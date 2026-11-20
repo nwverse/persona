@@ -11,16 +11,30 @@ type Answer = { status: number; body: unknown } | { fail: true }
 function world(on: On, polls: Answer[], env: Record<string, string> = { HOME: '/home/me' }) {
   const requests: { url: string; socketPath?: string; body: Record<string, unknown> }[] = []
   const submitted: { text: string; origin: unknown }[] = []
+  const aborted: string[] = []
+  let holdSubmit = false
+  let abortError: string | undefined
   mock.env(on, env)
   const clock = mock.clock(on, { now: 1_000 })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: SESSION }))
-  on('session.version', () => ({ value: { version: '2.1.308', base: '2.1.308' } }))
-  on('fs.read', () => ({ value: '{"name":"persona","version":"0.1.0"}' }))
+  on('session.version', () => ({ value: { version: '2.1.326', base: '2.1.326' } }))
+  on('fs.read', () => ({ value: '{"name":"persona","version":"0.2.0"}' }))
   on('ui.log', () => ({ value: undefined }))
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: 'done' }))
+  on('turn.abort', (_$, e) => {
+    if (abortError !== undefined) throw new Error(abortError)
+    aborted.push(e.turnId)
+    return { value: undefined }
+  })
   on('prompt.submit', (_$, e) => {
     submitted.push({ text: e.text, origin: e.origin })
+    if (holdSubmit) return new Promise(() => {})
     return { text: e.text }
+  })
+  on('turn.step', async function* (_$, _e) {
+    yield { type: 'complete', stopReason: 'end_turn', usage: { inputTokens: 1, outputTokens: 1 } }
   })
   on('http.fetch', (_$, e) => {
     requests.push({ url: e.url, socketPath: e.init?.socketPath, body: JSON.parse(e.init?.body ?? '{}') })
@@ -29,7 +43,18 @@ function world(on: On, polls: Answer[], env: Record<string, string> = { HOME: '/
     if ('fail' in next) throw new Error('connection refused')
     return { value: { status: next.status, ok: next.status === 200, headers: {}, text: JSON.stringify(next.body) } }
   })
-  return { requests, submitted, clock }
+  return {
+    requests,
+    submitted,
+    aborted,
+    clock,
+    setHoldSubmit(v: boolean) {
+      holdSubmit = v
+    },
+    setAbortError(err: string | undefined) {
+      abortError = err
+    },
+  }
 }
 
 const start = { cwd: '/work', surface: 'desktop', isInteractive: true } as const
@@ -44,9 +69,40 @@ describe('persona plugin', () => {
     const [poll, ack] = w.requests
     expect(poll?.url).toBe('http://persona/claude-plugin/v1/poll')
     expect(poll?.socketPath).toBe('/home/me/.persona/node.sock')
-    expect(poll?.body).toEqual({ session_id: SESSION, plugin_version: '0.1.0', engine_version: '2.1.308', wait_ms: 25_000 })
+    expect(poll?.body).toEqual({
+      session_id: SESSION,
+      plugin_version: '0.2.0',
+      engine_version: '2.1.326',
+      capabilities: ['busy_input', 'interrupt'],
+      wait_ms: 25_000,
+    })
     expect(ack?.url).toBe('http://persona/claude-plugin/v1/ack')
     expect(ack?.body).toEqual({ session_id: SESSION, id: 'm1', submitted: true })
+  })
+
+  test('queues a busy message without blocking the poll loop and aborts the active main-loop turn on interrupt', async ($, on) => {
+    const w = world(on, [
+      { status: 200, body: { messages: [{ id: 'm-busy', text: 'also check edge cases', deadline_ms: 9_000 }] } },
+      { status: 200, body: { messages: [], interrupt: { id: 'int-1', deadline_ms: 9_000 } } },
+      { status: 200, body: { messages: [], interrupt: { id: 'int-2', deadline_ms: 9_000 } } },
+    ])
+    w.setHoldSubmit(true)
+    await $.turn.start({ text: 'initial task', turnId: 'turn-main-1' })
+    await $.turn.start({ text: 'subagent task', turnId: 'turn-sub-1', agentId: 'sub-1' })
+    await $.session.start(start)
+    await w.clock.settle()
+
+    // While prompt.submit waits behind the running turn, advancing the settle window acks the queued message and polls on.
+    await w.clock.advance(250)
+    await w.clock.settle()
+
+    expect(w.submitted).toEqual([{ text: 'also check edge cases', origin: { kind: 'plugin', name: 'persona', asUser: true } }])
+    expect(w.aborted).toEqual(['turn-main-1'])
+    expect(w.requests.filter(r => r.url.endsWith('/ack')).map(r => r.body)).toEqual([
+      { session_id: SESSION, id: 'm-busy', submitted: true },
+      { session_id: SESSION, id: 'int-1', submitted: true },
+      { session_id: SESSION, id: 'int-2', submitted: false, reason: 'no_turn' },
+    ])
   })
 
   test('submits nothing late, empty or a slash command, and tells the node why', async ($, on) => {
@@ -120,9 +176,10 @@ describe('protocol helpers', () => {
   })
 
   test('poll answers', () => {
-    expect(readPoll(200, '{"messages":[{"id":"a","text":"hi","deadline_ms":5}],"retry_ms":10}')).toEqual({
+    expect(readPoll(200, '{"messages":[{"id":"a","text":"hi","deadline_ms":5}],"interrupt":{"id":"i1","deadline_ms":9},"retry_ms":10}')).toEqual({
       kind: 'messages',
       messages: [{ id: 'a', text: 'hi', deadlineMs: 5 }],
+      interrupt: { id: 'i1', deadlineMs: 9 },
       retryMs: 10,
     })
     expect(readPoll(200, 'not json')).toEqual({ kind: 'unavailable' })

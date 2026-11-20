@@ -736,11 +736,15 @@ installs and updates it.
   a caller put in the params. Messages from the assistant, extensions, channels (the Lark and WeChat bots), relays
   between conversations and the auth relay have no mark and keep the inbox, as do Stop and the answers to a question
   the session asked (both at priority `now`), and slash commands (still refused, `peer_command`).
-- **When**: only to a session at rest: its status file says idle (or shell) and its plugin polls. A session at work or
-  behind a dialog gets the message through the inbox at once, as before: it is read at the next tool boundary (or after
-  the dialog), and the send says `relay_reason: "busy"`. Holding the message until the turn ends was the other choice:
-  it would make a steer wait for minutes, and a held message could not be taken back once the plugin had it. So a
-  go-ahead goes in as the owner's while the session waits for one, which is when it asks for it.
+- **When**: when the plugin advertises `busy_input` (0.2.0+), owner messages go through the plugin both at rest and
+  while a turn runs (`$.prompt.submit` writes `queue-operation: enqueue` immediately, without blocking the poll loop or
+  being held for computer approval in `bypassPermissions` / `auto` mode, and `session.send` reports `queued: true` while
+  busy); a session waiting on an `AskUserQuestion` still takes the peer inbox at priority `now` so the question ends
+  instead of blocking the queue. Older plugins without `busy_input` receive owner messages only at rest and fall back to
+  the inbox while busy (`relay_reason: "busy"`).
+- **Owner Stop**: when the plugin advertises `interrupt` (0.2.0+), an owner-attested `session.interrupt` cancels the
+  running main-loop turn via `$.turn.abort({ turnId })` (falling back to the peer inbox when no plugin turn is active or
+  for non-owner interrupts), and `capabilities.interrupt` stays true while a turn runs and the plugin is reachable.
 - **Delivery and fallback**: the node hands the message to the session's waiting poll (`deadline_ms` 5 s ahead; the
   plugin submits nothing later) and counts it in once the transcript shows the plugin's prompt or its queue entry, or
   the plugin says it submitted it (its submit resolves as the turn starts). No poll takes it within 3 s, the plugin says

@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -92,21 +93,39 @@ type ccPluginMessage struct {
 	DeadlineMS int64  `json:"deadline_ms"`
 }
 
-// ccPluginAck is what the plugin said became of a message.
+// ccPluginInterrupt asks the plugin to abort the running main-loop turn via $.turn.abort.
+type ccPluginInterrupt struct {
+	ID         string `json:"id"`
+	DeadlineMS int64  `json:"deadline_ms"`
+}
+
+// ccPluginDelivery is what a woken poll returns to the plugin.
+type ccPluginDelivery struct {
+	Messages  []ccPluginMessage  `json:"messages"`
+	Interrupt *ccPluginInterrupt `json:"interrupt,omitempty"`
+}
+
+// ccPluginAck is what the plugin said became of a message or interrupt.
 type ccPluginAck struct {
 	Submitted bool
 	Reason    string
+}
+
+type ccPluginCaps struct {
+	busyInput bool
+	interrupt bool
 }
 
 // ccPluginSession is a session whose plugin polls this node.
 type ccPluginSession struct {
 	pid             int
 	version, engine string
+	caps            ccPluginCaps
 	seen            time.Time
-	// poll is the waiting poll's hand-off (one message), nil while none waits; done ends it early (a newer poll).
-	poll chan ccPluginMessage
+	// poll is the waiting poll's hand-off, nil while none waits; done ends it early (a newer poll).
+	poll chan ccPluginDelivery
 	done chan struct{}
-	acks map[string]chan ccPluginAck // messages handed over and not settled, by id
+	acks map[string]chan ccPluginAck // messages or interrupts handed over and not settled, by id
 }
 
 // ccPluginRegistry is every session whose plugin polled this node since it started; its zero value is ready.
@@ -116,8 +135,8 @@ type ccPluginRegistry struct {
 }
 
 // polled records a poll from session id's claude pid and makes it the session's waiting poll; the poll it replaces
-// (the same session's, still waiting) is ended. It returns the poll's hand-off and its end.
-func (r *ccPluginRegistry) polled(id string, pid int, version, engine string) (chan ccPluginMessage, chan struct{}) {
+// (the same session's, still waiting) is ended. It returns the poll's hand-off, its end, and whether capabilities changed.
+func (r *ccPluginRegistry) polled(id string, pid int, version, engine string, caps ccPluginCaps) (chan ccPluginDelivery, chan struct{}, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sessions == nil {
@@ -129,21 +148,24 @@ func (r *ccPluginRegistry) polled(id string, pid int, version, engine string) (c
 		}
 	}
 	s := r.sessions[id]
+	isNew := false
 	if s == nil || s.pid != pid {
 		s = &ccPluginSession{pid: pid, acks: map[string]chan ccPluginAck{}}
 		r.sessions[id] = s
+		isNew = true
 	}
 	if s.done != nil {
 		close(s.done)
 	}
-	s.version, s.engine, s.seen = version, engine, time.Now()
-	s.poll, s.done = make(chan ccPluginMessage, 1), make(chan struct{})
-	return s.poll, s.done
+	changed := isNew || s.caps != caps
+	s.version, s.engine, s.caps, s.seen = version, engine, caps, time.Now()
+	s.poll, s.done = make(chan ccPluginDelivery, 1), make(chan struct{})
+	return s.poll, s.done, changed
 }
 
-// pollEnded takes poll off session id when it is still the waiting one; ok false when a message was handed to it (or
+// pollEnded takes poll off session id when it is still the waiting one; ok false when work was handed to it (or
 // a newer poll replaced it), which the caller then reads from it.
-func (r *ccPluginRegistry) pollEnded(id string, poll chan ccPluginMessage) bool {
+func (r *ccPluginRegistry) pollEnded(id string, poll chan ccPluginDelivery) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s := r.sessions[id]
@@ -164,6 +186,22 @@ func (r *ccPluginRegistry) session(id string, pid int) *ccPluginSession {
 		return s
 	}
 	return nil
+}
+
+// busyInputCapable reports whether session id's polling plugin supports queueing owner messages while a turn runs.
+func (r *ccPluginRegistry) busyInputCapable(id string, pid int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s := r.sessions[id]
+	return s != nil && s.pid == pid && s.caps.busyInput && (s.poll != nil || time.Since(s.seen) < ccPluginStale)
+}
+
+// interruptCapable reports whether session id's polling plugin supports aborting the running turn via $.turn.abort.
+func (r *ccPluginRegistry) interruptCapable(id string, pid int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s := r.sessions[id]
+	return s != nil && s.pid == pid && s.caps.interrupt && (s.poll != nil || time.Since(s.seen) < ccPluginStale)
 }
 
 // expect makes room for the plugin's word on message mid, before it is handed over.
@@ -205,14 +243,14 @@ func (r *ccPluginRegistry) acked(id string, pid int, mid string, a ccPluginAck) 
 	return true
 }
 
-// handOver gives m to session id's waiting poll from claude pid, waiting up to wait for one; false when none took it.
-func (r *ccPluginRegistry) handOver(ctx context.Context, id string, pid int, m ccPluginMessage, wait time.Duration) bool {
+// handOver gives d to session id's waiting poll from claude pid, waiting up to wait for one; false when none took it.
+func (r *ccPluginRegistry) handOver(ctx context.Context, id string, pid int, d ccPluginDelivery, wait time.Duration) bool {
 	deadline := time.Now().Add(wait)
 	for {
 		r.mu.Lock()
 		s := r.sessions[id]
 		if s != nil && s.pid == pid && s.poll != nil {
-			s.poll <- m // room for one, and only handed over once: the poll is taken off below
+			s.poll <- d // room for one, and only handed over once: the poll is taken off below
 			s.poll, s.done = nil, nil
 			r.mu.Unlock()
 			return true
@@ -312,13 +350,14 @@ func (n *Node) ccPluginRequest(ctx context.Context, c net.Conn, method, path str
 		return http.StatusNotFound, map[string]any{"error": "unknown"}
 	}
 	var in struct {
-		SessionID     string `json:"session_id"`
-		PluginVersion string `json:"plugin_version"`
-		EngineVersion string `json:"engine_version"`
-		WaitMS        int64  `json:"wait_ms"`
-		ID            string `json:"id"`
-		Submitted     bool   `json:"submitted"`
-		Reason        string `json:"reason"`
+		SessionID     string   `json:"session_id"`
+		PluginVersion string   `json:"plugin_version"`
+		EngineVersion string   `json:"engine_version"`
+		Capabilities  []string `json:"capabilities"`
+		WaitMS        int64    `json:"wait_ms"`
+		ID            string   `json:"id"`
+		Submitted     bool     `json:"submitted"`
+		Reason        string   `json:"reason"`
 	}
 	if json.Unmarshal(body, &in) != nil || !validID(in.SessionID) {
 		return http.StatusBadRequest, map[string]any{"error": "invalid"}
@@ -345,24 +384,31 @@ func (n *Node) ccPluginRequest(ctx context.Context, c net.Conn, method, path str
 	if wait <= 0 || wait > ccPluginPollMost {
 		wait = ccPluginPollMost
 	}
-	poll, done := n.ccPlugins.polled(in.SessionID, pid, clipReason(in.PluginVersion), clipReason(in.EngineVersion))
+	caps := ccPluginCaps{
+		busyInput: slices.Contains(in.Capabilities, "busy_input"),
+		interrupt: slices.Contains(in.Capabilities, "interrupt"),
+	}
+	poll, done, changed := n.ccPlugins.polled(in.SessionID, pid, clipReason(in.PluginVersion), clipReason(in.EngineVersion), caps)
+	if changed {
+		n.notifySessions()
+	}
 	t := time.NewTimer(wait)
 	defer t.Stop()
 	select {
-	case m := <-poll:
-		return http.StatusOK, map[string]any{"messages": []ccPluginMessage{m}}
+	case d := <-poll:
+		return http.StatusOK, d
 	case <-done:
 	case <-t.C:
 	case <-ctx.Done():
 	}
 	if !n.ccPlugins.pollEnded(in.SessionID, poll) {
 		select {
-		case m := <-poll: // handed over as the poll ended
-			return http.StatusOK, map[string]any{"messages": []ccPluginMessage{m}}
+		case d := <-poll: // handed over as the poll ended
+			return http.StatusOK, d
 		default:
 		}
 	}
-	return http.StatusOK, map[string]any{"messages": []ccPluginMessage{}}
+	return http.StatusOK, ccPluginDelivery{Messages: []ccPluginMessage{}}
 }
 
 // clipReason keeps a short word from the plugin (a version, a reason) short.
@@ -448,8 +494,11 @@ func (n *Node) ccPluginSend(ctx context.Context, c claudeProc, id, text string) 
 	if n.ccPlugins.session(id, c.pid) == nil {
 		return false, relayNoPlugin
 	}
-	if claudeBgStatus[c.Status] != proto.StatusIdle {
-		return false, relayBusy // at work, or behind a dialog: the inbox queues it there, or answers the question
+	switch {
+	case claudeBgStatus[c.Status] == proto.StatusIdle:
+	case c.Status == "busy" && n.ccPlugins.busyInputCapable(id, c.pid):
+	default:
+		return false, relayBusy // behind a dialog, or an older plugin that awaits turn completion on submit
 	}
 	path := n.transcriptPath(id)
 	var offset int64
@@ -459,7 +508,7 @@ func (n *Node) ccPluginSend(ctx context.Context, c claudeProc, id, text string) 
 	m := ccPluginMessage{ID: strings.ReplaceAll(newUUID(), "-", ""), Text: text, DeadlineMS: time.Now().Add(ccPluginSubmitWait).UnixMilli()}
 	acks := n.ccPlugins.expect(id, m.ID)
 	defer n.ccPlugins.settle(id, m.ID)
-	if !n.ccPlugins.handOver(ctx, id, c.pid, m, ccPluginPickupWait) {
+	if !n.ccPlugins.handOver(ctx, id, c.pid, ccPluginDelivery{Messages: []ccPluginMessage{m}}, ccPluginPickupWait) {
 		return false, relayUnavailable
 	}
 	needle := ccPluginNeedle(text)
@@ -471,6 +520,9 @@ func (n *Node) ccPluginSend(ctx context.Context, c claudeProc, id, text string) 
 		}
 		if path != "" && ccPluginSeen(path, offset, needle) {
 			return true, ""
+		}
+		if submitted && c.Status == "busy" {
+			return true, "" // queued via $.prompt.submit while a turn runs; ack confirmed acceptance
 		}
 		if time.Now().After(deadline) {
 			if submitted {
@@ -489,6 +541,46 @@ func (n *Node) ccPluginSend(ctx context.Context, c claudeProc, id, text string) 
 		case <-ctx.Done():
 			return false, relayUnconfirmed
 		case <-time.After(150 * time.Millisecond):
+		}
+	}
+}
+
+// ccPluginInterrupt asks Persona's plugin in claude c to abort the running main-loop turn via $.turn.abort.
+// Returns true when the plugin confirmed the abort (or the turn settled while the abort was in flight); false when no
+// interrupt-capable plugin answered or it declined, leaving interruptOutside to fall back to the peer inbox.
+func (n *Node) ccPluginInterrupt(ctx context.Context, c claudeProc, id string) bool {
+	if c.Status != "busy" || !n.ccPlugins.interruptCapable(id, c.pid) {
+		return false
+	}
+	req := ccPluginInterrupt{
+		ID:         strings.ReplaceAll(newUUID(), "-", ""),
+		DeadlineMS: time.Now().Add(ccPluginSubmitWait).UnixMilli(),
+	}
+	acks := n.ccPlugins.expect(id, req.ID)
+	defer n.ccPlugins.settle(id, req.ID)
+	if !n.ccPlugins.handOver(ctx, id, c.pid, ccPluginDelivery{Messages: []ccPluginMessage{}, Interrupt: &req}, ccPluginPickupWait) {
+		return false
+	}
+	deadline := time.Now().Add(ccPluginSubmitWait)
+	for {
+		if now, ok := n.outsideClaude(id); !ok || now.Status != "busy" {
+			log.Printf("interrupt %s: claude %d settled after Persona's plugin took the stop", id, c.pid)
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case a := <-acks:
+			if a.Submitted {
+				log.Printf("interrupt %s: claude %d aborted its turn through Persona's plugin", id, c.pid)
+				return true
+			}
+			log.Printf("interrupt %s: the plugin did not abort (%s); falling back to inbox", id, a.Reason)
+			return false
+		case <-ctx.Done():
+			return false
+		case <-time.After(100 * time.Millisecond):
 		}
 	}
 }
