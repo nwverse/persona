@@ -28,6 +28,7 @@ const providers: ModelProvider[] = [
   { id: "launcher.custom", name: "Custom launcher", kind: "launcher" },
   { id: "launcher.messages", name: "Messages provider", kind: "api", api: "messages", model: "api-default" },
   { id: "launcher.codex", name: "Codex", kind: "launcher", agent: "codex" },
+  { id: "launcher.agy", name: "Antigravity", kind: "launcher", agent: "agy" },
   { id: "launcher.responses", name: "Responses provider", kind: "api", api: "responses" },
 ];
 const main: ModelPurpose = {
@@ -381,5 +382,35 @@ describe("a provider this use can't pick", () => {
     await render();
     await open();
     expect(picked()).toBe(t("settings-modelconfiguration.provider_unavailable", { id: "launcher.gone" }));
+  });
+});
+
+describe("API-kind purpose CLI backend badges (#12027)", () => {
+  beforeEach(() => {
+    use = LARK;
+    readonly = { ...child(), id: TWIN.id, name: "Inbox Agent", fields: [] };
+    current = {
+      ...triage(),
+      provider_ids: ["launcher.messages", "launcher.default", "launcher.codex", "launcher.agy"],
+    };
+  });
+
+  it("previews and renders codex exec, agy -p, and claude -p for launcher-backed API purposes", async () => {
+    await render();
+    await open();
+    await choose("launcher.default");
+    expect(dialog().querySelector("[data-execution-preview]")?.textContent).toBe("直接 API · claude -p");
+    await choose("launcher.codex");
+    expect(dialog().querySelector("[data-execution-preview]")?.textContent).toBe("直接 API · codex exec");
+    await act(async () => button(t("common.save"), dialog()).click());
+    await flush();
+    expect(row().textContent).toContain("直接 API · codex exec");
+
+    await open();
+    await choose("launcher.agy");
+    expect(dialog().querySelector("[data-execution-preview]")?.textContent).toBe("直接 API · agy -p");
+    await act(async () => button(t("common.save"), dialog()).click());
+    await flush();
+    expect(row().textContent).toContain("直接 API · agy -p");
   });
 });

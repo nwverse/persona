@@ -82,9 +82,10 @@ func (s *Service) modelProviderCompatible(p ModelPurpose, v ModelProvider, store
 		compatible = messagesAPI(v.API)
 	}
 	if p.Kind == "api" && v.Kind == "launcher" {
-		// Claude Code answering on the main chat's computer (models_run.go); a managed launcher with a Messages gateway is
-		// called over HTTP, as before. With no such computer it stays offered, and its status says to choose one.
-		compatible = (v.Agent == "" || v.Agent == "claude") && (p.MachineID == "" || len(v.Machines) == 0 || slices.Contains(v.Machines, p.MachineID))
+		// Claude Code, Codex, and Antigravity launchers can answer on the main chat's computer via model.run with
+		// zero-tool isolation (#5823, #12027); a managed launcher with a Messages gateway is called over HTTP, as
+		// before. With no such computer it stays offered, and its status says to choose one.
+		compatible = modelRunAgentSupported(v.Agent) && (p.MachineID == "" || len(v.Machines) == 0 || slices.Contains(v.Machines, p.MachineID))
 		for _, l := range stored {
 			if v.ID == "launcher."+l.Name {
 				compatible = messagesAPI(l.API) || compatible && (p.MachineID == "" || s.scopeReason(l, p.MachineID) == "")
