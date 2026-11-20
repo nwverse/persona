@@ -7,9 +7,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/prompts"
-	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // ---- the brief of a task_plan task (#3822) ----
@@ -142,35 +139,6 @@ func (s *Service) planBriefs(ctx context.Context, machine, conversation string, 
 		t.Brief = &v
 	}
 	return nil
-}
-
-// relayedTurnWaits: the turn in which conversation (on machine) plans tasks was opened by another conversation's message,
-// and what the owner asked for (user_requested, #11699) still needs their Start. The turn is read as the scheduled-round
-// check reads it (lastTurnItems, splitLastTurn): by the item that opened it, so an owner message typed into the turn
-// (queued) changes nothing. On Codex, whose transcript gives a message steered into a running turn the shape of one
-// that opens a turn, such a message is taken for the owner's own turn, as there too. The turn needs Start unless the
-// message that opened it answers this conversation's own message to its sender (relayAnswered), or it carried the
-// owner's verified words, this conversation is no direction's lead and no current lead passed the words on (their
-// request.via): a hand-over can reach the wrong lead, and a writable task would start in the wrong repository before
-// the owner sees it. A turn that cannot be read is taken as before.
-func (s *Service) relayedTurnWaits(ctx context.Context, machine, conversation string) bool {
-	items, ok := s.lastTurnItems(ctx, machine, conversation)
-	if !ok || len(items) == 0 {
-		return false
-	}
-	opener := items[0]
-	if opener.Role != "user" || opener.Kind != proto.KindText || opener.Queued {
-		return false
-	}
-	src := prompts.ItemSource(opener)
-	if src == nil || src.Kind != proto.SourceConversation {
-		return src == nil && opener.From != "" && !opener.Wake // another Claude session's message: no verified words
-	}
-	if s.relayAnswered(conversation, src.ConversationID) {
-		return false
-	}
-	q := s.receivedQuote(ctx, opener, src)
-	return q == nil || s.isLeader(ctx, conversation) || slices.ContainsFunc(q.Via, func(id string) bool { return s.isLeader(ctx, id) })
 }
 
 // checkContinuationScope rejects a plan that was prepared against a different
