@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -295,6 +296,81 @@ func TestCodexStartWithoutGoalTypesNothing(t *testing.T) {
 	startCodexWithGoal(t, n, "")
 	if got := f.trace("agent.prompt"); len(got) != 0 {
 		t.Fatalf("typed %v", got)
+	}
+}
+
+// The late-confirmation recheck reads the rollout itself: a goal event already written, whether or not a background
+// scan has caught up, suppresses the text fallback.
+func TestCodexRolloutGoalSet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	since := time.Now()
+	goalLine := func(updatedAt int64, null bool) string {
+		var goal any
+		if !null {
+			goal = map[string]any{"objective": "CI is green", "status": "active", "updatedAt": updatedAt}
+		}
+		line, _ := json.Marshal(map[string]any{"timestamp": time.Now().UTC().Format(time.RFC3339Nano), "type": "event_msg",
+			"payload": map[string]any{"type": "thread_goal_updated", "goal": goal}})
+		return string(line)
+	}
+	old := goalLine(since.Add(-time.Minute).Unix(), false) + "\n"
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if codexRolloutGoalSet(path, since) {
+		t.Fatal("a goal from before the send counted")
+	}
+	recent := goalLine(since.Unix(), false) + "\n"
+	if err := os.WriteFile(path, []byte(old+recent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !codexRolloutGoalSet(path, since) {
+		t.Fatal("the goal the rollout already shows was not seen")
+	}
+	cleared := goalLine(since.Unix(), true) + "\n"
+	if err := os.WriteFile(path, []byte(old+cleared), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if codexRolloutGoalSet(path, since) {
+		t.Fatal("a cleared goal counted")
+	}
+}
+
+// The text fallback revalidates the pane before typing: if an engine switch replaced the session in it, nothing goes
+// into the replacement agent.
+func TestCodexStartGoalTextFallbackNotTypedIntoAReplacedPane(t *testing.T) {
+	withCodexGoalWait(t, 300*time.Millisecond)
+	n, f, _, _ := codexStartHerdr(t, 100*time.Millisecond)
+	logs := &syncBuffer{}
+	n.logger = log.New(logs, "", 0)
+	f.setScreen("w1:p2", cxEmpty)
+	goal := "CI is green"
+	codexGoalAnswers(t, n, f, false, nil) // native goal never confirms, so the fallback is next
+	typed := make(chan struct{})
+	var once sync.Once
+	f.after(func(c herdrCall) {
+		if c.Method == "agent.prompt" && strings.HasPrefix(str(c.Params["text"]), "/goal ") {
+			once.Do(func() { close(typed) })
+		}
+	})
+	res, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "fix the build", "goal": goal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := decodeSessions(t, []any{res["session"]})[0]
+	<-typed // the native command is in; its rollout wait is running
+	// Before the fallback would type, the pane hosts another session (an engine switch, a replacement agent).
+	n.mu.Lock()
+	delete(n.agents, s.SessionID)
+	n.agents["another-session"] = host.Agent{PaneID: "w1:p2"}
+	n.mu.Unlock()
+	n.firstWait.Wait()
+	got := f.trace("agent.prompt")
+	if len(got) != 1 || !strings.Contains(got[0], `"/goal `+goal+`"`) {
+		t.Fatalf("typed into the replacement pane: %v", got)
+	}
+	if !strings.Contains(logs.String(), "the pane is no longer this session") {
+		t.Fatalf("log %q", logs.String())
 	}
 }
 
