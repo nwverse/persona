@@ -137,7 +137,7 @@ func workerOutcomeCandidate(items []proto.Item, index int) bool {
 		return false
 	}
 	if it.Kind == proto.KindText {
-		return strings.TrimSpace(it.Text) != ""
+		return index == workerFinalTextIndex(items)
 	}
 	if it.Kind != proto.KindToolUse ||
 		it.ToolName != "report_to_supervisor" && !slices.Contains(compat.MCPToolNames([]string{"report_to_supervisor"}), it.ToolName) {

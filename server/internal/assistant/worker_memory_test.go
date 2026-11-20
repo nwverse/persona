@@ -371,6 +371,37 @@ func TestRecordWorkerOutcomeLegacyIDPreventsDuplicate(t *testing.T) {
 	}
 }
 
+// The legacy writer selected only the last final text block, so earlier text in the same assistant line does not make
+// its legacy ID ambiguous or cause a duplicate keyed append.
+func TestWorkerMemoryEarlierTextDoesNotDisableLegacyDedupe(t *testing.T) {
+	env := newWorkerMemoryEnv(t)
+	env.setProject(t, "explicit")
+	legacy := kb.ProjectMemoryRecord{ID: workerMemoryID(env.todo.ID, "box", "s1", 1, 1), TodoID: env.todo.ID,
+		Agent: "s1", Turn: 1, ItemIndex: 1, Conclusion: workerMemoryConclusion}
+	if err := env.e.AppendProjectMemory("explicit", legacy); err != nil {
+		t.Fatal(err)
+	}
+	items := []proto.Item{
+		{ID: "prompt", Seq: 1, Kind: proto.KindText, Role: "user", Text: "Start"},
+		{ID: "earlier", Seq: 2, Kind: proto.KindText, Role: "assistant", Text: "Working"},
+		{ID: "answer", Seq: 2, Kind: proto.KindText, Role: "assistant", Text: workerMemoryConclusion},
+	}
+	work := db.SessionWork{MachineID: "box", SessionID: "s1", TurnAt: turnEnd,
+		Work: proto.WorkState{Phase: proto.WorkDone, Line: workerMemoryConclusion}}
+	env.s.goRecordWorkerDone(context.Background(), work, items)
+	env.s.tasks.outcomeRuns.Wait()
+	records := workerMemoryRecords(t, env.e, "explicit")
+	if len(records) != 1 || records[0].ID != legacy.ID {
+		t.Fatalf("earlier text disabled unambiguous legacy dedupe: %+v", records)
+	}
+	env.f.mu.Lock()
+	asked := len(env.f.outcomeAsked)
+	env.f.mu.Unlock()
+	if asked != 0 {
+		t.Fatalf("legacy dedupe repeated the model call %d time(s)", asked)
+	}
+}
+
 // Unrelated tools in the same assistant line were never outcome candidates, so they do not make a legacy report ID
 // ambiguous or cause a duplicate keyed append.
 func TestWorkerMemoryUnrelatedToolKeepsLegacyDedupe(t *testing.T) {
