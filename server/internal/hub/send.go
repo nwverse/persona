@@ -144,6 +144,26 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 		return
 	}
 	sid := r.PathValue("sid")
+	if terminalAgentSend(r.Context()) {
+		if !h.terminalAgentTarget(m, sid) {
+			h.refuseTerminalAgent(w, r)
+			return
+		}
+		hold, present := p["hold_when_away"].(bool)
+		if !present || hold != requestDeclares(r, featureAgentMessageHold) {
+			writeCode(w, http.StatusBadRequest, "invalid_hold",
+				i18n.T(h.requestLang(r), "agent-send.invalid_hold"), map[string]any{"delivered": "none"})
+			return
+		}
+		text, _ := p["text"].(string)
+		if len(p) != 3 || strings.TrimSpace(text) == "" || len(text) > devicewire.MaxTerminalAgentMessageBytes {
+			writeCode(w, http.StatusBadRequest, "invalid_terminal_message",
+				i18n.T(h.requestLang(r), "agent-send.invalid_text"), map[string]any{"delivered": "none"})
+			return
+		}
+		delete(p, "hold_when_away")
+	}
+
 	if caller := principalOf(r.Context()); caller.Role == roleScoped {
 		row, exists := m.session(sid)
 		if !exists || healthSession(&row) {
@@ -355,7 +375,11 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 		// for the Agent (NodeCall.Ordered: the manager refuses it, nothing typed, while they wait). From a client that
 		// draws a held message it may be held itself while the computer is away, answered held instead of offline
 		// (deliverOnce); one that does not would take 202 "later" for sent.
-		if h.requestWants(r, featureAgentMessageHold) {
+		holds := h.requestWants(r, featureAgentMessageHold)
+		if terminalAgentSend(r.Context()) {
+			holds = requestDeclares(r, featureAgentMessageHold)
+		}
+		if holds {
 			ctx = withHold(ctx, l)
 		} else {
 			ctx = withOrdered(ctx)

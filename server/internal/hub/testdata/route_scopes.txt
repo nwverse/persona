@@ -320,6 +320,7 @@ notify               GET /api/v1/push/stats/daily
 agents.read          GET /api/v1/saved-agent-searches
 agents.read          GET /api/v1/sessions
 agents.read          GET /api/v1/sessions/archived
+-                    GET /api/v1/sessions/{mid}/{sid}/agent-messages
 agents.read          GET /api/v1/sessions/{mid}/{sid}/info
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/full
@@ -601,6 +602,7 @@ notify               POST /api/v1/notify
 -                    POST /api/v1/recordings/{id}/segments
 -                    POST /api/v1/saved-agent-searches
 agents.control       POST /api/v1/sessions
+-                    POST /api/v1/sessions/{mid}/{sid}/agent-messages
 -                    POST /api/v1/sessions/{mid}/{sid}/archive
 -                    POST /api/v1/sessions/{mid}/{sid}/attach
 -                    POST /api/v1/sessions/{mid}/{sid}/autoname
