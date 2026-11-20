@@ -39,7 +39,7 @@ struct OwnerApprovalSettingsView: View {
                 }
                 Section {
                     TextEditor(text: $phraseText)
-                        .frame(minHeight: Theme.Space.xxl * 3)
+                        .scaledFrame(minHeight: Theme.Size.box110)
                         .disabled(saving)
                         .accessibilityIdentifier("owner-approval-phrases")
                     Button(String(localized: "Save Phrases")) { Task { await savePhrases() } }
