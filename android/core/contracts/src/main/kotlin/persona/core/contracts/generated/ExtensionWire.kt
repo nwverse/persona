@@ -1075,6 +1075,11 @@ data class ExtensionUIItem(
      */
     val icon: String? = null,
     /**
+     * nav_page only: the icon's named color in the sidebar, the same colors as a row's icon_color, drawn only while
+     * the owner chose Colored sidebar icons (#10822); without it the icon stays the sidebar's neutral ink.
+     */
+    @SerialName("icon_color") val iconColor: String? = null,
+    /**
      * overview_card, capsule_card and widget only: a nav_page or extension_page of the same extension.
      */
     val opens: String? = null,
@@ -1585,6 +1590,10 @@ data class ExtensionUIPlace(
      * A nav_page's sidebar group, its title in the request's language (#9071).
      */
     val group: ExtensionUIGroup? = null,
+    /**
+     * A nav_page's icon color as its manifest names it, drawn only with Colored sidebar icons (#10822).
+     */
+    @SerialName("icon_color") val iconColor: String? = null,
 )
 
 @Serializable

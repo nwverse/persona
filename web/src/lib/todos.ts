@@ -390,6 +390,9 @@ export function shownStatus(todo: Todo, status: TodoStatus): TodoStatus {
 export function todoStatusLabel(todo: Todo, status: TodoStatus): string {
   if (acceptedAtRest(todo, status)) return t("lib-todos.review_done");
   if (status === "done" && isReviewDone(todo)) return todo.supervision?.state === "cancelled" ? t("lib-todos.review_cancelled") : t("lib-todos.review_done");
+  if (status === "follow_up" && todo.supervision?.state === "parked" && todo.supervision.parked?.handoff && !openAsk(todo)) {
+    return TODO_STATUS_INFO.waiting.label;
+  }
   return status === "done" && isAutoDone(todo) ? t("lib-todos.auto_done") : TODO_STATUS_INFO[status].label;
 }
 

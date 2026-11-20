@@ -277,6 +277,7 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/git/status
 -                    GET /api/v1/machines/{mid}/grok-settings
 -                    GET /api/v1/machines/{mid}/health/reports
+-                    GET /api/v1/machines/{mid}/held-messages
 -                    GET /api/v1/machines/{mid}/herdr
 -                    GET /api/v1/machines/{mid}/iphone
 -                    GET /api/v1/machines/{mid}/launchers
@@ -474,6 +475,7 @@ todos.write          POST /api/v1/assistant/workspace-naming/preview
 -                    POST /api/v1/extensions/-/install
 -                    POST /api/v1/extensions/-/operations/{op}/retry
 -                    POST /api/v1/extensions/-/preview
+market.refresh_own   POST /api/v1/extensions/-/self/market/refresh
 -                    POST /api/v1/extensions/{id}/-/assistant-data/apply
 -                    POST /api/v1/extensions/{id}/-/attach
 -                    POST /api/v1/extensions/{id}/-/auth/logout
@@ -638,6 +640,7 @@ todos.write          POST /api/v1/todos
 -                    POST /api/v1/todos/{id}/backend-workspace/cancel
 -                    POST /api/v1/todos/{id}/backend-workspace/cleanup
 -                    POST /api/v1/todos/{id}/backend-workspace/prepare
+-                    POST /api/v1/todos/{id}/backend-workspace/start
 -                    POST /api/v1/todos/{id}/decision-dismiss
 -                    POST /api/v1/todos/{id}/decision-undo-dismiss
 todos.write          POST /api/v1/todos/{id}/decisions
