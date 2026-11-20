@@ -886,6 +886,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		Turns                   int           `json:"turns"`
 		LazyImages              bool          `json:"lazy_images"`
 		UserInputs              bool          `json:"user_inputs"`
+		StrictRead              bool          `json:"strict_read"`
 		FoldWork                bool          `json:"fold_work"`
 		FromSeq                 int           `json:"from_seq"`
 		ThroughSeq              int           `json:"through_seq"`
@@ -2192,27 +2193,49 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			ItemID string `json:"item_id"`
 		}
 		_ = json.Unmarshal(params, &a)
-		f, err := n.file(p.SessionID)
+		read := n.file
+		if p.StrictRead {
+			read = n.exportFile
+		}
+		f, err := read(p.SessionID)
 		if err != nil {
 			return nil, n.readErr(p.SessionID, err)
 		}
-		n.refresh(p.SessionID, f)
+		if p.StrictRead {
+			if err := n.refreshExport(p.SessionID, f); err != nil {
+				return nil, err
+			}
+		} else {
+			n.refresh(p.SessionID, f)
+		}
 		it, err := f.Full(a.ItemID)
 		if err != nil {
 			return nil, fmt.Errorf("session %s: %w", p.SessionID, err)
 		}
 		it.Image = nil // images come from session.image
-		return n.echoed(p.SessionID, f, []proto.Item{it})[0], nil
+		it = n.echoed(p.SessionID, f, []proto.Item{it})[0]
+		if p.StrictRead {
+			return struct {
+				proto.Item
+				StrictRead      bool `json:"strict_read"`
+				SourceTextBytes int  `json:"source_text_bytes"`
+			}{it, true, len(it.Text)}, nil
+		}
+		return it, nil
 	case "session.items":
-		f, err := n.file(p.SessionID)
+		read := n.file
+		if p.StrictRead {
+			read = n.exportFile
+		}
+		f, err := read(p.SessionID)
 		if err != nil {
-			if n.startingSession(p.SessionID) { // nothing written yet: an empty chat; else not_found with its reason
+			if !p.StrictRead && n.startingSession(p.SessionID) { // nothing written yet: an empty chat; else not_found with its reason
 				if p.UserInputs {
 					return proto.UserInputIndex{Inputs: []proto.UserInputPosition{}}, nil
 				}
 				return map[string]any{"items": []proto.Item{}, "has_more": false}, nil
 			}
-			if session, _, _ := strings.Cut(p.SessionID, subagentSep); p.BeforeSeq > 0 && !p.UserInputs && n.knownSession(session) {
+			if session, _, _ := strings.Cut(p.SessionID, subagentSep); p.BeforeSeq > 0 && !p.UserInputs && !p.StrictRead && n.knownSession(session) {
 				// An older page of a session the node knows (or of its subagent): the end of its history, as before
 				// #11388. Only the latest page says why there is none; released apps ask an older page again on an
 				// error (#11450).
@@ -2220,7 +2243,11 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			}
 			return nil, n.readErr(p.SessionID, err)
 		}
-		if err := n.refresh(p.SessionID, f); err != nil && p.UserInputs {
+		if p.StrictRead {
+			if err := n.refreshExport(p.SessionID, f); err != nil {
+				return nil, err
+			}
+		} else if err := n.refresh(p.SessionID, f); err != nil && p.UserInputs {
 			return nil, err
 		}
 		if p.UserInputs {
@@ -2263,7 +2290,11 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return withSpan(map[string]any{"items": items(fold(page)), "has_more": more}, span, false), nil
 		}
 		page, more, span := f.Page(p.BeforeSeq, limit)
-		return withSpan(map[string]any{"items": items(fold(page)), "has_more": more}, span, false), nil
+		result := withSpan(map[string]any{"items": items(fold(page)), "has_more": more}, span, p.StrictRead)
+		if p.StrictRead {
+			result["strict_read"] = true
+		}
+		return result, nil
 	case "session.watch":
 		// The stream outlives this request: it follows the connection (rpc.ConnContext), not the reply.
 		return ok(n.watchFor(rpc.ConnContext(ctx), p.SessionID, p.SinceSeq))
