@@ -349,16 +349,10 @@ func (s *Service) backgroundNeeded(ctx context.Context, cfg Settings, list []sup
 // of that purpose's model applies from its next message, as the main chat's does. params are left as they are when
 // the purpose cannot be resolved: the conversation then goes on with what it ran last.
 func (s *Service) backgroundModel(ctx context.Context, params map[string]any) {
-	prevMode, hadMode := params["permission_mode"]
 	p := maps.Clone(params)
-	if err := s.applyModel(ctx, purposeSupervise, p); err != nil {
+	if err := preservePermissionMode(p, func() error { return s.applyModel(ctx, purposeSupervise, p) }); err != nil {
 		s.logf("supervise: the background supervisor's model: %v; it keeps what it ran last", err)
 		return
-	}
-	if hadMode {
-		p["permission_mode"] = prevMode
-	} else {
-		delete(p, "permission_mode")
 	}
 	maps.Copy(params, p)
 }
