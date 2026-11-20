@@ -134,12 +134,19 @@ func TestConnectorThreadAvatarURLs(t *testing.T) {
 			h.connectors = connector.NewRegistry(nil)
 			c := &avatarPageConnector{pictureConnector: &pictureConnector{}, source: source}
 			c.state.Store(connector.StateOK)
-			c.page = connector.ThreadPage{
-				Chat: connector.ThreadChat{ID: "demo", Avatar: "a.u1.501", Author: &connector.ThreadPerson{Name: "Author", Avatar: "avatar:author:1"}},
-				Messages: []connector.ThreadMessage{
-					{ID: "1", Sender: connector.ThreadPerson{Name: "Reviewer", Avatar: "https://example.com/avatar.png"}},
-					{ID: "2", Sender: connector.ThreadPerson{Name: "Guest"}},
-				},
+			// Read the same shape an external connector can return, including unknown fields.
+			if err := json.Unmarshal([]byte(`{
+              "chat":{"id":"demo","avatar":"a.u1.501","avatar_url":"/plugin-path","author":{"name":"Author","avatar":"avatar:author:1","avatar_url":"/plugin-path"}},
+              "messages":[
+                {"id":"1","text":"Review","sender":{"name":"Reviewer","avatar":"https://example.com/avatar.png","avatar_url":"/plugin-path"}},
+                {"id":"2","sender":{"name":"Guest","avatar_url":"/plugin-path"}}
+              ],"before":"older"
+            }`), &c.page); err != nil {
+				t.Fatal(err)
+			}
+			original, err := json.Marshal(c.page)
+			if err != nil || bytes.Contains(original, []byte(`"avatar_url"`)) {
+				t.Fatalf("connector page contains a hub field: %s, %v", original, err)
 			}
 			if err := h.addConnector(c); err != nil {
 				t.Fatal(err)
@@ -161,8 +168,11 @@ func TestConnectorThreadAvatarURLs(t *testing.T) {
 			check(chat, "a.u1.501")
 			check(chat["author"].(map[string]any), "avatar:author:1")
 			check(messages[0].(map[string]any)["sender"].(map[string]any), "https://example.com/avatar.png")
-			if c.page.Chat.Author.AvatarURL != "" || c.page.Messages[0].Sender.AvatarURL != "" {
-				t.Fatal("the app response changed the connector's page")
+			if out["before"] != "older" || messages[0].(map[string]any)["text"] != "Review" {
+				t.Fatalf("missing thread data in the app response: %v", out)
+			}
+			if after, err := json.Marshal(c.page); err != nil || !bytes.Equal(original, after) {
+				t.Fatalf("the app response changed the connector's page: %s, %v", after, err)
 			}
 			if guest := messages[1].(map[string]any)["sender"].(map[string]any); guest["avatar"] != nil || guest["avatar_url"] != nil {
 				t.Errorf("guest without a picture: %v", guest)
