@@ -355,7 +355,7 @@ func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string,
 	// The engine first. An explicit reload refusal or closed handshake is retried; old nodes keep their fallback.
 	err = m.useEngine(ictx, peer)
 	if !handshakeInterrupted(err) {
-		err = peer.Call(ictx, "node.info", map[string]any{}, &c.info)
+		err = peer.Call(ictx, "node.info", nodeproto.NodeInfoQuery{ManagerFeatures: []string{nodeproto.SourcePermissions}}, &c.info)
 	}
 	if off := m.lanesOff(); err == nil && nodeHas(c.info, nodeproto.NodeLanes) && !off.IsZero() {
 		m.d.logf("[%s] lanes over %s: not asked until %s (frames broke this computer's connections)", m.cfg.ID, via, off.Format(time.TimeOnly))

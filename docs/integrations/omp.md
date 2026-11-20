@@ -7,10 +7,13 @@ rename, start a new omp with a first message, answer its `ask_user` questions an
 
 Verified with omp 18.18.x and herdr 0.9.5. Everything here needs a herdr engine.
 
-In New Agent on web, iOS or Android, select the computer's `omp` launcher in herdr. Enter a model ID such as
+Added in steps (issue #4148).
+
+In New Agent on web or Android, select the computer's `omp` launcher in herdr. Enter a model ID such as
 `opus` or `openai/gpt-5.2` to use it for this session. You can enter an ID even when the model list is empty.
 Leaving the model at Default lets omp read `modelRoles.default` from its own configuration.
 An older Persona node offers the launcher default. Upgrade the node on that computer to enter a model ID.
+iOS and iPadOS leave the model to omp's own configuration, as described under "Starting from the apps".
 
 ## Scope
 
@@ -125,6 +128,20 @@ extension listed it and then left with the omp is resumed the same way: a runtim
 
 The hub puts the refusals into the reader's language (`rpc-errors.omp_resume_unknown`, `rpc-errors.omp_stopped`).
 
+## Starting from the apps
+
+Only the launcher named `omp` starts omp natively (the node lists it with agent `omp`), and a native start sets nothing omp's
+own config decides unless a client explicitly selects a supported model override:
+
+- **iOS and iPadOS New Agent.** With an omp launcher picked (`Launcher.isOmp` or the native `Launcher.startsOmp`), Permissions &
+  Thinking is not shown (no permission mode, thinking effort or ultracode), no model is sent, and the first message goes with the
+  start, as a Codex's does: the node types it into omp's command and answers with omp's session. A message sent after the start would
+  reach an omp whose extension has not connected yet and be refused, so the first message is never sent that way. omp takes no
+  attachments: there is no add menu, and a photo or file picked before holds Start Chat back ("omp takes no attachments") until it
+  is removed.
+- **Pushes.** An omp card's push is titled with omp's name: the extension names its cards `omp`, and the hub uses a runtime
+  card's own label (`server/internal/hub/push_payload.go`).
+
 ## Differences from pi
 
 - **No pi-web and no companion process.** omp has no web client; its sessions live in its own process.
@@ -165,4 +182,10 @@ entries (calls outside the conversation), orchestration tokens included, under t
   resume from disk, two sends or two starts at once, a start racing a send, a send or start after the extension left, a
   start's images and `client_msg_id`, the refusals, a resume that never comes up and herdr's restore command; `server/internal/node/omp_guards_test.go`
   covers a live pane's file, a start for a runtime's session, the fallback row moving to its session, and the calls a stopped
-  session refuses. `server/internal/node/omp_start_model_test.go` checks the new session's recorded model and the arguments the terminal receives for default, short and provider-qualified model IDs.
+  session refuses. `server/internal/node/omp_start_model_test.go` checks the new session's recorded model and the arguments
+  the terminal receives for default, short and provider-qualified model IDs.
+- iOS: `apple/PersonaTests/OmpNewAgentTests.swift` covers telling an omp launcher, no modes or efforts and no attachments;
+  against `MOCK_OMP=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` (which lists an `omp` launcher and refuses an omp
+  start that is async or sets those options, as the node does), `PersonaUITests/NewAgentAttachmentsTests/testOmpStartsWithItsFirstMessageAndNoOptions`
+  picks omp in New Agent and checks the start's body.
+- Hub: `TestRuntimePushTitle` (`server/internal/hub/runtime_test.go`) covers an omp card's push title.

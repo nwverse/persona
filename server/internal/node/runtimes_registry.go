@@ -703,8 +703,10 @@ func (h *runtimeConn) formLauncherLocked(l runtimeLauncher) proto.Launcher {
 	if assistant && l.AssistantFor != l.Name { // only the launcher that runs the assistant says what it runs it for
 		assistantFor = l.AssistantFor
 	}
+	builtinCompanion := h.builtinAgy && h.daemon == "" && h.hello.Runtime == agyRuntimeID && agent == agyAgent
 	return proto.Launcher{Name: l.Name, Model: l.Model, Source: h.hello.Runtime, Agent: agent, PromptOptional: l.PromptOptional,
-		Assistant: assistant, AssistantFor: assistantFor, AutoAccept: l.AutoAccept, DisplayName: l.DisplayName, PermissionModes: modes}
+		Assistant: assistant, AssistantFor: assistantFor, AutoAccept: l.AutoAccept, DisplayName: l.DisplayName, PermissionModes: modes,
+		BuiltinCompanion: builtinCompanion}
 }
 
 // launcherRuntime is the runtime offering a launcher name, nil when none does.

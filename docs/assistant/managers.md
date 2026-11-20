@@ -79,6 +79,16 @@ The exact HTTP(S) instance (including nondefault port) and private CIDR must bot
 CIDRs cannot opt in private networks. Configure only infrastructure the operator trusts; this is not a connector
 or sign-in system. Public-only installations need no configuration.
 
+Built-in GitLab also reads a task's merge request when its delivery is checked (#11584,
+`server/internal/assistant/code_host_gitlab.go`): on gitlab.com, and on the self-hosted instances this manager's
+`manager.json` names. `token_file` (0600, read at each call, never logged or shown to a model) holds a token with
+`read_api`; without one only public projects answer. A private instance also needs its `repository_trusted_targets`
+entry above.
+
+```json
+{"gitlab":{"instances":[{"instance_url":"https://gitlab.example.com","token_file":"~/.persona/gitlab.token"}]}}
+```
+
 The remote image route (`docs/protocol/protocol.md` "Remote images (#9473)") asks a DNS-over-HTTPS service for a picture
 host's real addresses when this machine's resolver answers only a fake-IP proxy's (#9550). `remote_images.doh` in this
 manager's `manager.json` names that service's JSON API; without it `https://dns.alidns.com/resolve` is asked, and `""`

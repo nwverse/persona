@@ -1,4 +1,4 @@
-Atomically add 1–50 exact issue/PR URLs across links:[{url,title}] and legacy urls, at least one in total. Auto-group even unlisted repositories; no manual entry. Actual titles only: nonempty refreshes, omitted/empty keeps. Deduplicate; explicit adds can restore removed links. Preserve aliases, refs and source snapshots. Replace/remove via todo_repositories_get and revision-checked set tools. Associations never prove completion.
+Atomically add 1–50 exact issue/PR URLs across links:[{url,title}] and legacy urls, at least one in total. Auto-group even unlisted repositories; no manual entry. Actual titles only: nonempty refreshes, omitted/empty keeps. Deduplicate; explicit adds can restore removed links. Preserve aliases, refs and source snapshots. Replace/remove via todo_repositories_get and revision-checked set tools. Associations never prove completion.{{template "shared/mcp_language" .}}
 
 ```json
 {
