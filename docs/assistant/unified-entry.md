@@ -1122,22 +1122,34 @@ content, not memory: memory stays one for every conversation (#9440), and a dire
   window its refusal stays as the safety net, and a block counts as in effect only once the node took the send that
   carried it (`notesSendOutcome`).
 - **Settled by the send that carried it** (#11392): the moves of the block still in flight are kept per conversation,
-  each with the sends that carry its block, and an outcome settles only its own send's move. The manager's own sends
-  (`call`: `assistant.send`, `assistant.warm`, `session.send`, `session.send_once`, `assistant.answer_again`) are
-  settled by the node's answer, and as not taken when refused before they leave (a launcher out of the computer's
-  scope) or when the computer is offline or not one of the hub's. The owner's messages are settled by the hub's
-  `session.assistant_sent` notice, which names the message by its `client_msg_id`, and at once as not taken when
-  their `assistant.send_params` is refused. A notice settles only the message it names; one that names none (a message
-  sent without an id, or an older hub's notice) settles the oldest message without an id still waiting for one, else
-  the oldest one waiting. A second `assistant.send_params` for a message the manager already gave parameters for is
-  the hub's retry, which the hub may answer from its record without sending it or telling how it went: it moves
-  nothing and waits for no notice (the manager keeps each conversation's latest 64 ids). A send the node took keeps
-  its block, and the moves before it stay too. A send not taken drops its move once no other send in flight carries
-  that block: the block before it is put back when no later move is in flight, else the later move counts from it, so
-  only that one message is refused, not every message until the turn ends. Only these sends move the block. A send
-  whose outcome nobody reports takes the last confirmed block, the one before the oldest move still in flight, not a
-  block such a move gave: the node's own request for what its message runs on (`assistant.model`), and the parameters
-  the manager makes before it sends them through `call`.
+  each with the sends that carry its block, and an outcome settles only its own send's move. A send the node took
+  keeps its block, and the moves before it stay too. A send not taken drops its move once no other send in flight
+  carries that block: the block before it is put back when no later move is in flight, else the later move counts
+  from it, so only that one message is refused, not every message until the turn ends. Only the sends below move the
+  block. A send whose outcome nobody reports takes the last confirmed block, the one before the oldest move still in
+  flight, not a block such a move gave: the node's own request for what its message runs on (`assistant.model`), and
+  the parameters the manager makes before it sends them through `call`.
+- **The manager's own sends** (`call`: `assistant.send`, `assistant.warm`, `session.send`, `session.send_once`,
+  `assistant.answer_again`) are settled by the node's answer, and as not taken when refused before they leave (a
+  launcher out of the computer's scope) or when they provably never reached the computer (`sendNotTaken`, which reads
+  the error as `relayFailureOf` does): a setup to fix, such as `node_outdated` from the manager's devices layer or
+  `no_device`; a conversation that is gone; the computer offline; the bus down or suspended; a call cancelled or not
+  written before it left. A failure that may have gone in keeps the block: a deadline or a closed link with the
+  request out, a node error without a code, a cancel after the request was written.
+- **The owner's messages** are settled by the hub's `session.assistant_sent` notice, which names the message by its
+  `client_msg_id`, and at once as not taken when their `assistant.send_params` is refused. A notice settles only the
+  message it names; one that names none settles the oldest message without an id still waiting for one. Only while
+  the hub has not named a message in a notice on this connection (an older hub names none) does such a notice settle
+  the oldest message waiting when none without an id waits: a hub that names messages sends one without an id only
+  for a message sent without one, such as one sent just before the manager restarted.
+- **The hub's retry**: a second `assistant.send_params` for a message the manager already gave parameters for is the
+  hub's retry, and moves nothing (the manager keeps each conversation's latest 64 ids). The hub sends a retry only
+  when the first attempt reached nothing (it stopped before it claimed it, or it typed nothing), and else answers it
+  from its record without sending it or telling how it went. So while the first attempt still waits for its notice,
+  the retry is tied to it: it carries the block the first attempt carried while that move is in flight (else the last
+  confirmed block), waits the whole 10 minutes again, and the one notice that comes settles that move. Once nothing
+  waits for that message (settled, or past the wait), the retry takes the last confirmed block and waits for no
+  notice.
 - **An outcome never learned keeps the block**. An owner's message whose notice never comes (the hub did not send it
   after all, as for a retry the manager did not know it had seen; it stopped while sending it; or the notice was lost
   while the manager's connection was down) waits 10 minutes, longer than the hub waits for any send, and takes no
@@ -1148,6 +1160,13 @@ content, not memory: memory stays one for every conversation (#9440), and a dire
   send, the lead's process still runs the block before it: until the lead is idle, every send that finds it at work
   carries the new block and the node refuses it, and the first send that finds it idle gives the process the new
   block.
+- **Known and left**: a notice names the message, not the attempt. When the first attempt typed nothing and its notice
+  reaches the manager only after the hub asked for the retry's parameters (on a framed connection an event can wait
+  behind later requests, and events wait in the manager's own queue), that notice settles the move as not taken
+  while the retry tied to it still carries the moved block; if the node takes the retry, the lead runs that block and
+  the rest of its turn is refused until it is idle. Telling the attempts apart needs the hub to name the attempt.
+  A manager's own `session.send_once` or `assistant.answer_again` retry that the hub's once-guard answers from its
+  record counts as taken.
 - **Two editors** (#11392): a save may say which `notes_at` it started from, as `GET /api/v1/assistant/leaders`
   lists it (`null` there and here: there were no notes); when the
   notes changed since, it is refused with 409 `notes_changed` and the stored `notes` and `notes_at`, so a client can
@@ -1163,7 +1182,9 @@ content, not memory: memory stays one for every conversation (#9440), and a dire
 - **Checks**: `server/internal/assistant/direction_notes_test.go` (the route, the leader's policy and context, new
   Agents), `server/internal/assistant/lead_conversations_test.go` (`notes_at`, the idle rule across a restart, the
   outcome of the send that carried a block, in both orders and for every send that moves one, the hub's notice by the
-  message it names), `server/internal/hub/assistant_sent_test.go` (the notice names its message) and the
+  message it names, a retry the hub sends or answers from its record, the error shapes of a send that never reached
+  the computer, notices with and without ids, an unknown outcome), `server/internal/hub/assistant_sent_test.go` (the
+  notice names its message) and the
   goldens `direction_notes.*` / `todo_direction.*`; the web editor's browser check runs against the mock
   hub with `MOCK_LEADERS=1`: `node web/e2e/direction-notes.mjs` (desktop and phone width, light and dark).
 
