@@ -53,11 +53,14 @@ func (f directionFiling) bare() directionFiling {
 	return f
 }
 
-// restoreOf is the entry a write may put back exactly, as the Undo of the session's last write: the one that write
-// replaced, or the one it took out; nil when there is none (a first filing's Undo writes null instead).
-func restoreOf(e directionFiling, ok bool) *directionFiling {
+// restoreOf is the entry a write may put back exactly at now, as the Undo of the session's last write: the one that
+// write replaced, or the one it took out, while that is not past directionRemovedKeep; nil when there is none (a first
+// filing's Undo writes null instead).
+func restoreOf(e directionFiling, ok bool, now time.Time) *directionFiling {
 	switch {
 	case !ok:
+		return nil
+	case !e.live() && now.Sub(*e.RemovedAt) > directionRemovedKeep:
 		return nil
 	case !e.live():
 		r := e.bare()
@@ -72,9 +75,6 @@ func restoreOf(e directionFiling, ok bool) *directionFiling {
 type directionSessionsBook struct {
 	mu     sync.Mutex
 	loaded bool
-	// rev changes whenever m is replaced, so a write that counted a direction outside the lock knows the book it
-	// counted is still the book (fileDirectionSession).
-	rev uint64
 	// m is by runtimeListID(machine, session). An entry made before its computer's id was absorbed by another keeps the
 	// old id until the session's next write (directionEntries).
 	m map[string]*directionFiling
@@ -136,9 +136,44 @@ func directionTarget(raw json.RawMessage) (*string, error) {
 	return &id, nil
 }
 
-// serveDirectionFiling is the owner's write. Taking an entry out (null) asks nothing of the session, so an entry
-// whose session its computer no longer lists, or whose computer left, can always go. Such a session can still be set
-// on its own, with every check that needs no row; moving it to a direction needs its row (its space).
+// directionAsk is a write as its handler gathered it, before the book: the target (nil takes the session's entry out),
+// the session as its computer lists it, the rules, and what the target direction is. decideDirectionFiling decides it
+// against the book as it is when it is saved, under the book's lock.
+type directionAsk struct {
+	key     [2]string
+	target  *string
+	row     proto.Session
+	listed  bool
+	listErr error
+	parents map[string]string // the sub-agent sessions of the session's computer: their parents, by session id
+	rules   directionRules
+	dir     directionState
+	spaceOK bool // the listed session is in the target's space, or that cannot be told
+}
+
+// directionState is what a write's target is: a current direction, an ended one, or none.
+type directionState int
+
+const (
+	directionCurrent directionState = iota
+	directionEndedState
+	directionUnknown
+)
+
+// directionRefusal is a write refused, with its status, code and reason; call is the session's computer's own error
+// when its list could not be read.
+type directionRefusal struct {
+	status int
+	code   string
+	err    error
+	call   error
+}
+
+// serveDirectionFiling is the owner's write. It asks the session's computer and the directions first, then decides
+// and saves under the book's lock, from the book as it is then (fileDirectionSession). Taking an entry out (null)
+// asks nothing of the session, so an entry whose session its computer no longer lists, or whose computer left, can
+// always go. Such a session can still be set on its own, with every check that needs no row; moving it to a direction
+// needs its row (its space), unless the move is the Undo of the session's last write.
 func (s *Service) serveDirectionFiling(w http.ResponseWriter, r *http.Request) {
 	if !fullRole(r) {
 		directionFilingRefusal(w, r, http.StatusForbidden, "full_access_required", errDirectionRole)
@@ -162,113 +197,123 @@ func (s *Service) serveDirectionFiling(w http.ResponseWriter, r *http.Request) {
 		directionFilingRefusal(w, r, http.StatusNotFound, "session_not_found", errDirectionSessionNotFound)
 		return
 	}
-	key := [2]string{machine, sid}
-	if target == nil {
-		out, err := s.fileDirectionSession(ctx, key, nil, nil)
-		s.answerDirectionFiling(w, r, out, err)
-		return
+	ask := directionAsk{key: [2]string{machine, sid}, target: target, parents: map[string]string{}, spaceOK: true}
+	if target != nil {
+		list, listErr := s.sessions(ctx, machine)
+		ask.listErr = listErr
+		for _, c := range list {
+			if c.ParentSessionID != "" {
+				ask.parents[c.SessionID] = c.ParentSessionID
+			}
+			if c.SessionID == sid && !c.IsDeleted() {
+				ask.row, ask.listed = c, true
+			}
+		}
+		if err := s.ensureTodosLoaded(ctx); err != nil {
+			directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
+			return
+		}
+		cfg := s.settings(ctx)
+		if ask.rules, err = s.directionRulesNow(ctx, cfg); err != nil {
+			directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
+			return
+		}
+		if *target != "" && (*target == cfg.Main || !slices.Contains(cfg.Leaders, *target)) {
+			_, known, ok := s.directionSnapshot(ctx, *target)
+			if !ok {
+				directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
+				return
+			}
+			ask.dir = cond(known, directionEndedState, directionUnknown)
+		}
+		if *target != "" && ask.listed {
+			if space, known := s.conversationSpace(ctx, *target); known && spaceOf(ask.row) != space {
+				ask.spaceOK = false
+			}
+		}
 	}
-	records, err := s.directionSessionRecords(ctx)
-	if err != nil {
-		directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
-		return
+	out, refusal, err := s.fileDirectionSession(ctx, ask)
+	switch {
+	case refusal != nil && refusal.call != nil:
+		apierr.Call(w, refusal.call)
+	case refusal != nil:
+		directionFilingRefusal(w, r, refusal.status, refusal.code, refusal.err)
+	default:
+		s.answerDirectionFiling(w, r, out, err)
+	}
+}
+
+// decideDirectionFiling decides ask against records at now: refused, or how the book changes. The Undo of the
+// session's last write puts back exactly the entry that write replaced or took out (restoreOf): it needs neither the
+// session's row nor a current direction with room, as the write it undoes did not. The limit counts with look, whose
+// computers were asked before the book's lock was taken (frozen: one it lacks is noted in missing).
+func (s *Service) decideDirectionFiling(ctx context.Context, ask directionAsk, records map[string]directionFiling,
+	look *directionLook, now time.Time) (directionFilingWrite, *directionRefusal, error) {
+	key, sid := ask.key, ask.key[1]
+	if ask.target == nil {
+		return s.planDirectionFiling(records, key, nil, now), nil, nil
+	}
+	target := *ask.target
+	refuse := func(status int, code string, err error) (directionFilingWrite, *directionRefusal, error) {
+		return directionFilingWrite{}, &directionRefusal{status: status, code: code, err: err}, nil
 	}
 	entry, has := s.directionEntries(records)[key]
 	filed := has && entry.live()
-	// The Undo of the session's last write puts back exactly the entry that write replaced or took out: it needs
-	// neither the session's row nor a current direction with room, as the write it undoes did not.
-	restore := restoreOf(entry.directionFiling, has)
-	undo := restore != nil && restore.Direction == *target
-	list, listErr := s.sessions(ctx, machine)
-	var row proto.Session
-	listed := false
-	parents := map[string]string{}
-	for _, c := range list {
-		if c.ParentSessionID != "" {
-			parents[c.SessionID] = c.ParentSessionID
-		}
-		if c.SessionID == sid && !c.IsDeleted() {
-			row, listed = c, true
-		}
-	}
-	needsRow := !undo && (!filed || *target != "")
+	restore := restoreOf(entry.directionFiling, has, now)
+	undo := restore != nil && restore.Direction == target
+	row := ask.row
+	needsRow := !undo && (!filed || target != "")
 	switch {
-	case listed && identity.IsAssistantDir(row.Cwd) && !identity.IsAssistantDirOf(row.Cwd, s.id):
-		directionFilingRefusal(w, r, http.StatusNotFound, "session_not_found", errDirectionSessionNotFound)
-		return
-	case listed:
-	case needsRow && errors.Is(listErr, ErrNoDevice):
-		directionFilingRefusal(w, r, http.StatusNotFound, "machine_not_found", errDirectionMachineNotFound)
-		return
-	case needsRow && listErr != nil:
-		apierr.Call(w, listErr)
-		return
+	case ask.listed && identity.IsAssistantDir(row.Cwd) && !identity.IsAssistantDirOf(row.Cwd, s.id):
+		return refuse(http.StatusNotFound, "session_not_found", errDirectionSessionNotFound)
+	case ask.listed:
+	case needsRow && errors.Is(ask.listErr, ErrNoDevice):
+		return refuse(http.StatusNotFound, "machine_not_found", errDirectionMachineNotFound)
+	case needsRow && ask.listErr != nil:
+		return directionFilingWrite{}, &directionRefusal{call: ask.listErr}, nil
 	case needsRow:
-		directionFilingRefusal(w, r, http.StatusNotFound, "session_not_found", errDirectionSessionNotFound)
-		return
+		return refuse(http.StatusNotFound, "session_not_found", errDirectionSessionNotFound)
 	case undo: // not listed now: the entry it puts back is as it was filed
 		row.Title, row.ParentSessionID = restore.Title, restore.Parent
 	default: // in the book, not listed now, set on its own: kept as it was filed
 		row.Title, row.ParentSessionID = entry.Title, entry.Parent
 	}
-	if err := s.ensureTodosLoaded(ctx); err != nil {
-		directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
-		return
-	}
-	cfg := s.settings(ctx)
-	rules, err := s.directionRulesNow(ctx, cfg)
-	if err != nil {
-		directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
-		return
-	}
+	cfg := ask.rules.cfg
 	switch {
-	case sid == cfg.Main && machine == s.canonical(cfg.mainRouteMachine()):
-		directionFilingRefusal(w, r, http.StatusConflict, "direction_main_conversation", errDirectionMain)
-		return
-	case sid == cfg.BackgroundSupervisor && sid != cfg.Main && machine == s.canonical(cmp.Or(cfg.BackgroundSupervisorMachineID, cfg.MachineID)):
-		directionFilingRefusal(w, r, http.StatusConflict, "direction_background_supervisor", errDirectionBackground)
-		return
-	case rules.special[key]:
-		directionFilingRefusal(w, r, http.StatusConflict, "direction_leader_conversation", errDirectionLeader)
-		return
-	case rules.followers.follows(key, func(id string) string { return cond(id == sid, row.ParentSessionID, parents[id]) }):
-		directionFilingRefusal(w, r, http.StatusConflict, "direction_supervised_task", errDirectionSupervised)
-		return
+	case sid == cfg.Main && key[0] == s.canonical(cfg.mainRouteMachine()):
+		return refuse(http.StatusConflict, "direction_main_conversation", errDirectionMain)
+	case sid == cfg.BackgroundSupervisor && sid != cfg.Main && key[0] == s.canonical(cmp.Or(cfg.BackgroundSupervisorMachineID, cfg.MachineID)):
+		return refuse(http.StatusConflict, "direction_background_supervisor", errDirectionBackground)
+	case ask.rules.special[key]:
+		return refuse(http.StatusConflict, "direction_leader_conversation", errDirectionLeader)
+	case ask.rules.followers.follows(key, func(id string) string { return cond(id == sid, row.ParentSessionID, ask.parents[id]) }):
+		return refuse(http.StatusConflict, "direction_supervised_task", errDirectionSupervised)
 	}
-	if *target != "" {
-		current := *target != cfg.Main && slices.Contains(cfg.Leaders, *target)
-		if !current {
-			_, known, ok := s.directionSnapshot(ctx, *target)
-			switch {
-			case !ok:
-				directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
-				return
-			case !known:
-				directionFilingRefusal(w, r, http.StatusNotFound, "direction_not_found", errDirectionNotFound)
-				return
-			case !undo:
-				directionFilingRefusal(w, r, http.StatusConflict, "direction_ended", errDirectionEnded)
-				return
-			}
-		}
-		if space, known := s.conversationSpace(ctx, *target); !undo && known && spaceOf(row) != space {
-			directionFilingRefusal(w, r, http.StatusConflict, "direction_space_mismatch", errDirectionSpace)
-			return
+	if target != "" {
+		switch {
+		case ask.dir == directionUnknown:
+			return refuse(http.StatusNotFound, "direction_not_found", errDirectionNotFound)
+		case ask.dir == directionEndedState && !undo:
+			return refuse(http.StatusConflict, "direction_ended", errDirectionEnded)
+		case !undo && !ask.spaceOK:
+			return refuse(http.StatusConflict, "direction_space_mismatch", errDirectionSpace)
 		}
 	}
-	next := &directionFiling{Direction: *target, By: titleByUser, At: time.Now().UTC(), Title: row.Title, Parent: row.ParentSessionID}
-	held := func(records map[string]directionFiling) (int, error) {
-		return s.directionHeld(ctx, rules, records, *target, key)
+	next := restore
+	if !undo {
+		next = &directionFiling{Direction: target, By: titleByUser, At: now, Title: row.Title, Parent: row.ParentSessionID}
 	}
-	if undo {
-		next, held = restore, nil
+	p := s.planDirectionFiling(records, key, next, now)
+	if p.out.Changed && target != "" && !undo {
+		n, err := s.directionHeld(ctx, ask.rules, records, target, key, look)
+		if err != nil {
+			return directionFilingWrite{}, nil, err
+		}
+		if n >= directionSessionsPerDirection {
+			return refuse(http.StatusConflict, "direction_full", errDirectionFull)
+		}
 	}
-	out, err := s.fileDirectionSession(ctx, key, next, held)
-	if errors.Is(err, errDirectionFull) {
-		directionFilingRefusal(w, r, http.StatusConflict, "direction_full", errDirectionFull)
-		return
-	}
-	s.answerDirectionFiling(w, r, out, err)
+	return p, nil, nil
 }
 
 func (s *Service) answerDirectionFiling(w http.ResponseWriter, r *http.Request, out directionFilingResult, err error) {
@@ -405,7 +450,6 @@ func (s *Service) directionSessionsLocked(ctx context.Context) bool {
 		m = map[string]*directionFiling{}
 	}
 	b.m, b.loaded = m, true
-	b.rev++
 	return true
 }
 
@@ -498,7 +542,7 @@ func (s *Service) directionKeysOf(records map[string]directionFiling, k [2]strin
 	return keys
 }
 
-// directionFilingTries is how many times a write plans and counts again when the book changed meanwhile.
+// directionFilingTries is how many times a write lets the book's lock go to ask a computer the book named meanwhile.
 const directionFilingTries = 4
 
 // directionFilingWrite is what writing an entry for a session does to the book as records has it: the answer, and
@@ -549,44 +593,39 @@ func (s *Service) planDirectionFiling(records map[string]directionFiling, k [2]s
 	return p
 }
 
-// fileDirectionSession writes session k's entry: next nil takes it out. held counts the sessions the target direction
-// holds besides k, as the read places them, when the session moves into a direction (nil: no limit, an Undo); it asks
-// computers, so it runs outside the book's lock on a copy, and the write goes ahead only if the book is still that one
-// (else it plans and counts again). Copy-on-write keeps a failed save invisible even before the next lazy reload; loaded=false also
-// forces that reload, as the other settings books do.
-func (s *Service) fileDirectionSession(ctx context.Context, k [2]string, next *directionFiling,
-	held func(map[string]directionFiling) (int, error)) (directionFilingResult, error) {
+// fileDirectionSession decides ask and saves it, both under the book's lock and from the book as it is then, so two
+// writes never decide from a book the other changed. The computers are never asked under the lock: the limit counts
+// with the lists asked before it, and when the book names a computer not asked yet, the lock is let go, that computer
+// asked, and the write decided again (after directionFilingTries it counts with what it has, its stored parents for
+// the rest). Copy-on-write keeps a failed save invisible even before the next lazy reload; loaded=false also forces
+// that reload, as the other settings books do.
+func (s *Service) fileDirectionSession(ctx context.Context, ask directionAsk) (directionFilingResult, *directionRefusal, error) {
 	st := s.store()
 	if st == nil {
-		return directionFilingResult{}, errors.New("no database")
+		return directionFilingResult{}, nil, errors.New("no database")
 	}
 	b := &s.directionFilings
-	for range directionFilingTries {
+	look := newDirectionLook(s, nil)
+	for try := 1; ; try++ {
+		now := time.Now().UTC()
 		b.mu.Lock()
 		if !s.directionSessionsLocked(ctx) {
 			b.mu.Unlock()
-			return directionFilingResult{}, errors.New("direction sessions could not be read")
+			return directionFilingResult{}, nil, errors.New("direction sessions could not be read")
 		}
-		records, rev := directionRecordsOf(b.m), b.rev
-		b.mu.Unlock()
-		now := time.Now().UTC()
-		p := s.planDirectionFiling(records, k, next, now)
-		if !p.write {
-			return p.out, nil
-		}
-		if p.out.Changed && next != nil && next.Direction != "" && held != nil {
-			n, err := held(records)
-			if err != nil {
-				return directionFilingResult{}, err
-			}
-			if n >= directionSessionsPerDirection {
-				return directionFilingResult{}, errDirectionFull
-			}
-		}
-		b.mu.Lock()
-		if !b.loaded || b.rev != rev {
+		look.frozen, look.missing = true, nil
+		p, refusal, err := s.decideDirectionFiling(ctx, ask, directionRecordsOf(b.m), look, now)
+		if missing := slices.Sorted(maps.Keys(look.missing)); len(missing) > 0 && try < directionFilingTries {
 			b.mu.Unlock()
+			look.frozen = false
+			for _, machine := range missing {
+				look.list(ctx, machine)
+			}
 			continue
+		}
+		if err != nil || refusal != nil || !p.write {
+			b.mu.Unlock()
+			return p.out, refusal, err
 		}
 		m := maps.Clone(b.m)
 		for _, key := range p.drop {
@@ -603,14 +642,12 @@ func (s *Service) fileDirectionSession(ctx context.Context, k [2]string, next *d
 		if err := st.PutSetting(ctx, directionSessionsKey, m); err != nil {
 			b.loaded = false
 			b.mu.Unlock()
-			return directionFilingResult{}, err
+			return directionFilingResult{}, nil, err
 		}
 		b.m = m
-		b.rev++
 		b.mu.Unlock()
-		return p.out, nil
+		return p.out, nil, nil
 	}
-	return directionFilingResult{}, errors.New("direction sessions kept changing")
 }
 
 // dropDirectionSession removes only an assistant conversation's filing (its entries under every id of its computer).
@@ -641,7 +678,6 @@ func (s *Service) dropDirectionSession(ctx context.Context, machine, sid string)
 		return err
 	}
 	b.m = next
-	b.rev++
 	b.mu.Unlock()
 	s.directionTreeSoon()
 	return nil

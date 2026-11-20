@@ -274,10 +274,10 @@ func (s *Service) directionDeleted(ctx context.Context) (map[[2]string]bool, err
 }
 
 // directionHeld is how many sessions the owner filed direction holds besides session except, as the read places them
-// (the write's limit, with the book as records has it).
+// (the write's limit, with the book as records has it and the computers as look has them).
 func (s *Service) directionHeld(ctx context.Context, rules directionRules, records map[string]directionFiling, direction string,
-	except [2]string) (int, error) {
-	placed, err := s.directionPlacements(ctx, rules, records, func(d string) bool { return d == direction }, newDirectionLook(s, nil))
+	except [2]string, look *directionLook) (int, error) {
+	placed, err := s.directionPlacements(ctx, rules, records, func(d string) bool { return d == direction }, look)
 	if err != nil {
 		return 0, err
 	}
@@ -298,6 +298,9 @@ type directionLook struct {
 	listed   map[string]bool
 	failed   map[string]error
 	computer map[string]directionComputer
+	// frozen: asks no computer (a write holds the book's lock); one not asked yet is noted in missing instead.
+	frozen  bool
+	missing map[string]bool
 }
 
 // directionComputer is how a computer stands for the sessions on it. state is "" when it is one of this manager's
@@ -321,6 +324,13 @@ func newDirectionLook(s *Service, tb *treeBuild) *directionLook {
 // list reads machine's sessions, once.
 func (l *directionLook) list(ctx context.Context, machine string) {
 	if l.listed[machine] || l.failed[machine] != nil {
+		return
+	}
+	if l.frozen {
+		if l.missing == nil {
+			l.missing = map[string]bool{}
+		}
+		l.missing[machine] = true
 		return
 	}
 	rows, err := l.s.sessions(ctx, machine)
