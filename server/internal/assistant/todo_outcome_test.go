@@ -34,7 +34,12 @@ func outcomeEnv(t *testing.T, st Store, reply string) (*Service, *fakeHub, Todo)
 	}
 	p, _ := e.Store.Project("天气-app")
 	p.OneLine = "天气 App 的 iOS 和安卓版"
-	if err := e.Store.PutProject(p); err != nil {
+	// Seed an owner-written legacy OneLine. Ordinary PutProject now preserves that field on existing projects.
+	raw, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(e.Store.Path(kb.KindProject, p.Slug, "meta.json"), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
