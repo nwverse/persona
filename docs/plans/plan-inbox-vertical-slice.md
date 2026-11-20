@@ -28,12 +28,19 @@ The Inbox is the busiest single domain on every side, and most of its changes al
   (660); `assistant/tools.go` five names in `toolNames` (34-35) and five `runTool` cases (205-214); `extwire/scopes.go`
   the 31 Inbox scope entries (22-52); `assistant/handler.go` four Inbox methods on `Handler` (99-105), called only from
   `assistant/inbox_bus.go`.
-- **Seven files outside `inbox*.go` read the Inbox's in-memory state** (`inboxBook`, `s.inbox`):
+- **Ten files outside the Inbox core** (`inbox*.go` less the task bridge's files) **reach its in-memory state**
+  (`inboxBook`, `s.inbox`). Five write no item:
   `assistant/context.go` (`followingInboxItems`, 525-528), `assistant/tasks_draft_decisions.go` (88-89, 111-118),
-  `assistant/service.go` (326), and through `b := &s.inbox` `assistant/origins.go` (`gatherOriginEvidence`, 219),
-  `assistant/feishu_workbench.go` (`workbenchItem`, 530), `assistant/supervise_inbox.go` (51, 154) and
-  `assistant/tasks_inbox.go` (22, 60, 80). `assistant/briefing.go` only calls `s.followingInboxItems`. 123 test files
-  in the package touch `.inbox.mu` (1,241 times) or `.inbox.items` (588 times).
+  `assistant/service.go` (326), and through `b := &s.inbox` `assistant/origins.go` (`gatherOriginEvidence`, 219) and
+  `assistant/feishu_workbench.go` (`workbenchItem`, 530). Five are the task bridge's (section 2), and they also write
+  items under the book's lock: `assistant/supervise_inbox.go` (51, 154; writes at 179-186),
+  `assistant/tasks_inbox.go` (22, 60, 80; writes at 81-91; `checkTaskInbox`, a method on `*inboxBook`, at 38),
+  `assistant/inbox_task_links.go` (211, 281; writes at 232-235, 247-252 and 305-313), `assistant/inbox_task_recheck.go`
+  (37; writes at 56-58 and 110-115) and `assistant/inbox_todo.go` (91, 281; `fileTodo`, a writing method on
+  `*inboxBook`, at 29, which the core's `assistant/inbox_bulk.go:212` calls). Only the first two of those are outside
+  `inbox*.go`. `assistant/briefing.go` only calls `s.followingInboxItems`, and the lock in `assistant/inbox_no_output.go`
+  is the tasks' event ledger (`s.tasks.turns`), not the book. 123 test files in the package touch `.inbox.mu`
+  (1,241 times) or `.inbox.items` (588 times).
 - **Build cost** (#10613): a one-line edit in `internal/assistant` costs 58 s to compile its test binary, and check-fast
   tests the whole `./internal/assistant/...` subtree for any change under it (#10615).
 - **Web.** `web/src/lib/inbox.ts` (1,721 lines) is on every first screen (`web/src/lib/inbox-page.boundary.test.ts`).
@@ -81,7 +88,7 @@ a communication center. "Inbox" is the user-facing Inbox, not #7563's durable in
   `hub/inbox_delta.go` and `hub/inbox_forms.go` name it. The answer-only regexes in `hub/devicetokens.go` are a
   security boundary and stay hand-edited.
 - **The task bridge** (`supervise_inbox.go`, `tasks_inbox.go`, `inbox_no_output.go`, `inbox_task_*.go`,
-  `inbox_todo.go`): To-dos code that consumes Inbox events.
+  `inbox_todo.go`): To-dos code that consumes Inbox events and writes task links onto items.
 - **In-process readers:** the Lark workbench, the briefing, the main prompt's following section, the knowledge base.
 
 ## 3. Target on each side
@@ -132,9 +139,17 @@ type Kernel interface {
   adapter converts.
 - **Other code uses the Inbox through three surfaces:** a Reader (following items, an item copy, the card-send lock,
   origin evidence), Actions for the Lark workbench, and Policy (the model-call gate, the manager's origin decision,
-  agent started), which stays explicit calls, not kernel hooks.
+  agent started), which stays explicit calls, not kernel hooks. The Reader is read-only: it serves section 1's
+  readers, not the bridge.
 - **The task bridge** is renamed `task_inbox_*` / `todo_inbox`, sits behind an inboxTasks interface, and registers as
-  the module "inbox-tasks", which owns `/inbox/todo`, `/inbox/todo/undo` and the task-link recheck route.
+  the module "inbox-tasks", which owns `/inbox/todo`, `/inbox/todo/undo` and the task-link recheck route. It writes
+  items (a task link and its removal, a closed task's continuation, filing for a finished task, the supervisor's
+  in-memory signal watermark). While it shares package assistant with the core it keeps writing as it does today:
+  under the book's lock, rechecking the item and its link if it let go of the lock since reading them; a saved write
+  goes `beginWrite`, change, `settle`, unlock, then `saveWrites`; and it never takes the to-dos' lock while holding the
+  book's (`assistant/inbox_task_links.go:301`). S9 takes the lock out of package assistant, so it adds a fourth
+  surface, Links: one method for each read, check or write the bridge makes under the lock today, keeping those steps
+  inside the module (D5).
 
 ### 3.2 Contracts and wire
 
@@ -182,6 +197,11 @@ type Kernel interface {
 - **Evidence:** Go with GOFLAGS=-trimpath and `-p 4`, Gradle with `--max-workers=4`, no booted simulator for package
   tests. The PR says what was run and what was not. Rollback is a revert of the PR unless the table or the step says
   more. The tracks (server, web, Android, Apple) are independent; conflict costs are as of 2026-11-20.
+- **A known failure on main:** `TestHubAnswersOnlyItsOwnRoutes` has failed since #9485 merged, because
+  `hub/scoped_tokens.go` ranges over `extwire.RouteScopes`, which the guard does not take as a relayed wire table
+  (reported on #9485; it still fails at e21095770d, and no issue tracks it yet). Until it is fixed, a step whose
+  evidence names that test meets it when the test's only failure is that message, as on the step's base, and the PR
+  reports it; the step does not fix it (section 7).
 
 | Step | Change | Conflict cost | Gate |
 | --- | --- | --- | --- |
@@ -191,7 +211,7 @@ type Kernel interface {
 | S4 | Routes, bus methods, hooks, snapshot through the kernel | Medium: 25 open PRs on `assistant/service.go` and 6 on `assistant/bus.go`, none on the moved lines; none on `assistant/handler.go` | a window with a rebase note in each open PR on these files (#7891, 2026-11-18) |
 | S5 | The five tools through the kernel | Medium: 14 open PRs on `assistant/tools.go`; #6539 and #9782 (updated 2026-11-19) edit its Inbox line | after #6539 and #9782, or a rebase note |
 | S6 | Inbox scopes in their own extwire file | Low once #4512 lands (it adds three Inbox scopes, updated 2026-11-20); #7396 edits only the To-dos block | after #4512 |
-| S7 | The task bridge renamed, behind one interface | Medium: #6206, #9744, #10806, #10808 and #10894 (updated 2026-11-19 or 20) edit bridge files | after them, or once none was updated in 24 hours |
+| S7 | The task bridge renamed; the core calls it through one interface | Medium: #6206, #9744, #10806, #10808 and #10894 (updated 2026-11-19 or 20) edit bridge files | after them, or once none was updated in 24 hours |
 | S8 | The item slice | High: `assistant/inbox.go` has #4512 and the #9790 family (#9790, #10580, #10587); 12 open PRs touch `inbox*.go`, the #10079 family (#10079, #10891, #10915) too. Rollback: later steps first | a window after both families; announced in the open PRs and merged the same day |
 | S9 | The stateful module | Very high: every open server Inbox PR, and 123 test files rewritten. Rollback: before later PRs add files to the package | D3, a window, a short Inbox PR freeze |
 | W1 | Web domain folder, starting with the section bar | None: the moved and edited files had no open PR; `web/src/startup-preload.ts` and the startup namespaces (20 open PRs each) are untouched | now |
@@ -208,14 +228,17 @@ type Kernel interface {
   movedClusters row for `assistant/saved` bans that prefix). A registry test checks that a duplicate name panics.
 - **Done when:** `go test -p 4 ./internal/assistant/kernel/... ./internal/assistant/saved/... ./internal/archguard`, the
   saved tests, `TestRoutesAreTheWireOnes` and `go test ./internal/hub -run 'TestRouteScopes|TestHubAnswersOnlyItsOwnRoutes'`
-  pass with `route_scopes.txt` unchanged; `go vet ./internal/assistant/...` is clean.
+  pass with `route_scopes.txt` unchanged, `TestHubAnswersOnlyItsOwnRoutes` apart from #9485's known failure (reported,
+  not fixed); `go vet ./internal/assistant/...` is clean.
 
 ### S2. Guards and contract tests
-- **Change:** an archguard parse-only test: the book (`s.inbox.*` selectors, `b := &s.inbox`) is read only in `inbox*.go`
-  plus a shrink-only allowlist (section 1's seven files), and `toolNames` and `extwire/scopes.go` gain no Inbox entry
-  beyond main's and those open PRs add (#4512's three scopes, #6539's inbox_replay); the hint names the seam. Also the
-  reflection test of `listed()` (section 3.2), the every-block case for `TestWireSamples` (the existing case's bytes
-  unchanged), and an agreement test between a per-route answer-only table and `hub/devicetokens.go`.
+- **Change:** an archguard parse-only test: the book (`s.inbox.*` selectors, `b := &s.inbox`, methods on `*inboxBook`)
+  is reached only from the core (`inbox*.go` less the bridge's files), from the bridge's five files in section 1, named
+  in the guard so that S7's renames move their entries and add none, and from a shrink-only allowlist of section 1's
+  five readers; and `toolNames` and `extwire/scopes.go` gain no Inbox entry beyond main's and those open PRs add
+  (#4512's three scopes, #6539's inbox_replay); the hint names the seam. Also the reflection test of `listed()`
+  (section 3.2), the every-block case for `TestWireSamples` (the existing case's bytes unchanged), and an agreement
+  test between a per-route answer-only table and `hub/devicetokens.go`.
 - **Done when:** the new tests pass; a planted `s.inbox.items` read in a non-Inbox file fails the guard (shown in the
   PR); the guard passes on a local `git merge-tree` of each open Inbox PR's head, commands in the PR body; Android's
   `WireFixturesTest` still decodes `spec/fixtures/wire/inbox.json`.
@@ -241,7 +264,8 @@ type Kernel interface {
   the two fields, the register line and `s.inbox.lang`.
 - **Done when:** `go test ./internal/assistant -run 'TestRoutesAreTheWireOnes|Kernel|Bus|Inbox|Snapshot'`, then the
   full package, pass; `go test ./internal/hub -run 'TestRouteScopes|TestGoldenMCPTools|TestHubAnswersOnlyItsOwnRoutes'`
-  passes with every golden unchanged; `./internal/archguard` passes.
+  passes with every golden unchanged, `TestHubAnswersOnlyItsOwnRoutes` apart from #9485's known failure (reported, not
+  fixed); `./internal/archguard` passes.
 
 ### S5. The Inbox's tools through the kernel
 - **Change:** the five tools register as one block after ask_escalate and leave `toolNames` (`assistant/tools.go:34-35`)
@@ -260,14 +284,20 @@ type Kernel interface {
 - **Done when:** `go test ./internal/extwire/... ./internal/extmgr -run Scope` and `go test ./internal/hub -run TestRouteScopes`
   pass with `route_scopes.txt` byte-identical, and no `/api/v1/inbox` line is left in `extwire/scopes.go`.
 
-### S7. The task bridge, named as such, behind one interface
+### S7. The task bridge, named as such, called through one interface
 - **Change:** `git mv` the bridge files (`inbox_no_output.go`, `inbox_task_*.go`, `inbox_todo.go`, their tests) to
-  task_inbox_* and todo_inbox names, so the inbox prefix means the core only. The core calls the bridge only through
-  inboxTasks (confirmTodo, linkInboxTaskURLs, scopeInboxTasks, superviseInbox); the bridge registers as "inbox-tasks"
-  and reads the core through the Reader, so `supervise_inbox.go` and `tasks_inbox.go` leave the allowlist.
-- **Done when:** `ls server/internal/assistant/inbox*.go` lists only core files; an AST guard finds no direct bridge call
-  from the core; the Inbox and task tests, then the full package, pass; the docs naming the files are updated and
-  `scripts/test/test_doc_go_paths.py` passes.
+  task_inbox_* and todo_inbox names, so the inbox prefix means the core only. The core calls the bridge's entry points
+  only through inboxTasks (confirmTodo, linkInboxTaskURLs, scopeInboxTasks, superviseInbox), and the bridge registers
+  as "inbox-tasks", so `assistant/inbox_api.go` stops calling inboxTodoRoutes and inboxTaskLinkRoutes. The other
+  bridge code the core calls today moves to core files by a pure move: the item helpers `inboxTaskLinkEligible`,
+  `inboxScopeOf` (with its type), `judgeEvidence`, `receivedSince` and `checkSuggestedDue`, and `fileTodo`, the book
+  method `assistant/inbox_bulk.go:212` calls; `taskOpen` moves to a tasks file. The bridge's own reads and writes of
+  the book stay as they are (section 3.1): the Reader is read-only, so no surface is added here, and Links waits for
+  S9 (D5).
+- **Done when:** `ls server/internal/assistant/inbox*.go` lists only core files; an AST guard finds no call from the
+  core to a bridge function outside inboxTasks; S2's guard passes with the bridge's entries renamed, none added, and the
+  reader allowlist unchanged; the Inbox and task tests, then the full package, pass; the docs naming the files are
+  updated and `scripts/test/test_doc_go_paths.py` passes.
 
 ### S8. The item slice
 - **Change:** `InboxItem`, its nested types and pure methods (tiers, `status()`, `listed()` and its helpers) move to
@@ -281,8 +311,10 @@ type Kernel interface {
 ### S9. The stateful module (only after D3)
 - **Change:** the remaining core files move to server/internal/assistant/inbox; `*Service` methods become `*Module`
   methods behind inbox.Host, and Service keeps one field and calls the Reader, Actions and Policy surfaces. The
-  book-reaching unit tests move with a fake Host; a movedClusters row with the "inbox" prefix. One codemod PR, because
-  slicing it would split the book's locks across two packages.
+  bridge's reads, checks and writes under the book's lock become calls to Links (section 3.1), with `checkTaskInbox`
+  moving into the module behind one, so the bridge's five files leave S2's list. The book-reaching unit tests move
+  with a fake Host; a movedClusters row with the "inbox" prefix. One codemod PR, because slicing it would split the
+  book's locks across two packages.
 - **Done when:** the package's tests pass alone, then the assistant suite, hub goldens, `TestWireSamples`, archguard and
   the four docs tests; timings of a one-line Inbox edit before and after (package compile, test-binary compile,
   check-fast) are in the PR and in #10613's table.
@@ -354,7 +386,7 @@ review; S9 stays behind D3; check-fast gains nothing until #10615 picks option (
 | Measure | Now (287db61638) | Target |
 | --- | --- | --- |
 | Inbox server commits (of 149 in 14 days) also touching `assistant/service.go`, `assistant/tools.go`, `assistant/bus.go`, `extwire/scopes.go` | 16, 8, 8, 11 | 0 for new routes, tools and bus methods in the 30 days after S6 |
-| Files outside `inbox*.go` reading the book | 7 | `assistant/service.go` only |
+| Files outside the Inbox core reaching the book: readers; the bridge's, all of which write items | 5; 5 | `assistant/service.go` only; 0 after S9, the bridge writing through Links (without S9, they stay on S2's named list) |
 | Compile cost of a one-line Inbox edit | 58 s test-binary compile for `internal/assistant` (#10613) | measured for the item package (S8) and module (S9), same machine |
 | Web: commits editing `lib/inbox.ts` / raising `FIRST_SCREEN_BUDGET` (of 134) | 47 / 6 | falling / 0 |
 | Web: importers of `lib/inbox.ts` outside the Inbox | 27 | falling as re-exports are dropped |
@@ -369,7 +401,7 @@ review; S9 stays behind D3; check-fast gains nothing until #10615 picks option (
 | D2 | Kernel scope | One shared kernel that grows past saved's five members only with a second user (recommended), or a per-module Host struct of functions like saved.Host |
 | D3 | Whether S9 happens, and when | Decide after S8 measures the item package against the 58 s and the test rewrite cost is known |
 | D4 | Transitional aliases in package assistant | Allowed during the move (recommended); and whether a ratchet removes them later |
-| D5 | The task bridge | Stays with tasks as "inbox-tasks" (recommended), or moves with the Inbox |
+| D5 | The task bridge | Stays with tasks as "inbox-tasks" (recommended): it writes items under the book's lock as today until S9, which gives it the Links surface for those writes; or moves with the Inbox, so its writes stay inside the module and it reaches the to-dos through inbox.Host's tasks role. Either way S7 only renames it, and the Reader stays read-only |
 | D6 | Model purposes | The purpose table stays central in `assistant/models.go` (recommended), or modules declare their own. inbox.triage is also the model of the knowledge base and agent naming, and the parent of agent.triage, agent.delegate and translate, so renaming it changes configuration and needs its own issue |
 | D7 | A route manifest after the pilot | A per-route table (scope, relay kind, list key, receipt, answer-only) that `hub/inbox_routes.go`, `hub/ownership_lists.go` and the path prefix in `hub/bus_forward.go` read as data, or none. The answer-only regexes stay hand-edited either way |
 | D8 | Web folder name | web/src/domains/inbox (#10613's wording) or web/src/features/inbox (like the existing `web/src/features/todos`); and one `FIRST_SCREEN_BUDGET`, or a slice per domain |
@@ -399,7 +431,8 @@ generated type would be a pure replacement only if all of these hold:
   while the Lark workbench uses `wbNeedsYou` (tier or urgent); unifying them is for #5974 or a bug issue of its own.
 - **Sources** (extmgr, subscriptions), the hub's relay code, HarmonyOS, and splitting `docs/protocol/protocol.md` or
   `docs/assistant/inbox.md` (#10613's docs decision).
-- **Known test bugs, for issues of their own:** #9338's failing hand-off tests, and
+- **Known test bugs, for issues of their own:** #9338's failing hand-off tests, `TestHubAnswersOnlyItsOwnRoutes`
+  failing since #9485 (section 4), and
   `android/app/src/test/java/persona/android/di/InboxFacadeTest.kt`, which looks for a declaration text
   `android/app/src/main/java/persona/android/di/InboxModule.kt` no longer has (the facade is at line 200), so it scans
   the file up to the assistant facade and checks less than it says.
