@@ -479,7 +479,8 @@ enum HomeAgents {
     }
 }
 
-/// The Inbox widget's numbers and its newest messages, as the Inbox counts them (`InboxStore.actionCount`, its badge).
+/// The Inbox widget's numbers and its newest messages, as the Inbox counts them: Need You is `InboxStore.actionCount`
+/// (read ones included), Unread is `InboxStore.unreadCount`, the tab's badge.
 enum HomeInbox {
     static let shown = 5
 

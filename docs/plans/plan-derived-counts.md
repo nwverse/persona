@@ -242,6 +242,10 @@ description is schema text, so its four outputs are regenerated. *Conflict:* `In
 #4512), `assistantwire/inbox.go` 3 (#9782d, #6539d, #4512), the rest none. *Gate:* none. *Rollback:* revert. *Done:*
 `scripts/gen/extension_schema.py --check` and the docs tests pass.
 
+*Landed (#11832):* every correction above, none skipped (no open PR rewrites those lines), plus the same claims in the
+`HomeInbox` comment, `docs/apple/ios.md` ("Counts"), `docs/assistant/managers.md` ("Badges") and the web side-fold
+replay's comment.
+
 **3. The Agents definition, pinned.** *Change:* every `spec/fixtures/needs-you` case gets `expected.badge_rows`, plus
 six cases: a child's card under its parent, a side folded under its parent, a quiet task's card, a directory-hidden card
 (counted nowhere), a delegating card (counts today; D11), an elicitation-only card (its session waits). The iOS and
