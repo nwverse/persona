@@ -140,11 +140,25 @@ func (h *Hub) saveExtReports() {
 		r := h.ext.savePending
 		h.ext.savePending = nil
 		h.ext.saveMu.Unlock()
-		ctx, cancel := context.WithTimeout(context.Background(), extReportStoreTimeout)
-		err := h.store.PutSetting(ctx, extReportKey, *r)
-		cancel()
-		if err != nil {
-			h.logf("extensions: keep the report: %v", err)
+		if r != nil {
+			// A snapshot refuses new writes; keep the newest report pending
+			// and write it after resume (quiesce.go).
+			if !h.quiesce.begin() {
+				h.ext.saveMu.Lock()
+				if h.ext.savePending == nil {
+					h.ext.savePending = r
+				}
+				h.ext.saveRunning = false
+				h.ext.saveMu.Unlock()
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), extReportStoreTimeout)
+			err := h.store.PutSetting(ctx, extReportKey, *r)
+			cancel()
+			h.quiesce.end()
+			if err != nil {
+				h.logf("extensions: keep the report: %v", err)
+			}
 		}
 		h.ext.saveMu.Lock()
 		if h.ext.savePending == nil {
@@ -154,6 +168,19 @@ func (h *Hub) saveExtReports() {
 		}
 		h.ext.saveMu.Unlock()
 	}
+}
+
+// resumeExtReportSave writes a report left pending by a snapshot's pause.
+func (h *Hub) resumeExtReportSave() {
+	h.ext.saveMu.Lock()
+	if h.ext.savePending == nil || h.ext.saveRunning {
+		h.ext.saveMu.Unlock()
+		return
+	}
+	h.ext.saveRunning = true
+	h.nodeWorkers.Add(1)
+	h.ext.saveMu.Unlock()
+	go h.saveExtReports()
 }
 
 // loadExtReport is the report kept before the hub restarted, until the manager reports again.
@@ -185,7 +212,7 @@ func machineExtrasEqual(a, b map[string]extwire.MachineExtras) bool {
 // features are the hub's features with those of the extensions serving part of the API.
 func (h *Hub) features() []string {
 	out := append(slices.Clone(proto.Features), featureSessionsList, featureSessionsLookup, featureSessionsPaneSource, featureSessionsManager, featureSessionsPageCounts,
-		featureSessionsSearch, featureAgentsPageCounts, featureSessionsHierarchy, featureSessionsCatalog, featureSessionsTodo, featureSessionsQuickFilters, featureSessionsJustFinished, featureSessionsAgentsOnly, featureMachineRename, featureDesktopUnregister, nodeproto.MCPWait)
+		featureSessionsSearch, featureAgentsPageCounts, featureSessionsHierarchy, featureSessionsCatalog, featureSessionsTodo, featureSessionsQuickFilters, featureSessionsJustFinished, featureSessionsAgentsOnly, featureMachineRename, featureDesktopUnregister, nodeproto.MCPWait, "starred_messages")
 	out = append(out, h.agentSessionArchiveFeatures()...)
 	out = append(out, h.agentAutonameFeatures()...)
 	out = append(out, h.sessionsSideFoldFeatures()...)
@@ -278,7 +305,8 @@ func (h *Hub) emitToExtensions(owner, event string, params any) {
 func (h *Hub) extensionRoutesRelayed(api *http.ServeMux) {
 	for _, pattern := range extwire.Routes {
 		relay := func(w http.ResponseWriter, r *http.Request) { h.relayToManager(w, r, false) }
-		if pattern == "/api/v1/agents/" { // messages to the personal Agents (terminal_controls.go)
+		if strings.HasPrefix(pattern, "/api/v1/agents/") || strings.Contains(pattern, " /api/v1/agents/") {
+			// Messages to the personal Agents (terminal_controls.go), on both broad and concrete relay patterns.
 			relay = h.withoutTerminalControls(relay)
 		}
 		api.HandleFunc(pattern, relay)

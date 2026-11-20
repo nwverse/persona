@@ -13,23 +13,21 @@ import {
 import { ASSISTANT_MODEL_PICK_FEATURE, mainChatAgentMismatch } from "../../lib/assistant-models";
 import { SUPERVISE_PURPOSE } from "../../lib/background-supervisor";
 import type { AssistantLaunchers } from "../../lib/session-models";
-import { effortChoices, providerModels, takesEffort } from "../../lib/launcher-models";
+import { effortChoices, takesEffort } from "../../lib/launcher-models";
 import { useStore } from "../../lib/store";
 import { formatTokens } from "../../lib/tokens";
 import { formatNumber, t } from "../../i18n";
 import { Button, Dialog, IconButton, Loading, toast } from "../../ui/atoms";
 import { Segmented } from "../assistant/parts";
 import { Icon } from "../../ui/icons";
-import type { ModelList } from "../../ui/ModelPicker";
-import { lazyPage } from "../../lib/lazy-page";
 import { Group, Pill, Row } from "./SettingsParts";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { ConfigurationManager } from "./ConfigurationManager";
 import { DirectAPIEditor, DirectEffortSelect, directEffortState } from "./DirectAPIEditor";
+import { ModelPicker, useLauncherModels } from "./ModelBindingPickers";
 import { ModelProfiles } from "./ModelProfiles";
-
-// The picker is shared with task execution; load it when editing a model, outside Settings' preload dependencies.
-const ModelPicker = lazyPage(() => import("../../ui/ModelPicker").then((m) => m.ModelPicker));
+import { candidateDraft, candidateProblem, candidateProviders, candidateUpdate, type CandidateDraft } from "../../lib/model-candidates";
+import { ExtensionCandidates } from "./ExtensionCandidates";
 
 const UNVERIFIED_STATUS = "未验证"; // i18n-ignore: stable wire sentinel, not user-facing text.
 
@@ -85,7 +83,7 @@ function ModelConfigurationForManager({ manager, open, onOpen, onProviders }: { 
   return (
     <>
       <h2 className="mb-3 px-1 text-[15px] font-semibold text-ink">{t("settings-nav.tab_model_config")}</h2>
-      <ModelProfiles manager={manager} providers={data?.providers} onChanged={() => void load()} />
+      <ModelProfiles manager={manager} providers={data?.providers} purposes={data?.purposes} onChanged={() => void load()} />
       <div className="mb-4 flex items-center gap-2">
         <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-control bg-surface px-3 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
           <Icon name="search" size={13} stroke={2} className="text-ink-3" />
@@ -191,18 +189,14 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const [data, setData] = useState<ModelPurposeBody | null>(null);
   const [linkedParent, setLinkedParent] = useState<ModelPurpose>();
   const [draft, setDraft] = useState<ModelDraft>({ provider: "", model: "", effort: "", runtime: "" });
+  const [candidateEdits, setCandidateEdits] = useState<CandidateDraft>();
   const [error, setError] = useState("");
   const [conflict, setConflict] = useState(false);
   const [busy, setBusy] = useState(false);
   const [models, setModels] = useState<{ id: string; name?: string }[]>([]);
   const [modelsError, setModelsError] = useState("");
-  // A launcher provider's /model list (#943), from a machine that has it (`machine`), and the picker over it.
-  const [launcherList, setLauncherList] = useState<ModelList & { machine?: string; provider?: string }>({ status: "idle" });
   const [picking, setPicking] = useState(false);
   const [query, setQuery] = useState("");
-  // "Retry" / "Reload": the next load asks the CLI again (refresh) and keeps showing the list meanwhile, once.
-  const [reload, setReload] = useState(0);
-  const refreshNext = useRef(false);
   const search = useRef<HTMLInputElement>(null);
   const machines = useStore((s) => s.machines);
   const mainSession = useStore((s) => {
@@ -226,6 +220,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
       setLinkedParent(parent);
       setData(r);
       setDraft(draftFor(r.purpose));
+      setCandidateEdits(candidateDraft(r.purpose));
       setError("");
       setConflict(false);
     } catch (e) {
@@ -245,6 +240,9 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
 
   const p = data?.purpose;
   const candidates = p ? providersFor(p, data.providers) : [];
+  const directCandidates = p && candidateEdits ? candidateProviders(p, data.providers) : [];
+  const candidateChange = p?.candidates && candidateEdits && candidateUpdate(p.candidates, candidateEdits);
+  const candidateError = p?.candidates && candidateEdits ? candidateProblem(p.candidates, candidateEdits, directCandidates) : "";
   // The draft names no provider of its own: once saved it runs on what it follows. While nothing is overridden that is
   // what is in effect; with an override, the binding of the category a use with a record of its own follows (from the
   // page's catalog), as the reset makes it (#7980). Without that, what is in effect, as before.
@@ -268,22 +266,11 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const effortAllowed = !!p && effortOffered(p, chosen, effectiveProvider, followsAgents,
     !!data?.providers.some((provider) => provider.chat_effort === true));
   const listProvider = p?.kind !== "plugin" && chosen?.kind === "launcher" && supportsField(p!, "model") ? chosen.id : "";
-  useEffect(() => {
-    const refresh = refreshNext.current;
-    refreshNext.current = false;
-    if (!refresh) { setPicking(false); setQuery(""); } // another provider: start closed; a refresh keeps the list open
-    if (!listProvider) { setLauncherList({ status: "idle" }); return; }
-    const controller = new AbortController();
-    // Another provider's list never stays up while this one's loads (a pick would be the other provider's id).
-    setLauncherList((l) => ({ status: "loading", provider: listProvider, list: refresh && l.provider === listProvider ? l.list : undefined }));
-    providerModels(listProvider, { manager, refresh, machine: p?.machine_id, signal: controller.signal })
-      .then((list) => setLauncherList({ status: "ready", list, machine: list?.machine, provider: listProvider }))
-      .catch((e) => { if (!controller.signal.aborted) setLauncherList({ status: "error", error: errorText(e), provider: listProvider }); });
-    return () => controller.abort();
-  }, [listProvider, reload, p?.machine_id]);
-  const reloadList = () => { refreshNext.current = true; setReload((n) => n + 1); };
-  // The picker while there is a list (or one coming); the plain field without one: an older hub, a failure.
-  const picker = launcherList.status === "loading" || (launcherList.status === "ready" && !!launcherList.list?.models.length);
+  const { list: launcherList, reload: reloadList, hasPicker: picker } = useLauncherModels(listProvider, {
+    manager,
+    machine: p?.machine_id,
+    onProviderChange: () => { setPicking(false); setQuery(""); },
+  });
   // Left empty, the model is inherited while the provider is too (what runs now when nothing here is set; with an
   // override, the category's); with a provider picked here it is that provider's default (the list's "Default").
   // An own record that names its parent's provider still inherits an empty model or effort from that parent. Another
@@ -324,8 +311,11 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const configDirs = p ? configDirChoices(p, chosenAgent) : [];
   const previewForm = p ? executionForm({ ...p, effective: { ...p.effective, provider: runsOn, runtime: draft.runtime || p.effective?.runtime } }, data?.providers, machines) : undefined;
   const listMachine = machines.find((m) => m.id === launcherList.machine)?.name ?? launcherList.machine;
+  const canSave = !!(writable || candidateChange) && !conflict && !(candidateChange && candidateError);
+  // The binding reset saves immediately. Keep a pending candidate draft until Save or Cancel.
+  const canReset = writable && !conflict && !candidateChange;
   const save = async (restore = false) => {
-    if (!p || !writable || busy || conflict) return;
+    if (!p || busy || !(restore ? canReset : canSave)) return;
     setBusy(true);
     setError("");
     try {
@@ -333,7 +323,10 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
       // whatever this page grouped it under),
       // else the draft's fields, effort with them where the provider it runs on takes one
       const patch = restore ? resetPatch(p, draft.runtime, draft.config_dir) : modelPatch(p, draft, effortAllowed);
-      const r = await saveModelPurpose(p, patch, manager);
+      // Editing only the candidate order must not rewrite an independently inherited binding.
+      const bindingUnchanged = !restore && candidateChange && JSON.stringify(patch) === JSON.stringify(modelPatch(p, draftFor(p), effortAllowed));
+      const changes = !restore && candidateChange ? { ...(bindingUnchanged ? { revision: p.revision } : patch), candidates: candidateChange } : patch;
+      const r = await saveModelPurpose(p, changes, manager);
       if (!alive.current) return;
       setData(r);
       setDraft(draftFor(r.purpose));
@@ -349,10 +342,10 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
     }
   };
 
-  const reset = <Button tone="quiet" disabled={busy || !writable || conflict} onClick={() => void save(true)}>{follow || t("settings-modelconfiguration.restore")}</Button>;
+  const reset = <Button tone="quiet" disabled={busy || !canReset} onClick={() => void save(true)}>{follow || t("settings-modelconfiguration.restore")}</Button>;
   const actions = <>
     <Button tone="quiet" disabled={busy} onClick={onClose}>{t("common.cancel")}</Button>
-    <Button tone="primary" busy={busy} disabled={!writable || conflict} onClick={() => void save()}>{t("common.save")}</Button>
+    <Button tone="primary" busy={busy} disabled={!canSave} onClick={() => void save()}>{t("common.save")}</Button>
   </>;
   return (
     <Dialog open={id !== null} onClose={() => { if (!busy) onClose(); }} width={480} title={p?.name ?? t("settings-modelconfiguration.dialog_title")}
@@ -366,6 +359,8 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
       {p && <div className="flex flex-col gap-4">
         {followsAgents && <p className="text-[12px] text-ink-3">{agentsOverrideStatus(p.override)}</p>}
         {category && <p className="text-label text-ink-3">{categoryStatus(p.override, category)}</p>}
+        {p.candidates && candidateEdits && <ExtensionCandidates setting={p.candidates} draft={candidateEdits} providers={directCandidates}
+          busy={busy} problem={candidateError} onChange={setCandidateEdits} />}
         <Group title={t("settings-modelconfiguration.effective")} footer={p.inherited_from ? t("settings-modelconfiguration.inherited_from", { name: sourceName(p.inherited_from) ?? "" }) : t("settings-modelconfiguration.effective_footer")}>
           <Row label={t("settings-modelconfiguration.provider")} mono><span className="max-w-[220px] truncate">{providerName(p.effective?.provider, data?.providers) ?? t("settings-modelconfiguration.not_configured")}</span></Row>
           <Row label={t("settings-modelconfiguration.model")} mono><span className="max-w-[220px] truncate">{p.effective?.model || t("settings-modelconfiguration.provider_default")}</span></Row>

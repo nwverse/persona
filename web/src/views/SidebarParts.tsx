@@ -12,15 +12,16 @@ import { arrangeSections, useSidebarPrefs } from "../lib/sidebar-pages";
 import { useStartPageCheck } from "../lib/start-page";
 import { useExtensionSlot } from "../lib/extension-slots";
 import { toneOf } from "../lib/extension-ui";
+import { colorOf, hue, type UIColor } from "../lib/extension-ui-v6";
+import { BUILTIN_PAGE_COLORS, useSidebarIconMode } from "../lib/sidebar-icons";
 import { BADGE_TONE, navIcon, pageRoute } from "./extensions/ExtensionSlots";
 import { href, inWorkView, navigate, type Route } from "../lib/router";
 import { useAgentSessions } from "../lib/sessions";
-import { scoped, useScope, useScopedCounts, useScopedTodos } from "../lib/current-assistant";
-import { ownerBadge } from "../lib/todo-triage";
-import { makeSessionLookup } from "../lib/todos";
-import { useRestoredTodos } from "../lib/todo-restore";
+import { scoped, useScope, useScopedCounts } from "../lib/current-assistant";
+import { useOwnerNeeds } from "../lib/todo-owner-needs";
 import { useLarkOn, useStore } from "../lib/store";
 import { connPhase } from "../lib/connection";
+import { useStarredCount } from "../lib/starred-summary";
 import { useWorkspaceBoardSetting } from "../lib/workspace-board-setting";
 import type { Session } from "../lib/types";
 import type { MenuItem } from "../ui/atoms";
@@ -65,8 +66,13 @@ export function useGo(onNavigate?: () => void): GoFn {
 }
 
 /** One entry of the pages under Persona ("Overview", "Inbox" … "Settings", and the extensions' pages). `badgeLabel`:
- *  what a screen reader hears for the badge in place of its digits, when the number alone does not say what it counts. */
-export type NavPage = { k: string; to: Route; icon: IconName; label: string; short?: string; badge?: number | string; badgeTone?: keyof typeof BADGE_CLASS; badgeLabel?: string; hint?: string; title?: string; group?: { id: string; title: string } };
+ *  what a screen reader hears for the badge in place of its digits, when the number alone does not say what it counts.
+ *  `color`: its icon's, only with Settings › Appearance › Sidebar icons on Colored (#10822, lib/sidebar-icons.ts). */
+export type NavPage = { k: string; to: Route; icon: IconName; label: string; short?: string; badge?: number | string; badgeTone?: keyof typeof BADGE_CLASS; badgeLabel?: string; hint?: string; title?: string; group?: { id: string; title: string }; color?: UIColor };
+
+/** A page's icon in its color (#10822), unless it is the open page, whose icon keeps the open row's ink; none without a
+ *  color, so Monochrome draws what it always drew. */
+export const pageIconStyle = (color: UIColor | undefined, active: boolean) => (color && !active ? { color: hue(color) } : undefined);
 
 /** A page's spoken name with its badge ("Inbox 3", "To-dos 2 to-dos need you"): the phone's grid, the rail and the folded
  *  titles say what the list's row says. */
@@ -84,14 +90,11 @@ export function useNavPages() {
   const online = useStore((s) => scoped(s.machines, scope).filter((m) => m.online).length);
   const total = useStore((s) => scoped(s.machines, scope).length);
   const assistant = useStore((s) => s.assistant);
-  const todos = useScopedTodos();
   const todosSupported = useStore((s) => s.todosSupported);
-  // The open to-dos that need the owner, not those Agents are on (#11085, lib/todo-triage ownerBadge); quiet tasks
-  // (#1731) are told about in the main conversation, not counted here. The To-dos page's "Not done" counts every open one.
-  const agentSessions = useAgentSessions();
-  const interactions = useStore((s) => s.interactions);
-  const [restored] = useRestoredTodos();
-  const todosBadge = useMemo(() => ownerBadge(todos, makeSessionLookup(agentSessions, interactions), Date.now(), restored).size, [todos, agentSessions, interactions, restored]);
+  // The open to-dos that need the owner, not those Agents are on (#11085, lib/todo-triage ownerNeeds); quiet tasks
+  // (#1731) are told about in the main conversation, not counted here. The To-dos page's "Not done" counts every open one,
+  // and the page marks the rows counted here from the same hook (#11838), so the number and the marks agree.
+  const todosBadge = useOwnerNeeds().size;
   const todosBadgeLabel = todosBadge ? t("sidebar.todos_badge_title", { count: todosBadge }) : undefined;
   const counts = useScopedCounts();
   const inbox = useInboxBadge();
@@ -100,9 +103,13 @@ export function useNavPages() {
   // "Messages" needs the hub to read Feishu (feature `lark`) as well as this browser's switch
   const larkHome = larkSwitch && lark;
   const extensionPages = useExtensionSlot("nav_page");
+  // Colored sidebar icons (#10822): a built-in page's color, an extension's page the one its manifest names; none otherwise
+  const colored = useSidebarIconMode() === "colored";
+  const tint = (p: NavPage, color: UIColor | undefined): NavPage => (colored && color ? { ...p, color } : p);
   // off unless turned on in Settings › General › Agent (#2475); null until the hub answered
   const board = useWorkspaceBoardSetting().enabled;
   const boardOn = board === true;
+  const stars = useStarredCount(useStore((s) => s.features.includes("starred_messages")));
 
   const main = assistant?.main ? assistant.conversations.find((c) => c.session_id === assistant.main) : undefined;
   const page: Record<(typeof NAV_PAGES)[number], NavPage | false> = {
@@ -110,6 +117,7 @@ export function useNavPages() {
     inbox: { k: "inbox", to: { name: "inbox" }, icon: "inbox", label: t("sidebar.nav_inbox"), short: t("sidebar.nav_inbox_short"), badge: inbox || undefined, badgeTone: "attention", title: inbox ? t("sidebar.inbox_badge_title", { count: inbox }) : undefined },
     health: { k: "health", to: { name: "health" }, icon: "heart", label: t("sidebar.nav_health"), short: t("sidebar.nav_health_short") },
     messages: larkHome && { k: "messages", to: { name: "messages" }, icon: "chat", label: t("sidebar.nav_messages") },
+    starred: stars != null && { k: "starred", to: { name: "starred" }, icon: "star", label: t("starred.title"), badge: stars || undefined, badgeLabel: t("starred.count", { count: stars }) },
     "workspace-board": boardOn && { k: "workspace-board", to: { name: "workspace-board" }, icon: "layers", label: t("sidebar.nav_board"), short: t("sidebar.nav_board_short") },
     todos: todosSupported !== false && { k: "todos", to: { name: "todos" }, icon: "todo", label: t("sidebar.nav_todos"), badge: todosBadge || undefined, badgeLabel: todosBadgeLabel, title: todosBadgeLabel },
     routines: { k: "routines", to: { name: "routines" }, icon: "clock", label: t("sidebar.nav_routines"), short: t("sidebar.nav_routines_short") },
@@ -123,10 +131,10 @@ export function useNavPages() {
     ...(k === "settings"
       ? extensionPages.map((u) => {
           const key = extensionNavKey(u.extension, u.id);
-          return { k: key, to: pageRoute(u.extension, u.id), icon: navIcon(u.icon), label: u.title, badge: u.badge?.text || undefined, badgeTone: BADGE_TONE[toneOf(u.badge?.tone)], title: u.extension_name ? `${u.title} · ${u.extension_name}` : u.title, group: u.group };
+          return tint({ k: key, to: pageRoute(u.extension, u.id), icon: navIcon(u.icon), label: u.title, badge: u.badge?.text || undefined, badgeTone: BADGE_TONE[toneOf(u.badge?.tone)], title: u.extension_name ? `${u.title} · ${u.extension_name}` : u.title, group: u.group }, colorOf(u.icon_color));
         })
       : []),
-    ...(page[k] ? [page[k]] : []),
+    ...(page[k] ? [tint(page[k], k === "terminal" || k === "starred" ? undefined : BUILTIN_PAGE_COLORS[k])] : []),
   ]);
 
   // as arranged in Settings › General › Sidebar pages: the list, and the pages that wait under More (docs/web/web.md "The sidebar's pages")
@@ -134,9 +142,10 @@ export function useNavPages() {
   const { sections, more } = arrangeSections(all, useSidebarPrefs());
   const pages = sections.flatMap((s) => s.pages);
   // the start page this load opened on, if it is not there after all, gives way to the main chat (lib/start-page.ts)
-  useStartPageCheck((k) => all.some((p) => p.k === k), extensionPages, board !== null);
+  const starredKnown = stars !== undefined;
+  useStartPageCheck((k) => all.some((p) => p.k === k), extensionPages, board !== null, starredKnown);
 
-  return { phase, online, total, main, pages, sections, more, all };
+  return { phase, online, total, main, pages, sections, more, all, starredKnown };
 }
 
 /** The pages under "More" as menu rows (the phone's grid, the rail): a choice opens the page, then `onNavigate`

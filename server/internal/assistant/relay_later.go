@@ -44,6 +44,7 @@ func (s *Service) keepRelayLater(to string, msg relayMsg) (int, bool) {
 	}
 	b.st.Later[to] = q
 	if err := s.saveRelayLocked(); err != nil {
+		b.loaded = false // reload durable state before another send or retry
 		return 0, false
 	}
 	return len(q), true
@@ -55,7 +56,12 @@ func (s *Service) keepRelayLater(to string, msg relayMsg) (int, bool) {
 func (s *Service) relayLaterFor(ctx context.Context, to string) (string, func(taken bool)) {
 	b := &s.relays
 	b.mu.Lock()
-	if !s.relayLocked(ctx) || len(b.st.Later[to]) == 0 {
+	if !s.relayLocked(ctx) {
+		b.mu.Unlock()
+		return "", func(bool) {}
+	}
+	s.pruneRelayLaterLocked(time.Now())
+	if len(b.st.Later[to]) == 0 {
 		b.mu.Unlock()
 		return "", func(bool) {}
 	}

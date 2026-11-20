@@ -130,6 +130,8 @@ type assistantProc struct {
 	compacted     bool // compactIdle ran in this process: it is let go when idle again
 	manual        bool // an explicit /compact (manual or idle-aware delivery): its end is reported
 	requested     bool // its first request was logged
+	// release: the main conversation's release policy as the reaper last read it from its record (assistant_reap.go).
+	release assistantRelease
 	// tui: started as interactive Claude Code through `personad assistant-tui` (assistant_tui.go). tuiNote: why it
 	// runs claude -p although interactive was asked for (the bridge fell back, or a recent fallback holds new starts
 	// off); "" when it runs as asked.
@@ -802,7 +804,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			if roleChanged {
 				// Do not kill active work, or deliver a new role's message on the old system
 				// policy. Manager-generated messages remain queued for an idle retry.
-				return "", refusal("busy", i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
+				return "", refusal(assistantwire.CodeConversationBusy, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
 			}
 			if execution.Strict && executionChanged {
 				return "", errors.New("task execution context differs from this conversation; start a new conversation")
@@ -1594,7 +1596,7 @@ func (n *Node) assistantSessions() []proto.Session {
 				m := n.meta(path, st)
 				s.Title, s.Model, s.LastText, s.Rev = m.title, m.model, snippet(assistantAnswer(m)), st.Size()
 				s.PermissionMode, s.Effort = n.currentModes(p.id, m)
-				setContext(&s, m)
+				n.setSessionContext(&s, m)
 				// Background shells outlive the turn, as in a pane's session: a channel run (Lark) waits for the turn
 				// they start, and a list shows them (channel.Background).
 				n.setBackground(&s, m)

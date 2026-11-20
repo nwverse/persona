@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -184,7 +185,7 @@ func TestDecisionSignalsBypassTheCooldown(t *testing.T) {
 		}
 		// Nor does the scheduler delay it.
 		g := superviseSignal{Todo: "todo_urgent", Kind: kind, At: at, batchUntil: at.Add(time.Hour)}
-		if wait, ok := digestWait(at, time.Time{}, []superviseSignal{g}, shortSuperviseTimings); !ok || wait > shortSuperviseTimings.gather {
+		if wait, ok := digestWait(at, at, []superviseSignal{g}, shortSuperviseTimings); !ok || wait > shortSuperviseTimings.gather {
 			t.Fatalf("%s due in %v", kind, wait)
 		}
 	}
@@ -244,6 +245,54 @@ func TestConversationSendWithoutWake(t *testing.T) {
 	}
 	if n := len(laterFor(s, "conv1")); n != 0 {
 		t.Fatalf("%d kept after the message carrying them went in", n)
+	}
+}
+
+func TestConversationSendWithoutWakeSurvivesRestartAndFailedSave(t *testing.T) {
+	st := &memStore{}
+	s, _ := newQuietServiceOn(t, st)
+	msg := relayMsg{From: "conv2", FromTitle: "Research", Text: "Acknowledged.", At: time.Now()}
+	if n, ok := s.keepRelayLater("conv1", msg); !ok || n != 1 {
+		t.Fatalf("keep = %d, %v", n, ok)
+	}
+	st.setFailPut(errors.New("database unavailable"))
+	msg.Text = "Not saved."
+	if _, ok := s.keepRelayLater("conv1", msg); ok {
+		t.Fatal("a failed save was acknowledged")
+	}
+	st.setFailPut(nil)
+	// The failed write must not leak an unacknowledged message into the next delivery.
+	text, _ := s.relayLaterFor(context.Background(), "conv1")
+	if !strings.Contains(text, "Acknowledged.") || strings.Contains(text, "Not saved.") {
+		t.Fatalf("after failed save: %s", text)
+	}
+	again, _ := newQuietServiceOn(t, st)
+	text, done := again.relayLaterFor(context.Background(), "conv1")
+	if !strings.Contains(text, "Acknowledged.") {
+		t.Fatalf("restart lost the kept message: %s", text)
+	}
+	// A message arriving during delivery stays for the following delivery.
+	msg.Text = "Later update."
+	if _, ok := again.keepRelayLater("conv1", msg); !ok {
+		t.Fatal("could not keep concurrent update")
+	}
+	done(true)
+	remaining, _ := again.relayLaterFor(context.Background(), "conv1")
+	if strings.Contains(remaining, "Acknowledged.") || !strings.Contains(remaining, "Later update.") {
+		t.Fatalf("delivery cleared the wrong messages: %s", remaining)
+	}
+}
+
+func TestConversationSendWithoutWakeDropsExpiredBeforeDelivery(t *testing.T) {
+	s, _ := newQuietService(t)
+	if _, ok := s.keepRelayLater("conv1", relayMsg{Text: "Expired update.", At: time.Now()}); !ok {
+		t.Fatal("could not keep message")
+	}
+	s.relays.mu.Lock()
+	s.relays.st.Later["conv1"][0].QueuedAt = time.Now().Add(-relayLaterKeep - time.Hour)
+	s.relays.mu.Unlock()
+	if text, _ := s.relayLaterFor(context.Background(), "conv1"); text != "" {
+		t.Fatalf("expired message carried to delivery: %s", text)
 	}
 }
 

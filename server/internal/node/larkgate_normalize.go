@@ -19,10 +19,10 @@ func normalizeLarkCommand(cmd, cwd string, gates []proto.CommandGate) string {
 	return normalizeLarkCommandTracked(cmd, cwd, gates, nil)
 }
 
-// resolved, when non-nil, records the literal words of invocations whose executable came from a proven assignment.
+// resolved, when non-nil, records the normalized segment positions whose executable came from a proven assignment.
 // The classifier uses that provenance only for the neighboring-opaque-program check; the command itself is still
-// parsed and classified normally.
-func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, resolved map[string]bool) string {
+// parsed and classified normally. Positions, rather than word content, keep an identical later literal segment distinct.
+func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, resolved map[int]bool) string {
 	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
 	if err != nil {
 		return cmd
@@ -72,8 +72,11 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 	// moved: a literal cd ran before. It changes nothing an absolute path names, but a relative one, or a bare name with
 	// "." or an empty entry in PATH, is looked up from the new directory: only absolute values resolve after it (#8389).
 	moved := false
+	segmentPosition := 0
 	for _, unit := range units {
 		for _, stmt := range unit {
+			position := segmentPosition
+			segmentPosition++
 			if unsafe {
 				break
 			}
@@ -164,7 +167,7 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 								expanded = append(expanded, call.Args[index+1:]...)
 								call.Args = expanded
 								if resolved != nil {
-									resolved[larkSyntaxWordsKey(call.Args)] = true
+									resolved[position] = true
 								}
 								resolvedAbsolute = filepath.IsAbs(prefix[0]) && (index == 0 || filepath.Base(words[0]) == "timeout")
 								changed = true
@@ -387,16 +390,6 @@ func inertGoDocument(body *syntax.Word) bool {
 		}
 	}
 }
-
-func larkSyntaxWordsKey(args []*syntax.Word) string {
-	words := make([]string, len(args))
-	for i, arg := range args {
-		words[i], _ = executionWord(arg)
-	}
-	return larkWordsKey(words)
-}
-
-func larkWordsKey(words []string) string { return strings.Join(words, "\x00") }
 
 // literalCommandPrefix is the unquoted field splitting of a statically assigned command prefix. Quotes and shell
 // metacharacters inside a variable are data at runtime, not syntax to reinterpret; rejecting them here keeps that

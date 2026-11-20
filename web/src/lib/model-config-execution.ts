@@ -3,6 +3,7 @@ import { t } from "../i18n";
 import { SUPERVISE_PURPOSE } from "./background-supervisor";
 import { api, enc } from "./api";
 import { MANAGER_HEADER } from "./manager-choice";
+import type { CandidateUpdate } from "./model-candidates";
 import { modelSummary, providerAgent, providerName, RUNTIMES, runtimeLabel, type ModelBinding, type ModelConfigurationBody, type ModelDraft, type ModelProvider, type ModelPurpose, type ModelPurposeBody } from "./model-config";
 import type { Machine } from "./types";
 
@@ -24,9 +25,12 @@ export function executionForm(p: ModelPurpose, providers: ModelProvider[] = [], 
   const agent = providerAgent(provider, p.effective?.provider);
   let backend: string;
   if (p.kind === "plugin") backend = providerName(p.effective?.provider, providers) ?? "";
-  // A launcher picked for an API purpose runs Claude Code once per request on the main chat's computer, unless it is a
-  // managed one with a Messages gateway, called over HTTP (#5823; the hub decides by protocol, a key marks a managed one).
-  else if (p.kind === "api" && provider?.kind === "launcher" && ((provider.api && provider.api !== "messages") || !provider.has_key)) backend = "claude -p";
+  // A launcher picked for an API purpose runs its CLI once per request on the main chat's computer (model.run), unless
+  // it is a managed one with a Messages gateway, called over HTTP (#5823, #12027; the hub decides by protocol, a key
+  // marks a managed one).
+  else if (p.kind === "api" && provider?.kind === "launcher" && ((provider.api && provider.api !== "messages") || !provider.has_key)) {
+    backend = agent === "codex" ? "codex exec" : agent === "agy" ? "agy -p" : "claude -p";
+  }
   else if (p.kind === "api") backend = { messages: "Messages", responses: "Responses", chat: "Chat" }[provider?.api || "messages"];
   else if (launch === "headless") {
     backend = agent === "codex" ? "codex app-server"
@@ -239,7 +243,7 @@ export function resetPatch(p: ModelPurpose, runtime = "", configDir?: string): R
   return ownRecord(p) ? { ...patch, provider: null, model: null, effort: null } : patch;
 }
 
-export function saveModelPurpose(p: ModelPurpose, patch: Record<string, string | number | null>, manager?: string): Promise<ModelPurposeBody> {
+export function saveModelPurpose(p: ModelPurpose, patch: Record<string, string | number | null | CandidateUpdate>, manager?: string): Promise<ModelPurposeBody> {
   return api(`/model-config/purposes/${enc(p.id)}`, { method: "PATCH", json: patch, headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
 }
 

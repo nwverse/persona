@@ -19,6 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
@@ -48,7 +49,7 @@ func (s *Service) Tools(ctx context.Context) []proto.Tool {
 	if s.urgentOn(ctx) {
 		tools = append(tools, toolsNamed([]string{"urgent_call"})...)
 	}
-	return append(tools, s.knowledgeFolderTools(ctx)...)
+	return localizedMCPTools(append(tools, s.knowledgeFolderTools(ctx)...), s.toolLanguage(ctx))
 }
 
 // toolsNamed are the MCP tools of these names, as prompts/mcp has them.
@@ -67,6 +68,9 @@ func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
 		return proto.TextResult(err.Error(), true)
 	}
 	call.Name = compat.Tool(call.Name)
+	if err := s.guardRefusal(ctx, call.MachineID, call.SessionID, call.Name); err != nil {
+		return proto.TextResult(err.Error(), true)
+	}
 	if res, refused := s.inboxModelRefusal(ctx, call.MachineID, call.SessionID, "", call.Name); refused {
 		return res
 	}
@@ -226,8 +230,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("title and body are required")
 		}
 		// An empty level is passed through, not normalised to P1: with ln mode on the hub decides by conversation
-		// (the main conversation's ordinary notices still interrupt, fleet_link.go lnNotifyPushLevel); with it off the
-		// hub derives P1 for a NotifyPush anyway (hub/lnmode.go levelFor), so delivery there is unchanged.
+		// (the main conversation's ordinary notices still interrupt, fleet_link.go pushGradingNotifyLevel); with it off the
+		// hub derives P1 for a NotifyPush anyway (hub/push_grading.go levelFor), so delivery there is unchanged.
 		switch a.PushLevel {
 		case "", assistantwire.LevelP0, assistantwire.LevelP1:
 		default:
@@ -343,8 +347,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			DismissNotice bool `json:"dismiss_notice"`
 			// Task: new work handed to this agent becomes a supervised task of the main conversation (agent_control.go),
 			// read from RawTask by givenTask (nil: a reply).
-			Task    *sendTask       `json:"-"`
-			RawTask json.RawMessage `json:"task"`
+			Task    *sendTask           `json:"-"`
+			RawTask json.RawMessage     `json:"task"`
+			Handoff *taskHandoffRequest `json:"handoff"`
 			// Attachments: the user's pictures and files, by their paths on this conversation's computer (#2437).
 			Attachments []string `json:"attachments"`
 			// Resume: resume a stopped agent with its context, as the user's Resume does, with ResumeWhy said to the
@@ -352,7 +357,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			Resume    bool   `json:"resume"`
 			ResumeWhy string `json:"resume_why"`
 		}
-		_ = json.Unmarshal(args, &a)
+		if err := json.Unmarshal(args, &a); err != nil {
+			return "", fmt.Errorf("arguments: %w", err)
+		}
 		a.Task = givenTask(a.RawTask)
 		am, c, err := s.findAgent(ctx, a.Machine, a.SessionID)
 		if err != nil {
@@ -367,6 +374,16 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		if strings.TrimSpace(a.Text) == "" {
 			return "", fmt.Errorf("text is empty")
+		}
+		var handoff *preparedHandoff
+		if a.Handoff != nil {
+			if a.Task != nil || a.Resume || c.Status == proto.StatusOffline || stoppedAgent(c) || exitText(a.Text) {
+				return "", fmt.Errorf("a handoff needs an existing running Agent and a work message")
+			}
+			handoff, err = s.prepareTaskHandoff(ctx, self, am.ID, c.SessionID, *a.Handoff)
+			if err != nil {
+				return "", err
+			}
 		}
 		resume := ""
 		if stoppedAgent(c) { // read-only (#4754): a message does not start it; only a resume asked for does (#8099)
@@ -428,11 +445,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				return "", task.sendFailed(ctx, s, rpc.NotSent(err))
 			}
 		}
+		if handoff != nil {
+			wire, _ := json.Marshal(taskHandoffReceipt{TodoID: handoff.origin, ID: handoff.ID, Head: handoff.Head, Check: handoff.Target.Check})
+			text = prompts.RenderTodoHandoff(prompts.TodoHandoff{Text: text, ReceiptJSON: string(wire), Until: handoff.until.Format(time.RFC3339)})
+		}
 		// The user's attachments, copied to the agent's computer when it is another one: the text ends with them, the
 		// pictures in the <attached_images> block a picture sent straight to the agent ends with (#2437).
 		params := sendParams(c.SessionID, text, a.DismissNotice)
 		inputID := ""
-		if wait > 0 {
+		if handoff != nil {
+			inputID = handoff.ID
+			params["client_msg_id"] = inputID
+		} else if wait > 0 {
 			inputID = "wait_" + randomHex(16)
 			params["client_msg_id"] = inputID
 		}
@@ -463,7 +487,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if err != nil {
 				return "", task.sendFailed(ctx, s, err)
 			}
-			if !note.reopens() {
+			if !note.reopens() && handoff == nil {
 				lctx = ctx
 			}
 			// A nearly full Claude Code or Codex agent is compacted with its own /compact before the text goes in, by
@@ -475,14 +499,12 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				lctx, ccancel = context.WithTimeout(context.WithoutCancel(ctx), compactSendWait)
 				defer ccancel()
 			}
-			var sent struct {
-				Queued bool `json:"queued"` // the runtime holds it behind the turn under way (#8097)
-				// CompactAfterTurn: nearly full mid-turn, the node holds it and compacts once the turn ends; Compacted:
-				// it compacted the agent before the text went in (#11137).
-				CompactAfterTurn bool `json:"compact_after_turn"`
-				Compacted        bool `json:"compacted"`
+			var sent agentSendReply
+			if handoff != nil {
+				err = s.sendTaskHandoff(lctx, handoff, params, &sent)
+			} else {
+				err = s.call(lctx, am.ID, DeviceSessionSend, params, &sent)
 			}
-			err = s.call(lctx, am.ID, DeviceSessionSend, params, &sent)
 			note.sent(lctx, err) // an unknown answer counts for the agent's next turn: it may still arrive
 			if err == nil {
 				s.progressMade(am.ID, c.SessionID, time.Now()) // the supervisor told it something: a new stretch (supervise_progress.go)
@@ -492,6 +514,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 					return "", task.sendFailed(ctx, s, compactFailed(c, am, err, false))
 				}
 				return "", task.sendFailed(ctx, s, err)
+			}
+			if handoff != nil {
+				return finish(fmt.Sprintf("Handoff %s confirmed for %s. It is waiting for %s to report the result.",
+					handoff.ID, handoff.origin, handoff.Target.Title) + handed.said()), nil
 			}
 			if sent.CompactAfterTurn {
 				return finish(fmt.Sprintf("Queued for %s on %s: it is in the middle of a turn and its context is nearly full, so once "+
@@ -586,7 +612,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort), speed: strings.TrimSpace(a.Speed)} // before the tier
 		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
 		// the start lays it: what runs is said on the card (a hand-off from the health space asks) and in the answer.
-		tier, runs := strings.TrimSpace(a.Tier), ""
+		tier := strings.TrimSpace(a.Tier)
 		if tier != "" {
 			t, err := s.tierModel(ctx, tier)
 			if err != nil {
@@ -595,27 +621,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			model := a.Model
 			if !layTier(t, &a.Launcher, &a.Model, &a.Effort) {
 				tier = "" // a launcher of its own: the tier gives it nothing
-			} else {
-				if a.Speed == "" && (model == "" || model == t.Model) {
-					a.Speed = t.Speed
-				}
-				picks := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed}
-				if s.applyModel(ctx, "agent.new", picks) == nil { // one that can't run is the start's to say
-					l, _ := picks["launcher"].(string)
-					m, _ := picks["model"].(string)
-					e, _ := picks["effort"].(string)
-					v, _ := picks["speed"].(string)
-					runs = ModelTier{Launcher: l, Model: m, Effort: e, Speed: v}.runs()
-				}
+			} else if a.Speed == "" && (model == "" || model == t.Model) {
+				a.Speed = t.Speed
 			}
 		}
+		own.ompModelDefault = a.Launcher == "omp" && a.Model == ""
 		// What it runs on this computer, before the user is asked (#2640, launcher_fit.go): a launcher named here that
 		// the computer lacks starts nothing; a default it lacks gives way to one it has, and the card and answer say so.
 		run := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed}
 		if err := s.applyModel(ctx, "agent.new", run); err != nil {
 			return "", err
 		}
-		swapped, fit, err := s.fitLauncher(ctx, am, own, run)
+		swapped, fit, err := s.fitNewLauncher(ctx, am, own, run)
 		if err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
@@ -628,7 +645,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			a.Model, _ = run["model"].(string)
 			a.Effort, _ = run["effort"].(string)
 			a.Speed, _ = run["speed"].(string)
-			tier, runs = "", "" // the tier's launcher is not what runs
+			tier = "" // the tier's launcher is not what runs
 		}
 		// traex, omp…: no effort (launcher_modes.go). One this call names is refused before the user is asked, rather
 		// than by the computer after they said yes; one a tier filled in is dropped. pi, cursor, agy: dropped either way.
@@ -646,13 +663,16 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		branch := strings.TrimSpace(a.Worktree.Branch)
 		where := am.Name + " · " + a.Cwd
+		var runs string
 		if branch != "" {
 			where += i18n.T(s.lang(ctx), "assistant-tools.new_worktree", i18n.Args{"branch": branch})
 		}
 		switch { // the user sees what it will run on before saying yes
 		case swapped != "":
 			where += " · " + swapped
-		case runs != "":
+		case tier != "":
+			selected := pickOf(run)
+			runs = ModelTier{Launcher: selected.launcher, Model: selected.model, Effort: selected.effort, Speed: selected.speed}.runs()
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_tier", i18n.Args{"tier": tier, "runs": runs})
 		case a.Model != "":
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
@@ -678,9 +698,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartTimeout)
 		defer cancel()
 		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
-		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "tab_name": s.tabName(sctx, a.Prompt)}
-		prompt := s.withCloseoutBrief(sctx, a.Prompt, false)
-		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, self, prompt)
+		title := s.tabName(sctx, a.Prompt)
+		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "tab_name": title, "title": title}
+		prompt := s.withProjectContext(sctx, am.ID, a.Cwd, self, a.Prompt)
 		if a.Ultracode {
 			params["ultracode"] = true
 		}
@@ -699,6 +719,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
 		}
+		if err := s.applyOmpStartDefaults(sctx, am, own, fit, params); err != nil {
+			return "", err
+		}
+		params["prompt"] = s.withCloseoutBrief(sctx, am.ID, prompt, false)
 		if err := checkStartSpeed(params, fit, ""); err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
@@ -828,6 +852,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			}
 			return "", err
 		}
+		s.nameStartedAgent(sctx, am.ID, res.Session, title)
 		s.recordStartSuccess(ctx, am.ID, ranLauncher(launcher, res.Instead, res.Session))
 		if said := s.startInsteadNote(ctx, am, res.Instead, res.Session); said != "" {
 			note += " Note: " + said + "." // the engine ran another of the same kind, its default model, a lower effort (#8140)
@@ -866,6 +891,9 @@ var agentStartAdoptRetry = 200 * time.Millisecond
 // missing one or a request the node refused is definite and stays an error; rpc.ErrDropped answers the same words
 // as rpc.ErrClosed (a relay passes them through), so the rpc.Error message form counts too.
 func startResultUnknown(err error) bool {
+	if p, ok := errors.AsType[*taskworkspace.Problem](err); ok {
+		return p.Code == "operation_unknown"
+	}
 	var re *rpc.Error
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
 		errors.Is(err, rpc.ErrClosed) || errors.As(err, &re) && re.Message == rpc.ErrClosed.Error()
@@ -1462,6 +1490,10 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		if c.Launcher != "" && c.SourceKind == "" && !c.Assistant { // what agent_switch moves it from (agent_switch.go)
 			fmt.Fprintf(&b, " · launcher=%s", c.Launcher)
+			if c.OffLauncher { // its claude was resumed without Persona's command (#11792)
+				fmt.Fprintf(&b, " (off_launcher: started on it, but its claude now runs without Persona's start command, "+
+					"e.g. herdr's bare resume after a restart, so not on %s; agent_switch to %s brings it back)", c.Launcher, c.Launcher)
+			}
 		}
 		if to := s.queuedSwitchOf(r.m.ID, c.SessionID); to != "" { // agents_switch queued it for the end of its turn
 			fmt.Fprintf(&b, " · switch_queued=%s", to)

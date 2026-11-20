@@ -1,8 +1,8 @@
 // The queued messages (Session.queued) at the top of the composer's card, as cindy's pending queue (#5327; the owner
 // asked this part of the chat to follow cindy): rows in send order, the top one next, no numbers (the labels carry
 // them). A row is one line, the marks of what it carries before its words; on hover or focus it shows a drag handle
-// and round buttons: Send now (where the agent takes queued messages now; it hands over the whole queue at one press,
-// its tooltip saying so and what happens), Edit (pulled back into the box below) and Delete. Dragging the handle, or
+// and round buttons: Send now (the tooltip explains whether it sends the next message or the whole queue), Edit
+// (pulled back into the box below) and Delete. Dragging the handle, or
 // ↑ ↓ Home End on it, re-queues them all in the new order. Four rows or fewer show in full; five or more show three
 // and "N more".
 // Messages from other conversations come last and are only shown; since #6394 they collapse into one line
@@ -23,7 +23,7 @@ import { hasFinePointer } from "../../lib/viewport";
 import { Collapse, cx, Spinner, toast } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { t } from "../../i18n";
-import { restoreQueued, type QueuedImage } from "./QueueStrip";
+import { restoreQueued, type QueuedImage } from "./queue-restore";
 
 export interface QueuePanelProps {
   session: Session;
@@ -32,11 +32,11 @@ export interface QueuePanelProps {
   /** The persona's name in a Persona chat (#4342). */
   persona?: string;
   /** Hears a message taken out of the queue, so its sending bubble goes too. */
-  onWithdrawn?: (text: string) => void;
+  onWithdrawn?: (text: string, index: number) => void;
   /** How many photos a queued message went with when this browser sent it (a Persona chat's queue holds only words). */
-  photosOf?: (raw: string) => number;
+  photosOf?: (raw: string, index: number) => number;
   /** Local preview URLs (data URLs) for photos freshly queued from this browser (#10871). */
-  photoPreviewsOf?: (raw: string) => string[];
+  photoPreviewsOf?: (raw: string, index: number) => string[];
   /** A phone on its side: one line, "N queued", in the line of the run's status (outside the composer), that opens the
    *  same rows under it. */
   compact?: boolean;
@@ -75,12 +75,11 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
   // the user's own come first; the rest came from other conversations and are only shown (#4342)
   const own = queued.length - Math.min(Math.max(session.queued_relayed ?? 0, 0), queued.length);
   const agent = persona ?? agentLabel(session);
-  // A runtime's Agent (Paseo's) keeps its queue to itself: the node refuses to edit, reorder or send it now, so its
-  // rows are only shown, as the other conversations' are (#8142).
-  const runtime = persona === undefined && session.source_kind === "runtime";
-  const editable = canEdit && !runtime;
+  const runtimeSource = session.source_kind === "runtime";
+  const runtime = persona === undefined && runtimeSource;
+  const editable = canEdit && (session.capabilities?.queue_edit ?? !runtime);
   // a Claude takes queued messages at its next step, and can be given them now (#6088); so does a Persona chat's (#4342)
-  const takesNow = !runtime && (session.agent === "claude" || (persona !== undefined && own > 0));
+  const takesNow = canEdit && (session.capabilities?.queue_send_now ?? (!runtime && (session.agent === "claude" || (persona !== undefined && own > 0))));
   const path = sessionPath(session.machine_id, session.session_id);
   const listId = useId();
   const explainId = useId();
@@ -166,7 +165,7 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
       const r = await api<{ queue?: string[]; images?: QueuedImage[][] }>(`${path}/queue`, { method: "POST", json: { keep: keepAllBut(own, row.i) } });
       const pulled = r.queue ?? [];
       toast(del ? t("chat-queuepanel.deleted") : t("chat-queuepanel.pulled_back"), "ok");
-      if (pulled[row.i] !== undefined) onWithdrawn?.(pulled[row.i]);
+      if (pulled[row.i] !== undefined) onWithdrawn?.(pulled[row.i], row.i);
       const images = r.images?.[row.i] ?? [];
       if (!del && pulled[row.i] !== undefined) await restoreQueued(draftKey, session, parseQueued(pulled[row.i], images.length), images);
     }).then((ok) => ok && toBox(!del));
@@ -187,7 +186,9 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
       toast(t("chat-queuepanel.sent_now", { agent }), "ok");
     }).then((ok) => ok && toBox(false));
   // what the dialog used to say, now the button's tooltip and description
-  const explain = t(persona !== undefined ? "chat-queuepanel.send_now_body_persona" : "chat-queuepanel.send_now_body", { agent });
+  const sendNowTip = t(runtimeSource ? "chat-queuepanel.send_now_tip_runtime" : "chat-queuepanel.send_now_tip", { agent });
+  const explain = t(runtimeSource ? "chat-queuepanel.send_now_body_runtime" :
+    persona !== undefined ? "chat-queuepanel.send_now_body_persona" : "chat-queuepanel.send_now_body", { agent });
 
   const keyMove = (e: React.KeyboardEvent, row: Row) => {
     const to = e.key === "ArrowUp" ? row.i - 1 : e.key === "ArrowDown" ? row.i + 1 : e.key === "Home" ? 0 : e.key === "End" ? own - 1 : null;
@@ -245,14 +246,14 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
       key={row.id}
       row={row}
       n={pos + 1}
-      photos={photosOf?.(row.raw) ?? 0}
-      photoPreviews={photoPreviewsOf?.(row.raw)}
+      photos={photosOf?.(row.raw, row.i) ?? 0}
+      photoPreviews={photoPreviewsOf?.(row.raw, row.i)}
       mid={session.machine_id}
       cwd={session.cwd}
       editable={editable}
       movable={editable && own > 1}
       takesNow={takesNow}
-      agent={agent}
+      sendNowTip={sendNowTip}
       explain={explain}
       explainId={explainId}
       busy={busy === row.id}
@@ -459,7 +460,7 @@ function QueuedPhotoThumbs({ paths, previews, count, mid, cwd }: {
 
 /** One of the owner's queued messages. `photos`: ones it went with beside its words (a Persona chat's, when this browser
  *  sent it). */
-function QueueRow({ row, n, photos, photoPreviews, mid, cwd, editable, movable, takesNow, agent, explain, explainId, busy, locked, dragging, rowRef, handleRef, onKey, onPointerDown, onSendNow, onEdit, onDelete }: {
+function QueueRow({ row, n, photos, photoPreviews, mid, cwd, editable, movable, takesNow, sendNowTip, explain, explainId, busy, locked, dragging, rowRef, handleRef, onKey, onPointerDown, onSendNow, onEdit, onDelete }: {
   row: Row;
   n: number;
   photos: number;
@@ -469,7 +470,7 @@ function QueueRow({ row, n, photos, photoPreviews, mid, cwd, editable, movable, 
   editable: boolean;
   movable: boolean;
   takesNow: boolean;
-  agent: string;
+  sendNowTip: string;
   /** What sending now does, as Send now's tooltip and description. */
   explain: string;
   explainId: string;
@@ -499,9 +500,18 @@ function QueueRow({ row, n, photos, photoPreviews, mid, cwd, editable, movable, 
     if (el.scrollWidth > el.clientWidth) el.title = said;
     else el.removeAttribute("title");
   };
-  const buttons = editable ? (takesNow ? 3 : 2) : 0;
-  const tip = t("chat-queuepanel.send_now_tip", { agent });
+  const buttons = (editable ? 2 : 0) + (takesNow ? 1 : 0);
   const alwaysShowSendNow = n === 1 && takesNow;
+  const editButtons = editable && (
+    <>
+      <button type="button" data-queue-edit disabled={locked} onClick={onEdit} aria-label={t("chat-queuepanel.edit_label", { n })} title={t("chat-queuepanel.edit")} className={ROUND}>
+        <Icon name="pencil" size={11} stroke={2.25} />
+      </button>
+      <button type="button" data-queue-delete disabled={locked} onClick={onDelete} aria-label={t("chat-queuepanel.delete_label", { n })} title={t("chat-queuepanel.delete")} className={ROUND}>
+        <Icon name="trash" size={11} stroke={2.25} />
+      </button>
+    </>
+  );
   return (
     <div
       ref={rowRef}
@@ -557,22 +567,15 @@ function QueueRow({ row, n, photos, photoPreviews, mid, cwd, editable, movable, 
           </span>
         ) : alwaysShowSendNow ? (
           <div data-queue-actions className="flex shrink-0 items-center gap-1">
-            <div className={cx("flex shrink-0 items-center gap-1", ON_ACTIVE)}>
-              <button type="button" data-queue-edit disabled={locked} onClick={onEdit} aria-label={t("chat-queuepanel.edit_label", { n })} title={t("chat-queuepanel.edit")} className={ROUND}>
-                <Icon name="pencil" size={11} stroke={2.25} />
-              </button>
-              <button type="button" data-queue-delete disabled={locked} onClick={onDelete} aria-label={t("chat-queuepanel.delete_label", { n })} title={t("chat-queuepanel.delete")} className={ROUND}>
-                <Icon name="trash" size={11} stroke={2.25} />
-              </button>
-            </div>
+            {editable && <div className={cx("flex shrink-0 items-center gap-1", ON_ACTIVE)}>{editButtons}</div>}
             <button
               type="button"
               data-send-now
               disabled={locked}
               onClick={onSendNow}
-              aria-label={tip}
+              aria-label={sendNowTip}
               aria-describedby={explainId}
-              title={`${tip}\n${explain}`}
+              title={`${sendNowTip}\n${explain}`}
               className={SEND_NOW_PILL}
             >
               <Icon name="arrowUp" size={11} stroke={2.25} />
@@ -587,20 +590,15 @@ function QueueRow({ row, n, photos, photoPreviews, mid, cwd, editable, movable, 
                 data-send-now
                 disabled={locked}
                 onClick={onSendNow}
-                aria-label={tip}
+                aria-label={sendNowTip}
                 aria-describedby={explainId}
-                title={`${tip}\n${explain}`}
+                title={`${sendNowTip}\n${explain}`}
                 className={ROUND}
               >
                 <Icon name="arrowUp" size={12} stroke={2.25} />
               </button>
             )}
-            <button type="button" data-queue-edit disabled={locked} onClick={onEdit} aria-label={t("chat-queuepanel.edit_label", { n })} title={t("chat-queuepanel.edit")} className={ROUND}>
-              <Icon name="pencil" size={11} stroke={2.25} />
-            </button>
-            <button type="button" data-queue-delete disabled={locked} onClick={onDelete} aria-label={t("chat-queuepanel.delete_label", { n })} title={t("chat-queuepanel.delete")} className={ROUND}>
-              <Icon name="trash" size={11} stroke={2.25} />
-            </button>
+            {editButtons}
           </div>
         ))}
     </div>

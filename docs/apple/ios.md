@@ -842,9 +842,11 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
     With the list folded, the chat's leading button brings it back (#963): the sidebar's button (`Theme.Icon.sidebar`, "Show Sidebar", with how many Agents need the user), as on the
     main conversation, not a ‹ (#8603). What the button shows follows how the page was reached, not what it is: a chat picked in the list is a root and has the sidebar's button; the
     same chat pushed from inside another page (a waiting Agent on the main conversation, Inbox's) has ‹, which goes back to that page. On iPhone Duo open on its side the chat has
-    neither (#3680): its actions are in the system's side bars, whose Show Sidebar at the top left brings the list back, and the side column has no second one
-    (`ChatView.systemShowsList`). That button sits in a row of the bar of its own, so the chat's page starts `Theme.Space.xl` from the top whatever the bar holds
-    (`ChatView.pinsSideTop`): folded or out, the header and the chat stay where they are, and the button lies on the title's line, as on a place.
+    neither (#3680): its actions are in the system's side bars, and the side column's first item, where Back is on a sub-page, is the sidebar's button
+    (`ChatView.sideBarItems`, #11636), as on a place (`ListButtonItem`). Not the system's Show Sidebar, removed on the roots' column there too: iOS draws it in the bar's
+    title row, which the chat removes while its header shows its own title, so an Agent's chat picked in the sidebar had no way back to it, and on a place it was not
+    drawn again after a drill-down was popped. The chat's page starts `Theme.Space.xl` from the top whatever the bar holds (`ChatView.pinsSideTop`): folded or out, the
+    header and the chat stay where they are.
   - The Separate layout's tabs at regular width (#8596): the split makes the floating tab bar's room in its columns, and UIKit held it a second time in the tab's own top safe
     area for a tab first shown after a switch (the Agents tab's column head 64 pt lower). `TabBarRoomOnce` (ChatsView) takes the tab's top beyond the window's own back off.
   - Split chat pages do not hide the tab bar (single-column pages do, to fill the screen).
@@ -2073,11 +2075,45 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   Signing out of every hub forgets the remembered values, and a group that goes while others stay (signed out of, or
   merged into another: `TodosV1.forget`) loses its own, since the app's stored pick, written only when the owner picks
   a hub, can still name that group at the next launch. The gate turns on at the first hello that lists `todo_view`, also in the
-  middle of a run: holding that change while To-dos is on screen, so a visible page never swaps, is the page's job and
-  arrives with the V1 list; the gate stays a plain value. It is off in every build until the switch-on
+  middle of a run: holding that change while To-dos is on screen, so a visible page never swaps, is the page's job
+  (`TodosPlacePage`, below); the gate stays a plain value. It is off in every Release build until the switch-on
   (`TodosV1.released`), and on the iPhone and iPad only (`TodosV1.platform`): visionOS keeps today's To-dos. The data
   and model files under `apple/Persona/Features/Todos/` compile on every platform, since `TodoStore` (shared with
-  visionOS) names them; the V1 views will be iOS only. The hub's `todo_send_state` marker is not read yet.
+  visionOS) names them; the V1 views are iOS only (`List/`). The hub's `todo_send_state` marker is not read yet.
+- **The list** (`apple/Persona/Features/Todos/List/`, iOS only; DESIGN_SYSTEM 3.4 "To-dos list"). `TodosListModel`
+  (`Deps`: the store, the hub, the clock, the projects' names) follows the store and lays the list out once per change
+  (`TodosListLayout`, pure): the sections for the bar's choice (`TodosBar`, `TodosChoice`), the grouping and the sort,
+  from `countsSource.filed`, less the steps their parents carry. Each row reads its own cell (`TodosListModel.Row`),
+  whose content (`TodoRowContentLogic`: times said from now, the mark, line 2 through `TodoLineText`, the door, line 3,
+  and the row in words for VoiceOver) is worked out again only when its facts, its view or the minute changes; a line
+  key this build does not know says the section's word, so the mark stays. While the list is scrolled or out of sight
+  (`Hold`: the page reports its scroll phase and when it is out of sight) a new filing waits, and so does what each
+  row says, since a new line can wrap or a door come and go and a row's new height moves every row under it; a row
+  gone from the store keeps its cell until then. A row that comes to need the owner lands at once, alone, onto the
+  list as drawn; the numbers (`countsSource`) are never held. When the rest lands, the rows that changed group are
+  drawn in place at once and fade in (`Theme.Motion.conceal`), so nothing slides across the list. A row in another
+  group or fold is a new view there (another section's `ForEach`), so a trigger it observes cannot start the fade (it
+  starts with the value as it already is, and the view it leaves sees the change first), and an `onAppear` that
+  starts one comes a frame after the row was drawn whole. The landing marks the row instead (`Row.entering`), which the
+  new view reads from its first frame, drawn hidden, and clears inside the animation as it appears. A mark not taken
+  (a row that landed out of sight) is cleared at the next landing and when a scroll starts, so nothing fades in under
+  a finger; with Reduce Motion nothing is marked. The page's minute
+  (`tick`, also as the page comes back to the front) says the times again. Rows open today's to-do page until the to-do's own page arrives. On iOS 26 the section bar is pinned over the
+  list; iOS 18 has no scroll edge effect to draw behind it, so there the bar is the list's first row, as the Inbox's.
+  `TodoWorkspace` (one for the app, `TodoWorkspace.shared`, outside the pages' trees) keeps the place and where each
+  place's list came to rest, written only while the scene is active and only from the tree the window shows; a page
+  made anew puts its list back there once, and a page a to-do popped back to keeps its own place. The grouping and the
+  sort are kept on the device (`todos.v1.grouping`, `todos.v1.sort`); the bar's choice is not.
+- **Which page.** `TodosPlacePage` draws the V1 list while the gate is on, else today's `TodosView` (frozen), deciding
+  once, when the page is made (`TodosPageChoice`): a hello that turns the gate on while To-dos is up (a manager that
+  connects late), or while a to-do is pushed over it, never swaps it; the next time To-dos opens it is the V1 list. The
+  drawer's and sidebar's To-dos row and the folded Pages heading show N on the V1 path (`TodoStore.sidebarCount`),
+  today's open count otherwise, also while a page made before the gate came on still draws today's list
+  (`TodoWorkspace.holdsToday`), so the page and the drawer never say two numbers. DEBUG `-showTodosV1 YES` stands for
+  the release (`TodosV1.allowedHere`); V1 still needs a hub that lists `todo_view`. With `-probes YES` the page exports
+  what it draws and whether the gate is on (`probe.todos-page`). The store's one-minute clock for rows filed by the
+  app's own rules runs while a counted row is filed so (the drawer's N included, whether or not the list was drawn) and
+  follows whatever changes that, another assistant made current included (`TodoCountsSource.byRulesChanged`).
 - **404 and 405.** An older hub answers 405 for `GET /api/v1/todos/{id}` and `GET /api/v1/todos/places` (the `PATCH` and
   `DELETE` routes of `/api/v1/todos/{id}` match the path) and 404 for the other new routes: `TodoNotThere` takes both
   as "not there". A 404 with `todo_not_found` is the to-do itself gone. `GET /api/v1/todos` answering 404 still hides
@@ -2123,8 +2159,10 @@ a follow-up's prompt (`injected.detail`, or the raw input) is never shown while 
 visible one; its block shows only the one-line `injected.line` (`ChatLine.hidesPrompt`). A round stays shown by exactly
 the supervision rule (`Supervision.visible`): a successful `ask_user` / `notify_user`, a pending live `ask_user`, an
 accepted / needs-user `task_review`, a `supervision_finish` receipt with user visibility, or `fold.supervision_user`.
-A completed round with a nonblank final reply also stays visible unless it successfully finished silent. The reply
-uses the usual bubble and the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
+A completed round with a nonblank final reply also stays visible unless it successfully finished silent, except for a
+routine cross-conversation report to the main conversation: that reply stays inside the expandable background record,
+just as on the web. Explicit owner-visibility actions above still open and notify. The reply uses the usual bubble and
+the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
 
 While folding is on, the main chat's Needs You tray groups task rows by the conversation that supervises them (the
 to-do's `origin`) when they come from more than one: the conversation's own group first without a header, then each
@@ -2423,12 +2461,12 @@ When a device cannot reach the hub address, connect through an SSH server. For t
   `ServerConfig`, the pairing registry, `currentConfig` and all comparisons still use the hub's own address, so multi-hub grouping, routing and credential upgrades need no tunnel awareness.
   `HubRoute.healthProbe` uses `direct: true`, always probing the direct route.
 - **Routing**: with usable SSH settings in a group (host, user, confirmed fingerprint), `routePicker` always has a value: before every connection, `HubRoute.answering` probes direct routes (even a single address),
-  and only if none answer calls `SSHTunnels.open`; "Always use SSH" opens the tunnel first. While tunneled, `watchDirect` probes direct routes every 2 minutes and calls `reroute()` when they work again.
+  and only if none answer calls `SSHTunnels.open`; "Always use SSH" opens the tunnel first. When restoring a closed SSH tunnel used last time, that tunnel races the direct probes and the first success is used (#11671); an already-routed tunnel keeps direct-first selection so `watchDirect` can still move back. While tunneled, `watchDirect` probes direct routes every 2 minutes and calls `reroute()` when they work again.
 - **Configuration** lives in `PairedHub.ssh` (per-hub pairing registry in Keychain); private keys are separate in Keychain (`ssh.identity`, `AfterFirstUnlockThisDeviceOnly`).
   SSH settings entered on the pairing page are saved with the newly paired hub; the tunnel opened for pairing is handed directly to it (`SSHTunnels.adopt`), and device-credential upgrading continues through it.
 - **Status** (consistent with existing wording): connection details add "Route: Direct / Via SSH tunnel (user@host)"; tunnel startup failures show "SSH tunnel: <reason>";
   Settings top says "Hub connected · Via SSH tunnel"; the active hub in Settings › hub has an "SSH" tag and footer "Connected (via SSH tunnel)", with the SSH tunnel row showing Not configured / Fallback / Always / In use.
-- **Background**: `suspendLinks` closes every tunnel (`SSHTunnels.closeAll`); foregrounding reroutes and rebuilds each group (about 1 second measured in the simulator).
+- **Background**: `suspendLinks` closes tunnels unless a call or an outside action still owns them (`closeTunnelsForBackground`). Closing SSH also cancels pending authentication and removes its start immediately; late completion cannot affect a newer start or relay lease. Foregrounding reroutes and rebuilds each group. `HubLink.api` requests await `LiveConnection.waitForRoute` before resolving their outgoing address, independently per group and without waiting for the socket hello. Cancelled route attempts cancel their waiting requests. Actual recovery latency is network-dependent; the old approximately one-second observation was simulator-only.
 - **Debugging**: `-seedSSHTunnel <base64 SSHRoute JSON>` seeds SSH settings for the first hub; `-seedSSHKey <base64 32-byte seed>` uses a supplied test key (DEBUG only),
   `-tab settings -openSSHTunnel YES` opens the first hub's SSH tunnel page. End-to-end test setup is in `docs/operations/testing.md` ("SSH tunnels").
 
@@ -2711,10 +2749,10 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
   (`ManagersText.switcherLocked`, `switcherNote`); turned off while it is in use, the footer says it is listed for now and why.
   An older hub answers yes and keeps nothing: the list read after it still says shown, the switch goes back and a toast says to
   update the hub. While the hub marks it `hidden` its row in the list carries a Hidden chip. Tests `ManagersModelTests`.
-- **Low-distraction mode** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
-  push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`); its footer says it holds
+- **Push grading** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
+  push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`, the legacy wire route); its footer says it holds
   for every device and what still notifies. A hub without the route, or one that does not answer, shows no section; a change
-  shows at once, and a refusal puts it back and says why. `docs/server/server.md` "Push grading (push urgency filtering, `hub/lnmode.go`)".
+  shows at once, and a refusal puts it back and says why. `docs/server/server.md` "Push grading (push urgency filtering, `hub/push_grading.go`)".
 - **Quiet hours**: Settings › Notifications has this device's quiet hours (a switch, then From / Until), only when the prefs answer
   has `quiet`; each change sends `quiet` alone with this device's time zone (`APIClient.setQuietHours`), as the web does. Hours set
   in another zone: the section's footer names that zone instead of this device's (`QuietHours.elsewhere`) until they are changed here.
@@ -2729,6 +2767,17 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
 - **Tests**: `InboxManagersTests`, `ManagerPushTests`, `ManagerGroupsTests.aComputerIsOfflineWithItsManager` and
   `.aPushIsThePagesOwnUnlessAnotherManagerSentIt`,
   `ExtensionOperationsTests.anotherManagersOperationIsKeptApart`, `MacAttentionTests.aManagerSwitchedOffHereRingsNoBanner`.
+
+## Starred messages (#11993)
+
+On iPhone and iPad, touch and hold a user message or reply in an Assistant or Agent conversation and choose **Star**.
+The same row shows the saved mark, and **Unstar** offers Undo. **Pages › Starred** searches the current assistant's
+snapshots by words, conversation title and speaker. The list is shared with the Web app through the existing Assistant
+manager API. Chats use compact references. The saved text is read while the Starred page is open.
+
+**Open Original** checks the exact transcript and highlights the saved message when it is still present. Positional
+messages also need a matching record fingerprint. A deleted conversation or original leaves the words available for
+Copy. A failed connection offers a retry. Older assistants that do not offer the API have no Starred entry or menu action.
 
 ## Saved prompts (#9436)
 
@@ -2754,7 +2803,7 @@ web's routes (`docs/protocol/protocol.md`, `/api/v1/assistant/saved-prompts`) an
 - **The editor** (`SavedPromptEditor`): Name after a fixed `/` and Text; `sheetCancel`'s ✕ leaves, `SheetConfirm`'s ✓ saves (a spinner while it runs; #11183). It says the hub's rules before asking it
   (`SavedPromptRules`: a taken name at once, the others once something is typed or Save was tapped); a count shows past
   80% of 8,000 characters; the hub's own refusal shows in the sheet and keeps what was typed.
-- Save as Prompt… on a message's menu, and Android, follow in their own issues.
+- Android supports saved prompts (#11667, `docs/android/android.md` "Saved prompts"). Save as Prompt… on a message's menu is a separate feature.
 - DEBUG: `-tab settings -openAssistantPage prompts|prompt|newPrompt` (`promptsEntry`: the profile scrolled to In Chats).
   Tests: `PersonaTests/SavedPromptsTests.swift`; UI suite `SavedPromptsUITests` against the mock with
   `MOCK_SAVED_PROMPTS=1` (`TEST_RUNNER_PERSONA_MOCK_HUB`; skips without it) swipes a row, checks Delete asks first and
@@ -2818,7 +2867,7 @@ is listed), and a hub that answers it has no roster filters nothing (`AppModel.m
   default's conversations name none, and with one installed manager or no roster nothing is named.
 - **Counts**: the tab badges, the app icon's number (their sum), the sidebar's Inbox and To-dos counts, the home page's
   Needs You and the main conversation's dock count the current assistant's (`AppModel.countBadges`,
-  `InboxStore.actionCount`, `TodoStore.badgeCount`). The
+  `InboxStore.unreadCount` for the Inbox's badge and row, `TodoStore.badgeCount`). The
   switcher shows beside every other assistant what waits there (`AssistantBadges`, `AppModel.assistantBadges`): its agents
   waiting (a session with a pending card or in Needs You once, quiet and muted ones left out, a card on no session by
   itself; Persona's own conversations by their cards only) plus `inbox_needs_you`. The header's face carries a mark while
@@ -3007,6 +3056,10 @@ Claude Code, Codex and Session Triage. Applying runtime settings to all online c
 computers in the current Hub. Connectors, extensions, markets, channels and knowledge selection use a captured assistant
 request context; switching assistants returns Settings to the list, and a late response cannot replace the new scope.
 An explicitly manager-bound detail link still opens that assistant's copy without changing the app's pick.
+
+An extension purpose with candidate support shows the lists it requested, their most recent use, and each model's provider
+or reason for being unavailable. Choose the extension’s lists, the purpose model alone, or an ordered list of directly
+callable providers and model IDs. Leave an ID empty to follow that provider’s default. Saving uses the current revision. When the revision changes elsewhere, the editor keeps the draft until you confirm a reload.
 
 The rest of the first group follows the same rule. Skills, Auto-Start Tasks (`TaskTrustModel`), Outlook sign-in on Add Mail
 Account, an extension form's launcher picker, each page's Subscriptions entry (`SettingsPage.subscriptions(state:manager:)`)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -74,6 +75,39 @@ func historyCall(t *testing.T, n *Node, params map[string]any) sessionhistory.An
 		t.Fatal(err)
 	}
 	return ans
+}
+
+// The extracted domain handler is the same pre-shared-params dispatch as Node.handle, including its own malformed-params error.
+func TestSessionsHistoryDispatchParity(t *testing.T) {
+	n := &Node{}
+	for _, tc := range []struct {
+		name    string
+		params  json.RawMessage
+		wantErr string
+	}{
+		{name: "valid", params: json.RawMessage(`{"since":"2026-01-01T00:00:00Z","source":"runtime","limit":1}`)},
+		{name: "malformed", params: json.RawMessage(`{"since":`), wantErr: "sessions.history: malformed params"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dispatched, dispatchErr := n.handle(t.Context(), "sessions.history", tc.params)
+			forwarded, forwardErr := n.handleSessionsHistory(t.Context(), "sessions.history", tc.params)
+			if !reflect.DeepEqual(forwarded, dispatched) {
+				t.Fatalf("domain result %#v, dispatch result %#v", forwarded, dispatched)
+			}
+			errorText := func(err error) string {
+				if err == nil {
+					return ""
+				}
+				return err.Error()
+			}
+			if got := errorText(dispatchErr); got != tc.wantErr {
+				t.Fatalf("dispatch error %q, want %q", got, tc.wantErr)
+			}
+			if got, want := errorText(forwardErr), errorText(dispatchErr); got != want {
+				t.Fatalf("domain error %q, dispatch error %q", got, want)
+			}
+		})
+	}
 }
 
 // A runtime that declares caps.history is listed in full over a 90-day window, page by page, far past what it pushes
@@ -358,4 +392,130 @@ func mustHistoryJSON(t *testing.T, v any) json.RawMessage {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// A runtime's past session the live list leaves out for a blocked Agent folder is in no sessions.history page, as
+// Claude Code's and Codex's are not (#10053); one the hub keeps is listed as in the live list. Dropped before paging:
+// the newest row being blocked still leaves a full page of one.
+func TestSessionsHistoryLeavesARuntimeSessionInABlockedFolderOut(t *testing.T) {
+	n, _ := runtimeNode(t)
+	now := time.Now().UTC()
+	row := func(id, cwd string, ago time.Duration) map[string]any {
+		return map[string]any{"session_id": id, "status": "offline", "cwd": cwd, "updated_at": now.Add(-ago).Format(time.RFC3339Nano)}
+	}
+	rows := []map[string]any{
+		row("blocked", "/work/bot/run1", time.Hour),
+		row("held", "/work/bot/run2", 2*time.Hour),
+		row("open", "/work/app", 3*time.Hour),
+	}
+	hello := dshHello()
+	hello["caps"].(map[string]any)["history"] = true
+	c := dialRuntime(t, n, hello)
+	c.mu.Lock()
+	c.answer = historyRuntime(rows)
+	c.mu.Unlock()
+	waitFor(t, "ready", func() bool { return len(n.runtimes.ready()) == 1 })
+	n.setBlockedAgentDirs([]string{"/work/bot/*"})
+	n.mu.Lock()
+	n.kept = map[string]bool{"held": true}
+	n.mu.Unlock()
+
+	since := now.Add(-24 * time.Hour).Format(time.RFC3339Nano)
+	var ids []string
+	cursor := ""
+	for page := 0; ; page++ {
+		ans := historyCall(t, n, map[string]any{"since": since, "source": "runtime", "limit": 1, "cursor": cursor})
+		if len(ans.Rows) != 1 && ans.NextCursor != "" {
+			t.Fatalf("page %d: %d rows with more to come; want a full page", page, len(ans.Rows))
+		}
+		for _, r := range ans.Rows {
+			ids = append(ids, r.Session.SessionID)
+		}
+		if cursor = ans.NextCursor; cursor == "" || page > 5 {
+			break
+		}
+	}
+	if strings.Join(ids, ",") != "held,open" {
+		t.Fatalf("rows %v; want held (kept by the hub) and open", ids)
+	}
+}
+
+// blockedRun is a runtime's history: n rows in a blocked folder, newest, then the visible ones given, older.
+func blockedRun(now time.Time, n int, visible ...string) []map[string]any {
+	var rows []map[string]any
+	at := now.Add(-time.Minute)
+	for i := 0; i < n; i++ {
+		rows = append(rows, map[string]any{"session_id": fmt.Sprintf("auto%04d", i), "status": "offline", "cwd": "/work/bot/run",
+			"updated_at": at.Format(time.RFC3339Nano)})
+		at = at.Add(-10 * time.Second)
+	}
+	for _, id := range visible {
+		at = at.Add(-time.Minute)
+		rows = append(rows, map[string]any{"session_id": id, "status": "offline", "cwd": "/work/app", "updated_at": at.Format(time.RFC3339Nano)})
+	}
+	return rows
+}
+
+// historyPages pages sessions.history to its end with limit 1 and returns the ids in order.
+func historyPages(t *testing.T, n *Node, since string) []string {
+	t.Helper()
+	var ids []string
+	cursor := ""
+	for page := 0; ; page++ {
+		if page > 40 {
+			t.Fatalf("no last page; so far %v", ids)
+		}
+		ans := historyCall(t, n, map[string]any{"since": since, "source": "runtime", "limit": 1, "cursor": cursor})
+		for _, r := range ans.Rows {
+			ids = append(ids, r.Session.SessionID)
+		}
+		if cursor = ans.NextCursor; cursor == "" {
+			return ids
+		}
+	}
+}
+
+// More of a runtime's newest rows in a blocked folder than one page reads (an automation's runs): paging goes on past
+// them to its visible rows instead of ending (#10053).
+func TestSessionsHistoryPagesPastABlockedRunLongerThanAPage(t *testing.T) {
+	n, _ := runtimeNode(t)
+	now := time.Now().UTC()
+	hello := dshHello()
+	hello["caps"].(map[string]any)["history"] = true
+	c := dialRuntime(t, n, hello)
+	c.mu.Lock()
+	c.answer = historyRuntime(blockedRun(now, 1100, "v0", "v1"))
+	c.mu.Unlock()
+	waitFor(t, "ready", func() bool { return len(n.runtimes.ready()) == 1 })
+	n.setBlockedAgentDirs([]string{"/work/bot/*"})
+
+	if got := historyPages(t, n, now.Add(-48*time.Hour).Format(time.RFC3339Nano)); strings.Join(got, ",") != "v0,v1" {
+		t.Fatalf("rows %v; want v0,v1", got)
+	}
+}
+
+// The same with a second source whose rows are older than the first's visible ones: the cursor never steps past
+// the first's unread rows to the second's.
+func TestSessionsHistoryBlockedRunDoesNotSkipAnotherSourcesOlderRows(t *testing.T) {
+	n, _ := runtimeNode(t)
+	now := time.Now().UTC()
+	hello := dshHello()
+	hello["caps"].(map[string]any)["history"] = true
+	a := dialRuntime(t, n, hello)
+	a.mu.Lock()
+	a.answer = historyRuntime(blockedRun(now, 1100, "a0", "a1"))
+	a.mu.Unlock()
+	b := dialRuntime(t, n, map[string]any{"runtime": "toy", "name": "Toy", "caps": map[string]any{"history": true}})
+	b.mu.Lock()
+	b.answer = historyRuntime([]map[string]any{
+		{"session_id": "b0", "status": "offline", "cwd": "/work/app", "updated_at": now.Add(-20 * time.Hour).Format(time.RFC3339Nano)},
+		{"session_id": "b1", "status": "offline", "cwd": "/work/app", "updated_at": now.Add(-21 * time.Hour).Format(time.RFC3339Nano)},
+	})
+	b.mu.Unlock()
+	waitFor(t, "ready", func() bool { return len(n.runtimes.ready()) == 2 })
+	n.setBlockedAgentDirs([]string{"/work/bot/*"})
+
+	if got := historyPages(t, n, now.Add(-48*time.Hour).Format(time.RFC3339Nano)); strings.Join(got, ",") != "a0,a1,b0,b1" {
+		t.Fatalf("rows %v; want a0,a1,b0,b1", got)
+	}
 }

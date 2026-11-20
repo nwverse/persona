@@ -1,4 +1,4 @@
-Message another conversation; it waits for a running turn or 2 min of user quiet. Replies use conversation_send. Few hops per user message (main: no cap; a wake-up resets; a first reply adds none). Past the rate it queues: the result says when. Ack or FYI only: wake false. Follow policy refusals; don't retry. Owner-verbatim words to main: start with them. Handing on a user request: set quote (free once).
+Message another conversation; it waits for a running turn or 2 min of user quiet. Replies use conversation_send. Few hops per user message (main: no cap; a wake-up resets; a first reply adds none). Past the rate it queues: the result says when. Ack or FYI only: wake false. Follow policy refusals; don't retry. Owner-verbatim words to main: start with them. Handing on a user request: set quote (free once).{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -14,7 +14,7 @@ Message another conversation; it waits for a running turn or 2 min of user quiet
     },
     "quote": {
       "type": "string",
-      "description": "\"latest\" or a message id: the user's words, carried verbatim"
+      "description": "\"latest\" (this turn), a message id or the user's exact words"
     },
     "wake": {
       "type": "boolean",

@@ -26,6 +26,8 @@ import (
 type startPick struct {
 	launcher, effort, model, speed, tier, permission string
 	ultracode                                        *bool
+	// The caller or preset selected omp with no model before Model Settings were applied.
+	ompModelDefault bool
 }
 
 // launchPick is what task t holds of its launch now, as pickOf reads it from a start's params, with its ultracode.
@@ -93,6 +95,8 @@ func (s *Service) resolveStart(ctx context.Context, params map[string]any, launc
 	if err := s.applyStartTier(ctx, params); err != nil {
 		return own, err
 	}
+	selected := pickOf(params)
+	own.ompModelDefault = selected.launcher == "omp" && selected.model == ""
 	return own, s.applyModelBinding(ctx, "agent.new", params, launcherDefaultModel)
 }
 
@@ -110,6 +114,43 @@ type startAgent struct {
 // launcherStartAgent is what launcher l runs.
 func launcherStartAgent(l ConfiguredLauncher) startAgent {
 	return startAgent{agent: l.AgentType, source: l.Source, autoAccept: l.AutoAccept}
+}
+
+// fitNewLauncher applies a new Agent's defaults using the launcher actually available on its destination.
+// Resumes call fitLauncher directly and keep their existing execution settings.
+func (s *Service) fitNewLauncher(ctx context.Context, m Device, own startPick, params map[string]any) (string, startAgent, error) {
+	note, agent, err := s.fitLauncher(ctx, m, own, params)
+	if err == nil {
+		err = s.applyOmpStartDefaults(ctx, m, own, agent, params)
+	}
+	return note, agent, err
+}
+
+func (s *Service) applyOmpStartDefaults(ctx context.Context, m Device, own startPick, agent startAgent, params map[string]any) error {
+	declared, _ := params["agent_type"].(string)
+	if params["launcher"] != "omp" || agent.agent != "omp" || (declared != "" && declared != "omp") || !herdrTaskHost(m, params) {
+		return nil
+	}
+	if source := compat.Source(agent.source); source != "" && source != "builtin" && !machineSource(source) {
+		return nil
+	}
+	model, _ := params["model"].(string)
+	effort, _ := params["effort"].(string)
+	// An explicit launcher default uses omp's local model. Following Model Settings keeps its model.
+	// Only an effort the caller named reaches the node, which refuses it before opening the tab.
+	dropModel, dropEffort := own.ompModelDefault && model != "", own.effort == "" && effort != ""
+	if !dropModel && !dropEffort {
+		return nil
+	}
+	if dropModel {
+		model = ""
+		delete(params, "model")
+	}
+	if dropEffort {
+		effort = ""
+		delete(params, "effort")
+	}
+	return s.finishModel(ctx, "agent.new", params, ModelBinding{Provider: launcherProvider("omp"), Model: model, Effort: effort})
 }
 
 // launcherKindSnapshot is the kind the launcher metadata actually names, before sessionLaunchers applies its Claude
@@ -135,6 +176,22 @@ func launcherKindSnapshot(discovered, overrides []ConfiguredLauncher, name strin
 		}
 	}
 	return kind
+}
+
+// configuredStartAgentLookup applies hub overrides and compatibility defaults once for an inventory, then resolves
+// names without another machine read. Both the real fit and candidate previews use this same metadata.
+func configuredStartAgentLookup(discovered, overrides []ConfiguredLauncher) func(string) startAgent {
+	configured := sessionLaunchers(discovered, overrides)
+	return func(name string) startAgent {
+		for _, l := range configured {
+			if l.Name == name {
+				a := launcherStartAgent(l)
+				a.snapshot = launcherKindSnapshot(discovered, overrides, name)
+				return a
+			}
+		}
+		return startAgent{}
+	}
 }
 
 // allowAll: the Agents Persona itself starts on the launcher (agent_start, a planned task, a read-only one too) run with
@@ -182,17 +239,7 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 		discovered = append(discovered, ConfiguredLauncher{Launcher: l})
 	}
 	overrides := s.hello(ctx).Models.Launchers[m.ID]
-	configured := sessionLaunchers(discovered, overrides)
-	agentOf := func(name string) startAgent {
-		for _, l := range configured {
-			if l.Name == name {
-				a := launcherStartAgent(l)
-				a.snapshot = launcherKindSnapshot(discovered, overrides, name)
-				return a
-			}
-		}
-		return startAgent{}
-	}
+	agentOf := configuredStartAgentLookup(discovered, overrides)
 	if slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name }) {
 		return "", agentOf(name), nil
 	}
