@@ -81,7 +81,7 @@ func historyCall(t *testing.T, n *Node, params map[string]any) sessionhistory.An
 // runtime without the capability is not asked and is marked honored: false.
 func TestSessionsHistoryPagesARuntimeInFullAndMarksOneWithoutIt(t *testing.T) {
 	n, _ := runtimeNode(t)
-	now := time.Now().UTC()
+	now := time.Now().UTC().Add(-time.Minute) // the newest row before the window's end (until: now)
 	var rows []map[string]any
 	for i := 0; i < 450; i++ { // one every 4 hours: 75 days
 		rows = append(rows, map[string]any{"session_id": fmt.Sprintf("s%03d", i), "status": "offline",
@@ -190,7 +190,8 @@ func TestHistoryRowItemsGoToTheRuntime(t *testing.T) {
 	hello["caps"].(map[string]any)["history"] = true
 	host := dialRuntime(t, n, hello)
 	host.mu.Lock()
-	list := historyRuntime([]map[string]any{{"session_id": archived, "archived": true, "updated_at": time.Now().UTC().Format(time.RFC3339Nano)}})
+	// A minute back: a row updated this very millisecond is not before the window's end (until: now), so not in it.
+	list := historyRuntime([]map[string]any{{"session_id": archived, "archived": true, "updated_at": time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)}})
 	host.answer = func(method string, params json.RawMessage) (any, error) {
 		var p struct {
 			SessionID string `json:"session_id"`

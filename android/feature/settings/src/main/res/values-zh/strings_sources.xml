@@ -291,8 +291,8 @@
     <string name="settings_src_provider_preset_note">地址、接入方式和模型由扩展「%1$s」提供；加好以后和自己填写的一样可以编辑。</string>
     <string name="settings_src_provider_extension_default">扩展默认</string>
     <string name="settings_src_provider_model_note">各用途的具体选择在「模型配置」里统一管理；未单独指定时使用这里的默认。</string>
-    <string name="settings_src_provider_api_note">hub 直接请求模型，供分拣、翻译和知识处理等用途选择。</string>
-    <string name="settings_src_provider_launcher_note">在你的电脑上启动 Claude Code，供对话和 Agent 等用途选择。</string>
+    <string name="settings_src_provider_api_note">hub 直接调用这个 API 来起草回复、分拣、翻译或整理知识，无需启动 Agent。</string>
+    <string name="settings_src_provider_launcher_note">对话和 Agent 会在你的电脑上运行 Claude Code。没有可用的「直接 API」供应商时，hub 可用此启动器的 Messages API 地址、密钥和默认模型直接起草回复或分拣，无需启动 Agent。</string>
     <string name="settings_src_provider_base_url_hint">填写所选协议兼容的地址。</string>
     <string name="settings_src_provider_small_model">小模型（可选）</string>
     <string name="settings_src_provider_same_as_above">默认同上</string>

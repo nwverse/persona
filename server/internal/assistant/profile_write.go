@@ -111,6 +111,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_auto_compact_minutes"))
 		return
 	}
+	if m := in.SupervisionBatchMinutes; m != nil && (*m < 0 || *m > maxSupervisionBatchMinutes) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_supervision_batch_minutes"))
+		return
+	}
 	if n := in.IdleAutoCompactTokens; n != nil && (*n < minIdleAutoCompactTokens || *n > maxIdleAutoCompactTokens) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_auto_compact_tokens"))
 		return
@@ -316,6 +320,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.MainSupervisesOwnTasks != nil {
 			v.MainSupervisesOwnTasks = in.MainSupervisesOwnTasks
 		}
+		if in.SupervisionBatchMinutes != nil {
+			v.SupervisionBatchMinutes = in.SupervisionBatchMinutes
+		}
 		if in.DefaultPermissionMode != "" {
 			v.DefaultPermissionMode = in.DefaultPermissionMode
 		}
@@ -340,6 +347,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.settingsChanged(ctx)
+	if in.SupervisionBatchMinutes != nil && supervisionBatchMinutesOf(s.settings(ctx)) != supervisionBatchMinutesOf(before) {
+		s.rescheduleSupervision()
+	}
 	if in.MeetingTranscriptionExtension != nil {
 		s.transcriptionReadinessChanged() // named again: probed again (the answer stands meanwhile)
 	}
