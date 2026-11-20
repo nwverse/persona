@@ -46,6 +46,7 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         ExpiresInHours("Expires in %1\$d hours"),
         ExpiresInDays("Expires in %1\$d days"),
         RequestFromSubagent("From subagent · %1\$s"),
+        RequestFromWorker("From worker · %1\$s"),
         RequestFromSide("From side session · %1\$s"),
         RequestFromMcp("From MCP server %1\$s"),
         RequestFromMcpConfigured("From MCP server %1\$s (configured in %2\$s)"),

@@ -1,5 +1,7 @@
 package persona.android.ui
 
+import persona.core.domain.sort.isTeamWorker
+
 import persona.android.R
 import androidx.compose.ui.res.stringResource
 import androidx.compose.runtime.*
@@ -64,7 +66,7 @@ internal fun ShellLinkHost(session: ShellSession, navigator: Navigator, feedback
             val groups = session.groups.groups.value
             val selected = groups.selectedGroup()
             val route = resolveHubPage(page, selected?.namespace, session.sessions.sessions.value.map { it.key },
-                session.assistant.assistant.value, groups, hub) ?: return
+                session.assistant.assistant.value, groups, hub, session.sessions.sessions.value) ?: return
             if (route.hubGroupId != null && route.hubGroupId != selected?.id) {
                 if (source.isNotEmpty()) persona.android.MainActivity.pendingHubLink.value = source
             } else openResolvedHubPage(route, navigator)
@@ -87,7 +89,7 @@ internal fun ShellLinkHost(session: ShellSession, navigator: Navigator, feedback
             val groups = session.groups.groups.value
             val selected = groups.selectedGroup()
             val route = resolveHubRoute(link, session.hubAddresses(), selected?.namespace,
-                session.sessions.sessions.value.map { it.key }, session.assistant.assistant.value, groups)
+                session.sessions.sessions.value.map { it.key }, session.assistant.assistant.value, groups, session.sessions.sessions.value)
             when {
                 route == null -> false
                 route.hubGroupId != null && route.hubGroupId != selected?.id -> {
@@ -149,18 +151,18 @@ internal fun openHubPage(link: String, hubs: List<String>, namespace: String?, s
 
 /** The native route of a hub link; cold-start Router and in-app links share this mapping. */
 internal fun resolveHubRoute(link: String, hubs: List<String>, namespace: String?, sessions: List<SessionKey>,
-    assistant: AssistantSnapshot, groups: List<HubGroupInfo> = emptyList()): ResolvedRoute? {
+    assistant: AssistantSnapshot, groups: List<HubGroupInfo> = emptyList(), rows: List<persona.core.contracts.Session> = emptyList()): ResolvedRoute? {
     val selectedId = groups.selectedGroup()?.id
     val profiles = if (groups.isEmpty()) listOf(HubLinks.Hub("", hubs)) else groups.flatMap { group ->
         group.hubs.map { member -> HubLinks.Hub(member.hubId, if (group.id == selectedId) hubs else emptyList()) }
     }
     val result = HubLinks.parse(link, profiles) as? HubLinks.Result.Page ?: return null
-    return resolveHubPage(result.page, namespace, sessions, assistant, groups, result.hub?.takeIf { it.isNotBlank() })
+    return resolveHubPage(result.page, namespace, sessions, assistant, groups, result.hub?.takeIf { it.isNotBlank() }, rows)
 }
 
 /** The native route of an already parsed page; message-link and web-link navigation share this mapping. */
 internal fun resolveHubPage(page: HubPage, namespace: String?, sessions: List<SessionKey>,
-    assistant: AssistantSnapshot, groups: List<HubGroupInfo> = emptyList(), hub: String? = null): ResolvedRoute? {
+    assistant: AssistantSnapshot, groups: List<HubGroupInfo> = emptyList(), hub: String? = null, rows: List<persona.core.contracts.Session> = emptyList()): ResolvedRoute? {
     if (hub != null && groups.isEmpty()) return null
     val target = groups.groupForHub(hub)
     if (groups.isNotEmpty() && target == null) return null
@@ -169,6 +171,14 @@ internal fun resolveHubPage(page: HubPage, namespace: String?, sessions: List<Se
     fun route(tab: AppTab, key: androidx.navigation3.runtime.NavKey, focus: Boolean = false) =
         ResolvedRoute(tab, key, focusComposer = focus, hubGroupId = target?.id)
     return when (page) {
+        is HubPage.AgentTab -> {
+            val machineId = machine(page.machineId)
+            val members = rows.filter { it.machineId == machineId && !it.assistant && it.spaceId == page.space && it.slotId == page.slot }
+            // A bare tab link makes no explicit worker selection. Only a declared Team changes Android's ordinary place link.
+            val lead = members.firstOrNull { (it.children?.workers ?: 0) > 0 }?.sessionId
+                ?: members.firstOrNull { it.isTeamWorker && it.foldedSide.isNullOrBlank() && it.agentState != persona.core.contracts.AgentState.Offline }?.foldedUnder
+            route(AppTab.Agents, lead?.let { ChatRoute(machineId, it) } ?: AgentsRoute)
+        }
         is HubPage.Agent -> {
             val machineId = machine(page.machineId)
             // The web page also takes the first characters of a session id (#2464): the one session they name.

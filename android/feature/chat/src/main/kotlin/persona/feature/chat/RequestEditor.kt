@@ -18,6 +18,7 @@ import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.PersonaTheme
 import persona.core.domain.sort.canApprove
+import persona.core.domain.sort.fromWorker
 import persona.core.domain.sort.fromSide
 import persona.core.domain.answer.*
 import javax.inject.Inject
@@ -95,11 +96,15 @@ internal fun resolveRequestApprovalBlockedReason(request: Interaction, fallback:
     val context = LocalContext.current.applicationContext
     val children = LocalChatChildren.current
     val side = children?.sides?.takeIf { request.fromSide }?.firstOrNull { it.key == request.sessionKey }
-    val child = children?.rows?.get(request.sessionId) ?: side
+    val child = children?.rows?.get(request.sessionId) ?: side ?: children?.workers?.firstOrNull { it.key == request.sessionKey }
     return requestApprovalBlockedReason(request, child, fallback) {
         approvalBlockedReason(context.resources, it)
     }
 }
+
+/** Hide the source only for rendering inside that worker. Taps and drafts retain the hub's original card. */
+internal fun Interaction.onWorkerPage(worker: SessionKey?): Interaction =
+    if (fromWorker && sessionKey == worker) copy(foldedUnder = null, foldedAs = null) else this
 
 /** Both request inbox and conversation use the same form, journal and validation. */
 @Composable
@@ -119,9 +124,11 @@ fun RequestEditor(
     val side = LocalChatChildren.current?.sides?.takeIf { request.fromSide }?.firstOrNull { it.key == request.sessionKey }
     val requestBlock = resolveRequestApprovalBlockedReason(request, blockedReason)
     val stoppedWork = requestBlock != null && request.isManagerWorkCard
-    val shown = if (!request.foldedUnder.isNullOrBlank() && request.sessionTitle.isNullOrBlank())
-        request.copy(sessionTitle = side?.displayTitle
-            ?: stringResource(if (request.fromSide) R.string.chat_side_session_untitled else R.string.chat_subagent_untitled)) else request
+    val displayed = request.onWorkerPage(LocalChatChildren.current?.workerPage)
+    val shown = if (!displayed.foldedUnder.isNullOrBlank() && displayed.sessionTitle.isNullOrBlank())
+        request.copy(sessionTitle = LocalChatChildren.current?.workers?.firstOrNull { it.key == request.sessionKey }?.let { workerTitle(it) }
+            ?: side?.displayTitle
+            ?: stringResource(if (request.fromSide) R.string.chat_side_session_untitled else R.string.chat_subagent_untitled)) else displayed
     val services = remember(context) { EntryPointAccessors.fromApplication(context, RequestEditorServices::class.java) }
     val store = remember(services) { services.requestDrafts() }
     val local by store.storage.collectAsStateWithLifecycle()

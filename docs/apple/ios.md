@@ -6,6 +6,17 @@ XcodeGen source is `apple/project.yml`, generating `apple/Persona.xcodeproj` (ge
 Performance rules, budgets and how to measure: `docs/apple/performance.md` (read before changing `apple/` code).
 Bundle ID comes from configuration (`app.bundle_id`, watch `<id>.watchkitapp`, `docs/operations/config.md`). The UI supports English, Simplified Chinese and Japanese (`en` / `zh-Hans` / `ja`).
 
+## Team workers (#5185)
+
+In a lead Agent’s chat, **Team** shows the running workers in pane order. Each entry shows a title and state.
+Selecting a worker opens its conversation. On a phone, open Team by tapping its button or following a worker link.
+At regular width, Team opens on arrival at a lead with workers and when a team starts. Closing it by hand is
+remembered for that lead. The view closes when its last worker leaves.
+
+The Agents list counts the lead once and shows its team’s folded state. A worker’s question appears under the
+lead, labeled **From worker · title**. While that worker is selected, its own conversation shows the card and
+delivers the answer. A link to a worker opens the lead with that worker selected at either width.
+
 ## Side sessions (#7944)
 
 Who it serves: people who use Agents with the Claude desktop app. A desktop app's side chat, /btw question or spawned

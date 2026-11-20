@@ -1,5 +1,7 @@
 package persona.feature.chat
 
+import persona.core.domain.sort.isTeamWorker
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -31,7 +33,7 @@ internal fun spaceTabs(session: Session?, sessions: List<Session>): List<Session
     val byPane = LinkedHashMap<String, Session>()
     val rest = mutableListOf<Session>()
     for (other in sessions + session) {
-        if (other.machineId != session.machineId || other.assistant || other.agentState == AgentState.Offline) continue
+        if (other.machineId != session.machineId || other.assistant || other.isTeamWorker || other.agentState == AgentState.Offline) continue
         if ((other.spaceId?.takeIf(String::isNotBlank) ?: other.workspaceId) != space) continue
         val pane = other.paneId?.takeIf(String::isNotBlank)
         if (pane == null) { if (rest.none { it.key == other.key }) rest += other; continue }

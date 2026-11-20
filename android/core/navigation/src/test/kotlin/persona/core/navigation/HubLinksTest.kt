@@ -42,7 +42,7 @@ class HubLinksTest {
 
     @Test fun knowsTheOtherPages() {
         assertEquals(HubPage.Agent("m1", "abc-1"), page("$hub/t/m1/space/slot/abc-1"))
-        assertEquals(HubPage.Screen(AgentsRoute), page("$hub/t/m1/space/slot"))
+        assertEquals(HubPage.AgentTab("m1", "space", "slot"), page("$hub/t/m1/space/slot"))
         assertEquals(HubPage.Conversation(null), page(hub))
         assertEquals(HubPage.Conversation(null), page("$hub/"))
         assertEquals(HubPage.Conversation(null), page("$hub/persona"))

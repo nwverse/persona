@@ -641,6 +641,10 @@
       "sf": "stop.circle",
       "phosphor": "stop"
     },
+    "subagent": {
+      "sf": "person.2",
+      "phosphor": "users"
+    },
     "submit": {
       "sf": "arrow.up.circle.fill",
       "phosphor": "arrow-up"

@@ -27,11 +27,14 @@ import persona.core.domain.sort.sideChildren
 import persona.core.domain.sort.sideHome
 import persona.core.domain.sort.sideRollup
 import persona.core.domain.sort.sideSessions
+import persona.core.domain.sort.isTeamWorker
+import persona.core.domain.sort.teamWorkers
 import java.time.Duration
 
 internal data class ChatChildren(val rows: Map<String, Session>, val repository: ChatRepository,
     /** The side sessions folded under this chat's session (#7944), in their panel's order; empty in a side's own chat. */
-    val sides: List<Session> = emptyList(), val sideRollup: SideRollup = SideRollup())
+    val sides: List<Session> = emptyList(), val sideRollup: SideRollup = SideRollup(), val workers: List<Session> = emptyList(),
+    val workerPage: SessionKey? = null)
 internal val LocalChatChildren = staticCompositionLocalOf<ChatChildren?> { null }
 
 data class ChildSessionHome(val key: SessionKey, val childSessionId: String? = null,
@@ -90,6 +93,14 @@ fun ChildSessionHome.shownSide(rows: List<Session>, features: Collection<String>
     return row.sideHome?.let { SessionKey(key.machineId, it) }
 }
 
+/** A direct worker link opens its lead with this member selected. Links through a side belong to the side. */
+fun ChildSessionHome.shownWorker(rows: List<Session>): SessionKey? {
+    val child = childSessionId ?: return null
+    val target = SessionKey(key.machineId, child)
+    val row = (rows + this.rows).firstOrNull { it.key == target } ?: return null
+    return target.takeIf { row.foldedUnder == key.sessionId && row.isTeamWorker && row.foldedSide.isNullOrBlank() }
+}
+
 /**
  * Bounded hubs keep children outside the root window; a failed refresh keeps the last confirmed cards. With side folding
  * (#7944) a parent's sides are its Side sessions, not cards, and a side's own chat shows the rows folded through it,
@@ -110,7 +121,7 @@ internal fun rememberChatChildren(key: SessionKey, parent: Session?, rows: List<
         childSessionRows(home, local, held, chrome.lookupRows)
     }
     val children = remember(folded, key, top, sideFold) {
-        if (top != null) sideChildren(folded, key) else childSessions(folded, key, sides = sideFold)
+        if (top != null) sideChildren(folded, key) else childSessions(folded, key, sides = sideFold).filterNot { it.isTeamWorker }
     }
     val sides = remember(folded, key, top, sideFold) { if (sideFold && top == null) sideSessions(folded, key) else emptyList() }
     val rollup = remember(parent, sides, folded) { if (sideFold && top == null) sideRollup(parent, sides, folded) else SideRollup() }
@@ -135,7 +146,8 @@ internal fun rememberChatChildren(key: SessionKey, parent: Session?, rows: List<
             }
         }
     }
-    return ChatChildren(children.associateBy { it.sessionId }, repository, sides, rollup)
+    val workers = remember(folded, top, key) { if (top == null) teamWorkers(folded, key) else emptyList() }
+    return ChatChildren(children.associateBy { it.sessionId }, repository, sides, rollup, workers, key.takeIf { chrome.teamWorkerPage })
 }
 
 /** The existing task card, with its child's own metadata and a transcript read only while open. */

@@ -59,6 +59,7 @@ class DeepLinkFixtureTest {
     }
 
     private fun fields(page: HubPage): Map<String, String> = when (page) {
+        is HubPage.AgentTab -> values("tab", "machine" to page.machineId, "space" to page.space, "slot" to page.slot)
         is HubPage.Agent -> values("session", "machine" to page.machineId, "session" to page.sessionId,
             "at" to page.itemId, "view" to page.view)
         is HubPage.Conversation -> if (page.sessionId == null) values("persona")

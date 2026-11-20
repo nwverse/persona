@@ -2727,6 +2727,9 @@ extension Interaction {
             if foldedAs == SideFold.side || foldedSide != nil, !title.isEmpty {
                 return String(localized: "From Side Session · \(title)")
             }
+            if TeamWorkers.hasPanel, foldedAs == "worker" {
+                return title.isEmpty ? String(localized: "From worker") : String(localized: "From worker · \(title)")
+            }
             let name = title.isEmpty ? String(localized: "Subagent task [Child Session]") : title
             return String(localized: "From subagent · \(name)")
         }

@@ -7,12 +7,17 @@ import persona.core.contracts.Item
 import persona.core.contracts.mcpServerLabel
 import persona.core.contracts.toolDisplayName
 import persona.core.domain.sort.fromSide
+import persona.core.domain.sort.fromWorker
 import kotlinx.serialization.json.*
 
 /** Only metadata supplied by the hook is a source; tool names are not proof. A side session's own card says it is one (#7944). */
 fun Interaction.requestSourceLabel(): CoreText? = listOfNotNull(
     (if (!foldedUnder.isNullOrBlank()) sessionTitle else agentType)?.trim()?.takeIf(String::isNotEmpty)
-        ?.let { CoreText.of(if (fromSide) Key.RequestFromSide else Key.RequestFromSubagent, persona.core.domain.lines.Subagents.compact(it, 48)) },
+        ?.let { CoreText.of(when {
+            fromSide -> Key.RequestFromSide
+            fromWorker -> Key.RequestFromWorker
+            else -> Key.RequestFromSubagent
+        }, persona.core.domain.lines.Subagents.compact(it, 48)) },
     mcpServerName?.trim()?.takeIf(String::isNotEmpty)?.let { server ->
         val name = mcpServerLabel(server)
         mcpConfigSource?.trim()?.takeIf(String::isNotEmpty)?.let { CoreText.of(Key.RequestFromMcpConfigured, name, it) }

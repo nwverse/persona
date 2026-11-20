@@ -18,7 +18,11 @@ import persona.feature.assistant.NeedsYouLine
  */
 internal fun needsYouRoute(line: NeedsYouLine): ResolvedRoute = when (line) {
     is NeedsYouLine.Agent -> sessionlessCard(line.session, line.requestId)
-        ?: (line.side ?: line.session).let { ResolvedRoute(AppTab.Agents, ChatRoute(it.machineId, it.sessionId, ConversationKind.Agent)) }
+        ?: (line.memberTarget ?: line.session).let {
+            val chat = ChatRoute(it.machineId, it.sessionId, ConversationKind.Agent)
+            val workerCard = line.memberTarget != null && line.side == null && line.requestId.isNotBlank()
+            ResolvedRoute(AppTab.Agents, if (workerCard) InteractionRoute(chat, line.requestId) else chat)
+        }
     is NeedsYouLine.Inbox -> ResolvedRoute(AppTab.Persona, InboxItemRoute(line.itemId))
 }
 

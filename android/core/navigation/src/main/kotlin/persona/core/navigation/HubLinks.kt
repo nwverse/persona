@@ -16,6 +16,9 @@ sealed interface HubPage {
         val view: String? = null,
     ) : HubPage
 
+    /** A legacy tab link without an explicit pane. */
+    data class AgentTab(val machineId: String, val space: String, val slot: String) : HubPage
+
     /** `/persona/<conversation>`; null is Persona's own page. */
     data class Conversation(
         val sessionId: String?,
@@ -147,7 +150,7 @@ object HubLinks {
             "s" -> if (p.size == 3) agent(p[1], p[2], query) else null
             "t" -> when (p.size) {
                 5 -> agent(p[1], p[4], query)
-                4 -> HubPage.Screen(AgentsRoute) // the older place link retained by the original Android wrapper
+                4 -> HubPage.AgentTab(p[1], p[2], p[3])
                 else -> null
             }
             "persona" -> when {

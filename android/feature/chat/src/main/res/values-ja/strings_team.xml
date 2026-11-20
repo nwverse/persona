@@ -1,0 +1,12 @@
+<resources>
+    <string name="chat_team">コラボ</string>
+    <string name="chat_team_needs_you">コラボ：対応を待っている Worker があります</string>
+    <string name="chat_team_summary">Worker %1$d 件 · 実行中 %2$d 件</string>
+    <string name="chat_team_waiting">Worker を待機中</string>
+    <string name="chat_team_workers">Worker</string>
+    <string name="chat_team_worker">Worker</string>
+    <string name="chat_team_earlier">前の Worker へスクロール</string>
+    <string name="chat_team_more">次の Worker へスクロール</string>
+    <string name="chat_team_close">コラボを閉じる</string>
+    <string name="chat_team_member">Agent・%1$s・%2$s</string>
+</resources>

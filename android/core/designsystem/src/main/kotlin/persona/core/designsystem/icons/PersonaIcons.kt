@@ -326,6 +326,8 @@ object PersonaIcons {
     val sshKey: PhIcon get() = PhIcons.Key
     /** SF Symbol `stop.circle`. */
     val stopLoop: PhIcon get() = PhIcons.Stop
+    /** SF Symbol `person.2`. */
+    val subagent: PhIcon get() = PhIcons.Users
     /** SF Symbol `arrow.up.circle.fill`. */
     val submit: PhIcon get() = PhIcons.ArrowUp
     /** SF Symbol `checkmark.circle`. */

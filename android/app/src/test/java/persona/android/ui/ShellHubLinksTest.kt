@@ -25,6 +25,20 @@ class ShellHubLinksTest {
     private fun open(url: String, namespace: String? = null, sessions: List<SessionKey> = emptyList(), snapshot: AssistantSnapshot = assistant) =
         openHubPage(url, listOf(hub), namespace, sessions, snapshot, navigator)
 
+    @Test fun bareTabOnlyChangesForAnExplicitTeamInTheTargetPairing() {
+        val tab = HubPage.AgentTab("server", "space", "tab")
+        val main = Session("server", "lead", spaceId = "space", slotId = "tab", paneIndex = 0)
+        val worker = main.copy(sessionId = "worker", paneIndex = 1, foldedAs = "worker", foldedUnder = main.sessionId)
+        val other = main.copy(machineId = "server~g00000002", children = persona.core.contracts.SessionChildren(workers = 3))
+        fun target(vararg rows: Session) = resolveHubPage(tab, null, rows.map { it.key }, assistant, rows = rows.toList())?.key
+        assertEquals(ChatRoute("server", "lead"), target(main, worker, other))
+        assertEquals(ChatRoute("server", "lead"), target(main.copy(children = persona.core.contracts.SessionChildren(workers = 3))))
+        assertEquals(AgentsRoute, target(main))
+        assertEquals(AgentsRoute, target(main.copy(paneIndex = 1), worker.copy(foldedAs = null, foldedUnder = null)))
+        assertEquals(AgentsRoute, target(other))
+        assertEquals(AgentsRoute, target(main.copy(slotId = "elsewhere"), worker.copy(slotId = "elsewhere")))
+    }
+
     @Test fun anAgentLinkOpensItsConversation() {
         assertTrue(open("$hub/s/m1/abc-1?view=chat"))
         assertEquals(listOf<NavKey>(ChatRoute("m1", "abc-1")), opened)

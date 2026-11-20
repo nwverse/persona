@@ -150,6 +150,7 @@ class Router(
     }
 
     private fun resolve(page: HubPage): ResolvedRoute? = when (page) {
+        is HubPage.AgentTab -> resolve(AgentsRoute) // the app shell resolves a tab against its paired rows
         is HubPage.Agent -> {
             page.itemId?.let { MessageJumps.request(page.machineId, page.sessionId, it) }
             if (page.view == "term") ResolvedRoute(AppTab.Agents, TerminalRoute(page.machineId, page.sessionId))

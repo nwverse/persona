@@ -19,7 +19,6 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import kotlinx.serialization.json.JsonObject
 
 /**
  * One group's services, built on its data and connection with the group's plain ids (what ChatDataOwner used to
@@ -107,12 +106,9 @@ class GroupStacks @Inject constructor(application: Application, private val runt
                 connection.request(path, method, body)
             }, { id, retry -> if (current()) repositories.sessions.heldActionCompleted(session, id, retry) })
         }
-        val view = object : HubConnection {
+        val view = object : HubConnection by connection {
             override val state = group.state
-            override val resumed get() = connection.resumed
-            override val events = connection.events
             override fun reconnect() = group.reconnect()
-            override fun send(message: JsonObject) = connection.send(message)
         }
         val plain = createChatWiring(data, repositories, connection, view, ::current,
             // The conversation's Undo of the assistant's calendar write (iOS `CalendarTool.remove`): this phone's own

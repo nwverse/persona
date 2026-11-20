@@ -24,7 +24,8 @@ import kotlinx.coroutines.flow.flow
 @Composable
 internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navigator, feedback: AppFeedback, requestId: String? = null,
     onSessionClosed: (SessionKey) -> Unit = {}, onOpenCard: (ResolvedRoute) -> Unit, onGroupGone: (ChatRoute, ChatRoute?) -> Unit,
-    terminal: persona.core.contracts.api.TerminalTransport? = session.terminal) {
+    terminal: persona.core.contracts.api.TerminalTransport? = session.terminal,
+    teamMember: persona.core.contracts.Session? = null, onCloseTeam: (() -> Unit)? = null) {
     // The services of the session's own hub group, which need not be the selected one (docs/android/android.md "Multiple hubs").
     val source = chatWiringSource()
     val activeWiring by remember(source, route.machineId) { source.bindingsFor(SessionKey(route.machineId, route.sessionId)) }
@@ -58,8 +59,10 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
     val sessions by session.sessions.sessions.collectAsStateWithLifecycle()
     val routingConnection = wiring?.connection ?: session.connection
     val routingState by routingConnection.state.collectAsStateWithLifecycle()
-    val routingFeatures = routingConnection.lastHello?.features.orEmpty()
-    val home = rememberChildSessionHome(SessionKey(route.machineId, route.sessionId), sessions, actions,
+    // The pairing socket exposes its current hello, including for non-selected pairings and after a cold launch.
+    val socketHello by routingConnection.currentHello.collectAsStateWithLifecycle()
+    val routingFeatures = (socketHello?.hello ?: routingConnection.lastHello)?.features.orEmpty()
+    val home = if (teamMember != null) ChildSessionHome(teamMember.key, rows = listOf(teamMember)) else rememberChildSessionHome(SessionKey(route.machineId, route.sessionId), sessions, actions,
         routingFeatures, routingState == ConnectionState.Online, side = route.side)
     // A link to a side session (#7944: a notification, Needs you, a search hit) opens its parent, then the side over it,
     // once: Back from the side comes to the parent.
@@ -72,6 +75,7 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
         val chat = ChatRoute(side.machineId, side.sessionId, ConversationKind.Agent, side = true)
         navigator.navigate(requestId?.let { InteractionRoute(chat, it) } ?: chat)
     }
+    val landedWorker = remember(home, sessions) { home.shownWorker(sessions) }
     val key = home.key
     val metadata = (sessions + home.rows).firstOrNull { it.key == key }
     val managerChoice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
@@ -115,7 +119,7 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
     androidx.compose.runtime.CompositionLocalProvider(persona.feature.chat.LocalUsageRead provides wiring?.usage) {
         Box(Modifier.fillMaxSize()) {
             // Keep the composer and conversation mounted while browsing the session directory.
-            ChatScreen(key, session.chats, session.sender, session.interactions, session.sessions, { if (!closed) navigator.back() },
+            ChatScreen(key, session.chats, session.sender, session.interactions, session.sessions, { if (!closed) onCloseTeam?.invoke() ?: navigator.back() },
                 onTerminal = if (terminal != null && !assistant) ({ focus.clearFocus(); resumeOnOpen = false; terminalOpen = true }) else null,
                 onResumeInTerminal = if (terminal != null && !assistant) ({ focus.clearFocus(); resumeOnOpen = true; terminalOpen = true }) else null,
                 chrome = ChatChromeBindings(
@@ -123,7 +127,13 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                     onGit = if (filesAvailable && git?.isRepo == true) ({ open(FilesPane.Git) }) else null,
                     gitLabel = "Git${git?.files?.size?.takeIf { it > 0 }?.let { " · $it" }.orEmpty()}",
                     actions = actions, connection = wiring?.connection ?: session.connection, requestId = requestId, covered = pane != null || terminalOpen,
-                    childSessionId = home.childSessionId.takeIf { landedSide == null },
+                    childSessionId = home.childSessionId.takeIf { landedSide == null && landedWorker == null },
+                    teamWorkerPage = teamMember != null,
+                    team = if (!assistant && teamMember == null && !route.side) TeamChatHost(wiring?.scope?.path ?: session.identity, landedWorker) { member, close ->
+                        ShellChat(ChatRoute(member.machineId, member.sessionId, ConversationKind.Agent), session, navigator, feedback,
+                            requestId = requestId.takeIf { member.key == landedWorker }, onSessionClosed = onSessionClosed,
+                            onOpenCard = onOpenCard, onGroupGone = onGroupGone, terminal = terminal, teamMember = member, onCloseTeam = close)
+                    } else null,
                     lookupRows = home.rows,
                     worktrees = wiring?.worktrees,
                     assistantManagement = assistantManagement,
@@ -157,6 +167,7 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                                 SettingsPageRoute(SettingsPage.StandingAuthorizations)
                         })
                     }),
+                showTopBar = teamMember == null,
                 renderStyle = if (assistant) ChatRenderStyle.Assistant else ChatRenderStyle.Agent,
                 composerState = composer, composerService = wiring?.composer,
                 onDraftChanged = editor?.let { it::changed },
@@ -198,7 +209,7 @@ internal fun rememberWaitingRequests(session: ShellSession, sessions: List<perso
         persona.feature.assistant.needsYou(pending, sessions, preferences.mutes, emptyList(), shown = Int.MAX_VALUE,
             isAssistant = { it == assistant.mainSession || assistant.conversations.any { c -> c.key == it } })
             .lines.filterIsInstance<persona.feature.assistant.NeedsYouLine.Agent>()
-            .map { WaitingRequest(it.session, it.requestId, it.who, it.what) }
+            .map { WaitingRequest(it.session, it.requestId, it.who, it.what, it.memberTarget) }
     }
 }
 

@@ -250,6 +250,16 @@ struct FetchHint: Equatable {
     @ObservationIgnored var seen: [String: Date?] = [:]
     @ObservationIgnored private var revision: [SessionKey: String] = [:]
     @ObservationIgnored private var loaded: Set<SessionKey> = []
+    @ObservationIgnored private var generation: [String: Int] = [:]
+
+    /// A new pairing may reuse the default group and the same server and session names.
+    func forget(_ group: String) {
+        generation[group, default: 0] += 1
+        heldNow = heldNow.filter { $0.key.group != group }
+        held = heldNow
+        revision = revision.filter { $0.key.group != group }
+        loaded = loaded.filter { $0.group != group }
+    }
 
     func known(_ parent: SessionKey) -> [Session] { held[parent] ?? [] }
     func knownNow(_ parent: SessionKey) -> [Session] { heldNow[parent] ?? [] }
@@ -281,6 +291,7 @@ struct FetchHint: Equatable {
 
     private func refresh(parent: SessionKey, api: APIClient, retry: Bool) async {
         let since = revision[parent]
+        let started = generation[parent.group]
         do {
             var cursor: String?
             var changes: [Session] = []
@@ -295,11 +306,13 @@ struct FetchHint: Equatable {
                 guard page.hasMore == true, let more = page.nextCursor, !more.isEmpty else { break }
                 cursor = more
             }
+            guard started == generation[parent.group] else { return }
             put(parent, ChildSessions.merge(held: heldNow[parent] ?? [], changes: changes, removals: removals,
                                              baseline: since == nil))
             if let next { revision[parent] = next }
             loaded.insert(parent)
         } catch let error as APIError where retry && error.status == 409 && error.code == "revision_expired" {
+            guard started == generation[parent.group] else { return }
             revision[parent] = nil
             loaded.remove(parent)
             await refresh(parent: parent, api: api, retry: false)

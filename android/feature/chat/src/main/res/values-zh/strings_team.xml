@@ -1,0 +1,12 @@
+<resources>
+    <string name="chat_team">协同</string>
+    <string name="chat_team_needs_you">协同：有子 Agent 在等你</string>
+    <string name="chat_team_summary">子 Agent %1$d 个 · %2$d 个在跑</string>
+    <string name="chat_team_waiting">等待子 Agent</string>
+    <string name="chat_team_workers">子 Agent</string>
+    <string name="chat_team_worker">子 Agent</string>
+    <string name="chat_team_earlier">滚动到前面的子 Agent</string>
+    <string name="chat_team_more">滚动到更多子 Agent</string>
+    <string name="chat_team_close">关闭协同</string>
+    <string name="chat_team_member">Agent · %1$s · %2$s</string>
+</resources>

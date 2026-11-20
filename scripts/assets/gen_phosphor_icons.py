@@ -24,7 +24,7 @@ moon-stars music-note note-pencil paper-plane-right paper-plane-tilt paperclip p
 plugs-connected plus power prohibit push-pin puzzle-piece qr-code question quotes robot rocket-launch scan seal-question
 share-network shield shield-check shield-warning sidebar-simple sliders-horizontal snowflake sparkle speaker-high
 spinner-gap squares-four stack star stop sun target television terminal terminal-window thermometer timer translate
-trash tray tree-structure trend-down trend-up user user-circle video-camera wallet warning warning-circle waveform
+trash tray tree-structure trend-down trend-up user user-circle users video-camera wallet warning warning-circle waveform
 wifi-high wifi-slash wind wrench x x-circle
 """.split()
 

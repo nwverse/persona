@@ -1,5 +1,7 @@
 package persona.feature.chat
 
+import persona.core.domain.sort.isTeamWorker
+
 import androidx.compose.ui.platform.LocalResources
 import android.content.res.Resources
 import androidx.compose.runtime.*
@@ -21,7 +23,7 @@ internal fun spaceCompanions(session: Session?, sessions: List<Session>): List<S
     if (session == null) return emptyList()
     val space = session.spaceId?.takeIf(String::isNotBlank) ?: session.workspaceId?.takeIf(String::isNotBlank)
     return sessions.filter { other ->
-        other.machineId == session.machineId && other.key != session.key && !other.assistant &&
+        other.machineId == session.machineId && other.key != session.key && !other.assistant && !other.isTeamWorker &&
             if (space != null) (other.spaceId?.takeIf(String::isNotBlank) ?: other.workspaceId) == space
             else !session.spaceName.isNullOrBlank() && other.spaceName == session.spaceName
     // tab by tab, a tab's agents together by their place in it (#2515, as the web's tab groups): the launcher first

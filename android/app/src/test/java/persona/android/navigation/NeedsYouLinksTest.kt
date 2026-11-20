@@ -13,6 +13,15 @@ class NeedsYouLinksTest {
         AppTab.Persona to mutableListOf(AssistantRoute), AppTab.Agents to mutableListOf(AgentsRoute),
     )
 
+    @Test fun aTeamCardKeepsItsCountUnderTheLeadAndOpensItsPairedWorkerAtTheCard() {
+        val lead = SessionKey("server~g00000002", "lead")
+        val worker = SessionKey(lead.machineId, "review")
+        val line = NeedsYouLine.Agent(lead, "permission", "permission", null, "Lead", "Review changes", memberTarget = worker)
+        assertEquals(lead, line.session)
+        assertEquals(InteractionRoute(ChatRoute(worker.machineId, worker.sessionId, ConversationKind.Agent), "permission"),
+            needsYouRoute(line).key)
+    }
+
     @Test fun aRequestOpensItsConversationOnAgents() {
         val line = NeedsYouLine.Agent(SessionKey("m", "s"), "r1", "plan", null, "迁移", "计划等你批准")
         assertEquals(AppTab.Agents, needsYouRoute(line).open(stacks))

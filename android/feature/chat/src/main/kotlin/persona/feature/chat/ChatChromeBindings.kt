@@ -70,6 +70,10 @@ data class ChatChromeBindings(
      * rounds fold like the main conversation's. Empty from an older hub or a non-assistant surface.
      */
     val leaderConversations: Set<String> = emptySet(),
+    /** Shell-scoped worker chat and its direct-link selection. Absent for non-agent surfaces. */
+    val team: TeamChatHost? = null,
+    val teamWorkerPage: Boolean = false,
+    val shownTeamWorker: SessionKey? = null,
     /** Parent/child rows resolved for a cold link outside the root page; not list membership. */
     val lookupRows: List<persona.core.contracts.Session> = emptyList(),
 )

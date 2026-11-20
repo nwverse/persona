@@ -350,6 +350,18 @@ child card expanded only when that parent row exists. Covered by `SessionHierarc
 `RequestApprovalTest`, `FoldedSessionsShotsTest` and
 `ChildSessionsShotsTest` (Glass, Brief and Board, light/dark).
 
+**Team workers (#5185)**
+
+Open **Team** in a lead Agent’s chat to see its running workers. Each worker has a title and status in pane order.
+Selecting one opens its conversation. On a phone, the button or a worker link opens Team. On a wide screen, Team
+opens when you arrive at a lead with workers, or when a new team starts. Closing it by hand is remembered for
+that lead. It closes when the last worker leaves.
+
+A worker carries `folded_as: "worker"` and `folded_under` from the hub. The Agents list counts the lead once and
+shows its team’s folded state. A worker’s question appears in the lead chat with **From worker · title**. Opening
+that worker moves the card to its conversation, where the answer goes to the worker that asked. A worker link
+opens its lead with that worker selected.
+
 **Side sessions (#7944)**
 
 A Claude desktop app's side chat or /btw question (`parent_agent_id`) folds under its topmost listed parent on the same

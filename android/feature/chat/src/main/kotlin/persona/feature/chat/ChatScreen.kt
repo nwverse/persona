@@ -124,11 +124,26 @@ fun ChatScreen(
         key(sessionKey, scopedReadingKey) {
             val readOnlyRefusal = androidx.compose.ui.res.stringResource(R.string.chat_read_only_history)
             val pageSender = remember(sender, historyReadOnly) { if (historyReadOnly) ReadOnlyMessageSender(sender, readOnlyRefusal) else sender }
-            ChatPage(sessionKey, repository, pageSender, interactions, sessions, onBack, onTerminal, onResumeInTerminal, chrome,
-                scopedReadingKey, anchorStore ?: local?.anchors,
-                renderStyle, textUpdates,
-                composerService, composerUpload, composerState ?: rememberChatComposerState(), onDraftChanged, onContextCleared, statusBindings,
-                embedded, showTopBar, historyReadOnly, historyFooter, historySession, healthChat)
+            val team = chrome.team
+            if (team == null) {
+                ChatPage(sessionKey, repository, pageSender, interactions, sessions, onBack, onTerminal, onResumeInTerminal, chrome,
+                    scopedReadingKey, anchorStore ?: local?.anchors,
+                    renderStyle, textUpdates,
+                    composerService, composerUpload, composerState ?: rememberChatComposerState(), onDraftChanged, onContextCleared, statusBindings,
+                    embedded, showTopBar, historyReadOnly, historyFooter, historySession, healthChat, null, null)
+            } else {
+                val composer = composerState ?: rememberChatComposerState()
+                val rows by sessions.sessions.collectAsStateWithLifecycle()
+                val parent = rows.firstOrNull { it.key == sessionKey } ?: chrome.lookupRows.firstOrNull { it.key == sessionKey }
+                val children = rememberChatChildren(sessionKey, parent, rows, chrome, repository)
+                TeamChatLayout(sessionKey, parent, children.workers, team, chrome.covered, chrome.requestId) { control, shown, covered ->
+                    val bindings = chrome.copy(shownTeamWorker = shown, covered = chrome.covered || covered)
+                    ChatPage(sessionKey, repository, pageSender, interactions, sessions, onBack, onTerminal, onResumeInTerminal, bindings,
+                        scopedReadingKey, anchorStore ?: local?.anchors, renderStyle, textUpdates,
+                        composerService, composerUpload, composer, onDraftChanged, onContextCleared, statusBindings,
+                        embedded, showTopBar, historyReadOnly, historyFooter, historySession, healthChat, children, control)
+                }
+            }
         }
     }
 }
@@ -146,7 +161,7 @@ private fun ChatPage(
     statusBindings: ChatStatusBindings,
     embedded: Boolean, showTopBar: Boolean,
     historyReadOnly: Boolean, historyFooter: (@Composable () -> Unit)?,
-    historySession: Session?, healthChat: Boolean,
+    historySession: Session?, healthChat: Boolean, heldChildren: ChatChildren?, teamButton: TeamControl?,
 ) {
     val pageSources = rememberChatPageSources(key, repository, sender, interactions, sessions, chrome, statusBindings)
     val scope = pageSources.scope
@@ -428,7 +443,7 @@ private fun ChatPage(
     }).collectAsStateWithLifecycle()
     // The chat jumps to a task's notice through the task host's navigation.
     // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
-    val childCards = rememberChatChildren(key, session, sessionList, chrome, repository)
+    val childCards = heldChildren ?: rememberChatChildren(key, session, sessionList, chrome, repository)
     val modeChangeStore = remember(key, repository, scope) { ModeChangeStore(scope) { repository.modeChanges(it) } }
     DisposableEffect(modeChangeStore) { onDispose(modeChangeStore::close) }
     LaunchedEffect(key, repository, renderStyle, session != null, session?.permissionMode, session?.bypassPending) {
@@ -950,7 +965,7 @@ private fun ChatPage(
                     }
                 }
                 val onOpenSibling = chrome.onOpenSession
-                val siblingSessions = if (showTopBar && renderStyle != ChatRenderStyle.Assistant && onOpenSibling != null) {
+                val siblingSessions = if (teamButton == null && showTopBar && renderStyle != ChatRenderStyle.Assistant && onOpenSibling != null) {
                     remember(session, sessionList) { spaceTabs(session, sessionList) }
                 } else emptyList()
                 // Glass: a loop and background work are a pill at the end of the tabs' row (iOS ActivityChips, #4339 C8),
@@ -978,7 +993,7 @@ private fun ChatPage(
                                         onResumeInTerminal = resumeInTerminal,
                                         turnStart = runningSince,
                                         sides = childCards.sides, sideRollup = childCards.sideRollup, onOpenSide = chrome.onOpenSide,
-                                        menuOpen = headerMenuOpen)
+                                        menuOpen = headerMenuOpen, actions = { teamButton?.let { TeamButton(it) } })
                                     // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
                                     if (tabs && session != null && onOpenSibling != null) {
                                         ChatSiblingTabs(session, siblingSessions, onOpenSibling, trailing = activityPill)
@@ -1029,7 +1044,7 @@ private fun ChatPage(
                             val keyboard by remember(ime, imeDensity) { derivedStateOf { ime.getBottom(imeDensity) > 0 } }
                             if (showsNextWaiting(offerNext, requests.size, readOnly, canOpen = openRequest != null, keyboard = keyboard))
                                 nextWaiting(chrome.waiting, key)?.let { next ->
-                                    NextWaitingRow(next, { offerNext = false; openRequest?.invoke(next.request.session, next.request.requestId) })
+                                    NextWaitingRow(next, { offerNext = false; openRequest?.invoke(next.request.memberTarget ?: next.request.session, next.request.requestId) })
                                 }
                             // An Agent's cards sit over the queue, the notes and the composer, as iOS's footer has them.
                             if (!readOnly && !assistantChat) pendingCards(stackCards, false, keyboard)

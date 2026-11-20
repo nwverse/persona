@@ -44,6 +44,7 @@ import persona.core.domain.models.AgentModelPanel
 import persona.core.domain.lines.isLiveStatus
 import persona.core.domain.lines.placeFailed
 import persona.core.domain.sort.READ_ONLY
+import persona.core.domain.sort.fromWorker
 import persona.core.domain.sort.canApprove
 import persona.core.domain.sort.canChangeEffortOnly
 import persona.core.domain.sort.canChangeModes
@@ -105,7 +106,7 @@ internal fun rememberChatPageRequests(key: SessionKey, chrome: ChatChromeBinding
     val sideFold = persona.core.domain.sort.SideFold.FEATURE in features
     val sidePage = sideFold && (sessionList.firstOrNull { it.key == key } ?: chrome.lookupRows.firstOrNull { it.key == key })
         ?.isFoldedSide == true
-    val requests = chatPageCards(taps.shown(allRequests), key, taskKeys, sideFold, sidePage)
+    val requests = chatPageCards(taps.shown(allRequests), key, taskKeys, sideFold, sidePage, chrome.shownTeamWorker, chrome.teamWorkerPage)
         .sortedBy { if (it.id == chrome.requestId) 0 else 1 }
     // The cards above the composer, as iOS's footer has them. An Agent's chat: the stack holds every card it waits on.
     // Persona's conversation: the oldest question of its tasks is a card of its own above the Needs you / In progress
@@ -154,11 +155,16 @@ internal class ChatPageRequests(
  * belongs to that side's chat alone. The parent's page is covered while a side's chat is open, so a card never shows twice.
  */
 internal fun chatPageCards(cards: List<Interaction>, key: SessionKey, taskKeys: Set<SessionKey>, sideFold: Boolean,
-    sidePage: Boolean): List<Interaction> = when {
-    !sideFold -> cards.filter { it.homeKey == key || it.homeKey in taskKeys }
-    sidePage -> cards.filter { it.sessionKey == key || it.sideHome == key }
-        .map { if (it.sessionKey == key && it.fromSide) it.copy(foldedUnder = null, foldedAs = null) else it }
-    else -> cards.filter { it.homeKey == key && it.foldedSide.isNullOrBlank() || it.homeKey in taskKeys }
+    sidePage: Boolean, shownWorker: SessionKey? = null, workerPage: Boolean = false): List<Interaction> {
+    // The answer guard requires the original pending card, including its folded metadata.
+    if (workerPage) return cards.filter { it.sessionKey == key }
+    val home = when {
+        !sideFold -> cards.filter { it.homeKey == key || it.homeKey in taskKeys }
+        sidePage -> cards.filter { it.sessionKey == key || it.sideHome == key }
+            .map { if (it.sessionKey == key && it.fromSide) it.copy(foldedUnder = null, foldedAs = null) else it }
+        else -> cards.filter { it.homeKey == key && it.foldedSide.isNullOrBlank() || it.homeKey in taskKeys }
+    }
+    return if (shownWorker == null) home else home.filterNot { it.fromWorker && it.sessionKey == shownWorker }
 }
 
 /** ChatPage's links and mentions: port links, the @ menu, the cards host, call jumps and tool names (moved as is). */
@@ -580,10 +586,12 @@ internal fun rememberChatPageSession(key: SessionKey, chrome: ChatChromeBindings
     historyReadOnly: Boolean, historyFooter: (@Composable () -> Unit)?, historySession: Session?,
     res: android.content.res.Resources, sessionList: List<Session>, listedSessions: List<Session>, adoptedSessions: List<Session>,
     keptReceipts: List<persona.core.contracts.api.MessageSendReceipt>): ChatPageSession {
-    val parent = sessionList.firstOrNull { it.machineId == key.machineId && it.subagents.orEmpty().any { child -> child.sessionId == key.sessionId } }
+    // A listed Team worker has a normal chat even if an older subagent summary still mentions it.
+    val summaries = if (chrome.teamWorkerPage) emptyList() else sessionList
+    val parent = summaries.firstOrNull { it.machineId == key.machineId && it.subagents.orEmpty().any { child -> child.sessionId == key.sessionId } }
     val child = parent?.subagents?.firstOrNull { it.sessionId == key.sessionId }
     // A workflow's agent reads like a subagent (`<session>@<agent id>`, #2935).
-    val workflowParent = if (child != null) null else sessionList.firstOrNull { s ->
+    val workflowParent = if (child != null) null else summaries.firstOrNull { s ->
         s.machineId == key.machineId && s.workflows.orEmpty().any { w -> w.agents.orEmpty().any { it.sessionId == key.sessionId } }
     }
     val workflowAgent = workflowParent?.workflows.orEmpty().firstNotNullOfOrNull { w -> w.agents.orEmpty().firstOrNull { it.sessionId == key.sessionId } }
@@ -594,7 +602,7 @@ internal fun rememberChatPageSession(key: SessionKey, chrome: ChatChromeBindings
     val historyOnly = historyReadOnly || ownerOffline != null
     val footer: (@Composable () -> Unit)? = historyFooter
         ?: ownerOffline?.let { note -> @Composable { persona.core.designsystem.JNotice(note, status = persona.core.designsystem.Status.Offline) } }
-    val readOnly = historyOnly || child != null || workflowAgent != null || key.sessionId.contains('@')
+    val readOnly = historyOnly || child != null || workflowAgent != null || (!chrome.teamWorkerPage && key.sessionId.contains('@'))
     var lastSession by remember(key) { mutableStateOf<Session?>(null) }
     var detailInfo by remember(key) { mutableStateOf<SessionInfo?>(null) }
     val adopted = adoptedSessions.lastOrNull { it.key == key }

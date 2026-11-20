@@ -18164,6 +18164,28 @@
         }
       }
     },
+    "A worker needs you" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A worker needs you"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "対応を待っている Worker があります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有子 Agent 在等你"
+          }
+        }
+      }
+    },
     "Accepted [To-dos Line]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -76190,6 +76212,50 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "来自子 Agent · %1$@"
+          }
+        }
+      }
+    },
+    "From worker" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From worker"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Worker から"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自子 Agent"
+          }
+        }
+      }
+    },
+    "From worker · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From worker · %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Worker「%@」から"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自子 Agent · %@"
           }
         }
       }
@@ -166902,6 +166968,28 @@
       },
       "extractionState" : "manual"
     },
+    "Team" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Team"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コラボ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "协同"
+          }
+        }
+      }
+    },
     "Tell %@ what to change…" : {
       "localizations" : {
         "en" : {
@@ -199948,6 +200036,28 @@
       },
       "extractionState" : "manual"
     },
+    "Waiting for worker" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for worker"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Worker を待機中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待子 Agent"
+          }
+        }
+      }
+    },
     "Waiting for your consent" : {
       "localizations" : {
         "en" : {
@@ -204225,6 +204335,50 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "仕事用コンピューター"
+          }
+        }
+      }
+    },
+    "Workers: %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Workers: %lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Worker %lld 件"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子 Agent %lld 个"
+          }
+        }
+      }
+    },
+    "Workers: %lld · Running: %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Workers: %lld · Running: %lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Worker %1$lld 件 · 実行中 %2$lld 件"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子 Agent %1$lld 个 · %2$lld 个在跑"
           }
         }
       }

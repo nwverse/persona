@@ -11,7 +11,6 @@ import persona.feature.inbox.InboxSnapshot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
 import java.io.File
 
 /**
@@ -135,14 +134,9 @@ internal fun DraftRepository.inGroup(names: GroupNames): DraftRepository {
 internal fun HubConnection.inGroup(names: GroupNames, scope: CoroutineScope): HubConnection {
     if (names.plain) return this
     val source = this
-    return object : HubConnection {
-        override val state = source.state
-        override val currentHello = source.currentHello
-        override val resumed get() = source.resumed
+    return object : HubConnection by source {
         override val events: SharedFlow<ServerEvent> = source.events.map(names::event)
             .shareIn(scope, SharingStarted.WhileSubscribed())
-        override fun reconnect() = source.reconnect()
-        override fun send(message: JsonObject) = source.send(message)
     }
 }
 

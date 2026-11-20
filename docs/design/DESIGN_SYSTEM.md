@@ -741,6 +741,11 @@ theme, motion, primary navigation, or destructive action is introduced.
 - a 32 px strip of the running workers in pane order. Each is a 24 px round pill, 11 px, with its `StatusMark` and title. The pill shown is filled `--ink` on `--surface`, as cindy's accent pill is; the others are `bg-field` with the hairline border. The strip scrolls sideways, with ‹ › and faded ends while there is more that way, and arrow keys, Home and End move between pills;
 - the shown worker's own conversation, the chat page without its header.
 
+On iOS and Android (#5185), the lead’s **Team** entry opens the same pane-ordered strip and the selected
+worker’s conversation. Phone layouts open it from the entry or a worker link. Wide layouts also open it when
+arriving at a lead with a team or when a team starts. A manual close is remembered for that lead. A worker’s
+question moves from the lead’s dock into the selected worker’s conversation so it has one visible answer action.
+
 With no worker running, the panel says "Waiting for worker". It opens and closes by itself with cindy's timing (`docs/web/web.md`, "Team"); by hand it opens at every width, and a narrow screen draws it over the page as every side panel. Left out from cindy, because Persona has no such actions on a herdr tab: closing the panel does not end the team, and there is no create, edit or archive on a pill and no dropdown layout.
 
 **Side sessions panel** (web, #7944; `web/src/views/chat/TeamPanel.tsx` `SidesPanel`, `web/src/lib/side-panel.ts`). The Team panel's layout over a session's side sessions (3.4), opened from the **Side sessions** control in the parent's header: the `sideSessions` icon (Lucide's gallery-vertical-end, the web's match for SF Symbol `rectangle.stack`) and how many sides there are, one line in the header's end slot, 28 px tall, 12 px medium tabular figures, the hover fill and the open state as `IconButton`'s, with the attention dot (8 px, `bg-attention`) while a side needs you. It is shown only while the session has sides, and the chat's ⋯ has the same thing as "Side sessions (N)". In zh-Hans the feature is 分支会话 (the owner's word, 2026-11-15), in ja 子セッション; neither is 子任务 / 子 Agent / サブタスク, which name child Agents and tasks. The panel has:

@@ -118,19 +118,25 @@ final class AppModel {
         #endif
         // A paged window (`roots=1`) holds no side: the ones the child index read for an open parent fold in too, so its
         // chip and sheet list them and a side's page finds its row (#7944).
-        var indexedSides: [Session] = []
-        if !groups.isEmpty {
-            let read = childIndex.heldNow.values.flatMap { $0 }.filter { groups.contains($0.group) && SideFold.isSideRow($0) }
-            if !read.isEmpty {
-                let held = Set(raw.map(\.key))
-                indexedSides = read.filter { !held.contains($0.key) }
-                raw += indexedSides
+        let indexed = childIndex.heldNow.values.joined().filter {
+            TeamWorkers.presentedLead(of: $0) != nil || (groups.contains($0.group) && SideFold.isSideRow($0))
+        }
+        var indexedPanes: [Session] = []
+        if !indexed.isEmpty {
+            let held = Set(raw.map(\.key))
+            indexedPanes = indexed.filter { !held.contains($0.key) }
+            raw += indexedPanes
+        }
+        if TeamWorkers.hasPanel {
+            teamMembers.removeAll(keepingCapacity: true)
+            for row in raw {
+                if let lead = TeamWorkers.lead(of: row) { teamMembers[lead, default: []].append(row) }
             }
         }
         let fold = SideFold.fold(raw, groups: groups)
         sideFoldGroups = groups
         sideFold = fold
-        allSessions = fold.listed
+        allSessions = TeamWorkers.presentedRows(fold.listed)
         sessionsNow = allSessions
         let going = DockAgent.going(scoped(allSessions))
         if going != goingAgents { goingAgents = going }
@@ -149,8 +155,12 @@ final class AppModel {
         #if DEBUG
         for s in sampleSides where index[s.key] == nil { index[s.key] = s }
         #endif
-        for s in indexedSides where index[s.key] == nil { index[s.key] = s }
+        for s in indexedPanes where index[s.key] == nil { index[s.key] = s }
         sessionIndex = index
+        for (lead, cell) in teamCells {
+            let rows = TeamWorkers.rows(teamMembers[lead] ?? [], of: lead)
+            if !Self.sameForTheirPages(cell.value, rows) { cell.value = rows }
+        }
         for (key, cell) in sideCells {
             let now = SideSessions(fold, parent: key)
             if cell.value != now { cell.value = now }
@@ -173,6 +183,7 @@ final class AppModel {
         countBadges()
         saveSnapshot()
         resolveProvisionalChat()
+        resolveTeamLink()
     }
 
     /// The lists are folded again when a hub's hello says it folds side sessions now, or no longer.
@@ -206,6 +217,47 @@ final class AppModel {
 
     /// The parent whose chat a folded side session lives in; nil for any other session.
     func sideParent(of key: SessionKey) -> SessionKey? { sideFold.home[key] }
+
+    /// Workers stay addressable by their own qualified keys while the lists show their lead.
+    @ObservationIgnored private var teamMembers: [SessionKey: [Session]] = [:]
+    @ObservationIgnored private var teamCells: [SessionKey: SpaceCell] = [:]
+
+    @ObservationIgnored var lastTeamWorker: [SessionKey: SessionKey] = [:]
+
+    func team(of lead: SessionKey) -> [Session] {
+        if let cell = teamCells[lead] { return cell.value }
+        let cell = SpaceCell(TeamWorkers.rows(teamMembers[lead] ?? [], of: lead))
+        teamCells[lead] = cell
+        return cell.value
+    }
+
+    func teamCount(_ lead: SessionKey) -> Int {
+        // An explicit zero is authoritative while a paged worker removal is still arriving.
+        session(lead)?.children?.workers ?? team(of: lead).count
+    }
+
+    func teamLead(of worker: SessionKey) -> SessionKey? {
+        guard let row = sessionIndex[worker] ?? childIndex.row(worker), let lead = TeamWorkers.presentedLead(of: row),
+              sessionIndex[lead] != nil else { return nil }
+        return lead
+    }
+
+    private func resolveTeamLink() {
+        guard let key = pendingTeamLink, let row = sessionIndex[key] else { return }
+        guard TeamWorkers.lead(of: row) != nil else { pendingTeamLink = nil; return }
+        guard teamLead(of: key) != nil, selectedTab == .chats,
+              openChat == key || (openChat == nil && visibleSession == key) else { return }
+        open(key)
+    }
+
+    /// The worker that owns this card when the lead is showing it.
+    func teamWorker(of ix: Interaction, in lead: SessionKey) -> SessionKey? {
+        let key = ix.sessionKey
+        guard TeamWorkers.hasPanel, key.group == lead.group, key.machineID == lead.machineID,
+              key != lead, !SideFold.isSideCard(ix) else { return nil }
+        if ix.foldedAs == "worker", ix.foldedUnder == lead.sessionID { return key }
+        return teamLead(of: key) == lead ? key : nil
+    }
 
     private(set) var allSessions: [Session] = []
     /// The Persona conversations (`assistantConversations`, `archivedConversations`).
@@ -293,7 +345,9 @@ final class AppModel {
     /// Kept rows as the counts read them for waiting sessions: through the cards' resolver, without the ones the hub no
     /// longer has or that are directory-hidden.
     func waitingRows(_ rows: [Session], reading session: (SessionKey) -> Session?) -> [Session] {
-        rows.compactMap { cardSessionsGone.contains($0.key) ? nil : session($0.key) ?? $0 }.filter { $0.hiddenByDirectory != true }
+        let visible = rows.compactMap { cardSessionsGone.contains($0.key) ? nil : session($0.key) ?? $0 }
+            .filter { $0.hiddenByDirectory != true }
+        return TeamWorkers.presentedRows(visible)
     }
 
     /// The rows a hub that leaves directory-hidden sessions out of its lists holds in them now (the Agents list and its
@@ -484,12 +538,18 @@ final class AppModel {
             if let k = openChat, !openingExactStar(k), let parent = sideFold.home[k] {
                 sideLanding = SideLanding(parent: parent, side: sideFold.chat[k] ?? k)
                 openChat = parent
+            } else if let key = openChat, let lead = teamLead(of: key) {
+                teamLanding = TeamLanding(lead: lead, worker: key)
+                openChat = lead
             }
             if openChat != nil { agentsNavigationRevision += 1 }
         }
     }
     /// The side session to show over its parent's chat once that chat is on screen (`openChat`); taken by the chat.
     var sideLanding: SideLanding?
+    var teamLanding: TeamLanding?
+    /// ChatsView consumes openChat before a paged worker's row and lead arrive.
+    @ObservationIgnored private var pendingTeamLink: SessionKey?
     /// Cancels deferred list resets even after a newer targeted open has already been consumed.
     @ObservationIgnored private(set) var agentsNavigationRevision = 0
     /// An external link without a group can open the first hub before any hub has listed its sessions.
@@ -1227,6 +1287,9 @@ final class AppModel {
     /// Sign Out of everything: every group, every hub (Settings › Disconnect with one group, a revoked credential of this device).
     func unpair() {
         forgetSeen()
+        teamLanding = nil
+        pendingTeamLink = nil
+        lastTeamWorker.removeAll()
         updateHeldRetryReceipts { _ in [] }
         LarkChatOutbox.forget()
         // No hub left to answer: the open questions are denied, their results have nowhere to go.
@@ -1236,6 +1299,8 @@ final class AppModel {
         for group in Set(links.map(\.group)).union([hubGroup]) {
             InboxHandOffMemory.forget(group: group)
             ForwardMemory.forget(group: group) // and where forwards went (#3807)
+            TeamPanelMemory.forget(group: group)
+            if TeamWorkers.hasPanel { childIndex.forget(group) }
         }
         LarkDrafts.shared.forget()
         pairingEngineMachine = nil
@@ -1896,6 +1961,12 @@ final class AppModel {
     /// and moves to the parent only when that parent row exists.
     func open(_ key: SessionKey, latestAnswer: Bool = false, reveal: String? = nil) {
         provisionalChat = nil
+        if TeamWorkers.hasPanel {
+            // A paged window can already name the worker while its lead is still being read.
+            let waiting = latest(key).map { TeamWorkers.lead(of: $0) != nil && teamLead(of: key) == nil } ?? true
+            pendingTeamLink = reveal == nil && waiting ? key : nil
+        }
+        if let landing = teamLanding, landing.lead != key, landing.worker != key { teamLanding = nil }
         // A side session lives in its parent's chat (#7944): its parent opens with the side shown over it, not with a
         // child's card revealed (`openChat` turns it into the parent and `sideLanding`).
         if reveal == nil, !openingExactStar(key), sideFold.home[key] == nil, let home = localChildHome(key), home.key != key {
@@ -1929,13 +2000,14 @@ final class AppModel {
         }
     }
 
-    func interactions(for key: SessionKey) -> [Interaction] {
+    func interactions(for key: SessionKey, showingWorker: SessionKey? = nil) -> [Interaction] {
         pendingInteractions.filter { ix in
             if ix.sessionKey == key { return true }
+            if let showingWorker, ix.sessionKey == showingWorker, teamWorker(of: ix, in: key) != nil { return false }
             // A folded child's card is shown on the parent, and only when that parent row is in hand. A row of a side
             // session's chat (`folded_side`, #7944) is shown in that side's chat too.
             guard ix.machineID == key.machineID, ix.group == key.group,
-                  ix.requestHome == key.sessionID || ix.foldedSide == key.sessionID else { return false }
+                  ix.requestHome == key.sessionID || ix.foldedSide == key.sessionID || teamWorker(of: ix, in: key) != nil else { return false }
             return session(key) != nil
         }
     }
@@ -1951,14 +2023,15 @@ final class AppModel {
 
     /// Every row folded under `parent` that this app holds, its side sessions too: what is still missing is read by it.
     private func everyFoldedChild(_ parent: SessionKey) -> [Session] {
-        ChildSessions.children(of: parent, in: sessionsNow + childIndex.knownNow(parent))
+        ChildSessions.children(of: parent, in: sessionsNow + (teamMembers[parent] ?? []) + childIndex.knownNow(parent))
     }
 
     private func foldedChildren(_ parent: SessionKey) -> [Session] {
         let rows = everyFoldedChild(parent)
         // A side session is no child card in its parent's chat: its chip and sheet have it (#7944, `SideFold`).
-        guard sideFoldGroups.contains(parent.group) else { return rows }
-        return rows.filter { !SideFold.isSideRow($0) }
+        return rows.filter {
+            TeamWorkers.presentedLead(of: $0) == nil && !(sideFoldGroups.contains(parent.group) && SideFold.isSideRow($0))
+        }
     }
 
     private func refreshChildFold(_ parent: SessionKey) {
@@ -1971,7 +2044,9 @@ final class AppModel {
     /// fold them behind its Side Sessions chip (#7944).
     private func childRowsRead(_ parent: SessionKey) {
         refreshChildFold(parent)
-        if sideFoldGroups.contains(parent.group), childIndex.knownNow(parent).contains(where: SideFold.isSideRow) { sessionsChanged() }
+        let known = childIndex.knownNow(parent)
+        if teamMembers[parent] != nil || known.contains(where: { TeamWorkers.presentedLead(of: $0) != nil })
+            || (sideFoldGroups.contains(parent.group) && known.contains(where: SideFold.isSideRow)) { sessionsChanged() }
     }
 
     private func refreshChildFolds() {
@@ -1981,7 +2056,8 @@ final class AppModel {
     /// The parent page for a child whose parent row is already loaded. Nil when this key is not a folded child, or
     /// the parent row is not in hand: opening does not wait on a lookup.
     func localChildHome(_ key: SessionKey) -> ChildSessions.Home? {
-        guard let row = session(key) ?? childIndex.row(key), let parentKey = ChildSessions.parentKey(row),
+        guard let row = session(key) ?? childIndex.row(key), TeamWorkers.presentedLead(of: row) == nil,
+              let parentKey = ChildSessions.parentKey(row),
               let parent = session(parentKey) else { return nil }
         let home = ChildSessions.home(requested: key, row: row, parent: parent)
         return home.childID == nil ? nil : home
@@ -2125,8 +2201,12 @@ final class AppModel {
                         applySessions([parent.machineRef: Self.replacing(parent, in: sessionsByMachine[parent.machineRef] ?? [])])
                     }
                     if openChat == key {
-                        moveDraft(from: key, to: parent.key)
-                        open(parent.key, reveal: full.sessionID)
+                        if TeamWorkers.presentedLead(of: full) == parent.key {
+                            open(key)
+                        } else {
+                            moveDraft(from: key, to: parent.key)
+                            open(parent.key, reveal: full.sessionID)
+                        }
                     }
                     return
                 }
@@ -2458,6 +2538,7 @@ final class AppModel {
         visibleSession = key
         NotificationActions.clearDelivered(key) // what it said is on screen now (#3449)
         resolveProvisionalChat()
+        resolveTeamLink()
     }
 
     func hide(by owner: UUID) {
@@ -2929,7 +3010,7 @@ final class AppModel {
 
     private func redirectFoldedOpenChat() {
         // A side session asked for before its parent was listed: its parent's chat, with the side shown (#7944).
-        if let shown = openChat, sideFold.home[shown] != nil {
+        if let shown = openChat, sideFold.home[shown] != nil || teamLead(of: shown) != nil {
             openChat = shown
             return
         }
@@ -4701,6 +4782,7 @@ final class AppModel {
         toolResults.forget(groups: gone)
         PortForwarder.shared.close(groups: gone)
         machines = machines.filter { !gone.contains($0.group) }
+        if TeamWorkers.hasPanel { for group in gone { childIndex.forget(group) } }
         sessionsByMachine = sessionsByMachine.filter { !gone.contains($0.key.group) }
         interactions = interactions.filter { !gone.contains($0.value.group) }
         for key in chats.keys where gone.contains(key.group) { dropChat(key) }
@@ -4710,7 +4792,11 @@ final class AppModel {
         TodosV1.shared.forget(gone)
         if let k = openChat, gone.contains(k.group) { openChat = nil }
         if let k = assistantCurrent, gone.contains(k.group) { assistantCurrent = nil }
+        lastTeamWorker = lastTeamWorker.filter { !gone.contains($0.key.group) }
+        if let landing = teamLanding, gone.contains(landing.lead.group) { teamLanding = nil }
+        if let key = pendingTeamLink, gone.contains(key.group) { pendingTeamLink = nil }
         for g in gone {
+            TeamPanelMemory.forget(group: g)
             StateCache.remove(Self.snapshotName(g), in: stateFolder)
             ChatCache.removeGroup(g, in: stateFolder)
             PinsStore.forget(suffix: g)

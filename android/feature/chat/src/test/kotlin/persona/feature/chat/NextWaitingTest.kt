@@ -22,6 +22,13 @@ class NextWaitingTest {
         assertEquals("a", nextWaiting(listOf(w("a", "n", "s")), here)?.request?.requestId)
     }
 
+    @Test fun theShownWorkerIsNotAnotherChatEvenWhenItIsCountedUnderTheLead() {
+        val own = w("own", "m", "lead").copy(memberTarget = here)
+        val other = w("other", "m", "lead").copy(memberTarget = SessionKey("m", "other"))
+        assertEquals(NextWaiting(other, 1), nextWaiting(listOf(own, other), here))
+        assertNull(nextWaiting(listOf(own, other), own.session))
+    }
+
     @Test fun nothingWhenOnlyThisChatHasCardsOrNoneDoes() {
         assertNull(nextWaiting(listOf(w("a", "m", "s")), here))
         assertNull(nextWaiting(emptyList(), here))

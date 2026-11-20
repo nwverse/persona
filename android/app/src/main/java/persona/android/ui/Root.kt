@@ -247,7 +247,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     fun hubRouter(kind: (String, String) -> ConversationKind?) = Router(
         hubLink = { link ->
             resolveHubRoute(link, session.hubAddresses(), session.groups.groups.value.firstOrNull { it.selected }?.namespace,
-                session.sessions.sessions.value.map { it.key }, session.assistant.assistant.value, session.groups.groups.value)
+                session.sessions.sessions.value.map { it.key }, session.assistant.assistant.value, session.groups.groups.value, session.sessions.sessions.value)
         },
         conversationKind = kind,
     )

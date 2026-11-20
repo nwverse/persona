@@ -62,7 +62,9 @@ struct ChatView: View {
     /// Its side sessions' sheet and the side shown over it (#7944, `SideSessionsPresentation`): one reference, so the
     /// page's value stays as small as it was (`MainPagesStackTests`).
     @State private var sideUI: SideSessionsUI
+    private let teamPage: Bool
     #if os(iOS)
+    @State private var teamUI: TeamPanelUI
     /// The review page of this session's changes (#151).
     @State private var reviewRequest: ReviewRequest?
     #endif
@@ -250,10 +252,11 @@ struct ChatView: View {
 
     /// `sidePage`: the page is a side session's own (`SideSessionPage`), which shows that side; any other Agents page given
     /// a folded side (a Needs You card, a link, a restored chat) opens its parent with the side shown over it (#7944).
-    init(key: SessionKey, style: ChatStyle = .dev, itemManager: String? = nil, sidePage: Bool = false) {
+    init(key: SessionKey, style: ChatStyle = .dev, itemManager: String? = nil, sidePage: Bool = false, teamPage: Bool = false) {
+        self.teamPage = teamPage
         // Built again for the same path (a tree swap): the agent its header switched to, not the one it opened with.
         #if os(iOS)
-        var start = style == .dev ? AppModel.shared.chatSwitched[key] ?? key : key
+        var start = style == .dev && !teamPage ? AppModel.shared.chatSwitched[key] ?? key : key
         #else
         var start = key
         #endif
@@ -262,6 +265,14 @@ struct ChatView: View {
             landing = start
             start = parent
         }
+        #if os(iOS)
+        var worker: SessionKey?
+        if style == .dev, !sidePage, !teamPage, landing == nil, let lead = AppModel.shared.teamLead(of: start) {
+            worker = start
+            start = lead
+        }
+        _teamUI = State(initialValue: TeamPanelUI(requested: worker))
+        #endif
         _sideUI = State(initialValue: SideSessionsUI(shown: landing))
         _key = State(initialValue: start)
         opened = key
@@ -373,6 +384,10 @@ struct ChatView: View {
                 model.adopt(adopted)
                 switchTo(adopted.key)
             }
+            #if os(iOS)
+            .stackSegment()
+            .modifier(TeamPresentation(lead: key, enabled: style == .dev && host == nil && !teamPage, ui: teamUI))
+            #endif
     }
 
     @ViewBuilder private var chatPage: some View {
@@ -401,7 +416,7 @@ struct ChatView: View {
         // Agents chats draw their own header (devChrome) so it can follow the scroll; the assistant's floats over the
         // chat (AssistantTopBar, drawn by AssistantView over this page and the new-conversation page). Where the system
         // puts bars down the side (iPhone Duo), an Agents chat hands its actions to it instead: they go in that column.
-        .toolbarVisibility(sideBars ? .visible : .hidden, for: .navigationBar)
+        .toolbarVisibility(!teamPage && sideBars ? .visible : .hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(sideBars && !systemBack)
         .pageToolbar { if sideBars { sideBarItems } }
         // The system draws that bar's title over the content, not in the column: a second title right above the
@@ -440,7 +455,7 @@ struct ChatView: View {
             #if os(macOS)
             if style == .dev { macChrome }
             #else
-            if style == .dev { if sideBars { sideHeader } else { devChrome } }
+            if style == .dev && !teamPage { if sideBars { sideHeader } else { devChrome } }
             #endif
         }
         #if os(iOS)
@@ -2333,7 +2348,7 @@ struct ChatView: View {
         // The Mac has no header over the chat (`chrome` stays empty): the row over it is `macChrome`.
         style == .dev ? macChromeHeight : AssistantTopBar.height
         #else
-        style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.room(railEdge)
+        teamPage ? 0 : style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.room(railEdge)
         #endif
     }
 
@@ -2911,7 +2926,13 @@ struct ChatView: View {
     /// The agent's pending cards, and in DEBUG the sample ones the screenshot switches add (`-showSampleQuestion YES`…).
     private var pendingCards: [PendingCards.Card] {
         let parentPage = style == .dev && host == nil
-        var cards = model.interactions(for: key).compactMap { ix -> PendingCards.Card? in
+        #if os(iOS)
+        let showingWorker = parentPage && !teamPage && teamUI.open
+            ? TeamWorkers.shown(in: model.team(of: key), requested: teamUI.requested, last: model.lastTeamWorker[key])?.key : nil
+        #else
+        let showingWorker: SessionKey? = nil
+        #endif
+        var cards = model.interactions(for: key, showingWorker: showingWorker).compactMap { ix -> PendingCards.Card? in
             // A stopped Agent's work card stays open for putting it off or dismissing it, which send the Agent nothing (#6839).
             let answerable = model.canAnswer(ix)
             let localOnly = !answerable && ix.isManagerWork
@@ -2925,6 +2946,13 @@ struct ChatView: View {
                     interaction: ix, enabled: enabled, localOnly: localOnly, blocked: blocked,
                     from: Self.sideCardSource(side, ix, model))
             }
+            #if os(iOS)
+            if parentPage, !teamPage, let worker = model.teamWorker(of: ix, in: key) {
+                let title = model.session(worker)?.displayTitle ?? ix.sessionTitle ?? ""
+                let source = title.isEmpty ? String(localized: "From worker") : String(localized: "From worker · \(title)")
+                return PendingCards.Card(interaction: ix, enabled: enabled, localOnly: localOnly, blocked: blocked, from: source)
+            }
+            #endif
             return PendingCards.Card(interaction: ix, enabled: enabled, localOnly: localOnly, blocked: blocked)
         }
         // A card answered in a terminal dialog of several questions stays, greyed, until the next one comes (#2970).
@@ -3716,6 +3744,9 @@ struct ChatView: View {
             .accessibilityIdentifier("chat.compactTitle")
             .titleSaysLink() // the slim bar says Connecting… too: the shell's floating pill does not say it again
             Spacer(minLength: 0)
+            #if os(iOS)
+            if teamCount > 0 { teamEntry }
+            #endif
             // The open header's ⋯ and its menu (#7962, the user's call; #3719 had left this spot empty). As wide as ‹,
             // so the capsule stays in the middle and no narrower; the open ⋯'s square to hit. Drawn bare like ‹: the
             // bar is 40 pt, no room for the open header's 44 pt glass. The goal, the loop and background work and the
@@ -3877,6 +3908,11 @@ struct ChatView: View {
                     Button { showSubagents = true } label: {
                         Label(String(localized: "All Subagents (\(n))"), systemImage: Theme.Icon.list).lineLimit(1)
                     }
+                }
+                #endif
+                #if os(iOS)
+                if teamCount > 0 {
+                    Button { teamUI.present(!teamUI.open, for: key) } label: { Label("Team", systemImage: Theme.Icon.subagent) }
                 }
                 #endif
                 // Its side sessions (#7944), as the header's chip opens them.
@@ -4189,7 +4225,7 @@ struct ChatView: View {
                 let tabs = host == nil && session?.spaceKey != nil
                 let mode = headerModeSession
                 let sides = self.sides
-                if tabs || hasActivity || mode != nil || !sides.isEmpty {
+                if tabs || hasActivity || mode != nil || !sides.isEmpty || teamCount > 0 {
                     contextRow(tabs: tabs, activity: hasActivity, mode: mode, sides: sides)
                         .padding(.horizontal, Theme.Space.l)
                         .padding(.bottom, Theme.Space.s)
@@ -4401,7 +4437,7 @@ struct ChatView: View {
         let tabs = host == nil && session?.spaceKey != nil
         let mode = headerModeSession
         let sides = self.sides
-        if tabs || hasActivity || mode != nil || !sides.isEmpty { contextRow(tabs: tabs, activity: hasActivity, mode: mode, sides: sides) }
+        if tabs || hasActivity || mode != nil || !sides.isEmpty || teamCount > 0 { contextRow(tabs: tabs, activity: hasActivity, mode: mode, sides: sides) }
         if let goal = session?.goal { GoalBar(goal: goal) }
         workflowBar
         closeoutCard
@@ -4418,6 +4454,22 @@ struct ChatView: View {
     /// The header's second row: the space's other agents on the left, taking the width there is, and this agent's /loop
     /// and background work as one pill held at the trailing end (there too without tabs), so neither moves when the
     /// other comes or goes. Its side sessions' chip leads the trailing group while it has any (#7944).
+    private var teamCount: Int {
+        #if os(iOS)
+        guard host == nil, !teamPage, style == .dev else { return 0 }
+        return model.teamCount(key)
+        #else
+        return 0
+        #endif
+    }
+
+    #if os(iOS)
+    private var teamEntry: some View {
+        let waiting = !teamUI.open && model.team(of: key).contains { $0.state == .needsYou }
+        return TeamEntry(count: teamCount, waiting: waiting) { teamUI.present(!teamUI.open, for: key) }
+    }
+    #endif
+
     private func contextRow(tabs: Bool, activity: Bool, mode: Session?, sides: SideSessions = SideSessions()) -> some View {
         HStack(spacing: Theme.Space.m) {
             if tabs {
@@ -4427,8 +4479,11 @@ struct ChatView: View {
             }
             // This agent's own: its /loop and background work, then its permission mode at the very end (under ⋯, #3719),
             // which stays put as the work comes and goes.
-            if activity || mode != nil || !sides.isEmpty {
+            if activity || mode != nil || !sides.isEmpty || teamCount > 0 {
                 HStack(spacing: Theme.Space.s) {
+                    #if os(iOS)
+                    if teamCount > 0 { teamEntry }
+                    #endif
                     if !sides.isEmpty { SideSessionsChip(sides: sides) { sideUI.showList = true } }
                     if activity {
                         ActivityChips(loop: session?.loop, background: session?.background ?? []) { showActivity = true }

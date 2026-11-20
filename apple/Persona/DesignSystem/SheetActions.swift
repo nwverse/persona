@@ -26,13 +26,18 @@ struct SheetClose: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) {
-            closeButton
-                .tint(Color.primary)
-                .disabled(disabled)
-                .keyboardShortcut(.cancelAction)
-                .accessibilityLabel(Text("Close"))
-                .accessibilityIdentifier(id)
+            control
         }
+    }
+
+    /// Inspectors with a self-drawn header use the same close action, keyboard shortcut and label.
+    var control: some View {
+        closeButton
+            .tint(Color.primary)
+            .disabled(disabled)
+            .keyboardShortcut(.cancelAction)
+            .accessibilityLabel(Text("Close"))
+            .accessibilityIdentifier(id)
     }
 
     @ViewBuilder private var closeButton: some View {

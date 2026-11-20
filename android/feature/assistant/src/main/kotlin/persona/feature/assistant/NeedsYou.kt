@@ -22,6 +22,7 @@ import persona.core.domain.inbox.InboxItem
 import persona.core.domain.inbox.orderHubInbox
 import persona.core.domain.sort.AgentPreferences
 import persona.core.domain.sort.NeedsYouRow
+import persona.core.domain.sort.memberTarget
 import persona.core.domain.sort.sideHome
 
 /** How many things the Persona home lists before it says how many more there are. */
@@ -59,6 +60,8 @@ sealed interface NeedsYouLine {
         val terminal: Boolean = false,
         /** The side session the card is from (#7944): the line opens [session], its parent, with that side shown. */
         val side: SessionKey? = null,
+        /** The selected side or worker, while [session] remains the counted lead. */
+        val memberTarget: SessionKey? = side,
     ) : NeedsYouLine {
         override val key: String get() = row ?: "agent:$requestId"
     }
@@ -105,7 +108,7 @@ fun needsYou(
         NeedsYouLine.Agent(request.homeKey, request.id, request.kind, request.toolName,
             who = if (request.homeKey in foldedHomes) agentName(null, null, bySession[request.homeKey])
                 else agentName(request, bySession[request.homeKey]), what = oneLine(request.headline.shown),
-            side = request.sideHome)
+            side = request.sideHome, memberTarget = request.memberTarget)
     }
     val all: List<NeedsYouLine> = agents + inboxLines(messages)
     return NeedsYou(all.take(shown), (all.size - shown).coerceAtLeast(0))
@@ -126,7 +129,7 @@ fun needsYouBySession(rows: List<NeedsYouRow>, sessions: List<Session>, messages
         NeedsYouLine.Agent(row.key, card?.id.orEmpty(), card?.kind ?: "screen", card?.toolName,
             who = agentName(card?.sessionTitle?.takeIf { card.foldedUnder.isNullOrBlank() }, card?.cwd, session),
             what = card?.let { oneLine(it.headline.shown) }.orEmpty(),
-            row = row.id, terminal = card == null, side = card?.sideHome)
+            row = row.id, terminal = card == null, side = card?.sideHome, memberTarget = card?.memberTarget)
     }
     return agents + inboxLines(messages)
 }

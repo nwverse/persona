@@ -16,7 +16,7 @@ import persona.core.designsystem.icons.PhIcons
  * One card an agent waits on you with, as the Persona home's "Needs you now" lists it (the app maps its `needsYou`
  * lines): the conversation, the card, the conversation's name and what the card asks (`Interaction.headline`).
  */
-data class WaitingRequest(val session: SessionKey, val requestId: String, val who: String, val what: String)
+data class WaitingRequest(val session: SessionKey, val requestId: String, val who: String, val what: String, val memberTarget: SessionKey? = null)
 
 /**
  * The cards other chats wait on you with and how to open one, for a chat whose page does not pass them itself: Persona's
@@ -51,7 +51,7 @@ internal fun showsNextWaiting(offered: Boolean, cardsHere: Int, readOnly: Boolea
 
 /** The cards of [waiting] outside [here] (the same session id on another computer is another chat); null when none is. */
 internal fun nextWaiting(waiting: List<WaitingRequest>, here: SessionKey): NextWaiting? {
-    val others = waiting.filter { it.session != here }
+    val others = waiting.filter { it.session != here && it.memberTarget != here }
     return others.firstOrNull()?.let { NextWaiting(it, others.size) }
 }
 

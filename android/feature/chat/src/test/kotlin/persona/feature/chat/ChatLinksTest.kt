@@ -171,6 +171,7 @@ class ChatLinksTest {
         is ChatAppLink.Session -> messageFields("page" to "session", "machine" to link.machineId, "session" to link.sessionId,
             link.itemId?.let { "at" to it })
         is ChatAppLink.Page -> when (val page = link.page) {
+            is HubPage.AgentTab -> messageFields("page" to "tab", "machine" to page.machineId, "space" to page.space, "slot" to page.slot)
             is HubPage.Agent -> messageFields("page" to "session", "machine" to page.machineId, "session" to page.sessionId,
                 page.itemId?.let { "at" to it }, page.view?.let { "view" to it })
             is HubPage.Conversation -> {
