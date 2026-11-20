@@ -188,7 +188,7 @@ public nonisolated struct Closeout: Codable, Hashable, Sendable {
     // MARK: - The raw block in a reply
 
     // The public Markdown v1 form has a dedicated heading, three required facts and a final thematic break.
-    private static let report = try! NSRegularExpression(pattern: #"(?:^|\n)(### Persona (?:work report|工作报告|作業報告)\r?\n(?:\r?\n)?- Status: (?:done|not_done|blocked)\r?\n- Merged: (?:yes|no|n/a)\r?\n- Deployed: (?:yes|no|n/a)\r?\n(?:- (?:Did|Artifact|Delivery|Unblock|Verified|Missing|Waiting|Next): [^\r\n]+\r?\n)*(?:\r?\n)?---)(?=[\t \r\n]*(?:\n<oai-mem-citation>[\s\S]*?</oai-mem-citation>[\t \r\n]*)?$)"#)
+    private static let report = try! NSRegularExpression(pattern: #"(?:^|\n)(### Persona (?:work report|工作报告|作業報告)\r?\n(?:\r?\n)?- Status: (?:done|not_done|blocked)\r?\n- Merged: (?:yes|no|n/a)\r?\n- Deployed: (?:yes|no|n/a)\r?\n(?:- (?:Did|Artifact|Delivery|Unblock|Verified|Missing|Waiting|Next): [^\r\n]+\r?\n)*(?:\r?\n)?---)(?=[\t \r\n]*(?:\n<oai-mem-citation>[\s\S]*?</oai-mem-citation>[\t \r\n]*)?$)"#) // i18n-ignore: the report heading as Persona writes it in each language
     private static let reportFence = try! NSRegularExpression(pattern: #"^[\t ]*(`{3,}|~{3,})([^\r\n]*)"#, options: .anchorsMatchLines)
 
     private static func insideReportFence(_ text: String, before end: Int) -> Bool {
