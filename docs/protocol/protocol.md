@@ -4635,7 +4635,7 @@ Lists keep only the recent: the node lists Claude transcripts of the last 7 days
 
 - **Window**: `since` (required) and `until` (default now), RFC 3339. A session is in it when its time is in `[since, until)`; its time is `active_at` (when it was last active, e.g. its last message: archiving may move `updated_at`), else `updated_at`, else `started_at`.
 - **Rows**: listed sessions (the `Session` shape), with `archived: true` for archived ones, plus `history_source` (`claude`, `codex` or `runtime`), `history_runtime` (a runtime row's runtime id) and, when the source knows them, `active_at`, `started_at`, `origin` (`user` or `automation`, a scheduled run) and `user_messages` (how many messages the user wrote). Deleted sessions (`status: "deleted"` or `deleted: true`, or deleted in Persona) are never listed.
-- **Pages**: newest first by that time (milliseconds), ties by source and session id; `limit` 200 by default, at most 500; `next_cursor` is opaque, empty on the last page. Send the same `since` / `until` with every cursor.
+- **Pages**: newest first by that time (milliseconds), ties by source and session id; `limit` 200 by default, at most 500; `next_cursor` is opaque, empty on the last page; a page can be empty with a `next_cursor` when every row read for it was left out (a blocked folder's), so page until `next_cursor` is empty. Send the same `since` / `until` with every cursor.
 - **`complete`**: the source vouches that the window is fully listed. A node-owned source lists every record still on disk.
 
 Legs:
@@ -5665,32 +5665,55 @@ New Agent starts do not take a speed setting.
 
 ## Agent directory visibility
 
-Hidden Agent folders are the parallel list to blocked Claude config directories
+Agent folder rules are the parallel list to blocked Claude config directories
 (`docs/integrations/claude-integration.md`, "Blocking configuration directories"): both are per computer, kept in
-the devices layer's settings beside each other (`claude_dirs_blocked/<machine id>`, `agent_dirs_hidden/<machine id>`),
-and use one pattern syntax and matcher (`proto.DirPatternMatchedBy`). They differ in what they do:
+the devices layer's settings beside each other (`claude_dirs_blocked/<machine id>`, `agent_dirs_hidden/<machine id>`;
+the second keeps the name it had when hiding was its only action), and use one pattern syntax and matcher
+(`proto.DirPatternMatchedBy`). They differ in what they do:
 
-| | Blocked Claude config directories | Hidden Agent folders |
+| | Blocked Claude config directories | Agent folder rules |
 | --- | --- | --- |
 | Matches | a Claude Code `CLAUDE_CONFIG_DIR` | a session's working directory (`cwd`), any runtime |
-| Effect | the node does not scan it; its sessions are never collected | sessions stay collected and recorded; the manager leaves them out of Agents and the assistant's view |
-| Switch | delete the rule | each rule has `enabled`; off keeps the rule and hides nothing |
+| Effect | the node does not scan it; its sessions are never collected | `action: "block"`: the node does not collect the sessions (below); `"hide"`: sessions stay collected and recorded, the manager leaves them out of Agents and the assistant's view |
+| Switch | delete the rule | each rule has `enabled`; off keeps the rule and does nothing |
 | HTTP | `GET /api/v1/machines/{mid}/claude-dirs`, `PUT …/claude-dirs/blocked {"blocked": [...]}` | `GET /api/v1/machines/{mid}/agent-dirs/hidden`, `PUT …/agent-dirs/hidden {"rules": [...]}` |
 | `persona_settings` | `agents.blocked_claude_dirs` get / add / remove | `agents.hidden_dirs` get / add / remove |
 
-`GET /api/v1/machines/{mid}/agent-dirs/hidden` returns `{rules: [{pattern, enabled}], home?}` (`home` is the
+`GET /api/v1/machines/{mid}/agent-dirs/hidden` returns `{rules: [{pattern, enabled, action}], home?}` (`home` is the
 computer's home for showing `~`, absent before its node first said). `PUT` replaces the computer's whole list and
 returns the new state; an answer-only device cannot call it. Offline computers can be set up. A rule is a path or
 `filepath.Match` glob starting with `/` or `~/` (`~` is that computer's home, never the manager's; until it is
 known a `~/` rule does not match), or a folder name glob starting with `*` (`*botfarm*`) that matches a folder of
 that name anywhere in the path. A rule matches the folder and everything under it. Trailing slashes are dropped;
-patterns that would cover home or the root, or that every folder matches (`*`, `/*`), invalid globs, duplicates and
-more than 100 rules are refused (400).
-Matching is lexical and case-sensitive; symlinks on the remote computer are not resolved. Empty is the default.
+patterns that would cover home or the root, or that every folder matches (`*`, `/*`), invalid globs, duplicates, an
+`action` other than `block` or `hide`, and more than 100 rules are refused (400). A rule saved without an `action` (by the hiding-only version, #8578, or an
+older client) is stored and answered as `hide`, except that a `PUT` from such a client leaves an existing rule's action
+as it is (so switching one rule there does not turn blocks into hides); the apps and `persona_settings` make a new rule `block` unless Hide
+is chosen. Matching is lexical and case-sensitive; a home reached through a link (`/home/me -> /data/home/me`,
+`NodeInfo.home_real`) matches under either name, and the node also matches a working folder with its links
+followed. Empty is the default.
+
+**Block** (#10053). The manager sends the computer's enabled block patterns in `node.configure`
+(`agent_dirs_blocked: [...]`, `[]` when none block) when its node connects and again whenever they change, then lists
+again; when it cannot read the rules (before its first successful read), it sends `null`, which leaves the node's list
+as it is rather than unblocking every folder.
+A node that announces `agent_dirs_blocked` keeps them (also across restarts, `~/.persona/agent-dirs-blocked.json`)
+and, for a session working there, with any runtime: leaves it out of every session list (`sessions.history`
+included), so no row, count or
+revision reaches the hub; pushes no `hook.event`, `session.items` or `session.delta` of it (a read the hub asks
+for by session id, such as one of a chat opened before the block, is still answered); gives a Claude Code hook
+no decision at once (Claude Code asks in its terminal); dismisses a runtime package's `interaction.create` at once
+(handed back to the computer); leaves its Codex cards out of `codex.interactions` and creates no card for a shared
+app-server's approval (Codex's own client decides); answers `personad ask` unavailable and drops `personad notify`;
+and drops what standby kept of it instead of replaying it. The assistant's own conversations and the sessions the hub
+keeps (`keep_sessions`) are never blocked, at rest as well as running. The manager still treats every enabled rule as hiding, so a node from
+before blocking, which lists those sessions, only gets them hidden.
 
 `persona_settings` `agents.hidden_dirs` takes the same values as `agents.blocked_claude_dirs`: `add`
-`{"machine", "pattern", "enabled"?}` (default on; on an existing rule it switches it), `remove`
-`"<machine id>:<pattern>"`, and `get` lists each computer's rules with how many sessions each hides now. Every
+`{"machine", "pattern", "action"?, "enabled"?}` (`action` `block`, the default for a new rule, or `hide`; an existing
+rule keeps its action unless one is given; `enabled` default on, on an existing rule it switches it), `remove`
+`"<machine id>:<pattern>"`, and `get` lists each computer's rules with their action and how many of its listed
+sessions each matches now (a block rule's are 0 once that node keeps them out). Every
 change waits for the user's approval on the phone and is applied to the rules as they are then, so a change made
 meanwhile is kept; the opposite switch or `remove` undoes it.
 
@@ -5704,7 +5727,8 @@ This is a visibility preference, not access control or transcript deletion.
 
 Pending interactions have a separate authoritative inventory. `fleet.interactions` on reconnect always carries
 all pending cards, including directory-hidden sessions: an omitted card means resolved to the hub. Assistant,
-Feishu and attention summaries use a visibility projection instead. Saving any hidden-folder change (the devices
+Feishu and attention summaries use a visibility projection instead. A blocked session's cards never reach this
+inventory on a node that blocks. Saving any Agent folder rule change (the devices
 tell the assistant, `devices.Options.HiddenAgentDirsChanged`) publishes the computer's updated session rows, then
 replays pending `fleet.interaction` cards to connected clients. Replays preserve
 delegation state and do not send notifications; a pending card stays actionable after revealing its session.

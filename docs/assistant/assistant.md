@@ -2471,11 +2471,12 @@ users, and named the host, container and harness when they were known (web usabi
 
 ### Hiding ambient Agent sessions
 
-For people using Agents with noisy workspace trees, `agents.hidden_dirs` is a reversible per-computer
-visibility preference, shared across runtimes: the parallel list to `agents.blocked_claude_dirs`, with the same
-pattern syntax and get / add / remove, but nothing stops being collected. Rules are kept with each computer in the
-devices layer, live in advanced Agent settings and default to empty.
-The manager retains all sessions but excludes matched ambient sessions from Assistant observations and
-reminders. Open supervised task agents remain visible, preserving the supervisor's completion and approval
+For people using Agents with noisy workspace trees, `agents.hidden_dirs` holds reversible per-computer Agent
+folder rules, shared across runtimes: the parallel list to `agents.blocked_claude_dirs`, with the same pattern syntax
+and get / add / remove. Each rule blocks (the default for a new rule: that computer stops collecting the sessions, so
+nothing of them reaches Persona, #10053) or hides (nothing stops being collected). Rules are kept with each computer
+in the devices layer, live in advanced Agent settings and default to empty.
+For a hide rule, and for a block rule on a node that does not block yet, the manager retains all sessions but
+excludes matched ambient sessions from Assistant observations and reminders. Open supervised task agents remain visible, preserving the supervisor's completion and approval
 flow; after supervision ends, the rule applies again. See `docs/protocol/protocol.md` ("Agent directory visibility")
 for matching, persistence, app inspection and the confirmed `persona_settings` contract.
