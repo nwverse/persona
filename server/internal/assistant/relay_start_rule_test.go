@@ -3,11 +3,13 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // relayedPlan is task_plan's arguments for one task on box the model marks user_requested: writable unless over says
@@ -95,6 +97,15 @@ func TestALeadAHandoverWentIntoWaitsForStart(t *testing.T) {
 		{"the turn the hand-over opened", "lead", (*dispatchPolicyHarness).handOver, nil, false, false},
 		{"a later turn a task's report opened", "lead", func(d *dispatchPolicyHarness, t *testing.T) {
 			d.handOver(t)
+			// What goes on in the lead meanwhile: a turn runs and ends, an unquoted message and a task's report go in.
+			d.setStatus(d.leaderID, proto.StatusWorking)
+			d.setStatus("", "")
+			d.s.drainRelays("server", []proto.Session{d.idle(d.leaderID)})
+			d.send(t, d.mainID, d.leaderID, `"text":"how far is it?"`)
+			sent := d.f.sentTo(d.leaderID)
+			d.s.relayOrQueue(context.Background(), d.leaderID, relayMsg{From: "todo_audit", FromTitle: "Task", Tool: noticeTool,
+				State: "done", Text: "🔔 task done: the export audit", At: time.Now().UTC()})
+			waitFor(t, "the task's report to go in", func() bool { return d.f.sentTo(d.leaderID) == sent+1 })
 			d.f.setItems(taskReport())
 		}, nil, false, false},
 		{"after the owner writes there", "lead", func(d *dispatchPolicyHarness, t *testing.T) {
@@ -154,6 +165,95 @@ func TestALeadAHandoverWentIntoWaitsForStart(t *testing.T) {
 				t.Fatalf("started %v, want %v", got, tc.starts)
 			}
 		})
+	}
+}
+
+// A direct send of a hand-over into a lead that ends in doubt has opened the lead's turn: a writable plan in that turn
+// waits, although nothing said yet that the message went in.
+func TestAHandoverInDoubtHoldsTheTurnItOpened(t *testing.T) {
+	d := newStartRuleHarness(t, nil)
+	stopHolds(t, d.s)
+	var sent string
+	d.f.mu.Lock()
+	d.f.onAssistantSend = func(f *fakeHub, p map[string]any) {
+		if p["session_id"] == d.leaderID {
+			sent, _ = p["text"].(string)
+		}
+	}
+	d.f.mu.Unlock()
+	refuseSendsTo(d.f, d.leaderID, context.DeadlineExceeded) // written, then no answer in time
+	d.f.setItems(ownerItem("m-owner", quotedWords))
+	d.send(t, d.mainID, d.leaderID, `"text":"please fix the export","quote":"latest"`)
+	if e := onlyHandover(t, d.s); e.State != handoverQueued {
+		t.Fatalf("in doubt: %+v", e)
+	}
+	d.f.setItems(proto.Item{ID: "r1", Seq: 2, Role: "user", Kind: proto.KindText, Text: sent,
+		Source: &proto.MessageSource{Kind: proto.SourceConversation, ConversationID: d.mainID}})
+	refuseSendsTo(d.f, d.leaderID, nil)
+	if d.planIn(t, d.leaderID, nil) {
+		t.Fatal("a writable plan in the turn a hand-over in doubt opened started without the owner")
+	}
+}
+
+// A try the lead definitely did not take leaves no mark when the lead had none: its plans start as before. One that had
+// a mark from an earlier hand-over keeps it.
+func TestARefusedHandoverLeavesNoMark(t *testing.T) {
+	for _, before := range []bool{false, true} {
+		name := "no mark before"
+		if before {
+			name = "a mark before"
+		}
+		t.Run(name, func(t *testing.T) {
+			d := newStartRuleHarness(t, nil)
+			stopHolds(t, d.s)
+			if before {
+				d.handOver(t)
+			}
+			refuseSendsTo(d.f, d.leaderID, &rpc.Error{Code: proto.CodeNodeOutdated, Message: "update Persona on this computer"})
+			d.f.setItems(ownerItem("m-owner-2", "and the import as well"))
+			if res := d.tool(t, d.mainID, "conversation_send", `{"id":"`+d.leaderID+`","text":"and the import","quote":"latest"}`); !res.IsError {
+				t.Fatalf("the refused send went: %s", res.Content[0].Text)
+			}
+			refuseSendsTo(d.f, d.leaderID, nil)
+			d.f.setItems(taskReport())
+			if got := d.planIn(t, d.leaderID, nil); got == before {
+				t.Fatalf("started %v after a refused try (%s)", got, name)
+			}
+		})
+	}
+}
+
+// The mark is saved before the send leaves: a manager that restarts while the send is on its way finds it, and a
+// writable plan in the lead waits.
+func TestTheLeadsMarkSurvivesARestartDuringTheSend(t *testing.T) {
+	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	d := newStartRuleHarness(t, st)
+	stopHolds(t, d.s)
+	var during map[string][]byte // the database as a restart during the send would find it
+	d.f.mu.Lock()
+	d.f.onAssistantSend = func(f *fakeHub, p map[string]any) {
+		if p["session_id"] != d.leaderID {
+			return
+		}
+		st.memStore.mu.Lock()
+		during = map[string][]byte{}
+		for k, v := range st.memStore.vals {
+			during[k] = slices.Clone(v)
+		}
+		st.memStore.mu.Unlock()
+	}
+	d.f.mu.Unlock()
+	refuseSendsTo(d.f, d.leaderID, context.DeadlineExceeded) // the manager stops before any answer comes
+	d.f.setItems(ownerItem("m-owner", quotedWords))
+	d.send(t, d.mainID, d.leaderID, `"text":"please fix the export","quote":"latest"`)
+	if during == nil {
+		t.Fatal("no send to the lead")
+	}
+	restarted := newStartRuleHarness(t, planUpdateStore{&planMemStore{memStore: &memStore{vals: during}, plans: map[string]db.TaskPlanRow{}}})
+	stopHolds(t, restarted.s)
+	restarted.f.setItems(taskReport())
+	if restarted.planIn(t, restarted.leaderID, nil) {
+		t.Fatal("after a restart during the send a writable plan in the lead started without the owner")
 	}
 }
 
