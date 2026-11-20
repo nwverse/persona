@@ -175,6 +175,9 @@ nonisolated struct APIClient: Sendable {
     var session: URLSession = .shared
     /// Answers every request in place of the network: unit tests' `FakeHub`. The demo config uses `local`.
     var transport: Transport?
+    /// A live hub link's route attempt, when one is in progress. Standalone clients and the direct health probes
+    /// have no such wait. Returning a config updates the request's destination before its URL is constructed.
+    var requestRoute: (@Sendable () async throws -> ServerConfig?)?
     /// The group of paired hubs this client talks to (docs/protocol/multi-hub.md): put on the sessions, machines,
     /// interactions and keys it returns. "" = the default group.
     var group: String = ""
@@ -211,6 +214,16 @@ nonisolated struct APIClient: Sendable {
     /// A write for this device (`/api/v1/devices/{id}/…`: notification settings, Live Activity tokens) whose push
     /// registration the hub retired (docs/protocol/protocol.md devices).
     static let pushRegistrationRequired = "push_registration_required"
+
+    /// Resolve once per operation. The returned copy has no callback, so a transport helper can delegate to itself
+    /// without waiting twice. URL creation, authorization, and the operation's manager headers then use one config.
+    private func preparedForRequest() async throws -> APIClient {
+        var prepared = self
+        if let selected = try await requestRoute?() { prepared.config = selected }
+        prepared.requestRoute = nil
+        try Task.checkCancellation()
+        return prepared
+    }
 
     /// For bytes the app caches itself (chat images, Feishu media): through `.shared` the system's URLCache kept a
     /// second copy of every one of them.
@@ -339,7 +352,8 @@ nonisolated struct APIClient: Sendable {
                  timeout: TimeInterval = 30, opID: UUID? = nil, extraHeaders: [String: String] = [:]) async throws -> Data {
         // Keep the non-Sendable Encodable body in this request's task instead of sending it to a concurrent local function.
         nonisolated(nonsending) func send() async throws -> Data {
-            try await sendRequest(method, path, query: query, repeated: repeated, body: body, timeout: timeout, opID: opID, extraHeaders: extraHeaders)
+            let routed = try await preparedForRequest()
+            return try await routed.sendRequest(method, path, query: query, repeated: repeated, body: body, timeout: timeout, opID: opID, extraHeaders: extraHeaders)
         }
         do {
             return try await send()
@@ -420,6 +434,10 @@ nonisolated struct APIClient: Sendable {
     /// (`If-None-Match`), else the new bytes and their tag. The fake transport has no headers: the tag rides in the query
     /// as `If-None-Match` and a 304 is an APIError with that status.
     func conditionalGet(_ path: String, query: [String: String], etag: String?) async throws -> (data: Data?, etag: String?) {
+        if requestRoute != nil {
+            let routed = try await preparedForRequest()
+            return try await routed.conditionalGet(path, query: query, etag: etag)
+        }
         try Self.refuseReplayed(path, query)
         if transport != nil || config.isDemo {
             var q = query
@@ -445,6 +463,10 @@ nonisolated struct APIClient: Sendable {
     /// Neither the fake transport nor Demo Mode streams: it throws there, and callers do what they do without it.
     func streamed(_ method: String, _ path: String, body: (any Encodable)? = nil,
                   timeout: TimeInterval = 30) async throws -> (HTTPURLResponse, URLSession.AsyncBytes) {
+        if requestRoute != nil {
+            let routed = try await preparedForRequest()
+            return try await routed.streamed(method, path, body: body, timeout: timeout)
+        }
         try Self.refuseReplayed(path, [:])
         if transport != nil || config.isDemo { throw APIError(status: 501, message: "Streaming isn't available here") }
         var req = URLRequest(url: url(path, query: [:]), timeoutInterval: timeout)
@@ -477,6 +499,10 @@ nonisolated struct APIClient: Sendable {
     /// neither cellular data nor an expensive network (**Hub transcription on Wi-Fi only**, `URLRequest.keepOnWiFi`).
     func putBytes(_ path: String, query: [String: String] = [:], data: Data, timeout: TimeInterval = 120,
                   wifiOnly: Bool = false) async throws -> Data {
+        if requestRoute != nil {
+            let routed = try await preparedForRequest()
+            return try await routed.putBytes(path, query: query, data: data, timeout: timeout, wifiOnly: wifiOnly)
+        }
         let query = larkScoped(path, query)
         try Self.refuseReplayed(path, query)
         if config.isDemo { throw APIError(status: 403, message: DemoText.notSent) }
@@ -506,6 +532,10 @@ nonisolated struct APIClient: Sendable {
 
     /// A bounded, staged attachment sent from disk. The fake transport reads it only in tests.
     func uploadBytes(file: URL, path: String, query: [String: String], timeout: TimeInterval = 180) async throws -> Data {
+        if requestRoute != nil {
+            let routed = try await preparedForRequest()
+            return try await routed.uploadBytes(file: file, path: path, query: query, timeout: timeout)
+        }
         let query = larkScoped(path, query)
         try Self.refuseReplayed(path, query)
         if config.isDemo { throw APIError(status: 403, message: DemoText.notSent) }
@@ -538,6 +568,10 @@ nonisolated struct APIClient: Sendable {
     /// dest "dir": into the folder `query` names (dir, cwd, conflict; docs/protocol/protocol.md "Changing files"), under its own name.
     func upload(file: URL, name: String, machine: String, dest: String? = nil, query extra: [String: String] = [:],
                 progress: @escaping @Sendable (Int64) -> Void) async throws -> UploadedFile {
+        if requestRoute != nil {
+            let routed = try await preparedForRequest()
+            return try await routed.upload(file: file, name: name, machine: machine, dest: dest, query: extra, progress: progress)
+        }
         if config.isDemo { throw APIError(status: 403, message: DemoText.notSent) }
         var query = extra.merging(["name": name]) { _, new in new }
         if let dest { query["dest"] = dest }
@@ -561,6 +595,10 @@ nonisolated struct APIClient: Sendable {
 
     func download(_ path: String, query: [String: String], to destination: URL,
                   progress: @escaping @Sendable (Int64, Int64) -> Void) async throws {
+        if requestRoute != nil {
+            let routed = try await preparedForRequest()
+            return try await routed.download(path, query: query, to: destination, progress: progress)
+        }
         let query = larkScoped(path, query)
         try Self.refuseReplayed(path, query)
         if transport != nil || config.isDemo {
@@ -861,10 +899,11 @@ nonisolated struct APIClient: Sendable {
     /// The models the launcher's agent lists in its /model menu (New Agent's model picker). The node starts the CLI to
     /// ask (a few seconds, kept 10 minutes); refresh asks it again. Assistant purpose asks the shell launcher's list,
     /// even when the computer's Agent engine has a provider of the same name.
-    func launcherModels(machine: String, launcher: String, refresh: Bool = false, purpose: String? = nil) async throws -> LauncherModels {
+    func launcherModels(machine: String, launcher: String, refresh: Bool = false, purpose: String? = nil, host: String? = nil) async throws -> LauncherModels {
         let path = "/api/v1/machines/\(machine)/launchers/\(launcher.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? launcher)/models"
         var query = refresh ? ["refresh": "1"] : [:]
         if let purpose { query["purpose"] = purpose }
+        if let host, !host.isEmpty { query["host"] = host }
         let client = purpose == "assistant" ? currentAssistantSettings() : self
         return try JSON.decoder.decode(LauncherModels.self, from: await client.request("GET", path, query: query, timeout: 75))
     }
@@ -1053,6 +1092,10 @@ nonisolated struct APIClient: Sendable {
 
     /// The bytes of a lazy image on this hub: "<machine>/<session>/<item id>" (`ImageRef.split` of an `ImagePayload.ref`).
     func image(ref: String) async throws -> Data {
+        if requestRoute != nil {
+            let routed = try await preparedForRequest()
+            return try await routed.image(ref: ref)
+        }
         let parts = ref.split(separator: "/", maxSplits: 2).map(String.init)
         guard parts.count == 3 else { throw APIError(status: 0, message: "bad image ref") }
         if config.isDemo { return try await request("GET", "/api/v1/sessions/\(parts[0])/\(parts[1])/items/\(parts[2])/image") }
@@ -1070,6 +1113,10 @@ nonisolated struct APIClient: Sendable {
 
     /// An item whole: the text a page cut (`Item.fullSize`).
     func fullItem(_ k: SessionKey, id: String) async throws -> Item {
+        if requestRoute != nil {
+            let routed = try await preparedForRequest()
+            return try await routed.fullItem(k, id: id)
+        }
         if config.isDemo { return try JSON.decoder.decode(Item.self, from: try await request("GET", sp(k) + "/items/\(id)/full")) }
         var req = URLRequest(url: itemURL(machine: k.machineID, session: k.sessionID, item: id, "full"), timeoutInterval: 60)
         config.authorize(&req)

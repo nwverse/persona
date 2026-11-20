@@ -4256,8 +4256,8 @@ struct ChatView: View {
     /// Under side bars in a split (the open Duo on its side) the page starts `Theme.Space.xl` from the top whatever its
     /// navigation bar holds. The bar holds nothing across the top (its actions are in the side column, its title is
     /// removed) but, with the column folded, the system's Show Sidebar, and that row pushed the header and the chat 58 pt
-    /// down. The empty bar put the page `Theme.Space.xl` down, so with the column out nothing moves; folded, the system's
-    /// button lies on the title's line at the top left, as on a place. Not while typing: the bar then shows the system's
+    /// down. The empty bar put the page `Theme.Space.xl` down, so with the column out nothing moves; folded, the sidebar's
+    /// button is the side column's first item (`sideBarItems`, #11636). Not while typing: the bar then shows the system's
     /// title over the content, and the header is only fog. Not in a hosting sheet, which has a bar of its own.
     private var pinsSideTop: Bool {
         #if os(iOS)
@@ -4266,10 +4266,6 @@ struct ChatView: View {
         false
         #endif
     }
-
-    /// The list folded under side bars: the system's Show Sidebar at the top left brings it back (#3680), so the side
-    /// column has no second one.
-    private var systemShowsList: Bool { backShowsList && split?.sideBars == true }
 
     /// Under side bars, a page pushed onto another, on its chat: Back is the system's own (#9971). It does what ours does
     /// there (one page back), the system puts it at the top of the side column, and only with it does iOS's swipe back
@@ -4283,12 +4279,16 @@ struct ChatView: View {
 
     /// The header's actions as system toolbar items, for the side column: back on top (a custom one, so it leaves files /
     /// Git for the chat first), then the panes, the terminal and ⋯. Each has a title as well as a symbol: the column
-    /// shows the symbol, the overflow menu both.
+    /// shows the symbol, the overflow menu both. A root picked in the sidebar, with the sidebar folded, has the sidebar's
+    /// button there instead (#8603, #11636): the system's Show Sidebar is removed on the roots' column, since iOS drew it
+    /// in the bar's title row, which the chat removes, and did not draw it again on a root after a pop.
     @ToolbarContentBuilder private var sideBarItems: some ToolbarContent {
-        if !hidesBack && !systemShowsList && !systemBack {
+        if !hidesBack && !systemBack {
             ToolbarItem(placement: .topBarLeading) {
-                // A hosting sheet's ✕ Close, its pushed page's ‹ Back, the panes' ‹ Back (#2625): as the header's would be.
+                // A hosting sheet's ✕ Close, its pushed page's ‹ Back, the panes' ‹ Back (#2625): as the header's would be;
+                // a root's Show Sidebar (`backSymbol`, `backLabel`).
                 Button { back() } label: { Label(backLabel, systemImage: backSymbol) }
+                    .modifier(SidebarButtonID(active: backShowsList))
             }
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
@@ -4315,7 +4315,7 @@ struct ChatView: View {
         var all: [SessionPane] = pane != .chat ? [.chat] : []
         if session?.canTerminal == true { all.append(.terminal) }
         all += panes.filter { ($0 == .git || $0 == .files) && $0 != pane }
-        let back = !hidesBack && !systemShowsList
+        let back = !hidesBack
         return Array(all.prefix(TabSwitchLayout.pageButtons(all.count, back: back, room: sideColumn?.room)))
     }
 

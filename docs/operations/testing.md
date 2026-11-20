@@ -136,7 +136,8 @@ The offline web tests still run completely. Apple explicitly excludes five fixtu
 `NotificationServiceTests/opensWhatTheRelayDelivered`, `VideoFileTests/nativeVideoPlaysSeeksAndCleansUp`,
 `VideoFileResourceTests/realHTTPReadsMiddleTailAndRejectsChangedRevision`, `AssistantHTMLSecurityTests/aRealInfiniteLoopCanBeDiscardedWithoutBlockingANewCard`)
 and five `ExtensionStreamSnapshotTests` Mac cases needing a live extension/hub pair. Apple result parsing rejects any unexpected skip and
-requires the four design-system suites; UI suites, visionOS, Persona Link and SSH-package integration remain outside this lane.
+requires the four design-system suites. PersonaSSH's native package integration tests run before the app builds, using a temporary
+loopback SSH server and mock hub; their failure fails the lane. UI suites, visionOS and Persona Link remain outside this lane.
 Full simulator screenshots, device/instrumentation/UI suites, real Agent/phone integrations, release entitlements,
 production signing and publication need devices, explicit lab inputs or secrets; retain the manual checks below.
 The stock iOS unit-test simulator is granted Reminders access for the synthetic CI app, and `TEST_RUNNER_PERSONA_EVENTKIT_ROUNDTRIP=1`
@@ -1332,6 +1333,9 @@ TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> TEST_RUNNER_PERSONA_SHOTS=<
 ## SSH tunnels (`apple/Packages/PersonaSSH`, [network.md](network.md#经-ssh-隧道连-hub直连不通时的后备))
 
 **Package tests** (real sshd + mock hub, no root, no local SSH-config changes):
+
+Apple CI runs this complete suite in `scripts/ci/apple.sh`'s `all`, `ios` and `packages` lanes before the app builds (#11671),
+from its disposable source snapshot with a separate SwiftPM scratch directory. No integration case is skipped or allowed to fail.
 
 ```sh
 cd apple/Packages/PersonaSSH

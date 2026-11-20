@@ -907,6 +907,8 @@ type SuperviseEntry struct {
 	// (decide_yourself, not_what_i_asked, explain_first).
 	Decision *SuperviseDecision
 	Response string
+	// Told: a check's decided entry whose answer is already in its Agent's chat (said there, or sent by agent_send).
+	Told bool
 	// parked_due: what the task was parked for; park_decided: what it was parked for again before the message went.
 	Parked *SuperviseParked
 	// From the task's brief (#3822): Asked is the owner's message that led to the work (clipped) and AskedAt its day;
