@@ -1675,7 +1675,7 @@ loading/retry states and timestamps as other secondary views, and adds no primar
 
 ### 4.5 Push, notifications and reminders
 
-- The system prompt appears right after pairing and at launch, with no in-app explanation first (`apple/Persona/App/PushRegistrar.swift:41-53`, the options at `:174`). Requested options include time-sensitive. When denied, Settings explains and deep-links; allowing it there registers when the app comes back (#1861).
+- The system prompt appears right after pairing and at launch, with no in-app explanation first (`apple/Persona/App/PushRegistrar.swift:41-53`, the options at `:174`). Requested options include time-sensitive. When denied, Settings explains and deep-links; allowing it there registers when the app comes back (#1861). A confirmed outage also puts one non-dismissible `NoticeBanner` on Persona's main screen (#9612): plain words for what cannot reach this device and one repair action, with denied permission deep-linking to system Settings and other causes opening Notifications settings. Unknown or unchecked hubs, a healthy route and a route whose only problem is one failed push stay silent; raw relay, APNs, HTTP and credential details remain in Settings.
 - Foreground: the system banner, suppressed for the visible session. No custom in-app push banner.
 - Actions: Allow (needs unlock) and Deny on permissions; Approve and Send Back on plans; Reply on done (`apple/Persona/App/NotificationActions.swift:19-52`). Failures are posted as local notifications.
 - Live Activity: Allow and Deny buttons; Allow requires authentication. Stale after 15 minutes.
