@@ -17,6 +17,7 @@ import { initialLauncher, launcherBlock, usableFirst } from "../lib/launcher-hea
 import { defaultLabel, inlineTextStart, machineLaunchers, type LauncherDefault } from "../lib/launcher-models";
 import { providerLabel } from "../lib/provider-names";
 import { navigate } from "../lib/router";
+import { openFromPage } from "../lib/handoff";
 import { ONE_PANE, useMedia } from "../lib/viewport";
 import { settingsHref } from "./settings/nav";
 import { interactionAsk } from "../lib/inbox";
@@ -2005,7 +2006,7 @@ const TaskBriefHistory = lazy(() => import("./assistant/TaskBrief").then((m) => 
 const BriefResultExtras = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.BriefResultExtras })));
 // the question a failed start's tab stopped on, answered on its page (#10365): only for such a failure
 const ShellQuestion = lazy(() => import("./ShellQuestionCard"));
-const TodoImageViewer = lazy(() => import("./chat/ImageViewer").then((m) => ({ default: m.ImageViewer })));
+const TodoImageViewer = lazyPage(() => import("./chat/ImageViewer").then((m) => m.ImageViewer));
 
 // The existing review UI lives with this lazy page, not the first screen's card badges.
 const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; className: string; label: () => string }> = {
@@ -2576,8 +2577,9 @@ function TodoDetail({
                 <div
                   key={`${agent.machine_id}/${agent.session_id}`}
                   onClick={() => {
+                    // a drill-down: Back and the sidebar stay with this to-do (#12055)
                     if (session) {
-                      navigate({ name: "session", mid: agent.machine_id, sid: agent.session_id });
+                      openFromPage({ name: "session", mid: agent.machine_id, sid: agent.session_id });
                     }
                   }}
                   className={cx(
@@ -3585,7 +3587,7 @@ export function HandoverDialog({
       await refresh();
       toast(t("todos.sent"), "ok");
       onClose();
-      navigate({ name: "session", mid: s.machine_id, sid: s.session_id });
+      openFromPage({ name: "session", mid: s.machine_id, sid: s.session_id });
     } catch (e) {
       toast(t("todos.send_failed", { error: errorText(e) }), "error");
     } finally {

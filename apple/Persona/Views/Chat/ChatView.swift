@@ -167,7 +167,15 @@ struct ChatView: View {
     /// `Unfolding`). Closing has no such phase: what closes goes at once (#3005).
     @State private var revealUntil: [String: Date] = [:]
 
-    private enum Entry: Equatable { case latestAnswer, line(String), message(String) }
+    private enum Entry: Equatable {
+        case latestAnswer, line(String), message(String)
+        #if os(iOS)
+        case starred(MessageJump)
+        #endif
+    }
+    #if os(iOS)
+    @State private var checkedStar: UUID?
+    #endif
     /// The line being landed on, measured while landing (only that one row watches its frame).
     @State private var landing: String?
 
@@ -944,7 +952,7 @@ struct ChatView: View {
         .stackSegment()
         .environment(\.openLink, actions.openLink)
         .environment(\.openPort, actions.openPort)
-        // Web links open in the in-app sheet (Feishu docs in the native reader); anything else as before.
+        // Web links open in the in-app sheet (Feishu docs in the native reader); local paths open the machine's file viewer.
         .environment(\.openURL, actions.openURL)
         #if os(macOS)
         .macLinkPanel($link, key: key) // the Mac's panel at the trailing edge (Mac/Link/MacLinkPanel.swift)
@@ -963,6 +971,9 @@ struct ChatView: View {
         .environment(\.attachImage, actions.attachImage)
         .environment(\.loadImage, actions.loadImage)
         .environment(\.loadFullText, actions.loadFullText)
+        #if os(iOS)
+        .environment(\.starredChat, starredChatContext)
+        #endif
         .onAppear(perform: appeared)
         // The same chat was already open (the app left on it) when its "Done" notification was tapped: no new entry.
         .onChange(of: model.latestAnswerFor) { _, k in
@@ -1683,6 +1694,29 @@ struct ChatView: View {
                 if store.hasMore, scratch.entryPages < Self.entryPageLimit { searchOlderForEntry() } else { entry = nil }
             }
             return
+        #if os(iOS)
+        case .starred(let jump):
+            guard checkedStar == jump.id, shownKey == jump.key, let source = jump.starred else { return }
+            if let item = store.items.first(where: { $0.id == source.item }) {
+                guard source.matches(item) else {
+                    entry = nil
+                    model.toast = Toast(String(localized: "The original message is unavailable."))
+                    return
+                }
+                if jumpToMessage(source.item, hold: Theme.Quote.landingHold, stillMatches: {
+                    shownKey == jump.key && store.items.contains(where: source.matches)
+                }) { entry = nil; return }
+            }
+            if store.backlogBuilt {
+                if store.hasMore, scratch.entryPages < Self.entryPageLimit {
+                    searchOlderForEntry()
+                } else {
+                    entry = nil
+                    model.toast = Toast(String(localized: "Couldn't find the original message in the loaded chat."))
+                }
+            }
+            return
+        #endif
         case .line(let saved):
             if lines.contains(where: { $0.id == saved }) {
                 id = saved
@@ -2359,7 +2393,7 @@ struct ChatView: View {
                     #if DEBUG
                     .overlay(alignment: .topLeading) { if Self.scrollProbe { scrollState } }
                     .screenProbe("chat", page: style == .assistant ? "assistant" : "agents",
-                                 ChatShown(key: shownKey.machineID + "/" + shownKey.sessionID, appeared: appearCount))
+                                 ChatShown(key: shownKey.machineID + "/" + shownKey.sessionID, appeared: appearCount, highlighted: quoteFlash?.line))
                     .overlay(alignment: .topLeading) {
                         #if DEBUG
                         if UnfoldTrace.enabled { unfoldProbe } else if ScreenProbe.enabled { rowsProbe }
@@ -2627,7 +2661,7 @@ struct ChatView: View {
 
     /// Brings message `msg` (an item's id) of the loaded chat to the middle of the list and lights it up for `hold`, opening
     /// the work line it is folded in; the list stops following the newest. False when it is not in the loaded chat.
-    private func jumpToMessage(_ msg: String, hold: Duration = Theme.Quote.flashHold) -> Bool {
+    private func jumpToMessage(_ msg: String, hold: Duration = Theme.Quote.flashHold, stillMatches: (() -> Bool)? = nil) -> Bool {
         var target: String?
         for line in currentLines() {
             switch line.content {
@@ -2654,8 +2688,10 @@ struct ChatView: View {
         setFollow { $0.read() }
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(120)) // an opened work line's steps are laid out first
+            guard stillMatches?() != false else { return }
             withAnimation(Theme.Motion.standard) { position.scrollTo(id: target, anchor: .center) }
             try? await Task.sleep(for: .milliseconds(250))
+            guard stillMatches?() != false else { return }
             quoteFlash = QuoteFlashMark(line: target, hold: hold)
         }
         return true
@@ -4636,8 +4672,32 @@ struct ChatView: View {
     private func takeMessageJump() -> Bool {
         guard let j = model.messageJump, j.key == key else { return false }
         model.messageJump = nil
-        entry = .message(j.item)
         scratch.entryPages = 0
+        #if os(iOS)
+        if let source = j.starred {
+            guard let api = model.api(key.group) else {
+                model.toast = Toast(String(localized: "Couldn't check the original message. Try again."))
+                return false
+            }
+            if viewing != nil { view(nil) }
+            entry = .starred(j)
+            checkedStar = nil
+            Task {
+                let result = await StarredStore.readOriginal(source, key: key, api: api)
+                guard entry == .starred(j), shownKey == j.key, api.sameSettingsScope(as: model.api(key.group)) else { return }
+                if result == .verified {
+                    checkedStar = j.id
+                    landEntry(currentLines())
+                } else {
+                    entry = nil
+                    model.toast = Toast(result == .unavailable ? String(localized: "The original message is unavailable.") :
+                        String(localized: "Couldn't check the original message. Try again."))
+                }
+            }
+            return true
+        }
+        #endif
+        entry = .message(j.item)
         return true
     }
 
@@ -5166,8 +5226,8 @@ struct ChatView: View {
         // (`MessagePhotos.payload`; docs/apple/performance.md, P8).
         let side = MessagePhotos.maxSide
         return ForwardDraft(source: source, raw: raw, full: full, images: bar.isUser ? UserBubble.imagePaths(raw) : [],
-                            loadImage: { [model] path in
-                                guard let data = try? await model.api(key.group)?.fileBytes(machine: key.machineID, path: path, cwd: nil)
+                            loadImage: { [model, cwd = s?.cwd] path in
+                                guard let data = try? await model.api(key.group)?.fileBytes(machine: key.machineID, path: path, cwd: cwd)
                                 else { return nil }
                                 return await Task.detached(priority: .userInitiated) { LarkMedia.decode(data, maxPixel: side) }.value
                             }, share: share)
@@ -5330,6 +5390,16 @@ struct ChatView: View {
         if style == .assistant { return t.isEmpty || t == "Claude Code" ? "Persona" : t }
         return t.isEmpty ? String(localized: "Chat") : t
     }
+
+    #if os(iOS)
+    private var starredChatContext: StarredChatContext? {
+        guard !ProcessInfo.processInfo.isiOSAppOnMac, shownKey.group == model.hub?.group,
+              model.hubFeatures.contains(APIClient.starredMessagesFeature) else { return nil }
+        return StarredChatContext(key: shownKey, conversation: style == .assistant ? .assistant : .agent,
+                                  title: title, speaker: style == .assistant ? model.assistantShownName(in: shownKey) : (session?.agentLabel ?? ""),
+                                  manager: session?.manager, api: model.api(shownKey.group))
+    }
+    #endif
 
     private var subtitle: String {
         guard let s = session else { return "" }
@@ -7973,6 +8043,10 @@ struct WorkStepView: View, Equatable {
             self?.handlers.openFileAt(ref.path, ref.line)
             return .handled
         }
+        if let path = PathLinkURL.localPath(url) { // an explicit Markdown link to a machine file, absolute or cwd-relative
+            self?.handlers.openFileAt(path, nil)
+            return .handled
+        }
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), let self else {
             // A link to one of Persona's pages written into a message (#9926): handed to the system it came back to
             // `onOpenURL` and went nowhere.
@@ -8850,6 +8924,8 @@ nonisolated struct ChatShown: Encodable, Equatable {
     var key: String
     /// How many times this conversation has appeared since launch (`ChatView.appearances`).
     var appeared: Int
+    /// The exact line the most recent link or quote highlighted.
+    var highlighted: String? = nil
 }
 
 /// `probe.chat-rows`: the items and lines the chat has, how many lines are on screen, the top one and where it is.

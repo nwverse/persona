@@ -257,3 +257,9 @@ System Back at a place root returns to the conversation as a root switch, with n
 root leaves the app. The compact phone drawer still pushes a place that has no host yet over the conversation. A fixed place that already has a host is shown on that host. Health and
 Scheduled Tasks are not navigation destinations on Android; picking them shows the conversation page, where those screens already open.
 
+**Web** (#12055). The browser's history is the stack: an Agent opened from inside a page (a to-do, a knowledge project, a
+meeting, a Persona conversation's card set to Full page) is a new entry naming that page, so Back returns to it and the
+Agent's page offers "Came from … · click to return"; the sidebar keeps that page's row lit while the Agent is shown
+(`web/src/lib/persona-nav.ts` `sidebarRoute`, `docs/web/web.md` "An Agent opened from inside a page is a drill-down"). An
+Agent picked in the sidebar is a root and lights its own row.
+

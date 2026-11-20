@@ -8,7 +8,8 @@ import Foundation
 /// Everything (Paseo's Auto Accept or full access, docs/integrations/paseo.md "Capabilities"); and it takes only the
 /// efforts its model lists. Both are picked on the sheet and never remembered, the same rule as the web and Android
 /// (docs/design/DESIGN_SYSTEM.md "Permission modes a provider lists (#8261)"). A computer older than that list says
-/// nothing: there a Paseo provider that is neither Claude Code nor Codex is told by its agent instead (#8144).
+/// nothing: there a Paseo provider that is neither Claude Code nor Codex is told by its agent instead (#8144). An omp
+/// launcher takes neither (`Launcher.isOmp`): omp's own config decides, and the node refuses a start that sets them.
 nonisolated enum StartModes {
     /// The permission modes a start on it takes when they are not Claude Code's (the node's `permission_modes`, #8261);
     /// nil for Claude Code's launchers, for the others, which take none, and from an older computer.
@@ -17,6 +18,13 @@ nonisolated enum StartModes {
         if launcher?.startsOmp == true { return [SessionModes.ModeID.launcherDefault] }
         guard let modes = launcher?.permissionModes, !modes.isEmpty else { return nil }
         return modes
+    }
+
+    /// A known terminal Traex, discovered in the shell or explicitly typed without another runtime source. It takes no
+    /// Claude Code start choices; Paseo, desktop and unknown runtime sources keep their own paths (#1842).
+    static func terminalTraex(_ launcher: Launcher?) -> Bool {
+        guard let launcher, launcher.runtimeAgent == "traex" else { return false }
+        return launcher.source == "zshrc" || launcher.source?.isEmpty != false
     }
 
     /// It takes its own modes, not Claude Code's: it lists them (`listed`), or, from a computer older than that list, it
@@ -33,6 +41,7 @@ nonisolated enum StartModes {
     /// lists its own has besides its own approval (Allow Everything, which says it can be switched back in the chat);
     /// Allow Everything for a limited launcher from an older computer. Empty: no choice to make.
     static func modes(for launcher: Launcher?) -> [SessionModes.Option] {
+        if terminalTraex(launcher) || launcher?.isOmp == true { return [] }
         if let listed = listed(launcher) {
             return listed.filter { $0 != SessionModes.ModeID.launcherDefault }.map { SessionModes.listedOption($0) }
         }
@@ -52,9 +61,9 @@ nonisolated enum StartModes {
     }
 
     /// The efforts offered: the ones the model that will run lists (`known`), every start level while that is not
-    /// known. A limited launcher's only from its model's list: none while that is not known.
+    /// known. A limited launcher's only from its model's list: none while that is not known. None for omp.
     static func efforts(known: [String]?, for launcher: Launcher?) -> [SessionModes.Option] {
-        if launcher?.startsOmp == true { return [] }
+        if terminalTraex(launcher) || launcher?.isOmp == true || launcher?.startsOmp == true { return [] }
         guard let known else { return limited(launcher) ? [] : SessionModes.startEffortLevels }
         return SessionModes.startEffortLevels.filter { known.contains($0.id) }
     }

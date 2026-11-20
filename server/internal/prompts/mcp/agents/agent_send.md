@@ -6,7 +6,7 @@ From the main conversation, give task to supervise new work, including done_when
 
 Use `handoff` for an already-stopped to-do you supervise. A node acknowledgement starts its wait for the receiving Agent's result.
 
-`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.
+`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -64,7 +64,7 @@ Use `handoff` for an already-stopped to-do you supervise. A node acknowledgement
       "properties": {
         "title": {
           "type": "string",
-          "description": "the task in a short line (Chinese, under 20 characters)"
+          "description": "{{if eq .Lang "en"}}the task in a short line (English, under 20 characters){{else if eq .Lang "ja"}}短いタスク名（日本語、20文字未満）{{else}}the task in a short line (Chinese, under 20 characters){{end}}"
         },
         "done_when": {
           "type": "array",

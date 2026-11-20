@@ -481,7 +481,7 @@ final class AppModel {
         didSet {
             // A side session lives in its parent's chat (#7944): a notification, a Needs You card or a link that names one
             // opens the parent with it shown (ChatView takes `sideLanding`).
-            if let k = openChat, let parent = sideFold.home[k] {
+            if let k = openChat, !openingExactStar(k), let parent = sideFold.home[k] {
                 sideLanding = SideLanding(parent: parent, side: sideFold.chat[k] ?? k)
                 openChat = parent
             }
@@ -522,6 +522,14 @@ final class AppModel {
     var latestAnswerFor: SessionKey?
     /// A hub link's message to land on once its chat shows (HubPageRouting, #2696); taken by that chat.
     var messageJump: MessageJump?
+
+    private func openingExactStar(_ key: SessionKey) -> Bool {
+        #if os(iOS)
+        messageJump?.key == key && messageJump?.starred != nil
+        #else
+        false
+        #endif
+    }
     /// An Inbox item a link asked to open (`HubPage.inboxItem`): the Inbox pushes it and clears this.
     var inboxToOpen: InboxOpenRequest?
     /// A to-do, knowledge entry or computer a link opened where no screen handles links itself (`HubLinkSheet`), over
@@ -1123,6 +1131,9 @@ final class AppModel {
         if links.count == 1 { hubGroup = group }
         guard let link = link(group) else { return }
         link.live.disconnect()
+        #if os(iOS)
+        if group == hub?.group { refreshStarred(reset: true) }
+        #endif
         link.live.connect(registry.primary(group)?.config ?? new)
         pushWatchConfigs()
         PushRegistrar.shared.registerIfPossible()
@@ -1241,6 +1252,9 @@ final class AppModel {
         for g in Set(registry.groups).union(PushCrypto.allKeys().map(\.group)) { PushCrypto.removeKey(group: g) }
         links = []
         registry = HubRegistry()
+        #if os(iOS)
+        refreshStarred(reset: true)
+        #endif
         // A later pairing's first snapshot must invalidate even when it has the same assistant scope.
         lastAssistantLauncherSignature = nil
         lastAssistantLauncherInvalidation = nil
@@ -1884,7 +1898,7 @@ final class AppModel {
         provisionalChat = nil
         // A side session lives in its parent's chat (#7944): its parent opens with the side shown over it, not with a
         // child's card revealed (`openChat` turns it into the parent and `sideLanding`).
-        if reveal == nil, sideFold.home[key] == nil, let home = localChildHome(key), home.key != key {
+        if reveal == nil, !openingExactStar(key), sideFold.home[key] == nil, let home = localChildHome(key), home.key != key {
             moveDraft(from: key, to: home.key)
             open(home.key, latestAnswer: latestAnswer, reveal: home.childID)
             return
@@ -2691,6 +2705,9 @@ final class AppModel {
         // connection's snapshot (machines, sessions, pending interactions) is whole: nothing to fetch again, no Updating….
         let plan = ReconnectPlan(resumed: link.live.resumed)
         if group == hub?.group {
+            #if os(iOS)
+            refreshStarred()
+            #endif
             // The hub's version and whether an update is out or under way (an older hub has no such page: nil).
             Task { hubUpdate = try? await api?.hubUpdate() }
             if plan.refetch {
@@ -3164,6 +3181,10 @@ final class AppModel {
         case .savedPrompts(let manager):
             // another device changed the list: only the shown assistant's is read again (#9436)
             if isHub, SavedPromptStore.concerns(eventManager: manager, shownManager: api?.shownManager) { SavedPromptStore.shared.reload() }
+        case .starredMessages(let manager):
+            #if os(iOS)
+            if isHub { StarredStore.shared.invalidate(manager: manager) }
+            #endif
         case .personas:
             // The new tier's package is downloaded whole before the face changes. The list changed
             // just now: a refresh already under way may have asked before, so it is read again after that one (#2405).
@@ -3328,6 +3349,7 @@ final class AppModel {
         case .inbox: "inbox"
         case .todos: "todos"
         case .savedPrompts: "assistant_saved_prompts"
+        case .starredMessages: "assistant_starred"
         case .personas: "personas"
         case .look: "look"
         case .managers: "managers"
@@ -4749,6 +4771,9 @@ final class AppModel {
         TodoStore.shared.reload()
         SavedPromptStore.shared.forget()
         SavedPromptStore.shared.reload()
+        #if os(iOS)
+        refreshStarred(reset: true)
+        #endif
         followScope()
         // The avatar is the new hub's from now, before its list is read below: a card tapped meanwhile goes to it.
         let avatarHub = api
@@ -4783,6 +4808,9 @@ final class AppModel {
         assistantConfigLoadFailed = false
         readiness.forget()
         relistAssistant()
+        #if os(iOS)
+        refreshStarred(reset: switched)
+        #endif
         if switched {
             if let a = assistantCurrent, let s = session(a), s.assistant, !s.isHealth, !assistantShows(s.manager) { assistantCurrent = assistantMain }
             assistantSwitches += 1

@@ -15,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 )
 
-// Low-distraction ("ln") mode: when its switch is on, the hub delivers pushes by urgency instead of pushing
+// Push grading: when its switch is on, the hub delivers pushes by urgency instead of pushing
 // everything. P0 still interrupts, P1 is held for the "Needs you" list / briefings, P2 stays silent, and the same
 // related key may interrupt at most once in 12 hours. Every push the switch holds back is recorded with its reason,
 // in memory and in hub_settings, behind a read-only API for extensions and the nightly review. With the switch off
@@ -25,21 +25,21 @@ import (
 // switch back to one: written when the hub stops and at most hourly (mirrorSent), never per push.
 
 const (
-	lnModeSettingKey       = "hub.ln_mode"
-	lnInterceptsSettingKey = "hub.ln_intercepts"
+	gradingSwitchSettingKey = "hub.ln_mode"
+	heldPushesSettingKey    = "hub.ln_intercepts"
 	// pushSentSettingKey held the delivered pushes as one list before hub_push_sent, and is all a build from before
 	// reads. loadSent adds its entries to the table (AdoptPushSentSetting) and mirrorSent writes the list back to it.
 	pushSentSettingKey = "hub.push_sent"
 
-	// lnDedupWindow: how long the same related key stays quiet after it pushed once.
-	lnDedupWindow = 12 * time.Hour
-	// lnConfigTTL bounds how often one Pusher asks the database for the switch while pushes keep coming.
-	lnConfigTTL = 15 * time.Second
-	// lnInterceptMax bounds how many held pushes are kept; the oldest go first.
-	lnInterceptMax = 500
-	// lnInterceptAge: held pushes older than this are not worth showing any more.
-	lnInterceptAge      = 14 * 24 * time.Hour
-	lnInterceptLimitMax = 200
+	// gradingDedupWindow: how long the same related key stays quiet after it pushed once.
+	gradingDedupWindow = 12 * time.Hour
+	// gradingConfigTTL bounds how often one Pusher asks the database for the switch while pushes keep coming.
+	gradingConfigTTL = 15 * time.Second
+	// heldPushMax bounds how many held pushes are kept; the oldest go first.
+	heldPushMax = 500
+	// heldPushMaxAge: held pushes older than this are not worth showing any more.
+	heldPushMaxAge       = 14 * 24 * time.Hour
+	heldPushViewLimitMax = 200
 	// pushSentMax bounds how many delivered pushes the daily counts remember; the oldest go first. Counts read this
 	// full record, so they stay exact on a busy day where the 200-entry intercepts view would truncate.
 	pushSentMax = 2000
@@ -62,8 +62,8 @@ const (
 
 // Why a push was held back.
 const (
-	interceptReasonP1    = "ln_p1_held"   // P1 while ln mode is on: kept for the list / briefing
-	interceptReasonP2    = "ln_p2_silent" // P2 while ln mode is on: silent
+	interceptReasonP1    = "ln_p1_held"   // P1 while push grading is on: kept for the list / briefing
+	interceptReasonP2    = "ln_p2_silent" // P2 while push grading is on: silent
 	interceptReasonDedup = "ln_dedup_12h" // the same related key pushed within the last 12 hours
 )
 
@@ -77,8 +77,8 @@ func summaryBody(s string) string {
 	return string(r[:pushInterceptBodyMaxRunes-1]) + "…"
 }
 
-// pushIntercept is one push the grading filter held back, as the read-only API returns it.
-type pushIntercept struct {
+// heldPushRecord is one push the grading filter held back, as the read-only API returns it.
+type heldPushRecord struct {
 	At         time.Time `json:"at"`
 	Level      string    `json:"level"`
 	Reason     string    `json:"reason"`
@@ -171,88 +171,88 @@ func levelFor(kind, given string) string {
 	}
 }
 
-// lnModeOn says whether the switch is on. It never waits on the database: the switch is read once at startup
-// (loadLnState), written through setLnMode, and refreshed in the background when the cached answer is older than
-// lnConfigTTL (another hub process may have changed it). A database that does not answer keeps the last known answer,
+// pushGradingOn says whether the switch is on. It never waits on the database: the switch is read once at startup
+// (loadPushGradingState), written through setPushGrading, and refreshed in the background when the cached answer is older than
+// gradingConfigTTL (another hub process may have changed it). A database that does not answer keeps the last known answer,
 // off before the first successful read, so an outage never turns filtering on by itself.
-func (p *Pusher) lnModeOn() bool {
+func (p *Pusher) pushGradingOn() bool {
 	if p == nil {
 		return false
 	}
-	p.lnMu.Lock()
-	defer p.lnMu.Unlock()
-	if p.store != nil && !p.lnRefreshing && (p.lnCached == nil || p.now().Sub(p.lnCachedAt) >= lnConfigTTL) {
-		p.lnRefreshing = true
-		go p.refreshLnMode(p.lnVersion)
+	p.gradingMu.Lock()
+	defer p.gradingMu.Unlock()
+	if p.store != nil && !p.gradingRefreshing && (p.gradingCached == nil || p.now().Sub(p.gradingCachedAt) >= gradingConfigTTL) {
+		p.gradingRefreshing = true
+		go p.refreshPushGrading(p.gradingVersion)
 	}
-	return p.lnCached != nil && *p.lnCached
+	return p.gradingCached != nil && *p.gradingCached
 }
 
-// refreshLnMode reads the switch from hub_settings into the cache (lnModeOn starts it, one at a time). version is
-// lnVersion when it started: a setLnMode meanwhile wins over what this read saw.
-func (p *Pusher) refreshLnMode(version uint64) {
-	enabled, ok := p.readLnMode()
-	p.lnMu.Lock()
-	defer p.lnMu.Unlock()
-	p.lnRefreshing = false
-	if version != p.lnVersion {
+// refreshPushGrading reads the switch from hub_settings into the cache (pushGradingOn starts it, one at a time). version is
+// gradingVersion when it started: a setPushGrading meanwhile wins over what this read saw.
+func (p *Pusher) refreshPushGrading(version uint64) {
+	enabled, ok := p.readPushGrading()
+	p.gradingMu.Lock()
+	defer p.gradingMu.Unlock()
+	p.gradingRefreshing = false
+	if version != p.gradingVersion {
 		return
 	}
 	if ok {
-		p.lnCached, p.lnCachedAt = &enabled, p.now()
-	} else if p.lnCached != nil {
-		p.lnCachedAt = p.now() // keep the last answer; try again after another TTL
+		p.gradingCached, p.gradingCachedAt = &enabled, p.now()
+	} else if p.gradingCached != nil {
+		p.gradingCachedAt = p.now() // keep the last answer; try again after another TTL
 	}
 }
 
-// readLnMode reads the switch; ok false when the database did not answer. No row is off.
-func (p *Pusher) readLnMode() (enabled, ok bool) {
+// readPushGrading reads the switch; ok false when the database did not answer. No row is off.
+func (p *Pusher) readPushGrading() (enabled, ok bool) {
 	if p.store == nil {
 		return false, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), p.storeTimeout)
 	defer cancel()
-	found, err := p.store.Setting(ctx, lnModeSettingKey, &enabled)
+	found, err := p.store.Setting(ctx, gradingSwitchSettingKey, &enabled)
 	if err != nil {
 		return false, false
 	}
 	return found && enabled, true
 }
 
-// setLnMode writes the switch (hub_settings) and refreshes the cache immediately.
-func (p *Pusher) setLnMode(ctx context.Context, enabled bool) error {
+// setPushGrading writes the switch (hub_settings) and refreshes the cache immediately.
+func (p *Pusher) setPushGrading(ctx context.Context, enabled bool) error {
 	if p == nil || p.store == nil {
 		return errors.New("push settings are not available")
 	}
 	ctx, cancel := context.WithTimeout(ctx, p.storeTimeout)
 	defer cancel()
-	if err := p.store.PutSetting(ctx, lnModeSettingKey, enabled); err != nil {
+	if err := p.store.PutSetting(ctx, gradingSwitchSettingKey, enabled); err != nil {
 		return err
 	}
-	p.lnMu.Lock()
-	p.lnCached, p.lnCachedAt = &enabled, p.now()
-	p.lnVersion++
-	p.lnMu.Unlock()
+	p.gradingMu.Lock()
+	p.gradingCached, p.gradingCachedAt = &enabled, p.now()
+	p.gradingVersion++
+	p.gradingMu.Unlock()
 	return nil
 }
 
-// applyLn decides whether one alert push may go out. With the switch off it allows everything and touches nothing.
+// applyPushGrading decides whether one alert push may go out. With the switch off it allows everything and touches nothing.
 // It runs once per push call, never per device: a held push is one intercepted entry however many devices would have
-// received it. The 12-hour check and the note of a P0 that goes out happen under one hold of lnMu, so two pushes with
+// received it. The 12-hour check and the note of a P0 that goes out happen under one hold of gradingMu, so two pushes with
 // the same key at the same moment cannot both pass.
-func (p *Pusher) applyLn(policy pushPolicy) (allow bool, reason string) {
+func (p *Pusher) applyPushGrading(policy pushPolicy) (allow bool, reason string) {
 	level := policy.level
 	if level == "" {
 		level = assistantwire.LevelP1
 	}
 	now := p.now()
-	if !p.lnModeOn() {
+	if !p.pushGradingOn() {
 		// The switch is off: every push goes out as before, and the delivery counts still remember it.
 		p.recordSent(policy, level, now)
 		return true, ""
 	}
 	key := strings.TrimSpace(policy.relatedKey)
-	in := pushIntercept{
+	in := heldPushRecord{
 		At: now.UTC(), Level: level, Title: policy.title, Body: policy.body, RelatedKey: key, Manager: policy.manager,
 		TodoID: strings.TrimSpace(policy.todoID), MachineID: strings.TrimSpace(policy.machineID), SessionID: strings.TrimSpace(policy.sessionID),
 	}
@@ -260,7 +260,7 @@ func (p *Pusher) applyLn(policy pushPolicy) (allow bool, reason string) {
 		// Clients follow a session only as a complete pair; do not persist a half-destination.
 		in.MachineID, in.SessionID = "", ""
 	}
-	p.lnMu.Lock()
+	p.gradingMu.Lock()
 	if level == assistantwire.LevelP0 {
 		// P0 is what the owner must do or decide themself: it always interrupts, before and whatever the 12-hour check
 		// says, so no earlier push with the same key can swallow it. Its key then keeps lower levels quiet for the window.
@@ -268,14 +268,14 @@ func (p *Pusher) applyLn(policy pushPolicy) (allow bool, reason string) {
 			p.noteKeyPushedLocked(key, now)
 		}
 		p.addSentLocked(pushSent{At: now.UTC(), Level: level, RelatedKey: key, Manager: policy.manager})
-		p.lnMu.Unlock()
+		p.gradingMu.Unlock()
 		return true, ""
 	}
 	if key != "" {
-		if last, seen := p.lnLastPush[key]; seen && now.Sub(last) < lnDedupWindow {
+		if last, seen := p.gradingLastAlert[key]; seen && now.Sub(last) < gradingDedupWindow {
 			in.Reason = interceptReasonDedup
 			p.addInterceptLocked(in, false)
-			p.lnMu.Unlock()
+			p.gradingMu.Unlock()
 			return false, interceptReasonDedup
 		}
 	}
@@ -283,28 +283,28 @@ func (p *Pusher) applyLn(policy pushPolicy) (allow bool, reason string) {
 	case assistantwire.LevelP2:
 		in.Reason = interceptReasonP2
 		p.addInterceptLocked(in, false)
-		p.lnMu.Unlock()
+		p.gradingMu.Unlock()
 		return false, interceptReasonP2
 	default: // P1 and anything unknown: held for the list and the briefing rather than alerted.
 		in.Level, in.Reason = assistantwire.LevelP1, interceptReasonP1
 		p.addInterceptLocked(in, true)
-		p.lnMu.Unlock()
+		p.gradingMu.Unlock()
 		return false, interceptReasonP1
 	}
 }
 
 // noteKeyPushedLocked remembers that key alerted at now, and forgets keys whose window is over (card keys are unique,
-// so the map would otherwise only grow). lnMu is held.
+// so the map would otherwise only grow). gradingMu is held.
 func (p *Pusher) noteKeyPushedLocked(key string, now time.Time) {
-	if p.lnLastPush == nil {
-		p.lnLastPush = map[string]time.Time{}
+	if p.gradingLastAlert == nil {
+		p.gradingLastAlert = map[string]time.Time{}
 	}
-	for k, at := range p.lnLastPush {
-		if now.Sub(at) >= lnDedupWindow {
-			delete(p.lnLastPush, k)
+	for k, at := range p.gradingLastAlert {
+		if now.Sub(at) >= gradingDedupWindow {
+			delete(p.gradingLastAlert, k)
 		}
 	}
-	p.lnLastPush[key] = now
+	p.gradingLastAlert[key] = now
 }
 
 // relatedDestination is the legacy destination a held-push client follows when related_key is a to-do or an http(s)
@@ -333,8 +333,8 @@ func relatedDestination(key string) string {
 // addInterceptLocked keeps one held push and schedules its save. merge (P1): it folds into a recent P1 entry of the
 // same manager and compatible destination opened in the same minute, or about the same related key within the 12-hour
 // window, so several conclusion cards arriving together, or three cards about one PR, become one entry. Entries past
-// the age and count limits go. lnMu is held.
-func (p *Pusher) addInterceptLocked(in pushIntercept, merge bool) {
+// the age and count limits go. gradingMu is held.
+func (p *Pusher) addInterceptLocked(in heldPushRecord, merge bool) {
 	in.Body = summaryBody(in.Body)
 	if merge {
 		minute := in.At.Truncate(time.Minute)
@@ -347,7 +347,7 @@ func (p *Pusher) addInterceptLocked(in pushIntercept, merge bool) {
 				continue
 			}
 			sameMinute := e.At.Truncate(time.Minute).Equal(minute)
-			sameKey := in.RelatedKey != "" && e.RelatedKey == in.RelatedKey && in.At.Sub(e.At) < lnDedupWindow
+			sameKey := in.RelatedKey != "" && e.RelatedKey == in.RelatedKey && in.At.Sub(e.At) < gradingDedupWindow
 			if sameMinute || sameKey {
 				if in.Title != "" {
 					e.Also = append(slices.Clip(e.Also), in.Title)
@@ -357,7 +357,7 @@ func (p *Pusher) addInterceptLocked(in pushIntercept, merge bool) {
 			}
 		}
 	}
-	cutoff := p.now().Add(-lnInterceptAge)
+	cutoff := p.now().Add(-heldPushMaxAge)
 	kept := p.intercepts[:0]
 	for _, e := range p.intercepts {
 		if e.At.After(cutoff) {
@@ -365,26 +365,26 @@ func (p *Pusher) addInterceptLocked(in pushIntercept, merge bool) {
 		}
 	}
 	p.intercepts = append(kept, in)
-	if len(p.intercepts) > lnInterceptMax {
-		p.intercepts = slices.Clone(p.intercepts[len(p.intercepts)-lnInterceptMax:])
+	if len(p.intercepts) > heldPushMax {
+		p.intercepts = slices.Clone(p.intercepts[len(p.intercepts)-heldPushMax:])
 	}
 	p.scheduleSaveLocked()
 }
 
-// recordIntercept keeps one held push (tests and callers outside applyLn).
-func (p *Pusher) recordIntercept(in pushIntercept) {
-	p.lnMu.Lock()
+// recordIntercept keeps one held push (tests and callers outside applyPushGrading).
+func (p *Pusher) recordIntercept(in heldPushRecord) {
+	p.gradingMu.Lock()
 	p.addInterceptLocked(in, false)
-	p.lnMu.Unlock()
+	p.gradingMu.Unlock()
 }
 
 // addSentLocked remembers one delivered push for the daily counts, dropping entries past the age and count limits, and
-// queues it for the writer, which appends only the new rows to the store (never the whole list). lnMu is held.
+// queues it for the writer, which appends only the new rows to the store (never the whole list). gradingMu is held.
 func (p *Pusher) addSentLocked(in pushSent) {
 	if in.ID == "" {
 		in.ID = rand.Text()
 	}
-	cutoff := p.now().Add(-lnInterceptAge)
+	cutoff := p.now().Add(-heldPushMaxAge)
 	kept := p.sent[:0]
 	for _, e := range p.sent {
 		if e.At.After(cutoff) {
@@ -406,48 +406,48 @@ func (p *Pusher) addSentLocked(in pushSent) {
 	if len(p.sentPending) > pushSentMax { // a store that keeps failing: the oldest would be past the count limit anyway
 		p.sentPending = slices.Clone(p.sentPending[len(p.sentPending)-pushSentMax:])
 	}
-	if !p.lnWriting {
-		p.lnWriting = true
+	if !p.gradingWriting {
+		p.gradingWriting = true
 		go p.saveIntercepts()
 	}
 }
 
-// recordSent remembers one delivered push for the daily counts. It is the entry for paths where applyLn does not run
-// (the switch is off in sendFromPolicy); applyLn's own paths call addSentLocked under its lock.
+// recordSent remembers one delivered push for the daily counts. It is the entry for paths where applyPushGrading does not run
+// (the switch is off in sendFromPolicy); applyPushGrading's own paths call addSentLocked under its lock.
 func (p *Pusher) recordSent(policy pushPolicy, level string, now time.Time) {
 	if p == nil {
 		return
 	}
-	p.lnMu.Lock()
-	defer p.lnMu.Unlock()
+	p.gradingMu.Lock()
+	defer p.gradingMu.Unlock()
 	p.addSentLocked(pushSent{At: now.UTC(), Level: level, RelatedKey: strings.TrimSpace(policy.relatedKey), Manager: policy.manager})
 }
 
 // scheduleSaveLocked marks the list changed and starts the one writer if it is not running. The writer saves the
 // latest list, then again while it changed meanwhile, so saves never land out of order and a burst of held pushes is
-// one or two writes, off the push path. lnMu is held.
+// one or two writes, off the push path. gradingMu is held.
 func (p *Pusher) scheduleSaveLocked() {
 	if p.store == nil {
 		return
 	}
-	p.lnDirty = true
-	if !p.lnWriting {
-		p.lnWriting = true
+	p.heldDirty = true
+	if !p.gradingWriting {
+		p.gradingWriting = true
 		go p.saveIntercepts()
 	}
 }
 
 func (p *Pusher) saveIntercepts() {
 	for {
-		p.lnMu.Lock()
-		if !p.lnDirty && len(p.sentPending) == 0 {
-			p.lnWriting = false
-			p.lnMu.Unlock()
+		p.gradingMu.Lock()
+		if !p.heldDirty && len(p.sentPending) == 0 {
+			p.gradingWriting = false
+			p.gradingMu.Unlock()
 			return
 		}
-		saveIntercepts := p.lnDirty
-		p.lnDirty = false
-		var list []pushIntercept
+		saveIntercepts := p.heldDirty
+		p.heldDirty = false
+		var list []heldPushRecord
 		if saveIntercepts {
 			list = cloneIntercepts(p.intercepts)
 		}
@@ -460,11 +460,11 @@ func (p *Pusher) saveIntercepts() {
 		if prune {
 			p.sentPrunedAt = now // a failed sweep waits for the next one
 		}
-		p.lnMu.Unlock()
+		p.gradingMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), p.storeTimeout)
 		failedIntercepts, failedSent := false, false
 		if saveIntercepts {
-			if err := p.store.PutSetting(ctx, lnInterceptsSettingKey, list); err != nil {
+			if err := p.store.PutSetting(ctx, heldPushesSettingKey, list); err != nil {
 				p.logf("push grading: save held pushes: %v", err)
 				failedIntercepts = true
 			}
@@ -474,7 +474,7 @@ func (p *Pusher) saveIntercepts() {
 				p.logf("push grading: save delivered pushes: %v", err)
 				failedSent = true
 			} else if prune {
-				if _, err := log.PrunePushSent(ctx, now.Add(-lnInterceptAge), pushSentMax); err != nil {
+				if _, err := log.PrunePushSent(ctx, now.Add(-heldPushMaxAge), pushSentMax); err != nil {
 					p.logf("push grading: sweep delivered pushes: %v", err)
 				}
 			}
@@ -485,9 +485,9 @@ func (p *Pusher) saveIntercepts() {
 		}
 		// A failed write marks only its own part pending again and the writer retries after a backoff instead of
 		// hammering a failing database or rewriting what already landed. waitInterceptsSaved waits it out.
-		p.lnMu.Lock()
+		p.gradingMu.Lock()
 		if failedIntercepts {
-			p.lnDirty = true
+			p.heldDirty = true
 		}
 		if failedSent {
 			// Ahead of what was added meanwhile, so the rows keep the order the pushes went out in.
@@ -496,7 +496,7 @@ func (p *Pusher) saveIntercepts() {
 				p.sentPending = slices.Clone(p.sentPending[len(p.sentPending)-pushSentMax:])
 			}
 		}
-		p.lnMu.Unlock()
+		p.gradingMu.Unlock()
 		time.Sleep(pushSaveRetryBackoff)
 	}
 }
@@ -505,9 +505,9 @@ func (p *Pusher) saveIntercepts() {
 func (p *Pusher) waitInterceptsSaved(d time.Duration) bool {
 	deadline := time.Now().Add(d)
 	for {
-		p.lnMu.Lock()
-		idle := !p.lnWriting && !p.lnDirty && len(p.sentPending) == 0
-		p.lnMu.Unlock()
+		p.gradingMu.Lock()
+		idle := !p.gradingWriting && !p.heldDirty && len(p.sentPending) == 0
+		p.gradingMu.Unlock()
 		if idle {
 			return true
 		}
@@ -518,8 +518,8 @@ func (p *Pusher) waitInterceptsSaved(d time.Duration) bool {
 	}
 }
 
-func cloneIntercepts(in []pushIntercept) []pushIntercept {
-	out := make([]pushIntercept, len(in))
+func cloneIntercepts(in []heldPushRecord) []heldPushRecord {
+	out := make([]heldPushRecord, len(in))
 	for i, e := range in {
 		e.Also = slices.Clone(e.Also)
 		out[i] = e
@@ -527,15 +527,15 @@ func cloneIntercepts(in []pushIntercept) []pushIntercept {
 	return out
 }
 
-// loadLnState reads the switch and the held-push list once at startup; an absent or unreadable row is off / empty.
-func (p *Pusher) loadLnState() {
+// loadPushGradingState reads the switch and the held-push list once at startup; an absent or unreadable row is off / empty.
+func (p *Pusher) loadPushGradingState() {
 	if p == nil || p.store == nil {
 		return
 	}
-	if enabled, ok := p.readLnMode(); ok {
-		p.lnMu.Lock()
-		p.lnCached, p.lnCachedAt = &enabled, p.now()
-		p.lnMu.Unlock()
+	if enabled, ok := p.readPushGrading(); ok {
+		p.gradingMu.Lock()
+		p.gradingCached, p.gradingCachedAt = &enabled, p.now()
+		p.gradingMu.Unlock()
 	}
 	load := func(key string, dst any) bool {
 		ctx, cancel := context.WithTimeout(context.Background(), p.storeTimeout)
@@ -549,11 +549,11 @@ func (p *Pusher) loadLnState() {
 		}
 		return ok
 	}
-	var stored []pushIntercept
-	if load(lnInterceptsSettingKey, &stored) {
-		cutoff := p.now().Add(-lnInterceptAge)
+	var stored []heldPushRecord
+	if load(heldPushesSettingKey, &stored) {
+		cutoff := p.now().Add(-heldPushMaxAge)
 		sanitized := false
-		p.lnMu.Lock()
+		p.gradingMu.Lock()
 		p.intercepts = p.intercepts[:0]
 		for _, e := range stored {
 			if !e.At.After(cutoff) {
@@ -571,7 +571,7 @@ func (p *Pusher) loadLnState() {
 		if sanitized && p.store != nil {
 			p.scheduleSaveLocked()
 		}
-		p.lnMu.Unlock()
+		p.gradingMu.Unlock()
 	}
 
 	p.loadSent()
@@ -597,7 +597,7 @@ func (p *Pusher) loadSent() {
 		return true
 	}
 	now := p.now()
-	cutoff := now.Add(-lnInterceptAge)
+	cutoff := now.Add(-heldPushMaxAge)
 	behind := false
 	adopted := step("add "+pushSentSettingKey+" to its table", func(ctx context.Context) (err error) {
 		var added int
@@ -618,7 +618,7 @@ func (p *Pusher) loadSent() {
 	}) {
 		return
 	}
-	p.lnMu.Lock()
+	p.gradingMu.Lock()
 	p.sentPrunedAt = now
 	p.sent = p.sent[:0]
 	for _, e := range rows {
@@ -626,7 +626,7 @@ func (p *Pusher) loadSent() {
 	}
 	p.sentMirrorable = adopted
 	p.sentMirrorDue = p.sentMirrorDue || behind
-	p.lnMu.Unlock()
+	p.gradingMu.Unlock()
 }
 
 // mirrorSent writes the delivered pushes whole into the hub.push_sent setting when they changed since its last write:
@@ -642,40 +642,40 @@ func (p *Pusher) mirrorSent(ctx context.Context) error {
 	// One write at a time, so a list taken earlier never lands over a later one.
 	p.sentMirrorMu.Lock()
 	defer p.sentMirrorMu.Unlock()
-	p.lnMu.Lock()
+	p.gradingMu.Lock()
 	if !p.sentMirrorable || !p.sentMirrorDue {
-		p.lnMu.Unlock()
+		p.gradingMu.Unlock()
 		return nil
 	}
 	p.sentMirrorDue = false
 	now := p.now()
-	cutoff := now.Add(-lnInterceptAge)
+	cutoff := now.Add(-heldPushMaxAge)
 	list := make([]pushSent, 0, len(p.sent))
 	for _, e := range p.sent {
 		if e.At.After(cutoff) {
 			list = append(list, e)
 		}
 	}
-	p.lnMu.Unlock()
+	p.gradingMu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, p.storeTimeout)
 	defer cancel()
 	err := p.store.PutSetting(ctx, pushSentSettingKey, list)
-	p.lnMu.Lock()
+	p.gradingMu.Lock()
 	if err != nil {
 		p.sentMirrorDue = true
 	} else {
 		p.sentMirroredAt = now
 	}
-	p.lnMu.Unlock()
+	p.gradingMu.Unlock()
 	return err
 }
 
 // mirrorSentIfDue is mirrorSent for a running hub (maintenanceLoop): no sooner than pushSentMirrorEvery after the
 // last write, so the first pushes after a start reach the setting at the next pass and later ones within the hour.
 func (p *Pusher) mirrorSentIfDue(ctx context.Context) {
-	p.lnMu.Lock()
+	p.gradingMu.Lock()
 	due := p.sentMirrorDue && p.now().Sub(p.sentMirroredAt) >= pushSentMirrorEvery
-	p.lnMu.Unlock()
+	p.gradingMu.Unlock()
 	if !due {
 		return
 	}
@@ -684,16 +684,16 @@ func (p *Pusher) mirrorSentIfDue(ctx context.Context) {
 	}
 }
 
-// lnInterceptsView returns the held pushes newest first, at most limit (clamped to lnInterceptLimitMax). When manager
+// heldPushesView returns the held pushes newest first, at most limit (clamped to heldPushViewLimitMax). When manager
 // is not empty, only that manager's entries count toward the limit: the filter runs before the truncation, so another
 // manager's burst can never push an extension's own entries out of its 200.
-func (p *Pusher) lnInterceptsView(manager string, limit int) []pushIntercept {
-	if limit <= 0 || limit > lnInterceptLimitMax {
-		limit = lnInterceptLimitMax
+func (p *Pusher) heldPushesView(manager string, limit int) []heldPushRecord {
+	if limit <= 0 || limit > heldPushViewLimitMax {
+		limit = heldPushViewLimitMax
 	}
-	p.lnMu.Lock()
-	defer p.lnMu.Unlock()
-	out := make([]pushIntercept, 0, min(limit, len(p.intercepts)))
+	p.gradingMu.Lock()
+	defer p.gradingMu.Unlock()
+	out := make([]heldPushRecord, 0, min(limit, len(p.intercepts)))
 	for i := len(p.intercepts) - 1; i >= 0 && len(out) < limit; i-- {
 		e := p.intercepts[i]
 		if manager != "" && e.Manager != manager {
@@ -722,7 +722,7 @@ func (p *Pusher) pushDailyStats(since time.Time, manager string) []pushDayStats 
 		sent, intercepted int
 		byReason          map[string]int
 	}
-	p.lnMu.Lock()
+	p.gradingMu.Lock()
 	days := map[string]map[string]*agg{}
 	add := func(at time.Time, mgr string, reason string, delivered bool) {
 		if at.Before(since) {
@@ -753,7 +753,7 @@ func (p *Pusher) pushDailyStats(since time.Time, manager string) []pushDayStats 
 	for _, e := range p.intercepts {
 		add(e.At, e.Manager, e.Reason, false)
 	}
-	p.lnMu.Unlock()
+	p.gradingMu.Unlock()
 
 	dates := make([]string, 0, len(days))
 	for d := range days {
@@ -785,24 +785,24 @@ func (h *Hub) interceptReaderAllowed(r *http.Request) bool {
 }
 
 // setPushGrading turns the switch on or off: the route's PUT (the apps' Settings › Notifications) and persona_settings
-// notifications.low_distraction once the owner approved it on the phone (self_settings_lnmode.go). The managers are told
+// notifications.low_distraction once the owner approved it on the phone (self_settings_push_grading.go). The managers are told
 // at once, since they hold back their own cards by the switch too (Hello.QuietPush).
 func (h *Hub) setPushGrading(ctx context.Context, on bool) error {
-	if err := h.push.setLnMode(ctx, on); err != nil {
+	if err := h.push.setPushGrading(ctx, on); err != nil {
 		return err
 	}
 	h.assistantUpdated()
 	return nil
 }
 
-// lnRoutes serves the switch, the read-only list of held pushes and the read-only daily delivery counts. The routes
+// pushGradingRoutes serves the switch, the read-only list of held pushes and the read-only daily delivery counts. The routes
 // sit behind the standard API gate; an extension token with the notify scope may read the switch, its own manager's
 // held pushes and counts, but not change the switch.
-func (h *Hub) lnRoutes(api *http.ServeMux) {
-	api.HandleFunc("GET /api/v1/push/ln-mode", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"enabled": h.push.lnModeOn()})
-	})
-	api.HandleFunc("PUT /api/v1/push/ln-mode", func(w http.ResponseWriter, r *http.Request) {
+func (h *Hub) pushGradingRoutes(api *http.ServeMux) {
+	getSwitch := func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"enabled": h.push.pushGradingOn()})
+	}
+	putSwitch := func(w http.ResponseWriter, r *http.Request) {
 		if extensionToken(r) {
 			writeErr(w, http.StatusForbidden, errors.New("the ln mode switch is for the hub's own apps"))
 			return
@@ -819,7 +819,11 @@ func (h *Hub) lnRoutes(api *http.ServeMux) {
 			return
 		}
 		writeJSON(w, map[string]any{"enabled": body.Enabled})
-	})
+	}
+	api.HandleFunc("GET /api/v1/push/ln-mode", getSwitch)
+	api.HandleFunc("GET /api/v1/push/grading", getSwitch)
+	api.HandleFunc("PUT /api/v1/push/ln-mode", putSwitch)
+	api.HandleFunc("PUT /api/v1/push/grading", putSwitch)
 	api.HandleFunc("GET /api/v1/push/intercepts", func(w http.ResponseWriter, r *http.Request) {
 		em := extensionManager(r)
 		if extensionToken(r) && !h.interceptReaderAllowed(r) {
@@ -830,7 +834,7 @@ func (h *Hub) lnRoutes(api *http.ServeMux) {
 		}
 		// The manager filter runs before the 200-entry limit: an extension token reads only its own manager's held
 		// pushes; a full credential reads every manager's. Bodies are summaries already (summaryBody at record time).
-		view := h.push.lnInterceptsView(em, 0)
+		view := h.push.heldPushesView(em, 0)
 		writeJSON(w, map[string]any{"intercepts": view})
 	})
 	api.HandleFunc("GET /api/v1/push/stats/daily", func(w http.ResponseWriter, r *http.Request) {
@@ -852,7 +856,7 @@ func (h *Hub) lnRoutes(api *http.ServeMux) {
 			}
 			since = since.AddDate(0, 0, -(days - 1))
 		}
-		if oldest := now.Add(-lnInterceptAge); since.Before(oldest) {
+		if oldest := now.Add(-heldPushMaxAge); since.Before(oldest) {
 			since = oldest
 		}
 		// An extension token counts only its own manager's pushes; a full credential counts every manager's.

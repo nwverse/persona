@@ -11,9 +11,9 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Every production alert reaches applyLn through sendFromPolicy or sendCard. Exercise those real boundaries, then
+// Every production alert reaches applyPushGrading through sendFromPolicy or sendCard. Exercise those real boundaries, then
 // verify both the JSON saved in hub_settings and the record a restarted pusher reads back.
-func TestLnHeldPushSourcesPersist(t *testing.T) {
+func TestPushGradingHeldPushSourcesPersist(t *testing.T) {
 	tests := []struct {
 		name                           string
 		reason, todo, machine, session string
@@ -23,7 +23,7 @@ func TestLnHeldPushSourcesPersist(t *testing.T) {
 			name: "quiet ask carries its todo and agent session", reason: interceptReasonP1,
 			todo: "todo_quiet", machine: "mac", session: "agent-ask",
 			record: func(t *testing.T, h *Hub) {
-				n := lnNotification(assistantwire.LevelP1, "ask:todo_quiet", "quiet ask")
+				n := gradingNotification(assistantwire.LevelP1, "ask:todo_quiet", "quiet ask")
 				n.DeviceID, n.SessionID = "mac", "agent-ask"
 				if err := h.deliverPush(n); err != nil {
 					t.Fatal(err)
@@ -34,7 +34,7 @@ func TestLnHeldPushSourcesPersist(t *testing.T) {
 			name: "notify_user keeps its free-form key and session", reason: interceptReasonP1,
 			machine: "mac", session: "routine-conv",
 			record: func(t *testing.T, h *Hub) {
-				n := lnNotifyUserPush("routine-conv", assistantwire.LevelP1)
+				n := gradingNotifyUserPush("routine-conv", assistantwire.LevelP1)
 				n.Asked, n.RelatedKey = true, "model-chosen subject"
 				if err := h.deliverPush(n); err != nil {
 					t.Fatal(err)
@@ -45,7 +45,7 @@ func TestLnHeldPushSourcesPersist(t *testing.T) {
 			name: "model-written ask key does not invent a todo", reason: interceptReasonP1,
 			machine: "mac", session: "routine-conv",
 			record: func(t *testing.T, h *Hub) {
-				n := lnNotifyUserPush("routine-conv", assistantwire.LevelP1)
+				n := gradingNotifyUserPush("routine-conv", assistantwire.LevelP1)
 				n.Asked, n.RelatedKey = true, "ask:not-a-proven-todo"
 				if err := h.deliverPush(n); err != nil {
 					t.Fatal(err)
@@ -56,7 +56,7 @@ func TestLnHeldPushSourcesPersist(t *testing.T) {
 			name: "recognized todo key remains the primary source", reason: interceptReasonP1,
 			todo: "todo_existing", machine: "mac", session: "routine-conv",
 			record: func(t *testing.T, h *Hub) {
-				n := lnNotifyUserPush("routine-conv", assistantwire.LevelP1)
+				n := gradingNotifyUserPush("routine-conv", assistantwire.LevelP1)
 				n.Asked, n.RelatedKey = true, "todo:todo_existing@2026-11-14T10:00:00Z"
 				if err := h.deliverPush(n); err != nil {
 					t.Fatal(err)
@@ -67,7 +67,7 @@ func TestLnHeldPushSourcesPersist(t *testing.T) {
 			name: "finished turn carries its agent session", reason: interceptReasonP2,
 			machine: "mac", session: "agent-done",
 			record: func(t *testing.T, h *Hub) {
-				n := lnNotification("", "", "finished")
+				n := gradingNotification("", "", "finished")
 				n.Kind, n.DeviceID, n.SessionID = assistantwire.NotifyDone, "mac", "agent-done"
 				if err := h.deliverPush(n); err != nil {
 					t.Fatal(err)
@@ -133,7 +133,7 @@ func TestLnHeldPushSourcesPersist(t *testing.T) {
 			machine: "mac", session: "agent-dedup",
 			record: func(t *testing.T, h *Hub) {
 				const key = "notify:manager-a//dedup-source"
-				if allow, _ := h.push.applyLn(pushPolicy{level: assistantwire.LevelP0, relatedKey: key}); !allow {
+				if allow, _ := h.push.applyPushGrading(pushPolicy{level: assistantwire.LevelP0, relatedKey: key}); !allow {
 					t.Fatal("the P0 setup push was held")
 				}
 				_, err := h.deliverNotify(notifyRequest{Title: "dedup", ID: "dedup-source",
@@ -146,12 +146,12 @@ func TestLnHeldPushSourcesPersist(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _ := lnHub(t)
-			if err := h.push.setLnMode(context.Background(), true); err != nil {
+			h, _ := gradingHub(t)
+			if err := h.push.setPushGrading(context.Background(), true); err != nil {
 				t.Fatal(err)
 			}
 			tc.record(t, h)
-			assert := func(stage string, view []pushIntercept) {
+			assert := func(stage string, view []heldPushRecord) {
 				t.Helper()
 				if len(view) != 1 {
 					t.Fatalf("%s: got %d held rows, want 1: %+v", stage, len(view), view)
@@ -162,14 +162,14 @@ func TestLnHeldPushSourcesPersist(t *testing.T) {
 						stage, got.Reason, got.TodoID, got.MachineID, got.SessionID, tc.reason, tc.todo, tc.machine, tc.session, got)
 				}
 			}
-			assert("in memory", h.push.lnInterceptsView("", 0))
+			assert("in memory", h.push.heldPushesView("", 0))
 			if !h.push.waitInterceptsSaved(2 * time.Second) {
 				t.Fatal("the held push was not saved")
 			}
 
-			store := h.push.store.(*lnStore)
+			store := h.push.store.(*gradingStore)
 			store.mu.Lock()
-			raw := append([]byte(nil), store.vals[lnInterceptsSettingKey]...)
+			raw := append([]byte(nil), store.vals[heldPushesSettingKey]...)
 			store.mu.Unlock()
 			var rows []map[string]any
 			if err := json.Unmarshal(raw, &rows); err != nil || len(rows) != 1 {
@@ -186,16 +186,16 @@ func TestLnHeldPushSourcesPersist(t *testing.T) {
 			}
 
 			restarted := newPusher(t.TempDir(), store, t.Logf)
-			assert("after restart", restarted.lnInterceptsView("", 0))
+			assert("after restart", restarted.heldPushesView("", 0))
 		})
 	}
 }
 
 // A merged row has only one destination. Never let it absorb a different push's source, including an older row with
 // no source at all; identical sources keep the existing same-minute and same-key coalescing behavior.
-func TestLnP1MergesOnlyCompatibleSources(t *testing.T) {
+func TestPushGradingP1MergesOnlyCompatibleSources(t *testing.T) {
 	notification := func(title, key, machine, session string) assistantwire.Notification {
-		n := lnNotification(assistantwire.LevelP1, key, title)
+		n := gradingNotification(assistantwire.LevelP1, key, title)
 		n.DeviceID, n.SessionID = machine, session
 		return n
 	}
@@ -251,20 +251,20 @@ func TestLnP1MergesOnlyCompatibleSources(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _ := lnHub(t)
-			if err := h.push.setLnMode(context.Background(), true); err != nil {
+			h, _ := gradingHub(t)
+			if err := h.push.setPushGrading(context.Background(), true); err != nil {
 				t.Fatal(err)
 			}
 			if err := h.deliverPush(tc.first); err != nil {
 				t.Fatal(err)
 			}
 			if tc.moveMinute {
-				lnMoveClock(h, h.push.now().Add(time.Minute))
+				moveGradingClock(h, h.push.now().Add(time.Minute))
 			}
 			if err := h.deliverPush(tc.second); err != nil {
 				t.Fatal(err)
 			}
-			view := h.push.lnInterceptsView("", 0)
+			view := h.push.heldPushesView("", 0)
 			if len(view) != tc.wantRows {
 				t.Fatalf("got %d rows, want %d: %+v", len(view), tc.wantRows, view)
 			}
@@ -278,30 +278,30 @@ func TestLnP1MergesOnlyCompatibleSources(t *testing.T) {
 	}
 }
 
-// The source is captured before applyLn makes its own mode check. If the mode changes during payload construction,
+// The source is captured before applyPushGrading makes its own mode check. If the mode changes during payload construction,
 // the newly held card still has its session; no goroutine or timing guess is needed to exercise that interleaving.
-func TestLnCardSourcePresentWhenModeChangesDuringSend(t *testing.T) {
-	h, _ := lnHub(t)
-	h.push.lnMu.Lock()
+func TestPushGradingCardSourcePresentWhenModeChangesDuringSend(t *testing.T) {
+	h, _ := gradingHub(t)
+	h.push.gradingMu.Lock()
 	enabled := false
-	h.push.lnCached = &enabled
-	h.push.lnCachedAt = h.push.now()
-	h.push.lnMu.Unlock()
+	h.push.gradingCached = &enabled
+	h.push.gradingCachedAt = h.push.now()
+	h.push.gradingMu.Unlock()
 
 	ix := proto.Interaction{ID: "ix_toggle", MachineID: "m1", SessionID: "s1", Kind: proto.IxPermission, Summary: "git push"}
 	build := func(l i18n.Lang) map[string]any {
-		h.push.lnMu.Lock()
+		h.push.gradingMu.Lock()
 		enabled = true
-		h.push.lnMu.Unlock()
+		h.push.gradingMu.Unlock()
 		return interactionPayloadIn(l, ix, "box")
 	}
-	attempts := lnAttempts(h)
+	attempts := gradingAttempts(h)
 	h.push.sendCard("manager-a", pushPolicy{level: assistantwire.LevelP1, relatedKey: "ix:ix_toggle", title: ix.Summary},
 		build, ix.ID, nil, quietNone, nil)
 	if *attempts != 0 {
 		t.Fatalf("the card alerted %d times after ln mode turned on, want 0", *attempts)
 	}
-	view := h.push.lnInterceptsView("", 0)
+	view := h.push.heldPushesView("", 0)
 	if len(view) != 1 || view[0].MachineID != "m1" || view[0].SessionID != "s1" {
 		t.Fatalf("held card after the mode change = %+v, want its complete session source", view)
 	}

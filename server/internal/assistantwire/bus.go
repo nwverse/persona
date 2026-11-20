@@ -279,6 +279,7 @@ var Routes = []string{
 	"GET /api/v1/assistant/worker-presets",
 	"GET /api/v1/assistant/start-defaults",
 	"PUT /api/v1/assistant/start-defaults",
+	"POST /api/v1/assistant/start-defaults/preview",
 	"GET /api/v1/assistant/availability",
 	"GET /api/v1/assistant/directions/tree",
 	"GET /api/v1/assistant/directions/offers",

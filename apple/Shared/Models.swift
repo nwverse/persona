@@ -690,6 +690,9 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     var runtimeAgent: String? { agentType?.isEmpty == false ? agentType : agent }
     /// Starting it needs a first message: a Codex on a computer that cannot open it without one.
     var needsFirstMessage: Bool { isCodex && promptOptional != true }
+    /// It runs omp (docs/integrations/omp.md): omp's own config.yml picks its model and thinking level, so a start on it
+    /// takes no permission mode, effort, ultracode or model, and its first message goes with the start.
+    var isOmp: Bool { runtimeAgent == "omp" }
 
     enum CodingKeys: String, CodingKey {
         case name, model, agent, assistant, health, source
@@ -2678,10 +2681,13 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var codexHeartbeatQuiet: Bool? = nil
     /// What the model requests this item stands for used (#5426). Older hubs omit it.
     var usage: [TokenUsage]? = nil
+    /// Raw record identity for a text item with a positional ID, stable before clipping. Older nodes omit it.
+    var sourceFingerprint: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage
         case modelRefusal = "model_refusal", narration, codexHeartbeatQuiet = "codex_heartbeat_quiet"
+        case sourceFingerprint = "source_fingerprint"
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
              clientMsgID = "client_msg_id", supervisionUser = "supervision_user"
     }

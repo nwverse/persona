@@ -46,6 +46,10 @@ extension Theme {
         /// Calls moved to the background.
         static let backgroundTask = "gearshape.2"
         static let backgroundTaskFilled = "gearshape.2.fill"
+        /// Running and recently completed background tasks in Agent chat.
+        static let backgroundTasks = taskPlan
+        /// A background command that watches an ongoing signal.
+        static let backgroundMonitor = screen
         /// A multi-agent workflow running in the background (Claude Code's Workflow tool).
         static let workflow = "flowchart"
         static let pinned = "pin.fill"
@@ -592,6 +596,8 @@ extension Theme {
         /// The user's own messages.
         static let user = "person.fill"
         static let inbox = "tray.full"
+        static let starredMessage = "star"
+        static let starredMessageFilled = "star.fill"
         /// The conversations Persona opened by itself (the Inbox's AI twin, scheduled tasks, Lark /agent…): the sidebar's
         /// Auto Chats (#3266).
         static let autoConversations = "sparkles.rectangle.stack"

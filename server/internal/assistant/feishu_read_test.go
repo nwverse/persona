@@ -1,12 +1,14 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -253,5 +255,66 @@ func TestFeishuReadCardsSkipAConcurrentTopic(t *testing.T) {
 		if n["text"] == line {
 			t.Fatalf("the topic was told about a card that is not its run's: %v", n)
 		}
+	}
+}
+
+// A /read answer Lark took but whose reply was lost is tried again under the same key, so the group gets one card
+// (#11987). The retry comes later, so its footer's elapsed time differs: the hub's key from the card's words would too.
+func TestFeishuReadAnswerRetryKeepsItsKey(t *testing.T) {
+	e := readEnv(t)
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	e.s.chans.mu.Lock()
+	e.s.chans.now = func() time.Time { return now }
+	e.s.chans.mu.Unlock()
+	e.read(readEvent("om_r6", "/read 看下", ""))
+	run := e.readLive("fb_om_r6")
+	var keys, cards []string
+	landed := map[string]bool{} // what Lark keeps: one message per uuid
+	e.f.answerApp(AppFeishu, FeishuPost, func(p json.RawMessage) (any, error) {
+		var m map[string]any
+		_ = json.Unmarshal(p, &m)
+		key, _ := m["uuid"].(string)
+		card, _ := m["card"].(string)
+		keys, cards = append(keys, key), append(cards, card)
+		// Without a key the hub keys a reply by its words (extmgr feishuReplyUUIDIn).
+		landed[cmp.Or(key, card)] = true
+		if len(keys) == 1 {
+			return nil, bus.ErrOffline // accepted, but the reply never came back
+		}
+		return map[string]any{"message_id": "om_answer"}, nil
+	})
+	e.s.finishChannelRun(run, &channel.Result{Answer: "结论：同一次发布"})
+	if r, _ := e.s.channelRunByID(run.ID); r == nil {
+		t.Fatal("the run ended although its answer did not get out")
+	}
+	now = now.Add(90 * time.Second)
+	e.s.finishChannelRun(run, &channel.Result{Answer: "结论：同一次发布"})
+	if r, _ := e.s.channelRunByID(run.ID); r != nil {
+		t.Fatal("the run did not end after the retry")
+	}
+	if len(keys) != 2 || keys[0] == "" || keys[0] != keys[1] {
+		t.Fatalf("keys %q", keys)
+	}
+	if cards[0] == cards[1] {
+		t.Fatal("the retry's card is the same: the test does not show the words' key would change")
+	}
+	if len(landed) != 1 {
+		t.Fatalf("%d cards in the group", len(landed))
+	}
+}
+
+// Each piece of a /read answer has a key of its own, and a held run's later turn other keys.
+func TestReadAnswerKey(t *testing.T) {
+	turn := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	a := readAnswerKey("run1", turn, 0)
+	if a != readAnswerKey("run1", turn, 0) || len(a) > 46 || !strings.HasPrefix(a, "rd-") {
+		t.Fatalf("key %q", a)
+	}
+	seen := map[string]bool{a: true}
+	for _, k := range []string{readAnswerKey("run1", turn, 1), readAnswerKey("run1", turn.Add(time.Minute), 0), readAnswerKey("run2", turn, 0)} {
+		if seen[k] {
+			t.Fatalf("key %q repeats", k)
+		}
+		seen[k] = true
 	}
 }
