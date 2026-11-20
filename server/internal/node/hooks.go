@@ -202,6 +202,15 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		resp = n.handleAsk(ctx, req)
 	case "notify": // personad notify (scriptcli.go)
 		resp = n.handleNotify(ctx, req)
+	case "direction.create", "direction.progress": // personad create-direction / write-progress
+		var out map[string]any
+		if err := n.peer.Call(ctx, req.Kind, req.Input, &out); err != nil {
+			resp = map[string]any{"status": "unavailable", "error": err.Error()}
+		} else if out == nil {
+			resp = map[string]any{"status": "unavailable", "error": "unknown kind"}
+		} else {
+			resp = out
+		}
 	case "launcher.env": // personad launch <name>
 		resp = n.launcherEnvFor(req)
 	case "launcher.pi": // pi's Persona extension: the providers pi can use here (pi_providers.go)

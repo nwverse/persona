@@ -27,7 +27,8 @@ import { firstAndCurrent } from "../lib/persona-nav";
 import { recentConversations } from "../lib/conversation-origins";
 import { isBackgroundSupervisor } from "../lib/background-supervisor";
 import { setRecentMore, useRecentCount, useRecentMore } from "../lib/sidebar-recent";
-import { countsLabel, directionLabel, totalCounts, useDirectionNames, useLeaderCounts } from "../lib/direction-names";
+import { countsLabel, directionExternal, directionLabel, totalCounts, useDirectionNames, useLeaderCounts } from "../lib/direction-names";
+import type { ExternalDirection } from "../lib/direction-tree";
 import { SidebarDirectionRow } from "./SidebarDirections";
 import { ConversationRowMenu } from "./ConversationMenu";
 import { conversationPage } from "../lib/conversation-page";
@@ -279,6 +280,7 @@ function GlideHighlight({ box }: { box: ReturnType<typeof glideStore> }) {
 const MORE_BUTTON = "whitespace-nowrap rounded-[7px] px-2 py-1 text-left text-[12px] text-ink-3 hover:text-ink-2 [@media(pointer:coarse)]:min-h-11";
 
 const NO_CONVERSATIONS: Session[] = [];
+type DirectionEntry = { id: string; conversation?: Session; external?: ExternalDirection };
 
 export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActions }: { route: Route; onSearch: () => void; onNewAgent: () => void; onNavigate?: () => void; workspaceActions?: WorkspaceTreeActions }) {
   const bindings = useBindings();
@@ -304,14 +306,21 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   // The background supervisor is neither: it is built in, listed with the scheduled tasks' chats under 全部对话 (#5082).
   const leaders = (assistant?.leaders ?? []).filter((id) => id !== assistant?.main && !isBackgroundSupervisor(assistant, id));
   const isLeader = (id: string) => leaders.includes(id);
-  const directions = leaders.map((id) => assistant?.conversations.find((c) => c.session_id === id)).filter((c): c is Session => !!c);
+  const conversationOf = (id: string) => assistant?.conversations.find((c) => c.session_id === id);
+  const directions = leaders.map((id): DirectionEntry | null => {
+    const conversation = conversationOf(id);
+    if (conversation) return { id, conversation };
+    const external = directionExternal(id);
+    return external ? { id, external } : null;
+  }).filter((d): d is DirectionEntry => !!d);
   const recentCount = useRecentCount();
   const recentMore = useRecentMore();
   const ownChats = recentConversations(assistant?.conversations ?? [], assistant?.main, leaders, assistant?.background_supervisor, assistant?.recent_task_chats === true);
   const recent = ownChats.slice(0, recentCount * (1 + recentMore));
   const recentLeft = ownChats.length - recent.length;
   const recentLess = recentMore > 0 && ownChats.length > recentCount;
-  const directionNames = useDirectionNames(directions.map((c) => `${c.session_id}\u0000${c.title ?? ""}`).join("\u0001"));
+  // Every direction id belongs in the key: with only conversationless directions there is still a `/leaders` fallback ask.
+  const directionNames = useDirectionNames(leaders.map((id) => `${id}\u0000${conversationOf(id)?.title ?? ""}`).join("\u0001"));
   const counts = useLeaderCounts();
   const leaderTotal = totalCounts(counts, leaders);
   // the main row sits above the pages, so"Persona chats"waits for the assistant (a hub without it has none)
@@ -320,7 +329,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   const [convMenu, setConvMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt } | null>(null);
   // one function for the sidebar's life: the conversation rows and the main row keep their memo across pushes
   const onConvMenu = useCallback<RowMenuFn>((s, anchor, at) => setConvMenu((m) => (!at && m?.anchor === anchor ? null : { s, anchor, at })), []);
-  const [personaFolded, togglePersona] = useFolded("persona", false, { holds: activeKey === "history" || activeKey === "j:new" || [...directions, ...recent].some((c) => activeKey === `j:${c.session_id}`) });
+  const [personaFolded, togglePersona] = useFolded("persona", false, { holds: activeKey === "history" || activeKey === "j:new" || directions.some((d) => activeKey === `j:${d.id}`) || recent.some((c) => activeKey === `j:${c.session_id}`) });
   // 最近 folds on its own too (#6228): the choice is kept in this browser, and it opens by itself while it holds the
   // open conversation, so folding never hides where a message lands. The Agents block's Recent uses another key.
   const [recentFolded, toggleRecent] = useFolded("recent-chats", false, { holds: recent.some((c) => activeKey === `j:${c.session_id}`) });
@@ -328,11 +337,28 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   useStickyTop(nav);
   const go = useGo(onNavigate);
 
-  // A lead's row is an ordinary conversation row under the 常驻 heading (#6214): no pin glyph of its own, so it never
-  // reads as a button. Its "等你 N" stays on hover and the ⋯ has its own reserved end slot (keepTrailing).
-  const directionRow = (c: Session) => (
-    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={directionLabel(directionNames, c.session_id, conversationTitle(c))} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull showState={false} workingMark={counts.get(c.session_id)?.running ?? false} keepTrailing onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
-  );
+  // A conversation-backed lead's row is unchanged. An external one reuses that row, but opens only its actual outside
+  // Agent (never a fabricated `/persona/<direction-id>`), has no conversation menu, and is a plain row without a pair.
+  const directionName = (d: DirectionEntry) => directionLabel(directionNames, d.id, d.conversation ? conversationTitle(d.conversation) : t("lib-format.untitled_session"));
+  const directionRow = (d: DirectionEntry) => {
+    if (d.conversation) {
+      const c = d.conversation;
+      return <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={directionName(d)} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull showState={false} workingMark={counts.get(c.session_id)?.running ?? false} keepTrailing onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />;
+    }
+    const { machine_id: mid, session_id: sid } = d.external ?? {};
+    const key = mid && sid ? `s:${mid}/${sid}` : `j:${d.id}`;
+    const label = directionName(d);
+    const s: Session = {
+      machine_id: mid ?? assistant?.machine_id ?? "",
+      session_id: sid ?? d.id,
+      title: label,
+      cwd: "",
+      status: "idle",
+      state: "idle",
+      assistant: !mid || !sid,
+    };
+    return <SessionRow key={d.id} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={mid && sid ? { name: "session", mid, sid } : null} go={go} label={label} hint={countsLabel(counts.get(d.id), t) || undefined} hintFull showState={false} workingMark={counts.get(d.id)?.running ?? false} keepTrailing />;
+  };
 
   const recentRow = (c: Session) => (
     <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={conversationTitle(c)} showState={false} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
@@ -398,7 +424,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
                 <>
                   <SubHeading label={t("sidebar.directions")} />
                   <div className="sidebar-indent">
-                    {directions.map((c) => <SidebarDirectionRow key={c.session_id} id={c.session_id} name={directionLabel(directionNames, c.session_id, conversationTitle(c))} row={directionRow(c)} reg={reg} hover={hover} go={go} onNavigate={onNavigate} />)}
+                    {directions.map((d) => <SidebarDirectionRow key={d.id} id={d.id} name={directionName(d)} row={directionRow(d)} reg={reg} hover={hover} go={go} onNavigate={onNavigate} />)}
                   </div>
                 </>
               )}

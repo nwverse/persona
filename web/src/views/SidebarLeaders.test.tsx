@@ -33,7 +33,21 @@ const base = [
 ];
 let conversations: Session[];
 let leaders: string[] | undefined;
-let named: unknown;
+type LeaderFixture = {
+  id: string;
+  title?: string;
+  name?: string;
+  ended?: boolean;
+  counts?: { working?: number; needs_you?: number };
+  running?: boolean;
+  external?: boolean;
+  machine_id?: string;
+  session_id?: string;
+  tasks?: { id: string; title: string; state: string; agents?: [] }[];
+};
+let named: { leaders: LeaderFixture[] } | undefined;
+let treeMissing = false;
+let assistantReads = 0;
 let posts: string[] = [];
 
 let host: HTMLDivElement;
@@ -45,11 +59,14 @@ const rowIds = () => [...host.querySelectorAll<HTMLAnchorElement>('a[href^="/per
 const headings = () => [...host.querySelectorAll('[role="heading"]')].map((h) => h.textContent);
 const newChat = () => host.querySelector<HTMLAnchorElement>(`a[href="/persona/new"][aria-label="${t("sidebar.new_chat")}"]`);
 const row = (sid: string) => host.querySelector<HTMLAnchorElement>(`a[href="/persona/${sid}"]`)!;
+const directionRow = (id: string) => host.querySelector<HTMLElement>(`[data-direction="${id}"]`)!;
 
 beforeEach(() => {
   localStorage.clear();
   conversations = base;
   leaders = ["lead-a", "lead-b"];
+  treeMissing = false;
+  assistantReads = 0;
   posts = [];
   named = { leaders: [
     // lead-b has a task in the working state whose Agents all stopped: nothing runs under it (#6626)
@@ -63,11 +80,13 @@ beforeEach(() => {
       posts.push(path);
       return Promise.resolve(new Response(String(init.body), { headers: { "Content-Type": "application/json" } }));
     }
-    if ((path === "/api/v1/assistant/leaders" || path === "/api/v1/assistant/directions/tree") && named === undefined) return Promise.resolve(new Response("{}", { status: 404 }));
+    if (path === "/api/v1/assistant") assistantReads++;
+    if (path === "/api/v1/assistant/directions/tree" && (named === undefined || treeMissing)) return Promise.resolve(new Response("{}", { status: 404 }));
+    if (path === "/api/v1/assistant/leaders" && named === undefined) return Promise.resolve(new Response("{}", { status: 404 }));
     if (path === "/api/v1/assistant/directions/tree") {
-      const list = (named as { leaders: { id: string; name?: string; ended?: boolean; counts?: unknown; running?: boolean }[] }).leaders.filter((l) => !l.ended);
+      const list = (named?.leaders ?? []).filter((l) => !l.ended);
       // `running` only where a case gives it: without it the tree is an older hub's
-      return Promise.resolve(new Response(JSON.stringify({ directions: [...list.map((l) => ({ id: l.id, name: l.name, counts: { stuck: 0, review: 0, ...(l.counts as object) }, ...(l.running === undefined ? {} : { running: l.running }), tasks: [] })), { id: "main", name: "", secretary: true, counts: { working: 9, needs_you: 9, stuck: 0, review: 0 }, tasks: [] }] }), { headers: { "Content-Type": "application/json" } }));
+      return Promise.resolve(new Response(JSON.stringify({ directions: [...list.map((l) => ({ id: l.id, name: l.name, external: l.external, machine_id: l.machine_id, session_id: l.session_id, counts: { stuck: 0, review: 0, ...(l.counts ?? {}) }, ...(l.running === undefined ? {} : { running: l.running }), tasks: l.tasks ?? [] })), { id: "main", name: "", secretary: true, counts: { working: 9, needs_you: 9, stuck: 0, review: 0 }, tasks: [] }] }), { headers: { "Content-Type": "application/json" } }));
     }
     const body = path === "/api/v1/assistant" ? { machine_id: "hub", main: "main", leaders, conversations } : path === "/api/v1/assistant/leaders" ? named : path === "/api/v1/machines" ? { machines: [{ id: "hub", name: "Hub", online: true }] } : {};
     return Promise.resolve(new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } }));
@@ -180,6 +199,75 @@ describe("the leader conversations in the sidebar", () => {
     const tally = host.querySelector<HTMLElement>("[data-sidebar-rows] [data-direction-counts]");
     expect(tally!.textContent).toBe("等你 3");
     expect(tally!.querySelector('[data-shape="arc"]')).toBeNull();
+  });
+
+  it("keeps mixed conversation and external rows, opens only a complete outside pair, and folds by direction id", async () => {
+    leaders = ["lead-a", "direction-outside", "direction-targetless", "lead-b"];
+    named = { leaders: [
+      { id: "lead-a", name: "Product", counts: { working: 0, needs_you: 1 }, running: false },
+      { id: "direction-outside", name: "Outside release", external: true, machine_id: "mac", session_id: "agent-7", counts: { working: 1, needs_you: 2 }, running: true,
+        tasks: [{ id: "todo-outside", title: "Check the outside work", state: "needs_you", agents: [] }] },
+      { id: "direction-targetless", name: "Outside without a target", external: true, counts: { working: 0, needs_you: 0 }, running: false },
+      { id: "lead-b", name: "Infrastructure", counts: { working: 0, needs_you: 0 }, running: false },
+    ] };
+    await renderSidebar();
+    // The existing conversation row, route and menu are unchanged.
+    expect(row("lead-a").getAttribute("href")).toBe("/persona/lead-a");
+    expect(row("lead-a").textContent).toContain("Product");
+    expect(directionRow("lead-a").querySelector('[aria-haspopup="menu"]')).not.toBeNull();
+    const outside = directionRow("direction-outside");
+    const outsideLink = outside.querySelector<HTMLAnchorElement>('a[href="/s/mac/agent-7"]')!;
+    expect(outsideLink.textContent).toContain("Outside release");
+    expect(outsideLink.textContent).toContain("等你 2");
+    expect(outside.textContent).not.toContain("agent-7");
+    expect(outside.querySelector('a[href^="/persona/"]')).toBeNull();
+    expect(outside.querySelector('[aria-haspopup="menu"]')).toBeNull();
+    const targetless = directionRow("direction-targetless");
+    expect(targetless.textContent).toContain("Outside without a target");
+    expect(targetless.querySelector("a")).toBeNull();
+    expect(targetless.querySelector('[aria-haspopup="menu"]')).toBeNull();
+    expect(host.querySelector('a[href="/persona/direction-targetless"]')).toBeNull();
+    // The disclosure and its persisted state use the opaque direction id, not the outside Agent's session id.
+    const disclosure = outside.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    act(() => disclosure.click());
+    await flush();
+    expect(localStorage.getItem("fold:direction:direction-outside")).toBe("0");
+    expect(localStorage.getItem("fold:direction:agent-7")).toBeNull();
+    expect(outside.querySelector('a[href="/todos?id=todo-outside"]')).not.toBeNull();
+    act(() => outsideLink.click());
+    await flush();
+    expect(location.pathname).toBe("/s/mac/agent-7");
+  });
+
+  it("includes conversationless directions in the folded section's counts", async () => {
+    localStorage.setItem("fold:persona", "1");
+    conversations = [base[0]];
+    leaders = ["direction-outside", "direction-targetless"];
+    named = { leaders: [
+      { id: "direction-outside", name: "Outside release", external: true, machine_id: "mac", session_id: "agent-7", counts: { working: 1, needs_you: 2 }, running: true },
+      { id: "direction-targetless", name: "Outside without a target", external: true, counts: { working: 0, needs_you: 1 }, running: false },
+    ] };
+    await renderSidebar();
+    const tally = host.querySelector<HTMLElement>("[data-sidebar-rows] [data-direction-counts]")!;
+    expect(tally.textContent).toBe("等你 3");
+    expect(tally.querySelector('[data-shape="arc"][data-state="working"]')).not.toBeNull();
+  });
+
+  it("shows only conversationless directions through the leaders fallback when the tree is 404", async () => {
+    treeMissing = true;
+    conversations = [base[0]];
+    leaders = ["direction-outside", "direction-targetless"];
+    named = { leaders: [
+      { id: "direction-outside", name: "Outside release", external: true, machine_id: "mac", session_id: "agent-7" },
+      { id: "direction-targetless", name: "Outside without a target", external: true },
+    ] };
+    await renderSidebar();
+    const outsideLink = host.querySelector<HTMLAnchorElement>('a[href="/s/mac/agent-7"]')!;
+    expect(outsideLink.textContent).toContain("Outside release");
+    const targetless = [...host.querySelectorAll<HTMLElement>(".sidebar-row")].find((el) => el.textContent?.includes("Outside without a target"))!;
+    expect(targetless.tagName).toBe("DIV");
+    expect(targetless.querySelector("a")).toBeNull();
+    expect(host.querySelector('a[href^="/persona/direction-"]')).toBeNull();
   });
 
   it("show their titles on a hub without the leaders list", async () => {
@@ -320,6 +408,28 @@ describe("the leader conversations in the sidebar", () => {
     act(() => asking!.click());
     await flush();
     expect(posts).toEqual(["/api/v1/assistant/directions/lead-a/end"]);
+  });
+
+  it("does not reread the assistant solely for a permanent external direction id", async () => {
+    conversations = [base[0]];
+    leaders = ["direction-outside"];
+    named = { leaders: [{ id: "direction-outside", name: "Outside release", external: true, machine_id: "mac", session_id: "agent-7", counts: { working: 0, needs_you: 0 }, running: false }] };
+    await renderSidebar();
+    vi.stubGlobal("WebSocket", FakeSocket);
+    act(() => {
+      connect();
+      FakeSocket.last!.readyState = 1;
+      FakeSocket.last!.onopen?.();
+    });
+    push({ type: "hello", features: [] });
+    await flush();
+    const reads = assistantReads;
+    push({ type: "directions" });
+    await flush();
+    expect(assistantReads).toBe(reads);
+    push({ type: "directions" });
+    await flush();
+    expect(assistantReads).toBe(reads);
   });
 
   it("follow the hub's directions message at once: a new one shows, an ended one goes, counts change", async () => {

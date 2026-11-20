@@ -968,9 +968,10 @@ func (f *fakeHub) eventTypes() string {
 // in memory, as Service does with no store).
 type memStore struct {
 	noPlans
-	mu   sync.Mutex
-	vals map[string][]byte
-	puts int
+	mu      sync.Mutex
+	vals    map[string][]byte
+	outside map[string]db.OutsideDirection
+	puts    int
 	// failSetting: what reading a setting fails with (nil: it reads).
 	failSetting error
 	// failPut: what writing settings fails with (nil: it writes); nothing is written then.
@@ -1111,6 +1112,53 @@ func (m *memStore) PutSettings(ctx context.Context, values map[string]any) error
 		m.vals[key] = b
 	}
 	m.puts += len(encoded)
+	return nil
+}
+
+func (m *memStore) OutsideDirections(_ context.Context) (map[string]db.OutsideDirection, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failSetting != nil {
+		return nil, m.failSetting
+	}
+	out := make(map[string]db.OutsideDirection, len(m.outside))
+	for id, ref := range m.outside {
+		out[id] = ref
+	}
+	return out, nil
+}
+
+func (m *memStore) CreateOutsideDirection(ctx context.Context, id string, ref db.OutsideDirection, values map[string]any) error {
+	encoded := make(map[string][]byte, len(values))
+	for key, value := range values {
+		b, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		encoded[key] = b
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if m.failPut != nil {
+		return m.failPut
+	}
+	if _, exists := m.outside[id]; exists {
+		return errors.New("outside direction already exists")
+	}
+	if m.vals == nil {
+		m.vals = map[string][]byte{}
+	}
+	if m.outside == nil {
+		m.outside = map[string]db.OutsideDirection{}
+	}
+	for key, b := range encoded {
+		m.vals[key] = b
+	}
+	m.outside[id] = ref
+	m.puts += len(encoded) + 1
 	return nil
 }
 

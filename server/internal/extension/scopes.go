@@ -25,6 +25,7 @@ const (
 	ScopeTodosRead               = extwire.ScopeTodosRead
 	ScopeTodosWrite              = extwire.ScopeTodosWrite
 	ScopeLeadersRead             = extwire.ScopeLeadersRead
+	ScopeLeadersWrite            = extwire.ScopeLeadersWrite
 	ScopeAssistantDispatchPolicy = extwire.ScopeAssistantDispatchPolicy
 	ScopeAssistantStartDefaults  = extwire.ScopeAssistantStartDefaults
 	ScopeModels                  = extwire.ScopeModels
@@ -36,7 +37,7 @@ const (
 // HubScopes are the scopes, in the order the install screen lists them.
 var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeSentRead, ScopeInboxRead, ScopeInboxWrite, ScopeAgentsRead, ScopeAgentsControl,
 	ScopeAgentsPermissionMode, ScopeMachinesRead, ScopeNotify, ScopeAssistantAsk, ScopeAssistantRead, ScopeAssistantMemoryRead,
-	ScopeTodosRead, ScopeTodosWrite, ScopeLeadersRead, ScopeAssistantDispatchPolicy, ScopeAssistantStartDefaults, ScopeModels, ScopeTranscription}
+	ScopeTodosRead, ScopeTodosWrite, ScopeLeadersRead, ScopeLeadersWrite, ScopeAssistantDispatchPolicy, ScopeAssistantStartDefaults, ScopeModels, ScopeTranscription}
 
 // InEveryScope says whether a token of every scope (an extension granted the hub's full token the old way, hub_api,
 // that gets one of every scope instead) has scope s: all but the ones an extension gets only when its manifest names
@@ -66,6 +67,7 @@ var scopeTitles = map[string]string{
 	ScopeTodosRead:               "scope_todos_read",
 	ScopeTodosWrite:              "scope_todos_write",
 	ScopeLeadersRead:             "scope_leaders_read",
+	ScopeLeadersWrite:            "scope_leaders_write",
 	ScopeAssistantDispatchPolicy: "scope_assistant_dispatch_policy",
 	ScopeAssistantStartDefaults:  "scope_assistant_start_defaults",
 	ScopeModels:                  "scope_models",

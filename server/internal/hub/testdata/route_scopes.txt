@@ -419,8 +419,10 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/conversations/{id}/undelivered/{msg}/retry
 -                    POST /api/v1/assistant/conversations/{id}/views/{key}/actions
 -                    POST /api/v1/assistant/conversations/{id}/views/{key}/html-actions
+leaders.write        POST /api/v1/assistant/directions
 -                    POST /api/v1/assistant/directions/{id}/end
 -                    POST /api/v1/assistant/directions/{id}/make
+leaders.write        POST /api/v1/assistant/directions/{id}/progress
 -                    POST /api/v1/assistant/directions/{id}/start
 -                    POST /api/v1/assistant/feed/{id}/dismiss
 -                    POST /api/v1/assistant/feed/{id}/undo-dismiss

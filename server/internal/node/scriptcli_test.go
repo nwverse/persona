@@ -30,6 +30,14 @@ type scriptHub struct {
 	notified  []map[string]any
 	cancelled []string
 	larkSent  []proto.LarkSent // what the node's gate proxy told of (lark.sent)
+
+	direction      func(context.Context, string, json.RawMessage) (any, error)
+	directionCalls []scriptDirectionCall
+}
+
+type scriptDirectionCall struct {
+	method string
+	params json.RawMessage
 }
 
 func newScriptHub(t *testing.T, create func(ctx context.Context, ix proto.Interaction) (any, error), notify func() (any, error)) *scriptHub {
@@ -60,6 +68,14 @@ func newScriptHub(t *testing.T, create func(ctx context.Context, ix proto.Intera
 			h.notified = append(h.notified, p)
 			h.mu.Unlock()
 			return notify()
+		case "direction.create", "direction.progress":
+			h.mu.Lock()
+			h.directionCalls = append(h.directionCalls, scriptDirectionCall{method: method, params: params})
+			h.mu.Unlock()
+			if h.direction != nil {
+				return h.direction(ctx, method, params)
+			}
+			return nil, nil
 		case proto.MethodLarkSent:
 			var s proto.LarkSent
 			_ = json.Unmarshal(params, &s)

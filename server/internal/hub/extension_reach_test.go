@@ -320,6 +320,8 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"POST /api/v1/assistant/conversations/{id}/stop":   "path",
 		"GET /api/v1/assistant/reporters":                  "manager",
 		"GET /api/v1/assistant/leaders":                    "manager",
+		"POST /api/v1/assistant/directions":                "manager", // create validates an optional body Agent against this manager
+		"POST /api/v1/assistant/directions/{id}/progress":  "manager", // current-direction membership is manager-owned
 		"GET /api/v1/assistant/dispatch-policy":            "manager",
 		"PUT /api/v1/assistant/dispatch-policy":            "manager",
 		"GET /api/v1/assistant/worker-presets":             "manager",

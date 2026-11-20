@@ -241,6 +241,12 @@ func (s *Service) savedSettings(ctx context.Context) (Settings, bool) {
 
 // updateSettings changes the saved settings with fn (which may refuse) and saves them.
 func (s *Service) updateSettings(ctx context.Context, fn func(*Settings) error) (Settings, error) {
+	return s.updateSettingsSave(ctx, fn, nil)
+}
+
+// updateSettingsSave is updateSettings with an optional atomic writer for state that must change with the settings.
+// The ordinary path still writes only the assistant setting; a custom writer receives the store and complete value.
+func (s *Service) updateSettingsSave(ctx context.Context, fn func(*Settings) error, save func(context.Context, Store, Settings) error) (Settings, error) {
 	b := &s.prefs
 	b.change.Lock()
 	defer b.change.Unlock()
@@ -257,8 +263,18 @@ func (s *Service) updateSettings(ctx context.Context, fn func(*Settings) error) 
 	if proto.IsExternalLauncher(v.Launcher) {
 		return Settings{}, i18n.Err("external-adapter.purpose_unsupported")
 	}
-	if st := s.store(); st != nil {
-		if err := st.PutSetting(ctx, settingsKey, v); err != nil {
+	st := s.store()
+	if st == nil && save != nil {
+		return Settings{}, errors.New("no database on this hub")
+	}
+	if st != nil {
+		var err error
+		if save != nil {
+			err = save(ctx, st, v)
+		} else {
+			err = st.PutSetting(ctx, settingsKey, v)
+		}
+		if err != nil {
 			return Settings{}, err
 		}
 	}
@@ -541,6 +557,12 @@ func (s *Service) leadSessions(ctx context.Context, v Settings) []SessionRef {
 	for _, id := range v.Leaders {
 		if id == "" || id == v.Main {
 			continue
+		}
+		if d := b.m[id]; loaded && d != nil && d.Outside != nil {
+			if d.Outside.MachineID != "" && d.Outside.SessionID != "" {
+				out = append(out, SessionRef{MachineID: d.Outside.MachineID, SessionID: d.Outside.SessionID})
+			}
+			continue // never keep a synthetic direction id as though it were a conversation
 		}
 		machine := v.MachineID
 		if d := b.m[id]; loaded && d != nil && d.MachineID != "" {

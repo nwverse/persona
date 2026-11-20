@@ -263,6 +263,8 @@ var Routes = []string{
 	"POST /api/v1/assistant/conversations/{id}/stop",
 	"GET /api/v1/assistant/reporters",
 	"GET /api/v1/assistant/leaders",
+	"POST /api/v1/assistant/directions",
+	"POST /api/v1/assistant/directions/{id}/progress",
 	"GET /api/v1/assistant/dispatch-policy",
 	"PUT /api/v1/assistant/dispatch-policy",
 	"GET /api/v1/assistant/worker-presets",

@@ -260,6 +260,10 @@ func (s *Service) leaderList(ctx context.Context, cfg Settings, in []string) ([]
 		if id == cfg.BackgroundSupervisor {
 			return nil, errors.New("the background supervisor is built in and follows up the tasks no leader supervises: a leader is another side conversation")
 		}
+		if d := s.directionOf(id); d != nil && d.Outside != nil {
+			list = append(list, id) // a created conversationless direction survives whole-list edits
+			continue
+		}
 		if c, ok := s.session(ctx, cfg.MachineID, id); !ok || !c.Assistant {
 			return nil, fmt.Errorf("%s is not a Persona conversation on the assistant's machine (conversations_list has their ids)", id)
 		}

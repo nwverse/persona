@@ -224,7 +224,7 @@ function SecondLine({ line, draft }: { line: { lead?: string; text: string; tone
 }
 
 // `prefix`: a word before the title (a tab's name, a pane's agent), in `prefixClass`
-type SessionRowProps = { menuLabel?: string; /** The mark at the start when the state is not shown (a Persona conversation's; pinned: the pin). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; to: Route; go: GoFn; tab?: boolean; label?: string; prefix?: string; prefixClass?: string; hint?: string; /** The hint is whole, never cut (a lead's counts). */ hintFull?: boolean; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean; /** A lead row whose own conversation is idle while something under it runs (the direction tree's `running`, #6626): draw the working arc anyway (#6230). An own needs-you / unread state still takes precedence. */ workingMark?: boolean;
+type SessionRowProps = { menuLabel?: string; /** The mark at the start when the state is not shown (a Persona conversation's; pinned: the pin). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; /** null: a targetless external direction, drawn as the same non-link row. */ to: Route | null; go: GoFn; tab?: boolean; label?: string; prefix?: string; prefixClass?: string; hint?: string; /** The hint is whole, never cut (a lead's counts). */ hintFull?: boolean; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean; /** A lead row whose own conversation is idle while something under it runs (the direction tree's `running`, #6626): draw the working arc anyway (#6230). An own needs-you / unread state still takes precedence. */ workingMark?: boolean;
   /** 常驻 rows (#6214): the "在做 N · 等你 N" counts never fade on hover and the ⋯ sits in a reserved end slot instead
    * of covering them, so hovering removes no information. */
   keepTrailing?: boolean };
@@ -232,10 +232,10 @@ type SessionRowProps = { menuLabel?: string; /** The mark at the start when the 
 // Every sessions push re-renders the sidebar and the Agents list, while lib/sessions-delta.ts keeps the object of each
 // session that did not change: a row renders again only when one of its props did. The props compare by identity
 // (`go` and the menus are stable), except the route, which the call sites build anew and which is its path (routePath).
-function sameProps<P extends { to: Route }>(a: P, b: P): boolean {
+function sameProps<P extends { to: Route | null }>(a: P, b: P): boolean {
   const keys = Object.keys(a) as (keyof P)[];
   if (keys.length !== Object.keys(b).length) return false;
-  return keys.every((key) => (key === "to" ? routePath(a.to) === routePath(b.to) : Object.is(a[key], b[key])));
+  return keys.every((key) => (key === "to" ? (a.to && b.to ? routePath(a.to) === routePath(b.to) : a.to === b.to) : Object.is(a[key], b[key])));
 }
 
 export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, active, to, go, tab, label, prefix, prefixClass, hint, hintFull, host, showState = true, showTodoTag, onMenu, menuLabel = t("sidebar.agent_actions"), endRoom, icon = "chat", workingMark = false, keepTrailing = false }: SessionRowProps) {
@@ -329,11 +329,15 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   // ultracode on (#3428): the workflow mark in the AI colour right after the title; a row without it is drawn as before.
   // Not on an offline row: the node keeps the last value it saw after the process is gone, and a resume starts it off.
   const ultra = showState && ultracodeMarkShown(s);
+  const RowTag = to ? "a" : "div";
+  const destination = to ? {
+    href: href(to),
+    onClick: (event: React.MouseEvent) => { rememberSessionRow(row); go(to)(event); },
+  } : {};
   const link = (
-    <a
+    <RowTag
       ref={regRow}
-      href={href(to)}
-      onClick={(event) => { rememberSessionRow(row); go(to)(event); }}
+      {...destination}
       // right click (at the pointer), the menu key and Shift+F10 (beside the row): the row's menu, the same as its ⋯
       {...(onMenu ? contextMenuProps((at, el) => onMenu(s, el, at)) : {})}
       onMouseEnter={() => hover(k)}
@@ -427,7 +431,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       {tailShown && <span className={cx(hintFull ? "shrink-0 whitespace-nowrap tabular-nums" : "max-w-[72px] min-w-6 shrink-[20] truncate", "text-[11px] text-ink-3", hintAside)}>{tail}</span>}
       {ageAtEnd && <span data-row-age className={cx("shrink-0 text-[11px] text-ink-3", aside)}>{ago(s.updated_at, Date.now(), "narrow")}</span>}
       {pendingCount > 0 && <span className={cx("flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10px] font-semibold text-attention tabular-nums", aside)}>{pendingCount}</span>}
-    </a>
+    </RowTag>
   );
   if (!onMenu) return link;
   // 常驻 rows keep their counts on hover (#6214): the ⋯ lives in a reserved end slot that fades in instead of an

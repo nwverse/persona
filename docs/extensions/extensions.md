@@ -447,7 +447,8 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `notify` | Send notifications to your devices | `POST /api/v1/notify` (see "Sending notifications") |
 | `assistant.ask` | Start chats with Persona and read chat activity | `GET /api/v1/assistant`, `POST /api/v1/assistant/conversations`, `GET …/conversations/{id}/feed` |
 | `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}`, `GET /api/v1/todos/places`, `GET /api/v1/todos/{id}/decisions`, `GET /api/v1/todos/{id}/repositories`, `GET /api/v1/todos/{id}/timeline`. From a manager naming `todo_timeline`, the to-do's conversation too: the timeline, and on `GET /api/v1/todos/{id}` its latest rounds, recap and results (what the owner told its runs and their turn summaries), less what "Never shown to extensions" leaves out |
-| `leaders.read` | See leader conversations (directions) and what they report | `GET /api/v1/assistant/leaders`; the events `leader.changed` and `leader.report` (see "Leader events") |
+| `leaders.read` | See directions and what they report | `GET /api/v1/assistant/leaders`; the events `leader.changed` and `leader.report` (see "Leader events"). Does not permit writes |
+| `leaders.write` | Create directions and report their progress | `POST /api/v1/assistant/directions` and `POST /api/v1/assistant/directions/{id}/progress` only. Does not imply `leaders.read`; direction names, notes, ends and to-do aggregation are unchanged |
 | `assistant.dispatch_policy` | Read and change the assistant dispatch policy | `GET` / `PUT /api/v1/assistant/dispatch-policy`; a policy written by an extension must expire within one hour (see "Dispatch policy") |
 | `assistant.start_defaults` | Read the Agent presets and set the defaults task Agents start with | `GET /api/v1/assistant/worker-presets`, `GET` / `PUT /api/v1/assistant/start-defaults`; a policy written by an extension must expire within one hour ([assistant.md](../assistant/assistant.md) "Start defaults"). Not covered by the legacy `hub_api` full access: it can raise what task Agents spend (a preset, effort `max`, ultracode), so an extension gets it only by naming it, as `agents.permission_mode` |
 | `todos.write` | Create and edit to-dos, attach chats to to-dos | `POST /api/v1/todos`, `PATCH /api/v1/todos/{id}`, a to-do's `agents/{mid}/{sid}` and `spaces/{mid}/{space…}` (`PUT` / `DELETE`), `POST /api/v1/todos/{id}/decisions` (outcome decisions only, see [todos.md](../assistant/todos.md) "API overview"), `PUT /api/v1/todos/{id}/repositories` and `PUT /api/v1/todos/{id}/repositories/{repo_id}/links` (replace repository associations and issue/PR links); creating and editing to-dos and adding decisions not with terminal control characters (see below); deleting to-dos, superseding decisions, completion checks and retries still require full access |
@@ -3120,8 +3121,8 @@ Extensions contribute `events` to subscribe to things happening on the hub. Thes
 | `agent.finished` | `machine_id`, `machine`, `session_id`, `title`: an Agent finished |
 | `todo.changed` | `id`, `title`, `thread?`, `done?`, `supervisor?`, `kind?`, `what`: a to-do was created, deleted, or its title, whether it is done, its supervisor, or the thread it is bound to changed (needs `todos.read`, see below) |
 | `todo.decision` | `id`, `title`, `thread?`, `decision`: a decision was written on a to-do (needs `todos.read`, see below) |
-| `leader.changed` | `id`, `title`, `project?`, `ended?`: a leader conversation was made, retitled, filed under another project, ended or made a leader again (needs `leaders.read`, see "Leader events") |
-| `leader.report` | `id`, `leader`, `kind`, `todo`, `text`, `link?`, `at`: a leader's task reached its goal, needs the owner's decision or is stuck (needs `leaders.read`) |
+| `leader.changed` | `id`, `title`, `project?`, `ended?`: a direction was made, retitled, filed under another project, ended or made current again (needs `leaders.read`, see "Leader events") |
+| `leader.report` | `id`, `leader`, `kind`, `todo`, `text`, `link?`, `at`: a direction's task reached its goal, needs the owner's decision or is stuck, or the direction reported progress (needs `leaders.read`) |
 
 SDK programs receive them in `Namespaces["event"]` (method name is the event name).
 
@@ -3143,8 +3144,9 @@ SDK programs receive them in `Namespaces["event"]` (method name is the event nam
 ### Leader events (#3484, #3485)
 
 `leader.changed` and `leader.report` let a work-log extension keep one record per direction of the owner's work and write
-its result lines (`docs/design/proposals/owner-at-a-glance.md` "Contract with a work-log extension"). A *leader* is a
-side conversation in `assistant.leaders`; one leader is one direction. Schema: `schema/extension/leaders.schema.json`
+its result lines (`docs/design/proposals/owner-at-a-glance.md` "Contract with a work-log extension"). A direction is
+usually a side conversation in `assistant.leaders`; since #8236 it can instead be an outside reporting direction with
+no Persona conversation. Either kind has one stable direction id. Schema: `schema/extension/leaders.schema.json`
 (`wire.LeaderChangedEvent`, `wire.LeaderReportEvent`).
 
 ```json
@@ -3152,8 +3154,8 @@ side conversation in `assistant.leaders`; one leader is one direction. Schema: `
  "contributes":{"events":[{"id":"leaders","subscribe":["leader.changed","leader.report","todo.changed"]}]}}
 ```
 
-- **Who is told**: as for the to-do events, with `leaders.read` (or the legacy full access); `todos.read` is not enough.
-- **`leader.changed {id, title, name, project?, ended?}`**: `id` is the leader conversation's session id, the key to keep a
+- **Who is told**: as for the to-do events, with `leaders.read` (or the legacy full access); `todos.read` and `leaders.write` alone are not enough.
+- **`leader.changed {id, title, name, project?, ended?}`**: `id` is the stable direction id (the leader conversation's session id, or an outside direction's server-generated `dir_…` id), the key to keep a
   record by; `title` its title as the apps show it; `name` what the direction is called, **the one to show** (#3679): the
   name the owner (`PUT /api/v1/assistant/directions/{id}/name`) or the secretary (`direction_name`) gave it, else its
   knowledge-base project's name, else `title` without its `MMDD | kind | ` prefix (and when that starts `你是「X」`, a role given in the first message, just `X`, #3744); a new name is a change, told once; `project` the knowledge-base project's slug it is filed under (left
@@ -3169,11 +3171,20 @@ side conversation in `assistant.leaders`; one leader is one direction. Schema: `
   twice; `text` is at most 300 characters in the owner's language; `link` the task's PR when it has one. Progress is
   never reported. Besides those, `kind: "progress"` (#3679) is the
   leader's own summary of its direction at the goal level, sent with its `leader_progress` tool (each reached task, each
-  report cycle): `reached` (what was reached), `doing` (what is being done, and where it is stuck), `needs_you` (what the
+  report cycle), or an authorized outside caller's `POST /api/v1/assistant/directions/{id}/progress` /
+  `personad write-progress`: `reached` (what was reached), `doing` (what is being done, and where it is stuck), `needs_you` (what the
   owner has to do) and `links` (evidence, at most 5; `link` is the first), each part at most 200 characters; `text` puts
   the parts together in the owner's language (「达成：…」「在做：…」「要你做：…」, one per line); `todo` is `""`. A work-log
   card renders one line per direction from the day's latest `progress`. `GET /api/v1/assistant/leaders` lists each
   direction's `name` and latest `progress` (`{reached?, doing?, needs_you?, links?, at}`).
+- **Writing from outside (#8236)**: `leaders.write` allows `POST /api/v1/assistant/directions` with a required
+  `name`, required existing knowledge-base `project` and optional complete coding-Agent `machine_id` / `session_id`
+  pair, and the progress route above for any current direction. The create returns a leader with `external: true` and a
+  generated `dir_…` id, not a Persona conversation id. The Agent remains an optional navigation target only: it does
+  not become the supervisor, and its linked to-dos are not newly aggregated. A targetless direction is allowed. The
+  scope opens no read, event, rename, notes, end or to-do route; request `leaders.read` separately when the extension
+  also needs this section's read model. The local `personad` commands use the same-user node socket instead of an
+  extension token (`docs/integrations/script-cli.md`).
 - **Leaders made before the extension**: `GET /api/v1/assistant/leaders` (`leaders.read`) lists every direction as
   `leader.changed` would tell it now, with `by` (`assistant` or `user`), `at` and `ended_at?`; current leaders first.
 - They share the to-do events' queue and its limits.
