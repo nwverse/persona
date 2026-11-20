@@ -179,8 +179,24 @@ def card_field_keyboard(browser, base, hub, shots):
             page.wait_for_timeout(400)
             if box(page, "[data-chat-dock]")["height"] > kb * 0.55 + 1:
                 fail(f"{what}: the focus gone, the dock is over its cap")
+            # answered from the card with the keyboard up: its arrow takes the focus on the tap, and the card (on a page
+            # the keyboard made short, Android at 360) must still be there for the click
+            keyboard(page, ios, w, h)
+            page.wait_for_timeout(400)
+            field.tap()
+            for vh in (h - 100, h - 200, kb):
+                keyboard(page, ios, w, vh)
+                page.wait_for_timeout(120)
+            page.wait_for_timeout(400)
+            page.locator("[data-pending-card]").get_by_role("button", name="发送回答").first.tap()
+            for _ in range(25):
+                if any(r["id"] == ix for r in json.load(urllib.request.urlopen(hub + "/mock/resolved"))["resolved"]):
+                    break
+                page.wait_for_timeout(200)
+            else:
+                fail(f"{what}: tapping the card's arrow with the keyboard up sent no answer")
             ok(f"{what}: the card's own field stays in sight and takes a tap over the keyboard, the composer on screen; "
-               "the cap again with the keyboard down or the focus gone")
+               "the cap again with the keyboard down or the focus gone; its arrow answers it")
         finally:
             ctx.close()
             urllib.request.urlopen(urllib.request.Request(
