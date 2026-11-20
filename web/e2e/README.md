@@ -540,3 +540,20 @@ node web/e2e/font-preferences.mjs http://127.0.0.1:<web-port> <artifact-director
 ```
 
 Use exclusively owned mock/Vite processes and a fresh Chrome profile. This drives the real Settings page at wide/phone widths, light/dark and standard/large text, captures Default and Custom, checks immediate and cross-tab application/reset, before-paint reload, zero additional font requests and actual CJK/symbol fallback faces. It mounts the production single-pane and Full UI renderers against the synthetic hub and checks their first font family, retained-view attachment and unchanged size; it does not verify a live shell. All network access is restricted to the supplied loopback origin. Results and sixteen screenshots go outside the repository; a four-minute watchdog bounds the run.
+
+## Sidebar icon colors (#10822)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_NAV_ICON_COLOR=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/sidebar-icon-colors.mjs <loopback-web-origin> <artifact-directory> [--monochrome-only] [--chromium <executable>]
+```
+
+Against an exclusively owned mock-backed web server, in Simplified Chinese, light and dark, at 1440 × 900 and 390 × 844
+(touch). With nothing stored (Monochrome), every page icon of the wide sidebar, the icon rail and the phone's drawer is
+`--ink-3` and the open page's `--ink`. It then picks 彩色 in Settings › General › Appearance › 侧栏图标 and checks that
+each built-in page's icon is its named color, that the made-up extension page naming `icon_color` (花园) is green and
+the gateway's 用量 (none named) neutral, that the open page keeps `--ink`, that Inbox keeps its orange under the pointer,
+and that every colored icon reads at 3:1 on the sidebar and on the hover fill, as the browser resolves them.
+`--monochrome-only` takes only the Monochrome part, to set its screenshots beside another build's. Screenshots and
+`results.json` go to the artifact directory; a five-minute watchdog ends the run, and the last line is the verdict.
