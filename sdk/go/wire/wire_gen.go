@@ -5610,6 +5610,17 @@ type StorageClaimResult struct {
 	Job *StorageJob `json:"job,omitempty"`
 }
 
+// StorageRenewParams: extend only the current run's unexpired lease on this exact key, job and token. The host sets
+// lease_until to the later of its current value and renewal time plus lease_seconds; job state and attempts do not
+// change.
+type StorageRenewParams struct {
+	RequestID    string `json:"request_id"`
+	Key          string `json:"key"`
+	ID           string `json:"id"`
+	Lease        string `json:"lease"`
+	LeaseSeconds int    `json:"lease_seconds"`
+}
+
 type StorageSettleParams struct {
 	RequestID string `json:"request_id"`
 	Key       string `json:"key"`
@@ -6937,6 +6948,7 @@ var newDef = map[string]func() any{
 	"StorageJobResult":              func() any { return new(StorageJobResult) },
 	"StorageClaimParams":            func() any { return new(StorageClaimParams) },
 	"StorageClaimResult":            func() any { return new(StorageClaimResult) },
+	"StorageRenewParams":            func() any { return new(StorageRenewParams) },
 	"StorageSettleParams":           func() any { return new(StorageSettleParams) },
 	"StorageRetryParams":            func() any { return new(StorageRetryParams) },
 	"StorageDeleteResult":           func() any { return new(StorageDeleteResult) },
@@ -7064,6 +7076,7 @@ var Calls = map[string]Call{
 	"storage.queue.list":             {Name: "storage.queue.list", From: "program", Params: "StorageQueueListParams", Result: "StorageQueueListResult"},
 	"storage.queue.enqueue":          {Name: "storage.queue.enqueue", From: "program", Params: "StorageEnqueueParams", Result: "StorageJobResult"},
 	"storage.queue.claim":            {Name: "storage.queue.claim", From: "program", Params: "StorageClaimParams", Result: "StorageClaimResult"},
+	"storage.queue.renew":            {Name: "storage.queue.renew", From: "program", Params: "StorageRenewParams", Result: "StorageJobResult"},
 	"storage.queue.ack":              {Name: "storage.queue.ack", From: "program", Params: "StorageSettleParams", Result: "StorageJobResult"},
 	"storage.queue.forget":           {Name: "storage.queue.forget", From: "program", Params: "StorageSettleParams", Result: "StorageDeleteResult"},
 	"storage.queue.retry":            {Name: "storage.queue.retry", From: "program", Params: "StorageRetryParams", Result: "StorageJobResult"},

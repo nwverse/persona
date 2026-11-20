@@ -21,8 +21,9 @@ import (
 // launcher, which starts in bypassPermissions, relies on.
 
 // startTakesModes: a start of agent takes a permission mode and an effort.
+// Antigravity (agy) runs via its ACP runtime and supports permission modes and effort.
 func startTakesModes(agent string) bool {
-	return !proto.IsWorkAgentType(agent) && !proto.IsNoModeAgentType(agent)
+	return agent == "agy" || (!proto.IsWorkAgentType(agent) && !proto.IsNoModeAgentType(agent))
 }
 
 // startModesRefused is the refusal of a permission mode or effort the caller named for a launcher whose agent the node

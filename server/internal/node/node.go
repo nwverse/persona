@@ -43,6 +43,10 @@ import (
 type Node struct {
 	runtimeUsage runtimeUsageReports
 
+	// Only the manager's initial node.info can negotiate source delivery on this connection.
+	managerInfoOnce sync.Once
+	sourceSend      atomic.Bool
+
 	// The assistant's one memory (memory_merge.go), both under memoryMu: per project key, the other profiles' notes
 	// already merged, and when a merge that failed is tried again.
 	memoryMerged     map[string]map[string]bool
@@ -786,6 +790,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	}
 	switch method {
 	case nodeproto.SourceSend:
+		if !n.sourceSend.Load() {
+			return nil, refusal("source_permissions_not_negotiated", "The connected manager did not negotiate source permissions", nil)
+		}
 		method = "session.send"
 		ctx = withSourceDelivery(ctx, params)
 	case nodeproto.OwnerInterrupt:
@@ -798,9 +805,10 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	if method == "session.send" || method == "codex.answer" {
 		ctx = promptLanguageContext(ctx, params)
 	}
+	if method == "sessions.history" {
+		return n.handleSessionsHistory(ctx, method, params)
+	}
 	switch method {
-	case "sessions.history": // sessions active in a time window, inactive ones too (sessions_history.go)
-		return n.sessionsHistory(ctx, params)
 	case "workspace.naming.resolve":
 		return n.resolveWorkspaceNaming(ctx, params)
 	case "session.share_projection":
@@ -1069,18 +1077,18 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		case "session.keys", "session.screen", "session.screen.before", "terminal.watch", "session.close", "session.queue.edit", "session.queue.send_now", "session.rename", "assistant.send":
 			return nil, refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)
 		case "session.modes":
-			// Its effort, on the app-server running it (codex_effort.go), or in the Codex App window that has it
-			// (codex_desktop_effort.go); nothing else.
-			if _, _, driven := n.codexEffortThread(p.SessionID); !driven {
-				if src, found := n.codexSource(p.SessionID); found && codexDesktopChat(src) {
-					return ok(n.codexDesktopModes(ctx, p.SessionID, src, p.Model, p.PermissionMode, p.Effort))
+			// Model and effort, on the app-server running it (codex_effort.go), or in the Codex App window that has it
+			// (codex_desktop_effort.go); permission modes remain on the computer.
+			if c, t, driven := n.codexEffortThread(p.SessionID); driven {
+				if p.PermissionMode != "" {
+					return nil, fmt.Errorf("Codex 的会话在手机上只能改思考强度和模型，权限模式要在电脑上改")
 				}
-				return nil, refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)
+				return ok(n.setCodexSettings(ctx, p.SessionID, c, t, p.Model, p.Effort))
 			}
-			if p.Model != "" {
-				return nil, fmt.Errorf("Codex 的会话不支持在手机上切换模型")
+			if src, found := n.codexSource(p.SessionID); found && codexDesktopChat(src) {
+				return ok(n.codexDesktopModes(ctx, p.SessionID, src, p.Model, p.PermissionMode, p.Effort))
 			}
-			return ok(n.setModes(ctx, p.SessionID, p.PermissionMode, p.Effort))
+			return nil, refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)
 		case "session.interrupt":
 			return ok(n.interruptCodex(ctx, p.SessionID))
 		}
@@ -1171,6 +1179,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "ping": // the hub checking a tailcat connection is alive (its userspace TCP has no keepalive)
 		return map[string]any{}, nil
 	case "node.info":
+		n.managerInfoOnce.Do(func() {
+			var p nodeproto.NodeInfoQuery
+			if json.Unmarshal(params, &p) == nil {
+				n.sourceSend.Store(slices.Contains(p.ManagerFeatures, nodeproto.SourcePermissions))
+			}
+		})
 		return n.info(ctx), nil
 	case "herdr.server.start": // the "Start" button beside "herdr is not running" (herdrstart.go)
 		return n.startHerdrServer(ctx)
@@ -1570,8 +1584,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			if kind == "" {
 				kind = launcherAgentType(p.Launcher)
 			}
-			if kind == ompAgent { // omp's own config decides, not a start's arguments (start_agent.go)
-				return nil, refusal("omp_options", ompOptionsRefusal, nil)
+			if kind == ompAgent {
+				return nil, ompOptionsRefusal(ctx)
 			}
 			if _, runtime := engineRuntimes[cmp.Or(p.Host, n.defaultKind())]; runtime { // the start's host is a runtime (Paseo)
 				kind = "runtime"
@@ -1667,6 +1681,10 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			// (launcher_switch.go): the Resume waits for it, then finds the agent running, or resumes it as it is.
 			defer n.resumeTurn(ctx, p.ResumeSessionID)() // and a switch to the other engine does not resume it beside this
 			r = n.fillResume(p.ResumeSessionID, r)       // what it ran with, for what the start leaves out (retire.go)
+			if n.startAgentType(r.launcher, p.AgentType) == ompAgent {
+				// omp restores the model from its session file. Only an explicit override should reach the refusal.
+				r.execution.Model = p.Model
+			}
 			ctx, taskSpace = withTaskSpace(ctx, r.taskID, r.workspaceID, r.workspaceLabel)
 			// The user's Resume (the only way a stopped agent runs again, #4754): in the shell it left when that is
 			// still there (stopped.go).
@@ -2205,10 +2223,16 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			if err := n.refreshExport(p.SessionID, f); err != nil {
 				return nil, err
 			}
-		} else {
-			n.refresh(p.SessionID, f)
+		} else if err := n.refresh(p.SessionID, f); err != nil && proto.PositionalItemID(a.ItemID) {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, n.readErr(p.SessionID, noTranscript{p.SessionID})
+			}
+			return nil, err
 		}
 		it, err := f.Full(a.ItemID)
+		if errors.Is(err, transcript.ErrSourceChanged) {
+			return nil, &rpc.Error{Code: codeNotFound, Message: err.Error()}
+		}
 		if err != nil {
 			return nil, fmt.Errorf("session %s: %w", p.SessionID, err)
 		}
@@ -2694,11 +2718,17 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 	f, err := n.file(id)
 	if err != nil {
 		if src, ok := n.codexSource(id); ok {
-			effort := ""
+			model, effort := "", ""
 			if c, t, driven := n.codexEffortThread(id); driven {
+				model = n.codexModelNow(id, c, t, "")
 				effort = n.codexEffortNow(id, c, t, "")
+			} else if codexDesktopChat(src) {
+				var row proto.Session
+				row.SessionID = id
+				n.codexDesktopEffortRow(&row, src, quickMeta{})
+				model, effort = row.Model, row.Effort
 			}
-			return map[string]any{"session_id": id, "source_kind": "codex_app_server", "source_thread_id": src.thread, "transcript_path": "", "cwd": "", "model": "", "launcher": "", "git_branch": "", "version": "", "permission_mode": "", "effort": effort, "context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0, "history_unavailable": true, "stop_cause": n.stopCause(id)}, nil
+			return map[string]any{"session_id": id, "source_kind": "codex_app_server", "source_thread_id": src.thread, "transcript_path": "", "cwd": "", "model": model, "launcher": "", "git_branch": "", "version": "", "permission_mode": "", "effort": effort, "context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0, "history_unavailable": true, "stop_cause": n.stopCause(id)}, nil
 		}
 		return nil, err
 	}
@@ -2708,9 +2738,16 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 	if st.Launcher == "" {
 		st.Launcher = n.inferLauncher(id)
 	}
+	model := n.shownModel(id, m.Model)
 	mode, effort := n.modesOf(id)
 	if c, t, driven := n.codexEffortThread(id); driven {
+		model = n.codexModelNow(id, c, t, m.Model)
 		effort = n.codexEffortNow(id, c, t, m.Effort) // what the app-server runs it with (codex_effort.go)
+	} else if src, ok := n.codexSource(id); ok && codexDesktopChat(src) {
+		var row proto.Session
+		row.SessionID, row.Model = id, m.Model
+		n.codexDesktopEffortRow(&row, src, n.metaOf(id))
+		model, effort = row.Model, row.Effort
 	}
 	if pane, err := n.paneFor(ctx, id); err == nil && !n.isAssistantSession(id) {
 		if screen, err := n.readPane(ctx, pane, "visible", 60); err == nil && tuiMode(screen) != "" {
@@ -2722,7 +2759,7 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 		cwd = n.assistantCwd(id, f.Path, cwd) // a conversation's own, where it started (#2368)
 	}
 	return map[string]any{
-		"session_id": id, "transcript_path": f.Path, "cwd": cwd, "model": m.Model, "launcher": st.Launcher,
+		"session_id": id, "transcript_path": f.Path, "cwd": cwd, "model": model, "launcher": st.Launcher,
 		"git_branch": m.GitBranch, "version": m.Version, "permission_mode": mode, "effort": effort,
 		"context_tokens": m.ContextTokens, "output_tokens": m.OutputTokens, "compactions": m.Compactions,
 		"turns": m.Turns, "started_at": m.StartedAt, "last_activity": m.LastActivity,

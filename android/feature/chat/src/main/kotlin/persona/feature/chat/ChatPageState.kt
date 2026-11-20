@@ -422,7 +422,10 @@ internal class ChatPageRecap(
 
 /** ChatPage's subagent links and workflow cards, with what is folded in them (moved as is). */
 @Composable
-internal fun rememberChatPageSubagents(key: SessionKey, chrome: ChatChromeBindings, readOnly: Boolean, session: Session?): ChatPageSubagents {
+internal fun rememberChatPageSubagents(
+    key: SessionKey, chrome: ChatChromeBindings, readOnly: Boolean, session: Session?,
+    openBackground: ((BackgroundDestination) -> Unit)?,
+): ChatPageSubagents {
     val subagentLinks = remember(session?.subagents, chrome.onOpenSession, readOnly, key.machineId) {
         val listed = session?.subagents.orEmpty()
         if (listed.isEmpty()) null
@@ -434,11 +437,15 @@ internal fun rememberChatPageSubagents(key: SessionKey, chrome: ChatChromeBindin
     // A Workflow call draws its run's card (#3435): the session's runs by the call that launched them, their agents
     // opening as "View sub-agent" does. What the reader opens or folds in them lasts while this chat is open.
     val workflowFolds = remember(key) { persona.core.designsystem.WorkflowFolds() }
-    val workflowCards = remember(session?.workflows, chrome.onOpenSession, readOnly, key.machineId, workflowFolds) {
+    val background = rememberUpdatedState(openBackground)
+    val hasBackgroundAction = openBackground != null
+    val workflowCards = remember(session?.workflows, chrome.onOpenSession, readOnly, key.machineId, workflowFolds, hasBackgroundAction) {
         val open = chrome.onOpenSession?.takeIf { !readOnly }
         session?.workflows.orEmpty().filter { !it.toolUseId.isNullOrBlank() }.associateBy { it.toolUseId!! }
             .takeIf { it.isNotEmpty() }
-            ?.let { runs -> ChatWorkflows(runs, workflowFolds, open?.let { o -> { agent -> o(SessionKey(key.machineId, agent.sessionId)) } }) }
+            ?.let { runs -> ChatWorkflows(runs, workflowFolds,
+                open?.let { o -> { agent -> o(SessionKey(key.machineId, agent.sessionId)) } },
+                if (hasBackgroundAction) ({ run -> background.value?.invoke(BackgroundDestination.Run(run.backgroundId())) }) else null) }
     }
     return ChatPageSubagents(subagentLinks, subagentFolds, workflowCards)
 }

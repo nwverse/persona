@@ -336,6 +336,7 @@ var rpcFailureKeys = map[string]string{
 	"agent_stopped":      "rpc-errors.agent_stopped",
 	"resume_not_allowed": "rpc-errors.resume_not_allowed",
 	"stop_not_saved":     "rpc-errors.stop_not_saved",
+	"omp_options":        "rpc-errors.omp_options",
 	// a message to an omp session the node cannot resume: no usable session file (node/ompresume.go)
 	"omp_resume_unknown": "rpc-errors.omp_resume_unknown",
 	// a call a stopped omp has nothing to answer with: rename, interrupt, modes, queue, close (node/ompcalls.go)
@@ -521,13 +522,13 @@ func Summary(l i18n.Lang, code string, data map[string]any) string {
 }
 
 // Sentence is the plain words in l of code, one of the refusals the hub words itself ("" for any other): a start refused
-// on its request with nothing to name (readonly_unsupported, directory_untypable) as it is, and codeActions' by their
+// on its request with nothing to name as it is, and codeActions' by their
 // data: machine_name (else "this computer"), launcher, and of a start the new tab's shell could not run (where
 // "terminal", node/shellmiss.go) what it could not run (missing, kind), that shell (pane_shell) and the shell and rc
 // file the launchers are listed in (launcher_shell, rc_file). What a 409 says, and a session's start_error.
 func Sentence(l i18n.Lang, code string, data map[string]any) string {
 	switch code {
-	case "readonly_unsupported", proto.CodeDirectoryUntypable: // the request refused, with nothing to name
+	case "readonly_unsupported", proto.CodeDirectoryUntypable, "omp_options": // refusal needs no request parameters
 		return i18n.T(l, rpcFailureKeys[code])
 	}
 	if code == proto.CodeShellWaiting || code == proto.CodeStartLineRejected { // a start's new tab (node/shellsettle.go, #2570)

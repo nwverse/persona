@@ -1,4 +1,6 @@
 [
+  "starred.count",
+  "starred.title",
   "agent-goal.plan_",
   "agent-mark",
   "agentmenus.archive",
@@ -338,7 +340,7 @@
   "lib-mentions",
   "lib-mermaid",
   "lib-mesh",
-  "lib-model-config",
+  "lib-model-config.runtime_fallback",
   "lib-new-agent",
   "lib-node-actions",
   "lib-node-palette",

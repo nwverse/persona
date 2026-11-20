@@ -349,6 +349,8 @@
     <string name="agents_model_retry">重试</string>
     <string name="agents_model_sheet_note">「%1$s」里 %2$s 的模型，和在终端里输入 /model 看到的一样。只用于这次启动。</string>
     <string name="agents_model_sheet_note_provider">「%1$s」提供的模型。只用于这次启动。</string>
+    <string name="agents_model_sheet_note_omp">为「%1$s」的这次启动选择模型或输入模型 ID。</string>
+    <string name="agents_model_omp_machine_default">这台电脑上 omp 的默认模型</string>
     <string name="agents_model_configured">模型配置：%1$s</string>
     <string name="agents_new_error_pending">上次启动的结果待确认，请核对结果</string>
     <string name="agents_new_error_record">读不出启动记录。关掉再试一次</string>

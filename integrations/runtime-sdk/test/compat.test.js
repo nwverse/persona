@@ -37,6 +37,20 @@ test('compat environment and existing root do not create an empty store', (t) =>
   assert.equal(stateDir(home, { PERSONA_HOME: legacy }), legacy)
 })
 
+test('assistant and health workspaces recognize manager IDs only under a state root', () => {
+  const home = '/example'
+  const env = { PERSONA_HOME: '~/profile' }
+  for (const name of ['assistant', 'health', 'assistant-m-01aef', 'health-m-f0']) {
+    for (const root of ['.persona', '.jarvis', 'profile']) {
+      assert.equal(isAssistantDir(join(home, root, name), home, env), true)
+    }
+    assert.equal(isAssistantDir(join(home, 'project', name), home, env), false)
+  }
+  for (const name of ['assistant-bin', 'assistant-hooks', 'assistant-m-', 'health-m-AF', 'assistant-m-0g', 'health-m-a\n']) {
+    assert.equal(isAssistantDir(join(home, '.persona', name), home, env), false)
+  }
+})
+
 test('compat websocket selects only a protocol actually offered and still checks token', () => {
   for (const protocol of ['persona-runtime.v1', 'jarvis-runtime.v1']) {
     const req = { method: 'GET', headers: { authorization: 'Bearer secret', upgrade: 'websocket', 'sec-websocket-key': 'test', 'sec-websocket-version': '13', 'sec-websocket-protocol': protocol } }
