@@ -6,11 +6,11 @@ import (
 )
 
 // TestDistBudget bounds what personad, persona-node and persona-manager embed of the runtime packages: every file
-// Generate writes from integrations/. Measured 161,129 B on 2026-11-17 for the DSH, pi, Antigravity and Paseo runtimes
-// and the Claude Code plugin (#9799); the budget is that plus the 5,244 B of headroom main had. Raise it only for code a
-// runtime needs, never to embed the packages raw again.
+// Generate writes from integrations/. Measured 173,369 B with the macOS Antigravity Desktop companion (#11172)
+// included in the Antigravity runtime package. Keep the existing 5,244 B of headroom.
+// Raise it only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 166_373
+	const budget = 178_613
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

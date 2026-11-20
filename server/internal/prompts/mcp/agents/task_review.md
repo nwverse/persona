@@ -1,4 +1,4 @@
-accepted closes the task unless user_check: keep it and its Agent open until the owner's Pass; feedback returns to that Agent. Terminals stay by default. With owner opt-in at task start, outcome done may close its original idle tab after saved acceptance. Report cleanup closed/skipped/pending; never close it yourself or ask again. rework sends gaps twice at most; a third needs a complete owner decision. Stopped Agents are read-only: replace with agent_start. External waits use parked with source evidence. Only answerable owner-only decisions use needs_user, with all decision fields and the recommended option first. Otherwise act, rework or close.
+accepted closes the task; user_check keeps it and its Agent open until owner Pass, with feedback to that Agent. Terminals stay unless the owner opted in at Start; accepted done may close its idle tab once saved. Report cleanup closed/skipped/pending; leave cleanup to the hub. rework sends gaps twice at most; a third requires a complete owner decision. Replace a stopped read-only Agent with agent_start. External waits use parked with source evidence. Answerable owner-only decisions use needs_user: why_owner, reason, recommend, 2–4 options (recommended first, each with leads_to), cost_of_waiting. Otherwise act within your authority, rework or close.
 
 accepted with outcome done (default) and current done_when requires every criterion exactly once in checks, met=true with nonblank evidence. Refuse missing/duplicate/unknown/unmet checks before writing; user_check cannot bypass this. outcome cannot, cancelled and no-criteria tasks are unchanged. Other verdicts may omit checks without erasing progress. Report each criterion as met, not met or dropped (logged scope change), then also_done. Judge the scoped brief, not a later handover or the Agent's word; review every task supervision asks you to.
 
@@ -114,11 +114,12 @@ A non-main conversation reviewing another supervisor's task may only accept/canc
         "kind": {
           "type": "string",
           "enum": ["person_reply", "merge_review", "external_event", "date"],
-          "description": "parked: person_reply (a sent request to a person), merge_review (a sent request for review of a ready PR/MR), external_event (an observable outside event), or date"
+          "description": "parked wait kind: person_reply, merge_review, external_event or date"
         },
         "target": {"type": "string", "maxLength": 200, "description": "the named person/reviewer or external object"},
         "wake": {"type": "string", "maxLength": 600, "description": "the observable change that ends this wait"},
-        "url": {"type": "string", "maxLength": 2000, "description": "required for merge_review (ready PR/MR link) and external_event (observable object URL); omit for person_reply and date"},
+        "url": {"type": "string", "maxLength": 2000, "description": "merge_review/external_event source URL; omit otherwise"},
+        "interaction_id": {"type": "string", "maxLength": 200, "description": "external_event only: exact pending interaction ID of this task's worker, from agents_list; the hub verifies and shows that existing request, never a new card"},
         "contact": {
           "type": "object",
           "required": ["channel", "url", "sender", "sent_at", "request", "status"],
@@ -149,7 +150,7 @@ A non-main conversation reviewing another supervisor's task may only accept/canc
           "description": "person_reply: exact IDs from a configured lark-cli reader, never names. contact.url must be the sent request's matching topic AppLink. A verified reply asks the current supervisor to review, not direct Agent delivery"
         }
       },
-      "description": "required for parked. Inspect the source receipt: this records your attestation, not a provider check. Do not supply recorded_by (current conversation, server-authored/output only). Legacy missing evidence is unrecorded, not verified"
+      "description": "required for parked: source-backed evidence you inspected. recorded_by is server-authored/output only. Missing legacy evidence is unverified"
     }
   }
 }

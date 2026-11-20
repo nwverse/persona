@@ -10,6 +10,7 @@ import {
   reachMessage, replyInThread, reviewLabel, startsGroup, type ThreadChat, type ThreadMedia, type ThreadMessage, type ThreadPage,
 } from "../../lib/connectors";
 import { connectorReference, itemPath, itemRequest, shortTime, tightCJK, withToken, type InboxItem } from "../../lib/inbox";
+import { atNewest } from "../../lib/lark-history";
 import { defaultManager, useItemManager, withManager } from "../../lib/manager-choice";
 import { openLink } from "../../lib/links";
 import { t } from "../../i18n";
@@ -18,7 +19,7 @@ import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
 import { ImageViewer } from "../chat/ImageViewer";
 import { scrollBehavior } from "../../ui/stream/motion";
-import { Monogram } from "./InboxParts";
+import { Monogram, useFollowEnd } from "./InboxParts";
 import { LarkInboxContent } from "./LarkInboxContent";
 import { ConnectorReadNotice, ConnectorReplyTarget, conversationFailure, type ConversationFailure } from "./ConnectorReadNotice";
 
@@ -336,13 +337,22 @@ function ChatThread({ id, page, older, onOlder, onReach, onSend }: {
   const last = page.messages[page.messages.length - 1]?.id;
   const group = page.chat.kind !== "dm";
   const headline = chatHeadline(page.chat);
+  // Where the last scroll left the list (atNewest), and whether a quote's jump holds it.
+  const atEnd = useRef(true);
+  const away = useRef(false);
   // At the newest message on open and when one comes in (an older page leaves the scroll where it was).
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    atEnd.current = true;
   }, [last]);
+  // At its newest message the list keeps it in view (the keyboard, a longer answer, a picture loading); a quote's jump
+  // and an older page asked for are left alone.
+  useFollowEnd(scroller, () => atEnd.current && !away.current);
   // To the quoted message once it is drawn: centred, without the smooth scroll when the user asks for less motion.
   useEffect(() => {
+    away.current = flash !== null;
     if (!flash) return;
     const row = [...(scroller.current?.querySelectorAll<HTMLElement>("[data-mid]") ?? [])].find((el) => el.dataset.mid === flash.id);
     row?.scrollIntoView?.({ block: "center", behavior: scrollBehavior() });
@@ -357,9 +367,15 @@ function ChatThread({ id, page, older, onOlder, onReach, onSend }: {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {headline && <p className="shrink-0 truncate border-b border-line px-4 py-1.5 text-center text-[12px] text-ink-3 tabular-nums">{headline}</p>}
-      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scroller} onScroll={(e) => {
+        atEnd.current = atNewest(e.currentTarget);
+      }} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[760px] px-3 py-3 sm:px-5">
-          {page.before && <OlderButton busy={older} onClick={onOlder} />}
+          {page.before && <OlderButton busy={older} onClick={() => {
+            // asking for older messages leaves the end, even in a thread short enough to show it
+            atEnd.current = false;
+            onOlder();
+          }} />}
           {!page.messages.length && <p className="py-10 text-center text-[12.5px] text-ink-3">{t("inbox-connectorthread.empty")}</p>}
           {page.messages.map((m, i) => (
             <Bubble key={m.id} id={id} m={m} head={startsGroup(m, page.messages[i - 1])} group={group} lit={flash?.id === m.id}

@@ -459,6 +459,8 @@ export interface Session {
   /** An assistant conversation moved out of the list (docs/assistant/assistant.md "Managing its own conversations"), or
    *  an archived agent (docs/protocol/protocol.md "Agent session archives": only the Archived list has those). */
   archived?: boolean;
+  /** Manager-owned visibility policy; recording and direct session access remain available. */
+  hidden_by_directory?: boolean;
   /** The user-defined labels of an assistant conversation (docs/assistant/assistant.md "Conversation tags"), newest
    *  write first's provenance aside; omitted when it carries none. An older hub never sends it. */
   tags?: string[];
@@ -861,6 +863,13 @@ export interface SessionChildren {
   sides_unread?: number;
 }
 
+export const SESSION_REVIEW_FEATURE = "session_review";
+export const SESSION_REVIEW_TOOL = "persona_session_review";
+
+export function isSessionReview(ix: Pick<Interaction, "kind" | "tool_name">): boolean {
+  return ix.kind === "question" && ix.tool_name === SESSION_REVIEW_TOOL;
+}
+
 export interface Interaction {
   id: string;
   /** The manager it belongs to (docs/protocol/protocol.md "Per-manager routing"); none: the default one. */
@@ -879,7 +888,13 @@ export interface Interaction {
   tool_input?: Record<string, unknown>;
   /** The outgoing text the server lets the user edit before Allow, only for a Claude Code Lark send/reply card. */
   editable_text?: string;
+  /** Script asks opt into Markdown for their summary or question; absent and unknown values stay plain (#10857). */
+  format?: "markdown" | (string & {});
   summary?: string;
+  /** A finished independent session review's finding count, full report, and hidden reviewer (#1808). */
+  review_count?: number;
+  review_report?: string;
+  reviewer_session_id?: string;
   screen?: string;
   secret?: boolean;
   dialog?: ScreenDialog;

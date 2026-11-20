@@ -67,6 +67,7 @@ const CodeDeliveryUnknown = "delivery_unknown"
 // (docs/protocol/protocol.md "hub ↔ node"), passed through by the hub's device.call like the others.
 const (
 	// DeviceAssistantPrepare: {dir, claude_md, connectors, clis, plugin_skills} → {cwd, plugin_skills_need}.
+	DeviceAssistantDirectory = "assistant.directory" // {path} -> {cwd}; validates an existing directory without writes
 	DeviceAssistantPrepare   = "assistant.prepare"
 	DeviceAssistantExecution = "assistant.execution" // {session_id} → proto.AssistantExecution
 	// DeviceAssistantGuestPrepare: {dir, claude_md} → {cwd}: a guest conversation's directory (assistant/guest.go), only
@@ -101,13 +102,17 @@ const ConfigDirClaudeOnly = "config_dir is only supported for Claude assistant c
 
 // StartParams is assistant.start's params.
 type StartParams struct {
-	Text           string        `json:"text"`
-	Images         []proto.Image `json:"images,omitempty"`
-	Launcher       string        `json:"launcher,omitempty"`
-	Model          string        `json:"model,omitempty"`      // the first message's model, picked as a message's is (#5033)
-	ConfigDir      string        `json:"config_dir,omitempty"` // Claude profile on the target machine; "" private, "legacy" old resolution, "default" unset
-	PermissionMode string        `json:"permission_mode,omitempty"`
-	Effort         string        `json:"effort,omitempty"`
+	TaskModel           *ModelBinding `json:"-"`
+	Cwd                 string        `json:"-"` // internal scheduled task directory; validated on the target computer
+	TaskExecution       bool          `json:"-"` // refuse execution substitutions
+	LegacyTaskExecution bool          `json:"-"` // an unconfigured scheduled turn may use an older node
+	Text                string        `json:"text"`
+	Images              []proto.Image `json:"images,omitempty"`
+	Launcher            string        `json:"launcher,omitempty"`
+	Model               string        `json:"model,omitempty"`      // the first message's model, picked as a message's is (#5033)
+	ConfigDir           string        `json:"config_dir,omitempty"` // Claude profile on the target machine; "" private, "legacy" old resolution, "default" unset
+	PermissionMode      string        `json:"permission_mode,omitempty"`
+	Effort              string        `json:"effort,omitempty"`
 	// ServiceTier: the native speed for a new Codex conversation, acknowledged before its first turn. Independent of Effort.
 	ServiceTier string `json:"service_tier,omitempty"`
 	Purpose     string `json:"purpose,omitempty"`    // the model configuration's purpose; "" is the main chat's
@@ -117,6 +122,9 @@ type StartParams struct {
 	Space string `json:"space,omitempty"`
 	// Main: it becomes the main conversation (what the old one left goes before Text).
 	Main bool `json:"main,omitempty"`
+	// Public: the first message answers in someone else's chat. It suppresses the owner's live snapshot for this turn
+	// only; never over the bus or accepted from an app's conversation-start request.
+	Public bool `json:"-"`
 	// Untitled: not one of the conversations it names and lists as its own (the inbox's AI twin: its result is the
 	// draft in the inbox).
 	Untitled bool `json:"untitled,omitempty"`
@@ -135,9 +143,8 @@ type StartParams struct {
 	// ClientMsgID: the first message's client_msg_id (with NewSessionID: the node sends it once and its transcript
 	// item carries it, as a send's; without, the node ties it to the new conversation's first line). Never over the bus.
 	ClientMsgID string `json:"-"`
-	// Human: a person's own app opens it, as the hub vouched (HTTPRequest.Human): its first message gets a
-	// client_msg_id (FirstMessageIDPrefix) and counts as theirs, as a send the hub vouched for does (SendParams.Human).
-	// Never over the bus.
+	// Human attributes the first message to an app start vouched for by the hub. It is used for missing replies.
+	// The node adds no client message ID to that input. Never over the bus.
 	Human bool `json:"-"`
 }
 
@@ -158,6 +165,12 @@ type SendParams struct {
 	// the manager's own sends (channels, the inbox, meetings) never set it, and an older hub never sends it. A hand-off's
 	// Always rule spares the card only for a turn of such messages (assistant secret_handoff.go).
 	Human bool `json:"human,omitempty"`
+	// VerbatimText is internal-only: an approval clarification keeps the owner's
+	// exact question instead of expanding workspace mentions or main-chat handoff.
+	VerbatimText bool `json:"-"`
+	// ReplyInput is a direct app send authenticated by the hub's legacy owner credential. It only qualifies for
+	// missing-reply recovery. Internal sends and other roles cannot set it, and it does not authorize a hand-off.
+	ReplyInput bool `json:"reply_input,omitempty"`
 }
 
 // KeepUndeliveredParams is assistant.keep_undelivered's params. Params are the app's message as it came (text, images,

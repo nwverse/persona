@@ -434,6 +434,18 @@ activation. One exact owned machine must be covered; additional machines fail cl
 After candidate checks, the publisher reads authority again and binds the fresh real digest
 to the activation plan. A maintenance window alone never establishes idle state.
 
+A newly created manager can instead have no main or machine yet. Its private target has both
+`main` and `machine_id` as empty strings. The publisher accepts this only while two complete
+Hub reads confirm empty ownership and no conversation state, and passes an explicit
+`unassigned` inventory plan with all three identity flags deliberately empty. The CLI reads
+the selected manager's own database twice, binding the existing empty row's revision. It
+produces two complete empty-runtime inventories without dialing a node or inventing an identity.
+An absent settings row, failed read, malformed settings object or identity field, partial
+identity, missing existing-row revision, runtime row, background activity, changed revision,
+owned machine, or newly assigned main/machine fails closed. No settings row or identity is
+created. An empty display list alone is not evidence. Candidate checks and the final pre-start
+authority read are the same as for a populated manager.
+
 ### Confirmation and recovery
 
 The formal artifact is staged in the manager's own `.manager-updates/<run-id>` directory.
@@ -543,6 +555,8 @@ Each manager's assistant runs its conversations in a directory of its own on a c
 | Another (`m-…`) | `~/.persona/assistant-<id>` | `~/.persona/health-<id>` |
 
 Under a custom `PERSONA_HOME` they are in that root instead of `~/.persona`. The manager names them when it prepares one (`assistant.prepare`, `internal/identity` `AssistantDirName` / `HealthDirName`). The node knows any manager's (`IsAssistantDir`: `assistant`, `health`, and the same with `-m-<hex>`; `assistant-bin` and the like are not), and keeps every manager's health space from the conversations outside it, another manager's health conversations included (a health conversation reads its own space only). The hub and each manager count a conversation as the assistant's only in the directories of the computer's manager (`IsAssistantDirOf`); the hub asks a computer for another manager's skills in that manager's directory. A computer that moved keeps the old manager's directories, which the new one does not read ("Moving a machine or a source").
+
+Every later message and every resume of a conversation runs in the directory it started in: such a message names no folder (`session.send`, the manager's next `assistant.send`, a recovery), so the node takes the one its start record names, and never the built-in manager's `~/.persona/assistant` for another manager's conversation, which would leave it without its manager's instructions and assistant tools (#11047).
 
 The node lists an assistant or health conversation in the directory it started in, not where the model's last `cd` left it (#2368: a `cd` into `.claude/skills/<skill>` had one listed as an agent): its start record, else the transcript's first `cwd`, else its own project directory's name. The other way round, an agent whose `cd` landed in an assistant or health directory itself (one started in the home directory) is listed where it started, so only a conversation that started there is ever listed in one. The hub and the managers keep counting only exact directories (`IsAssistantDirOf`), not anything inside them: a conversation the user runs in a subfolder is theirs, not the assistant's. An older node's rows at rest may still drift until the node is updated; health cards are kept off the lock screen and the channels for every node version (the manager places a card of its conversation in the conversation's directory, `placeCard`).
 
