@@ -261,15 +261,34 @@ func TestTodoViewRoutesStayOnTheirManager(t *testing.T) {
 func TestExtensionSelfMarketRefreshStaysOnTokenManager(t *testing.T) {
 	_, url, a, b := reachHub(t)
 	beforeA, beforeB := len(reached(a)), len(reached(b))
-	if code, out := extDo(t, url, http.MethodPost, "/api/v1/extensions/-/self/market/refresh", "", nil); code == 0 {
-		t.Fatalf("own-manager self refresh: %s", out)
+	// guardManager answers RPCs but does not take an HTTP relay. Stop after the dispatch this test is about; the real
+	// manager's immediate 202 and its background read are covered in extmgr.
+	const path = "/api/v1/extensions/-/self/market/refresh"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url+path, strings.NewReader(""))
+	req.Header.Set("Authorization", "Bearer "+extTokenPrefix+"bx-token")
+	req.Header.Set("Content-Type", "application/json")
+	answered := make(chan error, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			err = resp.Body.Close()
+		}
+		answered <- err
+	}()
+	eventually(t, 5*time.Second, "the token manager's self refresh", func() bool { return len(reached(b)) > beforeB })
+	cancel()
+	select {
+	case <-answered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the cancelled self refresh did not return")
 	}
 	if got := reached(a)[beforeA:]; len(got) != 0 {
 		t.Fatalf("the other manager received the self refresh: %v", got)
 	}
 	calls := reached(b)[beforeB:]
-	if len(calls) != 1 || !strings.Contains(calls[0], extwire.MethodAccept) ||
-		!strings.Contains(calls[0], "/api/v1/extensions/-/self/market/refresh") {
+	if len(calls) != 1 || !strings.HasPrefix(calls[0], extwire.MethodAccept+" ") {
 		t.Fatalf("the token owner's manager did not receive exactly one self refresh: %v", calls)
 	}
 	for _, tc := range []struct {
