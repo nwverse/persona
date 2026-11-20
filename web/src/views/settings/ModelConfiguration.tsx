@@ -13,25 +13,21 @@ import {
 import { ASSISTANT_MODEL_PICK_FEATURE, mainChatAgentMismatch } from "../../lib/assistant-models";
 import { SUPERVISE_PURPOSE } from "../../lib/background-supervisor";
 import type { AssistantLaunchers } from "../../lib/session-models";
-import { effortChoices, providerModels, takesEffort } from "../../lib/launcher-models";
+import { effortChoices, takesEffort } from "../../lib/launcher-models";
 import { useStore } from "../../lib/store";
 import { formatTokens } from "../../lib/tokens";
 import { formatNumber, t } from "../../i18n";
 import { Button, Dialog, IconButton, Loading, toast } from "../../ui/atoms";
 import { Segmented } from "../assistant/parts";
 import { Icon } from "../../ui/icons";
-import type { ModelList } from "../../ui/ModelPicker";
-import { lazyPage } from "../../lib/lazy-page";
 import { Group, Pill, Row } from "./SettingsParts";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { ConfigurationManager } from "./ConfigurationManager";
 import { DirectAPIEditor, DirectEffortSelect, directEffortState } from "./DirectAPIEditor";
+import { ModelPicker, useLauncherModels } from "./ModelBindingPickers";
 import { ModelProfiles } from "./ModelProfiles";
 import { candidateDraft, candidateProblem, candidateProviders, candidateUpdate, type CandidateDraft } from "../../lib/model-candidates";
 import { ExtensionCandidates } from "./ExtensionCandidates";
-
-// The picker is shared with task execution; load it when editing a model, outside Settings' preload dependencies.
-const ModelPicker = lazyPage(() => import("../../ui/ModelPicker").then((m) => m.ModelPicker));
 
 const UNVERIFIED_STATUS = "未验证"; // i18n-ignore: stable wire sentinel, not user-facing text.
 
@@ -87,7 +83,7 @@ function ModelConfigurationForManager({ manager, open, onOpen, onProviders }: { 
   return (
     <>
       <h2 className="mb-3 px-1 text-[15px] font-semibold text-ink">{t("settings-nav.tab_model_config")}</h2>
-      <ModelProfiles manager={manager} providers={data?.providers} onChanged={() => void load()} />
+      <ModelProfiles manager={manager} providers={data?.providers} purposes={data?.purposes} onChanged={() => void load()} />
       <div className="mb-4 flex items-center gap-2">
         <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-control bg-surface px-3 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
           <Icon name="search" size={13} stroke={2} className="text-ink-3" />
@@ -199,13 +195,8 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const [busy, setBusy] = useState(false);
   const [models, setModels] = useState<{ id: string; name?: string }[]>([]);
   const [modelsError, setModelsError] = useState("");
-  // A launcher provider's /model list (#943), from a machine that has it (`machine`), and the picker over it.
-  const [launcherList, setLauncherList] = useState<ModelList & { machine?: string; provider?: string }>({ status: "idle" });
   const [picking, setPicking] = useState(false);
   const [query, setQuery] = useState("");
-  // "Retry" / "Reload": the next load asks the CLI again (refresh) and keeps showing the list meanwhile, once.
-  const [reload, setReload] = useState(0);
-  const refreshNext = useRef(false);
   const search = useRef<HTMLInputElement>(null);
   const machines = useStore((s) => s.machines);
   const mainSession = useStore((s) => {
@@ -275,22 +266,11 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const effortAllowed = !!p && effortOffered(p, chosen, effectiveProvider, followsAgents,
     !!data?.providers.some((provider) => provider.chat_effort === true));
   const listProvider = p?.kind !== "plugin" && chosen?.kind === "launcher" && supportsField(p!, "model") ? chosen.id : "";
-  useEffect(() => {
-    const refresh = refreshNext.current;
-    refreshNext.current = false;
-    if (!refresh) { setPicking(false); setQuery(""); } // another provider: start closed; a refresh keeps the list open
-    if (!listProvider) { setLauncherList({ status: "idle" }); return; }
-    const controller = new AbortController();
-    // Another provider's list never stays up while this one's loads (a pick would be the other provider's id).
-    setLauncherList((l) => ({ status: "loading", provider: listProvider, list: refresh && l.provider === listProvider ? l.list : undefined }));
-    providerModels(listProvider, { manager, refresh, machine: p?.machine_id, signal: controller.signal })
-      .then((list) => setLauncherList({ status: "ready", list, machine: list?.machine, provider: listProvider }))
-      .catch((e) => { if (!controller.signal.aborted) setLauncherList({ status: "error", error: errorText(e), provider: listProvider }); });
-    return () => controller.abort();
-  }, [listProvider, reload, p?.machine_id]);
-  const reloadList = () => { refreshNext.current = true; setReload((n) => n + 1); };
-  // The picker while there is a list (or one coming); the plain field without one: an older hub, a failure.
-  const picker = launcherList.status === "loading" || (launcherList.status === "ready" && !!launcherList.list?.models.length);
+  const { list: launcherList, reload: reloadList, hasPicker: picker } = useLauncherModels(listProvider, {
+    manager,
+    machine: p?.machine_id,
+    onProviderChange: () => { setPicking(false); setQuery(""); },
+  });
   // Left empty, the model is inherited while the provider is too (what runs now when nothing here is set; with an
   // override, the category's); with a provider picked here it is that provider's default (the list's "Default").
   // An own record that names its parent's provider still inherits an empty model or effort from that parent. Another

@@ -103,9 +103,13 @@ type PlanTask struct {
 	Reroute *PlanReroute `json:"reroute,omitempty"`
 	// DoneWhen: what done means, criteria the supervisor checks before it accepts the work. ExpectMinutes is an optional
 	// override of the hub-selected estimate; EstimateSource records which automatic estimate the brief owns (#11685).
-	DoneWhen       []string `json:"done_when,omitempty"`
-	ExpectMinutes  int      `json:"expect_minutes,omitempty"`
-	EstimateSource string   `json:"estimate_source,omitempty"`
+	DoneWhen         []string              `json:"done_when,omitempty"`
+	ExpectMinutes    int                   `json:"expect_minutes,omitempty"`
+	EstimateSource   string                `json:"estimate_source,omitempty"`
+	EstimateEvidence *TaskEstimateEvidence `json:"estimate_evidence,omitempty"`
+	// EstimateCalibration is set only by task_plan and stored with the task.
+	// Direct owner starts and older plans have no calibration provenance.
+	EstimateCalibration bool `json:"estimate_calibration,omitempty"`
 	// The brief (#3822, task_brief.go): Goal is the work in one sentence (the title when left out), OutOfBounds what
 	// the agent must not do. Continues: the to-do this task carries on in (a retry on another computer or a rework
 	// round), for ContinuesWhy: it keeps that to-do and its brief instead of creating another. Brief is

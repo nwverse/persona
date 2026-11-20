@@ -1373,11 +1373,15 @@ Agents made no tool calls or how many calls only waited or repeated. It never qu
 often says the work is going fine.
 The option the owner takes on that decision, recommended or not, is recorded in the to-do's decisions. It goes to the
 task's supervising conversation as `check` with `report: decided`, the decision as asked and each option's result,
-not to the Agent at work. This covers the card, the push's OK, the to-do's accept route and `task_decided`. The Agent
-hears only what the supervisor then sends it, and the card says the choice went to the supervisor. An answer in the
-owner's own words still goes the ordinary way. Choosing another approach asks the supervisor for a proposal within
-existing permissions, not permission to spend, send or widen scope. The decision's 24-hour deadline only revisits it;
-the hub never applies the proposed strategy change by default. Existing notification preferences still apply.
+not to the Agent at work. This covers the card, the push's OK, the to-do's accept route, `task_decided` (whose reply
+says the choice went to the supervisor) and an exact option the owner names in the Agent's chat (#11747). The Agent
+hears only what the supervisor then sends it, and the card says the choice went to the supervisor. An answer already
+in the Agent's chat (named there, or `task_decided` with `told_agent`) tells the supervisor the Agent has it rather
+than "not told", and its card names the option without saying the Agent did not get it. An answer in the owner's own
+words still goes the ordinary way, to the Agent with no `check` signal, and its card says so. Choosing another
+approach asks the supervisor for a proposal within existing permissions, not permission to spend, send or widen
+scope. The decision's 24-hour deadline only revisits it; the hub never applies the proposed strategy change by
+default. Existing notification preferences still apply.
 For a worker supervised by a task-leader Agent, the conversation above that leader reviews the decision through
 its existing authority and receives the owner's option; the worker stays supervised by its leader.
 Another pending owner decision is never overwritten; a failed escalation is retried on a later assessment.

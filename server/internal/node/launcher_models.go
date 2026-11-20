@@ -86,6 +86,16 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 		return n.liveRuntimeModels(ctx, h, runtimeName, refresh, res)
 	}
 	agent := n.launcherModelsAgent(ctx, name, agentType)
+	if agent == ompAgent {
+		// omp accepts a typed model on a new herdr start, unless its launcher pins it.
+		res := proto.LauncherModels{Agent: agent, Models: []proto.AgentModel{}}
+		if err := n.checkOmpStartModel(ctx, name, modelCheckProbe); err != nil {
+			res.Locked = err.Error()
+		} else {
+			res.SupportsStartModel = true
+		}
+		return res, nil
+	}
 	if agent == agyAgent && (assistantLauncherPurpose(ctx) || n.startKind(ctx) == agyAgent) {
 		// The companion is unavailable on this path. Its catalog must stay separate from the pane's cached list.
 		return proto.LauncherModels{Agent: agyAgent, Models: []proto.AgentModel{}}, nil

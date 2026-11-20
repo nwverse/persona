@@ -657,7 +657,8 @@ record per piece of work, made when the work is handed out and never rewritten (
 | `goal` | the model | The work in one sentence (the task's title when a writable task gives none) |
 | `done_when`, `out_of_bounds` | the model | What done means and what the Agent must not do |
 | `expect_minutes` | the model, optional override | About how long it should take; omitted uses the hub's automatic estimate |
-| `estimate_source` | the hub | `system_default` for the initial 60-minute default, `override` for an explicit value; a dispatch records this on the brief's log |
+| `estimate_source` | the hub | `learned` for a comparable history estimate, `system_default` for the 60-minute default, or `override` for an explicit value. A dispatch records the source on the brief's log |
+| `estimate_evidence` | the hub | The automatic estimate's minutes, number of samples and chosen cohort. It accompanies a new plan and its recorded dispatch |
 | `reconstructed`, `handover` | the hub | A brief made later for a task from before briefs ("Backfill" below) |
 
 **Who asked.** The hub reads the conversation that made the tool call (its last three turns) and goes by the latest
@@ -758,8 +759,9 @@ sees it.
 
 **Required.** `task_plan` refuses a writable task (`readonly` false) without `done_when` (at least one criterion),
 and a read-only task without `goal`; the refusal names what is missing and nothing is planned. `expect_minutes` is an
-optional override, not a number the dispatching model must invent. With no override the hub assigns 60 minutes and
-records `system_default`; a positive override records `override`. The plan's task carries the brief (`tasks[i].brief`)
+optional override. The hub uses the median of recent accepted comparable rounds when it has enough examples.
+It records `learned` for that estimate, `system_default` when it uses 60 minutes, and `override` for an explicit value.
+The tool reports the estimate and its evidence. The plan's task carries the brief (`tasks[i].brief`)
 from the moment the plan is made, so the card can show the owner's words, the criteria and the time, and "Start"
 confirms them. The brief is kept when the task starts, dated from the start. Only `task_plan` dispatches create this
 automatic estimate: manually started terminal/herdr Agents, manual `agent_start`, adopted Agents and direct
@@ -768,6 +770,22 @@ and no calibration history. A continuation or reuse through `task_plan` is a new
 brief began as manual or legacy work. The web draws `tasks[i].brief` on the plan card and the to-do's `brief` and `lineage`
 on its page (the criteria stay in the page's one list, the ledger's; a finished task adds the dropped ones and
 `also_done` under it) (`docs/web/web.md`, "Pages": **A task's brief**); the iOS and Android plan cards and task pages do not yet.
+
+**How the estimate learns.** Persona groups work by its existing task kind, read-only mode, role and tier. It looks
+at the newest 256 accepted samples of that kind in the past 90 days, within one manager. It uses the most specific
+group with at least five samples, trying the same machine and repository, then the same machine, then the broader
+kind. The median uses up to the newest 32 values in that group and rounds up to the minute, capped at one day.
+When there are too few samples, the evidence says how many were available. Unavailable history also uses the default.
+
+A new dispatch from `task_plan` records the cohort once, including plans the owner starts from their card.
+Direct owner starts keep their existing brief behavior. An Agent must link successfully in the recorded cohort. The first recorded
+completion supplies wall-clock minutes from the dispatch. That duration becomes a sample only when the supervisor
+or its judge accepts the round. Reopening a to-do removes its prior round from learning. A manual re-close cannot
+reuse that acceptance. Canceled, unstarted, placement-changed and older rounds without a recorded cohort supply no samples. Health-space plans use the default and keep their work out of calibration.
+The next comparable plan checks up to 32 recent rounds whose review was accepted while the sample write was
+interrupted, and recovers them from the durable admission, completion and acceptance. It skips expired and
+reopened work. Estimates and their evidence are fixed on the plan. A continuation of an automatic brief inherits its current
+estimate unless given an override. The learned minutes run the same one-shot review clock.
 
 **Lineage.** A task that takes over from another gives `continues` (that task's to-do id) and `continues_why` in
 `task_plan`: a retry on another computer, a rework round, a new Agent after the first failed, a part split off. It
