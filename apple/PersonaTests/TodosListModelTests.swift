@@ -164,6 +164,13 @@ struct TodosListModelTests {
         #expect(list.row("/a")?.content.mark == .waiting)
         #expect(list.row("/a")?.arrivals == arrived + 1, "a re-filed row fades in")
         #expect(list.row("/b")?.arrivals == 1, "b faded in once, when it came to need the owner")
+        // In another group the row is a new view: it takes the fade as it appears, once, and only as the layout lands.
+        let a = try #require(list.row("/a"))
+        #expect(a.takeArrival(), "the view drawing a where it now is fades it in")
+        #expect(!a.takeArrival(), "once per re-filing")
+        let b = try #require(list.row("/b"))
+        let late = ProcessInfo.processInfo.systemUptime + TodosListModel.Row.arrivalWindow
+        #expect(!b.takeArrival(now: late), "a row first drawn later, scrolled into sight, appears as it is")
     }
 
     /// A row gone from the store while the list is held keeps its place and its words until the list rests: the rows

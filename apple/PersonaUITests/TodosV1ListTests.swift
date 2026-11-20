@@ -100,6 +100,10 @@ final class TodosV1ListTests: XCTestCase {
         guard let hub = env["PERSONA_TODOS_LATE_HUB"] else {
             throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_TODO_VIEW=late (PERSONA_TODOS_LATE_HUB)")
         }
+        // The mock's hellos from the start of their sequence, as a fresh mock's, also after an earlier run against it; no
+        // app of an earlier run connected to start it early.
+        XCUIApplication().terminate()
+        _ = try mock(try XCTUnwrap(URL(string: hub)), "GET", "mock/reset")
         // Nothing remembered from an earlier run: the first hello decides, and it lacks the view. The phone's own layout:
         // ☰ opens the drawer from any place.
         launch(hub, ["-hubTodoFeatures.", "0", "-probes", "YES"], layout: "separate")

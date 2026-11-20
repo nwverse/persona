@@ -36,6 +36,9 @@ final class TodosListModel {
         fileprivate(set) var content: TodoRowContent
         /// How many re-filings put it in another group: each fades it in where it now is (`TodoListRow`).
         fileprivate(set) var arrivals = 0
+        /// When the last re-filing put it there (the system's uptime), until its row takes the fade. A row in another
+        /// group is drawn by a new view, which starts with `arrivals` as it already is and so plays nothing by itself.
+        @ObservationIgnored fileprivate var arrivedAt: TimeInterval?
         /// What it will say once the list rests (nil: what it says is the latest).
         @ObservationIgnored fileprivate var waiting: TodoRowContent?
         /// What the content was worked out from: worked out again only when one of these or the clock changes.
@@ -55,6 +58,18 @@ final class TodosListModel {
             self.inputs = inputs
             self.content = content
         }
+
+        /// Whether the view drawing it fades in now: once per re-filing, and only as the new layout lands, so a row first
+        /// scrolled into sight later appears as it is. The row takes it as it appears, or as `arrivals` moves.
+        func takeArrival(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+            guard let at = arrivedAt else { return false }
+            arrivedAt = nil
+            return now - at < Self.arrivalWindow
+        }
+
+        /// How soon after the layout lands a row still takes its fade: the frames that draw the new layout, with room
+        /// for a busy main thread.
+        static let arrivalWindow: TimeInterval = 0.5
     }
 
     /// The bar's choice: All each time the list is made, never stored, so a remembered choice can't hide what needs the
@@ -238,7 +253,12 @@ final class TodosListModel {
     private func show(_ laid: TodosListLayout.Output, animated: Bool) {
         guard laid != layout else { return }
         if animated && !layout.groups.isEmpty {
-            for key in Self.moved(from: layout, to: laid) { cells[key]?.arrivals += 1 }
+            let now = ProcessInfo.processInfo.systemUptime
+            for key in Self.moved(from: layout, to: laid) {
+                guard let cell = cells[key] else { continue }
+                cell.arrivals += 1
+                cell.arrivedAt = now
+            }
         }
         layout = laid
     }

@@ -9,6 +9,8 @@ import SwiftUI
 struct TodoListRow: View {
     var row: TodosListModel.Row
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The fades this view has played: a re-filing's, taken from its row (`TodosListModel.Row.takeArrival`).
+    @State private var fades = 0
 
     var body: some View {
         let c = row.content
@@ -28,7 +30,7 @@ struct TodoListRow: View {
             .padding(.vertical, Theme.Space.s)
         }
         // A re-filing that put it in another group: it fades in where it now is (proposal 3.9), still with Reduce Motion.
-        .keyframeAnimator(initialValue: 1.0, trigger: row.arrivals) { view, opacity in
+        .keyframeAnimator(initialValue: 1.0, trigger: fades) { view, opacity in
             view.opacity(opacity)
         } keyframes: { _ in
             if reduceMotion {
@@ -38,6 +40,10 @@ struct TodoListRow: View {
                 LinearKeyframe(1, duration: Theme.Motion.concealTime, timingCurve: Theme.Motion.concealCurve)
             }
         }
+        // There it is a new view (another section's), so it takes the fade as it appears; a view kept takes it as the
+        // row's count moves.
+        .onAppear { if row.takeArrival() { fades += 1 } }
+        .onChange(of: row.arrivals) { if row.takeArrival() { fades += 1 } }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(c.spoken)
         .accessibilityIdentifier("todos.row." + row.todoID)

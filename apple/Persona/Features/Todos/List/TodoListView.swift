@@ -34,7 +34,8 @@ struct TodoListView: View {
     private var shownHere: Bool { builtTree == nil || shownTree?.tree === builtTree }
 
     /// iOS 26 pins the bar over the list, which scrolls under it behind the scroll edge's effect. iOS 18 has no such
-    /// effect to draw behind a pinned bar: the bar is the list's first row there, as the Inbox's (#10465 review).
+    /// effect to draw behind a pinned bar: the bar is the list's first row there, as the Inbox's (DESIGN_SYSTEM 3.4,
+    /// "To-dos list").
     private static var pinsBar: Bool {
         if #available(iOS 26.0, *) { true } else { false }
     }
