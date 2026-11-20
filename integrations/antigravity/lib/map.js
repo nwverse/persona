@@ -4,6 +4,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { basename, join } from 'node:path'
 import { appToolName, clipInput, light, snippet } from '../../runtime-sdk/index.js'
+import { isImageReference } from './media.js'
 
 export const RUNTIME = 'agy'
 export const LABEL = 'Antigravity'
@@ -151,7 +152,7 @@ export function cleanGenericOutput(content) {
 /**
  * Parse a transcript.jsonl file (or array of parsed step objects) into Persona items.
  * @param {object[]} steps
- * @param {{ brainDir?: string, full?: boolean }} [opts]
+ * @param {{ brainDir?: string, full?: boolean, includeMedia?: boolean, mediaItemId?: string }} [opts]
  */
 export function stepsToItems(steps, opts = {}) {
   const items = []
@@ -160,6 +161,7 @@ export function stepsToItems(steps, opts = {}) {
   let lastText = ''
   let turnError
   let afterWork = false
+  let media
 
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i]
@@ -255,8 +257,15 @@ export function stepsToItems(steps, opts = {}) {
           ts,
         }
         items.push(opts.full ? resItem : light(resItem))
-        // Omit tool-result step.media: Antigravity runtimes have no session.image handler (matching agytranscript.go),
-        // and Read/view_file image thumbnails are already resolved from tool_input.file_path via ViewedImages.
+        if (opts.includeMedia === true && Array.isArray(step.media)) {
+          for (const [index, entry] of step.media.entries()) {
+            if (!isImageReference(entry)) continue
+            const id = `${line}#media${index}`
+            items.push({ id, seq, role: 'assistant', kind: 'image', tool_use_id: callId, ts,
+              image: { mime: entry.mime_type, data: '', lazy: true } })
+            if (opts.mediaItemId === id) media = entry
+          }
+        }
         break
       }
       case 'PERSONA_MODE_NOTICE': {
@@ -277,7 +286,7 @@ export function stepsToItems(steps, opts = {}) {
     }
   }
 
-  return { items, toSeq: maxSeq, lastText, turnError }
+  return { items, toSeq: maxSeq, lastText, turnError, ...(media ? { media } : {}) }
 }
 
 const transcriptCache = new Map()

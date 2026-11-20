@@ -12,6 +12,69 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+func TestSupervisionBatchManagerConfigOverridesSavedSettings(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeHub().withMachine()
+	f.settings = &Settings{SupervisionBatchMinutes: ptr(60)}
+	s := newTestService(t, f)
+	pin := func(minutes *int) {
+		f.mu.Lock()
+		f.hello.Assistant.SupervisionBatchMinutes = minutes
+		f.mu.Unlock()
+	}
+	if got := supervisionBatchMinutesOf(s.settings(ctx)); got != 60 {
+		t.Fatalf("unset manager pin = %d, want saved setting 60", got)
+	}
+	pin(ptr(45))
+	if got := supervisionBatchMinutesOf(s.settings(ctx)); got != 45 {
+		t.Fatalf("manager-pinned effective setting = %d, want 45", got)
+	}
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/assistant", nil))
+	var view map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK || view["supervision_batch_minutes"] != float64(45) {
+		t.Fatalf("manager-pinned API view: %d %+v", rec.Code, view)
+	}
+	readback := s.Tool(ctx, ToolCall{Name: "persona_settings", Arguments: json.RawMessage(`{"action":"get","key":"assistant.supervision_batch_minutes"}`), MachineID: "server", SessionID: "conv1"})
+	if readback.IsError || len(readback.Content) != 1 || readback.Content[0].Text != "45" {
+		t.Fatalf("manager-pinned persona_settings readback: %+v", readback)
+	}
+	if len(s.pendingQuestions()) != 0 {
+		t.Fatal("reading a manager pin created an approval card")
+	}
+	pin(ptr(0))
+	if got := supervisionBatchMinutesOf(s.settings(ctx)); got != 0 {
+		t.Fatalf("explicit manager zero = %d, want immediate delivery", got)
+	}
+	pin(nil)
+	if got := supervisionBatchMinutesOf(s.settings(ctx)); got != 60 {
+		t.Fatalf("removing the manager pin = %d, want saved setting 60", got)
+	}
+}
+
+func TestSupervisionBatchManagerConfigZeroReleasesHeldDigest(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	shortSupervise(t, s)
+	f.mu.Lock()
+	f.hello.Assistant.SupervisionBatchMinutes = ptr(60)
+	f.mu.Unlock()
+	routine := superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "manager-release-on-zero", Minutes: 50}
+	s.queueSignal(routine)
+	waitFor(t, "a manager-pinned held batch", func() bool {
+		s.supervise.mu.Lock()
+		defer s.supervise.mu.Unlock()
+		return !s.supervise.pending[routine.id()].batchUntil.IsZero()
+	})
+	f.mu.Lock()
+	f.hello.Assistant.SupervisionBatchMinutes = ptr(0)
+	f.mu.Unlock()
+	s.ProfileChanged(context.Background())
+	waitFor(t, "the held digest after the manager pin is reloaded as zero", func() bool { return len(assistantSendsTo(f, "conv1")) == 1 })
+}
+
 func TestSupervisionBatchSettingsDefaultsAndView(t *testing.T) {
 	s := newTestService(t, newFakeHub().withMachine())
 	rec := httptest.NewRecorder()

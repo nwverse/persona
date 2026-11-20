@@ -579,7 +579,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - Launcher health in New Agent (#1643, `docs/server/launcher-health.md` "In the App"): `MOCK_LAUNCHER_HEALTH=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` gives every computer's launcher list `work_gw` blocked as not in the terminal and `team_gw` blocked on its key (claude checked fine),
   a start that runs `work_gw` fails with the hub's coded sentence, and `macbook/f1643000-0000-4000-8000-000000000001` is a chat that already failed so. `MOCK_LAUNCHER_HEALTH=default` also makes `work_gw` Model Settings' New Agent default.
   `MOCK_LANG=en|ja` writes the hub's start-failure sentence in that language (from the hub's own catalogs; default zh-Hans), for screenshots in that language. With `MOCK_TERMINAL_PANES=1` the computers have free shells for Run Agent Here.
-- Hidden Agent folders (#8578, `docs/protocol/protocol.md` "Agent directory visibility"): every mock serves `GET`/`PUT /api/v1/machines/{mid}/agent-dirs/hidden`; rows whose `cwd` an enabled rule matches carry `hidden_by_directory` (bounded lists leave them out unless `include_hidden=1`), and a change pushes that computer's rows and replays its pending cards, which never leave the inventory. `GET /mock/agent_dirs_fail?n=<count>` makes the next reads answer 503. `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/HiddenAgentDirsUITests` hides Mac Studio's `~/code/photo-sync` (one Agent with three cards), checks the list and Needs You, the Agents menu's Show hidden sessions / Hide directory matches, a relaunch with the rule on, the settings page (picker, rules, inline error, load failure and Retry), switching the rule off and allowing the returned approval, then opens Blocked Config Folders. It answers that approval, so restart the mock before each run; `TEST_RUNNER_PERSONA_LOOKS=light|dark|ax5` picks the looks (set the simulator's text size with `simctl ui <udid> content_size` for `ax5`) and `TEST_RUNNER_PERSONA_SHOTS=<directory>` keeps `hidden-dirs-<look>-<step>.png`.
+- Agent folders (#8578, #10053, `docs/protocol/protocol.md` "Agent directory visibility"): every mock serves `GET`/`PUT /api/v1/machines/{mid}/agent-dirs/hidden`; rows whose `cwd` an enabled hide rule matches (a rule without an `action` hides) carry `hidden_by_directory` (bounded lists leave them out unless `include_hidden=1`), rows and cards an enabled block rule matches are left out entirely, as a node that blocks them sends none, and a change pushes that computer's rows and replays its pending cards, which never leave the inventory. `GET /mock/agent_dirs_fail?n=<count>` makes the next reads answer 503. `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/HiddenAgentDirsUITests` hides Mac Studio's `~/code/photo-sync` (one Agent with three cards), checks the list and Needs You, the Agents menu's Show hidden sessions / Hide directory matches, a relaunch with the rule on, the settings page (picker, rules, inline error, load failure and Retry), switching the rule off and allowing the returned approval, opens Blocked Config Folders, then blocks the folder (gone even from Show hidden sessions) and switches the rule to Hide from its action picker. It answers that approval, so restart the mock before each run; `TEST_RUNNER_PERSONA_LOOKS=light|dark|ax5` picks the looks (set the simulator's text size with `simctl ui <udid> content_size` for `ax5`) and `TEST_RUNNER_PERSONA_SHOTS=<directory>` keeps `hidden-dirs-<look>-<step>.png`.
 - Terminal-only Agent (#6170): `MOCK_TERMINAL_ONLY=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` lists a Kiro CLI in a herdr pane (`macbook/c0de0000-0000-4000-8000-000000000002`, with a `read_only_reason` as the node sets it). `-openSession macbook/c0de0000-0000-4000-8000-000000000002` shows the Terminal button over its composer (`chat.terminalOnly.terminal`).
   iOS / Mac: `-showNewChat YES -openLauncherPicker YES` opens the launcher list once the computer's launchers are in, `-showLauncherHelp <name>` that launcher's help over it (`-openLauncherDetails YES` with Details open); `-openSession macbook/f1643000-…` shows the failed start; with `MOCK_TERMINAL_PANES=1`, `-tab dev -showRunAgentHere macbook` opens Run Agent Here for that computer's first herdr space (`-showRunHereLauncher work_gw` with it picked, since a picker menu's items take no synthesized tap); `-tab dev -showPushAsk macbook` asks that space's Git ▸ Push question (#1883). With `MOCK_GIT_READ_FAIL=1`, `-openPane git -showGitReload YES` refreshes a session's Git tab and loads earlier commits once after the first read, both failing (#1889).
   Web: `node web/e2e/launcher-health.mjs <web URL> --shots <dir> [--locale en-US]` against the same mock (wide / 390 × light / dark: the model panel's groups for blocked launchers with their rows off, their reasons and How to fix, the line under the first message box when what runs this time is blocked (#5104), the chat's coded failure, and, with `MOCK_TERMINAL_PANES=1`, the Run agent here menu).
@@ -767,7 +767,9 @@ module again too, so its module-level state starts over as `mock_hub.py`'s globa
 `os.environ`; what exists only with the switch is registered only when it is on (the help line always), so with it off the hub
 answers as before. The domains on the registry are desktop registration (`scripts/mock/desktops_mock.py`, #11053), GitHub's
 sign-ins and thread page (`scripts/mock/github_mock.py`), Settings › Knowledge selection (`scripts/mock/kb_selection_mock.py`)
-and mail's accounts and write paths (`scripts/mock/mail_mock.py`), the last three moved out of `mock_hub.py` in #11543.
+and mail's accounts and write paths (`scripts/mock/mail_mock.py`), moved out of `mock_hub.py` in #11543, and the hub's own
+update (`scripts/mock/hub_update_mock.py`), Messages' reader (`scripts/mock/imessage_mock.py`; its connector stays in
+`mock_hub.py`) and Settings › Saved Prompts (`scripts/mock/saved_prompts_mock.py`), moved in #11649.
 `scripts/mock/test_mock_domains.py` checks every hook against a running mock. A block that moves out of `mock_hub.py` lists
 the names it took in that test's `MOVED`: a branch from before the move that kept the old block when it resolved its conflict
 then fails there, with the module to edit instead
@@ -1295,6 +1297,22 @@ TEST_RUNNER_PERSONA_HUB_A=http://127.0.0.1:18760 TEST_RUNNER_PERSONA_HUB_B=http:
 - One-group zero change: build DEBUG before in detached worktree, same mock/group args/status bar/clock, 14 pages × light/dark;
   repeat after, pixel compare. Repeated shots from same build identify noise (system spinner/Liquid Glass highlights vary per launch); exclude noise, inspect remaining differences.
   Only allowed change: hub row added to Settings Server section.
+
+### Switching hubs (`HubSwitchSidebarTests`, #11657)
+
+Two mock hubs, each a group of its own with data of its own, check that the iPhone's sidebar follows the current hub in both layouts: Persona's chats
+(Home's mock titles, Work's `MOCK_TITLES=1` titles) and the Agents list narrowed to one hub (`服务器 · Home`, `Work server · Work`).
+
+```sh
+PORT=18870 MOCK_HUB_ID=hub-home MOCK_HUB_NAME=Home python3 scripts/mock/mock_hub.py &
+PORT=18871 MOCK_HUB_ID=hub-work MOCK_HUB_NAME=Work MOCK_TITLES=1 \
+  MOCK_MACHINE_NAMES='{"server":"Work server","macbook":"Work MacBook"}' python3 scripts/mock/mock_hub.py &
+TEST_RUNNER_PERSONA_HUB_A=http://127.0.0.1:18870 TEST_RUNNER_PERSONA_HUB_B=http://127.0.0.1:18871 TEST_RUNNER_PERSONA_HUB_B_TITLES=1 \
+  TEST_RUNNER_PERSONA_SCHEME=light TEST_RUNNER_PERSONA_SHOTS=<directory> \
+  xcodebuild test … -only-testing:PersonaUITests/HubSwitchSidebarTests
+```
+
+Both hubs also run with `MOCK_SESSIONS_LIST=1` (bounded lists, as current hubs have them); the test is the same.
 
 ### All-day recording (`RecordingDayUITests`)
 

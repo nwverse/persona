@@ -60,7 +60,7 @@
   "mcp_tools.assistant#kb_history_stop": 429,
   "mcp_tools.assistant#kb_list": 1092,
   "mcp_tools.assistant#kb_search": 1438,
-  "mcp_tools.assistant#kb_update": 2576,
+  "mcp_tools.assistant#kb_update": 2545,
   "mcp_tools.assistant#leader_progress": 1396,
   "mcp_tools.assistant#list_followups": 245,
   "mcp_tools.assistant#list_places": 452,
@@ -81,8 +81,8 @@
   "mcp_tools.assistant#repository_add": 1219,
   "mcp_tools.assistant#repository_get": 769,
   "mcp_tools.assistant#save_place": 802,
-  "mcp_tools.assistant#schedule_followup": 4044,
-  "mcp_tools.assistant#schedule_routine": 4647,
+  "mcp_tools.assistant#schedule_followup": 3996,
+  "mcp_tools.assistant#schedule_routine": 4599,
   "mcp_tools.assistant#schedule_state_set": 624,
   "mcp_tools.assistant#secret_run": 2522,
   "mcp_tools.assistant#skill_import": 2154,
@@ -133,5 +133,5 @@
   "supervise.review_rework": 555,
   "supervise.rework": 396,
   "supervise.task_goal": 111,
-  "supervision_instructions": 15682
+  "supervision_instructions": 15777
 }

@@ -420,6 +420,15 @@ For sessions it starts, the node restores persisted ownership and launcher metad
 The original assistant or health directory identifies the conversation after rediscovery and reconnects. Runtime
 status, model, permissions and capabilities continue to describe the running session.
 
+For shell calls to `personad tool --cli`, a runtime can use `rt.assistantPid(sessionId, pid)` from the runtime SDK.
+Report a dedicated local worker for each assistant conversation and pass `0` when that worker is dropped. Never report
+the main runtime process or a worker shared with ordinary Agent sessions. The node checks the session's ownership and
+assistant status, and verifies the worker is a strict process descendant of the connected runtime. It derives the
+caller's session from the worker's process tree, not from the CLI request. Antigravity runs each active assistant chat
+in its own ACP process, separate from the Agents' shared process. An idle assistant worker exits after five minutes
+without work; the next send or mode change resumes the chat in a fresh worker. A forked assistant chat gets its own
+worker when first used. An active turn or unanswered permission keeps the worker alive.
+
 A runtime that declares `caps.assistant` must:
 
 1. For **assistant chats** (started with `assistant: true`, or whose directory is the assistant directory), always send permissions and questions to the phone first (when there's a hub), regardless of whether the local UI is open.
@@ -476,6 +485,10 @@ The session's `last_text` preview contains assistant response text after the lat
 input clears the previous reply preview, including input with no visible text. Thinking and tool records leave it empty
 until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while
 preserving genuine assistant questions. User messages and tool records remain available in the conversation items.
+
+CLI companion sessions and herdr panes show images from exported tool results. Conversation pages carry only image
+references; Persona loads the bytes when an image is shown. It accepts PNG, JPEG, GIF and WebP up to 1,152 KiB from
+the result's inline data or local file. The Desktop companion still omits these images.
 
 Native model errors can be omitted from the JSONL export even when ACP reports a completed prompt. When an idle
 summary has unexported steps, the companion reads at most the final eight native steps with `GetCascadeTrajectorySteps`.
