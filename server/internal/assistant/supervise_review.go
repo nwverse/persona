@@ -197,9 +197,6 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		priorReply = s.priorDecisionReply(ctx, t, cmp.Or(strings.TrimSpace(a.QuestionQuote), decision.Reason))
 	}
 	if priorReply != nil {
-		// Fence any older card answer or default while we hand the already-answered question back.
-		s.reviewDismissals.actions.acquire(t.ID)
-		defer s.reviewDismissals.actions.release(t.ID)
 		cur, ok := s.todoNow(t.ID)
 		if !ok || cur.DoneAt != nil || !cur.UpdatedAt.Equal(t.UpdatedAt) ||
 			s.activeTodoOf(priorReply.MachineID, priorReply.SessionID) != t.ID {
