@@ -930,6 +930,8 @@ type SuperviseLastReview struct {
 // DecisionAgentReply asks a supervisor to confirm a pending decision after its owner writes in the task's Agent chat.
 type DecisionAgentReply struct {
 	Language, Machine, Session string
+	Handled                    bool
+	Text, Closeout             string
 }
 
 // SuperviseInbox is the Inbox item an inbox entry names (#4293): its id, title (the chat's name or the mail's subject),
@@ -993,6 +995,14 @@ type DraftPR struct {
 
 func RenderDraftPR(p DraftPR) string { return render("assistant/draft_pr", p) }
 
+// EstimateDue is the localized fact attached to an automatic estimate_due supervision entry.
+type EstimateDue struct {
+	Language          string
+	Expected, Elapsed int
+}
+
+func RenderEstimateDue(p EstimateDue) string { return render("assistant/estimate_due", p) }
+
 // SuperviseReviewed is the independent review of a task waiting for review: State clean (nothing blocking), blocking
 // (blocking findings left once the rework rounds ran out) or failed (Error says why), its counts and report.
 type SuperviseReviewed struct {
@@ -1052,6 +1062,7 @@ type Relay struct {
 // RelayQuote is the owner's message a relay carries: its id, when and in which conversation they wrote it, the
 // conversations that passed it on after that one (oldest first), and the text verbatim. ParseRelayQuoteID reads the id back.
 type RelayQuote struct {
+	Part                 bool // the text is an excerpt from the source message
 	ID, At, Conversation string
 	Via                  []string
 	Text                 string
@@ -1265,18 +1276,6 @@ type SuperviseCloseout struct {
 	CheckedMerged, CheckedDeployed string
 	LocalDeployment                bool
 }
-
-// Route is the system prompt of assistant.route (assistant/route): is a New chat's first message a direction or a quick
-// chat. Language is the direction name's language by its own name ("" Chinese); Crowded: there are Leaders leaders
-// already, so the model names the closest one too.
-type Route struct {
-	Language string
-	TitleMax int
-	Crowded  bool
-	Leaders  int
-}
-
-func RenderRoute(r Route) string { return render("assistant/route", r) }
 
 // RouteLeader is a current leader as the route model is shown it.
 type RouteLeader struct{ ID, Title, Project string }

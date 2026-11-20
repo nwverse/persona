@@ -619,4 +619,5 @@
     <plurals name="agents_todo_calendar_undated">
         <item quantity="other">%1$d 条没有截止</item>
     </plurals>
+    <string name="agents_sidebar_heading">智能体</string>
 </resources>

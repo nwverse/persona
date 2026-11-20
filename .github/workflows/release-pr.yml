@@ -210,16 +210,14 @@ jobs:
         run: scripts/release/publish.sh
       - name: Bind the verified downloads to the release plan
         run: |
-          set -uo pipefail
+          set -euo pipefail
           mkdir -p release/downloads
-          cd build-publish/bin
-          for name in *.gz VERSION SHA256SUMS latest.json install.sh; do
-            test -f "$name"
-            cp "$name" "$OLDPWD/release/downloads/$name"
+          for path in build-publish/bin/*.gz build-publish/bin/VERSION build-publish/bin/SHA256SUMS build-publish/bin/latest.json build-publish/install.sh; do
+            test -f "$path"
+            cp "$path" "release/downloads/${path##*/}"
           done
-          cd "$OLDPWD"
-          python3 scripts/operations/release_pr.py --repository "${{ github.repository }}" --channel "${{ needs.plan.outputs.channel }}" bind-cli-web --plan release/plan.json --downloads release/downloads
-          result=$?
+          result=0
+          python3 scripts/operations/release_pr.py --repository "${{ github.repository }}" --channel "${{ needs.plan.outputs.channel }}" bind-cli-web --plan release/plan.json --downloads release/downloads || result=$?
           if [[ "$result" -ne 0 ]]; then
             printf 'bind-cli-web failed with exit %s; its exact error is above. These unverified artifacts are diagnostic only.\n' "$result" >&2
             exit "$result"
@@ -452,7 +450,9 @@ jobs:
 
   windows:
     name: Verify Windows programs natively and sign the desktop package
-    needs: [plan, cli-web, android, apple]
+    # Windows consumes only CLI/Web and Android artifacts. An unrelated Apple failure must not hide a native Windows
+    # execution or signing regression; the final aggregate still requires every platform to succeed.
+    needs: [plan, cli-web, android]
     if: needs.plan.outputs.pr != '0' && needs.plan.outputs.version != ''
     runs-on: windows-latest
     timeout-minutes: 120
@@ -471,10 +471,6 @@ jobs:
         with:
           name: release-pr-android-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}
           path: release/downloads
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-pr-apple-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}
-          path: release
       - name: Run every Windows CLI on its matching native architecture
         shell: pwsh
         run: |
@@ -538,7 +534,9 @@ jobs:
   verify:
     name: All available release-PR checks passed
     needs: [plan, cli-web, android, apple, windows]
-    if: needs.plan.outputs.pr != '0' && needs.plan.outputs.version != ''
+    # A failed or skipped dependency normally skips this whole job, including its failure-conclusion step. Always run
+    # the aggregate for an actual release plan so the exact merge-result check cannot remain pending indefinitely.
+    if: always() && needs.plan.outputs.pr != '0' && needs.plan.outputs.version != ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

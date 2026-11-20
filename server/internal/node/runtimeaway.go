@@ -77,6 +77,7 @@ func awayRow(s proto.Session) proto.Session {
 		cp.Fork = false
 		cp.Interrupt, cp.Close, cp.Rename, cp.Modes, cp.Model = false, proto.CanModes(false), proto.CanModes(false), proto.CanModes(false), proto.CanModes(false)
 		cp.Rewind, cp.RewindCode = proto.CanModes(false), proto.CanModes(false)
+		cp.QueueEdit, cp.QueueSendNow = cp.Close, cp.Close
 		s.Capabilities = &cp
 	}
 	return s

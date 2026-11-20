@@ -330,6 +330,7 @@ Reduce Motion:
   No new style, setting or navigation is added; at accessibility sizes the market row puts its full name above the
   version and status instead of squeezing all three beside the logo.
 - Web draws about 80 stroke glyphs (`web/src/ui/icons.tsx`, 15 px, stroke 1.9). Android uses Phosphor. There is no shared glyph map.
+- The web sidebar's page icons are the neutral ink: `--ink-3`, the open page's `--ink` on its fill, never a page's own color. **Colored** sidebar icons are an opt-in (Settings › Appearance › Sidebar icons, #10822) that gives each page a named color; Monochrome stays the default, pixel-identical. The map and its contrast: "Sidebar icon colors" below.
 - `pullDown` (#10422, an alias of `expand`'s chevron) follows an action's words that open a menu of how far the action goes (a pull-down, as UIKit draws one): the Inbox group titles' **Mark All Seen ⌄** / **Clear All ⌄** (`docs/assistant/inbox.md` "Group titles"). A value that opens a menu of choices keeps `choices`; the web draws its `chevron`.
 - `sideSessions` (#7944) is a session's side sessions on every platform: SF Symbol `rectangle.stack` on Apple, its Phosphor match on Android, Lucide's gallery-vertical-end on the web.
 - Catalog package logos (#4780) replace only the generic extension glyph inside its existing leading tile in the market list, market detail, installed list and installed detail. A shared logo component keeps the tile's geometry and fallback glyph. Loaded artwork has a fixed light neutral backing (`--extension-logo-backing` on web, `PersonaPalette.catalogLogoBackground` on Android) so transparent dark marks remain legible in either appearance. Missing, invalid, loading and failed artwork retain the earlier role-tinted generic mark; a changed URL can retry. The image fits without cropping and is decorative beside the package name. Bundled catalog artwork (#5461) is a square PNG inside the versioned extension package; the hub verifies/reads it and returns an authenticated relative `icon_url`. Web uses its selected hub connection to fetch bytes and displays a local Blob URL; Android uses its authenticated hub image loader. Missing, stale or unavailable bundled files keep the same fallback. Legacy absolute HTTPS sources still load anonymously without hub or market credentials. Publisher limits and authenticated image routes are in `docs/extensions/extensions.md` ("Bundled catalog artwork"). Downloads, when supplied, use secondary text (`--extension-meta-size` on web, scaled by the existing text-size transform) and the same GHCR package total across versions on every surface, never an install/user count; unknown counts add no line. This adds package identity to an existing component, not a new style or theme. Other marks, actions and primary screens stay unchanged.
@@ -914,6 +915,8 @@ A section of a page about one thing (a computer's page) lists its items in place
 
 In every grouping a list offers, a session that needs the user is visible without opening anything: in a section at the top, or by the state mark on its row, with a folded group counting it on its header. Grouping by location (computer, repository, worktree, tab) never hides it, and nobody has to pick a computer or a repository first to see their own work.
 
+The web's To-dos page (#11838) files to-dos by their state, so one the sidebar's To-dos badge counts can sit outside Needs you: a to-do no Agent is on, under Other open. Each row the badge counts carries the badge's mark, **Up to you** (`Tag` in the accent tone the badge is drawn in), why it counts in its tooltip and spoken label, and a folded heading over one says how many ("1 up to you"). The marks and the badge come from one hook (`useOwnerNeeds`), so they never disagree. Why a mark and not a section: what the badge counts spreads over several sections (Needs you, Parked, Other open, Just finished, Working for work held for the user's OK), and Other open also holds to-dos it leaves out (a goal its pieces carry). Why not Needs you as the mark's words: that is a section of its own with a narrower rule (principle 4).
+
 A child session (an Agent another Agent started, folded under a listed parent; web, #5120, after cindy) is never a row or a count of its own: its parent's row carries it, in the parent's folded state (a waiting child makes it need you, a working one makes it work), its second line saying what the child waits for. The child's need is visible on that row, counted once under the parent.
 
 A side session folded into its parent (#7944, `parent_agent_id`, with `sessions_side_fold`) is the same: its parent's row carries it in the folded state, and the parent's chat header carries a needs-you dot on its Side sessions control while one waits, so a waiting side is visible without opening anything. An older hub that does not fold sides leaves each a row with its own state mark, counted on its own.
@@ -1001,6 +1004,15 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
   one home of those requests, not a second home, and counts what the switch and tabs count (`agentsWaiting`). **The usage
   strip** (`SidebarUsageStrip`): the two fullest subscription accounts as name, percent and `UsageMeter`, the web
   sidebar's foot (#2432); a tap opens Machines. Separate stays the default and pixel-identical.
+- Android (#6378) offers the same **Separate** and **Merged** values under **Settings › Appearance › Sidebar**.
+  Separate is the Android default at every width. Merged uses the current left drawer and the regular window's
+  existing beside or overlay policy. Main conversation stays above the scrollable Pages, Persona Chats and Agents.
+  The first two sections keep their folds on the device. `JSidebarSectionHeading` gives all three headings one
+  sidebar row's height and `Space.s` above. The Agents list supplies its rows, filters, grouping and actions, with one
+  selected row for the visible root. The fixed Needs You jump uses the shell count. The two fullest subscription
+  accounts share their data with Computers. One New chat control and the Search and Settings capsule sit below them.
+  `JSidebarFooterActions` stacks the capsule under New chat when the full label needs the row's width.
+  Search opens over the whole window in Chats or Agents. The Android guide lists the pages its capabilities expose.
 - One selected row in the Sidebar layout's column (#11032; `SidebarRootsUITests.testOneRowIsSelectedAndItFollowsTheRoot`):
   the whole column (Main Chat, the Pages rows, Persona Chats, the Agents list with Pinned) has at most one selected row, and
   it is the root of the page beside it (`UnifiedSidebar`: `atRoot`, `shownPlace`, `shownAgent`, all read from its roots). A
@@ -1126,7 +1138,7 @@ to-dos) or an extension's badge stays out. `docs/apple/ios.md` "App icon badge (
 
 "On another computer" (web, #5421, cindy's `RemoteSignalOverlay`): `AgentMark` `remote` adds one arc and a dot off the mark's upper right, in the mark's text color, overhanging its box without taking room (a 16-unit canvas whose lower-left 12.5 units are the mark). The web chat's top bar draws every Agent's mark with it, since an Agent always runs on one of the user's computers: the mark's hover and accessible name say "Agent runs on {computer}", and while that computer is offline the mark is at 75 % opacity and says it continues once the computer is back.
 
-Web chat top bar (#5421, the owner's requested alignment with cindy's `SessionContentHeader`, 2026-11-12; `docs/web/web.md` "The top bar"): one line. At its start, in order: the pin mark and the loop mark (13 px, `--ink-3`, only when they apply), the Agent's mark (14 px, `remote`), the title (14 px medium, truncating; a double-click edits it in place, Enter or blur saves, Esc cancels), ⋯ (28 px, 15 px icon, `--ink-3`) and the git branch (12 px, `--ink-3`, from 800 px of header width, not interactive). At its end, the side panels' buttons (Background tasks, Team, Side sessions, Files) and the one button to the other view. It shows no state, model, permission mode, subtitle, goal or space button: the state is the running status bar's and the row's, the mode the composer picker's, the goal a bar over the composer. The bar stays 56 px tall (cindy's 46) so it lines up with every other page header and side panel header. A Persona conversation keeps its face before the title and the same order. In a task's or an Agent's side panel (#5424, while Settings › How Agents open says Side panel) the same bar is the panel's only header: the task's title in place of the Agent's (its state and place in the title's tooltip, no in-place rename), a task with several Agents adds ⌄ to switch after the title, ⋯ starts with the panel's own rows (Open in new window, Remove task…), the same space's other Agents are left out, and × at the end closes the panel.
+Web chat top bar (#5421, the owner's requested alignment with cindy's `SessionContentHeader`, 2026-11-12; `docs/web/web.md` "The top bar"): one line. At its start, in order: the pin mark and the loop mark (13 px, `--ink-3`, only when they apply), the Agent's mark (14 px, `remote`), the title (14 px medium, truncating; a double-click edits it in place, Enter or blur saves, Esc cancels), ⋯ (28 px, 15 px icon, `--ink-3`) and the git branch (12 px, `--ink-3`, from 800 px of header width, not interactive). At its end, the side panels' buttons (Background tasks, Team, Side sessions, Files) and the one button to the other view. It shows no state, model, permission mode, subtitle, goal or space button: the state is the running status bar's and the row's, the mode the composer picker's, the goal a bar over the composer. The bar stays 56 px tall (cindy's 46) so it lines up with every other page header and side panel header. A Persona conversation keeps its face before the title and the same order. In a task's or an Agent's side panel (#5424, while Settings › How Agents open says Side panel) the same bar is the panel's only header: the task's title in place of the Agent's (its state and place in the title's tooltip, no in-place rename), a task with several Agents adds ⌄ to switch after the title, ⋯ starts with the panel's own rows (Open in new window, Remove task…), the same space's other Agents are left out, and × at the end closes the panel. Before ×, the chat bubble (`chat`, the icon the agent page's view button shows for Chat; "Open Agent page") opens the Agent shown as its own page with the way-back strip and closes the panel; it is absent while the task has no Agent up.
 
 Assistant avatar: a disc with the first character of the assistant's name. The default assistant's is the AI purple; any other takes one of five hues (blue, green, orange, pink, indigo, in that order) by the sum of its id's UTF-8 bytes modulo 5, so every client colors the same assistant alike. A status mark sits at its foot (online green, offline neutral, installing orange) and, on the sidebar's head only, a mark at its head when another assistant has something waiting. Web: `web/src/ui/AssistantAvatar.tsx` with the `--ai` and `--hue-*` tokens. The letter is sized by the disc, not by the system's text size, so it never outgrows it. Android: `JManagerAvatar` (the status mark's ring is cut out of the disc, so the surface behind shows around it), with `JAssistantSwitcherHeader` and `JAssistantSwitcherRow` for the sidebar's head and the roster's rows (an offline one's row faded with `HomeTokens.assistantOfflineAlpha`), and `JAssistantSettingsHeader` for the head of Settings' first group (the monogram at `HomeTokens.assistantAvatarHeader`, the title, and a Switch text button opening the same roster). Apple: `AssistantMonogram` (`Monogram` drawn on the assistant's hue, its letter in the panel's color and capped at the largest standard text size) with `AssistantStateDot` (ringed in the color it sits on), an offline row faded with `Theme.Fade.offline`; the sidebar's head keeps the Persona face with the same dot, and `AssistantWaitingDot` at its head. Why not the person avatar (`Monogram`, Android `JAvatar`): that one sits on the neutral surface, and here the color is what tells the assistants apart.
 
@@ -1283,6 +1295,13 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   phones; Escape, the backdrop and Back keep things as they were. The model panel stays open under it (held below the
   backdrop) and closes once the switch is recorded. The pending pill names the engine and the target model with that
   model's own effort.
+- Android engine handoff (#5302, `docs/android/android.md` “Switching between Claude Code and Codex”): Glass
+  uses the existing model pill and panel. Entering the other engine asks with `JDialog`. While a switch waits, the
+  pill names the upcoming engine to assistive technology and keeps its mark in the compact composer. The panel offers
+  a direct cancellation above its search. In every style, the recorded handoff uses `JModelChangeDivider` and opens
+  the handoff context with the existing full-text reader. Older transcript runs join the same list as read-only rows
+  above the current run. Their pagination, full text and image requests retain the original conversation scope.
+
 - Panel (`web/src/ui/model-panel/`): opens above the pill, right edges aligned, 6 px gap, 8 px from the window's edges;
   300–460 px wide with a 428 px scrollable body, search on top and "Configure models" at the bottom.
   One shared column in Agent, handover, Assistant and New Agent pickers (#10249): Follow model configuration where
@@ -1548,6 +1567,10 @@ Real folding-feature evidence and fake-posture layout evidence are reported sepa
 
 `docs/SUPER_RULES.md` rule 3: Assistant and Agents are the only primary home destinations on iOS, Android and web. Settings opens from the sidebar. Everything else (Recordings, Inbox, To-dos, Scheduled Tasks, Knowledge, Machines, Health, extension pages) is pushed from the drawer. Push by value for new pages; mixing view-based and value-based pushes in one stack is a known trap. An optional Messages page can be switched on and becomes a third primary destination; whether that fits rule 3 needs the rule owner (DS-26).
 
+On Android, a Merged sidebar pick replaces the visible root and closes the compact drawer or regular overlay.
+A beside column stays open. Navigation inside the visible root keeps its Back path, and external entries retain their
+route and session identities. The sidebar setting changes the presentation of Assistant and Agents.
+
 A dispatched task's Open link (#3711) is a compact row using existing typography, fill, radius and 44 pt touch-target
  tokens, not a filter or a link to the whole In Progress list. One task shows its title and Open; a plan lists only its
  own tasks in order. On iPhone it pushes the existing Agent page by `SessionKey` on the Assistant stack, preserving
@@ -1656,6 +1679,10 @@ Severity ladder to adopt:
 2. Destructive with one object: `.accessibleConfirmationDialog` on Apple (rule 7 in section 1.2), with a destructive button that repeats the verb, a message that says what is lost, and Cancel.
 3. Needs extra choices (keep or remove the worktree): a content-height sheet.
 4. `.alert` for short prompts and text entry, except where the text needs what the alert would cover (below).
+
+In Android Agent Files (#11733), **Move…** uses a folder picker sheet with an explicit **Move Here** action. The conflict
+dialog opens for a name the hub reports as taken and offers **Keep Both**, destructive **Replace**, and **Cancel**.
+Keep Both gives the moved item a numbered name. Replace puts the existing file in the computer's Trash.
 
 In-meeting typed questions (#4486) are the exception to rung 4: they use an inline input row in the live recording sheet's bottom bar (`apple/Persona/Recording/RecordingLiveBar.swift`), not a system text-entry alert. The question usually refers to what was just said, and a modal alert hid the live lines and the earlier answers while the user typed. It also allowed only one line and no reference back. The keyboard button beside Ask Persona opens the row (at accessibility sizes, More › Type a Question opens it). The row shows a hint, then a field and send button that reuse the composer's `ComposerSurface` and `ComposerRoundButton` (3.1); the two are one view, `MeetingQuestionField` (`apple/Persona/Recording/MeetingQuestionField.swift`), which the meeting page's composer reuses ("Meeting page (#3862)" below), so the two stay alike. The field grows to `Theme.Recording.askLines` lines (`askLinesLargeType` at accessibility sizes, where the hint also steps aside while the keyboard is up and the field's spoken hint carries it). Send stays in place but is dimmed and disabled until there is non-whitespace text, and Return sends too. While the row is open, the keyboard button becomes Cancel, which drops the draft as the alert's Cancel did. While the field has the keyboard, Pause, Stop and Bookmark step aside so the timeline keeps the room. Sending goes through the same `MeetingAsk.ask(_:text:)`, then clears the field and closes the row. It is not a fifth composer (DS-19): it has no attachments, dictation (the microphone is recording), model menu or full-page editor.
 
@@ -1869,6 +1896,10 @@ states visibly that the next message is saved as the answer; its existing cancel
 discussion. The original decision round travels with the answer. Only a delivered and recorded answer removes the
 pending card; neither navigation, an unrelated chat message, nor an answer to a different Agent question does.
 
+Expired assistant questions (#9731) keep one home on their question to-do. The shared `ask` payload puts them in **Needs you**, not **In progress**, without inventing an Agent or supervisor. On the web, the existing question card displays the original choices and descriptions inside that row: a single choice sends on one tap, while several questions or multiple selections keep the existing complete-form submission. Its answer goes through the to-do's late-answer route, not the expired interaction. **Later** defers only this browser's current question round; opening the to-do preserves its existing explicit close/drop controls. A failed answer keeps the original form usable. This adds no style, typography token or pending-request list.
+
+An irreversible deadline only reminds the owner: the question stays in **Needs you**. A reversible default reserves its answer while being delivered or recovered, so it never offers a second decision; a failed default returns that decision to the owner. A rejected inline answer retains the same selections for retry and never shows **Answer recorded**.
+
 Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and waiting for a reply.
 
 - **Home**: the bottom of the session page, a stack of cards above the composer, which stays usable (iOS `PendingCards`;
@@ -1899,6 +1930,10 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   composer, under the Needs you / In progress entries and the route chip, on every client (#4883: on the web and Android
   they sat only in the closed Needs you tray, and an owner waited minutes on an approval no screen in the chat showed).
   Needs you still counts them, and its row for one closes the tray onto the card instead of drawing it a second time.
+  On the web, a card the conversation's own turn waits on (its own session's request, not one of a worker or side
+  session folded under it: `lib/turn-asks.ts`, #11794) is never folded: each stands open above the Needs you / In
+  progress capsules, all of them at once, and Needs you neither counts nor lists it again. The cards of sessions folded
+  under the conversation keep the stack and the tray as above. iOS and Android keep the stack for both until they follow.
   The stack holds the conversation's own cards alone, as one slot on the web: its first card with "2 / 6" (where it stands in the run), the next taking its place when it is answered, and what was just answered one line over it that goes 3 seconds after the last answer (details with the interaction cards in `docs/web/web.md`).
   What the conversation's tasks ask is a card of its own above the entries (iOS `TaskQuestions`, #4339 C10): the oldest
   question of their Agents, under its task's name with the ask mark in the needs-you tone and, at the end of that line,
@@ -2534,6 +2569,48 @@ An experiment can supply a permanent note under its introduction or beside a fie
 hint styles. A choice with consequences can request confirmation for a specific change. Use the shared Dialog, with the
 affected scope, impact, timing and an action-specific button. All dismissal paths preserve the edit. On success the
 field’s polite save status can explain when the choice takes effect. Show this receipt once, in the field footer.
+
+## Sidebar icon colors (#10822)
+
+Who it serves: anyone whose sidebar lists many pages and who finds it quicker to scan when each page has a color. It is
+an option, off by default (principle 2): Settings › General › Appearance › **Sidebar icons**, **Monochrome** or
+**Colored**, kept in this browser as the theme color is (`web/src/lib/sidebar-icons.ts`). Monochrome is the sidebar as
+it was, pixel for pixel: every page's line icon in `--ink-3`, the open page's in `--ink`, and nothing is stored.
+
+With Colored:
+
+- Each built-in page's icon takes the fixed named color below (`Color`, `schema/extension/view.schema.json`), drawn in
+  the web's existing `--hue-*` tokens through the same `hue()` a row's `icon_color` uses
+  (`web/src/lib/extension-ui-v6.ts`). No color value is added.
+- An extension's `nav_page` takes the `icon_color` its manifest names (`docs/extensions/extensions.md` "UI slots"); a
+  page without one, or with a name no client knows, stays neutral.
+- The open page keeps today's rule: its icon is the open row's `--ink`, not its color, so the open page stands out as
+  before. Under the pointer the color stays and the hover fill shows.
+- Everywhere the sidebar draws its pages: the Pages list and the groups, More, the folded icon rail and a phone's grid
+  of pages. The More menu, ⌘K and Settings › Sidebar pages keep neutral icons; the main chat's row, All chats and the
+  Agents' rows are not pages and are unchanged. State marks, dots and counts never take these colors (#4538).
+- Theme colors and extension themes move neither the `--hue-*` tokens nor the sidebar's backgrounds, so the colors and
+  their contrast are the same under each of them; the text size does not scale icons.
+
+| Page | Icon | Color | Light: on `--canvas` / `--hover` | Dark: on `--canvas` / `--hover` |
+| --- | --- | --- | --- | --- |
+| Overview | `home` | amber | 3.26 / 3.35 | 9.05 / 7.59 |
+| Inbox | `inbox` | orange | 3.01 / 3.09 | 7.16 / 6.01 |
+| Health | `heart` | pink | 3.82 / 3.93 | 6.44 / 5.41 |
+| Messages | `chat` | green | 3.25 / 3.34 | 6.87 / 5.76 |
+| Workflow board | `layers` | yellow | 3.25 / 3.34 | 10.89 / 9.14 |
+| To-dos | `todo` | blue | 3.23 / 3.32 | 5.84 / 4.90 |
+| Scheduled tasks | `clock` | purple | 4.25 / 4.37 | 6.53 / 5.48 |
+| Knowledge | `book` | indigo | 4.79 / 4.92 | 5.80 / 4.87 |
+| Machines | `machine` | teal | 3.65 / 3.75 | 7.15 / 6.00 |
+| Settings | `gear` | gray | 3.54 / 3.63 | 6.27 / 5.26 |
+
+Each page has a color of its own. Red (3.55 / 3.65 light, 5.09 / 4.27 dark) is left to extensions: on a built-in page
+it would read as an error. An icon is a graphic, so the floor is 3:1; `web/src/ui/theme-contrast.test.ts` checks all
+eleven named colors on both backgrounds in light and dark, since an extension may name any of them, and the closest is
+light orange at 3.01:1. Why a new pattern: one ink let only the open page stand out; Colored keeps that and adds a
+second cue for scanning, so it is an option and never the default. iOS and Android follow with the same setting, the
+same map and the same `icon_color`, so a page has one color on every client (#10822 tracks them).
 
 ## A chosen page that is not there now (#9071)
 

@@ -167,6 +167,14 @@ class AssistantManagementTest {
             assertEquals("Team API", launchers.launchers.single().title)
             assertEquals("opus", launchers.default?.model)
             assertEquals("api_protocol" to "用的是 Responses 协议", launchers.unavailable.single().let { it.code to it.reason })
+            for (refresh in listOf(false, true)) {
+                server.enqueue(MockResponse().setBody("""{"launchers":[]}"""))
+                api.assistantLauncherList("mac", refresh)
+                val url = requireNotNull(server.takeRequest().requestUrl)
+                assertEquals("/api/v1/machines/mac/launchers", url.encodedPath)
+                assertEquals("assistant", url.queryParameter("purpose"))
+                assertEquals("1".takeIf { refresh }, url.queryParameter("refresh"))
+            }
         }
     }
 

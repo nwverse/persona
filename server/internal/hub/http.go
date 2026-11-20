@@ -500,6 +500,14 @@ func callErr(w http.ResponseWriter, err error) {
 func (h *Hub) callNode(w http.ResponseWriter, r *http.Request, m *Machine, method string, params any, timeout time.Duration, outdated string, args i18n.Args, handle ...func(error) bool) (json.RawMessage, bool) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
+	if strings.HasPrefix(method, "git.") {
+		var err error
+		method, params, err = backendGitTarget(r, method, params)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return nil, false
+		}
+	}
 	var out json.RawMessage
 	if err := m.call(ctx, method, params, &out); err != nil {
 		if h.nodeOutdated(w, r, err, outdated, args) {
@@ -541,6 +549,10 @@ func (h *Hub) proxy(method string, params func(*http.Request) any) http.HandlerF
 func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 	q := r.URL.Query()
 	params := map[string]any{"session_id": r.PathValue("sid")}
+	strict := q.Get("strict") == "1"
+	if strict {
+		params["strict_read"] = true
+	}
 	userInputs := q.Get("user_inputs") == "1"
 	if userInputs {
 		params["user_inputs"] = true // only a count/position projection, never message bodies
@@ -581,17 +593,22 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		return
 	}
 	var res struct {
-		Items     []proto.Item `json:"items"`
-		HasMore   bool         `json:"has_more"`
-		MoreAfter bool         `json:"more_after,omitempty"`
-		More      bool         `json:"more,omitempty"` // a fold's lines go on after these
+		Items      []proto.Item `json:"items"`
+		HasMore    bool         `json:"has_more"`
+		MoreAfter  bool         `json:"more_after,omitempty"`
+		More       bool         `json:"more,omitempty"` // a fold's lines go on after these
+		StrictRead bool         `json:"strict_read,omitempty"`
 		itemSpan
 	}
 	if err := m.call(ctx, "session.items", params, &res); err != nil {
 		callErr(w, err)
 		return
 	}
-	res.Items = cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), localizedItems(h.requestLang(r), h.withInjected(res.Items)))
+	if strict && !res.StrictRead {
+		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("chatexport.node_version"))
+		return
+	}
+	res.Items = cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), localizedItems(h.requestLang(r), h.withInjected(res.Items)))
 	if q.Get("lazy_images") == "1" {
 		res.Items = proto.WithoutImageData(res.Items)
 	}
@@ -603,15 +620,32 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 func (h *Hub) sessionItemFull(w http.ResponseWriter, r *http.Request, m *Machine) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	var it proto.Item
-	if err := m.call(ctx, "session.item", map[string]any{"session_id": r.PathValue("sid"), "item_id": r.PathValue("iid")}, &it); err != nil {
+	params := map[string]any{"session_id": r.PathValue("sid"), "item_id": r.PathValue("iid")}
+	strict := r.URL.Query().Get("strict") == "1"
+	if strict {
+		params["strict_read"] = true
+	}
+	var full struct {
+		proto.Item
+		StrictRead      bool `json:"strict_read,omitempty"`
+		SourceTextBytes *int `json:"source_text_bytes,omitempty"`
+	}
+	if err := m.call(ctx, "session.item", params, &full); err != nil {
 		callErr(w, err)
 		return
 	}
-	// The whole item for the channels that follow the conversation, or show its view (the manager's, fleet_follow.go).
-	h.asstOf(h.sessionOwner(m.cfg.ID, r.PathValue("sid"))).notify(assistantwire.EventSessionItems, assistantwire.SessionItems{MachineID: m.cfg.ID, SessionID: r.PathValue("sid"),
-		Items: []proto.Item{it}})
-	writeItemsJSON(w, cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), localizedItems(h.requestLang(r), h.withInjected([]proto.Item{it})))[0])
+	if strict && !full.StrictRead {
+		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("chatexport.node_version"))
+		return
+	}
+	it := full.Item
+	if !strict {
+		// A client opened an item whole. Let the channels following its view see it too (fleet_follow.go).
+		h.asstOf(h.sessionOwner(m.cfg.ID, r.PathValue("sid"))).notify(assistantwire.EventSessionItems, assistantwire.SessionItems{MachineID: m.cfg.ID, SessionID: r.PathValue("sid"),
+			Items: []proto.Item{it}})
+	}
+	full.Item = cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), localizedItems(h.requestLang(r), h.withInjected([]proto.Item{it})))[0]
+	writeItemsJSON(w, full)
 }
 
 // sessionImage serves one item's image as raw bytes. An item's image never changes, so the app may cache it forever.
@@ -796,6 +830,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		Model           string        `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
 		Prompt          string        `json:"prompt"`
 		Images          []proto.Image `json:"images,omitempty"`
+		ClientMsgID     string        `json:"client_msg_id,omitempty"`
 		ResumeSessionID string        `json:"resume_session_id"`
 		WorkspaceID     string        `json:"workspace_id"`
 		// Host: the machine's enabled engine host to open in (herdr, orca, paseo…; #2576); empty: its default host.
@@ -912,9 +947,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	if p.TodoID != "" {
 		p.Prompt = decided
 	}
-	if strings.TrimSpace(p.Prompt) == "" {
-		p.Images = nil // an empty start has no first message to attach pictures to
-	} else {
+	if strings.TrimSpace(p.Prompt) != "" {
 		p.Images = append(p.Images, handoffImages...)
 	}
 	async := startsAsync(p.Async, p.ResumeSessionID, p.Launcher, p.AgentType)
@@ -1009,7 +1042,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	if shown, ok := h.awaitListed(ctx, m, res.Session.SessionID); ok {
 		res.Session.State = shown.State // as the manager works it out (fleet_link.go)
 	}
-	if p.TodoID != "" && p.ResumeSessionID == "" && strings.TrimSpace(p.Prompt) == "" {
+	if p.TodoID != "" && p.ResumeSessionID == "" && strings.TrimSpace(p.Prompt) == "" && len(p.Images) == 0 {
 		cwd := res.Session.Cwd
 		if cwd == "" {
 			cwd = startCwd(m, p.Cwd)
@@ -1301,9 +1334,10 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 	}
 	// One message per language and image mode: the node's Chinese lines read in each connection's (transcript_text.go).
 	type form struct {
-		lang i18n.Lang
-		lazy bool
-		ring bool // draws ```persona-card rings (card_compat.go)
+		lang             i18n.Lang
+		lazy             bool
+		markdownCloseout bool
+		ring             bool // draws ```persona-card rings (card_compat.go)
 	}
 	msgs := map[form][]byte{}
 	key := [2]string{machineID, sessionID}
@@ -1316,10 +1350,10 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 		if !sub {
 			continue
 		}
-		f := form{c.lang(), wantsLazy, c.has(featureCardRing)}
+		f := form{lang: c.lang(), lazy: wantsLazy, ring: c.has(featureCardRing), markdownCloseout: c.has(featureMarkdownCloseout)}
 		b, ok := msgs[f]
 		if !ok {
-			its := cardCompatItems(f.lang, f.ring, localizedItems(f.lang, items))
+			its := cardCompatItems(f.lang, f.ring, f.markdownCloseout, localizedItems(f.lang, items))
 			if f.lazy {
 				its = proto.WithoutImageData(its)
 			}
@@ -1720,7 +1754,7 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			c.sendJSON(failure)
 			return
 		}
-		res.Items = cardCompatItems(c.lang(), c.has(featureCardRing), localizedItems(c.lang(), h.withInjected(res.Items)))
+		res.Items = cardCompatItems(c.lang(), c.has(featureCardRing), c.has(featureMarkdownCloseout), localizedItems(c.lang(), h.withInjected(res.Items)))
 		if lazy {
 			res.Items = proto.WithoutImageData(res.Items)
 		}

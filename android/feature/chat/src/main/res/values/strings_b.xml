@@ -234,6 +234,7 @@
     <string name="chat_link_unsupported_text">This link can\'t open in Persona.</string>
     <string name="chat_link_ok">Got it</string>
     <string name="chat_link_open">Open</string>
+    <string name="chat_link_open_in_app">Open in Persona</string>
     <string name="chat_link_no_app">No app can open this link</string>
     <string name="chat_links_mail_title">Write an email?</string>
     <string name="chat_links_mail_text">Opens the mail app to write an email.</string>
@@ -505,4 +506,5 @@
     <string name="chat_turn_fix_model_route_launcher">Model not connected: this model isn\'t available on %1$s</string>
     <string name="chat_turn_fix_model_route_detail">The model name is wrong, or the model isn\'t available right now; try another one.</string>
     <string name="chat_turn_fix_action">Fix it</string>
+    <string name="chat_slash_saved_prompts">Saved Prompts</string>
 </resources>

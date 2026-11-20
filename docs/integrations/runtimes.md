@@ -49,8 +49,10 @@ Optional (for each one present, the SDK declares the capability in `runtime.hell
 | `cursor(sessionId)` | The current `to_seq`, or `{to_seq, history}` (with history, a rewrite with the same item count can still be detected; if omitted, the `to_seq` and `history` of a `turns: 1` page are used) |
 | `image(params)` / `item(params)` | Raw image data / the full text of a truncated item |
 | `send({session_id, text, images, client_msg_id})` | Sending a message from the phone. **Dedup by `client_msg_id`**: the App resends on reconnect. Resolve to `{queued: true}` when the message only waits behind the running turn, so that nobody takes it for read (#8097) |
+| `editQueue({session_id, keep})` | `caps.queue_edit`: keep the given queue indexes in that order. Return the original `{queue, images?}`; each `images` entry is the message's image array or `null`. Refuse an empty queue with `nothing_queued`, and invalid indexes with `queue_changed`. |
+| `sendNow({session_id})` | `caps.queue_send_now`: start delivering the waiting messages without waiting for the active turn to finish naturally. Refuse an empty queue with `nothing_queued`. The SDK answers `{sent: true}` on success. |
 | `interrupt({session_id})` | Stop the running turn. Resolve to `{settled: true}` once the turn has actually ended, and throw when it could not be stopped; resolving to nothing means "asked to stop, not confirmed" (#8097). A turn waiting on the user (a dialog, a card) must end too |
-| `rename` / `close` / `start({cwd, prompt})` | Interrupt, rename, close, create from the phone (with `start` and a configured `launcher`, the new-session form gains a launcher field). The apps offer Rename and Close on its rows from `capabilities.rename` / `capabilities.close`, which carry `caps.rename` (not on a sub-Agent's row) and `caps.close` (#6294) |
+| `rename` / `close` / `start({cwd, prompt, client_msg_id})` | Interrupt, rename, close, create from the phone (with `start` and a configured `launcher`, the new-session form gains a launcher field). If present, `client_msg_id` identifies the first message, just as in `send`. Antigravity can also receive `images` on start, with or without text. The apps offer Rename and Close on its rows from `capabilities.rename` / `capabilities.close`, which carry `caps.rename` (not on a sub-Agent's row) and `caps.close` (#6294) |
 | `hasLocalClient(sessionId)` | Whether this runtime's own UI is open for that session (decides who gets permission requests first, see below) |
 | `unlistedTranscripts()` | The Claude session ids of sessions of its own that `listSessions()` no longer lists (archived in the runtime), or nothing while it cannot say yet; no capability is declared. See "Runtimes that run Claude Code" below |
 | `modes({session_id, permission_mode, effort, model})` | Switching permission mode / reasoning effort from the phone (`caps.modes`; optional model changes require `createRuntime` option `modelSwitch: true`, advertised as `caps.model`; values are Persona's: `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`, `low` … `max`). The apps show the mode chips on its rows whose agent is `claude` or the runtime's own, never Paseo's catch-all `paseo` (`capabilities.modes`, `docs/protocol/protocol.md` "Codex sources and capabilities"). A row may take modes and model away from its own session in its `capabilities` (`modes: false`, `model: false`: Paseo's archived agents, #8133), and a row whose agent is not `claude` may list the levels `effort` takes for it (`efforts`, weakest first), which the apps offer alone on it, and the permission modes it takes (`capabilities.permission_modes`, #8261: `default`, its own approval, and `bypassPermissions` where it has an Allow all), between which the apps offer a two-state switch, "Launcher default" and Allow all; node drops both where the runtime declared no `caps.modes` or the row took modes away, and `permission_modes` where the Claude Code chips stand |
@@ -420,6 +422,15 @@ For sessions it starts, the node restores persisted ownership and launcher metad
 The original assistant or health directory identifies the conversation after rediscovery and reconnects. Runtime
 status, model, permissions and capabilities continue to describe the running session.
 
+For shell calls to `personad tool --cli`, a runtime can use `rt.assistantPid(sessionId, pid)` from the runtime SDK.
+Report a dedicated local worker for each assistant conversation and pass `0` when that worker is dropped. Never report
+the main runtime process or a worker shared with ordinary Agent sessions. The node checks the session's ownership and
+assistant status, and verifies the worker is a strict process descendant of the connected runtime. It derives the
+caller's session from the worker's process tree, not from the CLI request. Antigravity runs each active assistant chat
+in its own ACP process, separate from the Agents' shared process. An idle assistant worker exits after five minutes
+without work; the next send or mode change resumes the chat in a fresh worker. A forked assistant chat gets its own
+worker when first used. An active turn or unanswered permission keeps the worker alive.
+
 A runtime that declares `caps.assistant` must:
 
 1. For **assistant chats** (started with `assistant: true`, or whose directory is the assistant directory), always send permissions and questions to the phone first (when there's a hub), regardless of whether the local UI is open.
@@ -454,6 +465,7 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | opencode (`opencode-<pid>`) | `integrations/opencode`: opencode plugin (one connection per opencode server process; list and chats read from opencode.db, live updates over the event stream, control through the plugin API) | `docs/integrations/opencode.md` |
 | Grok CLI (`grok-chat`) | `integrations/grok/companion.mjs`: optional standalone ACP companion with assistant tools, permission hooks, native renaming and restart recovery; also lists conversations started in a terminal (read-only while the terminal holds them) | `integrations/grok/README.md` |
 | Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
+| Managed Agents (`managed-agents`, configurable) | `integrations/managed-agents/companion.mjs`: standalone companion for Volcengine Ark Managed Agents and compatible endpoints (cloud or self-hosted, the user's own key); reads sessions over the REST API, sends, interrupts, starts, and answers tool confirmations and question / plan tools on the phone; `--listen` makes it a daemon | `docs/integrations/managed-agents.md` |
 | echo (example) | `integrations/runtime-sdk/examples/echo-runtime.mjs` (with `--listen <port>` it's a daemon) | "Minimal example" in this doc, `docs/integrations/daemons.md` |
 
 ### Antigravity Desktop (macOS, experimental)
@@ -481,12 +493,28 @@ CLI companion sessions and herdr panes show images from exported tool results. C
 references; Persona loads the bytes when an image is shown. It accepts PNG, JPEG, GIF and WebP up to 1,152 KiB from
 the result's inline data or local file. The Desktop companion still omits these images.
 
+A picture the model service cannot decode never enters a conversation (`integrations/antigravity/lib/media-guard.js`, #11789).
+agy's own `read_file` sends a picture's bytes to the model and keeps them in the history, so one truncated JPEG (a chat
+attachment served cut short) makes every later request fail with `400 INVALID_ARGUMENT` / `INVALID_MEDIA`, a Continue
+included. The CLI companion writes an agy plugin, `<agy config>/../config/plugins/persona-media-guard`, whose
+`PreToolUse` hook checks the file `read_file` / `view_file` is about to open. A complete PNG, JPEG, GIF or WebP, and any
+file that is no picture, gets no opinion (`ask`: agy's own permissions decide). A cut or damaged one is refused (`deny`,
+which wins over another hook's `allow`) with a reason the model passes on, and the file is left as it is. A truncated
+JPEG whose image data began also gets a terminated copy under `<agy config>/persona-media-guard/`, named in the reason,
+so the model can still look at the part that arrived. The hook answers `ask` when its script is gone (the package moved
+on), so a stale plugin never blocks agy; `--no-media-guard` keeps the companion from writing it. Pictures attached to a
+message from Persona get the same check: a broken one is left out of the prompt with a line saying so.
+
 Native model errors can be omitted from the JSONL export even when ACP reports a completed prompt. When an idle
 summary has unexported steps, the companion reads at most the final eight native steps with `GetCascadeTrajectorySteps`.
 The result is cached against the summary and exported branch. Discovery opens the native service through read-only
 session listing. An omitted terminal error uses the shared assistant-text `API Error:` representation for the existing error card
 and populates the session's `turn_error`
-fields, including a subscription reset timestamp supplied in native quota metadata. New input and rewinds invalidate
+fields, including a subscription reset timestamp supplied in native quota metadata. When Antigravity gives only its
+generic `Agent execution terminated due to error.`, the text is the native short error with the `ErrorInfo` reason
+(`INVALID_ARGUMENT (code 400): … (INVALID_MEDIA)`). A 4xx other than 401, 408 and 429 is a request the service refuses
+as it is (a picture in the history it cannot decode, an invalid argument): a Continue sends it again, so it is published
+as `turn_error_kind: "user"` (#11742). New input and rewinds invalidate
 that result. Rejected ACP prompts also publish their failure through the session's error state.
 The history token includes the error format so connected clients refresh items cached before this representation.
 
@@ -560,12 +588,26 @@ Live text belongs to the ACP prompt currently executing. Queued prompts acquire 
 empty boundary. A tool call ends the current text message, so the next message replaces its words in the live slot.
 Each prompt clears its live text on completion, including when another prompt is queued.
 
+An unsolicited ACP update after a delivered reply opens its own exchange before streaming text. In an exported
+Antigravity transcript, a `SYSTEM_MESSAGE` after a completed answer marks the same boundary once the model
+resumes before the next owner input. Multiple notifications for that resumption share one generic `wake` notice.
+The notice shares the first resumed activity's sequence, ahead of its content. Its ID derives from the preceding
+delivered native answer. Private scheduling text stays in the export. If ACP observed the wake and its matching
+reply lands without a scheduling record, the companion records the two native step fingerprints in the conversation's
+`.persona-observed-wakes` file. The companion and terminal pane can then reconstruct the same exchange on
+reconnect or restart. A read-only conversation keeps this evidence for the life of the companion. An older export
+with neither a scheduling record nor an observed boundary retains its original grouping.
+
 While a conversation is watched, the companion polls its native export every 400 ms. Persona-owned ACP turns reuse
 their existing poll. Unwatch, disconnection and shutdown release the watched poll. Native records that update an
 existing step carry a stable content revision in the history token, so a response completed at the same sequence
 replaces retained content. Ordinary appends preserve that revision and continue through incremental item batches.
 
 Session inventory, watch cursors, item pages and live item pushes read `transcript_full.jsonl` when available.
+Antigravity Agent and Assistant sessions publish waiting messages in `Session.queued`, using an empty string for a
+photo-only message. Send Now cancels only the active prompt and starts the next queued message when it settles.
+Interrupt cancels the active prompt and clears the queue.
+
 Antigravity declares `caps.rewind` for idle Agent conversations. The selected message, duplicate occurrence from the
 end, and following user-input count are checked against `GetCascadeTrajectory`. The owned ACP process's private log
 identifies its loopback native service. `RevertToCascadeStep` receives `conversationOnly: true` and the preceding step
