@@ -126,12 +126,14 @@ func TestNoteResumeFailed(t *testing.T) {
 	n.state.Sessions["maybe"] = sessionState{Pane: "p"}
 	n.state.Sessions["kept"] = sessionState{Pane: "p"}
 	n.state.Sessions["late"] = sessionState{Pane: "p"}
-	n.noteResumeFailed("gone", errors.New("Codex did not come up"))
+	n.state.Sessions["plain"] = sessionState{Pane: "p"}
+	n.noteResumeFailed("gone", refusal(codexResumeRefused, "Codex could not find its session", nil))
 	n.noteResumeFailed("fine", nil)
 	n.noteResumeFailed("maybe", unconfirmedStart(errors.New("no answer from the pane")))
 	n.noteResumeFailed("kept", withKeptTab(refusal(proto.CodeAgentStartStalled, "stalled", nil), "w1:p1", time.Now()))
 	n.noteResumeFailed("late", context.DeadlineExceeded)
-	for _, id := range []string{"maybe", "kept", "late"} { // uncertain: it may still come up, so no second resume
+	n.noteResumeFailed("plain", errors.New("claude did not come up")) // a line was typed: it may still
+	for _, id := range []string{"maybe", "kept", "late", "plain"} {   // uncertain: it may still come up, so no second resume
 		if got := n.stopCause(id); got != proto.StopUnknown {
 			t.Fatalf("%s: %q", id, got)
 		}

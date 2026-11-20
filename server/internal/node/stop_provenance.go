@@ -96,18 +96,15 @@ func (n *Node) supervisorResumeAllowed(id, mode, launcher string) error {
 	return nil
 }
 
-// startFailedForSure: a start's error leaves nothing that may still come up: not possibly delivered, not stalled or
-// waiting on its shell, no tab kept for it (withKeptTab), not cut off by its caller's deadline.
+// startFailedForSure: a start's error says nothing of it ran (a refusal with delivered none) and no tab was kept for
+// it (withKeptTab). Any other failure (a line typed into a shell, a stalled agent, an unanswered call) may still bring
+// the Agent up, and a second resume must not start it twice: those stay unknown (#8214).
 func startFailedForSure(err error) bool {
-	if maybeDelivered(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return false
-	}
-	switch rpcCode(err) {
-	case proto.CodeAgentStartStalled, proto.CodeShellWaiting:
-		return false
-	}
 	var re *rpc.Error
-	if errors.As(err, &re) && len(re.Data) > 0 {
+	if !errors.As(err, &re) || deliveredOf(re) != deliveredNone {
+		return false
+	}
+	if len(re.Data) > 0 {
 		var d struct {
 			Pane      string `json:"pane"`
 			KeptUntil string `json:"kept_until"`
