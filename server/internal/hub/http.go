@@ -80,6 +80,7 @@ func (h *Hub) routes() http.Handler {
 	api.HandleFunc("GET /api/v1/ops/{id}", h.getClientOp)
 	h.fleetRoutesRelayed(api) // resolve, history, seen: the manager's (fleet_link.go)
 	h.phoneWriteRoutes(api)
+	h.phonePrimaryRoutes(api)
 	h.deviceRoutes(api)
 	h.pushRoutes(api)
 	h.webPushRoutes(api)
@@ -1356,26 +1357,22 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 	}
 }
 
+// phoneClient is the connected phone that takes tool (none given: any): only connected providers of it are eligible.
+// The primary device the owner chose goes first while it is connected and offers the tool (phone_primary.go); then
+// real devices before simulators, then the one active last.
 func (h *Hub) phoneClient(tool ...string) *client {
+	name := ""
+	if len(tool) > 0 {
+		name = tool[0]
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	// Only connected providers of the requested tool are eligible; prefer real devices, then recent activity.
-	var best *client
-	for c := range h.clients {
-		select {
-		case <-c.done:
-			continue
-		default:
-		}
-		if !c.phone || (len(tool) > 0 && !c.phoneToolNames[tool[0]]) {
-			continue
-		}
-		if best == nil || (best.sim && !c.sim) || (best.sim == c.sim &&
-			(c.activeAt.After(best.activeAt) || (c.activeAt.Equal(best.activeAt) && c.since.After(best.since)))) {
-			best = c
+	if primary, offers := h.primaryPhoneLocked(name); offers {
+		if c := h.phoneClientLocked(name, primary); c != nil {
+			return c
 		}
 	}
-	return best
+	return h.phoneClientLocked(name, "")
 }
 
 func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {

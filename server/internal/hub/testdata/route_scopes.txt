@@ -741,6 +741,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/model-profiles/{id}
 -                    PUT /api/v1/mutes
 -                    PUT /api/v1/navigation
+-                    PUT /api/v1/phone/primary
 -                    PUT /api/v1/pins
 -                    PUT /api/v1/push/ln-mode
 -                    PUT /api/v1/push/web/{device}

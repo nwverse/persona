@@ -1,0 +1,1 @@
+Answered by {{if .Device}}the user's {{.Device}}{{else}}another of the user's devices{{end}}, not by their primary device{{if .Primary}} ({{.Primary}}){{end}}, which could not take this call just now. If it matters (a location, say), tell the user which device this came from.

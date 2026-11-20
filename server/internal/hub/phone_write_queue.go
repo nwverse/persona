@@ -159,7 +159,7 @@ func (h *Hub) deliverPhoneWrites(ctx context.Context) {
 		var next *db.PhoneWrite
 		var phone *client
 		for i := range writes {
-			if phone = h.phoneClient(writes[i].Tool); phone != nil {
+			if phone = h.queuedWriteClient(writes[i].Tool); phone != nil { // the primary device only, when it offers the tool
 				next = &writes[i]
 				break
 			}
