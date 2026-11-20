@@ -45,8 +45,9 @@ struct StarredChatContext {
     private func add(_ draft: StarredSnapshot, item: Item, source: StarredSource, bar: MessageBarInfo,
                      scope: Int, store: StarredStore) async {
         guard scope == store.scope else { return }
-        let loadText: (() async throws -> String)? = item.fullSize == nil ? nil : {
-            try await fullText(source, bar: bar)
+        var loadText: (() async throws -> String)?
+        if item.fullSize != nil {
+            loadText = { try await fullText(source, bar: bar) }
         }
         await store.add(draft, loadText: loadText)
     }
