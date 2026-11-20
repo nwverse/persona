@@ -41,15 +41,16 @@ SPM="${CI_SPM_CACHE:-$HOME/Library/Caches/persona-ci/spm}"
 mkdir -p "$SOURCE" "$SPM"
 SPM=$(cd "$SPM" && pwd)
 SIM=""
-PHONE_SIM=""
 SIM_STARTED=0
 SIM_NAME="Persona CI $(basename "$OUTPUT")"
-cleanup() {
-  local code=$?
-  trap - EXIT
-  # A failed boot may already have created the device without returning its ID.
-  if [ -z "$SIM" ] && [ "$SIM_STARTED" = 1 ]; then
-    SIM=$(python3 -I - "$SIM_NAME" <<'PY'
+REGULAR_SIM=""
+REGULAR_SIM_STARTED=0
+REGULAR_SIM_NAME="$SIM_NAME Regular"
+cleanup_device() {
+  local udid="$1" name="$2" started="$3"
+  # A failed creation may already have created the device without returning its ID.
+  if [ -z "$udid" ] && [ "$started" = 1 ]; then
+    udid=$(python3 -I - "$name" <<'PY'
 import json, subprocess, sys
 try:
     data = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "-j"], text=True, timeout=60))
@@ -61,18 +62,32 @@ except (OSError, ValueError, subprocess.SubprocessError) as error:
 PY
     ) || true
   fi
+  if [ -n "$udid" ]; then
+    ci_run 'Shut down owned simulator' 120 xcrun simctl shutdown "$udid" || true
+    ci_run 'Delete owned simulator' 120 xcrun simctl delete "$udid" || true
+  fi
+}
+simulator_udid() {
+  # Accept only the helper's single UDID, never a partial/error log.
+  python3 -I - "$1" <<'PY'
+import re, sys
+matches = re.findall(r"(?m)^([0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12})$", open(sys.argv[1]).read())
+if len(matches) != 1:
+    sys.exit("apple-ci: FAIL simulator helper did not return exactly one UDID")
+print(matches[0])
+PY
+}
+cleanup() {
+  local code=$?
+  trap - EXIT
   if [ "$code" -ne 0 ]; then
     # Capture simulator state before cleanup; only allowlisted logs and xcresult
     # bundles leave the disposable output, never synthetic/private config or keys.
     ci_run 'Collect Apple failure diagnostics' 180 python3 "$CI_ROOT/scripts/ci/apple_diagnostics.py" \
       "$OUTPUT" "$DIAGNOSTICS" || printf 'apple-ci: failure diagnostics could not be collected\n' >&2
   fi
-  local owned
-  for owned in "$SIM" "$PHONE_SIM"; do
-    [ -n "$owned" ] || continue
-    ci_run 'Shut down owned simulator' 120 xcrun simctl shutdown "$owned" || true
-    ci_run 'Delete owned simulator' 120 xcrun simctl delete "$owned" || true
-  done
+  cleanup_device "$SIM" "$SIM_NAME" "$SIM_STARTED"
+  cleanup_device "$REGULAR_SIM" "$REGULAR_SIM_NAME" "$REGULAR_SIM_STARTED"
   printf 'apple-ci: %s (exit %s); evidence: %s\n' "$([ "$code" = 0 ] && printf PASS || printf FAIL)" "$code" "$OUTPUT"
   exit "$code"
 }
@@ -125,10 +140,10 @@ resolve() {
   ci_run "Resolve Swift packages ($1)" 900 "${XCODE[@]}" -scheme "$1" -resolvePackageDependencies
 }
 result() {
-  local name="$1"; shift
+  local name="$1" device="$2"; shift 2
   if [ "$LANE" = ios18 ]; then
     ci_run "Inspect test results ($name)" 120 python3 "$CI_ROOT/scripts/ci/apple_result.py" "$OUTPUT/$name.xcresult" \
-      "$@" --ios18 "$SIM" "$OUTPUT/$name.log" --xcode-status "$IOS_LAST_STATUS" || IOS_FAILED=1
+      "$@" --ios18 "$device" "$OUTPUT/$name.log" --xcode-status "$IOS_LAST_STATUS" || IOS_FAILED=1
   else
     ci_run "Inspect test results ($name)" 120 python3 "$CI_ROOT/scripts/ci/apple_result.py" "$OUTPUT/$name.xcresult" "$@"
   fi
@@ -145,6 +160,8 @@ test_batch() {
 }
 
 if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
+  # Real loopback sshd and mock hub, with temporary keys: exercise tunnel recovery before the app builds (#11671).
+  ci_run 'PersonaSSH native tunnel integration tests' 900 env PERSONA_SSH_TRACE="$OUTPUT/native-ssh-trace.log" xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaSSH" --scratch-path "$SPM/PersonaSSH"
   ci_run 'PersonaCore strict-concurrency tests and C-binding fixture replay' 900 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaCore" --scratch-path "$SPM/PersonaCore" -Xswiftc -warnings-as-errors
   ci_run 'PersonaKit unit tests' 900 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaKit" --scratch-path "$SPM/PersonaKit"
   # The live screen's video wire and capture decisions (#3954): PersonaScreenCore, all Persona Link's helper is built from
@@ -218,11 +235,13 @@ if [ "$LANE" != packages ]; then
   if [ "$LANE" = ios18 ]; then
     IOS_VERSION=18.6
     IOS_PHONE="iPhone 16 Pro"
+    IOS_TABLET="iPad (10th generation)"
     BUILD_SECONDS=3600
     UNIT_SECONDS=3600
   else
     IOS_VERSION=26.0
     IOS_PHONE="iPhone 17 Pro"
+    IOS_TABLET="iPad Pro 11-inch (M5)"
     BUILD_SECONDS=1800
     UNIT_SECONDS=1800
   fi
@@ -242,7 +261,11 @@ if [ "$LANE" != packages ]; then
   # despite @MainActor or xcodebuild's parallel-testing switch (#2025).
   # Compile before creating the device: compilation cannot consume its readiness deadline.
   # The full execution retains exactly the same suite selection.
+  # #11289's real .regular foreground scene cannot run on this lane's iPhone.
+  # It is neither skipped nor replaced with an overridden trait: a separate
+  # real-iPad test-without-building lane below runs the unchanged pixel test.
   IOS_UNIT_SELECTION=("${IOS_EXCLUSIONS[@]}" -only-testing:PersonaTests
+    -skip-testing:PersonaTests/AboutVersionRegularVisualTests
     -skip-testing:PersonaTests/AssistantHTMLCardTests -skip-testing:PersonaTests/AssistantHTMLSecurityTests)
   # A generic destination must retain the host's single runnable architecture.
   ci_run 'Build iOS offline unit tests' "$BUILD_SECONDS" "${IOS_COMMON[@]}" \
@@ -255,24 +278,13 @@ if [ "$LANE" != packages ]; then
   # hosted readiness (900). A device state or running service is not a test gate.
   # sim-boot remains the creation entry, with a fresh stock simulator (not
   # paired to a real hub), pinned to the validated compiler-compatible runtime.
-  create_test_simulator() {
-    local model="$1" log="$2"
-    SIM_STARTED=1
-    ci_run "Create stock iOS $IOS_VERSION test simulator" 100 bash -c \
-      '"$1" --create-only --profile stock --runtime "$4" --device-type "$6" "$2" > "$3" 2> >(tee "$5" >&2)' \
-      -- "$SOURCE/scripts/app/sim-boot.sh" "$SIM_NAME" "$OUTPUT/$log.log" "$IOS_RUNTIME" "$OUTPUT/$log-boot.log" "$model"
-    # Accept only the helper's single UDID, never a partial/error log.
-    SIM=$(python3 -I - "$OUTPUT/$log.log" <<'PY'
-import re, sys
-matches = re.findall(r"(?m)^([0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12})$", open(sys.argv[1]).read())
-if len(matches) != 1:
-    sys.exit("apple-ci: FAIL simulator helper did not return exactly one UDID")
-print(matches[0])
-PY
-    )
-    IOS_TESTS=("${IOS_COMMON[@]}" -destination "platform=iOS Simulator,id=$SIM" -destination-timeout 120)
-  }
-  create_test_simulator "$IOS_PHONE" simulator
+  SIM_STARTED=1
+  ci_run "Create stock iOS $IOS_VERSION test simulator" 100 bash -c \
+    '"$1" --create-only --profile stock --runtime "$4" --device-type "$6" "$2" > "$3" 2> >(tee "$5" >&2)' \
+    -- "$SOURCE/scripts/app/sim-boot.sh" "$SIM_NAME" "$OUTPUT/simulator.log" "$IOS_RUNTIME" "$OUTPUT/simulator-boot.log" "$IOS_PHONE"
+  # Accept only the helper's single UDID, never a partial/error log.
+  SIM=$(simulator_udid "$OUTPUT/simulator.log")
+  IOS_TESTS=("${IOS_COMMON[@]}" -destination "platform=iOS Simulator,id=$SIM" -destination-timeout 120)
   # Xcode owns boot, installation and test-host launch. The existing hosted suite
   # and its strict result check must both finish inside the readiness deadline.
   CI_BUNDLE_ID=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["app"]["bundle_id"])' "$PERSONA_CONFIG")
@@ -310,35 +322,50 @@ PY
   if [ "$LANE" = ios18 ]; then
     # These unit suites require real compact/regular scenes and screenshot output.
     # Both execute below, in the language and region of AboutVersionVisualTests.
-    IOS_UNIT_SELECTION+=(-skip-testing:PersonaTests/AboutVersionCompactVisualTests
-      -skip-testing:PersonaTests/AboutVersionRegularVisualTests)
+    IOS_UNIT_SELECTION+=(-skip-testing:PersonaTests/AboutVersionCompactVisualTests)
   fi
   test_batch ios-unit 'iOS offline unit and design/token tests' "$UNIT_SECONDS" "${IOS_TESTS[@]}" "${IOS_UNIT_SELECTION[@]}" \
     -resultBundlePath "$OUTPUT/ios-unit.xcresult" test-without-building
-  result ios-unit TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests
+  result ios-unit "$SIM" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests
   test_batch ios-html-card 'iOS HTML card tests (separate batch)' 600 "${IOS_TESTS[@]}" \
     -only-testing:PersonaTests/AssistantHTMLCardTests -resultBundlePath "$OUTPUT/ios-html-card.xcresult" test
-  result ios-html-card AssistantHTMLCardTests
+  result ios-html-card "$SIM" AssistantHTMLCardTests
   test_batch ios-html-security 'iOS bounded HTML security tests (separate batch)' 600 "${IOS_TESTS[@]}" \
     -only-testing:PersonaTests/AssistantHTMLSecurityTests \
     "-skip-testing:PersonaTests/AssistantHTMLSecurityTests/aRealInfiniteLoopCanBeDiscardedWithoutBlockingANewCard()" \
     -resultBundlePath "$OUTPUT/ios-html-security.xcresult" test
-  result ios-html-security AssistantHTMLSecurityTests
+  result ios-html-security "$SIM" AssistantHTMLSecurityTests
   if [ "$LANE" = ios18 ]; then
     about_visual() {
-      local name="$1" suite="$2"
+      local name="$1" suite="$2" device="$3"
       mkdir -p "$OUTPUT/$name-shots"
       test_batch "$name" "iOS 18.6 $suite" 600 env "TEST_RUNNER_PERSONA_SHOTS=$OUTPUT/$name-shots" \
-        "${IOS_TESTS[@]}" -testLanguage en -testRegion US "-only-testing:PersonaTests/$suite" \
+        "${IOS_COMMON[@]}" -destination "platform=iOS Simulator,id=$device" -destination-timeout 120 \
+        -testLanguage en -testRegion US "-only-testing:PersonaTests/$suite" \
         -resultBundlePath "$OUTPUT/$name.xcresult" test
-      result "$name" "$suite"
+      result "$name" "$device" "$suite"
     }
-    about_visual ios-visual-compact AboutVersionCompactVisualTests
-    PHONE_SIM="$SIM"
-    SIM=""
-    SIM_NAME="$SIM_NAME iPad"
-    create_test_simulator "iPad (10th generation)" simulator-ipad
-    about_visual ios-visual-regular AboutVersionRegularVisualTests
+    about_visual ios-visual-compact AboutVersionCompactVisualTests "$SIM"
+  fi
+
+  # The same compiled fixture and compatible runtime as #11289, but on a real
+  # iPad whose foreground scene has .regular horizontal size class. This is a
+  # focused evidence lane within the Apple job, not a hidden platform skip.
+  REGULAR_SIM_STARTED=1
+  ci_run 'Create stock regular-width About test simulator' 100 bash -c \
+    '"$1" --create-only --profile stock --runtime "$4" --device-type "$6" "$2" > "$3" 2> >(tee "$5" >&2)' \
+    -- "$SOURCE/scripts/app/sim-boot.sh" "$REGULAR_SIM_NAME" "$OUTPUT/regular-simulator.log" "$IOS_RUNTIME" "$OUTPUT/regular-simulator-boot.log" "$IOS_TABLET"
+  REGULAR_SIM=$(simulator_udid "$OUTPUT/regular-simulator.log")
+  if [ "$LANE" = ios18 ]; then
+    about_visual ios-visual-regular AboutVersionRegularVisualTests "$REGULAR_SIM"
+  else
+    mkdir -p "$OUTPUT/regular-shots"
+    TEST_RUNNER_PERSONA_SHOTS="$OUTPUT/regular-shots" \
+      ci_run 'iOS regular-width About visual test on real iPad' 600 "${IOS_COMMON[@]}" \
+        -destination "platform=iOS Simulator,id=$REGULAR_SIM" -destination-timeout 120 \
+        -only-testing:PersonaTests/AboutVersionRegularVisualTests \
+        -resultBundlePath "$OUTPUT/ios-about-regular.xcresult" test-without-building
+    result ios-about-regular "$REGULAR_SIM" AboutVersionRegularVisualTests
   fi
   ci_run 'Verify token baseline was not rewritten' 60 cmp "$CI_ROOT/apple/PersonaTests/TokenBaseline.json" "$SOURCE/apple/PersonaTests/TokenBaseline.json"
   exit "$IOS_FAILED"

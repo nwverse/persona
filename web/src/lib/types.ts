@@ -157,6 +157,8 @@ export interface SessionCapabilities {
   read?: boolean;
   send?: boolean;
   interrupt?: boolean;
+  queue_edit?: boolean;
+  queue_send_now?: boolean;
   approve?: boolean;
   terminal?: boolean;
   attach?: boolean;
@@ -698,6 +700,8 @@ export interface Item {
   /** The runtime's own outcome, when the node recorded one (docs/protocol/protocol.md "Tool outcomes"). */
   outcome?: { status?: string; exit_code?: number };
   full_size?: number;
+  /** Opaque identity of the source record when an item ID names only a position. */
+  source_fingerprint?: string;
   queued?: boolean;
   wake?: boolean;
   narration?: boolean;
@@ -798,6 +802,7 @@ export interface ItemsPage {
 export interface Question {
   question: string;
   header?: string;
+  recommend?: string;
   multi_select?: boolean;
   /** Missing or null for a question asked in free text (Codex request_user_input; a Go nil slice, #1573). */
   options?: { label: string; description?: string; action?: "defer" | (string & {}) }[] | null;

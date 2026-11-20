@@ -175,11 +175,15 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 		}
 		s := proto.Session{
 			SessionID: id, Cwd: c.Cwd, Status: status, Agent: "claude", Title: m.title, SourceKind: source,
-			Model: m.model, LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, st), Rev: st.Size(), AgentSurface: m.surface,
+			Model: n.shownModel(id, m.model), LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, st), Rev: st.Size(), AgentSurface: m.surface,
 		}
 		s.Capabilities, s.ReadOnlyReason = outsideCapabilities(c)
 		if s.Capabilities != nil && s.Capabilities.Send && n.ccPluginInput(id, c.pid) {
 			s.Capabilities.PluginInput = true // the owner's messages go in as their input while it rests (ccplugin.go)
+			if n.ccPluginSettingsCapable(id, c.pid) {
+				s.Capabilities.Model = proto.Bool(true)
+				s.Efforts = slices.Clone(proto.EffortLevels)
+			}
 		}
 		// A claude in a tmux pane says where it runs ("tmux":"orc:@11.%11") and no hooks of Persona's run there: the
 		// pane's screen is what its approval shows on, so it gets that screen and the keys into it (#2562).
@@ -191,6 +195,9 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 			s.Capabilities.Terminal = true
 			s.Capabilities.Send = true         // the owner's message can be typed here even with no inbox (#5965)
 			s.Capabilities.PluginInput = false // this pane, not the plugin, carries the owner's input
+			s.Capabilities.Model = proto.Bool(true)
+			s.Capabilities.Modes = proto.CanModes(true)
+			s.Efforts = slices.Clone(proto.EffortLevels)
 			s.ReadOnlyReason = ""
 			livePanes[pane] = true // its dialog read is kept while the claude lives (forgetDialogs)
 			// Its own status file says waiting when a dialog has the keyboard, but a build that does not: a resting
@@ -225,7 +232,7 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 		if s.Title == "" {
 			s.Title = c.Name
 		}
-		setContext(&s, m)
+		n.setSessionContext(&s, m)
 		s.ModelFallback = m.modelFallback
 		s.Activity, s.ActivityAt = m.activityOf()
 		s.PermissionMode, s.Effort = n.currentModes(id, m)

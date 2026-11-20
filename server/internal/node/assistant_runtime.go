@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/nodeclient"
 
 	"github.com/nwverse/persona/server/internal/assistantskills"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -73,6 +74,10 @@ func runtimeSessionID(id string) bool { return id != "" && !validID(id) && runti
 // supervision_instructions as an explicit protocol field on session.start and session.send; non-capable runtimes keep
 // the runtimePolicyDropped boundary (refusing supervision deliveries, dropping policy for owner messages).
 func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd, launcher, text string, images []proto.Image, mode string, public, strict bool, modelEffortPolicy ...string) (string, error) {
+	hasInput := strings.TrimSpace(text) != "" || len(images) != 0
+	if id != "" && hasInput && n.runtimes.compacting(id) {
+		return "", runtimeCompactingRefusal(ctx)
+	}
 	var pickedModel, pickedEffort, policy string
 	if len(modelEffortPolicy) > 0 {
 		pickedModel = modelEffortPolicy[0]
@@ -118,7 +123,7 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		policy = ""
 	}
 	if supportsPolicy && id != "" && known && st.SupervisionInstructions != policy && n.runtimeStatus(h, id) == proto.StatusWorking {
-		return "", refusal("busy", i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
+		return "", refusal(assistantwire.CodeConversationBusy, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
 	}
 	if n.assistantDirectoryPrepared(cwd) {
 		n.assistantRuntimeSkills(cwd)
@@ -157,7 +162,6 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	if m := n.assistantModeOf(id); m != "" {
 		turn["mode"] = m
 	}
-	hasInput := strings.TrimSpace(text) != "" || len(images) != 0
 	if !known || st.Launcher != launcher || st.Cwd != cwd || hasInput && st.TaskExecution != strict || (startedNew && supportsPolicy && policy != "") {
 		if st.StartedAt.IsZero() {
 			st.StartedAt = time.Now().UTC()
@@ -203,13 +207,27 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	if supportsPolicy {
 		params["supervision_instructions"] = policy
 	}
+	compactCommand := command && runtimeCommandWord(text) == "/compact"
+	var beforeSend *proto.Session
+	if h.agent() == "agy" && (!command || compactCommand) {
+		if row, ok := h.row(id); ok {
+			beforeSend = &row
+		}
+	}
 	cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
 	defer cancel()
-	if err := h.peer.Call(cctx, "session.send", params, nil); err != nil {
+	var said json.RawMessage
+	if err := h.peer.Call(cctx, "session.send", params, &said); err != nil {
 		if isRPCError(err) {
 			return "", err
 		}
 		return "", fmt.Errorf("%s: %w", h.label(), err)
+	}
+	if runtimeAnswerFlag(said, "queued") {
+		markSendQueued(ctx)
+	}
+	if st.AwaitingFirstMessage || beforeSend != nil {
+		n.noteRuntimeWorking(h, id, beforeSend)
 	}
 	if supportsPolicy && st.SupervisionInstructions != policy {
 		cur, _ := n.state.get(id)
@@ -217,13 +235,10 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		n.state.put(id, cur)
 	}
 	commit()
-	if command && runtimeCommandWord(text) == "/compact" {
+	if compactCommand {
 		// The runtime summarizes the conversation: the blocks it was told are gone, so the next message tells it everything
 		// again, as after Persona's own compaction.
 		n.contextCompacted(id)
-	}
-	if st.AwaitingFirstMessage {
-		n.noteRuntimeWorking(h, id)
 	}
 	awaitList(n.notifySessionsSoon()) // as a Claude conversation's send: not the whole list's time
 	return id, nil
@@ -321,9 +336,7 @@ func (n *Node) runtimeInstructions(cwd, memDir string) string {
 // assistantRuntimeSkills puts the assistant's skills where agent runtimes look for a project's (<cwd>/.agents/skills),
 // beside Claude's (.claude/skills, assistantLarkEnv).
 func (n *Node) assistantRuntimeSkills(cwd string) {
-	if err := assistantskills.Sync(filepath.Join(cwd, ".agents", "skills"), assistantskills.UserDir(), n.signedInConnectors(cwd), n.logger.Printf); err != nil {
-		n.logger.Printf("assistant: skills: %v", err)
-	}
+	n.syncRuntimeSkillDir(cwd, filepath.Join(cwd, ".agents", "skills"))
 }
 
 // gateScript is a command gate's script in the assistant's directory, "" when its skill is not there.

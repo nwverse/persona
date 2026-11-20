@@ -158,7 +158,7 @@ type Session struct {
 	Capabilities     *SessionCapabilities `json:"capabilities,omitempty"`
 	IsSubagent       bool                 `json:"is_subagent,omitempty"`
 	Attached         bool                 `json:"attached,omitempty"`
-	// CanFork: "Branch to new chat" works for it (a Claude Code conversation the node can copy, node/fork.go); older nodes
+	// CanFork: "Branch to new chat" works for it (node/fork.go); older nodes
 	// never say so, and the clients hide it.
 	CanFork          bool `json:"can_fork,omitempty"`
 	StartedByPersona bool `json:"started_by_persona"`
@@ -232,6 +232,12 @@ type Session struct {
 	// optional effort metadata within the row size budget.
 	PendingEffort      *string `json:"pending_effort,omitempty"`
 	EffortChangeFailed bool    `json:"effort_change_failed,omitempty"`
+	// OffLauncher: Persona started this Claude Code Agent on Launcher, but the claude that runs it now was not started
+	// by Persona's command (it lacks Persona's --mcp-config): herdr's bare `claude --resume <id>` after a restart on a
+	// herdr older than 0.9.2, or a resume typed by hand (#11792). Launcher's settings, model, MCP and hooks do not
+	// apply to it, and a launcher switch to Launcher itself brings it back there. Beside EffortChangeFailed, in its
+	// padding: a Session stays in its allocation size class.
+	OffLauncher bool `json:"off_launcher,omitempty"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
 	// UltracodePending (beside AsksRead) means a requested change waits for an idle input box; LostAt asks the client
 	// to offer reopening after a resumed process reset an enabled switch. Reopening or dismissing the notice clears

@@ -82,6 +82,42 @@ class AppleCIPreparationTests(unittest.TestCase):
             script.index("Unsigned iOS and embedded watch/extensions build"),
         )
 
+    def test_native_ssh_tests_run_before_the_app_and_fail_the_lane_on_error(self):
+        script = SCRIPT.read_text()
+        packages = script.split('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then\n', 1)[1].split('\nfi', 1)[0]
+        commands = [line.strip() for line in packages.splitlines() if "ci_run 'PersonaSSH " in line]
+        self.assertEqual(len(commands), 1)
+        command = commands[0]
+        self.assertIn('900 env PERSONA_SSH_TRACE="$OUTPUT/native-ssh-trace.log" xcrun swift test', command)
+        self.assertLess(script.index(command), script.index('Unsigned iOS and embedded watch/extensions build'))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / 'output directory'
+            output.mkdir()
+            xcrun = root / 'xcrun'
+            xcrun.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > "$CALL_LOG"\n'
+                             'printf "synthetic SSH trace\\n" > "$PERSONA_SSH_TRACE"\nexit "$SSH_STATUS"\n')
+            xcrun.chmod(0o755)
+            log = root / 'commands.log'
+            env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
+                       SOURCE=str(root / 'source snapshot'), SPM=str(root / 'spm cache'),
+                       OUTPUT=str(output), CALL_LOG=str(log))
+            shell = 'source scripts/ci/common.sh\n' + command + '\nprintf "ssh-lane-continued\\n"\n'
+            for status in (0, 42):
+                with self.subTest(status=status):
+                    env['SSH_STATUS'] = str(status)
+                    result = subprocess.run(['bash', '-c', shell], cwd=ROOT, env=env,
+                                            text=True, capture_output=True, timeout=15)
+                    self.assertEqual(result.returncode, status, result.stdout + result.stderr)
+                    # The complete native suite runs from the disposable snapshot, with no filters or skips.
+                    self.assertEqual(log.read_text().splitlines(), [
+                        'swift', 'test', '--package-path', env['SOURCE'] + '/apple/Packages/PersonaSSH',
+                        '--scratch-path', env['SPM'] + '/PersonaSSH',
+                    ])
+                    self.assertEqual((output / 'native-ssh-trace.log').read_text(), 'synthetic SSH trace\n')
+                    self.assertEqual('ssh-lane-continued' in result.stdout, status == 0)
+                    self.assertIn('PASS' if status == 0 else 'FAIL', result.stdout)
+
     def test_existing_integration_exclusions_use_exact_swift_testing_selectors(self):
         script = SCRIPT.read_text()
         block = script.split('IOS_EXCLUSIONS=(', 1)[1].split('\n  )', 1)[0]
@@ -162,12 +198,15 @@ class AppleCIPreparationTests(unittest.TestCase):
             suite = f"AboutVersion{size}VisualTests"
             self.assertIn("-skip-testing:PersonaTests/" + suite, script)
             self.assertIn(f"about_visual ios-visual-{size.lower()} {suite}", script)
-        tablet = script.index('create_test_simulator "iPad (10th generation)"')
+        self.assertIn('IOS_TABLET="iPad (10th generation)"', script)
+        tablet = script.index('REGULAR_SIM=$(simulator_udid')
         self.assertLess(script.index("about_visual ios-visual-compact"), tablet)
         self.assertGreater(script.index("about_visual ios-visual-regular"), tablet)
         self.assertIn("TEST_RUNNER_PERSONA_SHOTS=$OUTPUT/$name-shots", script)
         self.assertIn('-testLanguage en -testRegion US', script)
-        self.assertIn('for owned in "$SIM" "$PHONE_SIM"', script)
+        self.assertIn('about_visual ios-visual-compact AboutVersionCompactVisualTests "$SIM"', script)
+        self.assertIn('about_visual ios-visual-regular AboutVersionRegularVisualTests "$REGULAR_SIM"', script)
+        self.assertIn('result "$name" "$device" "$suite"', script)
 
     def test_native_mac_profile_preparation_is_gone_and_ios_tests_use_ad_hoc_signing(self):
         script = SCRIPT.read_text()
@@ -185,8 +224,8 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn('--platform "$platform"', script)
         self.assertNotIn("-buildVersion 26.0", script)
         self.assertIn('--profile stock --runtime "$4"', script)
-        self.assertIn('"$OUTPUT/$log.log" "$IOS_RUNTIME"', script)
-        self.assertIn('create_test_simulator "$IOS_PHONE" simulator', script)
+        self.assertIn('"$OUTPUT/simulator.log" "$IOS_RUNTIME" "$OUTPUT/simulator-boot.log" "$IOS_PHONE"', script)
+        self.assertIn('"$OUTPUT/regular-simulator.log" "$IOS_RUNTIME" "$OUTPUT/regular-simulator-boot.log" "$IOS_TABLET"', script)
         self.assertIn("FAIL select Xcode 26.0.x explicitly", script)
 
 
@@ -281,10 +320,12 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
             root = Path(directory)
             output, destination = root / 'output', root / 'artifacts'
             output.mkdir()
-            for name in ('simulator.log', 'simulator-boot.log', 'simulator-readiness.log', 'runtimes-iOS-before.json'):
+            for name in ('simulator.log', 'simulator-boot.log', 'simulator-readiness.log', 'runtimes-iOS-before.json',
+                         'regular-simulator.log', 'regular-simulator-boot.log', 'native-ssh-trace.log'):
                 (output / name).write_text('diagnostic fixture')
             (output / 'config.json').write_text('configuration must stay in output')
             (output / 'private.key').write_text('key fixture must stay in output')
+            (output / 'native-ssh-trace-private.log').write_text('unlisted trace must stay in output')
             result = output / 'ios-unit.xcresult'
             result.mkdir()
             (result / 'summary.json').write_text('test results')
@@ -303,11 +344,13 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
             self.assertEqual((destination / 'disk-space.txt').read_text(), 'disk space diagnostic')
             self.assertEqual({path.name for path in destination.iterdir()}, {
                 'simulator.log', 'simulator-boot.log', 'simulator-readiness.log', 'runtimes-iOS-before.json',
+                'regular-simulator.log', 'regular-simulator-boot.log', 'native-ssh-trace.log',
                 'ios-unit.xcresult', 'simctl-list.json', 'simctl-list.stderr.txt', 'simctl-list.status.txt',
                 'disk-space.txt', 'disk-space.stderr.txt', 'disk-space.status.txt',
                 'simulator-launch.status.txt',
             })
             self.assertEqual((destination / 'ios-unit.xcresult/summary.json').read_text(), 'test results')
+            self.assertEqual((destination / 'native-ssh-trace.log').read_text(), 'diagnostic fixture')
             self.assertFalse((destination / 'ios-unit.xcresult/external-key').exists())
 
     def test_unavailable_simctl_still_retains_existing_logs(self):
@@ -331,7 +374,13 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
         self.assertIn('--create-only --profile stock', script)
         self.assertIn('2> >(tee "$5" >&2)', script)
         self.assertIn('if [ "$code" -ne 0 ]; then', script)
-        self.assertLess(script.index("ci_run 'Collect Apple failure diagnostics'"), script.index("ci_run 'Shut down owned simulator'"))
+        cleanup = script[script.index('cleanup() {'):script.index('trap cleanup EXIT')]
+        self.assertLess(cleanup.index("ci_run 'Collect Apple failure diagnostics'"), cleanup.index('cleanup_device "$SIM"'))
+        cleanup_helper = script[script.index('cleanup_device() {'):script.index('simulator_udid() {')]
+        self.assertIn("ci_run 'Shut down owned simulator'", cleanup_helper)
+        self.assertIn("ci_run 'Delete owned simulator'", cleanup_helper)
+        self.assertEqual(cleanup.count('cleanup_device "$SIM"'), 1)
+        self.assertEqual(cleanup.count('cleanup_device "$REGULAR_SIM"'), 1)
         self.assertIn('exit "$code"', script)
         self.assertIn('if: failure()\n        uses: actions/upload-artifact@v4', workflow)
         self.assertIn('CI_APPLE_DIAGNOSTICS: ${{ runner.temp }}/persona-apple-diagnostics-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}', workflow)

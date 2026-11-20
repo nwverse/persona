@@ -47,20 +47,21 @@ func (n *Node) readErr(id string, err error) error {
 // for): proto.NotFoundNoTranscript for a session it knows (knownSession), proto.NotFoundUnknownSession for one it has
 // no record of. A subagent ("<session>@<agent>") goes by its session. None until the node's records have come from the
 // hub on this connection (recordsLoaded: a session missing from them may still be Persona's), nor for a session an
-// Agent runtime runs: one whose transcript the runtime names (runtimetranscript.go), and any of a runtime's own ids or
-// their subagents', whose history is the runtime's and comes back with it when it is not connected now (#11450).
+// Agent runtime runs: registered ownership, a transcript the runtime names, or a runtime assistant conversation. The
+// runtime-shaped id test is only a fallback for an unrecorded id: the node's own record can use that shape too (#11470).
 func (n *Node) readReason(id, missing string) string {
 	if parent, _, ok := splitSubagent(id); ok && parent == missing {
 		id = parent
 	}
 	session, _, _ := strings.Cut(id, subagentSep)
-	if id != missing || runtimeSessionID(session) || n.runtimes.transcriptOf(id) != "" {
+	_, _, runtimeOwned := n.runtimes.belongs(session)
+	if id != missing || runtimeOwned || n.runtimeAssistant(session) || n.runtimes.transcriptOf(id) != "" {
 		return ""
 	}
 	if n.knownSession(id) {
 		return proto.NotFoundNoTranscript
 	}
-	if !n.recordsLoaded() {
+	if runtimeSessionID(session) || !n.recordsLoaded() {
 		return ""
 	}
 	return proto.NotFoundUnknownSession
@@ -347,6 +348,29 @@ func validID(id string) bool { return nodeclient.ValidSessionID(id) }
 
 func (n *Node) file(id string) (*transcript.File, error) {
 	n.refreshCodexAppHistory(id) // a Codex App chat with no rollout: its history written out of the App's database (codex_apphistory.go)
+	return n.transcriptFile(id)
+}
+
+func (n *Node) exportFile(id string) (*transcript.File, error) {
+	unsupported := func() error {
+		return refusal(proto.CodeNodeOutdated, "The transcript is a database history projection.", nil)
+	}
+	if _, _, projected := n.codexAppHistoryChat(id); projected {
+		return nil, unsupported()
+	}
+	f, err := n.transcriptFile(id)
+	if err != nil {
+		return nil, err
+	}
+	// Refuse a cached projection even when its database can no longer name
+	// the session. The readable JSONL would still be stale.
+	if dir := n.codexAppHistoryDir(); dir != "" && filepath.Dir(f.Where()) == filepath.Clean(dir) {
+		return nil, unsupported()
+	}
+	return f, nil
+}
+
+func (n *Node) transcriptFile(id string) (*transcript.File, error) {
 	n.mu.Lock()
 	f := n.files[id]
 	if f != nil {

@@ -54,7 +54,7 @@ internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? =
     var whole by remember(item.id) { mutableStateOf<String?>(null) }
     val cut = item.fullSize != null && whole == null && update?.streaming != true
     val text = (whole ?: update?.text ?: item.text.orEmpty().let { if (item.fullSize != null) cutText(it) else it })
-        .let { if (hideCloseout) persona.core.domain.sort.stripCloseout(it) else it }
+        .let { if (hideCloseout) persona.core.domain.sort.stripCloseout(it, complete = !cut && update?.streaming != true) else it }
     val ancillaryStream = remember(item.id, update?.streaming == true) { AssistantAncillaryStream { _, _ -> } }
     val ancillary = if (update?.streaming == true && !user && item.from.isNullOrBlank()) {
         ancillaryStream.update(text, hostnames = LocalChatPorts.current?.hostnames.orEmpty(), linkable = emptySet())
@@ -65,8 +65,8 @@ internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? =
     val target = MessageTarget(item.id, model.plain, user, model.editText(), raw = text,
         from = item.from?.takeIf { it.isNotBlank() } ?: (model.parts.singleOrNull() as? MessagePart.Source)?.name?.takeIf { it.isNotBlank() },
         time = item.ts, cut = item.id.takeIf { cut })
-    Column(Modifier.fillMaxWidth().messageMenu(target)) {
-        MessageContextGroup(model.contexts, "${item.id}/contexts", uri::openUri, alignEnd = user)
+    PickableMessageColumn(target, Modifier.fillMaxWidth().messageMenu(target)) {
+        MessageForwardContexts(model.contexts, "${item.id}/contexts", uri::openUri, alignEnd = user)
         AttachedFileCards(model.attached, alignEnd = user)
         // a reply still being written: its quotes do not fold yet (#2984)
         CompositionLocalProvider(LocalReplyStreaming provides (update?.streaming == true)) {
@@ -117,11 +117,16 @@ private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, on
     }
     parts.forEachIndexed { index, part ->
         when (part) {
-            is MessagePart.Text -> if (user) Text(messageLinkAnnotations(part.text), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink,
-                onTextLayout = { layout ->
-                    if (index == parts.lastIndex && layout.lineCount > 0)
-                        onLastLine?.invoke((layout.size.height - layout.getLineTop(layout.lineCount - 1)).toInt() + bottomPadding)
-                })
+            is MessagePart.Text -> if (user) {
+                val annotated = messageLinkAnnotations(part.text)
+                val layoutState = remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
+                Text(annotated, Modifier.chatLinkLongPress(annotated) { layoutState.value }, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink,
+                    onTextLayout = { layout ->
+                        layoutState.value = layout
+                        if (index == parts.lastIndex && layout.lineCount > 0)
+                            onLastLine?.invoke((layout.size.height - layout.getLineTop(layout.lineCount - 1)).toInt() + bottomPadding)
+                    })
+            }
                 else AssistantAnswerFrame(boxed) {
                     ReplyMarkdown(part.text, "$id/$index", ownReply,
                         viewKeys = { n -> persona.core.domain.views.AssistantFences.key(id, firstCard[index] + n) }, streaming = streaming)
@@ -162,7 +167,8 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
     val models = remember(items, texts) { items.mapIndexed { index, item -> messageModel(texts[index], item.from, user = true) } }
     val parts = remember(models) { models.flatMap { it.parts } }
     // A forward (#3901) is a card at the top of the bubble; the other blocks fold into one row above it, as before.
-    val (forwards, contexts) = remember(models) { models.flatMap { it.contexts }.partition { it.kind == ForwardMessage.KIND } }
+    val forwards = remember(models) { models.flatMap { bubbleForwardGroups(it.contexts) } }
+    val contexts = remember(models) { models.flatMap { it.contexts }.filter { it.kind != ForwardMessage.KIND } }
     val photos = remember(models) { models.flatMap { it.images }.distinct() }
     val files = remember(models) { models.flatMap { it.files }.distinct().take(6) }
     val attached = remember(models) { models.flatMap { it.attached }.distinctBy { it.path } }
@@ -198,14 +204,14 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
     val bubble = (contexts.isEmpty() && attached.isEmpty()) || parts.isNotEmpty() || photos.isNotEmpty() || images != null || streaming ||
         forwards.isNotEmpty()
     val fromCard = models.any { it.fromCard }
-    Column(Modifier.fillMaxWidth()) {
+    PickableMessageColumn(target.takeIf { menu }, Modifier.fillMaxWidth()) {
         MessageContextGroup(contexts, "${items.firstOrNull()?.id.orEmpty()}/contexts", uri::openUri)
         AttachedFileCards(attached)
         if (fromCard) Text(stringResource(R.string.chat_from_card), Modifier.align(Alignment.End).padding(bottom = Tokens.Space.xs),
             style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1)
         if (bubble) UserBubbleFrame(Modifier.messageMenu(target.takeIf { menu }), footer = footer, own = own, faded = faded, leading = leading) {
             forwards.forEachIndexed { index, forward ->
-                ForwardBubbleCard(forward, "${items.firstOrNull()?.id.orEmpty()}/forward/$index")
+                ForwardBubbleGroup(forward, "${items.firstOrNull()?.id.orEmpty()}/forward/$index")
                 if (index < forwards.lastIndex || parts.isNotEmpty() || photos.isNotEmpty() || images != null || streaming)
                     Spacer(Modifier.height(Tokens.Space.s))
             }

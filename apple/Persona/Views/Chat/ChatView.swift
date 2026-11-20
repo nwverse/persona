@@ -167,7 +167,15 @@ struct ChatView: View {
     /// `Unfolding`). Closing has no such phase: what closes goes at once (#3005).
     @State private var revealUntil: [String: Date] = [:]
 
-    private enum Entry: Equatable { case latestAnswer, line(String), message(String) }
+    private enum Entry: Equatable {
+        case latestAnswer, line(String), message(String)
+        #if os(iOS)
+        case starred(MessageJump)
+        #endif
+    }
+    #if os(iOS)
+    @State private var checkedStar: UUID?
+    #endif
     /// The line being landed on, measured while landing (only that one row watches its frame).
     @State private var landing: String?
 
@@ -963,6 +971,9 @@ struct ChatView: View {
         .environment(\.attachImage, actions.attachImage)
         .environment(\.loadImage, actions.loadImage)
         .environment(\.loadFullText, actions.loadFullText)
+        #if os(iOS)
+        .environment(\.starredChat, starredChatContext)
+        #endif
         .onAppear(perform: appeared)
         // The same chat was already open (the app left on it) when its "Done" notification was tapped: no new entry.
         .onChange(of: model.latestAnswerFor) { _, k in
@@ -1139,6 +1150,7 @@ struct ChatView: View {
         ChatLines(openWork: openWork, openAll: Self.debugOpenAll, openRuns: openRuns,
                   openAllRuns: Self.debugOpenRuns, chipRuns: AppStyle.current.usesBeautifulUI,
                   foldsIntoRun: foldsIntoRun, foldSupervision: style == .assistant, foldBackground: foldsBackground,
+                  main: shownKey.sessionID == model.assistantMain?.sessionID,
                   openSupervision: openSupervision, openAllSupervision: Self.debugOpenSupervision, active: shownRoundActive)
     }
     private func unfoldWork(_ lines: [ChatLine]) -> [ChatLine] { lineBuilder.unfold(lines) }
@@ -1682,6 +1694,29 @@ struct ChatView: View {
                 if store.hasMore, scratch.entryPages < Self.entryPageLimit { searchOlderForEntry() } else { entry = nil }
             }
             return
+        #if os(iOS)
+        case .starred(let jump):
+            guard checkedStar == jump.id, shownKey == jump.key, let source = jump.starred else { return }
+            if let item = store.items.first(where: { $0.id == source.item }) {
+                guard source.matches(item) else {
+                    entry = nil
+                    model.toast = Toast(String(localized: "The original message is unavailable."))
+                    return
+                }
+                if jumpToMessage(source.item, hold: Theme.Quote.landingHold, stillMatches: {
+                    shownKey == jump.key && store.items.contains(where: source.matches)
+                }) { entry = nil; return }
+            }
+            if store.backlogBuilt {
+                if store.hasMore, scratch.entryPages < Self.entryPageLimit {
+                    searchOlderForEntry()
+                } else {
+                    entry = nil
+                    model.toast = Toast(String(localized: "Couldn't find the original message in the loaded chat."))
+                }
+            }
+            return
+        #endif
         case .line(let saved):
             if lines.contains(where: { $0.id == saved }) {
                 id = saved
@@ -2358,7 +2393,7 @@ struct ChatView: View {
                     #if DEBUG
                     .overlay(alignment: .topLeading) { if Self.scrollProbe { scrollState } }
                     .screenProbe("chat", page: style == .assistant ? "assistant" : "agents",
-                                 ChatShown(key: shownKey.machineID + "/" + shownKey.sessionID, appeared: appearCount))
+                                 ChatShown(key: shownKey.machineID + "/" + shownKey.sessionID, appeared: appearCount, highlighted: quoteFlash?.line))
                     .overlay(alignment: .topLeading) {
                         #if DEBUG
                         if UnfoldTrace.enabled { unfoldProbe } else if ScreenProbe.enabled { rowsProbe }
@@ -2626,7 +2661,7 @@ struct ChatView: View {
 
     /// Brings message `msg` (an item's id) of the loaded chat to the middle of the list and lights it up for `hold`, opening
     /// the work line it is folded in; the list stops following the newest. False when it is not in the loaded chat.
-    private func jumpToMessage(_ msg: String, hold: Duration = Theme.Quote.flashHold) -> Bool {
+    private func jumpToMessage(_ msg: String, hold: Duration = Theme.Quote.flashHold, stillMatches: (() -> Bool)? = nil) -> Bool {
         var target: String?
         for line in currentLines() {
             switch line.content {
@@ -2653,8 +2688,10 @@ struct ChatView: View {
         setFollow { $0.read() }
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(120)) // an opened work line's steps are laid out first
+            guard stillMatches?() != false else { return }
             withAnimation(Theme.Motion.standard) { position.scrollTo(id: target, anchor: .center) }
             try? await Task.sleep(for: .milliseconds(250))
+            guard stillMatches?() != false else { return }
             quoteFlash = QuoteFlashMark(line: target, hold: hold)
         }
         return true
@@ -4255,8 +4292,8 @@ struct ChatView: View {
     /// Under side bars in a split (the open Duo on its side) the page starts `Theme.Space.xl` from the top whatever its
     /// navigation bar holds. The bar holds nothing across the top (its actions are in the side column, its title is
     /// removed) but, with the column folded, the system's Show Sidebar, and that row pushed the header and the chat 58 pt
-    /// down. The empty bar put the page `Theme.Space.xl` down, so with the column out nothing moves; folded, the system's
-    /// button lies on the title's line at the top left, as on a place. Not while typing: the bar then shows the system's
+    /// down. The empty bar put the page `Theme.Space.xl` down, so with the column out nothing moves; folded, the sidebar's
+    /// button is the side column's first item (`sideBarItems`, #11636). Not while typing: the bar then shows the system's
     /// title over the content, and the header is only fog. Not in a hosting sheet, which has a bar of its own.
     private var pinsSideTop: Bool {
         #if os(iOS)
@@ -4265,10 +4302,6 @@ struct ChatView: View {
         false
         #endif
     }
-
-    /// The list folded under side bars: the system's Show Sidebar at the top left brings it back (#3680), so the side
-    /// column has no second one.
-    private var systemShowsList: Bool { backShowsList && split?.sideBars == true }
 
     /// Under side bars, a page pushed onto another, on its chat: Back is the system's own (#9971). It does what ours does
     /// there (one page back), the system puts it at the top of the side column, and only with it does iOS's swipe back
@@ -4282,12 +4315,16 @@ struct ChatView: View {
 
     /// The header's actions as system toolbar items, for the side column: back on top (a custom one, so it leaves files /
     /// Git for the chat first), then the panes, the terminal and ⋯. Each has a title as well as a symbol: the column
-    /// shows the symbol, the overflow menu both.
+    /// shows the symbol, the overflow menu both. A root picked in the sidebar, with the sidebar folded, has the sidebar's
+    /// button there instead (#8603, #11636): the system's Show Sidebar is removed on the roots' column, since iOS drew it
+    /// in the bar's title row, which the chat removes, and did not draw it again on a root after a pop.
     @ToolbarContentBuilder private var sideBarItems: some ToolbarContent {
-        if !hidesBack && !systemShowsList && !systemBack {
+        if !hidesBack && !systemBack {
             ToolbarItem(placement: .topBarLeading) {
-                // A hosting sheet's ✕ Close, its pushed page's ‹ Back, the panes' ‹ Back (#2625): as the header's would be.
+                // A hosting sheet's ✕ Close, its pushed page's ‹ Back, the panes' ‹ Back (#2625): as the header's would be;
+                // a root's Show Sidebar (`backSymbol`, `backLabel`).
                 Button { back() } label: { Label(backLabel, systemImage: backSymbol) }
+                    .modifier(SidebarButtonID(active: backShowsList))
             }
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
@@ -4314,7 +4351,7 @@ struct ChatView: View {
         var all: [SessionPane] = pane != .chat ? [.chat] : []
         if session?.canTerminal == true { all.append(.terminal) }
         all += panes.filter { ($0 == .git || $0 == .files) && $0 != pane }
-        let back = !hidesBack && !systemShowsList
+        let back = !hidesBack
         return Array(all.prefix(TabSwitchLayout.pageButtons(all.count, back: back, room: sideColumn?.room)))
     }
 
@@ -4635,8 +4672,32 @@ struct ChatView: View {
     private func takeMessageJump() -> Bool {
         guard let j = model.messageJump, j.key == key else { return false }
         model.messageJump = nil
-        entry = .message(j.item)
         scratch.entryPages = 0
+        #if os(iOS)
+        if let source = j.starred {
+            guard let api = model.api(key.group) else {
+                model.toast = Toast(String(localized: "Couldn't check the original message. Try again."))
+                return false
+            }
+            if viewing != nil { view(nil) }
+            entry = .starred(j)
+            checkedStar = nil
+            Task {
+                let result = await StarredStore.readOriginal(source, key: key, api: api)
+                guard entry == .starred(j), shownKey == j.key, api.sameSettingsScope(as: model.api(key.group)) else { return }
+                if result == .verified {
+                    checkedStar = j.id
+                    landEntry(currentLines())
+                } else {
+                    entry = nil
+                    model.toast = Toast(result == .unavailable ? String(localized: "The original message is unavailable.") :
+                        String(localized: "Couldn't check the original message. Try again."))
+                }
+            }
+            return true
+        }
+        #endif
+        entry = .message(j.item)
         return true
     }
 
@@ -5329,6 +5390,16 @@ struct ChatView: View {
         if style == .assistant { return t.isEmpty || t == "Claude Code" ? "Persona" : t }
         return t.isEmpty ? String(localized: "Chat") : t
     }
+
+    #if os(iOS)
+    private var starredChatContext: StarredChatContext? {
+        guard !ProcessInfo.processInfo.isiOSAppOnMac, shownKey.group == model.hub?.group,
+              model.hubFeatures.contains(APIClient.starredMessagesFeature) else { return nil }
+        return StarredChatContext(key: shownKey, conversation: style == .assistant ? .assistant : .agent,
+                                  title: title, speaker: style == .assistant ? model.assistantShownName(in: shownKey) : (session?.agentLabel ?? ""),
+                                  manager: session?.manager, api: model.api(shownKey.group))
+    }
+    #endif
 
     private var subtitle: String {
         guard let s = session else { return "" }
@@ -8849,6 +8920,8 @@ nonisolated struct ChatShown: Encodable, Equatable {
     var key: String
     /// How many times this conversation has appeared since launch (`ChatView.appearances`).
     var appeared: Int
+    /// The exact line the most recent link or quote highlighted.
+    var highlighted: String? = nil
 }
 
 /// `probe.chat-rows`: the items and lines the chat has, how many lines are on screen, the top one and where it is.

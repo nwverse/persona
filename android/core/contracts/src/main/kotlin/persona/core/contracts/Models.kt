@@ -102,6 +102,8 @@ data class Machine(
     @SerialName("error_code") val errorCode: String? = null,
     /** The manager it belongs to (docs/assistant/managers.md「Ownership」); null from an older hub: the default manager. */
     @SerialName("manager") val manager: String? = null,
+    /** The default for new sessions among [engineHosts]. Older hubs describe it with [engine]. */
+    @SerialName("engine_default") val engineDefault: String? = null,
 ) {
     val displayName: String get() = name.ifEmpty { id }
     val pending: Boolean get() = trust == "pending"
@@ -236,6 +238,10 @@ data class BackgroundTask(
     @WireTime @SerialName("expires_at") val expiresAt: String? = null,
     /** A workflow's run (`wf_…`): which of [Session.workflows] it is. */
     @SerialName("run_id") val runId: String? = null,
+    /** Retained results have a terminal status, a stop time and, when observed, an exit code. */
+    val status: String? = null,
+    @WireTime @SerialName("ended_at") val endedAt: String? = null,
+    @SerialName("exit_code") val exitCode: Int? = null,
 ) {
     /** A Workflow run: shown from [Session.workflows] where the hub sends them, never counted twice. */
     val isWorkflow: Boolean get() = kind == "workflow"
@@ -509,6 +515,8 @@ data class Session(
      */
     @SerialName("queued_relayed") val queuedRelayed: Int? = null,
     @SerialName("background") val background: List<BackgroundTask>? = null,
+    /** A short-lived list of shell and Monitor outcomes. Summary rows and older hubs can omit it. */
+    @SerialName("background_ended") val backgroundEnded: List<BackgroundTask>? = null,
     /**
      * Its Workflow runs of the last day, newest first (docs/protocol/agent-states.md "Background workflows and Monitor"): a running one is
      * in [background] too, as kind `workflow`. Older hubs never send it (null).
@@ -652,6 +660,8 @@ data class Session(
      * waits. [launcher] stays the one it runs on until then. Summary rows leave it out.
      */
     @SerialName("pending_switch") val pendingSwitch: PendingSwitch? = null,
+    /** Earlier stretches of this conversation, oldest first, after a handoff to the other engine. */
+    @SerialName("engine_history") val engineHistory: List<EngineLeg> = emptyList(),
     /** The manager's current queue. A complete session row without the field has no held messages. */
     val undelivered: List<HeldAgentMessage>? = null,
 ) {
@@ -712,6 +722,14 @@ data class Session(
     val displayTitle: String get() = if (title.isEmpty() || title == "Claude Code") folderName.ifEmpty { sessionId.take(8) } else title
     /** Codex in a terminal, or a thread from a Codex app-server / Codex history. */
     val isCodex: Boolean get() = agent == "codex" || sourceKind == "codex_app_server" || sourceKind == "codex_history"
+
+    /** The launcher's catalog identity when a row omits an explicit launcher. */
+    val effectiveLauncher: String get() = launcher?.takeIf(String::isNotEmpty) ?: when {
+        spaceKind == "codex_app" -> "codex-app"
+        isCodex -> "codex"
+        else -> "claude"
+    }
+
     /** Claude Code, or an older hub that does not name the agent: what Claude-only controls (modes, /model, /clear) need. */
     val isClaude: Boolean get() = !isCodex && (agent.isNullOrEmpty() || agent == "claude")
     /**
@@ -975,6 +993,17 @@ data class PendingSwitch(
 )
 
 object PendingSwitchSerializer : WireSerializer<PendingSwitch>(PendingSwitch.generatedSerializer())
+
+/** The session and cutoff of one earlier stretch of an Agent conversation. */
+@KeepGeneratedSerializer
+@Serializable(with = EngineLegSerializer::class)
+data class EngineLeg(
+    @SerialName("session_id") val sessionId: String = "",
+    val agent: String = "",
+    @WireTime val until: String? = null,
+)
+
+object EngineLegSerializer : WireSerializer<EngineLeg>(EngineLeg.generatedSerializer())
 
 /** A pending "back to the configured model" (server proto.ModelRestore): `next_start`, the next start asks for [to]. */
 @KeepGeneratedSerializer

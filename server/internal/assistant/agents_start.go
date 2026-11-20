@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -55,11 +56,8 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 		}
 		clearStandardSpeed(params)
 	} else {
-		own := pickOf(params)
-		if err := s.applyStartTier(ctx, params); err != nil {
-			return nil, badRequest(err, s.appLang(ctx, p.Lang))
-		}
-		if err := s.applyModel(ctx, "agent.new", params); err != nil {
+		own, err := s.resolveStart(ctx, params, false)
+		if err != nil {
 			return nil, badRequest(err, s.appLang(ctx, p.Lang)) // a typed model that is no id among them
 		}
 		if params["launch"] != "engine" {
@@ -68,7 +66,7 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 		// Held to what the computer has (#2640): a launcher picked that it lacks is refused, a default it lacks gives
 		// way to one it has.
 		if m, ok := s.device(ctx, p.MachineID); ok {
-			note, agent, err := s.fitLauncher(ctx, m, own, params)
+			note, agent, err := s.fitNewLauncher(ctx, m, own, params)
 			if err != nil {
 				return nil, badRequest(err, s.appLang(ctx, p.Lang))
 			}
@@ -162,6 +160,21 @@ func (s *Service) tabName(ctx context.Context, prompt string) string {
 		s.logf("tab name: nothing usable in %q", clip(oneLine(text), 80))
 	}
 	return name
+}
+
+// nameStartedAgent records the dispatched Agent's initial Persona title. Use the actual tab label when the host
+// made the requested name unique. A later CLI or Persona rename can replace it.
+func (s *Service) nameStartedAgent(ctx context.Context, machine string, c proto.Session, requested string) string {
+	if requested == "" || c.SessionID == "" {
+		return requested
+	}
+	title := cmp.Or(c.HerdrTabName(), requested)
+	if err := s.putInitialAgentTitle(ctx, machine, c.SessionID, title); err != nil {
+		s.logf("dispatch: save session title for %q/%q: %v", machine, c.SessionID, err)
+	} else {
+		s.publishSessions(machine)
+	}
+	return title
 }
 
 // tabSlug keeps what a tab name may be: lowercase ASCII letters and digits, single hyphens, at most 24 characters.

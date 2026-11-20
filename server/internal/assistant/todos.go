@@ -84,6 +84,7 @@ type Todo struct {
 	// OtherPRs: the observed facts of its earlier PRs (PRs), newest first (#7935); the apps show each open one.
 	OtherPRs      []TodoPRStatus `json:"other_prs,omitempty"`
 	StageKind     string         `json:"stage_kind,omitempty"` // code or general; absent on older hubs
+	StageDone     bool           `json:"stage_done,omitempty"` // closed, nothing left to deploy: Done ends the strip (stageDone, set by formatTodo, #11590)
 	stageVerified bool           // explicit acceptance, kept with the stage setting
 	planPending   bool           // a live plan-approval card; never persisted as progress
 	// PRs are the earlier PRs its agents named before PRURL, newest last (reports.go todoStage.PRs): the Inbox links
@@ -169,6 +170,7 @@ type todoStore interface {
 	UpdateTodoAgentSnapshot(ctx context.Context, machineID, sessionID, title, startError string) error
 	ListTodoDecisions(ctx context.Context, todoID string, all bool) ([]db.TodoDecisionRow, error)
 	InsertTodoDecision(ctx context.Context, r db.TodoDecisionRow) (bool, error)
+	CommitTodoAnswer(ctx context.Context, id string, decisions []db.TodoDecisionRow, settings map[string]any, at time.Time) (*db.TodoRow, []db.TodoDecisionRow, error)
 	SetTodoDecisionSupersedes(ctx context.Context, todoID, id, supersedesID string, at time.Time) (*db.TodoDecisionRow, error)
 	ReportConcern(ctx context.Context, r db.TodoDecisionRow, reason string) (*db.TodoRow, bool, error)
 	ListTodoThreads(ctx context.Context) (map[string]db.TodoThread, error)
@@ -702,6 +704,7 @@ func copyTodoLocked(t *Todo) Todo {
 func formatTodo(t Todo) Todo {
 	out := t
 	out.Delivery = currentDelivery(t)
+	out.StageDone = stageDone(t) // before the wire's done_by hides a cancellation
 	if out.Source != nil && out.Source.ReportFullReply {
 		source := *out.Source
 		source.ReportText = "" // the delivery payload is not part of the to-do list
@@ -934,6 +937,7 @@ func (s *Service) todoRoutes() {
 	s.todoImageRoutes()
 	s.todoRepositoryRoutes()
 	s.workspaceNamingRoutes()
+	s.taskWorkspaceRoutes()
 	s.taskReviewDismissalRoutes()
 	s.todoDecisionRoutes()
 	s.todoThreadRoutes()
@@ -2027,7 +2031,7 @@ func (s *Service) TodoHandoff(ctx context.Context, h TodoHandoff) (TodoHandoffRe
 			if t.Supervision != nil {
 				lead = t.Supervision.Supervisor
 			}
-			text = s.withProjectContext(ctx, h.MachineID, h.Cwd, lead, text) // a new agent: its project's background first
+			text = s.withProjectContextForTodo(ctx, h.MachineID, h.Cwd, lead, t, text) // a new agent: its project's background first
 		}
 	}
 	res := TodoHandoffResult{Found: true, Title: t.Title, DoneAt: t.DoneAt, Text: text}
