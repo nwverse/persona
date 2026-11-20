@@ -1161,6 +1161,8 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
                 "expect_minutes":30,                                    // estimated minutes, 0 / absent = not given
                 "state":"",       // "" in progress | pending_review awaiting review | rework being reworked | needs_user waiting for the user to decide | parked waiting on purpose until a time (#3804) | accepted accepted | cancelled cancelled
                                   // (for accepted / cancelled the to-do is done; after the user reopens it, it counts as in progress)
+                                  // a plan's task that takes the to-do over with a new Agent (continues / todo_id) starts a new round:
+                                  // state goes back to "" and round to 0, the earlier review stays in reviews (#11553)
                 // only while state is parked (#3804, docs/assistant/todos.md "Parked tasks"; additive): what the task waits for in one sentence, until when (RFC 3339),
                 // what kind of thing it waits on (owner_priority | someone_else | external_event | date) and how many times in a row it was parked with no agent turn in between;
                 // a parked task is open and is not waiting on the user. Clients that do not know the state show the task as in progress

@@ -1141,6 +1141,10 @@ Only the main conversation and the ones acting for it (the background supervisor
 
 `continues` is an explicit task handoff, separate from automatic task closure. It stops prior Agents only when the
 plan starts, keeps their terminals and released links in the task history, and reopens the original to-do if needed.
+The new Agent's work is a new round of the to-do's supervision, and a plain `todo_id` takeover is too (#11553). The
+earlier round's accepted or cancelled review stays in the ledger's history. The ledger's state goes back to going on
+and its rework count to 0, so no client shows the earlier acceptance on the new work (`docs/assistant/todo-status-sop.md`,
+"Accepted tasks").
 The waiting plan card leaves Agents and task completion unchanged. A refused stop fails the handoff without making
 a new to-do. Existing historical successor chains are still guarded against duplicate continuation.
 

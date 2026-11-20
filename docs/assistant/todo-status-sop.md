@@ -341,6 +341,16 @@ The acceptance now stands until a newer review replaces it (`acceptanceStands` i
 
 A task the user reopens by hand also keeps the accepted verdict until the next review; the checkbox closes it again.
 
+**A new Agent from a plan starts a new round, not more work** (#11553). When a plan's task takes the to-do over with
+a new Agent (`task_plan` with `continues`, or with its `todo_id`), the hub keeps the earlier `accepted` or
+`cancelled` review in `reviews` as history. It puts the ledger back to going on: `state` "", `round` 0, no owner wait
+(`startSupervisionRound` in `server/internal/assistant/supervise.go`). Rule 6 no longer applies to it. The row shows
+**Supervised**, and the to-do stays in Working, Waiting on you or Other open while the new Agent works or stops. The new
+round's stops reach its supervisor like any task's. Before, the continued to-do kept the earlier round's green
+**Accepted** in Working, went to Just finished whenever its new Agent stopped, and its supervisor never heard of a stop
+short of done. A ledger continued before this change keeps its old state until its next review: records are not
+migrated.
+
 ## Clients
 
 Every client follows this document with its own copy of the rules, each with the same test cases (#3206):
