@@ -22,6 +22,9 @@ final class PageAgentPushTests: XCTestCase {
     /// "给天气 App 加主屏幕小组件", the widget to-do's Agent and one of the weather project's.
     private static let widgetAgent = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
     private static let widgetTitle = "给天气 App 加主屏幕小组件"
+    /// "排查 /orders 接口变慢": a to-do in the list and its one Agent, of the same title.
+    private static let ordersAgent = "server/a1f3c2d4-0000-4000-8000-000000000004"
+    private static let ordersTitle = "排查 /orders 接口变慢"
 
     private struct Page: Decodable, CustomStringConvertible {
         var root: String
@@ -59,14 +62,15 @@ final class PageAgentPushTests: XCTestCase {
     /// A to-do's Agent row pushes the Agent's chat over the to-do's page.
     @MainActor func testAToDoPushesItsAgentWithBack() throws {
         launch(["-openShellPage", "todos"])
-        let todo = app.staticTexts["修小组件横屏崩溃"].firstMatch
-        XCTAssertTrue(todo.waitForExistence(timeout: 20), "no widget to-do in the list:\n\(app.debugDescription)")
+        XCTAssertTrue(app.staticTexts["补齐网络层的单元测试"].firstMatch.waitForExistence(timeout: 20), "no to-dos:\n\(app.debugDescription)")
         hideOverlaidSidebar()
-        todo.tap()
+        // Under In Progress, below the ones that need the owner: scrolled to.
+        scrolledTo(app.staticTexts[Self.ordersTitle].firstMatch, "the orders to-do").tap()
         let handTo = app.descendants(matching: .any)["todo.handToAgent"].firstMatch
         XCTAssertTrue(handTo.waitForExistence(timeout: 10), "the to-do's page did not open:\n\(app.debugDescription)")
-        let row = agentRow()
-        try drillDown(from: "todo", tap: row, agent: Self.widgetAgent) { handTo }
+        // The Agent's row: the one button carrying its title (the to-do's own title is a field).
+        let row = scrolledTo(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", Self.ordersTitle)).firstMatch, "the orders Agent's row")
+        try drillDown(from: "todo", tap: row, agent: Self.ordersAgent) { handTo }
     }
 
     /// A knowledge project's Agent row pushes the Agent's chat over the project's page (pushed by view).
@@ -140,19 +144,22 @@ final class PageAgentPushTests: XCTestCase {
 
     /// The weather widget Agent's row on the page in front, scrolled into view.
     @MainActor private func agentRow() -> XCUIElement {
-        let row = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", Self.widgetTitle)).firstMatch
-        let text = app.staticTexts[Self.widgetTitle].firstMatch
+        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", Self.widgetTitle)).firstMatch
+        return row.exists ? scrolledTo(row, "the widget Agent's row") : scrolledTo(app.staticTexts[Self.widgetTitle].firstMatch, "the widget Agent's row")
+    }
+
+    /// `element`, the page in front dragged up until it is on screen and hittable.
+    @MainActor private func scrolledTo(_ element: XCUIElement, _ what: String) -> XCUIElement {
         let deadline = Date.now.addingTimeInterval(30)
         while Date.now < deadline {
-            let shown = row.exists ? row : text
-            if shown.exists, shown.isHittable { return shown }
+            if element.exists, element.isHittable { return element }
             let window = app.windows.firstMatch
             window.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.7))
                 .press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.4)))
             usleep(400_000)
         }
-        XCTFail("no row for the widget Agent:\n\(app.debugDescription)")
-        return row
+        XCTFail("no \(what):\n\(app.debugDescription)")
+        return element
     }
 
     /// Drags the conversation until `element` sits in the middle band of the window, clear of the bars.
@@ -185,7 +192,8 @@ final class PageAgentPushTests: XCTestCase {
     @MainActor private func sidebarSelection() -> [String]? {
         let main = app.descendants(matching: .any)["sidebar-main"].firstMatch
         guard main.exists, main.isHittable else { return nil }
-        return app.selectedSidebarRows().map(\.description)
+        // Ids, not labels: a row's label carries a relative time ("2 minutes ago") that moves on its own.
+        return app.selectedSidebarRows().map(\.id)
     }
 
     @MainActor private func assertChat(_ session: String) {

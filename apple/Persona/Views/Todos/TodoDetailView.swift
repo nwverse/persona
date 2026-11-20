@@ -74,6 +74,7 @@ struct TodoDetailView: View {
                 }
             }
         }
+        .pushedAgentChat($pushedAgent)
         .sheet(isPresented: $showHandoff) {
             if let todo = currentTodo {
                 // The Agent it is handed to is pushed over this page; with nothing to push on, it opens as before (#12006).
