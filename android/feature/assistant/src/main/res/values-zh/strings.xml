@@ -193,6 +193,12 @@
     <string name="assistant_tags_hint">按回车添加。最多 %1$d 个标签，每个不超过 %2$d 个字符。</string>
     <string name="assistant_tag_too_long">每个标签最多 %1$d 个字符。</string>
     <string name="assistant_tag_count_limit">一段对话最多 %1$d 个标签。</string>
+    <string name="assistant_tag_filters_customize">自定义标签筛选</string>
+    <string name="assistant_tag_filters_empty">没有标签筛选</string>
+    <string name="assistant_tag_filters_placeholder">添加标签筛选</string>
+    <string name="assistant_tag_filters_reset">恢复自动筛选</string>
+    <string name="assistant_tag_filters_done">完成</string>
+    <string name="assistant_tag_filters_count_limit">最多添加 %1$d 个标签筛选。</string>
     <string name="assistant_tags_saved">已保存「%1$s」的标签</string>
     <string name="assistant_copy_diagnostics">拷贝诊断</string>
     <string name="assistant_diagnostics_copied">已拷贝诊断</string>

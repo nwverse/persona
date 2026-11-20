@@ -193,6 +193,12 @@
     <string name="assistant_tags_hint">Enter で追加します。タグは %1$d 個まで、各 %2$d 文字以内です。</string>
     <string name="assistant_tag_too_long">各タグは %1$d 文字以内で入力してください。</string>
     <string name="assistant_tag_count_limit">1つのチャットに設定できるタグは %1$d 個までです。</string>
+    <string name="assistant_tag_filters_customize">タグフィルターをカスタマイズ</string>
+    <string name="assistant_tag_filters_empty">タグフィルターはありません</string>
+    <string name="assistant_tag_filters_placeholder">タグフィルターを追加</string>
+    <string name="assistant_tag_filters_reset">自動に戻す</string>
+    <string name="assistant_tag_filters_done">完了</string>
+    <string name="assistant_tag_filters_count_limit">タグフィルターは %1$d 個まで追加できます。</string>
     <string name="assistant_tags_saved">「%1$s」のタグを保存しました</string>
     <string name="assistant_copy_diagnostics">診断情報をコピー</string>
     <string name="assistant_diagnostics_copied">診断情報をコピーしました</string>

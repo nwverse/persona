@@ -76,6 +76,9 @@ class RealAssistantRepository(
             leaders = leadersOf(data),
             backgroundSupervisor = backgroundSupervisorOf(data),
             recentTaskChats = (data["recent_task_chats"] as? JsonPrimitive)?.booleanOrNull,
+            conversationTagFilters = data["conversation_tag_filters"]?.let {
+                JsonCodec.decodeFromJsonElement<ConversationTagFilters>(it)
+            } ?: ConversationTagFilters.Unsupported,
         )
     }
 
@@ -259,6 +262,24 @@ class RealAssistantRepository(
                 val snapshot = if (selected) current.value else cached[request.key] ?: return@withLock
                 if (selected) ++refreshVersion
                 val updated = snapshot.copy(recentTaskChats = value)
+                cached[request.key] = updated
+                if (selected) current.value = updated
+            }
+        }
+    }
+
+    override suspend fun updateConversationTagFilters(value: ConversationTagFilters) {
+        conversationTagFiltersUpdater()(value)
+    }
+
+    override suspend fun conversationTagFiltersUpdater(): suspend (ConversationTagFilters) -> Unit {
+        val request = request()
+        return { value ->
+            lock.withLock {
+                val selected = selected(request)
+                val snapshot = if (selected) current.value else cached[request.key] ?: return@withLock
+                if (selected) ++refreshVersion
+                val updated = snapshot.copy(conversationTagFilters = value)
                 cached[request.key] = updated
                 if (selected) current.value = updated
             }

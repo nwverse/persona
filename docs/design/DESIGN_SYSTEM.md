@@ -2668,6 +2668,12 @@ section that holds what needs the user (Needs you, Stuck) has no switch and says
 `--ink-3` (3.4: a session that needs the user is never hidden); a hidden one is the same hairline outline as a hidden
 card, "Hidden" under its name. The greeting and its summary are not part of it and stay first. No new token or component.
 
+## Choosing conversation tag filters (#12018)
+
+All chats keeps its automatic row of one chip per tag in use until the user chooses **Customize tag filters…** in the existing display-options menu. Editing happens above the same list, not in a detached settings page: an exact-tag field and **Add filter**, a small × beside each chosen chip, **Reset to all in-use tags**, and **Done**. Chips still filter the list by exact tag while editing. Removing the selected chip also clears that filter rather than leaving an invisible selection; Reset restores the automatic chips. A deliberately empty custom row says **No tag filters** instead of silently refilling itself. Saves are optimistic and a refusal restores the previous entries and reports the error. The hub stores the exact entries and their order for every client; null means automatic and an empty array remains a real choice.
+
+The filter bar is a controlled component: its caller owns the entries, order, selection and editing state, and the bar owns only its draft and pending action. It can therefore move into another pane without moving conversation-list state with it. Default chips have no persistent editing controls, a fresh install with no tags has no empty row, and no sidebar structure, navigation pattern, token or dialog is added.
+
 ## Values a form fills in by itself (#4975)
 
 Where a form can work out a value from what the user already gave it (the web provider wizard's Claude Code tiers, read

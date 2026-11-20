@@ -797,6 +797,11 @@ fun AssistantScreen(
         }
     }
     val openKeys = remember(snapshot.conversations) { openKeys(snapshot.conversations) }
+    fun historyFailed(error: Throwable) {
+        if (feedback?.failure(error) != true) toast.show(persona.core.designsystem.FeedbackNotice(
+            persona.core.designsystem.operationFeedback(error).text.resolve(resources),
+            style = persona.core.designsystem.FeedbackStyle.Error))
+    }
     val sidebar: @Composable () -> Unit = {
         AssistantDrawer(query, { query = it }, groups, active, snapshot.mainSession != null,
             onEnd = if (pageManagement != null) ({ ending = it }) else null,
@@ -828,6 +833,23 @@ fun AssistantScreen(
             onDiagnostics = ::copyDiagnostics,
             archivedCount = history.shownArchived(openKeys).size, onArchived = { history.archivedOpen = true },
             tagChoices = tagChoices, activeTag = history.activeTag, onTag = history::selectTag,
+            tagFilterBar = if (pageManagement != null && !demo && snapshot.conversationTagFilters.supported) ({
+                ConversationTagFilterBar(
+                    entries = conversationTagFilterEntries(tagChoices, snapshot.conversationTagFilters),
+                    activeTag = history.activeTag,
+                    customized = snapshot.conversationTagFilters.customized,
+                    editing = history.editingTagFilters,
+                    busy = history.tagFiltersBusy,
+                    onSelect = history::selectTag,
+                    onChange = { next ->
+                        val result = history.saveConversationTagFilters(next)
+                        result.exceptionOrNull()?.let(::historyFailed)
+                        result.isSuccess
+                    },
+                    onEdit = { history.editingTagFilters = true },
+                    onDone = { history.editingTagFilters = false },
+                )
+            }) else null,
             onTodos = onTodos?.let { action -> { scope.launch { drawerOpen = false }; action() } },
             todoCount = todoCount,
             showTodos = showTodos,
@@ -836,14 +858,13 @@ fun AssistantScreen(
             found = foundChats, searchPartial = searchPartial,
         )
         ConversationHistoryDialogs(history, snapshot.conversations, scope,
+            customizedTagFilters = snapshot.conversationTagFilters.customized,
             onOpen = { openFromList(it); scope.launch { drawerOpen = false } },
             notice = { message ->
                 if (feedback?.notice(message, persona.core.designsystem.FeedbackStyle.Success) != true)
                     toast.show(persona.core.designsystem.FeedbackNotice(message, style = persona.core.designsystem.FeedbackStyle.Success))
             },
-            failure = { error ->
-                if (feedback?.failure(error) != true) toast.show(persona.core.designsystem.FeedbackNotice(persona.core.designsystem.operationFeedback(error).text.resolve(resources), style = persona.core.designsystem.FeedbackStyle.Error))
-            })
+            failure = ::historyFailed)
     }
     // On Glass what needs the user sits over the blank page's composer, as many lines as fit (#4339 C17, iOS ShellNeedsYou);
     // Brief and Board keep "Needs you now" in the page's scroll.
@@ -1422,6 +1443,8 @@ internal fun AssistantDrawer(
     archivedCount: Int = 0, onArchived: (() -> Unit)? = null,
     /** Every tag in use across open and archived chats; empty draws no filter strip. */
     tagChoices: List<String> = emptyList(), activeTag: String? = null, onTag: (String) -> Unit = {},
+    /** Parent-controlled customizable filter bar; null keeps the original automatic chip path above. */
+    tagFilterBar: (@Composable () -> Unit)? = null,
     onTodos: (() -> Unit)? = null, todoCount: Int = 0, showTodos: Boolean = true,
     onInbox: (() -> Unit)? = null, inboxCount: Int = 0,
     settingsCount: Int = 0, settingsDot: Boolean = false, settingsBadge: String? = null,
@@ -1581,7 +1604,8 @@ internal fun AssistantDrawer(
             if (merged == null && ((!fullWindowSearch && (!drawer || searchVisible)) || query.isNotBlank())) {
                 item { JSearchField(query, onQuery, stringResource(R.string.assistant_search_chats)) }
             }
-            if (tagChoices.isNotEmpty()) item(key = "conversation-tag-filter") {
+            if (tagFilterBar != null) item(key = "conversation-tag-filter") { tagFilterBar() }
+            else if (tagChoices.isNotEmpty()) item(key = "conversation-tag-filter") {
                 ConversationTagFilter(tagChoices, activeTag, onTag)
             }
             if (searchPartial) item {
