@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -47,8 +48,9 @@ func (q *relayRequest) reference() string {
 
 // relayQuote is one quote the hub verified: what the receiver's brief takes, and when it was sent.
 type relayQuote struct {
-	Request BriefRequest `json:"request"`
-	At      time.Time    `json:"at"`
+	Request       BriefRequest `json:"request"`
+	At            time.Time    `json:"at"`
+	SourceChecked bool         `json:"source_checked,omitempty"` // the original owner input passed the meeting privacy check
 }
 
 type quoteBook struct {
@@ -68,6 +70,16 @@ func (b *quoteBook) loadLocked(ctx context.Context, s *Service) bool {
 		if _, err := st.Setting(ctx, relayQuotesKey, &m); err != nil {
 			s.logf("load relay quotes: %v", err)
 			return false
+		}
+		// Older entries did not record whether their original input was shareable. Keep only checked
+		// records across the upgrade, including when the first operation after restarting is a read.
+		before := len(m)
+		maps.DeleteFunc(m, func(_ string, q relayQuote) bool { return !q.SourceChecked })
+		if len(m) != before {
+			if err := st.PutSetting(ctx, relayQuotesKey, m); err != nil {
+				s.logf("remove unverified relay quotes: %v", err)
+				return false
+			}
 		}
 	}
 	if m == nil {
@@ -122,7 +134,7 @@ func (s *Service) keepQuote(ctx context.Context, from string, req relayRequest) 
 		return
 	}
 	now := time.Now().UTC()
-	b.m[quoteRef(from, req.reference())] = relayQuote{Request: req.BriefRequest, At: now}
+	b.m[quoteRef(from, req.reference())] = relayQuote{Request: req.BriefRequest, At: now, SourceChecked: true}
 	keys := make([]string, 0, len(b.m))
 	for k, q := range b.m {
 		if now.Sub(q.At) > quoteMemory {
@@ -172,6 +184,14 @@ func (s *Service) resolveQuote(ctx context.Context, self, quote string) (*relayR
 	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	if quote == quoteLatest {
+		// Codex pages give a steered message the same shape as an opening message. An explicit
+		// selection works even when the start of the turn is outside the page.
+		row, known := s.session(cctx, machine, self)
+		if !known || row.Agent == "codex" {
+			return nil, errors.New("not sent: this transcript does not identify the start of the current turn. Use the message id or the user's exact words in quote, or send without quote")
+		}
+	}
 	if err := s.call(cctx, machine, DeviceSessionItems,
 		map[string]any{"session_id": self, "turns": quoteTurns, "lazy_images": true}, &res); err != nil {
 		return nil, fmt.Errorf("not sent: this conversation could not be read to find the user's message to quote (%v). Send it again without quote", err)
@@ -243,7 +263,7 @@ func (s *Service) quoteInTurn(ctx context.Context, self string, items []proto.It
 		return choices[0], nil
 	default:
 		var msg strings.Builder
-		msg.WriteString("not sent: more than one user message or received quote in this turn. Put the id or the exact words of the one to pass on in quote:")
+		msg.WriteString("not sent: more than one user message or received quote in this turn. To select one, copy the id on the left into quote. The text on the right is a preview:")
 		for _, q := range choices {
 			fmt.Fprintf(&msg, "\n%s: %s", q.reference(), clip(oneLine(q.Text), 60))
 		}
@@ -255,6 +275,7 @@ func (s *Service) quoteByIDOrWords(ctx context.Context, self string, items []pro
 	// Resolve every kind of id first, even when a newer message contains the id as ordinary words.
 	var candidates []*relayRequest
 	var private []string
+	var passageSource bool
 	for _, it := range slices.Backward(items) {
 		if strings.HasPrefix(it.ClientMsgID, justMeMsgPrefix) {
 			if it.ID == selector {
@@ -268,11 +289,17 @@ func (s *Service) quoteByIDOrWords(ctx context.Context, self string, items []pro
 			return nil, errors.New("not sent: that item is neither a message the user wrote nor a verified quote this conversation received. Use the user's exact words, or send without quote")
 		}
 		if q != nil {
-			if it.ID == selector || q.MessageID == selector || q.reference() == selector {
+			if q.reference() == selector || (!q.Part && it.ID == selector) {
 				return q, nil
+			}
+			if q.Part && (q.MessageID == selector || it.ID == selector) {
+				passageSource = true // keep looking for the whole message, even behind a newer passage
 			}
 			candidates = append(candidates, q)
 		}
+	}
+	if passageSource {
+		return nil, errors.New("not sent: this conversation received a passage. Select its own quote reference or the exact words of the passage, or send without quote")
 	}
 	words := oneLine(selector)
 	if utf8.RuneCountInString(words) >= urgentQuoteMin {
