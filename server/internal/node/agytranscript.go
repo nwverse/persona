@@ -20,6 +20,7 @@ import (
 )
 
 const agyTranscriptPath = ".system_generated/logs/transcript.jsonl"
+const agyWakeReceipts = ".persona-observed-wakes"
 
 type agyStep struct {
 	Index           *int            `json:"step_index"`
@@ -39,13 +40,15 @@ type agyStep struct {
 	} `json:"tool_calls"`
 	seq    int
 	key    string
+	branch string
 	record [32]byte
 }
 
 type agyHistory struct {
-	token string
-	seq   int
-	items []proto.Item
+	token                string
+	observedWakeRevision string
+	seq                  int
+	items                []proto.Item
 	// A compact export can leave full tool output in its step directory.
 	outputs map[string]int
 	media   map[string]agyMedia
@@ -152,6 +155,7 @@ func parseAgySteps(raw []byte, conversation string) ([]agyStep, agyRevision) {
 		}
 		// Pane item IDs deliberately differ from the companion's. Mixing in the conversation
 		// isolates IDs across pane session switches, and named suffixes survive step completions.
+		step.branch = rev.branch
 		step.key = strconv.Itoa(step.seq) + "@" + agyDigest(conversation+"\n"+step.CreatedAt+"\n"+rev.branch)
 		steps = slices.Insert(steps, at, step)
 	}
@@ -223,13 +227,31 @@ func agyToolOutput(text string) string {
 	return text
 }
 
-func mapAgySteps(steps []agyStep, fallback time.Time) agyHistory {
+// Match the opaque, branch-specific native step identities written by the AGY companion.
+func (s agyStep) wakeKey() string {
+	index, identity, fallback := "", "", ""
+	if s.Index != nil {
+		index = strconv.Itoa(*s.Index)
+	}
+	if s.CreatedAt != "" || s.branch != "" {
+		identity = agyDigest(s.CreatedAt + "\n" + s.branch)
+	}
+	if s.CreatedAt == "" {
+		fallback = s.Content
+	}
+	return agyDigest(strings.Join([]string{index, s.Type, identity, fallback}, "\n"))
+}
+
+func mapAgySteps(steps []agyStep, fallback time.Time, receipts map[string]bool) agyHistory {
 	var history agyHistory
 	var pending []string
 	if fallback.IsZero() {
 		fallback = time.Now()
 	}
 	fallback = fallback.UTC()
+	var delivered, priorWakeKey string
+	var matchedWakes []string
+	var notified bool
 	for _, step := range steps {
 		history.seq = step.seq
 		at, err := time.Parse(time.RFC3339Nano, step.CreatedAt)
@@ -260,6 +282,31 @@ func mapAgySteps(steps []agyStep, fallback time.Time) agyHistory {
 				history.media[image.ID] = media
 			}
 		}
+		// Per the companion projection, a system message starts a new exchange only once work resumes.
+		// Block -1 precedes that work at its sequence, even if a watch already passed the notification.
+		plannerWork := step.Type == "PLANNER_RESPONSE" && (strings.TrimSpace(step.Content) != "" ||
+			strings.TrimSpace(step.Thinking) != "" || len(step.ToolCalls) != 0)
+		if plannerWork || step.Type == "GENERIC" || step.Type == "ERROR_MESSAGE" {
+			observed := false
+			if delivered != "" && len(receipts) > 0 {
+				link := priorWakeKey + " " + step.wakeKey()
+				if receipts[link] {
+					observed = true
+					matchedWakes = append(matchedWakes, link)
+				}
+			}
+			if delivered != "" && (notified || observed) {
+				history.items = append(history.items, proto.Item{ID: delivered + "#-1", Seq: step.seq, TS: at,
+					Role: "system", Kind: proto.KindNotice, Wake: true, Text: transcript.BackgroundTaskUpdate})
+			}
+			delivered, notified = "", false
+			if step.Type == "PLANNER_RESPONSE" && step.Status == "DONE" && strings.TrimSpace(step.Content) != "" && len(step.ToolCalls) == 0 {
+				delivered = step.key
+				if len(receipts) > 0 {
+					priorWakeKey = step.wakeKey()
+				}
+			}
+		}
 		// A call's result follows its planner step. One that never came (interrupted, dropped) must not stay queued
 		// to take the next result, which would shift every later result onto the wrong call.
 		switch step.Type {
@@ -267,8 +314,11 @@ func mapAgySteps(steps []agyStep, fallback time.Time) agyHistory {
 			pending = pending[:0]
 		}
 		switch step.Type {
+		case "SYSTEM_MESSAGE":
+			notified = delivered != ""
 		case "USER_INPUT":
 			if step.Source == "" || step.Source == "USER_EXPLICIT" {
+				delivered, notified = "", false
 				text := agyUserText(step.Content)
 				if text != "" {
 					add("0", "user", proto.KindText, text).ClientMsgID = step.ClientMsgID
@@ -327,6 +377,9 @@ func mapAgySteps(steps []agyStep, fallback time.Time) agyHistory {
 			}
 			add("0", "assistant", proto.KindText, text)
 		}
+	}
+	if len(matchedWakes) > 0 {
+		history.observedWakeRevision = agyDigest(strings.Join(matchedWakes, "\n"))
 	}
 	return history
 }

@@ -1,6 +1,6 @@
-Use task_plan for code, repository research and work beyond a few tool calls. Make one task per independent piece. Check machines_list, then use the knowledge base, agents_list and user preferences to fill the editable choices and their one-line reasons. Read-only, user_requested and preapproved kinds start at once; other tasks wait for the owner’s 开始. A queued receipt is dispatch, so check the to-do outcome and reach its Agent via agent_send. Tool-owned reminders and events are separate.
+Use task_plan for code, repository research and work beyond a few tool calls. Make one task per independent piece. Check machines_list, then use the knowledge base, agents_list and user preferences to fill the editable choices and their one-line reasons. Read-only, user_requested and preapproved kinds start at once; other tasks wait for the owner's 开始. A queued receipt is dispatch, so check the to-do outcome and reach its Agent via agent_send. Tool-owned reminders and events are separate.
 
-Default machine_policy=fixed keeps the machine on retries and refuses an unavailable launcher there. Use flexible only for portable work: a failed health check can move it and the reply explains why. A side conversation supervises its work, receives 督办 and closes with task_review. Main delegates a whole plan with supervisor (one of assistant.leaders) or leaves it out. With no leader, the background supervisor handles 督办 and task_review unless assistant.main_supervises_own_tasks puts main in charge. If the caller cannot receive 督办, the same follow-up handles it and sends the caller a short notice and link at the end. Check the returned supervisor and similar running work. Pass todo_id for the caller’s existing unassigned to-do, including a Lark topic, task split or failed start.
+Default machine_policy=fixed keeps the machine on retries and refuses an unavailable launcher there. Use flexible only for portable work: a failed health check can move it and the reply explains why. A side conversation supervises its work, receives 督办 and closes with task_review. Main delegates a whole plan with supervisor (one of assistant.leaders) or leaves it out. With no leader, the background supervisor handles 督办 and task_review unless assistant.main_supervises_own_tasks puts main in charge. If the caller cannot receive 督办, the same follow-up handles it and sends the caller a short notice and link at the end. Check the returned supervisor and similar running work. Pass todo_id for the caller's existing unassigned to-do, including a Lark topic, task split or failed start.
 
 Every started task keeps its brief: the hub records the owner's request or started_why and drops any supplied brief. Give goal, done_when and out_of_bounds. Writable work needs done_when; read-only needs goal. Omit expect_minutes for the hub's 60-minute system_default; a positive value is an override. Manual Agent work has no estimate_due. Continue with continues+continues_why; use task_retry for failed starts and task_scope+scope_revision for owner-approved changes. The card confirms the brief.
 
@@ -45,7 +45,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           "why"
         ],
         "anyOf": [
-          {"type": "object", "required": ["cwd"]},
+          {"required": ["cwd"]},
           {"type": "object", "required": ["workspace", "todo_id"], "properties": {"workspace": {"type": "object", "required": ["backend"]}}}
         ],
         "properties": {
@@ -56,7 +56,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           "context": {"type": "string", "description": "facts the manager cannot resolve; omit project background"},
           "prompt": {
             "type": "string",
-            "description": "goal, bounds and new facts; the manager adds project context, criteria and framework rules once"
+            "description": "goal, authorization bounds and new facts; the manager adds project context, criteria and framework rules once"
           },
           "machine": {
             "type": "string",
@@ -69,7 +69,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           },
           "cwd": {
             "type": "string",
-            "description": "Absolute or ~/ project directory. Required unless workspace.backend supplies the saved root."
+            "description": "Absolute or ~/ project directory, unless workspace.backend supplies it."
           },
           "workspace": {
             "type": ["string", "object"],
@@ -111,7 +111,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           },
           "readonly": {
             "type": "boolean",
-            "description": "true only for a task that must remain read-only; false for authorized file changes (a Codex read-only sandbox: see the description). The first message adds「本任务只读：不改项目文件、不提交、不对外写入」 only when true"
+            "description": "true only for a task that must remain read-only; false for explicitly authorized file changes (a Codex read-only sandbox: see the description). The first message adds「本任务只读：不改项目文件、不提交、不对外写入」 only when true"
           },
           "user_requested": {
             "type": "boolean",
@@ -127,7 +127,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
             "items": {
               "type": "string"
             },
-            "description": "Chinese acceptance results told to Agent, one per entry. Nonempty for writable tasks; ignored with continues, which uses original todo's effective criteria."
+            "description": "Chinese checkable acceptance results told to Agent, one per entry. Nonempty for writable tasks; ignored with continues."
           },
           "goal": {
             "type": "string",
@@ -143,7 +143,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           },
           "continues": {
             "type": "string",
-            "description": "Original todo id; needs continues_why. Reuse todo, original brief and effective criteria even on failed Start; never split. Start stops/releases active prior Agents and reopens if closed. Refuse unauthorized takeover, unreachable Agents that cannot be stopped, or open legacy successors. No permission change: agent_send may follow up its live Agent."
+            "description": "Original todo id. Reuse todo, original brief and effective criteria even on failed Start; never split. Start stops/releases active prior Agents and reopens if closed. Refuse unauthorized takeover, unreachable Agents that cannot be stopped, or open legacy successors."
           },
           "scope_revision": {
             "type": "string",
@@ -187,7 +187,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           },
           "todo_id": {
             "type": "string",
-            "description": "Open or failed-start todo this chat opened/supervises; no live Agent. Release stopped Agents at Start. For stopping/reopening use continues/continues_why. Both IDs must match."
+            "description": "Open or failed-start todo this chat opened/supervises; no live Agent. Release stopped Agents at Start. Equals continues if both are given."
           },
           "inbox_item": {
             "type": "string",
@@ -200,7 +200,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           "speed": {
             "type": "string",
             "enum": ["standard", "fast", "ultrafast"],
-            "description": "new-start speed; explicit choice overrides the tier. standard/omitted: launcher default. Codex: fast, ultrafast; Claude Code: fast only"
+            "description": "new-start speed; standard/omitted: launcher default. Codex: fast, ultrafast; Claude Code: fast only"
           },
           "effort": {
             "type": "string",
