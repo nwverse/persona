@@ -8,7 +8,7 @@ import { api, ApiError, errorText, fullItem, pastHub, sessionPath } from "../../
 import { attentionReason, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionCanRename, sessionDisplayTab, sessionMenuActions, sourceSubtitle, sessionTitle, sessionTitleDetail, shortPath, stateOf, tabLabel, uuid } from "../../lib/format";
 import { useHerdrTabName } from "../../lib/agents-display";
 import { conversationPage } from "../../lib/conversation-page";
-import { navigate, type SessionView } from "../../lib/router";
+import { navigate, type Route, type SessionView } from "../../lib/router";
 import { canShowTerminal, composerSlot, otherView, terminalJump, terminalWaits, useSessionView, viewOnlyRow } from "../../lib/session-view";
 import { invalidateOverviewPanel } from "../../lib/use-shortcuts";
 import { resumeInTerminal, terminalResume } from "../../lib/agent-resume";
@@ -126,7 +126,7 @@ import { PageBoundary } from "../PageBoundary";
 import { ViewLayer } from "../session/ViewLayer";
 import { conversationTitle } from "../assistant/conversations";
 import { useDirectionName } from "../../lib/direction-names";
-import { chatPlaceIn, dropChatPlace, firstLineInView, handoffFrom, type ChatPlace, type HandoffFrom } from "../../lib/handoff";
+import { chatPlaceIn, dropChatPlace, firstLineInView, handoffFrom, leaveChat, type ChatPlace, type HandoffFrom } from "../../lib/handoff";
 import { externalOpening, openerOf } from "../../lib/conversation-origins";
 import { usePersona } from "../assistant/Persona";
 import { voiceCalls, useVoiceCall, useVoiceState } from "../../lib/voice/calls";
@@ -278,9 +278,12 @@ async function rewindTo(mid: string, sid: string, draftKey: string, items: Item[
 /** In a side panel (TaskPanel, AgentPanel; #3333, iOS #3255; opened while Agents open in the side panel, #5424): the
  *  chat's one-line header is the panel's only one. It closes the panel (× at its end), may stand for the task (its title,
  *  with `sub` in the title's tooltip), carries the panel's own rows at the top of ⋯ and, beside the title, what the panel
- *  puts there (a task's ⌄ to switch between its agents); the same space's other agents are left out. */
+ *  puts there (a task's ⌄ to switch between its agents); the same space's other agents are left out. With `page`, a chat
+ *  bubble before × opens the Agent shown as its own page (`/s/…`, as from the Agents list) and the panel closes. */
 export interface PanelChrome {
   onClose: () => void;
+  /** The page of the Agent the panel shows: the header's "Open Agent page" button. */
+  page?: Route;
   title?: string;
   sub?: string;
   items?: MenuItem[];
@@ -462,21 +465,24 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the photos a Persona chat's queued message went with, when it was sent from here (its queue holds only the words),
   // and local preview data URLs for any queued message sent from this page (#10871).
   // Both stay the same while `pending` does: the queue is drawn in the memoized composer.
-  const queuedPhotos = useCallback((raw: string) => pending.find((p) => sameMessage(raw, p.msg.text))?.msg.images?.length ?? 0, [pending]);
-  const queuedPhotoPreviews = useCallback((raw: string): string[] => {
-    const paired = photoOnly.get(raw);
+  const queuedPhotos = useCallback((raw: string, index: number) => {
+    const paired = photoOnly.get(index);
+    return (raw === "" && paired !== undefined ? pending[paired] : pending.find((p) => sameMessage(raw, p.msg.text)))?.msg.images?.length ?? 0;
+  }, [pending, photoOnly]);
+  const queuedPhotoPreviews = useCallback((raw: string, index: number): string[] => {
+    const paired = photoOnly.get(index);
     const match = paired !== undefined ? pending[paired] : pending.find((p) => sameMessage(raw, p.msg.text));
     return (match?.msg.images ?? [])
       .map((item) => (item.image?.data ? `data:${item.image.mime};base64,${item.image.data}` : ""))
       .filter(Boolean);
   }, [pending, photoOnly]);
-  const withdrawn = useCallback((text: string) => {
-    const paired = photoOnly.get(text);
+  const withdrawn = useCallback((text: string, index: number) => {
+    const paired = queued[index] === text ? photoOnly.get(index) : undefined;
     const gone = pending.find((p) => !p.posting && sameMessage(text, p.msg.text)) ?? (paired !== undefined && !pending[paired]?.posting ? pending[paired] : undefined);
     if (!gone) return;
     forgetOutgoing(outboxKey(mid, sid), gone.id);
     setPending((ps) => ps.filter((p) => p.id !== gone.id));
-  }, [pending, photoOnly, mid, sid]);
+  }, [pending, photoOnly, queued, mid, sid]);
   const outgoing = shownPending.length + outbox.filter((e) => e.state !== "failed").length;
   const persona = usePersona();
   const state = session ? stateOf(session) : "unknown";
@@ -2009,7 +2015,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the run's status. The same element while nothing in it changes: the composer is memoized.
   const hasQueue = queued.length > 0;
   const queue = useMemo(
-    () => (session && hasQueue ? <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} onWithdrawn={withdrawn} photosOf={assistant ? queuedPhotos : undefined} photoPreviewsOf={queuedPhotoPreviews} /> : null),
+    () => (session && hasQueue ? <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} onWithdrawn={withdrawn} photosOf={assistant || session.capabilities?.queue_edit ? queuedPhotos : undefined} photoPreviewsOf={queuedPhotoPreviews} /> : null),
     [session, hasQueue, draftKey, canCompose, short, assistant, persona.name, withdrawn, queuedPhotos, queuedPhotoPreviews],
   );
   // with the plan's pill showing, "Jump to bottom" goes beside it (over the chat, they hid each other); the pill keeps
@@ -2387,7 +2393,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           working={state === "working" || awaiting}
           needsYou={state === "needs_you"}
           onSend={send}
-          onSendNow={session && (assistant || (session.agent === "claude" && session.source_kind !== "runtime")) ? sendQueueNow : undefined}
+          onSendNow={session && (session.capabilities?.queue_send_now ?? (assistant || (session.agent === "claude" && session.source_kind !== "runtime"))) ? sendQueueNow : undefined}
           disabled={Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"))}
           onEditLastMessage={onEditLastMessage}
           editingLast={editProp}
@@ -2739,6 +2745,13 @@ export const Header = memo(function Header({
     onTerminal?.();
     chrome?.onClose();
   };
+  // the panel's Agent as its own page, the page it has in the Agents list; leaveChat keeps the conversation's place for
+  // Back, as the "Full page" way of opening Agents does (lib/agent-open.ts). The panel closes, its chat being that page now.
+  const openAgentPage = () => {
+    if (!chrome?.page) return;
+    leaveChat(chrome.page, true, getPanel() ?? undefined);
+    chrome.onClose();
+  };
   const showFiles = Boolean(session && !assistant && session.cwd);
   const flipView = () => view && onView?.(otherView(view));
   const openFiles = () => session && togglePanel({ kind: "files", mid: session.machine_id, sid: session.session_id, cwd: session.cwd });
@@ -2988,6 +3001,7 @@ export const Header = memo(function Header({
       {!assistant && session && (session.agent === "codex" || session.source_kind === "codex_history" || session.source_kind === "codex_app_server") &&
         <Suspense fallback={null}><TakeoverAction key={`${session.machine_id}:${session.session_id}`} session={session} /></Suspense>}
       {Boolean(topCenter) && more("end")}
+      {chrome?.page && <IconButton icon="chat" label={t("chat-chatview.open_agent_page")} onClick={openAgentPage} />}
       {chrome && <IconButton icon="x" label={t("sidepanel.close")} onClick={chrome.onClose} />}
       </div>
       {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align={topCenter && mediaMatches(NARROW) ? "right" : "left"} items={items} />}
