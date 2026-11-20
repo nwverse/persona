@@ -1335,6 +1335,15 @@ on its `ScheduleRun` in `assistant.runs`: `progress`, `no_progress`, `unknown` o
 consecutive assessable no-progress count and the run's explanation. Skipped or unstarted attempts are `not_run`;
 a newer completed run makes a late older unassessed result `superseded`. A still-running, unassessed run is `pending`.
 
+The explanation is the run's own reply (#11553): the last reply after the prompt that carries the run's key, up to the
+next message that opened a turn. A run in its source conversation shares that conversation with its other work:
+supervision messages, the owner's words, and other schedules' runs. There the explanation is never just the latest turn's
+reply. Two linked runs due in the same minute in one supervising conversation each keep their own reply, although both
+watchers see the conversation settle only after the second answer. When the run's turn is not its own (its prompt was
+queued into another turn, or another message was queued into its turn), or its prompt is not on the page, the
+explanation is the hub's evidence line ("no new Agent reply, criterion change or progress report"). A run in a
+conversation of its own falls back to that conversation's latest turn.
+
 The baseline is the previous assessment, or a before-dispatch snapshot on the first run. Observable progress is
 any changed nonempty last Agent answer on a current unreleased, undismissed task Agent, a state change of an
 existing acceptance criterion, or changed content/steps in an explicit `report_to_supervisor` `progress` report.

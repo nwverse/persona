@@ -2674,12 +2674,14 @@ type MessagingMe struct {
 }
 
 type MessagingAccount struct {
-	ID       string `json:"id"`
-	Name     string `json:"name,omitempty"`
-	Avatar   string `json:"avatar,omitempty"`
-	Tenant   string `json:"tenant,omitempty"`
-	SignedIn bool   `json:"signed_in"`
-	Unread   int    `json:"unread,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name,omitempty"`
+	Avatar string `json:"avatar,omitempty"`
+	// Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+	AvatarURL string `json:"avatar_url,omitempty"`
+	Tenant    string `json:"tenant,omitempty"`
+	SignedIn  bool   `json:"signed_in"`
+	Unread    int    `json:"unread,omitempty"`
 }
 
 type MessagingAccounts struct {
@@ -2699,9 +2701,11 @@ const (
 var MessagingConversationKinds = []string{"direct", "group", "topic_group", "bot"}
 
 type MessagingConversation struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	Avatar          string    `json:"avatar,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Avatar string `json:"avatar,omitempty"`
+	// Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+	AvatarURL       string    `json:"avatar_url,omitempty"`
 	Kind            string    `json:"kind"`
 	Unread          int       `json:"unread"`
 	MarkedUnread    bool      `json:"marked_unread,omitempty"`
@@ -2726,7 +2730,9 @@ type MessagingPerson struct {
 	ID     string `json:"id,omitempty"`
 	Name   string `json:"name"`
 	Avatar string `json:"avatar,omitempty"`
-	Kind   string `json:"kind,omitempty"`
+	// Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+	AvatarURL string `json:"avatar_url,omitempty"`
+	Kind      string `json:"kind,omitempty"`
 }
 
 type MessagingMembers struct {
@@ -3046,9 +3052,11 @@ type MessagingProfileField struct {
 }
 
 type MessagingProfile struct {
-	ID          string                  `json:"id"`
-	Name        string                  `json:"name"`
-	Avatar      string                  `json:"avatar,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Avatar string `json:"avatar,omitempty"`
+	// Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+	AvatarURL   string                  `json:"avatar_url,omitempty"`
 	Cover       string                  `json:"cover,omitempty"`
 	Kind        string                  `json:"kind,omitempty"`
 	Subtitle    string                  `json:"subtitle,omitempty"`
