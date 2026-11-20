@@ -1,20 +1,24 @@
 import type { EngineInterface, Register } from 'claude-code'
 import {
   BASE,
+  CAPABILITIES,
   POLL_WAIT_MS,
+  applyStepOverride,
   homeDir,
+  mergeOverride,
   nextBackoff,
   readPoll,
   socketPath,
   verdict,
   type Message,
   type PollAnswer,
-} from './bridge.ts'
+  type SessionOverride,
+  type SettingsUpdate,
+} from './bridge'
 
 // Persona's plugin (README.md): while this session lives it asks the local Persona node for the owner's own messages
-// from the Persona apps, and submits each one as the person's words (`asUser`), so the session reads it as typed
-// input rather than as another session's. It submits text and nothing else: it runs no command, reads no file but
-// its own manifest, and keeps quiet (the debug log only) when no node answers.
+// and session-scoped model / effort picks from the Persona apps. Messages go in as the person's words (`asUser`), and
+// model / effort overrides apply to main-loop `turn.step` requests without touching global settings files.
 
 type Engine = EngineInterface
 
@@ -22,16 +26,37 @@ export const register: Register = on => {
   // One poll loop per load: a reload runs session.start again in a fresh environment, and the old loop goes with
   // its environment. A /clear keeps the loop: each poll names the session open now.
   let loop = 0
+  let override: SessionOverride | undefined
+
+  on('turn.step', async function* ($, e, next) {
+    if (e.agentId !== undefined || override === undefined) return yield* next(e)
+    const session = await $.session.id().catch(() => '')
+    const sessionModel = override.model !== undefined ? await $.session.model().catch(() => undefined) : undefined
+    const applied = applyStepOverride(e, override, session, sessionModel)
+    override = applied.nextOverride
+    return yield* next(applied.step)
+  })
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     const mine = ++loop
-    void run($, () => mine === loop)
+    void run(
+      $,
+      () => mine === loop,
+      async (session, update) => {
+        const sessionModel = update.model !== undefined ? await $.session.model().catch(() => undefined) : undefined
+        override = mergeOverride(override, session, update, sessionModel)
+      },
+    )
     return started
   })
 }
 
-async function run($: Engine, current: () => boolean): Promise<void> {
+async function run(
+  $: Engine,
+  current: () => boolean,
+  onSettings: (session: string, update: SettingsUpdate) => Promise<void>,
+): Promise<void> {
   const home = homeDir(await $.env.get('USERPROFILE'), await $.env.get('HOME'))
   const sock = socketPath(home, await $.env.get('PERSONA_HOME'))
   if (sock === undefined) return
@@ -50,6 +75,7 @@ async function run($: Engine, current: () => boolean): Promise<void> {
         session_id: session,
         plugin_version: pluginVersion,
         engine_version: engineVersion,
+        capabilities: CAPABILITIES,
         wait_ms: POLL_WAIT_MS,
       }))
       answer = readPoll(res.status, res.text)
@@ -68,8 +94,30 @@ async function run($: Engine, current: () => boolean): Promise<void> {
       continue
     }
     backoff = 0
+    if (answer.settings !== undefined) await applySettings($, sock, session, answer.settings, onSettings)
     for (const m of answer.messages) await deliver($, sock, session, m)
     if (answer.retryMs > 0) await sleep($, answer.retryMs)
+  }
+}
+
+async function applySettings(
+  $: Engine,
+  sock: string,
+  session: string,
+  update: SettingsUpdate,
+  onSettings: (session: string, update: SettingsUpdate) => Promise<void>,
+): Promise<void> {
+  let ok = true
+  try {
+    await onSettings(session, update)
+  } catch {
+    ok = false
+  }
+  const ack = ok ? { submitted: true } : { submitted: false, reason: 'failed' }
+  try {
+    await $.http.fetch(`${BASE}/ack`, post(sock, { session_id: session, id: update.id, ...ack }))
+  } catch {
+    // The node went away before receiving the ack.
   }
 }
 

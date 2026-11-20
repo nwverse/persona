@@ -17,9 +17,9 @@ import (
 // persona_settings notifications.low_distraction (#8157): settings.list names it, get answers what GET
 // /api/v1/push/ln-mode answers, and set changes the switch only once the owner approves the phone card: while the card
 // waits and after a decline the switch is as it was; an approval turns it on and tells the managers (Hello.QuietPush).
-func TestLowDistractionSettingChangesTheSwitchOnlyOnApproval(t *testing.T) {
+func TestPushGradingSettingChangesTheSwitchOnlyOnApproval(t *testing.T) {
 	h := newTestHub(t)
-	h.push.store = newLnStore()
+	h.push.store = newGradingStore()
 	a := connectAssistant(t, h)
 	m := &Machine{cfg: MachineConfig{ID: "box"}, hub: h}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -37,16 +37,16 @@ func TestLowDistractionSettingChangesTheSwitchOnlyOnApproval(t *testing.T) {
 	}
 	listed := false
 	for _, s := range list.Settings {
-		if s.Key == lowDistractionKey {
+		if s.Key == pushGradingSelfSettingKey {
 			listed = strings.Join(s.Actions, ",") == "get,set" && s.Title != "" && s.About != ""
 		}
 	}
 	if !listed {
-		t.Fatalf("settings.list does not offer %s with get and set: %s", lowDistractionKey, raw)
+		t.Fatalf("settings.list does not offer %s with get and set: %s", pushGradingSelfSettingKey, raw)
 	}
 
 	mux := http.NewServeMux()
-	h.lnRoutes(mux)
+	h.pushGradingRoutes(mux)
 	route := func() bool {
 		t.Helper()
 		rec := httptest.NewRecorder()
@@ -74,7 +74,7 @@ func TestLowDistractionSettingChangesTheSwitchOnlyOnApproval(t *testing.T) {
 		for {
 			if pending := h.pendingInteractions(); answer != nil && len(cards) == 0 && len(pending) == 1 {
 				cards = pending
-				if h.push.lnModeOn() || route() {
+				if h.push.pushGradingOn() || route() {
 					t.Fatal("the switch changed before the owner answered the card")
 				}
 				_ = h.resolve(pending[0].ID, proto.Resolution{Allow: answer})
@@ -96,8 +96,8 @@ func TestLowDistractionSettingChangesTheSwitchOnlyOnApproval(t *testing.T) {
 		t.Fatalf("get = %q, route = %v; want both off", out, route())
 	}
 	no, yes := false, true
-	if out, cards := run(set, &no); !strings.Contains(out, "declined") || len(cards) != 1 || h.push.lnModeOn() {
-		t.Fatalf("declined: %q, cards %d, on %v", out, len(cards), h.push.lnModeOn())
+	if out, cards := run(set, &no); !strings.Contains(out, "declined") || len(cards) != 1 || h.push.pushGradingOn() {
+		t.Fatalf("declined: %q, cards %d, on %v", out, len(cards), h.push.pushGradingOn())
 	}
 	out, cards := run(set, &yes)
 	if len(cards) != 1 || cards[0].Kind != proto.IxPermission || cards[0].ToolName != "persona_settings" ||
@@ -105,8 +105,8 @@ func TestLowDistractionSettingChangesTheSwitchOnlyOnApproval(t *testing.T) {
 			"after": i18n.T(h.userLang(), "hub-self_settings_lnmode.on"), "what": i18n.T(h.userLang(), "hub-self_settings_lnmode.when_on")}) {
 		t.Fatalf("the card: %+v", cards)
 	}
-	if !h.push.lnModeOn() || !route() || !strings.Contains(out, "true") {
-		t.Fatalf("approved: %q, on %v, route %v", out, h.push.lnModeOn(), route())
+	if !h.push.pushGradingOn() || !route() || !strings.Contains(out, "true") {
+		t.Fatalf("approved: %q, on %v, route %v", out, h.push.pushGradingOn(), route())
 	}
 	if got, _ := run(get, nil); got != "true" {
 		t.Fatalf("get after the change = %q, want what the route says (true)", got)

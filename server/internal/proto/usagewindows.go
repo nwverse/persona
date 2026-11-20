@@ -22,6 +22,14 @@ type UsageWindow struct {
 	Model string `json:"model,omitempty"`
 }
 
+// UsageBalance is a prepaid account's remaining amount as its provider reports it (#11825), for a provider that has
+// no rate-limit window to draw (the official DeepSeek launcher's GET /user/balance). Amount is the provider's own
+// decimal string, kept exactly as sent ("12.34") and never recomputed into a percentage; Currency is its code ("CNY").
+type UsageBalance struct {
+	Amount   string `json:"amount"`
+	Currency string `json:"currency"`
+}
+
 // UsageAccount is one subscription account as one source saw it (a node's answer) or as the hub merged it.
 type UsageAccount struct {
 	// ID is the manager's opaque row key. For Codex it identifies an account or an unidentified source across resets.
@@ -29,8 +37,12 @@ type UsageAccount struct {
 	Provider string `json:"provider"`       // codex | claude
 	Name     string `json:"name"`           // "Codex Pro", "Claude"
 	Plan     string `json:"plan,omitempty"` // as the source calls it ("pro")
-	// Windows are ordered shortest first.
+	// Windows are ordered shortest first. Empty for an account whose provider reports only a balance.
 	Windows []UsageWindow `json:"windows"`
+	// Balance is the remaining prepaid amount, when the provider reports one instead of rate-limit windows. The
+	// account's SampledAt, Stale, StaleAt and Problem apply to it as they do to windows. A genuine zero is a Balance
+	// with amount "0.00"; a failed read is Problem with the previous Balance kept, or no Balance at all.
+	Balance *UsageBalance `json:"balance,omitempty"`
 	// SampledAt is when the source wrote the newest of these numbers (not when we read them).
 	SampledAt time.Time `json:"sampled_at"`
 	// Stale: the sample is older than the collector's schedule allows (its source has not been written to for a

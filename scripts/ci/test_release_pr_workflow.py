@@ -62,12 +62,24 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("release_merge_check.py", plan_script)
         self.assertIn('test "$COMMIT" = "${{ github.event.pull_request.merge_commit_sha || github.sha }}"', plan_script)
         verify_script = str(jobs["verify"]["steps"])
-        self.assertEqual(jobs["verify"]["steps"][0]["env"], {
+        self.assertEqual(jobs["verify"]["steps"][0]["uses"], "actions/checkout@v4")
+        gate = next(step for step in jobs["verify"]["steps"]
+                    if step.get("name") == "Require every platform job to succeed before verification")
+        self.assertEqual(gate["env"], {
             "CLI_WEB": "${{ needs.cli-web.result }}",
             "ANDROID": "${{ needs.android.result }}",
             "APPLE": "${{ needs.apple.result }}",
             "WINDOWS": "${{ needs.windows.result }}",
         })
+        for failed in ("failure", "skipped", "cancelled"):
+            with self.subTest(platform_result=failed):
+                result = subprocess.run(["bash", "-c", gate["run"]],
+                                        env=dict(os.environ, CLI_WEB=failed, ANDROID="success", APPLE="success", WINDOWS="success"),
+                                        capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(subprocess.run(["bash", "-c", gate["run"]],
+                                        env=dict(os.environ, CLI_WEB="success", ANDROID="success", APPLE="success", WINDOWS="success"),
+                                        capture_output=True, text=True, timeout=10).returncode, 0)
         self.assertIn('test "$result" = success', verify_script)
         self.assertIn("--conclusion success", verify_script)
         # GitHub skips the whole aggregate after a failed or skipped dependency by default. That would also skip
