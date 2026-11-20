@@ -173,6 +173,8 @@ A component with a composable slot ends with a function-typed parameter, so a ca
 | `VoiceOrb` / `VoiceStatus` / `VoiceCaption` / `VoiceControl` / `VoiceControlBar` | Voice chat page: the orb (connecting, listening, speaking, muted, ended), status line, captions, round labeled buttons at the bottom (used by `feature:voice`, `docs/android/android.md` ("Voice chat")) |
 | `AmbientLight` / `floatingSurface` / `glassSource` | Glass's status light (`inWindow` lays it out by window, thumbnail previews by their own frame), overlays, the content overlays sample (handled by the page scaffold; pages normally do not use these directly) |
 
+**Large-text row priority:** `MessageItem` keeps its ordinary name/time line by default. Prioritized event rows, and chat lists that explicitly set `stackTitleTimeAtLargeText`, allow the name two lines and move the full time below it at 1.5× font scale and above; unread state must not squeeze the name to an ellipsis alone. The option is off by default, so other callers retain their existing layout. A non-prioritized row's title icon stays beside the preview rather than being duplicated beside the large-text name.
+
 When an extension's View redraws (refresh, `ui.invalidate`, a button returning a new View), it shows what changed (#2811, same as web #2757): for the same key,
 `metric` / `stat_grid` / row values where only the number changed count to the new value (`JChangingText`: only the digits move, each frame written in the original value's format, `2/8 → 6/8`, `¥1.20 → ¥36.20`),
 other text changes fade in; a row badge changing tone transitions its color (`JTag(…, animated = true)`); in lists, blocks added by item key fade in, removed ones fade out, the rest move to their new positions;

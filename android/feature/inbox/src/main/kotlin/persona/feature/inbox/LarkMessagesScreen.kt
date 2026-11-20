@@ -120,6 +120,7 @@ internal fun LarkMessagesContent(
                     titleTag = if (row.markedUnread && row.unread == 0) {
                         androidx.compose.ui.res.stringResource(R.string.inbox_lark_unread)
                     } else null,
+                    stackTitleTimeAtLargeText = true,
                 )
             }
             snapshot.moreFailure?.let { reason ->
