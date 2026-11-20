@@ -314,3 +314,67 @@ func TestPlainAgyAndOmpRequireConnectedAssistantRuntime(t *testing.T) {
 		t.Fatalf("assistant with agy runtime: %s", got)
 	}
 }
+
+// A main chat on a launcher that Model settings' provider list leaves out, but the main chat's picker offers on its
+// computer, is not "Provider missing or incompatible" (#11772): a runtime that runs it (DSH declaring caps.assistant), or
+// a hub.json wrapper only that computer names. Its status is the one any launcher there gets, and the uses that follow
+// the main chat say the same. The room keeps its own word for a runtime (TestMeetingRoomExplainsAMainChatOnARuntime).
+func TestMainChatOnARuntimeIsNotIncompatible(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	f.mu.Lock()
+	f.zshrc = map[string][]proto.Launcher{"server": {{Name: "dsh-rt", Source: "dsh", Agent: "dsh", Assistant: true}, {Name: "cc", Source: "zshrc"}}}
+	f.hello.Models.Launchers = map[string][]ConfiguredLauncher{"server": {{Launcher: proto.Launcher{Name: "cc-wrapper"}, AgentType: "claude"}}}
+	f.mu.Unlock()
+	names, providers := pickerNames(t, s, "assistant"), s.modelProviders(ctx)
+	for _, name := range []string{"dsh-rt", "cc-wrapper"} {
+		if !slices.Contains(names, name) {
+			t.Fatalf("the main chat can't run on %s, so this proves nothing: %v", name, names)
+		}
+		if slices.ContainsFunc(providers, func(v ModelProvider) bool { return v.ID == "launcher."+name }) {
+			t.Fatalf("the provider list names %s, so this proves nothing", name)
+		}
+		setModel(t, s, "assistant", ModelBinding{Provider: "launcher." + name})
+		for _, id := range []string{"assistant", "schedule", purposeSupervise} {
+			if p := purposeOf(t, s, id); p.Effective.Provider != "launcher."+name || p.Status != modelUnverified {
+				t.Fatalf("%s on %s: %+v; want status %q", id, name, p, modelUnverified)
+			}
+		}
+	}
+}
+
+// A runtime's launcher the main chat can't run on is still "Provider missing or incompatible": one that does not declare
+// the assistant, and one gone from its computer's list after the main chat was set to it.
+func TestMainChatOnAMissingRuntimeIsIncompatible(t *testing.T) {
+	ctx := context.Background()
+	t.Run("without the assistant capability", func(t *testing.T) {
+		s, f, _ := modelService(t)
+		f.mu.Lock()
+		f.zshrc = map[string][]proto.Launcher{"server": {{Name: "dsh-rt", Source: "dsh", Agent: "dsh"}, {Name: "cc", Source: "zshrc"}}}
+		f.mu.Unlock()
+		if names := pickerNames(t, s, "assistant"); slices.Contains(names, "dsh-rt") {
+			t.Fatalf("the picker offers a runtime without the capability, so this proves nothing: %v", names)
+		}
+		setModel(t, s, "assistant", ModelBinding{Provider: "launcher.dsh-rt"})
+		if p, want := purposeOf(t, s, "assistant"), mc(s.requestCtxLang(ctx), "status_provider_incompatible"); p.Status != want {
+			t.Fatalf("a runtime that can't run the main chat: %+v; want status %q", p, want)
+		}
+	})
+	t.Run("gone from the computer", func(t *testing.T) {
+		s, f, _ := modelService(t)
+		f.mu.Lock()
+		f.zshrc = map[string][]proto.Launcher{"server": {{Name: "dsh-rt", Source: "dsh", Agent: "dsh", Assistant: true}, {Name: "cc", Source: "zshrc"}}}
+		f.mu.Unlock()
+		setModel(t, s, "assistant", ModelBinding{Provider: "launcher.dsh-rt"})
+		if p := purposeOf(t, s, "assistant"); p.Status != modelUnverified {
+			t.Fatalf("on the runtime while it is there: %+v; want status %q", p, modelUnverified)
+		}
+		f.mu.Lock()
+		f.zshrc = map[string][]proto.Launcher{"server": {{Name: "cc", Source: "zshrc"}}}
+		f.mu.Unlock()
+		s.zshrcLaunchers(ctx, true) // the computer's list as it is now: the runtime has gone
+		if p, want := purposeOf(t, s, "assistant"), mc(s.requestCtxLang(ctx), "status_provider_incompatible"); p.Effective.Provider != "launcher.dsh-rt" || p.Status != want {
+			t.Fatalf("on a runtime gone from the computer: %+v; want status %q", p, want)
+		}
+	})
+}

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
@@ -77,6 +78,30 @@ func (s *Service) mainChatFit(ctx context.Context, machine, name string) (mainCh
 		return mainChatRefused, s.mainChatRefusal(ctx, machine, label, launcherLabel(instead))
 	}
 	return mainChatGone, nil
+}
+
+// mainChatOffers: p is one of the main chat's purposes (its own, a scheduled task's, the background supervisor's; not
+// the In-meeting conversation's, which has its own rule, models_room.go) and its computer's main-chat picker offers p's
+// launcher, by the picker's rule (assistantProviders) over that computer's launchers as last seen (roomLaunchers, no
+// node asked). This is how Model settings' status tells a launcher the provider list leaves out from one that is not
+// there: a runtime's launcher that runs the assistant (a runtime declaring caps.assistant, #11772) or a hub.json
+// wrapper only that computer names. One gone from the list, or there but unable to run the assistant (a runtime without
+// the capability), is not offered. A hidden one still is, as mainChatFit has it: hiding takes it out of the pickers only.
+func (s *Service) mainChatOffers(ctx context.Context, p ModelPurpose) bool {
+	if p.Kind != "launcher" || p.CategoryID != "assistant" || p.ID == purposeMeetingRoom || p.MachineID == "" {
+		return false
+	}
+	name, ok := strings.CutPrefix(p.Effective.Provider, "launcher.")
+	if !ok || name == "" || proto.IsExternalLauncher(name) {
+		return false
+	}
+	ctx = withUnhidden(ctx, name)
+	seen := s.roomLaunchers(ctx, p.MachineID, "", false)
+	if !slices.ContainsFunc(seen, func(l ConfiguredLauncher) bool { return l.Name == name }) {
+		return false
+	}
+	allowed, err := s.assistantProviders(ctx, p.MachineID, seen)
+	return err == nil && allowed[name]
 }
 
 // finishMainChatModel validates the binding after model resolution, including a default or a legacy fallback that
