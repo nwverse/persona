@@ -1655,6 +1655,18 @@ class WatcherTests(unittest.TestCase):
             added = [line for chunk in chunks for line in chunk.splitlines() if line.startswith("+new-")]
             self.assertEqual(len(removed), 20000)
             self.assertEqual(len(added), 20000)
+            new_line = 1
+            for chunk in chunks:
+                header = re.search(r"(?m)^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", chunk)
+                self.assertEqual(int(header.group(1)), new_line)
+                new_line += sum(line.startswith(("+", " ")) for line in chunk.splitlines()
+                                if not line.startswith("+++"))
+
+    def test_split_hunk_header_uses_part_ranges(self):
+        self.assertEqual(pr_watch_review.split_hunk_header(
+            "@@ -100 +200 @@ function\n", 40, 80), "@@ -140 +280 @@ function\n")
+        self.assertEqual(pr_watch_review.split_hunk_header(
+            "@@ -100,0 +200,1 @@\n", 0, 10), "@@ -100 +210 @@\n")
 
     def test_large_single_diff_line_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
