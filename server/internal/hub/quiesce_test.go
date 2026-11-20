@@ -627,12 +627,15 @@ func TestPauseDevelopmentWritersFailureWakesDeferredWorkers(t *testing.T) {
 			pauseCtx, pauseCancel := context.WithCancel(context.Background())
 			defer pauseCancel()
 			var done chan error
+			var endOnce sync.Once
+			endInFlight := func() { endOnce.Do(h.quiesce.end) }
 
 			if branch == "quiesce-wait-failure" {
 				// Hold an in-flight write so quiesce.pause sets paused=true and blocks.
 				if !h.quiesce.begin() {
 					t.Fatal("initial begin failed")
 				}
+				defer endInFlight()
 				done = make(chan error, 1)
 				go func() { done <- h.pauseDevelopmentWriters(pauseCtx) }()
 				waitFor(t, "quiesce paused", func() bool {
@@ -671,18 +674,19 @@ func TestPauseDevelopmentWritersFailureWakesDeferredWorkers(t *testing.T) {
 				return h.ext.savePending != nil && !h.ext.saveRunning
 			})
 
-			// Abort the pause.
+			// Abort the pause and wait for cancellation before ending the in-flight
+			// write so writeQuiescer.pause cannot race between idle and ctx.Done.
 			pauseCancel()
-			if branch == "quiesce-wait-failure" {
-				h.quiesce.end()
-			}
 			select {
 			case err := <-done:
-				if err == nil {
-					t.Fatal("expected pauseDevelopmentWriters to fail")
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("pauseDevelopmentWriters error = %v, want context.Canceled", err)
 				}
 			case <-time.After(time.Second):
 				t.Fatal("pauseDevelopmentWriters did not return after cancel")
+			}
+			if branch == "quiesce-wait-failure" {
+				endInFlight()
 			}
 
 			// Assistant gate must be open again on both branches.
@@ -1988,7 +1992,11 @@ func TestFinishDeviceSessionIsNonBlockingAndSerialized(t *testing.T) {
 		if !h.quiesce.begin() {
 			t.Fatal("initial begin failed")
 		}
+		var endOnce sync.Once
+		endInFlight := func() { endOnce.Do(h.quiesce.end) }
+		defer endInFlight()
 		pauseCtx, pauseCancel := context.WithCancel(context.Background())
+		defer pauseCancel()
 		pauseDone := make(chan error, 1)
 		go func() { pauseDone <- h.pauseDevelopmentWriters(pauseCtx) }()
 		waitFor(t, "quiesce paused", func() bool {
@@ -2001,16 +2009,18 @@ func TestFinishDeviceSessionIsNonBlockingAndSerialized(t *testing.T) {
 		h.finishDeviceSession(11, time.Now(), "closed", 30)
 		h.nodeWorkers.Wait()
 
+		// Wait for pauseDevelopmentWriters to observe cancellation before ending
+		// the in-flight write so only ctx.Done can unblock writeQuiescer.pause.
 		pauseCancel()
-		h.quiesce.end()
 		select {
 		case err := <-pauseDone:
-			if err == nil {
-				t.Fatal("expected pauseDevelopmentWriters to fail")
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("pauseDevelopmentWriters error = %v, want context.Canceled", err)
 			}
 		case <-time.After(200 * time.Millisecond):
 			t.Fatal("failed pauseDevelopmentWriters blocked on device session flush")
 		}
+		endInFlight()
 
 		select {
 		case <-entered:
