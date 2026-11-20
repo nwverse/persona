@@ -27,15 +27,29 @@ func (n *Node) observedRunning(id string) {
 }
 
 func (n *Node) recordRunning(id string) {
+	now := time.Now()
 	n.state.update(id, func(v *sessionState) bool {
-		if v.StopCause == proto.StopUnknown {
-			return false
+		changed := false
+		if v.StopCause != proto.StopUnknown {
+			v.StopCause = proto.StopUnknown
+			v.StopCauseAt = max(now.UnixNano(), v.StopCauseAt+1)
+			changed = true
 		}
-		v.StopCause = proto.StopUnknown
-		v.StopCauseAt = max(time.Now().UnixNano(), v.StopCauseAt+1)
-		return true
+		if now.Unix()-v.RanAt >= int64(ranAtEvery/time.Second) {
+			v.RanAt = now.Unix()
+			changed = true
+		}
+		return changed
 	})
 }
+
+// ranAtEvery: how often a running Agent's RanAt is written; restartWindow: how long before this node started an Agent
+// may last have been seen running for its end to count as the restart's (markInterrupted). A quick restart or upgrade
+// falls inside it; a machine that was off for longer leaves the cause unknown.
+const (
+	ranAtEvery    = 5 * time.Minute
+	restartWindow = 2 * ranAtEvery
+)
 
 // state.put is one-way. Verify the cause before closing or consuming a stopped
 // capability: a failed save must not revive old recovery permission after a restart.
@@ -77,4 +91,18 @@ func (n *Node) supervisorResumeAllowed(id, mode, launcher string) error {
 		return refusal("resume_not_allowed", "The session is running again; refresh it before sending.", nil)
 	}
 	return nil
+}
+
+// noteResumeFailed records the assistant's resume of session id that ended in err with the Agent not running as
+// resume_failed: stopped by Persona's own step, which the assistant may try again, never unknown (#11441). Nothing
+// when the resume went (err nil) or the Agent runs after all.
+func (n *Node) noteResumeFailed(id string, err error) {
+	if err == nil {
+		return
+	}
+	if _, live := n.agent(id); live {
+		return
+	}
+	n.state.stopped(id, proto.StopResumeFailed)
+	n.logf("session %s: the assistant's resume failed: %v", short(id), err)
 }
