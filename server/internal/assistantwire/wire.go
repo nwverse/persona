@@ -89,6 +89,8 @@ type Placement struct {
 	// Standby: this hub is a member of a mesh group, whose center runs the scheduled tasks (docs/server/mesh.md).
 	Standby        bool `json:"standby,omitempty"`
 	MemoryDreaming bool `json:"memory_dreaming,omitempty"`
+	// CompleteAgentlessTodos lets a supervising conversation complete its own agentless memo without another card.
+	CompleteAgentlessTodos bool `json:"complete_agentless_todos,omitempty"`
 }
 
 // DeviceCall is device.call's params. Device is a machine id, or DeviceAll for DeviceDevicesList.
@@ -102,11 +104,12 @@ type DeviceCall struct {
 // answers the others from what it holds about the machine.
 const (
 	// The node's (docs/protocol/protocol.md "hub ↔ node").
-	DeviceSessionItems  = "session.items"  // {session_id, turns} → {items}
-	DeviceSessionRename = "session.rename" // {session_id, title} → {ok}
-	DeviceAssistantSend = "assistant.send" // {session_id, text, resume_only?, permission_mode?, …model} → {session_id}
-	DeviceSessionSend   = "session.send"   // {session_id, text} → {}
-	DeviceSessionStart  = "session.start"  // {cwd, prompt, launcher?, model?, permission_mode?, tab_name?, workspace_id?, session_id?} → {session}; session_id names the new session (Claude), for an exact reconciliation when the answer is lost
+	DeviceSessionItems              = "session.items"                 // {session_id, turns} → {items}
+	DeviceSessionRename             = "session.rename"                // {session_id, title?, tab_name?} → {ok}
+	DeviceSessionRenameTabIfCurrent = "session.rename_tab_if_current" // {session_id, tab_id, expected_tab_name, tab_name} → {ok}
+	DeviceAssistantSend             = "assistant.send"                // {session_id, text, resume_only?, permission_mode?, …model} → {session_id}
+	DeviceSessionSend               = "session.send"                  // {session_id, text} → {}
+	DeviceSessionStart              = "session.start"                 // {cwd, prompt, launcher?, model?, permission_mode?, tab_name?, workspace_id?, session_id?} → {session}; session_id names the new session (Claude), for an exact reconciliation when the answer is lost
 	// DeviceSessionModes: {session_id, launcher?, from?, model?, effort?, permission_mode?} → {}; a launcher other than
 	// the session's own is a switch to it, carried out by a session.send with apply_switch (docs/protocol/protocol.md).
 	DeviceSessionModes = "session.modes"
@@ -205,6 +208,8 @@ const (
 	// (internal/extmgr), not the hub; AppSettings is Persona's own settings (persona_settings).
 	AppInbox    = "inbox"
 	AppSettings = "settings"
+	// AgentsDisplayGet reads the default manager's shared Agents display settings for another manager.
+	AgentsDisplayGet = "agents.display.get"
 
 	// AppNotify is the hub's push settings: NotifyQuietGet tells whether the user is in their quiet hours now.
 	AppNotify = "notify"

@@ -88,12 +88,12 @@ func pickOf(params map[string]any) startPick {
 // resolveStart fills params (a session.start's, with the caller's own launcher, model, effort and tier, if any) with
 // what the new Agent runs on: the tier, then Model configuration › Agents. It answers the caller's own pick, for
 // fitLauncher.
-func (s *Service) resolveStart(ctx context.Context, params map[string]any) (startPick, error) {
+func (s *Service) resolveStart(ctx context.Context, params map[string]any, launcherDefaultModel bool) (startPick, error) {
 	own := pickOf(params)
 	if err := s.applyStartTier(ctx, params); err != nil {
 		return own, err
 	}
-	return own, s.applyModel(ctx, "agent.new", params)
+	return own, s.applyModelBinding(ctx, "agent.new", params, launcherDefaultModel)
 }
 
 // startAgent is what a start's launcher runs on the computer it starts on (fitLauncher): the agent type (claude, codex,

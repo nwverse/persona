@@ -146,8 +146,9 @@ type Service struct {
 
 	// prepared is what this hub last gave a machine's node for a directory (key: machine id NUL directory), the
 	// CLAUDE.md and the plugin skills, by prepareSpaceIf; refreshInstructions gives again what differs.
-	preparedMu sync.Mutex
-	prepared   map[string]preparedState
+	prepareLocks cardLocks
+	preparedMu   sync.Mutex
+	prepared     map[string]preparedState
 
 	epoch string
 	// born is when this manager started: a background supervisor started before it may be in a profile with no login
@@ -469,9 +470,14 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			return beforeNodeWrite(method, err)
 		}
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
+	taken := false // the node took this send (or may have): a direction's notes block it carried counts as given
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend ||
+		method == DeviceSessionSendOnce || method == assistantwire.DeviceAssistantAnswerAgain) {
 		id, _ := p["session_id"].(string)
-		if err := s.putSupervisionInstructions(ctx, device, id, p); err != nil {
+		pctx, carry := withNotesCarry(ctx)
+		// Settled however this returns: a send refused before it left was not taken (direction_notes.go).
+		defer func() { s.notesSendOutcome(ctx, carry, taken) }()
+		if err := s.putSupervisionInstructions(pctx, device, id, p); err != nil {
 			return beforeNodeWrite(method, err)
 		}
 		if method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce {
@@ -599,6 +605,8 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if !ok {
 		res, err = s.hub.DeviceCall(ctx, p)
 	}
+	// Not taken: refused before anything was typed, or it never reached the computer (relay_refusal.go).
+	taken = err == nil || !sendNotTaken(err)
 	if taskRoot != "" && (method == DeviceSessionSend || method == deviceTaskStart) {
 		s.noteTaskSpaceResult(ctx, taskRoot, device, res)
 	}

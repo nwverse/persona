@@ -128,6 +128,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 		classified = classified && larkBypassSafe(c)
 	}
 	safe := len(v.calls) > 0 && classified
+	boundary := slices.ContainsFunc(v.calls, func(c larkCall) bool { return !larkBypassSafe(c) })
 	if v.other {
 		// A write through a gate whose credentials are at the proxy goes there only as a call read off the command and
 		// let through here: in a command the gate cannot follow it would be refused after the phone said yes.
@@ -152,7 +153,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 		g, write := gateWrite(cfg.Gates, analysisCommand)
 		// Text naming lark-cli in a command with no call is not one: classifyLark marks unknown what could run it
 		// (larkgate_text.go), so a grep pattern or a note written to a file is no card (#8119).
-		if write || v.cliWrite || v.unknown || larkCLIRe.MatchString(analysisCommand) && !classified {
+		if write || boundary || v.cliWrite || v.unknown || larkCLIRe.MatchString(analysisCommand) && !classified {
 			ix.Kind = proto.IxPermission
 			title := wholeCommandTitle(cfg.Gates, v, analysisCommand, g, write)
 			if title != "" {

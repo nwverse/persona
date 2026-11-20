@@ -186,7 +186,12 @@ type AgentDelegate struct {
 	Rules    string // the user's own rules, trimmed: manager.json agents.delegate.rules
 }
 
-func RenderAgentDelegate(d AgentDelegate) string { return render("agents/delegate", d) }
+func RenderAgentDelegate(d AgentDelegate) string {
+	if d.Language == "zh-Hans" || d.Language == "简体中文" {
+		d.Language = ""
+	}
+	return render("agents/delegate", d)
+}
 
 // AgentDelegateInput is the question to decide on and what is known around it (agents/delegate_input).
 type AgentDelegateInput struct {
