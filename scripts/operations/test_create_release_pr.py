@@ -22,6 +22,7 @@ class CreateReleasePRTests(unittest.TestCase):
         with patch.object(subject, "gh", return_value=response) as call:
             subject.create("nwverse/persona", "release: v1.0.0-beta.1", "release/1.0.0-beta.1", "body", "token")
             self.assertEqual(call.call_count, 1)
+            self.assertEqual(call.call_args.args[0], ["api", "repos/nwverse/persona/pulls?state=open&head=release/1.0.0-beta.1&base=main&per_page=10"])
 
     def test_throttled_creation_uses_bounded_backoff_then_succeeds(self):
         listing = subprocess.CompletedProcess([], 0, "[]", "")
