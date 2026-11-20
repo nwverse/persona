@@ -19,6 +19,193 @@ type userCheckPassStore struct {
 	failLedger       atomic.Bool
 }
 
+func TestUserCheckRecoversMissingPassAsk(t *testing.T) {
+	ctx := t.Context()
+	for _, scenario := range []string{"missing", "previously auto accepted"} {
+		t.Run(scenario, func(t *testing.T) {
+			store := todoTestDB(t)
+			s, hub, todo := acceptedForUserCheckOn(t, store)
+			old := askOf(s, todo.ID)
+			asks := make(map[string]*acceptAsk)
+			if scenario == "previously auto accepted" {
+				previous := *old
+				previous.AcceptedAt, previous.ByAssistant = previous.AskedAt, true
+				asks[todo.ID] = &previous
+			}
+			if err := store.PutSetting(ctx, acceptanceKey, asks); err != nil {
+				t.Fatal(err)
+			}
+
+			restarted := newServiceOn(t, hub, store)
+			restarted.verifySupervisedAsks(ctx)
+			got := todoNow(restarted, todo.ID)
+			fresh := askOf(restarted, todo.ID)
+			if got.DoneAt != nil || got.Supervision.state(got) != reviewUserCheck ||
+				fresh == nil || !fresh.AcceptedAt.IsZero() || fresh.AskedAt.Equal(old.AskedAt) ||
+				fresh.SessionID != old.SessionID {
+				t.Fatalf("the pending verification did not recover a usable Pass: todo=%+v ask=%+v", got, fresh)
+			}
+			again := newServiceOn(t, hub, store)
+			again.verifySupervisedAsks(ctx)
+			if saved := askOf(again, todo.ID); saved == nil || !saved.AskedAt.Equal(fresh.AskedAt) {
+				t.Fatalf("recovery did not keep the same persisted ask: %+v", saved)
+			}
+			if result, err := again.acceptTryFromBrief(ctx, todo.ID, old.AskedAt.Format(timeKeyLayout)); err != nil || result.taken {
+				t.Fatalf("an older Pass accepted the recovered round: %+v, %v", result, err)
+			}
+			if result, err := again.acceptTryFromBrief(ctx, todo.ID, fresh.AskedAt.Format(timeKeyLayout)); err != nil || !result.taken {
+				t.Fatalf("the recovered Pass could not complete the task: %+v, %v", result, err)
+			}
+		})
+	}
+}
+
+func TestUserCheckReopenRollsBackWithLedgerFailure(t *testing.T) {
+	for _, path := range []string{"edit", "reopen"} {
+		t.Run(path, func(t *testing.T) {
+			ctx := t.Context()
+			dsn := newDatabase(t)
+			store, err := db.Open(ctx, dsn, db.ManagerSet)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(store.Close)
+			s, hub, todo := acceptedForUserCheckOn(t, store)
+			old := askOf(s, todo.ID)
+			done, open := true, false
+			if _, err := s.editTodo(ctx, todo.ID, db.TodoEdit{Done: &done}); err != nil {
+				t.Fatal(err)
+			}
+			execIn(t, dsn, `CREATE FUNCTION reject_user_check_reset() RETURNS trigger LANGUAGE plpgsql AS $$
+				BEGIN RAISE EXCEPTION 'verification reset rejected'; END $$;
+				CREATE TRIGGER reject_user_check_reset BEFORE UPDATE ON todo_supervision FOR EACH ROW
+				WHEN (OLD.state = 'user_check' AND NEW.state = '') EXECUTE FUNCTION reject_user_check_reset()`)
+			reopen := func(service *Service) error {
+				if path == "reopen" {
+					return service.reopenTodo(ctx, todo.ID)
+				}
+				_, err := service.editTodo(ctx, todo.ID, db.TodoEdit{Done: &open})
+				return err
+			}
+			if err := reopen(s); err == nil {
+				t.Fatal("the failed ledger reset was reported as a successful reopen")
+			}
+			restarted := newServiceOn(t, hub, store)
+			if err := restarted.ensureTodosLoaded(ctx); err != nil {
+				t.Fatal(err)
+			}
+			for _, service := range []*Service{s, restarted} {
+				got := todoNow(service, todo.ID)
+				if got.DoneAt == nil || got.ReopenedAt != nil || got.Supervision.State != reviewUserCheck {
+					t.Fatalf("the failed reset partially reopened the task: %+v", got)
+				}
+			}
+			execIn(t, dsn, `DROP TRIGGER reject_user_check_reset ON todo_supervision`)
+			if err := reopen(restarted); err != nil {
+				t.Fatal(err)
+			}
+			reloaded := newServiceOn(t, hub, store)
+			reloaded.verifySupervisedAsks(ctx)
+			got := todoNow(reloaded, todo.ID)
+			if got.DoneAt != nil || got.ReopenedAt == nil || got.Supervision.State != "" ||
+				len(got.Supervision.Reviews) != len(todo.Supervision.Reviews) {
+				t.Fatalf("the retry did not persist the reopened work and keep its review history: %+v", got)
+			}
+			if result, err := reloaded.acceptTry(ctx, todo.ID, old.MessageID); err != nil || result.taken {
+				t.Fatalf("the old Pass accepted reopened work: %+v, %v", result, err)
+			}
+			ledgers, err := store.ListTodoSupervision(ctx)
+			if err != nil || len(ledgers) != 1 || ledgers[0].State != "" {
+				t.Fatalf("the reopened ledger did not commit: %+v, %v", ledgers, err)
+			}
+		})
+	}
+}
+
+func TestUserCheckAlreadyReopenedKeepsWorkingAfterRestart(t *testing.T) {
+	ctx := t.Context()
+	dsn := newDatabase(t)
+	store, err := db.Open(ctx, dsn, db.ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	s, hub, todo := acceptedForUserCheckOn(t, store)
+	old := askOf(s, todo.ID)
+	// An earlier manager committed only the todo half of the reopen.
+	execIn(t, dsn, `UPDATE todos SET reopened_at = now()`)
+
+	restarted := newServiceOn(t, hub, store)
+	restarted.verifySupervisedAsks(ctx)
+	got := todoNow(restarted, todo.ID)
+	if got.DoneAt != nil || got.Supervision.State != "" || got.ReopenedAt == nil {
+		t.Fatalf("a stale ledger resurrected personal verification: %+v", got)
+	}
+	if a := askOf(restarted, todo.ID); a != nil && !a.AskedAt.Equal(old.AskedAt) {
+		t.Fatalf("a stale ledger created a fresh Pass: %+v", a)
+	}
+}
+
+func TestUserCheckPassWaitsForItsOwnRound(t *testing.T) {
+	for _, source := range []string{"web button", "card reply", "recovery sweep"} {
+		t.Run(source, func(t *testing.T) {
+			ctx := t.Context()
+			s, _, todo := acceptedForUserCheck(t)
+			old := askOf(s, todo.ID)
+			actions := &s.reviewDismissals.actions
+			actions.acquire(todo.ID)
+			locked := true
+			defer func() {
+				if locked {
+					actions.release(todo.ID)
+				}
+			}()
+			if source == "recovery sweep" {
+				s.accept.mu.Lock()
+				s.accept.asks[todo.ID].AcceptedAt = time.Now().UTC()
+				s.accept.mu.Unlock()
+			}
+			finished := make(chan error, 1)
+			go func() {
+				switch source {
+				case "recovery sweep":
+					s.verifySupervisedAsks(ctx)
+					finished <- nil
+				case "card reply":
+					s.acceptReply(ctx, "om_reply", "Pass", false, old.MessageID)
+					finished <- nil
+				default:
+					_, err := s.acceptTryFromBrief(ctx, todo.ID, old.AskedAt.Format(timeKeyLayout))
+					finished <- err
+				}
+			}()
+			waitFor(t, "the old Pass queued behind the task action", func() bool {
+				actions.mu.Lock()
+				defer actions.mu.Unlock()
+				return actions.m[todo.ID].n == 2
+			})
+			fresh := &acceptAsk{AskedAt: time.Now().UTC(), MessageID: "om_fresh", Messages: []string{"om_fresh"}}
+			s.accept.mu.Lock()
+			s.accept.asks[todo.ID] = fresh
+			s.accept.mu.Unlock()
+			actions.release(todo.ID)
+			locked = false
+			select {
+			case err := <-finished:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the old Pass did not return")
+			}
+			got, current := todoNow(s, todo.ID), askOf(s, todo.ID)
+			if got.DoneAt != nil || current == nil || !current.AcceptedAt.IsZero() {
+				t.Fatalf("a previous Pass affected the new verification round: done=%v ask=%+v", got.DoneAt, current)
+			}
+		})
+	}
+}
+
 func (d *userCheckPassStore) ReviewDoneTodo(ctx context.Context, id, reason string, accepted bool, at time.Time) (*db.TodoRow, bool, error) {
 	d.closeCalls.Add(1)
 	return d.DB.ReviewDoneTodo(ctx, id, reason, accepted, at)

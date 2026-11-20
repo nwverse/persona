@@ -832,6 +832,9 @@ Cover the real database too: an ordinary `done: false` edit of an already-open t
 timestamp alone lets an old Pass verify the rework after a manager restart.
 Reset the raw `user_check` ledger on every reopen, including a closed task's PATCH, since its effective state
 already reads accepted while closed. A fresh personal-verification review reopens before writing its new ledger.
+Commit the reopen and ledger reset together: a partial write leaves the task waiting on a Pass it can no longer use.
+On startup and the acceptance sweep, rebuild a missing ask from its saved review. Save the ask before posting the
+card, and check the round after taking the task action lock so a queued Pass cannot complete a newer check.
 Do not restart a waiting verification until its replacement review passed validation and was saved. Release the
 round's action lock before feedback delivery, and bind the eventual reply receipt to that ask's timestamp so a slow
 delivery cannot swallow a newer verification.

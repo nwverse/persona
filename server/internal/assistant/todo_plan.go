@@ -244,11 +244,6 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	if cur.isConcern() && cur.DoneAt == nil && e.Done != nil && *e.Done {
 		return Todo{}, db.ErrConcernUnreported // only its report closes it (concerns.go); the store checks it again
 	}
-	restartUserCheck := e.Done != nil && !*e.Done && (cur.DoneAt != nil || e.RestartWork) &&
-		cur.Supervision != nil && cur.Supervision.State == reviewUserCheck
-	if restartUserCheck {
-		e.RestartWork = true
-	}
 	links := e.PartOf != nil || e.After != nil || e.RequireAcceptedAfter != nil
 	if f := s.pieceWriteHook; links && f != nil {
 		f(id)
@@ -256,13 +251,24 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	if f := s.editWriteHook; f != nil {
 		f(id)
 	}
+	reopening := e.Done != nil && !*e.Done
+	if reopening {
+		// Keep a concurrent ledger writer from publishing an older state over the reopened row.
+		s.supervise.writeMu.Lock()
+	}
 	s.todos.writing.Lock()
+	unlock := func() {
+		s.todos.writing.Unlock()
+		if reopening {
+			s.supervise.writeMu.Unlock()
+		}
+	}
 	if links {
 		// Checked again with the graph held still: a write since the caller's check may have changed the request
 		// (todo_pieces.go). A *pieceError when it no longer holds.
 		l, err := s.recheckPieces(id, e)
 		if err != nil {
-			s.todos.writing.Unlock()
+			unlock()
 			return Todo{}, err
 		}
 		e.PartOf, e.After = l.PartOf, l.After
@@ -272,7 +278,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	if st := s.todoDB(); st != nil {
 		var err error
 		if row, err = st.EditTodo(ctx, id, e, now); err != nil {
-			s.todos.writing.Unlock()
+			unlock()
 			return Todo{}, err
 		}
 	} else {
@@ -280,7 +286,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		// again from the copy read before the lock)
 		base, ok := s.todoNow(id)
 		if !ok {
-			s.todos.writing.Unlock()
+			unlock()
 			return Todo{}, db.ErrTodoNotFound
 		}
 		r := todoRowOf(base)
@@ -288,22 +294,9 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		row = &r
 	}
 	out, doneKeys, applied := s.setTodoRow(id, *row, nil)
-	s.todos.writing.Unlock()
+	unlock()
 	if applied {
 		s.todoRowSet(ctx, doneKeys)
-	}
-	if applied && restartUserCheck {
-		if _, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
-			if v.State != reviewUserCheck || v.UpdatedAt.After(now) {
-				return false
-			}
-			v.State = ""
-			return true
-		}); err != nil {
-			return Todo{}, err
-		}
-		out, _ = s.todoNow(id)
-		out = formatTodo(out)
 	}
 	if cur.DoneAt == nil && row.DoneAt != nil {
 		// Done by the user: what the task came to goes in its decisions and its projects' timelines (#2820). cur

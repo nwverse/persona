@@ -426,6 +426,7 @@ func (d *DB) EditTodo(ctx context.Context, id string, e TodoEdit, updatedAt time
 		if cur.Kind == KindConcern && cur.DoneAt == nil && e.Done != nil && *e.Done {
 			return ErrConcernUnreported // only ReportConcern closes it
 		}
+		reopening := e.Done != nil && !*e.Done && (cur.DoneAt != nil || e.RestartWork)
 		e.Apply(&cur, updatedAt)
 		_, err = tx.Exec(ctx, `UPDATE todos SET title = $2, notes = $3, done_at = $4, updated_at = $5, start_error = $6,
 			done_by = $7, done_reason = $8, reopened_at = $9, due_at = $10, due_date = $11, remind_at = $12, reminded_at = $13,
@@ -436,6 +437,13 @@ func (d *DB) EditTodo(ctx context.Context, id string, e TodoEdit, updatedAt time
 			cur.SomedayUntil, cur.RequireAcceptedAfter)
 		if err != nil {
 			return err
+		}
+		if reopening {
+			// The old Pass is stale as soon as reopened_at advances. Reset its ledger in the same commit.
+			if _, err := tx.Exec(ctx, `UPDATE todo_supervision SET state = '', pending_since = NULL, updated_at = $2
+				WHERE todo_id = $1 AND state = 'user_check' AND updated_at <= $2`, id, updatedAt); err != nil {
+				return err
+			}
 		}
 		updated = cur
 		return nil

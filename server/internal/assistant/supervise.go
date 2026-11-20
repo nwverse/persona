@@ -216,6 +216,25 @@ func (v *Supervision) state(t Todo) string {
 	return v.State
 }
 
+// resetReopenedUserCheck mirrors the store's reopen and also reads rows written before the ledger reset was atomic.
+// A review written after the reopen starts a fresh check.
+func (t *Todo) resetReopenedUserCheck() {
+	v := t.Supervision
+	if t.DoneAt != nil || t.ReopenedAt == nil || v == nil || v.State != reviewUserCheck {
+		return
+	}
+	reviewedAt := v.UpdatedAt
+	if userCheckAsked(*t) {
+		reviewedAt = v.Reviews[len(v.Reviews)-1].At
+	}
+	if reviewedAt.Before(*t.ReopenedAt) {
+		t.Supervision = v.clone()
+		t.Supervision.State = ""
+		t.Supervision.PendingSince = nil
+		t.Supervision.UpdatedAt = maxTime(v.UpdatedAt, *t.ReopenedAt)
+	}
+}
+
 // supervisionStore is what the ledgers keep in the database; a store without it keeps them in memory only.
 type supervisionStore interface {
 	ListTodoSupervision(ctx context.Context) ([]db.TodoSupervisionRow, error)

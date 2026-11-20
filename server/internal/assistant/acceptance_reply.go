@@ -43,6 +43,11 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 	}
 	t, ok := s.todoNow(id)
 	ask, _ := s.askCopy(id)
+	card := slices.IndexFunc(ids, func(mid string) bool { return mid != "" && slices.Contains(ask.Messages, mid) })
+	if card < 0 {
+		s.botNote(ctx, messageID, i18n.T(l, "assistant-feishu_cards.already_handled"))
+		return true
+	}
 	if decideAsk(&ask) && !ask.AcceptedAt.IsZero() { // taken, or its review moved on: over
 		s.botNote(ctx, messageID, i18n.T(l, "assistant-feishu_cards.already_handled"))
 		return true
@@ -60,7 +65,7 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 				return true
 			}
 		}
-		if result, err := s.acceptTry(ctx, id, ""); errors.Is(err, errAcceptStore) {
+		if result, err := s.acceptTry(ctx, id, ids[card]); errors.Is(err, errAcceptStore) {
 			s.botNote(ctx, messageID, i18n.T(l, "http-status.unavailable"))
 		} else if note := inDoubtNote(l, err); note != "" { // it may be with the agent already: look before saying it again
 			s.botNote(ctx, messageID, note)
@@ -207,7 +212,7 @@ func (s *Service) acceptTry(ctx context.Context, id, card string) (acceptResult,
 func (s *Service) acceptTryAs(ctx context.Context, id, card string, byDefault bool) (acceptResult, error) {
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
-	return s.acceptTryAsDismissalLocked(ctx, id, card, byDefault)
+	return s.acceptTryAsDismissalLocked(ctx, id, card, time.Time{}, byDefault)
 }
 
 // ownerPassPending follows this round's durable owner Pass through completion, ledger and verification writes.
@@ -220,7 +225,7 @@ func ownerPassPending(a *acceptAsk, t Todo) bool {
 }
 
 // acceptTryAsDismissalLocked holds only this task's action lock across its send, not the book mutex.
-func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card string, byDefault bool) (acceptResult, error) {
+func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card string, askedAt time.Time, byDefault bool) (acceptResult, error) {
 	t, todoOK := s.todoNow(id)
 	if todoOK && byDefault { // Hidden is not answered: no default is taken for a dismissed round
 		if dismissed, err := s.decisionDismissed(ctx, t); err != nil || dismissed {
@@ -236,7 +241,8 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 	a, ok := b.asks[id]
 	resumeOwnerPass := ok && todoOK && ownerPassPending(a, t)
 	ownerCheck := todoOK && t.Supervision != nil && (t.Supervision.State == reviewUserCheck || resumeOwnerPass)
-	if !ok || a.AskedAt.IsZero() || !a.AcceptedAt.IsZero() && !resumeOwnerPass || (todoOK && acceptAskStale(a, t)) || (card != "" && card != a.MessageID && !slices.Contains(a.Messages, card)) ||
+	if !ok || a.AskedAt.IsZero() || !askedAt.IsZero() && !a.AskedAt.Equal(askedAt) ||
+		!a.AcceptedAt.IsZero() && !resumeOwnerPass || (todoOK && acceptAskStale(a, t)) || (card != "" && card != a.MessageID && !slices.Contains(a.Messages, card)) ||
 		decideAsk(a) && (a.Recommend == "" || todoOK && acceptAskEnded(a, t) || !a.RecheckAt.IsZero() || todoOK && ownerDecisionReturned(t.Supervision)) ||
 		byDefault && !(decideAsk(a) && a.Reversible && !a.Deadline.IsZero() && a.DueAt.IsZero() && !time.Now().Before(a.Deadline)) {
 		b.mu.Unlock()
