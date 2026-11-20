@@ -206,16 +206,19 @@ Ledger for tasks supervised by the main chat (#3124, `docs/assistant/unified-ent
 ### 6. task_briefs and task_brief_todos tables
 A task's brief (#3822, `docs/assistant/unified-entry.md`, "Briefs"): what was asked when the work was handed out.
 - `task_briefs`: `id` (text, PK), `brief` (jsonb, written once: the owner's message, who started it, goal, `done_when`,
-  `expect_minutes`, `out_of_bounds`), `state` (jsonb: the log of scope changes and overdue marks, the result),
-  `created_at`, `updated_at`. Nothing rewrites `brief`; `done_when` in effect is the brief's as its logged scope changes
-  left it, and a supervised task's `todo_supervision.done_when` carries the same list.
+  `expect_minutes`, `estimate_source`, `out_of_bounds`), `state` (jsonb: the log of dispatches, scope changes,
+  completions, estimate_due and overdue marks, the result), `created_at`, `updated_at`. Nothing rewrites `brief`;
+  `done_when` in effect is the brief's as its logged scope changes left it, and a supervised task's
+  `todo_supervision.done_when` carries the same list. These are JSON additions, so automatic estimates need no SQL migration;
+  pre-feature records with no estimate source stay outside the automatic clock.
 - `task_brief_todos`: `todo_id` (text, PK, FK → `todos(id)` ON DELETE CASCADE), `brief_id` (FK → `task_briefs(id)`),
   `continues` (the to-do it took the work over from), `reason`, `linked_at`. A brief's rows in `linked_at` order are its
   lineage.
 
 `GET /api/v1/todos` carries both on a to-do that has a brief: `brief` (the record, its `log`, `criteria` and
-`expect_minutes_now` in effect, `clock_at`, `due_at`, `overdue_at`, `result`) and `lineage`. A task from before briefs
-gets a reconstructed one lazily.
+`expect_minutes_now` in effect, `estimate_source_now`, `estimate_clock_at`, `estimate_due_at`,
+`estimate_due_told_at`, the latest `actual_minutes` and `completion_reported_at`, `clock_at`, `due_at`, `overdue_at`,
+`result`) and `lineage`. A task from before briefs gets a reconstructed one lazily.
 
 ### 7. todo_imports table
 To-dos imported from another app (#4009, "Imported from Reminders" below). Migration `0499` (manager side).
@@ -1097,6 +1100,7 @@ When one thing the owner asked for is split into several pieces of work, the pie
 - **`task_plan`** checks a task's links when the plan is made and writes them when the task starts. For advisory requests, a stale link is logged and left out rather than stopping an approved start. The apps' edits of a plan card do not change links.
 - **Deleting** a to-do leaves its id in other to-dos' `part_of` / `after`. The graph cannot draw edges to missing nodes; enforced starts stay blocked until their references are repaired.
 - `todo_list` / `todo_get` show a piece as `(piece of todo_…, after todo_…)`.
+- **The request's own row** (web, #11858): its status line says its steps as the hub counts them on its view (`view.steps`, closed of all; iOS's "Steps 2/5"): with no Agent of its own, "Steps 1/3" in place of Not started and nothing about handing it over, and once every step is closed "3/3 steps done · Next step not arranged yet"; with one, "· Steps 1/2" after its Agent count. Its page says the same. A row without the view (an older manager) reads as before; its section is unchanged.
 
 ### Enforce prerequisites at launch
 
