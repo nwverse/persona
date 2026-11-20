@@ -1,5 +1,9 @@
+// @vitest-environment jsdom
+import { act, createElement as h, Fragment, StrictMode, useState, type ReactNode } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isOverlayEntry, onOverlayEntry, openOverlay, overlayDepth, overlayState, settleOverlayEntry, takeOverlayEntry } from "./back-close";
+import { isOverlayEntry, onOverlayEntry, openOverlay, overlayDepth, overlayState, settleOverlayEntry, takeOverlayEntry, useCloseOnBack } from "./back-close";
+import { useBackStack } from "./back-stack";
 import { navigate } from "./router";
 
 describe("overlay history entries", () => {
@@ -16,11 +20,17 @@ describe("overlay history entries", () => {
   });
 });
 
-// A browser's history in miniature: back() pops asynchronously and fires popstate, like the real one.
+// A browser's history in miniature: back() and go() move asynchronously and fire popstate, like the real one.
 function fakeBrowser() {
   const stack: unknown[] = [null];
   let at = 0;
   const listeners = new Set<() => void>();
+  const traverse = (delta: number) =>
+    setTimeout(() => {
+      if (!delta || at + delta < 0 || at + delta >= stack.length) return;
+      at += delta;
+      listeners.forEach((l) => l());
+    }, 5);
   const history = {
     get state() {
       return stack[at];
@@ -37,11 +47,10 @@ function fakeBrowser() {
       stack[at] = s;
     },
     back() {
-      setTimeout(() => {
-        if (at === 0) return;
-        at--;
-        listeners.forEach((l) => l());
-      }, 5);
+      traverse(-1);
+    },
+    go(delta: number) {
+      traverse(delta);
     },
   };
   vi.stubGlobal("history", history);
@@ -239,5 +248,299 @@ describe("settleOverlayEntry", () => {
     await settle();
     expect(back).not.toHaveBeenCalled();
     expect(b.history.length).toBe(2);
+  });
+});
+
+// A full-screen side panel with a file open in it, a sheet over that (#11511): closing one from the page takes off its
+// entry and every entry over it, in one Back, however many closes come in that tick and in whatever order.
+describe("overlays stacked on each other", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+  const traversals = (b: ReturnType<typeof fakeBrowser>) => ({ back: vi.spyOn(b.history, "back"), go: vi.spyOn(b.history, "go") });
+
+  it("closing one with two over it goes back once by 3, and the next Back leaves the page", async () => {
+    const b = fakeBrowser();
+    b.history.pushState({ page: "chat" }); // the conversation, over the page it was opened from
+    const [panel, file, sheet] = [vi.fn(), vi.fn(), vi.fn()];
+    const closePanel = openOverlay(panel);
+    openOverlay(file);
+    openOverlay(sheet);
+    expect(overlayDepth()).toBe(3);
+    const t = traversals(b);
+    closePanel();
+    await vi.runAllTimersAsync();
+    expect(t.go.mock.calls).toEqual([[-3]]);
+    expect(t.back).not.toHaveBeenCalled();
+    expect(b.history.state).toEqual({ page: "chat" });
+    // what was open over it went with it; its own close came from the page
+    expect([panel.mock.calls.length, file.mock.calls.length, sheet.mock.calls.length]).toEqual([0, 1, 1]);
+    b.pressBack();
+    await vi.runAllTimersAsync();
+    expect(b.history.length).toBe(1);
+  });
+
+  it.each([["child first"], ["parent first"]])("closes in one tick (%s) go back once", async (order) => {
+    const b = fakeBrowser();
+    const closePanel = openOverlay(vi.fn());
+    const closeFile = openOverlay(vi.fn());
+    const t = traversals(b);
+    if (order === "child first") {
+      closeFile();
+      closePanel();
+    } else {
+      closePanel();
+      closeFile();
+    }
+    await vi.runAllTimersAsync();
+    expect(t.go.mock.calls).toEqual([[-2]]);
+    expect(t.back).not.toHaveBeenCalled();
+    expect(b.history.length).toBe(1);
+  });
+
+  it("a close after the Back started, before it landed, does not go back again", async () => {
+    const b = fakeBrowser();
+    const closePanel = openOverlay(vi.fn());
+    const closeFile = openOverlay(vi.fn());
+    const t = traversals(b);
+    closePanel();
+    await vi.advanceTimersByTimeAsync(0); // the Back is under way: the file's entry is still the current one
+    expect(t.go).toHaveBeenCalledOnce();
+    expect(overlayDepth()).toBe(2);
+    closeFile(); // a view's effect cleaned up late
+    await vi.runAllTimersAsync();
+    expect(t.go.mock.calls).toEqual([[-2]]);
+    expect(t.back).not.toHaveBeenCalled();
+    expect(b.history.length).toBe(1);
+  });
+
+  it("a close under where a started Back lands goes on from there", async () => {
+    const b = fakeBrowser();
+    const panel = vi.fn();
+    const closePanel = openOverlay(panel);
+    const closeFile = openOverlay(vi.fn());
+    const t = traversals(b);
+    closeFile(); // the viewer's ‹
+    await vi.advanceTimersByTimeAsync(0);
+    closePanel(); // × right after, before that Back landed
+    await vi.runAllTimersAsync();
+    expect(t.back).toHaveBeenCalledTimes(2);
+    expect(b.history.length).toBe(1);
+    expect(panel).not.toHaveBeenCalled();
+  });
+
+  it.each([["the lower first"], ["the upper first"]])(
+    "StrictMode's second run of their effects (cleanups %s) keeps both entries, one per overlay",
+    async (order) => {
+      const b = fakeBrowser();
+      const closeLower = openOverlay(vi.fn());
+      const closeUpper = openOverlay(vi.fn());
+      const t = traversals(b);
+      if (order === "the lower first") {
+        closeLower();
+        closeUpper();
+      } else {
+        closeUpper();
+        closeLower();
+      }
+      const [lower, upper] = [vi.fn(), vi.fn()];
+      openOverlay(lower);
+      openOverlay(upper);
+      await vi.runAllTimersAsync();
+      expect(t.back).not.toHaveBeenCalled();
+      expect(t.go).not.toHaveBeenCalled();
+      expect(b.history.length).toBe(3);
+      b.pressBack();
+      await vi.runAllTimersAsync();
+      expect([lower.mock.calls.length, upper.mock.calls.length]).toEqual([0, 1]);
+      b.pressBack();
+      await vi.runAllTimersAsync();
+      expect(lower).toHaveBeenCalledOnce();
+      expect(b.history.length).toBe(1);
+    },
+  );
+
+  it("one closed and another opened in its place over a stacked one: the entry is reused, the one under stays", async () => {
+    const b = fakeBrowser();
+    const panel = vi.fn();
+    openOverlay(panel);
+    const closeMenu = openOverlay(vi.fn());
+    const t = traversals(b);
+    closeMenu(); // a row menu's item opens a file
+    const file = vi.fn();
+    openOverlay(file);
+    await vi.runAllTimersAsync();
+    expect(t.back).not.toHaveBeenCalled();
+    expect(b.history.length).toBe(3);
+    b.pressBack();
+    await vi.runAllTimersAsync();
+    expect(file).toHaveBeenCalledOnce();
+    expect(panel).not.toHaveBeenCalled();
+  });
+
+  it("a navigation from a stacked overlay in the tick it closes takes the top entry: nothing goes back", async () => {
+    const b = fakeBrowser();
+    openOverlay(vi.fn());
+    const close = openOverlay(vi.fn());
+    const t = traversals(b);
+    close();
+    navigate("/overview"); // the router replaces the top entry with the new page
+    await vi.runAllTimersAsync();
+    expect(t.back).not.toHaveBeenCalled();
+    expect(t.go).not.toHaveBeenCalled();
+    expect(onOverlayEntry()).toBe(false);
+  });
+});
+
+// Views inside an overlay (Files' open files, the Git panel's diff and commit views): an entry each, over the overlay's.
+describe("useBackStack", () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  let host: HTMLDivElement;
+  let root: Root;
+  let b: ReturnType<typeof fakeBrowser>;
+  let popped: number[];
+  /** Lets the effects' microtasks, the closes' timer and the fake browser's traversals (5 ms each) run. */
+  const settle = () => act(() => new Promise((ok) => setTimeout(ok, 40)));
+  const render = async (el: ReactNode) => {
+    act(() => root.render(h(StrictMode, null, el)));
+    await settle();
+  };
+  const back = async () => {
+    b.pressBack();
+    await settle();
+  };
+  beforeEach(() => {
+    b = fakeBrowser();
+    popped = [];
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+  });
+  afterEach(async () => {
+    act(() => root.unmount());
+    await settle();
+    host.remove();
+    vi.unstubAllGlobals();
+  });
+
+  let openView = () => {};
+  function Views({ depth }: { depth: number }) {
+    const [n, setN] = useState(depth);
+    openView = () => setN((v) => v + 1);
+    useBackStack(n, (i) => (popped.push(i), setN(i)));
+    return h("span", { "data-views": n });
+  }
+  function Panel({ open, views, onClose = () => {} }: { open: boolean; views: number; onClose?: () => void }) {
+    useCloseOnBack(open, onClose);
+    return open ? h(Views, { depth: views }) : null;
+  }
+  const shown = () => Number(host.querySelector("[data-views]")?.getAttribute("data-views") ?? -1);
+
+  it("0 → 2 → 0: two entries over the page, then one Back by 2", async () => {
+    function Stack({ depth }: { depth: number }) {
+      useBackStack(depth, (i) => popped.push(i));
+      return null;
+    }
+    await render(h(Stack, { depth: 0 }));
+    expect(b.history.length).toBe(1);
+    await render(h(Stack, { depth: 2 }));
+    expect(overlayDepth()).toBe(2);
+    expect(b.history.length).toBe(3);
+    const t = { back: vi.spyOn(b.history, "back"), go: vi.spyOn(b.history, "go") };
+    await render(h(Stack, { depth: 0 }));
+    expect(t.go.mock.calls).toEqual([[-2]]);
+    expect(t.back).not.toHaveBeenCalled();
+    expect(b.history.length).toBe(1);
+    expect(popped).toEqual([]); // taken off from the page, not by Back
+  });
+
+  it("Back steps out of the top view first (popTo keeps the ones under it), then closes the panel", async () => {
+    const close = vi.fn();
+    await render(h(Panel, { open: true, views: 0, onClose: close }));
+    expect(b.history.length).toBe(2);
+    act(() => openView());
+    await settle();
+    act(() => openView());
+    await settle();
+    expect(shown()).toBe(2);
+    expect(b.history.length).toBe(4);
+    await back();
+    expect(popped).toEqual([1]);
+    expect(shown()).toBe(1);
+    expect(b.history.length).toBe(3);
+    await back();
+    expect(popped).toEqual([1, 0]);
+    expect(shown()).toBe(0);
+    expect(close).not.toHaveBeenCalled();
+    await back();
+    expect(close).toHaveBeenCalledOnce();
+    expect(b.history.length).toBe(1);
+  });
+
+  it("a panel that mounts with a view open (a restored file) has its entry under the view's", async () => {
+    const close = vi.fn();
+    await render(h(Panel, { open: true, views: 1, onClose: close }));
+    expect(overlayDepth()).toBe(2);
+    expect(b.history.length).toBe(3);
+    await back();
+    expect(popped).toEqual([0]);
+    expect(shown()).toBe(0);
+    expect(close).not.toHaveBeenCalled();
+    await back();
+    expect(close).toHaveBeenCalledOnce();
+    expect(b.history.length).toBe(1);
+  });
+
+  it("closing the panel with two views open takes the three entries off in one Back", async () => {
+    await render(h(Panel, { open: true, views: 2 }));
+    expect(b.history.length).toBe(4);
+    const t = { back: vi.spyOn(b.history, "back"), go: vi.spyOn(b.history, "go") };
+    await render(h(Panel, { open: false, views: 2 }));
+    expect(t.go.mock.calls).toEqual([[-3]]);
+    expect(t.back).not.toHaveBeenCalled();
+    expect(b.history.length).toBe(1);
+    expect(popped).toEqual([]);
+  });
+
+  it("a menu row that opens the panel on a file hands the menu's entry to the panel (one commit)", async () => {
+    let pick = () => {};
+    const close = vi.fn();
+    function Menu() {
+      useCloseOnBack(true, () => {});
+      return null;
+    }
+    function Shell() {
+      const [menu, setMenu] = useState(true);
+      const [panel, setPanel] = useState(false);
+      pick = () => {
+        setPanel(true);
+        setMenu(false);
+      };
+      return h(Fragment, null, menu && h(Menu), h(Panel, { open: panel, views: 1, onClose: close }));
+    }
+    await render(h(Shell));
+    expect(b.history.length).toBe(2);
+    const t = { back: vi.spyOn(b.history, "back"), go: vi.spyOn(b.history, "go") };
+    act(() => pick());
+    await settle();
+    expect(t.back).not.toHaveBeenCalled();
+    expect(b.history.length).toBe(3); // the menu's entry became the panel's, the file's is over it
+    await back();
+    expect(popped).toEqual([0]);
+    expect(close).not.toHaveBeenCalled();
+    await back();
+    expect(close).toHaveBeenCalledOnce();
+    expect(b.history.length).toBe(1);
+  });
+
+  it("off (a wide screen): no entries", async () => {
+    function Stack() {
+      useBackStack(2, () => {}, false);
+      return null;
+    }
+    await render(h(Stack));
+    expect(b.history.length).toBe(1);
   });
 });

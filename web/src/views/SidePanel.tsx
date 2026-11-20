@@ -51,7 +51,8 @@ export function SidePanel() {
   const panel = usePanel();
   // ⌘⇧↵ shows only the middle: the panel stays open (its terminal keeps running) but is not drawn, on a wide screen
   const maximized = useLayout().maximized;
-  // narrow, it covers the page: Back closes it first (and stays on the conversation)
+  // narrow, it covers the page: Back closes it first (and stays on the conversation). What a panel opens inside it (a
+  // file, a diff) goes over its entry (lib/back-stack.ts), so Back steps out of that first; closing takes them all off.
   useCloseOnBack(Boolean(panel), closePanel, useMedia(NARROW));
   // the width asked for; what is drawn is `shown`, which also fits the room there is now (the window, the sidebar).
   // Until the room is measured (or with no page beside it), the old cap: 72% of the window.
@@ -110,9 +111,10 @@ export function SidePanel() {
         closePanel();
       }}
       // narrow: over the visible part of the page (--kb-top / --kb-h, lib/viewport.ts), so on iOS the terminal's key
-      // bar sits on the keyboard instead of under it
+      // bar sits on the keyboard instead of under it; fixed, it is outside #root's safe-area padding, so it keeps clear
+      // of a landscape notch itself, as the drawer does
       className={cx(
-        "fixed inset-x-0 top-(--kb-top) z-30 flex h-(--kb-h) flex-col bg-page shadow-overlay lg:relative lg:inset-auto lg:top-auto lg:z-auto lg:h-auto lg:w-(--panel-w) lg:shrink-0 lg:border-l lg:border-line lg:shadow-none",
+        "fixed inset-x-0 top-(--kb-top) z-30 flex h-(--kb-h) flex-col bg-page shadow-overlay max-lg:pr-[env(safe-area-inset-right)] max-lg:pl-[env(safe-area-inset-left)] lg:relative lg:inset-auto lg:top-auto lg:z-auto lg:h-auto lg:w-(--panel-w) lg:shrink-0 lg:border-l lg:border-line lg:shadow-none",
         maximized && "lg:hidden",
       )}
       style={{ "--panel-w": `${shown}px`, animation: `slide-in-right 260ms ${EASE} both` } as React.CSSProperties}

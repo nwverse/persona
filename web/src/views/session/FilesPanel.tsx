@@ -10,6 +10,7 @@ import { storedValue, storeValue } from "../../lib/compatibility";
 // for one of those. Folders outside the home are read-only.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, enc, errorText, isAbort } from "../../lib/api";
+import { useBackStack } from "../../lib/back-stack";
 import { t } from "../../i18n";
 import { entryPayload, ENTRY_DRAG_TYPE } from "../../lib/entry-drag";
 import { aheadBehind, dirName, fileName, gitMark, joinPath, type FsEntry, type FsListing, type GitStatus } from "../../lib/files";
@@ -77,6 +78,8 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
   const [gitTick, setGitTick] = useState(0); // the folder's Git status did
   const [git, setGit] = useState<GitStatus | null>(null);
   const [open, setOpen] = useState<string[]>(file ? [file] : []); // files opened from the list, newest last
+  // narrow, the panel covers the page: Back closes the file shown first, back to the one under it or the list
+  useBackStack(open.length, (n) => setOpen((o) => o.slice(0, n)), narrow);
   // where it is, kept when the page leaves the session so coming back opens it here again (#5150)
   useEffect(() => notePlace({ mid, sid, cwd }, { path: dir === cwd ? undefined : dir, file: open.at(-1) }), [mid, sid, cwd, dir, open]);
   const menu = useMenu();
@@ -569,9 +572,10 @@ function EntryRow({ mid, e, full, mark, marked, onOpen, ops }: { mid: string; e:
         {mark && (e.dir ? <GitDot letter={mark} /> : <GitBadge letter={mark} />)}
         {e.dir && <Icon name="chevronRight" size={13} stroke={2.2} className="shrink-0 text-ink-3" />}
       </button>
-      {/* hover devices only: on a touch screen it would be an invisible target at the row's end */}
-      <span className="hidden items-center pr-2 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100 [@media(hover:hover)]:flex">
-        <IconButton icon="copy" label={t("session-filespanel.copy_path")} onClick={() => copyText(full)} size={26} iconSize={13} />
+      {/* on hover (or focus); a touch screen, with no hover and on iOS no right click, always shows the ⋯, its only way to
+          the row's menu (which has Copy path, so not that button as well) */}
+      <span className="hidden items-center pr-2 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100 [@media(hover:hover)]:flex [@media(hover:none)]:flex [@media(hover:none)]:opacity-100">
+        <IconButton icon="copy" label={t("session-filespanel.copy_path")} onClick={() => copyText(full)} size={26} iconSize={13} className="[@media(hover:none)]:hidden" />
         <RowMore ops={ops} x={x} open={onOpen} />
       </span>
     </div>
