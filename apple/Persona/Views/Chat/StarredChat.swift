@@ -37,13 +37,18 @@ struct StarredChatContext {
                                         role: item.role, title: title, speaker: bar.from ?? (bar.isUser ? "" : speaker),
                                         source_manager: manager, written_at: item.ts, text: bar.text)
             return StarredMenuAction(title: String(localized: "Star"), symbol: Theme.Icon.starredMessage) {
-                Task<Void, Never> {
-                    if scope == store.scope {
-                        await store.add(draft, loadText: item.fullSize == nil ? nil : { try await fullText(source, bar: bar) })
-                    }
-                }
+                Task<Void, Never> { await add(draft, item: item, source: source, bar: bar, scope: scope, store: store) }
             }
         }
+    }
+
+    private func add(_ draft: StarredSnapshot, item: Item, source: StarredSource, bar: MessageBarInfo,
+                     scope: Int, store: StarredStore) async {
+        guard scope == store.scope else { return }
+        let loadText: (() async throws -> String)? = item.fullSize == nil ? nil : {
+            try await fullText(source, bar: bar)
+        }
+        await store.add(draft, loadText: loadText)
     }
 
     private func fullText(_ source: StarredSource, bar: MessageBarInfo) async throws -> String {
