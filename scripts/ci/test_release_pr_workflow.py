@@ -136,7 +136,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("--reserved $(tr '\\n' ' ' < release-reserved.txt)", text)
         self.assertLess(text.index('refs/heads/release/*'), text.index('schedule-version'))
         self.assertIn('releases/latest', text)
-        self.assertIn('pulls?state=open&head=$branch&base=main', text)
+        self.assertIn('select(.head.ref == $branch)', text)
         self.assertNotIn("--force", text)
         self.assertNotIn('refs/tags/$TAG', text)
         self.assertNotIn("gh release create", text)
