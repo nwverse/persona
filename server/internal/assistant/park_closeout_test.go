@@ -48,6 +48,15 @@ func TestAutomaticCloseoutParkingAdmission(t *testing.T) {
 		name, reply string
 		want        bool
 	}{
+		{"modern work report", `### Persona work report
+
+- Status: blocked
+- Merged: no
+- Deployed: no
+- Artifact: build https://example.org/deployments/rollout-42
+- Waiting: deployment rollout-42
+
+---`, true},
 		{"named deployment", automaticCloseout("deployment rollout-42", "build https://example.org/deployments/rollout-42", nil), true},
 		{"named natural event", automaticCloseout("external event https://example.org/events/result-42", "", nil), true},
 		{"Chinese deployment", automaticCloseout("等待部署 rollout-42", "build https://example.org/deployments/rollout-42", nil), true},

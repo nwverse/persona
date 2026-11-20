@@ -60,8 +60,7 @@ func closeoutPark(reply string, previous *TaskReview, now time.Time, loc *time.L
 		return Parked{}, false
 	}
 	var body string
-	if ok {
-		start := strings.LastIndex(reply, "<closeout")
+	if start := strings.LastIndex(reply, "<closeout"); ok && start >= 0 {
 		var complete bool
 		body, _, complete = strings.Cut(reply[start:], "</closeout>")
 		if !complete {
