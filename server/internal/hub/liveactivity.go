@@ -217,6 +217,7 @@ type liveActivities struct {
 	// claims, and saveMu serializes SaveLiveActivity per device so resumed
 	// saves cannot overwrite newer state.
 	holdReplayMu  sync.Mutex
+	holdReplaying bool
 	quiescedStart bool
 	deferredHolds []deferredLiveHold
 	deferredSaves map[string]bool
@@ -779,13 +780,8 @@ func (la *liveActivities) holdStart(ctx context.Context, device string, asOf tim
 	if la.h.store == nil {
 		return
 	}
-	la.holdReplayMu.Lock()
-	defer la.holdReplayMu.Unlock()
 	held := quiesceHeld(ctx)
-	if !la.drainDeferredHoldsLocked(held) {
-		la.mu.Lock()
-		la.deferredHolds = append(la.deferredHolds, deferredLiveHold{device: device, asOf: asOf, hold: hold})
-		la.mu.Unlock()
+	if !la.drainDeferredHoldsFor(held, deferredLiveHold{device: device, asOf: asOf, hold: hold}) {
 		return
 	}
 	if !held {
@@ -803,6 +799,29 @@ func (la *liveActivities) holdStart(ctx context.Context, device string, asOf tim
 	if _, err := la.h.store.HoldLiveActivityStart(ctx, device, asOf, hold); err != nil {
 		la.h.logf("live activity start hold: device=%s hold=%s error=%v", trafficIdentity(device), hold, err)
 	}
+}
+
+// drainDeferredHoldsFor drains any holds queued during a pause before a new
+// holdStart/liftHold writes to the store, without holding holdReplayMu across
+// the caller's own HoldLiveActivityStart call. Returns false if writes paused
+// again and incoming was appended behind the remaining deferred holds.
+func (la *liveActivities) drainDeferredHoldsFor(held bool, incoming deferredLiveHold) bool {
+	la.mu.Lock()
+	if len(la.deferredHolds) == 0 && !la.holdReplaying {
+		la.mu.Unlock()
+		return true
+	}
+	la.mu.Unlock()
+
+	la.holdReplayMu.Lock()
+	defer la.holdReplayMu.Unlock()
+	if !la.drainDeferredHoldsLocked(held) {
+		la.mu.Lock()
+		la.deferredHolds = append(la.deferredHolds, incoming)
+		la.mu.Unlock()
+		return false
+	}
+	return true
 }
 
 func (la *liveActivities) replayHold(h deferredLiveHold, held bool) bool {
@@ -840,6 +859,18 @@ func (la *liveActivities) drainDeferredHolds() bool {
 }
 
 func (la *liveActivities) drainDeferredHoldsLocked(held bool) bool {
+	la.mu.Lock()
+	if len(la.deferredHolds) == 0 {
+		la.mu.Unlock()
+		return true
+	}
+	la.holdReplaying = true
+	la.mu.Unlock()
+	defer func() {
+		la.mu.Lock()
+		la.holdReplaying = false
+		la.mu.Unlock()
+	}()
 	for {
 		la.mu.Lock()
 		if len(la.deferredHolds) == 0 {
