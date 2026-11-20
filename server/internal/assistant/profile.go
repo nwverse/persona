@@ -172,9 +172,11 @@ type Settings struct {
 	ClaudeInteractive *bool `json:"claude_interactive,omitempty"`
 	// OwnerReplyApproval enables exact, one-shot approval of server-prepared connector batches. It never creates an
 	// Always rule. PersistentOwnerActionCards independently keeps only reconstructable proposals pending indefinitely.
-	OwnerReplyApproval         *bool    `json:"owner_reply_approval,omitempty"`
-	PersistentOwnerActionCards *bool    `json:"persistent_owner_action_cards,omitempty"`
-	OwnerApprovalPhrases       []string `json:"owner_reply_approval_phrases,omitempty"`
+	OwnerReplyApproval         *bool `json:"owner_reply_approval,omitempty"`
+	PersistentOwnerActionCards *bool `json:"persistent_owner_action_cards,omitempty"`
+	// An explicitly empty phrase list disables reply approval. Do not omit it when encoding Settings: an omitted field
+	// decodes as nil and would silently restore the default phrases after a write or restart.
+	OwnerApprovalPhrases []string `json:"owner_reply_approval_phrases"`
 	// LoadAllTools: every Persona tool of an assistant conversation is loaded up front, as before #7317. nil is off
 	// (the default): only the frequently used ones are, the rest wait behind ToolSearch (tool_loading.go).
 	LoadAllTools *bool `json:"load_all_tools,omitempty"`

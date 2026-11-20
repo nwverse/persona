@@ -43,4 +43,26 @@ func TestOwnerApprovalSettingsDefaultOffAndReadBack(t *testing.T) {
 	if w.Code != http.StatusOK || saved.OwnerReplyApproval || saved.PersistentOwnerActionCards || !reflect.DeepEqual(saved.OwnerApprovalPhrases, []string{"发", "Agree"}) {
 		t.Fatalf("reverse exact-approval switches: %d %+v", w.Code, saved)
 	}
+
+	// Empty is a deliberate disable, not an omitted setting. It must survive both JSON persistence and a fresh view;
+	// otherwise the next read silently restores 发 / 同意 and a reply the owner explicitly disabled becomes valid again.
+	w, saved = permissionSettingsRequest(t, s, http.MethodPut, "/api/v1/assistant", "assistant", "full",
+		`{"owner_reply_approval_phrases":[]}`)
+	if w.Code != http.StatusOK || saved.OwnerApprovalPhrases == nil || len(saved.OwnerApprovalPhrases) != 0 {
+		t.Fatalf("save an explicitly empty phrase list: %d %+v %s", w.Code, saved, w.Body)
+	}
+	persisted := s.settings(context.Background())
+	if persisted.OwnerApprovalPhrases == nil || len(persisted.OwnerApprovalPhrases) != 0 {
+		t.Fatalf("empty phrase list was not preserved in settings: %#v", persisted.OwnerApprovalPhrases)
+	}
+	read = httptest.NewRecorder()
+	s.ServeHTTP(read, httptest.NewRequest(http.MethodGet, "/api/v1/assistant", nil))
+	reloaded = assistantView{}
+	if err := json.Unmarshal(read.Body.Bytes(), &reloaded); err != nil || reloaded.OwnerApprovalPhrases == nil || len(reloaded.OwnerApprovalPhrases) != 0 {
+		t.Fatalf("read back an explicitly empty phrase list: %v %#v %s", err, reloaded.OwnerApprovalPhrases, read.Body)
+	}
+	enabled := true
+	if ownerApprovalPhrase(Settings{OwnerReplyApproval: &enabled, OwnerApprovalPhrases: persisted.OwnerApprovalPhrases}, "发") {
+		t.Fatal("an explicitly empty phrase list restored a default affirmative")
+	}
 }
