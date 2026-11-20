@@ -49,6 +49,25 @@ class CompilerResourceTests(unittest.TestCase):
             sample.assert_called_once_with(root, "final", mock.ANY)
             self.assertIn("periodic samples", (root / "observer.status.txt").read_text())
 
+    def test_samples_are_compact_and_count_bounded(self):
+        def fake_output(command, **kwargs):
+            if command == ["memory_pressure"]:
+                return subprocess.CompletedProcess(command, 0, "Stats:\nSystem-wide memory free percentage: 4%\n", "")
+            if command == ["vm_stat"]:
+                return subprocess.CompletedProcess(command, 0, "Pages occupied by compressor: 123456.\n", "")
+            if command == ["sysctl", "vm.swapusage"]:
+                return subprocess.CompletedProcess(command, 0, "vm.swapusage: total = 1024M used = 900M free = 124M\n", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record = watch.sample(root, "sample", runner=fake_output)
+            self.assertEqual(record["memory_free_percent"], "System-wide memory free percentage: 4%")
+            self.assertEqual(record["pages_used_by_compressor"], "Pages occupied by compressor: 123456.")
+            self.assertNotIn("memory", record)
+            self.assertLess((root / "sample.json").stat().st_size, 1024)
+            self.assertLessEqual(watch.MAX_PERIODIC_SAMPLES, 120)
+            self.assertLessEqual(watch.MAX_OUTPUT_BYTES, 64 * 1024)
+
     def test_shell_wrapper_preserves_every_xcodebuild_argument_and_budget(self):
         source = (ROOT / "scripts/ci/apple.sh").read_text()
         self.assertIn("ci_run 'Build iOS offline unit tests' 1800 bash -c", source)

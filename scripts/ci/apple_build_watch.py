@@ -12,8 +12,9 @@ import time
 
 COMMAND_TIMEOUT = 10
 SAMPLE_SECONDS = 15
-MAX_PROCESSES = 24
-MAX_OUTPUT_BYTES = 128 * 1024
+MAX_PROCESSES = 8
+MAX_OUTPUT_BYTES = 64 * 1024
+MAX_PERIODIC_SAMPLES = 120
 
 
 def output(command, timeout=COMMAND_TIMEOUT, limit=MAX_OUTPUT_BYTES, runner=subprocess.run):
@@ -55,10 +56,21 @@ def processes(runner=subprocess.run):
 
 
 def sample(destination, label, runner=subprocess.run):
+    memory = output(["memory_pressure"], runner=runner)
+    pages = output(["vm_stat"], runner=runner)
+    swap = output(["sysctl", "vm.swapusage"], runner=runner)
+    process = processes(runner)
+    # Keep only the evidence needed to compare resource pressure over time. Full
+    # pressure/process logs make a 30-minute build produce tens of megabytes.
     record = {"captured_at": datetime.now(timezone.utc).isoformat(),
-              "memory": output(["memory_pressure"], runner=runner),
-              "vm_stat": output(["vm_stat"], runner=runner),
-              "processes": processes(runner)}
+              "memory_free_percent": next((line.strip() for line in memory.get("stdout", "").splitlines()
+                                           if "memory free percentage" in line), None),
+              "pages_used_by_compressor": next((line.strip() for line in pages.get("stdout", "").splitlines()
+                                               if "occupied by compressor" in line), None),
+              "swap": swap.get("stdout", "").strip(),
+              "processes": process}
+    if memory.get("exit") != 0 or pages.get("exit") != 0 or swap.get("exit") != 0:
+        record["unavailable"] = "resource command failed; no pressure verdict"
     path = destination / (label + ".json")
     path.write_text(json.dumps(record, indent=2) + "\n")
     return record
@@ -70,7 +82,7 @@ def observe(destination, seconds, stop_path, runner=subprocess.run, monotonic=ti
     (destination / "host-metadata.json").write_text(json.dumps(metadata(runner), indent=2) + "\n")
     count = 0
     try:
-        while not stop_path.exists() and monotonic() < deadline:
+        while not stop_path.exists() and monotonic() < deadline and count < MAX_PERIODIC_SAMPLES:
             sample(destination, f"sample-{count:03d}", runner)
             count += 1
             sleep(max(0, min(SAMPLE_SECONDS, deadline - monotonic())))
