@@ -718,8 +718,9 @@ or a move is saved before the queue without the message is.
 
 An answer is matched on the hand-overs, not on the relay's hop record, which forgets after an hour, when the owner
 speaks in the receiver, or when a third conversation's request reaches it. The reply names the hand-over it answers
-(`answers` on the queued message): of the pair's hand-overs that no other reply on its way names, the oldest delivered
-one, else the oldest still in doubt; one that waits untried is never named.
+(`answers` on the queued message): of the pair's hand-overs that no other reply on its way still answers (one named
+before the hand-over was sent again or moved does not), the oldest delivered one, else the oldest still in doubt; one
+that waits untried is never named.
 A reply that is refused or dropped leaves its hand-over `delivered` for the next one. In a lead's queue a hand-over goes
 after the outcomes to report and before the rest (`docs/assistant/assistant.md`, "Messages from the system wait for the
 owner"). Nothing reads the hand-overs yet but the log: no route, event or client shows them.

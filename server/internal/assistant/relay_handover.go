@@ -80,8 +80,8 @@ type handoverBook struct {
 	// pending: by id, the hand-over of a send not accepted yet, in memory. It becomes an entry when its message is
 	// queued or goes in (handoverSet), and is forgotten when the send is refused at once.
 	pending map[string]handover
-	// replying: the hand-overs a reply being sent now answers (handoverToAnswer), in memory.
-	replying map[string]bool
+	// replying: by hand-over, when a reply being sent now named it (handoverToAnswer), in memory.
+	replying map[string]time.Time
 }
 
 func (b *handoverBook) loadLocked(ctx context.Context, s *Service) bool {
@@ -231,7 +231,7 @@ func (s *Service) handoverWentIn(to string, msg relayMsg) {
 		if e.From != to || e.To != msg.From {
 			return false
 		}
-		if !e.ResentAt.IsZero() && msg.At.Before(e.ResentAt) {
+		if !claimHolds(*e, msg.At) {
 			s.logf("hand-over %s from %s to %s: an answer named before it was sent again does not count", e.ID, short(e.From), short(e.To))
 			return false
 		}
@@ -312,7 +312,7 @@ func (s *Service) handoverToAnswer(from, to string) (string, func()) {
 	now := time.Now().UTC()
 	var open []handover
 	for _, e := range b.m {
-		if e.From == to && e.To == from && !b.replying[e.ID] && now.Sub(e.At) <= handoverMemory &&
+		if e.From == to && e.To == from && !claimHolds(e, b.replying[e.ID]) && now.Sub(e.At) <= handoverMemory &&
 			(e.State == handoverDelivered || e.State == handoverQueued && e.AnswerAt.IsZero()) {
 			open = append(open, e)
 		}
@@ -331,13 +331,14 @@ func (s *Service) handoverToAnswer(from, to string) (string, func()) {
 		return cmp.Or(x.At.Compare(y.At), strings.Compare(x.ID, y.ID))
 	})
 	for _, e := range open {
-		if answered[e.ID] || e.State == handoverQueued && !inDoubt[e.ID] {
+		claimed := slices.ContainsFunc(answered[e.ID], func(at time.Time) bool { return claimHolds(e, at) })
+		if claimed || e.State == handoverQueued && !inDoubt[e.ID] {
 			continue
 		}
 		if b.replying == nil {
-			b.replying = map[string]bool{}
+			b.replying = map[string]time.Time{}
 		}
-		b.replying[e.ID] = true
+		b.replying[e.ID] = now
 		return e.ID, func() {
 			b.mu.Lock()
 			delete(b.replying, e.ID)
@@ -347,19 +348,27 @@ func (s *Service) handoverToAnswer(from, to string) (string, func()) {
 	return "", func() {}
 }
 
-// relayHandoverMarks are, of the relay queue, the hand-overs the replies queued for conversation asker answer, and those
-// whose message is queued for conversation replier after a try that may have gone in (in doubt).
-func (s *Service) relayHandoverMarks(asker, replier string) (answered, inDoubt map[string]bool) {
+// claimHolds: a reply made at time at that named hand-over e still answers it: one made before e was sent again or
+// moved (ResentAt) does not, whether it waits in the asker's queue, is on its way or goes in (handoverWentIn), so it
+// does not hold e from a later reply either. A zero at is no claim.
+func claimHolds(e handover, at time.Time) bool {
+	return !at.IsZero() && !at.Before(e.ResentAt)
+}
+
+// relayHandoverMarks are, of the relay queue, when the replies queued for conversation asker that name a hand-over were
+// made, by hand-over, and the hand-overs whose message is queued for conversation replier after a try that may have
+// gone in (in doubt).
+func (s *Service) relayHandoverMarks(asker, replier string) (answered map[string][]time.Time, inDoubt map[string]bool) {
 	b := &s.relays
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	answered, inDoubt = map[string]bool{}, map[string]bool{}
+	answered, inDoubt = map[string][]time.Time{}, map[string]bool{}
 	if !s.relayLocked(context.Background()) {
 		return answered, inDoubt
 	}
 	for _, m := range b.st.Queue[asker] {
 		if m.Answers != "" {
-			answered[m.Answers] = true
+			answered[m.Answers] = append(answered[m.Answers], m.At)
 		}
 	}
 	for _, m := range b.st.Queue[replier] {

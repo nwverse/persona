@@ -40,7 +40,9 @@ func TestADeliveredHandoverIsAnsweredBeforeOneInDoubt(t *testing.T) {
 	d.f.setItems(ownerItem("m-owner", quotedWords), ownerItem("m-owner-2", "and the import as well"))
 	refuseSendsTo(d.f, d.leaderID, context.DeadlineExceeded) // the first try: written, then no answer in time
 	d.send(t, d.mainID, d.leaderID, `"text":"take this one: the export fix","quote":"m-owner"`)
-	d.send(t, d.mainID, d.leaderID, `"text":"and the import","quote":"m-owner-2"`) // queued behind the one in doubt
+	d.setStatus(d.leaderID, proto.StatusWorking) // queued behind the one in doubt, and no drain of the send's own
+	d.send(t, d.mainID, d.leaderID, `"text":"and the import","quote":"m-owner-2"`)
+	d.setStatus("", "")
 	list := handoverList(d.s)
 	if len(list) != 2 || list[0].State != handoverQueued || list[1].State != handoverQueued {
 		t.Fatalf("hand-overs %+v", list)
@@ -160,6 +162,45 @@ func TestAHandoverQueuedWhileItsQueueMoves(t *testing.T) {
 				t.Fatalf("the late queued changed it: %+v", onlyHandover(t, d.s))
 			}
 		})
+	}
+}
+
+// An answer named before its hand-over was sent again holds nothing while it still waits: a later answer, made after
+// the send again, names that hand-over and answers it, and the earlier one, going in first, answers nothing.
+func TestAVoidAnswerDoesNotHoldItsHandover(t *testing.T) {
+	d := newDispatchPolicyHarness(t)
+	stopHolds(t, d.s)
+	d.f.setItems(ownerItem("m-owner", quotedWords))
+	refuseSendsTo(d.f, d.leaderID, context.DeadlineExceeded)
+	d.send(t, d.mainID, d.leaderID, `"text":"take this one: the export fix","quote":"latest"`)
+	e := onlyHandover(t, d.s)
+	d.setStatus(d.mainID, proto.StatusWorking)
+	d.send(t, d.leaderID, d.mainID, `"text":"on it"`) // R1, while it is in doubt
+	for looks := 0; looks < relayLookLimit; looks++ {
+		if looks > 0 {
+			advanceRelayLook(t, d.s, d.leaderID, looks)
+		}
+		if looks == relayLookLimit-1 {
+			refuseSendsTo(d.f, d.leaderID, nil) // the last look misses, and the message is sent again
+		}
+		drainRelayTest(t, d.s, d.idle(d.leaderID))
+	}
+	if got := handoverNow(d.s, e.ID); got.State != handoverDelivered || got.ResentAt.IsZero() {
+		t.Fatalf("sent again: %+v", got)
+	}
+	d.send(t, d.leaderID, d.mainID, `"text":"read it now: the export fix lands today"`) // R2, while R1 still waits
+	q := queuedRelays(d.s, d.mainID)
+	if len(q) != 2 || q[0].Answers != e.ID || q[1].Answers != e.ID {
+		t.Fatalf("queued answers %+v: want the later one to name %s too", q, e.ID)
+	}
+	d.setStatus("", "")
+	drainRelayTest(t, d.s, d.idle(d.mainID)) // R1 goes in: void
+	if s := handoverState(d.s, e.ID); s != handoverDelivered {
+		t.Fatalf("after the void answer went in: %s", s)
+	}
+	drainRelayTest(t, d.s, d.idle(d.mainID)) // R2 goes in
+	if s := handoverState(d.s, e.ID); s != handoverAnswered {
+		t.Fatalf("after the later answer went in: %s", s)
 	}
 }
 
