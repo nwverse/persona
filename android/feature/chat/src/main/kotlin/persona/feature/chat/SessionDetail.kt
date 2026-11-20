@@ -20,7 +20,7 @@ internal fun sessionWithDetail(row: Session, previous: Session?, info: SessionIn
     return row.copy(
         awaitingFirstMessage = row.awaitingFirstMessage || (read?.awaitingFirstMessage ?: held?.awaitingFirstMessage) == true,
         pendingSwitch = if (read != null) read.pendingSwitch else held?.pendingSwitch,
-        launcher = info?.launcher ?: held?.launcher,
+        launcher = read?.launcher ?: info?.launcher ?: held?.launcher,
         permissionMode = info?.permissionMode ?: held?.permissionMode,
         effort = info?.effort ?: held?.effort,
         model = row.model ?: info?.model ?: held?.model,

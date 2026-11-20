@@ -153,8 +153,7 @@ private fun ChatPage(
     val haptics = pageSources.haptics
     val res = pageSources.res
     val recovery = pageSources.recovery
-    val snapshot by pageSources.snapshot
-    val liveItems = pageSources.liveItems
+    val sourceSnapshot by pageSources.snapshot
     val renamer = pageSources.renamer
     val sessionList by pageSources.sessionList
     val managerChoice by pageSources.managerChoice
@@ -174,12 +173,24 @@ private fun ChatPage(
     val readOnly = pageSession.readOnly
     val row = pageSession.row
     val session = pageSession.session
+    val engineHistory = session?.engineHistory.orEmpty()
+    val windows = remember(key, renderStyle, engineHistory) {
+        if (renderStyle == ChatRenderStyle.Agent) persona.core.domain.lines.EngineHistoryWindows.of(key, engineHistory)
+        else emptyList()
+    }
+    val snapshot = remember(sourceSnapshot, windows) { currentEngineSnapshot(sourceSnapshot, windows) }
+    val liveItems = rememberChatLiveItems(snapshot.items, snapshot.liveText, snapshot.streamingItemIds)
     val codexThread = session?.takeIf { it.awaitingFirstMessage && !historyOnly }?.let {
         startedThreads[key] ?: codexThreadOf(sessionList, it)
     }
     val followSession = chrome.onFollowSession ?: onContextCleared ?: chrome.onOpenSession
-    LaunchedEffect(codexThread?.key) {
-        codexThread?.let { followSession?.invoke(it.key) }
+    // The node removes the old row only after the other engine takes over. Never infer a successor from a pane ID.
+    val switchedThread = remember(sessionList, key, renderStyle, historyOnly) {
+        if (renderStyle == ChatRenderStyle.Agent && !historyOnly) persona.core.domain.lines.EngineChanges.home(sessionList, key) else null
+    }
+    val nextThread = codexThread ?: switchedThread
+    LaunchedEffect(nextThread?.key) {
+        nextThread?.let { followSession?.invoke(it.key) }
     }
     // A launcher switch this page recorded or dropped (#5055), drawn at once until the row's next push says what the hub has.
     val pageCloseout = rememberChatPageCloseout(key, chrome, renderStyle, child, workflowAgent, row, session)
@@ -422,6 +433,9 @@ private fun ChatPage(
     val assistantPresentation = pageLines.assistantPresentation
     val subagentCards = pageLines.subagentCards
     val lines = pageLines.lines
+    val earlierEngines = rememberEarlierEngines(repository, key, windows, sourceSnapshot,
+        ready = snapshot.olderBoundaryKnown && !snapshot.hasOlder && !snapshot.loading)
+
     val searchableItems by produceState(emptyList<Item>(), liveItems, timelineVersion, search.visible) {
         if (!search.visible) return@produceState
         val projection = ChatSearchProjection()
@@ -514,6 +528,13 @@ private fun ChatPage(
     val resumeInTerminal = pageFolds.resumeInTerminal
     val lifecycle by pageFolds.lifecycle
 
+    fun readFullText(owner: SessionKey, item: Item) {
+        scope.launch {
+            try { fullText = repository.fullText(owner, item.id) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { if (feedback?.failure(e) != true) notice = operationFeedback(e).text.resolve(res) }
+        }
+    }
     fun followEnd() {
         chatList.returnToLatest()
     }
@@ -793,7 +814,8 @@ private fun ChatPage(
         else null
     // The list's keys from the bottom (reverse layout): the tail rows, the outbox's bubbles still on their way, that day,
     // then the lines, each with the failed sends written before it just above it (#2769).
-    val listKeys = remember(lines, placed, held.rows, tailRows, pendingDay != null) {
+    val earlierKeys = earlierEngines?.keys().orEmpty()
+    val listKeys = remember(lines, placed, held.rows, tailRows, pendingDay != null, earlierKeys) {
         buildList {
             addAll(tailRows)
             held.rows.asReversed().forEach { add("held-${it.id}") }
@@ -803,6 +825,7 @@ private fun ChatPage(
                 add(line.contentKey)
                 placed.before[line.id].orEmpty().asReversed().forEach { add("outbox-${it.clientMessageId}") }
             }
+            addAll(earlierKeys)
         }
     }
     ChatListEffects(chatList, listKeys,
@@ -1175,11 +1198,8 @@ private fun ChatPage(
                         foldsBackground = foldsBackground, onTerminal = agentTerminal, lastUserId = lastUserId, turnFix = turnFix,
                         fixModel = fixModel, openRecap = openRecap, taskHost = taskHost, folding = folding, foldErrors = foldErrors,
                         onToggle = ::toggle, onExpand = ::expand,
-                        onFullText = { item -> scope.launch {
-                            try { fullText = repository.fullText(key, item.id) }
-                            catch (e: CancellationException) { throw e }
-                            catch (e: Exception) { if (feedback?.failure(e) != true) notice = operationFeedback(e).text.resolve(res) }
-                        } }, loader = loader, session = session,
+                        onFullText = { item -> readFullText(key, item) }, loader = loader, session = session,
+                        earlierEngines = earlierEngines, onReadEarlierText = ::readFullText,
                         machineName = machines.firstOrNull { it.id == key.machineId }?.name, subagentCards = subagentCards,
                         messageMenu = messageMenu, turnLauncher = session?.launcher)
                 }

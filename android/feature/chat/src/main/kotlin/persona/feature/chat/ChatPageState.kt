@@ -375,6 +375,7 @@ internal fun rememberChatPageLines(key: SessionKey, renderStyle: ChatRenderStyle
             // The strip of what a turn's work looked at is Glass's, as iOS draws it (#4339 C9); Brief and Board keep their lines.
             .let { if (viewedStrips) it else it.filterNot { line -> line is ChatLine.Viewed } }
             .let { if (modelChanges) persona.core.domain.lines.ModelChanges.mark(it) else it }
+            .let { if (renderStyle == ChatRenderStyle.Agent) persona.core.domain.lines.EngineChanges.mark(it) else it }
             .let {
                 if (renderStyle == ChatRenderStyle.Assistant) it else persona.core.domain.lines.ModeChanges.merge(it, modeChanges,
                     earliest = if (snapshot.hasOlder) snapshot.items.firstNotNullOfOrNull { item ->
@@ -602,7 +603,9 @@ internal fun rememberChatPageSession(key: SessionKey, chrome: ChatChromeBindings
     // when the transcript's rev does not change.
     var completeRow by remember(key) { mutableStateOf<Session?>(null) }
     val lookup = "sessions_lookup" in LocalHubFeatures.current && (renderStyle == ChatRenderStyle.Assistant ||
-        (PersonaTheme.style == AppStyle.Glass && AgentModelPanel.LAUNCHER_SWITCH in LocalHubFeatures.current))
+        (PersonaTheme.style == AppStyle.Glass && LocalHubFeatures.current.any {
+            it == AgentModelPanel.LAUNCHER_SWITCH || it == AgentModelPanel.ENGINE_SWITCH
+        }))
     val refreshDetail: suspend () -> Unit = {
         if (row?.waiting != null && lookup) completeRow = chrome.actions?.completeRow(row)
     }
@@ -685,8 +688,6 @@ internal fun rememberChatPageSources(key: SessionKey, repository: ChatRepository
     val recovery = remember(key, statusBindings.recovery) { ChatStatusRecovery(res, statusBindings.recovery, scope, sessions::refresh) }
     val source = remember(repository, key) { repository.observeStructure(key) }
     val snapshotState = source.collectAsStateWithLifecycle(ChatSnapshot())
-    val snapshot by snapshotState
-    val liveItems = rememberChatLiveItems(snapshot.items, snapshot.liveText, snapshot.streamingItemIds)
     val application = LocalContext.current.applicationContext
     val renamer = chrome.renamer ?: remember(application) {
         if (application is GeneratedComponentManager<*>)
@@ -719,7 +720,7 @@ internal fun rememberChatPageSources(key: SessionKey, repository: ChatRepository
     val sendReceipts = allSendReceipts.filter { receipt -> receipt.session == key ||
         (receipt.session == PendingMainConversation && receipt.mainTarget &&
             allMessages.any { it.session == key && it.clientMessageId == receipt.clientMessageId }) }
-    return ChatPageSources(scope, haptics, res, recovery, snapshotState, liveItems, renamer, sessionListState,
+    return ChatPageSources(scope, haptics, res, recovery, snapshotState, renamer, sessionListState,
         managerChoiceState, machinesState, allRequestsState, allMessagesState, adoptedSessionsState, startedThreadsState,
         writtenAtState, sendReceipts)
 }
@@ -731,7 +732,6 @@ internal class ChatPageSources(
     val res: android.content.res.Resources,
     val recovery: ChatStatusRecovery,
     val snapshot: State<persona.core.contracts.api.ChatSnapshot>,
-    val liveItems: ChatLiveItems,
     val renamer: persona.core.domain.sort.SessionRenamer?,
     val sessionList: State<List<Session>>,
     val managerChoice: State<AssistantManagerChoice.Choice>,

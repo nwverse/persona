@@ -456,6 +456,7 @@ internal fun ChatLineContent(
         is ChatLine.Recaps -> RecapLine(line.items.map { it.item })
         is ChatLine.Viewed -> ViewedImagesRow(line.images, session, loader)
         is ChatLine.ModeChange -> ModeChangeDivider(line.change, agentSession)
+        is ChatLine.EngineChanged -> EngineChangeDivider(line.change)
         // Glass: where the replies' model changed (#5055, ModelChanges.mark), as the transcript names both.
         is ChatLine.ModelChange -> {
             val from = persona.core.domain.lines.ModelChanges.replyModelName(line.from)
