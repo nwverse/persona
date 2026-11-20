@@ -52,6 +52,12 @@ func TestDirectionReadMetadataCurrentAndEnded(t *testing.T) {
 	}
 }
 
+// directionSameRow: two reads list a session the same way (where, how it got there, since when, its state and title).
+func directionSameRow(a, b directionSessionView) bool {
+	return a.MachineID == b.MachineID && a.SessionID == b.SessionID && a.Title == b.Title && a.Source == b.Source &&
+		a.State == b.State && (a.At == nil) == (b.At == nil) && (a.At == nil || a.At.Equal(*b.At))
+}
+
 func mustDirectionJSON(v any) string {
 	raw, _ := json.Marshal(v)
 	return string(raw)
@@ -81,21 +87,20 @@ func TestDirectionReadPlacementOriginOnOwnAndNoFolder(t *testing.T) {
 	}
 
 	onOwn := directionFilingMustPut(t, e.s, "server", "chat-opened", "")
-	if onOwn.Previous != "conv_lead_a" || !onOwn.Changed {
-		t.Fatalf("on-own over origin: %+v", onOwn)
+	if onOwn.Previous != nil || !onOwn.Changed {
+		t.Fatalf("on-own over origin: %s", onOwn.Raw)
 	}
 	if got := directionMustRead(t, e.s, "", "conv_lead_a"); slices.Contains(directionSessionIDs(got.Sessions), "chat-opened") {
 		t.Fatalf("on-own did not override recorded origin: %+v", got.Sessions)
 	}
-	// Undo restores the effective direction. The explicit owner source may differ from the old origin source.
-	undo := directionFilingMustPut(t, e.s, "server", "chat-opened", onOwn.Previous)
-	if undo.Previous != "" || !undo.Changed {
-		t.Fatalf("undo on-own over origin: %+v", undo)
+	// Undo restores the earlier placement exactly: no entry, so the recorded origin places it again (#11458).
+	undo := directionUndo(t, e.s, "server", "chat-opened", onOwn)
+	if directionValue(undo.Previous) != "" || !undo.Changed {
+		t.Fatalf("undo on-own over origin: %s", undo.Raw)
 	}
 	after := directionMustRead(t, e.s, "", "conv_lead_a")
-	restored := directionFindSession(t, after.Sessions, "chat-opened")
-	if restored.Source == "" || restored.Source == opened.Source && restored.Source == "" {
-		t.Fatalf("restored session has no placement source: %+v", restored)
+	if restored := directionFindSession(t, after.Sessions, "chat-opened"); !directionSameRow(restored, opened) {
+		t.Fatalf("undo changed the placement: before %+v, after %+v", opened, restored)
 	}
 
 	// A leader is never a session filed under its own or another direction.
@@ -163,7 +168,8 @@ func TestDirectionReadPresenceAndFilingTimeTitle(t *testing.T) {
 	if online.State != proto.StateWorking || online.Title != "Original chat title" || online.At == nil || online.Source == "" {
 		t.Fatalf("listed session: %+v", online)
 	}
-	if offline := directionFindSession(t, got.Sessions, "agent-offline"); offline.State != "offline" || offline.Title != "Offline title" {
+	// Its list could not be read: what the session does there is not known (#11458: never its last state).
+	if offline := directionFindSession(t, got.Sessions, "agent-offline"); offline.State != "computer_offline" || offline.Title != "Offline title" {
 		t.Fatalf("offline session: %+v", offline)
 	}
 	if missing := directionFindSession(t, got.Sessions, "agent-not-listed"); missing.State != "not_listed" || missing.Title != "Archived title" {

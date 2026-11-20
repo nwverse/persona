@@ -44,8 +44,8 @@ export function useUserInputs(mid: string, sid: string, history: string | undefi
       setState({ scope, index });
     }).catch((e: unknown) => {
       if (!alive) return;
-      // Its computer can't find this conversation's history: the loaded-only rail, and no asking again (#11450).
-      if (sessionHistoryNotFound(e)) return;
+      // Its computer says this history is gone for good only with a reason; a detail-only answer may recover (#11470).
+      if (sessionHistoryNotFound(e) && typeof e.body.reason === "string") return;
       // Keep the loaded-only compatibility rail while an older/offline node catches up; failures remain retryable.
       timer = window.setTimeout(load, delay);
       delay = Math.min(delay * 2, 30_000);

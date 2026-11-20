@@ -128,6 +128,13 @@ type directionTreeBook struct {
 	run    sync.Mutex                      // one build and compare at a time
 	timer  *time.Timer                     // a real-clock comparison not yet run (tests can stop it during teardown)
 	runs   sync.WaitGroup                  // scheduled real-clock comparisons; fixtures wait before closing their store
+	// wake, wakeTimer: the build directionTreeAt scheduled for when a computer stops being shown as before.
+	wake      time.Time
+	wakeTimer *time.Timer
+	// sessions and machines: the directions' sessions in the tree told last, and their computers (directionSessionsOn).
+	// A build that cannot place sessions keeps those (directionTree).
+	sessions map[string][]directionSession
+	machines map[string]bool
 }
 
 // directionTreeRoutes: GET /api/v1/assistant/directions/tree is the tree as it is now.
@@ -169,7 +176,8 @@ func (s *Service) directionTreeSoon() {
 	b.mu.Unlock()
 }
 
-// directionTreeSessions: the sessions of machine d changed; the tree is built again when an open task's Agent is there.
+// directionTreeSessions: the sessions of machine d changed, or its computer went away (NodeDetached); the tree is built
+// again when that can change it: an open task's Agent is there, or a direction's session may be (directionSessionsOn).
 func (s *Service) directionTreeSessions(d DeviceSessions) {
 	s.todos.mu.RLock()
 	on := false
@@ -180,21 +188,46 @@ func (s *Service) directionTreeSessions(d DeviceSessions) {
 		}
 	}
 	s.todos.mu.RUnlock()
-	if !on {
-		records, err := s.directionSessionRecords(context.Background())
-		if err == nil {
-			for key := range records {
-				var tuple [2]string
-				if json.Unmarshal([]byte(key), &tuple) == nil && s.canonical(tuple[0]) == s.canonical(d.MachineID) {
-					on = true
-					break
-				}
+	if on || s.directionSessionsOn(context.Background(), d.MachineID, d.Sessions) {
+		s.directionTreeSoon()
+	}
+}
+
+// directionSessionsOn: a session of a current direction's may be on machine: the tree told last lists one there, the
+// owner filed one there, or a session of list (the machine's) was opened by a current direction's leader conversation.
+func (s *Service) directionSessionsOn(ctx context.Context, machine string, list []proto.Session) bool {
+	machine = s.canonical(machine)
+	b := &s.dtree
+	b.mu.Lock()
+	told := b.machines[machine]
+	b.mu.Unlock()
+	if told {
+		return true
+	}
+	cfg := s.settings(ctx)
+	current := func(id string) bool { return id != "" && id != cfg.Main && slices.Contains(cfg.Leaders, id) }
+	if records, err := s.directionSessionRecords(ctx); err == nil {
+		for k, e := range s.directionEntries(records) {
+			if k[0] == machine && e.live() && current(e.Direction) {
+				return true
 			}
 		}
 	}
-	if on {
-		s.directionTreeSoon()
+	if len(list) == 0 {
+		return false
 	}
+	var opened []string // the computers the sessions of list a current direction opened were opened on
+	o := &s.origins
+	o.mu.Lock()
+	if s.originsLocked(ctx) {
+		for i := range list {
+			if origin := o.m[list[i].SessionID]; origin != nil && origin.Origin == OriginSpawned && current(origin.Ref) {
+				opened = append(opened, cmp.Or(origin.MachineID, cfg.MachineID))
+			}
+		}
+	}
+	o.mu.Unlock()
+	return slices.ContainsFunc(opened, func(m string) bool { return s.canonical(m) == machine })
 }
 
 // directionTreeSync builds the tree and tells the apps {"type":"directions"} when it is not the one they were last told
@@ -209,17 +242,30 @@ func (s *Service) directionTreeSync(ctx context.Context) {
 	}
 	b.run.Lock()
 	defer b.run.Unlock()
-	raw, err := json.Marshal(s.directionTree(ctx, time.Now()))
+	tree, wake := s.directionTreeWake(ctx, time.Now())
+	raw, err := json.Marshal(tree)
 	if err != nil {
 		return
 	}
 	sum := sha256.Sum256(raw)
+	sessions, machines := map[string][]directionSession{}, map[string]bool{}
+	for _, d := range tree.Directions {
+		if len(d.Sessions) > 0 {
+			sessions[d.ID] = d.Sessions
+		}
+		for _, session := range d.Sessions {
+			machines[session.MachineID] = true
+		}
+	}
 	b.mu.Lock()
 	same := b.told && b.digest == sum
-	b.digest, b.told = sum, true
+	b.digest, b.told, b.sessions, b.machines = sum, true, sessions, machines
 	b.mu.Unlock()
 	if !same {
 		s.event(ctx, map[string]any{"type": "directions"})
+	}
+	if !wake.IsZero() {
+		s.directionTreeAt(wake)
 	}
 }
 
@@ -267,40 +313,88 @@ func (s *Service) currentLeaders(ctx context.Context, cfg Settings) ([]string, m
 
 // directionTree builds the tree from the to-dos and their Agents' sessions now (each machine asked once).
 func (s *Service) directionTree(ctx context.Context, now time.Time) directionTree {
+	out, _ := s.directionTreeWake(ctx, now)
+	return out
+}
+
+// directionTreeWake is directionTree, and when a computer of its directions' sessions stops being shown as before
+// (zero: none will): the tree can change then, and nothing tells the manager.
+func (s *Service) directionTreeWake(ctx context.Context, now time.Time) (directionTree, time.Time) {
 	tb, cfg, names := s.directionTreeParts(ctx, now)
 	out := tb.tree(names)
-	groups, err := tb.directionSessionGroups(ctx, cfg)
+	groups, wake, err := tb.directionSessionGroups(ctx, cfg)
 	if err != nil {
+		// What places sessions could not be read for now: the sessions told last stay, rather than every direction
+		// losing its sessions until the next build, less those that follow a task now (rule 1) or are under one in
+		// this build's tasks (directionTreeSessionRows below).
 		s.logf("direction sessions: %v", err)
-		return out
+		groups = tb.directionLastSessions(s.taskFollowers())
 	}
-	tb.directionTreeSessionRows(groups)
+	tb.directionTreeSessionRows(groups, out)
 	for i := range out.Directions {
 		if !out.Directions[i].Secretary {
 			out.Directions[i].Sessions = groups[out.Directions[i].ID]
 		}
 	}
-	return out
+	return out, wake
 }
 
-// directionTreeParts is the shared build behind the tree and the single-direction read. The read uses taskOwner for
-// ended tasks too; the tree still limits those raw owners to current leaders in directionOf.
+// directionLastSessions are the directions' sessions in the tree told last, copied, without those that follow a task
+// now (followers, a sub-agent session by its parent as this build lists it).
+func (tb *treeBuild) directionLastSessions(followers taskFollowers) map[string][]directionSession {
+	b := &tb.s.dtree
+	b.mu.Lock()
+	last := b.sessions
+	b.mu.Unlock()
+	groups := make(map[string][]directionSession, len(last))
+	for id, sessions := range last {
+		for _, session := range sessions {
+			k := [2]string{session.MachineID, session.SessionID}
+			if !followers.follows(k, func(sid string) string { return tb.sessions[[2]string{k[0], sid}].ParentSessionID }) {
+				groups[id] = append(groups[id], session)
+			}
+		}
+	}
+	return groups
+}
+
+// directionTreeAt builds the tree again at at: a computer of a direction's session stops being shown as before then
+// (its reconnect grace or the warm start after a restart ends), and the devices tell the manager nothing of it. One
+// wake is kept, the earliest; the build itself waits directionTreeSettle more, past the devices' own change.
+func (s *Service) directionTreeAt(at time.Time) {
+	b := &s.dtree
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.wake.IsZero() && !b.wake.After(at) || s.runCtx().Err() != nil {
+		return
+	}
+	b.wake = at
+	fire := func() {
+		b.mu.Lock()
+		if b.wake.Equal(at) {
+			b.wake, b.wakeTimer = time.Time{}, nil
+		}
+		b.mu.Unlock()
+		if s.runCtx().Err() == nil {
+			s.directionTreeSoon()
+		}
+	}
+	if b.after != nil {
+		b.after(time.Until(at), fire)
+		return
+	}
+	if b.wakeTimer != nil {
+		b.wakeTimer.Stop()
+	}
+	b.wakeTimer = time.AfterFunc(time.Until(at), fire)
+}
+
+// directionTreeParts is the tree's build. The single-direction read builds only the part taskOwner needs
+// (directionOwners); the tree limits those raw owners to current leaders in directionOf.
 func (s *Service) directionTreeParts(ctx context.Context, now time.Time) (*treeBuild, Settings, map[string]string) {
 	cfg := s.settings(ctx)
 	leads, names := s.currentLeaders(ctx, cfg)
-
-	s.todos.mu.RLock()
-	all := make([]listedTodo, 0, len(s.todos.todos))
-	for _, t := range s.todos.todos {
-		raw := copyTodoLocked(t)
-		shown := formatTodo(raw)
-		// formatTodo uses "review" for older clients' cancellation labels. Keep the stored marker in this internal
-		// projection so the single-direction read can distinguish cancellation from ordinary completion.
-		shown.DoneBy = raw.DoneBy
-		all = append(all, listedTodo{Todo: shown})
-	}
-	s.todos.mu.RUnlock()
-	slices.SortFunc(all, func(a, b listedTodo) int { return cmp.Compare(a.ID, b.ID) })
+	all := s.treeTodos()
 	asks := s.todoAsks(ctx) // once the to-dos are let go: it reads them itself
 	var undone []Todo
 	for i := range all {
@@ -314,6 +408,33 @@ func (s *Service) directionTreeParts(ctx context.Context, now time.Time) (*treeB
 	lists, reached := s.agentSessionLists(ctx, undone)
 	tb := newTreeBuild(s, cfg.Main, leads, all, lists, reached, now, s.location(ctx))
 	return tb, cfg, names
+}
+
+// treeTodos are every to-do as the tree reads them, by id.
+func (s *Service) treeTodos() []listedTodo {
+	s.todos.mu.RLock()
+	all := make([]listedTodo, 0, len(s.todos.todos))
+	for _, t := range s.todos.todos {
+		raw := copyTodoLocked(t)
+		shown := formatTodo(raw)
+		// formatTodo uses "review" for older clients' cancellation labels. Keep the stored marker in this internal
+		// projection so the single-direction read can distinguish cancellation from ordinary completion.
+		shown.DoneBy = raw.DoneBy
+		all = append(all, listedTodo{Todo: shown})
+	}
+	s.todos.mu.RUnlock()
+	slices.SortFunc(all, func(a, b listedTodo) int { return cmp.Compare(a.ID, b.ID) })
+	return all
+}
+
+// directionOwners is the part of a tree build taskOwner needs, for the single-direction read's ended tasks: every
+// to-do and the task leaders' Agents. It places no task and asks no computer.
+func (s *Service) directionOwners() *treeBuild {
+	tb := &treeBuild{s: s, todos: map[string]listedTodo{}, leaderAgent: map[[2]string][]string{}}
+	for _, t := range s.treeTodos() {
+		tb.index(t)
+	}
+	return tb
 }
 
 // treeBuild is one build of the tree: the to-dos placed, the sessions by machine and id, and what is nested where.
@@ -336,6 +457,17 @@ type treeBuild struct {
 	workerAt map[string]treeAttach
 	// workersUnder: the worker tasks under each (leader task, leader Agent).
 	workersUnder map[treeAttach][]string
+}
+
+// index adds to-do t, and the leader Agents it has.
+func (tb *treeBuild) index(t listedTodo) {
+	tb.todos[t.ID] = t
+	for _, a := range t.Agents {
+		if a.Source == sourceLeader {
+			k := [2]string{a.MachineID, a.SessionID}
+			tb.leaderAgent[k] = append(tb.leaderAgent[k], t.ID)
+		}
+	}
 }
 
 type treeAttach struct {
@@ -367,15 +499,9 @@ func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lis
 	}
 	tb.placed = triagePlace(all, look, now, loc)
 	for _, t := range all {
-		tb.todos[t.ID] = t
+		tb.index(t)
 		if triageCountsAsOpen(t.Todo, tb.placed[t.ID]) {
 			tb.open = append(tb.open, t.ID)
-		}
-		for _, a := range t.Agents {
-			if a.Source == sourceLeader {
-				k := [2]string{a.MachineID, a.SessionID}
-				tb.leaderAgent[k] = append(tb.leaderAgent[k], t.ID)
-			}
 		}
 	}
 	for _, id := range tb.open {
