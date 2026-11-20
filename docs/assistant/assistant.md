@@ -1692,7 +1692,10 @@ operation then read as accepted and the bubble waited for the transcript and wen
   as a context block in front (`prompts/assistant/relay_later.md`), with the next message the manager delivers to
   that conversation for anything else: a supervision message, another conversation's message, a scheduled follow-up,
   a notice. It starts no turn of its own, costs no hop and no place in the relay rate, and is dropped only once the
-  message carrying it went in. Nothing is guessed from the words: only the explicit argument decides. A `quote` (the
+  message carrying it went in. Before a send with a `once_id`, its quiet-message context (including an empty one) is
+  saved and reused on retries, including after restart. A retry clears only that original context; later arrivals wait
+  for a new send ID. These reservations expire after seven days, beyond the node's ten-minute send-ID memory.
+  Nothing is guessed from the words: only the explicit argument decides. A `quote` (the
   owner's request) always wakes, so the two together are refused. A turn the owner starts from an app does not carry
   it; it shows above the composer meanwhile.
 - **Between conversations.** `conversation_send` to a conversation that cannot take the message now no longer fails:

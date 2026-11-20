@@ -550,7 +550,11 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	laterTaken := func(bool) {}
 	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend {
 		// What conversation_send with wake: false kept for this conversation goes in with this message (relay_later.go).
-		laterTaken = s.withRelayLater(ctx, p)
+		var err error
+		laterTaken, err = s.withRelayLater(ctx, p)
+		if err != nil {
+			return beforeNodeWrite(method, err)
+		}
 	}
 	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend {
 		// The node reads a missing is_main as false, and is_main is part of what a process runs: a relay into the main

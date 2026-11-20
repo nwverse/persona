@@ -2,12 +2,21 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/prompts"
 )
+
+// relayLaterSend is the quiet context reserved before the first node write under a once_id. An empty reservation
+// matters too: a retry of a send that originally carried nothing must not consume newly arrived quiet messages.
+type relayLaterSend struct {
+	At    time.Time  `json:"at"`
+	Text  string     `json:"text,omitempty"`
+	Items []relayMsg `json:"items,omitempty"`
+}
 
 // conversation_send with wake: false (#11614). Every turn of a supervising conversation re-reads its whole context, so
 // a message that only acknowledges or informs should not start one. Such a message is kept for its receiver
@@ -54,33 +63,55 @@ func (s *Service) keepRelayLater(to string, msg relayMsg) (int, bool) {
 // the message carrying them went in (taken). What came meanwhile stays for the next delivery; a send that failed or is
 // in doubt keeps them all, so one is at worst read twice, never lost.
 func (s *Service) relayLaterFor(ctx context.Context, to string) (string, func(taken bool)) {
+	text, done, _ := s.relayLaterSendFor(ctx, to, "")
+	return text, done
+}
+
+func (s *Service) relayLaterSendFor(ctx context.Context, to, once string) (string, func(bool), error) {
+	loc := s.location(ctx)
+	language := answerLanguage(s.hello(ctx).Locale)
 	b := &s.relays
 	b.mu.Lock()
 	if !s.relayLocked(ctx) {
 		b.mu.Unlock()
-		return "", func(bool) {}
+		return "", func(bool) {}, errors.New("cannot read quiet-message delivery state")
 	}
 	s.pruneRelayLaterLocked(time.Now())
-	if len(b.st.Later[to]) == 0 {
-		b.mu.Unlock()
-		return "", func(bool) {}
+	key := to + "\x00" + once
+	carry, reserved := b.st.LaterSends[key]
+	if once == "" || !reserved {
+		carry = relayLaterSend{At: time.Now().UTC(), Items: slices.Clone(b.st.Later[to])}
+		items := make([]prompts.RelayLaterItem, 0, len(carry.Items))
+		for _, m := range carry.Items {
+			items = append(items, prompts.RelayLaterItem{FromID: m.From, FromTitle: m.FromTitle, At: m.At.In(loc).Format("01-02 15:04"), Text: m.Text})
+		}
+		if len(items) > 0 {
+			carry.Text = prompts.RenderRelayLater(prompts.RelayLater{Language: language, Items: items})
+		}
+		if once != "" {
+			if b.st.LaterSends == nil {
+				b.st.LaterSends = map[string]relayLaterSend{}
+			}
+			b.st.LaterSends[key] = carry
+			if err := s.saveRelayLocked(); err != nil {
+				b.loaded = false
+				b.mu.Unlock()
+				return "", func(bool) {}, err // never send a payload whose carry reservation was not saved
+			}
+		}
 	}
-	kept := slices.Clone(b.st.Later[to])
 	b.mu.Unlock()
-	loc := s.location(ctx)
-	items := make([]prompts.RelayLaterItem, 0, len(kept))
-	for _, m := range kept {
-		items = append(items, prompts.RelayLaterItem{FromID: m.From, FromTitle: m.FromTitle, At: m.At.In(loc).Format("01-02 15:04"), Text: m.Text})
-	}
-	text := prompts.RenderRelayLater(prompts.RelayLater{Language: answerLanguage(s.hello(ctx).Locale), Items: items})
-	return text, func(taken bool) {
+	return carry.Text, func(taken bool) {
 		if !taken {
 			return
 		}
 		b.mu.Lock()
 		defer b.mu.Unlock()
+		if !s.relayLocked(ctx) {
+			return
+		}
 		q := b.st.Later[to]
-		rest := slices.DeleteFunc(slices.Clone(q), func(m relayMsg) bool { return slices.Contains(kept, m) })
+		rest := slices.DeleteFunc(slices.Clone(q), func(m relayMsg) bool { return slices.Contains(carry.Items, m) })
 		if len(rest) == len(q) {
 			return
 		}
@@ -89,29 +120,37 @@ func (s *Service) relayLaterFor(ctx context.Context, to string) (string, func(ta
 		} else {
 			b.st.Later[to] = rest
 		}
-		s.saveRelayLocked()
-	}
+		if err := s.saveRelayLocked(); err != nil {
+			b.loaded = false
+		}
+	}, nil
 }
 
 // withRelayLater puts what is kept for the receiver of an assistant.send in front of its text (params p), answering
 // what to call with whether the send was taken. A meeting's batch and a command (a text starting with "/") carry
 // nothing: neither is a turn that reads messages.
-func (s *Service) withRelayLater(ctx context.Context, p map[string]any) func(taken bool) {
+func (s *Service) withRelayLater(ctx context.Context, p map[string]any) (func(taken bool), error) {
 	id, _ := p["session_id"].(string)
 	text, ok := p["text"].(string)
 	if id == "" || !ok || meetingSource(p) || strings.HasPrefix(strings.TrimSpace(text), "/") {
-		return func(bool) {}
+		return func(bool) {}, nil
 	}
-	later, done := s.relayLaterFor(ctx, id)
-	if later == "" {
-		return done
+	once, _ := p["once_id"].(string)
+	later, done, err := s.relayLaterSendFor(ctx, id, once)
+	if err != nil || later == "" {
+		return done, err
 	}
 	p["text"] = later + "\n" + text
-	return done
+	return done, nil
 }
 
 // pruneRelayLaterLocked lets go of kept messages older than relayLaterKeep; b.mu is held.
 func (s *Service) pruneRelayLaterLocked(now time.Time) {
+	for key, sent := range s.relays.st.LaterSends {
+		if now.Sub(sent.At) > relayLaterKeep {
+			delete(s.relays.st.LaterSends, key)
+		}
+	}
 	for id, q := range s.relays.st.Later {
 		q = slices.DeleteFunc(q, func(m relayMsg) bool { return now.Sub(m.QueuedAt) > relayLaterKeep })
 		if len(q) == 0 {

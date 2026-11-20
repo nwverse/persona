@@ -293,6 +293,8 @@ type relayState struct {
 	// (relay_later.go, #11614). A version that does not know it drops it on its next save: those acknowledgements are
 	// then not read.
 	Later map[string][]relayMsg `json:"later,omitempty"`
+	// LaterSends freezes quiet-message context for retries under one assistant.send once_id (relay_later.go).
+	LaterSends map[string]relayLaterSend `json:"later_sends,omitempty"`
 	// Handed: by direction's lead conversation, when a hand-over of the owner's quoted words last went into it
 	// (relay_lead_hold.go, #11699): until the owner next writes there (userSpoke), what it plans that writes waits for
 	// their Start. A version that does not know it drops it on its next save: those plans then start as before.

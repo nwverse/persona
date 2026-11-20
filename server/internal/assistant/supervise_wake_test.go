@@ -37,6 +37,9 @@ func TestRoutineSignalUnchangedIsNotToldAgainWhileTheTaskIsOpen(t *testing.T) {
 			t.Fatalf("%s: first signal told %d times", kind, n)
 		}
 		g.Key = "turn-b" // a later sweep, or a turn that ended with the same words
+		if kind == sigOverdue {
+			g.Key = "turn-a" // overdue keys name scope clocks, not sweeps
+		}
 		if n := reserve(e, g, now.Add(3*time.Hour)); n != 0 {
 			t.Fatalf("%s: the unchanged state woke the supervisor again after 3 hours", kind)
 		}
@@ -63,6 +66,22 @@ func TestRoutineSignalUnchangedIsNotToldAgainWhileTheTaskIsOpen(t *testing.T) {
 	}
 	if n := reserve(q, needs, now.Add(31*time.Minute)); n != 1 {
 		t.Fatal("an unanswered question was not told again after the window")
+	}
+}
+
+func TestOverdueDedupAllowsANewScopeClock(t *testing.T) {
+	s, _ := newQuietServiceOn(t, &memStore{})
+	e := prompts.SuperviseEntry{ID: "todo_overdue", Last: "Waiting for evidence."}
+	g := superviseSignal{Todo: e.ID, Kind: sigOverdue, Key: "brief@clock-one"}
+	now := time.Now()
+	for i, want := range []int{1, 0, 1} {
+		if i == 2 {
+			g.Key = "brief@clock-two"
+		}
+		out, _, _, err := s.reserveSupervision(context.Background(), []prompts.SuperviseEntry{e}, []superviseSignal{g}, now.Add(time.Duration(i)*time.Hour))
+		if err != nil || len(out) != want {
+			t.Fatalf("clock %s: %d entries, %v; want %d", g.Key, len(out), err, want)
+		}
 	}
 }
 
@@ -312,6 +331,65 @@ func TestConversationSendWithoutWakeDropsExpiredBeforeDelivery(t *testing.T) {
 	s.relays.mu.Unlock()
 	if text, _ := s.relayLaterFor(context.Background(), "conv1"); text != "" {
 		t.Fatalf("expired message carried to delivery: %s", text)
+	}
+}
+
+func TestQuietRelayRetryKeepsItsOriginalCarryAcrossRestart(t *testing.T) {
+	for _, initiallyEmpty := range []bool{false, true} {
+		t.Run(map[bool]string{false: "with context", true: "empty context"}[initiallyEmpty], func(t *testing.T) {
+			st := &memStore{}
+			s, _ := newQuietServiceOn(t, st)
+			ctx := context.Background()
+			if !initiallyEmpty {
+				if _, ok := s.keepRelayLater("conv1", relayMsg{Text: "Original acknowledgement.", At: time.Now().UTC()}); !ok {
+					t.Fatal("could not keep original")
+				}
+			}
+			params := func() map[string]any {
+				return map[string]any{"session_id": "conv1", "once_id": "delivery-one", "text": "Please check the build."}
+			}
+			first := params()
+			done, err := s.withRelayLater(ctx, first)
+			if err != nil {
+				t.Fatal(err)
+			}
+			done(false) // the send may have landed; its answer was lost
+			if _, ok := s.keepRelayLater("conv1", relayMsg{Text: "New acknowledgement.", At: time.Now().UTC()}); !ok {
+				t.Fatal("could not keep concurrent update")
+			}
+			again, _ := newQuietServiceOn(t, st)
+			retry := params()
+			done, err = again.withRelayLater(ctx, retry)
+			if err != nil || retry["text"] != first["text"] {
+				t.Fatalf("retry changed payload: first=%q retry=%q err=%v", first["text"], retry["text"], err)
+			}
+			done(true) // node deduplicates this once_id: only the original context was read
+			left := laterFor(again, "conv1")
+			if len(left) != 1 || left[0].Text != "New acknowledgement." {
+				t.Fatalf("retry consumed an unread update: %+v", left)
+			}
+			next := params()
+			next["once_id"] = "delivery-two"
+			done, err = again.withRelayLater(ctx, next)
+			if err != nil || !strings.Contains(next["text"].(string), "New acknowledgement.") {
+				t.Fatalf("new delivery did not carry the update: %+v, %v", next, err)
+			}
+			done(true)
+			if len(laterFor(again, "conv1")) != 0 {
+				t.Fatal("new delivery did not clear its context")
+			}
+		})
+	}
+}
+
+func TestQuietRelayCarrySaveFailureStopsBeforeTheNodeWrite(t *testing.T) {
+	st := &memStore{}
+	s, f := newQuietServiceOn(t, st)
+	st.setFailPut(errors.New("database unavailable"))
+	err := s.call(context.Background(), "server", DeviceAssistantSend,
+		map[string]any{"session_id": "conv1", "once_id": "delivery-one", "text": "Please check the build.", "resume_only": true}, nil)
+	if err == nil || f.sentTo("conv1") != 0 {
+		t.Fatalf("unreserved carry reached the node: err=%v sends=%d", err, f.sentTo("conv1"))
 	}
 }
 
