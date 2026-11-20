@@ -2629,6 +2629,10 @@ Notifications are only hints: replaying an old notification cannot restore an ab
 the known source end and item completeness are distinct. Missing older ranges fall back to the runtime; a cached
 offline page says `partial` when coverage or freshness is uncertain. Source failures never manufacture complete
 empty history. The disposable text-search index can be rebuilt without deleting durable messages.
+Legacy conversations on current nodes are imported lazily using the same source IDs. A node/runtime that omits
+the protocol's history-generation token keeps the runtime read path; the manager does not invent durable coverage
+that could mix a rewritten transcript with an older one. It can be indexed once its normalized source contract is
+available. This is a source-data compatibility fallback, not an engine-kind restriction.
 
 Historical reads and main handoffs prefer covered database content. Handoffs retain the source engine's stored
 compaction summary and bounded recent complete messages; no model is called to populate this store. Strict source

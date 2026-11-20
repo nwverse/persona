@@ -420,3 +420,45 @@ func TestDurableHistorySameRevisionRewriteAndLateNotification(t *testing.T) {
 		t.Fatalf("late event was stored %+v %v", rows, err)
 	}
 }
+
+func TestDurableHistoryDoesNotHydrateFromAnotherGeneration(t *testing.T) {
+	s, f, database, rt := historyFixture(t)
+	rt.mu.Lock()
+	rt.items[5].Text = "preview"
+	rt.items[5].FullSize = 100
+	rt.mu.Unlock()
+	f.answerNode("session.item", func(_ string, _ json.RawMessage) (any, error) {
+		rt.mu.Lock()
+		defer rt.mu.Unlock()
+		rt.history = "h2"
+		rt.items = []proto.Item{{ID: "replacement", Seq: 1, Role: "assistant", Kind: proto.KindText, Text: "current generation"}}
+		return proto.Item{ID: "a3", Seq: 6, Role: "assistant", Kind: proto.KindText, Text: "wrong generation hydration"}, nil
+	})
+	c := proto.Session{SessionID: "main-chat", Assistant: true, Rev: 100}
+	if err := s.historySync(t.Context(), database, "server", c); !errors.Is(err, db.ErrConversationHistoryChanged) {
+		t.Fatalf("mixed-generation hydration accepted: %v", err)
+	}
+	if h, err := database.ConversationHistory(t.Context(), "server", c.SessionID); err != nil || h != nil {
+		t.Fatalf("invalid hydrated page was committed %+v %v", h, err)
+	}
+	if err := s.historySync(t.Context(), database, "server", c); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := database.ConversationItems(t.Context(), "server", c.SessionID, "h2", 0, 100, 100, false)
+	if err != nil || len(rows) != 1 || rows[0].Item.ID != "replacement" {
+		t.Fatalf("retry mixed source generations %+v %v", rows, err)
+	}
+}
+
+func TestDurableHistoryMissingGenerationKeepsLegacyRuntimeFallback(t *testing.T) {
+	s, _, database, rt := historyFixture(t)
+	rt.mu.Lock()
+	rt.history = ""
+	rt.mu.Unlock()
+	if page := readHistory(t, s, "main-chat", map[string]any{"lazy_images": true}); len(page.Items) != 6 {
+		t.Fatalf("legacy runtime fallback %+v", page)
+	}
+	if h, err := database.ConversationHistory(t.Context(), "server", "main-chat"); err != nil || h != nil {
+		t.Fatalf("invented coverage without source identity %+v %v", h, err)
+	}
+}

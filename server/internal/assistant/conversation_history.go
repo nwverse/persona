@@ -19,6 +19,8 @@ import (
 
 const conversationHistoryKey = "assistant.history"
 
+var errHistoryGenerationUnavailable = errors.New("runtime did not provide a history generation")
+
 type conversationHistoryStore interface {
 	ConversationHistory(context.Context, string, string) (*db.ConversationHistory, error)
 	PutConversationPage(context.Context, db.ConversationPage) error
@@ -186,11 +188,15 @@ func (s *Service) historyCall(ctx context.Context, machine, method string, raw j
 	// durable end, but cannot prove it has not appended since then.
 	fresh := true
 	if h != nil {
+		offline := s.historyMachineOffline(ctx, machine)
 		if c, ok := s.historySession(ctx, machine, p.SessionID); ok {
 			fresh = c.Rev > 0 && h.Revision == c.Rev && !s.historyDirty(searchKey{machine, p.SessionID})
 		}
 		if h.TailSeq != nil {
-			if out, ok := s.historyPage(ctx, st, h, p, fresh); ok {
+			if out, ok := s.historyPage(ctx, st, h, p, fresh || offline); ok {
+				if offline {
+					out = partialHistoryPage(out)
+				}
 				return out, true, nil
 			}
 		}
@@ -209,17 +215,13 @@ func (s *Service) historyCall(ctx context.Context, machine, method string, raw j
 		}
 		if h != nil {
 			if out, ok := s.historyPage(ctx, st, h, p, true); ok {
-				var fallback historyPage
-				if json.Unmarshal(out, &fallback) == nil {
-					fallback.Partial = true
-					out, _ = json.Marshal(fallback)
-				}
+				out = partialHistoryPage(out)
 				return out, true, nil
 			}
 		}
 		return nil, true, err
 	}
-	if err := s.historyRemember(ctx, st, machine, p.SessionID, h, p, source, sourceRevision); err != nil {
+	if err := s.historyRemember(ctx, st, machine, p.SessionID, h, p, source, sourceRevision); err != nil && !errors.Is(err, errHistoryGenerationUnavailable) {
 		s.logf("assistant: persist history page: %v", err)
 	}
 	if p.FoldWork {
@@ -230,6 +232,28 @@ func (s *Service) historyCall(ctx context.Context, machine, method string, raw j
 	}
 	out, err := json.Marshal(source)
 	return out, true, err
+}
+
+func partialHistoryPage(raw json.RawMessage) json.RawMessage {
+	var page historyPage
+	if json.Unmarshal(raw, &page) != nil {
+		return raw
+	}
+	page.Partial = true
+	out, err := json.Marshal(page)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+func (s *Service) historyMachineOffline(ctx context.Context, machine string) bool {
+	for _, d := range s.devices(ctx) {
+		if d.ID == machine {
+			return !d.Online && !d.Reachable
+		}
+	}
+	return false
 }
 
 func historyItem(row conversationlog.Item, h *db.ConversationHistory) proto.Item {
@@ -366,6 +390,9 @@ func intValue(p *int) int {
 
 // historyRemember stores only coverage the source page proves. No content-equality deduplication.
 func (s *Service) historyRemember(ctx context.Context, st conversationHistoryStore, machine, sid string, previous *db.ConversationHistory, p historyParams, page historyPage, revision int64) error {
+	if page.History == "" {
+		return errHistoryGenerationUnavailable
+	}
 	if err := s.conversationAvailable(ctx, machine, sid); err != nil {
 		return err
 	}
@@ -417,6 +444,15 @@ func (s *Service) historyRemember(ctx context.Context, st conversationHistorySto
 			if err := s.historySource(upgradeCtx, machine, "session.item", map[string]any{"session_id": sid, "item_id": it.ID}, &full); err == nil && full.ID == it.ID && full.Seq == it.Seq {
 				*it = full
 			}
+		}
+	}
+	if upgrades > 0 {
+		var check historyPage
+		err := s.historySource(upgradeCtx, machine, DeviceSessionItems, map[string]any{"session_id": sid, "after_seq": through, "limit": 1, "lazy_images": true}, &check)
+		if err != nil {
+			items = page.Items
+		} else if check.History != "" && check.History != page.History {
+			return db.ErrConversationHistoryChanged
 		}
 	}
 	return st.PutConversationPage(ctx, db.ConversationPage{MachineID: machine, SessionID: sid, History: history, ExpectedHistory: expected,
@@ -581,7 +617,7 @@ func (s *Service) historySweep(ctx context.Context, st conversationHistoryStore)
 			if !c.Assistant || c.PaneID != "" || c.IsDeleted() {
 				continue
 			}
-			if err := s.historySync(ctx, st, machine.ID, c); err != nil && !errors.Is(err, db.ErrConversationHistoryChanged) {
+			if err := s.historySync(ctx, st, machine.ID, c); err != nil && !errors.Is(err, db.ErrConversationHistoryChanged) && !errors.Is(err, errHistoryGenerationUnavailable) {
 				s.logf("assistant: synchronize durable conversation: %v", err)
 			}
 		}
