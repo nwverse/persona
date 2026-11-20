@@ -54,6 +54,7 @@ func (c *ownChange) card(l i18n.Lang) string {
 func (s *Service) ownSettings() []ownSetting {
 	getSet := []string{"get", "set"}
 	return []ownSetting{
+		s.hiddenDirSetting(),
 		{Setting: Setting{Key: standingAuthorizationsKey, Title: "Standing authorizations", Actions: getSet,
 			About: "user-confirmed actions for one computer and absolute directory tree; only the main conversation may set them, and every change requires the user’s own permission approval",
 			Value: "{revision, authorizations: [{id?, machine_id, directory, actions, conditions, quote, source, reversible}]}; get first; retain existing entries unchanged or remove them; omit id for new grants; granted_at is set by the server"},
@@ -87,10 +88,19 @@ func (s *Service) ownSettings() []ownSetting {
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleAutoCompactMinutes(ctx)), nil },
 			set: s.setIdleAutoCompactMinutes},
 		{Setting: Setting{Key: "assistant.idle_auto_compact_tokens", Title: "Context size before compaction", Actions: getSet,
-			About: "minimum context size before automatic compaction; 300000 tokens by default",
+			About: "minimum context size before automatic compaction; 300000 tokens by default. Once saved, it is also the size " +
+				"at which the main chat is compacted before its idle process is let go (assistant.idle_release_minutes), " +
+				"whatever assistant.idle_auto_compact says; never saved, that compaction stays at 75% of the conversation's window",
 			Value: "a whole number from 10000 to 10000000"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleAutoCompactTokens(ctx)), nil },
 			set: s.setIdleAutoCompactTokens},
+		{Setting: Setting{Key: "assistant.idle_release_minutes", Title: "Main chat stays loaded when idle", Actions: getSet,
+			About: "how long the main chat's process stays loaded after its last activity before it is let go (it resumes on the " +
+				"next message); 20 minutes by default. Just before, it is compacted when its context is large (assistant.idle_auto_compact_tokens " +
+				"once saved). Kept below an hour so that compaction still reads the prompt cache. Applies from the main chat's next message",
+			Value: "a whole number of minutes from 5 to 55"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleReleaseMinutes(ctx)), nil },
+			set: s.setIdleReleaseMinutes},
 		{Setting: Setting{Key: readonlyModeKey, Title: "Read-only task protection", Actions: getSet,
 			About: "sandbox (the default) keeps current runtime protection: Codex uses a read-only sandbox, while Claude uses " +
 				"bypassPermissions and a first-message read-only instruction. prompt keeps the instruction without forcing plan " +
@@ -184,7 +194,7 @@ func (s *Service) ownSettings() []ownSetting {
 		{Setting: Setting{Key: "assistant.leaders", Title: "Leader conversations", Actions: getSet,
 			About: "empty (the default): only the main conversation supervises the tasks it hands out. A leader is a side conversation " +
 				"(one repository or long-running project each) that supervises the tasks it hands out with task_plan itself: their " +
-				"supervision messages go to it and it reviews them with task_review; needs_user and failed starts still come to the " +
+				"supervision messages go to it and it reviews them with task_review; its failed starts go to it too, while needs_user still comes to the " +
 				"main conversation. Applies to tasks handed out from now on",
 			Value: "the whole list of leader conversation ids (conversations_list), [] for none"},
 			get: s.getLeaders,
@@ -264,13 +274,20 @@ func (s *Service) ownSettings() []ownSetting {
 		{Setting: Setting{Key: "assistant.main_supervises_own_tasks", Title: "The main chat supervises its own tasks", Actions: getSet,
 			About: "off (the default): the background supervisor, one built-in Persona conversation made on first use, follows up " +
 				"every supervised task no leader supervises: their supervision messages go to it and it reviews them with task_review, " +
-				"so the main conversation stays free to answer the user. The main conversation still hears of failed starts and of " +
+				"so the main conversation stays free to answer the user. The main conversation still hears of failed starts with no current leader and of " +
 				"what the background supervisor hands to the user, and may review any of these tasks itself. on: the main conversation " +
 				"gets these supervision messages itself, as before the background supervisor existed. Applies to signals raised from " +
 				"the change on (a supervision message already with the background supervisor is finished there); tasks keep running",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.mainSupervisesOwnTasks(ctx)), nil },
 			set: s.setMainSupervisesOwnTasks},
+		{Setting: Setting{Key: "assistant.supervision_batch_minutes", Title: "Routine supervision batching per recipient", Actions: getSet,
+			About: "0 (the default) keeps the existing supervision gather and shared spacing. A nonzero interval batches routine signals independently for each final recipient conversation, anchored at that recipient's first routine signal. needs_you, ask, escalated, decide, decision_reply, park_decided, owner_cannot_answer, recheck, undecidable and failed bypass the batch after the existing 15-second gather; any one of them releases that recipient's whole digest. Due batches still use the recipient's existing busy queue",
+			Value: "a whole number from 0 to 1440 minutes"},
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(supervisionBatchMinutesOf(s.settings(ctx))), nil
+			},
+			set: s.setSupervisionBatchMinutes},
 		{Setting: Setting{Key: "assistant.background_supervisor_keeps_context", Title: "The background supervisor keeps every round in context", Actions: getSet,
 			About: "off (the default): each round of the background supervisor starts from its first turn, in the same conversation: " +
 				"it reads its start brief and that round's supervision message, with only the tools supervision uses; what " +
@@ -317,9 +334,13 @@ func (s *Service) toolPersonaSettings(ctx context.Context, call ToolCall, args j
 		Action string          `json:"action"`
 		Key    string          `json:"key"`
 		Value  json.RawMessage `json:"value"`
+		ID     string          `json:"id"` // remove's, as the hub's own settings take it
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return proto.TextResult(fmt.Sprintf("invalid arguments: %v", err), true)
+	}
+	if a.Action == "remove" && len(a.Value) == 0 && a.ID != "" {
+		a.Value, _ = json.Marshal(a.ID)
 	}
 	if a.Key == standingAuthorizationsKey && a.Action == "set" && (call.SessionID == "" || call.SessionID != s.settings(ctx).Main || call.MachineID != s.settings(ctx).MachineID) {
 		return proto.TextResult("only the main conversation may change standing authorizations", true)
@@ -451,12 +472,13 @@ func orNone(s string) string {
 // what the assistant reads).
 var settingTitles = map[string]string{standingAuthorizationsKey: "title_standing_authorizations", "assistant.notes": "title_notes", "assistant.main_tasks_quiet": "title_main_tasks_quiet",
 	"assistant.idle_auto_compact": "title_idle_auto_compact", "assistant.idle_auto_compact_minutes": "title_idle_auto_compact_minutes", "assistant.idle_auto_compact_tokens": "title_idle_auto_compact_tokens",
+	"assistant.idle_release_minutes":      "title_idle_release_minutes",
 	readonlyModeKey:                       "title_readonly_mode",
 	"assistant.task_workspace_preference": "title_task_workspace_preference",
 	"assistant.start_requested_tasks":     "title_start_requested_tasks", "assistant.launcher": "title_launcher",
 	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context",
-	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "model_profiles.tiers": "title_model_tiers",
+	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", "model_profiles.tiers": "title_model_tiers",
 	"assistant.load_all_tools":                "title_load_all_tools",
 	"assistant.meeting_transcription_default": "title_meeting_transcription_default",
 	"assistant.meeting_attendance_default":    "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",
@@ -512,7 +534,8 @@ func (s *Service) setIdleAutoCompactTokens(ctx context.Context, raw json.RawMess
 		return nil, i18n.Err("assistant-settings_tool.bad_idle_auto_compact_tokens")
 	}
 	before := s.idleAutoCompactTokens(ctx)
-	if value == before {
+	// Saving the default is a change while unset: a saved value is also the main chat's release-time threshold.
+	if value == before && s.settings(ctx).IdleAutoCompactTokens != nil {
 		return &ownChange{summary: i18n.T(s.lang(ctx), "assistant-settings_tool.idle_auto_compact_unchanged")}, nil
 	}
 	if s.store() == nil {
@@ -526,6 +549,29 @@ func (s *Service) setIdleAutoCompactTokens(ctx context.Context, raw json.RawMess
 		}
 		s.settingsChanged(ctx)
 		return i18n.T(s.lang(ctx), "assistant-settings_tool.idle_auto_compact_saved"), nil
+	}}, nil
+}
+
+func (s *Service) setIdleReleaseMinutes(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
+	var value int
+	if err := json.Unmarshal(raw, &value); err != nil || value < minIdleReleaseMinutes || value > maxIdleReleaseMinutes {
+		return nil, i18n.Err("assistant-settings_tool.bad_idle_release_minutes")
+	}
+	before := s.idleReleaseMinutes(ctx)
+	if value == before {
+		return &ownChange{summary: i18n.T(s.lang(ctx), "assistant-settings_tool.idle_release_unchanged")}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_idle_release_minutes", i18n.Args{"before": before, "after": value})
+	}, apply: func(ctx context.Context) (string, error) {
+		if _, err := s.updateSettings(ctx, func(v *Settings) error { v.IdleReleaseMinutes = &value; return nil }); err != nil {
+			return "", err
+		}
+		s.settingsChanged(ctx)
+		return i18n.T(s.lang(ctx), "assistant-settings_tool.idle_release_saved"), nil
 	}}, nil
 }
 

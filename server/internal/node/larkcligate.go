@@ -38,7 +38,7 @@ var (
 	// Stable read commands also work when the manager has not configured CLI risk discovery, or the lookup gets no
 	// answer (a wrapper on the login shell's PATH that cannot find the real lark-cli from the node's, #8389). Only an
 	// unknown risk falls back here: what lark-cli reports wins. Each is "Risk: read" in lark-cli 1.0.54.
-	larkCLIKnownReads = map[string]bool{"docs/+fetch": true, "im/+chat-messages-list": true, "im/+messages-search": true,
+	larkCLIKnownReads = map[string]bool{"docs/+fetch": true, "contact/+search-user": true, "im/+chat-messages-list": true, "im/+messages-search": true,
 		"im/+messages-mget": true, "im/+threads-messages-list": true, "im/+chat-search": true}
 	// larkCLIReadVerbs name what a command does when lark-cli cannot be asked (#11193): a shortcut (`calendar +agenda`,
 	// `task +get-my-tasks`, `im +chat-messages-list`) or a generated method (`calendar events list`) named by one of them
@@ -47,6 +47,14 @@ var (
 	larkCLIReadVerbs      = map[string]bool{"fetch": true, "agenda": true, "search": true, "list": true, "get": true, "mget": true}
 	larkCLILeadReadVerbs  = map[string]bool{"get": true, "list": true}
 	larkCLIMethodReadVerb = map[string]bool{"list": true, "get": true, "search": true, "mget": true, "batch_get": true}
+	// larkCLILocalDownloads save what a message carries (an image, a file) under the current directory and change
+	// nothing on Lark, though lark-cli rates them "Risk: write" (lark-cli 1.0.91): /read downloads a group's images
+	// and files with them (#11803). lark-cli overwrites an existing file and takes a dotfile name, and without --output
+	// the name is the sender's (Content-Disposition), so one is a read only when --output names a plain file in
+	// lark-im-resources/ (larkCLIDownloadOutput, the directory --download-resources uses), and only for an ordinary
+	// write rating: a high-risk one is not.
+	larkCLILocalDownloads = map[string]bool{"im/+messages-resources-download": true}
+	larkCLIDownloadOutput = lazyre.New(`^lark-im-resources/[A-Za-z0-9_][A-Za-z0-9._-]{0,199}$`)
 	larkCLIRead           = map[string]bool{"schema": true, "skills": true, "whoami": true, "doctor": true, "help": true, "completion": true}
 	larkCLIAuthRead       = map[string]bool{"status": true, "check": true, "scopes": true, "list": true}
 	larkCLIEventRead      = map[string]bool{"list": true, "schema": true, "status": true}
@@ -155,6 +163,9 @@ func parseLarkCLI(args []string, risk larkRisk) (c larkCall, deny string, ok boo
 		if c.Risk == "" && (larkCLIKnownReads[strings.Join(words, "/")] || larkCLINamedRead(words)) {
 			c.Risk = "read"
 		}
+		if (c.Risk == "" || c.Risk == "write") && larkCLILocalDownloads[strings.Join(words, "/")] && larkCLISafeDownload(flags) {
+			c.Risk = "read"
+		}
 	}
 	return c, "", true
 }
@@ -179,6 +190,46 @@ func larkCLINamedRead(words []string) bool {
 		}
 	}
 	return len(words) >= 3 && larkCLIMethodReadVerb[last]
+}
+
+// larkCLIDownloadFlags are the flags of `im +messages-resources-download` (lark-cli 1.0.91 --help), true for those
+// that take a value. The command has no -o: lark-cli rejects it today, but a later version may add one, so a word the
+// list does not name keeps the download a write.
+var larkCLIDownloadFlags = map[string]bool{
+	"--as": true, "--file-key": true, "--format": true, "-q": true, "--jq": true, "--message-id": true, "--output": true,
+	"--type": true, "--dry-run": false, "--json": false,
+}
+
+// larkCLISafeDownload: the download can only write a plain file in lark-im-resources/, nowhere else and no dotfile.
+// It has to be proved from the words alone, read in order: every one is a flag the command is known to have (no -o in
+// any spelling, no shorthand cluster, no "--", no stray argument), there is an --output, and every --output (not
+// only the last, which pflag keeps) names such a file.
+func larkCLISafeDownload(flags []string) bool {
+	outputs := 0
+	for i := 0; i < len(flags); i++ {
+		key, val, inline := strings.Cut(flags[i], "=")
+		takesValue, known := larkCLIDownloadFlags[key]
+		if !known {
+			return false
+		}
+		if !takesValue {
+			continue
+		}
+		if !inline {
+			if i+1 == len(flags) {
+				return false
+			}
+			i++
+			val = flags[i]
+		}
+		if key == "--output" {
+			if val == "" || strings.Contains(val, "..") || !larkCLIDownloadOutput.MatchString(val) {
+				return false
+			}
+			outputs++
+		}
+	}
+	return outputs > 0
 }
 
 // cliRead: a lark-cli call that only reads (its own risk level, or a GET through `lark-cli api`).

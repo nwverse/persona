@@ -175,11 +175,15 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 		}
 		s := proto.Session{
 			SessionID: id, Cwd: c.Cwd, Status: status, Agent: "claude", Title: m.title, SourceKind: source,
-			Model: m.model, LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, st), Rev: st.Size(), AgentSurface: m.surface,
+			Model: n.shownModel(id, m.model), LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, st), Rev: st.Size(), AgentSurface: m.surface,
 		}
 		s.Capabilities, s.ReadOnlyReason = outsideCapabilities(c)
 		if s.Capabilities != nil && s.Capabilities.Send && n.ccPluginInput(id, c.pid) {
 			s.Capabilities.PluginInput = true // the owner's messages go in as their input while it rests (ccplugin.go)
+			if n.ccPluginSettingsCapable(id, c.pid) {
+				s.Capabilities.Model = proto.Bool(true)
+				s.Efforts = slices.Clone(proto.EffortLevels)
+			}
 		}
 		// A claude in a tmux pane says where it runs ("tmux":"orc:@11.%11") and no hooks of Persona's run there: the
 		// pane's screen is what its approval shows on, so it gets that screen and the keys into it (#2562).
@@ -191,6 +195,9 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 			s.Capabilities.Terminal = true
 			s.Capabilities.Send = true         // the owner's message can be typed here even with no inbox (#5965)
 			s.Capabilities.PluginInput = false // this pane, not the plugin, carries the owner's input
+			s.Capabilities.Model = proto.Bool(true)
+			s.Capabilities.Modes = proto.CanModes(true)
+			s.Efforts = slices.Clone(proto.EffortLevels)
 			s.ReadOnlyReason = ""
 			livePanes[pane] = true // its dialog read is kept while the claude lives (forgetDialogs)
 			// Its own status file says waiting when a dialog has the keyboard, but a build that does not: a resting
@@ -225,7 +232,7 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 		if s.Title == "" {
 			s.Title = c.Name
 		}
-		setContext(&s, m)
+		n.setSessionContext(&s, m)
 		s.ModelFallback = m.modelFallback
 		s.Activity, s.ActivityAt = m.activityOf()
 		s.PermissionMode, s.Effort = n.currentModes(id, m)
@@ -369,6 +376,7 @@ func (n *Node) sendOutsidePriority(ctx context.Context, id, text string, images 
 		}
 	}
 	p.fromMode = n.peerAttest(ctx, c, id)
+	_, p.source = ctx.Value(sourceDeliveryKey{}).(string)
 	err = peerSendAt(ctx, p, id, text, priority)
 	var pe *errPeer
 	if asPeer(err, &pe) {
@@ -409,13 +417,17 @@ func (n *Node) sendOutsidePriority(ctx context.Context, id, text string, images 
 //     terminal goes in whatever its mode. bypass when live receiver evidence puts the session in that class
 //     (peerSessionClassAt); nothing otherwise (a session that prompts takes a message that states none). Uncertain
 //     evidence can only make the session hold the message, never take more than its owner could.
-//   - anything else (supervision, another Agent's message, non-owner answers and stops): nothing. The node cannot bind such
-//     words to the permission mode they were written in, so a bypass session holds them for approval at the computer.
+//   - an Agent message on the source-permission delivery RPC: the source node captured its class when the words were produced, bound to the source process and call. It never becomes owner input.
+//   - anything without reliable source evidence (including older peers and non-owner controls): nothing.
 func (n *Node) peerAttest(ctx context.Context, c claudeProc, id string) string {
-	if ownerDeliveryOf(ctx) != nil && peerSessionClassAt(ctx, n, c, id) == peerModeBypass {
-		return peerModeBypass
+	if ownerDeliveryOf(ctx) != nil {
+		if peerSessionClassAt(ctx, n, c, id) == peerModeBypass {
+			return peerModeBypass
+		}
+		return ""
 	}
-	return ""
+	mode, _ := ctx.Value(sourceDeliveryKey{}).(string)
+	return mode
 }
 
 // peerSessionClass is the classifier without a send context. Keep its signature for callers that only inspect a class.
@@ -423,19 +435,26 @@ func peerSessionClass(n *Node, c claudeProc, id string) string {
 	return peerSessionClassAt(context.Background(), n, c, id)
 }
 
-// peerSessionClassAt is the from-mode class session id runs in. A readable external tmux footer is the freshest mode:
+// peerSessionClassAt also accepts plan mode for owner delivery if the destination can switch to bypass.
+func peerSessionClassAt(ctx context.Context, n *Node, c claudeProc, id string) string {
+	mode := peerSessionModeAt(ctx, n, c, id)
+	if mode == "plan" && claudeCanBypass(c.pid) {
+		return peerModeBypass
+	}
+	return permissionClass(mode)
+}
+
+// peerSessionModeAt reads the current permission mode. A readable external tmux footer is the freshest mode:
 // shift+tab changes it before Claude writes the transcript. A visible composer without a recognized mode is prompting:
 // bypass and plan keep their indicators when a draft or dialog hides default's hint. Without live evidence, read the newest
-// transcript copy in claude c's own config directory (not another profile's copy), bypassing the ordinary metadata cache.
-// Plan needs one more fact: process arguments say whether bypass is available to that session. No mode, or plan without
-// that evidence, is "".
-func peerSessionClassAt(ctx context.Context, n *Node, c claudeProc, id string) string {
+// transcript copy in claude c's own config directory, bypassing the ordinary metadata cache.
+func peerSessionModeAt(ctx context.Context, n *Node, c claudeProc, id string) string {
 	mode := ""
 	if pane := outsidePane(c); pane != "" {
 		if text, err := n.readPane(ctx, pane, "visible", 60); err == nil {
 			mode = tuiMode(text)
 			if mode == "" && tuiPromptingScreen(text) {
-				return peerModePrompting
+				return "default"
 			}
 		}
 	}
@@ -452,17 +471,7 @@ func peerSessionClassAt(ctx context.Context, n *Node, c claudeProc, id string) s
 			mode = n.metaNow(path, newest).mode
 		}
 	}
-	switch mode {
-	case "bypassPermissions":
-		return peerModeBypass
-	case "default", "acceptEdits", "auto", "dontAsk":
-		return peerModePrompting
-	case "plan":
-		if claudeCanBypass(c.pid) {
-			return peerModeBypass
-		}
-	}
-	return ""
+	return mode
 }
 
 // computerWaitKey is where sendOutside leaves, for session.send's answer, that the session took the message while

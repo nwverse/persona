@@ -157,6 +157,8 @@ export interface SessionCapabilities {
   read?: boolean;
   send?: boolean;
   interrupt?: boolean;
+  queue_edit?: boolean;
+  queue_send_now?: boolean;
   approve?: boolean;
   terminal?: boolean;
   attach?: boolean;
@@ -459,6 +461,8 @@ export interface Session {
   /** An assistant conversation moved out of the list (docs/assistant/assistant.md "Managing its own conversations"), or
    *  an archived agent (docs/protocol/protocol.md "Agent session archives": only the Archived list has those). */
   archived?: boolean;
+  /** Manager-owned visibility policy; recording and direct session access remain available. */
+  hidden_by_directory?: boolean;
   /** The user-defined labels of an assistant conversation (docs/assistant/assistant.md "Conversation tags"), newest
    *  write first's provenance aside; omitted when it carries none. An older hub never sends it. */
   tags?: string[];
@@ -696,6 +700,8 @@ export interface Item {
   /** The runtime's own outcome, when the node recorded one (docs/protocol/protocol.md "Tool outcomes"). */
   outcome?: { status?: string; exit_code?: number };
   full_size?: number;
+  /** Opaque identity of the source record when an item ID names only a position. */
+  source_fingerprint?: string;
   queued?: boolean;
   wake?: boolean;
   narration?: boolean;
@@ -796,6 +802,7 @@ export interface ItemsPage {
 export interface Question {
   question: string;
   header?: string;
+  recommend?: string;
   multi_select?: boolean;
   /** Missing or null for a question asked in free text (Codex request_user_input; a Go nil slice, #1573). */
   options?: { label: string; description?: string; action?: "defer" | (string & {}) }[] | null;
@@ -861,6 +868,13 @@ export interface SessionChildren {
   sides_unread?: number;
 }
 
+export const SESSION_REVIEW_FEATURE = "session_review";
+export const SESSION_REVIEW_TOOL = "persona_session_review";
+
+export function isSessionReview(ix: Pick<Interaction, "kind" | "tool_name">): boolean {
+  return ix.kind === "question" && ix.tool_name === SESSION_REVIEW_TOOL;
+}
+
 export interface Interaction {
   id: string;
   /** The manager it belongs to (docs/protocol/protocol.md "Per-manager routing"); none: the default one. */
@@ -882,6 +896,10 @@ export interface Interaction {
   /** Script asks opt into Markdown for their summary or question; absent and unknown values stay plain (#10857). */
   format?: "markdown" | (string & {});
   summary?: string;
+  /** A finished independent session review's finding count, full report, and hidden reviewer (#1808). */
+  review_count?: number;
+  review_report?: string;
+  reviewer_session_id?: string;
   screen?: string;
   secret?: boolean;
   dialog?: ScreenDialog;

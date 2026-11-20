@@ -76,6 +76,7 @@ fun LargeWindowComposer(
     onModel: (() -> Unit)? = null,
     // /permissions opens the chat's permission mode picker (#6513); null where the chat has none.
     onPermissions: (() -> Unit)? = null,
+    onWorkflows: (() -> Unit)? = null,
     loop: Boolean = false,
     blockedLabel: String? = null,
     onBlocked: () -> Unit = {},
@@ -95,25 +96,27 @@ fun LargeWindowComposer(
             extraContent = extraContent, assistantChat = assistantChat, enabled = enabled, placeholder = placeholder, leading = leading,
             accessory = accessory, modeHint = modeHint, onOverlay = onOverlay, visible = visible, dictate = dictate.takeUnless { covered },
             agentName = agentName, canInterrupt = canInterrupt, mentions = mentions, onMention = onMention,
-            onMentionTask = onMentionTask, onMentionOpen = onMentionOpen, onModel = onModel, onPermissions = onPermissions, loop = loop,
+            onMentionTask = onMentionTask, onMentionOpen = onMentionOpen, onModel = onModel, onPermissions = onPermissions, onWorkflows = onWorkflows, loop = loop,
             blockedLabel = blockedLabel, onBlocked = onBlocked, useShellSurface = useShellSurface, modelPill = modelPill, wrapPlaceholder = wrapPlaceholder,
         )
     }
 
     val mainClear = LocalMainChatClear.current?.takeIf { enabled }
     val currentSubmit by rememberUpdatedState {
-        if (!covered && dictate?.active != true) dispatchComposerSend(state, extraContent, mainClear, onPermissions, onSend)
+        if (!covered && dictate?.active != true) dispatchComposerSend(state, extraContent, mainClear, onPermissions, onWorkflows, onSend)
     }
     val sendAction = remember { { currentSubmit() } }
     val hasContent = state.hasContent || extraContent
     val canSend = visible && !covered && enabled && state.ready && !sending && dictate?.active != true
     val sendEnabled = canSend && hasContent && blockedLabel == null
-    val collapseForSend = remember(state) {
+    val collapseForSend = remember(state, extraContent, onPermissions) {
         { collapse: () -> Unit ->
             val focusRequest = state.focusRequest
+            val opensPermissions = isPermissionsCommand(state, extraContent, onPermissions)
             collapse()
             state.focusRequest = focusRequest
-            state.focused = false
+            // The leading mode control owns the requested picker; keep it composed until that picker is dismissed.
+            state.focused = opensPermissions
         }
     }
     val collapseForEscape = remember(state) {

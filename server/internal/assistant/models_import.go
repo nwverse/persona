@@ -740,12 +740,20 @@ func nonNil(s []string) []string {
 	return s
 }
 
-// pickerDefault is GET /api/v1/machines/{mid}/launchers's default: ?purpose= (assistant, or "New Agent"'s agent.new
-// when absent).
-func (s *Service) pickerDefault(ctx context.Context, r *http.Request) map[string]any {
+// pickerDefault is GET /api/v1/machines/{mid}/launchers's default: ?purpose=assistant for ordinary chats,
+// task for computer-scoped scheduled-task inheritance, or "New Agent"'s agent.new when absent.
+func (s *Service) pickerDefault(ctx context.Context, r *http.Request, picker []ConfiguredLauncher) map[string]any {
 	purpose := r.URL.Query().Get("purpose")
+	if purpose == "assistant" {
+		return s.assistantPickerDefault(ctx, picker)
+	}
 	if purpose == "" {
 		purpose = "agent.new"
+	}
+	if purpose == "task" && r.PathValue("mid") != "" {
+		if b, err := s.taskModelBaseline(ctx, r.PathValue("mid")); err == nil {
+			return map[string]any{"provider": strings.TrimPrefix(b.Provider, "launcher."), "model": b.Model, "effort": b.Effort}
+		}
 	}
 	return s.launcherDefault(ctx, purpose)
 }
@@ -757,6 +765,38 @@ func (s *Service) launcherDefault(ctx context.Context, purpose string) map[strin
 	if err != nil || p.Kind != "launcher" {
 		return nil
 	}
-	b := p.Effective
+	return launcherPickerBinding(p.Effective)
+}
+
+// assistantPickerDefault fills the effective default from the choices already read for the picker and the last
+// snapshot. Building the full Settings provider catalog here could wait for another shell scan on a cold manager.
+func (s *Service) assistantPickerDefault(ctx context.Context, picker []ConfiguredLauncher) map[string]any {
+	b, err := s.resolveModel(ctx, "assistant")
+	if err != nil {
+		return nil
+	}
+	name, launcher := strings.CutPrefix(b.Provider, "launcher.")
+	if !launcher || name == "" {
+		return nil // the main chat can start only a launcher, even if an older record holds a direct API ID
+	}
+	if b.Model == "" {
+		if m, ok := s.managedNamed(ctx, name); ok {
+			b.Model = m.Model
+		} else if i := slices.IndexFunc(picker, func(l ConfiguredLauncher) bool {
+			return l.Name == name && name != "claude" && listedRCLauncher(l.Launcher)
+		}); i >= 0 {
+			b.Model = picker[i].Model
+		} else {
+			lastSeen, _ := s.zshrcLaunchersLastSeen(ctx)
+			views := s.launcherViewsOf(ctx, lastSeen)
+			if i := slices.IndexFunc(views, func(v LauncherView) bool { return v.Name == name }); i >= 0 {
+				b.Model = views[i].Model
+			}
+		}
+	}
+	return launcherPickerBinding(b)
+}
+
+func launcherPickerBinding(b ModelBinding) map[string]any {
 	return map[string]any{"provider": strings.TrimPrefix(b.Provider, "launcher."), "model": b.Model, "effort": b.Effort}
 }

@@ -187,6 +187,10 @@ func (n *Node) persistModes(id, mode, effort string) {
 
 // currentModes is the session's mode and effort: from its transcript, or what the app set since.
 func (n *Node) currentModes(id string, m quickMeta) (mode, effort string) {
+	return n.currentModesWithEffort(id, m, terminalEffort{})
+}
+
+func (n *Node) currentModesWithEffort(id string, m quickMeta, confirmed terminalEffort) (mode, effort string) {
 	mode, effort = m.mode, m.effort
 	if mode != "" && !slices.Contains(permissionModes, mode) && n.isAssistantSession(id) {
 		mode = modeFromCodex(mode, m.sandbox) // a Codex rollout records its approval policy and sandbox
@@ -211,8 +215,11 @@ func (n *Node) currentModes(id string, m quickMeta) (mode, effort string) {
 			mode = set.Mode
 		}
 		if set.Effort != "" && set.EffortAt.After(m.effortAt) {
-			effort = set.Effort
+			effort, m.effortAt = set.Effort, set.EffortAt
 		}
+	}
+	if confirmed.at.After(m.effortAt) {
+		effort = confirmed.value
 	}
 	return mode, effort
 }
@@ -240,11 +247,24 @@ func (n *Node) modesOf(id string) (mode, effort string) {
 			m = n.meta(p, st)
 		}
 	}
+	n.mu.Lock()
+	a := n.agents[id]
+	n.mu.Unlock()
+	if a.Agent == "claude" && a.PaneID != "" {
+		_, confirmed := n.switches().terminalEfforts(id)
+		if confirmed.pane == a.PaneID {
+			return n.currentModesWithEffort(id, m, confirmed)
+		}
+	}
 	return n.currentModes(id, m)
 }
 
 // setModes changes a running session's permission mode and / or effort level ("" leaves one as it is).
 func (n *Node) setModes(ctx context.Context, id, mode, effort string) error {
+	return n.updateModes(ctx, id, mode, effort, nil)
+}
+
+func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending *bool) error {
 	if !n.isAssistantSession(id) {
 		if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
 			return err
@@ -252,7 +272,7 @@ func (n *Node) setModes(ctx context.Context, id, mode, effort string) error {
 		// A Codex thread on its app-server takes Codex's efforts, checked against its model (codex_effort.go).
 		if c, t, ok := n.codexEffortThread(id); ok {
 			if mode != "" {
-				return fmt.Errorf("Codex 的会话在手机上只能改思考强度，权限模式要在电脑上改")
+				return fmt.Errorf("Codex 的会话在手机上只能改思考强度和模型，权限模式要在电脑上改")
 			}
 			if effort == "" {
 				return nil
@@ -316,7 +336,7 @@ func (n *Node) setModes(ctx context.Context, id, mode, effort string) error {
 		if n.runtimeAssistant(id) {
 			if h, _, _ := n.runtimes.belongs(id); h != nil {
 				cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
-				_ = h.peer.Call(cctx, "session.modes", map[string]any{"session_id": id, "permission_mode": mode, "effort": effort}, nil)
+				_ = h.peer.Call(cctx, "session.modes", map[string]any{"session_id": id, "permission_mode": mode, "effort": effort, "assistant": true}, nil)
 				cancel()
 			}
 		}
@@ -337,6 +357,16 @@ func (n *Node) setModes(ctx context.Context, id, mode, effort string) error {
 	if n.codexPath(id) != "" || n.traexPath(id) != "" { // not driven through an app-server: no way to set either
 		return fmt.Errorf("Codex / TRAEX 的会话不支持在手机上改权限模式和思考强度")
 	}
+	if mode == "" && effort != "" {
+		if handled, err := n.ccPluginSetSettings(ctx, id, "", effort); handled {
+			if err != nil {
+				return err
+			}
+			n.noteModes(id, "", effort)
+			n.notifySessions()
+			return nil
+		}
+	}
 	if mode != "" {
 		// Allow All for a claude that has no bypass flag: no key reaches it, so it is restarted in it once its turn is
 		// over (mode_restart.go, #6476). Any other pick drops such a restart that waits.
@@ -354,33 +384,35 @@ func (n *Node) setModes(ctx context.Context, id, mode, effort string) error {
 			n.dropModeRestart(id, mode)
 		}
 	}
+	if effort != "" {
+		unlock, err := n.inputTurn(ctx, id)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
+	unlockModes := n.switches().modesInput.lock(id)
+	defer unlockModes()
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {
 		return n.noPaneForModes(id)
 	}
-	// The /effort picker makes herdr report the agent as blocked; the hub would turn that into a "needs you" push.
-	n.mu.Lock()
-	n.driving[id] = true
-	n.mu.Unlock()
-	defer func() {
-		n.mu.Lock()
-		delete(n.driving, id)
-		n.mu.Unlock()
-	}()
 	if mode != "" {
-		if err := n.tuiSetMode(ctx, pane, mode); err != nil {
+		stopDriving := n.driveModes(id)
+		err := n.tuiSetMode(ctx, pane, mode)
+		stopDriving()
+		if err != nil {
 			return err
 		}
 		n.noteModes(id, mode, "")
 	}
 	if effort != "" {
-		if a, ok := n.agent(id); ok && (a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked) {
+		if c, ok := n.outsideClaude(id); ok && (c.Status == "busy" || c.Status == "waiting") {
 			return fmt.Errorf("Agent 正在工作，这一轮结束后再改思考强度")
 		}
-		if err := n.tuiSetEffort(ctx, pane, effort); err != nil {
+		if err := n.setTerminalEffort(ctx, id, pane, effort, pending); err != nil {
 			return err
 		}
-		n.noteModes(id, "", effort)
 	}
 	n.notifySessions()
 	return nil

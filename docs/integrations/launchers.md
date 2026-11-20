@@ -28,6 +28,15 @@ The answer adds `sync`: one item per computer, with `state` `ok` / `offline` / `
 (settings `launchers.zshrc.meta`). A computer that didn't answer still shows its last list, but the entries' `stale` names that computer; every client marks them “Not updated” and explains why in the per-computer group.
 An entry's `rc_files` are the files it came from (`source: "zshrc"` only; older nodes don't report it, so it is `~/.zshrc`).
 
+The Assistant picker gives shell discovery 10 seconds and reserves one further second for own-service checks. A check
+cut short by this budget uses the last answer if one exists. On a shell timeout the picker can show that computer's
+last known shell and PATH launchers and the providers in its current scope.
+Runtime launchers require a live response. Confirmed unavailable providers still show their reason. If the picker has
+neither available nor unavailable entries, it returns a timeout so the client can offer Retry. The node bounds the
+shell scan and stops its child processes when it times out. An incomplete scan keeps the previous launcher list for
+one more minute when one exists. Retry asks the node to scan again. If the new scan is slow or fails, the picker can
+read the node's last completed shell list and live runtime entries within the same 10-second discovery budget.
+
 ## External model adapters (#7940)
 
 For advanced users who already manage connections in another local tool, an optional adapter supplies the model
@@ -168,7 +177,7 @@ disabling the registry takes effect when the node is restarted; it does not rewr
 
 ## Which shell
 
-The node runs the list script and the launchers in an interactive shell (`loginShellProgram`): zsh when there is one, but bash when the user's login shell is bash (`$SHELL`, or `/etc/passwd` under systemd, where it is unset) and there is no `~/.zshrc`;
+The node runs the list script and shell-defined launchers in an interactive shell (`loginShellProgram`): zsh when there is one, but bash when the user's login shell is bash (`$SHELL`, or `/etc/passwd` under systemd, where it is unset) and there is no `~/.zshrc`;
 always bash without zsh (Git Bash on Windows). Bash runs as `bash -ic` and reads `~/.bashrc`, not `~/.bash_profile` / `~/.profile`: aliases kept there aren't listed.
 Bash has no zsh `(z)` / `(Q)`, and macOS's bundled bash 3.2 has no `BASH_ALIASES`, so under bash the script prints `alias -p`, and the node splits words and strips quotes by the shell's rules itself (nothing expanded or run, `node/launchers_shell.go`) before handing them to the same parser.
 
@@ -244,6 +253,11 @@ The script frames what it prints with begin/end markers, and node reads only bet
   A function-based launcher's `--settings` is not visible and still gets overridden on these claude versions.
 - Model listing (`node/launcher_models.go`) passes `--settings '{"disableAllHooks":true}'` to avoid triggering hooks (alias and managed-launcher settings are still merged). A function's own
   `--settings` is still overridden here, so the listed models omit its effects: disabling hooks can only be specified in `--settings`, and merging requires first reading the settings supplied by the function (#1411).
+  On Unix, model discovery for a Persona-managed Claude Code provider invokes `personad launch` directly for native
+  CLI binaries and for npm scripts whose Node.js is already available. For npm installations, including Node Version
+  Manager (NVM) and Homebrew prefixes, the probe uses the matching Node.js executable when it finds one and keeps the
+  child's search path in its original order. Other launcher scripts and CLIs that need shell setup run through the
+  user's interactive shell.
 
 ## How herdr recognizes Agents started by launchers (`HERDR_AGENT`, #3454)
 
@@ -282,8 +296,9 @@ The first message is never typed into the pane:
 
 - **pi**: through the Persona extension in that pi process (`session.send`, `docs/integrations/pi.md`). If the extension does not list the session within 30 seconds, Persona uses bounded, best-effort agent cleanup and leaves the tab at the shell; a user-picked pane with ambiguous ownership is left untouched. The message is not sent (`pi_no_extension`), so a start never falls back to typing into pi's input.
 - **cursor and agy**: through herdr's `agent.prompt`, once herdr reports the agent. herdr 0.9.5 detects both (its integrations `cursor` and `antigravity-cli`) and reads `HERDR_AGENT` for a wrapper that execs them under another name. The phone shows the terminal and can send messages and interrupt.
+  herdr reports the agent, and calls it idle, as soon as its input box shows, and `agent.prompt` only types. agy is still signing in at that point, and it can drop a message typed then (#11345). So the start checks in the background that the agent took the message (`server/internal/node/workagent_first.go`). It counts as taken when herdr calls the agent working, blocked or done, or when herdr's Antigravity integration reports the agy conversation. If the agent stays idle and the screen shows neither the message nor a `[Pasted text …]` chip, the message is typed again, up to three times in all. Otherwise the session is listed as needing the user, with the reason, instead of idle. Messages sent to the session while the check runs wait for it.
 
-Neither keeps token counts the node can read, so their usage is not on the token calendar (`docs/server/machines.md`, "Token usage"). A herdr restart starts Cursor again without a session. Pi's resume names its session (`pi --session`). Pi runs with `--approve` on start and resume, so a directory with project-local files does not stop it at a Trust prompt nobody answers (`docs/integrations/pi.md`, "Project trust"). Resuming one of these sessions from the phone with `session.start` is refused (`work_agent_resume`): a stopped pi resumes in its own herdr tab when the phone sends it a message (`docs/integrations/pi.md`), and the others are resumed on the computer.
+Neither keeps token counts the node can read, so their usage is not on the token calendar (`docs/server/machines.md`, "Token usage"). A herdr restart starts Cursor again without a session. Pi's resume names its session (`pi --session`). Pi runs with `--approve` on start and resume, so a directory with project-local files does not stop it at a Trust prompt nobody answers (`docs/integrations/pi.md`, "Project trust"). An agy start answers agy's folder-trust dialog ("Do you trust the contents of this project?") by trusting the folder the start chose, as Claude's and Codex's starts do, before its first message goes in; the watch is bounded, and a start with no dialog types nothing extra (`server/internal/node/agytrust.go`, #11424). Resuming one of these sessions from the phone with `session.start` is refused (`work_agent_resume`): a stopped pi resumes in its own herdr tab when the phone sends it a message (`docs/integrations/pi.md`), and the others are resumed on the computer.
 
 **Antigravity CLI conversation history and restore.** Run `herdr integration install antigravity-cli` on the computer that runs agy. Once Persona verifies the conversation ID herdr reports for the pane, it reads that conversation's local history. On a herdr restart, a Persona-started pane uses `agy --conversation <id>` to reopen the verified conversation and preserves the selected model. Until Persona has a verified ID, the pane restores with `agy` and the original `--model` option if set, starting a fresh conversation. The phone can still send messages, interrupt, and use the terminal while it waits for the conversation.
 
@@ -725,6 +740,8 @@ picked otherwise. They also count for the send check (`launcherHasModel`), so a 
 “Quota” on the launcher page reads how much allowance its key has left at the gateway. **Which gateways to read and how is the quota extension's responsibility** (`docs/extensions/extensions.md`, “Quota”): the open-source repository contains no gateway-specific readers.
 Without a quota extension, this section explains that querying is unavailable, without an error. Code: shared `server/internal/quota` (report shape, delegated requests), manager-side `assistant/models_quota.go` (routes, cache, gateway selection), hub-side `extmgr/extension_quota.go` (extension quota reading, `app.call plugins.quota`),
 and node-side `node/launcherquota.go`.
+
+A launcher whose provider reports a prepaid balance rather than an allowance window is separate from the Quota extension: an official DeepSeek launcher added in Persona has its `GET /user/balance` read by the manager with the same sealed key and shown as an amount and currency in the sidebar's usage panel (`docs/server/usage-windows.md`, “Prepaid balances (#11825)”). The key never leaves the manager, and a launcher found in a shell rc file keeps its key on that computer, so only launchers added in Persona report a balance.
 
 - Extensions **cannot see keys**: They answer `quota.query` and pass requests through `quota.http` to the party holding the key, which replaces `${launcher_key}` in the request with the key.
   Requests may go only to the launcher's own gateway (same origin, including redirects); key occurrences in responses are replaced with the placeholder again.

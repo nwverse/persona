@@ -260,6 +260,8 @@ func (n *Node) claudeAssistantMCPAndToolsFor(id, cwd string, legacyMCP bool, too
 	}
 	mcp, _ := json.Marshal(map[string]any{"mcpServers": compat.MCPRegistrationServers(servers, legacyMCP)})
 	if inbox {
+		// Local Read is investigation. Network, shell and mutation tools keep their normal permission flow.
+		allow = append(allow, "Read")
 		allow = append(allow, n.inboxReadRules()...) // inbox_policy.go
 	}
 	allow = append(allow, healthReportRules(cwd)...) // healthdeny.go
@@ -321,7 +323,7 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	if err := n.checkExternalAssistant(startCtx, id, launcher, execution, spare); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(cwd, 0o700); err != nil {
+	if err := n.prepareAssistantCwd(cwd, execution.Strict); err != nil {
 		return nil, err
 	}
 	guest := n.guestOf(id) != nil // a guest, a meeting's room too (assistant_guest.go)

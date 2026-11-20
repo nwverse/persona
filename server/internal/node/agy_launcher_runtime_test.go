@@ -65,6 +65,10 @@ func TestAgyCommandOnPathUsesConnectedAssistantRuntime(t *testing.T) {
 			if len(picks) != 1 {
 				t.Fatalf("ambiguous AGY launcher: %+v", picks)
 			}
+			models, err := nodeCall(t, n, "launchers.models", map[string]any{"name": "agy", "host": "agy"})
+			if err != nil || !strings.Contains(string(models), `"id":"runtime-model"`) {
+				t.Fatalf("explicit companion model catalog: %s %v", models, err)
+			}
 			if override != "" {
 				if picks[0].Assistant || n.runtimeOf("agy") != nil || n.assistantRuntime("agy") != nil {
 					t.Fatal("the runtime took an explicit shell override")
@@ -77,7 +81,7 @@ func TestAgyCommandOnPathUsesConnectedAssistantRuntime(t *testing.T) {
 			if agent, err := n.assistantAgent(context.Background(), "agy"); err != nil || agent != assistantOnRuntime {
 				t.Fatalf("assistant agent: %s %v", agent, err)
 			}
-			models, err := nodeCall(t, n, "launchers.models", map[string]any{"name": "agy", "purpose": "assistant"})
+			models, err = nodeCall(t, n, "launchers.models", map[string]any{"name": "agy", "purpose": "assistant"})
 			if err != nil || !strings.Contains(string(models), `"id":"runtime-model"`) {
 				t.Fatalf("runtime model catalog: %s %v", models, err)
 			}
@@ -133,6 +137,7 @@ func TestAgyStartRoutesHerdrAndCompanion(t *testing.T) {
 					f.reply("session.snapshot", snapshot(nil, nil, []any{
 						agentOf(agyAgent, "", proto.StatusIdle, "w1:p2", "w1:t2", "w1", home, agyAgent),
 					}, nil))
+					f.setScreen("w1:p2", agyIdleScreen) // agy's input box is up: its first message may go in (agytrust.go)
 				}
 			})
 			var companion *fakeRuntime

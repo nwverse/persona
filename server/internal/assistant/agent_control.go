@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -276,7 +277,7 @@ func (s *Service) adoptAgentAs(ctx context.Context, self string, am Device, c pr
 			return Todo{}, false, err
 		}
 		t.Supervision = &v
-		s.setTaskStageKind(ctx, t.ID, "", "", taskStageKind(false, v.DoneWhen, t.PRURL), false)
+		s.restage(ctx, t.ID, nil) // by its new criteria; a read-only start still holds
 		return t, false, nil
 	}
 	title, retitle := s.adoptedTitle(ctx, c, title, prompt)
@@ -295,7 +296,7 @@ func (s *Service) adoptAgentAs(ctx context.Context, self string, am Device, c pr
 		s.dropAdoption(ctx, todo.ID, err)
 		return Todo{}, false, fmt.Errorf("supervise it: %w", err)
 	}
-	s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(false, doneWhen, todo.PRURL), false)
+	s.restage(ctx, todo.ID, nil)
 	todo.Supervision = &v
 	s.briefFor(ctx, s.callerOrigin(ctx, self), todo, doneWhen, expect) // before its agent is linked (task_brief.go)
 	if err := s.linkTodoAgent(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent); err != nil {
@@ -654,6 +655,8 @@ func (r *reportRate) allow(mid, sid string, now time.Time) bool {
 // a second question does not push the first one out.
 func joinReports(cur, g superviseSignal) superviseSignal {
 	g.At = cur.At
+	// A call's permission observation cannot vouch for a report made by another call.
+	g.SourcePermission = proto.SourcePermission{}
 	if cur.Detail != "" && cur.Detail != g.Detail {
 		g.Detail = clipMiddle(cur.Detail+"\n—\n"+g.Detail, 3000)
 	}
@@ -711,13 +714,14 @@ func (s *Service) agentTool(ctx context.Context, machine, session, name string, 
 // false is no signal: it goes into the queue of questions that can wait (later.go) when a briefing will list it.
 func (s *Service) reportToSupervisor(ctx context.Context, machine, session string, args json.RawMessage, now time.Time) (string, error) {
 	var a struct {
-		Kind     string            `json:"kind"`
-		Text     string            `json:"text"`
-		Evidence []string          `json:"evidence"`
-		Step     int               `json:"step"`
-		Steps    int               `json:"steps"`
-		Urgent   *bool             `json:"urgent"`
-		Criteria []criterionReport `json:"criteria"`
+		Kind     string              `json:"kind"`
+		Text     string              `json:"text"`
+		Evidence []string            `json:"evidence"`
+		Step     int                 `json:"step"`
+		Steps    int                 `json:"steps"`
+		Urgent   *bool               `json:"urgent"`
+		Criteria []criterionReport   `json:"criteria"`
+		Handoff  *taskHandoffReceipt `json:"handoff_receipt"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
@@ -733,6 +737,9 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	}
 	if session == "" {
 		return "Nobody receives this: the call came from outside an agent session.", errNoSupervisor
+	}
+	if a.Handoff != nil {
+		return s.reportTaskHandoff(ctx, machine, session, *a.Handoff, a.Kind, text, a.Evidence, now)
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return "", err
@@ -821,9 +828,12 @@ func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, tex
 
 // reportNow sends a report to the supervisor of task t as a signal, and shows it in its conversation.
 func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind, text string, evidence []string, step, steps int, now time.Time) (string, error) {
+	if kind == upReportDone {
+		s.recordBriefCompletion(ctx, t, briefCompletionReport, now)
+	}
 	s.progressReported(machine, session, len(evidence), step, now) // evidence or a later step is progress (supervise_progress.go)
 	s.signal(superviseSignal{Todo: t.ID, Kind: sigReport, Key: now.UTC().Format(time.RFC3339Nano), At: now, Machine: machine,
-		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps})
+		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps, SourcePermission: devicewire.SourcePermissionFrom(ctx)})
 	progress := TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()}
 	if text != progress.Text {
 		progress.Detail = text

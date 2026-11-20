@@ -33,6 +33,12 @@ func Write(w http.ResponseWriter, status int, err error) {
 // WriteCode preserves error for old clients and adds a stable machine-readable code.
 // An i18n.Message reads in the request's language (docs/protocol/i18n.md "Protocol").
 func WriteCode(w http.ResponseWriter, status int, code string, err error) {
+	WriteBody(w, status, CodeBody(w, status, code, err))
+}
+
+// CodeBody is the body WriteCode writes, for a caller that adds to it (a to-do's write says delivered on every
+// refusal).
+func CodeBody(w http.ResponseWriter, status int, code string, err error) map[string]any {
 	l := i18n.OfWriter(w)
 	body := LocalizedBody(status, code, err, l)
 	if l != "" {
@@ -41,7 +47,7 @@ func WriteCode(w http.ResponseWriter, status int, code string, err error) {
 			body["error"] = i18n.T(l, key)
 		}
 	}
-	WriteBody(w, status, body)
+	return body
 }
 
 var standardStatusKeys = map[int]string{
@@ -168,6 +174,12 @@ func Call(w http.ResponseWriter, err error) {
 // CallStatus writes err, a node call's error, as Call does but with status: for a route whose clients already read
 // Call's status as something else (a to-do's accept, where every app takes a 409 for "already handled", #7343).
 func CallStatus(w http.ResponseWriter, status int, err error) {
+	WriteBody(w, status, CallStatusBody(w, status, err))
+}
+
+// CallStatusBody is the body CallStatus writes, for a caller that adds to it (a to-do's answer says delivered on
+// every refusal).
+func CallStatusBody(w http.ResponseWriter, status int, err error) map[string]any {
 	code := NodeCode(err)
 	var re *rpc.Error
 	if errors.As(err, &re) && re.Code != "" {
@@ -212,11 +224,15 @@ func CallStatus(w http.ResponseWriter, status int, err error) {
 		if _, hasDetail := body["detail"]; !hasDetail {
 			body["detail"] = re.Message
 		}
-		body["error"] = i18n.T(l, "http-status.not_found")
+		key := "http-status.not_found"
+		if reason, _ := body["reason"].(string); notFoundKeys[reason] != "" {
+			key = notFoundKeys[reason]
+		}
+		body["error"] = i18n.T(l, key)
 	} else if _, explained := codeActions[code]; !explained {
 		localizeFailure(body, status, err, i18n.OfWriter(w))
 	}
-	WriteBody(w, status, body)
+	return body
 }
 
 // LocalizedBody preserves all machine-readable outcome fields while translating a known failure summary.
@@ -313,12 +329,14 @@ var rpcFailureKeys = map[string]string{
 	"push_failed":         "rpc-errors.push_failed",
 	"fetch_failed":        "rpc-errors.fetch_failed",
 	// session.modes (node/modes.go, #1843)
-	proto.CodeModesOnComputer: "rpc-errors.modes_on_computer",
-	proto.CodeModesNotRunning: "rpc-errors.modes_not_running",
+	proto.CodeModesOnComputer:     "rpc-errors.modes_on_computer",
+	proto.CodeModesNotRunning:     "rpc-errors.modes_not_running",
+	proto.CodeEffortChangePending: "rpc-errors.effort_change_pending",
 	// a message to a stopped agent: read-only, its terminal page's Resume brings it back (node stopped.go, #4754)
 	"agent_stopped":      "rpc-errors.agent_stopped",
 	"resume_not_allowed": "rpc-errors.resume_not_allowed",
 	"stop_not_saved":     "rpc-errors.stop_not_saved",
+	"omp_options":        "rpc-errors.omp_options",
 	// a message to an omp session the node cannot resume: no usable session file (node/ompresume.go)
 	"omp_resume_unknown": "rpc-errors.omp_resume_unknown",
 	// a call a stopped omp has nothing to answer with: rename, interrupt, modes, queue, close (node/ompcalls.go)
@@ -338,6 +356,14 @@ var rpcFailureKeys = map[string]string{
 	proto.CodeSwitchFailed:          "rpc-errors.switch_failed",
 	proto.CodeSwitchFailedStopped:   "rpc-errors.switch_failed_stopped",
 	proto.CodeSwitchBusy:            "rpc-errors.switch_busy",
+}
+
+// notFoundKeys word a node's not_found by why its session's history can't be read (data.reason, node/transcript_files.go
+// readErr, #11388). One without a known reason (an older node, a runtime's own answer, a missing file) keeps the plain
+// summary.
+var notFoundKeys = map[string]string{
+	proto.NotFoundNoTranscript:   "apierr-apierr.session_no_transcript",
+	proto.NotFoundUnknownSession: "apierr-apierr.session_unknown",
 }
 
 // openElsewhereKeys word the node's open_elsewhere refusal by where the session is open (node/openelsewhere.go
@@ -496,13 +522,13 @@ func Summary(l i18n.Lang, code string, data map[string]any) string {
 }
 
 // Sentence is the plain words in l of code, one of the refusals the hub words itself ("" for any other): a start refused
-// on its request with nothing to name (readonly_unsupported, directory_untypable) as it is, and codeActions' by their
+// on its request with nothing to name as it is, and codeActions' by their
 // data: machine_name (else "this computer"), launcher, and of a start the new tab's shell could not run (where
 // "terminal", node/shellmiss.go) what it could not run (missing, kind), that shell (pane_shell) and the shell and rc
 // file the launchers are listed in (launcher_shell, rc_file). What a 409 says, and a session's start_error.
 func Sentence(l i18n.Lang, code string, data map[string]any) string {
 	switch code {
-	case "readonly_unsupported", proto.CodeDirectoryUntypable: // the request refused, with nothing to name
+	case "readonly_unsupported", proto.CodeDirectoryUntypable, "omp_options": // refusal needs no request parameters
 		return i18n.T(l, rpcFailureKeys[code])
 	}
 	if code == proto.CodeShellWaiting || code == proto.CodeStartLineRejected { // a start's new tab (node/shellsettle.go, #2570)
