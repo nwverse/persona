@@ -28,6 +28,8 @@ const providers: ModelProvider[] = [
   { id: "launcher.custom", name: "Custom launcher", kind: "launcher" },
   { id: "launcher.messages", name: "Messages provider", kind: "api", api: "messages", model: "api-default" },
   { id: "launcher.codex", name: "Codex", kind: "launcher", agent: "codex" },
+  { id: "launcher.codex-responses", name: "Codex Responses", kind: "launcher", agent: "codex", api: "responses", has_key: true },
+  { id: "launcher.codex-messages", name: "Codex Messages", kind: "launcher", agent: "codex", api: "messages", has_key: true },
   { id: "launcher.agy", name: "Antigravity", kind: "launcher", agent: "agy" },
   { id: "launcher.responses", name: "Responses provider", kind: "api", api: "responses" },
 ];
@@ -391,7 +393,7 @@ describe("API-kind purpose CLI backend badges (#12027)", () => {
     readonly = { ...child(), id: TWIN.id, name: "Inbox Agent", fields: [] };
     current = {
       ...triage(),
-      provider_ids: ["launcher.messages", "launcher.default", "launcher.codex", "launcher.agy"],
+      provider_ids: ["launcher.messages", "launcher.default", "launcher.codex", "launcher.codex-responses", "launcher.codex-messages", "launcher.agy"],
     };
   });
 
@@ -423,6 +425,14 @@ describe("API-kind purpose CLI backend badges (#12027)", () => {
     await choose("launcher.codex");
     expect(effortValues()).toContain("minimal");
     expect(effortValues()).toContain("ultra");
+
+    await choose("launcher.codex-responses");
+    expect(effortValues()).toContain("minimal");
+    expect(effortValues()).toContain("ultra");
+
+    await choose("launcher.codex-messages");
+    expect(effortValues()).not.toContain("minimal");
+    expect(effortValues()).not.toContain("ultra");
 
     await choose("launcher.default");
     expect(effortValues()).not.toContain("minimal");

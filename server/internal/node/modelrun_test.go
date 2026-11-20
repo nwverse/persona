@@ -396,6 +396,18 @@ printf '{"event":"result","result":{"conversation_id":"c-auth-2","status":"SUCCE
 	}
 }
 
+// A timed-out agy process that emits a complete SUCCESS event and then hangs past TimeoutMS must still return
+// CodeModelRunTimeout rather than accepting the stale output (#12120 P2).
+func TestModelRunAgyTimeoutAfterSuccessReturnsTimeout(t *testing.T) {
+	fakeModelRunCLIHome(t, "agy", "agy", `printf '{"event":"init","conversation_id":"c-to","init":{"model":"gemini-4-hydrogen-low"}}\n'
+printf '{"event":"result","result":{"conversation_id":"c-to","status":"SUCCESS","response":"too slow","num_turns":1}}\n'
+sleep 5
+`)
+	if _, err := runModel(t, proto.ModelRunParams{Launcher: "agy", Prompt: "ping", TimeoutMS: 200}); runCode(err) != proto.CodeModelRunTimeout {
+		t.Fatalf("expected timeout after SUCCESS+sleep, got: %v", err)
+	}
+}
+
 // Runtime provenance (#12043 P1): only the verified built-in Antigravity companion is admitted for runtime-backed
 // model.run; external agy runtimes and other runtimes advertising agy or codex launchers are refused and never fall
 // back to findAgyExecutable() or local CLI logins.

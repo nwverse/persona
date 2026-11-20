@@ -614,6 +614,9 @@ func (n *Node) modelRunAgy(ctx context.Context, p proto.ModelRunParams, dir stri
 	cmd := loginShell(runCtx, script)
 	killGroupOnCancel(cmd)
 	raw, loggedOutFast, runErr := runWithEarlyAuthDetect(cancelRun, cmd, isAgyInteractiveAuthPrompt)
+	if ctx.Err() != nil {
+		return proto.ModelRunAnswer{}, timedOut
+	}
 	text := strings.TrimSpace(string(raw))
 	res := parseAgyStreamOutput(text)
 	if res.hasResult && res.status == "SUCCESS" {
@@ -625,9 +628,6 @@ func (n *Node) modelRunAgy(ctx context.Context, p proto.ModelRunParams, dir stri
 	}
 	if loggedOutFast {
 		return proto.ModelRunAnswer{}, &rpc.Error{Code: proto.CodeModelRunLoggedOut, Message: "model.run: " + p.Launcher + " is not logged in here"}
-	}
-	if ctx.Err() != nil {
-		return proto.ModelRunAnswer{}, timedOut
 	}
 	errText := cmp.Or(res.errMsg, text)
 	if isAgyLoggedOut(errText) || isAgyLoggedOut(text) {

@@ -450,6 +450,9 @@ func TestAPIPurposeCodexEffortsValidationAndRun(t *testing.T) {
 
 	putLaunchers(t, s,
 		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "cx", Agent: "codex", API: "responses"}},
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "cx-msg-unkeyed", Agent: "codex"}},
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "cx-msg-explicit", Agent: "codex", API: "messages"}},
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "cx-msg-keyed", Agent: "codex", API: "messages", BaseURL: "https://api.example.com", Model: "m-1"}, KeySealed: "sealed"},
 		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "anti", Agent: "agy", API: "responses"}},
 		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "direct", Kind: "api", API: "responses", BaseURL: "https://api.example.com", Model: "m-1"}, KeySealed: "sealed"},
 	)
@@ -482,8 +485,9 @@ func TestAPIPurposeCodexEffortsValidationAndRun(t *testing.T) {
 		}
 	}
 
-	// Claude, Antigravity (managed and shell), and direct HTTP API providers still reject minimal and ultra.
-	for _, provider := range []string{"launcher.claude", "launcher.anti", "launcher.agy", "launcher.direct"} {
+	// Managed Messages-backed Codex launchers (both unkeyed and keyed), Claude, Antigravity (managed and shell), and
+	// direct HTTP API providers reject minimal and ultra.
+	for _, provider := range []string{"launcher.cx-msg-unkeyed", "launcher.cx-msg-explicit", "launcher.cx-msg-keyed", "launcher.claude", "launcher.anti", "launcher.agy", "launcher.direct"} {
 		for _, effort := range []string{"minimal", "ultra"} {
 			cur := purposeOf(t, s, "kb")
 			body := fmt.Sprintf(`{"revision":%d,"provider":%q,"effort":%q}`, cur.Revision, provider, effort)

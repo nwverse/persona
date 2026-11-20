@@ -175,10 +175,11 @@ func effortLevelsForKind(kind string) []string {
 }
 
 // effortLevelsForPurpose returns the effort levels valid for a purpose of kind running on provider. An API-kind
-// purpose backed by a Codex launcher accepts Codex's reasoning effort levels (including minimal and ultra) alongside
-// the API off/none sentinel, without enabling minimal or ultra for Claude, Antigravity, or direct HTTP API providers.
+// purpose backed by a Codex launcher running via model.run (a shell/PATH launcher or a non-Messages managed launcher)
+// accepts Codex's reasoning effort levels (including minimal and ultra) alongside the API off/none sentinel, without
+// enabling minimal or ultra for Messages-backed HTTP launchers, Claude, Antigravity, or direct HTTP API providers.
 func effortLevelsForPurpose(kind string, provider *ModelProvider) []string {
-	if kind == "api" && provider != nil && provider.Kind == "launcher" && provider.Agent == "codex" && (!provider.HasKey || !messagesAPI(provider.API)) {
+	if kind == "api" && provider != nil && provider.Kind == "launcher" && provider.Agent == "codex" && (provider.source != "persona" || !messagesAPI(provider.API)) {
 		return append(slices.Clone(proto.CodexEffortLevels), "off", "none")
 	}
 	return effortLevelsForKind(kind)

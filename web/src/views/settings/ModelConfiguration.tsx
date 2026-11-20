@@ -294,9 +294,11 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const inheritedPermissionMode = following
     ? sameParentProvider ? parent?.effective?.permission_mode : undefined
     : sameEffectiveProvider && !p?.override?.permission_mode ? p?.effective?.permission_mode : undefined;
+  const codexRunLauncher = p?.kind === "api" && chosen?.kind === "launcher" && chosenAgent === "codex"
+    && chosen.api !== "messages" && (!!chosen.api || !chosen.has_key);
   const listedEfforts = launcherList.status === "ready" && launcherList.list && takesEffort(launcherList.list.agent)
     ? effortChoices(launcherList.list, draft.model, inherited)
-    : (p?.kind === "api" && chosen?.kind === "launcher" && chosenAgent === "codex"
+    : (codexRunLauncher
       ? ["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
       : p?.id === "inbox.triage" || p?.kind === "api"
         ? ["off", "low", "medium", "high", "xhigh", "max"]
