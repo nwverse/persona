@@ -9,6 +9,7 @@
 //   text containing 'hold'     keeps session/prompt open until session/cancel arrives
 //   anything else              immediately emits a short agent message and ends with end_turn
 import { appendFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { createInterface } from 'node:readline'
 
 if (process.argv.includes('models')) {
@@ -19,14 +20,18 @@ if (process.argv.includes('models')) {
 const recordFile = process.argv[process.argv.indexOf('--record') + 1]
 const noAdditionalDirs = process.argv.includes('--no-additional-dirs')
 const failResume = process.argv.includes('--fail-resume')
-const record = (o) => appendFileSync(recordFile, `${JSON.stringify(o)}\n`)
+const record = (o) => appendFileSync(recordFile, `${JSON.stringify({ worker: process.pid, ...o })}\n`)
 const send = (o) => process.stdout.write(`${JSON.stringify(o)}\n`)
 
-let nextSession = 1
 const turns = new Map() // sessionId -> { id }
+let nextPermission = 1
 
-function sessionUUID(n) {
-  return `11111111-2222-4333-8444-${String(n).padStart(12, '0')}`
+function askPermission(sessionId) {
+  const id = `permission-${nextPermission++}`
+  send({ jsonrpc: '2.0', id, method: 'session/request_permission', params: {
+    sessionId, toolCall: { toolCallId: id, title: 'run_command', rawInput: { CommandLine: 'pwd' } },
+    options: [{ kind: 'allow_once', optionId: 'yes' }, { kind: 'reject_once', optionId: 'no' }],
+  } })
 }
 
 function onRequest(msg) {
@@ -42,7 +47,7 @@ function onRequest(msg) {
           : { sessionCapabilities: { additionalDirectories: {} } },
       })
     case 'session/new': {
-      const sessionId = sessionUUID(nextSession++)
+      const sessionId = randomUUID()
       return answer({
         sessionId,
         models: { currentModelId: 'test-model', availableModels: [{ modelId: 'test-model', name: 'Test Model' }] },
@@ -55,14 +60,18 @@ function onRequest(msg) {
       return answer({})
     case 'session/set_model':
     case 'session/set_mode':
-    case 'session/set_config_option':
     case 'session/close':
       return answer({})
+    case 'session/set_config_option':
+      answer({})
+      if (params.value === 'ask-idle') askPermission(params.sessionId)
+      return
     case 'session/prompt': {
       const sessionId = params.sessionId
       const text = params.prompt?.find((b) => b.type === 'text')?.text || ''
-      if (text.includes('hold')) {
+      if (text.includes('hold') || text === 'ask') {
         turns.set(sessionId, { id })
+        if (text === 'ask') askPermission(sessionId)
         return
       }
       send({

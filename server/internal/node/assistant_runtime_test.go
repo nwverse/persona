@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -423,6 +427,69 @@ func TestAssistantToolsOnlyForTheAssistantsConversations(t *testing.T) {
 	if p := call(plain, sid); p["assistant"] == true {
 		t.Fatalf("another runtime's call passed as the assistant's: %v", p)
 	}
+}
+
+func TestAssistantRuntimePIDReportsOnTheSocket(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("no local peer process lookup")
+	}
+	previousLineage := nodeLineage
+	t.Cleanup(func() { nodeLineage = previousLineage })
+	nodeLineage = func() []int { return nil }
+	n, _ := runtimeNode(t)
+	host := dialRuntime(t, n, assistantRuntimeHello())
+	plain := dialRuntime(t, n, map[string]any{"runtime": "plain-pid", "caps": map[string]any{"start": true, "send": true}})
+	if features, _ := host.helloR["features"].([]any); !slices.Contains(features, any("assistant_pids")) {
+		t.Fatalf("assistant_pids not advertised: %v", features)
+	}
+	worker := exec.CommandContext(t.Context(), "sleep", "60")
+	if err := worker.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = worker.Wait() })
+	const chat, other = "session-assistant-worker", "session-other-worker"
+	for index, client := range []*fakeRuntime{host, plain} {
+		id := []string{chat, other}[index]
+		if err := client.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{
+			{"session_id": id, "cwd": identity.AssistantDir(n.home), "status": "idle"},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, "runtimes own their Assistant-directory rows", func() bool {
+		_, _, chatListed := n.runtimes.rowOf(chat)
+		_, _, otherListed := n.runtimes.rowOf(other)
+		return chatListed && otherListed
+	})
+	report := func(client *fakeRuntime, pids map[string]int) {
+		t.Helper()
+		if err := client.peer.Notify("runtime.assistant_pids", map[string]any{"pids": pids}); err != nil {
+			t.Fatal(err)
+		}
+		var response any
+		if err := client.peer.Call(t.Context(), "mcp.tools", map[string]any{"session_id": "not-owned"}, &response); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pid := worker.Process.Pid
+	report(plain, map[string]int{other: pid})
+	report(host, map[string]int{other: pid, "unlisted-assistant": pid})
+	if roots := n.assistantRoots(); len(roots) != 0 {
+		t.Fatalf("accepted PID without assistant capability or ownership: %v", roots)
+	}
+	report(host, map[string]int{chat: pid})
+	if got := n.assistantRoots()[pid]; got != chat {
+		t.Fatalf("worker authorized as %q, want %q", got, chat)
+	}
+	report(host, map[string]int{})
+	if got := n.assistantRoots()[pid]; got != "" {
+		t.Fatalf("omitted worker still authorized as %q", got)
+	}
+	report(host, map[string]int{chat: pid})
+	if err := host.conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "disconnected worker cleared", func() bool { return n.assistantRoots()[pid] == "" })
 }
 
 func TestRuntimeAgentToolsRequireOwnedSessions(t *testing.T) {

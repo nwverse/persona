@@ -304,6 +304,9 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		features := []string{"prefer_running", "resume_argv", "handover", "transcript", "launchers", "start_params", "modes", "resume", "codex_thread", "unlisted_transcripts", "workspaces", "usage"}
 		if !h.isDaemon() {
 			features = append(features, "leader_tools", "supervision_policy")
+			if hello.Caps.Assistant {
+				features = append(features, "assistant_pids")
+			}
 		}
 		res := map[string]any{"protocol": RuntimeProtocol, "node_version": rh.version, "hub": rh.current() != nil,
 			"features": features}
@@ -409,6 +412,15 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 		return // hello first
 	}
 	n := rh.current()
+	if event == "runtime.assistant_pids" {
+		var p struct {
+			PIDs map[string]int `json:"pids"`
+		}
+		if n != nil && json.Unmarshal(params, &p) == nil {
+			rh.reg.setAssistantPIDs(h, p.PIDs, func(id string) bool { return n.runtimeAssistantChat(h, id) })
+		}
+		return
+	}
 	if event == "runtime.launchers" { // its launchers changed (runtimecontrol.go)
 		var p struct {
 			Launchers []runtimeLauncher `json:"launchers"`

@@ -43,18 +43,24 @@ func (n *Node) assistantCaller(c net.Conn) (string, bool) {
 
 // assistantOf is the assistant conversation whose process is pid or an ancestor of it (parent gives a process's).
 func (n *Node) assistantOf(pid int, parent func(int) (int, error)) (string, bool) {
-	return n.assistantIn(lineage(pid, parent))
+	return assistantIn(lineage(pid, parent), n.assistantRoots())
 }
 
 // assistantIn is the assistant conversation whose process is one of pids, the first one found.
-func (n *Node) assistantIn(pids []int) (string, bool) {
-	roots := n.assistantRoots()
+func assistantIn(pids []int, roots map[int]string) (string, bool) {
 	for _, p := range pids {
 		if id, ok := roots[p]; ok {
 			return id, true
 		}
 	}
 	return "", false
+}
+
+func strictDescendant(pid, ancestor int, parent func(int) (int, error)) bool {
+	if pid <= 1 || ancestor <= 1 || pid == ancestor {
+		return false
+	}
+	return slices.Contains(lineage(pid, parent)[1:], ancestor)
 }
 
 // lineage is pid and its ancestors, nearest first, as far as parent tells: up to ancestorsMost, init not included.
@@ -75,10 +81,21 @@ func lineage(pid int, parent func(int) (int, error)) []int {
 // process).
 var nodeLineage = func() []int { return lineage(os.Getpid(), parentPID) }
 
-// assistantRoots are the processes this node runs for the assistant, by pid, each with the session its calls go to
+func (n *Node) assistantRoots() map[int]string {
+	roots := n.localAssistantRoots()
+	for _, worker := range n.runtimes.assistantWorkers() {
+		if _, exists := roots[worker.pid]; !exists && strictDescendant(worker.pid, worker.runtimePID, parentPID) &&
+			n.runtimeAssistantChat(worker.host, worker.session) {
+			roots[worker.pid] = worker.session
+		}
+	}
+	return roots
+}
+
+// localAssistantRoots are the processes this node runs for the assistant, by pid, each with the session its calls go to
 // the hub with: a conversation's, the warm spare's (its MCP server lists the tools as it starts, before a conversation
 // adopts it), and a Codex process's key until its thread exists (the key its MCP server says, resolveAssistantKey).
-func (n *Node) assistantRoots() map[int]string {
+func (n *Node) localAssistantRoots() map[int]string {
 	roots := map[int]string{}
 	add := func(id string, p *assistantProc) {
 		if p == nil || p.cmd == nil || p.cmd.Process == nil {
@@ -146,7 +163,7 @@ func (n *Node) mcpAssistantOf(pid int, err error, parent func(int) (int, error),
 		return "", false
 	}
 	line := lineage(pid, parent)
-	if id, ok := n.assistantIn(line); ok {
+	if id, ok := assistantIn(line, n.localAssistantRoots()); ok {
 		return id, true
 	}
 	if h := n.runtimes.assistantIn(line); h != nil && n.runtimeMayName(h, session) {
@@ -157,7 +174,7 @@ func (n *Node) mcpAssistantOf(pid int, err error, parent func(int) (int, error),
 
 // assistantSession: session is the one a process this node runs for the assistant goes to the hub with.
 func (n *Node) assistantSession(session string) bool {
-	for _, id := range n.assistantRoots() {
+	for _, id := range n.localAssistantRoots() {
 		if id == session {
 			return true
 		}
