@@ -69,6 +69,9 @@ func testGatewayStoppedProvenance(t *testing.T) {
 			}
 			f.reply("session.snapshot", snapshot(nil, nil, nil, []any{pane}))
 			row = byID(listSessions(t, n))[sidA]
+			if err := n.supervisorResumeAllowed(sidA, "", ""); err != nil {
+				t.Fatalf("restored terminal must be eligible before owner-stop checks: %v", err)
+			}
 			// Explicit stops always win, even while the same gateway error remains in history.
 			for _, cause := range []proto.StopCause{proto.StopUser, proto.StopExit} {
 				n.state.stopped(sidA, cause)
