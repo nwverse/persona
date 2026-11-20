@@ -160,3 +160,20 @@ it("indexes identical item IDs separately in Agent and Assistant chats", async (
   expect(io.rows.get(starKey(agent))?.id).toBe(agent.id);
   expect(io.rows.get(starKey(assistant))?.id).toBe(assistant.id);
 });
+
+it("keeps a removed snapshot's collection hint on the existing Undo request", async () => {
+  refs = [star];
+  startStarred();
+  await Promise.resolve();
+  io.request.mockResolvedValueOnce({ removed: { ...star, collection_id: "review" } });
+  expect(await removeStar(star)).toBe(true);
+  io.request.mockImplementationOnce(async (path, request) => {
+    expect(path).toBe("/assistant/starred");
+    expect(request).toMatchObject({ method: "POST", json: { collection_id: "review", text: star.text } });
+    return { star: { ...star, id: "restored-star" } };
+  });
+  const undo = io.toast.mock.lastCall?.[2].run as () => void;
+  undo();
+  await Promise.resolve();
+  expect(io.request.mock.calls.some(([, options]) => options.method === "POST" && options.json.collection_id === "review")).toBe(true);
+});

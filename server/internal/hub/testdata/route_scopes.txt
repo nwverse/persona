@@ -59,6 +59,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/repositories/{id}
 -                    DELETE /api/v1/assistant/saved-prompts/{id}
 -                    DELETE /api/v1/assistant/standing-authorizations/{id}
+-                    DELETE /api/v1/assistant/starred/collections/{id}
 -                    DELETE /api/v1/assistant/starred/{id}
 -                    DELETE /api/v1/assistant/tasks/{id}
 -                    DELETE /api/v1/assistant/tasks/{id}/start-grant
@@ -165,6 +166,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/assistant/skills
 -                    GET /api/v1/assistant/standing-authorizations
 -                    GET /api/v1/assistant/starred
+-                    GET /api/v1/assistant/starred/collections
 assistant.start_defaults GET /api/v1/assistant/start-defaults
 -                    GET /api/v1/assistant/tasks
 -                    GET /api/v1/assistant/tasks/cron
@@ -375,6 +377,8 @@ agents.read          GET /api/v1/workspaces
 -                    GET {link.StreamPath}
 -                    GET {peerPath}
 -                    PATCH /api/v1/agent-shares/{share_id}
+-                    PATCH /api/v1/assistant/starred/collections/assignments
+-                    PATCH /api/v1/assistant/starred/collections/{id}
 inbox.write          PATCH /api/v1/inbox/policies/{id}
 -                    PATCH /api/v1/managers/{id}
 -                    PATCH /api/v1/model-config/purposes/{id}
@@ -448,6 +452,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/rule-suggestions/{id}/not-now
 -                    POST /api/v1/assistant/saved-prompts
 -                    POST /api/v1/assistant/starred
+-                    POST /api/v1/assistant/starred/collections
 -                    POST /api/v1/assistant/tasks
 -                    POST /api/v1/assistant/tasks/{id}/fresh
 -                    POST /api/v1/assistant/tasks/{id}/run

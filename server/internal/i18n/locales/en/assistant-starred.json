@@ -4,5 +4,11 @@
   "err_read_only": "This device can only view starred messages.",
   "err_store": "Starred messages are temporarily unavailable.",
   "err_limit": "You can keep up to {max} starred messages. Remove one to make room.",
-  "err_conflict": "Starred messages changed on another device. Try again."
+  "err_conflict": "Starred messages changed on another device. Try again.",
+  "err_collection_input": "Check the collection name and the selected messages.",
+  "err_collection_conflict": "Starred collections changed. Reload and try again.",
+  "err_collection_duplicate": "There is already a collection with that name.",
+  "err_collection_limit": "You can keep up to 50 starred collections.",
+  "err_collection_missing": "That starred collection no longer exists.",
+  "err_collection_star_gone": "One of the selected messages is no longer starred."
 }

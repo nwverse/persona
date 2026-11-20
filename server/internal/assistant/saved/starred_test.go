@@ -168,10 +168,10 @@ func TestStarredValidationAndCapacity(t *testing.T) {
 	if ok, err := store.CompareSetting(ctx, StarredKey, 0, doc); err != nil || !ok {
 		t.Fatalf("seed full collection: %v, %v", ok, err)
 	}
-	if _, err := b.add(ctx, testStar("extra")); err != errStarLimit {
+	if _, _, err := b.add(ctx, testStar("extra")); err != errStarLimit {
 		t.Fatalf("adding to a full collection: %v", err)
 	}
-	if got, err := b.add(ctx, doc.Stars[0].StarInput); err != nil || got.ID != doc.Stars[0].ID {
+	if got, _, err := b.add(ctx, doc.Stars[0].StarInput); err != nil || got.ID != doc.Stars[0].ID {
 		t.Fatalf("retrying an existing star at capacity: %q, %v", got.ID, err)
 	}
 	store.conflict = true
@@ -192,7 +192,7 @@ func TestStarredConcurrentProcessEdits(t *testing.T) {
 				prefix = "b"
 			}
 			for i := range 20 {
-				if _, err := b.add(ctx, testStar(fmt.Sprintf("%s%d", prefix, i))); err != nil {
+				if _, _, err := b.add(ctx, testStar(fmt.Sprintf("%s%d", prefix, i))); err != nil {
 					errors <- err
 					break
 				}

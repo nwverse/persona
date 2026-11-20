@@ -1,6 +1,7 @@
 // Run with MOCK_STARRED=1 PORT=18797 python3 scripts/mock/mock_hub.py and
 // PERSONA_HUB_URL=http://127.0.0.1:18797 vite --host 127.0.0.1 --port 5797.
-// node web/e2e/starred-messages.mjs [--shots tmp/starred-shots] [--nested-sources team|hierarchy]
+// node web/e2e/starred-messages.mjs [--shots tmp/starred-shots] [--nested-sources team|hierarchy] [--collections]
+// Set MOCK_STARRED_COLLECTIONS=1 to exercise collection management across the two devices.
 // For team set MOCK_TEAM=1 in the mock. For hierarchy set MOCK_SIDE_SESSIONS=1 MOCK_CHILD_SESSIONS=1 MOCK_ENGINE_SWITCH=done.
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
@@ -18,20 +19,21 @@ const shotsArg = process.argv.indexOf("--shots");
 const shots = shotsArg < 0 ? undefined : process.argv[shotsArg + 1];
 const nestedArg = process.argv.indexOf("--nested-sources");
 const nestedSources = nestedArg < 0 ? undefined : process.argv[nestedArg + 1];
+const collections = process.argv.includes("--collections");
 assert.ok(nestedArg < 0 || nestedSources === "team" || nestedSources === "hierarchy", "choose a nested mock fixture: team or hierarchy");
 if (shots) mkdirSync(shots, { recursive: true });
 const shot = (page, name) => shots && page.screenshot({ path: join(shots, name + ".png"), animations: "disabled" });
 
 const review = "/s/macbook/a1f3c2d4-0000-4000-8000-000000000006?view=chat";
 const path = "/api/v1/assistant/starred";
-const onHub = async (method = "GET", suffix = "", json) => {
+const onHub = async (method = "GET", suffix = "", json, expectedStatus = 200) => {
   const response = await fetch(hub + path + suffix, {
     method,
     headers: { Authorization: "Bearer mock", "Content-Type": "application/json" },
     ...(json && { body: JSON.stringify(json) }),
     signal: AbortSignal.timeout(8000),
   });
-  assert.ok(response.ok, `${method} ${path} returned ${response.status}`);
+  assert.equal(response.status, expectedStatus, `${method} ${path + suffix}`);
   return await response.json();
 };
 
@@ -92,6 +94,86 @@ async function rowCount(page, n) {
   await page.waitForFunction((count) => document.querySelectorAll('ol[aria-label="Starred"] li > article').length === count, n);
 }
 
+const chooseCollection = (page) => page.getByRole("combobox", { name: "Collection", exact: true });
+const chooseSource = (page) => page.getByRole("combobox", { name: "Source", exact: true });
+
+async function exerciseCollectionFilters(page, collection) {
+  if (collection) await chooseCollection(page).selectOption(collection);
+  await chooseSource(page).selectOption("assistant");
+  await rowCount(page, 1);
+  const search = page.getByRole("textbox", { name: "Search starred messages" });
+  await search.fill("You PR #42");
+  await rowCount(page, 0);
+  await chooseSource(page).selectOption("agent");
+  await rowCount(page, 1);
+  await search.clear();
+  await chooseSource(page).selectOption("all");
+  await rowCount(page, 2);
+}
+
+async function exerciseCollections(desktop, mobile, stored) {
+  const dialog = desktop.getByRole("dialog");
+  await desktop.getByRole("button", { name: "New collection", exact: true }).click();
+  await dialog.getByRole("textbox", { name: "Collection name" }).fill("Review notes");
+  await dialog.getByRole("button", { name: "Create collection", exact: true }).click();
+  await dialog.waitFor({ state: "hidden" });
+  const created = await onHub("GET", "/collections");
+  const { id } = created.collections.find((folder) => folder.name === "Review notes");
+
+  // Collection writes are visible in an already open second client.
+  await chooseCollection(mobile).locator("option").filter({ hasText: "Review notes" }).waitFor({ state: "attached" });
+  await chooseCollection(desktop).selectOption("all");
+  await desktop.getByRole("button", { name: "Select messages", exact: true }).click();
+  const messages = desktop.locator("li[data-star-id]");
+  for (const item of await messages.all()) await item.getByRole("checkbox").check();
+  await desktop.getByRole("button", { name: "Move selected", exact: true }).click();
+  await dialog.getByRole("combobox", { name: "Move to" }).selectOption(id);
+  await dialog.getByRole("button", { name: "Move", exact: true }).click();
+  await dialog.waitFor({ state: "hidden" });
+  const organized = await onHub("GET", "/collections");
+  assert.deepEqual(organized.assignments, Object.fromEntries(stored.map((star) => [star.id, id])));
+  await onHub("PATCH", "/collections/assignments", {
+    revision: created.revision, star_ids: stored.map((star) => star.id), collection_id: null,
+  }, 409);
+  assert.deepEqual((await onHub("GET", "/collections")).assignments, organized.assignments, "A stale move cannot unfile messages");
+  await chooseCollection(mobile).selectOption(id);
+  await rowCount(mobile, 2);
+  await exerciseCollectionFilters(desktop, id);
+
+  await desktop.getByRole("button", { name: "Rename collection", exact: true }).click();
+  await dialog.getByRole("textbox", { name: "Collection name" }).fill("Code review");
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await dialog.waitFor({ state: "hidden" });
+  await chooseCollection(mobile).locator("option").filter({ hasText: "Code review" }).waitFor({ state: "attached" });
+  await shot(desktop, "starred-collections-desktop-light");
+  await shot(mobile, "starred-collections-phone-dark");
+
+  const removed = stored[0];
+  await desktop.locator(`li[data-star-id="${removed.id}"]`).getByRole("button", { name: "Unstar", exact: true }).click();
+  await rowCount(mobile, 1);
+  await desktop.getByRole("button", { name: "Undo", exact: true }).click();
+  await rowCount(mobile, 2);
+  const restored = (await onHub()).stars.find((star) => star.item_id === removed.item_id);
+  assert.notEqual(restored.id, removed.id, "Undo creates a new snapshot ID");
+  assert.equal((await onHub("GET", "/collections")).assignments[restored.id], id, "Undo restores the original collection");
+
+  await desktop.locator(`li[data-star-id="${restored.id}"]`).getByRole("button", { name: "Unstar", exact: true }).click();
+  await rowCount(mobile, 1);
+  await desktop.getByRole("button", { name: "Delete collection", exact: true }).click();
+  await dialog.getByRole("button", { name: "Delete collection", exact: true }).click();
+  await dialog.waitFor({ state: "hidden" });
+  await chooseCollection(mobile).locator("option").filter({ hasText: "Code review" }).waitFor({ state: "detached" });
+  await chooseCollection(mobile).selectOption("unfiled");
+  await rowCount(mobile, 1);
+  await desktop.getByRole("button", { name: "Undo", exact: true }).click();
+  await rowCount(mobile, 2);
+  assert.deepEqual((await onHub("GET", "/collections")).assignments, {});
+  assert.equal((await onHub()).stars.length, 2, "Deleting a collection keeps both snapshots");
+  await chooseCollection(mobile).selectOption("all");
+  await chooseCollection(desktop).selectOption("all");
+  console.log("PASS collection create, two-device refresh, bulk move, stale-write rejection, filters, rename, Undo and non-destructive delete");
+}
+
 let cleanup = false;
 let previousStart = "";
 try {
@@ -126,6 +208,12 @@ try {
   await rowCount(desktop.page, 2);
   await shot(desktop.page, "starred-desktop-light");
   await shot(mobile.page, "starred-phone-dark");
+  if (collections) {
+    await exerciseCollections(desktop.page, mobile.page, stored);
+  } else {
+    await exerciseCollectionFilters(desktop.page);
+    assert.equal(await chooseCollection(desktop.page).count(), 0, "Older managers keep source filtering without collections");
+  }
   const search = mobile.page.getByRole("textbox", { name: "Search starred messages" });
   await search.fill("You PR #42");
   await rowCount(mobile.page, 1);

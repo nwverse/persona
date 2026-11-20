@@ -115,14 +115,14 @@ describe("CloseoutCard and its evidence chunk", () => {
   it("keeps did, Verified and the evidence row back until the chunk is in, then draws them together", async () => {
     await card(read);
     await asked(1); // the card's own load: nothing started it before
-    expect(shows("chat-chatview.closeout_missing")).toBe(true);
-    expect(shows("chat-chatview.closeout_did")).toBe(false);
-    expect(shows("chat-chatview.closeout_verified")).toBe(false);
+    expect(shows("chat-closeoutcard.closeout_missing")).toBe(true);
+    expect(shows("chat-closeoutcard.closeout_did")).toBe(false);
+    expect(shows("chat-closeoutcard.closeout_verified")).toBe(false);
     expect(evidence()).toBe(false);
     chunk.open();
     await turns(evidence);
-    expect(shows("chat-chatview.closeout_did")).toBe(true);
-    expect(shows("chat-chatview.closeout_verified")).toBe(true);
+    expect(shows("chat-closeoutcard.closeout_did")).toBe(true);
+    expect(shows("chat-closeoutcard.closeout_verified")).toBe(true);
     expect(evidence()).toBe(true);
   });
 
@@ -131,30 +131,30 @@ describe("CloseoutCard and its evidence chunk", () => {
     await asked(1);
     chunk.open();
     await chunkIn();
-    expect(shows("chat-chatview.closeout_verified")).toBe(false); // the chunk is in, the exchange is not
+    expect(shows("chat-closeoutcard.closeout_verified")).toBe(false); // the chunk is in, the exchange is not
     await card(read);
-    expect(shows("chat-chatview.closeout_did")).toBe(true);
-    expect(shows("chat-chatview.closeout_verified")).toBe(true);
+    expect(shows("chat-closeoutcard.closeout_did")).toBe(true);
+    expect(shows("chat-closeoutcard.closeout_verified")).toBe(true);
     expect(evidence()).toBe(true);
     await card(read, null); // a transcript read again
-    expect(shows("chat-chatview.closeout_verified")).toBe(true);
+    expect(shows("chat-closeoutcard.closeout_verified")).toBe(true);
     expect(evidence()).toBe(true);
   });
 
   it("holds nothing for a card drawn from a session list, which has no Verified line", async () => {
     await card(row);
     expect(chunk.calls).toBe(0);
-    expect(shows("chat-chatview.closeout_missing")).toBe(true);
+    expect(shows("chat-closeoutcard.closeout_missing")).toBe(true);
   });
 
   it("draws did and Verified without the row once HOLD_MS has passed, and the row when the chunk comes in", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await card(read);
     await asked(1);
-    expect(shows("chat-chatview.closeout_verified")).toBe(false);
+    expect(shows("chat-closeoutcard.closeout_verified")).toBe(false);
     await act(async () => vi.advanceTimersByTime(1000));
-    expect(shows("chat-chatview.closeout_did")).toBe(true);
-    expect(shows("chat-chatview.closeout_verified")).toBe(true);
+    expect(shows("chat-closeoutcard.closeout_did")).toBe(true);
+    expect(shows("chat-closeoutcard.closeout_verified")).toBe(true);
     expect(evidence()).toBe(false);
     chunk.open();
     await turns(evidence);
@@ -165,9 +165,9 @@ describe("CloseoutCard and its evidence chunk", () => {
     await card(read);
     await asked(1);
     chunk.fail();
-    await turns(() => shows("chat-chatview.closeout_verified"));
-    expect(shows("chat-chatview.closeout_did")).toBe(true);
-    expect(shows("chat-chatview.closeout_verified")).toBe(true);
+    await turns(() => shows("chat-closeoutcard.closeout_verified"));
+    expect(shows("chat-closeoutcard.closeout_did")).toBe(true);
+    expect(shows("chat-closeoutcard.closeout_verified")).toBe(true);
     expect(evidence()).toBe(false);
   });
 
@@ -184,7 +184,7 @@ describe("CloseoutCard and its evidence chunk", () => {
     await chunkIn(); // the chunk comes in, before any card
     await card(read); // the card draws at once, with every row
     expect(chunk.calls).toBe(1);
-    expect(shows("chat-chatview.closeout_verified")).toBe(true);
+    expect(shows("chat-closeoutcard.closeout_verified")).toBe(true);
     expect(evidence()).toBe(true);
     saver();
     stop();

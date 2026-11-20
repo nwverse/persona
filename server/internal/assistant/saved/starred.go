@@ -54,6 +54,13 @@ type Star struct {
 	StarredAt time.Time `json:"starred_at"`
 }
 
+// CollectionID is an optional wire hint emitted for Undo. It is never written
+// as a field of the original Star or StarInput snapshot.
+type removedStar struct {
+	Star
+	CollectionID string `json:"collection_id,omitempty"`
+}
+
 type starRef struct {
 	StarSource
 	ID string `json:"id"`
@@ -179,9 +186,11 @@ func sameStarSource(star Star, in StarInput) bool {
 			(star.WrittenAt != nil && in.WrittenAt != nil && star.WrittenAt.Equal(*in.WrittenAt)))
 }
 
-func (b *starBook) add(ctx context.Context, in StarInput) (Star, error) {
+func (b *starBook) add(ctx context.Context, in StarInput) (Star, bool, error) {
 	var out Star
+	created := false
 	err := b.change(ctx, func(doc *starCollection) (bool, error) {
+		created = false
 		for _, star := range doc.Stars {
 			if sameStarSource(star, in) {
 				out = star
@@ -193,9 +202,10 @@ func (b *starBook) add(ctx context.Context, in StarInput) (Star, error) {
 		}
 		out = Star{StarInput: in, ID: "sm" + randomHex(16), StarredAt: time.Now().UTC()}
 		doc.Stars = append([]Star{out}, doc.Stars...)
+		created = true
 		return true, nil
 	})
-	return out, err
+	return out, created, err
 }
 
 func (b *starBook) remove(ctx context.Context, id string) (*Star, error) {
@@ -276,7 +286,10 @@ func (b *starBook) routes() {
 		}
 	}
 	b.h.Handle("POST "+starPath, write(func(w http.ResponseWriter, r *http.Request) {
-		var in StarInput
+		var in struct {
+			StarInput
+			CollectionID string `json:"collection_id"`
+		}
 		raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
 		if err != nil {
 			b.h.BodyErr(w, err, errStarInput)
@@ -290,10 +303,13 @@ func (b *starBook) routes() {
 			writeStarError(w, err)
 			return
 		}
-		out, err := b.add(r.Context(), in)
+		out, created, err := b.add(r.Context(), in.StarInput)
 		if err != nil {
 			writeStarError(w, err)
 			return
+		}
+		if created && validCollectionID(in.CollectionID) {
+			b.restoreStarCollection(r.Context(), out.ID, in.CollectionID)
 		}
 		apierr.WriteJSON(w, map[string]any{"star": out})
 	}))
@@ -303,6 +319,11 @@ func (b *starBook) routes() {
 			writeStarError(w, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"removed": out})
+		var removed *removedStar
+		if out != nil {
+			removed = &removedStar{Star: *out, CollectionID: b.collectionForUnstar(r.Context(), out.ID)}
+		}
+		apierr.WriteJSON(w, map[string]any{"removed": removed})
 	}))
+	b.collectionRoutes(write)
 }

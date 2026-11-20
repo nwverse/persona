@@ -1505,6 +1505,24 @@ To verify the web flow, run the mock hub with `MOCK_STARRED=1` and follow the co
 `web/e2e/starred-messages.mjs`. It drives two isolated browser contexts and verifies cross-device changes,
 search, copy, Undo, exact links, and a snapshot whose original is absent.
 
+#### Organizing starred messages (#12045)
+
+Use a collection to keep related saved messages together. **All** shows every saved snapshot. **Unfiled**
+shows messages outside a collection. Moving a message changes where it appears, and deletion of a collection
+returns its messages to Unfiled. It leaves the saved words and their original links available.
+
+The Assistant and Agent filters can narrow any collection, including All. Search runs over the current
+selection of collection and source. Select multiple messages when they should move together. A revision
+conflict refreshes the collection information and gives you a chance to review the move before retrying.
+When Undo restores a message, it returns to its collection if that collection still exists.
+
+Starred reads collection metadata while its page is open. Older managers still support the original list
+and source filters. Collection actions appear once the manager supports them. The compact references used
+by chat markers and the sidebar count stay independent of collection names and assignments.
+
+For the collection browser checks, enable `MOCK_STARRED_COLLECTIONS=1` alongside `MOCK_STARRED=1`, then run
+`node web/e2e/starred-messages.mjs --collections`. Use the optional screenshot directory documented in the script.
+
 ### Exporting a conversation (#7375)
 
 **Export Conversation…** in every chat's ⋯ (Agent chats and Persona conversations) saves the whole conversation as one

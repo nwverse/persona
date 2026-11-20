@@ -24,6 +24,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request as HTTPRequest, build_opener
 
@@ -56,6 +57,46 @@ def registry(namespace=None):
 
 
 class RegistryTests(unittest.TestCase):
+    def test_starred_collection_undo_keeps_the_snapshot_when_its_collection_was_deleted(self):
+        import starred_mock
+
+        events = []
+        r, d = registry({
+            "MANAGERS": {"default": "assistant"},
+            "other_manager": lambda _h: None,
+            "is_read_only": lambda _h: False,
+            "broadcast": events.append,
+            "ago": lambda: "2026-11-20T00:00:00Z",
+        })
+        with patch.dict(os.environ, {"MOCK_STARRED": "1", "MOCK_STARRED_COLLECTIONS": "1"}):
+            starred_mock.register(d)
+
+        def send(method, suffix="", body=None):
+            h = FakeHandler(starred_mock.BASE + suffix)
+            payload = b"" if body is None else json.dumps(body).encode()
+            self.assertTrue(r.http(h, method, h.path.partition("?")[0], payload))
+            status, result = h.sent.pop()
+            self.assertEqual(status, 200, result)
+            return result
+
+        folder = send("POST", "/collections", {"revision": 0, "name": "Review"})["collections"][0]["id"]
+        item = {"machine_id": "box", "session_id": "example", "item_id": "example-message",
+                "conversation": "agent", "role": "user", "text": "A saved synthetic message"}
+        original = send("POST", body=dict(item, collection_id=folder))["star"]
+        self.assertNotIn("collection_id", original)
+        self.assertEqual(send("GET", "/collections")["assignments"], {original["id"]: folder})
+        removed = send("DELETE", "/" + original["id"])["removed"]
+        self.assertEqual(removed["collection_id"], folder)
+
+        send("DELETE", f"/collections/{folder}?revision=2")
+        restored = send("POST", body=removed)["star"]
+        self.assertNotEqual(restored["id"], original["id"])
+        self.assertEqual(restored["text"], item["text"])
+        self.assertNotIn("collection_id", restored)
+        self.assertEqual(send("GET", "/collections")["assignments"], {})
+        self.assertEqual(send("GET")["stars"], [restored])
+        self.assertEqual(events, [{"type": "assistant_starred"}] * 5)
+
     def test_route_matches_method_and_whole_path(self):
         r, d = registry()
         seen = []

@@ -4,5 +4,11 @@
   "err_read_only": "此设备只能查看已收藏的消息。",
   "err_store": "消息收藏暂时不可用。",
   "err_limit": "最多可收藏 {max} 条消息。请取消一条收藏后重试。",
-  "err_conflict": "其他设备更新了消息收藏，请重试。"
+  "err_conflict": "其他设备更新了消息收藏，请重试。",
+  "err_collection_input": "请检查收藏夹名称和选中的消息。",
+  "err_collection_conflict": "收藏夹已发生变化。请刷新后重试。",
+  "err_collection_duplicate": "已有同名收藏夹。",
+  "err_collection_limit": "最多可保留 50 个收藏夹。",
+  "err_collection_missing": "这个收藏夹已不存在。",
+  "err_collection_star_gone": "有一条选中的消息已取消收藏。"
 }
