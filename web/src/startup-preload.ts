@@ -525,8 +525,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // Merged, the two changes add 25 B + 610 B to their shared 483,143 B ja baseline, giving 483,778 B;
 // #7524's 37 B of room is kept on top.
 // #11979 (in-session model/effort switching in lib/model-switch.ts on main) raised the ja first screen by 80 B
-// (en 481,036 B, ja 483,895 B, zh-Hans 481,759 B); #12034's lazy-loaded Settings row adds 0 B.
-export const FIRST_SCREEN_BUDGET = 483_895;
+// (en 481,036 B, ja 483,895 B, zh-Hans 481,759 B).
+// #12038: the sidebar's Starred count/access has a small summary store of its own. Per-message identity and marks
+// belong to the lazy message controls, not the first screen. ja 483,895 B to 483,788 B; the budget stays 483,815 B.
+// #12034's delivery closeout gate row lives in the lazy-loaded Settings page and adds 0 B, so the budget stays too.
+export const FIRST_SCREEN_BUDGET = 483_815;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
