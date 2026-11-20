@@ -13,30 +13,36 @@ struct ChatAvatar: View {
     var name: String
     var size: CGFloat = Theme.Size.avatar
     @Environment(\.displayScale) private var displayScale
-    @State private var image: UIImage?
+    private struct Request: Equatable {
+        let path: String?
+        let edge: Int
+    }
+    @State private var loaded: (request: Request, image: UIImage)?
 
     var body: some View {
         let disc = Theme.monogram(name)
+        let request = Request(path: url, edge: Self.edge(pixels: size * displayScale))
         Monogram(name: name, size: size, fill: disc.fill, ink: disc.ink, font: LarkAvatar.font(size))
             .overlay {
-                if let image {
-                    Image(uiImage: image).resizable().scaledToFill()
+                if let loaded, loaded.request == request {
+                    Image(uiImage: loaded.image).resizable().scaledToFill()
                         .clipShape(.circle)
                         .overlay(Circle().strokeBorder(Color.primary.opacity(0.06)))
                 }
             }
-            .task(id: url) {
-                guard let url, !url.isEmpty else {
-                    image = nil
+            .task(id: request) {
+                guard let path = request.path, !path.isEmpty else {
+                    loaded = nil
                     return
                 }
-                let edge = Self.edge(pixels: size * displayScale)
-                if let kept = LarkMedia.shared.cached(url, size: edge) {
-                    image = kept
+                if let kept = LarkMedia.shared.cached(path, size: request.edge) {
+                    loaded = (request, kept)
                     return
                 }
-                image = nil
-                image = await LarkMedia.shared.image(url, size: edge, maxPixel: CGFloat(edge))
+                loaded = nil
+                if let image = await LarkMedia.shared.image(path, size: request.edge, maxPixel: CGFloat(request.edge)), !Task.isCancelled {
+                    loaded = (request, image)
+                }
             }
             .accessibilityHidden(true)
     }

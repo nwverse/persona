@@ -518,13 +518,17 @@ func (s *Service) botStartAgent(machine, cwd, prompt, mode string) error {
 		return err
 	}
 	t := botTarget{Kind: targetAgent, MachineID: d.ID, SessionID: res.Session.SessionID}
-	label := agentLabel(res.Session)
+	preferTab := s.useHerdrTabName(ctx)
+	label, secondary := feishuSessionNames(res.Session, preferTab)
 	if label == "" || label == "." {
 		label = cwd
 	}
 	label += " · " + d.Name
 	s.setBotCurrent(t)
-	c := feishubot.NewCard("", "", i18n.T(l, "assistant-feishu_cards.started")).Markdown(i18n.T(l, "assistant-feishu_cards.started_body", i18n.Args{"machine": feishubot.EscapeMarkdown(d.Name), "dir": feishubot.Code(cwd)}))
+	c := feishubot.NewCard(clip(oneLine(res.Session.DisplayTabName(preferTab)), 70), "", i18n.T(l, "assistant-feishu_cards.started")).Markdown(i18n.T(l, "assistant-feishu_cards.started_body", i18n.Args{"machine": feishubot.EscapeMarkdown(d.Name), "dir": feishubot.Code(cwd)}))
+	if secondary != "" {
+		c.Note(secondary)
+	}
 	if prompt != "" {
 		c.Note(i18n.T(l, "assistant-feishu_cards.started_working"))
 	}
