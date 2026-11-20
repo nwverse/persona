@@ -682,13 +682,14 @@ in ChatView). A refusal never settles by words.
 A to-do's message or answer that fails has to say whether it typed anything, or a phone offers to send again what the
 Agent already has. Two readings looked right and were not. An RPC error that crosses the bus keeps its code and its
 message, not its Go type: a deadline that ran out past the bus reaches the manager as an `*rpc.Error` whose message is
-`context deadline exceeded`, which `errors.Is(err, context.DeadlineExceeded)` does not match. Test for a deadline with
-`apierr.NodeCode` (it reads that exact message as `timeout`), never `errors.Is` alone. `sendUnknown` still reads such a
-deadline as a refusal for its other callers (the send note, a successor's reopen), so the to-do routes read it as in
-doubt themselves (`writeDelivered`, `server/internal/assistant/todo_write_outcome.go`). And `Service.call` can fail
-after the node answered OK: it checks the deletion ledger again and decodes the answer. Such an error of a
-conversation write is `nodeWroteThen`, which the routes read as typed. A refusal said "nothing typed" wrongly is the
-unsafe side: when in doubt, say `unknown`.
+`context deadline exceeded`, which `errors.Is(err, context.DeadlineExceeded)` does not match. Read it by that exact
+message (`noSendAnswer` in `sendUnknown`, or `apierr.NodeCode`, which reads it as `timeout`), never `errors.Is` alone.
+And `Service.call` can fail after the node answered OK: it checks the deletion ledger again and decodes the answer.
+Such an error of a `session.send` or `session.start` is `completedNodeWriteError` (`afterNodeWrite`), which the to-do
+routes read as typed (`writeDelivered`, `server/internal/assistant/todo_write_outcome.go`). #11274 found the same two
+pitfalls from the Agent-send side at the same time, and the two changes now share `sendUnknown` and that type. The
+to-do routes read a little more as in doubt than `sendUnknown` does (a connection that ended mid-answer, any other
+network error). A refusal said "nothing typed" wrongly is the unsafe side: when in doubt, say `unknown`.
 
 ## Name the thing an event is about, and keep what was done for it (#5718)
 

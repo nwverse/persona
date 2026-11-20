@@ -288,6 +288,11 @@ func TestWriteDeliveredReadsEachKind(t *testing.T) {
 		{wordsSent{errors.New("the feed could not be written")}, "yes"},
 		{wordsSent{db.ErrTodoNotFound}, "yes"},
 		{wordsSent{context.DeadlineExceeded}, "yes"},
+		// The node answered OK, then Service.call's own check or its decoding failed: the words are with the Agent.
+		{afterNodeWrite(DeviceSessionSend, errors.New("the conversation was deleted meanwhile")), "yes"},
+		{&uncertainTaskStart{cause: afterNodeWrite(DeviceSessionStart, errors.New("unexpected end of JSON input"))}, "yes"},
+		{&uncertainTaskStart{cause: context.DeadlineExceeded}, "unknown"},      // a new Agent's start that never answered
+		{beforeNodeWrite(DeviceSessionSend, context.DeadlineExceeded), "none"}, // its wait ran out before it went out
 		{context.DeadlineExceeded, "unknown"},
 		{context.Canceled, "unknown"},
 		{rpc.ErrClosed, "unknown"},
@@ -302,6 +307,8 @@ func TestWriteDeliveredReadsEachKind(t *testing.T) {
 		{machineOffline("box"), "none"},
 		{agentUnavailable("assistant-tasks.route_no_agent"), "none"},
 		{i18n.Err("assistant-tasks.route_starting"), "none"},
+		// A message that waited for a new Agent's start in doubt, and typed nothing itself (#11274).
+		{i18n.Err("assistant-tasks.route_waited_unconfirmed"), "none"},
 		{db.ErrTodoCompleted, "none"},
 		{errAcceptStore, "none"},
 		{fmt.Errorf("%w: %w", errAcceptStore, context.DeadlineExceeded), "none"}, // a save that timed out sent nothing

@@ -15,11 +15,13 @@ import (
 // "OK" reply, which take the same paths) says it in its error's delivered, so the hub's todo_send_state and its receipt
 // say failed only for a write that typed nothing, and a phone never sends again under a new op id what may be with the
 // Agent already. Words reach an Agent only through sendToTaskAgent's session.send or startTaskSuccessor's
-// session.start: an error of either may have typed them when sendUnknown says so or it reads as a timeout or a dropped
-// link, and typed nothing otherwise; what fails after the node did the call (nodeWroteThen), or after one of them took
-// the words (wordsSent), typed them; any other error came before anything went out. The reading is deliberately
-// broader than sendUnknown's (the rule agentSendNote.sent and successorOpens follow): a deadline that ran out past the
-// bus arrives as words only, which sendUnknown reads as a refusal, and here saying "none" wrongly is the unsafe side.
+// session.start. An error that came after the node answered either OK typed them: Service.call's own checks or decoding
+// of the answer (completedNodeWriteError, afterNodeWrite), or the route failing to record what was sent (wordsSent).
+// One that came before the call went out typed nothing (rpc.NotSent, beforeNodeWrite). An error of the call itself may
+// have typed them when sendUnknown says so or it reads as a timeout or a dropped link, and typed nothing otherwise. The
+// reading is broader than sendUnknown's (the rule agentSendNote.sent and the successor's start follow): apierr.NodeCode
+// also takes a connection that ended mid-answer (io.EOF, io.ErrUnexpectedEOF) or any other network error as a dropped
+// link, and here saying "none" wrongly is the unsafe side.
 
 // codeSendInDoubt is the code of a to-do write whose words may be with its Agent already, or are: it is never sent
 // again by itself, and its words say to look first.
@@ -31,22 +33,15 @@ type wordsSent struct{ error }
 
 func (e wordsSent) Unwrap() error { return e.error }
 
-// nodeWroteThen is a conversation write the node did that failed after it answered (Service.call): the conversation
-// was deleted meanwhile, its deletion ledger could not be read, or the answer could not be read. Whatever it carried
-// is with the Agent.
-type nodeWroteThen struct{ error }
-
-func (e nodeWroteThen) Unwrap() error { return e.error }
-
 // writeDelivered is what err, a to-do write's failure, did with its words, as its answer's delivered says it: "yes"
-// when they reached the Agent before what followed failed, "unknown" when the send or the start that carried them may
-// have reached it, "none" when nothing was typed. Besides sendUnknown, any transport failure the API reads as a
-// timeout or a dropped link is unknown (a deadline that ran out past the bus arrives as words only, apierr.NodeCode),
-// unless it never went out, its computer was offline, or the asks could not be read or saved (errAcceptStore, which
-// comes before any send, or instead of one).
+// when they reached the Agent before what followed failed (the node answered the send or the start OK), "unknown" when
+// the send or the start that carried them may have reached it, "none" when nothing was typed. Besides sendUnknown, any
+// transport failure the API reads as a timeout or a dropped link is unknown (apierr.NodeCode), unless it never went
+// out, its computer was offline, or the asks could not be read or saved (errAcceptStore, which comes before any send,
+// or instead of one).
 func writeDelivered(err error) string {
 	var sent wordsSent
-	var wrote nodeWroteThen
+	var wrote *completedNodeWriteError
 	switch {
 	case errors.As(err, &sent), errors.As(err, &wrote):
 		return "yes"

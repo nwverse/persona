@@ -184,7 +184,7 @@
       "name": "message_typed_then_deleted",
       "description": "The node took the message, then the Agent's conversation was marked deleted before the manager answered: the Agent has it.",
       "source": [
-        "server/internal/assistant/service.go call (nodeWroteThen)"
+        "server/internal/assistant/service.go call (afterNodeWrite)"
       ],
       "input": {
         "route": "message",
