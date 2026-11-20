@@ -181,6 +181,7 @@ func (s *Service) taskDirectoryExists(ctx context.Context, machine, dir string) 
 // and answers the machine's id and the session's: the machine it reached is the one the agent is linked to (looking it
 // up again after the start could find another, or none). A failed start counts against the launcher there.
 func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (mid, sid string, err error) {
+	t.startedAgent = ""
 	if err := s.checkRequestStart(ctx, *t); err != nil {
 		return "", "", err
 	}
@@ -505,6 +506,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 					session, found := s.adoptStartedSession(lookup, m, s.startLauncher(ctx, picked), t.Cwd, expectID, nil)
 					cancel()
 					if found {
+						t.startedAgent = cmp.Or(session.Agent, fit.snapshot)
 						return m.ID, session.SessionID, nil
 					}
 				}
@@ -515,6 +517,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			// once, with no failure receipt, retry or reroute (and no duplicate agent on another computer, #6540).
 			if sess, ok := s.adoptTaskStartSession(ctx, m, s.startLauncher(ctx, picked), t.Cwd, expectID, knownIDs); ok {
 				s.logf("task %s: start answered late on %s; adopted session %s from the machine's own list", t.TodoID, m.ID, sess.SessionID)
+				t.startedAgent = cmp.Or(sess.Agent, fit.snapshot)
 				return m.ID, sess.SessionID, nil
 			}
 			// Nothing found, and the link took the answer (it closed, or the machine is not reachable now): the
@@ -527,6 +530,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 					// of time, so a retry never opens a second agent beside one still being built (#6540).
 					if sess, ok := s.adoptTaskStartSessionUntil(ctx, m, s.startLauncher(ctx, picked), t.Cwd, expectID, knownIDs, startMayHaveArrived(err, sentAt)); ok {
 						s.logf("task %s: start's link dropped; adopted session %s on %s after it reconnected", t.TodoID, sess.SessionID, m.ID)
+						t.startedAgent = cmp.Or(sess.Agent, fit.snapshot)
 						return m.ID, sess.SessionID, nil
 					}
 				}
@@ -576,6 +580,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		}
 		t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.ultracode_skipped", i18n.Args{"reason": skipped}))
 	}
+	t.startedAgent = cmp.Or(res.Session.Agent, fit.snapshot)
 	return m.ID, res.Session.SessionID, nil
 }
 

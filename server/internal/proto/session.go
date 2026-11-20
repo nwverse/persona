@@ -558,6 +558,16 @@ const (
 // language (apierr.Call). 409.
 const CodeNotLoaded = "not_loaded"
 
+// NotFoundNoTranscript and NotFoundUnknownSession are why a node's read of a session's history (session.items,
+// session.item, session.image, session.visualization) is not_found, its data.reason (node/transcript_files.go
+// readErr): a session the node knows with no transcript to read (its file gone, or none ever written), or an id it
+// has no record of. The hub words each in the request's language (apierr.Call); a not_found without one (an older
+// node, a runtime's own answer, a missing file) keeps the plain summary (#11388).
+const (
+	NotFoundNoTranscript   = "no_transcript"
+	NotFoundUnknownSession = "unknown_session"
+)
+
 // CodeTurnOverBackground is session.interrupt's answer when the Escape went to a session whose turn was already over
 // and only its background work (a background command, a subagent, a workflow) keeps it Working: nothing was
 // interrupted and that work goes on (#10828).
