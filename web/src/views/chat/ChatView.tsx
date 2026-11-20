@@ -465,21 +465,24 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the photos a Persona chat's queued message went with, when it was sent from here (its queue holds only the words),
   // and local preview data URLs for any queued message sent from this page (#10871).
   // Both stay the same while `pending` does: the queue is drawn in the memoized composer.
-  const queuedPhotos = useCallback((raw: string) => pending.find((p) => sameMessage(raw, p.msg.text))?.msg.images?.length ?? 0, [pending]);
-  const queuedPhotoPreviews = useCallback((raw: string): string[] => {
-    const paired = photoOnly.get(raw);
+  const queuedPhotos = useCallback((raw: string, index: number) => {
+    const paired = photoOnly.get(index);
+    return (raw === "" && paired !== undefined ? pending[paired] : pending.find((p) => sameMessage(raw, p.msg.text)))?.msg.images?.length ?? 0;
+  }, [pending, photoOnly]);
+  const queuedPhotoPreviews = useCallback((raw: string, index: number): string[] => {
+    const paired = photoOnly.get(index);
     const match = paired !== undefined ? pending[paired] : pending.find((p) => sameMessage(raw, p.msg.text));
     return (match?.msg.images ?? [])
       .map((item) => (item.image?.data ? `data:${item.image.mime};base64,${item.image.data}` : ""))
       .filter(Boolean);
   }, [pending, photoOnly]);
-  const withdrawn = useCallback((text: string) => {
-    const paired = photoOnly.get(text);
+  const withdrawn = useCallback((text: string, index: number) => {
+    const paired = queued[index] === text ? photoOnly.get(index) : undefined;
     const gone = pending.find((p) => !p.posting && sameMessage(text, p.msg.text)) ?? (paired !== undefined && !pending[paired]?.posting ? pending[paired] : undefined);
     if (!gone) return;
     forgetOutgoing(outboxKey(mid, sid), gone.id);
     setPending((ps) => ps.filter((p) => p.id !== gone.id));
-  }, [pending, photoOnly, mid, sid]);
+  }, [pending, photoOnly, queued, mid, sid]);
   const outgoing = shownPending.length + outbox.filter((e) => e.state !== "failed").length;
   const persona = usePersona();
   const state = session ? stateOf(session) : "unknown";
@@ -2012,7 +2015,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the run's status. The same element while nothing in it changes: the composer is memoized.
   const hasQueue = queued.length > 0;
   const queue = useMemo(
-    () => (session && hasQueue ? <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} onWithdrawn={withdrawn} photosOf={assistant ? queuedPhotos : undefined} photoPreviewsOf={queuedPhotoPreviews} /> : null),
+    () => (session && hasQueue ? <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} onWithdrawn={withdrawn} photosOf={assistant || session.capabilities?.queue_edit ? queuedPhotos : undefined} photoPreviewsOf={queuedPhotoPreviews} /> : null),
     [session, hasQueue, draftKey, canCompose, short, assistant, persona.name, withdrawn, queuedPhotos, queuedPhotoPreviews],
   );
   // with the plan's pill showing, "Jump to bottom" goes beside it (over the chat, they hid each other); the pill keeps
@@ -2390,7 +2393,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           working={state === "working" || awaiting}
           needsYou={state === "needs_you"}
           onSend={send}
-          onSendNow={session && (assistant || (session.agent === "claude" && session.source_kind !== "runtime")) ? sendQueueNow : undefined}
+          onSendNow={session && (session.capabilities?.queue_send_now ?? (assistant || (session.agent === "claude" && session.source_kind !== "runtime"))) ? sendQueueNow : undefined}
           disabled={Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"))}
           onEditLastMessage={onEditLastMessage}
           editingLast={editProp}
