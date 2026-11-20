@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/ai"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -142,6 +143,40 @@ func modelRunAgentSupported(agent string) bool {
 	return agent == "" || agent == "claude" || agent == "codex" || agent == "agy"
 }
 
+// modelRunSourceSupported reports whether a launcher with the given source, agent, and built-in companion provenance
+// can answer API-kind background purposes via model.run. Shell/PATH/built-in/Persona CLIs are permitted for supported
+// agents; among runtime-backed launchers, only the verified built-in Antigravity companion is permitted.
+func modelRunSourceSupported(source, agent string, builtinCompanion bool) bool {
+	if !modelRunAgentSupported(agent) {
+		return false
+	}
+	if runtimeSource(source) {
+		return builtinCompanion && compat.Source(source) == "agy" && agent == "agy"
+	}
+	return true
+}
+
+// modelRunViewSupported reports whether launcher name is known to the manager and backed by a CLI or verified built-in
+// Antigravity companion that model.run can execute (on machine when one is set, or on any machine otherwise).
+func (s *Service) modelRunViewSupported(ctx context.Context, name, machine string) bool {
+	for _, v := range s.launcherViews(ctx) {
+		if v.Name != name {
+			continue
+		}
+		if v.Source == "persona" {
+			return modelRunAgentSupported(viewAgent(v))
+		}
+		if v.modelRunMachines != nil {
+			if machine == "" {
+				return len(v.modelRunMachines) > 0
+			}
+			return slices.Contains(v.modelRunMachines, machine)
+		}
+		return modelRunSourceSupported(v.Source, viewAgent(v), v.builtinCompanion)
+	}
+	return false
+}
+
 // noAPIStatus is the catalog key for an unconfigured API use, on the settings row and on a done judge's task alike.
 func (s *Service) noAPIStatus(ctx context.Context) string {
 	return modelNoAPIStatus
@@ -178,7 +213,7 @@ func (s *Service) fallbackAPIProvider(ctx context.Context) string {
 	return fallbackAPIProviderFrom(s.storedLaunchers(ctx), s.hiddenLaunchers(ctx))
 }
 
-// mergeModel puts over's choices on base: another provider starts from nothing (its model and effort are its own).
+// mergeModel puts over's choices on base: another provider starts from nothing (its model, effort and permission mode are its own).
 func mergeModel(base, over ModelBinding) ModelBinding {
 	if over.Provider != "" && over.Provider != base.Provider {
 		base = ModelBinding{Provider: over.Provider, ConfigDir: base.ConfigDir}
@@ -188,6 +223,9 @@ func mergeModel(base, over ModelBinding) ModelBinding {
 	}
 	if over.Effort != "" {
 		base.Effort = over.Effort
+	}
+	if over.PermissionMode != "" {
+		base.PermissionMode = over.PermissionMode
 	}
 	if over.ConfigDir != "" {
 		base.ConfigDir = over.ConfigDir
@@ -340,12 +378,14 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 			}
 		}
 		if !found { // plain claude, a computer's own launcher, a managed one without a Messages gateway
-			// Claude Code, Codex, and Antigravity launchers (an empty agent is Claude Code) known to the manager: a
-			// deleted or unsupported launcher is an error (#12027).
-			if name != "claude" && !slices.ContainsFunc(s.launcherViews(ctx), func(v LauncherView) bool { return v.Name == name && modelRunAgentSupported(viewAgent(v)) }) {
+			// Claude Code, Codex, and Antigravity launchers (an empty agent is Claude Code) known to the manager and
+			// backed by a CLI or the verified built-in Antigravity companion: a deleted or unsupported launcher/runtime
+			// is an error (#12027).
+			viaMachine := s.settings(ctx).MachineID
+			if name != "claude" && !s.modelRunViewSupported(ctx, name, viaMachine) {
 				return c, i18n.Err("assistant-models.err_not_callable")
 			}
-			c = ai.Config{RunLauncher: name, ViaMachine: s.settings(ctx).MachineID}
+			c = ai.Config{RunLauncher: name, ViaMachine: viaMachine}
 			if c.ViaMachine == "" {
 				return c, i18n.Err("assistant-models.err_run_no_machine")
 			}
@@ -406,7 +446,8 @@ func (s *Service) modelFingerprint(ctx context.Context, id string) (string, erro
 
 // modelBindingFingerprint changes when what the binding runs on does (the provider's settings, the key sealed anew).
 func (s *Service) modelBindingFingerprint(ctx context.Context, b ModelBinding) string {
-	b.ConfigDir = "" // where new conversations start, not what this binding runs on (#4633)
+	b.ConfigDir = ""      // where new conversations start, not what this binding runs on (#4633)
+	b.PermissionMode = "" // applies to new starts/conversations, does not restart running ones
 	raw, _ := json.Marshal(b)
 	if strings.HasPrefix(b.Provider, "legacy.") {
 		v, _ := json.Marshal(s.legacyModelConfig(ctx, b.Provider))

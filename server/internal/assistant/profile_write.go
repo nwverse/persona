@@ -120,6 +120,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_auto_compact_tokens"))
 		return
 	}
+	if m := in.IdleReleaseMinutes; m != nil && (*m < minIdleReleaseMinutes || *m > maxIdleReleaseMinutes) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_release_minutes"))
+		return
+	}
 	if in.MinutesRetention != nil {
 		if err := json.Unmarshal(in.MinutesRetention, &in.MinutesDays); err != nil || in.MinutesDays == nil ||
 			*in.MinutesDays < minMinutesDays || *in.MinutesDays > maxMinutesDays {
@@ -129,6 +133,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if m := in.MeetingAttendanceDefault; m != nil && !slices.Contains(meetingRoles, *m) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-meeting.bad_default_role"))
+		return
+	}
+	if g := in.DeliveryGate; g != nil && !slices.Contains(deliveryGates, *g) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("delivery_gate must be off, merged or live"))
 		return
 	}
 	if code := s.readMeetingTranscriptionSettings(&in.Settings, in.TranscriptionMode, in.Glossary, in.TranscriptionExtension); code != "" {
@@ -241,6 +249,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.IdleAutoCompactTokens != nil {
 			v.IdleAutoCompactTokens = in.IdleAutoCompactTokens
 		}
+		if in.IdleReleaseMinutes != nil {
+			v.IdleReleaseMinutes = in.IdleReleaseMinutes
+		}
 		if in.StartRequestedTasks != nil {
 			v.StartRequestedTasks = in.StartRequestedTasks
 		}
@@ -291,8 +302,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.ArchiveClosedDays != nil {
 			v.ArchiveClosedDays = in.ArchiveClosedDays
 		}
-		if in.DoneNeedsDelivery != nil {
+		if in.DeliveryGate != nil {
+			v.DeliveryGate = in.DeliveryGate
+			v.DoneNeedsDelivery = nil
+		} else if in.DoneNeedsDelivery != nil {
 			v.DoneNeedsDelivery = in.DoneNeedsDelivery
+			v.DeliveryGate = nil
 		}
 		if in.ReviewSamplePercent != nil {
 			v.ReviewSamplePercent = in.ReviewSamplePercent

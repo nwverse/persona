@@ -12,7 +12,7 @@ on:
       lane:
         description: Apple platform lane
         type: choice
-        options: [ios, ios18]
+        options: [ios, ios18, ios-build]
         default: ios
         required: true
 permissions:

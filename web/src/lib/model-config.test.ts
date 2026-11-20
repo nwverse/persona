@@ -5,7 +5,7 @@ import {
 } from "./model-config";
 import {
   agentsOverride, catalogLists, chooseProvider, claudeCodeOnly, configDirChoices, draftFor, effortOffered, executionForm, followedCategory, modelConfiguration, modelPatch, overridden,
-  ownRecord, parentCategory, providersFor, purposeDescription, purposeGroups, resetPatch, runtimeChoices, saveModelPurpose, setApartFrom, withPurposeAfter,
+  ownRecord, parentCategory, permissionModesForProvider, providersFor, purposeDescription, purposeGroups, resetPatch, runtimeChoices, saveModelPurpose, setApartFrom, withPurposeAfter,
   withUsesAfterCategories,
 } from "./model-config-execution";
 
@@ -53,6 +53,21 @@ describe("用途配置", () => {
     expect(modelPatch(purpose, { ...draftFor(purpose), config_dir: "legacy" })).not.toHaveProperty("config_dir");
     expect(resetPatch(main, "", "legacy")).toMatchObject({ revision: 3, config_dir: "legacy" }); // a reset keeps it, as it keeps the runtime
     expect(resetPatch(purpose, "", "legacy")).not.toHaveProperty("config_dir");
+  });
+  it("handles permission_mode on launcher purposes only and clears it when switching providers", () => {
+    const withPerm: ModelPurpose = {
+      ...purpose,
+      override: { provider: "strong", permission_mode: "acceptEdits" },
+      fields: ["provider", "model", "effort", "permission_mode"],
+    };
+    const draft = draftFor(withPerm);
+    expect(draft.permission_mode).toBe("acceptEdits");
+    expect(chooseProvider(draft, "other").permission_mode).toBe("");
+    expect(modelPatch(withPerm, draft)).toMatchObject({ revision: 3, permission_mode: "acceptEdits" });
+    expect(resetPatch(withPerm)).toMatchObject({ revision: 3, permission_mode: null });
+    expect(permissionModesForProvider(withPerm, { id: "launcher.claude", name: "Claude", kind: "launcher", agent: "claude" }, "claude").length).toBeGreaterThan(0);
+    expect(permissionModesForProvider(withPerm, { id: "launcher.omp", name: "OMP", kind: "launcher", agent: "omp" }, "omp")).toEqual([]);
+    expect(permissionModesForProvider({ ...withPerm, kind: "api" }, { id: "api", name: "API", kind: "api" }, "")).toEqual([]);
   });
   it("uses server capability candidates and keeps a referenced hidden provider", () => {
     expect(providersFor(purpose, providers).map((p) => p.id)).toEqual(["strong", "other"]);
