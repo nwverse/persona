@@ -74,6 +74,7 @@ type Settings struct {
 	IdleAutoCompact        *bool `json:"idle_auto_compact,omitempty"`
 	IdleAutoCompactMinutes *int  `json:"idle_auto_compact_minutes,omitempty"`
 	IdleAutoCompactTokens  *int  `json:"idle_auto_compact_tokens,omitempty"`
+	IdleReleaseMinutes     *int  `json:"idle_release_minutes,omitempty"` // #12008, idle_compact_settings.go
 	// StartRequestedTasks: a task_plan task the user asked for in so many words starts without the card's "Start"
 	// (#2559). nil is on (the default).
 	StartRequestedTasks     *bool  `json:"start_requested_tasks,omitempty"`
@@ -591,6 +592,7 @@ type assistantView struct {
 	IdleAutoCompact        bool               `json:"idle_auto_compact"`
 	IdleAutoCompactMinutes int                `json:"idle_auto_compact_minutes"`
 	IdleAutoCompactTokens  int                `json:"idle_auto_compact_tokens"`
+	IdleReleaseMinutes     int                `json:"idle_release_minutes"`
 	// StartRequestedTasks is in effect, like MainTasksQuiet.
 	StartRequestedTasks     bool   `json:"start_requested_tasks"`
 	TaskWorkspacePreference string `json:"task_workspace_preference"`
@@ -658,7 +660,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	out := assistantView{WorkspaceNamingVersion: workspacenaming.Version, EffectiveWorkspaceRules: effectiveRules, Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: recordingDaysOf(v), MinutesDays: kb.MinutesDaysFor(minutesDaysSetting(v), recordingDaysOf(v)),
 		IdleAutoCompact: s.idleAutoCompact(ctx), IdleAutoCompactMinutes: s.idleAutoCompactMinutes(ctx), IdleAutoCompactTokens: s.idleAutoCompactTokens(ctx),
-		MeetingAttendanceDefault: meetingAttendanceOf(v), KBTopics: quietOn(v.KBTopics),
+		IdleReleaseMinutes: s.idleReleaseMinutes(ctx), MeetingAttendanceDefault: meetingAttendanceOf(v), KBTopics: quietOn(v.KBTopics),
 		MeetingTranscriptionDefault: meetingTranscriptionDefaultOf(v), MeetingGlossary: meetingGlossaryOf(v),
 		MeetingTranscriptionExtension: meetingTranscriptionExtensionOf(v), MeetingTranscriptionReady: s.transcriptionReadyNow(),
 		TaskWorkspacePreference: s.taskWorkspacePreference(ctx),
