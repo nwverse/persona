@@ -1653,9 +1653,12 @@ func TestWebPushDefersFirstKeyCreationAndDispatchUntilResume(t *testing.T) {
 			if store.settingWrites(webPushKeysSetting) != 1 {
 				t.Fatalf("VAPID key setting writes = %d, want 1", store.settingWrites(webPushKeysSetting))
 			}
-			waitFor(t, "delivery noted as OK after resume", func() bool {
+			waitFor(t, "delivery noted as OK and sent callback invoked after resume", func() bool {
 				d := w.delivery(sub.Device)
-				return d.OKAt != nil && d.FailedAt == nil && d.Error == ""
+				sentMu.Lock()
+				n := len(sentErrs)
+				sentMu.Unlock()
+				return d.OKAt != nil && d.FailedAt == nil && d.Error == "" && n >= 1
 			})
 			sentMu.Lock()
 			if len(sentErrs) != 1 || sentErrs[0] != nil {
@@ -1665,6 +1668,56 @@ func TestWebPushDefersFirstKeyCreationAndDispatchUntilResume(t *testing.T) {
 			sentMu.Unlock()
 		})
 	}
+}
+
+// A newer Web Push dispatch arriving after quiesce.resume() admits writes, but
+// before resumeWrites() replays an older deferred push for the same
+// subscription, stays chained behind the deferred queue entry and delivers second.
+func TestWebPushDeferredPushNotOvertakenByPostResumeDispatch(t *testing.T) {
+	f := newFakePushService(t)
+	h := webPushHub(t, f)
+	store := &bgWriteStore{meshStore: newMeshStore()}
+	h.store = store
+	w := h.push.web
+	w.store = store
+	w.quiesce = &h.quiesce
+
+	b := f.browser(t, "/push/order")
+	sub := webSub{Device: "web-order", Endpoint: b.Sub.Endpoint, P256DH: b.Sub.P256DH, Auth: b.Sub.Auth}
+	if err := w.subscribe(sub); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.quiesce.pause(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	msg := webpush.Message{TTL: webPushTTL, Urgency: webpush.UrgencyHigh}
+	w.dispatch(sub, []byte(`{"v":1,"kind":"alert","title":"First deferred"}`), msg)
+	waitFor(t, "first push deferred while paused", func() bool {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return len(w.pendingPushes) == 1
+	})
+
+	// Resume the quiescer (admitting new writes) before resumeWrites replays the
+	// deferred push, then dispatch a newer push to the same subscription.
+	h.quiesce.resume()
+	w.dispatch(sub, []byte(`{"v":1,"kind":"alert","title":"Second post-resume"}`), msg)
+	// The newer push must remain queued behind the deferred push's open done channel.
+	f.none(t)
+
+	h.push.resumeWrites()
+
+	first := webOpened(t, b, f.next(t))
+	second := webOpened(t, b, f.next(t))
+	if first["title"] != "First deferred" || second["title"] != "Second post-resume" {
+		t.Fatalf("delivery order = [%v, %v], want [First deferred, Second post-resume]", first["title"], second["title"])
+	}
+	waitFor(t, "subscription queue tail cleaned up", func() bool {
+		w.queueMu.Lock()
+		defer w.queueMu.Unlock()
+		return len(w.tails) == 0
+	})
 }
 
 type hookedDeviceStore struct {

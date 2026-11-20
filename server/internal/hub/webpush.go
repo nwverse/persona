@@ -88,14 +88,6 @@ type webPushQueued struct {
 	done      chan struct{}
 }
 
-// webPushDeferred is a background dispatch deferred while a snapshot pause
-// prevents creating the hub's first VAPID key; replayed on resumeWrites.
-type webPushDeferred struct {
-	sub       webSub
-	plaintext []byte
-	message   webpush.Message
-}
-
 type webPusher struct {
 	store   Store
 	quiesce *writeQuiescer
@@ -118,7 +110,10 @@ type webPusher struct {
 	subs           map[string]webSub // by device
 	last           map[string]webDelivery
 	pendingForgets []webSub
-	pendingPushes  []webPushDeferred
+	// pendingPushes holds per-subscription queue heads deferred while a
+	// snapshot pause prevented creating the hub's first VAPID key; each entry's
+	// done channel stays open until replayed so newer dispatches cannot overtake it.
+	pendingPushes []*webPushQueued
 
 	queueMu sync.Mutex
 	tails   map[webPushSubscription]*webPushQueued // the last dispatch queued for each browser endpoint
@@ -216,8 +211,9 @@ func (w *webPusher) resumeWrites() {
 	pushes := w.pendingPushes
 	w.pendingPushes = nil
 	w.mu.Unlock()
-	for _, p := range pushes {
-		w.dispatch(p.sub, p.plaintext, p.message)
+	for _, queued := range pushes {
+		key := webPushSubscription{device: queued.sub.Device, endpoint: queued.sub.Endpoint}
+		go w.runQueued(key, nil, queued)
 	}
 	if len(forgets) == 0 {
 		return
@@ -434,30 +430,23 @@ func (w *webPusher) noted(s webSub, status int, err error) {
 // push posts plaintext to s, tried again after each of retryWaits while the failure may pass. It returns the push
 // service's status (0: none came) and, when it did not take it, why. A subscription that is gone is dropped.
 func (w *webPusher) push(ctx context.Context, s webSub, plaintext []byte, m webpush.Message) (int, error) {
-	return w.deliver(ctx, s, plaintext, m, false)
+	status, _, err := w.deliver(ctx, s, plaintext, m, nil)
+	return status, err
 }
 
-func (w *webPusher) deliver(ctx context.Context, s webSub, plaintext []byte, m webpush.Message, deferOnQuiesce bool) (int, error) {
-	var onPaused func()
-	if deferOnQuiesce {
-		onPaused = func() {
-			w.mu.Lock()
-			w.pendingPushes = append(w.pendingPushes, webPushDeferred{sub: s, plaintext: plaintext, message: m})
-			w.mu.Unlock()
-		}
-	}
+func (w *webPusher) deliver(ctx context.Context, s webSub, plaintext []byte, m webpush.Message, onPaused func()) (int, bool, error) {
 	keys, deferred, err := w.keyOrDefer(ctx, onPaused)
 	if deferred {
-		return 0, nil
+		return 0, true, nil
 	}
 	if err != nil {
 		w.noted(s, 0, err)
-		return 0, err
+		return 0, false, err
 	}
 	if s.Key != "" && s.Key != keys.Public {
 		err := errors.New("subscribed with another key")
 		w.noted(s, 0, err)
-		return 0, err
+		return 0, false, err
 	}
 	status, err := w.postOnce(ctx, s, keys, plaintext, m)
 	for _, wait := range w.retryWaits {
@@ -473,13 +462,13 @@ func (w *webPusher) deliver(ctx context.Context, s webSub, plaintext []byte, m w
 	if webpush.Gone(status) {
 		w.forgetIfCurrent(s) // before noted: what it tells (tests) finds the subscription gone
 		w.noted(s, status, err)
-		return status, err
+		return status, false, err
 	}
 	w.noted(s, status, err)
 	if err != nil {
 		w.logf("web push %s: %v", cmp.Or(s.Browser, s.Device), err)
 	}
-	return status, err
+	return status, false, err
 }
 
 func (w *webPusher) postOnce(ctx context.Context, s webSub, keys webpush.Keys, plaintext []byte, m webpush.Message) (int, error) {
@@ -512,24 +501,36 @@ func (w *webPusher) dispatch(s webSub, plaintext []byte, m webpush.Message) {
 	previous := w.tails[key]
 	w.tails[key] = queued
 	w.queueMu.Unlock()
-	go func() {
-		defer func() {
-			close(queued.done)
-			w.queueMu.Lock()
-			if w.tails[key] == queued { // a newer dispatch owns the queue now; its completion cleans it up
-				delete(w.tails, key)
-			}
-			w.queueMu.Unlock()
-		}()
-		if previous != nil {
-			<-previous.done
+	go w.runQueued(key, previous, queued)
+}
+
+func (w *webPusher) runQueued(key webPushSubscription, previous, queued *webPushQueued) {
+	deferred := false
+	defer func() {
+		if deferred {
+			// Keep queued.done open and queued in w.tails[key] until
+			// resumeWrites replays it, preserving FIFO order for later dispatches.
+			return
 		}
-		// Queued waiting is not part of the delivery's timeout. Cancellation, Gone and every other return from push
-		// still close done above, allowing the next dispatch to proceed.
-		ctx, cancel := context.WithTimeout(context.Background(), webPushTimeout*time.Duration(len(w.retryWaits)+1)+10*time.Second)
-		defer cancel()
-		_, _ = w.deliver(ctx, queued.sub, queued.plaintext, queued.message, true)
+		close(queued.done)
+		w.queueMu.Lock()
+		if w.tails[key] == queued { // a newer dispatch owns the queue now; its completion cleans it up
+			delete(w.tails, key)
+		}
+		w.queueMu.Unlock()
 	}()
+	if previous != nil {
+		<-previous.done
+	}
+	// Queued waiting is not part of the delivery's timeout. Cancellation, Gone and every other non-deferred return
+	// still close done above, allowing the next dispatch to proceed.
+	ctx, cancel := context.WithTimeout(context.Background(), webPushTimeout*time.Duration(len(w.retryWaits)+1)+10*time.Second)
+	defer cancel()
+	_, deferred, _ = w.deliver(ctx, queued.sub, queued.plaintext, queued.message, func() {
+		w.mu.Lock()
+		w.pendingPushes = append(w.pendingPushes, queued)
+		w.mu.Unlock()
+	})
 }
 
 // webPushNotify sends a notify event (notifyWSFrom's msgIn) to every subscribed browser with no Persona page open
