@@ -2475,7 +2475,7 @@ function NotLivePill({ onReload, lower, error }: { onReload: () => void; /** The
     <div role="status" data-testid="chat-not-live" className={lower ? "absolute top-14 left-1/2 z-10 -translate-x-1/2" : "absolute top-3 left-1/2 z-10 -translate-x-1/2"} style={{ animation: "fade-up 150ms ease-out both" }}>
       <div className="flex h-8 items-center gap-2 rounded-full border border-line bg-surface px-3 text-[12px] leading-none whitespace-nowrap text-ink-2 shadow-raised">
         <span title={error}>{t(error ? "chat-chatview.refresh_failed" : "chat-chatview.not_live")}</span>
-        <button type="button" onClick={onReload} className="font-medium text-accent-ink hover:underline">
+        <button type="button" onClick={onReload} className="touch-hit font-medium text-accent-ink hover:underline">
           {t("chat-chatview.not_live_reload")}
         </button>
       </div>
@@ -2491,7 +2491,7 @@ function ReturnPill({ onClick }: { onClick: () => void }) {
         type="button"
         onClick={onClick}
         data-search-return
-        className="flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 text-[12px] leading-none font-medium whitespace-nowrap text-ink-2 shadow-raised transition-colors duration-150 hover:bg-hover active:scale-[0.98]"
+        className="touch-hit flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 text-[12px] leading-none font-medium whitespace-nowrap text-ink-2 shadow-raised transition-colors duration-150 hover:bg-hover active:scale-[0.98]"
       >
         <Icon name="arrowLeft" size={14} className="shrink-0" />
         <span className="translate-y-[0.5px]">{t("chat-chatview.search_return")}</span>
@@ -2509,7 +2509,7 @@ function JumpPill({ label, onClick, inline }: { label: string; onClick: () => vo
         onClick={onClick}
         aria-label={label}
         data-jump-pill
-        className="flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 text-[12px] leading-none font-medium whitespace-nowrap text-ink-2 shadow-raised transition-colors duration-150 hover:bg-hover active:scale-[0.98]"
+        className="touch-hit flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 text-[12px] leading-none font-medium whitespace-nowrap text-ink-2 shadow-raised transition-colors duration-150 hover:bg-hover active:scale-[0.98]"
       >
         <Icon name="arrowDown" size={14} className="shrink-0" />
         <span className="translate-y-[0.5px]">{label}</span>

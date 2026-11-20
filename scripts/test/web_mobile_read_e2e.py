@@ -316,6 +316,86 @@ def check_diff(page, tag):
     ok(f"{tag}: Back closes the diff on the chat")
 
 
+# The chat's pills on a touch screen (#11511): "Reload" in the failed-refresh pill, "Jump to bottom" and "Back to where
+# you were" answer a finger 20 px from their middle (touch-hit's 44 px), and their squares do not overlap.
+PILLS = "/s/studio/a1f3c2d4-0000-4000-8000-000000000003"  # an Agent no other check opens: its items come from the route below
+PILL_HITS = """(sels) => sels.map((sel) => {
+  const b = document.querySelector(sel);
+  if (!b) return { sel, missing: true };
+  const r = b.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+  const on = (px, py) => document.elementFromPoint(px, py)?.closest('button') === b;
+  const half = (n) => Math.max(n / 2, 22);
+  return { sel, h: Math.round(r.height), above: on(x, y - 20), below: on(x, y + 20),
+           sq: [x - half(r.width), y - half(r.height), x + half(r.width), y + half(r.height)] };
+})"""
+
+
+def check_chat_pills(page, tag):
+    # twelve exchanges with more before them; the older page fails (a hub that lost its computer), so the pill shows
+    n, last = 12, 900000
+    items = []
+    for k in range(n):
+        seq = last - 2 * (n - k) + 1
+        items += [{"id": f"pill-u{k}", "seq": seq, "ts": "2026-11-19T08:00:00Z", "role": "user", "kind": "text", "text": f"第 {k + 1} 个问题：这一块的写法有没有问题？"},
+                  {"id": f"pill-a{k}", "seq": seq + 1, "ts": "2026-11-19T08:01:00Z", "role": "assistant", "kind": "text",
+                   "text": "\n\n".join([f"第 {k + 1} 块看过了，命名可以再统一一点，测试也覆盖到了主要的分支。"] * 4)}]
+    pattern = "**/api/v1/sessions/studio/a1f3c2d4-0000-4000-8000-000000000003/items?*"
+
+    def serve(route):
+        url = route.request.url
+        if "before_seq=" in url:
+            route.fulfill(status=502, json={"error": "node unreachable"})
+        elif "turns=" in url:
+            route.fulfill(json={"items": items, "has_more": True, "to_seq": last})
+        else:
+            route.fallback()
+    page.route(pattern, serve)
+    try:
+        go(page, PILLS)
+        page.wait_for_timeout(600)
+        # leave the end with a finger, then up to the top: the older page is asked for, and fails
+        send = touches(page)
+        x, y = center(page.locator("[data-chat-scroll]"))
+        send("touchStart", [(x, y - 100)])
+        for i in range(1, 9):
+            page.wait_for_timeout(16)
+            send("touchMove", [(x, y - 100 + 30 * i)])
+        send("touchEnd", [])
+        page.wait_for_timeout(400)
+        page.evaluate("document.querySelector('[data-chat-scroll]').scrollTop = 0")
+        expect(page.locator("[data-testid=chat-not-live] button")).to_be_visible(timeout=10000)
+        expect(page.locator("[data-jump-pill]")).to_be_visible()
+        page.wait_for_timeout(300)  # the pills' fade-up
+        shot(page, f"{tag}-pills")
+        reload, jump = "[data-testid=chat-not-live] button", "[data-jump-pill]"
+        for d in page.evaluate(PILL_HITS, [reload, jump]):
+            if d.get("missing") or not (d["above"] and d["below"]):
+                fail(f"{tag}: {d['sel']} ({d.get('h')} tall) does not answer 20 px from its middle ({d})")
+        # a search hit gone to: "Back to where you were" over the chat's top edge, the failed-refresh pill under it
+        page.locator("header").get_by_role("button", name="更多操作", exact=True).tap()
+        page.get_by_role("menuitem", name="会话内搜索").tap()
+        page.locator("[data-chat-search] input").fill("第 3 个问题")
+        page.locator("[data-search-result]").first.tap()
+        expect(page.locator("[data-search-return]")).to_be_visible()
+        expect(page.locator(reload)).to_be_visible(timeout=10000)  # the hit is near the top: the older page fails again
+        page.wait_for_timeout(300)
+        hits = page.evaluate(PILL_HITS, [reload, "[data-search-return]", jump])
+        for d in hits:
+            if d.get("missing") or not (d["above"] and d["below"]):
+                fail(f"{tag}: with the return pill up, {d['sel']} does not answer 20 px from its middle ({d})")
+        for i, a in enumerate(hits):
+            for b in hits[i + 1:]:
+                ox = min(a["sq"][2], b["sq"][2]) - max(a["sq"][0], b["sq"][0])
+                oy = min(a["sq"][3], b["sq"][3]) - max(a["sq"][1], b["sq"][1])
+                if ox > 0.5 and oy > 0.5:
+                    fail(f"{tag}: the touch squares of {a['sel']} and {b['sel']} overlap ({a['sq']}, {b['sq']})")
+        shot(page, f"{tag}-pills-return")
+        ok(f"{tag}: Reload ({hits[0]['h']} tall), Back to where you were and Jump to bottom answer a finger 20 px from "
+           "their middle, their squares apart")
+    finally:
+        page.unroute(pattern)
+
+
 def phone(browser, name, theme, full):
     w, h = PHONES[name]
     tag = f"{name}-{theme}"
@@ -336,6 +416,7 @@ def phone(browser, name, theme, full):
         check_revisit(page, tag)
         check_diff(page, tag)
         check_pending(page, tag)
+    if name != "land": check_chat_pills(page, tag)
     ctx.close()
 
 
