@@ -816,7 +816,10 @@ personad tool task_spawn '{"title":"Check the regression","prompt":"Inspect the 
   supervisor, parent, machine, directory and permissions cannot be supplied by the Agent. The current launcher and
   effort are reused. For the model, an original plan assignment that names one wins for its own Agent while it still
   runs on that assignment's launcher (the default launcher when it named none), instead of carrying over a model
-  switched in the app after the start; otherwise the parent's current model is reused (#10557). Permission comes from
+  switched in the app after the start. Otherwise a managed parent's `requested_model` supplies its exact launch ID;
+  an explicitly empty value keeps the launcher's own default. For older nodes and observed sessions, an exact offered
+  ID is kept. A reply that uniquely resolves one concrete offered ID uses that ID. An ambiguous, unmatched or unknown
+  catalog keeps the reported model (#10557). Permission comes from
   the live parent, or its persisted original plan assignment when Codex does not expose it; unknown permission stays in
   plan mode, never a writable owner default. Another spawned session with unknown permission cannot borrow the original
   Agent's plan permission.
