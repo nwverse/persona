@@ -10,6 +10,7 @@ import { storedValue, storeValue } from "../../lib/compatibility";
 // for one of those. Folders outside the home are read-only.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, enc, errorText, isAbort } from "../../lib/api";
+import { useBackStack } from "../../lib/back-close";
 import { t } from "../../i18n";
 import { entryPayload, ENTRY_DRAG_TYPE } from "../../lib/entry-drag";
 import { aheadBehind, dirName, fileName, gitMark, joinPath, type FsEntry, type FsListing, type GitStatus } from "../../lib/files";
@@ -77,6 +78,8 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
   const [gitTick, setGitTick] = useState(0); // the folder's Git status did
   const [git, setGit] = useState<GitStatus | null>(null);
   const [open, setOpen] = useState<string[]>(file ? [file] : []); // files opened from the list, newest last
+  // narrow, the panel covers the page: Back closes the file shown first, back to the one under it or the list
+  useBackStack(open.length, (n) => setOpen((o) => o.slice(0, n)), narrow);
   // where it is, kept when the page leaves the session so coming back opens it here again (#5150)
   useEffect(() => notePlace({ mid, sid, cwd }, { path: dir === cwd ? undefined : dir, file: open.at(-1) }), [mid, sid, cwd, dir, open]);
   const menu = useMenu();
