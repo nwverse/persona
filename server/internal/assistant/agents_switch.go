@@ -171,7 +171,7 @@ func (s *Service) switchItems(ctx context.Context, a agentsSwitchArgs, t switchT
 				continue
 			}
 			own := cmp.Or(c.Launcher, "claude")
-			if own == t.Launcher || from != "" && own != from {
+			if own == t.Launcher && !c.OffLauncher || from != "" && own != from { // off it: a switch back (#11792)
 				continue
 			}
 			out = append(out, s.switchPlan(ctx, m, c, t))

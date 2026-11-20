@@ -1490,6 +1490,10 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		if c.Launcher != "" && c.SourceKind == "" && !c.Assistant { // what agent_switch moves it from (agent_switch.go)
 			fmt.Fprintf(&b, " · launcher=%s", c.Launcher)
+			if c.OffLauncher { // its claude was resumed without Persona's command (#11792)
+				fmt.Fprintf(&b, " (off_launcher: started on it, but its claude now runs without Persona's start command, "+
+					"e.g. herdr's bare resume after a restart, so not on %s; agent_switch to %s brings it back)", c.Launcher, c.Launcher)
+			}
 		}
 		if to := s.queuedSwitchOf(r.m.ID, c.SessionID); to != "" { // agents_switch queued it for the end of its turn
 			fmt.Fprintf(&b, " · switch_queued=%s", to)
