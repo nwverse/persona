@@ -199,6 +199,9 @@ func TestConversationSendWithoutWake(t *testing.T) {
 	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
 		proto.Session{SessionID: "conv2", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
 	ctx := context.Background()
+	if _, err := s.toolConversationSend(ctx, "conv2", []byte(`{"id":"conv1","text":"Got it.","wake":"false"}`)); err == nil {
+		t.Fatal("a non-boolean wake argument was accepted")
+	}
 	out, err := s.toolConversationSend(ctx, "conv2", []byte(`{"id":"conv1","text":"Got it, thanks.","wake":false}`))
 	if err != nil || !strings.Contains(out, "without waking it") {
 		t.Fatalf("wake false: %q, %v", out, err)

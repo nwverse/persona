@@ -1414,7 +1414,9 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 		Quote string `json:"quote"`
 		Wake  *bool  `json:"wake"`
 	}
-	_ = json.Unmarshal(args, &a)
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", fmt.Errorf("invalid conversation_send arguments: %w", err)
+	}
 	if strings.TrimSpace(a.Text) == "" {
 		return "", errors.New("text is empty")
 	}
