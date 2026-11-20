@@ -482,6 +482,79 @@ func TestPermissionModePerMachineResolution(t *testing.T) {
 	}
 }
 
+func TestPermissionModeManagedShadowingAndHubOverride(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	f.mu.Lock()
+	f.sessions["mac"] = nil
+	f.zshrc = map[string][]proto.Launcher{
+		"server": {
+			// Same-named Claude-like local definition shadowed by an in-scope managed omp provider.
+			{Name: "shadow-omp", Agent: "claude", Source: "zshrc"},
+			// Reverse collision: local omp definition shadowed by an in-scope managed Claude provider.
+			{Name: "shadow-claude", Agent: "omp", Source: "zshrc"},
+			// Scoped managed omp provider is only active on mac, so server keeps its local Claude launcher.
+			{Name: "scoped-omp", Agent: "claude", Source: "zshrc"},
+			// Discovered omp launcher with a partial hub.json override (AgentType/Agent unset).
+			{Name: "override-zshrc-omp", Agent: "omp", Source: "zshrc"},
+			// Local omp launcher shadowed by an in-scope managed Messages API provider + partial hub.json override.
+			{Name: "shadow-api", Agent: "omp", Source: "zshrc"},
+			// Runtime launcher whose AgentType is explicitly overridden to omp in hub.json.
+			{Name: "override-to-omp", Agent: "paseo", Source: "paseo", PermissionModes: proto.PermissionModeSetOf("default", "plan")},
+		},
+		"mac": {
+			{Name: "scoped-omp", Agent: "claude", Source: "zshrc"},
+		},
+	}
+	f.hello.Models.Launchers = map[string][]ConfiguredLauncher{
+		"server": {
+			{Launcher: proto.Launcher{Name: "shadow-omp", BaseURL: "https://override.example"}},
+			{Launcher: proto.Launcher{Name: "override-zshrc-omp", Model: "custom-model"}},
+			{Launcher: proto.Launcher{Name: "shadow-api", BaseURL: "https://api-override.example"}},
+			{Launcher: proto.Launcher{Name: "override-to-omp"}, AgentType: "omp"},
+		},
+	}
+	f.mu.Unlock()
+
+	putLaunchers(t, s,
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "shadow-omp", Agent: "omp", BaseURL: "https://omp.example"}, Share: "all"},
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "shadow-claude", Agent: "claude", BaseURL: "https://claude.example"}, Share: "all"},
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "scoped-omp", Agent: "omp", BaseURL: "https://scoped.example"}, Share: "selected", ScopeMachines: []string{"mac"}},
+		apiProvider(t, s, "shadow-api", "messages"),
+	)
+
+	// In-scope managed omp provider shadows local Claude launcher AND preserves omp across partial hub.json override.
+	if modes := s.permissionModesForLauncher(ctx, "server", "shadow-omp", &ModelProvider{ID: "launcher.shadow-omp", Kind: "launcher", Agent: "omp"}); len(modes) != 0 {
+		t.Fatalf("managed shadow-omp with local claude + partial hub.json override modes = %v, want empty", modes)
+	}
+	// Reverse collision: in-scope managed Claude provider shadows local omp launcher.
+	if modes := s.permissionModesForLauncher(ctx, "server", "shadow-claude", &ModelProvider{ID: "launcher.shadow-claude", Kind: "launcher", Agent: "claude"}); !slices.Contains(modes, "acceptEdits") {
+		t.Fatalf("managed shadow-claude shadowing local omp modes = %v, want standard Claude modes", modes)
+	}
+	if w := modelRequest(s, http.MethodPatch, "assistant", `{"revision":0,"provider":"launcher.shadow-claude","permission_mode":"acceptEdits"}`); w.Code != http.StatusOK {
+		t.Fatalf("assistant rejected valid Claude mode on managed shadow-claude: %d %s", w.Code, w.Body.String())
+	}
+	// Out-of-scope managed omp provider does not shadow server's local Claude launcher, but does shadow mac's.
+	if modes := s.permissionModesForLauncher(ctx, "server", "scoped-omp", &ModelProvider{ID: "launcher.scoped-omp", Kind: "launcher", Agent: "omp"}); !slices.Contains(modes, "acceptEdits") {
+		t.Fatalf("server out-of-scope scoped-omp modes = %v, want local Claude modes", modes)
+	}
+	if modes := s.permissionModesForLauncher(ctx, "mac", "scoped-omp", &ModelProvider{ID: "launcher.scoped-omp", Kind: "launcher", Agent: "omp"}); len(modes) != 0 {
+		t.Fatalf("mac in-scope scoped-omp modes = %v, want empty", modes)
+	}
+	// Partial hub.json override (AgentType and Agent unset) preserves discovered omp agent.
+	if modes := s.permissionModesForLauncher(ctx, "server", "override-zshrc-omp", nil); len(modes) != 0 {
+		t.Fatalf("override-zshrc-omp modes = %v, want empty", modes)
+	}
+	// Managed Messages API provider shadows local omp launcher and survives partial hub.json override.
+	if modes := s.permissionModesForLauncher(ctx, "server", "shadow-api", nil); !slices.Contains(modes, "acceptEdits") {
+		t.Fatalf("shadow-api modes = %v, want standard Claude modes", modes)
+	}
+	// Explicit hub.json AgentType override to omp clears inherited runtime permission modes.
+	if modes := s.permissionModesForLauncher(ctx, "server", "override-to-omp", nil); len(modes) != 0 {
+		t.Fatalf("override-to-omp modes = %v, want empty", modes)
+	}
+}
+
 func TestModelProfilePermissionModeValidationAndCapture(t *testing.T) {
 	s, f, _ := modelService(t)
 	ctx := context.Background()
