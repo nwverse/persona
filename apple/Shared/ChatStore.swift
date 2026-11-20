@@ -1689,8 +1689,10 @@ nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     /// It was written while the agent worked (the composer's queue mode): the queue strip draws it, not the chat
     /// (`QueuePlacement`, #1461). nil for one written while the agent was idle, and in outboxes saved before this.
     var queuedMode: Bool?
+    /// The latest effort choice seen while this message waited. Kept across app and node restarts.
+    var requiredEffort: String?
 
-    private enum CodingKeys: String, CodingKey { case id, text, images, state, failure, inboxHandOff, createdAt, mayHaveArrived, refused, via, queuedMode }
+    private enum CodingKeys: String, CodingKey { case id, text, images, state, failure, inboxHandOff, createdAt, mayHaveArrived, refused, via, queuedMode, requiredEffort }
 
     /// Only on this phone as far as it knows: failed, or waiting for the network. Deleting it (its long press, its mark's
     /// menu) drops the bubble and its outbox entry and sends nothing (#4626). One being sent may be arriving and a sent

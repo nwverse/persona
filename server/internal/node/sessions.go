@@ -172,9 +172,6 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Activity, s.ActivityAt = m.activityOf()
 				setContext(&s, m)
 				s.ModelFallback = m.modelFallback
-				if a.Agent != "codex" && a.Agent != traexAgent {
-					s.PermissionMode, s.Effort = n.currentModes(id, m)
-				}
 				s.WokeByTask = m.wake
 				if s.Status == proto.StatusWorking || s.Status == proto.StatusBlocked {
 					s.Queued = m.queue // an idle agent has taken everything; stale entries are from outside the tail
@@ -185,6 +182,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Loop, s.Goal, s.Plan = m.loop, m.goal, m.plan
 				s.Subagents = n.subagents(id)
 			}
+		}
+		if a.Agent != "codex" && a.Agent != traexAgent {
+			n.terminalModesRow(&s, rollout)
 		}
 		blockedSince := n.noteBlockedAt(id, s.Status == proto.StatusBlocked, now)
 		if a.Agent == "codex" && host.ParsePane(a.PaneID).Kind != host.Botmux && s.Status == proto.StatusBlocked &&
@@ -428,6 +428,7 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	s.BypassAvailable = n.hooks.canBypass(s.SessionID) // modes.go claudeCanBypass
 	n.modeRestartRow(s)                                // mode_restart.go
 	n.ultracodeRow(s, pass)
+	n.wakeEffortChange(s)
 }
 
 // decorateState restores metadata recorded when Persona started the session.

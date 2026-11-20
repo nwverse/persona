@@ -647,6 +647,10 @@ class OkHttpHubConnection(
         }
         _heartbeat.value = Heartbeat(20, 15)
         _currentHello.value = null
+        val dropRecorded = AtomicBoolean()
+        fun recordDrop() {
+            if (dropRecorded.compareAndSet(false, true)) persona.core.contracts.DevProbe.socket("dropped")
+        }
         val owner = ownerOf(selected)
         resumed = false
         val resumeFrom = resumePoint
@@ -655,10 +659,6 @@ class OkHttpHubConnection(
         val ws = webSocketFactory.newWebSocket(
             authorized(socketUrl(selected.endpoint.baseUrl(), resumeFrom), owner).build(),
             object : WebSocketListener() {
-                private val dropRecorded = AtomicBoolean()
-                private fun recordDrop() {
-                    if (dropRecorded.compareAndSet(false, true)) persona.core.contracts.DevProbe.socket("dropped")
-                }
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     persona.core.contracts.DevProbe.socket("connected")
                     received()
@@ -976,6 +976,9 @@ class OkHttpHubConnection(
             recheck.cancel()
             syncing?.cancel()
             pingJob?.cancel()
+            // OkHttp's failure callback is asynchronous and the outer close also shuts down its dispatcher. Record
+            // this terminal socket locally before cancellation; the listener's later callback shares the same guard.
+            recordDrop()
             ws.cancel()
             messages.close()
             activity.close()
