@@ -16,8 +16,11 @@ import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -28,6 +31,7 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
+import java.net.SocketTimeoutException
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.ModelPick
 import persona.core.contracts.PendingSwitch
@@ -120,7 +124,7 @@ class ModelPillTest {
     }
 
     /** Records what the pill asks the hub. */
-    private class Hub : AssistantManagement {
+    private open class Hub : AssistantManagement {
         val asked = mutableListOf<String>()
         var launcherListReads = 0
             private set
@@ -153,6 +157,119 @@ class ModelPillTest {
     }
 
     private fun hasDialogText(text: String) = hasText(text) and hasAnyAncestor(isDialog())
+
+    private fun showAssistantPill(hub: Hub) {
+        val session = Session("box", "main", assistant = true, launcher = "claude", status = "idle", rev = 3)
+        rule.setContent {
+            CompositionLocalProvider(LocalHubFeatures provides setOf("assistant_model_pick")) {
+                PersonaTheme(reduceMotion = true, style = AppStyle.Glass) {
+                    Box {
+                        PersonaModelPill(session, "box", hub, ModelPillWidth.Wide, pagePick = null, onPagePick = {}, onNotice = {})
+                    }
+                }
+            }
+        }
+    }
+
+    private fun waitForDialogText(text: String) = rule.waitUntil(5_000) {
+        rule.onAllNodes(hasDialogText(text), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+    }
+
+    @Test fun anAssistantProviderTimeoutCanBeRetriedInTheOpenSheet() = assertAssistantProviderRetry(SocketTimeoutException())
+
+    @Test fun aDiscardedAssistantRouteCanBeRetriedInTheOpenSheet() = assertAssistantProviderRetry(CancellationException("Pairing changed"))
+
+    private fun assertAssistantProviderRetry(failure: Exception) {
+        val first = CompletableDeferred<Unit>()
+        val retry = CompletableDeferred<Unit>()
+        val hub = object : Hub() {
+            override suspend fun assistantLauncherList(machineId: String): AssistantLaunchers {
+                val result = super.assistantLauncherList(machineId)
+                (if (launcherListReads == 1) first else retry).await()
+                return result
+            }
+        }
+        showAssistantPill(hub)
+        rule.onNodeWithTag("model-pill").performClick()
+        waitForDialogText("Loading models…")
+        rule.runOnIdle { first.completeExceptionally(failure) }
+        waitForDialogText("Couldn't load models")
+        rule.onNode(hasDialogText("Loading models…"), useUnmergedTree = true).assertDoesNotExist()
+
+        rule.onNode(hasDialogText("Retry"), useUnmergedTree = true).performClick()
+        waitForDialogText("Loading models…")
+        rule.runOnIdle { retry.complete(Unit) }
+        waitForDialogText("Sonnet 4.5")
+        rule.onNode(hasDialogText("Retry"), useUnmergedTree = true).assertDoesNotExist()
+        assertEquals(2, hub.launcherListReads)
+    }
+
+    @Test fun openingTheAssistantModelSheetRetriesAFailedPrefetch() {
+        val first = CompletableDeferred<Unit>()
+        val retry = CompletableDeferred<Unit>()
+        val hub = object : Hub() {
+            override suspend fun assistantLauncherList(machineId: String): AssistantLaunchers {
+                val result = super.assistantLauncherList(machineId)
+                (if (launcherListReads == 1) first else retry).await()
+                return result
+            }
+        }
+        showAssistantPill(hub)
+        rule.waitUntil(5_000) { hub.launcherListReads == 1 }
+        rule.runOnIdle { first.completeExceptionally(SocketTimeoutException()) }
+        rule.onNode(isDialog()).assertDoesNotExist()
+
+        rule.onNodeWithTag("model-pill").performClick()
+        waitForDialogText("Loading models…")
+        rule.runOnIdle {
+            assertEquals(2, hub.launcherListReads)
+            retry.complete(Unit)
+        }
+        waitForDialogText("Sonnet 4.5")
+        rule.onNode(hasDialogText("Retry"), useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun aFailedAssistantProviderRefreshKeepsTheModelsInTheOpenSheet() {
+        val refresh = CompletableDeferred<Unit>()
+        val hub = object : Hub() {
+            override suspend fun assistantLauncherList(machineId: String): AssistantLaunchers {
+                val result = super.assistantLauncherList(machineId)
+                if (launcherListReads > 1) refresh.await()
+                return result
+            }
+        }
+        showAssistantPill(hub)
+        rule.waitUntil(5_000) { hub.launcherListReads == 1 }
+        rule.onNodeWithTag("model-pill").performClick()
+        waitForDialogText("Sonnet 4.5")
+        rule.waitUntil(5_000) { hub.launcherListReads == 2 }
+        rule.runOnIdle { refresh.completeExceptionally(SocketTimeoutException()) }
+        waitForDialogText("Retry")
+        rule.onNodeWithTag("model-panel-list").performScrollToNode(hasText("Sonnet 4.5"))
+        rule.onNode(hasDialogText("Sonnet 4.5"), useUnmergedTree = true).assertExists()
+        rule.onNode(hasDialogText("Loading models…"), useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun aFallbackProviderCanRetryAfterTheRouteChangedAndShowAnEmptyModelList() {
+        val first = CompletableDeferred<LauncherModels>()
+        val retry = CompletableDeferred<LauncherModels>()
+        val hub = object : Hub() {
+            private var reads = 0
+
+            override suspend fun assistantLauncherList(machineId: String) = AssistantLaunchers()
+            override suspend fun launcherModels(machineId: String, launcher: String): LauncherModels =
+                (if (++reads == 1) first else retry).await()
+        }
+        showAssistantPill(hub)
+        rule.onNodeWithTag("model-pill").performClick()
+        rule.runOnIdle { first.completeExceptionally(CancellationException("Pairing changed")) }
+        waitForDialogText("Retry")
+        rule.onNode(hasDialogText("Retry"), useUnmergedTree = true).performClick()
+        rule.onNode(hasDialogText("Retry"), useUnmergedTree = true).assertDoesNotExist()
+        rule.runOnIdle { retry.complete(LauncherModels()) }
+        waitForDialogText("No models available")
+        rule.onNode(hasDialogText("Loading models…"), useUnmergedTree = true).assertDoesNotExist()
+    }
 
     @Test fun aPersonaChatsPickIsKeptOnTheHubAndUndone() {
         val hub = Hub()

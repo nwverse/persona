@@ -1521,6 +1521,13 @@ When restoring an assistant conversation, finding its newest transcript does not
 
 The same holds for a shell launcher's private profile, which a managed catalog can't name: its gateway token lives in the launcher's environment, so the profile never gets a sign-in, and plain claude started there answers "Not logged in" while `claude auth status` in the user's own setup says signed in. Ask Claude Code about the profile the start will actually use (`claudeAuthStatusProfile`), not the machine's default, and move the conversation to where the launcher is signed in rather than telling the user to sign in again (#11694).
 
+## Managed model discovery must tolerate a slow interactive shell (#10927)
+
+An interactive rc file can spend the entire discovery deadline in a version manager before the launcher command begins.
+A managed model probe has the command and provider settings already, so run it directly and test npm's
+`#!/usr/bin/env node` with a different Node.js on the service's PATH. Keep shell discovery for aliases and functions,
+and only cache output framed by the discovery command. A timed-out shell can print a banner without listing anything.
+
 ## Cross-session permission evidence (#9671)
 
 - A session-list mode is a display snapshot, not evidence of the mode in which a message was written. Capture at the source node while handling the producing call; delayed reports and retries retain that observation.

@@ -211,6 +211,9 @@ type ownSeen struct {
 	at time.Time
 }
 
+// pickerDiscoveryDeadline limits optional own-service probes to the time left after the Assistant picker reads the node.
+type pickerDiscoveryDeadline struct{}
+
 var (
 	ownServiceFresh = 10 * time.Minute
 	ownServiceRetry = time.Minute
@@ -239,10 +242,20 @@ func (s *Service) ownService(ctx context.Context, machine, agent string) proto.O
 		return st
 	}
 	st := proto.OwnServiceState{Agent: agent}
-	cctx, cancel := context.WithTimeout(ctx, ownServiceWait)
+	wait := ownServiceWait
+	if deadline, ok := ctx.Value(pickerDiscoveryDeadline{}).(time.Time); ok {
+		wait = min(wait, time.Until(deadline))
+		if wait <= 0 {
+			return st
+		}
+	}
+	cctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	if err := s.call(cctx, machine, DeviceLaunchersOwnService, map[string]any{"agent": agent}, &st); err != nil {
 		st = proto.OwnServiceState{Agent: agent}
+		if wait < ownServiceWait && cctx.Err() != nil {
+			return st // a picker giving up early must not replace the cached answer
+		}
 	}
 	m := &s.models
 	m.ownMu.Lock()

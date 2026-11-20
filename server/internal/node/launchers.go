@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/shellcmd"
 )
@@ -20,9 +22,10 @@ var launcherCache struct {
 	sync.Mutex
 	at         time.Time
 	list       []proto.Launcher
-	generation uint64     // incremented whenever a discovery publishes a new list
-	fetch      sync.Mutex // one login shell at a time
-	fetching   bool       // a background refresh (cachedLaunchers) is running
+	generation uint64            // incremented whenever a discovery publishes a new list
+	fetch      singleflight.Group // concurrent ordinary asks share the login shell's result, including failure
+	shell      sync.Mutex        // one login shell at a time, including forced refreshes
+	fetching   bool              // a background refresh (cachedLaunchers) is running
 	// codex: how each Codex launcher runs (codex_start.go), its words as the shell would run them.
 	codex map[string][]string
 	// settings: the --settings a claude alias brings itself, as its words give it (launcher_settings.go).
@@ -95,18 +98,34 @@ type launcherFetchObserverKey struct{}
 
 // launchers lists the launchers of this machine's login shell: the `_claude_launchers` helper's (claude wrapper
 // functions), then every alias that runs claude (`alias dmcc="ANTHROPIC_BASE_URL=… claude …"`), by name. A name
-// the helper lists is not repeated; none at all: plain claude. refresh true bypasses and replaces the one-minute
-// cache; the manager uses it only while recovering a specific Assistant launcher missing from the cached snapshot.
+// the helper lists is not repeated; none at all: plain claude. Ordinary concurrent asks share one shell's result.
+// refresh true bypasses and replaces the one-minute cache; the manager uses it only while recovering a specific
+// Assistant launcher missing from the cached snapshot.
 func (n *Node) launchers(ctx context.Context, refresh ...bool) ([]proto.Launcher, error) {
 	forced := len(refresh) > 0 && refresh[0]
+	// Forced recovery must run its own discovery when the cache has not advanced. Sharing another forced refresh's
+	// failed result would hide that recovery, while ordinary asks retain singleflight's sharing of failures.
+	if !forced {
+		result, err, _ := launcherCache.fetch.Do("shell", func() (any, error) {
+			return n.discoverLaunchers(ctx, false)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return result.([]proto.Launcher), nil
+	}
+	return n.discoverLaunchers(ctx, true)
+}
+
+func (n *Node) discoverLaunchers(ctx context.Context, forced bool) ([]proto.Launcher, error) {
 	launcherCache.Lock()
 	observed := launcherCache.generation
 	launcherCache.Unlock()
 	if entered, _ := ctx.Value(launcherFetchObserverKey{}).(func()); entered != nil {
 		entered()
 	}
-	launcherCache.fetch.Lock()
-	defer launcherCache.fetch.Unlock()
+	launcherCache.shell.Lock()
+	defer launcherCache.shell.Unlock()
 	launcherCache.Lock()
 	// A detached discovery may have finished while this call waited for the shell lock. Its newly published list is the
 	// freshest possible answer, even for a forced refresh; running another shell now could hide that recovery again.
@@ -126,34 +145,47 @@ func (n *Node) launchers(ctx context.Context, refresh ...bool) ([]proto.Launcher
 	// and the next ask within the minute gets the list from the cache.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
 	defer cancel()
-	// Within those 20 s for good (#10952): something the rc file leaves running in the background (or the script's
-	// children when the cap kills the shell) holds the output's pipe open, and Output() alone waited for it, past the
-	// hub's 30 s on every ask while this lock held each one behind it. The shell's output so far is the list.
-	cmd := loginShell(ctx, launcherScript)
-	killGroupOnCancel(cmd)
-	began := time.Now()
-	out, err := cmd.Output()
-	text := string(out)
-	if !strings.Contains(text, launcherBegin) {
-		// The shell ended before the script ran (the 20 s cap on a slow rc file, an rc file that exits): what it printed
-		// is the rc files' own, and says nothing of the launchers. Ordinary reads may keep the last good list, but a
-		// forced recovery refresh must report the failed read rather than presenting that stale list as fresh evidence.
-		failed := fmt.Errorf("list launchers: the login shell ended before listing them after %v: %v",
-			time.Since(began).Round(time.Millisecond), err)
+	out, err := scanLaunchers(ctx)
+	if err != nil {
+		// Ordinary reads may keep the last good list, but a forced recovery refresh must report the failed read rather
+		// than presenting that stale list as fresh evidence.
 		if forced {
-			return nil, failed
+			return nil, err
 		}
-		return lastLaunchers(failed)
+		return lastLaunchers(err)
 	}
-	// Once discovery began, partial framed output remains useful when the 20-second cap cuts off the shell. Without
-	// that begin marker there is no evidence that any of the output came from launcherScript.
-	list, codex, settings, scripts := mergeLaunchers(text)
+	list, codex, settings, scripts := mergeLaunchers(string(out))
 	launcherCache.Lock()
 	launcherCache.at, launcherCache.list, launcherCache.codex, launcherCache.settings = time.Now(), list, codex, settings
 	launcherCache.scripts = scripts
 	launcherCache.generation++
 	launcherCache.Unlock()
 	return list, nil
+}
+
+func scanLaunchers(ctx context.Context) ([]byte, error) {
+	// Bound both the shell and descendants that hold its output pipe open (#10952).
+	began := time.Now()
+	out, err := launcherShellOutput(ctx, launcherScript)
+	if !strings.Contains(string(out), launcherBegin) {
+		// The shell ended before the script ran (the 20 s cap on a slow rc file, an rc file that exits): what it printed
+		// is the rc files' own, and says nothing of the launchers. Parsed, it was plain claude alone, which replaced the
+		// last list for a minute: every other launcher unknown, and the hub moved their conversations to claude (#11580).
+		return nil, fmt.Errorf("list launchers: the login shell ended before listing them after %v: %v",
+			time.Since(began).Round(time.Millisecond), err)
+	}
+	// Retain useful partial output. The shell can print an rc banner or the start of the frame before the timeout.
+	if err != nil && strings.Trim(launcherOutput(string(out)), "\x02\x1d\r\n\t ") == "" {
+		return nil, fmt.Errorf("list launchers: %w", err)
+	}
+	return out, nil
+}
+
+func launcherShellOutput(ctx context.Context, script string) ([]byte, error) {
+	cmd := loginShell(ctx, script)
+	// A shell's children can hold stdout open after it dies. Bound the group and the pipe wait (#10952).
+	killGroupOnCancel(cmd)
+	return cmd.Output()
 }
 
 // lastLaunchers answers a failed read of the login shell (launchers): the last list, kept for another minute so the

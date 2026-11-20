@@ -61,6 +61,94 @@ func TestMainChatPickerListsOnlyWhatRunsTheAssistant(t *testing.T) {
 	}
 }
 
+func TestMainChatPickerUsesKnownProvidersDuringShellTimeout(t *testing.T) {
+	s, f := mainChatFixture(t)
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "gw", Model: "m1", OwnService: "skip"}})
+	old := launcherSyncTimeout
+	launcherSyncTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { launcherSyncTimeout = old })
+	f.mu.Lock()
+	f.slowLaunchers = map[string]bool{"server": true}
+	callStart := len(f.calls)
+	f.mu.Unlock()
+
+	if got := pickerNames(t, s, "assistant"); !slices.Equal(got, []string{"gw"}) {
+		t.Fatalf("managed launcher without a shell snapshot = %v", got)
+	}
+
+	f.mu.Lock()
+	calls := slices.Clone(f.calls[callStart:])
+	f.slowLaunchers = nil
+	f.sessions["other"] = nil
+	f.zshrc = map[string][]proto.Launcher{
+		"server": {{Name: "cached-alias", Source: "zshrc"}},
+		"other":  {{Name: "other-machine", Source: "zshrc"}},
+	}
+	f.mu.Unlock()
+	shellReads := 0
+	for _, call := range calls {
+		if call.Method == DeviceLaunchersList {
+			shellReads++
+		}
+		if call.Method == DeviceLaunchersOwnService {
+			t.Fatal("picker asked the node about its own service after the discovery deadline")
+		}
+	}
+	if shellReads != 1 {
+		t.Fatalf("cold picker made %d shell reads, want 1", shellReads)
+	}
+	_ = s.zshrcLaunchers(t.Context(), true)
+	f.mu.Lock()
+	f.slowLaunchers = map[string]bool{"server": true}
+	f.mu.Unlock()
+	if got := pickerNames(t, s, "assistant"); !slices.Equal(got, []string{"cached-alias", "gw"}) {
+		t.Fatalf("picker during shell timeout = %v", got)
+	}
+
+	f.mu.Lock()
+	f.slowLaunchers = nil
+	f.zshrc["server"] = []proto.Launcher{{Name: "live-alias", Source: "zshrc"}}
+	f.mu.Unlock()
+	if got := pickerNames(t, s, "assistant"); !slices.Equal(got, []string{"live-alias", "gw"}) {
+		t.Fatalf("picker after shell recovery = %v", got)
+	}
+}
+
+func TestMainChatPickerDefaultUsesFreshAlias(t *testing.T) {
+	s, f := mainChatFixture(t)
+	if err := s.saveModelRecord(t.Context(), "assistant", 0, ModelBinding{Provider: "launcher.live-alias"}); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.launcherList = []proto.Launcher{{Name: "live-alias", Source: "zshrc", Model: "example-model"}}
+	f.mu.Unlock()
+	r := request(s, "GET", "/api/v1/machines/server/launchers?purpose=assistant", "")
+	var res struct {
+		Default struct {
+			Provider string
+			Model    string
+		}
+	}
+	if r.Code != 200 || json.Unmarshal(r.Body.Bytes(), &res) != nil ||
+		res.Default.Provider != "live-alias" || res.Default.Model != "example-model" {
+		t.Fatalf("picker lost the configured alias default: %d %s", r.Code, r.Body.String())
+	}
+}
+
+func TestMainChatPickerShellTimeoutWithoutChoicesStaysRetryable(t *testing.T) {
+	f := newFakeHub().withMachine()
+	f.slowLaunchers = map[string]bool{"server": true}
+	s := newTestService(t, f)
+	old := launcherSyncTimeout
+	launcherSyncTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { launcherSyncTimeout = old })
+
+	r := request(s, "GET", "/api/v1/machines/server/launchers?purpose=assistant", "")
+	if r.Code != 502 || !strings.Contains(r.Body.String(), `"code":"timeout"`) {
+		t.Fatalf("picker without choices = %d %s", r.Code, r.Body.String())
+	}
+}
+
 // Every client replays these candidates: an assistant-purpose read adds the eligible Messages API provider and keeps
 // the declared runtime, but not managed Codex. New Agent keeps its generic launcher answer (Direct APIs are not Agents).
 func TestMainChatPickerReplaysSharedLauncherFixture(t *testing.T) {

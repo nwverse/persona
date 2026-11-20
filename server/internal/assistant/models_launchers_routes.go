@@ -483,24 +483,26 @@ func (s *Service) machineLauncherRoutes() {
 		// New Agent lists what a start in its host can run (?host=, else the computer's default): where that is an
 		// engine that runs only its own launchers (Paseo), its providers alone (#8140). The main chat's menu lists the
 		// computer's own launchers: the assistant runs them on its command line, whatever the engine.
+		purpose := r.URL.Query().Get("purpose")
 		host := ""
-		if purpose := r.URL.Query().Get("purpose"); purpose == "" || purpose == "agent.new" {
+		if purpose == "" || purpose == "agent.new" {
 			host = agentStartHost(d, r.URL.Query().Get("host"))
 		}
 		var list []ConfiguredLauncher
 		var err error
-		if d.ExternalInventory && r.URL.Query().Get("purpose") == "assistant" {
-			list, err = s.externalPickerLaunchers(ctx, d, r.URL.Query().Get("refresh") == "1")
-		} else {
-			list, err = s.pickerLaunchersOn(ctx, mid, host)
-		}
 		var unavailable []unavailableLauncher
-		if purpose := r.URL.Query().Get("purpose"); err == nil && (purpose == "assistant" || purpose == "task") {
-			all := list
-			if list, err = s.assistantLaunchersOf(ctx, mid, all); err == nil {
+		var all []ConfiguredLauncher
+		// the main chat's menu, and the scheduled tasks' (task: computer-scoped scheduled-task inheritance)
+		if purpose == "assistant" || purpose == "task" {
+			if !d.ExternalInventory {
+				ctx = context.WithValue(ctx, pickerDiscoveryDeadline{}, time.Now().Add(launcherSyncTimeout))
+			}
+			all, list, err = s.assistantPickerLaunchers(ctx, d, r.URL.Query().Get("refresh") == "1")
+			if err == nil {
 				unavailable = s.mainChatUnavailable(ctx, mid, all, list, s.requestLang(r)) // and what it can't run, with why (#5033)
 			}
-		} else if err == nil {
+		} else {
+			list, err = s.pickerLaunchersOn(ctx, mid, host)
 			list = slices.DeleteFunc(list, func(l ConfiguredLauncher) bool {
 				return proto.IsExternalLauncher(l.Name) || l.Source == proto.ExternalLauncherSource
 			})
@@ -511,7 +513,7 @@ func (s *Service) machineLauncherRoutes() {
 		}
 		// A launcher whose latest check failed is left out of the pickers and of the presets that name it; the launcher
 		// the configuration runs with no pick stays, with its record, so the form can still say why this start may fail.
-		def := s.pickerDefault(ctx, r)
+		def := s.pickerDefault(ctx, r, all)
 		keep, _ := def["provider"].(string)
 		shown := s.withHealth(ctx, mid, list, keep)
 		// A Persona-managed provider shows its display name over its ID (launcher_auto_name), and a runtime's provider the
@@ -532,7 +534,7 @@ func (s *Service) machineLauncherRoutes() {
 		if unavailable != nil {
 			out["unavailable"] = unavailable
 		}
-		if purpose := r.URL.Query().Get("purpose"); purpose == "" || purpose == "agent.new" {
+		if purpose == "" || purpose == "agent.new" {
 			usable := make([]ConfiguredLauncher, 0, len(shown))
 			for _, l := range shown {
 				usable = append(usable, l.ConfiguredLauncher)

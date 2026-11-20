@@ -345,11 +345,10 @@ var agentSystemDirs = []string{"/opt/homebrew/bin", "/usr/local/bin"}
 // node puts claude. commonNodePaths looks there after agentSystemDirs; a test points it elsewhere with them (#6257).
 var distroNodeDir = "/usr/bin"
 
-// claudeExecutable finds claude: PATH first, then the usual install spots. A node started by launchd (macOS) has a
-// minimal PATH that misses /opt/homebrew/bin, and nothing in `personad launch`'s own path adds it.
-func agentExecutable(bin string) (string, error) {
+// agentExecutableOnDisk finds a CLI on PATH or in the usual install locations without running shell startup files.
+func agentExecutableOnDisk(bin string) string {
 	if p, err := exec.LookPath(bin); err == nil {
-		return p, nil
+		return p
 	}
 	home := userHome()
 	var candidates []string
@@ -364,9 +363,11 @@ func agentExecutable(bin string) (string, error) {
 		filepath.Join(home, ".claude", "local", bin),
 		filepath.Join(home, ".volta", "bin", bin),
 	)
-	nvmDirs, _ := filepath.Glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin", bin))
-	sort.Sort(sort.Reverse(sort.StringSlice(nvmDirs)))
-	candidates = append(candidates, nvmDirs...)
+	for _, dir := range nvmVersionsDirs(home) {
+		paths, _ := filepath.Glob(filepath.Join(dir, "*", "bin", bin))
+		slices.Reverse(paths)
+		candidates = append(candidates, paths...)
+	}
 	for _, np := range commonNodePaths() {
 		candidates = append(candidates, filepath.Join(filepath.Dir(np), bin))
 	}
@@ -377,10 +378,16 @@ func agentExecutable(bin string) (string, error) {
 		}
 		seen[p] = true
 		if st, err := os.Stat(p); err == nil && !st.IsDir() && (st.Mode().Perm()&0111 != 0 || runtime.GOOS == "windows") {
-			return p, nil
+			return p
 		}
 	}
+	return ""
+}
 
+func agentExecutable(bin string) (string, error) {
+	if p := agentExecutableOnDisk(bin); p != "" {
+		return p, nil
+	}
 	agentExecutableMu.Lock()
 	cached := agentExecutableCache[bin]
 	agentExecutableMu.Unlock()
@@ -395,8 +402,8 @@ func agentExecutable(bin string) (string, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := loginShell(ctx, "command -v "+shellQuote(bin))
-	if out, err := cmd.Output(); err == nil {
+	// ErrWaitDelay means command -v succeeded, but an rc child kept the output pipe open.
+	if out, err := launcherShellOutput(ctx, "command -v "+shellQuote(bin)); err == nil || errors.Is(err, exec.ErrWaitDelay) {
 		lines := strings.Split(strings.TrimSpace(terminalEscapes.ReplaceAllString(string(out), "")), "\n")
 		for i := len(lines) - 1; i >= 0; i-- {
 			line := strings.TrimSpace(lines[i])
@@ -421,6 +428,28 @@ func agentExecutable(bin string) (string, error) {
 }
 
 func claudeExecutable() (string, error) { return agentExecutable("claude") }
+
+// A managed model probe can skip the user's rc file when Claude and its interpreter are already available.
+// Otherwise run the original shell command so it gets the launcher and PATH established by the user's setup.
+func canProbeManagedClaudeDirectly() bool {
+	if runtime.GOOS == "windows" {
+		return true // keep the Windows executable and wrapper handling in Launch
+	}
+	claude := agentExecutableOnDisk("claude")
+	if claude == "" {
+		return false
+	}
+	dir, needsNode := launcherNodeDir(claude)
+	if dir != "" {
+		return true
+	}
+	if !needsNode {
+		// An arbitrary wrapper may depend on tools added by the user's shell.
+		return nativeExecutable(claude)
+	}
+	_, err := exec.LookPath("node")
+	return err == nil
+}
 
 // Launch is `personad launch [--ticket <ticket>] <name> [claude args…]`: the managed launcher's settings from the
 // local node, a hand-off's values with a ticket (secretenv.go), then claude.
@@ -513,7 +542,7 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 	if agent == "codex" && os.Getenv(codexBypassEnv) == "1" {
 		argv = codexBypassArgs(argv)
 	}
-	env = withoutEnv(env, []string{codexBypassEnv})
+	env = withoutEnv(env, []string{codexBypassEnv, managedModelProbeEnv})
 	if agent == "codex" {
 		// The provider wrapper is another native process boundary. Resolve npm's
 		// shim too; never let cmd.exe parse the first message on this final hop.
@@ -776,7 +805,16 @@ func launchExec(agent, exe string, argv, env []string) (string, []string, []stri
 		return sandbox.NewStatusReason("node-doctor.sandbox_unmanaged_agent", i18n.Args{"agent": agent})
 	}
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "personad launch: "+format+"\n", a...) }
-	wrapped, wenv, st := wrapAgent("launch "+agent, home, identity.DataDir(home), cwd, settingsArgs(rest), inner, append([]string{exe}, rest...), env, logf)
+	command := append([]string{exe}, rest...)
+	if agent == "claude" && os.Getenv(managedModelProbeEnv) == "1" {
+		if dir, _ := launcherNodeDir(exe); dir != "" {
+			// Only the probe needs this interpreter. Keep the child environment's PATH order for every other command.
+			exe = filepath.Join(dir, "node")
+			command = append([]string{exe}, command...)
+			argv = command
+		}
+	}
+	wrapped, wenv, st := wrapAgent("launch "+agent, home, identity.DataDir(home), cwd, settingsArgs(rest), inner, command, env, logf)
 	if wrapped[0] == exe {
 		return exe, argv, env, st
 	}

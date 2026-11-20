@@ -2,12 +2,15 @@ package node
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // asBash runs script the way the node does where the login shell is bash (`bash -ic`), with defs as the ~/.bashrc,
@@ -15,6 +18,107 @@ import (
 func asBash(t *testing.T, defs, script string) string {
 	t.Helper()
 	return asBashIn(t, t.TempDir(), defs, script)
+}
+
+func TestLauncherScanTimeoutDiscardsEmptyFramesAndBoundsChildOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses Unix shell process groups")
+	}
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("no zsh")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ZDOTDIR", home)
+	t.Setenv("SHELL", "/bin/zsh")
+	const hang = "exec /bin/sh -c '/bin/sleep 8 & wait'"
+	for name, rc := range map[string]string{
+		"startup": "echo 'Welcome back'\n" + hang,
+		"no rows": "_claude_launchers() { " + hang + "; }",
+	} {
+		t.Run(name, func(t *testing.T) {
+			writeFile(t, filepath.Join(home, ".zshrc"), rc+"\n")
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			start := time.Now()
+			out, err := scanLaunchers(ctx)
+			if err == nil || len(out) != 0 || !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				t.Fatalf("scan should fail without reporting launchers: output=%q error=%v context=%v", out, err, ctx.Err())
+			}
+			if took := time.Since(start); took > 6*time.Second {
+				t.Fatalf("scan waited %s for a child that held stdout open", took)
+			}
+		})
+	}
+}
+
+func TestConcurrentLaunchersShareFailedShellScan(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a Unix shell fixture")
+	}
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("no zsh")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ZDOTDIR", home)
+	t.Setenv("SHELL", "/bin/zsh")
+	launcherCache.Lock()
+	oldAt, oldList, oldCodex, oldSettings, oldScripts := launcherCache.at, launcherCache.list, launcherCache.codex, launcherCache.settings, launcherCache.scripts
+	launcherCache.at, launcherCache.list = time.Time{}, nil
+	launcherCache.Unlock()
+	t.Cleanup(func() {
+		launcherCache.Lock()
+		launcherCache.at, launcherCache.list, launcherCache.codex, launcherCache.settings, launcherCache.scripts = oldAt, oldList, oldCodex, oldSettings, oldScripts
+		launcherCache.Unlock()
+	})
+	rc, started, release := filepath.Join(home, ".zshrc"), filepath.Join(home, "started"), filepath.Join(home, "release")
+	const recordStart = `printf 'start\n' >> "$HOME/started"` + "\n"
+	writeFile(t, rc, recordStart+`while [ ! -f "$HOME/release" ]; do /bin/sleep 0.02; done
+exit 1
+`)
+	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o600) })
+	n := &Node{}
+	const requests = 5
+	ready, done := make(chan struct{}), make(chan error, requests)
+	for range requests {
+		go func() {
+			ready <- struct{}{}
+			_, err := n.launchers(t.Context())
+			done <- err
+		}()
+	}
+	for range requests {
+		<-ready
+	}
+	waitFor(t, "launcher scan startup", func() bool { _, err := os.Stat(started); return err == nil })
+	// All callers have reached the call site. Let them join the running scan before allowing it to fail.
+	time.Sleep(100 * time.Millisecond)
+	writeFile(t, release, "")
+	deadline := time.After(10 * time.Second)
+	for range requests {
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Error("expected the shell failure to reach every caller")
+			}
+		case <-deadline:
+			t.Fatal("launcher requests did not return after the shell exited")
+		}
+	}
+	if starts, err := os.ReadFile(started); err != nil || string(starts) != "start\n" {
+		t.Fatalf("concurrent calls started %q, %v", starts, err)
+	}
+	writeFile(t, rc, recordStart+"alias retry_test='claude --model model-a'\n")
+	for range 2 {
+		list, err := n.launchers(t.Context())
+		if err != nil || byName(list)["retry_test"].Model != "model-a" {
+			t.Fatalf("a new call should retry and cache the recovered launchers: %+v, %v", list, err)
+		}
+	}
+	if starts, err := os.ReadFile(started); err != nil || string(starts) != "start\nstart\n" {
+		t.Fatalf("retry and cache should run the shell once more: %q, %v", starts, err)
+	}
 }
 
 // asBashIn is asBash with dir as the HOME, for a test that puts something in it first.

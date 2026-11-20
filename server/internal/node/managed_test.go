@@ -2,10 +2,13 @@ package node
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -65,6 +68,7 @@ func TestClaudeExecutableFallsBackToNVMAndActionableError(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", t.TempDir())
+	t.Setenv("NVM_DIR", "")
 	// Not the machine's own claude, or "missing" would find it (#5449, #6257).
 	hideMachineAgents(t)
 
@@ -95,6 +99,37 @@ func TestClaudeExecutableFallsBackToNVMAndActionableError(t *testing.T) {
 	got, err := claudeExecutable()
 	if err != nil || got != nvmClaude {
 		t.Fatalf("got %q %v, want %q", got, err, nvmClaude)
+	}
+
+	// NVM can be installed elsewhere when a service inherits NVM_DIR.
+	custom := filepath.Join(home, "custom NVM")
+	t.Setenv("NVM_DIR", custom)
+	customClaude := writeExecutable(t, filepath.Join(custom, "versions", "node", "v22.1.0", "bin", "claude"), "#!/bin/sh\n")
+	if got, err := claudeExecutable(); err != nil || got != customClaude {
+		t.Fatalf("got %q %v, want %q", got, err, customClaude)
+	}
+}
+
+func TestAgentExecutableKeepsSuccessfulShellLookupWithOpenChildOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses Unix shell process groups")
+	}
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("no zsh")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ZDOTDIR", home)
+	t.Setenv("SHELL", "/bin/zsh")
+	const name = "persona-test-agent-from-rc"
+	path := writeExecutable(t, filepath.Join(home, "custom agent", name), "#!/bin/sh\n")
+	writeFile(t, filepath.Join(home, ".zshrc"), "export PATH="+shellQuote(filepath.Dir(path))+":\"$PATH\"\n/bin/sleep 7 &!\n")
+	start := time.Now()
+	if got, err := agentExecutable(name); err != nil || got != path {
+		t.Fatalf("got %q %v, want %q", got, err, path)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("lookup waited %s for a child that held stdout open", took)
 	}
 }
 

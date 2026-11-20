@@ -292,11 +292,51 @@ func (s *Service) pickerLaunchersKnown(ctx context.Context, machine, host string
 	if err != nil {
 		return nil, false, err
 	}
+	return s.pickerLaunchersFrom(ctx, machine, ls), known, nil
+}
+
+func (s *Service) pickerLaunchersFrom(ctx context.Context, machine string, ls []proto.Launcher) []ConfiguredLauncher {
 	discovered := make([]ConfiguredLauncher, 0, len(ls))
 	for _, l := range ls {
 		discovered = append(discovered, ConfiguredLauncher{Launcher: l})
 	}
-	return sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[machine]), known, nil
+	return sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[machine])
+}
+
+// assistantPickerLaunchers bounds live shell discovery to the launcher sync deadline. If the shell is slow to start,
+// the machine's last known launchers and any Persona-managed providers can still populate the main chat's menu.
+func (s *Service) assistantPickerLaunchers(ctx context.Context, d Device, refresh bool) (picker, fits []ConfiguredLauncher, err error) {
+	var syncErr error
+	if d.ExternalInventory {
+		picker, err = s.externalPickerLaunchers(ctx, d, refresh)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else {
+		var listing launcherListing
+		listing, syncErr = s.listLaunchers(ctx, d)
+		if syncErr != nil {
+			if ctx.Err() != nil || apierr.NodeCode(syncErr) != "timeout" {
+				return nil, nil, syncErr
+			}
+			listing.Launchers = nil
+			lastSeen, _ := s.zshrcLaunchersLastSeen(ctx)
+			if i := slices.IndexFunc(lastSeen, func(m zshrcLaunchers) bool { return m.MachineID == d.ID }); i >= 0 {
+				listing.Launchers = lastSeen[i].Launchers
+			}
+		}
+		res := machineLauncherListing{Launchers: make([]proto.LauncherEnvelope, 0, len(listing.Launchers))}
+		for _, l := range listing.Launchers {
+			res.Launchers = append(res.Launchers, proto.LauncherEnvelope(l))
+		}
+		launchers, _ := s.machineLaunchersFrom(ctx, d.ID, res)
+		picker = s.pickerLaunchersFrom(ctx, d.ID, launchers)
+	}
+	fits, err = s.assistantLaunchersOf(ctx, d.ID, picker)
+	if err == nil && len(fits) == 0 {
+		err = syncErr
+	}
+	return picker, fits, err
 }
 
 // pickerLaunchersSeen is pickerLaunchers from seen, machine's own launchers as last seen, without asking its node for

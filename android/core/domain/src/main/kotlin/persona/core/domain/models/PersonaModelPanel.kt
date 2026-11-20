@@ -86,7 +86,8 @@ object PersonaModelPanel {
             }
             // the provider it runs on stays as it is, whatever its kind: it is what the panel says the chat runs
             val unavailable = if (running && kind != runs && l.name != setup.provider) PanelReason.OtherEngine(runs, kind) else null
-            PanelProvider(l.name, l.title, kind, models, loading = !e.read && e.error == null, error = e.error?.takeIf { !e.read },
+            PanelProvider(l.name, l.title, kind, models, loading = !e.read && (e.loading || e.error == null),
+                error = e.error?.takeIf { !e.read && !e.loading },
                 unavailable = unavailable, typable = unavailable == null && typed && AgentModelPanel.typedModelOffered(kind, e.list))
         }.toMutableList()
         // what the chat runs on, when the list doesn't have it (yet): plain claude is always there; another one is gone
@@ -98,8 +99,9 @@ object PersonaModelPanel {
                 claude -> null
                 else -> listOfNotNull(setup.model?.let { PanelModel(it, AgentModelPanel.modelLabel(it)) })
             }
-            providers.add(0, PanelProvider(setup.provider, setup.provider, runs, models, loading = claude && !e.read,
-                unavailable = if (claude) null else PanelReason.ProviderGone))
+            providers.add(0, PanelProvider(setup.provider, setup.provider, runs, models,
+                loading = claude && !e.read && (e.loading || e.error == null),
+                error = e.error?.takeIf { claude && !e.read && !e.loading }, unavailable = if (claude) null else PanelReason.ProviderGone))
         }
         for (u in info?.unavailable.orEmpty()) {
             if (providers.any { it.id == u.name }) continue
