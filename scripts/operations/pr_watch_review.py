@@ -157,13 +157,35 @@ def split_diff(text, limit=180_000, worktree=None, base=None, head=None):
                 else:
                     raise WatchError("one diff header exceeds the semantic-review chunk bound; review this file manually")
             for hunk in hunks:
+                hunk_parts = []
                 if len(hunk) + len(header) > limit:
-                    raise WatchError("one diff hunk exceeds the semantic-review chunk bound; review this file manually")
-                if piece != header and len(piece) + len(hunk) > limit:
-                    file_chunks.append((piece, None))
-                    piece = header
-                piece += hunk
-            file_chunks.append((piece, None))
+                    # A contiguous text replacement is one hunk, however many
+                    # lines it contains. Split only between complete content
+                    # lines, retaining the original hunk header for context.
+                    hunk_lines = hunk.splitlines(keepends=True)
+                    if len(hunk_lines) < 2 or any(
+                            not line.startswith(("+", "-", " ", "\\"))
+                            for line in hunk_lines[1:]):
+                        raise WatchError("malformed text diff hunk; review this file manually")
+                    if any(len(line) + len(header) + len(hunk_lines[0]) > limit
+                           for line in hunk_lines[1:]):
+                        raise WatchError("one diff line exceeds the semantic-review chunk bound; review this file manually")
+                    part = hunk_lines[0]
+                    for line in hunk_lines[1:]:
+                        if len(part) + len(line) + len(header) > limit:
+                            hunk_parts.append(part)
+                            part = hunk_lines[0]
+                        part += line
+                    hunk_parts.append(part)
+                else:
+                    hunk_parts = [hunk]
+                for part in hunk_parts:
+                    if piece != header and len(piece) + len(part) > limit:
+                        file_chunks.append((piece, None))
+                        piece = header
+                    piece += part
+            if piece != header:
+                file_chunks.append((piece, None))
             reconstructed.append(header + "".join(hunks))
         for file_chunk, original in file_chunks:
             if current and len(current) + len(file_chunk) > limit:
