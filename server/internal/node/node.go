@@ -1569,8 +1569,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			if kind == "" {
 				kind = launcherAgentType(p.Launcher)
 			}
-			if kind == ompAgent { // omp's own config decides, not a start's arguments (start_agent.go)
-				return nil, refusal("omp_options", ompOptionsRefusal, nil)
+			if kind == ompAgent {
+				return nil, ompOptionsRefusal(ctx)
 			}
 			if _, runtime := engineRuntimes[cmp.Or(p.Host, n.defaultKind())]; runtime { // the start's host is a runtime (Paseo)
 				kind = "runtime"
@@ -1666,6 +1666,10 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			// (launcher_switch.go): the Resume waits for it, then finds the agent running, or resumes it as it is.
 			defer n.resumeTurn(ctx, p.ResumeSessionID)() // and a switch to the other engine does not resume it beside this
 			r = n.fillResume(p.ResumeSessionID, r)       // what it ran with, for what the start leaves out (retire.go)
+			if n.startAgentType(r.launcher, p.AgentType) == ompAgent {
+				// omp restores the model from its session file. Only an explicit override should reach the refusal.
+				r.execution.Model = p.Model
+			}
 			ctx, taskSpace = withTaskSpace(ctx, r.taskID, r.workspaceID, r.workspaceLabel)
 			// The user's Resume (the only way a stopped agent runs again, #4754): in the shell it left when that is
 			// still there (stopped.go).
