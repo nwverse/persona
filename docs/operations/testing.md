@@ -460,6 +460,18 @@ Run `python3 scripts/test/android-named-inbox-handoff.py --report /tmp/persona-h
 
 The fixture runs `persona.core.data.NamedManagerInboxHandoffLiveTest` in `:core:data:testDebugUnitTest`. The Android repository reads the merged Inbox and hands the named manager's item to the target session. Each of two attempts uses a fresh Room outbox and reply journal so the same operation crosses HTTP twice. The session-message route names the manager's machine, and the Inbox record request names the manager. The test compares the complete returned handoff, including the original Agent chain entry. The report includes the request and response hashes for each observed route, delivery counts for both machines, and handoff and chain counts from both databases. Ordinary Android test runs skip this fixture unless `PERSONA_ANDROID_HANDOFF_FIXTURE` names its private configuration file.
 
+## Android Inbox Agent handoff to a running engine
+
+Run `python3 scripts/test/android-engine-inbox-handoff.py --model <installed-model> --report /tmp/engine-handoff.json`
+with Docker, Go, the Android SDK and JDK, Node 22+, Codex CLI and a local Ollama model that supports the Responses API
+on port 11434. Use `--codex <path>` to select a CLI that writes session items Persona can read. Codex CLI 0.169.1
+was verified with `gemma4:e4b`. The test creates a disposable Codex profile, thread, loopback hub, default manager and PostgreSQL store.
+
+Android sends one synthetic Inbox instruction through its real outbox. At the injected HTTP 409 the driver inspects
+the engine transcript and the Inbox database before allowing the composer to retry. It then checks the single completed
+engine turn, the returned reply in Android's session history and the handoff recorded under the original client ID.
+The report contains HTTP receipts, counts and SHA-256 digests. The separate named-manager test covers cross-manager routing.
+
 ## Android screenshots
 
 `./scripts/app/android.sh shots -s emulator-<port> --out <directory>` installs a separate test package on a dedicated emulator and auto-pairs to anonymized `scripts/mock/mock_hub.py`,

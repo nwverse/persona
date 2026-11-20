@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -38,6 +39,50 @@ func TestQueuedEffortWaitsForTheTurnAndConfirmation(t *testing.T) {
 	})
 	if got := f.trace("pane.send_text"); len(got) != 1 || got[0] != call("pane.send_text", map[string]any{"pane_id": "w1:p1", "text": "/effort"}) {
 		t.Fatalf("picker commands = %q", got)
+	}
+}
+
+func TestQueuedEffortConfirmationSurvivesReconnect(t *testing.T) {
+	worker, f, _, cwd, _ := switchNode(t, proto.StatusIdle, nil)
+	share := worker.switches()
+	const pane = "w1:p1"
+	share.setEffortChange(sidA, effortChange{target: "high", pane: pane})
+	readRow := func(n *Node, pane string, m quickMeta) proto.Session {
+		row := proto.Session{SessionID: sidA, PaneID: pane, Agent: "claude"}
+		n.terminalModesRow(&row, m)
+		return row
+	}
+
+	// The new Node starts serving before the old connection's worker finishes the picker.
+	serving, _ := testNode(t)
+	serving.share.Store(share)
+	share.receive(serving)
+	old := quickMeta{effort: "low", effortAt: time.Now().Add(-time.Hour)}
+	if row := readRow(serving, pane, old); row.PendingEffort == nil || row.Effort != "low" {
+		t.Fatalf("reconnect lost the pending pick: %+v", row)
+	}
+
+	empty := screenFixture(t, "claude-2.1.312-empty-162.txt")
+	done := empty + "\n  ⎿  Set effort level to high (this session only)\n"
+	f.screenSteps(pane, func(c herdrCall) bool { return isKeys("enter")(c) || isKeys("s")(c) }, empty, listPicker, done)
+	f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(sidA, proto.StatusIdle, pane, "w1:t1", "w1", cwd, "")}, nil))
+	worker.tryEffortChange(sidA)
+	if row := readRow(serving, pane, old); row.PendingEffort != nil || row.Effort != "high" {
+		t.Fatalf("serving Node lost the confirmation: %+v", row)
+	}
+
+	later, _ := testNode(t)
+	later.share.Store(share)
+	share.receive(later)
+	if row := readRow(later, pane, old); row.PendingEffort != nil || row.Effort != "high" {
+		t.Fatalf("later connection lost the confirmation: %+v", row)
+	}
+	if row := readRow(later, "w1:p2", old); row.Effort != "low" {
+		t.Fatalf("confirmation leaked to a different pane: %+v", row)
+	}
+	newer := quickMeta{mode: "plan", effort: "medium", effortAt: time.Now().Add(time.Second)}
+	if row := readRow(later, pane, newer); row.Effort != "medium" || row.PermissionMode != "plan" {
+		t.Fatalf("confirmation overwrote newer metadata: %+v", row)
 	}
 }
 

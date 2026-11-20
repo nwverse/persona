@@ -78,7 +78,7 @@ class PathTests(unittest.TestCase):
         self.assertTrue(paths.select(["sdk/ts/src/wire.ts"])["runtimes"])
         # The shared Rust core: its own lane, and Android, whose tests load it.
         for filename in ["native/app-core/crates/persona-core/src/lib.rs", "spec/fixtures/continuity/append_and_gaps.json",
-                         "scripts/ci/core.sh"]:
+                         "spec/fixtures/sync-driver/lifecycle.json", "scripts/ci/core.sh"]:
             self.assertTrue(paths.select([filename])["core"], filename)
         self.assertTrue(paths.select(["native/app-core/Cargo.lock"])["android"])
         # The generated ArkTS codec and its host tests run in the same lane as the core they encode for (#7450).

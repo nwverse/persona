@@ -323,8 +323,8 @@ internal class NewAgentViewModel(
                     val restored = pending.firstMessage ?: r.prompt.orEmpty()
                     // Its forward's card again, and the rest of the first message as it was saved: any other block and
                     // what was typed. Without a forward, the saved message is the prompt as it is.
-                    val (block, rest) = ForwardMessage.split(restored)
-                    val forward = block?.xml()
+                    val (blocks, rest) = ForwardMessage.splitAll(restored)
+                    val forward = blocks.takeIf { it.isNotEmpty() }?.joinToString("\n") { it.xml() }
                     // A start of something else keeps its first message as it was sent, other blocks included.
                     val typed = if (forward != null) rest else restored
                     mutable.value = NewAgentState(initialized = true, machineId = r.machineId,
@@ -575,6 +575,8 @@ internal class NewAgentViewModel(
             (if (next.modelLauncher != it.modelLauncher) next.copy(model = "") else next).settled() }
         loadModels()
     }
+    fun forwardContext(value: String?) { mutable.update { if (it.locked) it else it.copy(context = value) } }
+
     fun prompt(value: String) { if (!state.value.locked) mutable.update { it.copy(prompt = value) } }
     fun ultracode(on: Boolean) { if (!state.value.locked && state.value.ultracode != on) mutable.update { it.copy(ultracode = on, error = null) } }
     /** The permission mode for a launcher that lists its own (#8261): "" its own approval, or one it lists. */

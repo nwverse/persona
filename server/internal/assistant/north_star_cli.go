@@ -119,6 +119,10 @@ func northStarCommand(ctx context.Context, manager, hub *db.DB, date, split, tz 
 	if err != nil {
 		return NorthStar{}, err
 	}
+	return northStarCommandWindow(ctx, manager, hub, since, until, at, loc)
+}
+
+func northStarCommandWindow(ctx context.Context, manager, hub *db.DB, since, until, at time.Time, loc *time.Location) (NorthStar, error) {
 	roles, err := rolesNow(ctx, manager)
 	if err != nil {
 		return NorthStar{}, err

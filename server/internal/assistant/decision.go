@@ -428,6 +428,9 @@ func (s *Service) answerDecisionTextLocked(ctx context.Context, st todoStore, t 
 		Question: cmp.Or(a.Reason, i18n.T(s.botLang(ctx), "assistant-reports.verdict_decide")),
 		Choice:   decisionText(text), Source: db.DecisionManual, SourceMessage: item.ID, CreatedAt: at}
 	if _, err := s.insertDecision(ctx, st, row); err != nil {
+		if sendErr == nil { // its Agent has the words: say so, never "nothing was taken" (the to-do may be gone by now)
+			err = wordsSent{err}
+		}
 		return FeedItem{}, acceptResult{}, err
 	}
 	completeDismissal()

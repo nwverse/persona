@@ -47,15 +47,18 @@ func northStarWeeklyCommand(ctx context.Context, manager, hub *db.DB, date, tz s
 		}
 		loc = l
 	}
-	reading := dayStart(now.In(loc))
+	// Keep calendar arithmetic independent of the local clock. Midnight can be missing.
+	y, m, d := now.In(loc).Date()
+	today := time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+	reading := today
 	if date != "" {
-		d, err := time.ParseInLocation(time.DateOnly, date, loc)
+		d, err := time.Parse(time.DateOnly, date)
 		if err != nil {
 			return weeklyNorthStar{}, err
 		}
-		reading = dayStart(d)
+		reading = d
 	}
-	if reading.After(dayStart(now.In(loc))) {
+	if reading.After(today) {
 		return weeklyNorthStar{}, errors.New("date in the future")
 	}
 	out := weeklyNorthStar{
@@ -65,22 +68,25 @@ func northStarWeeklyCommand(ctx context.Context, manager, hub *db.DB, date, tz s
 		Rows:       make([]northStarRowOut, 0),
 	}
 	first := reading.AddDate(0, 0, -28)
+	localStart := func(day time.Time) time.Time {
+		y, m, d := day.Date()
+		return dayStart(time.Date(y, m, d, 12, 0, 0, 0, loc))
+	}
+	days := make([][]NorthStar, len(out.Weeks))
 	for i := range out.Weeks {
 		since := first.AddDate(0, 0, i*7)
 		until := since.AddDate(0, 0, 7)
 		out.Weeks[i] = northStarWeek{
 			Start: since.Format(time.DateOnly),
 			End:   until.AddDate(0, 0, -1).Format(time.DateOnly),
-			since: since,
-			until: until,
+			since: localStart(since),
+			until: localStart(until),
 		}
-	}
-	days := make([][]NorthStar, len(out.Weeks))
-	for i, week := range out.Weeks {
 		days[i] = make([]NorthStar, 7)
 		for day := range days[i] {
-			date := week.since.AddDate(0, 0, day).Format(time.DateOnly)
-			ns, err := northStarCommand(ctx, manager, hub, date, "", loc.String(), now)
+			start := localStart(since.AddDate(0, 0, day))
+			end := localStart(since.AddDate(0, 0, day+1)).Add(-time.Nanosecond)
+			ns, err := northStarCommandWindow(ctx, manager, hub, start, end, time.Time{}, loc)
 			if err != nil {
 				return weeklyNorthStar{}, err
 			}
@@ -307,6 +313,7 @@ func weeklyIndependentReview(weeks []northStarWeek, rawReviews []json.RawMessage
 	}
 	runs := make([]map[string]bool, len(weeks))
 	results := make([]map[string]int, len(weeks))
+	starts := map[string]time.Time{}
 	for i := range weeks {
 		runs[i] = map[string]bool{}
 		results[i] = map[string]int{}
@@ -319,10 +326,10 @@ func weeklyIndependentReview(weeks []northStarWeek, rawReviews []json.RawMessage
 			}
 			return row
 		}
+		if !review.StartedAt.IsZero() {
+			starts[review.ID] = review.StartedAt
+		}
 		for i, week := range weeks {
-			if northStarWeeklyContains(week, review.StartedAt) {
-				runs[i][review.ID] = true
-			}
 			if review.EndedAt != nil && northStarWeeklyContains(week, *review.EndedAt) {
 				results[i][review.State]++
 			}
@@ -332,9 +339,14 @@ func weeklyIndependentReview(weeks []northStarWeek, rawReviews []json.RawMessage
 		if agent.Source != sourceReview || agent.Via == "" {
 			continue
 		}
+		if _, ok := starts[agent.Via]; !ok {
+			starts[agent.Via] = agent.LinkedAt
+		}
+	}
+	for id, started := range starts {
 		for i, week := range weeks {
-			if northStarWeeklyContains(week, agent.LinkedAt) {
-				runs[i][agent.Via] = true
+			if northStarWeeklyContains(week, started) {
+				runs[i][id] = true
 			}
 		}
 	}
@@ -347,12 +359,16 @@ func weeklyIndependentReview(weeks []northStarWeek, rawReviews []json.RawMessage
 func weeklyWorkspacesOfClosed(finished [][]string, rawPlans []db.TaskPlanRow, ready bool) northStarRowOut {
 	row := northStarRowOut{ID: "workspaces_of_closed_todos", Cells: make([]any, len(finished))}
 	bindings := map[string]PlanTask{}
+	legacyTargets := map[string]PlanTask{}
 	for _, raw := range rawPlans {
 		plan := planFromRow(raw)
 		for _, task := range plan.Tasks {
-			for _, id := range []string{task.ReuseTodo, task.ReservedTodoID, task.TodoID} {
+			if task.TodoID != "" {
+				bindings[task.TodoID] = task
+			}
+			for _, id := range []string{task.ReuseTodo, task.ReservedTodoID} {
 				if id != "" {
-					bindings[id] = task
+					legacyTargets[id] = task
 				}
 			}
 		}
@@ -365,6 +381,9 @@ func weeklyWorkspacesOfClosed(finished [][]string, rawPlans []db.TaskPlanRow, re
 		counts := map[string]int{"created": 0, "reused": 0, "shared": 0, "existing": 0, "none": 0, "not_recorded": 0}
 		for _, id := range ids {
 			task, ok := bindings[id]
+			if !ok {
+				task, ok = legacyTargets[id]
+			}
 			if !ok || task.WorkspaceResolved == nil {
 				counts["not_recorded"]++
 				continue
@@ -415,6 +434,10 @@ func weeklyInterruptionsPerFinished(ctx context.Context, manager *db.DB, weeks [
 		}
 		seen := map[string]bool{}
 		for _, event := range events {
+			wasFinished, recorded := event.Detail["was_finished"].(bool)
+			if (recorded && !wasFinished) || event.Detail["done_by"] == db.DoneByCancelled {
+				continue
+			}
 			seconds, ok := event.Detail["after"].(float64)
 			todo, _ := event.Detail["todo"].(string)
 			if !ok || todo == "" || seen[todo] || seconds < 0 || seconds > wrongDoneWithin.Seconds() {
