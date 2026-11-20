@@ -65,8 +65,8 @@ internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? =
     val target = MessageTarget(item.id, model.plain, user, model.editText(), raw = text,
         from = item.from?.takeIf { it.isNotBlank() } ?: (model.parts.singleOrNull() as? MessagePart.Source)?.name?.takeIf { it.isNotBlank() },
         time = item.ts, cut = item.id.takeIf { cut })
-    Column(Modifier.fillMaxWidth().messageMenu(target)) {
-        MessageContextGroup(model.contexts, "${item.id}/contexts", uri::openUri, alignEnd = user)
+    PickableMessageColumn(target, Modifier.fillMaxWidth().messageMenu(target)) {
+        MessageForwardContexts(model.contexts, "${item.id}/contexts", uri::openUri, alignEnd = user)
         AttachedFileCards(model.attached, alignEnd = user)
         // a reply still being written: its quotes do not fold yet (#2984)
         CompositionLocalProvider(LocalReplyStreaming provides (update?.streaming == true)) {
@@ -162,7 +162,8 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
     val models = remember(items, texts) { items.mapIndexed { index, item -> messageModel(texts[index], item.from, user = true) } }
     val parts = remember(models) { models.flatMap { it.parts } }
     // A forward (#3901) is a card at the top of the bubble; the other blocks fold into one row above it, as before.
-    val (forwards, contexts) = remember(models) { models.flatMap { it.contexts }.partition { it.kind == ForwardMessage.KIND } }
+    val forwards = remember(models) { models.flatMap { bubbleForwardGroups(it.contexts) } }
+    val contexts = remember(models) { models.flatMap { it.contexts }.filter { it.kind != ForwardMessage.KIND } }
     val photos = remember(models) { models.flatMap { it.images }.distinct() }
     val files = remember(models) { models.flatMap { it.files }.distinct().take(6) }
     val attached = remember(models) { models.flatMap { it.attached }.distinctBy { it.path } }
@@ -197,14 +198,14 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
     val bubble = (contexts.isEmpty() && attached.isEmpty()) || parts.isNotEmpty() || photos.isNotEmpty() || images != null || streaming ||
         forwards.isNotEmpty()
     val fromCard = models.any { it.fromCard }
-    Column(Modifier.fillMaxWidth()) {
+    PickableMessageColumn(target.takeIf { menu }, Modifier.fillMaxWidth()) {
         MessageContextGroup(contexts, "${items.firstOrNull()?.id.orEmpty()}/contexts", uri::openUri)
         AttachedFileCards(attached)
         if (fromCard) Text(stringResource(R.string.chat_from_card), Modifier.align(Alignment.End).padding(bottom = Tokens.Space.xs),
             style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1)
         if (bubble) UserBubbleFrame(Modifier.messageMenu(target.takeIf { menu }), footer = footer, own = own, faded = faded, leading = leading) {
             forwards.forEachIndexed { index, forward ->
-                ForwardBubbleCard(forward, "${items.firstOrNull()?.id.orEmpty()}/forward/$index")
+                ForwardBubbleGroup(forward, "${items.firstOrNull()?.id.orEmpty()}/forward/$index")
                 if (index < forwards.lastIndex || parts.isNotEmpty() || photos.isNotEmpty() || images != null || streaming)
                     Spacer(Modifier.height(Tokens.Space.s))
             }
