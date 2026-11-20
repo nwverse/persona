@@ -9,14 +9,16 @@ import (
 )
 
 // signInCLI is resumeCLI that also answers `claude auth status`: signed in only in the user's own setup (no
-// CLAUDE_CONFIG_DIR, ~/.claude), as plain claude signed in with a subscription is, unless $CLI_FAKE_DIR/auth-everywhere
-// says it is signed in everywhere (a gateway's token in its environment) or $CLI_FAKE_DIR/auth-unknown that it can't
-// tell. Every status run appends a line to $CLI_FAKE_DIR/auth-runs.
+// CLAUDE_CONFIG_DIR, ~/.claude), as plain claude signed in with a subscription is, and in the directory named in
+// $CLI_FAKE_DIR/auth-dir, unless $CLI_FAKE_DIR/auth-everywhere says it is signed in everywhere (a gateway's token in its
+// environment) or $CLI_FAKE_DIR/auth-unknown that it can't tell. Every status run appends a line to
+// $CLI_FAKE_DIR/auth-runs.
 const signInCLI = `case " $* " in
   *" auth status "*)
     echo "${CLAUDE_CONFIG_DIR-unset}" >> "$CLI_FAKE_DIR/auth-runs"
     if [ -e "$CLI_FAKE_DIR/auth-unknown" ]; then echo 'not json'; exit 1; fi
-    if [ -e "$CLI_FAKE_DIR/auth-everywhere" ] || [ "${CLAUDE_CONFIG_DIR+set}" != set ]; then
+    if [ -e "$CLI_FAKE_DIR/auth-everywhere" ] || [ "${CLAUDE_CONFIG_DIR+set}" != set ] ||
+      { [ -e "$CLI_FAKE_DIR/auth-dir" ] && [ "$CLAUDE_CONFIG_DIR" = "$(cat "$CLI_FAKE_DIR/auth-dir")" ]; }; then
       echo '{"loggedIn": true, "authMethod": "claude.ai"}'; exit 0
     fi
     echo '{"loggedIn": false, "authMethod": "none"}'; exit 1 ;;
@@ -63,6 +65,39 @@ func TestAssistantSwitchResumesWhereTheLauncherIsSignedIn(t *testing.T) {
 	}
 	if st, _ := n.state.get(id); st.ConfigDir != "default" || st.Launcher != "claude" {
 		t.Fatalf("recorded %q on %q, want default on claude", st.ConfigDir, st.Launcher)
+	}
+}
+
+// Persona's own profile of plain claude is where its new conversations start by default. Signed out there (the
+// default: nobody signed in to it), the conversation goes to the user's own setup; signed in there, it goes there.
+func TestAssistantSignedInResumeTriesPersonasOwnProfileFirst(t *testing.T) {
+	for _, signedIn := range []bool{false, true} {
+		name := "own-profile-signed-out"
+		if signedIn {
+			name = "own-profile-signed-in"
+		}
+		t.Run(name, func(t *testing.T) {
+			f, real, id, _, _ := signInTest(t)
+			own := filepath.Join(f.n.dir, "profiles", "claude")
+			if err := os.MkdirAll(own, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			want, at := "default", filepath.Join(real, ".claude")
+			if signedIn {
+				writeFile(t, filepath.Join(os.Getenv("CLI_FAKE_DIR"), "auth-dir"), own)
+				want, at = own, own
+			}
+			got, err := f.n.assistantProfileSelection(context.Background(), id, "claude", "", true)
+			if err != nil || got != want {
+				t.Fatalf("got %q %v, want %q", got, err, want)
+			}
+			if !fileExists(filepath.Join(at, "projects", "-assistant", id+".jsonl")) {
+				t.Fatalf("not copied to %s", at)
+			}
+			if !signedIn && fileExists(filepath.Join(own, "projects", "-assistant", id+".jsonl")) {
+				t.Fatal("copied to the signed-out profile")
+			}
+		})
 	}
 }
 
