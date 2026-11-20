@@ -32219,6 +32219,29 @@
       },
       "extractionState" : "manual"
     },
+    "Couldn't change thinking effort. Choose it again to send waiting messages." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't change thinking effort. Choose it again to send waiting messages."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考の強さを変更できませんでした。待機中のメッセージを送るには、もう一度選んでください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法更改思考强度。请重新选择，以发送等待中的消息。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "CPU, memory and network update every 10 seconds. Charts show the last hour." : {
       "localizations" : {
         "en" : {
@@ -71177,6 +71200,29 @@
           }
         }
       }
+    },
+    "Keep Current Effort" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep Current Effort"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在の思考の強さを維持"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保留当前思考强度"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Terminals [Agent Follow-Up]" : {
       "extractionState" : "manual",
@@ -111599,6 +111645,121 @@
         }
       }
     },
+    "Notifications can't reach this device. Allow them in Settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications can't reach this device. Allow them in Settings."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスは通知を受け取れません。設定で通知を許可してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台设备收不到通知。请在设置中允许通知。"
+          }
+        }
+      }
+    },
+    "Notifications can't reach this device. Ask the person who set up Persona to finish notification setup." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications can't reach this device. Ask the person who set up Persona to finish notification setup."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスは通知を受け取れません。Personaの設定をした人に、通知の設定を完了してもらってください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台设备收不到通知。请让负责设置 Persona 的人完成通知设置。"
+          }
+        }
+      }
+    },
+    "Notifications can't reach this device. Check your network. Persona will try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications can't reach this device. Check your network. Persona will try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスは通知を受け取れません。ネットワークを確認してください。Personaは再試行します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台设备收不到通知。请检查网络，Persona 会重试。"
+          }
+        }
+      }
+    },
+    "Notifications can't reach this device. Keep Persona open while it tries again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications can't reach this device. Keep Persona open while it tries again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスは通知を受け取れません。Personaを開いたままにすると、再試行します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台设备收不到通知。请保持 Persona 打开，它会自动重试。"
+          }
+        }
+      }
+    },
+    "Notifications can't reach this device. Update Persona to turn them back on." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications can't reach this device. Update Persona to turn them back on."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスは通知を受け取れません。Personaをアップデートして通知を復旧してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台设备收不到通知。请更新 Persona 以恢复通知。"
+          }
+        }
+      }
+    },
     "Notifications for Persona are off in Settings." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -122184,6 +122345,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Persona Link · %1$@ から"
+          }
+        }
+      }
+    },
+    "Persona Notification Settings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona Notification Settings"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personaの通知設定"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 通知设置"
           }
         }
       }
@@ -167860,6 +168044,29 @@
       },
       "extractionState" : "manual"
     },
+    "The hub has no push registration for this device." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub has no push registration for this device."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブにこのデバイスのプッシュ登録がありません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 没有这台设备的推送注册。"
+          }
+        }
+      }
+    },
     "The hub hasn't said which way it pushes to this device." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -174057,6 +174264,98 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "思考 %1$lld"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Thinking effort after this turn: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thinking effort after this turn: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このターンの後の思考の強さ：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本轮结束后的思考强度：%1$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Thinking effort change failed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thinking effort change failed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考の強さを変更できませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考强度更改失败"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Thinking effort could not be confirmed. Choose it again before resending." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thinking effort could not be confirmed. Choose it again before resending."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考の強さを確認できませんでした。再送信する前にもう一度選んでください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确认思考强度。请重新选择后再发送。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Thinking effort will change after this turn." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thinking effort will change after this turn."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このターンが終わると、思考の強さが変わります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考强度将在本轮结束后更改。"
           }
         }
       },

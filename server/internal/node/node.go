@@ -224,6 +224,9 @@ type Node struct {
 	sysOnce    sync.Once      // system: read once (metrics.go)
 	sys        proto.System
 
+	// startsBegun: when the latest start of a session that starts does not hold began (transcript_files.go).
+	startsBegun startsBegun
+
 	// share: what the node keeps of launcher switches outside the state records, shared by a resident node's Nodes
 	// (switch_share.go, attach.go); nil until the first use when attach set none (switches).
 	share atomic.Pointer[switchShare]
@@ -1705,10 +1708,19 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "assistant.guest_delete": // a meeting's room, at its transcript's cut (assistant_guest.go)
 		return n.assistantGuestDelete(params)
 	case "session.modes":
-		if err := n.setModelAndModes(ctx, p.SessionID, p.Model, p.PermissionMode, p.Effort); err != nil { // model: model_switch.go
+		var options struct {
+			QueueEffort bool `json:"queue_effort"`
+		}
+		_ = json.Unmarshal(params, &options)
+		pending, err := n.setModelAndModes(ctx, p.SessionID, p.Model, p.PermissionMode, p.Effort, options.QueueEffort)
+		if err != nil {
 			return nil, err
 		}
-		return n.modesAnswer(p.SessionID, p.PermissionMode), nil
+		answer := n.modesAnswer(p.SessionID, p.PermissionMode)
+		if pending {
+			answer["pending_effort"] = p.Effort
+		}
+		return answer, nil
 	case "assistant.compact": // the user compacting an assistant conversation, or the hub a meeting's room (assistant_compact.go)
 		return ok(n.assistantCompact(ctx, p.SessionID, p.OnlyRunning))
 	case "assistant.handoff": // what a new main conversation is told about the old one
@@ -2095,6 +2107,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 				if p.UserInputs {
 					return proto.UserInputIndex{Inputs: []proto.UserInputPosition{}}, nil
 				}
+				return map[string]any{"items": []proto.Item{}, "has_more": false}, nil
+			}
+			if session, _, _ := strings.Cut(p.SessionID, subagentSep); p.BeforeSeq > 0 && !p.UserInputs && n.knownSession(session) {
+				// An older page of a session the node knows (or of its subagent): the end of its history, as before
+				// #11388. Only the latest page says why there is none; released apps ask an older page again on an
+				// error (#11450).
 				return map[string]any{"items": []proto.Item{}, "has_more": false}, nil
 			}
 			return nil, n.readErr(p.SessionID, err)
