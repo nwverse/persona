@@ -281,6 +281,14 @@ class ManualWorkflowTests(unittest.TestCase):
         self.assertNotIn('continue-on-error:', ci)
         self.assertNotIn('pull_request', ci)
 
+    def test_standalone_scripts_checkout_can_merge_base_origin_main(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = yaml.load((root / '.github/workflows/scripts-tests.yml').read_text(), Loader=yaml.BaseLoader)
+        checkout = next(step for step in workflow['jobs']['scripts']['steps']
+                        if step.get('uses') == 'actions/checkout@v4')
+        self.assertEqual(checkout.get('with', {}).get('fetch-depth'), '0',
+                         'standalone non-main dispatches need origin/main and shared history for git merge-base')
+
     def test_version_tag_publishes_a_release_after_the_image(self):
         root = Path(__file__).resolve().parents[2]
         path = root / '.github/workflows/release.yml'
@@ -508,6 +516,15 @@ class AppleWorkflowTests(unittest.TestCase):
                                'iOS HTML card tests (separate batch)',
                                'iOS bounded HTML security tests (separate batch)'):
             self.assertIn(required_batch, script)
+
+    def test_resolved_variant_is_staged_only_in_the_disposable_source(self):
+        root = Path(__file__).resolve().parents[2]
+        script = (root / 'scripts/ci/apple.sh').read_text()
+        for required in ('scripts/ci/apple_resolved.py',
+                         '--tracked "$CI_ROOT/apple/Packages/PersonaSSH/Package.resolved"',
+                         '--staged "$SOURCE/apple/Packages/PersonaSSH/Package.resolved"',
+                         '--meta "$PERSONA_META_WEARABLES"'):
+            self.assertIn(required, script)
 
 
 class PostgresCleanupTests(unittest.TestCase):

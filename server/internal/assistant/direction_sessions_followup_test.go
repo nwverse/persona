@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -729,39 +730,96 @@ func TestDirectionLeaderRecordedUnderAnAbsorbedComputerIDStaysSpecial(t *testing
 	}
 }
 
-// The write counts the target direction outside the book's lock: a write that lands meanwhile makes it count again
-// on the new book, and nothing waits on the lock while the computers are asked.
-func TestDirectionFilingCountsAgainWhenTheBookChanged(t *testing.T) {
-	e := directionFilingEnv(t, nil)
-	ctx := context.Background()
-	counts := 0
-	held := func(records map[string]directionFiling) (int, error) {
-		counts++
-		if counts == 1 {
-			done := make(chan error, 1)
-			go func() {
-				_, err := e.s.fileDirectionSession(ctx, [2]string{"server", "chat-b"},
-					&directionFiling{Direction: "conv_lead_a", By: titleByUser, At: time.Now().UTC()}, func(map[string]directionFiling) (int, error) { return 0, nil })
-				done <- err
-			}()
-			select {
-			case err := <-done:
-				if err != nil {
-					t.Errorf("the write that landed meanwhile: %v", err)
-				}
-			case <-time.After(5 * time.Second):
-				t.Error("a write waited on the book's lock while another counted")
-			}
+// directionFilingPutHooked is the write with a context the fake hub's afterList hooks answer to (listHooked): a hook
+// armed for its computer runs after each of the write's own lists of it, never after another call's.
+func directionFilingPutHooked(s *Service, machine, session, direction string) directionFilingAnswer {
+	body, _ := json.Marshal(map[string]string{"direction": direction})
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/assistant/sessions/"+machine+"/"+session+"/direction", strings.NewReader(string(body)))
+	r = r.WithContext(listHooked(r.Context()))
+	r.Header.Set(RoleHeader, roleFull)
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	var out directionFilingAnswer
+	_ = json.Unmarshal(w.Body.Bytes(), &out)
+	out.Status, out.Raw = w.Code, w.Body.String()
+	return out
+}
+
+// directionArmAfterList runs hook after the next hooked list of machine, again for each of the following ones while it
+// answers true.
+func directionArmAfterList(f *fakeHub, machine string, hook func() bool) {
+	var again func()
+	again = func() {
+		if hook() {
+			f.mu.Lock()
+			f.afterList[machine] = again
+			f.mu.Unlock()
 		}
-		return len(records), nil
 	}
-	out, err := e.s.fileDirectionSession(ctx, [2]string{"server", "chat-a"},
-		&directionFiling{Direction: "conv_lead_a", By: titleByUser, At: time.Now().UTC()}, held)
-	if err != nil || !out.Changed || counts != 2 {
-		t.Fatalf("write: %+v %v, counted %d times, want 2", out, err, counts)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.afterList == nil {
+		f.afterList = map[string]func(){}
 	}
-	if !directionBookHas(t, e.s, "server", "chat-a") || !directionBookHas(t, e.s, "server", "chat-b") {
-		t.Fatalf("a write was lost: %s", directionBookSnapshot(t, e.s))
+	f.afterList[machine] = again
+}
+
+// Filings that land while a write asks the computers never make it fail: it decides and saves under the book's lock
+// from the book as it is then, and asks no computer under that lock (#11490 point 3).
+func TestDirectionFilingSucceedsWhileOtherFilingsLand(t *testing.T) {
+	e := directionFilingEnv(t, nil)
+	var extra []proto.Session
+	for i := range 8 {
+		extra = append(extra, proto.Session{MachineID: "server", SessionID: fmt.Sprintf("chat-meanwhile-%d", i), Cwd: "/home/u/.persona/assistant",
+			Assistant: true, Status: proto.StatusIdle, Title: "Filed meanwhile"})
+	}
+	directionFilingSetSessions(e, extra...)
+	directionFilingMustPut(t, e.s, "server", "chat-b", "conv_lead_a") // A has a filing: its count lists the computer
+	landed := 0
+	directionArmAfterList(e.f, "server", func() bool {
+		directionFilingMustPut(t, e.s, "server", extra[landed].SessionID, "conv_lead_b")
+		landed++
+		return landed < len(extra)
+	})
+	if out := directionFilingPutHooked(e.s, "server", "chat-a", "conv_lead_a"); out.Status != http.StatusOK || !out.Changed {
+		t.Fatalf("a filing that fits, with %d others landing while it asked the computer: %d %s", landed, out.Status, out.Raw)
+	}
+	if landed < 2 {
+		t.Fatalf("precondition: other filings landed while it asked the computer (%d)", landed)
+	}
+	for _, id := range []string{"chat-a", "chat-b"} {
+		if !directionBookHas(t, e.s, "server", id) {
+			t.Fatalf("%s is not filed: %s", id, directionBookSnapshot(t, e.s))
+		}
+	}
+}
+
+// Several filings sent together, each fitting, all succeed (#11490 point 3).
+func TestDirectionFilingsSentTogetherAllSucceed(t *testing.T) {
+	e := directionFilingEnv(t, nil)
+	var extra []proto.Session
+	for i := range 16 {
+		extra = append(extra, proto.Session{MachineID: "server", SessionID: fmt.Sprintf("chat-together-%02d", i), Cwd: "/home/u/.persona/assistant",
+			Assistant: true, Status: proto.StatusIdle, Title: "Filed together"})
+	}
+	directionFilingSetSessions(e, extra...)
+	results := make([]directionFilingAnswer, len(extra))
+	var wg sync.WaitGroup
+	for i, c := range extra {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = directionFilingPut(e.s, roleFull, "", "server", c.SessionID, cond(i%2 == 0, "conv_lead_a", "conv_lead_b"))
+		}()
+	}
+	wg.Wait()
+	for i, out := range results {
+		if out.Status != http.StatusOK || !out.Changed {
+			t.Fatalf("%s: %d %s", extra[i].SessionID, out.Status, out.Raw)
+		}
+	}
+	if a, b := directionMustRead(t, e.s, "", "conv_lead_a"), directionMustRead(t, e.s, "", "conv_lead_b"); len(a.Sessions)+len(b.Sessions) != len(extra) {
+		t.Fatalf("filed %d of %d", len(a.Sessions)+len(b.Sessions), len(extra))
 	}
 }
 
@@ -971,4 +1029,89 @@ func TestDirectionUndoRightAfterItsWrite(t *testing.T) {
 			t.Fatalf("a new filing into A: %d %s", out.Status, out.Raw)
 		}
 	})
+}
+
+// A removal marker past its seven days is no Undo any more, also while nothing has been written since to drop it; one
+// within them still is (#11490 point 1).
+func TestDirectionRemovalMarkerPastItsWeekIsNoUndo(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		age  time.Duration
+		want int
+	}{{"past its week", directionRemovedKeep + time.Hour, http.StatusNotFound}, {"within it", directionRemovedKeep - time.Hour, http.StatusOK}} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := directionFilingEnv(t, nil)
+			removed := time.Now().Add(-tc.age).UTC()
+			filed := removed.Add(-time.Hour)
+			if err := e.s.store().PutSetting(ctx, directionSessionsSettingKey, map[string]map[string]any{
+				runtimeListID("box", "agent-gone"): {"direction": "conv_lead_a", "by": titleByUser, "at": filed, "title": "Filed title", "removed_at": removed},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			e.s.directionFilings.mu.Lock()
+			e.s.directionFilings.loaded = false // read the book as stored
+			e.s.directionFilings.mu.Unlock()
+			e.f.setSessions("box") // its computer does not list it: only an Undo needs no row
+			if out := directionFilingPut(e.s, roleFull, "", "box", "agent-gone", "conv_lead_a"); out.Status != tc.want {
+				t.Fatalf("a write naming the marker's direction: %d %s, want %d", out.Status, out.Raw, tc.want)
+			}
+		})
+	}
+}
+
+// A write decided as the Undo from the book its handler read first is decided again from the book as it is when it
+// is saved: a write to the same session in between makes it an ordinary move, which the ended direction refuses
+// (#11490 point 2).
+func TestDirectionUndoDecidedFromTheBookItSaves(t *testing.T) {
+	e := directionFilingEnv(t, nil)
+	ctx := context.Background()
+	directionFilingMustPut(t, e.s, "server", "chat-a", "conv_lead_a")
+	moved := directionFilingMustPut(t, e.s, "server", "chat-a", "conv_lead_b")
+	if code, _ := doRoute(t, e.s, http.MethodPost, "/api/v1/assistant/directions/conv_lead_a/end", "", roleFull); code != http.StatusOK {
+		t.Fatalf("end: %d", code)
+	}
+	e.s.directionsSync(ctx)
+	directionArmAfterList(e.f, "server", func() bool {
+		directionFilingMustPut(t, e.s, "server", "chat-a", "") // another device sets it on its own meanwhile
+		return false
+	})
+	undo := directionFilingPutHooked(e.s, "server", "chat-a", *moved.Previous)
+	if undo.Status != http.StatusConflict || undo.Code != "direction_ended" {
+		t.Fatalf("the Undo of a write that is no longer the last one: %d %s", undo.Status, undo.Raw)
+	}
+	if got := directionMustRead(t, e.s, "", "conv_lead_a"); slices.Contains(directionSessionIDs(got.Sessions), "chat-a") {
+		t.Fatalf("the ended direction got the chat back: %+v", got.Sessions)
+	}
+}
+
+// A tree built while what places sessions cannot be read lists a session that joined a task since only under that
+// task, not again in its old direction's sessions (#11490 point 4).
+func TestDirectionTreeFallbackLeavesOutASessionNowUnderATask(t *testing.T) {
+	ctx := context.Background()
+	st := &directionCountingStore{memStore: &memStore{}}
+	e := directionFilingEnv(t, st)
+	e.f.setSessions("box", proto.Session{MachineID: "box", SessionID: "agent-joins", Agent: "claude", Status: proto.StatusWorking,
+		State: proto.StateWorking, Title: "Working agent"})
+	directionFilingMustPut(t, e.s, "box", "agent-joins", "conv_lead_a")
+	e.clock.advance(time.Minute)
+	e.s.directionTreeSync(ctx)
+	if got := e.tree().Directions[0]; !slices.Contains(directionSessionViews(got.Sessions), "agent-joins") {
+		t.Fatalf("precondition: the working filed Agent is in A's sessions: %+v", got.Sessions)
+	}
+	taskID := e.task("B's supervised task", func(todo *Todo) {
+		todo.Supervision = &Supervision{Supervisor: "conv_lead_b"}
+		todo.Agents = []TodoAgent{{MachineID: "box", SessionID: "agent-joins", Agent: "claude"}}
+	})
+	e.s.todos.mu.Lock()
+	e.s.todos.activeBySession[[2]string{"box", "agent-joins"}] = taskID
+	e.s.todos.mu.Unlock()
+	st.fail(true)
+	tree := e.tree()
+	if n := directionTreeCount(tree, "agent-joins"); n != 1 {
+		t.Fatalf("the Agent is in the tree %d times: %+v", n, tree.Directions)
+	}
+	if slices.Contains(directionSessionViews(tree.Directions[0].Sessions), "agent-joins") {
+		t.Fatalf("the fallback kept the Agent in its old direction's sessions: %+v", tree.Directions[0].Sessions)
+	}
 }

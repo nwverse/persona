@@ -325,20 +325,37 @@ func (s *Service) directionTreeWake(ctx context.Context, now time.Time) (directi
 	groups, wake, err := tb.directionSessionGroups(ctx, cfg)
 	if err != nil {
 		// What places sessions could not be read for now: the sessions told last stay, rather than every direction
-		// losing its sessions until the next build.
+		// losing its sessions until the next build, less those that follow a task now (rule 1) or are under one in
+		// this build's tasks (directionTreeSessionRows below).
 		s.logf("direction sessions: %v", err)
-		s.dtree.mu.Lock()
-		groups = s.dtree.sessions
-		s.dtree.mu.Unlock()
-	} else {
-		tb.directionTreeSessionRows(groups, out)
+		groups = tb.directionLastSessions(s.taskFollowers())
 	}
+	tb.directionTreeSessionRows(groups, out)
 	for i := range out.Directions {
 		if !out.Directions[i].Secretary {
 			out.Directions[i].Sessions = groups[out.Directions[i].ID]
 		}
 	}
 	return out, wake
+}
+
+// directionLastSessions are the directions' sessions in the tree told last, copied, without those that follow a task
+// now (followers, a sub-agent session by its parent as this build lists it).
+func (tb *treeBuild) directionLastSessions(followers taskFollowers) map[string][]directionSession {
+	b := &tb.s.dtree
+	b.mu.Lock()
+	last := b.sessions
+	b.mu.Unlock()
+	groups := make(map[string][]directionSession, len(last))
+	for id, sessions := range last {
+		for _, session := range sessions {
+			k := [2]string{session.MachineID, session.SessionID}
+			if !followers.follows(k, func(sid string) string { return tb.sessions[[2]string{k[0], sid}].ParentSessionID }) {
+				groups[id] = append(groups[id], session)
+			}
+		}
+	}
+	return groups
 }
 
 // directionTreeAt builds the tree again at at: a computer of a direction's session stops being shown as before then

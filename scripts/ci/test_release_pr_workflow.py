@@ -134,6 +134,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("preserve its failed source", text)
         self.assertIn("release-reserved.txt", text)
         self.assertIn("--reserved $(tr '\\n' ' ' < release-reserved.txt)", text)
+        self.assertLess(text.index('refs/heads/release/*'), text.index('schedule-version'))
+        self.assertIn('releases/latest', text)
+        self.assertIn('pulls?state=open&head=$branch&base=main', text)
         self.assertNotIn("--force", text)
         self.assertNotIn('refs/tags/$TAG', text)
         self.assertNotIn("gh release create", text)
@@ -154,6 +157,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("github.event.workflow_run.head_branch == 'main'", PUBLISH.read_text())
         self.assertIn("verify-merged-pr", PUBLISH.read_text())
         self.assertIn("Create the immutable tag only after the merged source passed every platform check", PUBLISH.read_text())
+        tag = next(step for step in self.publish["jobs"]["authorize"]["steps"]
+                   if step.get("name") == "Create the immutable tag only after the merged source passed every platform check")
+        self.assertEqual(tag["env"]["GH_TOKEN"], "${{ secrets.RELEASE_PR_TOKEN }}")
+        self.assertIn("missing RELEASE_PR_TOKEN", tag["run"])
+        marker = next(step for step in self.publish["jobs"]["authorize"]["steps"]
+                      if step.get("name") == "Mark the Release as owned by this verified release PR")
+        self.assertEqual(marker["env"]["GH_TOKEN"], "${{ secrets.RELEASE_PR_TOKEN }}")
 
     def test_review_regressions_checkout_sources_and_upload_order(self):
         pr = PR.read_text()
