@@ -117,19 +117,18 @@ func (b *usageBalances) applyLocked(samples []proto.UsageAccount, now time.Time)
 			continue
 		}
 		seen[a.Ref] = true
-		if a.BalanceSkipped {
-			// The poll's overall deadline ended before this launcher got a full attempt: keep whatever state it had
-			// without marking it unreachable or treating it as removed.
-			continue
-		}
 		st := b.state[a.Ref]
 		if st == nil {
+			if a.BalanceSkipped {
+				// Never fabricate a row for a launcher that has not had a full attempt yet.
+				continue
+			}
 			st = &balanceState{}
 			b.state[a.Ref] = st
 		}
 		// A key the user replaced or rotated is another credential: the amount kept from the old one is not this
-		// credential's last known balance, so a failed read after the change must not keep showing it. Resolved-key
-		// and sealed-material identities are tracked separately:
+		// credential's last known balance, so a failed or skipped read after the change must not keep showing it.
+		// Resolved-key and sealed-material identities are tracked separately:
 		//   - when a key resolved, compare resolved-key digests (catches secret-reference rotation even when sealed
 		//     bytes stay constant, and tolerates re-sealing the same key with a fresh nonce);
 		//   - when no key resolved, compare sealed-material digests (retains the last amount across a temporary
@@ -146,7 +145,7 @@ func (b *usageBalances) applyLocked(samples []proto.UsageAccount, now time.Time)
 			}
 		}
 		if changed {
-			st.account.Balance, st.account.SampledAt, st.account.Stale, st.account.StaleAt = nil, time.Time{}, false, nil
+			st.account.Balance, st.account.SampledAt, st.account.Stale, st.account.StaleAt, st.account.Problem = nil, time.Time{}, false, nil, ""
 			st.errCode = ""
 			st.credential = ""
 		}
@@ -155,6 +154,11 @@ func (b *usageBalances) applyLocked(samples []proto.UsageAccount, now time.Time)
 		}
 		if a.BalanceSealedCredential != "" {
 			st.sealedCredential = a.BalanceSealedCredential
+		}
+		if a.BalanceSkipped {
+			// The poll's overall deadline ended before this launcher got a full attempt: keep whatever compatible
+			// state it had without marking it unreachable or treating it as removed.
+			continue
 		}
 		switch {
 		case a.Balance != nil:

@@ -441,3 +441,100 @@ func TestBalancePollerKeepsAmountWhenSameKeyIsResealedAndLaterFailsToOpen(t *tes
 		t.Fatalf("temporary open failure on updated seal must keep amount: %+v", got)
 	}
 }
+
+// A key rotation followed by a BalanceSkipped poll must clear the previous credential's balance instead of leaving it
+// visible across deadline exhaustion, while unchanged skipped launchers keep their balance and never-read skipped
+// launchers still create no row (#11825).
+func TestBalancePollerClearsAmountWhenCredentialRotatesBeforeSkippedRead(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().Truncate(time.Second)
+	step := 0
+	var b usageBalances
+	b.init(func(context.Context) ([]proto.UsageAccount, bool) {
+		switch step {
+		case 0:
+			rotated := balance("ds-rotated", "12.34", time.Time{})
+			rotated.BalanceCredential = "resolved-old"
+			rotated.BalanceSealedCredential = "sealed:ref-1"
+			same := balance("ds-same", "5.00", time.Time{})
+			same.BalanceCredential = "resolved-same"
+			same.BalanceSealedCredential = "sealed:ref-same"
+			return []proto.UsageAccount{rotated, same}, true
+		case 1, 2:
+			// Overall deadline expires after LauncherBalances resolved the rotated key.
+			return []proto.UsageAccount{
+				{
+					Provider:                "deepseek",
+					Name:                    "ds-rotated",
+					Ref:                     "balance:ds-rotated",
+					BalanceCredential:       "resolved-new",
+					BalanceSealedCredential: "sealed:ref-1",
+					BalanceSkipped:          true,
+				},
+				{
+					Provider:                "deepseek",
+					Name:                    "ds-same",
+					Ref:                     "balance:ds-same",
+					BalanceCredential:       "resolved-same",
+					BalanceSealedCredential: "sealed:ref-same",
+					BalanceSkipped:          true,
+				},
+				{
+					Provider:                "deepseek",
+					Name:                    "ds-never-read",
+					Ref:                     "balance:ds-never-read",
+					BalanceCredential:       "resolved-brand-new",
+					BalanceSealedCredential: "sealed:ref-new",
+					BalanceSkipped:          true,
+				},
+			}, true
+		default:
+			rotated := balance("ds-rotated", "50.00", time.Time{})
+			rotated.BalanceCredential = "resolved-new"
+			rotated.BalanceSealedCredential = "sealed:ref-1"
+			same := balance("ds-same", "5.00", time.Time{})
+			same.BalanceCredential = "resolved-same"
+			same.BalanceSealedCredential = "sealed:ref-same"
+			return []proto.UsageAccount{rotated, same}, true
+		}
+	}, nil, nil)
+
+	b.pollDue(ctx, now)
+	first := b.accounts(now)
+	if len(first) != 2 || first[0].Name != "ds-rotated" || first[0].Balance.Amount != "12.34" ||
+		first[1].Name != "ds-same" || first[1].Balance.Amount != "5.00" {
+		t.Fatalf("first read: %+v", first)
+	}
+	sameSampled := first[1].SampledAt
+
+	// First skipped poll after rotation drops ds-rotated's old balance, keeps ds-same, and ignores ds-never-read.
+	step = 1
+	t1 := now.Add(usageBalancePoll)
+	b.pollDue(ctx, t1)
+	got1 := b.accounts(t1)
+	if len(got1) != 1 || got1[0].Name != "ds-same" || got1[0].Balance == nil || got1[0].Balance.Amount != "5.00" ||
+		got1[0].Problem != "" || got1[0].Stale || !got1[0].SampledAt.Equal(sameSampled) {
+		t.Fatalf("rotated skipped launcher must clear old amount and never-read skipped must create no row: %+v", got1)
+	}
+	if _, ok := b.state["balance:ds-never-read"]; ok {
+		t.Fatalf("never-read skipped launcher must not create state entry")
+	}
+
+	// Repeated skipped poll continues hiding the old amount without fabricating a failed row.
+	step = 2
+	t2 := t1.Add(usageBalancePoll)
+	b.pollDue(ctx, t2)
+	if got2 := b.accounts(t2); len(got2) != 1 || got2[0].Name != "ds-same" {
+		t.Fatalf("repeated skipped poll must not resurrect old amount: %+v", got2)
+	}
+
+	// Once a non-skipped poll succeeds with the rotated key, the new balance appears normally.
+	step = 3
+	t3 := t2.Add(usageBalancePoll)
+	b.pollDue(ctx, t3)
+	got3 := b.accounts(t3)
+	if len(got3) != 2 || got3[0].Name != "ds-rotated" || got3[0].Balance == nil || got3[0].Balance.Amount != "50.00" ||
+		got3[0].Problem != "" || got3[0].Stale {
+		t.Fatalf("subsequent successful read after rotation: %+v", got3)
+	}
+}
