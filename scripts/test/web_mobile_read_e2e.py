@@ -298,6 +298,7 @@ def check_long_press(page, tag):
     shot(page, f"{tag}-menu")
     page.keyboard.press("Escape")
     expect(menu).to_have_count(0)
+    page.wait_for_function("!history.state?.personaOverlay")  # its entry goes a tick later; the next go() would be the one popped
 
 
 def check_revisit(page, tag):

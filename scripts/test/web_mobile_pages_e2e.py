@@ -114,7 +114,10 @@ def sheet_checks(page, w, h, tag, shots):
         open_new_agent(page)
         close()
         page.wait_for_selector(PANEL, state="detached")
-        page.wait_for_timeout(300)
+        try:  # its entry goes a tick after it closes (lib/back-close.ts)
+            page.wait_for_function("!history.state?.personaOverlay", timeout=3000)
+        except Exception:
+            pass
         check(not page.evaluate("history.state && history.state.personaOverlay"), f"{tag}: closing it from the page leaves no overlay entry")
 
 
@@ -195,6 +198,9 @@ def inbox_filters(page, tag, shots):
     shot(page, shots, f"inbox_menu_{tag}")
     page.keyboard.press("Escape")
     page.get_by_role("menu").wait_for(state="detached")
+    # the menu's history entry goes a tick after it closes (lib/back-close.ts): until then the next page's address is
+    # the one its Back pops, which left the to-dos step on /inbox about one run in two
+    page.wait_for_function("!history.state?.personaOverlay")
 
 
 def todos(page, tag, shots):
