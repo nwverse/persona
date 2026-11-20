@@ -210,6 +210,15 @@ func (s *Service) CleanupBackendWorkspace(ctx context.Context, id, op string, fo
 	if r.State == "removed" {
 		return r, nil
 	}
+	if slices.ContainsFunc(r.Uses, func(use string) bool { return strings.HasPrefix(use, "launch_") }) {
+		if err := s.releaseStoppedBackendUses(ctx, r, ""); err != nil {
+			return r, err
+		}
+		_, r, err = s.backendWorkspace(ctx, id, op)
+		if err != nil {
+			return r, err
+		}
+	}
 	if r.NodeOperationID != "" && r.NodeOperationID != r.OperationID {
 		owned, err := st.TaskWorkspace(ctx, id, r.NodeOperationID)
 		if err != nil {
@@ -304,7 +313,7 @@ func (s *Service) ReleaseBackendWorkspace(ctx context.Context, id, op, use strin
 	if result.Error != nil {
 		return r, result.Error
 	}
-	return st.MutateTaskWorkspace(ctx, id, r.OperationID, 0, "release", use)
+	return st.MutateTaskWorkspace(ctx, id, r.OperationID, r.Revision, "release", use)
 }
 func (s *Service) ensureBackendWorkspacePlan(ctx context.Context, id string, in namingRequest) error {
 	if !workspacenaming.ValidOperationID(in.OperationID) || len(in.WorkspaceRules) > 0 {
@@ -367,6 +376,7 @@ func backendWorkspaceError(w http.ResponseWriter, err error) {
 	namingError(w, err)
 }
 func (s *Service) taskWorkspaceRoutes() {
+	s.handle("POST /api/v1/todos/{id}/backend-workspace/start", s.startOwnerBackendPlan)
 	s.handle("GET /api/v1/todos/{id}/backend-workspace", func(w http.ResponseWriter, r *http.Request) {
 		st, err := s.backendWorkspaceStore()
 		if err != nil {
