@@ -81,20 +81,20 @@ func TestDirectionKeepHoldsTheCurrentDirectionsSessions(t *testing.T) {
 	}
 
 	// The opened conversation set on its own leaves keep; taken out of the book again it is the leader's once more.
-	opened2 := SessionRef{MachineID: "mac", SessionID: "chat-opened"}
+	openedRef := SessionRef{MachineID: "mac", SessionID: "chat-opened"}
 	directionFilingMustPut(t, ft.s, "mac", "chat-opened", "")
-	if got := directionKeepNow(t, ft.s, ft.f); slices.Contains(got, opened2) {
+	if got := directionKeepNow(t, ft.s, ft.f); slices.Contains(got, openedRef) {
 		t.Fatalf("a conversation set on its own is still kept: %+v", got)
 	}
 	directionFilingMustRemove(t, ft.s, "mac", "chat-opened")
-	if got := directionKeepNow(t, ft.s, ft.f); !slices.Contains(got, opened2) {
+	if got := directionKeepNow(t, ft.s, ft.f); !slices.Contains(got, openedRef) {
 		t.Fatalf("the leader's conversation is not kept again: %+v", got)
 	}
 	// Deleted, its origin stays on record, and the deletion record leaves it out.
 	if code, _ := doRoute(t, ft.s, http.MethodDelete, "/api/v1/assistant/conversations/chat-opened", `{"machine_id":"mac"}`, roleFull); code != http.StatusOK {
 		t.Fatalf("delete the opened conversation: %d", code)
 	}
-	if got := directionKeepNow(t, ft.s, ft.f); slices.Contains(got, opened2) {
+	if got := directionKeepNow(t, ft.s, ft.f); slices.Contains(got, openedRef) {
 		t.Fatalf("a deleted conversation is still kept: %+v", got)
 	}
 
