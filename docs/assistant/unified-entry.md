@@ -671,6 +671,32 @@ context counts (`prompts.ParseRelayQuoteID`), and its text is never read as the 
 owner's request, never their approval: a scope change that needs the owner's yes takes only a message they wrote in
 the conversation making the change. Hops and rate limits are as before.
 
+**Hand-overs** (#11699, `server/internal/assistant/relay_handover.go`). A `conversation_send` that carries a verified
+quote and has a direction's lead conversation (`assistant.leaders`, not a task leader Agent) on either end is one
+hand-over: from the main conversation to a lead, from a lead back to it, or between a lead and any other conversation.
+The hub records it once the send is accepted, sent at once or queued (setting `assistant.handovers`, by id, kept like
+the quotes: 14 days, at most 64, the oldest dropped first): the sending and receiving conversation, the receiver's
+title, where the owner wrote the words (conversation and message id), its state and code, and when it was made and
+last changed. A send refused at once (the sending model has the error), one without a quote and one between two
+conversations neither of which is a lead are none. Its state follows what the relay does with the message, is written
+only once it is true and never goes back, and each change is one log line:
+
+- `queued`: the message waits in the receiver's queue.
+- `delivered`: the message went in: sent at once, from the queue, or a try in doubt later found in the receiver's
+  transcript. A try in doubt is never `delivered` on its own.
+- `answered`: the receiver's first `conversation_send` back to the sender since the hand-over was delivered went into
+  the sender, however much later, while the hand-over is kept.
+- `not_delivered`: the message will not be tried again; its code is the refusal's when it was refused for good after
+  it was queued, `gone` when it was dropped because the receiver is gone. The sender still gets the line that says so
+  (`docs/assistant/assistant.md`, "Between conversations").
+
+An answer is matched on the hand-overs, not on the relay's hop record, which forgets after an hour, when the owner
+speaks in the receiver, or when a third conversation's request reaches it. The reply names the hand-over it answers
+(`answers` on the queued message): of the pair's delivered hand-overs, the oldest that no other reply on its way names.
+A reply that is refused or dropped leaves its hand-over `delivered` for the next one. In a lead's queue a hand-over goes
+after the outcomes to report and before the rest (`docs/assistant/assistant.md`, "Messages from the system wait for the
+owner"). Nothing reads the hand-overs yet but the log: no route, event or client shows them.
+
 **Required.** `task_plan` refuses a writable task (`readonly` false) without `done_when` (at least one criterion) and
 `expect_minutes`, and a read-only task without `goal` and `expect_minutes`; the refusal names what is missing and
 nothing is planned. The plan's task carries the brief (`tasks[i].brief`) from the moment the plan is made, so the card

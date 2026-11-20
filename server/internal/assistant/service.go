@@ -181,6 +181,7 @@ type Service struct {
 	chatReplies      chatReplyBook         // chat_reply.go: what conversations that wrote as the user were told of the chats
 	undelivered      undeliveredBook       // undelivered.go: the owner's messages that could not go in
 	quotes           quoteBook             // relay_quote.go: the owner's messages relays carried, verified
+	handovers        handoverBook          // relay_handover.go: the owner's words handed to and from a direction's lead
 	avail            availBook             // availability.go
 	quiet            quietBook             // quiet.go
 	taskFileBook     taskFileBook          // task_files.go: the files tasks handed over, by todo id
