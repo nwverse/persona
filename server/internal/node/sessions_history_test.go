@@ -269,7 +269,7 @@ func TestSessionsHistoryListsClaudeTranscriptsOlderThanAWeek(t *testing.T) {
 	if !live[ids[3]] || live[ids[20]] || live[ids[60]] {
 		t.Fatalf("the live list keeps only the last week: %v", live)
 	}
-	ans, err := n.sessionsHistory(t.Context(), mustJSON(t, map[string]any{"since": now.Add(-90 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)}))
+	ans, err := n.sessionsHistory(t.Context(), mustHistoryJSON(t, map[string]any{"since": now.Add(-90 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,12 +287,12 @@ func TestSessionsHistoryListsClaudeTranscriptsOlderThanAWeek(t *testing.T) {
 		t.Errorf("the node's own sources are complete: %+v", ans.Sources)
 	}
 	// A window ending before the newest one.
-	ans, _ = n.sessionsHistory(t.Context(), mustJSON(t, map[string]any{"since": now.Add(-90 * 24 * time.Hour).UTC().Format(time.RFC3339Nano),
+	ans, _ = n.sessionsHistory(t.Context(), mustHistoryJSON(t, map[string]any{"since": now.Add(-90 * 24 * time.Hour).UTC().Format(time.RFC3339Nano),
 		"until": now.Add(-10 * 24 * time.Hour).UTC().Format(time.RFC3339Nano), "source": "claude", "limit": 1}))
 	if len(ans.Rows) != 1 || ans.Rows[0].Session.SessionID != ids[20] || ans.NextCursor == "" {
 		t.Fatalf("first page of [90 days, 10 days): %+v", ans)
 	}
-	ans, _ = n.sessionsHistory(t.Context(), mustJSON(t, map[string]any{"since": now.Add(-90 * 24 * time.Hour).UTC().Format(time.RFC3339Nano),
+	ans, _ = n.sessionsHistory(t.Context(), mustHistoryJSON(t, map[string]any{"since": now.Add(-90 * 24 * time.Hour).UTC().Format(time.RFC3339Nano),
 		"until": now.Add(-10 * 24 * time.Hour).UTC().Format(time.RFC3339Nano), "source": "claude", "limit": 1, "cursor": ans.NextCursor}))
 	if len(ans.Rows) != 1 || ans.Rows[0].Session.SessionID != ids[60] || ans.NextCursor != "" {
 		t.Fatalf("second and last page: %+v", ans)
@@ -334,7 +334,7 @@ func TestSessionsHistoryListsCodexRolloutsOlderThanTwoWeeks(t *testing.T) {
 	dir, at = day(200)
 	write(dir, tooOld, `{"id":"`+tooOld+`","cwd":"/work/app","source":"cli"}`, at)
 
-	ans, err := n.sessionsHistory(t.Context(), mustJSON(t, map[string]any{"since": now.Add(-90 * 24 * time.Hour).UTC().Format(time.RFC3339Nano), "source": "codex"}))
+	ans, err := n.sessionsHistory(t.Context(), mustHistoryJSON(t, map[string]any{"since": now.Add(-90 * 24 * time.Hour).UTC().Format(time.RFC3339Nano), "source": "codex"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +350,7 @@ func TestSessionsHistoryListsCodexRolloutsOlderThanTwoWeeks(t *testing.T) {
 	}
 }
 
-func mustJSON(t *testing.T, v any) json.RawMessage {
+func mustHistoryJSON(t *testing.T, v any) json.RawMessage {
 	t.Helper()
 	b, err := json.Marshal(v)
 	if err != nil {
