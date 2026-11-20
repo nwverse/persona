@@ -229,6 +229,35 @@ func TestRemedyTurnEndLeavesARetryRunning(t *testing.T) {
 	}
 }
 
+// A retry parked in the admission queue is owned by the queue loop, not given up by turn-end or tab expiry.
+func TestRemedyLeavesAdmissionQueuedRetryAlive(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	todo, p := remedyingTask(t, s, f, keptRefusal(proto.CodeShellWaiting))
+	waitFor(t, "the supervision message", func() bool { return len(f.notices()) == 1 })
+	if err := s.patchPlanTask(ctx, p.ID, 0, func(pt *PlanTask) {
+		pt.Start.Until = time.Now().Add(-time.Second)
+		pt.Queue = &TaskQueue{
+			Reason:   "high load",
+			Key:      "admission_load",
+			Attempt:  1,
+			QueuedAt: time.Now().UTC(),
+			NextAt:   time.Now().Add(time.Minute).UTC(),
+			Retry:    true,
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.remedyTurnEnded(ctx, "conv1")
+	s.remedyWatch(ctx, todoNow(s, todo.ID), time.Now(), s.planHistoryOnce())
+	if got := todoNow(s, todo.ID); got.DoneAt != nil {
+		t.Fatalf("queued retry was given up: %+v", got)
+	}
+	if r := remedyState(t, s, p.ID); r == nil || r.State != remedying {
+		t.Fatalf("start state changed while queued: %+v", r)
+	}
+}
+
 // The kept tab expires with nobody remedying it (no supervision turn came, or the hub restarted): the supervisor's
 // tick fails the start for good and tells the user.
 func TestRemedyExpiresWithItsTab(t *testing.T) {

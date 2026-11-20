@@ -627,4 +627,5 @@
     <plurals name="agents_todo_calendar_undated">
         <item quantity="other">期限なし %1$d 件</item>
     </plurals>
+    <string name="agents_sidebar_heading">エージェント</string>
 </resources>

@@ -404,6 +404,13 @@ running Agent to another provider".
   its turn ended) is not started: `session.switch` with `launcher` points its record at the new launcher and model, so
   its next Resume, or the message that resumes it, comes up there ("switched (takes effect when resumed)"). A switch
   that fails on the node (it did not come up and rolled back) is reported as refused with its reason and not retried.
+- **An agent off its launcher** (`off_launcher`, #11792): a Persona Agent whose claude runs without Persona's start
+  command (herdr's bare `claude --resume <id>` after a restart on herdr older than 0.9.2) does not run on the launcher
+  its row names. `agents_list` says so after `launcher=`, and a switch to that launcher (`agent_switch`, `agents_switch`,
+  the chat's pick) moves it back there rather than being refused as one it runs on already; `agent_switch` does not take
+  such a pick back when its message fails, since picking the agent's own launcher is the switch back (a switch to
+  another launcher it does take back: with that switch waiting, the own launcher's pick cancels it). Busy, it is
+  queued and switched back when its turn ends.
 - **A busy agent is not switched**: one that works, waits for the user, is starting, or has background work a quit
   would end gets the message on its launcher as always, and the switch waits for a later message. Background work is the
   row's (running subagents and workflows, a `/loop`) and every background command or monitor of its claude process,
@@ -956,7 +963,7 @@ below; [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibil
 | `command-paths` | Hook / MCP commands in those files (first word parsed following `shellQuote` syntax) point to existing executable programs | Unusable: fail |
 | `claude-version` | Local Claude version ≥ `pluginMinVersion`, supporting `--plugin-dir` | Unreadable / too old: warn (`--settings` fallback still works); read nothing although the shell found claude: warn with state `unanswered`, which readiness treats as unknown rather than missing |
 | `herdr` | Herdr API socket connects | Unreachable: warn; engine selected by hub on connection, not stored locally; ignore for other engines |
-| `global-permission-hooks` | Count and commands, truncated to 80 characters, of synchronous non-async `PermissionRequest` hooks in user's `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude`) | Present: warn; other approval hooks block requests alongside phone approvals; **inspect only, never modify** |
+| `global-permission-hooks` | Count and commands, truncated to 80 characters, of synchronous non-async `PermissionRequest` hooks in user's `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude`). A hook whose program (first word, `~/` / `$HOME/` expanded, symlinks followed) is a file of a package the node installed (`<persona dir>/node-plugins/<id>/<version>/`, with the node's `.persona-node` mark and the version's `.persona-digest` record and manifest) is that extension's, named by its manifest (#11973); a path under `node-plugins/` alone is not enough | Another tool's hook present: warn; other approval hooks block requests alongside phone approvals. Only installed extensions' hooks: ok, naming them; **inspect only, never modify** |
 | `agent-sandbox` | Whether the agent sandbox is on, whether this machine can run it, each kind of start's last status (`docs/server/agent-sandbox.md`) | On but unusable / skipped: warn |
 | `launchd-process-type` (Mac only) | The resident node's installed LaunchAgent in `~/Library/LaunchAgents` has `ProcessType=Interactive`, and launchd runs it that way (`launchctl print`: `spawn type = interactive`). When both supported definitions exist, inspect the one launchd has loaded (docs/server/server.md "Scheduling and privacy on the Mac") | Missing / other value / loaded from an older plist: warn; no agent: ok |
 | `path-access` (not on Windows) | Reads what a claude start reads (Claude Code's directory, `settings.json`, `settings.local.json`, `CLAUDE.md`, the symlinks in `skills`, `commands`, `agents`; each working directory and its `.claude/` ones) in a child that is killed after a 3 s stall (a whole run: at most 15 s); asked of the running node when there is one | Blocked in Claude Code's directory: fail; only in a working directory: warn |

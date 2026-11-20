@@ -83,6 +83,8 @@
   "admission_refused": "电脑 {machine} 现在不能启动这个 Agent：{reason}{recommend}",
   "admission_recommend": "推荐电脑：{machine}。",
   "admission_reroute": "已从 {from} 改派到 {to}：{reason}",
+  "gateway_quota_wait": "账号池已达用量上限，预计有账号会在 {time} 左右恢复。",
+  "gateway_quota_unsaved": "Persona 无法保存此任务的账号池等待状态，请重新启动任务。",
   "admission_queued": "排队中，hub 会自动重试：{reason}",
   "request_owner_start": "此请求有前置任务。请在任务计划卡片上批准启动。",
   "request_edit_piece": "请在计划启动前编辑现有待办的请求关系。计划不能更改这些关系。",

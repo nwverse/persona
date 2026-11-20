@@ -59,6 +59,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/repositories/{id}
 -                    DELETE /api/v1/assistant/saved-prompts/{id}
 -                    DELETE /api/v1/assistant/standing-authorizations/{id}
+-                    DELETE /api/v1/assistant/starred/{id}
 -                    DELETE /api/v1/assistant/tasks/{id}
 -                    DELETE /api/v1/assistant/tasks/{id}/start-grant
 -                    DELETE /api/v1/auth/tokens/{id}
@@ -163,6 +164,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/assistant/search
 -                    GET /api/v1/assistant/skills
 -                    GET /api/v1/assistant/standing-authorizations
+-                    GET /api/v1/assistant/starred
 assistant.start_defaults GET /api/v1/assistant/start-defaults
 -                    GET /api/v1/assistant/tasks
 -                    GET /api/v1/assistant/tasks/cron
@@ -320,6 +322,7 @@ notify               GET /api/v1/push/stats/daily
 agents.read          GET /api/v1/saved-agent-searches
 agents.read          GET /api/v1/sessions
 agents.read          GET /api/v1/sessions/archived
+-                    GET /api/v1/sessions/{mid}/{sid}/agent-messages
 agents.read          GET /api/v1/sessions/{mid}/{sid}/info
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/full
@@ -443,6 +446,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/rule-suggestions/{id}/always
 -                    POST /api/v1/assistant/rule-suggestions/{id}/not-now
 -                    POST /api/v1/assistant/saved-prompts
+-                    POST /api/v1/assistant/starred
 -                    POST /api/v1/assistant/tasks
 -                    POST /api/v1/assistant/tasks/{id}/fresh
 -                    POST /api/v1/assistant/tasks/{id}/run
@@ -601,6 +605,7 @@ notify               POST /api/v1/notify
 -                    POST /api/v1/recordings/{id}/segments
 -                    POST /api/v1/saved-agent-searches
 agents.control       POST /api/v1/sessions
+-                    POST /api/v1/sessions/{mid}/{sid}/agent-messages
 -                    POST /api/v1/sessions/{mid}/{sid}/archive
 -                    POST /api/v1/sessions/{mid}/{sid}/attach
 -                    POST /api/v1/sessions/{mid}/{sid}/autoname

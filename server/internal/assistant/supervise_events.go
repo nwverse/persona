@@ -387,7 +387,8 @@ func (s *Service) supervisedWorking(ctx context.Context, t Todo) {
 	b.mu.Lock()
 	delete(b.pending, t.ID+"|"+sigReview)
 	delete(b.pending, t.ID+"|"+sigParkedDue)
-	s.forgetSupervisePending(t.ID+"|"+sigReview, t.ID+"|"+sigParkedDue)
+	delete(b.pending, t.ID+"|"+sigEstimateDue)
+	s.forgetSupervisePending(t.ID+"|"+sigReview, t.ID+"|"+sigParkedDue, t.ID+"|"+sigEstimateDue)
 	b.mu.Unlock()
 	if st := t.Supervision.state(t); st != reviewPending && st != reviewParked && (t.Supervision == nil || t.Supervision.Waits == nil) {
 		return

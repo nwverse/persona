@@ -533,6 +533,7 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 	s.logf("supervise: %d signal(s) to task leader %s", len(entries), short(lead.SessionID))
 	s.ackSupervisePending(batch)
 	s.parkedDueTold(ctx, kept)
+	s.estimateDueTold(ctx, kept)
 	s.turnsTold(ctx, holds) // kept went, the rest was said the same within the deduplication window
 	return true
 }
@@ -600,6 +601,7 @@ func (s *Service) leaderDelivered(ctx context.Context, lead TodoAgent, entries [
 	}
 	s.ackSupervisePending(all)
 	s.parkedDueTold(ctx, sent)
+	s.estimateDueTold(ctx, sent)
 	s.turnsTold(ctx, receipts)
 	s.logf("supervise: %d signal(s) to task leader %s after confirmation", len(sent), short(lead.SessionID))
 }
@@ -761,7 +763,7 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	b.mu.Lock()
 	b.init()
 	var keys []string
-	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigOrphaned} {
+	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigOrphaned, sigEstimateDue} {
 		key := t.ID + "|" + k
 		delete(b.pending, key) // reviewed: what waited is answered
 		keys = append(keys, key)

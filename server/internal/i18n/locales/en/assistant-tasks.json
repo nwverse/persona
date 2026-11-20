@@ -83,6 +83,8 @@
   "admission_refused": "Computer {machine} cannot start this agent: {reason}.{recommend}",
   "admission_recommend": " Recommended computer: {machine}.",
   "admission_reroute": "Moved from {from} to {to}: {reason}",
+  "gateway_quota_wait": "The account pool is at its usage limit. An account is expected to recover around {time}.",
+  "gateway_quota_unsaved": "Persona could not save this task's wait for the account pool. Try starting the task again.",
   "admission_queued": "Queued, the hub will retry automatically: {reason}",
   "request_owner_start": "This request has prerequisites. Approve the start on its task plan card.",
   "request_edit_piece": "Edit the existing to-do's request links before planning its start. The plan cannot change them.",

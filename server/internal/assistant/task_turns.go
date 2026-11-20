@@ -563,8 +563,8 @@ func (s *Service) turnJudged(ctx context.Context, todo string, c taskDoneCheck, 
 }
 
 // turnSignalKind: a signal that says how a turn ended, kept on its turn.
-func turnSignalKind(kind string) bool {
-	return kind == sigReview || kind == sigIdle || kind == sigUnjudged || kind == sigInterrupted
+func turnSignalKind(g superviseSignal) bool {
+	return !g.externalPRReview() && (g.Kind == sigReview || g.Kind == sigIdle || g.Kind == sigUnjudged || g.Kind == sigInterrupted)
 }
 
 // turnSignalled keeps on the ledger that todo's turn raised g, before it is told. told: a supervision message
@@ -633,7 +633,7 @@ func (s *Service) turnsToldLocked(ctx context.Context, list []superviseSignal) b
 	changed := false
 	previous := map[string]*turnSignal{}
 	for _, g := range list {
-		if !turnSignalKind(g.Kind) {
+		if !turnSignalKind(g) {
 			continue
 		}
 		e, ok := b.doc.Turns[g.Todo]

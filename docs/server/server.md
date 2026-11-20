@@ -28,6 +28,76 @@ The hub and the managers apart:
 - **One container in Docker.** The hub image runs the hub and the built-in manager as two processes under `personad supervise`, each restarted on its own, as `persona-hub run` and `persona-manager assistant` unless `PERSONA_SPLIT_PROGRAMS=0` ([docker.md](../operations/docker.md) ("Programs")).
 - **Two services on a new install.** `hub setup` installs the hub's service and the built-in manager's own (`persona-manager-assistant.service` running `persona-manager assistant`, or on a Mac the launchd agent `com.persona.manager.assistant`, running `persona-manager assistant` on a new install, each with `PERSONA_ASSISTANT_DEPLOY=service`), and binds the second to the first with a one-time code. Existing installs keep the hub's child until `hub setup --manager-service` ([upgrade.md](../operations/upgrade.md): every install type, step by step). See [managers.md](../assistant/managers.md) ("The built-in manager as its own service").
 
+## Send an Agent message and check its receipt
+
+Use `personad agent send` to hand a message to an existing Agent from a script or terminal. Use a full paired-device
+token file and either an HTTPS hub address or loopback HTTP. The hub must advertise `client_ops` and `agent_terminal_send`.
+
+```sh
+personad agent send --hub '<hub URL>' --token-file '<private token file>' \
+  --message-file instructions.txt --json '<computer ID>' '<session ID>'
+
+personad agent receipt --hub '<hub URL>' --token-file '<same private token file>' \
+  --wait --json '<request ID>'
+```
+
+The CLI checks the exact target before submitting. A listed Agent may be on an offline computer. Persona
+conversations, archived sessions and unknown targets are refused by the hub.
+
+Pass `--message-file -` to read stdin. Text must be nonempty UTF-8 and fit in 64 KiB. The command prints a generated
+request UUID on stderr before the POST. Scripts can supply their own stable UUID using `--request-id`. Keep the UUID
+with the chosen hub, device credential, target, text and hold choice. A reused ID with different input is a conflict. The CLI
+makes one POST and can recover a lost answer by reading the matching receipt. The recovery read gets a separate
+deadline of up to five seconds. It reuses the same hub and credential and verifies the stored target and input digest.
+
+Add `--hold` to opt in to the hub's existing hold for an Agent whose computer is away. A `held` receipt records admission
+to the outbox. It does not report eventual delivery or change when the outbox retries or discards the message. Use
+`personad outbox list` and the existing recovery actions to check what is still held. An Agent may also accept a message
+into its own queue, reported as `queued`. Delivery and queueing are transport outcomes and do not indicate that the
+Agent finished the work.
+
+`receipt --wait` polls a pending receipt and can continue through a transient read failure. The network deadline defaults to 30 seconds and accepts up to five minutes
+with `--timeout`. A missing or unusable receipt cannot establish whether a message was sent. Keep the same request
+ID and check the existing chat and outbox before making a new send decision.
+
+With `--json`, an outcome is one stdout object containing `request_id` and `state`, plus `http_status` or `reason` when
+known. Exit 0 means `delivered`, `queued`, or `held`. Exit 1 covers `pending`, `refused`, `conflict`, `unknown` and
+`unavailable`, plus connection setup failures. Exit 2 signals invalid usage. The command does not print message text,
+raw receipt bodies or credentials.
+
+## Export a conversation from the terminal
+
+People who work in a terminal can save an Agent or Persona conversation as Markdown for handoffs, tickets,
+or personal archives. Address one conversation using the computer ID and current session ID in the hub's session list.
+Use the hub's HTTPS address, including its mount path when applicable. Local HTTP also works. Keep the paired
+device's credential in a private file (see [Authentication](../protocol/protocol.md#authentication)).
+
+```sh
+personad chat export --hub '<hub URL>' --token-file '<private token file>' \
+  --output conversation.md '<computer ID>' '<current session ID>'
+
+personad chat export --hub '<hub URL>' --token-file '<private token file>' \
+  --output conversation-with-steps.md --include-steps '<computer ID>' '<current session ID>'
+```
+
+By default the export includes the visible conversation, with images and visualizations identified by placeholders.
+Add `--include-steps` to also keep tool calls, results, thinking and intermediate narration in collapsible sections.
+As in the Web export, tool inputs and results show up to 4,000 characters each and mark any omitted continuation.
+Tool inputs retain any size-limit markers already added by the runtime. In a conversation that switched engines, each
+session is read once and its items are placed inside the recorded switch windows. Existing chat permissions still apply.
+
+The command requires a hub that advertises `sessions_lookup` and a hub and node that confirm strict transcript reads.
+This currently means a readable local transcript, including a runtime session whose transcript the node reads locally.
+Export declines terminal-only views and transcripts reconstructed from Codex App or Traex databases. It captures each source's last sequence on the first page. New messages after
+that point stay out, and an observed rewrite or changed switch history triggers one fresh attempt. An unreadable
+page, incomplete full message, or exhausted budget fails without publishing a document. An attempt can read up to
+400 pages, 20,000 items, 512 full items, 64 conversation segments and 96 MiB of responses. Individual responses have a
+16 MiB limit and the command allows up to five minutes for the operation.
+
+Use a new path in an existing local folder that supports hard links. The document is published only after every
+read and the file write succeed, and an existing file is never replaced. On platforms with Unix file permissions the
+file is created with owner-only access. The credential is sent only to the supplied hub and never added to the export.
+
 ## Held Agent messages from the terminal
 
 Use `personad outbox` to check and recover messages waiting for one computer, even when the computer is offline or

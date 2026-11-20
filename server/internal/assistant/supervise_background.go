@@ -218,7 +218,7 @@ func (s *Service) backgroundLost(ctx context.Context, old, to, web string) []sup
 	}
 	moved := 0
 	title := "" // the name of to, for a hand-over of the owner's words that moves there (relay_handover.go)
-	if to != "" && s.queuedHandover(old) {
+	if to != "" {
 		title = short(to)
 		if cfg := s.settings(ctx); cfg.MachineID != "" {
 			if c, ok := s.session(ctx, cfg.MachineID, to); ok {

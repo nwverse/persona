@@ -220,7 +220,7 @@ func (f *File) openWindow(fh *os.File, size int64) (fresh []proto.Item, ok bool,
 	w.ids = seedTaskIDs(data)
 	meta := f.seeded(fh, w, b, lastNL, w.ids)
 	var kept []proto.Item
-	f.cut = nil
+	f.refs = nil
 	f.tree = f.freshTree()
 	f.parseLines(data, starts[b-1], b, &meta, f.tree, &kept, &fresh)
 	tail := make([]byte, size-lastNL)
@@ -548,11 +548,8 @@ func (f *File) parseLines(data []byte, pos int64, n int, meta *Meta, tree *branc
 				}
 				k, cut := light(it, false)
 				*kept = append(*kept, k)
-				if cut {
-					if f.cut == nil {
-						f.cut = map[int]lineRef{}
-					}
-					f.cut[n] = lineRef{at, i}
+				if cut || it.SourceFingerprint != "" {
+					f.rememberLine(n, lineRef{at, i})
 				}
 			}
 		}
