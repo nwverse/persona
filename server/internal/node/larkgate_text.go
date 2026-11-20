@@ -17,13 +17,14 @@ import (
 
 // larkFlow is what classifyLark notes of one segment for larkTextRuns.
 type larkFlow struct {
-	text    string
-	call    bool     // lark-cli's own call (or ssh's, read remotely): its words reach no other program
-	filter  bool     // an output filter: it prints what it is given or told, and runs none of it
-	program bool     // anything else: a program that may run a file
-	opaque  bool     // a program whose code the command does not show (a script, a shell reading its input)
-	writes  bool     // it writes a file
-	notes   []string // the notes it writes (larkNoteFile): run only by a program that names them (#8148)
+	text     string
+	call     bool     // lark-cli's own call (or ssh's, read remotely): its words reach no other program
+	filter   bool     // an output filter: it prints what it is given or told, and runs none of it
+	program  bool     // anything else: a program that may run a file
+	opaque   bool     // a program whose code the command does not show (a script, a shell reading its input)
+	writes   bool     // it writes a file
+	notes    []string // the notes it writes (larkNoteFile): run only by a program that names them (#8148)
+	resolved bool     // this invocation came from a proven literal command-prefix assignment
 }
 
 // larkTextRuns: the command may run lark-cli where classifyLark cannot see it. That is a program with code the
@@ -47,7 +48,7 @@ func larkTextRuns(cmd string, flow []larkFlow, sequential bool) bool {
 			piped = pos > 0 && (strings.Trim(gap, " \t\n\\|&;") != "" || larkPipedFrom(gap))
 			pos += at + len(f.text)
 		}
-		if names && f.opaque || piped && tainted && !f.filter {
+		if names && f.opaque && !f.resolved || piped && tainted && !f.filter {
 			return true
 		}
 		tainted = f.filter && (own || piped && tainted)
@@ -86,7 +87,7 @@ func selfContainedCode(words []string) bool {
 		return ok
 	case base == "sed":
 		code, ok = larkInlineScript(words[1:], "", "-n -E -r")
-		return ok && !strings.ContainsAny(code, "ewW") // e runs a command, w writes a file
+		return ok && sedScriptReadsOnly(code)
 	case larkInterpreter.MatchString(base):
 		flag := "-e"
 		if strings.HasPrefix(base, "python") {
@@ -119,6 +120,54 @@ func selfContainedCode(words []string) bool {
 var larkCodeRuns = lazyre.New("(?i)(?:^|[^.\\w])(?:eval|exec|compile|__import__|import|require)\\s*\\(" +
 	"|\\b(?:system|exec[a-z]+|popen[0-9]*|spawn[a-z]*|fork|getoutput|check_output)\\s*\\(" +
 	"|subprocess|importlib|runpy|child_process|ctypes|getattr|__builtins__|builtins|__dict__|globals\\s*\\(|\\bpty\\.|`|\\bqx\\W|%x[{(\\[]|open\\s*\\(\\s*[\"']\\s*\\|")
+
+// sedScriptReadsOnly ignores letters inside /regular-expression/ addresses and the pattern and replacement of an
+// s command. Elsewhere e executes a command and w/W writes a file, including when they are s flags. Unknown or
+// unterminated syntax stays opaque. This avoids mistaking "/## Messages/,/## Summary/p" for execution without
+// allowing sed's actual evaluation and file-writing forms.
+func sedScriptReadsOnly(code string) bool {
+	section := func(start int, delimiter byte) (int, bool) {
+		for i := start; i < len(code); i++ {
+			if code[i] == '\\' {
+				i++ // an escaped delimiter (or backslash) remains part of the section
+				continue
+			}
+			if code[i] == delimiter {
+				return i + 1, true
+			}
+		}
+		return len(code), false
+	}
+	for i := 0; i < len(code); {
+		switch code[i] {
+		case 'e', 'w', 'W':
+			return false
+		case '/':
+			next, ok := section(i+1, '/')
+			if !ok {
+				return false
+			}
+			i = next
+		case 's':
+			if i+1 >= len(code) || code[i+1] == '\\' || code[i+1] == '\n' || code[i+1] == '\r' || code[i+1] == ' ' || code[i+1] == '\t' {
+				return false
+			}
+			delimiter := code[i+1]
+			next, ok := section(i+2, delimiter)
+			if !ok {
+				return false
+			}
+			next, ok = section(next, delimiter)
+			if !ok {
+				return false
+			}
+			i = next // flags stay visible: s///e evaluates and s///w writes
+		default:
+			i++
+		}
+	}
+	return true
+}
 
 // larkInlineScript is the script of `awk|sed [options] SCRIPT [files…]` (or -e SCRIPT): valued lists the options
 // that take a value, flags those that do not; any other option makes it unknown.

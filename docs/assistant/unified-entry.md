@@ -549,7 +549,7 @@ When enabled, tasks dispatched from the main chat (`task_plan`; also `agent_star
 - **Coalescing**: wait 15 seconds after a task's first change (`quietNoticeDelay`), retaining only the latest change in that interval and noting "It also waited for the user during this period."
   If the user has answered before a waiting notice is sent, skip it. While the main chat is running, queue the notice between chat turns (the same queue as `conversation_send`, showing "Notice for task ‘xx’" above the input), then inject it after the current turn ends.
   If the queue already has a notice for this task, replace it in place instead of adding another. Implementation: `server/internal/assistant/quiet.go`.
-- **`agent_start`**: when called from the main chat with the setting enabled, hub creates a quiet to-do (`origin` = main chat, no plan), attaches the Agent, inserts a task card, and thereafter treats it like a `task_plan` task.
+- **`agent_start`**: when called from the main chat with the setting enabled, hub creates a quiet to-do (`origin` = main chat, no plan), attaches the Agent, inserts a task card, and thereafter treats it like a `task_plan` task. The link keeps the Agent kind from the start answer or the adopted session after a lost answer. If missing, it uses the resolved launcher kind, or stays empty when neither is known.
   With the setting off or calls from other chats, it remains a standalone Agent as before, unless Agent tasks are on ("Agent tasks" below).
 - **Reporting chats** (#3192): tasks (`task_plan`, `agent_start`) dispatched from chats created with `report_tasks: true` (the extension's Lark /agent) ignore this setting and are always quiet.
   Notices go into **the chat that dispatched them**, not the main chat (the `Reporting` wording follows the instructions at that chat's start). Registered in `assistant/reporters.go` (`docs/extensions/lark-agent.md`).
@@ -1120,9 +1120,34 @@ content, not memory: memory stays one for every conversation (#9440), and a dire
   send records that, so a direction ended and made again does not bring back the block it had before. The node can
   see work before the manager's session row shows it (a moment, or longer on a computer with many sessions); in that
   window its refusal stays as the safety net, and a block counts as in effect only once the node took the send that
-  carried it: when the node refuses that send or it fails before reaching the conversation, the block before it is put
-  back (`notesSendOutcome`: the manager's own sends by the node's answer, the owner's messages by the hub's
-  `session.assistant_sent` notice), so only that one message is refused, not every message until the turn ends.
+  carried it (`notesSendOutcome`).
+- **Settled by the send that carried it** (#11392): the moves of the block still in flight are kept per conversation,
+  each with the sends that carry its block, and an outcome settles only its own send's move. The manager's own sends
+  (`call`: `assistant.send`, `assistant.warm`, `session.send`, `session.send_once`, `assistant.answer_again`) are
+  settled by the node's answer, and as not taken when refused before they leave (a launcher out of the computer's
+  scope) or when the computer is offline or not one of the hub's. The owner's messages are settled by the hub's
+  `session.assistant_sent` notice, which names the message by its `client_msg_id`, and at once as not taken when
+  their `assistant.send_params` is refused. A notice settles only the message it names; one that names none (a message
+  sent without an id, or an older hub's notice) settles the oldest message without an id still waiting for one, else
+  the oldest one waiting. A second `assistant.send_params` for a message the manager already gave parameters for is
+  the hub's retry, which the hub may answer from its record without sending it or telling how it went: it moves
+  nothing and waits for no notice (the manager keeps each conversation's latest 64 ids). A send the node took keeps
+  its block, and the moves before it stay too. A send not taken drops its move once no other send in flight carries
+  that block: the block before it is put back when no later move is in flight, else the later move counts from it, so
+  only that one message is refused, not every message until the turn ends. Only these sends move the block. A send
+  whose outcome nobody reports takes the last confirmed block, the one before the oldest move still in flight, not a
+  block such a move gave: the node's own request for what its message runs on (`assistant.model`), and the parameters
+  the manager makes before it sends them through `call`.
+- **An outcome never learned keeps the block**. An owner's message whose notice never comes (the hub did not send it
+  after all, as for a retry the manager did not know it had seen; it stopped while sending it; or the notice was lost
+  while the manager's connection was down) waits 10 minutes, longer than the hub waits for any send, and takes no
+  other message's notice meanwhile. Until then its move stays in flight, so a send nobody reports takes the block
+  before it; after that it counts as an outcome never learned, and its block stays in effect. The moves in flight are
+  in memory only: after a manager restart between a send and its outcome the new block stays too, as it does for the
+  oldest move or owner's message beyond eight in flight for one conversation. When the node had in fact refused that
+  send, the lead's process still runs the block before it: until the lead is idle, every send that finds it at work
+  carries the new block and the node refuses it, and the first send that finds it idle gives the process the new
+  block.
 - **Two editors** (#11392): a save may say which `notes_at` it started from, as `GET /api/v1/assistant/leaders`
   lists it (`null` there and here: there were no notes); when the
   notes changed since, it is refused with 409 `notes_changed` and the stored `notes` and `notes_at`, so a client can
@@ -1136,7 +1161,9 @@ content, not memory: memory stays one for every conversation (#9440), and a dire
 - **Without notes nothing changes**: the leader's policy and context are byte for byte as before (a project's goal or
   status alone is never added), and no block goes to Agents.
 - **Checks**: `server/internal/assistant/direction_notes_test.go` (the route, the leader's policy and context, new
-  Agents), `server/internal/assistant/lead_conversations_test.go` (`notes_at`, the idle rule across a restart) and the
+  Agents), `server/internal/assistant/lead_conversations_test.go` (`notes_at`, the idle rule across a restart, the
+  outcome of the send that carried a block, in both orders and for every send that moves one, the hub's notice by the
+  message it names), `server/internal/hub/assistant_sent_test.go` (the notice names its message) and the
   goldens `direction_notes.*` / `todo_direction.*`; the web editor's browser check runs against the mock
   hub with `MOCK_LEADERS=1`: `node web/e2e/direction-notes.mjs` (desktop and phone width, light and dark).
 
