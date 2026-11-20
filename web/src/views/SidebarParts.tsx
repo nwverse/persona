@@ -17,10 +17,8 @@ import { BUILTIN_PAGE_COLORS, useSidebarIconMode } from "../lib/sidebar-icons";
 import { BADGE_TONE, navIcon, pageRoute } from "./extensions/ExtensionSlots";
 import { href, inWorkView, navigate, type Route } from "../lib/router";
 import { useAgentSessions } from "../lib/sessions";
-import { scoped, useScope, useScopedCounts, useScopedTodos } from "../lib/current-assistant";
-import { ownerBadge } from "../lib/todo-triage";
-import { makeSessionLookup } from "../lib/todos";
-import { useRestoredTodos } from "../lib/todo-restore";
+import { scoped, useScope, useScopedCounts } from "../lib/current-assistant";
+import { useOwnerNeeds } from "../lib/todo-owner-needs";
 import { useLarkOn, useStore } from "../lib/store";
 import { connPhase } from "../lib/connection";
 import { useWorkspaceBoardSetting } from "../lib/workspace-board-setting";
@@ -91,14 +89,11 @@ export function useNavPages() {
   const online = useStore((s) => scoped(s.machines, scope).filter((m) => m.online).length);
   const total = useStore((s) => scoped(s.machines, scope).length);
   const assistant = useStore((s) => s.assistant);
-  const todos = useScopedTodos();
   const todosSupported = useStore((s) => s.todosSupported);
-  // The open to-dos that need the owner, not those Agents are on (#11085, lib/todo-triage ownerBadge); quiet tasks
-  // (#1731) are told about in the main conversation, not counted here. The To-dos page's "Not done" counts every open one.
-  const agentSessions = useAgentSessions();
-  const interactions = useStore((s) => s.interactions);
-  const [restored] = useRestoredTodos();
-  const todosBadge = useMemo(() => ownerBadge(todos, makeSessionLookup(agentSessions, interactions), Date.now(), restored).size, [todos, agentSessions, interactions, restored]);
+  // The open to-dos that need the owner, not those Agents are on (#11085, lib/todo-triage ownerNeeds); quiet tasks
+  // (#1731) are told about in the main conversation, not counted here. The To-dos page's "Not done" counts every open one,
+  // and the page marks the rows counted here from the same hook (#11838), so the number and the marks agree.
+  const todosBadge = useOwnerNeeds().size;
   const todosBadgeLabel = todosBadge ? t("sidebar.todos_badge_title", { count: todosBadge }) : undefined;
   const counts = useScopedCounts();
   const inbox = useInboxBadge();

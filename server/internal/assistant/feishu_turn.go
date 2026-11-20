@@ -233,7 +233,7 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 	if newCard {
 		answerSteps = nil // they go into the folded progress card
 	}
-	cards := answerCards(l, answer, quiet, answerSteps, foot)
+	cards := answerCards(l, s.linkNamer(ctx), answer, quiet, answerSteps, foot)
 	if quiet {
 		c := feishubot.NewCard("", "", foot)
 		processPanel(l, c, steps)
@@ -250,8 +250,9 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 	for i, ac := range cards {
 		c, piece := ac.card, ac.fallback
 		if i == len(cards)-1 && r.SessionID != "" {
-			// The conversation's web link goes under the last piece only, as on pushed and mirrored turns.
-			c.Buttons(s.openButton(ctx, r.MachineID, r.SessionID))
+			// The conversation's web link goes under the last piece only, as on pushed and mirrored turns, in the row of
+			// the answer's own links.
+			c.AppendToLinks(s.openButton(ctx, r.MachineID, r.SessionID))
 		}
 		if i == 0 {
 			endHeader(l, c, end)

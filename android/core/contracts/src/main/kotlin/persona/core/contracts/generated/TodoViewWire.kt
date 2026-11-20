@@ -426,7 +426,9 @@ data class TodoCounts(
     val open: Int = 0,
     /**
      * N: the to-dos in the Needs you section, each once however many of its runs ask; Can wait and quiet tasks are
-     * not counted. The To-dos row's badge, the bar's Needs you and the Needs you header show it.
+     * not counted. For the To-dos V1 design's To-dos row badge, the bar's Needs you and the Needs you header. Of the
+     * clients only iOS reads it, behind the V1 gate that is off in release builds; the release clients count their
+     * To-dos row by rules of their own.
      */
     @SerialName("needs_you") val needsYou: Int = 0,
     /**
