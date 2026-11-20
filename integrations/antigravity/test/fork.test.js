@@ -115,6 +115,8 @@ test('an assistant fork can be opened and continued before the native export arr
     assert.equal(resume?.params.cwd, cwd)
     assert.ok(resume.params.mcpServers[0].env.some(({ name, value }) => name === 'PERSONA_ASSISTANT' && value === '1'))
   }
+  await node.peer.call('session.modes', { session_id: sessionId, permission_mode: 'default' })
+  assert.equal(calls().filter((call) => call.method === 'session/resume' && call.params.sessionId === source).length, 1)
 })
 
 for (const whole of [false, true]) {
