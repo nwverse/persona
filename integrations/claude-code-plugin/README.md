@@ -6,9 +6,9 @@ run, a background session. Without it the node can only use Claude Code's peer i
 words come from another session and that they are not the person's approval (`docs/integrations/claude-integration.md`,
 "Owner input through the Persona plugin").
 
-The plugin does one thing: while its session is idle it asks the local Persona node for a message, and submits the
-text it gets with `$.prompt.submit({ text, asUser: true })`. It runs nothing else, reads no file but its own manifest,
-and stays quiet when no node is running.
+The plugin polls the local Persona node while its session lives: while idle it submits the owner's messages with
+`$.prompt.submit({ text, asUser: true })`, and when `settings` is advertised it applies session-scoped model / effort
+picks on main-loop `turn.step` calls. It reads no file but its own manifest and stays quiet when no node is running.
 
 ## Packaging
 
@@ -48,16 +48,17 @@ another session, gets `403`.
 `POST /claude-plugin/v1/poll`
 
 ```json
-{"session_id": "<uuid>", "plugin_version": "0.1.0", "engine_version": "2.1.308", "wait_ms": 25000}
+{"session_id": "<uuid>", "plugin_version": "0.2.0", "engine_version": "2.1.308", "capabilities": ["settings"], "wait_ms": 25000}
 ```
 
-- Held until a message comes or `wait_ms` passes (at most 25 s; Claude Code's fetch gives up at 30 s), then asked
+- Held until work comes or `wait_ms` passes (at most 25 s; Claude Code's fetch gives up at 30 s), then asked
   again at once. A newer poll for the same session answers the older one at once, empty. The plugin polls whether the
   session works or rests: the node reads that from Claude Code's own status file and hands a message over only while
-  the session rests.
-- `200`: `{"messages": [{"id": "<id>", "text": "...", "deadline_ms": <epoch ms>}], "retry_ms": <ms>}`. `messages` is
-  empty when nothing came. `retry_ms`, when present, is how long to wait before the next poll: a session the node does
-  not deliver to this way (one in a Persona terminal, the assistant's own) is told to come back much later.
+  the session rests, while `settings` overrides can be delivered to any active poll.
+- `200`: `{"messages": [{"id": "<id>", "text": "...", "deadline_ms": <epoch ms>}], "settings": {"id": "<id>", "model": "...", "effort": "..."}, "retry_ms": <ms>}`.
+  `messages` is empty when nothing came; `settings` is omitted when none are pending. `retry_ms`, when present, is how
+  long to wait before the next poll: a session the node does not deliver to this way (one in a Persona terminal, the
+  assistant's own) is told to come back much later.
 - `403 {"error": "not_this_session"}`: the caller is not the claude that has this session open. `404`, or an answer
   that is not HTTP: a node without this protocol. The plugin backs off (up to a minute) and tries again.
 
@@ -82,7 +83,8 @@ session has loaded the plugin, or none has polled yet (a session polls as it sta
 
 ## What goes this way
 
-Only text the owner typed in a Persona app (the hub's own-device human-input marker, `owner_input` on `session.send`),
-to a session that is idle. Everything else keeps the peer inbox: messages from the Persona assistant, extensions and
-channels (Lark, WeChat), relays between conversations, a message to a busy session, slash commands, the answer to a
-question the session asked, and Stop. Details and fallback rules: `docs/integrations/claude-integration.md`.
+Text the owner typed in a Persona app (the hub's own-device human-input marker, `owner_input` on `session.send`) to a
+session that is idle, plus session-scoped model / effort overrides (`settings`). Everything else keeps the peer inbox:
+messages from the Persona assistant, extensions and channels (Lark, WeChat), relays between conversations, a message to
+a busy session, slash commands, the answer to a question the session asked, and Stop. Details and fallback rules:
+`docs/integrations/claude-integration.md`.

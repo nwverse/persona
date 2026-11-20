@@ -741,6 +741,9 @@ installs and updates it.
   the dialog), and the send says `relay_reason: "busy"`. Holding the message until the turn ends was the other choice:
   it would make a steer wait for minutes, and a held message could not be taken back once the plugin had it. So a
   go-ahead goes in as the owner's while the session waits for one, which is when it asks for it.
+- **Session settings (`settings`, 0.2.0+)**: when the plugin advertises `settings` on `/poll`, `session.model` and
+  `session.modes` (model / effort) hand session-scoped overrides over `/poll` and wait for `/ack`; the plugin applies
+  them in memory on main-loop `turn.step` calls without modifying global Claude settings files.
 - **Delivery and fallback**: the node hands the message to the session's waiting poll (`deadline_ms` 5 s ahead; the
   plugin submits nothing later) and counts it in once the transcript shows the plugin's prompt or its queue entry, or
   the plugin says it submitted it (its submit resolves as the turn starts). No poll takes it within 3 s, the plugin says
