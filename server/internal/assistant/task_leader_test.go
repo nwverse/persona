@@ -745,7 +745,7 @@ func TestTaskLeaderListRefreshesAfterItsLink(t *testing.T) {
 // The messages the leader and its workers are given.
 func TestTaskLeaderMessages(t *testing.T) {
 	for _, want := range []string{"you are the leader of this task", "task_plan", "default permission mode", "Persona · supervision", "task_review", "stop and ask the user"} {
-		if !strings.Contains(prompts.RenderTaskLeader(), want) {
+		if !strings.Contains(prompts.RenderTaskLeader(prompts.TaskLeader{}), want) {
 			t.Errorf("the leader's brief lacks %q", want)
 		}
 	}

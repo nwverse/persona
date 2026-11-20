@@ -9,7 +9,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasScrollToNodeAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -76,6 +79,9 @@ class TodosParityShotsTest {
             delivery = TodoDelivery("live", at = ago(8))),
         Todo("t4", title = "整理崩溃报告", createdAt = ago(600), doneAt = ago(120), doneBy = "auto", doneReason = "Agent 已经把报告整理好并发到群里",
             spaces = emptyList()),
+        // An open PR that is not held for the owner's approval belongs to PR to merge, not Needs you or Shelved.
+        Todo("t5", title = "发布补丁", createdAt = ago(80), updatedAt = ago(5), origin = "conv", spaces = emptyList(),
+            delivery = TodoDelivery("pr", unblock = "agent", at = ago(5))),
     )
 
     private val cancelled = Todo(
@@ -114,7 +120,7 @@ class TodosParityShotsTest {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 Box(Modifier.testTag("shot").width(400.dp).height(1400.dp).background(PersonaTheme.palette.background)) {
                     when (scene) {
-                        "list" -> TodosScreen(todos, sessions, null, onBack = {}, onOpenTodo = {}, now = now)
+                        "list", "list-sections" -> TodosScreen(todos, sessions, null, onBack = {}, onOpenTodo = {}, now = now)
                         "failed" -> TodosScreen(failed, sessions, null, onBack = {}, onOpenTodo = {}, now = now)
                         "empty" -> TodosScreen(emptyList(), emptyList(), null, onBack = {}, onOpenTodo = {}, now = now)
                         // The current assistant offline (the hub's list leaves it out): offline, not "no to-dos" (#3374 follow-up).
@@ -135,6 +141,11 @@ class TodosParityShotsTest {
         rule.waitForIdle()
         if (scene == "cancelled-list") { rule.onNodeWithText("已取消").performClick(); rule.waitForIdle() }
         if (scene == "picker") { rule.onNodeWithText("新建待办…").performClick(); rule.waitForIdle() }
+        if (scene == "list-sections") {
+            // The actual PR section can be below the initial viewport. Bring it into view without changing triage,
+            // fixtures' status sections or the viewport size.
+            rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(expected))
+        }
         assertTrue("$scene: no 「$expected」", rule.onAllNodesWithText(expected, substring = true, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
         val node = if (scene == "picker") rule.onNode(isDialog()) else rule.onNodeWithTag("shot")
         val bitmap = node.captureToImage().asAndroidBitmap()
@@ -159,8 +170,8 @@ class TodosParityShotsTest {
     @Test fun heldBoard() = shot("held", AppStyle.Board, false, "卡在「等你批准合并」")
     @Test fun heldBoardDark() = shot("held", AppStyle.Board, true, "卡在「等你批准合并」")
 
-    @Test fun listSectionsGlass() = shot("list", AppStyle.Glass, false, "PR 待合并")
-    @Test fun listSectionsGlassDark() = shot("list", AppStyle.Glass, true, "已交付·待看")
+    @Test fun listSectionsGlass() = shot("list-sections", AppStyle.Glass, false, "PR 待合并")
+    @Test fun listSectionsGlassDark() = shot("list-sections", AppStyle.Glass, true, "已交付·待看")
 
     @Test fun failedGlass() = shot("failed", AppStyle.Glass, false, "部署自托管面板")
     @Test fun failedGlassDark() = shot("failed", AppStyle.Glass, true, "部署自托管面板")

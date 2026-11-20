@@ -304,7 +304,7 @@ type SnapshotProfile struct {
 // SnapshotTier is one tier of the profile in use: what an Agent started on it runs on ("" model or effort: the
 // launcher's), and when to use it.
 type SnapshotTier struct {
-	Name, Launcher, Model, Effort, Speed, Description string
+	Name, Launcher, Model, Effort, Speed, PermissionMode, Description string
 }
 
 // Snapshot is the live context a starting assistant gets in its system prompt.
@@ -760,6 +760,21 @@ type RelayRefused struct {
 
 func RenderRelayRefused(d RelayRefused) string { return render("assistant/relay_refused", d) }
 
+// RelayLater is what conversation_send with wake: false kept for a conversation (#11614): it goes in, as a context
+// block, at the start of the next message the hub delivers there for any other reason. Language is the owner's
+// (answerLanguage; empty: Chinese).
+type RelayLater struct {
+	Language string
+	Items    []RelayLaterItem
+}
+
+// RelayLaterItem is one kept message: the sending conversation, when it was sent (the owner's local time) and its words.
+type RelayLaterItem struct {
+	FromID, FromTitle, At, Text string
+}
+
+func RenderRelayLater(d RelayLater) string { return render("assistant/relay_later", d) }
+
 // ChatReply tells a conversation that wrote into a Lark chat as the user that others wrote there since (#10777): the
 // chat's name (Group: a group, else a direct chat with that person), when the conversation last wrote there (local
 // "01-02 15:04"), how many new messages and who wrote the newest, whether Context also repeats messages it was told
@@ -843,9 +858,9 @@ type Supervise struct {
 	// they wait here before going up a rung.
 	Asked      bool
 	AskMinutes int
-	// LowDistraction: the owner's low-distraction mode is on: a card is never handed to the user on a timeout, and ask_escalate
+	// PushGrading: the owner's push grading switch is on: a card is never handed to the user on a timeout, and ask_escalate
 	// pushes only what is the owner's alone (why_owner).
-	LowDistraction bool
+	PushGrading bool
 	// Decisions: an entry is about a decision the owner cannot answer as it is (recheck, undecidable,
 	// owner_cannot_answer; #3804).
 	Decisions bool

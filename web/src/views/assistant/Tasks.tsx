@@ -18,7 +18,6 @@ import {
   feedNotice,
   getFeedState,
   sentByPersona,
-  planEditsToSend,
   planUltracodeToSend,
   removeTask,
   retryKey,
@@ -366,11 +365,12 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
       {editing && <Suspense fallback={<Loading />}>
         <PlanEditDialog
           plan={editedPlan}
+          original={plan}
           ultracode={ultracode}
           onClose={() => setEditing(false)}
           onStart={(edits) => {
             setEditing(false);
-            void run(() => startPlan(plan, remember, planEditsToSend(plan, edits, ultracodeBlockedNow), grant));
+            void run(() => startPlan(plan, remember, edits, grant));
           }}
         />
       </Suspense>}
@@ -772,7 +772,7 @@ function PlanHandoffs({ plan, since }: { plan: TaskPlan; since?: string }) {
       const id = planTaskTodo(plan, i, s.todos);
       // a later plan that continued the to-do holds it now; this plan's todo_id was cleared then (tasks_start.go)
       const superseded = Boolean(id && !task.todo_id && Object.values(plans).some((p) => p.id !== plan.id && p.tasks.some((x) => x.todo_id === id)));
-      return taskHandoffs(id ? s.todos.find((x) => x.id === id) : undefined, { key: `${plan.id}/${i}`, title: task.title, error: task.error, todoId: id, superseded }, "created", plans, s.todosLoaded, since);
+      return taskHandoffs(id ? s.todos.find((x) => x.id === id) : undefined, { key: `${plan.id}/${i}`, title: task.title, error: task.error, todoId: id, superseded }, task.continues ? "continuation" : "created", plans, s.todosLoaded, since);
     }),
   );
   return <HandoffCards handoffs={handoffs} />;

@@ -1,7 +1,7 @@
 📋 督办：你派出去的任务有 {{len .Entries}} 个要你处理
 （这是 Persona 的督办消息，不是用户发的。{{if .Background}}这是旧后台任务的收尾消息；新任务归主对话。{{else if .Leader}}这里只督办用户显式挂给你的手动 Agent；新 task_plan 任务归主对话。{{else if .Side}}这是此前交给你的旧任务；新任务归主对话。{{end}}）
 {{if .Fresh}}这一轮通常从干净的上下文开始：之前几轮的对话不一定在你眼前，跨轮要记的都在任务台账里（简报、范围调整、已定的事、上次结论），需要时用 todo_get 看。
-{{end}}{{if .Asked}}Question routing: timeout_minutes={{.AskMinutes}}, low_distraction={{.LowDistraction}}.
+{{end}}{{if .Asked}}Question routing: timeout_minutes={{.AskMinutes}}, low_distraction={{.PushGrading}}.
 {{end}}<persona-supervision level="{{if .Level}}{{.Level}}{{else}}triage{{end}}" />
 {{if .Fresh}}<persona-supervision-round />
 {{end}}{{range $i, $e := .Entries}}

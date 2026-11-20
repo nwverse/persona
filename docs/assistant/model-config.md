@@ -3,7 +3,7 @@
 ## What the three entry points control
 
 - **Settings › Model Providers**: connection method, API protocol, gateway, encrypted credentials, default model, and existing launchers on your computers. The old “Models” page lives here; existing synchronization, hiding, details, and quota features remain.
-- **Settings › Model Settings**: configures six default-model categories: main chat, Agents, information processing, information screening, question delegation and translation. Each selects a provider, specific model, and supported thinking effort. Their purposes follow them, with opt-in exceptions: translation has its own setting and starts from information screening's provider/model, using a cheap Haiku model for Claude Messages connections; the Inbox's **AI twin** and **Lark /agent** can each override Agents and can be reset to follow it, and **Meeting minutes** and the **In-meeting conversation** can each override their category (Information processing, Main chat) the same way (#7980, "Meeting minutes and the in-meeting conversation (#7980)" below). Named [model profiles](model-profiles.md) switch the category bindings and launcher model fields together; `agent_start` and `task_plan` can select a profile tier or explicit model override. The assistant's default launcher / model is selected only under “Main Chat” here; a chat switched to another model in the chat keeps that until it is reset (“A conversation's own model”).
+- **Settings › Model Settings**: configures six default-model categories: main chat, Agents, information processing, information screening, question delegation and translation. Each selects a provider, specific model, and supported thinking effort; launcher-backed purposes (`kind: "launcher"`) also support an optional unified `permission_mode` (`default`, `acceptEdits`, `plan`, `auto`, `bypassPermissions`, filtered by what the selected launcher supports; never exposed for direct API or plugin purposes). Their purposes follow them, with opt-in exceptions: translation has its own setting and starts from information screening's provider/model, using a cheap Haiku model for Claude Messages connections; the Inbox's **AI twin** and **Lark /agent** can each override Agents and can be reset to follow it, and **Meeting minutes** and the **In-meeting conversation** can each override their category (Information processing, Main chat) the same way (#7980, "Meeting minutes and the in-meeting conversation (#7980)" below). Named [model profiles](model-profiles.md) switch the category bindings and launcher model fields together; `agent_start` and `task_plan` can select a profile tier or explicit model override. The assistant's default launcher / model is selected only under “Main Chat” here; a chat switched to another model in the chat keeps that until it is reset (“A conversation's own model”). Effective permission mode follows `explicit caller/session override > tier preset > purpose binding > CLI native default`, applies only to new starts/conversations (never restarting running ones), and never weakens `readonly: true` task constraints, Inbox AI twin allowlists, or guest tool sandboxes.
 - **Settings › Assistant**: Persona itself: proactive work (scheduled tasks, run history), understanding you (about me, memory), Skills, the machine it runs on, and its working directory. It neither displays nor configures models (#1291): the “Assistant” row on the settings home page has no launcher name, and the page has no “Chat model” entry. This is consistent across iOS, Mac, web, and Android. Switching one chat's model from the chat itself is not configuration either: the pick stays with that chat (“A conversation's own model”).
 
 The home page has six category rows and separate **AI twin runs** and **Lark /agent** rows, each showing whether it is separately configured or follows Agents, and the **Meeting minutes** and **In-meeting conversation** rows, each showing whether it is separately configured or follows its category. “Applies To” remains read-only and collapsed by default; those rows open their own editors rather than a category. The manager supplies the catalog and descriptions (forwarded by hub; see “Who owns models” below). Model names take priority; provider details live in the editor. “Unverified” is not repeated across the home page, but real errors and rate limits still appear.
@@ -58,7 +58,7 @@ It is returned by the model-configuration list and detail endpoints, never store
 | --- | --- | --- | --- |
 | `assistant`, `schedule`, `task.*`, `assistant.supervise`, `meeting.room`, `inbox.agent`, `lark.agent` | `launcher` | `headless` | Background process, without a terminal panel (`meeting.room`: always Claude Code's CLI, #7980) |
 | `agent.new` | `launcher` | `engine` | Interactive Agent in the target computer's terminal host |
-| `kb`, `inbox.triage`, `agent.delegate`, `meeting.minutes`, other API purposes, `extension.*` | `api` | omitted | HTTP requests sent directly by the assistant; with a Claude Code launcher that has no Messages gateway picked, one `claude -p` run per request on the main chat's computer (#5823) |
+| `kb`, `inbox.triage`, `agent.delegate`, `meeting.minutes`, other API purposes, `extension.*` | `api` | omitted | HTTP requests sent directly by the assistant; with a Claude Code, Codex, or Antigravity launcher that has no Messages gateway picked, one isolated headless CLI run (`claude -p`, `codex exec`, or `agy -p`) per request on the main chat's computer (#5823, #12027) |
 | `plugin.*` | `plugin` | omitted | The plugin's own model service |
 
 Non-launcher purposes always have an empty launch value, even if their parent is a launcher.
@@ -78,7 +78,7 @@ and Meeting minutes in the direct-API group right after Information processing (
 Scheduled tasks follow the main chat's category; this presentation does not add independent task settings.
 
 Each row's neutral execution chip has a fixed form and a backend that follows the effective provider:
-`Background process · claude -p`, `Background process · codex app-server`, `Interactive · herdr · claude`, or `Direct API · Messages` / `Responses` / `Chat`.
+`Background process · claude -p`, `Background process · codex app-server`, `Interactive · herdr · claude`, `Direct API · Messages` / `Responses` / `Chat`, or `Direct API · claude -p` / `codex exec` / `agy -p` when a launcher without a Messages gateway is picked for an API purpose (#12027).
 The terminal host is a computer setting, not a provider property: only a purpose bound to a known computer shows its
 configured default host; `agent.new` says **By machine**. The editor previews backend changes before saving.
 
@@ -142,23 +142,20 @@ before this setting.
 - **Which computers**: only a direct API connection (`kind: "api"`), and only a computer this manager carries (another
   manager's machines are not its to call). Others are 400. Changing it clears the connection's recorded failures.
 
-## Running API purposes on a launcher (#5823)
+## Running API purposes on a launcher (#5823, #12027)
 
-Many users have no API key, only Claude Code or Codex logged in on a computer (a subscription), which is what runs their
+Many users have no API key, only Claude Code, Codex, or Antigravity (`agy`) logged in on a computer (a subscription), which is what runs their
 main chat and Agents. An API purpose (`kb`, `inbox.triage`, `agent.delegate`, their uses, `extension.*`) may therefore
-pick a launcher provider too: each request then runs that launcher's CLI headless, once, on a computer and returns its
-final text. Nothing reads, copies or re-serves the login (#4220 is a different thing): only the prompt and the answer travel.
+pick a launcher provider too (with no extra `ModelBinding` field): each request then runs that launcher's CLI headless,
+once, on a computer and returns its final text. Nothing reads, copies or re-serves the login (#4220 is a different thing):
+only the prompt and the answer travel.
 
-- **Which providers**: a launcher whose CLI is Claude Code (plain `claude`, a `~/.zshrc` or `PATH` launcher, a managed
-  launcher that does not speak Messages), on that computer and in its scope. A managed launcher that speaks Messages
-  keeps being called over HTTP with its own address and key, as before; direct API connections are unchanged. Codex is
-  not offered (#6628): `codex-cli 0.167.1` has independent `shell_tool`, `unified_exec`, `view_image`, `browser_use`
-  and other tool flags but no all-tools-off `exec` switch, and its app-server `ThreadStartParams` / `TurnStartParams`
-  has no empty built-in tool set (`dynamicTools` only adds tools). There is therefore no proof that a request's text,
-  which may be anyone's (a mail, an extension), can be handled without tools, MCP servers, apps, plugins or a retained
-  session. The purpose's status says so and names the alternatives: a keyed connection or a Claude Code launcher. If
-  the done judge has no model, its task stays open with the same localized explanation on its completion check. A
-  launcher deleted since it was picked fails with "can't call this provider", never a run.
+- **Which providers**: a launcher whose CLI is Claude Code (`claude`), Codex (`codex`), or Antigravity (`agy`) — plain
+  CLI, `~/.zshrc` / `PATH` launcher, built-in Antigravity companion launcher, or a managed launcher that does not speak
+  Messages — on that computer and in its scope. A managed launcher that speaks Messages keeps being called over HTTP with
+  its own address and key, as before; direct API connections are unchanged. Other CLIs/runtimes without a verified
+  zero-tool contract (such as `omp` or external runtimes) are not offered. A launcher deleted since it was picked fails
+  with "can't call this provider", never a run.
 - **Which computer**: the main chat's (Settings › Assistant), which the purpose's `machine_id` in
   `GET /api/v1/model-config` names. With none set, the purpose says so.
 - **What is sent**: the manager resolves the purpose as always, then sends one `model.run` call to that computer's node
@@ -177,11 +174,30 @@ final text. Nothing reads, copies or re-serves the login (#4220 is a different t
   shows "Last 7 days: N calls · M tokens" under a purpose with calls (#10498). Its tokens are input + output + cache
   writes; cache reads are left out of that number, since they cost a fraction and would swamp it, and the line's
   tooltip lists all four. The Apple and Android apps do not show it yet.
-- **How it runs**: the node runs the launcher as a start does (`personad launch` for a managed one, the login shell's
-  function or alias otherwise, with its environment, settings and default model), in a fresh temporary directory that
-  is removed afterwards. Claude Code runs as `-p --output-format json --max-turns 1 --no-session-persistence` with
-  `--tools ""`, `--strict-mcp-config` (no MCP servers), hooks disabled and the system prompt from a file. No tools, no
-  session left behind, no file written in the user's projects.
+- **How it runs and isolation guarantees**: the node runs the launcher in a fresh `persona-check-*` temporary directory
+  that is removed afterwards. Prompts and system instructions are passed through `0600` temp files / stdin (never argv)
+  and are never logged. Each supported CLI enforces zero-tool, zero-MCP, zero-hook, and no-session-persistence boundaries
+  and **fails closed** (refuses with an update error rather than retrying without isolation) if the installed CLI rejects
+  any required isolation flag:
+  - **Claude Code (`claude -p`)**: `-p --output-format json --max-turns 1 --no-session-persistence --tools '' --strict-mcp-config`,
+    `--system-prompt-file` for the system prompt, `--settings` with `{"disableAllHooks":true}`, and prompt on stdin.
+    Any residual Claude project entry for the temp directory is removed on exit.
+  - **Codex (`codex exec`)**: `exec --ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check -s read-only --color never --json`
+    with `-c approval_policy="never"`, `-c mcp_servers={}`, `-c web_search="disabled"`, `-c agents.max_depth=0`,
+    `-c include_apply_patch_tool=false`, and `--disable` for `shell_tool`, `unified_exec`, `apps`, `plugins`, `hooks`,
+    `multi_agent_v2`, `multi_agent`, `sleep_tool`, `view_image`, `goals`, `code_mode_host`, `browser_use`, `computer_use`,
+    `image_generation`, and `memories`. System prompt goes via `-c model_instructions_file=...`, effort via
+    `-c model_reasoning_effort=...`, and the user prompt via stdin (`-`).
+  - **Antigravity (`agy -p`)**: runs with a workspace-scoped custom agent (`.agents/agents/persona-model-run/agent.md`)
+    declaring `tools: []`, `commandExecutionPolicy: off`, `mcpServers: []`, `skills: []`, `plugins: []`, `subagent: false`
+    (with the system prompt as its Markdown body), paired with defense-in-depth `--settings` (`agentMode: ""`,
+    `toolPermission: "strict"`, `allowNonWorkspaceAccess: false`, `disableSlashCommands: true`, `statusLine`/`title`
+    disabled, and `permissions.deny` covering `command(*)`, `read_file(*)`, `write_file(*)`, `read_url(*)`,
+    `execute_url(*)`, `mcp(*)`, and `unsandboxed(*)`), `--disable-slash-commands`, and `--input-format stream-json --output-format stream-json`
+    so the prompt is fed on stdin as a single NDJSON user turn. An isolated `HOME` inside the temporary directory symlinks
+    only read-only auth/runtime assets (`antigravity-oauth-token`, `installation_id`, `bin`, `builtin`, plus macOS
+    `Library/Keychains` when present) so global `~/.gemini/config/` hooks/MCP are never loaded and zero session files or
+    SQLite rows are written to the user's real `~/.gemini/antigravity-cli/`.
 - **Concurrency and time**: at most two runs at a time on one computer; others wait for a slot within their own time.
   The call's deadline goes along as `timeout_ms` (2 minutes without one, at most 10); when the manager stops waiting it
   sends `rpc.cancel` and the node kills the run. Each run pays a CLI start (seconds) on top of the answer, so this suits

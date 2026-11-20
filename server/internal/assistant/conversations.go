@@ -304,6 +304,12 @@ type relayState struct {
 	Spawned map[string]spawnedConv `json:"spawned,omitempty"`
 	// Spoke: when the owner last sent each conversation a message, kept for ownerPresentFor (relay_presence.go).
 	Spoke map[string]time.Time `json:"spoke,omitempty"`
+	// Later: by receiver, what conversation_send with wake: false kept for it, to go in with its next delivered message
+	// (relay_later.go, #11614). A version that does not know it drops it on its next save: those acknowledgements are
+	// then not read.
+	Later map[string][]relayMsg `json:"later,omitempty"`
+	// LaterSends freezes quiet-message context for retries under one assistant.send once_id (relay_later.go).
+	LaterSends map[string]relayLaterSend `json:"later_sends,omitempty"`
 	// Handed: by direction's lead conversation, when a hand-over of the owner's quoted words last went into it
 	// (relay_lead_hold.go, #11699): until the owner next writes there (userSpoke), what it plans that writes waits for
 	// their Start. A version that does not know it drops it on its next save: those plans then start as before.
@@ -437,6 +443,7 @@ func (s *Service) saveRelayLocked() error {
 			delete(s.relays.st.Spawned, id)
 		}
 	}
+	s.pruneRelayLaterLocked(time.Now())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err := st.PutSetting(ctx, relayKey, s.relays.st)
@@ -822,10 +829,15 @@ func (s *Service) queuedRelays() (map[string][]string, bool) {
 	if !s.relayLocked(context.Background()) {
 		return nil, false
 	}
-	if len(b.st.Queue) == 0 {
+	if len(b.st.Queue) == 0 && len(b.st.Later) == 0 {
 		return nil, true
 	}
 	out := map[string][]string{}
+	for id, q := range b.st.Later { // kept without waking it (relay_later.go): they go in with its next message
+		for _, msg := range q {
+			out[id] = append(out[id], "来自「"+msg.FromTitle+"」（不唤醒）："+msg.Text) // i18n-ignore: the queue's label, as the others'
+		}
+	}
 	for id, q := range b.st.Queue {
 		for _, msg := range q {
 			if msg.Tool == noticeTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool || msg.Tool == relayRefusedTool { // a quiet task's notice (quiet.go), a question's answer (ask_todo.go): its title is enough
@@ -1575,10 +1587,17 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 		ID    string `json:"id"`
 		Text  string `json:"text"`
 		Quote string `json:"quote"`
+		Wake  *bool  `json:"wake"`
 	}
-	_ = json.Unmarshal(args, &a)
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", fmt.Errorf("invalid conversation_send arguments: %w", err)
+	}
 	if strings.TrimSpace(a.Text) == "" {
 		return "", errors.New("text is empty")
+	}
+	later := a.Wake != nil && !*a.Wake
+	if later && strings.TrimSpace(a.Quote) != "" {
+		return "", errors.New("a quote hands on the owner's request, which must wake its receiver: send it without wake: false")
 	}
 	c, err := s.ownSpaceConversation(ctx, self, a.ID)
 	if err != nil {
@@ -1591,6 +1610,21 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 	// refused send must not consume.
 	if err := s.dispatchSendGuard(ctx, self, c.MachineID, c.SessionID, a.Text); err != nil {
 		return "", err
+	}
+	if later {
+		// Kept for the receiver, not delivered: no turn, no hop, no place in the rate (relay_later.go, #11614).
+		from, err := s.relayFrom(ctx, self)
+		if err != nil {
+			return "", err
+		}
+		n, ok := s.keepRelayLater(c.SessionID, relayMsg{From: self, FromTitle: from, Tool: "conversation_send", Text: a.Text, At: time.Now().UTC()})
+		if !ok {
+			return "", errors.New("not kept: the relay state could not be read or saved; try again shortly")
+		}
+		s.spawnReported(self, c.SessionID) // a quiet report still answers the conversation that opened this one
+		s.publish(ctx)                     // the receiver shows it waiting above its composer
+		return fmt.Sprintf("Kept for %q without waking it (%d kept there): it goes in with the next message that conversation gets for anything else. No reply will come from it; no need to send it again.",
+			conversationName(c, s.settings(ctx).Main), n), nil
 	}
 	from, err := s.relayFrom(ctx, self)
 	if err != nil {

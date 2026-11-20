@@ -47,7 +47,7 @@ func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prom
 			return e.Kind == sigRecheck || e.Kind == sigUndecidable || e.Kind == sigOwnerCannot
 		}),
 		Inbox: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigInbox }),
-		Asked: askedIn(list), AskMinutes: int(askHoldFor.Minutes()), LowDistraction: askedIn(list) && s.quietModeOn(ctx)})
+		Asked: askedIn(list), AskMinutes: int(askHoldFor.Minutes()), PushGrading: askedIn(list) && s.quietModeOn(ctx)})
 }
 
 // recheckDigestTo preserves the supervisor already persisted for a queued signal. New dispatch uses digestTo's

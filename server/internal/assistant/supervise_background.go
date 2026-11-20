@@ -411,7 +411,7 @@ func (s *Service) backgroundNeeded(ctx context.Context, cfg Settings, list []sup
 // the purpose cannot be resolved: the conversation then goes on with what it ran last.
 func (s *Service) backgroundModel(ctx context.Context, params map[string]any) {
 	p := maps.Clone(params)
-	if err := s.applyModel(ctx, purposeSupervise, p); err != nil {
+	if err := preservePermissionMode(p, func() error { return s.applyModel(ctx, purposeSupervise, p) }); err != nil {
 		s.logf("supervise: the background supervisor's model: %v; it keeps what it ran last", err)
 		return
 	}

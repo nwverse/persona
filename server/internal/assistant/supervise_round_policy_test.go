@@ -166,7 +166,7 @@ func roundMessage(lang string) string {
 		entries = append(entries, e)
 	}
 	return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(entries), Leader: true, Background: true, Fresh: true,
-		Overdue: true, ParkedDue: true, ParkDecided: true, Decisions: true, Inbox: true, Asked: true, AskMinutes: 5, LowDistraction: true})
+		Overdue: true, ParkedDue: true, ParkDecided: true, Decisions: true, Inbox: true, Asked: true, AskMinutes: 5, PushGrading: true})
 }
 
 // roundScanTools are the tools the scans below look for: the assistant's own, the extensions' that Persona's own text

@@ -43,6 +43,7 @@ export interface ModelProfileTier {
   launcher: string;
   model?: string;
   effort?: string;
+  permission_mode?: string;
   speed?: string;
   description?: string;
 }

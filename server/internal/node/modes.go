@@ -75,6 +75,22 @@ func argsCanBypass(args []string) bool {
 	return false
 }
 
+// argsPermissionMode returns the explicit --permission-mode passed before "--" in a claude process's arguments, or "".
+func argsPermissionMode(args []string) string {
+	mode := ""
+	for i, a := range args {
+		switch {
+		case a == "--":
+			return mode
+		case strings.HasPrefix(a, "--permission-mode="):
+			mode = strings.TrimPrefix(a, "--permission-mode=")
+		case a == "--permission-mode" && i+1 < len(args):
+			mode = args[i+1]
+		}
+	}
+	return mode
+}
+
 // sessionModes is a mode / effort the app set, with when, until the transcript catches up.
 type sessionModes struct {
 	Mode, Effort     string
