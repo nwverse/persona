@@ -291,6 +291,7 @@ type Node struct {
 	// codexAttached: such a row's id → the thread it became; codexWaitLooking: the look for their threads runs.
 	codexWaiting     map[string]*codexWait
 	codexAttached    map[string]codexAttach
+	codexManual      map[string]string // a manually attached thread, only while Codex still runs in its pane
 	codexWaitLooking bool
 	// codexAbandoned: failed starts whose pane could not be closed; a retry must close it before opening another.
 	codexAbandoned map[string][]codexAbandonedStart
