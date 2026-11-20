@@ -495,7 +495,7 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // earlier row drawn over the top padding (views/chat/ChatView.tsx), the Agents page's scroll kept on Back and its title
 // row's and By to-do rows' touch boxes (views/Sidebar.tsx, views/SidebarTree.tsx), and Back closing the Assistant tray
 // (views/assistant/Tasks.tsx). Main was already 42 B over the 483,265 B limit there (after #11582's queue panel), so
-// the budget is this ja size plus 44 B, the room main had before that.
+// the budget is this ja size plus 44 B (main had about 40 B of room before #11582).
 export const FIRST_SCREEN_BUDGET = 483_557;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
