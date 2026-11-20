@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extwire"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 func TestWriteQuiescerWaitsForInFlightWrites(t *testing.T) {
@@ -877,4 +878,534 @@ func (s *orderedDeviceSessionWrites) FinishDeviceSession(_ context.Context, id i
 	defer s.mu.Unlock()
 	s.ids = append(s.ids, id)
 	return nil
+}
+
+type busSeenRecord struct {
+	id    string
+	where *db.BusIdentity
+}
+
+type busSeenRecordingStore struct {
+	managerStore
+	seenMu  sync.Mutex
+	records []busSeenRecord
+	latest  map[string]*db.BusIdentity
+}
+
+var _ managerStore = (*busSeenRecordingStore)(nil)
+
+func (s *busSeenRecordingStore) BusIdentities(context.Context) ([]db.BusIdentity, error) {
+	return nil, nil
+}
+func (s *busSeenRecordingStore) SeeBusIdentity(_ context.Context, id string, where *db.BusIdentity) error {
+	var cp *db.BusIdentity
+	if where != nil {
+		v := *where
+		cp = &v
+	}
+	s.seenMu.Lock()
+	defer s.seenMu.Unlock()
+	if s.latest == nil {
+		s.latest = map[string]*db.BusIdentity{}
+	}
+	s.records = append(s.records, busSeenRecord{id: id, where: cp})
+	s.latest[id] = cp
+	return nil
+}
+
+// Bus roster updates (connect metadata and nil disconnects) deferred while paused
+// are coalesced per identity and flushed on resume without regressing newer updates.
+func TestDevelopmentPauseDefersBusSeenUpdates(t *testing.T) {
+	h := newTestHub(t)
+	store := &busSeenRecordingStore{}
+	h.bus.idents = store
+	ctx := context.Background()
+	if err := h.quiesce.pause(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.busSeen(ctx, "mgr-1", &db.BusIdentity{Host: "host-a", Version: "1.0"})
+	h.busSeen(ctx, "mgr-1", &db.BusIdentity{Host: "host-b", Version: "2.0"})
+	h.busSeen(ctx, "mgr-2", &db.BusIdentity{Host: "host-c", Version: "1.0"})
+	h.busSeen(ctx, "mgr-2", nil) // disconnect
+
+	store.seenMu.Lock()
+	pausedCount := len(store.records)
+	store.seenMu.Unlock()
+	if pausedCount != 0 {
+		t.Fatalf("SeeBusIdentity called %d times while paused", pausedCount)
+	}
+
+	h.resumeDevelopmentWriters()
+	waitFor(t, "deferred busSeen updates flushed", func() bool {
+		store.seenMu.Lock()
+		defer store.seenMu.Unlock()
+		_, ok1 := store.latest["mgr-1"]
+		_, ok2 := store.latest["mgr-2"]
+		return ok1 && ok2
+	})
+	store.seenMu.Lock()
+	got1 := store.latest["mgr-1"]
+	got2 := store.latest["mgr-2"]
+	store.seenMu.Unlock()
+	if got1 == nil || got1.Host != "host-b" || got1.Version != "2.0" {
+		t.Fatalf("mgr-1 persisted where = %+v, want host-b 2.0", got1)
+	}
+	if got2 != nil {
+		t.Fatalf("mgr-2 persisted where = %+v, want nil disconnect", got2)
+	}
+
+	// Ordering race: a newer post-resume disconnect is never overwritten by a stale deferred connect.
+	if err := h.quiesce.pause(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.busSeen(ctx, "mgr-3", &db.BusIdentity{Host: "stale-host"})
+	h.bus.seenMu.Lock()
+	entry := h.bus.seen["mgr-3"]
+	h.bus.seenMu.Unlock()
+	entry.mu.Lock()
+	h.resumeDevelopmentWriters()
+	newerDone := make(chan struct{})
+	go func() {
+		h.busSeen(ctx, "mgr-3", nil)
+		close(newerDone)
+	}()
+	waitFor(t, "newer busSeen queued", func() bool {
+		h.bus.seenMu.Lock()
+		defer h.bus.seenMu.Unlock()
+		return entry.gen >= 2
+	})
+	entry.mu.Unlock()
+	select {
+	case <-newerDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("newer busSeen did not finish")
+	}
+	h.nodeWorkers.Wait()
+	store.seenMu.Lock()
+	got3, ok3 := store.latest["mgr-3"]
+	store.seenMu.Unlock()
+	if !ok3 || got3 != nil {
+		t.Fatalf("mgr-3 persisted where = %+v (ok=%v), want nil", got3, ok3)
+	}
+}
+
+type hookedSettingsStore struct {
+	*meshStore
+	hookMu sync.Mutex
+	onPut  func(key string, v any)
+	onSave func(v db.LiveActivity)
+	laLast db.LiveActivity
+	laSeq  []string
+}
+
+func (s *hookedSettingsStore) PutSetting(ctx context.Context, key string, v any) error {
+	s.hookMu.Lock()
+	fn := s.onPut
+	s.hookMu.Unlock()
+	if fn != nil {
+		fn(key, v)
+	}
+	return s.meshStore.PutSetting(ctx, key, v)
+}
+
+func (s *hookedSettingsStore) SaveLiveActivity(_ context.Context, v db.LiveActivity) error {
+	s.hookMu.Lock()
+	fn := s.onSave
+	s.hookMu.Unlock()
+	if fn != nil {
+		fn(v)
+	}
+	s.hookMu.Lock()
+	s.laLast = v
+	s.laSeq = append(s.laSeq, v.PushToken)
+	s.hookMu.Unlock()
+	return nil
+}
+
+// Deferred Codex inventory writes cannot overwrite a newer post-resume report.
+func TestResumedCodexInventoryCannotOverwriteNewerReport(t *testing.T) {
+	t.Run("newer report arrives while resumed write is in flight", func(t *testing.T) {
+		h := newTestHub(t)
+		store := &hookedSettingsStore{meshStore: newMeshStore()}
+		h.store = store
+		m := newMachine(h, MachineConfig{ID: "box"})
+		oldRaw, _ := json.Marshal(proto.CodexConfig{LegacyHome: "/old-home"})
+		newRaw, _ := json.Marshal(proto.CodexConfig{LegacyHome: "/new-home"})
+
+		ctx := context.Background()
+		if err := h.quiesce.pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		m.rememberCodexInventory(oldRaw)
+
+		inOldPut := make(chan struct{})
+		releaseOld := make(chan struct{})
+		var once sync.Once
+		store.onPut = func(key string, v any) {
+			if cfg, ok := v.(proto.CodexConfig); ok && cfg.LegacyHome == "/old-home" {
+				once.Do(func() {
+					close(inOldPut)
+					<-releaseOld
+				})
+			}
+		}
+
+		h.resumeDevelopmentWriters()
+		select {
+		case <-inOldPut:
+		case <-time.After(2 * time.Second):
+			t.Fatal("resumed Codex inventory write did not start")
+		}
+		newerDone := make(chan struct{})
+		go func() {
+			m.rememberCodexInventory(newRaw)
+			close(newerDone)
+		}()
+		waitFor(t, "newer Codex inventory queued", func() bool {
+			h.codexPendingMu.Lock()
+			defer h.codexPendingMu.Unlock()
+			return h.codexPending["box"].gen >= 2
+		})
+		close(releaseOld)
+		select {
+		case <-newerDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("newer Codex inventory did not finish")
+		}
+		h.nodeWorkers.Wait()
+		var got proto.CodexConfig
+		if ok, err := store.Setting(ctx, codexInventoryKey("box"), &got); err != nil || !ok || got.LegacyHome != "/new-home" {
+			t.Fatalf("stored Codex inventory = %+v (ok=%v err=%v), want /new-home", got, ok, err)
+		}
+	})
+
+	t.Run("newer report arrives before resumed worker acquires write lock", func(t *testing.T) {
+		h := newTestHub(t)
+		store := &hookedSettingsStore{meshStore: newMeshStore()}
+		h.store = store
+		m := newMachine(h, MachineConfig{ID: "box"})
+		oldRaw, _ := json.Marshal(proto.CodexConfig{LegacyHome: "/old-home"})
+		newRaw, _ := json.Marshal(proto.CodexConfig{LegacyHome: "/new-home"})
+
+		ctx := context.Background()
+		if err := h.quiesce.pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		m.rememberCodexInventory(oldRaw)
+		h.codexPendingMu.Lock()
+		entry := h.codexPending["box"]
+		h.codexPendingMu.Unlock()
+
+		entry.mu.Lock()
+		h.resumeDevelopmentWriters()
+		newerDone := make(chan struct{})
+		go func() {
+			m.rememberCodexInventory(newRaw)
+			close(newerDone)
+		}()
+		waitFor(t, "newer Codex inventory queued", func() bool {
+			h.codexPendingMu.Lock()
+			defer h.codexPendingMu.Unlock()
+			return entry.gen >= 2
+		})
+		entry.mu.Unlock()
+		select {
+		case <-newerDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("newer Codex inventory did not finish")
+		}
+		h.nodeWorkers.Wait()
+		var got proto.CodexConfig
+		if ok, err := store.Setting(ctx, codexInventoryKey("box"), &got); err != nil || !ok || got.LegacyHome != "/new-home" {
+			t.Fatalf("stored Codex inventory = %+v (ok=%v err=%v), want /new-home", got, ok, err)
+		}
+	})
+}
+
+// Deferred assistant profile saves cannot overwrite a newer post-resume profile.
+func TestResumedAssistantProfileCannotOverwriteNewerReport(t *testing.T) {
+	t.Run("newer profile arrives while resumed write is in flight", func(t *testing.T) {
+		h := newTestHub(t)
+		store := &hookedSettingsStore{meshStore: newMeshStore()}
+		h.store = store
+		ctx := context.Background()
+		if err := h.quiesce.pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		h.keepAssistantProfile(ctx, &assistantwire.Profile{Timezone: "UTC", Main: "old-main"})
+
+		inOldPut := make(chan struct{})
+		releaseOld := make(chan struct{})
+		var once sync.Once
+		store.onPut = func(key string, v any) {
+			if p, ok := v.(*assistantwire.Profile); ok && p.Main == "old-main" {
+				once.Do(func() {
+					close(inOldPut)
+					<-releaseOld
+				})
+			}
+		}
+
+		h.resumeDevelopmentWriters()
+		select {
+		case <-inOldPut:
+		case <-time.After(2 * time.Second):
+			t.Fatal("resumed assistant profile write did not start")
+		}
+		newerDone := make(chan struct{})
+		go func() {
+			h.keepAssistantProfile(ctx, &assistantwire.Profile{Timezone: "Asia/Tokyo", Main: "new-main"})
+			close(newerDone)
+		}()
+		waitFor(t, "newer assistant profile queued", func() bool {
+			h.assistantProfileSave.mu.Lock()
+			defer h.assistantProfileSave.mu.Unlock()
+			return h.assistantProfileSave.gen >= 2
+		})
+		close(releaseOld)
+		select {
+		case <-newerDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("newer assistant profile did not finish")
+		}
+		h.nodeWorkers.Wait()
+		var got assistantwire.Profile
+		if ok, err := store.Setting(ctx, assistantProfileKey, &got); err != nil || !ok || got.Main != "new-main" || got.Timezone != "Asia/Tokyo" {
+			t.Fatalf("stored assistant profile = %+v (ok=%v err=%v), want new-main/Asia/Tokyo", got, ok, err)
+		}
+	})
+
+	t.Run("newer profile arrives before resumed worker acquires write lock", func(t *testing.T) {
+		h := newTestHub(t)
+		store := &hookedSettingsStore{meshStore: newMeshStore()}
+		h.store = store
+		ctx := context.Background()
+		if err := h.quiesce.pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		h.keepAssistantProfile(ctx, &assistantwire.Profile{Timezone: "UTC", Main: "old-main"})
+
+		h.assistantProfileSave.writeMu.Lock()
+		h.resumeDevelopmentWriters()
+		newerDone := make(chan struct{})
+		go func() {
+			h.keepAssistantProfile(ctx, &assistantwire.Profile{Timezone: "Asia/Tokyo", Main: "new-main"})
+			close(newerDone)
+		}()
+		waitFor(t, "newer assistant profile queued", func() bool {
+			h.assistantProfileSave.mu.Lock()
+			defer h.assistantProfileSave.mu.Unlock()
+			return h.assistantProfileSave.gen >= 2
+		})
+		h.assistantProfileSave.writeMu.Unlock()
+		select {
+		case <-newerDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("newer assistant profile did not finish")
+		}
+		h.nodeWorkers.Wait()
+		var got assistantwire.Profile
+		if ok, err := store.Setting(ctx, assistantProfileKey, &got); err != nil || !ok || got.Main != "new-main" || got.Timezone != "Asia/Tokyo" {
+			t.Fatalf("stored assistant profile = %+v (ok=%v err=%v), want new-main/Asia/Tokyo", got, ok, err)
+		}
+	})
+}
+
+// Deferred Live Activity saves cannot overwrite newer post-resume updateContext state.
+func TestResumedLiveActivitySaveCannotOverwriteNewerUpdate(t *testing.T) {
+	t.Run("newer update arrives while resumed save is in flight", func(t *testing.T) {
+		h := newTestHub(t)
+		store := &hookedSettingsStore{meshStore: newMeshStore()}
+		h.store = store
+		la := h.live
+		ctx := context.Background()
+		if err := h.quiesce.pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := la.updateContext(ctx, "dev1", func(v *db.LiveActivity) { v.PushToken = "old-tok" }); err != nil {
+			t.Fatal(err)
+		}
+
+		inOldSave := make(chan struct{})
+		releaseOld := make(chan struct{})
+		var once sync.Once
+		store.onSave = func(v db.LiveActivity) {
+			if v.PushToken == "old-tok" {
+				once.Do(func() {
+					close(inOldSave)
+					<-releaseOld
+				})
+			}
+		}
+
+		h.resumeDevelopmentWriters()
+		select {
+		case <-inOldSave:
+		case <-time.After(2 * time.Second):
+			t.Fatal("resumed Live Activity save did not start")
+		}
+		newerDone := make(chan error, 1)
+		go func() {
+			newerDone <- la.updateContext(ctx, "dev1", func(v *db.LiveActivity) { v.PushToken = "new-tok" })
+		}()
+		waitFor(t, "newer Live Activity update queued", func() bool {
+			la.mu.Lock()
+			defer la.mu.Unlock()
+			return la.rowGen["dev1"] >= 2
+		})
+		close(releaseOld)
+		select {
+		case err := <-newerDone:
+			if err != nil {
+				t.Fatalf("newer updateContext error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("newer updateContext did not finish")
+		}
+		h.nodeWorkers.Wait()
+		store.hookMu.Lock()
+		got := store.laLast.PushToken
+		seq := slices.Clone(store.laSeq)
+		store.hookMu.Unlock()
+		if got != "new-tok" {
+			t.Fatalf("final persisted Live Activity token = %q (seq=%v), want new-tok", got, seq)
+		}
+	})
+
+	t.Run("newer update arrives before resumed worker acquires device lock", func(t *testing.T) {
+		h := newTestHub(t)
+		store := &hookedSettingsStore{meshStore: newMeshStore()}
+		h.store = store
+		la := h.live
+		ctx := context.Background()
+		if err := h.quiesce.pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := la.updateContext(ctx, "dev1", func(v *db.LiveActivity) { v.PushToken = "old-tok" }); err != nil {
+			t.Fatal(err)
+		}
+		la.mu.Lock()
+		devMu := la.deviceSaveMuLocked("dev1")
+		la.mu.Unlock()
+
+		devMu.Lock()
+		h.resumeDevelopmentWriters()
+		newerDone := make(chan error, 1)
+		go func() {
+			newerDone <- la.updateContext(ctx, "dev1", func(v *db.LiveActivity) { v.PushToken = "new-tok" })
+		}()
+		waitFor(t, "newer Live Activity update queued", func() bool {
+			la.mu.Lock()
+			defer la.mu.Unlock()
+			return la.rowGen["dev1"] >= 2
+		})
+		devMu.Unlock()
+		select {
+		case err := <-newerDone:
+			if err != nil {
+				t.Fatalf("newer updateContext error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("newer updateContext did not finish")
+		}
+		h.nodeWorkers.Wait()
+		store.hookMu.Lock()
+		got := store.laLast.PushToken
+		seq := slices.Clone(store.laSeq)
+		store.hookMu.Unlock()
+		if got != "new-tok" {
+			t.Fatalf("final persisted Live Activity token = %q (seq=%v), want new-tok", got, seq)
+		}
+	})
+}
+
+// Resumed persona tier snapshots cannot overwrite newer post-resume tier state.
+func TestResumedPersonaTiersCannotOverwriteNewerState(t *testing.T) {
+	t.Run("newer tier arrives while resumed write is in flight", func(t *testing.T) {
+		h := newTestHub(t)
+		store := &hookedSettingsStore{meshStore: newMeshStore()}
+		h.store = store
+		ctx := context.Background()
+		if err := h.quiesce.pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		tiers := &personaTiers{Default: "base"}
+		h.setPersonaTier(ctx, "pkg", tiers, "egg", "alice")
+
+		inOldPut := make(chan struct{})
+		releaseOld := make(chan struct{})
+		var once sync.Once
+		store.onPut = func(key string, v any) {
+			if m, ok := v.(map[string]tierSeen); ok && m["pkg"].Tier == "egg" {
+				once.Do(func() {
+					close(inOldPut)
+					<-releaseOld
+				})
+			}
+		}
+
+		h.resumeDevelopmentWriters()
+		select {
+		case <-inOldPut:
+		case <-time.After(2 * time.Second):
+			t.Fatal("resumed persona tiers write did not start")
+		}
+		newerDone := make(chan struct{})
+		go func() {
+			h.setPersonaTier(ctx, "pkg", tiers, "cosmic", "alice")
+			close(newerDone)
+		}()
+		waitFor(t, "newer persona tier queued", func() bool {
+			h.tiers.mu.Lock()
+			defer h.tiers.mu.Unlock()
+			return h.tiers.saveGen >= 2
+		})
+		close(releaseOld)
+		select {
+		case <-newerDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("newer setPersonaTier did not finish")
+		}
+		h.nodeWorkers.Wait()
+		var got map[string]tierSeen
+		if ok, err := store.Setting(ctx, personaTiersKey, &got); err != nil || !ok || got["pkg"].Tier != "cosmic" {
+			t.Fatalf("stored persona tiers = %+v (ok=%v err=%v), want cosmic", got, ok, err)
+		}
+	})
+
+	t.Run("newer tier arrives before resumed worker acquires write lock", func(t *testing.T) {
+		h := newTestHub(t)
+		store := &hookedSettingsStore{meshStore: newMeshStore()}
+		h.store = store
+		ctx := context.Background()
+		if err := h.quiesce.pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		tiers := &personaTiers{Default: "base"}
+		h.setPersonaTier(ctx, "pkg", tiers, "egg", "alice")
+
+		h.tiers.writeMu.Lock()
+		h.resumeDevelopmentWriters()
+		newerDone := make(chan struct{})
+		go func() {
+			h.setPersonaTier(ctx, "pkg", tiers, "cosmic", "alice")
+			close(newerDone)
+		}()
+		waitFor(t, "newer persona tier queued", func() bool {
+			h.tiers.mu.Lock()
+			defer h.tiers.mu.Unlock()
+			return h.tiers.saveGen >= 2
+		})
+		h.tiers.writeMu.Unlock()
+		select {
+		case <-newerDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("newer setPersonaTier did not finish")
+		}
+		h.nodeWorkers.Wait()
+		var got map[string]tierSeen
+		if ok, err := store.Setting(ctx, personaTiersKey, &got); err != nil || !ok || got["pkg"].Tier != "cosmic" {
+			t.Fatalf("stored persona tiers = %+v (ok=%v err=%v), want cosmic", got, ok, err)
+		}
+	})
 }

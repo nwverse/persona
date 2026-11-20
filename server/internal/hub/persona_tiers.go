@@ -48,9 +48,11 @@ type tierSeen struct {
 // personaTierState is what the hub knows of the tiers: per package the tier last seen, per board the last copy read.
 type personaTierState struct {
 	mu           sync.Mutex
+	writeMu      sync.Mutex // serializes normal and resumed PutSetting writes
 	seen         map[string]tierSeen
 	boards       map[string]*boardCopy
 	saveDeferred bool
+	saveGen      uint64
 	// http reads the boards (tests: a TLS test server's client).
 	http *http.Client
 }
@@ -186,26 +188,60 @@ func (h *Hub) setPersonaTier(ctx context.Context, id string, t *personaTiers, ke
 		h.tiers.seen = map[string]tierSeen{}
 	}
 	h.tiers.seen[id] = tierSeen{Tier: key, Login: login, At: time.Now().UTC()}
-	seen := make(map[string]tierSeen, len(h.tiers.seen))
-	for k, v := range h.tiers.seen {
-		seen[k] = v
+	if h.store != nil {
+		h.tiers.saveDeferred = true
+		h.tiers.saveGen++
 	}
 	h.tiers.mu.Unlock()
 	if h.store != nil {
-		if h.quiesce.beginOrDefer(func() {
-			h.tiers.mu.Lock()
-			h.tiers.saveDeferred = true
-			h.tiers.mu.Unlock()
-		}) {
-			if err := h.store.PutSetting(ctx, personaTiersKey, seen); err != nil {
-				h.logf("persona tiers: %v", err)
-			}
-			h.quiesce.end()
-		}
+		h.flushPersonaTiers(ctx)
 	}
 	if key != before {
 		h.logf("persona %s: tier %s → %s", id, before, key)
 		h.broadcast(map[string]any{"type": "personas"})
+	}
+}
+
+func (h *Hub) flushPersonaTiers(ctx context.Context) {
+	if h.store == nil {
+		return
+	}
+	h.tiers.writeMu.Lock()
+	defer h.tiers.writeMu.Unlock()
+	for {
+		h.tiers.mu.Lock()
+		if !h.tiers.saveDeferred {
+			h.tiers.mu.Unlock()
+			return
+		}
+		h.tiers.saveDeferred = false
+		gen := h.tiers.saveGen
+		seen := make(map[string]tierSeen, len(h.tiers.seen))
+		for k, v := range h.tiers.seen {
+			seen[k] = v
+		}
+		h.tiers.mu.Unlock()
+		if !h.quiesce.beginOrDefer(func() {
+			h.tiers.mu.Lock()
+			if h.tiers.saveGen == gen {
+				h.tiers.saveDeferred = true
+			}
+			h.tiers.mu.Unlock()
+		}) {
+			return
+		}
+		wctx := ctx
+		var cancel context.CancelFunc
+		if wctx == nil || wctx.Err() != nil {
+			wctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		}
+		if err := h.store.PutSetting(wctx, personaTiersKey, seen); err != nil {
+			h.logf("persona tiers: %v", err)
+		}
+		if cancel != nil {
+			cancel()
+		}
+		h.quiesce.end()
 	}
 }
 
@@ -214,32 +250,15 @@ func (h *Hub) resumePersonaTiers() {
 		return
 	}
 	h.tiers.mu.Lock()
-	if !h.tiers.saveDeferred {
-		h.tiers.mu.Unlock()
+	deferred := h.tiers.saveDeferred
+	h.tiers.mu.Unlock()
+	if !deferred {
 		return
 	}
-	h.tiers.saveDeferred = false
-	seen := make(map[string]tierSeen, len(h.tiers.seen))
-	for k, v := range h.tiers.seen {
-		seen[k] = v
-	}
-	h.tiers.mu.Unlock()
 	h.nodeWorkers.Add(1)
 	go func() {
 		defer h.nodeWorkers.Done()
-		if !h.quiesce.beginOrDefer(func() {
-			h.tiers.mu.Lock()
-			h.tiers.saveDeferred = true
-			h.tiers.mu.Unlock()
-		}) {
-			return
-		}
-		defer h.quiesce.end()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := h.store.PutSetting(ctx, personaTiersKey, seen); err != nil {
-			h.logf("persona tiers: %v", err)
-		}
+		h.flushPersonaTiers(nil)
 	}()
 }
 

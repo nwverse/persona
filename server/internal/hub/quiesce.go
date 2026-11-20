@@ -276,5 +276,6 @@ func (h *Hub) resumeDevelopmentWriters() {
 	h.resumeCodexInventory()
 	h.resumeLooksGone()
 	h.resumeFSWatchEpoch()
+	h.resumeBusSeen()
 	h.assistantProc.start()
 }

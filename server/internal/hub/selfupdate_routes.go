@@ -195,9 +195,6 @@ func (u *updater) routes(api *http.ServeMux) {
 					return
 				}
 			}
-			u.settings.Source = *body.Source
-			u.settings.DevelopmentAuto = false // entering a channel never opts into automatic adoption
-			u.settings.DevelopmentBackup = nil
 		}
 		if backupDir != nil || body.DevelopmentBackupRetain != nil {
 			if u.updateActiveLocked() || u.checking {
@@ -214,6 +211,11 @@ func (u *updater) routes(api *http.ServeMux) {
 					return
 				}
 			}
+		}
+		if body.Source != nil && *body.Source != u.settings.Source {
+			u.settings.Source = *body.Source
+			u.settings.DevelopmentAuto = false // entering a channel never opts into automatic adoption
+			u.settings.DevelopmentBackup = nil
 		}
 		if body.AutoUpdateNodes != nil {
 			enabled := *body.AutoUpdateNodes

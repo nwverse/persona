@@ -125,6 +125,39 @@ func TestRecommendedDevelopmentBackupDirCanonicalizesSymlinks(t *testing.T) {
 	}
 }
 
+func TestRecommendedDevelopmentBackupDirPreservesFinalSymlinkForRefusal(t *testing.T) {
+	realHome := filepath.Join(t.TempDir(), "real-home")
+	if err := os.MkdirAll(filepath.Join(realHome, "update"), 0o700); err != nil {
+		fatal(t, err)
+	}
+	target := filepath.Join(t.TempDir(), "symlink-target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		fatal(t, err)
+	}
+	if err := os.Symlink(target, filepath.Join(realHome, "update", "development-backups")); err != nil {
+		fatal(t, err)
+	}
+	linkHome := filepath.Join(t.TempDir(), "link-home")
+	if err := os.Symlink(realHome, linkHome); err != nil {
+		fatal(t, err)
+	}
+	resolvedHome, err := filepath.EvalSymlinks(realHome)
+	if err != nil {
+		fatal(t, err)
+	}
+	got := RecommendedDevelopmentBackupDir(linkHome)
+	want := filepath.Join(resolvedHome, "update", "development-backups")
+	if got != want {
+		fatalf(t, "RecommendedDevelopmentBackupDir(final symlink) = %q, want %q", got, want)
+	}
+	if _, err := ValidateOutputDirectory(linkHome, got); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		fatalf(t, "ValidateOutputDirectory(%q) = %v, want symbolic link refusal", got, err)
+	}
+	if !SamePath(got, target) {
+		fatal(t, "SamePath did not resolve final symlink for equivalence comparison")
+	}
+}
+
 // A symlinked parent is resolved, and a path that reaches a collected tree
 // through one is still refused.
 func TestValidateOutputDirectoryFollowsParentsButRefusesCollectedTargets(t *testing.T) {

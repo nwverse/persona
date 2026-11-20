@@ -995,6 +995,55 @@ func TestDevelopmentBackupSettingsRefusedWhileActiveOrFolderChanged(t *testing.T
 			})
 		}
 	})
+
+	t.Run("combined source and folder change keeps settings intact on race refusal", func(t *testing.T) {
+		for _, race := range []string{"folder-changed", "update-started"} {
+			t.Run(race, func(t *testing.T) {
+				u, _, _ := updaterWithStoredSettings(t)
+				initial := filepath.Join(t.TempDir(), "initial")
+				next := filepath.Join(t.TempDir(), "next")
+				other := filepath.Join(t.TempDir(), "other")
+				receipt := &update.DevelopmentBackup{ID: "keep-receipt"}
+				u.mu.Lock()
+				u.settings.Source = "web-dev"
+				u.settings.DevelopmentAuto = true
+				u.settings.DevelopmentBackup = receipt
+				u.settings.DevelopmentBackupDirectory = &initial
+				u.loaded = true
+				u.mu.Unlock()
+				u.testAfterBackupRecoveryCheck = func() {
+					u.mu.Lock()
+					if race == "folder-changed" {
+						u.settings.DevelopmentBackupDirectory = &other
+					} else {
+						u.running = true
+					}
+					u.mu.Unlock()
+				}
+				body := fmt.Sprintf(`{"source":"release","development_backup_directory":%q}`, next)
+				if w := nodePolicyRequest(t, u, http.MethodPut, body); w.Code != http.StatusConflict {
+					t.Fatalf("combined race %s was not refused -> %d: %s", race, w.Code, w.Body.String())
+				}
+				u.mu.Lock()
+				gotSource := u.settings.Source
+				gotDevAuto := u.settings.DevelopmentAuto
+				gotBackup := u.settings.DevelopmentBackup
+				gotDir := ""
+				if u.settings.DevelopmentBackupDirectory != nil {
+					gotDir = *u.settings.DevelopmentBackupDirectory
+				}
+				u.mu.Unlock()
+				wantDir := initial
+				if race == "folder-changed" {
+					wantDir = other
+				}
+				if gotSource != "web-dev" || !gotDevAuto || gotBackup == nil || gotBackup.ID != "keep-receipt" || gotDir != wantDir {
+					t.Fatalf("rejected combined request mutated settings after %s: source=%q devAuto=%v backup=%+v dir=%q (want dir %q)",
+						race, gotSource, gotDevAuto, gotBackup, gotDir, wantDir)
+				}
+			})
+		}
+	})
 }
 
 // Finding #7: POSIX backslash paths are refused by the settings API before

@@ -212,10 +212,15 @@ type liveActivities struct {
 	answers   []phoneAnswer
 	answering bool
 	// quiescedStart, deferredHolds and deferredSaves hold writes refused while
-	// a development snapshot pauses hub writers (quiesce.go).
+	// a development snapshot pauses hub writers (quiesce.go). saveMu serializes
+	// SaveLiveActivity per device so resumed saves cannot overwrite newer state.
 	quiescedStart bool
 	deferredHolds []deferredLiveHold
 	deferredSaves map[string]bool
+	rowGen        map[string]uint64
+	saveMu        map[string]*sync.Mutex
+	savedGen      map[string]uint64
+	savedErr      map[string]error
 }
 
 type deferredLiveHold struct {
@@ -891,6 +896,10 @@ func (la *liveActivities) endCredential(credential string) {
 		delete(la.started, d.DeviceID)
 		delete(la.deferred, d.DeviceID)
 		delete(la.resend, d.DeviceID)
+		delete(la.deferredSaves, d.DeviceID)
+		if la.rowGen != nil {
+			la.rowGen[d.DeviceID]++
+		}
 		la.mu.Unlock()
 		if r.PushToken != "" {
 			// No agent details in the final state, even if dismissal is delayed by the phone.
@@ -1021,6 +1030,18 @@ func (la *liveActivities) update(device string, fn func(*db.LiveActivity)) {
 	_ = la.updateContext(context.Background(), device, fn)
 }
 
+func (la *liveActivities) deviceSaveMuLocked(device string) *sync.Mutex {
+	if la.saveMu == nil {
+		la.saveMu = map[string]*sync.Mutex{}
+	}
+	m := la.saveMu[device]
+	if m == nil {
+		m = &sync.Mutex{}
+		la.saveMu[device] = m
+	}
+	return m
+}
+
 // updateContext changes one device's row and bounds persistence by the caller's context and the store timeout.
 func (la *liveActivities) updateContext(ctx context.Context, device string, fn func(*db.LiveActivity)) error {
 	la.mu.Lock()
@@ -1029,33 +1050,98 @@ func (la *liveActivities) updateContext(ctx context.Context, device string, fn f
 	v.DeviceID = device
 	fn(&v)
 	la.rows[device] = v
+	var devMu *sync.Mutex
+	var wantGen uint64
+	if la.h.store != nil {
+		if la.rowGen == nil {
+			la.rowGen = map[string]uint64{}
+		}
+		la.rowGen[device]++
+		wantGen = la.rowGen[device]
+		if la.deferredSaves == nil {
+			la.deferredSaves = map[string]bool{}
+		}
+		la.deferredSaves[device] = true
+		devMu = la.deviceSaveMuLocked(device)
+	}
 	la.mu.Unlock()
 	defer la.changed() // a new token gets the current state even if persistence needs a retry
 	if v.PushToken != "" && v.PushToken != was {
 		la.phoneAnswered(ctx, device) // only the phone reports an update token
 	}
 	if la.h.store != nil {
-		if !quiesceHeld(ctx) {
-			if !la.h.quiesce.beginOrDefer(func() {
-				la.mu.Lock()
-				if la.deferredSaves == nil {
-					la.deferredSaves = map[string]bool{}
-				}
-				la.deferredSaves[device] = true
-				la.mu.Unlock()
-			}) {
-				return nil
-			}
-			defer la.h.quiesce.end()
-		}
-		ctx, cancel := context.WithTimeout(ctx, la.storeTimeout)
-		defer cancel()
-		if err := la.h.store.SaveLiveActivity(ctx, v); err != nil {
-			la.h.logf("save live activity: %v", err)
-			return err
-		}
+		return la.flushDeviceSave(ctx, device, devMu, wantGen)
 	}
 	return nil
+}
+
+func (la *liveActivities) flushDeviceSave(ctx context.Context, device string, devMu *sync.Mutex, wantGen uint64) error {
+	if la.h.store == nil {
+		return nil
+	}
+	devMu.Lock()
+	defer devMu.Unlock()
+	held := quiesceHeld(ctx)
+	first := true
+	var wantErr error
+	var gotWant bool
+	for {
+		la.mu.Lock()
+		if !la.deferredSaves[device] {
+			if !gotWant && wantGen != 0 && la.savedGen[device] == wantGen {
+				wantErr = la.savedErr[device]
+			}
+			la.mu.Unlock()
+			return wantErr
+		}
+		v, ok := la.rows[device]
+		gen := la.rowGen[device]
+		delete(la.deferredSaves, device)
+		la.mu.Unlock()
+		if !ok {
+			return wantErr
+		}
+		if !held {
+			if !la.h.quiesce.beginOrDefer(func() {
+				la.mu.Lock()
+				if la.rowGen[device] == gen {
+					if la.deferredSaves == nil {
+						la.deferredSaves = map[string]bool{}
+					}
+					la.deferredSaves[device] = true
+				}
+				la.mu.Unlock()
+			}) {
+				return wantErr
+			}
+		}
+		baseCtx := context.Background()
+		if first && ctx != nil {
+			baseCtx = ctx
+		}
+		first = false
+		sctx, cancel := context.WithTimeout(baseCtx, la.storeTimeout)
+		err := la.h.store.SaveLiveActivity(sctx, v)
+		cancel()
+		if !held {
+			la.h.quiesce.end()
+		}
+		if err != nil {
+			la.h.logf("save live activity: %v", err)
+		}
+		la.mu.Lock()
+		if la.savedGen == nil {
+			la.savedGen = map[string]uint64{}
+			la.savedErr = map[string]error{}
+		}
+		la.savedGen[device] = gen
+		la.savedErr[device] = err
+		la.mu.Unlock()
+		if wantGen != 0 && gen >= wantGen && !gotWant {
+			wantErr = err
+			gotWant = true
+		}
+	}
 }
 
 // resumeWrites flushes Live Activity holds, saves and start claims deferred
@@ -1064,13 +1150,19 @@ func (la *liveActivities) resumeWrites() {
 	if la == nil {
 		return
 	}
+	type saveItem struct {
+		device string
+		mu     *sync.Mutex
+	}
 	la.mu.Lock()
 	quiescedStart := la.quiescedStart
 	la.quiescedStart = false
 	holds := la.deferredHolds
 	la.deferredHolds = nil
-	saves := la.deferredSaves
-	la.deferredSaves = nil
+	var saves []saveItem
+	for device := range la.deferredSaves {
+		saves = append(saves, saveItem{device: device, mu: la.deviceSaveMuLocked(device)})
+	}
 	if quiescedStart {
 		la.repair = true
 	}
@@ -1090,29 +1182,8 @@ func (la *liveActivities) resumeWrites() {
 		for _, h := range holds {
 			la.holdStart(context.Background(), h.device, h.asOf, h.hold)
 		}
-		for device := range saves {
-			la.mu.Lock()
-			v, ok := la.rows[device]
-			la.mu.Unlock()
-			if !ok || la.h.store == nil {
-				continue
-			}
-			if !la.h.quiesce.beginOrDefer(func() {
-				la.mu.Lock()
-				if la.deferredSaves == nil {
-					la.deferredSaves = map[string]bool{}
-				}
-				la.deferredSaves[device] = true
-				la.mu.Unlock()
-			}) {
-				continue
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), la.storeTimeout)
-			if err := la.h.store.SaveLiveActivity(ctx, v); err != nil {
-				la.h.logf("save live activity: %v", err)
-			}
-			cancel()
-			la.h.quiesce.end()
+		for _, s := range saves {
+			_ = la.flushDeviceSave(nil, s.device, s.mu, 0)
 		}
 	}()
 }

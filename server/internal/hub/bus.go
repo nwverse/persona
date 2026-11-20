@@ -107,6 +107,16 @@ type busState struct {
 	// under mu. needsYouDelay is that delay for tests; zero is inboxNeedsYouPushDelay.
 	needsYouPush  bool
 	needsYouDelay time.Duration
+	// seen holds per-identity serialized SeeBusIdentity persistence state (including deferred writes during quiesce).
+	seenMu sync.Mutex
+	seen   map[string]*busSeenEntry
+}
+
+type busSeenEntry struct {
+	mu      sync.Mutex // serializes SeeBusIdentity writes for this identity
+	pending bool
+	where   *db.BusIdentity
+	gen     uint64
 }
 
 // busConn is one service connection.
@@ -683,13 +693,97 @@ func (h *Hub) stopBus() []*busConn {
 // busSeen keeps in the roster that identity id is connected now (where: its handshake's place) or just dropped, and
 // tells the apps (managers.go).
 func (h *Hub) busSeen(ctx context.Context, id string, where *db.BusIdentity) {
-	if s := h.managerStore(); s != nil {
-		if h.quiesce.begin() {
-			if err := s.SeeBusIdentity(ctx, id, where); err != nil {
-				h.logf("bus: [%s] roster: %v", id, err)
-			}
-			h.quiesce.end()
+	if h.managerStore() != nil {
+		var cp *db.BusIdentity
+		if where != nil {
+			v := *where
+			cp = &v
 		}
+		h.bus.seenMu.Lock()
+		if h.bus.seen == nil {
+			h.bus.seen = map[string]*busSeenEntry{}
+		}
+		e := h.bus.seen[id]
+		if e == nil {
+			e = &busSeenEntry{}
+			h.bus.seen[id] = e
+		}
+		e.where = cp
+		e.pending = true
+		e.gen++
+		h.bus.seenMu.Unlock()
+		h.flushBusSeen(ctx, id, e)
 	}
 	h.managersChanged()
+}
+
+func (h *Hub) flushBusSeen(ctx context.Context, id string, e *busSeenEntry) {
+	if h.managerStore() == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for {
+		h.bus.seenMu.Lock()
+		if !e.pending {
+			h.bus.seenMu.Unlock()
+			return
+		}
+		where := e.where
+		gen := e.gen
+		e.pending = false
+		h.bus.seenMu.Unlock()
+		if !h.quiesce.beginOrDefer(func() {
+			h.bus.seenMu.Lock()
+			if e.gen == gen {
+				e.pending = true
+			}
+			h.bus.seenMu.Unlock()
+		}) {
+			return
+		}
+		s := h.managerStore()
+		if s != nil {
+			wctx := ctx
+			var cancel context.CancelFunc
+			if wctx == nil || wctx.Err() != nil {
+				wctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+			}
+			if err := s.SeeBusIdentity(wctx, id, where); err != nil {
+				h.logf("bus: [%s] roster: %v", id, err)
+			}
+			if cancel != nil {
+				cancel()
+			}
+		}
+		h.quiesce.end()
+	}
+}
+
+func (h *Hub) resumeBusSeen() {
+	if h.managerStore() == nil {
+		return
+	}
+	type item struct {
+		id string
+		e  *busSeenEntry
+	}
+	h.bus.seenMu.Lock()
+	var todo []item
+	for id, e := range h.bus.seen {
+		if e.pending {
+			todo = append(todo, item{id: id, e: e})
+		}
+	}
+	h.bus.seenMu.Unlock()
+	if len(todo) == 0 {
+		return
+	}
+	h.nodeWorkers.Add(1)
+	go func() {
+		defer h.nodeWorkers.Done()
+		for _, it := range todo {
+			h.flushBusSeen(nil, it.id, it.e)
+		}
+	}()
 }

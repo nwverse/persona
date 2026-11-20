@@ -14,7 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/hubedge"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -65,11 +64,10 @@ type Hub struct {
 	testAfterFinishRefuse func()
 	clientOps             clientOpsWake
 	codexPendingMu        sync.Mutex
-	codexPending          map[string]proto.CodexConfig
+	codexPending          map[string]*codexSaveEntry
 	looksGoneMu           sync.Mutex
 	looksGonePending      []string
-	assistantProfileMu    sync.Mutex
-	assistantProfilePend  *assistantwire.Profile
+	assistantProfileSave  assistantProfileSaveState
 	logger                *log.Logger
 	traffic               trafficLog // privacy-safe minute counters, flushed to the journal
 	machines              []*Machine

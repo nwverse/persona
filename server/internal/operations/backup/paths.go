@@ -11,12 +11,13 @@ import (
 // RecommendedDevelopmentBackupDir is where a Web development update keeps its
 // snapshots unless the operator chose another directory: under the runtime's
 // update/ directory, which a snapshot never collects, so a snapshot cannot
-// contain an earlier one. Existing symlinked prefixes are resolved so the path
-// matches what ValidateOutputDirectory persists.
+// contain an earlier one. Existing symlinked parent prefixes are resolved so
+// the path matches what ValidateOutputDirectory persists, while keeping the
+// final component intact for ValidateOutputDirectory's symlink refusal.
 func RecommendedDevelopmentBackupDir(home string) string {
 	dir := filepath.Join(home, "update", "development-backups")
 	if filepath.IsAbs(dir) {
-		return resolveExisting(dir)
+		return filepath.Join(resolveExisting(filepath.Dir(dir)), filepath.Base(dir))
 	}
 	return dir
 }
