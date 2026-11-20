@@ -1410,8 +1410,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const foldBackground = useStore((s) =>
     foldsBackgroundRounds(sid, s.assistant ?? (mainCache ? { main: mainCache.scope } : undefined)));
   const lines = useMemo(
-    () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground })),
-    [earlier.liveItems, lastLive, outgoing, foldBackground],
+    () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, main: isMain })),
+    [earlier.liveItems, lastLive, outgoing, foldBackground, isMain],
   );
   lastLines.current = lines;
   // a DayLine over the first line of each new calendar day (#8160); day-only keys keep them stable as pages and

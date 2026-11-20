@@ -70,6 +70,26 @@ func BackgroundReplyMissing(items []proto.Item) bool {
 	return true // a known background run with no written answer
 }
 
+// RoutineConversationReply reports a cross-conversation background round with no successful explicit owner-visibility
+// action. The main conversation keeps its ordinary finished push and visible reply folded; all other sources and every
+// explicit promotion keep their existing behavior. Delivery and execution are not inspected or changed here.
+func RoutineConversationReply(items []proto.Item) bool {
+	start, background := lastBackgroundInput(items)
+	if !background || start < 0 {
+		return false
+	}
+	source := prompts.ItemSource(items[start])
+	if source == nil || source.Kind != proto.SourceConversation {
+		return false
+	}
+	for _, item := range items[start:] {
+		if item.SupervisionUser || item.Fold != nil && item.Fold.SupervisionUser {
+			return false
+		}
+	}
+	return !HasUserVisibleAction(items[start+1:])
+}
+
 // lastBackgroundInput stops at the last input or wake. Tool results are part of the input's turn.
 func lastBackgroundInput(items []proto.Item) (int, bool) {
 	for i := len(items) - 1; i >= 0; i-- {

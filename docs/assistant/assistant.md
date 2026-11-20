@@ -1472,14 +1472,20 @@ explicit user-facing actions still follow the usual visibility rules.
   unavailable, unless it settled with silent visibility. The full reply uses the ordinary reply bubble so its
   formatting and links remain available. Its work keeps the usual collapsed summary. Intermediate narration,
   generated quiet-heartbeat acknowledgements and empty turns stay folded. A successful silent finish keeps its round
-  folded unless an explicit user-visible action promoted it. This changes the chat display only and sends no push.
+  folded unless an explicit user-visible action promoted it. One exception is a routine `conversation_send` report to
+  the main conversation: with folding on, its input and nonblank reply both stay inside the expandable background
+  record, and a normal finished reply sends no push. A P0, a specifically requested result or a decision can still be
+  promoted through the explicit actions above, which keep their existing display and push paths. Final replies in
+  leader conversations and scheduled rounds stay visible as before. Relay delivery, processing and hop/answer
+  behavior are unchanged.
 - **Needs you** keeps its entry and its count. While folding is on and its rows come from more than one supervising
   conversation (a task's `origin`), they are grouped under that conversation's title, this conversation's own first;
   the rows and their order within a group are unchanged.
 - **Switch**: Settings › Assistant › **Fold background rounds** (`assistant.main_background_folded`, `PUT /api/v1/assistant`,
   on unless turned off; Persona's settings tool changes it only after the user confirms the card). Off, the main chat and
-  Needs you look exactly as before. A hub that does not send the field is treated as on. Display only: what the rounds do,
-  notify or push is unchanged.
+  Needs you look exactly as before. A hub that does not send the field is treated as on. The switch changes presentation
+  and routine main-relay finished-push eligibility only: relay execution, explicit `notify_user` actions and every other
+  push decision are unchanged.
 
 ## Messages from the system wait for the owner (#4925)
 
