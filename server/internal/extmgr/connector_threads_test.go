@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/subscriptions"
 )
@@ -110,6 +112,78 @@ func threadsHubWith(t *testing.T, rules []connector.Rule) (*Manager, *threadsCon
 		t.Fatal(err)
 	}
 	return h, c, h.routes()
+}
+
+type avatarPageConnector struct {
+	*pictureConnector
+	source string
+	page   connector.ThreadPage
+}
+
+func (c *avatarPageConnector) ID() string { return c.source }
+
+func (c *avatarPageConnector) Thread(context.Context, string, string, int) (connector.ThreadPage, error) {
+	return c.page, nil
+}
+
+func TestConnectorThreadAvatarURLs(t *testing.T) {
+	for _, source := range []string{"telegram", "github"} {
+		t.Run(source, func(t *testing.T) {
+			h := newTestManager(t)
+			h.store = newMemStore()
+			h.connectors = connector.NewRegistry(nil)
+			c := &avatarPageConnector{pictureConnector: &pictureConnector{}, source: source}
+			c.state.Store(connector.StateOK)
+			c.page = connector.ThreadPage{
+				Chat: connector.ThreadChat{ID: "demo", Avatar: "a.u1.501", Author: &connector.ThreadPerson{Name: "Author", Avatar: "avatar:author:1"}},
+				Messages: []connector.ThreadMessage{
+					{ID: "1", Sender: connector.ThreadPerson{Name: "Reviewer", Avatar: "https://example.com/avatar.png"}},
+					{ID: "2", Sender: connector.ThreadPerson{Name: "Guest"}},
+				},
+			}
+			if err := h.addConnector(c); err != nil {
+				t.Fatal(err)
+			}
+			mux := h.routes()
+			token := deviceToken("phone", roleFull)
+			code, out := call(t, mux, "GET", "/api/v1/connectors/"+source+"/thread?thread=demo", token, "")
+			if code != http.StatusOK {
+				t.Fatalf("thread: %d %v", code, out)
+			}
+			chat := out["chat"].(map[string]any)
+			messages := out["messages"].([]any)
+			check := func(row map[string]any, ref string) {
+				t.Helper()
+				if row["avatar"] != ref || row["avatar_url"] != extwire.AvatarURL(source, ref) {
+					t.Errorf("avatar: %v, want %q and its %s hub path", row, ref, source)
+				}
+			}
+			check(chat, "a.u1.501")
+			check(chat["author"].(map[string]any), "avatar:author:1")
+			check(messages[0].(map[string]any)["sender"].(map[string]any), "https://example.com/avatar.png")
+			if c.page.Chat.Author.AvatarURL != "" || c.page.Messages[0].Sender.AvatarURL != "" {
+				t.Fatal("the app response changed the connector's page")
+			}
+			if guest := messages[1].(map[string]any)["sender"].(map[string]any); guest["avatar"] != nil || guest["avatar_url"] != nil {
+				t.Errorf("guest without a picture: %v", guest)
+			}
+			if c.fetched.Load() != 0 {
+				t.Fatal("listing the thread fetched an image")
+			}
+			path, _ := chat["avatar_url"].(string)
+			if path == "" {
+				t.Fatal("no chat picture to open")
+			}
+			req := httptest.NewRequest("GET", path+"?size=80", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+			cfg, format, err := image.DecodeConfig(w.Body)
+			if w.Code != http.StatusOK || err != nil || format != "jpeg" || cfg.Width != 128 || cfg.Height != 128 || c.fetched.Load() != 1 {
+				t.Fatalf("opening the listed picture: %d, %s %v, %v, media reads %d", w.Code, format, cfg, err, c.fetched.Load())
+			}
+		})
+	}
 }
 
 // A thread reads a page at a time, newest first, each page going back from the one before; the app is told why it

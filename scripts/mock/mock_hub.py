@@ -12720,7 +12720,7 @@ def github_thread_area(h, method, p, raw):
         out = {"chat": chat, "messages": msgs[start:end]}
         if start > 0:
             out["before"] = msgs[start]["id"]
-        return h.send_json(out) or True
+        return h.send_json(thread_avatars("github", out)) or True
     if what == "media" and method == "GET":
         parts = q.get("ref", [""])[0].split(":")
         if len(parts) != 3 or parts[1] not in GH_AVATAR_COLORS:
@@ -13213,7 +13213,16 @@ def tg_thread(thread, before, limit):
     out = {"chat": chat, "messages": page}
     if len(msgs) > limit:
         out["before"] = page[0]["id"]
-    return out
+    return thread_avatars("telegram", out)
+
+
+def thread_avatars(source, page):
+    """List each picture on this thread through the hub, keeping its legacy connector ref."""
+    chat = page["chat"]
+    for row in [chat, chat.get("author")] + [m.get("sender") for m in page["messages"]]:
+        if row and row.get("avatar"):
+            row["avatar_url"] = avatar_path(source, row["avatar"])
+    return page
 
 
 def avatar_path(source, value):
@@ -13236,10 +13245,12 @@ def avatars_area(h, p):
     except ValueError:
         asked = 128
     size = next((e for e in (64, 128, 256, 512) if e >= asked), 512)
-    parts = value.split(".")
-    if source != "telegram" or not TELEGRAM_MODE or parts[0] != "a" or len(parts) != 3 or parts[1] not in TG_AVATAR_COLORS:
+    if source == "telegram" and TELEGRAM_MODE and len(parts := value.split(".")) == 3 and parts[0] == "a" and parts[1] in TG_AVATAR_COLORS:
+        data = tg_avatar(parts[1], size)
+    elif source == "github" and os.environ.get("MOCK_GITHUB_INBOX") and len(parts := value.split(":")) == 3 and parts[0] == "avatar" and parts[1] in GH_AVATAR_COLORS:
+        data = png(size, size, GH_AVATAR_COLORS[parts[1]])
+    else:
         return h.send_json({"error": "no such picture", "code": "fetch_failed"}, 502) or True
-    data = tg_avatar(parts[1], size)
     h.send_response(200)
     h.send_header("Content-Type", "image/png"); h.send_header("Content-Length", str(len(data)))
     h.send_header("X-Content-Type-Options", "nosniff")

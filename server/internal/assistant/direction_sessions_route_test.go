@@ -223,7 +223,14 @@ func directionFindSession(t *testing.T, list []directionSessionView, id string) 
 // every later read, including after a restart.
 func directionFilingFleetEnv(t *testing.T, st *fleetMem) *fleetTest {
 	t.Helper()
-	ft := newFleetTestOn(t, st)
+	return directionFilingFleetEnvOn(t, st, st)
+}
+
+// directionFilingFleetEnvOn is directionFilingFleetEnv on store, which keeps its data in st (a wrapper of st that
+// watches its writes).
+func directionFilingFleetEnvOn(t *testing.T, store Store, st *fleetMem) *fleetTest {
+	t.Helper()
+	ft := newFleetTestOn(t, store)
 	ft.st = st
 	ft.s.devs = &aliasDevs{fleetDevs: ft.d, alias: map[string]string{"old-mac": "mac", "a-mac": "mac"}}
 	ft.f.hello.Assistant.MachineID = "mac"
