@@ -101,7 +101,8 @@ type runtimeHello struct {
 		Archive bool `json:"archive"`
 		// Readonly: a session.start with permission_mode "plan" either starts in a read-only mode before its first
 		// prompt runs or is refused with readonly_unsupported; it never falls back to a writable provider (#3238).
-		Readonly bool `json:"readonly"`
+		Readonly             bool `json:"readonly"`
+		BackendWorkspaceRoot bool `json:"backend_workspace_root"`
 		// SameKind: its starts run only its own launchers (#8140). One it does not have runs on one of its launchers
 		// of the agent kind session.start names (agent_type), or is refused (launcher_kind_missing), never another
 		// kind of agent; what it asked for and does not run with comes back with the session (instead). As the start's

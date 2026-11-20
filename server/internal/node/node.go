@@ -749,14 +749,30 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			defer done()
 		}
 	}
+	return n.handleMethod(ctx, method, params)
+}
+
+func (n *Node) handleMethod(ctx context.Context, method string, params json.RawMessage) (result any, resultErr error) {
+	if verb, ok := strings.CutPrefix(method, "git.backend."); ok {
+		return n.backendGit(ctx, verb, params)
+	}
+	if method == devicewire.MethodStartBackendSession {
+		var envelope struct {
+			Workspace json.RawMessage `json:"backend_workspace"`
+		}
+		if err := json.Unmarshal(params, &envelope); err != nil {
+			return nil, err
+		}
+		return n.taskWorkspace(ctx, method, envelope.Workspace, params)
+	}
 	if strings.HasPrefix(method, "node.update.") {
 		return n.handleUpdate(ctx, method, params)
 	}
 	if method == "task.workspace.capabilities" {
-		return map[string]any{"capability": "task_workspace_v1"}, nil
+		return map[string]any{"capability": "task_workspace_v1", "start": true}, nil
 	}
 	if strings.HasPrefix(method, "task.workspace.") {
-		return n.taskWorkspace(ctx, strings.TrimPrefix(method, "task.workspace."), params)
+		return n.taskWorkspace(ctx, strings.TrimPrefix(method, "task.workspace."), params, nil)
 	}
 	switch method {
 	case nodeproto.SourceSend:
@@ -933,6 +949,21 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 	}
 	sessionSend := method == "session.send" || method == proto.MethodSessionSendUnseen
+	if backendLaunchFrom(ctx) == nil && (sessionSend || method == "session.start" && p.ResumeSessionID != "") {
+		id := p.ResumeSessionID
+		if sessionSend {
+			id = p.SessionID
+		}
+		b, lock, err := n.pinBackendSession(ctx, id, p.Cwd, !sessionSend)
+		if err != nil {
+			return nil, err
+		}
+		if b != nil {
+			defer lock.Close()
+			ctx = context.WithValue(ctx, backendLaunchKey{}, b)
+			p.Cwd = b.executor.journal.Plan.RootPath
+		}
+	}
 	hasSelectedSkills := false
 	if sessionSend && !n.isAssistantSession(p.SessionID) {
 		refs, err := assistantskills.References(p.Text)

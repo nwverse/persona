@@ -1481,12 +1481,41 @@ reconciled after a lost receipt; a completed branch deletion can resume without 
 Cleanup results distinguish removed checkouts from retained branch storage; no retained branch is
 claimed after its object store has been deleted.
 
-The T4 consumption boundary is `PrepareBackendWorkspace`, `InspectBackendWorkspace`,
-`AcquireBackendWorkspace`, `CheckBackendWorkspaceUse`, and `ReleaseBackendWorkspace` in
-`server/internal/assistant/task_workspaces.go`. Acquire before Engine start, check the current task
-intent immediately before starting, and keep the stable use ID until the session stops. An ambiguous
-acquire/release retains the use claim for inspection. Cleanup and use admission share the Todo lock;
-Node verifies Git again on acquire. Sandboxed Engine consumers must allow the returned `common_dir`
-paths for Git writes as well as the root and repository paths. Cancel/completion racing preparation prevents a late Ready result
-from authorizing a start. Engine opening, session recovery and user interface assembly are separate
-consumers of these primitives.
+### Starting an agent in a prepared workspace
+
+For a to-do with a saved workspace naming plan, pass its `todo_id` and select
+`"workspace":{"backend":{"operation_id":"op_example"}}` in the corresponding
+`task_plan` item. The operation determines the computer, root and selected
+repository paths. The named machine must match. Set `backend.host` to select
+an enabled engine on that computer. The Manager prepares a missing checkout,
+persists the all-ready result, claims the workspace and checks that the to-do
+and operation still permit a start. A retry reuses the same ready checkout.
+
+For an owner starting a to-do directly, including one created by hand, use
+`POST /api/v1/todos/{id}/backend-workspace/start`. Send `operation_id`,
+a stable `start_id` for this launch, and optional `host`, `launcher` and
+`prompt`. The response contains the ordinary task plan. Repeat the same
+request after a lost response to retrieve it. Changing the inputs under
+the same start ID returns a conflict. A subsequent launch after a confirmed
+stop uses a new start ID and the existing workspace operation.
+
+The plan's `workspace_resolved` contains `backend_workspace_id`, `operation_id`,
+`path` and the repository map. Git requests to the machine can carry
+`backend_workspace_id` and `repo_id` in the query for reads or the JSON body for
+writes. The Node verifies the worktree identity before running the usual Git
+operation in its recorded path. This also works when the root is itself the
+selected repository. Existing clients continue to pass `cwd`.
+
+The Node opens the prepared root, records the session ID, and keeps the checkout
+claimed while the agent runs. The Manager reconciles a lost reply against that
+receipt. An uncertain dispatch retains the claim and offers inspection. A
+confirmed stop allows another plan for the same operation to choose a different
+supported engine and keep the files and commits. A failed plan item exposes
+`workspace_error` with its stage, operation, path, repository when applicable
+and recovery actions. Preparation details and per-repository results remain
+available through the operation inspection endpoint above.
+
+The engine's workspace ID still identifies its native container. Use the
+backend cleanup endpoint for the prepared repositories and the engine’s
+close action for its terminal. Adding a repository, issue or pull request
+association leaves the task’s launch choice and delivery progress in place.
