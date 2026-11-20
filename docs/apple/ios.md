@@ -3007,6 +3007,10 @@ computers in the current Hub. Connectors, extensions, markets, channels and know
 request context; switching assistants returns Settings to the list, and a late response cannot replace the new scope.
 An explicitly manager-bound detail link still opens that assistant's copy without changing the app's pick.
 
+An extension purpose with candidate support shows the lists it requested, their most recent use, and each model's provider
+or reason for being unavailable. Choose the extension’s lists, the purpose model alone, or an ordered list of directly
+callable providers and model IDs. Leave an ID empty to follow that provider’s default. Saving uses the current revision. When the revision changes elsewhere, the editor keeps the draft until you confirm a reload.
+
 The rest of the first group follows the same rule. Skills, Auto-Start Tasks (`TaskTrustModel`), Outlook sign-in on Add Mail
 Account, an extension form's launcher picker, each page's Subscriptions entry (`SettingsPage.subscriptions(state:manager:)`)
 and the extension operations a page reads (`ExtensionOperations.reload(manager:)`, which replaces that assistant's alone) go to

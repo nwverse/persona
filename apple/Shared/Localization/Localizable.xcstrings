@@ -18214,6 +18214,28 @@
         }
       }
     },
+    "Add candidate" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add candidate"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "候補を追加"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加候选模型"
+          }
+        }
+      }
+    },
     "Add email: %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -28443,6 +28465,28 @@
         }
       }
     },
+    "Available model" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Available model"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "利用可能なモデル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型可用"
+          }
+        }
+      }
+    },
     "Available · Direct to APNs" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -35311,6 +35355,50 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已取消"
+          }
+        }
+      }
+    },
+    "Candidate %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Candidate %1$lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "候補 %1$lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "候选模型 %1$lld"
+          }
+        }
+      }
+    },
+    "Candidate models" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Candidate models"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "候補モデル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "候选模型"
           }
         }
       }
@@ -63057,6 +63145,28 @@
         }
       }
     },
+    "Each provider and model combination must be different." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Each provider and model combination must be different."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同じプロバイダとモデルの組み合わせは複数回指定できません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提供商和模型的组合不能重复。"
+          }
+        }
+      }
+    },
     "Each run goes into the chat that scheduled it and continues with its context." : {
       "localizations" : {
         "en" : {
@@ -63628,6 +63738,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Edit candidate" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit candidate"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "候補を編集"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑候选模型"
+          }
+        }
+      }
     },
     "Edit history is hidden" : {
       "localizations" : {
@@ -67821,6 +67953,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "拡張機能の設定"
+          }
+        }
+      }
+    },
+    "Extension lists" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Extension lists"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拡張機能のリスト"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扩展提供的列表"
           }
         }
       }
@@ -96414,6 +96568,28 @@
         }
       }
     },
+    "Models are tried in order. Leave a model ID empty to use the provider’s default." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Models are tried in order. Leave a model ID empty to use the provider’s default."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルは上から順に試行されます。プロバイダの既定モデルを使うには、モデル ID を空欄にします。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系统将按顺序尝试这些模型。将模型 ID 留空可使用提供商的默认模型。"
+          }
+        }
+      }
+    },
     "Models tried: %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -98302,6 +98478,50 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "My list" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "My list"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自分のリスト"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自定义列表"
+          }
+        }
+      }
+    },
+    "My model list" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "My model list"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自分のモデルリスト"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "我的模型列表"
+          }
+        }
+      }
     },
     "Name" : {
       "localizations" : {
@@ -105714,6 +105934,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "No providers can be called directly for this purpose." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No providers can be called directly for this purpose."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この用途で直接呼び出せるプロバイダはありません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此用途没有可直接调用的提供商。"
+          }
+        }
+      }
     },
     "No providers were imported." : {
       "localizations" : {
@@ -128096,6 +128338,28 @@
       },
       "extractionState" : "manual"
     },
+    "Provider default" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Provider default"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロバイダの既定モデル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提供商默认模型"
+          }
+        }
+      }
+    },
     "Providers and Keys" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -128578,6 +128842,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Purpose model only" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Purpose model only"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この用途のモデルのみ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅使用此用途的模型"
+          }
+        }
+      }
     },
     "Push" : {
       "localizations" : {
@@ -132023,6 +132309,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Recently requested lists" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recently requested lists"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近リクエストされたリスト"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近请求的列表"
+          }
+        }
+      }
     },
     "Recents" : {
       "localizations" : {
@@ -177478,6 +177786,28 @@
       },
       "extractionState" : "manual"
     },
+    "This extension hasn’t requested any model lists yet." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This extension hasn’t requested any model lists yet."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この拡張機能はまだモデルリストをリクエストしていません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此扩展尚未请求任何模型列表。"
+          }
+        }
+      }
+    },
     "This extension is managed outside the extension market. Remove it at its source." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -187317,6 +187647,28 @@
         }
       }
     },
+    "Unavailable model" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unavailable model"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "利用できないモデル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型不可用"
+          }
+        }
+      }
+    },
     "Unavailable on This Computer" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -189336,6 +189688,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Up to %lld candidates." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Up to %1$lld candidates."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "候補は最大 %1$lld 個です。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最多可添加 %1$lld 个候选模型。"
+          }
+        }
+      }
     },
     "Up to %lld characters per message; longer ones are split" : {
       "localizations" : {
@@ -212634,6 +213008,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "名称最多 32 个字。"
+          }
+        }
+      }
+    },
+    "Use models from" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use models from"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルの選択元"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型来源"
           }
         }
       }
