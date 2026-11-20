@@ -307,6 +307,7 @@ func weeklyIndependentReview(weeks []northStarWeek, rawReviews []json.RawMessage
 	}
 	runs := make([]map[string]bool, len(weeks))
 	results := make([]map[string]int, len(weeks))
+	starts := map[string]time.Time{}
 	for i := range weeks {
 		runs[i] = map[string]bool{}
 		results[i] = map[string]int{}
@@ -319,10 +320,10 @@ func weeklyIndependentReview(weeks []northStarWeek, rawReviews []json.RawMessage
 			}
 			return row
 		}
+		if !review.StartedAt.IsZero() {
+			starts[review.ID] = review.StartedAt
+		}
 		for i, week := range weeks {
-			if northStarWeeklyContains(week, review.StartedAt) {
-				runs[i][review.ID] = true
-			}
 			if review.EndedAt != nil && northStarWeeklyContains(week, *review.EndedAt) {
 				results[i][review.State]++
 			}
@@ -332,9 +333,14 @@ func weeklyIndependentReview(weeks []northStarWeek, rawReviews []json.RawMessage
 		if agent.Source != sourceReview || agent.Via == "" {
 			continue
 		}
+		if _, ok := starts[agent.Via]; !ok {
+			starts[agent.Via] = agent.LinkedAt
+		}
+	}
+	for id, started := range starts {
 		for i, week := range weeks {
-			if northStarWeeklyContains(week, agent.LinkedAt) {
-				runs[i][agent.Via] = true
+			if northStarWeeklyContains(week, started) {
+				runs[i][id] = true
 			}
 		}
 	}

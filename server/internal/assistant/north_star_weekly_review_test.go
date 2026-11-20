@@ -81,6 +81,40 @@ func TestNorthStarWeeklyIndependentReview(t *testing.T) {
 	}
 }
 
+func TestNorthStarWeeklyIndependentReviewCountsRunOnceAcrossWeeks(t *testing.T) {
+	ctx := context.Background()
+	_, database, hub, _ := northStarWeeklyDB(t)
+	setNorthStarWeeklyOwnConfig(t, `{"agents":{"review":{"launcher":"fixture"}}}`)
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	started := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	linked := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	mustDo(t, database.PutSetting(ctx, northStarSinceKey, northStarSince{At: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Build: "fixture"}))
+	for _, todo := range []string{"todo-stored", "todo-link-only"} {
+		mustDo(t, database.CreateTodo(ctx, db.TodoRow{ID: todo, Title: "synthetic", CreatedAt: started.Add(-time.Hour), UpdatedAt: started}))
+	}
+	ended := started.Add(30 * time.Minute)
+	raw, err := json.Marshal(AutoReview{ID: "rv-cross-week", State: "clean", StartedAt: started, EndedAt: &ended})
+	mustDo(t, err)
+	mustDo(t, database.PutTodoSupervision(ctx, db.TodoSupervisionRow{TodoID: "todo-stored", DoneWhen: []string{}, AutoReview: raw}))
+	mustDo(t, database.LinkTodoReviewer(ctx, "todo-stored", "machine", "session-cross-week", "synthetic", "/synthetic/private/path", "", "rv-cross-week", linked))
+	mustDo(t, database.LinkTodoReviewer(ctx, "todo-link-only", "machine", "session-link-only", "synthetic", "/synthetic/private/path", "", "rv-link-only", linked))
+
+	weekly, err := northStarWeeklyCommand(ctx, database, hub, "2026-11-04", "UTC", now)
+	mustDo(t, err)
+	row := northStarWeeklyFindRow(weekly.Rows, "independent_review")
+	if row == nil || len(row.Cells) != 4 {
+		t.Fatalf("independent review row: %+v", weekly.Rows)
+	}
+	previous, ok := row.Cells[2].(map[string]any)
+	if !ok || previous["runs_started"] != 1 {
+		t.Errorf("stored start week: %+v", row.Cells[2])
+	}
+	last, ok := row.Cells[3].(map[string]any)
+	if !ok || last["runs_started"] != 1 {
+		t.Errorf("link week must contain only the link-only run: %+v", row.Cells[3])
+	}
+}
+
 func TestNorthStarWeeklyIndependentReviewNotEnabled(t *testing.T) {
 	ctx := context.Background()
 	_, database, hub, _ := northStarWeeklyDB(t)
