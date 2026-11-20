@@ -129,10 +129,14 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		}
 		// A trailing refused turn is no context the compaction would summarize: it is cut, and a session left with no
 		// file by that starts under the id rather than resuming nothing.
+		drop := func() {}
 		if agentKind == "claude" {
-			n.healClaudeRefusalTranscript(id)
+			if pruned, clean := n.healClaudeRefusalTranscript(id); pruned && !clean {
+				drop = n.startsBegun.begin(id, n.startWait()) // started again right below: an empty chat meanwhile
+			}
 		}
 		if p, err = n.spawnAssistant(id, cwd, launcher, n.transcriptPath(id) != "", false, execution); err != nil {
+			drop()
 			return err
 		}
 		if st.SupervisionInstructions != execution.SupervisionInstructions {

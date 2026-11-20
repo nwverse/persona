@@ -163,7 +163,7 @@ Records associations between to-dos and Agent sessions:
 - `released_at` (timestamptz): time active association was released; `NULL` while active.
 - `title` (text, NOT NULL, DEFAULT ''): session-title snapshot (still displayable beyond the session-list time window).
 - `cwd` (text, NOT NULL, DEFAULT ''): session working-directory snapshot.
-- `agent` (text, NOT NULL, DEFAULT ''): launcher/Agent-type snapshot (`claude` / `codex`, etc.).
+- `agent` (text, NOT NULL, DEFAULT ''): Agent-kind snapshot (`claude` / `codex`, etc.) written by manual, adoption/dispatch, workspace/automatic, planned, spawned, successor and independent-review links from the session or start answer's `session.agent` (planned and spawned starts fall back to the explicitly resolved launcher kind); empty means not known, and a later link with an empty value keeps the stored kind.
 - `start_error` (text, NOT NULL, DEFAULT ''): asynchronous creation failure reason (viewable/removable in To-dos).
 - `source` (text, NOT NULL, DEFAULT 'manual'): association source:
   - `manual`: manually linked or handed to an existing Agent;
@@ -1084,6 +1084,8 @@ An approved start is remembered across manager restarts and rechecked by the tas
 | `todo_update` | Title, notes, due, remind, priority, project, `part_of`, `after`; `""` / `[]` clears | No |
 | `todo_complete` / `todo_reopen` | Mark done / open again | Only for a task, or a to-do agents work on (completing closes its agents) |
 | `todo_delete` | Delete for good | Always |
+
+With the advanced manager setting `assistant.complete_agentless_todos` enabled (default `false`), the supervising conversation can complete its own memo without a confirmation card when no Agent is attached. A memo originating in that conversation and having no supervision ledger also qualifies. Another conversation, a planned task (with or without an attached Agent), every reopen, and health-space outbound confirmation keep their existing behavior. The setting is documented in `docs/operations/config.md` ("manager.json").
 
 A to-do it makes is the user's own (no `origin`), except a piece of a request it will hand out ("Requests in pieces"): work for an agent still goes through `task_plan`. In a health conversation, anything that writes asks first (`confirmOutbound`, `health.md`). The generated CLAUDE.md tells the assistant to use `todo_create` when the user says to note a to-do or to remind them of something.
 

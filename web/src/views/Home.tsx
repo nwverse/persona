@@ -84,7 +84,6 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
     }
     return byMachine;
   }, [list, whole, hubAgentCounts, agentSessions]);
-  const now = useNow(5000, counts.working > 0 || counts.waiting > 0);
 
   // the agents of one herdr tab are one row (#2320), filed under the most urgent of them; a card waiting counts as
   // something to do, and "Mark all as seen" marks every unread agent, wherever its tab is filed
@@ -176,7 +175,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
       <Group
         title={t("home.tasks")}
         count={tasks.total}
-        right={tasks.total > tasks.rows.length && <a href={href({ name: "todos" })} onClick={(e) => onLinkClick(e, { name: "todos" })} className="text-[12px] text-ink-3 hover:text-ink-2">{t("home.tasks_all")}</a>}
+        right={tasks.total > tasks.rows.length && <a href={href({ name: "todos" })} onClick={(e) => onLinkClick(e, { name: "todos" })} className="touch-hit text-[12px] text-ink-3 hover:text-ink-2">{t("home.tasks_all")}</a>}
         grid="tasks"
       >
         {tasks.rows.map((r) => (
@@ -191,14 +190,14 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
         {groups.working.length > 0 && (
           <Group title={stateName("working")} count={groups.working.length} grid>
             {groups.working.map((g, i) => (
-              <GroupTask key={g.key} g={g} i={i} machine={name(g.lead.machine_id)} pill={<When>{g.lead.state_since ? shortDuration(now - Date.parse(g.lead.state_since)) : ""}</When>} />
+              <GroupTask key={g.key} g={g} i={i} machine={name(g.lead.machine_id)} pill={<Since iso={g.lead.state_since} />} />
             ))}
           </Group>
         )}
         {groups.waiting.length > 0 && (
           <Group title={stateName("bg_waiting")} count={groups.waiting.length} grid>
             {groups.waiting.map((g, i) => (
-              <GroupTask key={g.key} g={g} i={i} machine={name(g.lead.machine_id)} pill={<When>{g.lead.state_since ? shortDuration(now - Date.parse(g.lead.state_since)) : ""}</When>} />
+              <GroupTask key={g.key} g={g} i={i} machine={name(g.lead.machine_id)} pill={<Since iso={g.lead.state_since} />} />
             ))}
           </Group>
         )}
@@ -212,12 +211,12 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
         grid
       >
         {groups.unread.map((g, i) => (
-          <GroupTask key={g.key} g={g} i={i} machine={name(g.lead.machine_id)} pill={<When>{ago(g.lead.updated_at) || stateName("done")}</When>} footer={sessionCan(g.lead, "send") ? <ContinueAction s={g.lead} title={sessionTitle(g.launcher ?? g.sessions[0]!)} several={g.sessions.length > 1} /> : undefined} />
+          <GroupTask key={g.key} g={g} i={i} machine={name(g.lead.machine_id)} pill={<Ago iso={g.lead.updated_at} />} footer={sessionCan(g.lead, "send") ? <ContinueAction s={g.lead} title={sessionTitle(g.launcher ?? g.sessions[0]!)} several={g.sessions.length > 1} /> : undefined} />
         ))}
       </Group>
     ),
     computers: loaded && machines.length > 0 && (
-      <Group title={t("home.computers")} count={machines.length} right={<a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="text-[12px] text-ink-3 hover:text-ink-2">{t("home.monitor")}</a>}>
+      <Group title={t("home.computers")} count={machines.length} right={<a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="touch-hit text-[12px] text-ink-3 hover:text-ink-2">{t("home.monitor")}</a>}>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 @min-[60rem]:grid-cols-3 @min-[84rem]:grid-cols-4 @min-[110rem]:grid-cols-5">
           {machines.map((m) => {
             const count = agentCounts && (agentCounts.get(m.id) ?? 0);
@@ -358,7 +357,8 @@ function taskAgentLine({ agents, lead }: Pick<HomeTask, "agents" | "lead">, mach
 }
 
 // One task on the overview: its title (opens the task), its status, the stage bar with its PR, and what holds its
-// delivery, then who works on it (taskAgentLine). The PR link is beside the title link, not inside it.
+// delivery, then who works on it (taskAgentLine). The PR link is beside the title link, not inside it. On a touch
+// screen the title link's overlay spans the card, so a tap anywhere on it opens the task; the PR link sits above it.
 function TaskCard({ task, machine }: { task: HomeTask; machine: (mid: string) => string }) {
   const { todo, status } = task;
   // its state word and tone; a waiting one's say what it waits on, attention only on the owner (#11090)
@@ -370,9 +370,9 @@ function TaskCard({ task, machine }: { task: HomeTask; machine: (mid: string) =>
   const { who, more } = taskAgentLine(task, machine);
   const line = [held && t(`todos.delivery_${held.state}`), who].filter(Boolean).join(" · ");
   return (
-    <div className="flex h-full flex-col gap-2 rounded-card bg-surface px-3 py-2.5 shadow-card" data-task={todo.id}>
+    <div className="flex h-full flex-col gap-2 rounded-card bg-surface px-3 py-2.5 shadow-card pointer-coarse:relative pointer-coarse:isolate" data-task={todo.id}>
       <div className="flex min-w-0 items-center gap-2">
-        <a href={href(to)} onClick={(e) => onLinkClick(e, to)} className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink hover:underline">
+        <a href={href(to)} onClick={(e) => onLinkClick(e, to)} className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink hover:underline pointer-coarse:after:absolute pointer-coarse:after:inset-0 pointer-coarse:after:z-[1] pointer-coarse:after:content-['']">
           {todo.title}
         </a>
         {todo.kind === "concern" && <Tag><span data-testid="todo-concern">{t("todos.concern")}</span></Tag>}
@@ -402,13 +402,31 @@ function TaskCard({ task, machine }: { task: HomeTask; machine: (mid: string) =>
   );
 }
 
-function Pill({ children }: { children: React.ReactNode }) {
-  return <span className="inline-flex h-5 shrink-0 items-center rounded-full bg-field px-1.5 text-[11px] font-medium whitespace-nowrap text-attention">{children}</span>;
+// On a phone's width the pill and the title share what the row leaves them, the pill never wider than its words: its
+// words are cut only where they are wider than the title would be (the full words stay its tooltip and the link's name).
+function Pill({ children }: { children: string }) {
+  return (
+    <span title={children} className="inline-flex h-5 shrink-0 items-center rounded-full bg-field px-1.5 text-[11px] font-medium whitespace-nowrap text-attention max-sm:min-w-0 max-sm:flex-1 max-sm:max-w-max">
+      <span className="truncate">{children}</span>
+    </span>
+  );
 }
 
 /** When a row last changed or how long it has worked: quiet text, its badge already says the state. */
 function When({ children }: { children: React.ReactNode }) {
   return <span className="shrink-0 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums">{children}</span>;
+}
+
+/** How long a row has been in its state, on its own 5 s clock: the page around it does not re-render with each tick. */
+function Since({ iso }: { iso?: string }) {
+  const now = useNow(5000, Boolean(iso));
+  return <When>{iso ? shortDuration(now - Date.parse(iso)) : ""}</When>;
+}
+
+/** When a finished row last changed, read at each render and moved on by its own half-minute clock, as `Since` is. */
+function Ago({ iso }: { iso?: string }) {
+  useNow(30_000, Boolean(iso));
+  return <When>{ago(iso) || stateName("done")}</When>;
 }
 
 /** A row's place as small tags, without one that only repeats the title: a tab is often named after its agent's first

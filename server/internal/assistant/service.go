@@ -166,27 +166,28 @@ type Service struct {
 	// interrupts: the interrupted receipts re-sent when their tasks change (interruptions.go).
 	interrupts interruptBook
 
-	titles       titleBook            // titles.go
-	phoneKept    keptPhoneTools       // fleet_tools.go: the phone's tools as the hub last listed them
-	agentNames   agentNamingBook      // agent_naming.go
-	prefs        settingsBook         // profile.go
-	main         mainBook             // start.go
-	archived     archiveBook          // conversations.go
-	tags         conversationTagsBook // conversation_tags.go
-	origins      originBook           // origins.go
-	guests       guestBook            // guest.go
-	relays       relayBook            // conversations.go
-	chatReplies  chatReplyBook        // chat_reply.go: what conversations that wrote as the user were told of the chats
-	undelivered  undeliveredBook      // undelivered.go: the owner's messages that could not go in
-	quotes       quoteBook            // relay_quote.go: the owner's messages relays carried, verified
-	avail        availBook            // availability.go
-	quiet        quietBook            // quiet.go
-	taskFileBook taskFileBook         // task_files.go: the files tasks handed over, by todo id
-	supervise    superviseBook        // supervise_signals.go
-	progress     progressBook         // supervise_progress.go
-	preempt      preemptBook          // owner_preempt.go
-	tbriefs      taskBriefBook        // task_brief.go
-	search       searchIndex          // search_index.go
+	titles           titleBook             // titles.go
+	phoneKept        keptPhoneTools        // fleet_tools.go: the phone's tools as the hub last listed them
+	agentNames       agentNamingBook       // agent_naming.go
+	prefs            settingsBook          // profile.go
+	main             mainBook              // start.go
+	archived         archiveBook           // conversations.go
+	tags             conversationTagsBook  // conversation_tags.go
+	directionFilings directionSessionsBook // direction_sessions.go
+	origins          originBook            // origins.go
+	guests           guestBook             // guest.go
+	relays           relayBook             // conversations.go
+	chatReplies      chatReplyBook         // chat_reply.go: what conversations that wrote as the user were told of the chats
+	undelivered      undeliveredBook       // undelivered.go: the owner's messages that could not go in
+	quotes           quoteBook             // relay_quote.go: the owner's messages relays carried, verified
+	avail            availBook             // availability.go
+	quiet            quietBook             // quiet.go
+	taskFileBook     taskFileBook          // task_files.go: the files tasks handed over, by todo id
+	supervise        superviseBook         // supervise_signals.go
+	progress         progressBook          // supervise_progress.go
+	preempt          preemptBook           // owner_preempt.go
+	tbriefs          taskBriefBook         // task_brief.go
+	search           searchIndex           // search_index.go
 
 	deletedConversations conversationDeleteBook // conversation_delete.go
 	conversationWrites   sync.RWMutex
@@ -350,6 +351,7 @@ func New(o Options) *Service {
 	s.startPresetRoutes()
 	s.startDefaultsRoutes() // start_defaults_routes.go
 	s.directionTreeRoutes()
+	s.directionSessionRoutes()
 	s.routeRoutes()
 	s.agentRouteRoutes()
 	s.directionNameRoutes()
@@ -596,6 +598,12 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	res, ok, err := s.localFleetDeviceCall(ctx, p) // what the hub answered before the nodes' events were the manager's
 	if !ok {
 		res, err = s.hub.DeviceCall(ctx, p)
+	}
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
+		if id, _ := p["session_id"].(string); id != "" {
+			// A direction's notes block counts as given only once the node took the send (direction_notes.go).
+			s.notesSendOutcome(ctx, id, err == nil || nodeDelivered(err) != "none")
+		}
 	}
 	if taskRoot != "" && (method == DeviceSessionSend || method == deviceTaskStart) {
 		s.noteTaskSpaceResult(ctx, taskRoot, device, res)
