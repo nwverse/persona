@@ -373,12 +373,15 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if len(t.DoneWhen) > 0 { // what the supervisor will check (supervise.go)
 		prompt += "\n\n" + prompts.RenderTaskDoneWhen(t.DoneWhen)
 	}
+	var entry prompts.TaskHandoff // none verified: a work machine, no to-do
 	if t.TodoID != "" && !s.isWorkMachine(m.ID) {
-		rules = append(rules, s.taskHandoff(ctx, m.ID, fit))
+		entry = s.taskEntry(ctx, m.ID, fit)
+		rules = append(rules, prompts.RenderTaskHandoff(entry))
 	}
 	switch {
 	case t.Role == roleLeader: // what it may hand out, and how its workers reach it (task_leader.go)
-		rules = append(rules, prompts.RenderTaskLeader())
+		// Through the terminal entry the handoff note above names, for an Agent without the Persona MCP (#12136).
+		rules = append(rules, prompts.RenderTaskLeader(prompts.TaskLeader{Terminal: entry.Terminal()}))
 	case t.Parent != "":
 		rules = append(rules, prompts.RenderTaskWorker())
 	}
