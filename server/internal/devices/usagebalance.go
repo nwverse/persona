@@ -27,9 +27,13 @@ const (
 type balanceState struct {
 	account proto.UsageAccount // the last sample; its Balance is nil before the first successful read
 	errCode string             // why the last attempt failed; "" when it worked
-	// credential is the non-secret digest of the key the last attempt used (UsageAccount.BalanceCredential). A
-	// different one means the launcher's key was replaced: the kept amount belongs to another account.
+	// credential is the non-secret digest of the last resolved key (UsageAccount.BalanceCredential). A different one
+	// means the launcher's key was replaced or rotated: the kept amount belongs to another account.
 	credential string
+	// sealedCredential is the non-secret digest of the launcher's sealed key material
+	// (UsageAccount.BalanceSealedCredential). Kept separate from credential so a temporary open/resolution failure of
+	// unchanged sealed material retains the last known amount marked stale, while a replaced seal clears it.
+	sealedCredential string
 }
 
 // usageBalances polls the launchers' balances and holds their last samples.
@@ -123,14 +127,34 @@ func (b *usageBalances) applyLocked(samples []proto.UsageAccount, now time.Time)
 			st = &balanceState{}
 			b.state[a.Ref] = st
 		}
-		// A key the user replaced is another credential: the amount kept from the old one is not this credential's
-		// last known balance, so a failed read after the change must not keep showing it.
-		if a.BalanceCredential != "" && st.credential != "" && a.BalanceCredential != st.credential {
+		// A key the user replaced or rotated is another credential: the amount kept from the old one is not this
+		// credential's last known balance, so a failed read after the change must not keep showing it. Resolved-key
+		// and sealed-material identities are tracked separately:
+		//   - when a key resolved, compare resolved-key digests (catches secret-reference rotation even when sealed
+		//     bytes stay constant, and tolerates re-sealing the same key with a fresh nonce);
+		//   - when no key resolved, compare sealed-material digests (retains the last amount across a temporary
+		//     open/resolution failure of unchanged sealed material, while clearing it if the seal itself changed).
+		changed := false
+		switch {
+		case a.BalanceCredential != "":
+			if st.credential != "" && a.BalanceCredential != st.credential {
+				changed = true
+			}
+		case a.BalanceSealedCredential != "":
+			if st.sealedCredential != "" && a.BalanceSealedCredential != st.sealedCredential {
+				changed = true
+			}
+		}
+		if changed {
 			st.account.Balance, st.account.SampledAt, st.account.Stale, st.account.StaleAt = nil, time.Time{}, false, nil
 			st.errCode = ""
+			st.credential = ""
 		}
 		if a.BalanceCredential != "" {
 			st.credential = a.BalanceCredential
+		}
+		if a.BalanceSealedCredential != "" {
+			st.sealedCredential = a.BalanceSealedCredential
 		}
 		switch {
 		case a.Balance != nil:

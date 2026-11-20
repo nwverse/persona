@@ -322,12 +322,15 @@ func TestBalanceClientFollowsTheLaunchersRoute(t *testing.T) {
 
 // Rotating what a secret reference (such as op://…) resolves to changes BalanceCredential even though the stored
 // sealed reference bytes stay the same, so a subsequent failed read cannot keep showing the previous key's balance
-// (#11825). Keys that fail to open still fall back to a sealed-material digest distinct from resolved keys.
+// (#11825). A temporary resolution failure of the unchanged sealed reference leaves BalanceCredential empty while
+// keeping BalanceSealedCredential unchanged (so usageBalances retains the last amount as stale), whereas replacing the
+// sealed reference itself changes BalanceSealedCredential even when the replacement cannot be resolved.
 func TestLauncherBalancesCredentialChangesWhenReferenceRotates(t *testing.T) {
 	ctx := context.Background()
 	s, mux := launcherTestService(t)
 	const (
 		ref  = "exv://Example/deepseek/key"
+		ref2 = "exv://Example/deepseek/replacement"
 		key1 = "sk-deepseek-rotated-old-0001"
 		key2 = "sk-deepseek-rotated-new-0002"
 	)
@@ -362,6 +365,25 @@ func TestLauncherBalancesCredentialChangesWhenReferenceRotates(t *testing.T) {
 	if first[0].BalanceCredential != hex.EncodeToString(want1[:]) {
 		t.Fatalf("first credential=%q want=%q", first[0].BalanceCredential, hex.EncodeToString(want1[:]))
 	}
+	if first[0].BalanceSealedCredential != sealedCredential(sealedBefore) {
+		t.Fatalf("first sealed credential=%q want=%q", first[0].BalanceSealedCredential, sealedCredential(sealedBefore))
+	}
+
+	// Temporarily fail reference resolution without changing the stored sealed reference (e.g. vault locked).
+	// BalanceCredential is left empty and BalanceSealedCredential stays equal to the prior sealed digest.
+	vault.mu.Lock()
+	delete(vault.values, ref)
+	vault.mu.Unlock()
+	tempBroken, known := s.LauncherBalances(ctx)
+	if !known || len(tempBroken) != 1 || tempBroken[0].Balance != nil || tempBroken[0].Problem != "failed" {
+		t.Fatalf("temporary broken reference read: known=%v %+v", known, tempBroken)
+	}
+	if tempBroken[0].BalanceCredential != "" {
+		t.Fatalf("temporary broken read must leave BalanceCredential empty, got %q", tempBroken[0].BalanceCredential)
+	}
+	if tempBroken[0].BalanceSealedCredential != sealedCredential(sealedBefore) {
+		t.Fatalf("temporary broken sealed credential=%q want=%q", tempBroken[0].BalanceSealedCredential, sealedCredential(sealedBefore))
+	}
 
 	// Rotate the secret behind the same sealed reference without touching the stored launcher.
 	vault.mu.Lock()
@@ -379,6 +401,9 @@ func TestLauncherBalancesCredentialChangesWhenReferenceRotates(t *testing.T) {
 	if second[0].BalanceCredential != hex.EncodeToString(want2[:]) {
 		t.Fatalf("rotated credential=%q want=%q", second[0].BalanceCredential, hex.EncodeToString(want2[:]))
 	}
+	if second[0].BalanceSealedCredential != sealedCredential(sealedBefore) {
+		t.Fatalf("rotated sealed credential=%q want=%q", second[0].BalanceSealedCredential, sealedCredential(sealedBefore))
+	}
 	if second[0].BalanceCredential == first[0].BalanceCredential {
 		t.Fatalf("rotating a reference must change BalanceCredential: %q", second[0].BalanceCredential)
 	}
@@ -386,16 +411,31 @@ func TestLauncherBalancesCredentialChangesWhenReferenceRotates(t *testing.T) {
 		t.Fatalf("BalanceCredential must never carry a key: %q", second[0].BalanceCredential)
 	}
 
-	// If the reference later fails to resolve, the fallback sealed digest is still distinct from resolved keys.
+	// Replacing the sealed reference itself with a different reference that then fails to resolve changes
+	// BalanceSealedCredential while leaving BalanceCredential empty.
 	vault.mu.Lock()
-	delete(vault.values, ref)
+	vault.values[ref2] = "sk-deepseek-replacement-0003"
 	vault.mu.Unlock()
-	broken, known := s.LauncherBalances(ctx)
-	if !known || len(broken) != 1 || broken[0].Balance != nil || broken[0].Problem != "failed" {
-		t.Fatalf("broken reference read: known=%v %+v", known, broken)
+	if code, raw := launcherCall(t, mux, "PUT", "/api/v1/launchers/deepseek",
+		`{"base_url":"https://api.deepseek.com/anthropic","model":"deepseek-v4-pro","api_key_reference":"`+ref2+`"}`); code != 200 {
+		t.Fatal(code, raw)
 	}
-	if broken[0].BalanceCredential != sealedCredential(sealedBefore) || broken[0].BalanceCredential == second[0].BalanceCredential {
-		t.Fatalf("broken fallback credential=%q want=%q", broken[0].BalanceCredential, sealedCredential(sealedBefore))
+	vault.mu.Lock()
+	delete(vault.values, ref2)
+	vault.mu.Unlock()
+	storedReplaced := s.storedLaunchers(ctx)
+	if len(storedReplaced) != 1 || storedReplaced[0].KeySealed == "" || storedReplaced[0].KeySealed == sealedBefore {
+		t.Fatalf("replaced stored launcher: %+v", storedReplaced)
+	}
+	replaced, known := s.LauncherBalances(ctx)
+	if !known || len(replaced) != 1 || replaced[0].Balance != nil || replaced[0].Problem != "failed" {
+		t.Fatalf("replaced reference read: known=%v %+v", known, replaced)
+	}
+	if replaced[0].BalanceCredential != "" {
+		t.Fatalf("replaced unopenable read must leave BalanceCredential empty, got %q", replaced[0].BalanceCredential)
+	}
+	if replaced[0].BalanceSealedCredential != sealedCredential(storedReplaced[0].KeySealed) || replaced[0].BalanceSealedCredential == first[0].BalanceSealedCredential {
+		t.Fatalf("replaced sealed credential=%q want=%q (distinct from %q)", replaced[0].BalanceSealedCredential, sealedCredential(storedReplaced[0].KeySealed), first[0].BalanceSealedCredential)
 	}
 }
 

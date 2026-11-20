@@ -92,7 +92,16 @@ func (s *Service) LauncherBalances(ctx context.Context) (accounts []proto.UsageA
 		if name == "" {
 			name = l.Name
 		}
-		sample := proto.UsageAccount{Provider: "deepseek", Name: name, Ref: "balance:" + l.Name}
+		sealed := make([]string, 0, len(candidates))
+		for _, c := range candidates {
+			sealed = append(sealed, c.sealed)
+		}
+		sample := proto.UsageAccount{
+			Provider:                "deepseek",
+			Name:                    name,
+			Ref:                     "balance:" + l.Name,
+			BalanceSealedCredential: sealedCredential(sealed...),
+		}
 		// The first key that opens wins: a corrupt or unresolvable key on the first computer must not hide a usable
 		// one on the next.
 		key := ""
@@ -112,11 +121,9 @@ func (s *Service) LauncherBalances(ctx context.Context) (accounts []proto.UsageA
 			// turning a key away. One row per broken key, so two launchers sharing one emit it once.
 			fresh := false
 			digests := make([][sha256.Size]byte, 0, len(candidates))
-			sealed := make([]string, 0, len(candidates))
 			for _, c := range candidates {
 				d := sha256.Sum256([]byte(c.sealed))
 				digests = append(digests, d)
-				sealed = append(sealed, c.sealed)
 				if !broken[d] {
 					fresh = true
 				}
@@ -128,7 +135,9 @@ func (s *Service) LauncherBalances(ctx context.Context) (accounts []proto.UsageA
 				continue
 			}
 			sample.Problem = "failed"
-			sample.BalanceCredential = sealedCredential(sealed...)
+			// Leave BalanceCredential empty so usageBalances compares BalanceSealedCredential instead: unchanged
+			// sealed material keeps the last known amount marked stale, while genuinely replaced sealed material
+			// clears it.
 			accounts = append(accounts, sample)
 			continue
 		}
@@ -175,9 +184,9 @@ func (s *Service) LauncherBalances(ctx context.Context) (accounts []proto.UsageA
 	return accounts, true
 }
 
-// sealedCredential is the non-secret fallback digest carried only when a launcher's keys could not be opened. Openable
-// keys carry the hex SHA-256 digest of the resolved key instead, so a rotated secret reference changes the credential
-// identity even when the sealed reference bytes do not change.
+// sealedCredential is the non-secret digest of a launcher's sealed key material, tracked separately from the
+// resolved-key digest (BalanceCredential) so a temporary open/resolution failure of unchanged sealed material retains
+// the last known balance while genuinely replaced sealed material clears it.
 func sealedCredential(sealed ...string) string {
 	h := sha256.New()
 	for _, s := range sealed {
