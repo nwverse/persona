@@ -27,6 +27,8 @@ var launcherCache struct {
 	fetching   bool               // a background refresh (cachedLaunchers) is running
 	// codex: how each Codex launcher runs (codex_start.go), its words as the shell would run them.
 	codex map[string][]string
+	// codexAliases distinguishes configured aliases from the plain PATH/bundled launchers, even when their argv matches.
+	codexAliases map[string]bool
 	// settings: the --settings a claude alias brings itself, as its words give it (launcher_settings.go).
 	settings map[string]string
 	// scripts: where each wrapper script on PATH is (pathlaunchers.go).
@@ -132,8 +134,10 @@ func (n *Node) launchers(ctx context.Context, refresh ...bool) ([]proto.Launcher
 			return nil, err
 		}
 		list, codex, settings, scripts := mergeLaunchers(string(out))
+		aliases := codexAliasNames(string(out))
 		launcherCache.Lock()
 		launcherCache.at, launcherCache.list, launcherCache.codex, launcherCache.settings = time.Now(), list, codex, settings
+		launcherCache.codexAliases = aliases
 		launcherCache.scripts = scripts
 		launcherCache.generation++
 		current = discovery{list: list, generation: launcherCache.generation}
@@ -288,6 +292,23 @@ func mergeLaunchers(out string) (list []proto.Launcher, codex map[string][]strin
 		}
 	}
 	return list, codex, settings, scripts
+}
+
+// codexAliasNames keeps the provenance mergeLaunchers' argv map alone cannot carry:
+// a configured no-op alias and the plain PATH launcher both have the words ["codex"].
+func codexAliasNames(out string) map[string]bool {
+	body, _ := launcherOutput(out)
+	_, rest, _ := strings.Cut(body, "\x1d")
+	aliases, _, _ := strings.Cut(rest, "\x1d")
+	if a, ok := strings.CutPrefix(aliases, bashAliasMark); ok {
+		aliases = bashAliases(a)
+	}
+	_, words := parseCodexAliases(aliases)
+	names := make(map[string]bool, len(words))
+	for name := range words {
+		names[name] = true
+	}
+	return names
 }
 
 // cachedLaunchers never waits for the login shell: it returns the last list (possibly stale, nil before the first

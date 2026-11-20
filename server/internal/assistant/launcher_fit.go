@@ -178,6 +178,22 @@ func launcherKindSnapshot(discovered, overrides []ConfiguredLauncher, name strin
 	return kind
 }
 
+// configuredStartAgentLookup applies hub overrides and compatibility defaults once for an inventory, then resolves
+// names without another machine read. Both the real fit and candidate previews use this same metadata.
+func configuredStartAgentLookup(discovered, overrides []ConfiguredLauncher) func(string) startAgent {
+	configured := sessionLaunchers(discovered, overrides)
+	return func(name string) startAgent {
+		for _, l := range configured {
+			if l.Name == name {
+				a := launcherStartAgent(l)
+				a.snapshot = launcherKindSnapshot(discovered, overrides, name)
+				return a
+			}
+		}
+		return startAgent{}
+	}
+}
+
 // allowAll: the Agents Persona itself starts on the launcher (agent_start, a planned task, a read-only one too) run with
 // Allow all, bypassPermissions: Claude Code's, and, by the owner's decision (#8141), those whose approval is a switch
 // Allow all turns on (Paseo's providers with Auto Accept: Grok and its other ACP providers, OpenCode), which otherwise
@@ -223,17 +239,7 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 		discovered = append(discovered, ConfiguredLauncher{Launcher: l})
 	}
 	overrides := s.hello(ctx).Models.Launchers[m.ID]
-	configured := sessionLaunchers(discovered, overrides)
-	agentOf := func(name string) startAgent {
-		for _, l := range configured {
-			if l.Name == name {
-				a := launcherStartAgent(l)
-				a.snapshot = launcherKindSnapshot(discovered, overrides, name)
-				return a
-			}
-		}
-		return startAgent{}
-	}
+	agentOf := configuredStartAgentLookup(discovered, overrides)
 	if slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name }) {
 		return "", agentOf(name), nil
 	}
