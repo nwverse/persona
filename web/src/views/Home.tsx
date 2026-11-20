@@ -378,7 +378,7 @@ function TaskCard({ task, machine }: { task: HomeTask; machine: (mid: string) =>
         {todo.kind === "concern" && <Tag><span data-testid="todo-concern">{t("todos.concern")}</span></Tag>}
         <span className={cx("inline-flex h-5 shrink-0 items-center rounded-full bg-field px-1.5 text-[11px] font-medium whitespace-nowrap", TODO_TONE_CLASS[look.tone])} data-testid="task-status">{look.label}</span>
       </div>
-      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} />
+      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} done={todo.stage_done} />
       {/* the lines under the stage bar sit at the card's bottom, so a row of cards of one height lines up */}
       {(line || orphan) && (
         <div className="mt-auto flex flex-col gap-2">

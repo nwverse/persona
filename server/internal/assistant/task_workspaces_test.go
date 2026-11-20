@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
@@ -205,7 +206,7 @@ func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &first) != nil || first.State != "preparing" || first.WorkspaceID == lateFirst.WorkspaceID || first.Plan.Source.MachineID != "box" || first.Error == nil || first.Error.Code != "operation_unknown" {
 		t.Fatal(w.Code, w.Body)
 	}
-	restarted := newServiceOn(t, f, database)
+	restarted := newKBServiceOn(t, f, s.store())
 	restartTransport := &heldWorkspacePrepareHub{Hub: f}
 	setHub(restarted, restartTransport)
 	view, err := restarted.InspectBackendWorkspace(t.Context(), id, "op_example")
@@ -361,8 +362,30 @@ func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 		id := created.Todo.ID
 		in := next
 		in.OperationID = "op_manual"
+		in.Layout = "container"
 		if err := restarted.ensureBackendWorkspacePlan(t.Context(), id, in); err != nil {
 			t.Fatal(err)
+		}
+		naming, err := restarted.store().(workspaceNamingStore).WorkspaceNamingPlanForSave(t.Context(), id, in.OperationID)
+		if err != nil || naming == nil || len(naming.Repositories) != 1 {
+			t.Fatalf("missing container repository: %v, %v", naming, err)
+		}
+		e := kbEng(t, restarted)
+		for _, project := range []struct {
+			slug, summary string
+			dirs          []string
+		}{
+			{slug: "todo-project", summary: "Explicit todo project background"},
+			{slug: "repo-project", summary: "Repository project background", dirs: []string{"box:" + naming.Repositories[0].AbsolutePath}},
+		} {
+			if _, err := e.Apply(kb.KindProject, project.slug, kb.Update{
+				Dirs: project.dirs, Log: kb.TodoOutcomePrefix + project.summary, Source: kb.TodoLogSource + "Example",
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if edit := placeDo(restarted, "", "PATCH", "/api/v1/todos/"+id, `{"project":"todo-project"}`); edit.Code != 200 {
+			t.Fatal(edit.Code, edit.Body)
 		}
 		physical = nil
 		f.nodes[devicewire.MethodStartBackendSession] = func(machine string, raw json.RawMessage) (any, error) {
@@ -373,6 +396,11 @@ func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 			}
 			if err := json.Unmarshal(raw, &in); err != nil || in.Workspace.Plan.Source.TodoID != id || in.Cwd != in.Workspace.Plan.RootPath || !strings.Contains(in.Prompt, "resolved_commit") {
 				return nil, errors.New("bad manual handoff")
+			}
+			for _, want := range []string{"Explicit todo project background", "Repository project background"} {
+				if count := strings.Count(in.Prompt, want); count != 1 {
+					t.Errorf("manual handoff contains %q %d times, want once", want, count)
+				}
 			}
 			dispatched++
 			row := proto.Session{SessionID: "manual_session", MachineID: machine, Cwd: in.Cwd, Agent: "claude", Status: proto.StatusIdle}
