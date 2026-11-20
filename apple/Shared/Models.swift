@@ -32,6 +32,8 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     var canDeploy: Bool? = nil
     var deployReason: String? = nil
     var deployPhase: String? = nil
+    /// Switching this SSH computer to Persona Link (#10662); nil from older hubs and managers.
+    var linkSwitch: MachineLinkSwitch? = nil
     /// OS and hardware (docs/server/machines.md); nil from hubs before machine monitoring, or a machine never connected.
     var system: MachineSystem?
     var engine: MachineEngine = .herdr
@@ -75,6 +77,7 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
         case sshHost = "ssh_host", herdrVersion = "herdr_version", claudeVersion = "claude_version", lastSeen = "last_seen"
         case nodeMismatch = "node_mismatch", nodeVersion = "node_version", deploying, deployError = "deploy_error"
         case canDeploy = "can_deploy", deployReason = "deploy_reason", deployPhase = "deploy_phase"
+        case linkSwitch = "link_switch"
         case hubID = "hub_id", hubName = "hub_name", machineUID = "machine_uid", hubGroup = "app_hub_group",
              groupLabel = "app_group_label"
     }
@@ -85,6 +88,32 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
         case "desktop": Theme.Icon.machine
         default: Theme.Icon.laptop
         }
+    }
+}
+
+/// An SSH computer's eligibility for, or progress through, the hub-owned switch to Persona Link (#10662).
+/// `phase` and the reason/error codes stay as wire words so newer hubs remain decodable; clients localize them.
+nonisolated struct MachineLinkSwitch: Codable, Hashable, Sendable {
+    var available: Bool
+    var reason: String?
+    var phase: String?
+    var error: String?
+    var rollbackUnconfirmed: Bool?
+    var at: Date?
+
+    init(available: Bool, reason: String? = nil, phase: String? = nil, error: String? = nil,
+         rollbackUnconfirmed: Bool? = nil, at: Date? = nil) {
+        self.available = available
+        self.reason = reason
+        self.phase = phase
+        self.error = error
+        self.rollbackUnconfirmed = rollbackUnconfirmed
+        self.at = at
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case available, reason, phase, error, at
+        case rollbackUnconfirmed = "rollback_unconfirmed"
     }
 }
 
@@ -113,6 +142,7 @@ extension Machine {
         canDeploy = try c.decodeIfPresent(Bool.self, forKey: .canDeploy)
         deployReason = try c.decodeIfPresent(String.self, forKey: .deployReason)
         deployPhase = try c.decodeIfPresent(String.self, forKey: .deployPhase)
+        linkSwitch = try? c.decodeIfPresent(MachineLinkSwitch.self, forKey: .linkSwitch)
         system = try c.decodeIfPresent(MachineSystem.self, forKey: .system)
         engine = try c.decodeIfPresent(MachineEngine.self, forKey: .engine) ?? .herdr
         engines = try c.decodeIfPresent([DetectedEngine].self, forKey: .engines) ?? []
@@ -174,6 +204,13 @@ nonisolated extension Machine {
     /// Added but never online once (`never_connected`, or waiting with no `last_seen`): not Offline, it was never there.
     var neverConnected: Bool {
         !online && (errorCode == "never_connected" || (isPending && (lastSeen?.timeIntervalSince1970 ?? 0) <= 0))
+    }
+    /// Its disconnect is expected while the hub moves it from SSH to Persona Link, not a new connection failure.
+    var linkSwitchRunning: Bool {
+        switch linkSwitch?.phase {
+        case "checking", "installing", "connecting", "rolling_back": true
+        default: false
+        }
     }
 }
 

@@ -769,7 +769,11 @@ answers as before. The domains on the registry are desktop registration (`script
 sign-ins and thread page (`scripts/mock/github_mock.py`), Settings › Knowledge selection (`scripts/mock/kb_selection_mock.py`)
 and mail's accounts and write paths (`scripts/mock/mail_mock.py`), moved out of `mock_hub.py` in #11543, and the hub's own
 update (`scripts/mock/hub_update_mock.py`), Messages' reader (`scripts/mock/imessage_mock.py`; its connector stays in
-`mock_hub.py`) and Settings › Saved Prompts (`scripts/mock/saved_prompts_mock.py`), moved in #11649.
+`mock_hub.py`) and Settings › Saved Prompts (`scripts/mock/saved_prompts_mock.py`), moved in #11649. The opt-in SSH → Persona
+Link scenarios live in `scripts/mock/link_switch_mock.py` (#10671): `MOCK_LINK_SWITCH=1` makes `server` an eligible Linux SSH
+computer, and `GET /mock/link_switch?state=available|checking|installing|connecting|rolling_back|succeeded|failed|unconfirmed|unavailable|refused|forbidden|uncertain|hold|old`
+changes the fixture and pushes the machine list. `hold` keeps the POST answer out until `?release=1`; the no-query response reports
+the state and start-attempt count. With the switch off, existing mock screens do not change.
 `scripts/mock/test_mock_domains.py` checks every hook against a running mock. A block that moves out of `mock_hub.py` lists
 the names it took in that test's `MOVED`: a branch from before the move that kept the old block when it resolved its conflict
 then fails there, with the module to edit instead
