@@ -206,16 +206,19 @@ Ledger for tasks supervised by the main chat (#3124, `docs/assistant/unified-ent
 ### 6. task_briefs and task_brief_todos tables
 A task's brief (#3822, `docs/assistant/unified-entry.md`, "Briefs"): what was asked when the work was handed out.
 - `task_briefs`: `id` (text, PK), `brief` (jsonb, written once: the owner's message, who started it, goal, `done_when`,
-  `expect_minutes`, `out_of_bounds`), `state` (jsonb: the log of scope changes and overdue marks, the result),
-  `created_at`, `updated_at`. Nothing rewrites `brief`; `done_when` in effect is the brief's as its logged scope changes
-  left it, and a supervised task's `todo_supervision.done_when` carries the same list.
+  `expect_minutes`, `estimate_source`, `out_of_bounds`), `state` (jsonb: the log of dispatches, scope changes,
+  completions, estimate_due and overdue marks, the result), `created_at`, `updated_at`. Nothing rewrites `brief`;
+  `done_when` in effect is the brief's as its logged scope changes left it, and a supervised task's
+  `todo_supervision.done_when` carries the same list. These are JSON additions, so automatic estimates need no SQL migration;
+  pre-feature records with no estimate source stay outside the automatic clock.
 - `task_brief_todos`: `todo_id` (text, PK, FK → `todos(id)` ON DELETE CASCADE), `brief_id` (FK → `task_briefs(id)`),
   `continues` (the to-do it took the work over from), `reason`, `linked_at`. A brief's rows in `linked_at` order are its
   lineage.
 
 `GET /api/v1/todos` carries both on a to-do that has a brief: `brief` (the record, its `log`, `criteria` and
-`expect_minutes_now` in effect, `clock_at`, `due_at`, `overdue_at`, `result`) and `lineage`. A task from before briefs
-gets a reconstructed one lazily.
+`expect_minutes_now` in effect, `estimate_source_now`, `estimate_clock_at`, `estimate_due_at`,
+`estimate_due_told_at`, the latest `actual_minutes` and `completion_reported_at`, `clock_at`, `due_at`, `overdue_at`,
+`result`) and `lineage`. A task from before briefs gets a reconstructed one lazily.
 
 ### 7. todo_imports table
 To-dos imported from another app (#4009, "Imported from Reminders" below). Migration `0499` (manager side).
@@ -853,6 +856,20 @@ with the reason. A receiving Agent stopping by itself leaves the wait in place. 
 originating to-do end the old wait. Owner decisions and acceptance keep their existing handling.
 
 ## Parked tasks
+
+**External PR events (#9775).** On an `external_event` park, set `evidence.pr_event` to `terminal` when merge or
+closure ends the wait, or to `terminal_or_review` when a new submitted review also ends it. Set `evidence.url`
+to that GitHub PR. A PR link used as context for another dependency keeps its timed recheck. Existing records
+without `pr_event` can opt in when the supervisor confirms the condition and records a new park.
+
+The existing minute PR pass can add this exact source to its bounded sample even for a task with no stage PR.
+It uses the ten-minute attempt/fact throttle. Terminal state can be confirmed on the first fresh read.
+A review must name the current head and have a provider ID and submission time after the current park.
+Approvals, requests for changes and comments submitted as reviews are read from the existing bounded review page.
+The manager rechecks the task, captured park and latest observation before committing `external_pr` and
+`pending_review` together. The review signal goes to the current supervisor, who still checks the task criteria.
+Failed writes can be retried. The watch recovers a committed wake after a restart, with one delivery per park.
+The existing ready `merge_review` path still gates terminal wakes on the task's sampled PRs.
 
 (#3804, `assistant/parked.go`, `assistant/park_evidence.go`.) Parking is for an evidenced external wait, not a way to defer work or ask the owner a question. A new park must say what is awaited and include source-backed evidence.
 

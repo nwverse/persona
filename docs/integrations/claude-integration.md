@@ -404,6 +404,13 @@ running Agent to another provider".
   its turn ended) is not started: `session.switch` with `launcher` points its record at the new launcher and model, so
   its next Resume, or the message that resumes it, comes up there ("switched (takes effect when resumed)"). A switch
   that fails on the node (it did not come up and rolled back) is reported as refused with its reason and not retried.
+- **An agent off its launcher** (`off_launcher`, #11792): a Persona Agent whose claude runs without Persona's start
+  command (herdr's bare `claude --resume <id>` after a restart on herdr older than 0.9.2) does not run on the launcher
+  its row names. `agents_list` says so after `launcher=`, and a switch to that launcher (`agent_switch`, `agents_switch`,
+  the chat's pick) moves it back there rather than being refused as one it runs on already; `agent_switch` does not take
+  such a pick back when its message fails, since picking the agent's own launcher is the switch back (a switch to
+  another launcher it does take back: with that switch waiting, the own launcher's pick cancels it). Busy, it is
+  queued and switched back when its turn ends.
 - **A busy agent is not switched**: one that works, waits for the user, is starting, or has background work a quit
   would end gets the message on its launcher as always, and the switch waits for a later message. Background work is the
   row's (running subagents and workflows, a `/loop`) and every background command or monitor of its claude process,
