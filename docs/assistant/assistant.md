@@ -2281,20 +2281,32 @@ rule must set something; a rule whose `then` names nothing is refused.
 is in `docs/protocol/protocol.md` ("Start defaults"). On the wire the rule's match is `applies_when` and its preset
 list `then.candidates`, each candidate `{"name","priority"?,"weight"?}`; the pre-convergence names `when` and
 `presets` are still accepted on every decode (stored policies included), reads answer both names with the same values,
-and a body whose two names disagree is refused (#11719).
+and a body whose two names disagree is refused (#11719). Candidate names are trimmed of surrounding whitespace before
+validation and storage, so the dual-name read remains writable under the same body limit. Candidate names containing NUL are refused before storage.
 `POST /api/v1/assistant/start-defaults/preview` (same scope, read-only) answers what a policy would do for a task
 without doing any of it: the rule that fits (an omitted `task.role` is `worker`), the winning priority group's usable
-candidates and the passed-over reasons, the extras, and which of them the caller's own values win. Goal, effort and
-ultracode follow the same rules a real start applies to the `agent` in the body (default `claude`): effort and
-ultracode only for Claude Code, the goal through `startGoalSource` (so a rule's goal with no criteria sets nothing,
-and a new Codex start takes the default goal exactly when no rule names one). It runs the same matching and candidate
-selection as a real start and writes nothing — a draft policy in the body is only validated, never stored.
+candidates and the passed-over reasons (each with the agent its own launcher runs), the extras, and which of them the
+caller's own values win where the rule actually offers them. The illustrative start uses the same read-only
+resolve → machine fit → speed validation as a real plan edit, including explicit-hidden launcher metadata and machine
+fallback, never a free-form agent input; goal, effort and ultracode follow the fitted agent: effort and ultracode only
+for Claude Code, the goal through `startGoalSource` (so a rule's goal with no criteria sets nothing, and a new Codex
+start takes the default goal exactly when no rule names one and `defaultGoalRefusedOn` does not exclude that launcher).
+`caller.effort` is checked against the fitted agent's vocabulary, so Codex's `minimal` and `ultra` remain valid; a
+launcher whose agent the hub cannot tell (no live list, nothing last seen) is not assumed to be Claude Code and takes
+any Claude Code or Codex level, as the real start sends it unchanged and the node checks it. A rule's
+`ultracode: false` is never applied, so the preview leaves it out. Deterministic resolve/fit refusals are 400, with coded
+refusals keeping their code and data; operational store/configuration read failures are 500. An empty `rules` draft
+previews the no-policy start without clearing the stored policy. It runs the same matching and candidate selection as
+a real start and writes nothing — a draft policy in the body is only validated, never stored.
 
 - **Candidate source** (`internal/assistant/start_candidates.go`): selection reads one small interface,
-  `startCandidateSource`, which answers each preset's availability and reason on a machine. The built-in source reads
-  the active model profile with the machine's launcher list and health, the same data `GET worker-presets` serves, so
-  a preview and a start cannot disagree. A dynamic candidates source implements that interface and is set on the
-  Service at construction; rule matching, priority/weight selection and the per-try retry reset do not change.
+  `startCandidateSource`, which answers only the rule's requested presets with their availability, reason and real
+  launcher-agent metadata on a machine. The built-in source reads the active model profile with the machine's launcher
+  list and health, the same data `GET worker-presets` serves, so a preview and a start cannot disagree. One ordinary
+  inventory read covers visible candidates; each distinct requested hidden launcher gets at most one unhidden read per
+  evaluation, with usability and metadata cached per launcher for that evaluation only. A dynamic candidates source
+  implements that interface and is set on the Service at construction; rule matching, priority/weight selection and
+  the per-try retry reset do not change.
 
 - **Matching**, first rule that fits wins (the goal alone is decided apart, below): `supervisor` names the class of the
   conversation that follows the task up, with the dispatch policy's classes (`main`, `leader`, `background_supervisor`,

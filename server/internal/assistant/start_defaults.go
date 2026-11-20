@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -130,8 +131,10 @@ func (r *StartDefaultsRule) UnmarshalJSON(data []byte) error {
 	switch hasWhen, hasApplies := len(raw.When) > 0, len(raw.AppliesWhen) > 0; {
 	case hasWhen && hasApplies:
 		// Both names are normal: the GET answer and a stored policy carry both, and they must read back unchanged.
-		// An explicit null under either name still reaches this branch, so a null beside a real match is refused
-		// rather than silently treated as the other name.
+		// Null is not the same wire value as an empty object, even though both decode to the zero match.
+		if rawJSONNull(raw.When) != rawJSONNull(raw.AppliesWhen) {
+			return i18n.ErrEnglish("assistant-start_defaults.alias_match_conflict")
+		}
 		var w, aw StartDefaultsMatch
 		if err := strictJSON(raw.When, &w); err != nil {
 			return err
@@ -140,7 +143,7 @@ func (r *StartDefaultsRule) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		if !reflect.DeepEqual(w, aw) {
-			return errors.New("when and applies_when disagree; name one match")
+			return i18n.ErrEnglish("assistant-start_defaults.alias_match_conflict")
 		}
 		r.When = aw
 	case hasApplies:
@@ -169,6 +172,36 @@ type StartDefaultsMatch struct {
 	Supervisor []string `json:"supervisor,omitempty"`
 	Role       string   `json:"role,omitempty"`
 	Readonly   *bool    `json:"readonly,omitempty"`
+}
+
+// UnmarshalJSON validates the match strictly and normalizes supervisor to its distinct classes, first-seen order
+// kept: the classes are a set, so a duplicate carries no meaning, and accepting rather than rejecting a repeated
+// class while storing it once keeps every accepted policy's dual-name read inside the write body limit.
+func (m *StartDefaultsMatch) UnmarshalJSON(data []byte) error {
+	type plain StartDefaultsMatch
+	var raw plain
+	if err := strictJSON(data, &raw); err != nil {
+		return err
+	}
+	*m = StartDefaultsMatch(raw)
+	m.Supervisor = distinctStrings(m.Supervisor)
+	return nil
+}
+
+// distinctStrings returns the values with duplicates dropped, first-seen order kept.
+func distinctStrings(in []string) []string {
+	if len(in) == 0 {
+		return in
+	}
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // StartDefaultsThen is what a matching task starts with; every field is opt-in.
@@ -200,6 +233,9 @@ func (t *StartDefaultsThen) UnmarshalJSON(data []byte) error {
 	*t = StartDefaultsThen{Effort: raw.Effort, Ultracode: raw.Ultracode, Goal: raw.Goal, PlanFirst: raw.PlanFirst}
 	switch hasPresets, hasCandidates := len(raw.Presets) > 0, len(raw.Candidates) > 0; {
 	case hasPresets && hasCandidates:
+		if rawJSONNull(raw.Presets) != rawJSONNull(raw.Candidates) {
+			return i18n.ErrEnglish("assistant-start_defaults.alias_candidates_conflict")
+		}
 		var p, c []StartDefaultsPreset
 		if err := strictJSON(raw.Presets, &p); err != nil {
 			return err
@@ -208,7 +244,7 @@ func (t *StartDefaultsThen) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		if !reflect.DeepEqual(p, c) {
-			return errors.New("presets and candidates disagree; name one candidate list")
+			return i18n.ErrEnglish("assistant-start_defaults.alias_candidates_conflict")
 		}
 		t.Presets = c
 	case hasCandidates:
@@ -219,6 +255,11 @@ func (t *StartDefaultsThen) UnmarshalJSON(data []byte) error {
 		if err := strictJSON(raw.Presets, &t.Presets); err != nil {
 			return err
 		}
+	}
+	// Compare aliases before canonicalizing, so padded and unpadded aliases still disagree. Once one list is chosen,
+	// store the same name validation and selection already use; unbounded outer whitespace cannot double on a read.
+	for i := range t.Presets {
+		t.Presets[i].Name = strings.TrimSpace(t.Presets[i].Name)
 	}
 	return nil
 }
@@ -233,6 +274,11 @@ func (t StartDefaultsThen) MarshalJSON() ([]byte, error) {
 		Goal       string                `json:"goal,omitempty"`
 		PlanFirst  bool                  `json:"plan_first,omitempty"`
 	}{t.Presets, t.Presets, t.Effort, t.Ultracode, t.Goal, t.PlanFirst})
+}
+
+// rawJSONNull distinguishes an explicit JSON null from every non-null value before decoded equality is considered.
+func rawJSONNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
 // strictJSON decodes data into out refusing unknown fields, for the custom unmarshalers above (a decoder's
@@ -264,6 +310,10 @@ func (p *StartDefaultsPolicy) validate(allowNoExpiry bool, now time.Time) error 
 		if len(r.Then.Presets) == 0 && r.Then.Effort == "" && r.Then.Ultracode == nil && r.Then.Goal == "" && !r.Then.PlanFirst {
 			return fmt.Errorf("%s.then must name at least one of candidates, effort, ultracode, goal or plan_first", at)
 		}
+		if len(r.When.Supervisor) > len(dispatchClasses) {
+			// UnmarshalJSON already dedupes, so this is a defensive bound on the distinct classes a rule may name.
+			return fmt.Errorf("%s.applies_when.supervisor has %d entries; at most the %d distinct classes", at, len(r.When.Supervisor), len(dispatchClasses))
+		}
 		for _, c := range r.When.Supervisor {
 			if !slices.Contains(dispatchClasses, c) {
 				return fmt.Errorf("%s.applies_when.supervisor has %q; allowed: %v", at, c, dispatchClasses)
@@ -282,7 +332,7 @@ func (p *StartDefaultsPolicy) validate(allowNoExpiry bool, now time.Time) error 
 			return fmt.Errorf("%s.then.candidates has %d entries; at most %d", at, len(r.Then.Presets), startDefaultsMaxPresets)
 		}
 		for j, pr := range r.Then.Presets {
-			if n := utf8.RuneCountInString(strings.TrimSpace(pr.Name)); n == 0 || n > 64 {
+			if n := utf8.RuneCountInString(strings.TrimSpace(pr.Name)); n == 0 || n > 64 || strings.ContainsRune(pr.Name, '\x00') {
 				return fmt.Errorf("%s.then.candidates[%d].name must be 1 to 64 characters", at, j)
 			}
 			if pr.Weight < 0 || pr.Weight > startDefaultsMaxWeight {
@@ -572,36 +622,52 @@ func defaultGoalRefusedOn(m Device, params map[string]any, agent startAgent) boo
 // still gets tried, the way an ordinary default does). Omitted priorities are all 0, one group, the pre-priority
 // behavior. It reads and writes nothing of the task, so a preview shares this exact path.
 func (s *Service) chooseStartPreset(ctx context.Context, machine string, choices []PresetChoice) (name, note string, found bool) {
-	source, err := s.candidateSource().candidates(ctx, machine)
+	source, err := s.candidateSource().candidates(ctx, machine, requestedStartCandidateNames(choices))
 	if err != nil {
 		return "", "", false
 	}
 	usable, skipped := usablePresets(choices, source)
 	if len(usable) == 0 {
-		return "", strings.Join(skipped, "; "), false
+		return "", joinSkipped(skipped), false
 	}
 	pick := weightedPreset(presetIntN, usable)
 	note = "preset " + pick.Name
 	if len(skipped) > 0 {
-		note += " (passed over: " + strings.Join(skipped, "; ") + ")"
+		note += " (passed over: " + joinSkipped(skipped) + ")"
 	}
 	return pick.Name, note, true
 }
 
+// skippedPreset is one candidate a rule passed over, with its name and reason kept apart, so a structured reader
+// (the preview) never has to split them back out of a display string — a legal name may itself contain ": ".
+type skippedPreset struct {
+	Name   string
+	Reason string
+}
+
+// joinSkipped renders the skipped presets for a task's why: "name: reason", in the order they were passed over.
+func joinSkipped(skipped []skippedPreset) string {
+	parts := make([]string, 0, len(skipped))
+	for _, s := range skipped {
+		parts = append(parts, s.Name+": "+s.Reason)
+	}
+	return strings.Join(parts, "; ")
+}
+
 // usablePresets splits the choices into those the source says can start now, in their stated order with weight 0
 // read as 1, and the reasons the rest were passed over. An empty or unreadable source leaves nothing usable.
-func usablePresets(choices []PresetChoice, source map[string]startCandidate) (usable []PresetChoice, skipped []string) {
+func usablePresets(choices []PresetChoice, source map[string]startCandidate) (usable []PresetChoice, skipped []skippedPreset) {
 	for _, c := range choices {
 		if c.Name == "" {
 			continue
 		}
 		cand, ok := source[c.Name]
 		if !ok {
-			skipped = append(skipped, c.Name+": unknown preset")
+			skipped = append(skipped, skippedPreset{Name: c.Name, Reason: "unknown preset"})
 			continue
 		}
 		if !cand.Available {
-			skipped = append(skipped, c.Name+": "+cand.Reason)
+			skipped = append(skipped, skippedPreset{Name: c.Name, Reason: cand.Reason})
 			continue
 		}
 		usable = append(usable, PresetChoice{Name: c.Name, Priority: c.Priority, Weight: max(c.Weight, 1)})
