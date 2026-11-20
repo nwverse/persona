@@ -524,3 +524,15 @@ it("holds a row's answers while an answer to its card is on its way, given here 
   await sent;
   expect(held(render([], [card]))).toEqual([false, false]);
 });
+
+it("lets a card's kicker yield to its title on a phone, its words whole in its tooltip (#11442)", () => {
+  const a = agent(1, 0, "needs_you");
+  const html = render([a], [{ id: "p", kind: "permission", machine_id: "mac", session_id: a.session_id, tool_name: "Bash", tool_input: { command: "swift test" } } as Interaction]);
+  const words = t("todos.kicker_permission");
+  const m = new RegExp(`<span title="${words}" class="([^"]*)"><span class="truncate">${words}</span></span>`).exec(html);
+  expect(m, "the kicker pill").toBeTruthy();
+  const classes = m![1]!.split(" ");
+  // on a phone it grows from an equal start with the title, only up to its words; wider, it stays its words' width
+  expect(classes).toEqual(expect.arrayContaining(["shrink-0", "max-sm:min-w-0", "max-sm:flex-1", "max-sm:max-w-max"]));
+  expect(classes.filter((c) => /^(?:flex-|grow|basis-|max-w-|min-w-)/.test(c))).toEqual([]);
+});

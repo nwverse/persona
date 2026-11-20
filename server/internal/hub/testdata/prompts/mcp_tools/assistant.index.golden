@@ -15,6 +15,7 @@ cancel_followup
 list_places
 save_place
 machines_list
+machine_redeploy
 agents_list
 agent_read
 agent_send
