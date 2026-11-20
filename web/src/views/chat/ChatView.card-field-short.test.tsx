@@ -43,6 +43,7 @@ const question = {
 
 let host: HTMLDivElement;
 let root: Root;
+let fetcher: ReturnType<typeof vi.fn>;
 const flush = async () => {
   for (let i = 0; i < 6; i++) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 };
@@ -54,6 +55,12 @@ const folded = () => {
   expect(line).toBe(hidden);
   return line;
 };
+const type = (el: HTMLInputElement, text: string) => act(() => {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, text);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+});
+const sendArrow = () => host.querySelector<HTMLButtonElement>(`[data-pending-card] button[aria-label="${t("chat-interactions.send_answer")}"]`);
+const resolves = () => fetcher.mock.calls.filter(([url]) => String(url).endsWith(`/interactions/${question.id}/resolve`));
 const setShort = (short: boolean) => act(() => {
   media.short = short;
   media.listeners.forEach((l) => l());
@@ -66,7 +73,8 @@ beforeEach(() => {
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 0));
   upsertSession({ machine_id: "hub", session_id: "c1", title: "Persona", status: "working", state: "needs_you", assistant: true, agent: "claude" } as Session);
   Object.assign(getState(), { interactions: [question], answered: {} });
-  vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } })));
+  fetcher = vi.fn(async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+  vi.stubGlobal("fetch", fetcher);
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -97,6 +105,56 @@ describe("a waiting card's own field on a page the keyboard made short", () => {
     act(() => input.blur());
     await flush();
     expect(folded()).toBe(true);
+  });
+
+  it("keeps the card while the focus moves to its own send arrow, so the tap answers it", async () => {
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
+    await flush();
+    const input = field()!;
+    act(() => input.focus());
+    await type(input, "Next Monday");
+    setShort(true);
+    await flush();
+    // the tap focuses the arrow before its click: folded in between, the click would land on nothing
+    act(() => sendArrow()!.focus());
+    await flush();
+    expect(document.activeElement).toBe(sendArrow());
+    expect(folded()).toBe(false);
+    act(() => sendArrow()!.click());
+    await flush();
+    expect(resolves()).toHaveLength(1);
+  });
+
+  it("folds again once the focus leaves the card", async () => {
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
+    await flush();
+    const input = field()!;
+    act(() => input.focus());
+    await type(input, "Next Monday");
+    setShort(true);
+    act(() => sendArrow()!.focus());
+    await flush();
+    expect(folded()).toBe(false);
+    act(() => host.querySelector<HTMLTextAreaElement>("textarea[data-composer-input]")!.focus());
+    await flush();
+    expect(folded()).toBe(true);
+  });
+
+  it("does not count a field in a card outside this chat's own stack (the Assistant tray's)", async () => {
+    media.short = true;
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
+    await flush();
+    expect(folded()).toBe(true);
+    const tray = document.createElement("div");
+    tray.setAttribute("data-pending-card", "");
+    const other = document.createElement("input");
+    tray.append(other);
+    host.querySelector("[data-chat-dock]")!.append(tray);
+    act(() => other.focus());
+    await flush();
+    expect(folded()).toBe(true);
+    act(() => other.blur());
+    tray.remove();
   });
 
   it("folds as before when the page is short and nothing in a card has the focus", async () => {

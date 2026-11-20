@@ -189,8 +189,11 @@ function asOwnCard(ix: Interaction): Interaction {
   }
   return c;
 }
-/** A waiting card's own text field (styles.css lets the dock grow for it while the keyboard is up). */
-const isCardField = (el: EventTarget | null) => el instanceof Element && el.matches("[data-pending-card] :is(input, textarea)");
+/** In this chat's own waiting cards (not the Assistant tray's): one of them, and its text fields (styles.css lets the
+ *  dock grow for those while the keyboard is up). */
+const OWN_CARD = "[data-chat-cards] [data-pending-card]";
+const inOwnCard = (el: EventTarget | null) => el instanceof Element && Boolean(el.closest(OWN_CARD));
+const isCardField = (el: EventTarget | null) => el instanceof Element && el.matches(`${OWN_CARD} :is(input, textarea)`);
 /** How many earlier pages a link to a child loads looking for the exchange its card is in. */
 const CHILD_LINK_PAGES = 10;
 // no child sessions: no cards, and the exchanges are not walked for where they would go
@@ -1929,14 +1932,16 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // A card answered above the composer takes the focused button with it: the keyboard goes back to the composer (#5154).
   // Not on a touch screen alone (that would raise the keyboard), nor when something else took the focus.
   const dockFocus = useRef<Element | null>(null);
-  // A card's own field being typed into (#11442): a page made short by Android's keyboard must not fold that card away
+  // A card's own field being typed into (#11442): a page made short by Android's keyboard must not fold that card away,
+  // until the focus leaves the card (its send arrow or options take it on the tap: folded then, the tap is lost)
   const [cardField, setCardField] = useState(false);
   const onDockFocus = (e: React.FocusEvent) => {
     dockFocus.current = composerBox.current?.contains(e.target) ? null : e.target;
-    setCardField(isCardField(e.target));
+    if (isCardField(e.target)) setCardField(true);
+    else if (!inOwnCard(e.target)) setCardField(false);
   };
   const onDockBlur = (e: React.FocusEvent) => {
-    if (!isCardField(e.relatedTarget)) setCardField(false);
+    if (!inOwnCard(e.relatedTarget)) setCardField(false);
   };
   // Checked after each render only while a control above the composer holds the focus (nothing to do otherwise)
   useEffect(() => {
