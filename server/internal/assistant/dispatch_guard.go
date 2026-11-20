@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -273,9 +274,13 @@ func walkGuardJSONValue(dec *json.Decoder) error {
 	return nil
 }
 
-// strictGuardJSON decodes one JSON value and rejects duplicate and unknown fields at every level, including targets.
+// strictGuardJSON decodes one JSON value and rejects duplicate, unknown and differently cased fields at every level,
+// including targets, before any occurrence can be decoded and dropped.
 func strictGuardJSON(data []byte, out any) error {
 	if err := rejectDuplicateGuardKeys(data); err != nil {
+		return err
+	}
+	if err := rejectNonCanonicalGuardKeys(data, reflect.TypeOf(out)); err != nil {
 		return err
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -291,6 +296,81 @@ func strictGuardJSON(data []byte, out any) error {
 		return i18n.Err("assistant-dispatch_guard.invalid_json")
 	}
 	return nil
+}
+
+var (
+	guardRawMessageType = reflect.TypeFor[json.RawMessage]()
+	guardTimeType       = reflect.TypeFor[time.Time]()
+)
+
+// rejectNonCanonicalGuardKeys requires every object key to be the exact JSON name of a field in the schema being
+// decoded. encoding/json matches field names case-insensitively, so a differently cased key such as
+// "DISPATCH_GUARD" or "TARGETS" would be another occurrence of the same field and could replace an earlier malformed
+// occurrence before normalization sees it; DisallowUnknownFields does not catch that. A json.RawMessage value is
+// checked against its own schema when it is decoded in turn.
+func rejectNonCanonicalGuardKeys(data []byte, t reflect.Type) error {
+	var v any
+	if err := json.Unmarshal(data, &v); err != nil {
+		return i18n.Err("assistant-dispatch_guard.invalid_json")
+	}
+	return checkCanonicalGuardKeys(v, t)
+}
+
+func checkCanonicalGuardKeys(v any, t reflect.Type) error {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t == guardRawMessageType || t == guardTimeType {
+		return nil
+	}
+	switch t.Kind() {
+	case reflect.Struct:
+		obj, ok := v.(map[string]any)
+		if !ok {
+			return nil // a value of the wrong type is left to the decoder
+		}
+		for key, value := range obj {
+			field, ok := canonicalGuardField(t, key)
+			if !ok {
+				return i18n.Err("assistant-dispatch_guard.invalid_json")
+			}
+			if err := checkCanonicalGuardKeys(value, field.Type); err != nil {
+				return err
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		items, ok := v.([]any)
+		if !ok {
+			return nil
+		}
+		for _, item := range items {
+			if err := checkCanonicalGuardKeys(item, t.Elem()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// canonicalGuardField finds the field whose JSON name is exactly key.
+func canonicalGuardField(t reflect.Type, key string) (reflect.StructField, bool) {
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "-" {
+			continue
+		}
+		if name == "" {
+			name = f.Name
+		}
+		if name == key {
+			return f, true
+		}
+	}
+	return reflect.StructField{}, false
 }
 
 // normalizeDispatchGuard distinguishes a missing/null policy from an explicit disable or empty-target clear.

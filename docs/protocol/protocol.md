@@ -2371,7 +2371,9 @@ an extension granted `dispatch.guard`; the legacy every-scope grant does not inc
 policy must expire within one hour, and empty `targets` clears the policy even when the request leaves `enabled:true`.
 Requests must name `dispatch_guard`. Duplicate or unknown outer, policy or target fields, missing/null policies,
 `targets:null` and non-empty policies without an explicit `enabled` are 400 without a Store write or a tool-list
-notification. Complete JSON is walked for duplicate keys before any `RawMessage` occurrence can be discarded. Only an
+notification. Complete JSON is walked for duplicate keys before any `RawMessage` occurrence can be discarded. Field
+names are case-sensitive at every level; a differently cased alias (`DISPATCH_GUARD`, `TARGETS`, `ENABLED`) is an
+unknown field and gets the same 400. Only an
 explicit `enabled:false` or `targets:[]` clears. Validation responses use localized typed errors in English,
 Simplified Chinese and Japanese.
 

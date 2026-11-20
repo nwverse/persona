@@ -2252,7 +2252,8 @@ machine and session exactly; ordinary Agent start parameters are untouched.
   Requests must name `dispatch_guard`; duplicate or unknown outer, policy or target fields, a missing/null policy and
   a non-empty policy without an explicit `enabled` are rejected without touching the Store or publishing a list
   change. Duplicate keys are rejected while walking the complete JSON, before any `RawMessage` occurrence can be
-  discarded. Only an explicit `enabled:false` or `targets:[]` clears, and empty targets are normalized to disabled
+  discarded. Field names are case-sensitive: a differently cased alias such as `DISPATCH_GUARD` or `TARGETS`, which
+  `encoding/json` would otherwise match to the same field, is rejected as an unknown field at every level. Only an explicit `enabled:false` or `targets:[]` clears, and empty targets are normalized to disabled
   with no expiry even when the request leaves `enabled:true`. Validation responses use localized typed errors in
   English, Simplified Chinese and Japanese. Natural expiry and recovery from a Setting read failure are included in
   the discovery cursor and rechecked at heartbeat. Each returned list and its revision come from the same captured

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -313,5 +314,92 @@ func TestDispatchGuardSecondReadFailureRecoversWholeSet(t *testing.T) {
 	}
 	if !reflect.DeepEqual(full, after) {
 		t.Fatalf("recovery did not restore the complete original set: got %d tools, want %d", len(after), len(full))
+	}
+}
+
+// putGuardRelayed sends a write through the relayed HTTP carrier the hub uses, not a header-only recorder.
+func putGuardRelayed(t *testing.T, s *Service, role, body string) assistantwire.HTTPResponse {
+	t.Helper()
+	out, err := serveHTTP(context.Background(), s, assistantwire.HTTPRequest{
+		Method: http.MethodPut,
+		Path:   dispatchGuardRoute,
+		Body:   []byte(body),
+		Header: map[string][]string{RoleHeader: {role}, "Accept-Language": {"en"}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// encoding/json matches struct fields case-insensitively, so a differently cased key is another occurrence of the
+// same field. Every such alias must be refused before decoding can let it replace an earlier malformed occurrence.
+func TestDispatchGuardCaseAliasesKeepExistingPolicy(t *testing.T) {
+	valid := `{"machine_id":"server","session_id":"session-guarded","deny":["task_plan"]}`
+	cases := []struct{ name, body string }{
+		{"wrapper-valid-then-clear", `{"dispatch_guard":{"enabled":true,"targets":[` + valid + `]},"DISPATCH_GUARD":{"targets":[]}}`},
+		{"wrapper-unknown-then-clear", `{"dispatch_guard":{"enabled":true,"unknown":1},"DISPATCH_GUARD":{"targets":[]}}`},
+		{"targets-unknown-then-clear", `{"dispatch_guard":{"enabled":true,"targets":[{"unknown":1}],"TARGETS":[]}}`},
+		{"targets-null-then-clear", `{"dispatch_guard":{"enabled":true,"targets":null,"TARGETS":[]}}`},
+		{"enabled-true-then-false", `{"dispatch_guard":{"enabled":true,"ENABLED":false,"targets":[` + valid + `]}}`},
+		{"noncanonical-wrapper", `{"DISPATCH_GUARD":{"targets":[]}}`},
+		{"mixed-case-wrapper", `{"Dispatch_Guard":{"enabled":false}}`},
+		{"noncanonical-enabled", `{"dispatch_guard":{"Enabled":false}}`},
+		{"noncanonical-targets", `{"dispatch_guard":{"enabled":true,"Targets":[]}}`},
+		{"noncanonical-expiry", `{"dispatch_guard":{"enabled":true,"EXPIRES_AT":"2999-01-01T00:00:00Z","targets":[` + valid + `]}}`},
+		{"noncanonical-target-field", `{"dispatch_guard":{"enabled":true,"targets":[{"MACHINE_ID":"server","session_id":"session-guarded","deny":[]}]}}`},
+		{"target-field-then-alias", `{"dispatch_guard":{"enabled":true,"targets":[{"machine_id":"server","session_id":"session-guarded","deny":["task_plan"],"DENY":[]}]}}`},
+	}
+	for _, role := range []string{roleFull, roleExtension} {
+		for _, c := range cases {
+			t.Run(role+"/"+c.name, func(t *testing.T) {
+				s := newTestService(t, newGuardFakeHub())
+				putGuard(t, s, guardPolicy(t, "task_plan"))
+				st := s.store().(*memStore)
+				st.mu.Lock()
+				beforePuts, beforeRaw := st.puts, string(st.vals[dispatchGuardSetting])
+				st.mu.Unlock()
+				_, changed := s.mcpChanges.snapshot()
+				out := putGuardRelayed(t, s, role, c.body)
+				if out.Status != http.StatusBadRequest {
+					t.Fatalf("aliased write returned %d %s", out.Status, out.Body)
+				}
+				var response struct {
+					Error string `json:"error"`
+				}
+				if err := json.Unmarshal(out.Body, &response); err != nil {
+					t.Fatal(err)
+				}
+				if want := i18n.T(i18n.En, "assistant-dispatch_guard.invalid_json"); response.Error != want {
+					t.Fatalf("error %q, want %q", response.Error, want)
+				}
+				st.mu.Lock()
+				puts, raw := st.puts, string(st.vals[dispatchGuardSetting])
+				st.mu.Unlock()
+				if puts != beforePuts || raw != beforeRaw {
+					t.Fatalf("aliased write mutated storage: puts %d -> %d", beforePuts, puts)
+				}
+				select {
+				case <-changed:
+					t.Fatal("aliased write notified discovery")
+				default:
+				}
+				if err := s.guardRefusal(context.Background(), guardMachine, guardSession, "task_plan"); err == nil {
+					t.Fatal("aliased write disabled the existing guard")
+				}
+			})
+		}
+		// The canonical spelling of the same clear is still accepted over the same carrier.
+		t.Run(role+"/canonical-clear", func(t *testing.T) {
+			s := newTestService(t, newGuardFakeHub())
+			putGuard(t, s, guardPolicy(t, "task_plan"))
+			out := putGuardRelayed(t, s, role, `{"dispatch_guard":{"enabled":true,"targets":[]}}`)
+			if out.Status != http.StatusOK {
+				t.Fatalf("canonical clear returned %d %s", out.Status, out.Body)
+			}
+			if err := s.guardRefusal(context.Background(), guardMachine, guardSession, "task_plan"); err != nil {
+				t.Fatalf("the canonical clear left the guard refusing: %v", err)
+			}
+		})
 	}
 }
