@@ -13,7 +13,7 @@ import { launcherBlock } from "./launcher-health";
 import type { ModelBinding } from "./model-config";
 import { cleanSetup, type PanelConfig, type PanelModel, type PanelPreset, type PanelProvider, type PanelState } from "./model-panel";
 import { providerIdNote, providerTitle } from "./provider-names";
-import { effortTitle } from "./session-actions";
+import { effortTitle, modeTitle } from "./session-actions";
 import { isCurrentModel } from "./model-switch";
 import { currentModelRow, modelLabel, type ModelList, type PillSetup } from "./session-models";
 import type { Launcher } from "./types";
@@ -194,7 +194,7 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
     const own = runsOn?.models;
     const takes = x.model && (!own || runsOn?.typable || own.some((m) => !m.providerDefault && isCurrentModel(m, x.model)));
     const setup = cleanSetup({ provider: x.launcher, model: (takes ? x.model : "") || DEFAULT_ROW, effort: x.effort });
-    const description = x.description || [runsOn?.name ?? x.launcher, x.model && modelTitle(list, x.model), x.effort && effortTitle(x.effort)].filter(Boolean).join(" · ");
+    const description = x.description || [runsOn?.name ?? x.launcher, x.model && modelTitle(list, x.model), x.effort && effortTitle(x.effort), x.permission_mode && modeTitle(x.permission_mode)].filter(Boolean).join(" · ");
     return { key: x.name, name: x.name, ...(description ? { description } : {}), setup };
   });
   return { providers, state, presets };
