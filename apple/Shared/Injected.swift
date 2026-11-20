@@ -27,8 +27,8 @@ nonisolated enum Supervision {
     /// promoted to the user. This is deliberately narrower than `!visible`: a legacy quiet round without that receipt
     /// keeps its existing record line, while a failed or malformed receipt never removes history from the main chat.
     static func completedSilent(_ items: [Item], results: [String: Item], live: Bool,
-                                routineMainRelay: Bool = false) -> Bool {
-        guard !live, !visible(items, results: results, live: live, routineMainRelay: routineMainRelay) else { return false }
+                                showReply: (Item) -> Bool = { _ in true }) -> Bool {
+        guard !live, !visible(items, results: results, live: live, showReply: showReply) else { return false }
         for use in items where use.kind == .toolUse && tool(use.toolName) == "supervision_finish" {
             guard let result = use.toolUseID.flatMap({ results[$0] }), result.isError != true,
                   let text = result.text, let receipt = try? JSONDecoder().decode(JSONValue.self, from: Data(text.utf8)),
@@ -38,7 +38,7 @@ nonisolated enum Supervision {
         return false
     }
 
-    static func visible(_ items: [Item], results: [String: Item], live: Bool, routineMainRelay: Bool = false) -> Bool {
+    static func visible(_ items: [Item], results: [String: Item], live: Bool, showReply: (Item) -> Bool = { _ in true }) -> Bool {
         if items.contains(where: { it in
             it.supervisionUser == true || it.fold?.supervisionUser == true ||
                 (Injected.of(it).map { $0.isSupervision && $0.level == "user" } ?? false)
@@ -62,7 +62,7 @@ nonisolated enum Supervision {
                 if disposition == "silent" { silent = true }
             }
         }
-        return !live && !silent && !routineMainRelay && hasBackgroundReply(items)
+        return !live && !silent && backgroundReply(items).map(showReply) == true
     }
 
     /// A pending card in the main conversation's own attention list, not an Agent's general Needs-you state.
@@ -74,17 +74,17 @@ nonisolated enum Supervision {
         return interaction.kind == .permission && interaction.ownerProposal == true
     }
 
-    private static func hasBackgroundReply(_ items: [Item]) -> Bool {
+    private static func backgroundReply(_ items: [Item]) -> Item? {
         // Display lines can put a tool before the latest text even when the tool came after that text.
         let last = items.lazy.filter { item in
             item.wake == true || item.modelRefusal != nil || isTurnInterrupt(item) ||
                 item.kind == .toolUse || item.kind == .thinking || item.kind == .fold || isAnswerText(item)
         }.max { ($0.seq, $0.part) < ($1.seq, $1.part) }
-        guard let last else { return false }
-        return isAnswerText(last) && last.narration != true && last.codexHeartbeatQuiet != true
+        guard let last, isAnswerText(last), last.narration != true, last.codexHeartbeatQuiet != true else { return nil }
+        return last
     }
 
-    private static func isAnswerText(_ item: Item) -> Bool {
+    static func isAnswerText(_ item: Item) -> Bool {
         item.kind == .text && item.role == "assistant" &&
             !(item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
