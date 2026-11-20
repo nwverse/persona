@@ -63,6 +63,12 @@ func askSummary(l i18n.Lang, a *acceptAsk) string {
 // acceptedNote is what the bot answers under a card the owner passed.
 func acceptedNote(l i18n.Lang, a *acceptAsk) string {
 	switch {
+	case a.OutsideID != "" && !a.WithdrawnAt.IsZero():
+		return i18n.T(l, "assistant-reports.outside_withdrawn")
+	case a.OutsideID != "" && a.ByDefault:
+		return i18n.T(l, "assistant-reports.outside_answered_default")
+	case a.OutsideID != "":
+		return i18n.T(l, "assistant-reports.outside_answered")
 	case decideAsk(a) && a.ByDefault:
 		return i18n.T(l, "assistant-reports.verdict_taken_default")
 	case decideAsk(a) && a.Check != "" && a.Chosen != "": // a check's decision: it went to the supervisor (checkDecided)
@@ -351,7 +357,7 @@ func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk
 		row.Reason, row.Source = defaultReason(l, s.location(ctx), a.Deadline), db.DecisionAgent
 	}
 	var sendErr error
-	if a.Check == "" {
+	if a.Check == "" && a.OutsideID == "" {
 		if _, err := s.relayToTask(ctx, t.Origin, id, msg, func(cur Todo) bool {
 			return cur.DoneAt == nil && !acceptAskStale(&a, cur)
 		}); err != nil {
@@ -375,6 +381,8 @@ func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk
 		}
 	}
 	switch {
+	case a.OutsideID != "":
+		// An outside caller polls the answer; there is no Agent or supervisor to relay to.
 	case a.Check != "":
 		s.checkDecided(ctx, t, &a, a.Recommend)
 	case sendErr != nil:

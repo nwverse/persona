@@ -51,6 +51,9 @@ func (s *Service) toolTaskDecided(ctx context.Context, machine, self string, arg
 	if supervisor != self && !s.isMain(ctx, self) && !s.backgroundSupervises(ctx, self, t) {
 		return "", fmt.Errorf("task %s is supervised by another conversation: record the owner's answer from the main conversation or its supervisor", t.ID)
 	}
+	if ask, ok := s.askCopy(t.ID); ok && ask.OutsideID != "" {
+		return "", fmt.Errorf("task %s is an outside decision: only its owner's Needs-you answer may settle it, not task_decided", t.ID)
+	}
 	var result acceptResult
 	var err error
 	if a.ToldAgent {

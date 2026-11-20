@@ -24,6 +24,7 @@ const (
 	ScopeNotify                  = extwire.ScopeNotify
 	ScopeTodosRead               = extwire.ScopeTodosRead
 	ScopeTodosWrite              = extwire.ScopeTodosWrite
+	ScopeDecisionsRaise          = extwire.ScopeDecisionsRaise
 	ScopeLeadersRead             = extwire.ScopeLeadersRead
 	ScopeAssistantDispatchPolicy = extwire.ScopeAssistantDispatchPolicy
 	ScopeAssistantStartDefaults  = extwire.ScopeAssistantStartDefaults
@@ -36,14 +37,15 @@ const (
 // HubScopes are the scopes, in the order the install screen lists them.
 var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeSentRead, ScopeInboxRead, ScopeInboxWrite, ScopeAgentsRead, ScopeAgentsControl,
 	ScopeAgentsPermissionMode, ScopeMachinesRead, ScopeNotify, ScopeAssistantAsk, ScopeAssistantRead, ScopeAssistantMemoryRead,
-	ScopeTodosRead, ScopeTodosWrite, ScopeLeadersRead, ScopeAssistantDispatchPolicy, ScopeAssistantStartDefaults, ScopeModels, ScopeTranscription}
+	ScopeTodosRead, ScopeTodosWrite, ScopeDecisionsRaise, ScopeLeadersRead, ScopeAssistantDispatchPolicy, ScopeAssistantStartDefaults, ScopeModels, ScopeTranscription}
 
 // InEveryScope says whether a token of every scope (an extension granted the hub's full token the old way, hub_api,
 // that gets one of every scope instead) has scope s: all but the ones an extension gets only when its manifest names
-// them, agents.permission_mode and assistant.start_defaults (which can raise what task Agents spend: a preset, effort
-// max, ultracode), so neither comes to an extension installed the old way without the owner agreeing to it.
+// them, agents.permission_mode, assistant.start_defaults (which can raise what task Agents spend: a preset, effort
+// max, ultracode), and decisions.raise (which can interrupt the owner with a new decision), so none comes to an
+// extension installed the old way without the owner agreeing to it.
 func InEveryScope(s string) bool {
-	return s != ScopeAgentsPermissionMode && s != ScopeAssistantStartDefaults
+	return s != ScopeAgentsPermissionMode && s != ScopeAssistantStartDefaults && s != ScopeDecisionsRaise
 }
 
 // EveryScope is the scopes of a token of every scope (InEveryScope), in HubScopes' order.
@@ -65,6 +67,7 @@ var scopeTitles = map[string]string{
 	ScopeAssistantAsk:            "scope_assistant_ask",
 	ScopeTodosRead:               "scope_todos_read",
 	ScopeTodosWrite:              "scope_todos_write",
+	ScopeDecisionsRaise:          "scope_decisions_raise",
 	ScopeLeadersRead:             "scope_leaders_read",
 	ScopeAssistantDispatchPolicy: "scope_assistant_dispatch_policy",
 	ScopeAssistantStartDefaults:  "scope_assistant_start_defaults",

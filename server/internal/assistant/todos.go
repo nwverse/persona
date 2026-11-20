@@ -939,6 +939,7 @@ func (s *Service) todoRoutes() {
 	s.taskWorkspaceRoutes()
 	s.taskReviewDismissalRoutes()
 	s.todoDecisionRoutes()
+	s.outsideDecisionRoutes()
 	s.todoThreadRoutes()
 	s.todoSeenRoutes()
 	s.todoMarkRoutes()
@@ -1120,6 +1121,8 @@ func (s *Service) todoRoutes() {
 		if err != nil {
 			if errors.Is(err, db.ErrTodoNotFound) {
 				apierr.Write(w, http.StatusNotFound, err)
+			} else if errors.Is(err, errOutsideDecisionPending) {
+				apierr.WriteCode(w, http.StatusConflict, "outside_decision_pending", err)
 			} else if errors.Is(err, db.ErrConcernUnreported) {
 				apierr.Write(w, http.StatusConflict, err) // report its outcome instead: POST …/decisions {source: "reported"}
 			} else if pe := (*pieceError)(nil); errors.As(err, &pe) {
@@ -1150,6 +1153,8 @@ func (s *Service) todoRoutes() {
 		if err := s.deleteTodo(r.Context(), id); err != nil {
 			if errors.Is(err, db.ErrTodoNotFound) {
 				apierr.Write(w, http.StatusNotFound, err)
+			} else if errors.Is(err, errOutsideDecisionPending) {
+				apierr.WriteCode(w, http.StatusConflict, "outside_decision_pending", err)
 			} else {
 				apierr.Write(w, http.StatusInternalServerError, err)
 			}

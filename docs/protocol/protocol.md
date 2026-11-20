@@ -1989,6 +1989,9 @@ Clients report their errors and crashes only while `features` has `error_reports
 | GET | `/api/v1/todos/{id}/decisions?all=1` | Decision list `{"decisions":[Decision]}`, in chronological order; by default only those in effect, `all=1` also includes superseded ones; missing 404, hub without a database 503 ([todos.md](../assistant/todos.md) "Decision records") |
 | POST | `/api/v1/todos/{id}/decisions` | Record one manually `{"question","choice","reason"?,"supersedes_id"?}` → `{"decision":Decision}`; empty question or choice 400, bad `supersedes_id` 400; to-do missing 404, hub without a database 503; read-only device 403 |
 | PATCH | `/api/v1/todos/{id}/decisions/{did}` | Mark it as superseding after the fact `{"supersedes_id"}` (empty string undoes; omitted 400) → `{"decision":Decision}`; to-do or decision missing 404, hub without a database 503; read-only device 403 |
+| POST | `/api/v1/decisions` | Raise a rich owner decision without waiting for its answer: `OutsideDecisionRequest` → 200 `{"decision":OutsideDecision,"inserted":bool}`; full device, or an extension token explicitly granted `decisions.raise`. See "Decisions raised outside a supervisor" below for fields, source attribution and `ref` idempotency |
+| GET | `/api/v1/decisions/{id}` | Poll the caller's decision → 200 `{"decision":OutsideDecision}` with `state`, optional `answer` and `answer.answered_by`; only the caller that raised it, otherwise 404 `decision_not_found`. Same `decisions.raise` grant for an extension; this scope does not open the owner's answer routes |
+| POST | `/api/v1/decisions/{id}/withdraw` | Withdraw the caller's still-pending decision → 200 `{"decision":OutsideDecision}` with `state:"withdrawn"`; repeat withdrawal is idempotent, an answered decision is 409 `decision_closed`, another caller's or unknown id is 404 `decision_not_found`. Withdrawn decisions leave Needs you and cannot be answered |
 | GET | `/api/v1/task-plans/{id}` | One plan (`TaskPlan`, see "Tasks and chat feed" below) → 200 `{"plan":TaskPlan}`; missing 404 |
 | POST | `/api/v1/task-plans/{id}/start` | Start a plan `{"tasks"?:[PlanTask],"remember"?:bool,"schedule_grant"?:bool}`: `tasks` overrides, by index, the fields the user changed on the card (empty ones unchanged), and `remember` remembers "Start These Directly" for this kind; `schedule_grant` adds the kind to the start grant of the scheduled task whose round made the plan (its tasks' `schedule`, set by the hub with `schedule_title` and `schedule_basis`; ignored without one or once the schedule's prompt or target changed, [unified-entry.md](../assistant/unified-entry.md) "A scheduled task's own start grant"); creates a to-do per task (`origin`, `plan_id`) and starts the Agents in the background → 200 `{"plan":TaskPlan}`; already started or dismissed 409, missing 404, read-only device 403 |
 | POST | `/api/v1/task-plans/{id}/dismiss` | Don't start → 200 `{"plan":TaskPlan}`; already started 409 |
@@ -5747,6 +5750,38 @@ per-runtime sections where Claude Code's blocked config directories are; Agents 
 Apple: Settings › Agent › Hidden Agent Folders and the Agents menu's temporary reveal use the same contract.
 Android has the blocked list only for now.
 New labels and confirmation text ship in English, Simplified Chinese and Japanese.
+## Decisions raised outside a supervisor
+
+`POST /api/v1/decisions` accepts this bounded JSON document (64 KiB at the HTTP boundary):
+
+```json
+{
+  "ref": "nightly-2026-11-20",
+  "todo_id": "todo_optional_parent",
+  "title": "Publish the nightly build?",
+  "background": "Checks passed; the release notes are ready.",
+  "why_owner": "priority",
+  "options": [
+    {"label": "Publish", "leads_to": "Users receive the build"},
+    {"label": "Hold", "leads_to": "No build goes out"}
+  ],
+  "recommend": "Hold",
+  "cost_of_waiting": "The next nightly is delayed.",
+  "reversible": true,
+  "allow_default": false
+}
+```
+
+`title`, `background`, `why_owner`, `recommend`, `cost_of_waiting` and `reversible` are required; `options` has 2–4 non-empty `{label, leads_to}` entries whose labels stay distinct after removing whitespace and punctuation, and the recommendation names one of them. `why_owner` is `irreversible`, `visible_to_others`, `priority`, `acceptance` or `only_owner_knows`. The recommended option is returned first. `todo_id` is optional and names an existing open to-do; omitting it creates a standalone decision. `ref` is an optional caller-stable idempotency key, at most 200 characters without `#`. Repeating the same normalized request with the same caller and ref returns the original decision with `inserted:false`; reusing that ref for different content is 409 `decision_ref_conflict`.
+
+The reply is `{"decision": OutsideDecision, "inserted": bool}`. The decision contains `id`, optional `todo_id`, `ask_todo_id` (the separate backing to-do the existing Needs-you cards answer), `state`, authenticated `source: {kind, name}`, every rich request field, `default`, optional `deadline`, `created_at`, optional `withdrawn_at` and optional `answer`. `state` is `pending`, `answered` or `withdrawn`; `default` is `taken` or `never`. An answer has at most one of `option`, `response` or `text`, plus `answered_by` (`owner` or `default`) and `answered_at`. `response` is one of the three fixed answers `decide_yourself`, `not_what_i_asked` or `explain_first`; the last leaves state pending and suppresses the default.
+
+Omitted `allow_default` preserves the reversible 24-hour recommendation default; explicit `false` disables it. Irreversible and visible-to-others decisions never default. This field does not change the action's `reversible` fact or its one-tap risk. A source is server-derived: `extension` with the authenticated extension id for HTTP, `script` with the node-derived session or working-directory name for a local script, or `app` for a full app credential. Caller text cannot assert a source. Terminal control sequences are stripped before display.
+
+An extension needs the explicit `decisions.raise` scope on all three routes. `todos.read`, `todos.write` and legacy every-scope tokens do not include it, and it grants no owner answer route. A full app credential may use the routes; read-only and answer-only roles cannot. Cross-caller polling and withdrawal are deliberately indistinguishable from an unknown id (404 `decision_not_found`). Other failures are 400 `invalid_decision`, 404 `todo_not_found`, 409 `todo_closed`, 409 `decision_closed`, and 503 `store_unavailable`. `POST /api/v1/decisions/{id}/withdraw` is idempotent while withdrawn; an answer after withdrawal is refused by the existing owner answer route. While a decision is pending, independently closing or deleting its backing to-do is 409 `outside_decision_pending`, so polling cannot be stranded without an answer; after an answer or withdrawal the row may be deleted without erasing the caller's durable history.
+
+Local scripts use the same manager through node RPCs `decision.raise {decision, source}`, `decision.get {id}` and `decision.withdraw {id}`; the CLI's local-socket envelope is documented in [script-cli.md](../integrations/script-cli.md). The connected machine is the caller identity, so one computer cannot read or withdraw another computer's decisions. These are short requests, not resumable blocking interactions and not standby-spooled notifications. Answers never trigger an Agent, supervisor or model call. The manager owns validation, persistence, push/default handling, answering and withdrawal; the hub only authenticates and relays. See [todos.md](../assistant/todos.md) "Decisions raised outside a supervisor".
+
 ### Optional Todo repository metadata
 
 The manager relays `GET /api/v1/todos/{id}/repositories` with `todos.read`, and

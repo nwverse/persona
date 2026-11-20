@@ -353,6 +353,9 @@ var Routes = []string{
 	"PUT /api/v1/todos/{id}/agents/{mid}/{sid}",
 	"DELETE /api/v1/todos/{id}/agents/{mid}/{sid}",
 	"GET /api/v1/todos/{id}/decisions",
+	"POST /api/v1/decisions",
+	"GET /api/v1/decisions/{id}",
+	"POST /api/v1/decisions/{id}/withdraw",
 	"GET /api/v1/todos/{id}/timeline", // its conversation's rounds (todo_timeline.go, #10465)
 	"POST /api/v1/todos/{id}/decisions",
 	"PATCH /api/v1/todos/{id}/decisions/{did}",

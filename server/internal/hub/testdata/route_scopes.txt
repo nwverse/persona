@@ -178,6 +178,7 @@ assistant.start_defaults GET /api/v1/assistant/worker-presets
 -                    GET /api/v1/connectors/sent/chat-rules
 -                    GET /api/v1/connectors/{id}/media
 -                    GET /api/v1/connectors/{id}/thread
+decisions.raise      GET /api/v1/decisions/{id}
 -                    GET /api/v1/devices/push
 -                    GET /api/v1/devices/{id}/lock-tests/{test_id}
 -                    GET /api/v1/devices/{id}/prefs
@@ -465,6 +466,8 @@ todos.write          POST /api/v1/assistant/workspace-naming/preview
 -                    POST /api/v1/connectors/{id}/login
 -                    POST /api/v1/connectors/{id}/logout
 -                    POST /api/v1/connectors/{id}/thread/reply
+decisions.raise      POST /api/v1/decisions
+decisions.raise      POST /api/v1/decisions/{id}/withdraw
 -                    POST /api/v1/devices
 -                    POST /api/v1/devices/{id}/live-activity
 -                    POST /api/v1/devices/{id}/lock-tests
