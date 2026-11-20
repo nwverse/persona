@@ -356,6 +356,25 @@ class ForwardTest {
         ForwardPlacements.takeNewAgent(opened.agents.single())
     }
 
+    @Test fun aRepeatedNewAgentRouteReleasesItsPreviousPhotosAndKeepsMessageOwnership() {
+        val first = ForwardMessage.ref("A", source().copy(item = "same"), res)
+        val other = ForwardMessage.ref("B", source().copy(key = SessionKey("elsewhere", "another"), item = "same"), res)
+        fun placed(ref: ChatLinkContext, id: String, lost: Int) = ForwardPlacement(ref, RestoredPhotos(
+            listOf(ComposerAttachment(id, "same.png", "content://example/$id", image = true)), lost))
+        val old = listOf(placed(first, "old-a", 0), placed(other, "old-b", 2))
+        val replacement = listOf(placed(first, "new-a", 1), placed(other, "new-b", 0))
+        val opened = Opened()
+        val discarded = mutableListOf<RestoredPhotos>()
+        val target = forwarding(opened, main)
+        deliverForward(ForwardTarget.NewAgent, old, key, target, res, discarded::add)
+        deliverForward(ForwardTarget.NewAgent, replacement, key, target, res, discarded::add)
+        assertEquals(old.map { it.photos }, discarded)
+        assertEquals(1, opened.agents.distinct().size)
+        val context = opened.agents.last()
+        assertEquals(replacement, ForwardPlacements.takeNewAgent(context))
+        assertTrue(ForwardPlacements.takeNewAgent(context).isEmpty())
+    }
+
     @Test fun equalLocalMessageIdsFromDifferentChatsCanShareADestinationDraft() {
         val first = ForwardMessage.ref("First transcript", source().copy(item = "msg-1"), res)
         val second = ForwardMessage.ref("Second transcript", source().copy(key = SessionKey("studio", "independent"), item = "msg-1"), res)
