@@ -134,20 +134,16 @@ func inheritedLabel(l i18n.Lang, p ModelPurpose, base ModelBinding, from string,
 }
 
 // modelNoAPIStatus explains an API use with nothing to call without assuming which launchers are installed.
-// modelCodexNoAPIStatus adds Codex's limitation only when a visible Codex launcher actually exists.
 const modelNoAPIStatus = "status_no_api"
-const modelCodexNoAPIStatus = "status_codex_no_api"
+
+// modelRunAgentSupported reports whether a launcher running agent can answer API-kind background purposes via
+// model.run with strict zero-tool, zero-MCP, zero-hook, and no-session-persistence isolation (#12027).
+func modelRunAgentSupported(agent string) bool {
+	return agent == "" || agent == "claude" || agent == "codex" || agent == "agy"
+}
 
 // noAPIStatus is the catalog key for an unconfigured API use, on the settings row and on a done judge's task alike.
-// It reads the last-seen node list: explaining a failed call must not start another round of node requests.
 func (s *Service) noAPIStatus(ctx context.Context) string {
-	seen, _ := s.zshrcLaunchersLastSeen(ctx)
-	views := s.launcherViewsFrom(ctx, seen, s.storedLaunchers(ctx))
-	if slices.ContainsFunc(views, func(v LauncherView) bool {
-		return !v.Hidden && v.Kind != "api" && viewAgent(v) == "codex"
-	}) {
-		return modelCodexNoAPIStatus
-	}
 	return modelNoAPIStatus
 }
 
@@ -182,7 +178,7 @@ func (s *Service) fallbackAPIProvider(ctx context.Context) string {
 	return fallbackAPIProviderFrom(s.storedLaunchers(ctx), s.hiddenLaunchers(ctx))
 }
 
-// mergeModel puts over's choices on base: another provider starts from nothing (its model and effort are its own).
+// mergeModel puts over's choices on base: another provider starts from nothing (its model, effort and permission mode are its own).
 func mergeModel(base, over ModelBinding) ModelBinding {
 	if over.Provider != "" && over.Provider != base.Provider {
 		base = ModelBinding{Provider: over.Provider, ConfigDir: base.ConfigDir}
@@ -192,6 +188,9 @@ func mergeModel(base, over ModelBinding) ModelBinding {
 	}
 	if over.Effort != "" {
 		base.Effort = over.Effort
+	}
+	if over.PermissionMode != "" {
+		base.PermissionMode = over.PermissionMode
 	}
 	if over.ConfigDir != "" {
 		base.ConfigDir = over.ConfigDir
@@ -344,8 +343,9 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 			}
 		}
 		if !found { // plain claude, a computer's own launcher, a managed one without a Messages gateway
-			// Claude Code only (an empty agent is Claude Code) and one the manager knows: a deleted launcher is an error.
-			if name != "claude" && !slices.ContainsFunc(s.launcherViews(ctx), func(v LauncherView) bool { return v.Name == name && (viewAgent(v) == "" || viewAgent(v) == "claude") }) {
+			// Claude Code, Codex, and Antigravity launchers (an empty agent is Claude Code) known to the manager: a
+			// deleted or unsupported launcher is an error (#12027).
+			if name != "claude" && !slices.ContainsFunc(s.launcherViews(ctx), func(v LauncherView) bool { return v.Name == name && modelRunAgentSupported(viewAgent(v)) }) {
 				return c, i18n.Err("assistant-models.err_not_callable")
 			}
 			c = ai.Config{RunLauncher: name, ViaMachine: s.settings(ctx).MachineID}
@@ -409,7 +409,8 @@ func (s *Service) modelFingerprint(ctx context.Context, id string) (string, erro
 
 // modelBindingFingerprint changes when what the binding runs on does (the provider's settings, the key sealed anew).
 func (s *Service) modelBindingFingerprint(ctx context.Context, b ModelBinding) string {
-	b.ConfigDir = "" // where new conversations start, not what this binding runs on (#4633)
+	b.ConfigDir = ""      // where new conversations start, not what this binding runs on (#4633)
+	b.PermissionMode = "" // applies to new starts/conversations, does not restart running ones
 	raw, _ := json.Marshal(b)
 	if strings.HasPrefix(b.Provider, "legacy.") {
 		v, _ := json.Marshal(s.legacyModelConfig(ctx, b.Provider))

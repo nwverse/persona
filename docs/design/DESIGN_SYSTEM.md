@@ -619,6 +619,11 @@ on-demand model panel, not the everyday Assistant home (#6887).
   image route (`remote_images`, docs/protocol/protocol.md "Remote images (#9473)") at the size drawn; what other
   people wrote (the Inbox's Lark, GitHub and connector threads, `asksBeforePictures()`) keeps each run its size with
   Load Image over it until tapped, since a picture there may be a tracking pixel.
+  A machine-local Markdown image uses the session's machine and cwd and the same layout. A local image inside a line
+  of text is lifted into its own block so the machine-file loader and any failure are visible. A failed local image
+  keeps Retry on its tile and shows the complete reason below the tile or run, including at accessibility text sizes;
+  recreating the tile does not retry, and Retry runs only after a tap. The full-screen viewer shows the same reason
+  and offers Retry. Local file links open the same file viewer as bare paths, including missing or denied files.
   The web (#9475) draws the same rules: `ui/ReplyImages.tsx` (a chunk of its own with the step that lifts a run out of
   its paragraph, `ui/reply-images-plugin.ts`, loaded with a reply's first picture), rules in `lib/reply-image-layout.ts`;
   a lone picture is 300 px tall (240 px in a narrow window), a run at most 480 px wide, the turn images' 10 px radius

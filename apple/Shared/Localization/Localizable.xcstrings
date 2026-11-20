@@ -73941,6 +73941,29 @@
         }
       }
     },
+    "omp takes no attachments" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "omp takes no attachments"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "omp には添付ファイルを付けられません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "omp 不能带附件"
+          }
+        }
+      }
+    },
     "On %@ [Meeting Tapes]" : {
       "extractionState" : "manual",
       "localizations" : {

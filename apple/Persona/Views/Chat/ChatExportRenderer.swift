@@ -255,7 +255,13 @@ struct ExportAssets {
                     // As the chat loads them (through the hub when it fetches pictures, #9473), at the picture's size.
                     let size = ReplyImageLayout.size(points: max(column, Theme.Size.replyPicture), scale: scale)
                     for p in pictures where out.images[p.url] == nil {
-                        let img = await LarkMedia.shared.image(ReplyPictureSource.path(p.url, size: size), maxPixel: CGFloat(size))
+                        let img: UIImage?
+                        if p.isLocal {
+                            // The same session-scoped file loader used for message photos; relative paths use the session cwd.
+                            img = await loadImage(p.localPath ?? p.url)
+                        } else {
+                            img = await LarkMedia.shared.image(ReplyPictureSource.path(p.url, size: size), maxPixel: CGFloat(size))
+                        }
                         if let img { out.images[p.url] = img }
                     }
                 case .mathText(let md):

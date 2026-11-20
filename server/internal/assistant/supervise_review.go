@@ -156,7 +156,16 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		return "", fmt.Errorf("user_check applies to accepted only")
 	}
 	deliveryNote := ""
-	if verdict == reviewAccepted { // done_needs_delivery: its PR is live first (supervise_review_delivery.go)
+	if verdict == reviewAccepted { // delivery_gate: owner wait & criteria first, then PR/issue/deploy gate (supervise_review_delivery.go)
+		if t.DoneAt == nil && t.Supervision != nil && t.Supervision.Waits != nil {
+			w := *t.Supervision.Waits
+			return "", ownerWaitError(t.ID, &w)
+		}
+		if a.Outcome != outcomeCannot && t.Supervision != nil {
+			if err := completeReviewCriteriaError(t.Supervision.DoneWhen, a.Checks); err != nil {
+				return "", err
+			}
+		}
 		if deliveryNote, err = s.acceptedDeliveryError(ctx, t, strings.TrimSpace(a.Link), a.Outcome); err != nil {
 			return "", err
 		}

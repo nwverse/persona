@@ -244,4 +244,45 @@ class AgentsFoldAllTest {
         model.machine("")
         assertNull(motion.kind)
     }
+
+    @Test fun storedFoldsApplyOnVeryFirstPageEmissionWithoutUnfoldedFlash() = runTest {
+        preferences.grouping(AgentGrouping.Repo)
+        preferences.folds(AgentGrouping.Repo, setOf("pinned"))
+        val pinnedSession = Session("shown", "p1", state = "working")
+        val hubPrefs = AgentsPreferences(object : DataStore<Preferences> {
+            override val data = MutableStateFlow<Preferences>(
+                androidx.datastore.preferences.core.preferencesOf(
+                    androidx.datastore.preferences.core.stringSetPreferencesKey("folds-Repo") to setOf("pinned"),
+                )
+            )
+            override suspend fun updateData(transform: suspend (Preferences) -> Preferences) = transform(data.value).also { data.value = it }
+        }, object : HubPreferences {
+            override val preferences = MutableStateFlow(HubPreferencesSnapshot(pins = HubPreferenceSet(sessions = listOf("shown/p1"))))
+            override suspend fun refresh() = Unit
+            override suspend fun togglePin(path: String, space: Boolean) = Unit
+            override suspend fun toggleMute(path: String, space: Boolean) = Unit
+            override suspend fun markSeen(session: SessionKey, version: String) = Unit
+        })
+        model = AgentsViewModel(object : SessionsRepository {
+            override val sessions = MutableStateFlow(listOf(pinnedSession))
+            override val machines = MutableStateFlow(listOf(Machine("shown", online = true)))
+            override suspend fun refresh() = Unit
+        }, object : InteractionCenter {
+            override val pending = MutableStateFlow<List<Interaction>>(emptyList())
+            override suspend fun refresh() = Unit
+            override suspend fun resolve(id: String, resolution: Resolution) = Unit
+        }, object : HubConnection {
+            override val state = MutableStateFlow(ConnectionState.Online)
+            override val events = MutableSharedFlow<ServerEvent>()
+            override fun reconnect() = Unit
+            override fun send(message: JsonObject) = true
+        }, object : MessageSender {
+            override val outbox = MutableStateFlow<List<OutboxMessage>>(emptyList())
+            override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) = Unit
+        }, hubPrefs)
+        val firstNonEmpty = model.page.first { it.list.groups.isNotEmpty() }
+        val pinnedGroup = firstNonEmpty.list.groups.first { it.id == "pinned" }
+        assertTrue("pinned group must already be folded on the very first emission", pinnedGroup.folded)
+        assertTrue(pinnedGroup.visibleRows.isEmpty())
+    }
 }

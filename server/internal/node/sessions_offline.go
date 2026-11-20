@@ -210,6 +210,7 @@ func (n *Node) scanOffline() []proto.Session {
 		}
 		s.Activity, s.ActivityAt = m.activityOf()
 		setContext(&s, m)
+		m.turnErr.set(&s) // Preserve the full gateway error and its reset after the terminal Agent exits.
 		s.ModelFallback = m.modelFallback
 		n.setModelRestore(&s, c.path, m)
 		n.terminalModesRow(&s, m)

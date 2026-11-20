@@ -144,9 +144,11 @@ func (s *Service) launcherViewsFrom(ctx context.Context, zshrc []zshrcLaunchers,
 				if l.Source != "" {
 					src = l.Source
 				}
-				v = &LauncherView{Name: l.Name, Source: src, Agent: l.Agent, BaseURL: l.BaseURL, Model: l.Model, Hidden: slices.Contains(hidden, l.Name)}
+				v = &LauncherView{Name: l.Name, Source: src, Agent: l.Agent, BaseURL: l.BaseURL, Model: l.Model, Hidden: slices.Contains(hidden, l.Name), PermissionModes: l.PermissionModes}
 				byName[l.Name] = v
 				names = append(names, l.Name)
+			} else if l.PermissionModes != 0 {
+				v.PermissionModes |= l.PermissionModes
 			}
 			v.Machines = append(v.Machines, m.MachineID)
 			if rc := cmp.Or(m.Sync.RCFile, defaultRCFile); v.Source == "zshrc" && !slices.Contains(v.RCFiles, rc) {
