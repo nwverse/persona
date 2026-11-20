@@ -3,8 +3,8 @@
 tools) are there to tap, a turn's pictures open in the image viewer where two fingers zoom the picture (not the page)
 and Back closes it on the chat, a wide table's last column is not a character a line, your bubble keeps a margin on its
 left (also while it is being sent, folded when long), the answer is 16 px, a work group's header is 40 tall, a long
-press on an answer leaves its menu open after the finger lifts, an edit's diff takes the whole screen and folds past 40
-lines, and formulas are drawn once KaTeX has loaded for them. On a desktop (1280, a mouse) the sizes stay 15 / 14.
+press on an answer leaves its menu open after the finger lifts, an edit's diff takes the whole screen (the changes
+panel, #9362), and formulas are drawn once KaTeX has loaded for them. On a desktop (1280, a mouse) the sizes stay 15 / 14.
 
 Needs a running web page against the fake hub with these conversations, and Playwright for Python (it drives the
 installed Chrome):
@@ -93,9 +93,10 @@ def check_sizes(page, tag, body, secondary, group_min=None):
     fs = page.evaluate("() => getComputedStyle(document.querySelector('main [data-answer] .prose-j')).fontSize")
     if fs != body:
         fail(f"{tag}: the answer is {fs}, not {body}")
-    # the row's words ("run tests"), in the open once the group is open
+    # the row's words (since #10684 a command row leads with the command, "swift test"; its description "跑测试" is the
+    # hover title), in the open once the group is open
     open_group(page)
-    row = page.locator('main [data-action-row="Bash"] button span', has_text="跑测试").first.evaluate("e => getComputedStyle(e).fontSize")
+    row = page.locator('main [data-action-row="Bash"] button[title="跑测试"] span', has_text="swift test").first.evaluate("e => getComputedStyle(e).fontSize")
     if row != secondary:
         fail(f"{tag}: a tool row is {row}, not {secondary}")
     # a table and a code block keep their size
@@ -140,8 +141,10 @@ def check_pending(page, tag):
     box = page.locator("main textarea").first
     box.fill(long)
     page.locator('main button[aria-label="发送"], main button[aria-label="排队发送"]').first.click()
-    pend = page.locator("main [data-user-bubble]").filter(has_text="发送中").last
+    # the bubble being sent; its 发送中… is the chat's one send line under it since #7490
+    pend = page.locator("main [data-user-bubble][data-send-state=sending]").last
     expect(pend).to_be_visible()
+    expect(page.locator("main [data-message-feedback=sending]")).to_contain_text("发送中")
     folded = pend.locator("[data-folded]")
     expect(folded).to_have_count(1)
     expect(pend.get_by_role("button", name="展开")).to_be_visible()
@@ -156,7 +159,7 @@ def check_pending(page, tag):
 
 def check_copy(page, tag):
     go(page, READ)
-    btn = page.locator('main [data-answer] button[aria-label="拷贝代码"]').first
+    btn = page.locator('main [data-answer] button[aria-label="复制代码"]').first
     expect(btn).to_be_visible()
     if float(btn.evaluate("e => getComputedStyle(e).opacity")) < 0.99:
         fail(f"{tag}: copy code is invisible on a touch screen")
@@ -177,12 +180,34 @@ def check_math(page, tag):
     ok(f"{tag}: KaTeX loads for the formulas and draws them")
 
 
+def leave_end(page):
+    """A finger pulls the chat down a little, slowly (no fling): the reader leaves the end, so the chat stops following
+    it. A scroll from a script is not the reader leaving: content that grows still pulls the view back to the end."""
+    sc = page.locator("main [data-chat-scroll]").bounding_box()
+    x, y0 = sc["x"] + sc["width"] / 2, sc["y"] + 40
+    cdp = page.context.new_cdp_session(page)
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y0}]})
+    for i in range(1, 9):
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": y0 + 10 * i}]})
+        page.wait_for_timeout(16)
+    page.wait_for_timeout(100)  # held still before lifting: no speed left for a fling
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    cdp.detach()
+    expect(page.locator("[data-jump-pill]")).to_be_visible()  # away from the end
+
+
 def check_mermaid(page, tag):
     go(page, WIDGET)
+    # each block is drawn on its own a moment after it mounts, each one making the chat taller; at the end the chat
+    # follows, which moved the first diagram away under the tap about one run in three. Wait for all of them, leave the
+    # end with a finger as a reader would, and only then bring the diagram into view.
+    page.wait_for_function("""() => [...document.querySelectorAll('main [data-mermaid]')].every((m) =>
+        m.querySelector('[data-mermaid-diagram] svg, details'))""", timeout=10000)
+    leave_end(page)
     m = page.locator("main [data-mermaid]").first
     m.scroll_into_view_if_needed()
     diagram = m.locator("[data-mermaid-diagram]")
-    expect(diagram.locator("svg").first).to_be_visible(timeout=10000)
+    expect(diagram.locator("svg").first).to_be_visible()
     tools = m.locator('button[aria-label="放大"]')
     if float(tools.evaluate("e => getComputedStyle(e.parentElement).opacity")) < 0.99:
         fail(f"{tag}: Mermaid's tools are invisible on a touch screen")
@@ -196,6 +221,8 @@ def check_mermaid(page, tag):
 
 
 def check_viewer(page, tag):
+    """Each context opens the viewer cold, the first picture after a page load. That open is what broke when #8762 made
+    the viewer load on demand: the picture never fitted, so a pinch did nothing, until #11511 fixed the viewer."""
     go(page, REVIEW)
     strip = page.locator("main [data-turn-images] button").first
     strip.scroll_into_view_if_needed()
@@ -221,7 +248,7 @@ def check_viewer(page, tag):
     scale = float(img.evaluate("e => parseFloat(e.style.scale || '1')"))
     vv = page.evaluate("() => visualViewport.scale")
     if scale < 1.5:
-        fail(f"{tag}: a pinch zoomed the picture only to {scale:.2f}")
+        fail(f"{tag}: a pinch zoomed the picture only to {scale:.2f} (a cold first open, see check_viewer)")
     if abs(vv - 1) > 0.01:
         fail(f"{tag}: a pinch zoomed the page ({vv})")
     ok(f"{tag}: two fingers zoom the picture ({scale:.1f}×), the page stays at 1×")
@@ -284,33 +311,25 @@ def check_revisit(page, tag):
 
 
 def check_diff(page, tag):
+    """An edit's diff, in the Changes side panel since #9362 (the full-screen diff went with it): on a phone the panel
+    covers the screen, the page never scrolls sideways (a long line scrolls inside the diff), and Back closes it on the
+    chat."""
     go(page, READ)
     open_group(page)
     page.locator('main [data-action-row="Edit"] button').first.tap()
-    scr = page.locator("[data-diff-screen]")
-    expect(scr).to_be_visible()
-    page.wait_for_timeout(350)  # its slide-up
-    b = scr.bounding_box()
+    panel = page.locator("aside[aria-label=变更]")
+    expect(panel.locator("[data-changes-panel] [data-change-diff] [data-change-id]").first).to_be_visible()  # the edit drawn
+    page.wait_for_timeout(350)  # its slide-in
+    b = panel.bounding_box()
     cw = page.evaluate("document.documentElement.clientWidth")
     if abs(b["width"] - cw) > 1 or b["x"] > 1:
-        fail(f"{tag}: the diff is {b['width']:.0f} wide at {b['x']:.0f}, not the screen ({cw})")
-    more = scr.locator("[data-diff-more]")
-    expect(more).to_contain_text("展开其余")
-    n = scr.locator("[data-diff-line]").count()
-    if n != 40:
-        fail(f"{tag}: the folded diff shows {n} lines, not 40")
-    # a fade at the right edge while the lines go on past it, none when they fit
-    over, fade = scr.locator("[data-diff]").evaluate("e => [e.scrollWidth > e.clientWidth + 2, getComputedStyle(e).maskImage]")
-    if over != ("gradient" in fade):
-        fail(f"{tag}: lines {'overflow' if over else 'fit'} but the fade is {fade!r}")
+        fail(f"{tag}: the changes panel is {b['width']:.0f} wide at {b['x']:.0f}, not the screen ({cw})")
+    if page.evaluate("document.documentElement.scrollWidth") > cw:
+        fail(f"{tag}: the page scrolls sideways under the diff")
     shot(page, f"{tag}-diff")
-    more.tap()
-    expect(more).to_have_count(0)
-    if scr.locator("[data-diff-line]").count() <= 40:
-        fail(f"{tag}: 展开 did not show the rest")
-    ok(f"{tag}: the diff takes the screen, fades at the right, folds at 40 lines and opens to all")
+    ok(f"{tag}: an edit's diff opens in the changes panel over the whole screen")
     page.go_back()
-    expect(scr).to_have_count(0)
+    expect(panel).to_have_count(0)
     if not same_chat(READ, page.url):
         fail(f"{tag}: Back left the chat")
     ok(f"{tag}: Back closes the diff on the chat")
@@ -347,10 +366,11 @@ def desktop(browser, theme):
     h = main_box(page, "[data-work-group] > button")
     if h and h["height"] >= 32:
         fail(f"{tag}: the work group header grew on a desktop ({h['height']:.0f})")
-    btn = page.locator('main [data-answer] button[aria-label="拷贝代码"]').first
-    if float(btn.evaluate("e => getComputedStyle(e).opacity")) > 0.01:
-        fail(f"{tag}: copy code shows without hover on a desktop")
-    ok(f"{tag}: header {h['height']:.0f} tall, copy code waits for hover")
+    # a code block's Copy sits in its language bar, always shown (#3210: the corner button that waited for hover is gone)
+    btn = page.locator('main [data-answer] [data-code-bar] button[aria-label="复制代码"]').first
+    if float(btn.evaluate("e => getComputedStyle(e).opacity")) < 0.99:
+        fail(f"{tag}: copy code is not shown in the code bar on a desktop")
+    ok(f"{tag}: header {h['height']:.0f} tall, copy code in the code bar")
     shot(page, f"{tag}-read")
     ctx.close()
 

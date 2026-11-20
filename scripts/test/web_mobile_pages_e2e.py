@@ -16,6 +16,7 @@ Prints one line per check and a verdict; exits 1 on the first failure. --shots s
 import argparse
 import json
 import os
+import re
 import sys
 
 from playwright.sync_api import expect, sync_playwright
@@ -130,6 +131,7 @@ def touch_hit(page, tag):
     goto(page, "/settings?tab=general")
     sw = page.locator("[role=switch]").first
     sw.wait_for()
+    sw.scroll_into_view_if_needed()  # below a phone's first screen since #10656 (the font pickers above it)
     res = page.evaluate("""() => { const b = document.querySelector('[role=switch]'); const r = b.getBoundingClientRect();
       return { h: r.height, hit: document.elementFromPoint(r.left + r.width / 2, r.top - 8)?.closest('[role=switch]') === b }; }""")
     check(res["h"] < 44 and res["hit"], f"{tag}: a {res['h']:.0f}px switch is hit 8px above it", res)
@@ -138,14 +140,20 @@ def touch_hit(page, tag):
 def settings_list(page, tag, shots):
     goto(page, "/settings")
     page.locator('nav[aria-label="设置分类"]').wait_for()
-    rows = page.evaluate("() => [...document.querySelectorAll('nav[aria-label=\"设置分类\"] button')].map(b => [b.textContent.trim(), Math.round(b.getBoundingClientRect().height)])")
+    # the categories' rows; the first group's 切换 (#3667, its assistants) is a text button in its title line
+    rows = page.evaluate("() => [...document.querySelectorAll('nav[aria-label=\"设置分类\"] button:not([data-settings-switch])')].map(b => [b.textContent.trim(), Math.round(b.getBoundingClientRect().height)])")
     check(len(rows) >= 10 and all(h >= 44 for _, h in rows), f"{tag}: 设置 opens on the list of categories, rows of 44pt+", rows)
+    sw = page.evaluate("""() => { const b = document.querySelector('[data-settings-switch]'); if (!b) return null; const r = b.getBoundingClientRect();
+      const at = (y) => document.elementFromPoint(r.left + r.width / 2, y)?.closest('[data-settings-switch]') === b;
+      return { h: r.height, up: at(r.top - 10), down: at(r.bottom + 10) }; }""")
+    check(sw is None or (sw["up"] and sw["down"]), f"{tag}: 切换 is hit 10px above and below it", sw)
     shot(page, shots, f"settings_list_{tag}")
-    page.get_by_role("button", name="Codex").tap()
-    page.wait_for_function("location.search === '?tab=codex'")
-    expect(page.locator("header h1")).to_have_text("Codex")
-    check(page.locator('nav[aria-label="设置分类"]').count() == 0, f"{tag}: Codex opens as its own page with a back button")
-    shot(page, shots, f"settings_codex_{tag}")
+    # Codex is a section of Agent since #2317 (Claude Code, Codex, Antigravity, omp, one category)
+    page.locator('nav[aria-label="设置分类"]').get_by_role("button", name=re.compile(r"^Agent")).tap()
+    page.wait_for_function("location.search === '?tab=agents'")
+    expect(page.locator("header h1")).to_have_text("Agent")
+    check(page.locator('nav[aria-label="设置分类"]').count() == 0, f"{tag}: Agent opens as its own page with a back button")
+    shot(page, shots, f"settings_agents_{tag}")
     page.go_back()
     page.wait_for_function("location.pathname === '/settings' && location.search === ''")
     page.locator('nav[aria-label="设置分类"]').wait_for()
@@ -355,10 +363,11 @@ def wide_dialog(browser, base, token, shots):
     if shots:
         open_new_agent(page, tap=False)
         shot(page, shots, "dialog_1280")
-    # Settings keeps its tab bar
+    # Settings keeps its categories beside the page (a column since #2342, not the phone's list): /settings is 通用
     page.goto(f"{base}/settings")
     page.locator('nav[aria-label="设置分类"] button[aria-current="page"]', has_text="通用").wait_for()
-    check(page.locator("header nav[aria-label='设置分类']").count() == 1, "1280: 设置 keeps the tab bar, /settings is 通用")
+    check(page.locator("aside nav[aria-label='设置分类']").count() == 1 and page.get_by_role("button", name="返回设置").count() == 0,
+          "1280: 设置 keeps its category column, /settings is 通用")
     ctx.close()
 
 
