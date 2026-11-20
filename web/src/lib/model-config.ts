@@ -152,7 +152,4 @@ export function modelSummary(p: ModelPurpose, providers: ModelProvider[] = []): 
   return [name, p.effective?.model, p.effective?.effort && t("lib-model-config.effort", { effort: p.effective.effort }), runtime].filter(Boolean).join(" · ") || t("lib-model-config.not_configured");
 }
 
-/** The main chat's note when it asked for the Agent SDK and runs on the CLI (the session's `runtime_fallback`). */
-export function runtimeFallbackText(reason: string): string {
-  return t("lib-model-config.runtime_fallback", { reason: reason.trim() });
-}
+export { runtimeFallbackText } from "./runtime-fallback";
