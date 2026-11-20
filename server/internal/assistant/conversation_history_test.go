@@ -201,7 +201,7 @@ func TestDurableHistoryIncrementalGenerationAndRollback(t *testing.T) {
 	rt.mu.Lock()
 	cursor := append([]int(nil), rt.after...)
 	rt.mu.Unlock()
-	if fmt.Sprint(cursor) != "[0 6]" {
+	if fmt.Sprint(cursor) != "[0 6 6]" {
 		t.Fatalf("not incremental: %v", cursor)
 	}
 	if p := readHistory(t, s, "main-chat", map[string]any{"after_seq": 6, "lazy_images": true}); len(p.Items) != 1 || p.Items[0].ID != "a4" {
@@ -384,8 +384,8 @@ func TestDurableHistoryUsesNormalizedContractAcrossEngines(t *testing.T) {
 	rt.mu.Lock()
 	reads := rt.reads
 	rt.mu.Unlock()
-	if reads != 10 {
-		t.Fatalf("fake runtime page reads %d, want one per engine", reads)
+	if reads != 20 {
+		t.Fatalf("fake runtime page reads %d, want ingestion plus summary-generation verification per engine", reads)
 	}
 }
 
@@ -485,6 +485,25 @@ func TestDurableHistoryMissingGenerationKeepsLegacyRuntimeFallback(t *testing.T)
 	}
 	if h, err := database.ConversationHistory(t.Context(), "server", "main-chat"); err != nil || h != nil {
 		t.Fatalf("invented coverage without source identity %+v %v", h, err)
+	}
+}
+
+func TestDurableHistorySummaryReadCannotCrossARewrite(t *testing.T) {
+	s, f, database, rt := historyFixture(t)
+	f.answerNode(DeviceAssistantHandoff, func(_ string, _ json.RawMessage) (any, error) {
+		rt.mu.Lock()
+		defer rt.mu.Unlock()
+		rt.history = "h2"
+		rt.items = []proto.Item{{ID: "replacement", Seq: 1, Role: "assistant", Kind: proto.KindText, Text: "new generation"}}
+		return map[string]any{"summary": "summary after the rewrite"}, nil
+	})
+	err := s.historySync(t.Context(), database, "server", proto.Session{SessionID: "main-chat", Assistant: true, Rev: 100})
+	if !errors.Is(err, db.ErrConversationHistoryChanged) {
+		t.Fatalf("cross-generation summary accepted: %v", err)
+	}
+	h, err := database.ConversationHistory(t.Context(), "server", "main-chat")
+	if err != nil || h == nil || h.History != "h1" || h.SummaryKnown || h.Summary != "" {
+		t.Fatalf("summary leaked across generation %+v %v", h, err)
 	}
 }
 

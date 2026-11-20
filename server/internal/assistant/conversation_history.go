@@ -724,6 +724,18 @@ func (s *Service) historySync(ctx context.Context, st conversationHistoryStore, 
 				err := s.historySource(cctx, machine, DeviceAssistantHandoff, map[string]any{"session_id": c.SessionID}, &handoff)
 				cancel()
 				if err == nil {
+					// The summary is read through a separate runtime method. Fence a
+					// rewrite between the page and summary reads before checkpointing it.
+					var verified historyPage
+					cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+					verifyErr := s.historySource(cctx, machine, DeviceSessionItems, map[string]any{"session_id": c.SessionID, "after_seq": intValue(fresh.TailSeq), "limit": 1, "lazy_images": true}, &verified)
+					cancel()
+					if verifyErr != nil {
+						return verifyErr
+					}
+					if verified.History != fresh.History {
+						return db.ErrConversationHistoryChanged
+					}
 					if err := st.PutConversationSummary(ctx, machine, c.SessionID, fresh.History, fresh.Revision, clip(handoff.Summary, 12000)); err != nil {
 						return err
 					}
