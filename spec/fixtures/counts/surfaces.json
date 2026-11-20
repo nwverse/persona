@@ -131,8 +131,8 @@
       "code": [{"file": "android/feature/agents/src/main/kotlin/persona/feature/agents/AgentsListInfo.kt", "symbol": "agentNeedsYouRows"}],
       "tests": [{"file": "android/feature/agents/src/test/kotlin/persona/feature/agents/AgentsListInfoTest.kt", "symbol": "agentNeedsYouRows"}],
       "status": "differs",
-      "decisions": ["D6"],
-      "why": "It keeps muted agents and quiet tasks' agents as rows, which the count leaves out."
+      "decisions": ["D6", "D1"],
+      "why": "It keeps muted agents and quiet tasks' agents as rows, which the count leaves out, and, reading no hidden_by_directory, a directory-hidden session that waits (the needs-you fixture's Android mark, D1)."
     },
     {
       "client": "web",
@@ -204,7 +204,7 @@
       ],
       "tests": [{"file": "server/internal/assistant/fleet_attention_test.go", "symbol": "TestLiveActivityKeepsItsOwnCount"}],
       "status": "differs",
-      "decisions": ["D4", "D2"],
+      "decisions": ["D4", "D1", "D2"],
       "why": "A Persona conversation counts by a standing card, an elicitation does not stand, a card on no session does not count, and only the default manager's agents are in it."
     },
     {
@@ -457,8 +457,8 @@
       "code": [{"file": "apple/Persona/App/AppIconBadge.swift", "symbol": "AppIconBadge.count"}],
       "tests": [{"file": "apple/PersonaTests/AppIconBadgeTests.swift", "symbol": "AppIconBadgeTests"}],
       "status": "differs",
-      "decisions": ["D9", "D12"],
-      "why": "The tabs' badges added up, set by the app only, so it goes stale while the app is not running."
+      "decisions": ["D9", "D1", "D12"],
+      "why": "The tabs' badges added up, the Agents badge's difference on hubs with bounded lists included (ios.agents_tab, D1), set by the app only, so it goes stale while the app is not running."
     },
     {
       "client": "ios",
@@ -470,8 +470,8 @@
       "code": [{"file": "apple/Vision/App/VisionShell.swift", "symbol": "VisionShell"}],
       "tests": [],
       "status": "differs",
-      "decisions": ["D9"],
-      "why": "The Persona and Agents tabs' badges added up."
+      "decisions": ["D9", "D1"],
+      "why": "The Persona and Agents tabs' badges added up, the Agents badge's difference on hubs with bounded lists included (ios.agents_tab, D1)."
     }
   ]
 }

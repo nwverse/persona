@@ -8,7 +8,8 @@ draws, its scope, each client's code symbol and test, and whether drawing the ma
   row none; a row that draws a count whose rule waits on a decision differs, naming it;
 - every code symbol is declared in its file, and every test file names its symbol;
 - `matches` rows with the same label draw the same count;
-- the replays' report surfaces (`replays`) are rows of each lane, read from keys every fixture case has;
+- the replays' report surfaces (`replays`) are rows of each lane, read from keys every fixture case has, and a
+  lane's mark in a case (`known_differences.<lane>`) on a key a surface reads is in that row's `decisions`;
 - the `differs` rows only go down: the README states how many there are, and none is new against the base commit;
 - a hub-fed surface (a row with `view`) names its fallback in no source file of its client but the fallback's own;
 - check-fast runs this guard for every file the table names (scripts/ci/check_fast_map.py).
@@ -226,6 +227,29 @@ def replay_problems(table, root):
             for key in (read.get("value"), read.get("keys")):
                 if not key or any(key not in case.get("expected", {}) for case in cases):
                     found.append(f"replays.{fixture}.{surface}: not every case's expected has {key}")
+            found += mark_problems(table, fixture, cases, replay, surface, read)
+    return found
+
+
+def mark_problems(table, fixture, cases, replay, surface, read):
+    """A lane's mark (known_differences.<lane>) that changes a key the surface reads makes the lane's row differ,
+    naming the mark's decision: that row cannot match until the decision settles the mark."""
+    found = []
+    rows = {rid(row): row for row in table["surfaces"]}
+    keys = {read.get("value"), read.get("keys")}
+    for case in cases:
+        expected = case.get("expected", {})
+        for lane, mark in (case.get("known_differences") or {}).items():
+            row = rows.get(f"{lane}.{surface}")
+            if lane not in replay.get("lanes", []) or row is None or not isinstance(mark, dict):
+                continue
+            replaced = mark.get("replace") or {}
+            if not any(key in replaced and replaced[key] != expected.get(key) for key in keys):
+                continue
+            decision = mark.get("decision")
+            if row.get("status") != "differs" or decision not in (row.get("decisions") or []):
+                found.append(f"{rid(row)}: {fixture}'s case {case.get('name')} marks it as {decision}, "
+                             "which the row's decisions do not name")
     return found
 
 
@@ -357,7 +381,9 @@ class SeededViolationTests(unittest.TestCase):
         "web/src/lib/inbox.test.ts": "import { badgeCount } from './inbox';\n",
         "server/internal/live/live.go": "package live\n\nfunc (s *Service) needsYou() int { return 1 }\n",
         "spec/fixtures/cases/cases.json": json.dumps({"version": 1, "cases": [
-            {"name": "one", "expected": {"rows": [{"id": "a", "cards": []}], "badge": 1}}]}),
+            {"name": "one", "expected": {"rows": [{"id": "a", "cards": []}], "badge": 1}},
+            {"name": "marked", "expected": {"rows": [], "badge": 0},
+             "known_differences": {"ios": {"decision": "D1", "why": "Bounded lists.", "replace": {"badge": 1}}}}]}),
     }
     TABLE = {
         "version": 1,
@@ -451,6 +477,7 @@ class SeededViolationTests(unittest.TestCase):
         def fewer(t):
             t["surfaces"][0]["status"] = "matches"
             del t["surfaces"][0]["decisions"]
+            t["replays"] = {}  # the seed's mark on ios.tab goes with it, as a real one would
         self.assertEqual([], self.run_guard(self.broken(fewer), readme="`differs` rows today: 1", base=self.TABLE))
 
     def test_a_differs_row_names_a_decision_of_the_plan(self):
@@ -478,6 +505,20 @@ class SeededViolationTests(unittest.TestCase):
                           "android reports tab")
         self.assertCaught(self.broken(lambda t: t["replays"]["cases"]["surfaces"]["tab"].update(keys="badge_rows")),
                           "badge_rows")
+
+    def test_a_lanes_mark_on_a_surface_is_in_its_rows_decisions(self):
+        self.assertCaught(self.broken(lambda t: t["surfaces"][0].update(decisions=["D7"])),
+                          "ios.tab", "marked", "D1")
+
+        def matching(t):
+            t["surfaces"][0]["status"] = "matches"
+            del t["surfaces"][0]["decisions"]
+        self.assertCaught(self.broken(matching), "ios.tab", "marked", "D1", readme="`differs` rows today: 1.\n")
+        # A mark on a key the surface does not read leaves the row alone.
+        self.assertEqual([], mark_problems(self.TABLE, "cases", [
+            {"name": "other", "expected": {"rows": [], "badge": 0, "extra": 0},
+             "known_differences": {"ios": {"decision": "D7", "replace": {"extra": 1}}}}],
+            self.TABLE["replays"]["cases"], "tab", {"value": "badge", "keys": "rows"}))
 
     def test_a_hub_fed_surface_names_its_fallback_only_in_the_fallback_file(self):
         def fed(t):

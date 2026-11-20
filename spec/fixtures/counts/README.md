@@ -29,7 +29,7 @@ count (`docs/design/PRINCIPLES.md`, "Consistency first" and "Rules are checkable
 | `code` | The functions that compute it, `{file, symbol}`; a dotted symbol is a member of a type |
 | `tests` | The tests that hold it, `{file, symbol}`; empty where none does today |
 | `status` | `matches`: drawing the count from the manager's view would show today's number on every hub. `differs`: it would not |
-| `decisions` | For `differs`, the decisions of the plan's section 6 that settle it, the first the one that changes its number |
+| `decisions` | For `differs`, the decisions of the plan's section 6 that settle it, the first the one that changes its number. A row that draws another row's number (the app icon adds up the tabs' badges) names that row's decisions too, which only review can check; a lane's mark in a replayed case names its decision on that lane's row, which the guard checks |
 | `why` | In a sentence, what the client counts that the count does not, or why it matches |
 | `view` | Only once the client draws the view (the plan's steps 8 to 10): `{"fallback": {file, symbol}}`, the frozen fallback that today's rule moves into |
 
@@ -49,6 +49,8 @@ Inbox part, the Inbox tab on iOS, Android and the web, and the manager's To-dos 
 - every `code` symbol is declared in its file (each part of a dotted one), and every `tests` file names its symbol;
 - `matches` rows with the same label draw the same count;
 - each replay's surfaces are rows of every lane that reports them, read from keys every case's `expected` has;
+- a lane's mark in a replayed case (`known_differences.<lane>`) that changes a key a surface reads makes that lane's
+  row differ and name the mark's decision;
 - the `differs` rows only go down: the count above is the table's, and against the base commit (`CI_BASE_SHA`, else
   the merge base with `origin/main`) no row differs that did not;
 - a row with `view` names its fallback symbol in no source file of its client but the fallback's own (tests aside);
