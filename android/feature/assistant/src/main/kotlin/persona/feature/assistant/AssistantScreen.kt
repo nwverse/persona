@@ -390,7 +390,11 @@ fun AssistantScreen(
     // new-conversation page.
     val faceState = personaState(active?.let { key -> snapshot.conversations.firstOrNull { it.key == key } }, hubOnline,
         machines, assistantMachine)
-    SideEffect { sharedSidebar?.personaState = faceState; sharedSidebar?.active = active }
+    SideEffect {
+        sharedSidebar?.personaState = faceState
+        sharedSidebar?.active = active
+        sharedSidebar?.healthInFront = onHealthChat || healthPage
+    }
     fun openConversation(key: SessionKey) {
         newChat = null
         if (key == PendingMainConversation) {
@@ -871,10 +875,12 @@ fun AssistantScreen(
                             // On a health chat (or the health space's new-chat page) New starts another health chat. Off on
                             // the blank page itself, as iOS's (#4339 C18).
                             val health = onHealthChat || healthPage
-                            JIconButton(PhIcons.NotePencil,
-                                stringResource(if (health) R.string.assistant_health_new else R.string.assistant_new_conversation),
-                                { if (health) startHealthConversation() else startNewConversation() },
-                                enabled = !sending && managers.offline == null && (active != null || viewingMainQueue))
+                            if (health || LocalHomeChrome.current?.showSwitch != false) {
+                                JIconButton(PhIcons.NotePencil,
+                                    stringResource(if (health) R.string.assistant_health_new else R.string.assistant_new_conversation),
+                                    { if (health) startHealthConversation() else startNewConversation() },
+                                    enabled = !sending && managers.offline == null && (active != null || viewingMainQueue))
+                            }
                             if (LocalHomeChrome.current == null) JIconButton(PhIcons.UserCircle, stringResource(R.string.assistant_profile), {
                                 if (pageManagement != null) settingsOpen = true else info = AssistantInfo.Settings
                             })
@@ -1444,6 +1450,9 @@ internal fun AssistantDrawer(
     shadedPlace: String? = null,
     /** Folds the sidebar column from its own header while it sits beside the page; null in a drawer or floating overlay. */
     onFoldColumn: (() -> Unit)? = null,
+    merged: MergedSidebarContent? = null,
+    showSchedule: Boolean = true,
+    onAgentSearch: () -> Unit = {},
 ) {
     // iOS UnifiedSidebar.atRoot (UnifiedSidebar.swift:39–41): a place root shades its row, not a conversation.
     val shadeConversations = shadedPlace == null || shadedPlace == AssistantSidebarShade.Conversation
@@ -1455,7 +1464,7 @@ internal fun AssistantDrawer(
     val foldStore = remember { SidebarFoldStore(foldContext) }
     var recentFolded by remember { mutableStateOf(foldStore.recentFolded) }
     // The open conversation's row still shows while folded, so folding never hides where a message lands (iOS holdsCurrent).
-    val holdsCurrent = active != null && groups.recent.any { it.key == active }
+    val holdsCurrent = (merged == null || shadeConversations) && active != null && groups.recent.any { it.key == active }
     val recentOpen = !recentFolded || holdsCurrent
     // The drawer's head and main-conversation row read the same name as the page's top bar and the switcher (#6401):
     // the current manager's name, with the persona pack's name only as the no-roster fallback.
@@ -1465,7 +1474,9 @@ internal fun AssistantDrawer(
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     val drawer = LocalHomeDrawer.current
     // Regular-window column: Search opens the full-window page. Compact Glass drawer: the inline field toggles.
-    val searchInHead = drawer || fullWindowSearch
+    val searchInHead = merged == null && (drawer || fullWindowSearch)
+    var pagesFolded by remember { mutableStateOf(foldStore.pagesFolded) }
+    var chatsFolded by remember { mutableStateOf(foldStore.chatsFolded) }
     val resources = androidx.compose.ui.platform.LocalResources.current
     val haptics = rememberHaptics()
     Column(Modifier.fillMaxHeight().padding(horizontal = if (drawer) Tokens.Space.s else 12.dp.dense)) {
@@ -1497,7 +1508,7 @@ internal fun AssistantDrawer(
         // The head as it was (the persona's name; only the compact drawer / regular-window Search or fold button has one),
         // where there is no switcher to show.
         val plainHead: @Composable () -> Unit = {
-            if (headTrailing != null) Row(
+            if (headTrailing != null || merged != null) Row(
                 Modifier.fillMaxWidth().then(headPadding),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1507,31 +1518,33 @@ internal fun AssistantDrawer(
                     color = PersonaTheme.palette.ink,
                     modifier = Modifier.weight(1f),
                 )
-                headTrailing()
+                headTrailing?.invoke()
             }
         }
         if (switcher != null) switcher(headPadding, headTrailing, plainHead) else plainHead()
-        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 12.dp.dense)) {
-            // The main conversation is first and listed only once, including during text search.
-            // An exact tag filter also applies to this row.
-            if (activeTag == null || groups.main != null) item(key = "persona") {
-                val mainHit = found?.firstOrNull { it.session.key == groups.main?.key }?.hit
-                MainConversationRow(groups.main, selected = shadeConversations && groups.main != null && groups.main.key == active, hasMain = hasMain,
-                    onMain = {
-                        val main = groups.main
-                        if (main != null && mainHit != null) MessageJumps.request(main.machineId, main.sessionId, mainHit.itemId)
-                        onMain()
-                    }, onEnd = groups.main?.let { m -> onEnd?.let { action -> { action(m) } } },
-                    onCopy = { groups.main?.let(onCopy) },
-                    onEditTags = groups.main?.let { m -> onEditTags?.let { action -> { action(m) } } },
-                    onDiagnostics = groups.main?.let { m -> onDiagnostics?.let { action -> { action(m) } } },
-                    said = mainHit?.let(::markedSnippet))
-                JDivider(Modifier.padding(vertical = Tokens.Space.s))
-            }
-            if (!drawer) item { JSectionHeader(stringResource(R.string.assistant_more)) }
+        val mainRow: @Composable () -> Unit = {
+            val mainHit = found?.firstOrNull { it.session.key == groups.main?.key }?.hit
+            MainConversationRow(groups.main,
+                selected = shadeConversations && groups.main?.key == active && (merged != null || groups.main != null),
+                hasMain = hasMain,
+                onMain = {
+                    val main = groups.main
+                    if (main != null && mainHit != null) MessageJumps.request(main.machineId, main.sessionId, mainHit.itemId)
+                    onMain()
+                }, onEnd = groups.main?.let { m -> onEnd?.let { action -> { action(m) } } },
+                onCopy = { groups.main?.let(onCopy) },
+                onEditTags = groups.main?.let { m -> onEditTags?.let { action -> { action(m) } } },
+                onDiagnostics = groups.main?.let { m -> onDiagnostics?.let { action -> { action(m) } } },
+                said = mainHit?.let(::markedSnippet))
+        }
+        if (merged != null) mainRow()
+        val pageRows: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {
+            if (!drawer && merged == null) item { JSectionHeader(stringResource(R.string.assistant_more)) }
             // The compact drawer keeps only iPhone destinations; extra actions remain in the selected Assistant menu.
-            val totalMore = (if (drawer) 2 else 4) + (if (showTodos && onTodos != null) 1 else 0) +
-                (if (onInbox != null) 1 else 0) + (if (onHealth != null) 1 else 0) + pages.size
+            val showKnowledge = merged?.showKnowledge != false
+            val extraPages = !drawer && merged == null
+            val totalMore = listOf(showSchedule, showKnowledge, extraPages, extraPages,
+                showTodos && onTodos != null, onInbox != null, onHealth != null).count { it } + pages.size
             // Each row's place in the group is taken while the list is built: counted inside an item's own content, it
             // was counted again whenever only some rows recomposed, and the group's corners landed on the wrong rows.
             var moreIndex = 0
@@ -1541,10 +1554,15 @@ internal fun AssistantDrawer(
             }
             if (onInbox != null) more { DrawerItem(stringResource(R.string.assistant_origin_inbox), PhIcons.Tray, badge = inboxCount, onClick = onInbox, selected = shadedPlace == AssistantSidebarShade.Inbox) }
             if (showTodos && onTodos != null) more { DrawerItem(stringResource(R.string.assistant_todos), PhIcons.ListChecks, badge = todoCount, onClick = onTodos, selected = shadedPlace == AssistantSidebarShade.Todos) }
-            more { DrawerItem(stringResource(AssistantInfo.Schedule.title), PhIcons.Clock, onClick = { onInfo(AssistantInfo.Schedule) }) }
-            more { DrawerItem(stringResource(AssistantInfo.Knowledge.title), PhIcons.BookOpen, onClick = { onInfo(AssistantInfo.Knowledge) }, selected = shadedPlace == AssistantSidebarShade.Knowledge) }
-            if (onHealth != null) more { DrawerItem(stringResource(R.string.assistant_health), PhIcons.Heart, onHealth) }
-            if (!drawer) {
+            if (showSchedule) more {
+                DrawerItem(stringResource(AssistantInfo.Schedule.title), PhIcons.Clock, onClick = { onInfo(AssistantInfo.Schedule) },
+                    selected = shadedPlace == AssistantSidebarShade.Schedule)
+            }
+            if (showKnowledge) more { DrawerItem(stringResource(AssistantInfo.Knowledge.title), PhIcons.BookOpen, onClick = { onInfo(AssistantInfo.Knowledge) }, selected = shadedPlace == AssistantSidebarShade.Knowledge) }
+            if (onHealth != null) more {
+                DrawerItem(stringResource(R.string.assistant_health), PhIcons.Heart, onHealth, selected = shadedPlace == AssistantSidebarShade.Health)
+            }
+            if (extraPages) {
                 more { DrawerItem(stringResource(AssistantInfo.Session.title), PhIcons.Info, onClick = { onInfo(AssistantInfo.Session) }) }
                 more { DrawerItem(stringResource(AssistantInfo.Launcher.title), PhIcons.RocketLaunch, onClick = { onInfo(AssistantInfo.Launcher) }) }
             }
@@ -1556,10 +1574,11 @@ internal fun AssistantDrawer(
                         else if (page.dot) JStatusDot(Status.NeedsYou, breathes = false)
                     })
             } }
-            if (drawer) item { JDivider(Modifier.padding(vertical = Tokens.Space.s)) }
+        }
+        val chatRows: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {
             // Regular window: the field lives in the full-window search; compact keeps the inline field (and any stale
             // query typed before unfolding remains clearable until blank).
-            if ((!fullWindowSearch && (!drawer || searchVisible)) || query.isNotBlank()) {
+            if (merged == null && ((!fullWindowSearch && (!drawer || searchVisible)) || query.isNotBlank())) {
                 item { JSearchField(query, onQuery, stringResource(R.string.assistant_search_chats)) }
             }
             if (tagChoices.isNotEmpty()) item(key = "conversation-tag-filter") {
@@ -1602,7 +1621,7 @@ internal fun AssistantDrawer(
                 // With the hub's direction tree a lead folds open to its to-dos and their Agents (#4352, DirectionRows.kt).
                 DirectionLeadRows(groups.tree?.direction(session.sessionId)?.takeUnless { it.secretary },
                     groups.names[session.sessionId] ?: session.conversationTitle(conversationWords()),
-                    GroupPosition.of(index, groups.directions.size), onOpenTodo, onOpenAgent, shadedPlace) { position, disclosure ->
+                    GroupPosition.of(index, groups.directions.size), onOpenTodo, onOpenAgent, shadedPlace.takeIf { merged == null }) { position, disclosure ->
                     ConversationRow(session, selected = shadeConversations && session.key == active,
                         position = position,
                         onOpen = { onOpen(session.key) }, onEnd = onEnd?.let { action -> { action(session) } },
@@ -1672,20 +1691,63 @@ internal fun AssistantDrawer(
                     stringResource(if (query.isBlank()) R.string.assistant_empty_detail else R.string.assistant_no_match_detail)) }
             }
             }
-
         }
-        Row(Modifier.then(if (drawer) Modifier.padding(horizontal = Tokens.Space.l) else Modifier)
-            .padding(vertical = if (drawer) Tokens.Space.m else Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
-            JSidebarNewChat(stringResource(R.string.assistant_new_conversation), onNew, if (drawer) Modifier else Modifier.weight(1f))
-            if (drawer) Spacer(Modifier.weight(1f))
-            Box {
-                JIconButton(PhIcons.Gear, stringResource(R.string.assistant_open_settings), onSettings, raised = drawer)
-                when {
-                    settingsBadge != null -> JTag(settingsBadge, Modifier.align(Alignment.TopEnd))
-                    settingsCount > 0 -> JBadge(settingsCount, Modifier.align(Alignment.TopEnd))
-                    settingsDot -> JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd), breathes = false) // still, as iOS's `ExtensionSettingsBadge`
+        val assistantRows: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {
+            if (merged == null && (activeTag == null || groups.main != null)) item(key = "persona") {
+                mainRow()
+                JDivider(Modifier.padding(vertical = Tokens.Space.s))
+            }
+            if (merged != null) item(key = "sidebar-pages") {
+                JSidebarSectionHeading(stringResource(R.string.assistant_sidebar_pages), open = !pagesFolded,
+                    onToggle = { pagesFolded = !pagesFolded; foldStore.setPagesFolded(pagesFolded) })
+            }
+            if (merged == null || !pagesFolded) {
+                pageRows()
+            }
+            if (drawer && merged == null) item { JDivider(Modifier.padding(vertical = Tokens.Space.s)) }
+            if (merged != null) item(key = "sidebar-persona-chats") {
+                JSidebarSectionHeading(stringResource(R.string.assistant_sidebar_chats), open = !chatsFolded,
+                    onToggle = { chatsFolded = !chatsFolded; foldStore.setChatsFolded(chatsFolded) })
+            }
+            if (merged == null || !chatsFolded) {
+                chatRows()
+            }
+        }
+        val footer: @Composable () -> Unit = {
+            merged?.usage?.invoke()
+            Row(
+                Modifier.then(if (drawer) Modifier.padding(horizontal = Tokens.Space.l) else Modifier)
+                    .padding(vertical = if (drawer) Tokens.Space.m else Tokens.Space.s),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                JSidebarNewChat(stringResource(R.string.assistant_new_conversation), onNew,
+                    if (drawer && merged == null) Modifier else Modifier.weight(1f))
+                if (drawer && merged == null) Spacer(Modifier.weight(1f))
+                val settings: @Composable () -> Unit = {
+                    Box {
+                        JIconButton(PhIcons.Gear, stringResource(R.string.assistant_open_settings), onSettings,
+                            raised = drawer && merged == null)
+                        when {
+                            settingsBadge != null -> JTag(settingsBadge, Modifier.align(Alignment.TopEnd))
+                            settingsCount > 0 -> JBadge(settingsCount, Modifier.align(Alignment.TopEnd))
+                            settingsDot -> JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd), breathes = false)
+                        }
+                    }
+                }
+                if (merged == null) settings() else {
+                    Spacer(Modifier.width(Tokens.Space.s))
+                    JSidebarFooterControls {
+                        JIconButton(PhIcons.MagnifyingGlass, stringResource(R.string.assistant_sidebar_search), onFullSearch, raised = false)
+                        settings()
+                    }
                 }
             }
+        }
+        if (merged != null) {
+            Box(Modifier.weight(1f)) { merged.list(assistantRows, footer, onAgentSearch) }
+        } else {
+            LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 12.dp.dense), content = assistantRows)
+            footer()
         }
     }
 }

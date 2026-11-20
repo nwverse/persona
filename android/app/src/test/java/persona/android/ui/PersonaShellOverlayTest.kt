@@ -474,14 +474,68 @@ class PersonaShellOverlayTest {
         }
     }
 
+    @Config(qualifiers = "en-w411dp-h951dp-mdpi")
+    @Test fun mergedDrawerPicksAPlaceAsRootAndKeepsItsDrillDownBack() {
+        shell(withTodos = true, sidebarLayout = SidebarLayout.Merged) { scenario ->
+            awaitText("The trip outline is ready.")
+            rule.onNodeWithTag("home-switcher").assertDoesNotExist()
+            sidebar()
+            rule.onNodeWithTag("merged-sidebar-list").performScrollToNode(hasText("To-dos"))
+            clickText("To-dos")
+            close().assertDoesNotExist()
+            awaitText("Trip plan")
+            assertTrue(hasDisplayedContentDescription("Sidebar"))
+            assertFalse(hasDisplayedContentDescription("Back"))
+            clickText("Trip plan")
+            awaitText(otherAgent.displayTitle)
+            assertTrue(hasDisplayedContentDescription("Back"))
+            back(scenario)
+            awaitText("Trip plan")
+            back(scenario)
+            awaitText("The trip outline is ready.")
+        }
+    }
+
+    @Config(qualifiers = "en-w1000dp-h800dp-mdpi")
+    @Test fun separateIsDefaultAndAppearanceSwitchKeepsTheOpenChatAndSettings() {
+        shell(sidebarLayout = SidebarLayout.Separate) { scenario ->
+            awaitText("The trip outline is ready.")
+            rule.onNodeWithTag("home-switcher").assertExists()
+            rule.onNodeWithTag("merged-sidebar-list").assertDoesNotExist()
+            val draft = "Draft before the sidebar change"
+            rule.onNode(hasSetTextAction()).performTextInput(draft)
+            frames()
+            rule.onNodeWithContentDescription("Settings").performClick()
+            frames()
+            clickText("Appearance")
+            rule.onNodeWithText("Separate").performScrollTo().assertIsSelected()
+            clickText("Merged")
+            rule.onNodeWithText("Merged").assertIsSelected()
+            rule.onNodeWithText("Separate").assertIsNotSelected()
+            clickText("Separate")
+            rule.onNodeWithText("Separate").assertIsSelected()
+            clickText("Merged")
+            back(scenario)
+            back(scenario)
+            awaitText("The trip outline is ready.")
+            rule.onNodeWithTag("home-switcher").assertDoesNotExist()
+            rule.onNodeWithTag("merged-sidebar-list").assertExists()
+            rule.onNode(hasSetTextAction() and hasText(draft)).assertExists()
+        }
+    }
+
     private fun shell(agents: Boolean = false, sideInset: Int = 0, width: MutableState<Int>? = null,
         withTodos: Boolean = false, groupByTodo: Boolean = false,
         automation: Boolean = true,
+        sidebarLayout: SidebarLayout? = null,
         openNavigation: MutableState<((Router) -> ResolvedRoute?)?>? = null,
         content: (@Composable (ShellSession) -> Unit)? = null,
         check: (ActivityScenario<ComponentActivity>) -> Unit) {
         AssistantManagerChoice.choose("hub", null, "assistant")
         val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
+        val appearance = sidebarLayout?.let {
+            AppStyleStore(app).also { store -> if (it != SidebarLayout.Separate) store.setSidebar(it) }
+        }
         Shadows.shadowOf(app.packageManager).addActivityIfNotPresent(ComponentName(app, ComponentActivity::class.java))
         val main = Session("computer", "assistant", title = "Main conversation", assistant = true)
         val recent = main.copy(sessionId = "recent", title = "Weekend plans")
@@ -603,7 +657,8 @@ class PersonaShellOverlayTest {
                                         historySession = snapshot.conversations.firstOrNull { it.key == key })
                                 })
                         }
-                        CompositionLocalProvider(LocalWindowInfo provides window, LocalAssistantHost provides assistantHost) {
+                        CompositionLocalProvider(LocalWindowInfo provides window, LocalAssistantHost provides assistantHost,
+                            LocalAppStyleStore provides appearance) {
                             Box(Modifier.then(if (width == null) Modifier.fillMaxSize() else
                                 Modifier.width(width.value.dp).fillMaxHeight())) {
                                 if (content != null) content(session)

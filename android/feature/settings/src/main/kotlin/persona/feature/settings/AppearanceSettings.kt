@@ -72,6 +72,7 @@ fun AppearanceSettings(modifier: Modifier = Modifier, agentsDisplay: AgentListDi
         ExtensionThemeOptions()
         SchemeOptions(store)
         DensityOptions(store)
+        SidebarOptions(store)
         if (current == AppStyle.Glass) {
             JSectionHeader(stringResource(R.string.settings_style_transparency))
             JSegmented(GlassPreference.entries.map { JSegment(it.label) }, GlassPreference.entries.indexOf(glass), { store.setGlass(GlassPreference.entries[it]) })
@@ -87,6 +88,21 @@ fun AppearanceSettings(modifier: Modifier = Modifier, agentsDisplay: AgentListDi
         // Glass draws the Agents list in the chosen row style (#4338 A9); Brief and Board keep Compact and Detailed (decision 8).
         if (current == AppStyle.Glass && agentsDisplay != null) AgentsListLayout(agentsDisplay)
     }
+}
+
+@Composable
+private fun SidebarOptions(store: AppStyleStore) {
+    val current by store.sidebar.collectAsState()
+    JSectionHeader(stringResource(R.string.settings_sidebar))
+    JSegmented(
+        listOf(
+            JSegment(stringResource(R.string.settings_sidebar_separate)),
+            JSegment(stringResource(R.string.settings_sidebar_merged)),
+        ),
+        SidebarLayout.entries.indexOf(current),
+        { store.setSidebar(SidebarLayout.entries[it]) },
+        modifier = Modifier.testTag("settings-sidebar-layout"),
+    )
 }
 
 /**

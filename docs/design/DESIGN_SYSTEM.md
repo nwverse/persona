@@ -1001,6 +1001,14 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
   one home of those requests, not a second home, and counts what the switch and tabs count (`agentsWaiting`). **The usage
   strip** (`SidebarUsageStrip`): the two fullest subscription accounts as name, percent and `UsageMeter`, the web
   sidebar's foot (#2432); a tap opens Machines. Separate stays the default and pixel-identical.
+- Android (#6378) offers the same **Separate** and **Merged** values under **Settings › Appearance › Sidebar**.
+  Separate is the Android default at every width. Merged uses the current left drawer and the regular window's
+  existing beside or overlay policy. Main conversation stays above the scrollable Pages, Persona Chats and Agents.
+  The first two sections keep their folds on the device. `JSidebarSectionHeading` gives all three headings one
+  sidebar row's height and `Space.s` above. The Agents list supplies its rows, filters, grouping and actions, with one
+  selected row for the visible root. The fixed Needs You jump uses the shell count. The two fullest subscription
+  accounts share their data with Computers. One New chat control and the Search and Settings capsule sit below them.
+  Search opens over the whole window in Chats or Agents. The Android guide lists the pages its capabilities expose.
 - One selected row in the Sidebar layout's column (#11032; `SidebarRootsUITests.testOneRowIsSelectedAndItFollowsTheRoot`):
   the whole column (Main Chat, the Pages rows, Persona Chats, the Agents list with Pinned) has at most one selected row, and
   it is the root of the page beside it (`UnifiedSidebar`: `atRoot`, `shownPlace`, `shownAgent`, all read from its roots). A
@@ -1547,6 +1555,10 @@ Real folding-feature evidence and fake-posture layout evidence are reported sepa
 ### 4.1 Navigation hierarchy (super rule 3)
 
 `docs/SUPER_RULES.md` rule 3: Assistant and Agents are the only primary home destinations on iOS, Android and web. Settings opens from the sidebar. Everything else (Recordings, Inbox, To-dos, Scheduled Tasks, Knowledge, Machines, Health, extension pages) is pushed from the drawer. Push by value for new pages; mixing view-based and value-based pushes in one stack is a known trap. An optional Messages page can be switched on and becomes a third primary destination; whether that fits rule 3 needs the rule owner (DS-26).
+
+On Android, a Merged sidebar pick replaces the visible root and closes the compact drawer or regular overlay.
+A beside column stays open. Navigation inside the visible root keeps its Back path, and external entries retain their
+route and session identities. The sidebar setting changes the presentation of Assistant and Agents.
 
 A dispatched task's Open link (#3711) is a compact row using existing typography, fill, radius and 44 pt touch-target
  tokens, not a filter or a link to the whole In Progress list. One task shows its title and Open; a plan lists only its
