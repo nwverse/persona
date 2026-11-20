@@ -296,7 +296,7 @@ func serviceTierRefusal(ctx context.Context, code string) error {
 
 // assistantSend delivers a user message, starting or restarting the headless claude when needed.
 // id == "" starts a new conversation and returns its id.
-func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string, images []proto.Image, mode, effort string, options ...modelExecution) (string, error) {
+func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string, images []proto.Image, mode, effort string, options ...modelExecution) (_ string, sendErr error) {
 	clientID, _ := ctx.Value(sendTraceKey{}).(string)
 	timing := assistantSendTiming{node: n, id: proto.SendTraceID(clientID), start: time.Now()}
 	timing.mark("assistant_received", true)
@@ -699,10 +699,18 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 				n.rememberTasks(id, nil)
 				p = nil
 			}
-			if pruned, _ := n.healClaudeRefusalTranscript(id); pruned {
+			if pruned, clean := n.healClaudeRefusalTranscript(id); pruned {
 				n.mu.Lock()
 				delete(n.ctxSent, id) // a fresh process takes the whole snapshot
 				n.mu.Unlock()
+				if !clean { // its file went with its only turn: started again below, an empty chat meanwhile
+					drop := n.startsBegun.begin(id, n.startWait())
+					defer func() {
+						if sendErr != nil {
+							drop()
+						}
+					}()
+				}
 			}
 		}
 	}

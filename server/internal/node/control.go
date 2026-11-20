@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -36,6 +37,16 @@ func newUUID() string {
 // agentType is the agent the user picked for the launcher (claude, codex, traex, omp, pi, cursor, agy); empty: what
 // the launcher runs.
 func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspaceID, mode, effort, tabName, newID, agentType string, options ...modelExecution) (_ *proto.Session, startErr error) {
+	if id := cmp.Or(resume, newID); id != "" {
+		// Until its process is listed, a read of it is an empty page (startingSession): a Resume keeps the record's
+		// first start time, and its transcript may be gone (healClaudeRefusalTranscript) or never written (#11450).
+		drop := n.startsBegun.begin(id, n.startWait())
+		defer func() {
+			if startErr != nil {
+				drop()
+			}
+		}()
+	}
 	execution := executionOption(options)
 	if err := checkStartSpeedValue(execution.Speed, resume); err != nil {
 		return nil, err
