@@ -152,7 +152,21 @@ extension AppModel {
                     }
                     while isLive(group), outboxCanFlush(key, store),
                           let i = store.pending.firstIndex(where: { $0.state == .waiting }) {
-                        if store.pending[i].refused == true, store.pending[i].requiredEffort != nil {
+                        if store.pending[i].refused == true, let effort = store.pending[i].requiredEffort {
+                            if latest(key)?.effort != effort {
+                                // The refusal may have arrived before the node's session update. Keep that receipt
+                                // until an exact read or a later push confirms the effort.
+                                let id = store.pending[i].id
+                                await refreshSessionDetail(key, force: true)
+                                guard outboxCanFlush(key, store) else { break }
+                                if let message = store.pending.first(where: { $0.id == id && $0.state == .waiting }),
+                                   let required = message.requiredEffort, latest(key)?.effort != required {
+                                    noteFailure(key, id, String(localized: "Thinking effort could not be confirmed. Choose it again before resending."))
+                                    settleSend(key, id, .waiting)
+                                    break
+                                }
+                                continue
+                            }
                             store.pending[i].id = UUID()
                             store.pending[i].refused = nil
                             saveOutbox()
@@ -173,11 +187,13 @@ extension AppModel {
     }
 
     /// A later choice also applies to the messages still waiting behind the earlier one.
-    func updateOutboxEffort(_ key: SessionKey, to effort: String) {
+    func updateOutboxEffort(_ key: SessionKey, to effort: String, includeFailed: Bool = false) {
         guard let store = existingChat(key) else { return }
         var changed = false
-        for i in store.pending.indices where store.pending[i].state == .waiting {
-            guard store.pending[i].requiredEffort != effort else { continue }
+        for i in store.pending.indices {
+            let message = store.pending[i]
+            let retryable = includeFailed && message.state == .failed && message.requiredEffort != nil && message.mayHaveArrived != true
+            guard message.state == .waiting || retryable, message.requiredEffort != effort else { continue }
             store.pending[i].requiredEffort = effort
             changed = true
         }

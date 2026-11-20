@@ -100,11 +100,21 @@ struct ModelSwitchTests {
         let hub = FakeHub()
         hub.on("POST", "/api/v1/sessions/box/s1/modes", json: #"{"ok":true,"pending_effort":"high"}"#)
         let key = SessionKey(machineID: "box", sessionID: "s1")
-        #expect(try await hub.client.setModes(key, effort: "high") == "high")
+        #expect(try await hub.client.setModes(key, effort: "high", queueEffort: true) == "high")
+        let body = try #require(hub.sent("POST", "/api/v1/sessions/box/s1/modes").first?.body)
+        #expect((try JSONSerialization.jsonObject(with: body) as? [String: Any])?["queue_effort"] as? Bool == true)
         let row = try session(#","effort":"low","pending_effort":"high","effort_change_failed":true"#)
         #expect(row.effort == "low")
         #expect(row.pendingEffort == "high")
         #expect(row.effortChangeFailed == true)
+    }
+
+    @Test func summaryConfirmationWinsOverCachedEffort() throws {
+        let pending = try session(#","effort":"low","pending_effort":"high""#)
+        let confirmed = try session(#","effort":"high","waiting":false"#)
+        let merged = confirmed.preservingDetails(from: pending)
+        #expect(merged.effort == "high")
+        #expect(merged.pendingEffort == nil)
     }
 
     @MainActor @Test func followUpsWaitForConfirmationAndGoInOrder() async throws {
@@ -140,6 +150,47 @@ struct ModelSwitchTests {
         }
         #expect(texts == ["first", "second"])
         #expect(app.chat(key).pending.map(\.state) == [.sent, .sent])
+    }
+
+    @MainActor @Test func earlyRefusalKeepsItsIDUntilEffortIsConfirmed() async throws {
+        let hub = FakeHub()
+        let path = "/api/v1/sessions/box/s1/messages"
+        hub.on("POST", path) { _ in
+            throw APIError(status: 409, message: "Thinking effort is changing", fields: [
+                "code": "effort_change_pending", "delivered": "none", "effort": "high",
+            ])
+        }
+        let app = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString))
+        app.forgetRestoredForTests()
+        app.apiForTests = hub.client
+        app.linksUpForTests = true
+        var row = try session(#","effort":"low","agent":"claude""#)
+        let key = row.key
+        app.applySessions([key.machineRef: [row]])
+
+        #expect(app.sendNow(key, text: "follow-up"))
+        let originalID = try #require(app.chat(key).pending.first?.id)
+        for _ in 0..<300 where app.chat(key).pending.first?.state == .sending {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(app.chat(key).pending.first?.state == .waiting)
+        #expect(app.chat(key).pending.first?.refused == true)
+        app.flushOutbox()
+        for _ in 0..<300 where app.flushingOutbox.contains(key.group) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(app.chat(key).pending.first?.id == originalID)
+        #expect(hub.sent("POST", path).count == 1)
+
+        hub.on("POST", path, json: #"{"ok":true}"#)
+        row.effort = "high"
+        app.applySessions([key.machineRef: [row]])
+        for _ in 0..<300 where app.chat(key).pending.first?.state != .sent {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(hub.sent("POST", path).count == 2)
+        #expect(app.chat(key).pending.first?.state == .sent)
+        #expect(app.chat(key).pending.first?.id != originalID)
     }
 
     /// "Other Model…" (#1644): a typed ID goes through …/modes like a listed one; the list it comes with is the

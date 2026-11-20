@@ -31,6 +31,7 @@ type watch struct {
 	live    liveWatch
 	// A TRAE or Codex transcript that may need a fresh database projection on a follow tick.
 	dbHistory bool
+	agy       *agyWatch
 }
 
 // watchEvery is how often the pump reads the watched transcripts; every followEvery ticks it also follows the copy
@@ -67,7 +68,7 @@ func (n *Node) watch(id string, since int) error {
 func (n *Node) watchFor(parent context.Context, id string, since int) error {
 	f, err := n.file(id)
 	if err != nil {
-		if !n.startingSession(id) {
+		if !n.knownSession(id) {
 			return err
 		}
 		// A session that just started has no transcript until claude writes its first line: watch once it exists,
@@ -270,6 +271,15 @@ func (n *Node) watchPump() {
 // refreshed the file it opened kept pushing an old copy while the list's rev went on with the new one (#1423).
 func (n *Node) pumpWatch(w *watch, live int) {
 	if !w.armed.Load() || w.ctx.Err() != nil { // not caught up yet, or ended (watchEnded drops it)
+		return
+	}
+	if w.agy != nil {
+		if w.reading.CompareAndSwap(false, true) {
+			go func() {
+				defer w.reading.Store(false)
+				n.pollAgyPane(w)
+			}()
+		}
 		return
 	}
 	w.ticks++

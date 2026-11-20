@@ -84,6 +84,10 @@ func startedAssistant(t *testing.T, n *Node, host *fakeRuntime) string {
 func TestAssistantOnARuntimeStartsAndSendsWithTheSnapshot(t *testing.T) {
 	n, hub := runtimeNode(t)
 	assistantHub(hub)
+	n.dir = filepath.Join(n.home, ".persona")
+	cwd := filepath.Join(n.dir, "assistant")
+	privateMemory := filepath.Join(n.dir, "profiles", "claude", "projects", memoryKey(cwd), "memory")
+	writeNote(t, privateMemory, "runtime-copy.md", "A note from another profile.\n", time.Time{})
 	host := dialRuntime(t, n, assistantRuntimeHello())
 	if a, err := n.assistantAgent(context.Background(), "dsh"); err != nil || a != assistantOnRuntime {
 		t.Fatalf("assistantAgent: %q %v", a, err)
@@ -111,6 +115,12 @@ func TestAssistantOnARuntimeStartsAndSendsWithTheSnapshot(t *testing.T) {
 	}
 	if !strings.Contains(p.Context, "测试时间") || !strings.Contains(p.Context, "MEMORY.md") {
 		t.Fatalf("the first message's context: %q", p.Context)
+	}
+	if p.MemoryDir != n.memoryDir(cwd) || !strings.Contains(p.Context, "(runtime-copy.md)") {
+		t.Fatalf("the runtime's first turn missed the merged memory: %s", sends[0])
+	}
+	if got := readNote(t, p.MemoryDir, "runtime-copy.md"); got != "A note from another profile.\n" {
+		t.Fatalf("the runtime's memory note: %q", got)
 	}
 	if st, ok := n.state.get(sid); !ok || st.Launcher != "dsh" || !strings.HasSuffix(st.Cwd, "/.persona/assistant") {
 		t.Fatalf("state %+v", st)
@@ -164,6 +174,37 @@ func TestAssistantOnARuntimeStartsAndSendsWithTheSnapshot(t *testing.T) {
 	}
 	if got := host.got("session.send"); len(got) != 4 || !strings.Contains(string(got[3]), "on claude") {
 		t.Fatalf("sends %d", len(got))
+	}
+}
+
+// A public mention on a runtime-backed main chat gets the runtime's ordinary input but no owner snapshot (#11130).
+func TestAssistantPublicSendOnRuntimeSkipsSnapshot(t *testing.T) {
+	n, hub := runtimeNode(t)
+	assistantHub(hub)
+	host := dialRuntime(t, n, assistantRuntimeHello())
+	sid := startedAssistant(t, n, host)
+	hub.mu.Lock()
+	base := hub.answer
+	contextCalls := 0
+	hub.answer = func(method string, params json.RawMessage) (any, error, bool) {
+		if method == "assistant.context" {
+			contextCalls++
+		}
+		return base(method, params)
+	}
+	hub.mu.Unlock()
+	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": sid, "text": "public mention", "public": true}); err != nil {
+		t.Fatal(err)
+	}
+	hub.mu.Lock()
+	if contextCalls != 0 {
+		hub.mu.Unlock()
+		t.Fatalf("public runtime send requested %d owner snapshots", contextCalls)
+	}
+	hub.mu.Unlock()
+	sends := host.got("session.send")
+	if len(sends) != 2 || strings.Contains(string(sends[1]), "测试时间") {
+		t.Fatalf("public runtime input carries the owner snapshot: %s", sends)
 	}
 }
 
@@ -411,12 +452,21 @@ func TestGatedToolGoesThroughTheGate(t *testing.T) {
 	assistantHub(hub)
 	skills := filepath.Join(n.home, ".persona", "skills")
 	t.Setenv("PERSONA_SKILLS_DIR", skills)
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
 	n.dir = filepath.Join(n.home, ".persona")
 	script := filepath.Join(skills, "example", "scripts", "ex.sh")
-	_ = os.MkdirAll(filepath.Dir(script), 0o755)
-	_ = os.WriteFile(filepath.Join(skills, "example", "SKILL.md"), []byte("---\nname: example\n---\n"), 0o644)
+	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skills, "example", "SKILL.md"), []byte("---\nname: example\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	ran := filepath.Join(n.home, "ran")
-	_ = os.WriteFile(script, []byte("#!/bin/bash\necho \"$*\" >> "+shellQuote(ran)+"\necho done \"$*\"\n"), 0o755)
+	if err := os.WriteFile(script, []byte("#!/bin/bash\necho \"$*\" >> "+shellQuote(ran)+"\necho done \"$*\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The hub prepares its assistant directory before sending. User-selected task directories keep their own skills.
+	prepareAssistantForTest(t, n, ".persona/assistant", nil, nil)
 	g := exampleGate("")
 	g.Tool = &proto.GateTool{Name: "example_api", Description: "Run ex."}
 	n.mu.Lock()
@@ -480,4 +530,87 @@ func toolList(ts []proto.Tool) string {
 		out = append(out, x.Name)
 	}
 	return strings.Join(out, ",")
+}
+
+// A message that is only a slash command goes to the runtime on its own. With the <persona-context> block in front, an
+// agent that runs its own commands (Antigravity's /compact) no longer sees a command: it records the line as plain text,
+// `/compact/compact`, and compacts nothing. The snapshot is not lost: it stays unsent and rides with the next ordinary
+// message, and after a /compact the conversation is told everything again, as after Persona's own compaction.
+func TestAssistantOnARuntimeSendsASlashCommandOnItsOwn(t *testing.T) {
+	n, hub := runtimeNode(t)
+	assistantHub(hub)
+	host := dialRuntime(t, n, assistantRuntimeHello())
+	sid := startedAssistant(t, n, host)
+	sentText := func(i int) (text, context string) {
+		t.Helper()
+		sends := host.got("session.send")
+		if len(sends) <= i {
+			t.Fatalf("%d sends, want more than %d", len(sends), i)
+		}
+		var p struct {
+			Text    string `json:"text"`
+			Context string `json:"context"`
+		}
+		_ = json.Unmarshal(sends[i], &p)
+		return p.Text, p.Context
+	}
+	seen := func() map[string]string {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		return n.ctxSent[sid]
+	}
+	if seen() == nil {
+		t.Fatal("the first message did not record the snapshot as sent")
+	}
+
+	// /status: no context in front, and what the conversation has seen stays as it was.
+	before := seen()
+	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": sid, "text": "/status", "client_msg_id": "m-status"}); err != nil {
+		t.Fatal(err)
+	}
+	if text, ctx := sentText(1); text != "/status" || ctx != "" {
+		t.Fatalf("/status went as %q with context %q", text, ctx)
+	}
+	if got := seen(); len(got) != len(before) {
+		t.Fatalf("/status changed what the conversation has seen: %v -> %v", before, got)
+	}
+
+	// /compact: on its own too, and the conversation has to be told everything again afterwards.
+	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": sid, "text": "/compact\n", "client_msg_id": "m-compact"}); err != nil {
+		t.Fatal(err)
+	}
+	if text, ctx := sentText(2); strings.TrimSpace(text) != "/compact" || ctx != "" {
+		t.Fatalf("/compact went as %q with context %q", text, ctx)
+	}
+	if got := seen(); got != nil {
+		t.Fatalf("after /compact the conversation still counts the snapshot as told: %v", got)
+	}
+
+	// The next ordinary message carries the whole snapshot again.
+	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": sid, "text": "next", "client_msg_id": "m-next"}); err != nil {
+		t.Fatal(err)
+	}
+	if text, ctx := sentText(3); text != "next" || !strings.Contains(ctx, "测试时间") {
+		t.Fatalf("the message after /compact went as %q with context %q", text, ctx)
+	}
+	if seen() == nil {
+		t.Fatal("the message after /compact did not record the snapshot as sent")
+	}
+
+	// Words that merely begin with a slash, a path or a command with a sentence, are messages: they carry the context.
+	for i, text := range []string{"/tmp/report.md is ready\nplease read it", "/data/logs"} {
+		if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": sid, "text": text, "client_msg_id": "m-words-" + string(rune('a'+i))}); err != nil {
+			t.Fatal(err)
+		}
+		if got, ctx := sentText(4 + i); got != text || !strings.Contains(ctx, "测试时间") {
+			t.Fatalf("%q went as %q with context %q", text, got, ctx)
+		}
+	}
+	// A picture makes it a message, whatever the words.
+	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": sid, "text": "/status", "client_msg_id": "m-pic", "images": []map[string]any{{"mime": "image/png", "data": "AA=="}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ctx := sentText(6); !strings.Contains(ctx, "测试时间") {
+		t.Fatalf("a /status with a picture went without context: %q", ctx)
+	}
 }

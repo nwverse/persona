@@ -258,6 +258,7 @@ func TestInlineTurnRegistersWhenStoppedAssistantRevAdvances(t *testing.T) {
 		f.settings = &Settings{Timezone: "Asia/Shanghai"}
 		d := newFleetDevs()
 		d.add("mac", "Mac")
+		f.setSessions("mac") // transcript reads use the same machine the fleet lists
 		st := newMemInlineViewStore()
 		s := New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), Devices: d})
 		ft := &fleetTest{t: t, s: s, d: d, f: f}
@@ -273,6 +274,7 @@ func TestInlineTurnRegistersWhenStoppedAssistantRevAdvances(t *testing.T) {
 		f.mu.Unlock()
 
 		ctx := context.Background()
+		f.setSessions("mac") // the node's transcript reads go through the hub
 		machine, ok := s.fleetMachine("mac")
 		if !ok {
 			t.Fatal("missing fleet machine mac")

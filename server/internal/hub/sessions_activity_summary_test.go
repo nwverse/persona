@@ -70,8 +70,8 @@ func TestRuntimeSummaryKeepsTheModelPick(t *testing.T) {
 }
 
 func TestRuntimeSummaryKeepsEffortChange(t *testing.T) {
-	row := runtimeSummary(proto.Session{Effort: "low", PendingEffort: "high", EffortChangeFailed: true})
-	if row.Effort != "low" || row.PendingEffort != "high" || !row.EffortChangeFailed {
+	row := runtimeSummary(proto.Session{Effort: "low", PendingEffort: new("high"), EffortChangeFailed: true})
+	if row.Effort != "low" || row.PendingEffort == nil || *row.PendingEffort != "high" || !row.EffortChangeFailed {
 		t.Fatalf("effort status lost: %+v", row)
 	}
 }

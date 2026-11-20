@@ -325,7 +325,7 @@ func (n *Node) setModel(ctx context.Context, id, model string) error {
 
 // setModelAndModes applies a request of session.modes: the model first (the efforts a model takes depend on it),
 // then the mode and effort.
-func (n *Node) setModelAndModes(ctx context.Context, id, model, mode, effort string) (bool, error) {
+func (n *Node) setModelAndModes(ctx context.Context, id, model, mode, effort string, queueEffort bool) (bool, error) {
 	if model != "" {
 		if err := n.setModel(ctx, id, model); err != nil {
 			return false, err
@@ -333,6 +333,9 @@ func (n *Node) setModelAndModes(ctx context.Context, id, model, mode, effort str
 	}
 	if mode == "" && effort == "" {
 		return false, nil
+	}
+	if !queueEffort {
+		return false, n.setModes(ctx, id, mode, effort)
 	}
 	var pending bool
 	err := n.updateModes(ctx, id, mode, effort, &pending)

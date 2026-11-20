@@ -1,7 +1,21 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Snapshot sequence numbers must order application as well as computation (#10514). `publish` numbered snapshots under `pubMu` but applied their interaction lists later, so a delayed older list could withdraw a prepared approval installed by a newer one. Recheck the sequence under `pubMu` immediately before `askOnPhone`; skip only superseded interaction lists and leave current omissions and explicit lifecycle endings unchanged. Force two real publishers across an existing leaf-mutex gate, then prove the owner's Allow returns once and applies once.
+
+- Moving temporary model outages to a durable manager retry must not swallow the node's other bounded recovery paths (#10444). Keep unavailable-model chains, recent transient 404s, safeguards refusals, gateway-quota recovery and tool-search resends on their existing contracts; only the outage classes owned by the new scheduler change. Tests of node-internal recovery can use a recoverable missing-model failure, while scheduled failure-fallback tests need a permanent error such as 401. Run the combined recovery tests after merging newer origin-attestation and delivery changes. Exercise the real hub interrupt and owner-message paths too: a direct `UserStopped` test misses a hub that notifies only Assistant, and `/exit` or `/quit` starts no turn that could cancel the wake.
+
+- Negotiate external runtime supervision policy explicitly, and isolate per-session rule layers outside `~/.persona/assistant` (#11173). Hardcoding `SourceKind == SourceRuntime` as unsupported blocks capable runtimes like Antigravity CLI, while dropping the guard or concatenating `supervision_instructions` into user message text weakens compaction durability and role isolation (#10338, #11121). Gate policy delivery on explicit `caps.supervision_policy` / `capabilities.supervision_policy` (defaulting absent or unknown to unsupported so DSH and older runtimes keep exact fail-closed behavior). On `agy acp`, verify append vs. replace semantics empirically before choosing a channel: `_meta.antigravity.systemPrompt.append` accumulates across `session/resume` calls and cannot be cleared on demotion, whereas per-session managed directories under `<agyDir>/persona-supervision/<rawId>` passed via `additionalDirectories` load into `<user_rules>` on every turn, reflect atomic edits and deletions on the next turn, leave shared `~/.persona/assistant/AGENTS.md` untouched, keep concurrent ordinary chats isolated, and fail closed with `assistant_supervision_runtime` when ACP lacks `additionalDirectories`, disk writes fail, or policy exceeds the two-file 48,000-byte (`AGENTS.md` + `GEMINI.md`) cap.
+
+- Recover an untold completion by native turn identity, not transcript revision (#10686). Trailing transcript bookkeeping must not suppress an already judged signal. Revalidate the complete current ledger entry under its lock and enqueue without rewriting it, so an older recovery snapshot cannot replace a newer turn or judgment. Exercise both PostgreSQL-backed manager restart and stale-snapshot rejection, with replay disabled as a negative control.
+
+- A rendered prompt used as a source-snapshot fingerprint must compare with the call's captured language (#6272). Re-reading the current language while committing a valid model answer makes a preference change look like a concurrent source edit. Freeze the wrapper language, keep the source comparison, and test both a locale-only change and real source changes. Audit natural-language parsers too: a conservative Chinese uncertainty check must recognize uncertainty in newly supported English and Japanese outputs. Shared recording inputs must keep their recording-language contract rather than inheriting a non-recording wrapper accidentally.
 - Persist a complete delivery round before its first external send (#10393). Saving only when the call returns handles a returned error but loses the result if the manager exits inside the call, after task acceptance has committed. Keep the original timestamp/key and acceptance metadata on disk while retaining an in-memory claim to block overlapping sends. Every other book save must preserve that prepared record too; retry must not send from memory when its preparation could not be saved. Use a child-process exit at the real provider boundary and a fresh manager on the same disposable database to prove recovery, with the returned-error case as a control.
 - A review wake is not a completion verdict (#8373). PR events and judged-done candidates share the same signal. Keep its wording neutral, preserve the actual reason and criterion evidence, and leave acceptance gates and display grouping unchanged.
+
+- Detect missing final replies on the settled exchange (#10427). A session preview can carry the previous answer
+  through a tool-only turn. Check the current transcript and verified input provenance, then test that a follow-up
+  cannot pass the send guard after newer input or an explicit stop. Keep its attempt identity and visible failure
+  notice tied to the original input.
 
 - Snapshot display projections must not initialize the knowledge base (#10108). Publication already holds
   `pubMu`; read an already-open engine and retain the canonical cached project-name fallback rather than calling
@@ -42,6 +56,11 @@
   back onto the presence window, or the cap is not authoritative. The gate is memory-only on purpose: a restart
   degrades to the persisted presence window. Update the time-window tests by shortening the new limits in lockstep
   with the presence timers instead of waiting real minutes.
+
+- A delivered Inbox note is not automatically a reason to wake its supervisor (#9916). Keep the routed task feed,
+  but suppress the successful copy only for active work, checking waits before and after the send. Preserve failed
+  delivery and parked/review fallbacks. Scope and claimed-owner requests need the Agent's full-thread judgment and
+  an urgent-by-default supervisor question, not a keyword classifier over a clipped preview.
 
 - Inbox handling chats are implementation details, not user-created conversations (#5723). `Untitled` suppresses
   automatic naming but does not hide a chat, and `titleFixed` still gives it the item's subject. Apply default
@@ -154,6 +173,7 @@
 - Stage user-filing handling closure in the row being saved and publish it only after that row commits (#1313). Clearing drafts and pending notes on the live item before saving requires more than restoring its done marker, and a concurrent delivery pass can send the stop note before rollback. Exclude pending filing markers from unrelated saves, including delivery acknowledgements. A bulk unchanged acknowledgement also requires a committed state; return pending ids as failed so clients retry. Filters must include every pending open state that can still commit, including intermediate reopens between closed endpoints, and retain older pending ownership when a newer save fails. Give filing its own pending ownership so an unrelated parent edit cannot prevent rollback; keep concurrent chain entries and test batch fallback with mixed row failures, nested draft aliases and delivery during the write.
 
 - Schedule admission must be durable before dispatch (#1287). Save a separate candidate task list while holding the schedule lock, then publish it and broadcast only after success. A failed user edit or due-run marker leaves the prior tasks recoverable. Results and conversation ownership from work already sent are different: keep them in memory when persistence fails, preserve their history IDs so watchers can still update them, and retry the current lists on later saves. A late result still belongs only to its run; it must neither overwrite a newer run's status nor recreate a deleted task.
+- A durable timer needs a fixed deadline and a crash policy, not just a saved callback (#1811). Persist scheduled usage-limit retries and task receipt rechecks before arming their local timers, restore overdue work promptly, and fence dispatch with a compare-and-swap claim. Reset every captured result on each CAS retry: a loser whose first attempt claimed the document must not return success from that stale attempt. Once a scheduled retry may have been sent, recover its claim as unknown rather than resending; receipt rechecks can replay through the durable turn ledger, but only while their exact task-agent link and reopen generation still match. Keep the original settlement's unreachable result instead of probing twice—the second probe can succeed and wrongly discard the retry.
 
 - A list bounded by a retention window is not bounded (2026-11-12, #5549). `GET /api/v1/inbox` listed every item done within three days, so one Clean up all of a few thousand items made it about 10,000 items and 21 MB: every app downloaded it again on each `inbox` push, and Android's bounded reader (4 MiB, 100,000 structural tokens) turned it down. Cap the done side by count on a deterministic key (`done_at`, then id, the history's order: a just-filed item is always kept, and the same items give the same bytes for the merged validator), let the delta report what falls past the cut as `removed`, keep it reachable by id and through the history, and test with more items than the cap. Clients that took the window as complete without a page (iOS `listDoneSpan`, the web's former `LIST_DONE_MS`) under-show until they page it too.
 - A capped display list is not an idempotency record (2026-11-15, #8424). A connector's `replied` state report repeats until new messages come, and its dedupe looked for a `self_replied` chain entry at the report's `last`; the chain keeps the newest 50 entries for display, so a conversation's later steps at the same position could push that entry out and the same report counted as another owner reply: another entry, note and wake, and a reset follow-up, suggestion and draft. Keep the key a dedupe needs in a field of its own (`InboxItem.RepliedOf`), read the old marker only for rows stored before it, and test by evicting the marker before replaying the report.
@@ -182,6 +202,8 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 - Reintroducing a retired model purpose must not read its dormant settings record (2026-11-06, #5921). Lark /agent uses a new override namespace and revision sequence, inheriting Agents until a new user save. Keep category-default assignment from creating an opt-in binding, include overrides in provider-in-use checks, and determine client editability from writable fields rather than `category_id != id`. Tests must seed the old record directly, then verify new conversation startup parameters before override, after save, and after reset; merely asserting the resolved binding misses startup precedence.
 
 - A second opt-in model override shows where the first was keyed by ID (#4232). Setting the AI twin apart like Lark /agent needed no new server path, but every client special-cased `id == "lark.agent"` for its status words, reset label and effort rule, so the twin's row and editor would have kept a category's wording (no "Separately configured", "Restore Default" instead of "Follow Agents") while being an override. Recognize such a row by data (`parent: "agent.new"` and writable `fields`) and keep ID checks for wording that really is one purpose's. Server tests start the twin through its own path (`startInboxAgent`), not the conversation route, and check that a save writes only its own key.
+
+- Model recovery provenance belongs to a turn and a chain, not to conversation-wide mutable flags (#10909). Persist the original execution identity before recovery can overwrite session state; do not inherit it across an exhausted chain boundary. Classify a new pick without ending the old marker or hold, and commit that ending only at input delivery. A busy process must retain its own used/retry budget even when newer input joins it, then release that ownership when its chain finishes. For legacy markers, fallback-mutated session effort is not the original effort. Cover fresh/expired/aged/cold records, exact old-fallback picks, rejected and real newer delivery, older `from` and `to` turns, restart and launcher-scoped unavailable evidence.
 
 - Model-settings HTTP labels must use `requestCtxLang(ctx)`, not `s.lang(ctx)` (2026-11-06, #5057). The latter reads only the hub's language, so catalog-driven launcher role labels can still ignore a client's `Accept-Language`. Test sequential requests with a different hub language, both discovered-model and fallback-model paths, and unchanged model IDs. MCP-only refusals remain original model text; they must not become exemptions for real HTTP, push or approval-card copy.
 
@@ -270,7 +292,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 
 - **Model listing and saving must agree on online launcher selection** (#1840). A cached provider's first machine can be offline even when another machine successfully lists its models. For a purpose without a bound machine, reuse `pickMachine` for model validation; if no reported candidate is online, allow saving without a live check. Keep known bound-machine validation and managed-launcher behavior intact. Cover the HTTP save and profile-apply paths, including effort-only edits, rejected online models, exact RPC destinations, and unchanged storage after rejection.
 
-- A successful provider probe does not establish runtime compatibility (#2252). Direct-API calls resolve through `apiConfig`, while launcher tests also support transport settings that the node can honor. Refuse unsupported direct-API fields on saves, effective stored/preset probes, and runtime resolution; validate retained sealed headers without decrypting or rewriting the record, and allow explicit clearing. Preserve legacy anonymous Messages probes and real launcher settings: protocol alone does not distinguish a Messages launcher from a direct-API provider. Count synthetic upstream requests to prove rejected probes and runtime calls stop before sending.
+- A successful provider probe does not establish runtime compatibility (#2252, #11075). Direct-API calls resolve through `apiConfig`, while launcher tests can use transport settings that the selected runtime cannot honor. Carry validated custom headers through every direct protocol's save, test, discovery and inference, including launcher HTTP fallback and Send Through, and preserve the no-header defaults. Refuse unsupported proxy fields and runtime/model combinations before network I/O, while keeping Codex's real `env_http_headers` channel and Antigravity's limitation explicit. Seal values, return only header names, redact errors and diagnostics, retain headers on same-origin redirects and drop them after cross-origin hops; probes still never follow redirects. Protocol alone does not distinguish a Messages launcher from a direct-API provider.
 
 - **A goroutine asleep through a delay costs a stack per event; keep only the fields that are read** (#2472). The finished push, a task's receipt, the launcher's usage-limit mark and the triage each started a goroutine per turn end that slept through its window (60 s by default): with a few turn ends a second the manager held about 900 sleepers, roughly 16 KB of stack each (StackInuse 6 to 21 MB in a soak). Schedule the unchanged body with `time.AfterFunc` (`afterSettle`, `notifyFinished`), reading the delay when the turn ends as before; keep the synchronous function for its callers and tests. The same goes for memory kept between lists: a `proto.Session` is about 1.5 KB, so a by-value copy of every machine's list kept for a few fields (the previous list's turn fields, the reply reminders' rows, the herdr marks' four fields) is megabytes at a few thousand sessions. Keep a struct of what is read (`turnPrev`, `tokenRow`), or only the rows a reader can pick, and decorate one row (`decoratedSession`) rather than a machine's list to read one. A test of such a change compares against the full path's row (`TestDecoratedSessionIsTheListsRow`) and counts goroutines in a `synctest` bubble rather than sleeping.
 - **A hub deployed with new prompts does not reach a running assistant by itself** (#3235; #3068's ring cards kept coming out
@@ -427,7 +449,7 @@ creation or app presentation; quiet tasks and supervisor routing also show cards
 
 ## Supervisor assignment must respect the policy channel (#10338)
 
-A runtime-backed chat can plan work and receive owner replies. A task reviewer needs a separate policy channel on every supervised turn. Check the session's execution source when dispatch assigns the reviewer, including plans that waited for approval and scheduled chats listed as leaders. A permanent policy refusal ends that relay. The task and its worker reports stay available for review.
+A runtime-backed chat can plan work and receive owner replies. A task reviewer needs a separate policy channel on every supervised turn. Check the session's execution source when dispatch assigns the reviewer, including plans that waited for approval and scheduled chats listed as leaders. A permanent policy refusal ends that relay. The task and its worker reports stay available for review. Routing only at dispatch is not enough: tasks a runtime chat supervised before that, and digests already queued for it, must route around it when they are delivered (`digestTarget`), and the node must never shut the owner out because a policy came with an ordinary message: it refuses only the manager's supervision message (#11121).
 
 ## The supervision fingerprint only sees the agent's words (#6027)
 
@@ -738,6 +760,19 @@ unknown-risk write. Stable read shortcuts are listed in `larkCLIKnownReads`, whi
 nothing, so lark-cli's own answer still wins. When a card names a read as a write, check the lookup in the node's
 environment first, before changing the classifier. A literal `cd` before a command variable (`cd /tmp; L=/abs/lark-cli; $L …`)
 now resolves only absolute values: a relative one is looked up from the new directory.
+The short list was not enough (#11193): `calendar +agenda` still went to the phone as "建 / 改日程". When the lookup gives
+nothing, a command named as a read also counts as one (`larkCLINamedRead`): a shortcut whose name is, ends in or (get /
+list only) starts with fetch, agenda, search, list, get or mget, and a generated method named list, get, search, mget or
+batch_get. Every other name, sends, replies, reactions, create and update included, stays a write.
+
+## One `$?` in a literal loop made its lark-cli reads writes (#11193)
+
+`literalLarkLoopCommands` binds a literal `for` list into each lark-cli call so a variable path such as
+`documents/$d/raw_content` can be read. It gave up on the whole loop at any other parameter, and `echo "$d exit=$?"` was
+enough to leave `lark-cli api GET …/$d/…` unbound, unclassifiable and carded as a write. `$?` is now kept as inert text:
+it is always a number the shell sets, so it can neither name a program nor become a lark-cli word the classifier trusts
+(a path holding it is still unknown). When a loop of reads is carded, check every parameter in its body, not only the
+loop variable.
 
 ## A rejected answer must not consume Don't handle (#7907)
 
@@ -789,3 +824,21 @@ again. Evidence about a model is about one request shape: resolve the probe's ta
 (`sendModel`, read-only), have the node build the check as the turn (`launchers.check` `assistant_turn`), and key the
 evidence and its reuse by machine, launcher and model, so a pass of something else, or of an older plain check, never
 outranks the real turn's failure (`TestReadinessProbeOtherModelDoesNotClearModelRoute`).
+
+## An agent's own slash command works only as the whole prompt (#10950)
+
+In an Antigravity conversation, sending `/compact` reached the model as `/compact/compact` and compacted nothing. The
+web composer was not at fault: the hub's `sent_messages` held `/compact` once for every send. The node put the
+`<persona-context>` block in front of the text, and `agy` runs a command only when it is the whole prompt; with a block
+before it, it records the line as plain text. Reproduced with `agy acp` alone: the block plus `/compact` is recorded as
+`/compact/compact`, the bare `/compact` writes a compaction checkpoint. `assistantSendRuntime` now sends a one-line
+slash-only message on its own, leaves the snapshot unsent for the next message, and after `/compact` forgets the
+snapshot the conversation has seen (`TestAssistantOnARuntimeSendsASlashCommandOnItsOwn`). The chat bubble showed the
+doubled text because the chat is drawn from the agent's own transcript: when a user bubble looks wrong, compare it with
+the hub's record of what was sent before looking at the client.
+
+## Permanent conversation errors outrank silent-turn hints (#10399)
+
+When merging no-output turn handling, keep account-sealed compaction ahead of `no_output` / `stopped` handling in triage
+and clients. A generic kind must not restore Continue for a permanent error; ordinary silent turns keep their own text
+and Continue. Test both paths together, including the clients' independent invalid and plain-text flags.

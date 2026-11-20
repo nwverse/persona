@@ -1,5 +1,23 @@
 # Lessons: hub / node and networking
 
+## Under a full-tunnel VPN the default route's address is the tunnel's (#11125)
+
+A UDP "connect" towards a far address reports the source address of the route it would take, the usual way to find
+"the address traffic goes out of". When a VPN routes general traffic through its tunnel, that is the tunnel's own
+address (`utun*` on macOS), and many VPN clients give the tunnel a new one on every reconnect. `hub setup` wrote it into
+`public_url` and `public.tls_listen` as the LAN address, so after the next reconnect the TLS port refused everyone, LAN
+clients included. Before an address goes into config as the LAN address, check the interface it is on: up, not
+loopback, not virtual (`pickLANIPv4` in `server/internal/hub/setup_machine.go`), else take the first private IPv4 on
+such an interface.
+
+## A cancelled RPC test must acknowledge cancellation before releasing work (#10342)
+
+A local context cancellation only starts delivery of `rpc.cancel`; it does not prove the node has processed it. A test that releases a held file write immediately can let the operation finish as `done`, after which polling for `cancelled` times out and the original destination is not restored. Keep the write held until a following `file.operation` request on the same ordered connection has been answered, then release it. Exercise cancellation and normal completion in the same command, and keep the existing deadline, cleanup and restoration assertions.
+
+## Connected Link status does not acknowledge the hub's initial writes (#10409)
+
+The active Link client reports `connected` immediately after writing `hello`; the hub may still be writing its initial `endpoints` and `node` messages. A lifecycle test that kills SSH, switches mode or unpairs on that status can make the hub write to a closed socket. Wait for the same connection to report the hub name and online node, in that order, before the destructive step. To reproduce the early close deterministically, hold the hub at that write boundary, use an abortive tunnel close and wait for the SSH process to die: a graceful FIN alone can still let the first writes succeed (`server/internal/link/ssh_readiness_test.go`).
+
 ## Queue admission decides notification replay (#10394)
 
 A connected WebSocket is not evidence that its outbound queue accepted a notification. Record admission per device
@@ -8,12 +26,30 @@ same credential accepts it, do not retain a duplicate. Keep recipient-selection 
 and delivery. Exercise the real notification bus handler with a full queue, same-ID outbox retry and reconnect;
 keep push-route, capability and preference exclusions intact.
 
+## A response that stops mid-body must be aborted, not returned from (#10855)
+
+`http.ServeContent` stops at a read that fails and returns as if it were done, with the head (200 or 206 and its
+Content-Length) already sent. Over HTTP/1.1 net/http then closes the connection short of that length, which clients
+notice; over HTTP/2 it ends the stream cleanly with fewer bytes than declared, and a client that does not compare them
+keeps the cut file as the whole one. Keep the reader's error and `panic(http.ErrAbortHandler)` after `ServeContent`
+(`recoverPanics` passes it on): HTTP/2 resets the stream. Check it over a real HTTP/2 connection by reading the frames
+(`server/internal/hub/download_abort_test.go`): a `ResponseRecorder` cannot show it, and Go's client counts the bytes
+itself, so it reports the clean end and the reset alike as errors.
+
 ## Contribution identity must match both preview and commit (#10272)
 
 UI routes and switches identify a contribution by extension plus local ID. A global UI-ID conflict check can therefore
 make an unrelated disabled built-in block installation. Check both registry preview and plan commit: fixing only
 preview leaves the install broken. Exercise real installs, batched plans, upgrades, rollback and reload, while keeping
 non-UI contribution conflicts and within-manifest duplicate checks intact.
+
+## Queue admission decides notification replay (#10394)
+
+A connected WebSocket is not evidence that its outbound queue accepted a notification. Record admission per device
+and retain the event in the existing reconnect ring when every eligible socket rejects it. If another socket for the
+same credential accepts it, do not retain a duplicate. Keep recipient-selection counts separate from queue admission
+and delivery. Exercise the real notification bus handler with a full queue, same-ID outbox retry and reconnect;
+keep push-route, capability and preference exclusions intact.
 
 ## Empty assistant creation must not become a model turn
 
@@ -571,11 +607,17 @@ entry can import a secret target. Recreate ordinary links with `--symlink` so th
 close links for special read-only files or partially closed directories. Keep the view root read-only so later secret
 backups cannot be created. File binds still pin their inode and the top-level entry list: a replaced `node.sock` stays
 old, so a node restart requires an agent restart. Do not permanently cache probes or preflight success; bwrap/PATH and
-namespace availability can change, and full per-cwd profiles make an unbounded key space. A tmpfs mounted directly on a symlink follows it and masks the target; give an alias its own view, but do not
-claim this protects the link from unlink. Stock bwrap 0.8 has no path-aware unlink/rename filter, so protecting the link
-while keeping its parent writable needs another mechanism. It also keeps a supervisor even without `--unshare-pid` or
-with `--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
-lifecycle cleanup.
+namespace availability can change, and full per-cwd profiles make an unbounded key space. A tmpfs mounted directly on a
+symlink follows it and masks the target; the alias view alone does not protect the link from unlink. Stock bwrap 0.8 has
+no path-aware unlink/rename filter. To protect an explicit alias while its parent stays writable, a pre-exec helper can
+`open_tree` the symlink inode with `AT_SYMLINK_NOFOLLOW`, then `move_mount` the detached clone onto the alias without
+following the destination. Run the same helper in preflight and exec the agent at the same pid. Do not drop
+`CAP_SYS_ADMIN` to harden these mounts: that breaks `unshare -rm`, which was working; direct `umount` in the original
+namespace therefore remains an explicit boundary. Bubblewrap keeps a supervisor even without `--unshare-pid` or with
+`--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
+lifecycle cleanup. A kernel can pass the basic bwrap probe yet refuse `open_tree` on an alias symlink with `EPERM`
+(observed on Linux 5.4). Keep that start fail closed. Real tests may skip only the structured alias-`open_tree` `EPERM`
+from the full-profile preflight, never every unavailable result or a `move_mount` failure (#11073).
 
 ## Runtime policy and publisher-owned node packages (#2566)
 
@@ -2061,6 +2103,12 @@ A connection that outlives its transport (protocol.md "Resuming") changes what s
 - **A side that decides the transport is dead must tell the other.** One side's silence check fired while the other's
   read loop was busy (not dead); the busy side then waited for its own pings, past the other side's window. The side
   that loses a transport closes it, and the node keeps the connection longer than the manager takes to notice.
+- **A resumed connection can change path, not only transport (#10944).** After a failed try on the old path, a better
+  path may take the connection back. `path` / `via` can no longer be captured for the connection's lifetime: final
+  `pathEnded`, the better-path watcher, the machine's route and the tailcat watcher all need the pair after a successful
+  move. Commit it only after `Peer.Resume` succeeds; a failed attempt must leave the route and its accounting alone.
+  Callbacks that outlive a route (a planned switch, an RTT ping or a tailcat probe) carry its generation and check it
+  before acting. Path failure and SSH flap timing use the current route's own start, not the whole connection's.
 
 ## A new value for an existing RPC parameter may be silently ignored by an old node (2026-11-06, #4858)
 
@@ -2738,6 +2786,7 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
 - `cmd.Cancel` runs only when the context ends before the process exits. A shell that exits at once and leaves a background child holding its stdout or stderr (`sleep 4 & echo $!`) keeps `Wait` reading the pipe until that child exits or `WaitDelay`, counted from the shell's exit, closes it: the deadline passes unnoticed. `secret.run` held a 1-second run for 4 seconds, and the next command, which could no longer start, came back as timed out.
 - Watch the context for as long as `Wait` runs and stop the group at the deadline, sharing one "stopped" flag with `Cancel` so the group gets one SIGTERM (`runSecretCommand`). Classify the result by that flag, not the exit status: the shell exited 0.
 - A command that never started because the time was used up gets no result. A timed-out result for it reads as a command that ran and was stopped, and makes the Agent check the computer for one that never ran.
+- The same hole sat in the node's launcher scan (`launchers.go`, #10952): a `~/.zshrc` that left a job running in the background (or the script's children when the 20 s cap killed only the shell) kept `Output()` waiting, under the lock every launcher read takes. Each `GET /machines/{mid}/launchers` then ran into the hub's 30 s and nothing was cached. A login-shell read whose output matters takes `killGroupOnCancel`; `time zsh -ic true | cat` against `time zsh -ic true` shows such an rc file.
 
 ## An id the node makes up for a message ends up on its line (2026-11-12, #5225)
 
@@ -2903,6 +2952,15 @@ The tier criteria are shared with event grouping. Describe each event's assigned
 requests, not one "current new message" for an entire batch. A mixed-event regression should keep a new request
 and screenshot separate from another event's final acknowledgement, while retaining each event's overall tier.
 
+## Sparse visibility metadata and single-session allocation budgets
+
+Directory visibility (#8578) needs a wire flag without making every `Session` larger. Keep optional flags in
+existing sparse metadata and update the handwritten encoder and its layout hash together. Check both the
+row size and single-session allocation guards: invoking visibility callbacks from a lower-level list decorator
+made its one-row slice escape even after the row size was restored. Apply the annotation at the final list or
+single-row boundary, before folding/counting, and test archive-only rows too. Read persisted supervision before
+hiding; an unavailable task inventory must preserve possible supervision notifications.
+
 ## Doing the owner's call later (#10661)
 
 A message held while its computer is away must reach the Agent as the owner's, or a Claude outside Persona's
@@ -2965,3 +3023,13 @@ documenting an order.
 ## Compile production and test callers after shared helper changes
 
 A helper refactor can leave a missing tuple return, a test caller without a new context argument, or a runtime reader naming the old helper. Compile both production and test packages after merging; retain the existing read-only database helper and exercise its failure paths rather than adding a parallel implementation.
+
+## A custom `DialTLSContext` owns its handshake deadline (2026-11-19, #11028)
+
+`http.Transport.TLSHandshakeTimeout` bounds only the handshake the transport runs itself. #10681 moved the link's hub
+handshake into a custom `DialTLSContext` (to trace it) and so dropped that bound, and the transport dials under a
+context that a given-up request does not end. A hub, or a proxy's tunnel, that took the connection and never answered
+the TLS hello then held it open forever, on the direct route and through the proxy alike; #10716 put the deadline back.
+Whoever writes a `DialTLSContext` gives the handshake its own deadline and closes the raw connection when it runs out.
+Test it by waiting for the far end to see the connection close, not by how long the request took: the request returns
+on its own deadline either way (`TestDirectStalledHandshakeIsClosed`, `TestProxyStallingInsideTheTunnelIsClosed`).

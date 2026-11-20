@@ -167,7 +167,9 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
     annotator.delegate = remember(root, codeInk, copy, selecting) {
         copyingCode(root, codeInk, if (selecting) null else { words: String -> copy(words, null) })
     }
-    val components = remember(color, bodyStyle, palette, type) {
+    val gallery = LocalReplyGallery.current
+    val inlinePictures = rememberInlineReplyPictures(gallery, bodyStyle)
+    val components = remember(color, bodyStyle, palette, type, gallery) {
         markdownComponents(
             orderedList = { model -> MarkdownOrderedList(model.content, model.node, depth = model.listDepth,
                 markerModifier = { firstBaselineAligned().padding(end = 8.dp.dense) },
@@ -178,7 +180,9 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
             table = { model -> ReadableMarkdownTable(model.content, model.node, model.typography.table,
                 enabled = !LocalInPicture.current) },
             codeFence = { model ->
-                MarkdownFence(model.content.substring(model.node.startOffset, model.node.endOffset), color, bodyStyle) {
+                val raw = model.content.substring(model.node.startOffset, model.node.endOffset)
+                val group = gallery?.document?.group(raw)
+                if (group != null) ReplyPictureRun(gallery, group) else MarkdownFence(raw, color, bodyStyle) {
                     // A card fence the hub's rules do not take as standalone (in a list or a quote): an example, drawn as
                     // code. Standalone ones never get here (ChatMarkdownCards).
                     CodeText(it.code, it.language, syntax = true, bar = true)
@@ -190,8 +194,12 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
     }
     CompositionLocalProvider(LocalUriHandler provides uriHandler) {
         val current = render
-        if (parsed == null || current == null) ChatLinkText(text, Modifier.fillMaxWidth(), bodyStyle.copy(color = color))
-        else DrawParsedMarkdown(current, modifier = Modifier.fillMaxWidth(), imageTransformer = rememberMathImages(color, bodyStyle),
+        if (parsed == null || current == null) {
+            // The renderer's internal picture markers are never shown as reply text while the Markdown parse finishes.
+            val plain = when { gallery == null -> text; text == gallery.document.markdown -> gallery.document.original; else -> null }
+            if (plain != null) ChatLinkText(plain, Modifier.fillMaxWidth(), bodyStyle.copy(color = color))
+        }
+        else DrawParsedMarkdown(current, modifier = Modifier.fillMaxWidth(), imageTransformer = rememberMathImages(color, bodyStyle, inlinePictures),
             annotator = annotator,
             // Text grows at its measured size; the library's default spring trails each streamed line wrap.
             animations = markdownAnimations(animateTextSize = { this }),
@@ -379,6 +387,7 @@ internal fun ChatLineContent(
     lastUserId: String? = null, onLastLine: (Int) -> Unit = {},
     onFullText: (Item) -> Unit,
     style: ChatRenderStyle = ChatRenderStyle.Agent,
+    agentSession: persona.core.contracts.Session? = null,
     textUpdates: Map<String, ChatTextUpdate> = emptyMap(),
     liveText: Map<String, StateFlow<String>> = emptyMap(),
     streamingItemIds: Set<String> = emptySet(),
@@ -426,10 +435,12 @@ internal fun ChatLineContent(
                     val hideCloseout = closeoutReply == line.row.id && update?.streaming != true
                     // only the block goes; a reply that said nothing else is not drawn at all
                     if (!hideCloseout || !onlyCloseout(update?.text ?: item.text, cut = item.fullSize != null)) {
-                        MessageContent(item, false, update, boxed = true, hideCloseout = hideCloseout)
-                        val usage = LocalReplyUsage.current[item.id]
-                        // A reply still streaming has no total yet (the web hides the bar while the turn is live).
-                        if (usage != null && update?.streaming != true) ReplyUsageFooter(item, usage)
+                        Column(Modifier.fillMaxWidth()) {
+                            MessageContent(item, false, update, boxed = true, hideCloseout = hideCloseout)
+                            val usage = LocalReplyUsage.current[item.id]
+                            // A reply still streaming has no total yet (the web hides the bar while the turn is live).
+                            if (usage != null && update?.streaming != true) ReplyUsageFooter(item, usage)
+                        }
                     }
                 }
             }
@@ -443,6 +454,7 @@ internal fun ChatLineContent(
         }
         is ChatLine.Recaps -> RecapLine(line.items.map { it.item })
         is ChatLine.Viewed -> ViewedImagesRow(line.images, session, loader)
+        is ChatLine.ModeChange -> ModeChangeDivider(line.change, agentSession)
         // Glass: where the replies' model changed (#5055, ModelChanges.mark), as the transcript names both.
         is ChatLine.ModelChange -> {
             val from = persona.core.domain.lines.ModelChanges.replyModelName(line.from)

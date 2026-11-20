@@ -8,8 +8,8 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// effortChange keeps a busy Claude Code's requested effort separate from its confirmed effort. The node refuses
-// chat sends while it waits so Claude's own queue cannot start them at the old level. The app retains those sends.
+// effortChange keeps a busy Claude Code's requested effort separate from its confirmed effort.
+// Clients that can retain a refused send can wait for the confirmed choice.
 type effortChange struct {
 	target string
 	pane   string
@@ -80,13 +80,32 @@ func (n *Node) setTerminalEffort(ctx context.Context, id, pane, effort string, p
 // Read pending before reading confirmed effort so a row never sees the barrier lifted with the old effort.
 func (n *Node) terminalModesRow(s *proto.Session, m quickMeta) {
 	change := n.switches().effortChange(s.SessionID)
-	s.PendingEffort, s.EffortChangeFailed = change.target, change.failed
+	if change.target != "" {
+		s.PendingEffort = &change.target
+		s.EffortChangeFailed = change.failed
+	}
 	s.PermissionMode, s.Effort = n.currentModes(s.SessionID, m)
 }
 
+// Held sends use the cached pane when present, and verify a disappearance before lifting the barrier.
+func (n *Node) effortPaneStillLive(ctx context.Context, id, pane string) bool {
+	if a, ok := n.agent(id); ok && a.Agent == "claude" && a.PaneID == pane {
+		return true
+	}
+	h, _, err := n.paneHost(pane)
+	if err != nil {
+		return false
+	}
+	if err := n.refreshHosts(ctx, h); err != nil {
+		return true // the host could not confirm that the pane went away
+	}
+	a, live := n.agent(id)
+	return live && a.Agent == "claude" && a.PaneID == pane
+}
+
 func (n *Node) wakeEffortChange(s *proto.Session) {
-	if s.PendingEffort != "" && !s.EffortChangeFailed && !s.Starting &&
-		(s.Status == proto.StatusIdle || s.Status == proto.StatusDone || s.PaneID == "") {
+	if s.PendingEffort != nil && !s.Starting && (s.PaneID == "" ||
+		!s.EffortChangeFailed && (s.Status == proto.StatusIdle || s.Status == proto.StatusDone)) {
 		go n.tryEffortChange(s.SessionID)
 	}
 }
@@ -104,27 +123,32 @@ func (n *Node) tryEffortChange(id string) {
 	}
 	defer unlockEffort()
 	change := share.effortChange(id)
-	if change.target == "" || change.failed || share.inFlight(id) {
+	if change.target == "" || share.inFlight(id) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), switchProbeWait)
 	defer cancel()
 	h, _, err := n.paneHost(change.pane)
-	if err == nil {
-		if err = n.refreshHosts(ctx, h); err != nil {
-			return // a failed refresh is not evidence that the turn ended
-		}
-		a, live := n.agent(id)
-		switch {
-		case !live || a.PaneID != change.pane || a.Agent != "claude":
-			err = n.noPaneForModes(id)
-		case a.AgentStatus != proto.StatusIdle && a.AgentStatus != proto.StatusDone:
-			return
-		case n.checkPaneFor(ctx, change.pane, "claude", sendOpts{readBox: true}) != nil:
-			err = fmt.Errorf("Claude Code's prompt is not available")
-		default:
-			err = n.applyTerminalEffort(ctx, id, change.pane, change.target)
-		}
+	if err != nil {
+		share.setEffortChange(id, effortChange{})
+		n.notifySessionsSoon()
+		return
+	}
+	if err := n.refreshHosts(ctx, h); err != nil {
+		return // a failed refresh is not evidence that the turn ended
+	}
+	a, live := n.agent(id)
+	switch {
+	case !live || a.PaneID != change.pane || a.Agent != "claude":
+		share.setEffortChange(id, effortChange{})
+		n.notifySessionsSoon()
+		return
+	case change.failed || a.AgentStatus != proto.StatusIdle && a.AgentStatus != proto.StatusDone:
+		return
+	case n.checkPaneFor(ctx, change.pane, "claude", sendOpts{readBox: true}) != nil:
+		err = fmt.Errorf("Claude Code's prompt is not available")
+	default:
+		err = n.applyTerminalEffort(ctx, id, change.pane, change.target)
 	}
 	if err != nil {
 		n.logf("session %s: queued effort change failed: %v", id, err)

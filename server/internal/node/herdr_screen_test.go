@@ -252,8 +252,15 @@ func TestHerdrModesRefusals(t *testing.T) {
 		claudeAgent(sidA, proto.StatusWorking, "w1:p1", "w1:t1", "w1", "/tmp/e", ""),
 		claudeAgent(sidB, proto.StatusBlocked, "w1:p2", "w1:t2", "w1", "/tmp/e", ""))
 	for _, id := range []string{sidA, sidB} {
-		if err := setModes(t, n, id, "", "high"); err != nil {
-			t.Errorf("%s: %v", id, err)
+		if err := setModes(t, n, id, "", "high"); err == nil || !strings.Contains(err.Error(), "Agent 正在工作") {
+			t.Errorf("%s: legacy busy refusal = %v", id, err)
+		}
+		if got := n.switches().effortChange(id).target; got != "" {
+			t.Errorf("%s: legacy request queued %q", id, got)
+		}
+		reply, err := request(t, n, "session.modes", map[string]any{"session_id": id, "effort": "high", "queue_effort": true})
+		if err != nil || reply["pending_effort"] != "high" {
+			t.Errorf("%s: queued effort reply = %v, %v", id, reply, err)
 		}
 	}
 	if err := setModes(t, n, sidC, "plan", ""); err == nil || !strings.Contains(err.Error(), "Codex / TRAEX") {

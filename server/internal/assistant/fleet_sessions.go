@@ -267,10 +267,16 @@ func (s *Service) publishList(machine string) []proto.Session {
 	list = s.deletionRows(context.Background(), machine, list, true)
 	// A review's reviewer is no agent of the user's (supervise_autoreview.go): its result is on the task it reviewed.
 	hide := s.reviewerSessions()
-	if len(hide) > 0 {
+	reviewWorktrees := map[string]bool{}
+	for _, e := range mustSessionReviews(s) {
+		if e.MachineID == machine && e.Worktree != "" {
+			reviewWorktrees[e.Worktree] = true
+		}
+	}
+	if len(hide) > 0 || len(reviewWorktrees) > 0 {
 		kept := make([]proto.Session, 0, len(list))
 		for _, sess := range list {
-			if !hide[[2]string{machine, sess.SessionID}] {
+			if !hide[[2]string{machine, sess.SessionID}] && !reviewWorktrees[cmp.Or(sess.WorkspaceCwd, sess.Cwd)] {
 				kept = append(kept, sess)
 			}
 		}
@@ -404,6 +410,52 @@ func (s *Service) decoratedUnarchived(machine string) []proto.Session {
 	return s.decorateInventory(machine, s.nodeSessions(machine), true) // a copy already: the devices' list stays as it is
 }
 
+// addHeldRows keeps held messages reachable when their Agent is absent from a complete node list. It only changes
+// the displayed inventory: a real listed row always wins, and the placeholder goes when no message is held for it.
+func (s *Service) addHeldRows(machine string, list []proto.Session, held map[string][]proto.UndeliveredMessage) []proto.Session {
+	f := &s.fleet
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(held) == 0 {
+		delete(f.heldRows, machine)
+		return list
+	}
+	previous := f.heldRows[machine]
+	next := make(map[string]proto.Session, len(held))
+	listed := make(map[string]bool, len(list))
+	for i := range list {
+		sid := list[i].SessionID
+		listed[sid] = true
+		if len(held[sid]) > 0 {
+			next[sid] = archiveSnapshot(list[i])
+		}
+	}
+	missing := make([]string, 0, len(held))
+	for sid, messages := range held {
+		if len(messages) > 0 && !listed[sid] {
+			missing = append(missing, sid)
+		}
+	}
+	sort.Strings(missing)
+	for _, sid := range missing {
+		if row, ok := previous[sid]; ok {
+			next[sid] = row
+			list = append(list, archiveSnapshot(row)) // a fresh copy: decoration must not change the cache
+		} else {
+			list = append(list, proto.Session{MachineID: machine, SessionID: sid, Status: proto.StatusOffline})
+		}
+	}
+	if len(next) == 0 {
+		delete(f.heldRows, machine)
+	} else {
+		if f.heldRows == nil {
+			f.heldRows = map[string]map[string]proto.Session{}
+		}
+		f.heldRows[machine] = next
+	}
+	return list
+}
+
 // decorateInventory owns list. A subset gets the same live fields as the full
 // inventory, but must not forget state marks belonging to rows it did not read.
 func (s *Service) decorateInventory(machine string, list []proto.Session, complete bool) []proto.Session {
@@ -436,6 +488,9 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 	var held map[string][]proto.UndeliveredMessage
 	if s.devs != nil {
 		held = s.devs.HeldMessages(machine, lang)
+	}
+	if complete {
+		list = s.addHeldRows(machine, list, held)
 	}
 	// A done turn nobody has seen is Just finished when it ended after this (#9751).
 	finishedSince := time.Now().Add(-justFinishedFor(s.triageCfg(context.Background())))
@@ -492,6 +547,9 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		decorateLimit(&list[i]) // a subscription's usage limit and when it resets (usage_limit.go)
 		list[i].TurnErrorCode = sessionTurnErrorCode(list[i])
 		if list[i].TurnError != "" {
+			if proto.UnrecoverableTurnErrorCode(list[i].TurnError) != "" {
+				list[i].TurnErrorKind = proto.TurnErrorUnrecoverable
+			}
 			if list[i].TurnErrorCode == proto.TurnErrorModelFallbackUnavailable {
 				list[i].TurnErrorKind = proto.TurnErrorUser
 			}
@@ -535,6 +593,7 @@ func (s *Service) decoratedSession(machine, sid string) (proto.Session, bool) {
 	if !ok {
 		return proto.Session{}, false
 	}
+	row.SetHiddenByDirectory(s.hiddenByDirectory(machine, row))
 	one := []proto.Session{row}
 	s.foldSubset(machine, one) // what the last complete list folded it as, as for a row the node lists
 	return one[0], true
@@ -554,7 +613,9 @@ func (s *Service) listedSession(machine, sid string) (proto.Session, bool) {
 	if len(list) == 0 {
 		return proto.Session{}, false // an unreadable deletion ledger hides assistant rows rather than exposing them
 	}
-	return list[0], true
+	row = list[0]
+	row.SetHiddenByDirectory(s.hiddenByDirectory(machine, row))
+	return row, true
 }
 
 // listedSessions are the sessions machine's node lists, each as the apps get it (listedSession, for the whole list,
@@ -573,6 +634,9 @@ func (s *Service) listedSessions(ctx context.Context, machine string) ([]proto.S
 	list, err := s.archivedListed(context.Background(), m.ID, s.decorateInventory(m.ID, s.nodeSessions(m.ID), true), mark)
 	if err != nil {
 		s.logf("load agent archives: %v", err)
+	}
+	for i := range list {
+		list[i].SetHiddenByDirectory(s.hiddenByDirectory(m.ID, list[i]))
 	}
 	s.foldSubset(m.ID, list) // never stored: the fold is the complete list's, archive rows and all (foldInventory)
 	return list, nil

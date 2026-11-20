@@ -218,15 +218,20 @@ type Session struct {
 	AgentSurface string `json:"agent_surface,omitempty"`
 	Launcher     string `json:"launcher,omitempty"`
 	Model        string `json:"model,omitempty"`
+	// RequestedModel is the last model passed to a Persona-managed process.
+	// Nil means an older node or an observed session; an empty value means launcher default.
+	// Model remains the transcript-reported name, which a gateway may rewrite.
+	RequestedModel *string `json:"requested_model,omitempty"`
 	// PermissionMode and Effort are what Claude Code runs with now: default / acceptEdits / plan / auto /
 	// bypassPermissions, and low … max. Empty while unknown (before the first turn, Codex). A Codex thread the phone
 	// drives through its app-server has an Effort too (Codex's levels, see Efforts) but never a PermissionMode.
 	PermissionMode string `json:"permission_mode,omitempty"`
 	Effort         string `json:"effort,omitempty"`
 	// PendingEffort is a terminal change waiting for this Claude Code turn to end. If the attempt fails, the
-	// target stays visible and messages remain held until the user chooses an effort again.
-	PendingEffort      string `json:"pending_effort,omitempty"`
-	EffortChangeFailed bool   `json:"effort_change_failed,omitempty"`
+	// target stays visible and messages remain held until the user chooses an effort again. A pointer keeps
+	// optional effort metadata within the row size budget.
+	PendingEffort      *string `json:"pending_effort,omitempty"`
+	EffortChangeFailed bool    `json:"effort_change_failed,omitempty"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
 	// UltracodePending (beside AsksRead) means a requested change waits for an idle input box; LostAt asks the client
 	// to offer reopening after a resumed process reset an enabled switch. Reopening or dismissing the notice clears
@@ -412,9 +417,11 @@ type Session struct {
 	// (docs/assistant/todos.md "State calculation rules", #1516).
 	TurnError string `json:"turn_error,omitempty"`
 	// TurnErrorKind is what the agent's record says of TurnError, when it says (Claude Code's error field, Codex's
-	// error kinds): TurnErrorTransient (worth a "Continue"), TurnErrorUser (the user must act) or TurnErrorUsageLimit
-	// (a subscription's usage limit, until it resets); empty: read off the text. Or the hub's own word on a task
-	// Agent's turn that had no output at all (SilentTurnKind: TurnErrorNoOutput, TurnErrorStopped), with TurnError
+	// error kinds): TurnErrorTransient (worth a "Continue"), TurnErrorUser (the user must act), TurnErrorUsageLimit
+	// (a subscription's usage limit, until it resets), or TurnErrorUnrecoverable (the conversation is invalid).
+	// The hub's permanent-error classification overrides a generic runtime kind; empty: read off the text.
+	// Or the hub's own word on a task Agent's turn that had no output at all
+	// (SilentTurnKind: TurnErrorNoOutput, TurnErrorStopped), with TurnError
 	// the sentence for it in the user's language (#10187).
 	TurnErrorKind string `json:"turn_error_kind,omitempty"`
 	// TurnErrorResetsAt is when the subscription usage limit that ended the turn resets (TurnErrorKind
@@ -487,9 +494,10 @@ type Session struct {
 
 // Session.TurnErrorKind values.
 const (
-	TurnErrorTransient  = "transient"   // the model service failed for a moment: worth a "Continue"
-	TurnErrorUser       = "user"        // sign-in, context window, the model…: the user must act
-	TurnErrorUsageLimit = "usage_limit" // a subscription's usage limit: it goes on once the limit resets (TurnErrorResetsAt)
+	TurnErrorTransient     = "transient"     // the model service failed for a moment: worth a "Continue"
+	TurnErrorUser          = "user"          // sign-in, context window, the model…: the user must act
+	TurnErrorUsageLimit    = "usage_limit"   // a subscription's usage limit: it goes on once the limit resets (TurnErrorResetsAt)
+	TurnErrorUnrecoverable = "unrecoverable" // this conversation cannot continue; start a new one
 	// The hub's word on a task Agent's turn that ended with no reply, tool call or image (#2349, #10187): no error the
 	// model service reported, and no "Done" either.
 	TurnErrorNoOutput = "no_output" // the model service answered nothing: interrupted, worth a "Continue"
@@ -507,6 +515,7 @@ const (
 	TurnErrorModelRoute               = "model_route"                // the model name is not one the service or gateway knows
 	TurnErrorRateLimited              = "rate_limited"               // too many requests, or a usage limit
 	TurnErrorModelFallbackUnavailable = "model_fallback_unavailable" // a refusal selected a model the service cannot use
+	TurnErrorCompactionSealed         = "compaction_sealed"          // native context is encrypted to another account
 	// TurnErrorToolSearchUnsupported: the gateway refused Claude Code's on-demand tool loading (tool search, #10365). The
 	// node now starts that launcher and model with every tool loaded, so a retry works: not the user's to fix.
 	TurnErrorToolSearchUnsupported = "tool_search_unsupported"
@@ -519,8 +528,9 @@ const (
 	CodeMachinePending  = "machine_pending"  // the machine has not been confirmed as the user's yet
 	CodeClaudeMissing   = "claude_missing"   // Claude Code is not installed (or not on the launcher's PATH) there
 	CodeLauncherMissing = "launcher_missing" // the launcher (a ~/.zshrc function or alias) is not there
-	// CodeTerminalNotReady: the new tab's terminal would not take the start command (herdr's pane_send_failed); nothing
-	// ran, the tab is closed, a retry may work (node/typedstart.go). 503, retryable.
+	// CodeTerminalNotReady: the new tab's terminal would not take the start command (herdr's pane_send_failed), or the
+	// start line never showed in an Orca tab and never ran (node/startevidence.go, #10588); nothing ran, the tab is
+	// closed, a retry may work (node/typedstart.go). 503, retryable.
 	CodeTerminalNotReady = "terminal_not_ready"
 	// CodeAgentStartStalled: the agent opened but its session never became identifiable. This says nothing about
 	// launcher health and must not trigger an automatic retry or a health detour.
@@ -553,6 +563,16 @@ const (
 // open, docs/integrations/runtimes.md "What to implement", #8132). Nothing was read; the text is in the request's
 // language (apierr.Call). 409.
 const CodeNotLoaded = "not_loaded"
+
+// NotFoundNoTranscript and NotFoundUnknownSession are why a node's read of a session's history (session.items,
+// session.item, session.image, session.visualization) is not_found, its data.reason (node/transcript_files.go
+// readErr): a session the node knows with no transcript to read (its file gone, or none ever written), or an id it
+// has no record of. The hub words each in the request's language (apierr.Call); a not_found without one (an older
+// node, a runtime's own answer, a missing file) keeps the plain summary (#11388).
+const (
+	NotFoundNoTranscript   = "no_transcript"
+	NotFoundUnknownSession = "unknown_session"
+)
 
 // CodeTurnOverBackground is session.interrupt's answer when the Escape went to a session whose turn was already over
 // and only its background work (a background command, a subagent, a workflow) keeps it Working: nothing was
@@ -597,6 +617,9 @@ const (
 	// CodeSwitchUnsupported: not a Claude Code Agent running in a terminal Persona can restart it in (Codex, another
 	// CLI, a runtime's session, an assistant conversation, botmux).
 	CodeSwitchUnsupported = "switch_unsupported"
+	// CodeCompactFailed: a send that asked to compact a nearly full Agent first (#11137) found the compaction failed:
+	// nothing was sent, and the refusal says why.
+	CodeCompactFailed = "compact_failed"
 	// CodeSwitchLauncherMissing: the launcher picked is not on the session's computer.
 	CodeSwitchLauncherMissing = "switch_launcher_missing"
 	// CodeSwitchOtherAgent: the launcher picked runs another agent than Claude Code.
@@ -712,4 +735,13 @@ type ServiceTier struct {
 // Tokens32 is n as Session.ContextTokens and ContextWindow hold it: saturated at the int32 bounds.
 func Tokens32(n int) int32 {
 	return int32(max(min(n, math.MaxInt32), math.MinInt32))
+}
+
+// ContextNearlyFullShare is the share of its model's window an Agent's context may fill before the assistant's
+// agent_send compacts it ahead of the message (#11137): above it the Agent would compact, or run out, as it reads.
+const ContextNearlyFullShare = 0.85
+
+// ContextNearlyFull: what the model saw in the latest reply fills ContextNearlyFullShare of its window (both known).
+func ContextNearlyFull(tokens, window int) bool {
+	return window > 0 && tokens > 0 && float64(tokens) >= ContextNearlyFullShare*float64(window)
 }
