@@ -489,6 +489,16 @@ input clears the previous reply preview, including input with no visible text. T
 until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while
 preserving genuine assistant questions. User messages and tool records remain available in the conversation items.
 
+A session is listed `unknown` when the evidence cannot say working, idle or done (`transcriptState` in
+`integrations/antigravity/lib/map.js`). It is never guessed as idle: an idle native summary closes a turn only when its
+step count covers the last exported step. The companion logs why, as reason counts, each time the tally across listed
+sessions changes (`agy unknown status: no_summary 1, summary_behind 2`, then `none` once it clears, #12003):
+`read_failed` (the native summary database could not be read), `no_summary`, `summary_not_idle`, `summary_behind` (the
+summary's step count does not cover the last exported step), `no_step_index`, and `no_relevant_step` (no user input,
+response, tool result or error has been exported). A failed summary read is logged when it starts or its cause changes,
+with SQLite's result-code text only, and once more when reads recover, with the number of failures. The lines carry no
+session IDs, message text or paths; under `personad node` they appear in the node log after `agy runtime:`.
+
 CLI companion sessions and herdr panes show images from exported tool results. Conversation pages carry only image
 references; Persona loads the bytes when an image is shown. It accepts PNG, JPEG, GIF and WebP up to 1,152 KiB from
 the result's inline data or local file. The Desktop companion still omits these images.
@@ -602,6 +612,15 @@ While a conversation is watched, the companion polls its native export every 400
 their existing poll. Unwatch, disconnection and shutdown release the watched poll. Native records that update an
 existing step carry a stable content revision in the history token, so a response completed at the same sequence
 replaces retained content. Ordinary appends preserve that revision and continue through incremental item batches.
+
+Until the native export catches up, a Persona-owned prompt's steps come from ACP: the sent message, thinking, tool
+calls and results, and the settled reply; a background wake's steps the same way. While they only grow they keep the
+conversation's history token, so a send and every live update arrive as appends and clients keep their page (#12014).
+Their item IDs are not the export's, so the token changes once when the export replaces them, or when an interrupt
+drops some (a send that takes over a running wake included). The token that follows is written to the conversation's
+`.persona-history-epoch` file before the first such step shows, so a restarted companion never reports the token
+clients hold those steps under, and an idle conversation keeps its token across restarts. Where that file cannot be
+written, the token changes as soon as such steps appear.
 
 Session inventory, watch cursors, item pages and live item pushes read `transcript_full.jsonl` when available.
 Antigravity Agent and Assistant sessions publish waiting messages in `Session.queued`, using an empty string for a

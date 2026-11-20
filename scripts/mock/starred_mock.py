@@ -1,7 +1,9 @@
 """The web Starred page's loopback fixture. Separate assistants get separate collections."""
 import os
+import re
 import threading
 import uuid
+from urllib.parse import unquote
 
 
 BASE = "/api/v1/assistant/starred"
@@ -21,6 +23,7 @@ def register(d):
         d.feature("starred_messages")
     books = {}
     lock = threading.Lock()
+    unreadable = False
 
     def route(h, req):
         if mode != "1":
@@ -73,11 +76,16 @@ def register(d):
         return True
 
     def source(h, req):
+        nonlocal unreadable
         phase = req.json().get("phase")
-        if mode != "1" or phase not in (*VERSIONS, "reset", "stale", "long-user"):
+        if mode != "1" or phase not in (*VERSIONS, "reset", "stale", "long-user", "unreadable"):
             h.send_json({"error": "Not found"}, 404)
             return True
         with lock:
+            unreadable = phase == "unreadable"
+            if unreadable:
+                h.send_json({"ok": True})
+                return True
             if phase == "stale":
                 # Same-size overwrite: the node's regular page is unchanged, but Full can't verify the raw source.
                 hub.FULL.pop(POSITION, None)
@@ -103,6 +111,23 @@ def register(d):
         h.send_json({"ok": True})
         return True
 
+    def full_source(h, req):
+        if mode != "1":
+            return False
+        session, item_id = (unquote(part) for part in req.match.groups())
+        if session == hub.REVIEW and item_id == POSITION and unreadable:
+            h.send_json({"error": "Synthetic transcript read failure"}, 502)
+            return True
+        if item_id in hub.FULL or re.fullmatch(r"line[0-9]+#[0-9]+", item_id):
+            return False  # The normal mock handles saved full values and unverified positions.
+        # A real node can return an uncut stable item from the same transcript.
+        item = next((value for value in hub.find_items(session) if value["id"] == item_id and not value.get("full_size")), None)
+        if item is None:
+            return False
+        h.send_json(item)
+        return True
+
     d.route(("POST",), "/mock/starred-source", source)
+    d.route(("GET",), r"/api/v1/sessions/[^/]+/([^/]+)/items/([^/]+)/full", full_source)
     d.route(("GET", "POST"), BASE, route)
     d.route(("DELETE",), BASE + r"/([^/]+)", route)

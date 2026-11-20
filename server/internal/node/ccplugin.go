@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -23,8 +24,9 @@ import (
 // through the Persona plugin"). A claude outside Persona's terminals — Claude's desktop app, a terminal no engine runs,
 // a background session — has no pane to type into, and its peer inbox tells the model that what comes through it is
 // another session's, never the person's approval. The plugin, loaded in such a claude, asks this node for messages
-// over the node socket while the session lives, and submits each with $.prompt.submit({asUser: true}): the session
-// reads it as the person's own words, as typed input.
+// and session-scoped model / effort overrides over the node socket while the session lives: messages go in with
+// $.prompt.submit({asUser: true}), and model / effort overrides rewrite main-loop turn.step calls without touching
+// global settings files.
 //
 // Only the owner's own messages go that way (session.send's owner_input, which the devices manager sets for a message
 // typed in the owner's app, devices.go ownerInputParams), and only to a session at rest: one that works or waits on a
@@ -59,6 +61,8 @@ const (
 	// ccPluginStale is how long after its last poll a plugin still counts: an idle one polls again at once, a busy
 	// session's plugin keeps polling too (the node, not the plugin, tells whether the session rests).
 	ccPluginStale = 90 * time.Second
+	// ccPluginQueuedTTL bounds how long pre-queued session settings wait for a newly opened desktop session to poll.
+	ccPluginQueuedTTL = 2 * time.Minute
 )
 
 var (
@@ -92,7 +96,25 @@ type ccPluginMessage struct {
 	DeadlineMS int64  `json:"deadline_ms"`
 }
 
-// ccPluginAck is what the plugin said became of a message.
+// ccPluginSettings is a session-only model / effort override handed to a plugin on /poll.
+type ccPluginSettings struct {
+	ID     string `json:"id"`
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+}
+
+type ccPluginQueuedSettings struct {
+	settings ccPluginSettings
+	at       time.Time
+}
+
+// ccPluginDelivery is what a woken poll returns to the plugin.
+type ccPluginDelivery struct {
+	Messages []ccPluginMessage `json:"messages"`
+	Settings *ccPluginSettings `json:"settings,omitempty"`
+}
+
+// ccPluginAck is what the plugin said became of a message or settings update.
 type ccPluginAck struct {
 	Submitted bool
 	Reason    string
@@ -102,48 +124,70 @@ type ccPluginAck struct {
 type ccPluginSession struct {
 	pid             int
 	version, engine string
+	canSettings     bool
 	seen            time.Time
-	// poll is the waiting poll's hand-off (one message), nil while none waits; done ends it early (a newer poll).
-	poll chan ccPluginMessage
+	// poll is the waiting poll's hand-off, nil while none waits; done ends it early (a newer poll).
+	poll chan ccPluginDelivery
 	done chan struct{}
-	acks map[string]chan ccPluginAck // messages handed over and not settled, by id
+	acks map[string]chan ccPluginAck // items handed over and not settled, by id
 }
 
 // ccPluginRegistry is every session whose plugin polled this node since it started; its zero value is ready.
 type ccPluginRegistry struct {
 	mu       sync.Mutex
 	sessions map[string]*ccPluginSession
+	queued   map[string]ccPluginQueuedSettings
 }
 
 // polled records a poll from session id's claude pid and makes it the session's waiting poll; the poll it replaces
-// (the same session's, still waiting) is ended. It returns the poll's hand-off and its end.
-func (r *ccPluginRegistry) polled(id string, pid int, version, engine string) (chan ccPluginMessage, chan struct{}) {
+// (the same session's, still waiting) is ended. When settings were pre-queued for id and the plugin supports settings,
+// polled returns them immediately without leaving a waiting channel.
+func (r *ccPluginRegistry) polled(id string, pid int, version, engine string, canSettings bool) (poll chan ccPluginDelivery, done chan struct{}, immediate *ccPluginSettings, capabilitiesChanged bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sessions == nil {
 		r.sessions = map[string]*ccPluginSession{}
 	}
+	now := time.Now()
 	for other, o := range r.sessions {
-		if o.poll == nil && len(o.acks) == 0 && time.Since(o.seen) > ccPluginStale {
+		if o.poll == nil && len(o.acks) == 0 && now.Sub(o.seen) > ccPluginStale {
 			delete(r.sessions, other) // its claude exited or moved on; a live one polls again and is back
 		}
 	}
+	for qid, q := range r.queued {
+		if now.Sub(q.at) > ccPluginQueuedTTL {
+			delete(r.queued, qid)
+		}
+	}
 	s := r.sessions[id]
+	isNew := false
 	if s == nil || s.pid != pid {
 		s = &ccPluginSession{pid: pid, acks: map[string]chan ccPluginAck{}}
 		r.sessions[id] = s
+		isNew = true
 	}
 	if s.done != nil {
 		close(s.done)
+		s.poll, s.done = nil, nil
 	}
-	s.version, s.engine, s.seen = version, engine, time.Now()
-	s.poll, s.done = make(chan ccPluginMessage, 1), make(chan struct{})
-	return s.poll, s.done
+	if isNew || s.canSettings != canSettings {
+		capabilitiesChanged = true
+	}
+	s.version, s.engine, s.canSettings, s.seen = version, engine, canSettings, now
+	if canSettings {
+		if q, ok := r.queued[id]; ok {
+			delete(r.queued, id)
+			cp := q.settings
+			return nil, nil, &cp, capabilitiesChanged
+		}
+	}
+	s.poll, s.done = make(chan ccPluginDelivery, 1), make(chan struct{})
+	return s.poll, s.done, nil, capabilitiesChanged
 }
 
-// pollEnded takes poll off session id when it is still the waiting one; ok false when a message was handed to it (or
+// pollEnded takes poll off session id when it is still the waiting one; ok false when a delivery was handed to it (or
 // a newer poll replaced it), which the caller then reads from it.
-func (r *ccPluginRegistry) pollEnded(id string, poll chan ccPluginMessage) bool {
+func (r *ccPluginRegistry) pollEnded(id string, poll chan ccPluginDelivery) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s := r.sessions[id]
@@ -166,7 +210,66 @@ func (r *ccPluginRegistry) session(id string, pid int) *ccPluginSession {
 	return nil
 }
 
-// expect makes room for the plugin's word on message mid, before it is handed over.
+// settingsCapable reports whether session id's polling plugin supports session-scoped model/effort updates.
+func (r *ccPluginRegistry) settingsCapable(id string, pid int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s := r.sessions[id]
+	return s != nil && s.pid == pid && s.canSettings && (s.poll != nil || time.Since(s.seen) < ccPluginStale)
+}
+
+// queueSettings stores desired model/effort settings for session id so the next settings-capable poll receives them
+// immediately (or wakes a currently waiting poll right away).
+func (r *ccPluginRegistry) queueSettings(id, model, effort string) {
+	if id == "" || (model == "" && effort == "") {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.queued == nil {
+		r.queued = map[string]ccPluginQueuedSettings{}
+	}
+	prev := r.queued[id].settings
+	if model == "" {
+		model = prev.Model
+	}
+	if effort == "" {
+		effort = prev.Effort
+	}
+	upd := ccPluginSettings{
+		ID:     strings.ReplaceAll(newUUID(), "-", ""),
+		Model:  model,
+		Effort: effort,
+	}
+	if s := r.sessions[id]; s != nil && s.canSettings && s.poll != nil {
+		s.poll <- ccPluginDelivery{Messages: []ccPluginMessage{}, Settings: &upd}
+		s.poll, s.done = nil, nil
+		delete(r.queued, id)
+		return
+	}
+	r.queued[id] = ccPluginQueuedSettings{settings: upd, at: time.Now()}
+}
+
+// moveQueuedSettings moves pre-queued settings from oldID to newID when Claude Desktop continues a resting session
+// under a new transcript UUID.
+func (r *ccPluginRegistry) moveQueuedSettings(oldID, newID string) {
+	if oldID == "" || newID == "" || oldID == newID {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	q, ok := r.queued[oldID]
+	if !ok {
+		return
+	}
+	delete(r.queued, oldID)
+	if r.queued == nil {
+		r.queued = map[string]ccPluginQueuedSettings{}
+	}
+	r.queued[newID] = q
+}
+
+// expect makes room for the plugin's word on item mid, before it is handed over.
 func (r *ccPluginRegistry) expect(id, mid string) chan ccPluginAck {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -177,7 +280,7 @@ func (r *ccPluginRegistry) expect(id, mid string) chan ccPluginAck {
 	return ch
 }
 
-// settle forgets message mid.
+// settle forgets item mid.
 func (r *ccPluginRegistry) settle(id, mid string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -186,7 +289,7 @@ func (r *ccPluginRegistry) settle(id, mid string) {
 	}
 }
 
-// acked passes the plugin's word on message mid on, false for a message the node is not waiting on.
+// acked passes the plugin's word on item mid on, false for an item the node is not waiting on.
 func (r *ccPluginRegistry) acked(id string, pid int, mid string, a ccPluginAck) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -205,14 +308,17 @@ func (r *ccPluginRegistry) acked(id string, pid int, mid string, a ccPluginAck) 
 	return true
 }
 
-// handOver gives m to session id's waiting poll from claude pid, waiting up to wait for one; false when none took it.
-func (r *ccPluginRegistry) handOver(ctx context.Context, id string, pid int, m ccPluginMessage, wait time.Duration) bool {
+// handOver gives d to session id's waiting poll from claude pid, waiting up to wait for one; false when none took it.
+func (r *ccPluginRegistry) handOver(ctx context.Context, id string, pid int, d ccPluginDelivery, wait time.Duration) bool {
+	if d.Messages == nil {
+		d.Messages = []ccPluginMessage{}
+	}
 	deadline := time.Now().Add(wait)
 	for {
 		r.mu.Lock()
 		s := r.sessions[id]
 		if s != nil && s.pid == pid && s.poll != nil {
-			s.poll <- m // room for one, and only handed over once: the poll is taken off below
+			s.poll <- d // room for one, and only handed over once: the poll is taken off below
 			s.poll, s.done = nil, nil
 			r.mu.Unlock()
 			return true
@@ -265,6 +371,65 @@ func (n *Node) ccPluginInput(id string, pid int) bool {
 	return n.ccPlugins.session(id, pid) != nil
 }
 
+// ccPluginSettingsCapable: session id, open in claude pid, has a polling plugin that supports session-scoped
+// model / effort switching.
+func (n *Node) ccPluginSettingsCapable(id string, pid int) bool {
+	return n.ccPlugins.settingsCapable(id, pid)
+}
+
+// queueCCPluginSettings queues session-scoped model / effort overrides for session id (e.g. a newly seeded or resting
+// desktop session whose claude process has not polled yet).
+func (n *Node) queueCCPluginSettings(id, model, effort string) {
+	n.ccPlugins.queueSettings(id, model, effort)
+}
+
+// ccPluginSetSettings sends a session-scoped model / effort switch to a live outside Claude session via Persona's
+// plugin, or queues it for a resting Claude Desktop session that will open in the app on next send.
+func (n *Node) ccPluginSetSettings(ctx context.Context, id, model, effort string) (handled bool, err error) {
+	if c, ok := n.outsideClaude(id); ok && outsidePane(c) == "" {
+		if !n.ccPlugins.settingsCapable(id, c.pid) {
+			return false, nil
+		}
+		upd := ccPluginSettings{
+			ID:     strings.ReplaceAll(newUUID(), "-", ""),
+			Model:  model,
+			Effort: effort,
+		}
+		acks := n.ccPlugins.expect(id, upd.ID)
+		defer n.ccPlugins.settle(id, upd.ID)
+		if !n.ccPlugins.handOver(ctx, id, c.pid, ccPluginDelivery{Messages: []ccPluginMessage{}, Settings: &upd}, ccPluginPickupWait) {
+			// Poll is momentarily reconnecting: queue it for the next poll rather than dropping the user's pick.
+			n.ccPlugins.queueSettings(id, model, effort)
+			return true, nil
+		}
+		timer := time.NewTimer(ccPluginSubmitWait)
+		defer timer.Stop()
+		select {
+		case a := <-acks:
+			if !a.Submitted {
+				return true, fmt.Errorf("claude plugin rejected settings (%s)", a.Reason)
+			}
+			return true, nil
+		case <-timer.C:
+			return true, nil
+		case <-ctx.Done():
+			return true, ctx.Err()
+		}
+	}
+	if claudeDesktopOpens && readClaudeDesktopIndex(n.home).about[id].local != "" && n.desktopPluginReady() {
+		n.ccPlugins.queueSettings(id, model, effort)
+		return true, nil
+	}
+	return false, nil
+}
+
+// desktopPluginReady reports whether Persona's current Claude plugin is installed so a resting Claude Desktop session
+// will receive queued settings once opened.
+func (n *Node) desktopPluginReady() bool {
+	st := n.claudePluginStatus()
+	return st != nil && st.Version != "" && st.Version == st.Bundled
+}
+
 // ccPluginStatusNow is claude-plugin.status's answer.
 func (n *Node) ccPluginStatusNow() map[string]any {
 	live := map[string]int{}
@@ -312,13 +477,14 @@ func (n *Node) ccPluginRequest(ctx context.Context, c net.Conn, method, path str
 		return http.StatusNotFound, map[string]any{"error": "unknown"}
 	}
 	var in struct {
-		SessionID     string `json:"session_id"`
-		PluginVersion string `json:"plugin_version"`
-		EngineVersion string `json:"engine_version"`
-		WaitMS        int64  `json:"wait_ms"`
-		ID            string `json:"id"`
-		Submitted     bool   `json:"submitted"`
-		Reason        string `json:"reason"`
+		SessionID     string   `json:"session_id"`
+		PluginVersion string   `json:"plugin_version"`
+		EngineVersion string   `json:"engine_version"`
+		Capabilities  []string `json:"capabilities"`
+		WaitMS        int64    `json:"wait_ms"`
+		ID            string   `json:"id"`
+		Submitted     bool     `json:"submitted"`
+		Reason        string   `json:"reason"`
 	}
 	if json.Unmarshal(body, &in) != nil || !validID(in.SessionID) {
 		return http.StatusBadRequest, map[string]any{"error": "invalid"}
@@ -345,24 +511,31 @@ func (n *Node) ccPluginRequest(ctx context.Context, c net.Conn, method, path str
 	if wait <= 0 || wait > ccPluginPollMost {
 		wait = ccPluginPollMost
 	}
-	poll, done := n.ccPlugins.polled(in.SessionID, pid, clipReason(in.PluginVersion), clipReason(in.EngineVersion))
+	canSettings := slices.Contains(in.Capabilities, "settings")
+	poll, done, immediate, changed := n.ccPlugins.polled(in.SessionID, pid, clipReason(in.PluginVersion), clipReason(in.EngineVersion), canSettings)
+	if changed {
+		n.notifySessions()
+	}
+	if immediate != nil {
+		return http.StatusOK, ccPluginDelivery{Messages: []ccPluginMessage{}, Settings: immediate}
+	}
 	t := time.NewTimer(wait)
 	defer t.Stop()
 	select {
-	case m := <-poll:
-		return http.StatusOK, map[string]any{"messages": []ccPluginMessage{m}}
+	case d := <-poll:
+		return http.StatusOK, d
 	case <-done:
 	case <-t.C:
 	case <-ctx.Done():
 	}
 	if !n.ccPlugins.pollEnded(in.SessionID, poll) {
 		select {
-		case m := <-poll: // handed over as the poll ended
-			return http.StatusOK, map[string]any{"messages": []ccPluginMessage{m}}
+		case d := <-poll: // handed over as the poll ended
+			return http.StatusOK, d
 		default:
 		}
 	}
-	return http.StatusOK, map[string]any{"messages": []ccPluginMessage{}}
+	return http.StatusOK, ccPluginDelivery{Messages: []ccPluginMessage{}}
 }
 
 // clipReason keeps a short word from the plugin (a version, a reason) short.
@@ -459,7 +632,7 @@ func (n *Node) ccPluginSend(ctx context.Context, c claudeProc, id, text string) 
 	m := ccPluginMessage{ID: strings.ReplaceAll(newUUID(), "-", ""), Text: text, DeadlineMS: time.Now().Add(ccPluginSubmitWait).UnixMilli()}
 	acks := n.ccPlugins.expect(id, m.ID)
 	defer n.ccPlugins.settle(id, m.ID)
-	if !n.ccPlugins.handOver(ctx, id, c.pid, m, ccPluginPickupWait) {
+	if !n.ccPlugins.handOver(ctx, id, c.pid, ccPluginDelivery{Messages: []ccPluginMessage{m}}, ccPluginPickupWait) {
 		return false, relayUnavailable
 	}
 	needle := ccPluginNeedle(text)

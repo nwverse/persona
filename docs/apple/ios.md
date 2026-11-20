@@ -2752,7 +2752,7 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
 - **Push grading** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
   push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`, the legacy wire route); its footer says it holds
   for every device and what still notifies. A hub without the route, or one that does not answer, shows no section; a change
-  shows at once, and a refusal puts it back and says why. `docs/server/server.md` "Push grading (push urgency filtering, `hub/lnmode.go`)".
+  shows at once, and a refusal puts it back and says why. `docs/server/server.md` "Push grading (push urgency filtering, `hub/push_grading.go`)".
 - **Quiet hours**: Settings › Notifications has this device's quiet hours (a switch, then From / Until), only when the prefs answer
   has `quiet`; each change sends `quiet` alone with this device's time zone (`APIClient.setQuietHours`), as the web does. Hours set
   in another zone: the section's footer names that zone instead of this device's (`QuietHours.elsewhere`) until they are changed here.
@@ -2767,6 +2767,17 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
 - **Tests**: `InboxManagersTests`, `ManagerPushTests`, `ManagerGroupsTests.aComputerIsOfflineWithItsManager` and
   `.aPushIsThePagesOwnUnlessAnotherManagerSentIt`,
   `ExtensionOperationsTests.anotherManagersOperationIsKeptApart`, `MacAttentionTests.aManagerSwitchedOffHereRingsNoBanner`.
+
+## Starred messages (#11993)
+
+On iPhone and iPad, touch and hold a user message or reply in an Assistant or Agent conversation and choose **Star**.
+The same row shows the saved mark, and **Unstar** offers Undo. **Pages › Starred** searches the current assistant's
+snapshots by words, conversation title and speaker. The list is shared with the Web app through the existing Assistant
+manager API. Chats use compact references. The saved text is read while the Starred page is open.
+
+**Open Original** checks the exact transcript and highlights the saved message when it is still present. Positional
+messages also need a matching record fingerprint. A deleted conversation or original leaves the words available for
+Copy. A failed connection offers a retry. Older assistants that do not offer the API have no Starred entry or menu action.
 
 ## Saved prompts (#9436)
 

@@ -246,9 +246,6 @@ func (s *Service) botSendIn(ctx context.Context, ev *feishubot.MessageEvent, con
 		}
 	}
 	to := topic.target()
-	s.fbot.mu.Lock()
-	_, ours := s.fbot.st.Threads[msg.ParentID]
-	s.fbot.mu.Unlock()
 	// The media to pass on: this message's own, then the pictures and files of the message it quotes (the owner
 	// replies to a picture to ask about it), each downloaded with the message it is in.
 	type botMedia struct {
@@ -260,7 +257,7 @@ func (s *Service) botSendIn(ctx context.Context, ev *feishubot.MessageEvent, con
 	for _, md := range content.Media {
 		media = append(media, botMedia{of: msg.MessageID, Media: md})
 	}
-	if msg.ParentID != "" && !ours && topic == nil {
+	if msg.ParentID != "" && topic == nil {
 		var quoted []feishubot.Media
 		in.Quote, quoted = s.botQuote(ctx, msg.ParentID, lang)
 		for _, md := range quoted {
@@ -426,7 +423,7 @@ func (s *Service) botQuote(ctx context.Context, id string, lang i18n.Lang) (*pro
 	if c.Text == "" {
 		c.Text = "[" + it.MsgType + "]"
 	}
-	return &prompts.BotQuote{Who: who, Text: clip(c.Text, 4000)}, c.Media
+	return &prompts.BotQuote{ID: id, Who: who, Text: clip(c.Text, 4000)}, c.Media
 }
 
 // botForward reads a merged forward: one line per message, oldest first.

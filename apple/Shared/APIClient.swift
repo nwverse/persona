@@ -1117,7 +1117,9 @@ nonisolated struct APIClient: Sendable {
             let routed = try await preparedForRequest()
             return try await routed.fullItem(k, id: id)
         }
-        if config.isDemo { return try JSON.decoder.decode(Item.self, from: try await request("GET", sp(k) + "/items/\(id)/full")) }
+        if config.isDemo || transport != nil {
+            return try JSON.decoder.decode(Item.self, from: try await request("GET", sp(k) + "/items/\(id)/full"))
+        }
         var req = URLRequest(url: itemURL(machine: k.machineID, session: k.sessionID, item: id, "full"), timeoutInterval: 60)
         config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
@@ -1125,7 +1127,8 @@ nonisolated struct APIClient: Sendable {
         let (data, resp) = try await Self.uncachedSession.data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else {
-            throw APIError(status: status, message: APIError.message(in: data) ?? HTTPURLResponse.localizedString(forStatusCode: status))
+            throw APIError(status: status, message: APIError.message(in: data) ?? HTTPURLResponse.localizedString(forStatusCode: status),
+                           fields: APIError.fields(in: data))
         }
         return try await Task.detached(priority: .userInitiated) { try JSON.decoder.decode(Item.self, from: data) }.value
     }
