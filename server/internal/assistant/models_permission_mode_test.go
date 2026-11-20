@@ -555,6 +555,63 @@ func TestPermissionModeManagedShadowingAndHubOverride(t *testing.T) {
 	}
 }
 
+func TestPermissionModeStaleCacheFallsBackToLiveTargetDiscovery(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	f.mu.Lock()
+	f.sessions["mac"] = nil
+	f.zshrc = map[string][]proto.Launcher{
+		"server": {
+			{Name: "claude", Source: "zshrc"},
+		},
+		"mac": {
+			{Name: "newly-added", Agent: "claude", Source: "zshrc"},
+			{Name: "fresh-grok", Agent: "paseo", Source: "paseo", Assistant: true, PermissionModes: proto.PermissionModeSetOf("default", "plan")},
+		},
+	}
+	f.mu.Unlock()
+
+	// Populate the hub's cached zshrc snapshot for both machines while "server" lacks the newly added launchers.
+	_ = s.zshrcLaunchers(ctx, false)
+
+	// Now the live "server" node advertises both launchers with different capabilities than "mac", plus a partial
+	// hub.json override on "newly-added" (AgentType/Agent unset) that must still preserve live omp.
+	f.mu.Lock()
+	f.zshrc["server"] = []proto.Launcher{
+		{Name: "claude", Source: "zshrc"},
+		{Name: "newly-added", Agent: "omp", Source: "zshrc"},
+		{Name: "fresh-grok", Agent: "paseo", Source: "paseo", Assistant: true, PermissionModes: proto.PermissionModeSetOf("default", "bypassPermissions")},
+	}
+	f.hello.Models.Launchers = map[string][]ConfiguredLauncher{
+		"server": {
+			{Launcher: proto.Launcher{Name: "newly-added", Model: "custom-model"}},
+		},
+	}
+	f.mu.Unlock()
+
+	unionNewlyAdded := &ModelProvider{ID: "launcher.newly-added", Kind: "launcher", Agent: "claude"}
+	if modes := s.permissionModesForLauncher(ctx, "server", "newly-added", unionNewlyAdded); len(modes) != 0 {
+		t.Fatalf("stale cache missed live server omp for newly-added: got %v, want empty", modes)
+	}
+
+	unionFreshGrok := &ModelProvider{
+		ID:              "launcher.fresh-grok",
+		Kind:            "launcher",
+		Agent:           "paseo",
+		PermissionModes: proto.PermissionModeSetOf("default", "plan", "bypassPermissions"),
+	}
+	if modes := s.permissionModesForLauncher(ctx, "server", "fresh-grok", unionFreshGrok); slices.Contains(modes, "plan") || !slices.Contains(modes, "bypassPermissions") {
+		t.Fatalf("stale cache fell back to cross-machine union for fresh-grok: got %v, want [default bypassPermissions]", modes)
+	}
+
+	if w := modelRequest(s, http.MethodPatch, "assistant", `{"revision":0,"provider":"launcher.fresh-grok","permission_mode":"plan"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("assistant on server accepted mac-only plan mode via stale cache: %d %s", w.Code, w.Body.String())
+	}
+	if w := modelRequest(s, http.MethodPatch, "assistant", `{"revision":0,"provider":"launcher.fresh-grok","permission_mode":"bypassPermissions"}`); w.Code != http.StatusOK {
+		t.Fatalf("assistant on server rejected live bypassPermissions mode: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestModelProfilePermissionModeValidationAndCapture(t *testing.T) {
 	s, f, _ := modelService(t)
 	ctx := context.Background()
