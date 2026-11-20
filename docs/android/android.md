@@ -189,7 +189,10 @@ started like this**; each task with its number when there are several, where it 
 these directly**; a task's model chip is its short name ("Opus 4.8", `planModelLabel`), the Edit field keeps the raw id; then **Start** / **Start N tasks**, **Edit** and **Don't start**, in one row while Start's whole label fits and
 stacked (Start above the other two) when it would be cut), a dismissed one reads **Not started · N
 tasks**. A started plan is the hand-off cards in the card's place, and the card follows the store's latest plan, so a sheet that
-kept the plan it was opened with (the tray's Review) says **✓ Started N tasks** instead of offering Start again. Tests:
+kept the plan it was opened with (the tray's Review) says **✓ Started N tasks** instead of offering Start again. On every style,
+an open task with `brief` also has one `PlanTaskBrief` inset well: who asked or started it and when, a folded criteria / time /
+bounds summary, then **Show All** for the whole request or labelled hand-over, goal, effective criteria and expected time, and
+out of bounds. A task without one is unchanged, and an edited Start never sends the decoded brief back. Tests:
 `TaskRecordsTest` (core/domain), `PlanCardConversationTest`, `PlanCardFailureReasonTest`.
 
 #### Background rounds fold into one line (#4314, leaders in #6595)
@@ -1864,6 +1867,8 @@ When Claude calls `phone_*`, the hub merges same-name tools into one definition 
 Photo image blocks previously used `mimeType`; the hub only recognizes `mime_type`, so images never reached Claude. Fixed, guarded by `PhotoContentTest`.
 
 Mock hub: `GET /mock/tool_call?name=phone_device_info&args=<JSON>` calls a phone declaring that tool like the hub; `GET /mock/phone` shows registrations and responses. Unit tests passed. Verified 2026-11-02 on API 35 emulator: calendar permission prompt, confirmation dialog (three styles × light / dark), Deny returns `The user declined on the phone.`, Allow writes to local Persona calendar; background App's lock-screen confirmation Allow followed by unlock also writes (fixed, see Lessons); `phone_photos_recent` and `phone_photo_get` (image block `mime_type: image/jpeg`, `max_size` applied).
+
+**Calling (2026-11-21, #4050).** `phone_call_start` joins the catalog with the exact iOS description and schema (the fixture export no longer excludes Calls). The Calls switch is off by default and needs no system permission. A call is offered only while Persona is in the foreground and uses the same one-Allow-per-call confirmation as the other writes. Android accepts the iOS phone-number syntax and normalization, but `facetime` and `facetime_audio` fail as unsupported before confirmation. After Allow, `ACTION_DIAL` opens the normalized `tel:` URI; `handed_to_android` does not mean the call connected. There is no `ACTION_CALL` or `CALL_PHONE`. A missing dialer or a failed launch returns a definite "no call was started" error, not an uncertain write. `CallToolTest` covers validation, confirmation, foreground and launch failures in Robolectric; a real dialer and device remain unverified.
 
 **Calendar and contact write tools (2026-11-15).** `phone_calendar_update_event`, `phone_calendar_delete_event`, `phone_contacts_create` and `phone_contacts_update` join `phone_calendar_create_event` as confirmed writes, declared exactly like iOS (the fixture export no longer excludes them). Calendar writes need `READ_CALENDAR` + `WRITE_CALENDAR`, contact writes `READ_CONTACTS` + `WRITE_CONTACTS`; with only the read permission the read tools stay offered, the write tools are not registered and the settings row says "Read only".
 

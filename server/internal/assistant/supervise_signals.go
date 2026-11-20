@@ -162,7 +162,7 @@ func (g superviseSignal) urgent() bool {
 	switch g.Kind {
 	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigOwnerCannot, sigEstimateDue, // the owner or an automatic review deadline waits
-		sigParkDecided, sigDecisionReply, sigHandoffResult:
+		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult:
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -172,10 +172,9 @@ func (g superviseSignal) urgent() bool {
 	return false
 }
 
-// immediate: a signal that does not wait out the gap after the last message, only p.gather. A start that failed is
-// the supervisor's to retry and nobody else's; the gap is shared by every supervisor, so a message just sent to
-// another (the background supervisor) held it back for minutes while the task sat as if finished.
-func (g superviseSignal) immediate() bool { return g.Kind == sigFailed }
+// immediate signals need a decision and wait only for gathering, never the shared spacing or routine cooldown.
+// An explicit NotBefore (a deferred failed-start batch) still applies.
+func (g superviseSignal) immediate() bool { return supervisionBatchImmediate(g) }
 
 type superviseBook struct {
 	mu      sync.Mutex
@@ -193,6 +192,8 @@ type superviseBook struct {
 	last                time.Time                    // when the last supervision message went out
 	queued              map[string][]superviseSignal // conversation → the signals of the message still waiting in its queue
 	batch               map[string]time.Time         // conversation → its routine batch's first-signal deadline
+	batchInterval       time.Duration                // last scheduled optional interval, to release it when disabled
+	told                map[string]time.Time         // conversation → last accepted supervision message
 	timer               *time.Timer
 	timerAt             time.Time
 
@@ -227,6 +228,9 @@ func (b *superviseBook) init() {
 // package's superviseGather, superviseEvery or superviseUrgentEvery).
 type superviseTimings struct {
 	gather, every, urgent time.Duration
+	// cooldown: how long routine signals for a conversation wait after a supervision message went to it (zero:
+	// routineCooldown's default).
+	cooldown time.Duration
 }
 
 // superviseTimings are s's own timings, the package's for each one it does not set. Tests set them on their Service,
@@ -262,6 +266,9 @@ func digestWait(now, last time.Time, pending []superviseSignal, p superviseTimin
 			if next := last.Add(gap); next.After(at) {
 				at = next
 			}
+		}
+		if !supervisionBatchImmediate(g) && g.batchUntil.After(at) {
+			at = g.batchUntil // held for its recipient's routine cooldown (gateDigestBatches)
 		}
 		if due.IsZero() || at.Before(due) {
 			due = at
@@ -353,11 +360,13 @@ func (s *Service) queueSignal(g superviseSignal) {
 // scheduleDigestLocked sets the timer for when the pending signals are due; s.supervise.mu is held.
 func (s *Service) scheduleDigestLocked(now time.Time) {
 	b := &s.supervise
+	batch := s.supervisionBatchInterval(context.Background())
+	b.syncBatchInterval(batch)
 	list := make([]superviseSignal, 0, len(b.pending))
 	for _, g := range b.pending {
 		list = append(list, g)
 	}
-	wait, ok := digestWaitWithBatch(now, b.last, list, s.superviseTimings(), s.supervisionBatchInterval(context.Background()))
+	wait, ok := digestWaitWithBatch(now, b.last, list, s.superviseTimings(), batch)
 	if !ok {
 		return
 	}

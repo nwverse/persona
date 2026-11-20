@@ -33,6 +33,9 @@ import { PHONE, useMedia } from "../../lib/viewport";
 import { saveRecentTaskChats } from "../../lib/recent-task-chats";
 import { RECENT_COUNTS, setRecentCount, useRecentCount } from "../../lib/sidebar-recent";
 import { composing } from "../../lib/send-history";
+import { useConversationArrange } from "../../lib/use-conversation-arrange";
+import { ConversationArrangeBar } from "./ConversationArrangeBar";
+import { ConversationOrderRow } from "./ConversationOrderRow";
 
 const NONE: Session[] = [];
 // A row's line under its title: the matching words of a search, or else its last message.
@@ -160,7 +163,9 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
   // the labels in use, each once: the tag chips narrow the list the same way the origin chips do
   const tagChoices = useMemo(() => inUseTags(all), [all]);
   const visible = useMemo(() => withTag(hits, activeTag), [hits, activeTag]);
-  const { main, days, archived } = useMemo(() => arrange(visible, assistant?.main, new Date(nowMs)), [visible, assistant?.main, nowMs]);
+  const orderRows = useMemo(() => visible.filter((s) => !s.archived && s.session_id !== assistant?.main), [visible, assistant?.main]);
+  const { saved: conversationOrder, arranging, start: startArranging, done: doneArranging, move, step, reset } = useConversationArrange(orderRows);
+  const { main, days, archived } = useMemo(() => arrange(visible, assistant?.main, new Date(nowMs), conversationOrder), [visible, assistant?.main, nowMs, conversationOrder]);
   const total = all.filter((s) => !s.archived).length;
   const searching = query.trim() !== "";
 
@@ -210,6 +215,7 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
   // that has it) and how many it lists (this browser's), the same settings as Settings has.
   const recentTaskChats = assistant?.recent_task_chats;
   const optionItems: MenuItem[] = [
+    ...(orderRows.length ? [{ key: "arrange", label: t("conversation-menu.arrange_chats"), icon: "menu" as const, onSelect: startArranging }] : []),
     ...(typeof recentTaskChats === "boolean"
       ? [{
           key: "task-chats", label: t("settings-assistantsettings.recent_task_chats"), checked: recentTaskChats,
@@ -279,6 +285,8 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
             </div>
           )}
 
+          {arranging && <ConversationArrangeBar custom={!!conversationOrder?.length} onReset={reset} onDone={doneArranging} />}
+
           {loading && (
             <div className="flex justify-center py-16">
               <Loading />
@@ -320,9 +328,15 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
             <section key={d.title} className="mb-5">
               <SectionTitle>{d.title}</SectionTitle>
               <div className="divide-y divide-line overflow-hidden rounded-card bg-surface shadow-card">
-                {d.items.map((s) => (
-                  <ConvRow key={s.session_id} s={s} now={nowMs} said={searching ? saidBy.get(s.session_id) : undefined} fit={fit} onRename={setRenaming} onArchive={archive} onEditTags={setTagging} />
-                ))}
+                {d.items.map((s) => {
+                  const row = <ConvRow key={s.session_id} s={s} now={nowMs} said={searching ? saidBy.get(s.session_id) : undefined} fit={fit} onRename={setRenaming} onArchive={archive} onEditTags={setTagging} />;
+                  if (!arranging) return row;
+                  return (
+                    <ConversationOrderRow key={s.session_id} id={s.session_id} title={conversationTitle(s)} index={orderRows.findIndex((x) => x.session_id === s.session_id)} count={orderRows.length} onMove={move} onStep={step}>
+                      {row}
+                    </ConversationOrderRow>
+                  );
+                })}
               </div>
             </section>
           ))}

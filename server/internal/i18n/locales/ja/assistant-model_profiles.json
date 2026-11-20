@@ -31,5 +31,6 @@
   "err_tier_model": "プリセット {tier}：{model} はモデル ID ではありません。英字か数字で始め、英数字と . _ - / : @ [ ] だけを使ってください。",
   "err_tier_description": "プリセット {tier} の説明は 1 行、{max} 文字以内にしてください。",
   "tier_strong": "このプロファイル作成時のメインチャットのモデル：設計、レビュー、難しい問題。",
-  "tier_standard": "このプロファイル作成時の新規 Agent のモデル：日常のコーディング。"
+  "tier_standard": "このプロファイル作成時の新規 Agent のモデル：日常のコーディング。",
+  "err_permission_mode": "{where} の権限モード {mode} は無効です。選択肢：{modes}。"
 }

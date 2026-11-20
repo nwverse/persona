@@ -129,6 +129,14 @@
     <string name="assistant_direction_todos_of">To-dos of %1$s</string>
     <string name="assistant_direction_agents_of">Agents of %1$s</string>
     <string name="assistant_conversation_actions">Chat actions</string>
+    <string name="assistant_arrange_chats">Arrange chats</string>
+    <string name="assistant_arrange_move_up">Move up</string>
+    <string name="assistant_arrange_move_down">Move down</string>
+    <string name="assistant_arrange_drag">Drag to reorder chat</string>
+    <string name="assistant_arrange_reset">Reset to activity time</string>
+    <string name="assistant_arrange_reset_done">Chat order reset to activity time</string>
+    <string name="assistant_arrange_undo">Undo</string>
+    <string name="assistant_arrange_save_failed">Couldn’t save chat order. Try again.</string>
     <string name="assistant_demo_title">Demo mode</string>
     <string name="assistant_demo_notice">Content is only kept for this demo.</string>
     <string name="assistant_demo_reply">This is a sample chat. Once the assistant is connected, replies show up here.</string>

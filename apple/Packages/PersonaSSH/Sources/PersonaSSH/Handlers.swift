@@ -72,19 +72,22 @@ final class SessionHandler: ChannelInboundHandler {
     func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
         if event is UserAuthSuccessEvent {
             ready.succeed(())
-        } else if let v = event as? NIOTSNetworkEvents.ViabilityUpdate, !v.isViable {
-            context.close(promise: nil)
+        } else if let v = event as? NIOTSNetworkEvents.ViabilityUpdate {
+            trace("ssh session viability \(v.isViable)")
+            if !v.isViable { context.close(promise: nil) }
         }
         context.fireUserInboundEventTriggered(event)
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
         if self.error == nil { self.error = error }
+        trace("ssh session error \(String(reflecting: error))")
         ready.fail(error)
         context.close(promise: nil)
     }
 
     func channelInactive(context: ChannelHandlerContext) {
+        trace("ssh session inactive \(error.map { String(reflecting: $0) } ?? "without an error")")
         ready.fail(error ?? SSHTunnelError.handshake("服务器断开了连接"))
         context.fireChannelInactive()
     }

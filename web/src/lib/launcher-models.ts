@@ -58,18 +58,20 @@ export interface LauncherDefault {
   provider?: string;
   model?: string;
   effort?: string;
+  permission_mode?: string;
   /** Main chat only: cli or agentsdk. */
   runtime?: string;
 }
 
 /** One of "New agent"'s presets (#2225, docs/assistant/model-profiles.md "Agent presets"): a tier of the model profile in use
- *  whose launcher this computer starts. Picking it fills launcher, model and effort as picking them by hand would. */
+ *  whose launcher this computer starts. Picking it fills launcher, model, effort and permission mode as picking them by hand would. */
 export interface PickerTier {
   name: string;
   launcher: string;
   /** "" or absent: the launcher's default (the model settings' when the launcher is theirs). */
   model?: string;
   effort?: string;
+  permission_mode?: string;
   /** When to use it. */
   description?: string;
 }
