@@ -1337,6 +1337,15 @@ with the to-do ID, consecutive assessable no-progress count and a reason. The re
 attempts are `not_run`; a newer completed run makes a late older unassessed result `superseded`. A still-running,
 unassessed run is `pending`.
 
+The explanation is the run's own reply (#11553): the last reply after the prompt that carries the run's key, up to the
+next message that opened a turn. A run in its source conversation shares that conversation with its other work:
+supervision messages, the owner's words, and other schedules' runs. There the explanation is never just the latest turn's
+reply. Two linked runs due in the same minute in one supervising conversation each keep their own reply, although both
+watchers see the conversation settle only after the second answer. When the run's turn is not its own (its prompt was
+queued into another turn, or another message was queued into its turn), or its prompt is not on the page, the
+explanation is the hub's evidence line ("no new Agent reply, criterion change or progress report"). A run in a
+conversation of its own falls back to that conversation's latest turn.
+
 The first run after the link only records the baseline (`baseline`, #11587). Compared with a snapshot taken just
 before it was sent, it judged only its own few seconds, and an Agent working without words was counted at once.
 Each later run compares with the previous assessment's evidence. Observable progress is
@@ -2482,11 +2491,12 @@ users, and named the host, container and harness when they were known (web usabi
 
 ### Hiding ambient Agent sessions
 
-For people using Agents with noisy workspace trees, `agents.hidden_dirs` is a reversible per-computer
-visibility preference, shared across runtimes: the parallel list to `agents.blocked_claude_dirs`, with the same
-pattern syntax and get / add / remove, but nothing stops being collected. Rules are kept with each computer in the
-devices layer, live in advanced Agent settings and default to empty.
-The manager retains all sessions but excludes matched ambient sessions from Assistant observations and
-reminders. Open supervised task agents remain visible, preserving the supervisor's completion and approval
+For people using Agents with noisy workspace trees, `agents.hidden_dirs` holds reversible per-computer Agent
+folder rules, shared across runtimes: the parallel list to `agents.blocked_claude_dirs`, with the same pattern syntax
+and get / add / remove. Each rule blocks (the default for a new rule: that computer stops collecting the sessions, so
+nothing of them reaches Persona, #10053) or hides (nothing stops being collected). Rules are kept with each computer
+in the devices layer, live in advanced Agent settings and default to empty.
+For a hide rule, and for a block rule on a node that does not block yet, the manager retains all sessions but
+excludes matched ambient sessions from Assistant observations and reminders. Open supervised task agents remain visible, preserving the supervisor's completion and approval
 flow; after supervision ends, the rule applies again. See `docs/protocol/protocol.md` ("Agent directory visibility")
 for matching, persistence, app inspection and the confirmed `persona_settings` contract.

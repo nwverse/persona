@@ -354,7 +354,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		if earlier[s.SessionID] || !n.sessionScopeAllows(s.Cwd) {
 			continue
 		}
-		if s.Cwd != "" && n.cwdBlocked(s.Cwd) && !n.isAssistantSession(s.SessionID) && !n.keptSessions()[s.SessionID] {
+		if n.listBlocked(s.SessionID, s.Cwd) {
 			continue
 		}
 		if s.Status == proto.StatusWorking && (s.Agent == "" || s.Agent == "claude" || s.Agent == "codex") {
@@ -435,8 +435,8 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	if s.Launcher == "" {
 		s.Launcher = n.inferLauncher(s.SessionID)
 	}
-	n.normalizeSessionRowModel(s) // a gateway's routed echo back to the launcher's declared id
-	if s.Title == "" {
+	n.normalizeSessionRowModel(s) // keep the echoed model for display, clearing stand-in markers ("<synthetic>")
+	if s.Title == "" && s.HerdrTabName() == "" {
 		s.Title = filepath.Base(s.Cwd)
 	}
 	s.BypassAvailable = n.hooks.canBypass(s.SessionID) // modes.go claudeCanBypass
@@ -590,4 +590,10 @@ func (n *Node) revsChanged(list []proto.Session) map[string]int64 {
 	}
 	n.lastRevs = next
 	return out
+}
+
+// listBlocked: the live list leaves session sid out for its working folder cwd: a blocked Agent folder or Claude config
+// folder, except the assistant's own conversations and the sessions the hub keeps.
+func (n *Node) listBlocked(sid, cwd string) bool {
+	return cwd != "" && n.cwdBlocked(cwd) && !n.isAssistantSession(sid) && !n.keptSessions()[sid]
 }

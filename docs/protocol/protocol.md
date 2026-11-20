@@ -1162,6 +1162,8 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
                 "expect_minutes":30,                                    // estimated minutes, 0 / absent = not given
                 "state":"",       // "" in progress | pending_review awaiting review | rework being reworked | needs_user waiting for the user to decide | parked waiting on purpose until a time (#3804) | accepted accepted | cancelled cancelled
                                   // (for accepted / cancelled the to-do is done; after the user reopens it, it counts as in progress)
+                                  // a plan's task that takes the to-do over with a new Agent (continues / todo_id) starts a new round:
+                                  // state goes back to "" and round to 0, the earlier review stays in reviews (#11553)
                 // only while state is parked (#3804, docs/assistant/todos.md "Parked tasks"; additive): what the task waits for in one sentence, until when (RFC 3339),
                 // what kind of thing it waits on (owner_priority | someone_else | external_event | date) and how many times in a row it was parked with no agent turn in between;
                 // a parked task is open and is not waiting on the user. Clients that do not know the state show the task as in progress
@@ -1793,13 +1795,14 @@ What the apps draw and when they ask (the user's own Agents' and assistant's rep
 One protocol for every picture of a person or a conversation the apps show. Who it serves: everyone, who recognises a face faster than a letter; the apps never reach a third party for one.
 
 - **The value a source gives**: one string, `avatar`, wherever a source names a picture (step 1: a connector's Inbox thing, `InboxThing.avatar`). `https://…` is an address on the open internet that the manager fetches; anything else is one of the source's own media refs, whose bytes its extension gives (a connector's `Media(ref)`, the same refs its conversation page carries). An `http://` address, or a value over 2 KiB, is none. A value names fixed bytes: a changed picture gets a new value (a new ref, a new address, or a version in it), which is what makes caching for good safe.
-- **What the apps get**: never the value. The lists name the picture's hub path beside the field that has one, `avatar_url` = `/api/v1/avatars/{source}/{value as unpadded base64url}` (`extwire.AvatarURL`), made when listed (stored items keep the source's value). Step 1: an Inbox item's `connector.avatar_url`. Older fields keep the meaning older apps know (a Feishu item's `avatar`, a conversation page's `avatar` refs); without `avatar_url` (an older hub, a source that sends none) the apps draw the initial.
-- **`GET /api/v1/avatars/{source}/{value}?size=<px>`** (the extension manager's, `extmgr/avatars.go`): full devices only (403 otherwise); no extension scope opens it. `{source}` is an installed connector (404 otherwise; a ref also needs its `threads`). Stateless: the value is in the path. `size` is rounded up to 64, 128, 256 or 512 (none: 128). The picture is decoded, turned upright, scaled to fit (never enlarged) and encoded again (JPEG, PNG when transparent), which drops its metadata and anything that is not the picture: an extension's bytes are never served as they came. A ref whose bytes the connector's conversation page kept (`cache/connector-media/`) is drawn from them, signed out too.
+- **What the apps get**: the manager lists the hub path in `avatar_url`, `/api/v1/avatars/{source}/{value as unpadded base64url}` (`extwire.AvatarURL`). Inbox items list `connector.avatar_url`; the stored item keeps the source value. Connector thread pages (#10994) list optional `avatar_url` on `chat`, `chat.author` and each message's `sender`. Their existing `avatar` fields still carry the original values. An updated app reading a thread from an older hub loads its legacy ref through `/api/v1/connectors/{id}/media?ref=`. A missing or unavailable picture shows the initial.
+- **Messaging extensions (#10994)**: a checked account, conversation, person or profile retains its original `avatar`. The manager also supplies `avatar_url` for a public HTTPS address or a registered source's `media/<key>`. Messaging paths include `messaging=1`; local media also names the effective opaque `account` for multi-account sources. Two accounts can share a media key and return different originals. When one ID names both a messaging source and a connector, the marker selects the messaging source. Each manager caches the original under the source and account and draws the requested sizes from that original. An uninstalled source's avatar cache is removed. Older hubs' relative media remains usable; an old HTTPS avatar is tried only on the hub, with the initial as fallback.
+- **`GET /api/v1/avatars/{source}/{value}?size=<px>`** (the extension manager's, `extmgr/avatars.go`): full devices only (403 otherwise); no extension scope opens it. `{source}` is an installed connector or enabled, running messaging source (404 otherwise; a connector ref also needs its `threads`). Stateless: the value is in the path. `size` is rounded up to 64, 128, 256 or 512 (none: 128). The picture is decoded, turned upright, scaled to fit (never enlarged) and encoded again (JPEG, PNG when transparent), which drops its metadata and anything that is not the picture: an extension's bytes are never served as they came. A ref whose bytes the connector's conversation page kept (`cache/connector-media/`) is drawn from them, signed out too.
 - **Fetching an address**: `remoteimage`'s Avatars profile, the checks of "Remote images (#9473)" with these limits: `https` only, at the start and at every redirect (at most 3); every answer for the host public, the checked numbers dialled (no rebinding), a fake-IP proxy's names through the same DoH (`manager.json` `remote_images.doh`); no cookies, credentials or Referer; PNG, JPEG, WebP and GIF (its first frame) only, read from the bytes (HEIC, AVIF, SVG and everything else refused); 4 MiB per source, 16 megapixels, 10 s per fetch. An extension's bytes are held to the same types and sizes.
 - **Limits**: a device may start 300 fetches a minute; only fetches count (a picture from the cache, or another size drawn from a kept source, costs nothing), so a screen of new rows loads whole. The same picture is fetched once however many ask; a value that failed is answered from memory for 2 minutes.
-- **Cache**: `cache/avatars/<source>/` in the manager's directory, one subdirectory per source, at most 256 MiB for all of them, the least recently used dropped first; a cache, deletable at any time. Nothing is invalidated by hand (a new picture is a new value). A source's directory goes with its data (Delete Saved Data).
+- **Cache**: the manager keeps connector pictures in `cache/avatars/<source>/` and messaging pictures in `cache/avatars/_messaging-<source>/`. The sources can be removed independently, even when they have the same ID. The shared limit is 256 MiB, with the least recently used dropped first. A new picture gets a new value. A source's directory goes with its data (Delete Saved Data).
 - **Answer**: the picture with its own `Content-Type`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox` and `Cache-Control: private, max-age=31536000, immutable`; or a JSON error with `code`: `bad_url` (404 for a path that is not an avatar, 400), `address_not_allowed` (403), `too_large` (413), `unsupported_type` (415), `bad_image` (422), `rate_limited` (429, `Retry-After`), `fetch_failed` (502, the connector signed out or failing included), `timeout` (504). The apps draw the initial on any error.
-- **The apps**: one loader each. iOS `ChatAvatar` (`docs/design/DESIGN_SYSTEM.md` "3.8 Chips, badges, avatars, marks"), the web's `Monogram` with `src` (`ItemAvatar`): the initial at once and while loading, the picture over it, the initial on failure; asked at the route's size covering the pixels drawn and kept by the app's caches.
+- **The apps**: iOS uses `ChatAvatar` and the web uses `Monogram` for connector Inbox rows and thread senders and authors. Each requests the pixels needed for the displayed size from the item's manager and reuses its image cache. The initial stands in for a missing or failed picture.
 - **Steps**: 1 (#10923) connector Inbox rows, Telegram's first; 2 connector conversation pages; 3 messaging extensions (their `media/<key>` and `https` people and conversations); 4 Feishu (its keys through the route, gateway paths mapped, #1353); GitHub rows #10931, Android #10932.
 
 ## Extension install, upgrade and uninstall progress (`extension_operations`, #3277)
@@ -2158,7 +2161,7 @@ Clients report their errors and crashes only while `features` has `error_reports
 | GET | `/api/v1/devices/push` | `{direct,devices:[{device_id,name,kind,updated_at,push}],web:[{device_id,browser?,service?,current,updated_at,last_ok_at?,failed_at?,status?,error?}]}`: whether the hub has its own APNs key, every device it pushes to with its way, and every browser with Web Push ("Web Push (browsers)" below; `personad hub doctor`; not for a watch) |
 | POST | `/api/v1/devices/{id}/live-activity` | Live Activity tokens: `{"push_to_start_token"}`, `{"activity_id","push_token"}` (rotates; sent repeatedly), `{"activity_id","ended":true}` (`docs/apple/live-activity.md`); returns `{"ok":true}` after saving. A failed save returns 503 `internal` with a localized unavailable message so the client can retry. A device whose push registration was retired gets 409 `push_registration_required` instead, until it registers again. The write observes request cancellation and has a 5-second timeout (or the earlier request deadline) |
 | GET | `/api/v1/fleet` | `{"fleet": FleetState}`: the current Live Activity content (pulled when the App returns to the foreground); `stats` has all the numbers and each machine's load |
-| GET | `/api/v1/usage/windows` | `{"accounts": [{id, provider, name, plan?, windows: [{label, window_minutes, used_percent, resets_at?, model?}], sampled_at, stale?, local?, sources?, problem?}], "checked_at"}`: Codex / Claude subscription quota windows read by each computer's node from local files, plus those the manager reads from account-pool gateways (`local`: seen on a computer, `sources`: gateway names, `problem`: `unreachable` / `error`, `model`: a single-model window); the manager merges the same account and sorts by the fullest window, the hub forwards, and 503 `assistant_offline` when the manager is absent; no data is `[]` (`docs/server/usage-windows.md`, #2432, #2595) |
+| GET | `/api/v1/usage/windows` | `{"accounts": [{id, provider, name, plan?, windows: [{label, window_minutes, used_percent, resets_at?, model?}], sampled_at, stale?, local?, sources?, problem?}], "checked_at"}`: Codex / Claude subscription quota windows from computer nodes and account-pool gateways (`local`: seen on a computer, `sources`: gateway names, `problem`: `unreachable` / `error`, `model`: a single-model window); the manager groups the rows as described in `docs/server/usage-windows.md` and sorts by the fullest window. The hub forwards the response or returns 503 `assistant_offline` when the manager is absent. No data is `[]` (#2432, #2595) |
 | GET | `/api/v1/metrics` | `{"machines": [{machine_id, online, system, latest: MetricSample \| none, points: [MetricPoint], usage?: {today: {in, cache_write, cache_read, out, req}, per_minute, recent: [60 per-minute totals, oldest first]}}], "step": 60}`: current values and trends on each card of the App's **Machines** page, for every machine in configured order; `points` is the last hour, one per minute; `latest` is only present if a sample arrived within 30 seconds (`docs/server/machines.md`) |
 | GET | `/api/v1/machines/{id}/metrics?range=1h\|6h\|24h` | `{"metrics": {as above, one machine}, "range", "step"}`: the machine detail charts, step 10 / 60 / 240 seconds (about 360 points); unknown machine 404, bad range 400 |
 | GET | `/api/v1/machines/{id}/usage?range=1h\|24h\|7d[&model=…][&launcher=…]` | `{"usage": {machine_id, online, range, step, points: [{t, in, cache_write, cache_read, out, req, gap?}], total, models: [{name, …sums}], launchers: [{name, …sums}], launchers_known, stored}}`: a machine's token usage (`docs/server/machines.md` ("Token usage")); steps 60 / 600 / 3600 seconds, a point is the step's sums; `model` / `launcher` filter (`launcher=-` is the unknown launcher); `models` are under the launcher filter and `launchers` under the model filter, largest first; `launchers_known` false for an older node; default range 24h, bad range 400, unknown machine 404 |
@@ -3804,7 +3807,7 @@ trade-offs in `docs/plans/plan-orca-support.md` ("herdr-core host")).
   If herdr isn't installed, a pinned version is installed first (waits up to 15 seconds; if not done, returns an "Installing herdr …" error, finishes installing in the background and then starts itself; `docs/integrations/engines.md` ("When herdr is not installed")).
 - `herdr.server.status` (hub → node, no params, returns `{running, known, installing, install_error}`): `installing` means the node is installing herdr,
   `install_error` is why the last install failed (empty string if it never failed); `GET /api/v1/machines/{mid}/herdr` passes them through as is (omitted when absent).
-- `usage.windows` (hub → node, no params, returns `{enabled, collected_at, accounts: [UsageAccount]}`, #2432): subscription quota windows the node gets from reading this machine's Codex rollouts and the files Claude's status line writes.
+- `usage.windows` (manager → node, no params, returns `{enabled, collected_at, accounts: [UsageNodeAccount]}`, #2432): subscription quota windows from Codex app-server, Codex rollouts, and Claude status line files. Each item has the established usage account fields and optional Codex `account_key` and `source_key` digests. These keys are for the manager's grouping and are absent from the client API.
   It only reads local files and never touches credentials. When `usage_windows` in `node.configure` (hub.json `machines[].usage_windows`) is false it returns `{enabled: false, accounts: []}`. Old nodes don't have this method; the hub treats them as having no data (`docs/server/usage-windows.md`).
 - Operations without a pane (new, resume session, rename) go to the set's default host (the node's `defaultHost` / `defaultKind`; classic herdr for
   herdr + Herdr App); per-pane operations (read screen, send, keys, close) are routed by the host kind of the pane id, and each host's panes are limited
@@ -4075,7 +4078,7 @@ node → manager / hub requests (`interaction.create`, `computer.elicit`, `mcp.*
 - `usage.backfill.status {agents?}` → `{done, since?, before?, agents?}` and `usage.backfill {buckets:[{minute, model, launcher?, agent?, in, cache_write, cache_read, out, req}], through, done, agents?}` → `{stored}` (#9484, answered by the manager): the token usage backfill. A few minutes after connecting the node asks whether its history wants one; unless `done`, it reads its transcripts from `since` to `before` (Unix seconds: where the history begins or the hour after the last one stored, and the start of its live window), rate-limited, sums the replies by the hour (`minute` is the hour's start), model and launcher, and sends them a week at a time, oldest first, whole hours a request (`through`: the last hour in it, a week's last request the week's last hour; `done` on the very last, which may have no buckets) (#9562). Only numbers are sent. The manager stores an hour only when the machine has no usage in it yet and records `through` and `done`, so a scan cut off goes on from there and one sent again adds nothing (`stored`: hours added); an older manager answers `unknown method` and the node does nothing (`docs/server/machines.md` ("Backfill")).
   By agent (#9984): the node names the agents it reads (`agents: ["claude", "codex", …]`) and the manager answers each one's `{done, since?, before?}` under `agents` as well (its own fields stay the first record's, what an older node reads); Claude Code's is the machine's first record, any other agent has its own (Codex and traex since #10002). A request says the agents it read through `through` (`agents`; the manager stores only their buckets and moves their records on), and an hour is stored for an agent only when the machine has none of that agent's usage in it, nor, for Claude Code, Codex and traex, usage stored before agents were kept apart.
 - `interaction.create {interaction}` → `{resolution}` (blocks until handled / expired; on expiry returns `{"dismiss":true}`). A detachable assistant command-gate card returns after at most 75 seconds with `{"dismiss":true,"pending":true,"approval_id":"<original card>","message":"…"}` instead of holding its turn; a later ordinary Allow stores a one-time grant for the exact original call and messages its conversation to retry once. A matching retry receives `{"allow":true,"approval_id":"<original card>"}` only after that grant is atomically consumed and persisted; a changed input or second retry does not. See [Approval clarification](../assistant/approval-clarification.md) ("Detached command approvals"). When the manager answers from an "Always allow in this session" it kept (or one a card answered meanwhile covers) rather than from an answer to this card, the resolution has `"remembered":true` next to `allow` and `always`; only the manager sets it, an App's answer never carries it (the sent-as-user ledger records such a write as `conversation_always`)
-- `mcp.tools {assistant?, session_id?, guest?, revision?, leader_only?, tool_set?}` → `{tools, revision?}` or `{unchanged: true, revision}`. An optional revision matching the manager's current task-link cursor waits until it changes or a 30-second heartbeat expires; unchanged heartbeats do not compute the tool list. The cursor is captured before listing and invalidated on manager restart. Older managers omit it and retain one-shot discovery. With `leader_only: true`, an empty session returns the task-leader tool definitions for registration, and a named session returns them only for an active task leader eligible to use them. This query does not long-poll or fetch the general tool list. `tool_set: "supervise"`: a background supervisor's round asks for only the tools supervision uses (#7315), from `PERSONA_TOOL_SET` in its `personad mcp`'s environment; a manager that does not know the value, or an older one, answers the whole list. The set is fixed for the process, so the revision cursor applies to it unchanged.
+- `mcp.tools {assistant?, session_id?, guest?, revision?, leader_only?, tool_set?}` → `{tools, revision?}` or `{unchanged: true, revision}`. An optional revision matching the manager's current task-link cursor waits until it changes or a 30-second heartbeat expires; unchanged heartbeats do not compute the tool list. The cursor is captured before listing and invalidated on manager restart. Older managers omit it and retain one-shot discovery. With `leader_only: true`, an empty session returns the task-leader tool definitions for registration, and a named session returns them only for an active task leader eligible to use them. This query does not long-poll or fetch the general tool list. `tool_set: "supervise"`: a background supervisor's round asks for only the tools supervision uses (#7315), from `PERSONA_TOOL_SET` in its `personad mcp`'s environment; a manager that does not know the value, or an older one, answers the whole list. The set is fixed for the process, so the revision cursor applies to it unchanged. A manager may mark an Assistant tool with `work_guide_tool: true`. When the managed skill is installed, the MCP server keeps those definitions behind `work_tools_search` on each connection. Selecting exact names triggers `notifications/tools/list_changed`. Older servers ignore the marker.
 - `mcp.call {name, args, session_id, wait_updates?, call_id?}` → `{content, is_error, error_kind?, retry_after?}` (`error_kind` is the failure category: `declined` the user or `connector_gate` didn't agree, `unavailable` the connector isn't signed in / can't connect, `rate_limited` rate limited; `retry_after` is how many seconds of rate limiting remain. Included only when the hub knows; `personad tool` sets its exit code from it, #3779). `wait_updates` and the node's canonical UUID `call_id` are present together only for an opted-in call on a capable hub. A malformed or oversized id disables wait reporting without failing the tool call or publishing an event
 
 `source_permissions_v1` adds optional outer `source_permission: {at, session, generation, class, digest}` to a node's message-producing MCP calls. `class` is `bypass` or `prompting`; it is observed by the source node, not accepted from tool arguments. The call digest binds the source session and exact tool name/JSON arguments after RPC JSON compaction/escaping. Only authenticated node transport installs manager-side provenance. The manager retains creation-time evidence across delayed reports and retries; missing/mixed evidence states no class. On supporting target nodes the devices manager emits reserved `session.source_send` with a rebuilt source observation; ordinary `session.send` never uses a supplied source class. All caller spellings of `source_permission`/`from_mode` are removed before this internal RPC is chosen. It is not owner input, permission approval or a new public device method. Older nodes or intermediaries keep ordinary sends with no source declaration. See `docs/integrations/claude-integration.md` ("Source permissions on Agent messages").
@@ -4582,7 +4585,7 @@ runtime → node:
 | request `interaction.create {interaction, timeout_seconds?}` → `Resolution` | three kinds: question (`question`), plan (`plan`), permission (`permission`), same shape as `Interaction` above. The node fills in `created_at` / `expires_at` (default 30 minutes, same as hooks; `timeout_seconds` can only shorten it), the session title, the directory, and `agent` / `agent_label` (the Agent the session runs and its name: the session row's own `agent_label` whenever it has one, such as a Paseo provider's label, else the runtime's `name`; not set for runtimes running Claude Code, so the App draws a Claude card), pushes it to the phone via the hub, and blocks until answered. When nobody answers (expired, the phone's "hand back to computer", no hub) it returns `{dismiss: true}`, and the runtime hands over to its own UI. Interactions with an `id` the runtime gives, or with a `tool_use_id`, are `resumable`: the id (the runtime's, or the one the node computes from runtime + session + kind + tool_use_id) stays the same when it asks again; if the node or its hub link goes away midway it returns the error `code: node_gone`, never a dismiss (#8128), and once a hub is back the runtime asks again with the same id (the SDK, for up to 2 minutes from when the node or hub went away), and the hub reattaches the original card. Only an interaction with neither (its id a new one on each ask) is dismissed when the hub link drops |
 | event `interaction.cancel {id}` | this interaction is gone on the runtime side (tool call cancelled): withdraw the card on the phone |
 | request `runtime.package {name}` → `{name, hash, version, files: [{path, data}]}` | auto-update (`docs/integrations/runtimes.md` ("Auto-update")): `package` in hello says what code the runtime runs (package name and hash); when the node carries a package with this name and a different hash, the reply includes `update`, and the runtime fetches the files with this request (`data` is base64), checks the hash itself and swaps them in. Packages live in personad (`internal/runtimepkg`, generated from `integrations/` at build time); daemons can't get them (no `update`, and this request returns `unsupported`); no such package returns `not_found` |
-| requests `mcp.tools {assistant?, session_id?, leader_only?}` → `{tools: [{name, description, input_schema, shell?, defer_loading?}]}`, `mcp.call {name, args, session_id, assistant?}` → `ToolResult` | the hub's tools (the phone's `phone_*`, `mail_*`), forwarded to the hub (except `mail_save_attachment`, which the node answers itself and fetches over `mail.attachment`); without a hub `mcp.tools` is empty and `mcp.call` returns an error result. The runtime gives them to its own Agent (DSH: `docs/integrations/dsh.md` ("Phone tools")). `assistant: true` only matters for runtimes that declared `caps.assistant`: `mcp.tools` gains the assistant-only tools and the tools declared by extension command gates; `mcp.call` is handled as an assistant call only when the session belongs to this runtime and is an assistant chat (otherwise as an ordinary call). A named discovery session must belong to the requesting runtime, as must the caller of a session-scoped Agent tool. The `leader_tools` hello feature enables the `leader_only` discovery query. Gate-declared tools are run by the node itself; their `shell` is the word that runs them directly in a shell (command name, skill script path), which the runtime intercepts in the assistant chat's shell (`docs/integrations/runtimes.md` ("Assistant")). `defer_loading: true` marks an assistant tool used too rarely to send in full with every request (Claude Code keeps it behind ToolSearch, #7317); a runtime that cannot load tools on demand attaches it like any other |
+| requests `mcp.tools {assistant?, session_id?, leader_only?}` → `{tools: [{name, description, input_schema, shell?, defer_loading?, work_guide_tool?}]}`, `mcp.call {name, args, session_id, assistant?}` → `ToolResult` | the hub's tools (the phone's `phone_*`, `mail_*`), forwarded to the hub (except `mail_save_attachment`, which the node answers itself and fetches over `mail.attachment`); without a hub `mcp.tools` is empty and `mcp.call` returns an error result. The runtime gives them to its own Agent (DSH: `docs/integrations/dsh.md` ("Phone tools")). `assistant: true` only matters for runtimes that declared `caps.assistant`: `mcp.tools` gains the assistant-only tools and the tools declared by extension command gates; `mcp.call` is handled as an assistant call only when the session belongs to this runtime and is an assistant chat (otherwise as an ordinary call). A named discovery session must belong to the requesting runtime, as must the caller of a session-scoped Agent tool. The `leader_tools` hello feature enables the `leader_only` discovery query. Gate-declared tools are run by the node itself; their `shell` is the word that runs them directly in a shell (command name, skill script path), which the runtime intercepts in the assistant chat's shell (`docs/integrations/runtimes.md` ("Assistant")). `defer_loading: true` marks an assistant tool used too rarely to send in full with every request (Claude Code keeps it behind ToolSearch, #7317); a runtime that cannot load tools on demand attaches it like any other |
 
 node → runtime events: `runtime.hub {connected}`, sent to every runtime when the hub connects / disconnects. `runtime.driven {session_id}`
 (#8097): the hub started this session through another runtime within the last 6 hours (pi's companion starts sessions in pi-web), and this
@@ -4632,7 +4635,7 @@ Lists keep only the recent: the node lists Claude transcripts of the last 7 days
 
 - **Window**: `since` (required) and `until` (default now), RFC 3339. A session is in it when its time is in `[since, until)`; its time is `active_at` (when it was last active, e.g. its last message: archiving may move `updated_at`), else `updated_at`, else `started_at`.
 - **Rows**: listed sessions (the `Session` shape), with `archived: true` for archived ones, plus `history_source` (`claude`, `codex` or `runtime`), `history_runtime` (a runtime row's runtime id) and, when the source knows them, `active_at`, `started_at`, `origin` (`user` or `automation`, a scheduled run) and `user_messages` (how many messages the user wrote). Deleted sessions (`status: "deleted"` or `deleted: true`, or deleted in Persona) are never listed.
-- **Pages**: newest first by that time (milliseconds), ties by source and session id; `limit` 200 by default, at most 500; `next_cursor` is opaque, empty on the last page. Send the same `since` / `until` with every cursor.
+- **Pages**: newest first by that time (milliseconds), ties by source and session id; `limit` 200 by default, at most 500; `next_cursor` is opaque, empty on the last page; a page can be empty with a `next_cursor` when every row read for it was left out (a blocked folder's), so page until `next_cursor` is empty. Send the same `since` / `until` with every cursor.
 - **`complete`**: the source vouches that the window is fully listed. A node-owned source lists every record still on disk.
 
 Legs:
@@ -5662,32 +5665,55 @@ New Agent starts do not take a speed setting.
 
 ## Agent directory visibility
 
-Hidden Agent folders are the parallel list to blocked Claude config directories
+Agent folder rules are the parallel list to blocked Claude config directories
 (`docs/integrations/claude-integration.md`, "Blocking configuration directories"): both are per computer, kept in
-the devices layer's settings beside each other (`claude_dirs_blocked/<machine id>`, `agent_dirs_hidden/<machine id>`),
-and use one pattern syntax and matcher (`proto.DirPatternMatchedBy`). They differ in what they do:
+the devices layer's settings beside each other (`claude_dirs_blocked/<machine id>`, `agent_dirs_hidden/<machine id>`;
+the second keeps the name it had when hiding was its only action), and use one pattern syntax and matcher
+(`proto.DirPatternMatchedBy`). They differ in what they do:
 
-| | Blocked Claude config directories | Hidden Agent folders |
+| | Blocked Claude config directories | Agent folder rules |
 | --- | --- | --- |
 | Matches | a Claude Code `CLAUDE_CONFIG_DIR` | a session's working directory (`cwd`), any runtime |
-| Effect | the node does not scan it; its sessions are never collected | sessions stay collected and recorded; the manager leaves them out of Agents and the assistant's view |
-| Switch | delete the rule | each rule has `enabled`; off keeps the rule and hides nothing |
+| Effect | the node does not scan it; its sessions are never collected | `action: "block"`: the node does not collect the sessions (below); `"hide"`: sessions stay collected and recorded, the manager leaves them out of Agents and the assistant's view |
+| Switch | delete the rule | each rule has `enabled`; off keeps the rule and does nothing |
 | HTTP | `GET /api/v1/machines/{mid}/claude-dirs`, `PUT …/claude-dirs/blocked {"blocked": [...]}` | `GET /api/v1/machines/{mid}/agent-dirs/hidden`, `PUT …/agent-dirs/hidden {"rules": [...]}` |
 | `persona_settings` | `agents.blocked_claude_dirs` get / add / remove | `agents.hidden_dirs` get / add / remove |
 
-`GET /api/v1/machines/{mid}/agent-dirs/hidden` returns `{rules: [{pattern, enabled}], home?}` (`home` is the
+`GET /api/v1/machines/{mid}/agent-dirs/hidden` returns `{rules: [{pattern, enabled, action}], home?}` (`home` is the
 computer's home for showing `~`, absent before its node first said). `PUT` replaces the computer's whole list and
 returns the new state; an answer-only device cannot call it. Offline computers can be set up. A rule is a path or
 `filepath.Match` glob starting with `/` or `~/` (`~` is that computer's home, never the manager's; until it is
 known a `~/` rule does not match), or a folder name glob starting with `*` (`*botfarm*`) that matches a folder of
 that name anywhere in the path. A rule matches the folder and everything under it. Trailing slashes are dropped;
-patterns that would cover home or the root, or that every folder matches (`*`, `/*`), invalid globs, duplicates and
-more than 100 rules are refused (400).
-Matching is lexical and case-sensitive; symlinks on the remote computer are not resolved. Empty is the default.
+patterns that would cover home or the root, or that every folder matches (`*`, `/*`), invalid globs, duplicates, an
+`action` other than `block` or `hide`, and more than 100 rules are refused (400). A rule saved without an `action` (by the hiding-only version, #8578, or an
+older client) is stored and answered as `hide`, except that a `PUT` from such a client leaves an existing rule's action
+as it is (so switching one rule there does not turn blocks into hides); the apps and `persona_settings` make a new rule `block` unless Hide
+is chosen. Matching is lexical and case-sensitive; a home reached through a link (`/home/me -> /data/home/me`,
+`NodeInfo.home_real`) matches under either name, and the node also matches a working folder with its links
+followed. Empty is the default.
+
+**Block** (#10053). The manager sends the computer's enabled block patterns in `node.configure`
+(`agent_dirs_blocked: [...]`, `[]` when none block) when its node connects and again whenever they change, then lists
+again; when it cannot read the rules (before its first successful read), it sends `null`, which leaves the node's list
+as it is rather than unblocking every folder.
+A node that announces `agent_dirs_blocked` keeps them (also across restarts, `~/.persona/agent-dirs-blocked.json`)
+and, for a session working there, with any runtime: leaves it out of every session list (`sessions.history`
+included), so no row, count or
+revision reaches the hub; pushes no `hook.event`, `session.items` or `session.delta` of it (a read the hub asks
+for by session id, such as one of a chat opened before the block, is still answered); gives a Claude Code hook
+no decision at once (Claude Code asks in its terminal); dismisses a runtime package's `interaction.create` at once
+(handed back to the computer); leaves its Codex cards out of `codex.interactions` and creates no card for a shared
+app-server's approval (Codex's own client decides); answers `personad ask` unavailable and drops `personad notify`;
+and drops what standby kept of it instead of replaying it. The assistant's own conversations and the sessions the hub
+keeps (`keep_sessions`) are never blocked, at rest as well as running. The manager still treats every enabled rule as hiding, so a node from
+before blocking, which lists those sessions, only gets them hidden.
 
 `persona_settings` `agents.hidden_dirs` takes the same values as `agents.blocked_claude_dirs`: `add`
-`{"machine", "pattern", "enabled"?}` (default on; on an existing rule it switches it), `remove`
-`"<machine id>:<pattern>"`, and `get` lists each computer's rules with how many sessions each hides now. Every
+`{"machine", "pattern", "action"?, "enabled"?}` (`action` `block`, the default for a new rule, or `hide`; an existing
+rule keeps its action unless one is given; `enabled` default on, on an existing rule it switches it), `remove`
+`"<machine id>:<pattern>"`, and `get` lists each computer's rules with their action and how many of its listed
+sessions each matches now (a block rule's are 0 once that node keeps them out). Every
 change waits for the user's approval on the phone and is applied to the rules as they are then, so a change made
 meanwhile is kept; the opposite switch or `remove` undoes it.
 
@@ -5701,7 +5727,8 @@ This is a visibility preference, not access control or transcript deletion.
 
 Pending interactions have a separate authoritative inventory. `fleet.interactions` on reconnect always carries
 all pending cards, including directory-hidden sessions: an omitted card means resolved to the hub. Assistant,
-Feishu and attention summaries use a visibility projection instead. Saving any hidden-folder change (the devices
+Feishu and attention summaries use a visibility projection instead. A blocked session's cards never reach this
+inventory on a node that blocks. Saving any Agent folder rule change (the devices
 tell the assistant, `devices.Options.HiddenAgentDirsChanged`) publishes the computer's updated session rows, then
 replays pending `fleet.interaction` cards to connected clients. Replays preserve
 delegation state and do not send notifications; a pending card stays actionable after revealing its session.
@@ -5793,22 +5820,42 @@ in-flight command remains unknown until its execution can be established; it is 
 
 ## Agents display settings
 
-The default manager keeps the paired hub's `agents.show_botmux` boolean in its
+The default manager keeps the paired hub's `agents.show_botmux` and
+`agents.use_herdr_tab_name` booleans in its
 existing settings store, following the Agents triage route's ownership and role
 checks. These are authenticated routes relayed by the hub; clients do not select
 another manager for this shared preference.
 
 | Method | Path | Response / request |
 | --- | --- | --- |
-| GET | `/api/v1/agents/display-settings` | `{show_botmux: true, configured: false}` when unset; otherwise the saved boolean and `configured: true`. Authenticated answer-only devices may read. |
-| PUT | `/api/v1/agents/display-settings` | Full access only (403 otherwise). Requires `{show_botmux: boolean}`. Optional `only_if_unset: true` uses an atomic insert without updating an existing key. Both forms return the current saved value with `configured: true`, including when another writer won. |
+| GET | `/api/v1/agents/display-settings` | Defaults to `{show_botmux: true, configured: false, use_herdr_tab_name: false}`. `configured` reports whether `show_botmux` was saved. Authenticated answer-only devices may read. |
+| PUT | `/api/v1/agents/display-settings` | Full access only (403 otherwise). Send one of `{show_botmux: boolean}` or `{use_herdr_tab_name: boolean}`. For `show_botmux`, optional `only_if_unset: true` uses an atomic insert without updating an existing key. Returns the current settings, including when another writer won. |
 
 Invalid or missing booleans return 400; unavailable storage or failed reads/writes
 return 503, never a default presented as a successful save. The conditional
-migration and an explicit update serialize at the unique settings key across
+migration and an explicit botmux update serialize at the unique settings key across
 processes. Clients remove legacy local preferences only after a configured value
-is confirmed. Refresh on reconnect and the next Agents list refresh. This is a
-display preference only: Web paged lists use `exclude_pane_source=feishu`, complete
+is confirmed. Refresh on reconnect and the next Agents list refresh. For botmux,
+Web paged lists use `exclude_pane_source=feishu`, complete
 lists exclude botmux hosts before grouping/counting. Inventory and `seeBotmux`
 to-do attribution are unchanged. The per-computer inventory switch is independent
 ([engines.md](../integrations/engines.md), “Botmux display preference”).
+
+For an Agent with a named herdr or Herdr App tab, Web and Feishu use `slot_name`
+as the primary name when `use_herdr_tab_name` is true. They also use it when
+`title` is empty or is only a shell prompt such as `user@host:~/work`.
+Inventory refreshes carry the current tab label. The unified Web Rename dialog
+posts `tab_name` and, for a supported CLI, the same `title` to the existing
+session rename route. Other managers read the same preference through the
+hub's `app.call` method `agents.display.get`, which relays the default
+manager's display settings.
+
+Named assistant dispatches send `title` with `tab_name` in `session.start`.
+The synchronous terminal reply uses the actual tab label when available,
+including a suffix added for uniqueness. The manager persists the initial
+Persona title for subsequent inventory reads.
+
+With tab naming enabled, automatic naming calls the node's
+`session.rename_tab_if_current` with `session_id`, `tab_id`,
+`expected_tab_name` and `tab_name`. The node checks the live slot and its current
+host label before changing it and replies with `{ok: true}` on success.
