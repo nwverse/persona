@@ -1210,9 +1210,10 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
           // request.truncated is true when text was clipped at 2000 characters. request.via lists the relaying conversations, oldest first.
           "started_by":"owner|assistant|leader|routine|hub|unknown",
           "trigger":"supervision|followup|routine|conversation|notice|meeting|wake","trigger_title":"…","reason":"why it was started",   // when not the owner
-          "conversation":"<chat id>","goal":"one sentence","done_when":["…"],"expect_minutes":30,"estimate_source":"override","out_of_bounds":["…"],   // as handed out
+          "conversation":"<chat id>","goal":"one sentence","done_when":["…"],"expect_minutes":37,"estimate_source":"learned","out_of_bounds":["…"],   // as handed out
+          "estimate_evidence":{"minutes":37,"sample_count":7,"cohort":"repo_machine"},   // automatic choice, optional
           "reconstructed":true,"handover":"the prompt at hand-over, not the owner's words",   // a task from before briefs
-          "log":[{"at":"...","kind":"dispatch","source":"task_plan","plan_id":"plan_…","round_id":"plan_…/todo_…@...","todo_id":"todo_…","expect_minutes":60,"estimate_source":"system_default"},
+          "log":[{"at":"...","kind":"dispatch","source":"task_plan","plan_id":"plan_…","round_id":"plan_…/todo_…@...","todo_id":"todo_…","expect_minutes":37,"estimate_source":"learned","estimate_evidence":{"minutes":37,"sample_count":7,"cohort":"repo_machine"}},
                  {"at":"...","kind":"scope","todo_id":"todo_…","by":"<chat id>","change":"…","why":"…","done_when":["…"],"expect_minutes":90,"estimate_source":"override",
                   "added":["…"],"dropped":["…"],"approval":{"text":"…","at":"...","conversation":"…","message_id":"…"}},   // approval: the owner's message that allowed a risky step
                  {"at":"...","kind":"completion","source":"report_to_supervisor|task_review|judge","todo_id":"todo_…","round_id":"plan_…/todo_…@...","actual_minutes":45},
@@ -1220,6 +1221,8 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
                  {"at":"...","kind":"overdue","todo_id":"todo_…"}],
           "criteria":["…"],"expect_minutes_now":90,     // done_when and expect_minutes as the scope changes left them
           "estimate_source_now":"override","estimate_clock_at":"...","estimate_due_at":"...","estimate_due_told_at":"...",
+          // estimate_evidence_now is present when the current estimate has automatic evidence; an override clears it.
+          // Evidence cohort is repo_machine, machine, comparable, default (too few samples), or history_unavailable.
           "actual_minutes":45,"completion_reported_at":"...",   // latest completion; every round remains in log
           "clock_at":"...","due_at":"...","overdue_at":"...",   // the overdue clock: from the hand-out or latest scope change to max(expect × 3, 24 h); overdue_at once its supervisor was told
           "result":{"at":"...","todo_id":"todo_…","by":"judge","verdict":"accepted|cancelled",   // by absent: the supervisor's review
