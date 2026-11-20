@@ -47,7 +47,7 @@ A tier is Persona's equivalent of a Paseo Agent profile: a named launch preset (
 
 ## Edit and add profiles
 
-The web app adds **Settings › Models › Model profiles**: inspect a profile (its Agent presets as rows, the model settings it applies folded away), apply it, or roll back; with no profile in use it says presets are off. Ask Persona to edit Agent presets (above); use the hub API (authenticated as usual) to edit or add the rest. Native settings controls require an app release and are deferred in v1.
+The web app adds **Settings › Models › Model profiles**: inspect a profile (its Agent presets, purpose bindings, and launcher model overrides), edit it interactively using the same provider/launcher/model/effort pickers as Model Configuration, apply it, or roll back; with no profile in use it says presets are off. You can also ask Persona to edit Agent presets (above) or use the hub API (authenticated as usual) to automate edits and create/delete profiles. Native settings controls require an app release and are deferred in v1.
 
 | Method | Path | Operation |
 | --- | --- | --- |

@@ -360,6 +360,7 @@ func (n *Node) liveRuntimeModels(ctx context.Context, h *runtimeConn, name strin
 	// Apply the same bounds as runtime.launchers before exposing a native response.
 	clean := cleanLaunchers([]runtimeLauncher{{Name: name, Agent: fallback.Agent, Models: out.Models}})
 	out.Agent, out.Models = fallback.Agent, clean[0].Models
+	out.SupportsStartModel = false // only the node's native omp start can advertise this.
 	if out.Models == nil {
 		out.Models = []proto.AgentModel{}
 	}
