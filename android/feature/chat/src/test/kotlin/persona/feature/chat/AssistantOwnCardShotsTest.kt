@@ -143,8 +143,8 @@ class AssistantOwnCardShotsTest {
             deny = stringResource(R.string.chat_request_deny)
             reply = stringResource(R.string.chat_request_owner_reply, "发")
             always = stringResource(persona.core.designsystem.R.string.designsystem_core_always_allow_session)
-            val configuration = Configuration(LocalConfiguration.current).apply { fontScale = if (large) 1.6f else 1f }
-            val density = Density(LocalDensity.current.density, if (large) 1.6f else 1f)
+            val configuration = Configuration(LocalConfiguration.current).apply { fontScale = if (large) 2f else 1f }
+            val density = Density(LocalDensity.current.density, if (large) 2f else 1f)
             CompositionLocalProvider(LocalConfiguration provides configuration, LocalDensity provides density) {
                 PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                     Column(Modifier.testTag("shot").width(400.dp).background(PersonaTheme.palette.background)) {
