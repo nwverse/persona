@@ -43,6 +43,8 @@ import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent,
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { openAgent, openTask } from "../../lib/handoff";
 import { navigate } from "../../lib/router";
+import { useCloseOnBack } from "../../lib/back-close";
+import { NARROW, useMedia } from "../../lib/viewport";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { LiveCard } from "../../ui/AssistantCard";
 import type { AssistantView } from "../../lib/extension-wire";
@@ -1223,6 +1225,9 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
       window.removeEventListener("persona:task-start", needs);
     };
   }, [conversation]);
+  // On a narrow screen Back closes the tray, expanded or not, before it leaves the chat (as Android's); switching trays
+  // keeps the one entry, and ✕ takes it off
+  useCloseOnBack(tray !== null, () => setTray(null), useMedia(NARROW));
   const labels: Record<AssistantTray, string> = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running"), parked: t("todos.section_parked"), review: t("assistant-tasks.tray_review"), finished: t("assistant-tasks.tray_finished") };
   // Parked is a peer, not folded inside In progress; keep an emptied tray reachable until it closes. Finished comes last,
   // as what just finished comes after the unfinished work on the To-dos page (#10922).
