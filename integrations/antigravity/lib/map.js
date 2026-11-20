@@ -544,15 +544,25 @@ export function nativeWorking(summary) {
 
 /** Working requires live execution evidence. A completed planner message can be progress narration. */
 export function transcriptStatus(steps, summary) {
-  if (summary?.killed) return 'idle'
-  if (nativeWorking(summary)) return 'working'
+  return transcriptState(steps, summary).status
+}
+
+/**
+ * transcriptStatus with the evidence an `unknown` lacks (#12003): `no_relevant_step`, `no_summary`, `summary_not_idle`,
+ * `no_step_index` or `summary_behind`. The reason names a missing or stale record, never step content.
+ */
+export function transcriptState(steps, summary) {
+  if (summary?.killed) return { status: 'idle' }
+  if (nativeWorking(summary)) return { status: 'working' }
   const last = steps.findLast((step) => ['USER_INPUT', 'PLANNER_RESPONSE', 'GENERIC', 'ERROR_MESSAGE'].includes(step?.type))
-  if (!last) return 'unknown'
-  if (last.type === 'ERROR_MESSAGE' || ['ERROR', 'CANCELLED', 'CANCELED'].includes(last.status)) return 'idle'
+  if (!last) return { status: 'unknown', reason: 'no_relevant_step' }
+  if (last.type === 'ERROR_MESSAGE' || ['ERROR', 'CANCELLED', 'CANCELED'].includes(last.status)) return { status: 'idle' }
+  if (!summary) return { status: 'unknown', reason: 'no_summary' }
+  if (summary.status !== 'CASCADE_RUN_STATUS_IDLE') return { status: 'unknown', reason: 'summary_not_idle' }
+  if (!Number.isInteger(last.step_index)) return { status: 'unknown', reason: 'no_step_index' }
   // A summary from before a newly exported step cannot close that newer work.
-  const idle = summary?.status === 'CASCADE_RUN_STATUS_IDLE' && Number.isInteger(last.step_index) && summary.step_count > last.step_index
-  if (idle) return completedReply(last) ? 'done' : 'idle'
-  return 'unknown'
+  if (!(summary.step_count > last.step_index)) return { status: 'unknown', reason: 'summary_behind' }
+  return { status: completedReply(last) ? 'done' : 'idle' }
 }
 
 export function workspacePathOf(summary, fallbackCwd = '', skip = null) {
