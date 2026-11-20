@@ -232,6 +232,10 @@ def check_manifest_bytes(directory, item):
 def bind_cli_web(plan_path, directory):
     plan = json.loads(Path(plan_path).read_text())
     directory = Path(directory)
+    for name in ("install.sh", "VERSION", "SHA256SUMS", "latest.json"):
+        path = directory / name
+        if not path.is_file() or path.is_symlink() or path.stat().st_size == 0:
+            raise ReleaseError("a required release bootstrap file is missing, empty or not a regular file: " + name)
     manifest = json.loads((directory / "latest.json").read_text())
     if (manifest.get("version") != plan.get("version") or manifest.get("commit") != plan.get("commit")
             or manifest.get("build") != plan.get("build") or manifest.get("channel", "release") != plan.get("channel")):

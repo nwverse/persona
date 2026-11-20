@@ -120,15 +120,33 @@ class ReleasePRTests(unittest.TestCase):
                     manifest[group].setdefault("persona-node", {})["windows-amd64"] = entry
                 (downloads / name).write_bytes(packed)
             (downloads / "latest.json").write_text(json.dumps(manifest))
+            for name in ("install.sh", "VERSION", "SHA256SUMS"):
+                (downloads / name).write_text(name)
+            for name in ("install.sh", "VERSION", "SHA256SUMS", "latest.json"):
+                path = downloads / name
+                content = path.read_bytes()
+                for kind in ("missing", "empty", "symlink"):
+                    path.unlink()
+                    if kind == "empty":
+                        path.write_bytes(b"")
+                    elif kind == "symlink":
+                        target = root / "bootstrap-target"
+                        target.write_bytes(content)
+                        path.symlink_to(target)
+                    with self.subTest(name=name, kind=kind), self.assertRaisesRegex(release.ReleaseError, "bootstrap"):
+                        release.bind_cli_web(plan_path, downloads)
+                    if path.is_symlink() or path.exists():
+                        path.unlink()
+                    path.write_bytes(content)
             data = release.bind_cli_web(plan_path, downloads)
-            self.assertEqual(len(data["artifacts"]), 4)
+            self.assertEqual(len(data["artifacts"]), 7)
             release.verify_artifacts(plan_path, "nwverse/persona", "beta", COMMIT)
             android = root / "android"
             android.mkdir()
             (android / "Persona-test.apk").write_bytes(b"signed fixture")
             (android / "android.json").write_text('{"version":"0.9.1-beta.3"}')
             data = release.verify_artifacts(plan_path, "nwverse/persona", "beta", COMMIT, (android,))
-            self.assertEqual(len(data["artifacts"]), 6)
+            self.assertEqual(len(data["artifacts"]), 9)
             self.assertIn("android.json", {item["name"] for item in data["artifacts"]})
             (downloads / "personad-linux-amd64.gz").write_bytes(b"changed")
             with self.assertRaises(release.ReleaseError):

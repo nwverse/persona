@@ -82,6 +82,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	for i := range a.Tasks {
 		t := &a.Tasks[i]
 		t.WaitInputID = ""
+		t.BackendStartDigest = ""
+		t.WorkspaceError = nil
 		asked := strings.TrimSpace(t.Permission) // the caller's own, before read-only replaces it
 		if t.Readonly {
 			asked = ""
@@ -116,7 +118,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			return "", fmt.Errorf("task %d: expect_minutes must be zero or a positive number of minutes", i+1)
 		}
 		t.DoneWhen, t.ExpectMinutes = cleanDoneWhen(t.DoneWhen), min(t.ExpectMinutes, 24*60)
-		if t.Title == "" || t.Prompt == "" || t.Cwd == "" {
+		if t.Title == "" || t.Prompt == "" || t.Cwd == "" && !t.backendWorkspace() {
 			return "", fmt.Errorf("task %d: title, prompt and cwd are required", i+1)
 		}
 		t.Brief = nil // the hub's (planBriefs below), never the tool call's

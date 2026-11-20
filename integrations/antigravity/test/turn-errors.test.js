@@ -16,7 +16,7 @@ const FAKE = fileURLToPath(new URL('./fake-acp-rewind.mjs', import.meta.url))
 const AT = '2026-01-02T12:00:00Z'
 const RESET = '2026-01-03T18:00:00Z'
 const MESSAGE = 'Individual quota reached. Resets in 30h.'
-const TRANSIENT_401 = 'UNAUTHENTICATED (code 401): Request is missing required authentication credential'
+const TRANSIENT_401 = 'UNAUTHENTICATED (code 401): Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.'
 const input = { step_index: 0, type: 'USER_INPUT', source: 'USER_EXPLICIT', status: 'DONE', created_at: AT, content: 'Check the result.' }
 const error = {
   type: 'CORTEX_STEP_TYPE_ERROR_MESSAGE', metadata: { createdAt: AT },
@@ -55,6 +55,35 @@ test('ordinary rate limits and malformed metadata keep their native error withou
   assert.equal(nativeErrorStep({ ...error, status: 'CORTEX_STEP_STATUS_CANCELLED' }, 0), null)
 })
 
+// The shape Antigravity records when the model service refuses a picture it cannot decode (a truncated JPEG).
+const INVALID_MEDIA_TEXT = 'INVALID_ARGUMENT (code 400): Request contains an invalid argument.'
+const invalidMedia = {
+  type: 'CORTEX_STEP_TYPE_ERROR_MESSAGE', status: 'CORTEX_STEP_STATUS_DONE', metadata: { createdAt: AT },
+  errorMessage: { error: {
+    userErrorMessage: 'Agent execution terminated due to error.', modelErrorMessage: INVALID_MEDIA_TEXT, shortError: INVALID_MEDIA_TEXT,
+    errorCode: 400, userErrorNumber: 2011,
+    details: JSON.stringify({ error: { code: 400, message: 'Request contains an invalid argument.', status: 'INVALID_ARGUMENT', details: [
+      { '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason: 'INVALID_MEDIA', domain: 'cloudcode-pa.googleapis.com', metadata: { error_number: '2011' } },
+    ] } }),
+  } },
+}
+
+test('a request the service refuses as it is names its cause and is the user\'s to fix', () => {
+  const step = nativeErrorStep(invalidMedia, 3)
+  assert.deepEqual(step.turn_error, { turn_error: `${INVALID_MEDIA_TEXT} (INVALID_MEDIA)`, turn_error_kind: 'user' })
+  assert.equal(stepsToItems([input, step]).items.at(-1).text, `API Error: ${INVALID_MEDIA_TEXT} (INVALID_MEDIA)`)
+  const generic = (errorCode, shortError) => nativeErrorStep({ ...invalidMedia, errorMessage: { error: {
+    userErrorMessage: 'Agent execution terminated due to error.', shortError, errorCode } } }, 0).turn_error
+  // Only the wording changes for failures worth a Continue, or the transient 401 the runtime retries.
+  assert.deepEqual(generic(503, 'UNAVAILABLE (code 503): overloaded'), { turn_error: 'UNAVAILABLE (code 503): overloaded' })
+  assert.deepEqual(generic(401, TRANSIENT_401), { turn_error: TRANSIENT_401 })
+  assert.deepEqual(generic(408, 'DEADLINE_EXCEEDED (code 408)'), { turn_error: 'DEADLINE_EXCEEDED (code 408)' })
+  assert.deepEqual(generic(400, undefined), { turn_error: 'Agent execution terminated due to error.', turn_error_kind: 'user' })
+  // A specific message of the user's own stays as it is.
+  assert.deepEqual(nativeErrorStep({ ...invalidMedia, errorMessage: { error: { userErrorMessage: 'Model not available', errorCode: 404 } } }, 0)
+    .turn_error, { turn_error: 'Model not available', turn_error_kind: 'user' })
+})
+
 async function fixture(t, options = {}) {
   const home = mkdtempSync(join(tmpdir(), 'agy-turn-error-'))
   const config = join(home, 'config')
@@ -72,7 +101,7 @@ async function fixture(t, options = {}) {
     trajectory: { cascadeId: RAW, steps: [
       { type: 'CORTEX_STEP_TYPE_USER_INPUT', metadata: { source: 'CORTEX_STEP_SOURCE_USER_EXPLICIT' }, userInput: { items: [{ text: input.content }] } },
       ...Array.from({ length: options.padding || 0 }, () => ({ type: 'CORTEX_STEP_TYPE_SYSTEM_MESSAGE' })),
-      ...(options.rpcError ? [] : [error]),
+      ...(options.rpcError ? [] : [options.nativeError || error]),
     ] },
     promptError: options.rpcError,
     promptPlan: options.promptPlan,
@@ -135,8 +164,26 @@ for (const exported of [false, true]) {
   })
 }
 
+test('a plan-mode 401 retries despite a previous reply flushing and whole-second export timestamps', async (t) => {
+  const prior = { prompt: 'Earlier request.', reply: 'Earlier reply.' }
+  const { node, calls, items, row, idle } = await fixture(t, { initialCount: 1, promptPlan: [
+    { reply: prior.reply },
+    { error: TRANSIENT_401, export: true, planMode: true, wholeSeconds: true, flushReply: prior },
+    { reply: 'Finished.', export: true, planMode: true, wholeSeconds: true },
+  ] })
+  await node.peer.call('session.send', { session_id: SESSION, text: prior.prompt })
+  await until('previous turn settles without native export', () => row()?.last_text === prior.reply && idle())
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Continue.', client_msg_id: 'plan-retry' })
+  await until('plan retry settles', () => row()?.last_text === 'Finished.' && idle())
+  assert.equal(calls().filter((call) => call.method === 'session/prompt').length, 3)
+  const page = await items()
+  assert.deepEqual(page.items.map((item) => item.text), [input.content, prior.prompt, prior.reply, '/plan Continue.', 'Finished.'])
+  assert.equal(page.items[3].client_msg_id, 'plan-retry')
+})
+
 for (const [reason, plan, attempts, retryDelay] of [
   ['revoked login', [{ error: `${TRANSIENT_401}; invalid_grant` }], 1],
+  ['explicit sign-in request', [{ error: `${TRANSIENT_401} Please sign in.` }], 1],
   ['assistant text', [{ error: TRANSIENT_401, reply: 'Partial answer' }], 1],
   ['tool work', [{ error: TRANSIENT_401, tool: true }], 1],
   ['tool work received during the delay', [{ error: TRANSIENT_401, lateTool: 30 }], 1, 250],
@@ -174,6 +221,12 @@ for (const assistant of [false, true]) {
     await node.peer.call('session.send', { session_id: SESSION, text: 'Continue.', assistant: true })
     await modes()
     assert.deepEqual(resumes().map(assistantMcp), assistant ? [true] : [false, true])
+    const loads = calls().filter((call) => call.method === 'session/resume')
+    if (!assistant) {
+      assert.notEqual(loads[0].worker, loads[1].worker)
+      const closed = calls().find((call) => call.method === 'session/close')
+      assert.equal(closed?.worker, loads[0].worker)
+    }
     assert.match(resumes().at(-1).args[0], /mcp-proxy\.mjs$/)
   })
 }
@@ -197,6 +250,15 @@ test('runtime recovers an omitted native error through a cached bounded tail wit
   await restart()
   assert.equal((await items()).items.at(-1).text, `API Error: ${MESSAGE}`)
   await until('quota recovered after restart', () => row()?.turn_error === MESSAGE)
+})
+
+test('an omitted invalid-media failure reaches the session row as the user\'s to fix, not a Continue', async (t) => {
+  const { row, items, calls } = await fixture(t, { nativeError: invalidMedia })
+  assert.equal((await items()).items.at(-1).text, `API Error: ${INVALID_MEDIA_TEXT} (INVALID_MEDIA)`)
+  await until('invalid media published', () => row()?.turn_error_kind === 'user')
+  assert.equal(row().turn_error, `${INVALID_MEDIA_TEXT} (INVALID_MEDIA)`)
+  assert.equal(row().turn_error_code, undefined)
+  assert.equal(calls().some((call) => ['session/resume', 'session/prompt'].includes(call.method)), false)
 })
 
 test('new user input and successful response clear the old native failure', async (t) => {

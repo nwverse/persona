@@ -93,11 +93,11 @@ func TestTaskPlanAutomaticEstimateSource(t *testing.T) {
 
 func TestAutomaticEstimateTracksPlanEdits(t *testing.T) {
 	cases := []struct {
-		name         string
-		minutes      int
-		source       string
-		wantMinutes  int
-		wantSource   string
+		name        string
+		minutes     int
+		source      string
+		wantMinutes int
+		wantSource  string
 	}{
 		{name: "default changed becomes override", minutes: 90, source: briefEstimateSystemDefault, wantMinutes: 90, wantSource: briefEstimateOverride},
 		{name: "cleared override returns to default", minutes: 0, source: briefEstimateOverride, wantMinutes: defaultTaskEstimateMinutes, wantSource: briefEstimateSystemDefault},
