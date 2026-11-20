@@ -435,19 +435,26 @@ func peerSessionClass(n *Node, c claudeProc, id string) string {
 	return peerSessionClassAt(context.Background(), n, c, id)
 }
 
-// peerSessionClassAt is the from-mode class session id runs in. A readable external tmux footer is the freshest mode:
+// peerSessionClassAt also accepts plan mode for owner delivery if the destination can switch to bypass.
+func peerSessionClassAt(ctx context.Context, n *Node, c claudeProc, id string) string {
+	mode := peerSessionModeAt(ctx, n, c, id)
+	if mode == "plan" && claudeCanBypass(c.pid) {
+		return peerModeBypass
+	}
+	return permissionClass(mode)
+}
+
+// peerSessionModeAt reads the current permission mode. A readable external tmux footer is the freshest mode:
 // shift+tab changes it before Claude writes the transcript. A visible composer without a recognized mode is prompting:
 // bypass and plan keep their indicators when a draft or dialog hides default's hint. Without live evidence, read the newest
-// transcript copy in claude c's own config directory (not another profile's copy), bypassing the ordinary metadata cache.
-// Plan needs one more fact: process arguments say whether bypass is available to that session. No mode, or plan without
-// that evidence, is "".
-func peerSessionClassAt(ctx context.Context, n *Node, c claudeProc, id string) string {
+// transcript copy in claude c's own config directory, bypassing the ordinary metadata cache.
+func peerSessionModeAt(ctx context.Context, n *Node, c claudeProc, id string) string {
 	mode := ""
 	if pane := outsidePane(c); pane != "" {
 		if text, err := n.readPane(ctx, pane, "visible", 60); err == nil {
 			mode = tuiMode(text)
 			if mode == "" && tuiPromptingScreen(text) {
-				return peerModePrompting
+				return "default"
 			}
 		}
 	}
@@ -464,17 +471,7 @@ func peerSessionClassAt(ctx context.Context, n *Node, c claudeProc, id string) s
 			mode = n.metaNow(path, newest).mode
 		}
 	}
-	switch mode {
-	case "bypassPermissions":
-		return peerModeBypass
-	case "default", "acceptEdits", "auto", "dontAsk":
-		return peerModePrompting
-	case "plan":
-		if claudeCanBypass(c.pid) {
-			return peerModeBypass
-		}
-	}
-	return ""
+	return mode
 }
 
 // computerWaitKey is where sendOutside leaves, for session.send's answer, that the session took the message while

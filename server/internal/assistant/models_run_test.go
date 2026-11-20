@@ -39,10 +39,11 @@ func (d *runDevs) CallNode(ctx context.Context, id, method string, params json.R
 	return json.Marshal(proto.ModelRunAnswer{Text: "answer to " + p.Prompt, Model: "m-run", Usage: d.usage})
 }
 
-// An API purpose may pick plain claude (no gateway, no key): Model configuration offers it with the main chat's computer,
-// and its requests run there as model.run with the system prompt, the turns and the chosen model; "off" leaves the
-// effort to the launcher. Offline, logged out and old nodes say so; with no main chat computer the status says to choose
-// one; Codex and other CLIs are not offered, and a launcher since deleted is an error, not a run.
+// An API purpose may pick plain claude, codex, or agy (no gateway, no key): Model configuration offers them with the
+// main chat's computer, and requests run there as model.run with the system prompt, the turns and the chosen model;
+// "off" leaves the effort to the launcher. Offline, logged out and old nodes say so; with no main chat computer the
+// status says to choose one; unsupported CLIs (such as omp) are not offered, and a launcher since deleted is an error,
+// not a run.
 func TestAPIPurposeRunsOnALauncher(t *testing.T) {
 	s, f, _ := modelService(t)
 	devs := &runDevs{}
@@ -102,13 +103,50 @@ func TestAPIPurposeRunsOnALauncher(t *testing.T) {
 		}
 	}
 
-	// Not Claude Code: not offered, not run (codex exec can't be kept from its shell and MCP servers).
-	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "anti", Agent: "agy", API: "responses"}},
-		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "cx", Agent: "codex", API: "responses"}})
-	if p := purposeOf(t, s, "kb"); slices.Contains(p.ProviderIDs, "launcher.anti") || slices.Contains(p.ProviderIDs, "launcher.cx") {
-		t.Fatalf("offered: %v", p.ProviderIDs)
+	// Codex and Antigravity launchers are offered and callable via model.run (#12027); unsupported CLIs (such as omp)
+	// and deleted launchers remain rejected.
+	devs.err = nil
+	putLaunchers(t, s,
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "anti", Agent: "agy", API: "responses"}},
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "cx", Agent: "codex", API: "responses"}},
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "myomp", Agent: "omp", API: "responses"}},
+	)
+	p = purposeOf(t, s, "kb")
+	for _, wantID := range []string{"launcher.claude", "launcher.anti", "launcher.cx"} {
+		if !slices.Contains(p.ProviderIDs, wantID) {
+			t.Fatalf("%s not offered: %v", wantID, p.ProviderIDs)
+		}
 	}
-	for _, name := range []string{"cx", "gone"} {
+	if slices.Contains(p.ProviderIDs, "launcher.myomp") {
+		t.Fatalf("unsupported omp launcher offered: %v", p.ProviderIDs)
+	}
+	for _, tc := range []struct {
+		name, model, effort string
+	}{
+		{name: "cx", model: "gpt-6.1-terra", effort: "high"},
+		{name: "anti", model: "gemini-4-hydrogen-low", effort: "low"},
+	} {
+		cur := purposeOf(t, s, "kb")
+		body := fmt.Sprintf(`{"revision":%d,"provider":"launcher.%s","model":%q,"effort":%q}`, cur.Revision, tc.name, tc.model, tc.effort)
+		if r := modelRequest(s, "PATCH", "kb", body); r.Code != 200 {
+			t.Fatalf("pick %s: %d %s", tc.name, r.Code, r.Body.String())
+		}
+		before := len(devs.saw)
+		text, err := s.purposeModel("kb").Complete(context.Background(), "sys-"+tc.name, "hi-"+tc.name, 64)
+		if err != nil || text != "answer to hi-"+tc.name || len(devs.saw) != before+1 {
+			t.Fatalf("%s complete: %q %v", tc.name, text, err)
+		}
+		got := devs.saw[len(devs.saw)-1]
+		if got.Launcher != tc.name || got.Model != tc.model || got.Effort != tc.effort || got.System != "sys-"+tc.name {
+			t.Fatalf("%s params: %+v", tc.name, got)
+		}
+	}
+	// Restore kb back to launcher.claude for the no-machine status check below.
+	cur := purposeOf(t, s, "kb")
+	if r := modelRequest(s, "PATCH", "kb", fmt.Sprintf(`{"revision":%d,"provider":"launcher.claude","model":"m-1"}`, cur.Revision)); r.Code != 200 {
+		t.Fatalf("restore claude: %d %s", r.Code, r.Body.String())
+	}
+	for _, name := range []string{"myomp", "gone"} {
 		if _, err := s.apiConfig(context.Background(), ModelBinding{Provider: "launcher." + name}); err == nil {
 			t.Fatalf("%s runs", name)
 		}
@@ -171,7 +209,8 @@ func TestInboxGroupUsageReportsBothRoutes(t *testing.T) {
 	}
 }
 
-// A Codex-only install says why API purposes cannot use that login and what the user can add instead, in each language.
+// An unconfigured API purpose uses the neutral no-model explanation (listing Claude Code, Codex, and Antigravity
+// launchers as explicit choices alongside keyed API connections) in each language, even when Codex is installed.
 func TestCodexOnlyAPIPurposeStatusExplainsTheLimitation(t *testing.T) {
 	s, _, _ := modelService(t)
 	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "codex", Agent: "codex", API: "responses"}})
@@ -181,14 +220,14 @@ func TestCodexOnlyAPIPurposeStatusExplainsTheLimitation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := mc(lang, modelCodexNoAPIStatus)
-		if p.Status != want || !strings.Contains(p.Status, "Codex") || !strings.Contains(p.Status, "Claude Code") {
-			t.Errorf("%s: status %q, want %q with Codex and Claude Code", lang, p.Status, want)
+		want := mc(lang, modelNoAPIStatus)
+		if p.Status != want || !strings.Contains(p.Status, "Codex") || !strings.Contains(p.Status, "Claude Code") || !strings.Contains(p.Status, "Antigravity") {
+			t.Errorf("%s: status %q, want %q naming Claude Code, Codex, and Antigravity", lang, p.Status, want)
 		}
 	}
 }
 
-// A node-reported launcher in the stored last-seen snapshot selects the Codex explanation without an online refresh.
+// noAPIStatus does not trigger an online node refresh.
 func TestNoAPIStatusUsesStoredNodeLauncherSnapshot(t *testing.T) {
 	s, f, _ := modelService(t)
 	ctx := context.Background()
@@ -198,8 +237,8 @@ func TestNoAPIStatusUsesStoredNodeLauncherSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := len(f.calls)
-	if got := s.noAPIStatus(ctx); got != modelCodexNoAPIStatus {
-		t.Fatalf("status key %q, want %q", got, modelCodexNoAPIStatus)
+	if got := s.noAPIStatus(ctx); got != modelNoAPIStatus {
+		t.Fatalf("status key %q, want %q", got, modelNoAPIStatus)
 	}
 	for _, call := range f.calls[before:] {
 		if call.Method == DeviceLaunchersList {
@@ -224,13 +263,13 @@ func TestUnconfiguredDoneJudgeLeavesTheReasonOnTheTask(t *testing.T) {
 	}
 	s.applyTaskDone(ctx, todo, todo.CreatedAt, false, taskDoneCheck{}, judgeErr)
 	got := todoNow(s, todo.ID)
-	want := mc(i18n.En, modelCodexNoAPIStatus)
+	want := mc(i18n.En, modelNoAPIStatus)
 	if got.DoneAt != nil || got.Check == nil || got.Check.Verdict != verdictWaiting || got.Check.Reason != want {
 		t.Fatalf("task: done %v, check %+v, want waiting with %q", got.DoneAt, got.Check, want)
 	}
 }
 
-// An install without Codex gets the neutral no-model explanation, not an unrelated launcher limitation.
+// An install without Codex gets the same no-model explanation naming all supported launcher choices.
 func TestNoAPIStatusDoesNotBlameCodexWithoutIt(t *testing.T) {
 	s, _, _ := modelService(t)
 	for _, lang := range []i18n.Lang{i18n.Default, i18n.En, i18n.Lang("ja")} {
@@ -242,13 +281,10 @@ func TestNoAPIStatusDoesNotBlameCodexWithoutIt(t *testing.T) {
 		if want := mc(lang, modelNoAPIStatus); p.Status != want {
 			t.Errorf("%s: status %q, want %q", lang, p.Status, want)
 		}
-		if strings.Contains(p.Status, "Codex") {
-			t.Errorf("%s: status names Codex without a Codex launcher: %q", lang, p.Status)
-		}
 	}
 }
 
-// The task reason also stays neutral when no Codex launcher exists.
+// The task reason uses the neutral no-model explanation when no model is configured.
 func TestUnconfiguredDoneJudgeUsesNeutralReasonWithoutCodex(t *testing.T) {
 	s, f, _ := modelService(t)
 	f.hello.Locale = "en"
@@ -266,12 +302,9 @@ func TestUnconfiguredDoneJudgeUsesNeutralReasonWithoutCodex(t *testing.T) {
 	if got.Check == nil || got.Check.Verdict != verdictWaiting || got.Check.Reason != mc(i18n.En, modelNoAPIStatus) {
 		t.Fatalf("task check: %+v", got.Check)
 	}
-	if strings.Contains(got.Check.Reason, "Codex") {
-		t.Fatalf("task reason names Codex without a Codex launcher: %q", got.Check.Reason)
-	}
 }
 
-// The done judge uses the last-seen launcher snapshot instead of refreshing nodes just to explain an unavailable model.
+// The done judge does not refresh nodes just to explain an unavailable model.
 func TestUnconfiguredDoneJudgeDoesNotRefreshLaunchers(t *testing.T) {
 	s, f, _ := modelService(t)
 	f.hello.Locale = "en"
@@ -292,7 +325,7 @@ func TestUnconfiguredDoneJudgeDoesNotRefreshLaunchers(t *testing.T) {
 			t.Fatalf("done judge refreshed launchers on %s just to choose its reason", call.Device)
 		}
 	}
-	if got := todoNow(s, todo.ID); got.Check == nil || got.Check.Reason != mc(i18n.En, modelCodexNoAPIStatus) {
+	if got := todoNow(s, todo.ID); got.Check == nil || got.Check.Reason != mc(i18n.En, modelNoAPIStatus) {
 		t.Fatalf("task check: %+v", got.Check)
 	}
 }

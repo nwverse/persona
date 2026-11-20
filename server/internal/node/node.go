@@ -43,6 +43,10 @@ import (
 type Node struct {
 	runtimeUsage runtimeUsageReports
 
+	// Only the manager's initial node.info can negotiate source delivery on this connection.
+	managerInfoOnce sync.Once
+	sourceSend      atomic.Bool
+
 	// The assistant's one memory (memory_merge.go), both under memoryMu: per project key, the other profiles' notes
 	// already merged, and when a merge that failed is tried again.
 	memoryMerged     map[string]map[string]bool
@@ -786,6 +790,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	}
 	switch method {
 	case nodeproto.SourceSend:
+		if !n.sourceSend.Load() {
+			return nil, refusal("source_permissions_not_negotiated", "The connected manager did not negotiate source permissions", nil)
+		}
 		method = "session.send"
 		ctx = withSourceDelivery(ctx, params)
 	case nodeproto.OwnerInterrupt:
@@ -1172,6 +1179,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "ping": // the hub checking a tailcat connection is alive (its userspace TCP has no keepalive)
 		return map[string]any{}, nil
 	case "node.info":
+		n.managerInfoOnce.Do(func() {
+			var p nodeproto.NodeInfoQuery
+			if json.Unmarshal(params, &p) == nil {
+				n.sourceSend.Store(slices.Contains(p.ManagerFeatures, nodeproto.SourcePermissions))
+			}
+		})
 		return n.info(ctx), nil
 	case "herdr.server.start": // the "Start" button beside "herdr is not running" (herdrstart.go)
 		return n.startHerdrServer(ctx)
