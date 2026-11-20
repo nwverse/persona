@@ -98,6 +98,18 @@ describe("conversation tasks in the header", () => {
     expect(getPanel()).toMatchObject({ kind: "conversation-tasks", mid: "hub", sid: "c1" });
   });
 
+  it("on a phone, ⋯ has it before the session is in (a chat opened by link, a new one starting)", async () => {
+    media.phone = true;
+    act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
+    await flush();
+    expect(tasksButton()!.className).toContain("sm:flex");
+    await openMore();
+    expect(menuRows().map((r) => r.textContent)).toEqual([TASKS]);
+    act(() => tasksRow()!.click());
+    await flush();
+    expect(getPanel()).toMatchObject({ kind: "conversation-tasks", mid: "mac", sid: "s1" });
+  });
+
   it("from 640 px, the button opens it and ⋯ has no row for it", async () => {
     media.phone = false;
     upsertSession(agent);
