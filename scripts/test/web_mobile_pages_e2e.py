@@ -6,7 +6,7 @@ hit without opening the row, and the row opens from the keyboard; a long-pressed
 
 Needs a running web page against the fake hub and Playwright for Python (it drives the installed Chrome):
 
-    PORT=18964 python3 scripts/mock/mock_hub.py &
+    MOCK_GITHUB_INBOX=1 PORT=18964 python3 scripts/mock/mock_hub.py &
     (cd web && PERSONA_HUB_URL=http://127.0.0.1:18964 npx vite --port 5964 --strictPort &)
     uv run --no-project --with playwright==1.58.0 python3 scripts/test/web_mobile_pages_e2e.py http://127.0.0.1:5964 [--shots <dir>]
 
@@ -377,6 +377,46 @@ def wide_dialog(browser, base, token, shots):
     ctx.close()
 
 
+INBOX_TITLE = """() => { const h = document.querySelector('[data-item-title]'); const s = h.querySelector('span');
+  const done = [...h.closest('.items-start').querySelectorAll(':scope > button')].pop();
+  const text = [...done.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim()); const range = document.createRange(); range.selectNodeContents(text);
+  const lh = parseFloat(getComputedStyle(s).lineHeight);
+  return { text: s.textContent, cw: s.clientWidth, sw: s.scrollWidth, ch: s.clientHeight, sh: s.scrollHeight, lines: Math.round(s.getBoundingClientRect().height / lh),
+    wrap: getComputedStyle(s).whiteSpace, done: done.textContent.trim(), doneLines: new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size,
+    doneH: done.getBoundingClientRect().height }; }"""
+
+
+def inbox_title_phone(browser, base, token, shots):
+    """An Inbox item's title wraps on a phone for every source (#11511), not only a Feishu one's: a GitHub review's
+    "Add …" was cut to a few letters beside Done. Up to three lines, all of it shown; Done stays one line; wide, the
+    title is still one line, cut at its end."""
+    item = "/inbox/github%3Areview12"  # the fake hub's GitHub review (MOCK_GITHUB_INBOX=1), "Add retries to the example uploader"
+    for lang, locale in (("en", "en-US"), ("ja", "ja-JP")):
+        ctx = browser.new_context(viewport={"width": 360, "height": 740}, device_scale_factor=3, is_mobile=True, has_touch=True,
+                                  user_agent=UA, locale=locale)
+        ctx.add_init_script(f"localStorage.setItem('persona.language', '{lang}')")
+        page = ctx.new_page()
+        page.set_default_timeout(10000)
+        page.goto(f"{base}/overview?token={token}")
+        page.wait_for_selector("aside", state="attached", timeout=20000)
+        goto(page, item)
+        page.wait_for_selector("[data-item-title]")
+        page.wait_for_timeout(500)
+        res = page.evaluate(INBOX_TITLE)
+        check(res["sw"] <= res["cw"] + 1 and res["sh"] <= res["ch"] + 1 and 2 <= res["lines"] <= 3,
+              f"360 {lang}: a GitHub item's title wraps to {res['lines']} lines, all of it shown", res)
+        check(res["doneLines"] == 1 and res["doneH"] <= 33, f"360 {lang}: {res['done']} stays on one line", res)
+        shot(page, shots, f"inbox_title_360_{lang}")
+        ctx.close()
+    ctx, page = open_page(browser, base, token, 1280, 820, mobile=False)
+    goto(page, item)
+    page.wait_for_selector("[data-item-title]")
+    page.wait_for_timeout(500)
+    res = page.evaluate(INBOX_TITLE)
+    check(res["wrap"] == "nowrap" and res["lines"] == 1, "1280: the title stays one line, cut at its end", res)
+    ctx.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("base")
@@ -409,6 +449,7 @@ def main():
             ctx.close()
             toast_undo_edges(browser, base, a.token)
             wide_dialog(browser, base, a.token, a.shots)
+            inbox_title_phone(browser, base, a.token, a.shots)
         finally:
             browser.close()
     print("PASS web mobile pages e2e")
