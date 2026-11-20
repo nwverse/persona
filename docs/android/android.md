@@ -664,6 +664,31 @@ Ported 2026-11-02 from the old App on the main line (inventory items C5–C7, C9
 - Mock hub: `MOCK_SOURCES=1` adds three sessions: "整理部署脚本" ("tidy deploy scripts"; Codex live, can send, can join live, can't approve before joining, with a Codex permission card that has `always_label`), "迁移日志采集" ("migrate log collection"; Codex history, read-only, with `read_only_reason`) and "生成季度报表" ("generate quarterly report"; DSH runtime, `agent_label: DSH`, no terminal, with a permission card without `always_label`). `POST …/attach` sets `attached` to true and enables approval, and returns 403 `codex_read_only` for sessions that can't attach. `/info` returns Codex's model and version for Codex sessions. `MOCK_SCREEN_CHAT=1` adds a terminal dialog with a header ("计划模式", "plan mode") and a back-to-chat option ("照片同步脚本支持 HEIC", "photo sync script supports HEIC"), to look at the interaction panel's tags, numbering and **Say it in the chat**. To see the Mode button under **Allow all**, `POST /api/v1/sessions/{mid}/{sid}/modes {"permission_mode":"bypassPermissions"}` to the mock hub directly.
 - Unit tests: `SessionSourceTest` in `core:domain` (cases from the old `SessionSourcesTest` + runtime, resume commands), `AgentCloseTest`, `AlwaysOfferTest` and the answer / approval fixtures; `ModelsTest` in `core:contracts` (new fields, `agentLabel`, `SessionInfo`); `HttpChatActionsTest` (attach, queue, info) and `HttpAgentOperationsTest` (attach) in `core:hub`; `SessionModesTest` (old `SessionModesTest`, `ModelPickerTest`), `ChatSessionInfoTest` (old `SessionInfoTest`) and `InteractionOptionsTest` in `feature:chat`; `AgentsListInfoTest` in `feature:agents`; `NotificationExecutionTest` in `platform:notify` (sessions that can't approve send nothing back).
 
+### Switching between Claude Code and Codex
+
+On a hub that advertises `engine_switch`, the Glass Agent model picker offers both engines for a running,
+supported terminal Agent. Pick a model of the other engine and confirm the handoff. The picker explains that
+the other engine starts from a summary, and the composer shows the pending engine and model. Picking the running
+model or choosing **Cancel pending switch** clears the pending handoff. A different model of the already-chosen
+engine updates that pending handoff. **Don't ask again** remembers the choice on this device. To reverse it, choose
+**Ask before switching** in the model picker. The next text message from Glass applies the switch. If the draft has
+attachments, remove them or cancel the switch before sending. The attachment and message draft stay in the composer.
+A successful local choice is shown until a fresh complete row arrives. Paged list hints and reconnects refresh an open
+Agent's exact row, so another device's switch or cancellation wins even when the transcript has the same size.
+
+The open chat follows the new live session when its same-computer row names the old session in `engine_history`.
+A link to that old session opens the live conversation when its successor is listed. The handoff divider identifies
+both engines and whether the engine resumed or continued from a summary. **View handoff context** opens a read-only
+reader, leaving the chat scroll position in place.
+
+Scroll up to **Load earlier messages** after loading the current run. Each tap requests one page of the newest incomplete
+earlier run. A session that ran once keeps all its items. When a session was reused, its items are separated at
+the switch times, so a Claude Code → Codex → Claude Code conversation reads in that order with no duplicate messages.
+Historical rows keep their original session for images, tool expansions and full text. If a page fails, **Retry**
+keeps the loaded history. When the hub reports that a history no longer exists, Android says so and can continue to
+the previous run. When a reused session reports a new history generation, its earlier pages and expanded folds are
+refreshed independently of the other engines' pages. Chat search and sending remain scoped to the live run.
+
 ## Agent public sharing
 
 The Agent session menu opens `AgentShareSheet`, backed by the authority-bound `HttpAgentShares` adapter and the
