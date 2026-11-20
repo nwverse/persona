@@ -14,10 +14,11 @@ import (
 )
 
 type modelPatch struct {
-	Revision *int64          `json:"revision"`
-	Provider json.RawMessage `json:"provider"`
-	Model    json.RawMessage `json:"model"`
-	Effort   json.RawMessage `json:"effort"`
+	Revision       *int64          `json:"revision"`
+	Provider       json.RawMessage `json:"provider"`
+	Model          json.RawMessage `json:"model"`
+	Effort         json.RawMessage `json:"effort"`
+	PermissionMode json.RawMessage `json:"permission_mode"`
 	// Runtime is accepted and ignored, whatever its value: an older app still sends the main chat's "cli" or
 	// "agentsdk", and every assistant conversation runs on Claude Code's CLI.
 	Runtime json.RawMessage `json:"runtime"`
@@ -36,13 +37,13 @@ func patchModel(b ModelBinding, in modelPatch) (ModelBinding, error) {
 			}
 		}
 		if provider != b.Provider {
-			b.Model, b.Effort = "", ""
+			b.Model, b.Effort, b.PermissionMode = "", "", ""
 		}
 	}
 	for _, f := range []struct {
 		raw json.RawMessage
 		dst *string
-	}{{in.Provider, &b.Provider}, {in.Model, &b.Model}, {in.Effort, &b.Effort}, {in.ConfigDir, &b.ConfigDir}} {
+	}{{in.Provider, &b.Provider}, {in.Model, &b.Model}, {in.Effort, &b.Effort}, {in.PermissionMode, &b.PermissionMode}, {in.ConfigDir, &b.ConfigDir}} {
 		if f.raw == nil {
 			continue
 		}
@@ -158,6 +159,75 @@ func effortLevelsForKind(kind string) []string {
 	return proto.EffortLevels
 }
 
+// permissionModesForAgent returns the permission modes supported by an agent launcher.
+// When the launcher explicitly declares its supported modes (e.g. Paseo ACP providers), those govern.
+// Otherwise Claude Code, Codex and Antigravity (agy) support all standard modes, while no-mode/legacy
+// work agents (omp, traex, pi, cursor) take no permission mode.
+func permissionModesForAgent(agent string, listed proto.PermissionModeSet) []string {
+	if listed != 0 {
+		return listed.List()
+	}
+	switch agent {
+	case "", "claude", "codex", "agy":
+		return proto.PermissionModes
+	case "omp", "traex", "pi", "cursor":
+		return nil
+	default:
+		return proto.PermissionModes
+	}
+}
+
+func permissionModeSupported(agent string, listed proto.PermissionModeSet, mode string) bool {
+	if mode == "" {
+		return true
+	}
+	return slices.Contains(permissionModesForAgent(agent, listed), mode)
+}
+
+func (s *Service) permissionModesForLauncher(ctx context.Context, machine, name string, provider *ModelProvider) []string {
+	var agent string
+	var listed proto.PermissionModeSet
+	if provider != nil {
+		agent = provider.Agent
+		listed = provider.PermissionModes
+	}
+	if name != "" {
+		if machine != "" {
+			if c, ok := s.configuredLauncher(ctx, machine, name); ok {
+				if c.AgentType != "" {
+					agent = c.AgentType
+				} else if agent == "" && c.Agent != "" {
+					agent = c.Agent
+				}
+				if listed == 0 && c.PermissionModes != 0 {
+					listed = c.PermissionModes
+				}
+			}
+		}
+		if agent == "" && listed == 0 {
+			for _, l := range s.storedLaunchers(ctx) {
+				if l.Name == name {
+					agent = l.AgentType()
+					break
+				}
+			}
+		}
+		if agent == "" && listed == 0 {
+			for _, v := range s.launcherViews(ctx) {
+				if v.Name == name {
+					agent = viewAgent(v)
+					listed = v.PermissionModes
+					break
+				}
+			}
+		}
+		if agent == "" && slices.Contains([]string{"codex", "traex", "agy", "omp", "pi", "cursor"}, name) {
+			agent = name
+		}
+	}
+	return permissionModesForAgent(agent, listed)
+}
+
 func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBinding, providers []ModelProvider) error {
 	if err := checkExternalPurpose(b); err != nil {
 		return err
@@ -199,6 +269,18 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 	}
 	if b.Effort != "" && !slices.Contains(effortLevelsForKind(p.Kind), b.Effort) {
 		return i18n.Err("assistant-models.err_effort_unsupported")
+	}
+	if b.PermissionMode != "" {
+		if p.Kind != "launcher" {
+			return i18n.Err("assistant-models.err_permission_mode_launcher_only")
+		}
+		if !slices.Contains(proto.PermissionModes, b.PermissionMode) {
+			return i18n.Err("assistant-models.err_permission_mode_unsupported")
+		}
+		name := strings.TrimPrefix(b.Provider, "launcher.")
+		if !slices.Contains(s.permissionModesForLauncher(ctx, p.MachineID, name, provider), b.PermissionMode) {
+			return i18n.Err("assistant-models.err_permission_mode_unsupported")
+		}
 	}
 	if p.Kind == "api" {
 		c, err := s.apiConfig(ctx, b)
@@ -250,6 +332,9 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 				}
 				if p.ID == purposeMeetingRoom && result.Agent != "" && result.Agent != "claude" {
 					return errMeetingRoomClaudeOnly // the machine runs another agent under this launcher's name
+				}
+				if b.PermissionMode != "" && result.Agent != "" && !permissionModeSupported(result.Agent, 0, b.PermissionMode) {
+					return i18n.Err("assistant-models.err_permission_mode_unsupported")
 				}
 			}
 		}
