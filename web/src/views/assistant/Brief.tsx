@@ -39,10 +39,15 @@ function webLink(link?: string): string | undefined {
   return link && /^https?:\/\//i.test(link) ? link : undefined;
 }
 
-function meta(row: BriefRow): string {
-  const parts = [t("assistant-brief.waited", { wait: shortDuration(row.waited_s * 1000) })];
-  if (row.nudged) parts.push(t("assistant-brief.nudged"));
-  if (row.from) parts.push(row.from);
+/** What a row's meta line is made of: numbers and text only. A row typed as BriefRow cannot carry an object here (a
+ *  to-do's `ask.from` is one; spread into a row it is a type error), and a value that is not text anyway (a row cast
+ *  from the wire) is left out rather than drawn as "[object Object]" (#11794). */
+type MetaFields = Pick<BriefRow, "waited_s" | "nudged" | "from">;
+
+export function meta(row: MetaFields): string {
+  const parts: string[] = [t("assistant-brief.waited", { wait: shortDuration(row.waited_s * 1000) })];
+  if (row.nudged === true) parts.push(t("assistant-brief.nudged"));
+  if (typeof row.from === "string" && row.from) parts.push(row.from);
   return parts.join(" · ");
 }
 

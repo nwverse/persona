@@ -1385,7 +1385,9 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
   `AssistantEntries.split`, a port of the web's `assistantEntries`; `ActionTrayContent` puts the conversation's own cards
   in front of Needs You (their row closes the tray onto the card below). The web (`OwnAskRow` in `AssistantActionBar`,
   the cards in `ChatView`'s dock) and Android (`panelRequests`, the chat's `InteractionPanel`) do the same since #4883:
-  the conversation's own cards are above its composer, never only inside the closed tray. An Agent linked to a to-do made by hand (no
+  the conversation's own cards are above its composer, never only inside the closed tray. On the web, a card its own turn
+  waits on (`TurnAsk`, `lib/turn-asks.ts`, #11794) stands open above the capsules instead and Needs you leaves it out;
+  only the cards of sessions folded under the conversation keep a row there. An Agent linked to a to-do made by hand (no
   `origin`) is that to-do's row in the main chat, not a second row of its own (#3387's `dockAgents` leaves out only the
   agents of conversations' tasks, so web and Android list it twice; the fixture has no such case yet). Message cards also leave Needs You once the inbox
   has the item handled or the user put the card off with Later. Rows: a task opens its details (right-click or long press
