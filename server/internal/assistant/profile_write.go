@@ -262,6 +262,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.MainBackgroundFolded != nil {
 			v.MainBackgroundFolded = in.MainBackgroundFolded
 		}
+		if in.FoldRoutineRelayReplies != nil {
+			v.FoldRoutineRelayReplies = in.FoldRoutineRelayReplies
+		}
 		if in.MainCompactWindow != nil {
 			v.MainCompactWindow = in.MainCompactWindow
 		}

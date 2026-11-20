@@ -73207,6 +73207,22 @@
         }
       }
     },
+    "Fold routine replies from other chats" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ほかの会話からの通常の返信を折りたたむ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "折叠其他对话的常规回复"
+          }
+        }
+      }
+    },
     "Folded [Inbox Now]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -201827,6 +201843,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "待办需要你回答时，会出现在这里。"
+          }
+        }
+      }
+    },
+    "When background rounds are folded, routine replies from other chats stay in an expandable row in the main chat and skip the finished notification. Questions and replies marked for you still appear." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンドのラウンドを折りたたむと、ほかの会話からの通常の返信はメインチャットで開ける行にまとまり、完了通知は届きません。質問やあなた宛てに指定された返信は引き続き表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启后台轮次折叠后，其他对话的常规回复会收在主对话的一条可展开记录里，也不发送完成通知。需要你回答的问题和明确发给你的消息仍会显示。"
           }
         }
       }

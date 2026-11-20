@@ -23,7 +23,7 @@ nonisolated enum Supervision {
         }
     }
 
-    static func visible(_ items: [Item], results: [String: Item], live: Bool, routineMainRelay: Bool = false) -> Bool {
+    static func visible(_ items: [Item], results: [String: Item], live: Bool, showReply: (Item) -> Bool = { _ in true }) -> Bool {
         if items.contains(where: { it in
             it.supervisionUser == true || it.fold?.supervisionUser == true ||
                 (Injected.of(it).map { $0.isSupervision && $0.level == "user" } ?? false)
@@ -47,20 +47,20 @@ nonisolated enum Supervision {
                 if disposition == "silent" { silent = true }
             }
         }
-        return !live && !silent && !routineMainRelay && hasBackgroundReply(items)
+        return !live && !silent && backgroundReply(items).map(showReply) == true
     }
 
-    private static func hasBackgroundReply(_ items: [Item]) -> Bool {
+    private static func backgroundReply(_ items: [Item]) -> Item? {
         // Display lines can put a tool before the latest text even when the tool came after that text.
         let last = items.lazy.filter { item in
             item.wake == true || item.modelRefusal != nil || isTurnInterrupt(item) ||
                 item.kind == .toolUse || item.kind == .thinking || item.kind == .fold || isAnswerText(item)
         }.max { ($0.seq, $0.part) < ($1.seq, $1.part) }
-        guard let last else { return false }
-        return isAnswerText(last) && last.narration != true && last.codexHeartbeatQuiet != true
+        guard let last, isAnswerText(last), last.narration != true, last.codexHeartbeatQuiet != true else { return nil }
+        return last
     }
 
-    private static func isAnswerText(_ item: Item) -> Bool {
+    static func isAnswerText(_ item: Item) -> Bool {
         item.kind == .text && item.role == "assistant" &&
             !(item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }

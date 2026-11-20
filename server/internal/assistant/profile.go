@@ -90,6 +90,8 @@ type Settings struct {
 	// MainBackgroundFolded: the apps fold the main conversation's background rounds (another conversation's message,
 	// a scheduled task or follow-up) into one line that opens on request (#4314). nil is on (the default).
 	MainBackgroundFolded *bool `json:"main_background_folded,omitempty"`
+	// FoldRoutineRelayReplies opts the main chat into quiet completed relay reports when its background rounds fold.
+	FoldRoutineRelayReplies *bool `json:"fold_routine_relay_replies,omitempty"`
 	// MainCompactWindow: the compaction window, in tokens, the main conversation is held to when its launcher declares a
 	// larger one (#7314, main_compact_window.go); nil is 400000, 0 follows the launcher.
 	MainCompactWindow *int `json:"main_compact_window,omitempty"`
@@ -445,6 +447,10 @@ func (s *Service) mainBackgroundFolded(ctx context.Context) bool {
 	return quietOn(s.settings(ctx).MainBackgroundFolded)
 }
 
+func (v Settings) foldRoutineRelayReplies() bool {
+	return v.FoldRoutineRelayReplies != nil && *v.FoldRoutineRelayReplies
+}
+
 // recentTaskChats: the apps' sidebar Recent lists the scheduled tasks' chats too (recent_task_chats, off by default).
 func (s *Service) recentTaskChats(ctx context.Context) bool {
 	v := s.settings(ctx).RecentTaskChats
@@ -603,7 +609,8 @@ type assistantView struct {
 	// KBTopics is in effect, like MainTasksQuiet.
 	KBTopics bool `json:"kb_topics"`
 	// MainBackgroundFolded is in effect, like MainTasksQuiet.
-	MainBackgroundFolded bool `json:"main_background_folded"`
+	MainBackgroundFolded    bool `json:"main_background_folded"`
+	FoldRoutineRelayReplies bool `json:"fold_routine_relay_replies"`
 	// RecentTaskChats is in effect, like DoneNeedsDelivery.
 	RecentTaskChats bool `json:"recent_task_chats"`
 	WorkGuide       bool `json:"work_guide"`
@@ -664,6 +671,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		TaskWorkspacePreference: s.taskWorkspacePreference(ctx),
 		ReadonlyMode:            readonlyModeOf(v),
 		MainBackgroundFolded:    quietOn(v.MainBackgroundFolded),
+		FoldRoutineRelayReplies: v.foldRoutineRelayReplies(),
 		WorkGuide:               v.workGuideOn(),
 		RecentTaskChats:         v.RecentTaskChats != nil && *v.RecentTaskChats,
 		DoneNeedsDelivery:       v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),

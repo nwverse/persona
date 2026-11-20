@@ -6,6 +6,7 @@ import SwiftUI
 /// remembers, what it is told about the user, and its launcher.
 struct AssistantProfileView: View {
     @Environment(AppModel.self) private var model
+    @State private var savingRelayReplies = false
     @State private var tasks: [APIClient.ScheduledTask]?
     @State private var runs: [APIClient.ScheduleRun]?
     @State private var memoryCount: Int?
@@ -169,6 +170,13 @@ struct AssistantProfileView: View {
                     Text(Self.foldFooter)
                 }
             }
+            if let relay = routineRelayReplies {
+                Section {
+                    Toggle(isOn: relay) { Label(Self.relayTitle, systemImage: Theme.Icon.collapseAll) }
+                        .disabled(savingRelayReplies)
+                        .accessibilityIdentifier("assistant-fold-routine-relays")
+                } footer: { Text(Self.relayFooter) }
+            }
             if let recent = recentTaskChats {
                 Section {
                     Toggle(isOn: recent) {
@@ -290,6 +298,14 @@ struct AssistantProfileView: View {
                         }
                     }
                 }
+                if let relay = routineRelayReplies {
+                    BUIListSection(footer: Self.relayFooter) {
+                        BUIListRow(Self.relayTitle) { IconTile(Theme.Icon.collapseAll, tint: Theme.accent) } trailing: {
+                            Toggle(Self.relayTitle, isOn: relay).labelsHidden().disabled(savingRelayReplies)
+                                .accessibilityIdentifier("assistant-fold-routine-relays")
+                        }
+                    }
+                }
                 if let recent = recentTaskChats {
                     BUIListSection(Self.recentHeading, footer: Self.recentFooter) {
                         BUIListRow(Self.recentTitle) { IconTile(Theme.Icon.schedule, tint: Theme.accent) } trailing: {
@@ -400,6 +416,16 @@ struct AssistantProfileView: View {
         guard let on = model.assistantConfig?.mainBackgroundFolded else { return nil }
         return Binding(get: { on }, set: { v in Task { await model.setMainBackgroundFolded(v) } })
     }
+    private var routineRelayReplies: Binding<Bool>? {
+        guard let current = model.assistantConfig?.foldRoutineRelayReplies else { return nil }
+        return Binding(get: { current }, set: { value in
+            guard !savingRelayReplies else { return }
+            savingRelayReplies = true
+            Task { await model.setRoutineRelayReplies(value); savingRelayReplies = false }
+        })
+    }
+    private static let relayTitle = String(localized: "Fold routine replies from other chats")
+    private static let relayFooter = String(localized: "When background rounds are folded, routine replies from other chats stay in an expandable row in the main chat and skip the finished notification. Questions and replies marked for you still appear.")
     private static let foldTitle = String(localized: "Fold background rounds")
     private static let foldFooter = String(localized: "Rounds that another conversation, a scheduled task or a follow-up started in the main chat or a leader conversation show as one line you can open. Rounds that ask or tell you something stay shown.")
 
@@ -486,7 +512,7 @@ struct AssistantProfileView: View {
         async let s = try? api.standingAuthorizations()
         // The switch shows once the hub says it has the setting (#1731): a hub updated since the app read it, too.
         let held = model.assistantConfig
-        if held?.mainTasksQuiet == nil || held?.mainBackgroundFolded == nil || held?.mainSupervisesOwnTasks == nil || held?.recentTaskChats == nil {
+        if held?.mainTasksQuiet == nil || held?.mainBackgroundFolded == nil || held?.foldRoutineRelayReplies == nil || held?.mainSupervisesOwnTasks == nil || held?.recentTaskChats == nil {
             await model.refreshAssistant()
         }
         tasks = await r

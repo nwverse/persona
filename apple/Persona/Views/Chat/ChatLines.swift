@@ -103,8 +103,9 @@ struct ChatLines {
     /// Background rounds fold too (docs/apple/ios.md "Background rounds"): the main conversation and the leader
     /// conversations (`AssistantInfo.leaders`, #6595), with the hub's `main_background_folded` on. Needs `foldSupervision`.
     var foldBackground = false
-    /// The main Assistant conversation: a routine relay reply stays folded; leader conversations keep the old fallback.
-    var main = false
+    /// The main conversation explicitly opted into folding routine relay replies.
+    var foldRoutineRelayReplies = false
+    var latestReplyNeedsAttention = false
     var openSupervision: Set<String> = []
     var openAllSupervision = false
     var active = false
@@ -116,6 +117,14 @@ struct ChatLines {
         guard assistant, on, !conversation.isEmpty else { return false }
         if let main, !main.isEmpty, conversation == main { return true }
         return leaders.contains(conversation)
+    }
+
+    /// A question or a turn that stopped abnormally still needs the owner's attention with quiet relays on.
+    static func needsReplyAttention(_ session: Session?) -> Bool {
+        guard let session else { return false }
+        return session.awaitsReply || session.turnError?.isEmpty == false || session.turnErrorKind?.isEmpty == false ||
+            session.failureReason?.isEmpty == false || session.status == .blocked || session.wasInterrupted ||
+            session.work?.phase == "blocked"
     }
 
     /// The sources whose rounds are background rounds: a supervising conversation's message, a follow-up, a scheduled run.
@@ -157,6 +166,7 @@ struct ChatLines {
     func lines(_ blocks: [ChatBlock], live liveID: String?, streaming: Bool = false) -> [ChatLine] {
         guard foldSupervision else { return flatLines(blocks, live: liveID, streaming: streaming) }
         let all = blocks.flatMap(Self.transcriptItems)
+        let attentionReply = latestReplyNeedsAttention && foldRoutineRelayReplies ? all.last(where: Supervision.isAnswerText)?.id : nil
         let results = all.reduce(into: [String: Item]()) { out, item in
             if item.kind == .toolResult, let id = item.toolUseID { out[id] = item }
         }
@@ -176,7 +186,10 @@ struct ChatLines {
                 entry = nil
             }
             guard let trace = round, let first = trace.first else { return }
-            if Supervision.visible(evidence, results: results, live: running, routineMainRelay: main && source?.kind == "conversation") {
+            let quietRelay = foldRoutineRelayReplies && source?.kind == "conversation"
+            if Supervision.visible(evidence, results: results, live: running, showReply: { item in
+                !quietRelay || item.id == attentionReply || APIErrorInfo.parse(item.text) != nil
+            }) {
                 out += trace
             } else {
                 out.append(.supervision(id: "sv-" + first.id, lines: trace, live: running, source: source))

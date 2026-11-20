@@ -47,7 +47,7 @@ import { lastEditablePrompt, promptsOf, rewindBlock, rewindDone, rewindSession, 
 import { EDIT_SEND_SETTLE_MS } from "../../lib/edit-last-key";
 import { sendDraft } from "../../lib/drafts";
 import { chatLines, freshWords, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
-import { foldsBackgroundRounds } from "../../lib/background-fold";
+import { foldsBackgroundRounds, relayNeedsAttention } from "../../lib/background-fold";
 import type { Interaction, Item, Session, Subagent } from "../../lib/types";
 import { anchoredScroll, followsAgain, isScrollbarPress, jumpLabel, leavesOnKey, leavesOnScrollbarDrag, leavesOnTouch, leavesOnWheel, followsAfterUnfold, UNFOLD_PAUSE, type ScrollAnchor } from "../../lib/disclosure";
 import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
@@ -1410,9 +1410,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // AssistantInfo has not arrived but the cached main id has: keep the main chat folded (the absent switch means on).
   const foldBackground = useStore((s) =>
     foldsBackgroundRounds(sid, s.assistant ?? (mainCache ? { main: mainCache.scope } : undefined)));
+  const foldRoutineRelayReplies = useStore((s) => assistant && sid === s.assistant?.main && s.assistant.fold_routine_relay_replies);
+  const latestReplyNeedsAttention = Boolean(turnFailure || relayNeedsAttention(session));
   const lines = useMemo(
-    () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, main: isMain })),
-    [earlier.liveItems, lastLive, outgoing, foldBackground, isMain],
+    () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, foldRoutineRelayReplies, latestReplyNeedsAttention })),
+    [earlier.liveItems, lastLive, outgoing, foldBackground, foldRoutineRelayReplies, latestReplyNeedsAttention],
   );
   lastLines.current = lines;
   // a DayLine over the first line of each new calendar day (#8160); day-only keys keep them stable as pages and

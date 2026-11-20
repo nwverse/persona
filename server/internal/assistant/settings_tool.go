@@ -138,6 +138,13 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.mainBackgroundFolded(ctx)), nil },
 			set: s.setMainBackgroundFolded},
+		{Setting: Setting{Key: "assistant.fold_routine_relay_replies", Title: "Fold routine relay replies", Actions: getSet,
+			About: "off by default. When background rounds are folded in the main chat, keep routine replies from other conversations in their expandable round and skip their ordinary finished notification. Explicit owner notifications and errors retain their normal behavior.",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(s.settings(ctx).foldRoutineRelayReplies()), nil
+			},
+			set: s.setFoldRoutineRelayReplies},
 		{Setting: Setting{Key: "assistant.main_compact_window", Title: "Main chat compaction window", Actions: getSet,
 			About: "400000 (the default): the main conversation is compacted at about this many tokens (and sent /compact when " +
 				"idle at 75% of it) instead of its model's whole window, when it runs on a launcher Persona manages that declares " +
@@ -638,6 +645,12 @@ func (s *Service) setMainBackgroundFolded(ctx context.Context, v json.RawMessage
 		return i18n.T(l, "assistant-settings_tool.change_main_background_folded", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.MainBackgroundFolded },
 		"assistant.main_background_folded is %v; the apps redraw the main conversation with it.")
+}
+
+func (s *Service) setFoldRoutineRelayReplies(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, func(ctx context.Context) bool { return s.settings(ctx).foldRoutineRelayReplies() }, "assistant.fold_routine_relay_replies is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_fold_routine_relay_replies", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.FoldRoutineRelayReplies }, "assistant.fold_routine_relay_replies is %v for routine reports in the main conversation.")
 }
 
 func (s *Service) setRecentTaskChats(ctx context.Context, v json.RawMessage) (*ownChange, error) {

@@ -58,6 +58,8 @@
   "minutes_applied": "Meeting minutes retention is saved as {saved}; {after} is in effect. Transcripts still follow the recording retention.",
   "title_main_background_folded": "Fold background rounds",
   "change_main_background_folded": "“Fold background rounds”: {before} → {after}",
+  "title_fold_routine_relay_replies": "Fold routine relay replies",
+  "change_fold_routine_relay_replies": "“Fold routine relay replies”: {before} → {after}",
   "title_main_compact_window": "Main chat compaction window",
   "change_main_compact_window": "“Main chat compaction window”: {before} → {after}",
   "main_compact_window_launcher": "Follow the launcher",

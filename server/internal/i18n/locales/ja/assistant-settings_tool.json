@@ -58,6 +58,8 @@
   "minutes_applied": "議事録の保存期間を{saved}に設定しました。現在の有効値は{after}です。文字起こしは引き続き録音の保存期間に従います。",
   "title_main_background_folded": "バックグラウンドのラウンドを折りたたむ",
   "change_main_background_folded": "「バックグラウンドのラウンドを折りたたむ」：{before} → {after}",
+  "title_fold_routine_relay_replies": "通常の転送メッセージへの返信を折りたたむ",
+  "change_fold_routine_relay_replies": "「通常の転送メッセージへの返信を折りたたむ」：{before} → {after}",
   "title_main_compact_window": "メインチャットの圧縮ウィンドウ",
   "change_main_compact_window": "「メインチャットの圧縮ウィンドウ」：{before} → {after}",
   "main_compact_window_launcher": "ランチャーに従う",
