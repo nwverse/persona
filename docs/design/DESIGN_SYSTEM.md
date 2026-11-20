@@ -768,13 +768,22 @@ The brief box (web, #3822; `web/src/views/assistant/TaskBrief.tsx`) shows what a
 
 The status words are the task cards' (`taskStatusWord`), and the count on the top bar's button is the running background tasks and runs (`backgroundCount`), the same number the panel's Running section shows without the loop.
 
+**Android Background Tasks** (#5432). The Agent chat menu and Glass activity pill lead to the same native
+full-screen overlay. The root uses a leading Close action. A detail uses Back and returns focus to its row.
+The composer offers a local `/workflows` command, and an inline workflow card can open its run. Running and
+Completed stay separate in the same list. The loop keeps its existing confirmation. The workflow detail uses
+`JWorkflowCard`, and command details use the existing typography, copy action, notice, and file viewer.
+An outcome that an older hub did not retain says **Not listed as running**. The output preview follows the tail
+when the reader stays at the end and retains the last good result on an error. The requirements and file scope
+are in `docs/android/android.md` ("Background tasks in Agent chat").
+
 **Hand-off cards** (web, #5096; the owner asked that this part of the main chat follow cindy's `SessionHandoffCard` exactly, which replaces the "Dispatched: <title> · Open" line). iOS draws the same shape (`DispatchHandoffCard`): a well with ↳, title and badge, "3 min. ago · state", ↗, the failure line in `Theme.danger`. Each Agent a dispatch started or a task took over is one full-width card in the chat (`views/assistant/Handoff.tsx`; iOS and Android, #5110):
 - **Frame:** a bordered `rounded-xl` surface, 16 px padding and 14 px gaps (12 / 12 at phone width), whose border turns `--ink` on hover.
 - **Mark:** a 36 px round `--field` well with the ↳ mark (`cornerDownRight`), which inverts on hover.
-- **Title line:** the title (14 px semibold, one line) and a 10 px uppercase pill badge: New and Resumed are filled `--ink`, Already active is outlined.
+- **Title line:** the title (14 px semibold, one line) and a 10 px uppercase pill badge: New, Resumed and Continuation are filled `--ink`, Already active is outlined. On iOS and web, a plan that carries on an existing to-do says Continuation, including when its Agent fails to start. Resumed means the same Agent was reopened.
 - **Second line** (12 px): the history mark, "last active …" (the time alone at phone width), then ` · ` and the Agent's state from `StatusMark` and `lib/state-labels.ts`, in the attention color when it needs the user.
 - **End:** ↗ (`arrowUpRight`).
-- **Open:** the card opens the Agent where Settings › Agent preferences › "How Agents open" says (#5424): the side panel beside the chat (the default; over the chat on a phone-sized window), or the Agent's page. The card looks the same either way. Before an Agent is up, the card has no ↗ unless the task can be opened, and its second line says the Agent is starting, why it did not start (`--red`), or that the task closed or is gone.
+- **Open:** the card opens the Agent where Settings › Agent preferences › "How Agents open" says (#5424): the side panel beside the chat (the default; over the chat on a phone-sized window), or the Agent's page. The card looks the same either way. Before an Agent is up, the card has no ↗ unless the task can be opened, and its second line says the Agent is starting, why it did not start (`--red`), or that the task closed or is gone. On iOS and web, a failure with no readable cause says "Didn't start." and offers details only when the card can open them. If the card cannot open, its failure line wraps so the explanation can be read on the card.
 
 Two departures from cindy, both from Persona's rules:
 - cindy shows a short session id on the card. The Assistant's chat keeps ids out of sight (super rule 4, section 5.6), so here it is only in the card's tooltip.

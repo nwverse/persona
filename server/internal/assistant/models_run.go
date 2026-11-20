@@ -17,10 +17,10 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// An API purpose may pick a launcher without a gateway the manager can call (plain claude, a computer's own launcher):
-// each request then runs that launcher's CLI headless once on the main chat's computer, which answers with the final
-// text (docs/assistant/model-config.md "Running API purposes on a launcher", #5823). The manager still resolves the
-// purpose and reads the answer; the node runs the CLI with no tools and leaves no session (model.run).
+// An API purpose may pick a launcher without a gateway the manager can call (plain claude, codex, agy, or a computer's
+// own launcher): each request then runs that launcher's CLI headless once on the main chat's computer, which answers
+// with the final text (docs/assistant/model-config.md "Running API purposes on a launcher", #5823, #12027). The manager
+// still resolves the purpose and reads the answer; the node runs the CLI with no tools and leaves no session (model.run).
 
 // modelRunTimeout bounds a run whose caller set no deadline.
 const modelRunTimeout = 2 * time.Minute
@@ -41,7 +41,7 @@ func (s *Service) modelRun(ctx context.Context, c ai.Config, r ai.Request) (ai.R
 		defer cancel()
 	}
 	p := proto.ModelRunParams{Launcher: c.RunLauncher, Model: c.Model, System: r.System, Prompt: runPrompt(r.Messages)}
-	if slices.Contains(proto.EffortLevels, c.ReasoningEffort) { // "off" / "none" are the APIs' words: the launcher's own then
+	if slices.Contains(proto.EffortLevels, c.ReasoningEffort) || slices.Contains(proto.CodexEffortLevels, c.ReasoningEffort) { // "off" / "none" are the APIs' words: the launcher's own then
 		p.Effort = c.ReasoningEffort
 	}
 	_, p.Configured = s.configuredLauncher(ctx, c.ViaMachine, c.RunLauncher)

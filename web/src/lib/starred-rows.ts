@@ -1,6 +1,6 @@
-// Chat and sidebar only need the compact index. Load the requests and write
-// handling separately from the first screen and never pull snapshot text here.
-import { useEffect, useSyncExternalStore } from "react";
+// The lazy message controls need the compact index. The sidebar's count and access have their own smaller summary in
+// starred-summary.ts; requests and snapshot text remain in the on-demand starred.ts.
+import { useSyncExternalStore } from "react";
 import type { Item } from "./types";
 
 /** Transcript location as the chat already holds it. */
@@ -48,38 +48,15 @@ export function starKey(s: StarSource & { id?: string }) {
 type StarMark = { id?: string; pending?: "add" | "remove" };
 const empty: StarMark = {};
 let rows: ReadonlyMap<string, StarMark> = new Map();
-let count: number | null | undefined;
-let writable = false;
-let chunk: Promise<typeof import("./starred")> | undefined;
 const listeners = new Set<() => void>();
 const subscribe = (listener: () => void) => (listeners.add(listener), () => void listeners.delete(listener));
 
-export function starredModule() {
-  chunk ??= import("./starred").catch((error: unknown) => {
-    chunk = undefined;
-    throw error;
-  });
-  return chunk;
-}
-
-export function setStarredRows(next: ReadonlyMap<string, StarMark>, total: number | null | undefined, canWrite: boolean) {
+export function setStarredRows(next: ReadonlyMap<string, StarMark>) {
   rows = new Map([...next].map(([key, mark]) => {
     const previous = rows.get(key);
     return [key, previous && previous.id === mark.id && previous.pending === mark.pending ? previous : mark];
   }));
-  count = total;
-  writable = canWrite;
-  listeners.forEach((l) => l());
-}
-
-function start() {
-  void starredModule().then((m) => m.startStarred(), () => {});
-}
-
-/** Undefined while availability is unknown, null when unavailable, or the confirmed count. */
-export function useStarredCount(enabled: boolean) {
-  useEffect(() => { if (enabled) start(); }, [enabled]);
-  return useSyncExternalStore(subscribe, () => enabled ? count : null, () => undefined);
+  listeners.forEach((listener) => listener());
 }
 
 export function useStarMark(source: StarSource | undefined): StarMark {
@@ -87,8 +64,4 @@ export function useStarMark(source: StarSource | undefined): StarMark {
   return useSyncExternalStore(subscribe, () => (key && rows.get(key)) || empty, () => empty);
 }
 
-export function useStarAccess() {
-  return useSyncExternalStore(subscribe, () => writable ? "write" : count != null ? "read" : null, () => null);
-}
-
-export const useCanStar = () => useStarAccess() === "write";
+export { useCanStar, useStarAccess } from "./starred-summary";

@@ -204,7 +204,7 @@ func (n *Node) scanOffline() []proto.Session {
 		}
 		n.setPath(id, c.path)
 		s := proto.Session{
-			SessionID: id, Title: title, Cwd: cwd, Status: proto.StatusOffline, Model: m.model,
+			SessionID: id, Title: title, Cwd: cwd, Status: proto.StatusOffline, Model: n.shownModel(id, m.model),
 			Agent: "claude", AgentSurface: m.surface,
 			LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, c.st), Rev: c.st.Size(),
 		}

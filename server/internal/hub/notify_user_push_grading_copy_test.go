@@ -22,20 +22,20 @@ import (
 // conversation's ordinary one are copied, and a notice whose related key alerted within 12 hours is held as a repeat
 // and not copied. With the switch off every notice is copied, a repeated key too. A copied notice's answer says the
 // copy was delivered.
-func TestNotifyUserFeishuCopyFollowsLowDistractionOverTheBus(t *testing.T) {
+func TestNotifyUserFeishuCopyFollowsPushGradingOverTheBus(t *testing.T) {
 	h, srv, hubDB := newBusHub(t)
 	store := managerDB(t, h)
 	ctx := context.Background()
 	// The push grading keeps its switch and held list in hub_settings: the test hub's pusher was built before it had a
 	// database. Each run starts and ends with the switch off and nothing held.
 	h.push.store = hubDB
-	resetLn := func() {
-		for _, k := range []string{lnModeSettingKey, lnInterceptsSettingKey, pushSentSettingKey} {
+	resetGrading := func() {
+		for _, k := range []string{gradingSwitchSettingKey, heldPushesSettingKey, pushSentSettingKey} {
 			_ = hubDB.PutSetting(context.Background(), k, nil)
 		}
 	}
-	resetLn()
-	t.Cleanup(resetLn)
+	resetGrading()
+	t.Cleanup(resetGrading)
 	keys := []string{"assistant", "assistant.tasks", "assistant.routines", "assistant.followups", "assistant.runs",
 		"assistant.titles", "assistant.archived", "assistant.relay"}
 	clear := func() {
@@ -83,7 +83,7 @@ func TestNotifyUserFeishuCopyFollowsLowDistractionOverTheBus(t *testing.T) {
 		}
 		return c
 	}
-	lnMode := func(on bool) {
+	gradingMode := func(on bool) {
 		t.Helper()
 		body := `{"enabled":false}`
 		if on {
@@ -99,12 +99,12 @@ func TestNotifyUserFeishuCopyFollowsLowDistractionOverTheBus(t *testing.T) {
 		b, _ := io.ReadAll(res.Body)
 		res.Body.Close()
 		if res.StatusCode != http.StatusOK {
-			t.Fatalf("PUT ln-mode %s: %d %s", body, res.StatusCode, b)
+			t.Fatalf("PUT push grading switch %s: %d %s", body, res.StatusCode, b)
 		}
 		settleAssistant(h)
 	}
 	held := func(title string) string {
-		for _, e := range h.push.lnInterceptsView("", 0) {
+		for _, e := range h.push.heldPushesView("", 0) {
 			if e.Title == title {
 				return e.Reason
 			}
@@ -134,7 +134,7 @@ func TestNotifyUserFeishuCopyFollowsLowDistractionOverTheBus(t *testing.T) {
 	}
 
 	steps := []struct {
-		ln                       bool
+		grading                  bool
 		session, title, lvl, key string
 		copied                   bool
 		reason                   string // the hub's intercept reason when it held the push
@@ -148,17 +148,17 @@ func TestNotifyUserFeishuCopyFollowsLowDistractionOverTheBus(t *testing.T) {
 		{false, "side-2", "side pr-2, switch off", "", "pr-2", true, ""},
 		{false, "side-2", "side pr-2 again, switch off", "", "pr-2", true, ""},
 	}
-	lnOn := false
+	gradingOn := false
 	for i, st := range steps {
-		if i == 0 || st.ln != lnOn {
-			lnMode(st.ln)
-			lnOn = st.ln
+		if i == 0 || st.grading != gradingOn {
+			gradingMode(st.grading)
+			gradingOn = st.grading
 		}
 		// notify_user answers only after the copies it sent landed or their wait ran out (copies.wait(notifyCopyWait),
 		// tools.go), so a copy sent anyway is already among the posts here.
 		answer := notify(st.session, st.title, st.lvl, st.key)
 		got, reason := posted(st.title), held(st.title)
-		t.Logf("ln=%v %s %q level=%q key=%q: Feishu copies %d, hub held %q; answer: %s", st.ln, st.session, st.title, st.lvl, st.key, got, reason, answer)
+		t.Logf("grading=%v %s %q level=%q key=%q: Feishu copies %d, hub held %q; answer: %s", st.grading, st.session, st.title, st.lvl, st.key, got, reason, answer)
 		switch {
 		case st.copied && got != 1:
 			t.Errorf("%q: %d Feishu copies, want 1", st.title, got)

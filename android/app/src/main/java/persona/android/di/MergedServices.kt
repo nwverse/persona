@@ -375,6 +375,8 @@ internal fun routedFiles(lookup: (machineId: String) -> SessionFiles?): SessionF
     override suspend fun stat(machineId: String, cwd: String, paths: List<String>) = of(machineId).stat(machineId, cwd, paths)
     override suspend fun download(machineId: String, cwd: String, path: String, into: java.io.File) =
         of(machineId).download(machineId, cwd, path, into)
+    override suspend fun readLogTail(machineId: String, cwd: String, path: String, manager: String?) =
+        of(machineId).readLogTail(machineId, cwd, path, manager)
     override fun comparesVersions(machineId: String) = lookup(machineId)?.comparesVersions(machineId) == true
     override suspend fun blob(machineId: String, cwd: String, path: String, rev: String) = of(machineId).blob(machineId, cwd, path, rev)
     override suspend fun thumbnail(machineId: String, cwd: String, path: String, size: Int) = of(machineId).thumbnail(machineId, cwd, path, size)
