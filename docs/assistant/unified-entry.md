@@ -669,6 +669,10 @@ contains several candidates, the tool lists their ids and first words so the sen
 none, or its start is outside the transcript page, the sender can give the exact words of an earlier request or omit
 `quote`.
 
+A Codex transcript page can show a message steered into a running turn with the same shape as the turn's first
+message. On Codex, or when the manager cannot identify the session, select the message by id or exact words. In
+the list of choices, copy the displayed id to select the whole entry; the text next to it is a preview.
+
 A message id or the owner's exact words can select from the last ten turns. An id takes precedence. Text matches
 the newest owner message or verified incoming quote that contains it, with at least four characters and runs of
 whitespace compared as a single space. The receiver gets the original spacing. A selected passage sets
@@ -678,7 +682,9 @@ Just me question remains ineligible afterwards. A refusal uses no relay allowanc
 The hub keeps the verified words for 14 days, up to 64 entries in `assistant.quotes`, keyed by sender and the id
 in the receiver's `<persona-context kind="owner-request" message_id="…">` block. A whole message keeps its id.
 Each passage has its own stable reference so different receivers can pass on their own passage using the id in
-their block. The receiver's brief takes the stored words by that reference and the relay item's source. Only a
+their block. A source message's id selects the whole message when the receiver has it. The receiver's brief takes
+the stored words by that reference and the relay item's source. On upgrade, the manager discards retained quote
+records whose source predates the shareability check. The owner can select an eligible original message again. Only a
 block directly following the canonical relay context counts (`prompts.ParseRelayQuoteID`). The brief keeps
 `started_by` as `leader` or `assistant`, trigger `conversation`, and the conversation ids in `request.via`.
 A scope change requiring the owner's approval still needs a message they wrote in the conversation making it.
