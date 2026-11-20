@@ -65,7 +65,7 @@ class AgentTabTest {
     }
 
     @Test fun aTabWaitingOnTheUsersReplySpeaksForItOverTheSeenOnes() {
-        // 待你回复 (#5096) comes after 完成未看 and before 已看: over a seen agent earlier in pane order
+        // 待你回复 (#5096) comes after 新回复 and before 已看: over a seen agent earlier in pane order
         val asks = row(s("b", place = 1).copy(awaitsReply = true, asks = "要不要推到 beta？"))
         val seen = listOf(row(s("a", place = 0, state = "idle")), asks)
         assertEquals("b", agentTabs(seen).values.single().lead.session.sessionId)

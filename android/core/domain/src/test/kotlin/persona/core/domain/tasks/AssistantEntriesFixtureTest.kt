@@ -40,6 +40,7 @@ class AssistantEntriesFixtureTest(private val name: String, private val fixture:
         assertEquals(name, expected.keys("needs_you"), got.needsYou.map { it.key })
         assertEquals(name, expected.keys("running"), got.running.map { it.key })
         assertEquals(name, expected.keys("shelved"), got.shelved.map { it.key })
+        assertEquals(name, expected.keys("just_finished"), got.justFinished.map { it.key })
         // Finished (#10922): what the conversation handed out that finished in the last 24 hours, newest first, and which
         // of them nobody has opened since (drawn as new)
         assertEquals(name, expected.optionalKeys("finished"), got.finished.map { it.key })
@@ -62,7 +63,7 @@ class AssistantEntriesFixtureTest(private val name: String, private val fixture:
             if (name == "external_wait_without_background_keeps_clock") assertTrue(name, (row as RunningEntry.Task).waiting)
         }
         // one entry each, and no agent of a listed task on its own
-        val keys = got.needsYou.map { it.key } + got.running.map { it.key } + got.shelved.map { it.key } + got.finished.map { it.key }
+        val keys = got.needsYou.map { it.key } + got.running.map { it.key } + got.shelved.map { it.key } + got.justFinished.map { it.key } + got.finished.map { it.key }
         assertEquals(name, keys.size, keys.toSet().size)
         val taskAgents = todos.filter { !it.isDone && "task:${it.id}" in keys }
             .flatMap { t -> t.activeAgents.map { "agent:${it.machineId}/${it.sessionId}" } }.toSet()

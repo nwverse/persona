@@ -28,7 +28,7 @@ describe("iOS 标准的状态分组", () => {
     const all = [session("idle", "idle"), session("working", "working"), session("unread", "unread"), session("needs", "needs_you"),
       session("waiting", "unknown", { loop: { kind: "cron" } }), session("unknown", "unknown"), session("muted-working", "working")];
     const groups = buildAgentGroups(all, machines, "state", mutes);
-    expect(groups.map((g) => g.name)).toEqual(["需要你", "完成未看", "工作中", "待唤醒", "已屏蔽", "已看"]);
+    expect(groups.map((g) => g.name)).toEqual(["需要你", "新回复", "工作中", "待唤醒", "已屏蔽", "已看"]);
     expect(ids(groups[5].sessions)).toEqual(["idle", "unknown"]);
     expect(groups[5].folded).toBe(true);
     expect(groups.slice(0, 5).every((g) => !g.folded)).toBe(true);
@@ -112,7 +112,7 @@ describe("sessionHost", () => {
 describe("待你回复（#5096）", () => {
   const asking = (id: string, patch: Partial<Session> = {}) => session(id, "idle", { awaits_reply: true, asks: "要不要推到 beta？", ...patch });
 
-  it("已看 + awaits_reply、没屏蔽才算；完成未看、屏蔽的、没标的都不算", () => {
+  it("已看 + awaits_reply、没屏蔽才算；新回复、屏蔽的、没标的都不算", () => {
     expect(awaitsReply(asking("a"))).toBe(true);
     expect(awaitsReply(asking("a"), mutes)).toBe(true);
     expect(awaitsReply(session("u", "unread", { awaits_reply: true }))).toBe(false);
@@ -127,17 +127,17 @@ describe("待你回复（#5096）", () => {
     expect(isQuiet(asking("muted-idle"), mutes)).toBe(true);
   });
 
-  it("按状态：需要你 → 完成未看 → 待你回复 → 工作中 → 待唤醒 → 已屏蔽 → 已看；屏蔽的待你回复归已看", () => {
+  it("按状态：需要你 → 新回复 → 待你回复 → 工作中 → 待唤醒 → 已屏蔽 → 已看；屏蔽的待你回复归已看", () => {
     const all = [session("idle", "idle"), asking("reply"), session("working", "working"), session("unread", "unread"), session("needs", "needs_you"),
       session("waiting", "unknown", { loop: { kind: "cron" } }), session("muted-working", "working"), asking("muted-idle")];
     const groups = buildAgentGroups(all, machines, "state", mutes);
-    expect(groups.map((g) => g.name)).toEqual(["需要你", "完成未看", "待你回复", "工作中", "待唤醒", "已屏蔽", "已看"]);
+    expect(groups.map((g) => g.name)).toEqual(["需要你", "新回复", "待你回复", "工作中", "待唤醒", "已屏蔽", "已看"]);
     expect(ids(groups[2].sessions)).toEqual(["reply"]);
     expect(groups[2].folded).toBeFalsy();
     expect(ids(groups[6].sessions)).toEqual(["idle", "muted-idle"]);
   });
 
-  it("组内排序（byAttention）：待你回复在完成未看之后、工作中之前", () => {
+  it("组内排序（byAttention）：待你回复在新回复之后、工作中之前", () => {
     const all = [session("idle", "idle"), session("working", "working"), asking("reply"), session("unread", "unread"), session("needs", "needs_you")];
     expect(ids(all.sort(byAttention))).toEqual(["needs", "unread", "reply", "working", "idle"]);
   });

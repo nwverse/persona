@@ -46,7 +46,7 @@ import persona.core.domain.tasks.reviewVerdictStage
 // and the todo page's header, the checklist on the todo page, a line in the conversation for each review.
 
 @Composable
-private fun ReviewStage.label(round: Int): String = when (this) {
+internal fun ReviewStage.label(round: Int): String = when (this) {
     ReviewStage.Ongoing -> stringResource(R.string.chat_review_ongoing)
     ReviewStage.Pending -> stringResource(R.string.chat_review_pending)
     ReviewStage.Rework -> stringResource(R.string.chat_review_rework, maxOf(round, 1))

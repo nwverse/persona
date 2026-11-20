@@ -85,7 +85,7 @@ it("shows the engine preview and sends each new/existing/none choice on Start", 
 it("selects a machine-local existing workspace ID and shows its resolved absolute path", async () => {
   await render();
   await choose("existing");
-  const select = host.querySelector<HTMLSelectElement>(`select[aria-label="${t("assistant-tasks.workspace_select")}"]`)!;
+  const select = host.querySelector<HTMLSelectElement>(`select[aria-label="${t("assistant-task-details.workspace_select")}"]`)!;
   await act(async () => { select.value = "ws-one"; select.dispatchEvent(new Event("change", { bubbles: true })); });
   await tick();
   expect(host.querySelector("[data-workspace-path]")?.textContent).toBe("/code/other");

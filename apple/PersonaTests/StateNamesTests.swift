@@ -12,13 +12,13 @@ struct StateNamesTests {
 
     /// The names only an agent's or a task's state has. 「已完成」, 「未知」… also name other things (a tool run, a project, a
     /// step), so they are not checked.
-    private static let names = ["需要你", "工作中", "完成未看", "已看", "未运行", "待唤醒", "待你回复", "待跟进", "刚做完待看", "全部标为已看"]
+    private static let names = ["需要你", "工作中", "新回复", "已看", "未运行", "待唤醒", "待你回复", "待跟进", "刚做完待看", "全部标为已看"]
     /// Names a screen used before #3960 for one of those states.
     private static let old = ["等你", "在做", "待查看", "做完", "做完了", "做完了，还没看", "做完未看", "停着", "等你处理", "需要你处理",
                               "正在工作", "待回答", "没在运行", "全部标为已读"]
     /// A count of them: 「3 个需要你」, old or new.
     private static let count = try! NSRegularExpression(pattern:
-        #"^%(1\$)?lld ?[个件]?(需要你|在等你|等你|工作中|在做|在工作|完成未看|做完未看|未看|做完了)$"#)
+        #"^%(1\$)?lld ?[个件]?(需要你|在等你|等你|工作中|在做|在工作|新回复|做完未看|未看|做完了)$"#)
 
     /// The catalog's zh-Hans value of each key.
     private static func zh() throws -> [String: String] {
@@ -34,13 +34,13 @@ struct StateNamesTests {
 
     @Test func areTheGlossarysNames() {
         let want: [StateName: String] = [
-            .needsYou: "需要你", .working: "工作中", .unread: "完成未看", .seen: "已看", .notRunning: "未运行", .unknown: "未知",
+            .needsYou: "需要你", .working: "工作中", .unread: "新回复", .seen: "已看", .notRunning: "未运行", .unknown: "未知",
             .waiting: "待唤醒", .justFinished: "刚做完待看", .awaitsReply: "待你回复", .done: "已完成", .followUp: "待跟进", .taskWaiting: "等待中",
         ]
         for s in StateName.allCases { #expect(s.text == want[s], "\(s)") }
         #expect(StateName.count(.needsYou, 2) == "2 个需要你")
         #expect(StateName.count(.working, 3) == "3 个工作中")
-        #expect(StateName.count(.unread, 1) == "1 个完成未看")
+        #expect(StateName.count(.unread, 1) == "1 个新回复")
         #expect(StateName.markAllSeen() == "全部标为已看")
         #expect(StateName.markAllSeen(3) == "全部标为已看（3）")
     }
@@ -67,7 +67,7 @@ struct StateNamesTests {
     /// The screens that name a state take it from `StateName` (a sample of the sites #3960 moved).
     @MainActor @Test func screensUseThem() {
         #expect(AgentState.needsYou.label == StateName.needsYou.text && AgentState.idle.label == StateName.seen.text)
-        #expect(AgentState.unread.label == "完成未看" && AgentState.offline.label == "未运行")
+        #expect(AgentState.unread.label == "新回复" && AgentState.offline.label == "未运行")
         #expect(TodoSection.justDone.title == StateName.justFinished.text)
         #expect(PersonaState.needsYou.title == "需要你" && SessionStatus.blocked.label == "需要你")
     }

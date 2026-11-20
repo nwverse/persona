@@ -153,16 +153,18 @@ class QuietTasksTest {
             finished(listOf(done("side", "2026-11-10T08:30:00Z", origin = "side")), conversation = "side").finished.map { it.key })
     }
 
-    @Test fun anOpenUnseenFinishStaysInProgressAndAFailedStartIsNotNews() {
+    @Test fun aReportedFinishWaitsUncountedInJustFinishedAndAFailedStartIsNotNews() {
         val agent = TodoAgent("desk", "cut", linkedAt = "2026-11-10T08:00:00Z")
-        val session = Session("desk", "cut", state = "unread", updatedAt = "2026-11-10T08:40:00Z")
+        val session = Session("desk", "cut", state = "unread", updatedAt = "2026-11-10T08:40:00Z",
+            work = persona.core.contracts.WorkState("done", closeout = persona.core.contracts.Closeout("done")))
         val open = Todo("open", "Still open", origin = "main", createdAt = "2026-11-10T08:00:00Z",
             updatedAt = "2026-11-10T08:40:00Z", agents = listOf(agent))
         val failed = Todo("failed", "Did not start", origin = "main", startError = "rpc: connection closed",
             doneAt = "2026-11-10T08:50:00Z", createdAt = "2026-11-10T08:50:00Z")
         val got = assistantEntries("main", "main", listOf(open, failed), listOf(session), emptyList(), emptyList(), emptyList(), nowMs)
+        assertEquals(listOf("task:open"), got.justFinished.map { it.key })
+        assertTrue(got.running.isEmpty())
         assertTrue(got.finished.isEmpty())
-        assertEquals(listOf("task:open"), got.running.map { it.key })
         assertEquals(listOf("task:failed"), got.needsYou.map { it.key })
     }
 }

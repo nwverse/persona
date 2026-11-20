@@ -1734,6 +1734,8 @@ nonisolated struct UndeliveredMessage: Codable, Hashable, Sendable, Identifiable
 nonisolated struct WorkState: Codable, Hashable, Sendable {
     /// working / blocked / done.
     var phase: String
+    /// End of this turn; reading its reply or restarting the hub does not reset it.
+    var turnAt: Date? = nil
     /// What a blocked one waits on: user (a decision), agent, external (a deploy, CI, a time), transient (a model error).
     var on: String? = nil
     /// One line for the lists: what it waits for, or what it concluded.
@@ -1758,12 +1760,13 @@ nonisolated struct WorkState: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case phase, on, line, wait, then, attempts, max, agent, artifacts, closeout
-        case wakeAt = "wake_at", resetsAt = "resets_at", justFinished = "just_finished"
+        case wakeAt = "wake_at", resetsAt = "resets_at", turnAt = "turn_at", justFinished = "just_finished"
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         phase = try c.decode(String.self, forKey: .phase)
+        turnAt = try c.decodeIfPresent(Date.self, forKey: .turnAt)
         on = try c.decodeIfPresent(String.self, forKey: .on)
         line = try c.decodeIfPresent(String.self, forKey: .line)
         wait = try c.decodeIfPresent(String.self, forKey: .wait)

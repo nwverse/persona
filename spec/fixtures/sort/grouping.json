@@ -230,7 +230,7 @@
               "idle": 1,
               "unknown": 0
             },
-            "spoken": "1 个需要你，2 个完成未看，1 个空闲"
+            "spoken": "1 个需要你，2 个新回复，1 个空闲"
           }
         ],
         "unread_shown": [
@@ -332,7 +332,7 @@
               "idle": 0,
               "unknown": 0
             },
-            "spoken": "1 个完成未看"
+            "spoken": "1 个新回复"
           },
           {
             "id": "machine-a/space-b",
@@ -351,7 +351,7 @@
               "idle": 0,
               "unknown": 0
             },
-            "spoken": "1 个完成未看"
+            "spoken": "1 个新回复"
           }
         ],
         "unread_shown": [
@@ -453,7 +453,7 @@
               "idle": 0,
               "unknown": 0
             },
-            "spoken": "1 个完成未看"
+            "spoken": "1 个新回复"
           },
           {
             "id": "machine-a/space-b",
@@ -472,7 +472,7 @@
               "idle": 0,
               "unknown": 0
             },
-            "spoken": "1 个完成未看"
+            "spoken": "1 个新回复"
           }
         ],
         "unread_shown": [
@@ -649,7 +649,7 @@
               "idle": 0,
               "unknown": 0
             },
-            "spoken": "1 个完成未看"
+            "spoken": "1 个新回复"
           },
           {
             "id": "machine-a/working",
@@ -932,7 +932,7 @@
               "idle": 0,
               "unknown": 0
             },
-            "spoken": "1 个完成未看"
+            "spoken": "1 个新回复"
           },
           {
             "id": "machine-a/mute",

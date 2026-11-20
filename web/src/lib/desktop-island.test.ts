@@ -50,7 +50,7 @@ describe("islandState", () => {
     expect(state.rows[0].route).toContain("n3");
     // the assistant's conversation that needs you is neither a row nor a count: the Agents list leaves it out
     expect([state.needsYou, state.working, state.unread]).toEqual([3, 2, 1]);
-    expect(state.summary).toBe("3 个需要你，2 个工作中，1 个完成未看");
+    expect(state.summary).toBe("3 个需要你，2 个工作中，1 个新回复");
   });
 
   it("counts only the agents it can list: the assistant's conversation at work is neither", () => {
@@ -69,7 +69,7 @@ describe("islandState", () => {
     ], []);
     expect(state.rows.map((r) => [r.title, r.state, r.label, r.line])).toEqual([
       ["示例 w1", "working", "工作中", ""],
-      ["示例 u1", "unread", "完成未看", "已合并到 main"],
+      ["示例 u1", "unread", "新回复", "已合并到 main"],
     ]);
     expect([state.needsYou, state.working, state.unread]).toEqual([0, 1, 1]);
   });

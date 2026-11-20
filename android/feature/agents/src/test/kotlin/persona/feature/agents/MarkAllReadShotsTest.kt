@@ -49,7 +49,7 @@ class MarkAllReadShotsTest {
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
             rule.waitForIdle()
-            rule.onNodeWithText("把 3 个完成未看的会话标为已读？").assertExists()
+            rule.onNodeWithText("把 3 个新回复的会话标为已读？").assertExists()
             val bitmap = rule.onNode(isDialog()).captureToImage().asAndroidBitmap()
             File(out, "agents-mark-all-read-${s.name.lowercase()}-${if (d) "dark" else "light"}.png").outputStream()
                 .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }

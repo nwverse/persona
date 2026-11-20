@@ -1,7 +1,8 @@
 import { backgroundWork, taskBackgroundWork, type BackgroundWork } from "./background-work";
 import { cardDismissed, cardFiled, cardSent, startFailure, type FeedItem, type TaskPlan } from "./feed";
 import { cardBucket, taskCardSlots, type TaskCardMetadata } from "./task-cards";
-import { decisionDismissed, linkedParkInteraction, parkInteractionID, reviewState, withoutParkInteraction } from "./supervision";
+import { acceptanceStands, decisionDismissed, linkedParkInteraction, parkInteractionID, reviewState, withoutParkInteraction } from "./supervision";
+import { STOP_FOLLOWUP_MS, taskExecution } from "./task-execution";
 import { finishedAt, JUST_DONE_MS, supersededFailedStarts, triage } from "./todo-triage";
 import { awaitsReview, dockAgents, heldDelivery, makeSessionLookup, openAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
@@ -10,17 +11,17 @@ import type { Interaction, Session } from "./types";
 
 /**
  * The Assistant's entries above the composer (docs/assistant/unified-entry.md "Needs you and In progress"):
- * Needs you lists the user's turn, In progress the active work, and Parked the external waits, including ready PRs.
- * Each thing has one home and one count. Finished things are not open work: the handed-out ones that finished in the
- * last 24 hours are under Finished (`finished`, #10922), everything else on the board. A
- * task waiting for its supervisor's review is in neither: the web lists it under Persona reviewing (`review`, #8678),
- * however long it has waited. A task is one row whatever its agents: they are not listed on their own. In the main
+ * Needs you lists the user's turn, In progress active work and external waits, including ready PRs.
+ * Each thing has one home and one count; a reported finish goes in uncounted Just finished, not a peer review tray.
+ * Finished lists the last 24 hours of finished work (#10922).
+ * An unfinished stop needs follow-up after a full hour, even if the old page's inactivity rule would shelve it.
+ * A task is one row whatever its agents: they are not listed on their own. In the main
  * conversation an Agent that belongs to no task (opened by hand) is a row of its own.
  */
 export type NeedsYouItem =
   /** A task whose agent asks something (`asks`, oldest first), or that waits for the user's decision.
-   *  `countsOpen` says whether the To-dos page's "Not done" counts the to-do (#3331): the row stays visible whatever
-   *  it says, the chip badge counts it only when it does. */
+   *  `countsOpen` says whether the task contributes to the badge; an unattended stopped task counts even after
+   *  the legacy page's inactivity window. */
   | { kind: "task"; key: string; todo: Todo; status: TodoStatus; asks: Interaction[]; countsOpen: boolean }
   /** An Agent that belongs to no task, asking something. */
   | { kind: "agent"; key: string; session: Session; asks: Interaction[] }
@@ -46,12 +47,10 @@ export interface AssistantEntries {
   /** Open tasks with no progress for 48 hours and nothing running (the To-dos page's shelved, #3331): folded under
    *  In progress, not counted. */
   shelved: RunningItem[];
-  /** Explicit holds and fresh ready PR waits, outside In progress; still open tasks. */
+  /** Explicit holds and fresh ready PR waits: the Waiting subsection of In progress. */
   parked: RunningItem[];
-  /** Tasks waiting for their supervisor's review (`pending_review`) with nothing of them running or asking, however long
-   *  the review has waited (web only, #8678): Persona's to do, not the owner's, so outside Needs you; still open tasks,
-   *  counted like the other entries. An asking agent, an open `ask` or `needs_user` makes such a task Needs you instead. */
-  review: RunningItem[];
+  /** Reported finishes awaiting acceptance, uncounted under In progress. */
+  justFinished: RunningItem[];
   /** Handed-out tasks that finished in the last 24 hours (JUST_DONE_MS, the To-dos page's Just finished window), seen or
    *  not, newest finished first: the Finished entry (#10922). How a task ended is told here, not by a card in the chat
    *  (#8237). Not open work: its count is its rows, and opening one marks it seen without taking it out. Until #10922
@@ -108,12 +107,6 @@ export function taskAwaitsDecision(todo: Todo): boolean {
   return todo.supervision?.state === "needs_user";
 }
 
-/** The task waits for its supervisor's review and nothing of it runs: an open `pending_review` whose status is a
- *  finished turn (`awaitsReview`). An agent at work again keeps it In progress. */
-function underReview(todo: Todo, status: TodoStatus): boolean {
-  return !todo.done_at && reviewState(todo) === "pending_review" && awaitsReview(todo, status);
-}
-
 /** The message card still waits for Send: not sent, filed, dismissed, or put off. */
 export function messageWaits(it: FeedItem, deferred: Record<string, unknown> = {}): boolean {
   return it.kind === "message" && !cardSent(it) && !cardFiled(it) && !cardDismissed(it) && !deferred[it.id];
@@ -148,7 +141,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const open: { item: RunningItem; rank: number; at: string }[] = [];
   const shelved: { item: RunningItem; at: string }[] = [];
   const parked: { item: RunningItem; at: string }[] = [];
-  const review: { item: RunningItem; rank: number; at: string }[] = [];
+  const justFinished: { item: RunningItem; at: number }[] = [];
   const finished: FinishedItem[] = [];
   const folded = new Set<string>();
   const slots = taskCardSlots(conversation, input.cards ?? [], feed, plans, todos, isMain);
@@ -193,20 +186,32 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
     const waits = status === "failed" ? bucket === "open" : !todo.done_at && WAITS_ON_YOU.has(status);
     const decision = taskAwaitsDecision(todo);
+    const execution = taskExecution(todo, lookup);
+    const settled = !!todo.done_at || acceptanceStands(todo);
+    const external = !settled && (execution.waiting || reviewState(todo) !== "pending_review"
+      && triage(todo, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id)).section === "parked");
+    const unfinished = own.length === active.length && !settled && !!todo.agents?.some((a) => !a.released_at && !a.start_error)
+      && !execution.running && !external && status !== "usage_limit" && execution.closeout?.status !== "done";
+    const unattended = unfinished && execution.unattendedSince > 0 && now - execution.unattendedSince > STOP_FOLLOWUP_MS;
     const deliveryApproval = heldDelivery(todo)?.unblock === "user";
     if (asks.length) asking.push({ kind: "task", key, todo, status, asks, countsOpen });
-    else if (waits || decision || deliveryApproval) {
+    else if (waits || decision || unattended || deliveryApproval) {
       // Only the review decision is hidden; a live Agent question above still has its home.
       if (deliveryApproval || !(status !== "needs_you" && decision && (decisionDismissed(todo) || input.deferred?.[decisionLaterKey(todo)]))) {
-        deciding.push({ item: { kind: "task", key, todo, status, asks, countsOpen }, rank: todoRank(todo, status), at: card.at });
+        deciding.push({ item: { kind: "task", key, todo, status, asks, countsOpen: countsOpen || unattended }, rank: todoRank(todo, status), at: card.at });
       }
     }
-    // its supervisor's review (#8678): Persona's own work, not the owner's and not a wait on the upstream maintainer, so
-    // its own group whatever the To-dos page files it under, even with a fresh open PR; once reviewed (accepted, or parked
-    // on the PR) the PR rule below files it
-    else if (underReview(todo, status)) review.push({ item: { kind: "task", key, card, todo, status, countsOpen }, rank: todoRank(todo, status), at: card.at });
+    // #10174: a reported finish awaits acceptance in Just finished, never in a peer acceptance group.
+    else if (!settled && !execution.running && !external && execution.closeout?.status === "done") justFinished.push({ item: { kind: "task", key, card, todo, status, countsOpen: false }, at: execution.unattendedSince });
+    // A recent unfinished stop remains on To-dos during the supervisor's follow-up window, not among finished work.
+    else if (unfinished) {
+      for (const agent of active) folded.add(sessionKey(agent.machine_id, agent.session_id));
+      continue;
+    }
+    else if (!external && !todo.done_at && reviewState(todo) === "pending_review" && awaitsReview(todo, status) && !execution.running) justFinished.push({ item: { kind: "task", key, card, todo, status, countsOpen: false }, at: execution.unattendedSince });
+    else if (!settled && execution.running) open.push({ item: { kind: "task", key, card, todo, status: "working", activity: taskBackgroundWork(todo, lookup), countsOpen: true }, rank: todoRank(todo, status), at: card.at });
     // Use the To-dos page's wait classification. Live work and owner decisions outrank a hold or an open PR.
-    else if (reviewState(todo) !== "pending_review" && triage(todo, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id)).section === "parked") parked.push({ item: { kind: "task", key, card, todo, status, countsOpen }, at: card.at });
+    else if (external) parked.push({ item: { kind: "task", key, card, todo, status, countsOpen: countsOpen || execution.waiting }, at: card.at });
     else if (bucket === "open" || reviewState(todo) === "pending_review") open.push({ item: { kind: "task", key, card, todo, status, activity: taskBackgroundWork(todo, lookup), countsOpen }, rank: todoRank(todo, status), at: card.at });
     else if (bucket === "shelved") shelved.push({ item: { kind: "task", key, card, todo, status, countsOpen: false }, at: card.at });
     else {
@@ -251,7 +256,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     running: [...open.sort(newest).map((row) => row.item), ...agentsRunning],
     shelved: shelved.sort(newest).map((row) => row.item),
     parked: parked.sort(newest).map((row) => row.item),
-    review: review.sort(newest).map((row) => row.item),
+    justFinished: justFinished.sort((a, b) => b.at - a.at || a.item.key.localeCompare(b.item.key)).map((row) => row.item),
     // newest finished first; the same moment by id, so every client lists them in one order
     finished: finished.sort((a, b) => b.at - a.at || (a.todo.id < b.todo.id ? -1 : a.todo.id > b.todo.id ? 1 : 0)),
   };

@@ -27,8 +27,8 @@ export function permissionLabel(mode: string): string {
 /** The hub keeps the plan's model when the field is sent empty (applyPlanEdit): say so rather than "use the default". */
 export function modelPlaceholder(planned?: string, tier?: string): string {
   const m = planned?.trim();
-  if (m) return t("assistant-tasks.plan_edit_model_placeholder_kept", { model: m });
-  return tier ? t("assistant-tasks.plan_edit_model_placeholder_tier", { tier }) : t("assistant-tasks.plan_edit_model_placeholder");
+  if (m) return t("assistant-task-details.plan_edit_model_placeholder_kept", { model: m });
+  return tier ? t("assistant-task-details.plan_edit_model_placeholder_tier", { tier }) : t("assistant-task-details.plan_edit_model_placeholder");
 }
 
 /** `ultracode`: each task's choice on the card, where "Edit" starts from: kept while its computer can't (the switch is
@@ -41,7 +41,7 @@ export function PlanEditDialog({ plan, ultracode, onClose, onStart }: { plan: Ta
   const [tasks, setTasks] = useState<PlanTaskEdit[]>(before);
   const set = (i: number, patch: Partial<PlanTaskEdit>) => setTasks((list) => list.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   const close = () => {
-    if (planEditsChanged(before, tasks) && !confirm(t("assistant-tasks.plan_edit_discard"))) return;
+    if (planEditsChanged(before, tasks) && !confirm(t("assistant-task-details.plan_edit_discard"))) return;
     onClose();
   };
   const ready = tasks.every((x) => x.title.trim() && x.cwd.trim() && x.prompt.trim());
@@ -66,14 +66,14 @@ export function PlanEditDialog({ plan, ultracode, onClose, onStart }: { plan: Ta
           const known = machines.some((m) => m.id === task.machine);
           return (
             <fieldset key={i} className="flex flex-col gap-3">
-              <legend className="mb-2 text-[12px] font-semibold text-ink-3">{tasks.length > 1 ? t("assistant-tasks.plan_edit_task_n", { n: i + 1 }) : t("assistant-tasks.plan_edit_task")}</legend>
+              <legend className="mb-2 text-[12px] font-semibold text-ink-3">{tasks.length > 1 ? t("assistant-task-details.plan_edit_task_n", { n: i + 1 }) : t("assistant-task-details.plan_edit_task")}</legend>
               <div>
-                <label htmlFor={`${id}-title`} className={LABEL}>{t("assistant-tasks.plan_edit_title")}</label>
+                <label htmlFor={`${id}-title`} className={LABEL}>{t("assistant-task-details.plan_edit_title")}</label>
                 <input id={`${id}-title`} value={task.title} onChange={(e) => set(i, { title: e.target.value })} className={FIELD} />
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
-                  <label htmlFor={`${id}-machine`} className={LABEL}>{t("assistant-tasks.plan_edit_machine")}</label>
+                  <label htmlFor={`${id}-machine`} className={LABEL}>{t("assistant-task-details.plan_edit_machine")}</label>
                   <select id={`${id}-machine`} value={task.machine} onChange={(e) => set(i, { machine: e.target.value })} className={FIELD}>
                     {machines.map((m) => (
                       <option key={m.id} value={m.id}>
@@ -84,7 +84,7 @@ export function PlanEditDialog({ plan, ultracode, onClose, onStart }: { plan: Ta
                   </select>
                 </div>
                 <div>
-                  <label htmlFor={`${id}-permission`} className={LABEL}>{t("assistant-tasks.plan_edit_permission")}</label>
+                  <label htmlFor={`${id}-permission`} className={LABEL}>{t("assistant-task-details.plan_edit_permission")}</label>
                   <select id={`${id}-permission`} value={task.permission} onChange={(e) => set(i, { permission: e.target.value })} className={FIELD}>
                     {PLAN_PERMISSIONS.map((p) => (
                       <option key={p} value={p}>
@@ -95,13 +95,13 @@ export function PlanEditDialog({ plan, ultracode, onClose, onStart }: { plan: Ta
                 </div>
               </div>
               <div>
-                <label htmlFor={`${id}-cwd`} className={LABEL}>{t("assistant-tasks.plan_edit_cwd")}</label>
+                <label htmlFor={`${id}-cwd`} className={LABEL}>{t("assistant-task-details.plan_edit_cwd")}</label>
                 <input id={`${id}-cwd`} value={task.cwd} spellCheck={false} autoCapitalize="off" autoCorrect="off" onChange={(e) => set(i, { cwd: e.target.value })} className={`${FIELD} font-mono text-[12.5px]`} />
               </div>
               <TaskWorkspaceEditor plan={{ ...plan, tasks: plan.tasks.map((t, j) => ({ ...t, ...tasks[j], workspace_resolved: undefined })) }} index={i}
                 onChange={(workspace) => set(i, { workspace })} />
               <div>
-                <label htmlFor={`${id}-model`} className={LABEL}>{t("assistant-tasks.plan_edit_model")}</label>
+                <label htmlFor={`${id}-model`} className={LABEL}>{t("assistant-task-details.plan_edit_model")}</label>
                 <input id={`${id}-model`} value={task.model ?? ""} spellCheck={false} autoCapitalize="off" autoCorrect="off" placeholder={modelPlaceholder(plan.tasks[i]?.model, plan.tasks[i]?.tier)} onChange={(e) => set(i, { model: e.target.value })} className={FIELD} />
               </div>
               {ultracodeOffered && (
@@ -110,7 +110,7 @@ export function PlanEditDialog({ plan, ultracode, onClose, onStart }: { plan: Ta
                 </div>
               )}
               <div>
-                <label htmlFor={`${id}-prompt`} className={LABEL}>{t("assistant-tasks.plan_edit_prompt")}</label>
+                <label htmlFor={`${id}-prompt`} className={LABEL}>{t("assistant-task-details.plan_edit_prompt")}</label>
                 <textarea id={`${id}-prompt`} rows={4} value={task.prompt} onChange={(e) => set(i, { prompt: e.target.value })} className={`${FIELD} resize-y leading-relaxed`} />
               </div>
             </fieldset>

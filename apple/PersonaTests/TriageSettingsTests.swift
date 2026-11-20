@@ -195,7 +195,7 @@ import PersonaWire
     /// its decision is a question card; the reminder is worded as the hub's push.
     @Test func theExamplesShowWhatEachSwitchChanges() throws {
         let off = try #require(TriageExample.unread("x", title: "修登录测试"))
-        #expect(off.state == .unread && off.workLine() == nil && off.stateLabel(muted: false) == "完成未看")
+        #expect(off.state == .unread && off.workLine() == nil && off.stateLabel(muted: false) == "新回复")
         let on = try #require(TriageExample.triaged())
         #expect(on.workLine() == "在等 CI")
         let card = TriageExample.decision()

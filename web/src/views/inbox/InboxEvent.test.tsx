@@ -319,7 +319,7 @@ describe("收件箱事件：详情", () => {
     expect(host.querySelector('[data-chain-id="c4"] [data-chain-glyph="code"]')).not.toBeNull();
     expect(host.querySelector('[data-chain-id="c2"] [data-chain-agent-state]')).toBeNull();
     expect(host.querySelector('[data-chain-id="c3"] [data-chain-agent-state]')).toBeNull();
-    expect(host.querySelector('[data-chain-id="c4"] [data-chain-agent-state]')?.textContent).toBe("完成未看");
+    expect(host.querySelector('[data-chain-id="c4"] [data-chain-agent-state]')?.textContent).toBe("新回复");
     await press("收起");
     expect(ids()).toEqual(["c5", "c6", "c7"]);
   });

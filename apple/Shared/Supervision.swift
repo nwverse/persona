@@ -18,6 +18,7 @@ nonisolated struct TaskSupervision: Codable, Hashable, Sendable {
     nonisolated struct Review: Codable, Hashable, Sendable {
         var at: Date?
         var verdict: String
+        var by: String? = nil
         var round: Int?
         var checks: [Check]
         var note: String?
@@ -34,6 +35,7 @@ nonisolated struct TaskSupervision: Codable, Hashable, Sendable {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             at = try? c.decodeIfPresent(Date.self, forKey: .at)
             verdict = try c.decodeIfPresent(String.self, forKey: .verdict) ?? ""
+            by = try? c.decodeIfPresent(String.self, forKey: .by)
             round = try? c.decodeIfPresent(Int.self, forKey: .round)
             checks = (try? c.decodeIfPresent([Check].self, forKey: .checks)) ?? []
             note = try? c.decodeIfPresent(String.self, forKey: .note)
@@ -78,15 +80,17 @@ nonisolated struct TaskSupervision: Codable, Hashable, Sendable {
     var updatedAt: Date?
     /// When the task entered `pending_review`; nil in every other state, and from an older hub.
     var pendingSince: Date?
+    var followedUpAt: Date?
     var progress: Progress?
 
     enum CodingKeys: String, CodingKey {
         case supervisor, state, round, reviews, progress
         case doneWhen = "done_when", expectMinutes = "expect_minutes", updatedAt = "updated_at", pendingSince = "pending_since"
+        case followedUpAt = "followed_up_at"
     }
 
     init(supervisor: String = "", doneWhen: [String] = [], expectMinutes: Int? = nil, state: String = "", round: Int = 0,
-         reviews: [Review] = [], updatedAt: Date? = nil, pendingSince: Date? = nil, progress: Progress? = nil) {
+         reviews: [Review] = [], updatedAt: Date? = nil, pendingSince: Date? = nil, followedUpAt: Date? = nil, progress: Progress? = nil) {
         self.supervisor = supervisor
         self.doneWhen = doneWhen
         self.expectMinutes = expectMinutes
@@ -95,6 +99,7 @@ nonisolated struct TaskSupervision: Codable, Hashable, Sendable {
         self.reviews = reviews
         self.updatedAt = updatedAt
         self.pendingSince = pendingSince
+        self.followedUpAt = followedUpAt
         self.progress = progress
     }
 
@@ -108,6 +113,7 @@ nonisolated struct TaskSupervision: Codable, Hashable, Sendable {
         reviews = (try? c.decodeIfPresent([Review].self, forKey: .reviews)) ?? []
         updatedAt = try? c.decodeIfPresent(Date.self, forKey: .updatedAt)
         pendingSince = try? c.decodeIfPresent(Date.self, forKey: .pendingSince)
+        followedUpAt = try? c.decodeIfPresent(Date.self, forKey: .followedUpAt)
         progress = try? c.decodeIfPresent(Progress.self, forKey: .progress)
     }
 

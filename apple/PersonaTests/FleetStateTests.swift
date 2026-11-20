@@ -96,7 +96,7 @@ struct FleetStateTests {
     @Test func wording() {
         #expect(FleetText.headline(FleetState(phase: .needsYou, needsYou: 2)) == "2 个需要你")
         #expect(FleetText.headline(FleetState(phase: .working, working: 3)) == "3 个工作中")
-        #expect(FleetText.headline(FleetState(phase: .done, unread: 1)) == "1 个完成未看")
+        #expect(FleetText.headline(FleetState(phase: .done, unread: 1)) == "1 个新回复")
         #expect(FleetText.line(.init(id: "a/b", title: "", kind: .permission, detail: "Bash: ls")) == "授权：Bash: ls")
         #expect(FleetText.line(.init(id: "a/b", title: "", kind: .plan)) == "计划等你批准")
         #expect(FleetText.anonymous(.init(id: "a/b", title: "secret", kind: .permission)) == "有个授权等你")
