@@ -330,9 +330,14 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
 
   // A lead's row is an ordinary conversation row under the 常驻 heading (#6214): no pin glyph of its own, so it never
   // reads as a button. Its "等你 N" stays on hover and the ⋯ has its own reserved end slot (keepTrailing).
-  const directionRow = (c: Session) => (
-    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={directionLabel(directionNames, c.session_id, conversationTitle(c))} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull showState={false} workingMark={counts.get(c.session_id)?.running ?? false} keepTrailing onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
-  );
+  const directionRow = (c: Session) => {
+    const id = c.session_id;
+    const name = directionLabel(directionNames, id, conversationTitle(c));
+    const state = counts.get(id);
+    return <SidebarDirectionRow key={id} id={id} name={name} reg={reg} hover={hover} go={go} onNavigate={onNavigate}
+      row={(agents) => <SessionRow s={c} k={`j:${id}`} reg={reg} hover={hover} active={activeKey === `j:${id}`} to={conversationPage(id, c.machine_id, c.manager)} go={go} label={name}
+        agentSummary={agents && t("sidebar.direction_agent_counts", agents)} hint={countsLabel(state, t) || undefined} hintFull showState={false} workingMark={state?.running} keepTrailing onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />} />;
+  };
 
   const recentRow = (c: Session) => (
     <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={conversationTitle(c)} showState={false} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
@@ -398,7 +403,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
                 <>
                   <SubHeading label={t("sidebar.directions")} />
                   <div className="sidebar-indent">
-                    {directions.map((c) => <SidebarDirectionRow key={c.session_id} id={c.session_id} name={directionLabel(directionNames, c.session_id, conversationTitle(c))} row={directionRow(c)} reg={reg} hover={hover} go={go} onNavigate={onNavigate} />)}
+                    {directions.map(directionRow)}
                   </div>
                 </>
               )}

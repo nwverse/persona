@@ -157,7 +157,7 @@ func (s *Service) directionReadSessions(ctx context.Context, cfg Settings, id st
 
 // directionSessionGroups are the current directions' sessions, placed as the read places them, on the computers this
 // build listed and on the others, asked once; and when one of those computers stops being shown as before (wake).
-func (tb *treeBuild) directionSessionGroups(ctx context.Context, cfg Settings) (map[string][]directionSession, time.Time, error) {
+func (tb *treeBuild) directionSessionGroups(ctx context.Context, cfg Settings, look *directionLook) (map[string][]directionSession, time.Time, error) {
 	s := tb.s
 	rules, err := s.directionRulesNow(ctx, cfg)
 	if err != nil {
@@ -167,7 +167,6 @@ func (tb *treeBuild) directionSessionGroups(ctx context.Context, cfg Settings) (
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	look := newDirectionLook(s, tb)
 	placed, err := s.directionPlacements(ctx, rules, records, func(d string) bool { return slices.Contains(tb.leads, d) }, look)
 	if err != nil {
 		return nil, time.Time{}, err
@@ -316,7 +315,7 @@ func newDirectionLook(s *Service, tb *treeBuild) *directionLook {
 	l := &directionLook{s: s, rows: map[[2]string]proto.Session{}, listed: map[string]bool{}, failed: map[string]error{},
 		computer: map[string]directionComputer{}}
 	if tb != nil {
-		l.rows, l.listed = tb.sessions, tb.listed
+		l.rows, l.listed, l.failed = tb.sessions, tb.listed, tb.failed
 	}
 	return l
 }
@@ -511,13 +510,15 @@ func (tb *treeBuild) directionTreeSessionRows(groups map[string][]directionSessi
 			mark(t.Agents)
 		}
 	}
-	for direction, sessions := range groups {
-		active := sessions[:0]
-		for _, session := range sessions {
+	for i := range tree.Directions {
+		d := &tree.Directions[i]
+		if d.Secretary {
+			continue
+		}
+		for _, session := range groups[d.ID] {
 			if !onTask[[2]string{session.MachineID, session.SessionID}] && (session.State == proto.StateWorking || session.State == proto.StateNeedsYou) {
-				active = append(active, session)
+				d.Sessions = append(d.Sessions, session)
 			}
 		}
-		groups[direction] = active
 	}
 }

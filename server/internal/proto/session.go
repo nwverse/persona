@@ -232,6 +232,9 @@ type Session struct {
 	// optional effort metadata within the row size budget.
 	PendingEffort      *string `json:"pending_effort,omitempty"`
 	EffortChangeFailed bool    `json:"effort_change_failed,omitempty"`
+	// WorkingAtDisconnect retains the node's last running status when the manager marks a lost connection unknown.
+	// Local to this copy of the node's list; the next snapshot replaces it, including when the session is gone.
+	WorkingAtDisconnect bool `json:"-"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
 	// UltracodePending (beside AsksRead) means a requested change waits for an idle input box; LostAt asks the client
 	// to offer reopening after a resumed process reset an enabled switch. Reopening or dismissing the notice clears
@@ -490,6 +493,19 @@ type Session struct {
 	// AskingParentSessionID and IsDeleted; it is shared by every copy of the row, so it is never written in place:
 	// SetParentAgentID, SetFold, SetStartedAt, SetAskingParentSessionID and SetDeleted put a new one.
 	Hierarchy *SessionHierarchy `json:"-"`
+}
+
+// OwnTurnRunning reports an open turn on this conversation, including a host waiting for permission.
+// Attention badges and background work in child conversations can cover its displayed state. Old hosts
+// without turn status use their last own working state; disconnects retain that evidence on the cached row.
+func (s *Session) OwnTurnRunning() bool {
+	switch s.Status {
+	case StatusWorking, StatusBlocked:
+		return true
+	case StatusIdle, StatusDone, StatusInterrupted, StatusOffline:
+		return false
+	}
+	return s.WorkingAtDisconnect || s.State == StateWorking && !s.BackgroundWorking
 }
 
 // Session.TurnErrorKind values.

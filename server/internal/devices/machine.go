@@ -849,6 +849,17 @@ func (m *Machine) setSessions(list []proto.Session) {
 	m.mu.Unlock()
 }
 
+// markSessionsUnknownLocked masks the displayed status, retaining running evidence with just those cached rows.
+func (m *Machine) markSessionsUnknownLocked() {
+	for i := range m.sessions {
+		s := &m.sessions[i]
+		if s.Status != proto.StatusOffline {
+			s.WorkingAtDisconnect = s.OwnTurnRunning()
+			s.Status = proto.StatusUnknown
+		}
+	}
+}
+
 func (m *Machine) sessionList() []proto.Session {
 	m.mu.Lock()
 	defer m.mu.Unlock()

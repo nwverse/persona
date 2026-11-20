@@ -40,12 +40,13 @@ fun JSidebarHistoryRow(
     titleLead: String? = null,
     /** A lead with anything at work under it while its own conversation is idle spins the working mark anyway (#6230, #6626). */
     working: Boolean = false,
+    statusSummary: String? = null,
     titleAccessory: (@Composable () -> Unit)? = null,
     /** Drawn before the ⋯ (a 常驻 lead's caret that folds its to-dos open, #4352); null: nothing. */
     trailingAccessory: (@Composable () -> Unit)? = null,
 ) {
     JRow(title, onClick = onClick, onLongClick = onMenu, selected = selected, chevron = false,
-        subtitle = if (hintMark == null) hint else null, subtitleMark = hintMark,
+        subtitle = if (hintMark == null) hint else null, subtitleMark = hintMark, statusSummary = statusSummary,
         titleAccessory = titleAccessory, titleLead = titleLead, trailing = {
             // A Needs You dot is still, as iOS's `RowStateMark` in a dense list; a lead with work under it spins (#6230), as there.
             if (status == Status.NeedsYou || status == Status.Working || status == Status.Unread || working) JStatusDot(status, spinning = sidebarHistoryRowSpins(status, working), breathes = false)

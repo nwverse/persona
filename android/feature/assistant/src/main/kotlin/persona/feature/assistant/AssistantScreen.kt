@@ -1600,7 +1600,8 @@ internal fun AssistantDrawer(
             }
             itemsIndexed(groups.directions, key = { _, session -> "direction-" + session.key.path }) { index, session ->
                 // With the hub's direction tree a lead folds open to its to-dos and their Agents (#4352, DirectionRows.kt).
-                DirectionLeadRows(groups.tree?.direction(session.sessionId)?.takeUnless { it.secretary },
+                val direction = groups.tree?.direction(session.sessionId)?.takeUnless { it.secretary }
+                DirectionLeadRows(direction,
                     groups.names[session.sessionId] ?: session.conversationTitle(conversationWords()),
                     GroupPosition.of(index, groups.directions.size), onOpenTodo, onOpenAgent, shadedPlace) { position, disclosure ->
                     ConversationRow(session, selected = shadeConversations && session.key == active,
@@ -1612,6 +1613,7 @@ internal fun AssistantDrawer(
                         leader = true, onLeader = onLeader?.let { action -> { action(session) } },
                         counts = leaderCountsLabel(groups.counts[session.sessionId], resources),
                         working = groups.counts[session.sessionId]?.running == true,
+                        agentSummary = direction?.agentCounts?.let { stringResource(R.string.assistant_direction_agent_counts, it.running, it.stopped) },
                         named = groups.names[session.sessionId], disclosure = disclosure)
                 }
             }
@@ -1703,6 +1705,7 @@ private fun ConversationRow(
     leader: Boolean = false, onLeader: (() -> Unit)? = null, onCopy: () -> Unit = {}, onArchive: (() -> Unit)? = null,
     onRename: (() -> Unit)? = null, onEditTags: (() -> Unit)? = null, onDiagnostics: (() -> Unit)? = null,
     counts: String? = null, named: String? = null, origin: String? = session.origin,
+    agentSummary: String? = null,
     /** A 常驻 lead's caret that folds its to-dos open (#4352, DirectionRows.kt), before its ⋯; null: none. */
     disclosure: (@Composable () -> Unit)? = null,
     /** Any Agent under this lead is working, even if the conversation's own turn is idle (#6230): the row spins. */
@@ -1717,8 +1720,10 @@ private fun ConversationRow(
     val opener = ConversationOpener.of(session, origin)
     val channels = LocalChannels.current
     val channel = remember(session.channels, channels) { ChannelSources.latest(session.channels, channels) }
-    val sourceMark: (@Composable () -> Unit)? = source?.let { s -> { ConversationOriginMark(s, opener) } }
-        ?: channel?.let { c -> { JChannelMark(c, size = MarkSize.Inline) } }
+    val sourceMark: (@Composable () -> Unit)? = if (leader && source == AssistantConversationOrigin.Spawned) null else {
+        source?.let { s -> { ConversationOriginMark(s, opener) } }
+            ?: channel?.let { c -> { JChannelMark(c, size = MarkSize.Inline) } }
+    }
     val archivedLabel = if (session.archived) stringResource(R.string.assistant_archived) else null
     val accessory: (@Composable () -> Unit)? = if (sourceMark == null && archivedLabel == null) null else {
         {
@@ -1740,7 +1745,8 @@ private fun ConversationRow(
         Column {
             JSidebarHistoryRow(dated?.topic ?: title, ownStatus, selected, onOpen, { menu = true },
                 stringResource(R.string.assistant_conversation_actions), hint = if (said == null) counts else null, hintMark = said,
-                titleAccessory = accessory, titleLead = dated?.head, trailingAccessory = disclosure, working = leadActive)
+                titleAccessory = accessory, titleLead = dated?.head, trailingAccessory = disclosure, working = leadActive,
+                statusSummary = agentSummary)
             ConversationTagLabels(session, Modifier.padding(horizontal = Tokens.Space.l).padding(bottom = Tokens.Space.xs))
         }
     } else JSwipeActions(modifier, end = swipe) { JGroupItem(position) {
@@ -1749,7 +1755,7 @@ private fun ConversationRow(
         JRow(dated?.topic ?: title, onClick = onOpen, onLongClick = { menu = true },
             titleAccessory = accessory, titleLead = dated?.head,
             subtitle = if (said == null) session.lastText?.takeIf { it.isNotBlank() } else null,
-            subtitleMark = said,
+            subtitleMark = said, statusSummary = agentSummary,
             leading = {
                 if (leadActive) JSpinner(Modifier.size(Tokens.Size.iconXS), color = PersonaTheme.palette.accent, stroke = SpinnerTokens.compactStroke)
                 else JIcon(if (selected) PhIcons.CheckCircle else PhIcons.ChatCircle, null,

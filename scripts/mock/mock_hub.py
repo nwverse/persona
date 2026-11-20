@@ -2219,6 +2219,7 @@ if os.environ.get("MOCK_RECENT") == "1":
 # sidebar shows them first among the Persona chats as the "Directions" group under those names, on any browser.
 MOCK_LEADERS = []
 MOCK_DIRECTION_NAMES = {}
+MOCK_DIRECTION_AGENT_COUNTS = os.environ.get("MOCK_DIRECTION_AGENT_COUNTS") == "1"
 # A direction's notes (#10086, assistant/direction_notes.go): the first leader has some, PUT …/directions/{id}/notes keeps them.
 MOCK_DIRECTION_NOTES = {}
 MOCK_DIRECTION_PROJECTS = {}
@@ -2230,7 +2231,7 @@ if os.environ.get("MOCK_LEADERS") == "1":
         ("1108 | 探索 | 你是「支付对账」方向的主管", "支付对账", 60 * 55, "对账任务已派出。"),
     ]):
         c = assistant_sess(f"lead{i:04d}-0000-4000-8000-{i:012d}", title, minutes, last)
-        c["origin"] = "user"
+        c["origin"] = "spawned" if MOCK_DIRECTION_AGENT_COUNTS and i == 0 else "user"
         ASSISTANT.append(c)
         MOCK_LEADERS.append(c["session_id"])
         MOCK_DIRECTION_NAMES[c["session_id"]] = name
@@ -3315,6 +3316,10 @@ def mock_direction_tree():
                 "tasks": [{k: v for k, v in x.items() if k != "_at"} for x in tasks]}
 
     out = [direction(lid, MOCK_DIRECTION_NAMES.get(lid, ""), groups[lid]) for lid in MOCK_LEADERS]
+    if MOCK_DIRECTION_AGENT_COUNTS:
+        # Shared sidebar examples for the three clients, including explicit zeroes on either side (#11712).
+        for row, (running, stopped) in zip(out, [(2, 3), (0, 1), (1, 0), (0, 1)]):
+            row["agent_counts"] = {"running": running, "stopped": stopped}
     out.append(direction(ASSISTANT_CONFIG.get("main") or "", "", secretary, secretary=True))
     return {"directions": out}
 

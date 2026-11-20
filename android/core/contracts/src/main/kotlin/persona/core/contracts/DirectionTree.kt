@@ -38,9 +38,11 @@ data class Direction(
     /**
      * Something under it is at work right now: an Agent of one of its tasks, or one under it, whose session is working,
      * whatever the task's state (the hub's `running`, its one rule, #6626). Every direction row's activity mark spins on
-     * it; the working count is not shown. From a hub without it: whether it counts a working task, as before.
+     * it. A hub without this flag falls back to whether a task is working.
      */
     val running: Boolean = false,
+    /** Distinct Agents under this direction, counted by the hub. An older hub leaves the population unknown. */
+    val agentCounts: DirectionAgentCounts? = null,
 ) {
     /**
      * What a heading calls it: the secretary group is named by the app, a lead the hub has no name for ("" when its
@@ -53,8 +55,10 @@ data class Direction(
     }
 }
 
+data class DirectionAgentCounts(val running: Int, val stopped: Int)
+
 /** How many of a direction's listed tasks are in each state (`counts`): the row shows [needsYou] (#6626: what runs
- *  under it is [Direction.running], its spinner, never a working count). */
+ *  under it drives [Direction.running], its spinner). Agent totals come from [Direction.agentCounts]. */
 data class DirectionCounts(val working: Int = 0, val needsYou: Int = 0, val stuck: Int = 0, val review: Int = 0,
     val planned: Int = 0)
 

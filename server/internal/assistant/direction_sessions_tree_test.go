@@ -83,7 +83,7 @@ func TestDirectionTreeSessionsAreAdditiveActiveOnlyAndCountsUnchanged(t *testing
 		t.Fatalf("quiet session disappeared from the direction read: %+v", got.Sessions)
 	}
 
-	// Remove only the additive field: every old direction field remains byte-for-byte equivalent. A known-key
+	// Remove the new session rows and their direction-wide Agent totals: every old direction field remains byte-for-byte equivalent. A known-key
 	// decoder also accepts the new payload, as older clients do.
 	beforeMaps, afterMaps := directionFilingTreeMaps(t, beforeRaw), directionFilingTreeMaps(t, afterRaw)
 	if len(beforeMaps) != len(afterMaps) {
@@ -99,6 +99,8 @@ func TestDirectionTreeSessionsAreAdditiveActiveOnlyAndCountsUnchanged(t *testing
 	}
 	for i := range beforeMaps {
 		additiveRaw, _ := json.Marshal(afterMaps[i])
+		delete(beforeMaps[i], "agent_counts")
+		delete(afterMaps[i], "agent_counts")
 		delete(beforeMaps[i], "sessions")
 		delete(afterMaps[i], "sessions")
 		if !reflect.DeepEqual(beforeMaps[i], afterMaps[i]) {

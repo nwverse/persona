@@ -51,6 +51,8 @@ export interface Direction {
   name: string;
   secretary?: boolean;
   counts: DirectionCounts;
+  /** Distinct Agents, including stopped sessions outside the open task tree. Absent on older hubs. */
+  agent_counts?: { running: number; stopped: number };
   /** Something under it is at work right now: an Agent of one of its tasks, or one under it, whose session is working,
    *  whatever the task's state (the hub's one rule, #6626). Every direction row's activity mark spins on it, the
    *  working count is not shown. A hub without it: whether it counts a working task, as the rows read it before. */
@@ -72,11 +74,13 @@ export function normalizeTree(raw: unknown): DirectionTree {
       .filter((d): d is Direction => !!d && typeof d.id === "string")
       .map((d) => {
         const counts = normalizeCounts(d.counts);
+        const agents = d.agent_counts;
         return {
           id: d.id,
           name: typeof d.name === "string" ? d.name : "",
           ...(d.secretary ? { secretary: true } : {}),
           counts,
+          ...(agents && [agents.running, agents.stopped].every((n) => Number.isSafeInteger(n) && n >= 0) && { agent_counts: agents }),
           running: typeof (d as { running?: unknown }).running === "boolean" ? d.running : counts.working > 0,
           tasks: (Array.isArray(d.tasks) ? d.tasks : [])
             .filter((td): td is DirectionTask => !!td && typeof td.id === "string")

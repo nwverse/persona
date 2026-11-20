@@ -11,15 +11,15 @@ vi.hoisted(() => {
 });
 import { t } from "../i18n";
 import { resetDirectionNames } from "../lib/direction-names";
-import { resetDirectionTree, type DirectionTree } from "../lib/direction-tree";
+import { refreshDirectionTree, resetDirectionTree, type DirectionTree } from "../lib/direction-tree";
 import { refresh, reset } from "../lib/store";
 import type { Session } from "../lib/types";
 import { Sidebar } from "./Sidebar";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const conversation = (session_id: string, title: string): Session => ({
-  machine_id: "hub", session_id, title, cwd: "/persona", status: "idle", state: "idle", assistant: true, origin: "user", updated_at: "2026-11-10T09:00:00Z",
+const conversation = (session_id: string, title: string, origin = "user"): Session => ({
+  machine_id: "hub", session_id, title, cwd: "/persona", status: "idle", state: "idle", assistant: true, origin, updated_at: "2026-11-10T09:00:00Z",
 });
 const counts = (working: number, needs_you: number) => ({ working, needs_you, stuck: 0, review: 0 });
 const TREE: DirectionTree = {
@@ -58,7 +58,7 @@ beforeEach(() => {
     const path = new URL(url, "http://x").pathname;
     if (path === "/api/v1/assistant/directions/tree" && !tree) return Promise.resolve(new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: { "Content-Type": "application/json" } }));
     const body = path === "/api/v1/assistant"
-      ? { machine_id: "hub", main: "main", leaders, conversations: [conversation("main", "Persona"), conversation("lead-a", "Growth"), conversation("lead-b", "Payments"), conversation("other", "Trip plan")] }
+      ? { machine_id: "hub", main: "main", leaders, conversations: [conversation("main", "Persona"), conversation("lead-a", "Growth", "spawned"), conversation("lead-b", "Payments", "inbox"), conversation("other", "Trip plan", "spawned")] }
       : path === "/api/v1/assistant/directions/tree" ? tree
       : path === "/api/v1/assistant/leaders" ? { leaders: [{ id: "lead-a", name: "Product" }, { id: "lead-b", name: "Infrastructure" }] }
       : path === "/api/v1/machines" ? { machines: [{ id: "hub", name: "Hub", online: true }] } : {};
@@ -86,6 +86,33 @@ async function renderSidebar() {
 }
 
 describe("the 常驻 rows' disclosure", () => {
+  it("shows the hub's running and stopped Agent counts on each conversation link, including two zeroes", async () => {
+    tree = { directions: TREE.directions.map((d, i) => ({ ...d, agent_counts: i === 0 ? { running: 2, stopped: 3 } : { running: 0, stopped: 0 } })) };
+    await renderSidebar();
+    const lead = direction("lead-a")!;
+    const link = lead.querySelector<HTMLAnchorElement>('a[href="/persona/lead-a"]')!;
+    expect(link.textContent).toContain("运行中 2 · 已停 3");
+    expect(link.textContent).toContain("等你 1");
+    expect(link.querySelector('[data-state="working"]')).not.toBeNull();
+    expect(direction("lead-b")!.querySelector("a")!.textContent).toContain("运行中 0 · 已停 0");
+    expect(lead.querySelector('button[aria-haspopup="menu"]')).not.toBeNull();
+    expect(disclosure("lead-a").getAttribute("aria-expanded")).toBe("false");
+    tree = { directions: TREE.directions.map((d) => ({ ...d, agent_counts: { running: 0, stopped: 1 } })) };
+    await act(async () => { await refreshDirectionTree(); });
+    expect(link.textContent).toContain("运行中 0 · 已停 1");
+    expect(link.textContent).toContain("等你 1");
+  });
+
+  it("keeps ordinary conversation and other origin marks, and omits unknown counts from an older tree", async () => {
+    await renderSidebar();
+    const lead = direction("lead-a")!.querySelector("a")!;
+    expect(lead.querySelector('[data-origin-mark="spawned"]')).toBeNull();
+    expect(lead.title).toContain(t("assistant-conversations.origin_spawned"));
+    expect(lead.textContent).not.toContain("已停");
+    expect(direction("lead-b")!.querySelector('[data-origin-mark="inbox"]')).not.toBeNull();
+    expect(host.querySelector('a[href="/persona/other"] [data-origin-mark="spawned"]')).not.toBeNull();
+  });
+
   it("starts folded on #4610's row, with its name and what it has going, and no row for the secretary", async () => {
     await renderSidebar();
     const rows = [...host.querySelectorAll<HTMLElement>("[data-direction]")].map((el) => el.dataset.direction);
@@ -111,7 +138,7 @@ describe("the 常驻 rows' disclosure", () => {
   it("opens to the tasks with their state words, each task to its agents and theirs; the fold is kept", async () => {
     await renderSidebar();
     act(() => disclosure("lead-a").click());
-    await flush();
+    await act(() => vi.dynamicImportSettled());
     expect(disclosure("lead-a").getAttribute("aria-expanded")).toBe("true");
     expect(disclosure("lead-a").getAttribute("aria-label")).toBe(t("sidebar.direction_tasks_collapse", { name: "Product" }));
     expect(localStorage.getItem("fold:direction:lead-a")).toBe("0");
@@ -137,7 +164,7 @@ describe("the 常驻 rows' disclosure", () => {
     expect(disclosure("lead-a").getAttribute("aria-expanded")).toBe("false");
     expect(localStorage.getItem("fold:direction:lead-a")).toBeNull();
     act(() => disclosure("lead-a").click());
-    await flush();
+    await act(() => vi.dynamicImportSettled());
     const open = direction("lead-a")!;
     const task = open.querySelector<HTMLButtonElement>(`button[aria-label="${t("sidebar.task_agents", { name: "Pick the icon" })}"]`)!;
     expect(task.getAttribute("aria-expanded")).toBe("false");

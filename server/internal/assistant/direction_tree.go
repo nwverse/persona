@@ -65,13 +65,14 @@ type directionTree struct {
 
 // treeDirection is one direction, or the secretary group (Secretary; ID the main conversation's, Name "").
 type treeDirection struct {
-	ID        string             `json:"id"`
-	Name      string             `json:"name"`
-	Secretary bool               `json:"secretary,omitempty"`
-	Counts    treeCounts         `json:"counts"`
-	Running   bool               `json:"running"` // sent false too, so a client tells a hub without it (it reads counts.working then)
-	Tasks     []treeTask         `json:"tasks"`
-	Sessions  []directionSession `json:"sessions,omitempty"`
+	ID          string                `json:"id"`
+	Name        string                `json:"name"`
+	Secretary   bool                  `json:"secretary,omitempty"`
+	Counts      treeCounts            `json:"counts"`
+	AgentCounts *directionAgentCounts `json:"agent_counts,omitempty"`
+	Running     bool                  `json:"running"` // sent false too, so a client tells a hub without it (it reads counts.working then)
+	Tasks       []treeTask            `json:"tasks"`
+	Sessions    []directionSession    `json:"sessions,omitempty"`
 }
 
 // treeCounts are how many of a direction's listed tasks are in each state.
@@ -131,10 +132,11 @@ type directionTreeBook struct {
 	// wake, wakeTimer: the build directionTreeAt scheduled for when a computer stops being shown as before.
 	wake      time.Time
 	wakeTimer *time.Timer
-	// sessions and machines: the directions' sessions in the tree told last, and their computers (directionSessionsOn).
+	// The previous complete placements and computers whose sessions can change the direction counts.
 	// A build that cannot place sessions keeps those (directionTree).
 	sessions map[string][]directionSession
 	machines map[string]bool
+	agents   map[string]directionAgentCounts // last published counts, should the placement ledger become unavailable
 }
 
 // directionTreeRoutes: GET /api/v1/assistant/directions/tree is the tree as it is now.
@@ -177,7 +179,7 @@ func (s *Service) directionTreeSoon() {
 }
 
 // directionTreeSessions: the sessions of machine d changed, or its computer went away (NodeDetached); the tree is built
-// again when that can change it: an open task's Agent is there, or a direction's session may be (directionSessionsOn).
+// again when its current, historical or filed conversations may change the rows or their counts.
 func (s *Service) directionTreeSessions(d DeviceSessions) {
 	s.todos.mu.RLock()
 	on := false
@@ -242,30 +244,28 @@ func (s *Service) directionTreeSync(ctx context.Context) {
 	}
 	b.run.Lock()
 	defer b.run.Unlock()
-	tree, wake := s.directionTreeWake(ctx, time.Now())
+	tree, watch := s.directionTreeWake(ctx, time.Now())
 	raw, err := json.Marshal(tree)
 	if err != nil {
 		return
 	}
 	sum := sha256.Sum256(raw)
-	sessions, machines := map[string][]directionSession{}, map[string]bool{}
+	agents := make(map[string]directionAgentCounts)
 	for _, d := range tree.Directions {
-		if len(d.Sessions) > 0 {
-			sessions[d.ID] = d.Sessions
-		}
-		for _, session := range d.Sessions {
-			machines[session.MachineID] = true
+		if d.AgentCounts != nil {
+			agents[d.ID] = *d.AgentCounts
 		}
 	}
 	b.mu.Lock()
+	b.agents = agents
 	same := b.told && b.digest == sum
-	b.digest, b.told, b.sessions, b.machines = sum, true, sessions, machines
+	b.digest, b.told, b.sessions, b.machines = sum, true, watch.sessions, watch.machines
 	b.mu.Unlock()
 	if !same {
 		s.event(ctx, map[string]any{"type": "directions"})
 	}
-	if !wake.IsZero() {
-		s.directionTreeAt(wake)
+	if !watch.wake.IsZero() {
+		s.directionTreeAt(watch.wake)
 	}
 }
 
@@ -317,12 +317,20 @@ func (s *Service) directionTree(ctx context.Context, now time.Time) directionTre
 	return out
 }
 
+type directionTreeWatch struct {
+	wake time.Time
+	// Keep the full placement, including quiet rows that contribute only to agent_counts.
+	sessions map[string][]directionSession
+	machines map[string]bool
+}
+
 // directionTreeWake is directionTree, and when a computer of its directions' sessions stops being shown as before
 // (zero: none will): the tree can change then, and nothing tells the manager.
-func (s *Service) directionTreeWake(ctx context.Context, now time.Time) (directionTree, time.Time) {
+func (s *Service) directionTreeWake(ctx context.Context, now time.Time) (directionTree, directionTreeWatch) {
 	tb, cfg, names := s.directionTreeParts(ctx, now)
 	out := tb.tree(names)
-	groups, wake, err := tb.directionSessionGroups(ctx, cfg)
+	look := newDirectionLook(s, tb)
+	groups, wake, err := tb.directionSessionGroups(ctx, cfg, look)
 	if err != nil {
 		// What places sessions could not be read for now: the sessions told last stay, rather than every direction
 		// losing its sessions until the next build, less those that follow a task now (rule 1) or are under one in
@@ -330,13 +338,20 @@ func (s *Service) directionTreeWake(ctx context.Context, now time.Time) (directi
 		s.logf("direction sessions: %v", err)
 		groups = tb.directionLastSessions(s.taskFollowers())
 	}
+	machines := tb.countDirectionAgents(ctx, cfg, groups, out, look)
 	tb.directionTreeSessionRows(groups, out)
-	for i := range out.Directions {
-		if !out.Directions[i].Secretary {
-			out.Directions[i].Sessions = groups[out.Directions[i].ID]
+	if err != nil {
+		// An unreadable deletion/placement ledger can mask even a still-running conversation from sessions().
+		// Keep the aggregate of the last complete publication until a coherent view is available again.
+		s.dtree.mu.Lock()
+		for i := range out.Directions {
+			if n, ok := s.dtree.agents[out.Directions[i].ID]; ok && !out.Directions[i].Secretary {
+				out.Directions[i].AgentCounts = &n
+			}
 		}
+		s.dtree.mu.Unlock()
 	}
-	return out, wake
+	return out, directionTreeWatch{wake: wake, sessions: groups, machines: machines}
 }
 
 // directionLastSessions are the directions' sessions in the tree told last, copied, without those that follow a task
@@ -405,8 +420,9 @@ func (s *Service) directionTreeParts(ctx context.Context, now time.Time) (*treeB
 			undone = append(undone, all[i].Todo)
 		}
 	}
-	lists, reached := s.agentSessionLists(ctx, undone)
+	lists, reached, failed := s.agentSessionLists(ctx, undone)
 	tb := newTreeBuild(s, cfg.Main, leads, all, lists, reached, now, s.location(ctx))
+	tb.failed = failed
 	return tb, cfg, names
 }
 
@@ -450,6 +466,7 @@ type treeBuild struct {
 
 	sessions map[[2]string]proto.Session
 	listed   map[string]bool               // computers whose complete current list was read during this build
+	failed   map[string]error              // shared with placement and Agent counting, so a failed list is also asked only once
 	codexKid map[[2]string][]proto.Session // a machine's Codex sub-agent sessions still going, by parent session
 	// leaderAgent: every task leader's Agent (machine, session) and the to-dos it is the leader Agent of.
 	leaderAgent map[[2]string][]string

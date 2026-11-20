@@ -124,11 +124,7 @@ func (m *Machine) warmExpired(ch chan struct{}) {
 	}
 	m.endWarmLocked()
 	m.via, m.path = "", ""
-	for i := range m.sessions {
-		if m.sessions[i].Status != proto.StatusOffline {
-			m.sessions[i].Status = proto.StatusUnknown
-		}
-	}
+	m.markSessionsUnknownLocked()
 	why := m.err
 	m.mu.Unlock()
 	m.d.logf("[%s] offline: its node did not come back in time", m.cfg.ID)

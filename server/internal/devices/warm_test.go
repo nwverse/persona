@@ -48,6 +48,9 @@ func TestNodeReconnectGrace(t *testing.T) {
 		t.Fatalf("the apps were told about a disconnect within the grace (%d)", n)
 	}
 	time.Sleep(3 * m.reconnectGrace)
+	if !m.sessionList()[0].WorkingAtDisconnect {
+		t.Fatal("the expired connection lost the last working turn")
+	}
 	if m.snapshot().Online || m.sessionList()[0].Status != proto.StatusUnknown {
 		t.Fatal("still online after the grace")
 	}

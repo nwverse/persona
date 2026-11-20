@@ -144613,6 +144613,29 @@
         }
       }
     },
+    "Running %lld · Stopped %lld" : {
+      "comment" : "Execution counts for the distinct Agents belonging to one direction.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Running %1$lld · Stopped %2$lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実行中 %1$lld · 停止中 %2$lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行中 %1$lld · 已停 %2$lld"
+          }
+        }
+      }
+    },
     "Running" : {
       "localizations" : {
         "en" : {

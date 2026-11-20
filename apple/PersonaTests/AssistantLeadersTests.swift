@@ -23,7 +23,26 @@ struct AssistantLeadersTests {
         #expect(tree.leaders.map(\.counts.needsYou) == [1, 0])
     }
 
-    /// The row's words say what waits on you and nothing while nothing does; what runs is its spinner alone (#6626).
+    @Test func directionAgentCountsRoundTripIndependentlyOfTaskState() throws {
+        let raw = #"""
+        {"directions":[
+            {"id":"product","counts":{"working":12,"needs_you":1},"agent_counts":{"running":2,"stopped":3}},
+            {"id":"infra","counts":{"working":8},"agent_counts":{"running":0,"stopped":1}},
+            {"id":"empty","agent_counts":{"running":0,"stopped":0}},
+            {"id":"partial","agent_counts":{"running":0}},
+            {"id":"legacy","running":true,"counts":{"working":5,"needs_you":2}}]}
+        """#
+        let tree = try JSON.decoder.decode(DirectionTree.self, from: Data(raw.utf8))
+        let encoded = try JSONEncoder().encode(tree)
+        let object = try #require(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let directions = try #require(object["directions"] as? [[String: Any]])
+        let counts = directions.map { $0["agent_counts"] as? [String: Int] }
+        #expect(counts == [["running": 2, "stopped": 3], ["running": 0, "stopped": 1],
+                           ["running": 0, "stopped": 0], nil, nil])
+        #expect(tree.directions.last?.counts.needsYou == 2)
+    }
+
+    /// The to-do attention label only counts what waits on you, independently of the Agent totals (#6626, #11712).
     @Test func countsLabelShowsOnlyWhatWaitsOnYou() {
         #expect(DirectionCountsText.label(needsYou: 0) == nil)
         let waiting = DirectionCountsText.label(needsYou: 4)

@@ -1561,7 +1561,7 @@ extension AssistantSidebar {
                 AssistantSidebarDirection(direction: model.directionTree?.leader(s.sessionID), id: s.sessionID,
                                           name: model.directionNames[s.sessionID] ?? s.title, isShell: isShell, drawer: drawer,
                                           selected: s.key == current, selectedFill: Self.selectedFill) { shades in
-                    row(s, named: model.directionNames[s.sessionID], drawsShade: shades)
+                    row(s, named: model.directionNames[s.sessionID], drawsShade: shades, directionRow: true)
                 }
             }
         }
@@ -1742,7 +1742,8 @@ extension AssistantSidebar {
     /// `named`: a direction's name, shown instead of its leader conversation's title.
     /// `drawsShade` false: a direction's row with its fold chevron beside it, which draws the shade across both (#4352).
     /// `said`: the message a search found it by (#6284), shown under its title and opened at.
-    private func row(_ s: Session, named: String? = nil, drawsShade: Bool = true, said: AssistantSearchAnswer.Hit? = nil) -> some View {
+    private func row(_ s: Session, named: String? = nil, drawsShade: Bool = true, directionRow: Bool = false,
+                     said: AssistantSearchAnswer.Hit? = nil) -> some View {
         let selected = s.key == current
         let isMain = s.key == model.assistantMain
         // The main conversation and the hub's built-in background supervisor (#5083) stay: no Archive, Pin or End.
@@ -1752,13 +1753,15 @@ extension AssistantSidebar {
         let preview = s.lastText.map { Fmt.plain($0).replacingOccurrences(of: "\n", with: " ") } ?? ""
         let direction = model.assistantLeaders.contains(s.sessionID) ? model.directionTree?.leader(s.sessionID) : nil
         let counts = direction?.counts.label
+        let agentCounts = directionRow ? direction?.agentCounts.map(DirectionCountsText.agents) : nil
         // One activity mark for the whole row (#6230): it spins whether this conversation runs its own turn or anything
         // under it runs (the tree's `running`, an Agent at work, #6626); the row's own needs-you / unread dot still takes
-        // precedence. It is the only way the row says so: no "N working" beside it.
+        // precedence over the spinner.
         let leadWorking = direction?.running ?? false
         // What opened it when Persona did (#5195): the rule All Chats' filters use, so its mark and its filter agree. One
         // an extension opened is marked with that extension's own icon when it can be (#10358).
         let source = isMain ? nil : AutoConversations.source(of: s, tasks: taskChats.known(on: model.api))
+        let hideSpawned = directionRow && source == .spawned
         let opener = ConversationOpener.of(s)
         return Button {
             if let said { model.messageJump = MessageJump(key: s.key, item: said.itemID) }
@@ -1781,14 +1784,18 @@ extension AssistantSidebar {
                         SearchSaidLine(hit: said)
                             .accessibilityIdentifier("sidebar-search-said")
                     }
+                } else if let agentCounts {
+                    directionTitle(title, agentCounts: agentCounts, waiting: counts)
                 } else {
                     titleText(title, named: !isMain)
                 }
-                ConversationSourceMark(source: source, channels: s.channels, opener: opener) // what opened it, or its latest message's channel
+                if !hideSpawned {
+                    ConversationSourceMark(source: source, channels: s.channels, opener: opener)
+                }
                 Spacer(minLength: Theme.Space.xs)
-                // What waits on you under a direction ("N need you", #4331); what runs is the mark after it (#6626).
-                if let counts {
-                    Text(counts).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                // A direction without Agent totals keeps the to-do attention word beside its activity mark (#4331, #6626).
+                if agentCounts == nil, let counts {
+                    directionWaiting(counts)
                 }
                 RowStateMark(state: s.state, working: leadWorking)
             }
@@ -1807,7 +1814,8 @@ extension AssistantSidebar {
         .tag(s.key)
         .macListRow(selected: selected, in: Rectangle(), drawsShade: false) // the row draws its own (`selectedFill`)
         // a row a search found by a message says the manager's whole snippet in the last message's place (#6284)
-        .sourceLabel([title, counts, isMain && s.title != title ? s.title : nil], source: source, opener: opener,
+        .sourceLabel([title, agentCounts, counts, isMain && s.title != title ? s.title : nil],
+                     source: hideSpawned ? nil : source, opener: opener,
                      [stateWord(s, under: leadWorking), said?.snippet ?? (preview.isEmpty ? nil : preview)],
                      separator: String(localized: ", ", comment: "Separator between parts of an accessibility label"))
         .accessibilityAddTraits(selected ? .isSelected : [])
@@ -1863,6 +1871,38 @@ extension AssistantSidebar {
             .padding(Theme.Space.l)
             .frame(width: Theme.Size.box280, alignment: .leading)
         }
+    }
+
+    /// Use the trailing space at normal sizes, and give both counts a line when the sidebar or type size needs it.
+    private func directionTitle(_ title: String, agentCounts: String, waiting: String?) -> some View {
+        let name = titleText(title, named: true)
+        let totals = Text(agentCounts).font(Theme.Font.label.monospacedDigit()).foregroundStyle(Theme.Reply.secondaryInk)
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: Theme.Space.m) {
+                name.fixedSize()
+                Spacer(minLength: 0)
+                totals.fixedSize()
+                if let waiting { directionWaiting(waiting).fixedSize() }
+            }
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                HStack(spacing: Theme.Space.m) {
+                    name.fixedSize()
+                    Spacer(minLength: 0)
+                    if let waiting { directionWaiting(waiting).fixedSize() }
+                }
+                totals.fixedSize()
+            }
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                name
+                totals.fixedSize(horizontal: false, vertical: true)
+                if let waiting { directionWaiting(waiting) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func directionWaiting(_ word: String) -> some View {
+        Text(word).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
     }
 
     /// The row's state as VoiceOver says it: its mark's (`RowStateMark`), so a lead that spins for what runs under it

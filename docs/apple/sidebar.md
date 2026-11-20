@@ -99,8 +99,9 @@ Pinned group at all.
   going, read from the same tree (`DirectionTree.leader(_:)`): "N need you" in words, and one activity mark,
   `RowStateMark`'s spinner, while its own turn runs or anything under it does (the tree's `running`: an Agent of its
   to-dos, or one under it, at work, whatever the to-do's state; #6230, #6626). Its own Needs You / Unread dot wins over
-  what runs under it, and VoiceOver says Working for the spinner either way. No "N working" beside the spinner: one
-  meaning, one expression (#6626). A chevron button sits at its end
+  what runs under it, and VoiceOver says Working for the spinner either way. When the hub supplies `agent_counts`,
+  the row also shows “Running N · Stopped M”, including zeroes. VoiceOver reads those totals with the title.
+  The pinned row hides its spawned source mark. A chevron button sits at its end
   (`safeAreaInset`). The button folds the row; its label is the direction's name with its "N need you", its value Expanded /
   Collapsed; it is at least `Theme.Size.tapTarget` wide and
   `Theme.Sidebar.row` high. The row's selected fill and Mac hover shade span the conversation row and the button

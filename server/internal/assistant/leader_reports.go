@@ -358,7 +358,7 @@ func notStarted(t Todo) bool {
 // leaderSessions finds the sessions of the tasks' agents as the apps get them, asking each machine once; reached says,
 // by to-do id, whether every machine its agents are on answered.
 func (s *Service) leaderSessions(ctx context.Context, tasks []Todo) (triageLookup, map[string]bool) {
-	lists, reached := s.agentSessionLists(ctx, tasks)
+	lists, reached, _ := s.agentSessionLists(ctx, tasks)
 	return func(machine, id string) (proto.Session, bool) {
 		for _, c := range lists[machine] {
 			if c.SessionID == id {
@@ -371,9 +371,9 @@ func (s *Service) leaderSessions(ctx context.Context, tasks []Todo) (triageLooku
 
 // agentSessionLists are the session lists, by machine, of the machines the tasks' active agents are on, each asked
 // once; reached says, by to-do id, whether every machine its agents are on answered.
-func (s *Service) agentSessionLists(ctx context.Context, tasks []Todo) (map[string][]proto.Session, map[string]bool) {
+func (s *Service) agentSessionLists(ctx context.Context, tasks []Todo) (map[string][]proto.Session, map[string]bool, map[string]error) {
 	lists := map[string][]proto.Session{}
-	failed := map[string]bool{}
+	failed := map[string]error{}
 	reached := map[string]bool{}
 	for _, t := range tasks {
 		ok := true
@@ -381,19 +381,25 @@ func (s *Service) agentSessionLists(ctx context.Context, tasks []Todo) (map[stri
 			if a.ReleasedAt != nil || a.DismissedAt != nil {
 				continue
 			}
-			if _, asked := lists[a.MachineID]; !asked && !failed[a.MachineID] {
-				list, err := s.sessions(ctx, a.MachineID)
+			machine := s.canonical(a.MachineID)
+			if _, asked := lists[machine]; !asked && failed[machine] == nil {
+				list, err := s.sessions(ctx, machine)
 				if err != nil {
-					failed[a.MachineID] = true
+					failed[machine] = err
 				} else {
-					lists[a.MachineID] = list
+					lists[machine] = list
 				}
 			}
-			ok = ok && !failed[a.MachineID]
+			if machine != a.MachineID { // legacy task links still look up the id stored on their link
+				if rows, got := lists[machine]; got {
+					lists[a.MachineID] = rows
+				}
+			}
+			ok = ok && failed[machine] == nil
 		}
 		reached[t.ID] = ok
 	}
-	return lists, reached
+	return lists, reached, failed
 }
 
 // leaderReport is one report, named by its key.

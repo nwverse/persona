@@ -8,6 +8,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import persona.core.contracts.DirectionAgentCounts
 import persona.core.contracts.DirectionCounts
 import persona.core.contracts.DirectionTaskState
 
@@ -59,6 +60,23 @@ class DirectionTreeParseTest {
         assertTrue(running("""{"id": "a", "counts": {"working": 1}}"""))
         assertFalse(running("""{"id": "a", "counts": {"needs_you": 1}}"""))
         assertFalse(running("""{"id": "a"}"""))
+    }
+
+    @Test fun agentPopulationsAreReadEvenWhenZeroAndIndependentOfTaskCounts() {
+        val tree = directionTreeOf(json("""{"directions":[
+            {"id":"product","running":false,"counts":{"working":9,"needs_you":4},"agent_counts":{"running":2,"stopped":3}},
+            {"id":"infra","running":true,"agent_counts":{"running":0,"stopped":1}},
+            {"id":"empty","agent_counts":{"running":0,"stopped":0}},
+            {"id":"legacy","counts":{"working":8},"tasks":[{"id":"open"}]},
+            {"id":"partial","agent_counts":{"running":2}},
+            {"id":"invalid","agent_counts":{"running":-1,"stopped":0}}
+        ]}"""))!!
+        val expected = listOf(DirectionAgentCounts(2, 3), DirectionAgentCounts(0, 1), DirectionAgentCounts(0, 0), null, null, null)
+        assertEquals(expected, tree.directions.map { it.agentCounts })
+        assertEquals(expected, tree.mapMachines { "group/$it" }.directions.map { it.agentCounts })
+        assertFalse(tree.directions[0].running)
+        assertEquals(4, tree.directions[0].counts.needsYou)
+        assertTrue(tree.directions[1].running)
     }
 
     @Test fun anOlderHubsEmptyAnswerIsNoTree() {

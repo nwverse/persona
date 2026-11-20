@@ -358,8 +358,12 @@ func (s *Service) continuationTodos(id string) []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.init()
+	return continuationChain(id, b.links)
+}
+
+func continuationChain(id string, links map[string]taskBriefLink) []string {
 	out := []string{id}
-	link, ok := b.links[id]
+	link, ok := links[id]
 	if !ok || link.Brief == "" {
 		return out
 	}
@@ -367,7 +371,7 @@ func (s *Service) continuationTodos(id string) []string {
 	seen := map[string]bool{id: true}
 	for link.Continues != "" {
 		parent := link.Continues
-		link, ok = b.links[parent]
+		link, ok = links[parent]
 		if !ok || link.Brief != brief || seen[parent] {
 			break
 		}

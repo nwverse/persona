@@ -805,11 +805,7 @@ func (m *Machine) detach(err error, planned bool) {
 		if err != nil {
 			m.err = err.Error()
 		}
-		for i := range m.sessions {
-			if m.sessions[i].Status != proto.StatusOffline {
-				m.sessions[i].Status = proto.StatusUnknown
-			}
-		}
+		m.markSessionsUnknownLocked()
 	}
 	m.mu.Unlock()
 	if planned {

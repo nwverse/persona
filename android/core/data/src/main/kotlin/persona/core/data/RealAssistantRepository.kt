@@ -4,6 +4,7 @@ import persona.core.contracts.CoreText
 import persona.core.contracts.CoreText.Key
 import persona.core.contracts.Direction
 import persona.core.contracts.DirectionAgent
+import persona.core.contracts.DirectionAgentCounts
 import persona.core.contracts.DirectionCounts
 import persona.core.contracts.DirectionTask
 import persona.core.contracts.DirectionTaskState
@@ -442,7 +443,12 @@ private fun directionOf(data: JsonObject): Direction? {
             }
         },
         // #6626: the hub's; a hub without it (it always sends it, false too) spins on a working task, as before
-        running = (data["running"] as? JsonPrimitive)?.booleanOrNull ?: (count("working") > 0))
+        running = (data["running"] as? JsonPrimitive)?.booleanOrNull ?: (count("working") > 0),
+        agentCounts = data.obj("agent_counts")?.let { agents ->
+            val running = (agents["running"] as? JsonPrimitive)?.intOrNull ?: return@let null
+            val stopped = (agents["stopped"] as? JsonPrimitive)?.intOrNull ?: return@let null
+            if (running >= 0 && stopped >= 0) DirectionAgentCounts(running, stopped) else null
+        })
 }
 
 private fun directionAgentOf(data: JsonObject): DirectionAgent? {

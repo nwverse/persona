@@ -146,6 +146,12 @@ nonisolated struct DirectionTree: Codable, Hashable, Sendable {
         var displayTitle: String { title.isEmpty ? String(localized: "Untitled To-do") : title }
     }
 
+    /// Distinct Agents whose execution the hub attributes to this direction, including stopped Agents.
+    nonisolated struct AgentCounts: Codable, Hashable, Sendable {
+        var running: Int
+        var stopped: Int
+    }
+
     /// A direction: a current leader conversation, or (`secretary`) the group of to-dos no leader supervises, whose id is
     /// the main conversation's.
     nonisolated struct Direction: Codable, Hashable, Sendable, Identifiable {
@@ -155,18 +161,21 @@ nonisolated struct DirectionTree: Codable, Hashable, Sendable {
         var name: String
         var secretary: Bool
         var counts: Counts
+        /// An older hub does not know the totals. Open to-dos and their attention state are counted separately.
+        var agentCounts: AgentCounts?
         /// Something under it is at work right now: an Agent of one of its to-dos, or one under it, whose session is
         /// working, whatever the to-do's state (the hub's one rule, #6626). Every direction row's activity mark spins on
-        /// it; the working count is not shown. From a hub without it: whether it counts a working to-do, as before.
+        /// it. From a hub without it: whether it counts a working to-do, as before.
         var running: Bool
         var tasks: [TaskNode]
 
         init(id: String, name: String = "", secretary: Bool = false, counts: Counts = Counts(), running: Bool = false,
-             tasks: [TaskNode] = []) {
+             agentCounts: AgentCounts? = nil, tasks: [TaskNode] = []) {
             self.id = id
             self.name = name
             self.secretary = secretary
             self.counts = counts
+            self.agentCounts = agentCounts
             self.running = running
             self.tasks = tasks
         }
@@ -177,11 +186,15 @@ nonisolated struct DirectionTree: Codable, Hashable, Sendable {
             name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
             secretary = try c.decodeIfPresent(Bool.self, forKey: .secretary) ?? false
             counts = try c.decodeIfPresent(Counts.self, forKey: .counts) ?? Counts()
+            agentCounts = try? c.decodeIfPresent(AgentCounts.self, forKey: .agentCounts)
             running = try c.decodeIfPresent(Bool.self, forKey: .running) ?? (counts.working > 0)
             tasks = try c.decodeIfPresent([TaskNode].self, forKey: .tasks) ?? []
         }
 
-        private enum CodingKeys: String, CodingKey { case id, name, secretary, counts, running, tasks }
+        private enum CodingKeys: String, CodingKey {
+            case id, name, secretary, counts, running, tasks
+            case agentCounts = "agent_counts"
+        }
 
         /// What a header calls it: its name, Secretary for the secretary group (`fallback` for a leader the hub gave no
         /// name).

@@ -36,6 +36,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.Direction
 import persona.core.contracts.DirectionAgent
+import persona.core.contracts.DirectionAgentCounts
 import persona.core.contracts.DirectionCounts
 import persona.core.contracts.DirectionTask
 import persona.core.contracts.DirectionTaskState
@@ -163,6 +164,56 @@ class AssistantDrawerShotsTest {
         dark = true
         androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
         capture("drawer-glass-dark-large-text")
+    }
+
+    @Test fun onlyOrdinarySpawnedRowsShowTheirOriginMark() {
+        val direction = pinned.copy(origin = "spawned")
+        val ordinary = recent.first().copy(origin = "spawned")
+        val groups = ConversationGroups(main, listOf(direction), emptyList(), recent = listOf(ordinary))
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true) {
+                AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
+                    onInfo = {}, onNew = {}, onSettings = {})
+            }
+        }
+        rule.onNodeWithText(direction.title).assertExists()
+        rule.onNodeWithText(ordinary.title).assertExists()
+        rule.onAllNodesWithContentDescription("对话派生", useUnmergedTree = true).assertCountEquals(1)
+        val ordinaryRow = rule.onNodeWithText(ordinary.title).fetchSemanticsNode().boundsInRoot
+        val mark = rule.onNodeWithContentDescription("对话派生", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertTrue("The ordinary chat keeps its origin", ordinaryRow.contains(mark.center))
+    }
+
+    @Test fun agentCountsSurviveLayoutChangesAndDisappearWhenAnOlderHubOmitsThem() {
+        val lead = pinned.copy(title = "Persona 产品", origin = "spawned")
+        val dir = Direction(lead.sessionId, agentCounts = DirectionAgentCounts(2, 3))
+        var direction by mutableStateOf(dir)
+        var compact by mutableStateOf(true)
+        var opened: SessionKey? = null
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true) {
+                CompositionLocalProvider(LocalHomeDrawer provides compact) {
+                    val groups = ConversationGroups(main, listOf(lead), emptyList(),
+                        counts = mapOf(lead.sessionId to LeaderCounts(needsYou = 4)),
+                        tree = DirectionTree(listOf(direction)))
+                    AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = null, onMain = {},
+                        onOpen = { opened = it }, onInfo = {}, onNew = {}, onSettings = {})
+                }
+            }
+        }
+        for (compactLayout in listOf(true, false)) {
+            rule.runOnIdle { compact = compactLayout; direction = dir }
+            rule.onNodeWithText("运行中 2 · 已停 3").performClick()
+            assertEquals(lead.key, opened)
+            rule.onNodeWithText("等你 4").assertExists()
+            rule.runOnIdle { direction = dir.copy(agentCounts = DirectionAgentCounts(0, 1)) }
+            rule.onNodeWithText("运行中 0 · 已停 1").assertExists()
+            rule.runOnIdle { direction = dir.copy(agentCounts = DirectionAgentCounts(0, 0)) }
+            rule.onNodeWithText("运行中 0 · 已停 0").assertExists()
+            rule.runOnIdle { direction = dir.copy(agentCounts = null) }
+            rule.onNodeWithText("运行中", substring = true).assertDoesNotExist()
+            rule.onNodeWithText("等你 4").assertExists()
+        }
     }
 
     @Test fun navigationPagesAddTrailingChevronsAndKeepBadges() {

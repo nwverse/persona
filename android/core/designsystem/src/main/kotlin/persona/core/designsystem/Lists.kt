@@ -363,6 +363,8 @@ fun JRow(
     subtitleMark: AnnotatedString? = null,
     /** Lines the title may take before it ends in an ellipsis; rows whose labels must remain readable pass more than one. */
     titleLines: Int = 1,
+    /** A secondary status line under the title, allowed to wrap at large text sizes. */
+    statusSummary: String? = null,
 ) {
     val palette = PersonaTheme.palette
     RowFrame(modifier, onClick, onLongClick, null, enabled, selected, value, trailing, chevron, changingValue, role) {
@@ -384,6 +386,7 @@ fun JRow(
                 titleAccessory()
             }
             val caption = PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal)
+            statusSummary?.let { Text(it, style = caption, color = palette.ink2) }
             when {
                 subtitleMark != null -> Text(subtitleMark, style = caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 subtitle != null -> Text(subtitle, style = caption, color = palette.ink2, maxLines = subtitleLines, overflow = TextOverflow.Ellipsis)

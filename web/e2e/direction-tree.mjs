@@ -7,7 +7,7 @@
 //
 // Needs the web page against the fake hub with leaders, and Chrome (or any Chromium through --executable):
 //
-//   MOCK_LEADERS=1 PORT=18990 python3 scripts/mock/mock_hub.py &
+//   MOCK_LEADERS=1 MOCK_DIRECTION_AGENT_COUNTS=1 PORT=18990 python3 scripts/mock/mock_hub.py &
 //   (cd web && PERSONA_HUB_URL=http://127.0.0.1:18990 npx vite --port 5990 --strictPort &)
 //   node web/e2e/direction-tree.mjs http://127.0.0.1:5990 [--shots <dir>] [--executable <chromium>]
 //
@@ -90,6 +90,10 @@ try {
       // the lead's own row (its tasks folded under it say their state words): 等你 N, never 在做 N, and one activity mark
       // that spins while anything under the row runs or its own conversation does (#6626)
       const lead = row(page, d.id).locator(`a[href^="/persona/${d.id}"]`).first();
+      const agents = d.agent_counts;
+      const summary = agents ? `运行中 ${agents.running} · 已停 ${agents.stopped}` : undefined;
+      if (summary ? !(await lead.textContent()).includes(summary) : (await lead.textContent()).includes("已停")) fail(`${where}: ${d.name}'s Agent counts do not match the hub`);
+      if (await lead.locator('[data-origin-mark="spawned"]').count()) fail(`${where}: ${d.name} still shows a spawned mark`);
       if ((await lead.textContent()).includes("在做")) fail(`${where}: ${d.name}'s row says 在做: ${await lead.textContent()}`);
       const spins = (await lead.locator('[data-shape="arc"][data-state="working"]').count()) > 0;
       const own = ownState.get(d.id);
@@ -130,6 +134,12 @@ try {
     await row(page, first.id).waitFor({ state: "visible", timeout: 10000 });
     if ((await disclosure(page, first.id).getAttribute("aria-expanded")) !== "true") fail(`${where}: the opened 常驻 row is folded again after a reload`);
     ok(`${where}: the fold is kept after a reload`);
+    if (first.agent_counts) {
+      const lead = row(page, first.id).locator(`a[href^="/persona/${first.id}"]`).first();
+      await lead.getByText(`运行中 ${first.agent_counts.running} · 已停 ${first.agent_counts.stopped}`, { exact: true }).click();
+      if (new URL(page.url()).pathname !== `/persona/${first.id}`) fail(`${where}: clicking its Agent counts did not open the direction conversation`);
+      ok(`${where}: the Agent counts open the conversation independently of its disclosure`);
+    }
     await ctx.close();
   }
 

@@ -367,7 +367,7 @@ func TestDirectionTreeRouteShape(t *testing.T) {
 		slices.Sort(out)
 		return out
 	}
-	if k := keys(got.Directions[0]); !slices.Equal(k, []string{"counts", "id", "name", "running", "tasks"}) {
+	if k := keys(got.Directions[0]); !slices.Equal(k, []string{"agent_counts", "counts", "id", "name", "running", "tasks"}) {
 		t.Fatalf("a direction's fields: %v", k)
 	}
 	// running is sent false too: a client tells it from a hub without it (#6626)

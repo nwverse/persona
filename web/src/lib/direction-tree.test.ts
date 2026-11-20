@@ -80,6 +80,15 @@ describe("direction tree", () => {
     expect(groupsByDirection(undefined)).toBe(false);
   });
 
+  it("keeps complete Agent counts from the hub and leaves missing or invalid counts unknown", () => {
+    const read = (agent_counts?: unknown) => normalizeTree({ directions: [{ id: "lead", agent_counts }] }).directions[0].agent_counts;
+    expect(read({ running: 0, stopped: 0 })).toEqual({ running: 0, stopped: 0 });
+    expect(read({ running: 2, stopped: 3 })).toEqual({ running: 2, stopped: 3 });
+    for (const value of [undefined, null, {}, { running: 1 }, { running: -1, stopped: 2 }, { running: 2, stopped: "3" }]) {
+      expect(read(value)).toBeUndefined();
+    }
+  });
+
   it("says the words of the contract", () => {
     expect(directionStateName("needs_you")).toBe("等你");
     expect(directionStateName("review")).toBe("待验收");
