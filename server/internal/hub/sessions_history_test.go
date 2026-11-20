@@ -118,7 +118,7 @@ func historyGet(t *testing.T, srv *httptest.Server, token, path string) (int, []
 // keeps the history fields, and says which machines and sources were not honored.
 func TestSessionsHistoryMergesMachinesPageByPage(t *testing.T) {
 	h := newTestHub(t)
-	now := time.Now().UTC()
+	now := time.Now().UTC().Add(-time.Minute) // the newest row before the window's end (until: now)
 	rowsOf := func(prefix string, n int, every time.Duration) []sessionhistory.Row {
 		var out []sessionhistory.Row
 		for i := 0; i < n; i++ {

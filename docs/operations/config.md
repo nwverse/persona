@@ -302,8 +302,8 @@ The sections that are a manager's (whose assistant it is, `ai`, `agents`, `inbox
   so sessions not started by Persona also report turns and question events to Persona; false or removing the key removes Persona's entries on the next connection (if none exist, nothing is written).
   No blocking hooks are added: users' global configs often have other tools' synchronous PermissionRequest hooks; stacking them delays terminal dialogs (`docs/integrations/claude-integration.md` ("Global report-only hooks")).
   The node must also be this version; manual hub.json edits require a hub restart and take effect on reconnect.
-- `machines[].usage_windows` (optional, on by default): false means this computer's node does not read Codex / Claude subscription usage windows (no `rate_limits` in rollouts,
-  no `~/.persona/usage/claude*.json`), and the manager does not ask it either. Omitted means read, local files only, no login credentials touched, every 5 minutes (`docs/server/usage-windows.md`).
+- `machines[].usage_windows` (optional, on by default): false stops this computer's node from collecting Codex and Claude subscription usage. Omitted means refresh every
+  5 minutes via Codex app-server or local files, without giving Persona access to login credentials (`docs/server/usage-windows.md`).
   The node must also be this version; manual hub.json edits require a hub restart and take effect on reconnect.
 - `machines[].launchers` (optional): add launchers the node cannot list on this computer (e.g. shell wrapper functions), or override `agent_type`, `base_url`, `model` for same-name launchers the node reports (omitted fields stay unchanged),
   e.g. `[{"name":"example_wrapper","agent_type":"codex"}]`: the wrapper actually runs Codex (`agent_type` is `claude` / `codex` / `traex` or a runtime's agent; `docs/protocol/protocol.md`, `docs/assistant/model-config.md`).
