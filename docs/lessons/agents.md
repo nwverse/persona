@@ -1238,6 +1238,16 @@ revision so watchers re-read. A planner step, a prompt or an error closes the ca
 and `server/internal/node/agytranscript.go` must stay in step. Test with a real export's shape (the swapped lines,
 an interrupted call, a system message between results) and compare each result with its own call, not only the counts.
 
+## A send is not a history rewrite, even for steps the export has not caught up with (#12014)
+
+The Antigravity companion shows a prompt's steps from ACP before agy exports them, and gave them their own history
+token. Every send switched to it and the export switched back, so every client took each send as a rewrite: the web
+read a fresh two-turn page, the main chat's earlier messages vanished for a moment, and every task card of the day
+stacked above the new message until the rest came back. Projected steps that only grow are appends. Change the token
+only when one of them is dropped (the export replaces them, an interrupt), and record the next token before showing
+them, so a restarted companion cannot report the token clients hold them under. Test the push a send produces (same
+history, `from_seq` at the previous end, no earlier turn sent again) and a restart while a reply awaits its export.
+
 ## An installed CLI is not an explicit runtime override (#9181)
 
 Plain AGY discovery joined the shell launcher cache and shadowed its connected assistant-capable companion. New

@@ -75,6 +75,8 @@ type Service struct {
 	repositoriesMu   sync.Mutex
 	repositoryConfig string
 	repositoryCheck  func(context.Context, repository.Identity) error // tests only; production uses the guarded checker
+	// gitlabReview reads a GitLab merge request (tests only; production uses the guarded checker, code_host_gitlab.go).
+	gitlabReview func(ctx context.Context, id repository.Identity, link repository.TaskLink, token string) (repository.ReviewStatus, error)
 	// repoExt is the extensions' repository providers (SetExtensions; repository_providers.go); nil: none.
 	repoExt repository.Extensions
 	// repoStarted is closed once repoExt lists its providers (its manager has started); nil: it always does.

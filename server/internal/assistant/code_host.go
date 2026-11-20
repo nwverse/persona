@@ -11,7 +11,8 @@ import (
 
 // Code hosts (#11584) are where a task's review requests live. The link's host picks one (codeHostFor): built-in
 // GitHub for github.com pull requests, otherwise the repository provider that claims the host
-// (docs/extensions/repository-providers.md). A code host has three layers, kept apart:
+// (docs/extensions/repository-providers.md), then built-in GitLab (code_host_gitlab.go). A code host has three
+// layers, kept apart:
 //
 //   - read: ReviewStatus, what the delivery gate asks (supervise_review_delivery.go). GitHub's deploy check
 //     (deploy_check.go, prForge.Contains) stays GitHub's own.
@@ -35,8 +36,8 @@ var (
 	errNotReviewRequest  = errors.New("not a review request")
 )
 
-// codeHostFor is the code host that reads url and url's host; nil when none can (an unknown host, a built-in host
-// that is not a GitHub pull request, a host no installed provider claims).
+// codeHostFor is the code host that reads url and url's host; nil when none can (an unknown host, a GitHub address
+// that is not a pull request, a host neither an installed provider claims nor built-in GitLab reads).
 func (s *Service) codeHostFor(url string) (codeHost, string) {
 	if ciPRURL.MatchString(url) {
 		return githubHost{forge: s.forge()}, "github.com"
@@ -49,6 +50,9 @@ func (s *Service) codeHostFor(url string) (codeHost, string) {
 		if info, ok := s.repoExt.RepositoryProviderForHost(host); ok {
 			return providerHost{s: s, info: info}, host
 		}
+	}
+	if h, ok := s.gitlabHostFor(host); ok {
+		return h, host
 	}
 	return nil, host
 }
