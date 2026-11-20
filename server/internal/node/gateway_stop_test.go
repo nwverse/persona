@@ -67,6 +67,8 @@ func testGatewayStoppedProvenance(t *testing.T) {
 			if n.supervisorResumeAllowed(sidA, "", "") == nil {
 				t.Fatal("closed terminal retained gateway recovery")
 			}
+			f.reply("session.snapshot", snapshot(nil, nil, nil, []any{pane}))
+			row = byID(listSessions(t, n))[sidA]
 			// Explicit stops always win, even while the same gateway error remains in history.
 			for _, cause := range []proto.StopCause{proto.StopUser, proto.StopExit} {
 				n.state.stopped(sidA, cause)
