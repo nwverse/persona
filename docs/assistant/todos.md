@@ -661,7 +661,7 @@ Results still read from transcripts (receipts, `agent_read`, chat page); Unread 
 
 **A nearly full context is compacted, not replaced** (#11137, `server/internal/node/compact_before_send.go`). A context at 85% of its window or more (`proto.ContextNearlyFull`, from `context_tokens` / `context_window`) is no reason to lose the Agent's work. The assistant's resume then starts the session without a first message and sends the text with `compact_if_full`; an `agent_send` to a running Agent the hub sees nearly full sends that flag too (with a 15-minute wait instead of the live send's). The node decides when the text would go in: a Claude Code or Codex Agent that is nearly full gets its own `/compact` first (a Codex on its app-server `thread/compact/start`), and the text goes in once the compaction is over. Over means the transcript has a compaction record written after the `/compact` (Claude Code's `compact_boundary`, a Codex rollout's `compacted` / `context_compacted`) and the Agent no longer works; there is no fixed wait. It failed when the Agent came back to rest without such a record, wrote an error, did not begin within 3 minutes, stopped, or wrote none within 10 minutes. Then nothing is sent and the refusal (`compact_failed`) gives the reason, and only then is a replacement suggested. An Agent mid-turn that is already nearly full keeps the message on its node instead of in the runtime's own queue: once the turn ends the node checks again, compacts if still needed, then sends (`compact_after_turn` in the answer). One that cannot go in then leaves the session waiting for the owner, with why. Below the threshold everything is as before. Codex counts in all three forms Persona reaches it in. In its terminal, `/compact` is typed once its TUI shows the input box: a Codex that `codex resume <id>` just brought back reads its whole rollout first, so the node waits for its screen to show the box, for at most 3 minutes. A thread nothing runs (`codex_history`) is resumed that way in a new tab. Codex can come up behind its own update offer, whose default `Update now` installs the update and quits Codex. Every resume skips it with Esc (`settleCodexStartup`), as a new start does (#11323). Before `/compact`, the offer is skipped again if it is still there; any other dialog with numbered options is never taken for the input box and refuses with its first line (#11316). A `/compact` that was typed but whose screen did not confirm it in time is not a failure: the transcript decides. An agent that quits meanwhile is reported with the step and its terminal's last lines. A Codex on its app-server gets `thread/compact/start`. For Codex, a transcript written to after the `/compact` keeps the wait going even when its status shows no work. A reply that sees at most 60% of the context from before the `/compact` also counts as the compaction. Other agents have no compaction Persona can run: the Codex App's chats (the App takes no `/compact` from Persona and compacts on its own), a Claude outside Persona's terminals (`claude_bg`, `claude_desktop`, `claude_cli`: their inbox runs no command), pi, agy, opencode, cursor, and runtimes such as Paseo. A running one gets the message as before. Resuming a nearly full one is refused, and the refusal says which of these it is.
 
-**Stop provenance and recovery** (#8214): only `idle`, `task_completed` and recorded `restart` stops permit this assistant path. The node persists the confirmed stop cause in existing session state; a user close (including a kept terminal or `/exit`) revokes eligibility, and observing a running session clears the old cause. A restart status, an old start timestamp or a lost connection cannot prove the cause: an unrecorded crash remains unknown and needs the owner's Resume. Legacy rows, unknown/future causes and missing provenance stay read-only to the assistant. User closure first reads its saved stop back through `state.load`; a resume similarly saves and verifies unknown provenance before starting, so a failed or interrupted attempt cannot reuse the previous idle stop. A failed or unsupported save returns `stop_not_saved` without touching the terminal. Monotonic `stop_cause_at` revisions keep late metadata writes from reviving an older cause. The node rechecks the cause under the same per-session recovery lock as user closures, so a cached eligible row cannot undo a later close. Resumable `codex_history` rows enter this path only with read/terminal capabilities and no subagent; other read-only sources stay refused. The owner's explicit Resume is unchanged. Both the node and the managers carrying its provenance must support this addition; a component that drops it fails closed, not open.
+**Stop provenance and recovery** (#8214): only `idle`, `task_completed`, `restart`, `resume_failed` and `compact_failed` stops permit this assistant path. The node persists the confirmed stop cause in existing session state; a user close (including a kept terminal or `/exit`) revokes eligibility, and observing a running session clears the old cause. A restart status, an old start timestamp or a lost connection alone cannot prove the cause: an unrecorded crash remains unknown and needs the owner's Resume. Since #11441, three non-user stops are recorded. `restart`: the node records when it last saw each Agent running (`ran_at`, written at most every 5 minutes); a session the restart cut off (`markInterrupted`) that was seen running within 10 minutes before this node started counts as stopped by the restart. That window is a trade-off: an Agent that quit by itself in the last minutes before a restart is counted as the restart's, and a machine that was off for longer leaves the cause unknown. `resume_failed`: the assistant's own resume (`resume_automatic`) refused with nothing run (`delivered: none`, no kept tab) and the Agent not running. Any other failed start stays unknown: a line typed into a shell, a stalled Agent or an unanswered call may still bring it up, and a second resume must not start it twice. `compact_failed`: an Agent that quits while the node compacts it before a message. Neither is the user's doing, and the earlier stop already permitted the resume, so the assistant may try again. A user close during the attempt still wins, since it takes the same recovery lock and writes `user` after. Legacy rows, unknown/future causes and missing provenance stay read-only to the assistant. User closure first reads its saved stop back through `state.load`; a resume similarly saves and verifies unknown provenance before starting, so an interrupted attempt cannot reuse the previous idle stop (a failed one is `resume_failed`, above). A failed or unsupported save returns `stop_not_saved` without touching the terminal. Monotonic `stop_cause_at` revisions keep late metadata writes from reviving an older cause. The node rechecks the cause under the same per-session recovery lock as user closures, so a cached eligible row cannot undo a later close. Resumable `codex_history` rows enter this path only with read/terminal capabilities and no subagent; other read-only sources stay refused. The owner's explicit Resume is unchanged. Both the node and the managers carrying its provenance must support this addition; a component that drops it fails closed, not open.
 
 When every Agent of a task has stopped, the user's message on the task's card (`route`) or the task's **Retry** starts a new Agent for it instead (`assistant/tasks_successor.go`): on the computer, in the directory and with the launcher of its latest Agent, linked to the to-do, its first message the user's after who worked on the task before and that Agent's last reply; the `routed` feed line carries `new_agent`. Every `routed` line written since #10465 names the run it reached in `machine_id` / `session_id`: the owner's words, an answer the hub worded for them and Persona's own lines alike, the new Agent's for a message that started one (absent when its start named no session). A message on the card of a task the hub closed (`done_by` `auto` or an accepted `review`, not cancelled) reopens it once the new Agent started (or may have: the start's answer never came), so that Agent's work is the task's; a start that definitely failed (its computer unreachable, its launcher refused, or it never left the manager) leaves the task closed (#7539). Persona's own follow-ups (a supervisor's rework, relayed answers to decisions, acceptance or conclusions) start nothing and are refused (`route_agents_stopped`), and so is a bare `/exit` or `/quit`: what it would close is closed already (`route_agents_exited`). One new Agent per task at a time (#8272): a second message while it is still starting (a follow-up line, a bare `/exit`, or the same one sent again after the phone stopped waiting) waits for that start and is then sent to the new Agent. If the first start was definitely refused, the waiting message can start the Agent itself. If the first message may already have reached a new Agent, the manager keeps the task open and both callers are told to check its Agents before sending again (#11245). A start still going after its own bound plus a minute answers `route_starting` (nothing sent).
 
@@ -695,7 +695,7 @@ Agents linked to no task (user-created, `agent_start`, inspection sessions such 
 
 It uses the archive the apps use ("Agent session archives" in `docs/protocol/protocol.md`): the session moves under Archived, nothing is deleted, the tool that owns it is asked to archive it too where it can, and new activity (the user's Resume) restores it for good. At most 20 sessions are archived per pass, so a long backlog clears over a few passes.
 
-Never archived by this pass: a session still in a host (a pane or an engine host), including one whose state the host cannot tell (`unknown`); one working, starting, or with background commands, subagents, workflows, a `/loop` or a server running; one with a card waiting for the user or queued input; one the manager is to wake or continue, or that waits on something the manager follows (`work.phase` `blocked`, or `work.wake_at` set); one linked to an open to-do; an assistant conversation; a review's reviewer; a subagent's row; a session another tool owns (`source_kind` set: archiving it would also move it in that tool); a desktop app's session (`agent_surface` `desktop`): the node lists the Claude desktop app's sessions as its sidebar does, whatever their age (#3304), but sets `source_kind` only while the app has one open, so only an archive in the app or the user's Archive here takes one off; with no to-do, one whose last reply asks the user something nobody answered (`awaits_reply`). Computers that are not connected are skipped, and nothing runs until the to-dos are loaded, since they say which sessions open tasks count on. Each candidate is looked at again just before its archive is written.
+Never archived by this pass: a session still in a host (a pane or an engine host), including one whose state the host cannot tell (`unknown`); one working, starting, or with background commands, subagents, workflows, a `/loop` or a server running; one with a card waiting for the user or queued input; one the manager is to wake or continue, or that waits on something the manager follows (`work.phase` `blocked`, or `work.wake_at` set); one linked to an open to-do; one the owner filed under a current direction (#11515, `docs/assistant/unified-entry.md` "The direction tree": once its direction ends it may be archived again; the owner's own Archive still archives it, and a session this pass archived before #11515 stays archived until the owner restores it); an assistant conversation; a review's reviewer; a subagent's row; a session another tool owns (`source_kind` set: archiving it would also move it in that tool); a desktop app's session (`agent_surface` `desktop`): the node lists the Claude desktop app's sessions as its sidebar does, whatever their age (#3304), but sets `source_kind` only while the app has one open, so only an archive in the app or the user's Archive here takes one off; with no to-do, one whose last reply asks the user something nobody answered (`awaits_reply`). Computers that are not connected are skipped, nothing runs until the to-dos are loaded, since they say which sessions open tasks count on, and a pass archives nothing while the direction filing book cannot be read, since it says which sessions a direction holds. Each candidate is looked at again just before its archive is written, with the to-dos and the book read again.
 
 ## Nobody is working on this
 
@@ -1413,3 +1413,80 @@ one-time chunk reload and recoverable error. A persistent import failure leaves
 the other editors mounted and saveable.
 Edits and computer or assistant changes invalidate pending preview responses.
 These controls never select a creation mode or start an Agent.
+
+## Backend workspace preparation
+
+Backend creation is an explicit additional path for people preparing repository work on a computer.
+It does not change legacy `new` / `existing` / `none`, engine-created workspaces, existing checkout
+reuse, ordinary to-dos or their defaults. Associating repositories never creates a directory. A saved
+naming plan selects the repositories to prepare, independently of later association edits. Root layout
+uses one linked worktree at relative path `.`; container layout uses the selected subdirectories.
+
+The Manager adopts the T1 repository snapshot and saved T2 naming plan in one transaction before
+calling the Node. The shared repository contract lives in `server/internal/repositorywire`; the original
+`server/internal/assistant/repository` import path retains aliases and forwarding helpers. This keeps
+the Hub independent of Manager code while preserving the T1/T2 API. Naming and preparation persistence extend the Manager-owned `assistant/repositorystore` on the same database pool; no repository business storage is restored to shared `db`. New records are in manager migration `20261119163935_task_workspaces.sql`, separate from
+legacy engine workspace IDs. Repository migration `0516_todo_repositories.sql` replaces its earlier
+0513/0514 names through the existing renumbering mechanism; 0514 on main belongs to search. A Node
+stores physical receipts and private bare repositories under its protected `task-workspaces` directory.
+The bare repositories are private to the workspace, have no shared object dependencies, and survive
+default cleanup so local branches and commits really remain available. `common_dir` reports their
+actual locations. This separate Git storage also permits a root worktree to be removed while retaining
+its branches. File APIs cannot edit the ownership receipts; shell access under the same OS account
+is not a separate security boundary.
+
+The HTTP operations are:
+
+| Method and path | Behavior |
+| --- | --- |
+| `GET /api/v1/todos/{id}/backend-workspace` | Current persisted workspace or null; never prepares resources. |
+| `GET /api/v1/todos/{id}/backend-workspace/operations/{operation_id}` | Persisted workspace plus a separate live Node observation or an unavailable error. |
+| `POST /api/v1/todos/{id}/backend-workspace/prepare` | `operation_id`; first call also supplies `machine_id`, `layout` and `selected_repo_ids`. Saves or adopts a naming plan, then prepares. |
+| `POST /api/v1/todos/{id}/backend-workspace/cancel` | `operation_id`; persists cancellation before contacting the Node. |
+| `POST /api/v1/todos/{id}/backend-workspace/cleanup` | `operation_id`, optional `force` and `delete_branch` (both false by default). Returns per-repository removal and branch results plus retained Git paths. |
+
+These routes require full credentials for extension access, like machine worktree inspection and
+removal. The extension scopes for to-do metadata and naming plans do not grant physical worktree access.
+
+The assistant's `todo_workspace` tool exposes inspect, prepare, cancel and cleanup with the same
+contract. Preparation and cleanup never start an Agent or change task stage. Missing support returns
+`unsupported`; it never falls back to engine creation. Errors carry code, stage, operation, repository,
+path and available actions; partial results remain in the operation record. Raw Git stderr and embedded
+credentials are not returned. Default refs are discovered from remote HEAD and fetched on the Node;
+typed branch/tag/commit/ref input is preserved. A resolved base commit is checkpointed before the
+worktree is added. Current HEAD and dirty state never replace that source fact.
+
+Use the same operation for transient retry. After an unknown transport outcome, inspect it first.
+A canceled operation remains canceled. To correct inputs, cancel, edit associations/rules and use a
+new operation on the same to-do. Unchanged successful instances at the same root are reused; changes
+that would replace successful work return `resource_conflict` and require explicit cleanup. Cleanup
+keeps tombstones; preparing after removal uses a new operation/workspace identity. `node_operation_id` records the operation actually admitted by the Node, which may still be the
+previous one after rejected corrections. Further corrections and cleanup target that physical owner,
+including when cancellation happened before any Node effects. Business metadata stays editable and
+does not invalidate a ready workspace.
+
+Node locks cover each workspace and its root, including Git subprocesses. On Unix the subprocess
+inherits both lock descriptors: a killed Node cannot make an ongoing command look stopped. A new
+Node reconciles the Git registration after the command exits, preserving commits and dirty files. On
+Windows an interrupted in-flight command remains `operation_unknown` because the current lock
+implementation cannot prove its child stopped; normal completed-command restart recovery is supported.
+No native Windows execution is claimed by a cross-build.
+
+Cleanup uses the existing worktree rules: running Agents/use claims prevent removal, uncommitted
+changes require force, and deleting an unmerged task branch requires force. New commits alone do
+not prevent default cleanup because the task branch and its bare object store remain. The ancestry
+check for non-force branch deletion uses the frozen source, the equivalent of the source checkout's
+branch. It also protects branches whose worktrees were removed by an earlier partial cleanup or
+reconciled after a lost receipt; a completed branch deletion can resume without recreating the branch. Unknown container files and additional Git registrations are preserved, including with force.
+Cleanup results distinguish removed checkouts from retained branch storage; no retained branch is
+claimed after its object store has been deleted.
+
+The T4 consumption boundary is `PrepareBackendWorkspace`, `InspectBackendWorkspace`,
+`AcquireBackendWorkspace`, `CheckBackendWorkspaceUse`, and `ReleaseBackendWorkspace` in
+`server/internal/assistant/task_workspaces.go`. Acquire before Engine start, check the current task
+intent immediately before starting, and keep the stable use ID until the session stops. An ambiguous
+acquire/release retains the use claim for inspection. Cleanup and use admission share the Todo lock;
+Node verifies Git again on acquire. Sandboxed Engine consumers must allow the returned `common_dir`
+paths for Git writes as well as the root and repository paths. Cancel/completion racing preparation prevents a late Ready result
+from authorizing a start. Engine opening, session recovery and user interface assembly are separate
+consumers of these primitives.

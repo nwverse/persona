@@ -936,6 +936,7 @@ func (s *Service) todoRoutes() {
 	s.todoImageRoutes()
 	s.todoRepositoryRoutes()
 	s.workspaceNamingRoutes()
+	s.taskWorkspaceRoutes()
 	s.taskReviewDismissalRoutes()
 	s.todoDecisionRoutes()
 	s.todoThreadRoutes()
