@@ -214,7 +214,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if withDefaults {
 		presetNote = s.applyStartPreset(ctx, t, caller, defaults, params)
 	}
-	own, err := s.resolveStart(ctx, params)
+	own, err := s.resolveStart(ctx, params, t.launcherDefaultModel)
 	if err != nil {
 		return "", "", err
 	}
