@@ -82,7 +82,7 @@ func (s *Service) taskSpawn(ctx context.Context, machine, session string, args j
 	if !active || current.ID != t.ID {
 		err = errors.New("the caller's task changed or closed during the start")
 	} else {
-		err = s.linkTodoAgentWithSource(startCtx, t.ID, mid, sid, a.Title, child.Cwd, "", "", "spawned", machine+"/"+session)
+		err = s.linkTodoAgentWithSource(startCtx, t.ID, mid, sid, a.Title, child.Cwd, child.startedAgent, "", "spawned", machine+"/"+session)
 	}
 	if err != nil {
 		stopCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)

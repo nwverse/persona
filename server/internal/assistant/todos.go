@@ -135,6 +135,10 @@ type Todo struct {
 	// (#3822, task_brief.go). Filled in where the apps read the to-dos (withBrief); absent for a to-do with no brief.
 	Brief   *TaskBrief    `json:"brief,omitempty"`
 	Lineage []LineageStep `json:"lineage,omitempty"`
+	// Images are metadata and private media URLs only. The storeless service keeps their bytes separately; a database
+	// reload reconstructs the same metadata without reading those bytes in the to-do list.
+	Images    []TodoImage `json:"images,omitempty"`
+	imageData map[string][]byte
 }
 
 // todoStore is what the todos keep in the database (internal/db). A Store without it (the unit tests' memStore) keeps
@@ -251,29 +255,30 @@ func sessionSpaceKey(machineID string, c proto.Session) string {
 
 // ensureTodosLoaded reads the todos from the store the first time; an error says why they can't be read.
 func (s *Service) ensureTodosLoaded(ctx context.Context) error {
-	b := &s.todos
-	b.mu.RLock()
-	if b.loaded {
-		b.mu.RUnlock()
-		return nil
-	}
-	b.mu.RUnlock()
-
-	b.mu.Lock()
-	if b.loaded {
-		b.mu.Unlock()
-		return nil
-	}
-	err := s.loadTodosLocked(ctx)
-	loaded := b.loaded
-	b.mu.Unlock()
+	loaded, err := s.loadTodoInventory(ctx)
 	if loaded {
-		// The links as read are the ones the marks go by from now on: one that goes away later syncs its machine
-		// again (syncLinkedTodoTokens), even before any of the links changed.
 		s.syncLinkedTodoTokens()
-		s.sweepSourceReports() // a todo that closed while the assistant was away still tells where it came from
+		s.sweepSourceReports()
 	}
 	return err
+}
+
+// loadTodoInventory reads durable state without publishing session lists.
+func (s *Service) loadTodoInventory(ctx context.Context) (bool, error) {
+	b := &s.todos
+	b.mu.RLock()
+	loaded := b.loaded
+	b.mu.RUnlock()
+	if loaded {
+		return false, nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.loaded {
+		return false, nil
+	}
+	err := s.loadTodosLocked(ctx)
+	return b.loaded, err
 }
 
 func (s *Service) loadTodosLocked(ctx context.Context) error {
@@ -319,6 +324,7 @@ func (s *Service) loadTodosLocked(ctx context.Context) error {
 	spaces := make(map[string]string)
 
 	for _, tr := range tlist {
+		images, imageData := todoImageMetadata(tr.ID, tr.Images)
 		tmap[tr.ID] = &Todo{
 			ID:         tr.ID,
 			Title:      tr.Title,
@@ -335,6 +341,8 @@ func (s *Service) loadTodosLocked(ctx context.Context) error {
 			Quiet:      tr.Quiet,
 			Spaces:     make([]TodoSpace, 0),
 			Agents:     make([]TodoAgent, 0),
+			Images:     images,
+			imageData:  imageData,
 		}
 		tmap[tr.ID].setPlan(tr)
 	}
@@ -625,8 +633,9 @@ func (s *Service) putNewTodo(ctx context.Context, row db.TodoRow, bindings ...*r
 		}
 	}
 	id := row.ID
+	images, imageData := todoImageMetadata(id, row.Images)
 	tObj := &Todo{ID: id, Title: row.Title, Notes: row.Notes, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, Origin: row.Origin,
-		PlanID: row.PlanID, Quiet: row.Quiet, Spaces: make([]TodoSpace, 0), Agents: make([]TodoAgent, 0)}
+		PlanID: row.PlanID, Quiet: row.Quiet, Spaces: make([]TodoSpace, 0), Agents: make([]TodoAgent, 0), Images: images, imageData: imageData}
 	tObj.setPlan(row)
 	s.todos.mu.Lock()
 	s.todos.todos[id] = tObj
@@ -663,6 +672,7 @@ func copyTodoLocked(t *Todo) Todo {
 	out.Spaces = make([]TodoSpace, len(t.Spaces))
 	copy(out.Spaces, t.Spaces)
 	out.After = slices.Clone(t.After)
+	out.Images = slices.Clone(t.Images)
 	out.Agents = make([]TodoAgent, len(t.Agents))
 	for i, a := range t.Agents {
 		out.Agents[i] = a
@@ -921,6 +931,7 @@ func hubClosedTask(t *Todo) bool {
 var errTodosUnavailable = errors.New("todos service unavailable")
 
 func (s *Service) todoRoutes() {
+	s.todoImageRoutes()
 	s.todoRepositoryRoutes()
 	s.workspaceNamingRoutes()
 	s.taskReviewDismissalRoutes()
@@ -958,16 +969,22 @@ func (s *Service) todoRoutes() {
 			return
 		}
 		var in struct {
-			Title                string          `json:"title"`
-			Notes                string          `json:"notes"`
-			Project              *string         `json:"project"`
-			Kind                 string          `json:"kind"`
-			RequireAcceptedAfter *bool           `json:"require_accepted_after"`
-			RepositoryBindings   json.RawMessage `json:"repository_bindings"`
+			Title                string               `json:"title"`
+			Notes                string               `json:"notes"`
+			Images               []todoImageInputJSON `json:"images"`
+			Project              *string              `json:"project"`
+			Kind                 string               `json:"kind"`
+			RequireAcceptedAfter *bool                `json:"require_accepted_after"`
+			RepositoryBindings   json.RawMessage      `json:"repository_bindings"`
 			todoPlanIn
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		images, imageStatus, err := parseTodoImages(in.Images)
+		if err != nil {
+			apierr.Write(w, imageStatus, err)
 			return
 		}
 		title := strings.TrimSpace(in.Title)
@@ -1010,9 +1027,9 @@ func (s *Service) todoRoutes() {
 		}
 		var resTodo Todo
 		if kind == db.KindConcern {
-			resTodo, err = s.createConcern(r.Context(), title, strings.TrimSpace(in.Notes), plan, bindings)
+			resTodo, err = s.createConcernWithImages(r.Context(), title, strings.TrimSpace(in.Notes), plan, images, bindings)
 		} else {
-			resTodo, err = s.createPlainTodo(r.Context(), title, in.Notes, plan, bindings)
+			resTodo, err = s.createPlainTodoWithImages(r.Context(), title, in.Notes, plan, images, bindings)
 		}
 		if bindings != nil && err != nil {
 			taskRepositoriesError(w, err)
@@ -2017,6 +2034,13 @@ func (s *Service) TodoHandoff(ctx context.Context, h TodoHandoff) (TodoHandoffRe
 		}
 	}
 	res := TodoHandoffResult{Found: true, Title: t.Title, DoneAt: t.DoneAt, Text: text}
+	if t.DoneAt == nil && len(t.Images) > 0 {
+		images, err := s.todoImageContents(ctx, t)
+		if err != nil {
+			return TodoHandoffResult{}, err
+		}
+		res.Images = todoProtoImages(images)
+	}
 	if t.DoneAt != nil {
 		res.Status, res.Error = http.StatusConflict, "todo is already completed"
 	}

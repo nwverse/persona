@@ -215,7 +215,7 @@ func indexedRow(mid, id string, row *proto.Session, stamp bool, manager, root st
 		todo = row.Todo.ID
 	}
 	item := sessionlist.Item{
-		ID: id, Machine: mid, Project: project, Group: group, PaneSource: pane,
+		ID: id, Machine: mid, Project: project, Group: group, PaneSource: pane, HiddenByDirectory: row.HiddenByDirectory(),
 		State: row.State, BackgroundWaiting: row.BackgroundWaiting, JustFinished: row.Work != nil && row.Work.JustFinished,
 		Source: row.SourceKind, Provider: row.Agent, UpdatedAt: row.UpdatedAt,
 		Fold: indexedFold(mid, row, root, todo, indexed.Fold), Private: healthSession(row), Assistant: row.Assistant,
@@ -456,7 +456,8 @@ func runtimeSummary(s proto.Session) runtimeRowSummary {
 		TurnError: rowText(s.TurnError, 180), TurnErrorKind: s.TurnErrorKind, TurnErrorCode: s.TurnErrorCode,
 		TurnErrorResetsAt: s.TurnErrorResetsAt, TurnErrorResumes: s.TurnErrorResumes,
 		PendingInteractions: s.PendingInteractions, Rev: s.Rev, Quiet: s.Quiet,
-		Model: s.Model, Effort: s.Effort, ContextTokens: s.ContextTokens, ContextWindow: s.ContextWindow,
+		Model: s.Model, RequestedModel: s.RequestedModel, Effort: s.Effort, PendingEffort: s.PendingEffort, EffortChangeFailed: s.EffortChangeFailed,
+		ContextTokens: s.ContextTokens, ContextWindow: s.ContextWindow,
 		Hierarchy: s.Hierarchy, // folded_under, children, started_at: the child cards and the parent's state (#5120)
 	}
 	out.SetBackgroundEnded(nil)
@@ -577,7 +578,7 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 		return
 	}
 	opts.Manager = manager
-	opts.NoPrivate = extensionToken(r) // an extension's token never sees a health-space conversation (extension_private.go)
+	opts.NoPrivate = restrictedAgentData(r) // external Agent clients cannot see health-space conversations
 	if values, lookup := r.URL.Query()["session_id"]; lookup {
 		if len(values) != 1 || values[0] == "" || opts.Machine == "" || opts.Since != "" || opts.Cursor != "" {
 			sessionListErr(w, errors.New("exact session lookup requires one nonempty session_id and machine_id, without since or cursor"))
@@ -639,7 +640,7 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 		return
 	}
 	if catalogAsked(r) {
-		catalog, err := h.sessionCatalogOf(r.Context(), index, opts, own, limited, !extensionToken(r))
+		catalog, err := h.sessionCatalogOf(r.Context(), index, opts, own, limited, !restrictedAgentData(r))
 		if err != nil {
 			sessionListErr(w, err)
 			return

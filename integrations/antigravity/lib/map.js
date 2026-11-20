@@ -165,6 +165,8 @@ export function stepsToItems(steps, opts = {}) {
     const step = steps[i]
     if (!step || typeof step !== 'object') continue
     const idx = typeof step.step_index === 'number' ? step.step_index : i
+    // Synthetic notices can move the projected sequence without moving the native record's files or message binding.
+    const nativeIdx = typeof step.native_step_index === 'number' ? step.native_step_index : idx
     const seq = idx + 1
     if (seq > maxSeq) maxSeq = seq
     const ts = step.created_at || new Date().toISOString()
@@ -184,7 +186,7 @@ export function stepsToItems(steps, opts = {}) {
         afterWork = false
         const text = cleanUserText(step.content)
         if (!text) break
-        const msgId = (typeof step.client_msg_id === 'string' && step.client_msg_id) || opts.clientMsgIdFor?.(idx, text)
+        const msgId = (typeof step.client_msg_id === 'string' && step.client_msg_id) || opts.clientMsgIdFor?.(nativeIdx, text)
         const item = { id: `${line}#0`, seq, role: 'user', kind: 'text', text, ts, ...(msgId ? { client_msg_id: msgId } : {}) }
         items.push(opts.full ? item : light(item))
         break
@@ -233,7 +235,7 @@ export function stepsToItems(steps, opts = {}) {
         const callId = explicitCallId || (paired ? paired.callId : `call_${line}_0`)
         let rawOut = step.error || step.content || ''
         if (opts.full && opts.brainDir && Array.isArray(step.truncated_fields) && step.truncated_fields.includes('content')) {
-          const outFile = join(opts.brainDir, '.system_generated', 'steps', String(idx), 'output.txt')
+          const outFile = join(opts.brainDir, '.system_generated', 'steps', String(nativeIdx), 'output.txt')
           if (existsSync(outFile)) {
             try {
               rawOut = readFileSync(outFile, 'utf8')
@@ -253,21 +255,13 @@ export function stepsToItems(steps, opts = {}) {
           ts,
         }
         items.push(opts.full ? resItem : light(resItem))
-        if (Array.isArray(step.media)) {
-          step.media.forEach((m, mi) => {
-            if (m && typeof m.mime_type === 'string' && m.mime_type.startsWith('image/')) {
-              items.push({
-                id: `${line}#img${mi}`,
-                seq,
-                role: 'user',
-                kind: 'image',
-                mime: m.mime_type,
-                lazy: true,
-                ts,
-              })
-            }
-          })
-        }
+        // Omit tool-result step.media: Antigravity runtimes have no session.image handler (matching agytranscript.go),
+        // and Read/view_file image thumbnails are already resolved from tool_input.file_path via ViewedImages.
+        break
+      }
+      case 'PERSONA_MODE_NOTICE': {
+        const item = { id: `${line}#0`, seq, role: 'system', kind: 'notice', text: String(step.content || ''), ts }
+        items.push(opts.full ? item : light(item))
         break
       }
       case 'ERROR_MESSAGE': {
@@ -288,7 +282,7 @@ export function stepsToItems(steps, opts = {}) {
 
 const transcriptCache = new Map()
 const transcriptRevisions = new Map()
-const MAX_CACHED_TRANSCRIPTS = 16
+const MAX_CACHED_TRANSCRIPTS = 128
 const MAX_TRANSCRIPT_REVISIONS = 256
 const MAX_TRANSCRIPT_CACHE_BYTES = 64 * 1024 * 1024
 let transcriptCacheBytes = 0
@@ -408,17 +402,21 @@ export function transcriptStatus(steps, summary) {
   return 'unknown'
 }
 
-export function workspacePathOf(summary, fallbackCwd = '') {
+export function workspacePathOf(summary, fallbackCwd = '', skip = null) {
   if (Array.isArray(summary?.WorkspaceURIs) && summary.WorkspaceURIs.length > 0) {
-    const u = String(summary.WorkspaceURIs[0])
-    if (u.startsWith('file://')) {
-      try {
-        return decodeURIComponent(new URL(u).pathname)
-      } catch {
-        return u.slice('file://'.length)
+    for (const raw of summary.WorkspaceURIs) {
+      const u = String(raw)
+      let p = u
+      if (u.startsWith('file://')) {
+        try {
+          p = decodeURIComponent(new URL(u).pathname)
+        } catch {
+          p = u.slice('file://'.length)
+        }
       }
+      if (skip && skip(p)) continue
+      return p
     }
-    return u
   }
   return fallbackCwd
 }

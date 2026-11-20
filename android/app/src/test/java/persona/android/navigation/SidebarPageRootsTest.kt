@@ -148,6 +148,55 @@ class SidebarPageRootsTest {
     }
 
     @Test
+    fun agentAndPersonaRootsUseOneDistinctShadeKey() {
+        val agent = ChatRoute("machine", "agent", ConversationKind.Agent)
+        val otherAgent = ChatRoute("machine", "other-agent", ConversationKind.Agent)
+        val agentKey = sidebarShadeKey(agent)
+
+        assertFalse("an Agent root must not leave every conversation shaded", agentKey == AssistantSidebarShade.None)
+        assertFalse("an Agent root is not the Persona conversation", agentKey == AssistantSidebarShade.Conversation)
+        assertEquals(agentKey, sidebarShadeKey(agent.copy()))
+        val roots = listOf(agent, AssistantRoute, InboxRoute, otherAgent)
+        val keys = roots.map(::sidebarShadeKey)
+        assertEquals("each picked root moves the one shade key: $keys", keys.size, keys.toSet().size)
+    }
+
+    @Test
+    fun agentDrillDownFromMainKeepsTheConversationShadeRoot() {
+        val roots = SidebarPageRoots()
+        val agent = ChatRoute("machine", "agent", ConversationKind.Agent)
+        val step = roots.drill(agent, emptyList())
+
+        assertEquals(SidebarPageRoots.Move.DrillDown, step.move)
+        assertEquals(AssistantRoute, step.root)
+        assertEquals(AssistantSidebarShade.Conversation, sidebarShadeKey(step.root))
+        assertFalse(
+            "selecting that Agent as a root must move the shade off Main chat",
+            sidebarShadeKey(agent) == AssistantSidebarShade.Conversation ||
+                sidebarShadeKey(agent) == AssistantSidebarShade.None,
+        )
+    }
+
+    @Test
+    fun visibleAgentRootAndCrossTabDrilldownChooseDifferentShadeRoots() {
+        val agent = ChatRoute("machine", "agent", ConversationKind.Agent)
+        val agentShade = sidebarShadeKey(agent)
+
+        assertEquals(agentShade, visibleSidebarShade(true, AppTab.Agents, AssistantRoute, agent, null))
+        assertEquals(agentShade, visibleSidebarShade(false, AppTab.Agents, AssistantRoute, agent, null))
+        assertEquals(AssistantSidebarShade.None, visibleSidebarShade(true, AppTab.Agents, AssistantRoute, AgentsRoute, null))
+        assertEquals(AssistantSidebarShade.Conversation,
+            visibleSidebarShade(true, AppTab.Agents, AssistantRoute, agent, AppTab.Persona))
+        assertEquals(AssistantSidebarShade.Conversation,
+            visibleSidebarShade(false, AppTab.Agents, AssistantRoute, agent, AppTab.Persona))
+        assertEquals(AssistantSidebarShade.Inbox,
+            visibleSidebarShade(true, AppTab.Agents, InboxRoute, agent, AppTab.Persona))
+        assertEquals(AssistantSidebarShade.Conversation,
+            visibleSidebarShade(true, AppTab.Persona, AssistantRoute, AssistantRoute, null))
+        assertNull(visibleSidebarShade(false, AppTab.Persona, AssistantRoute, AssistantRoute, null))
+    }
+
+    @Test
     fun widthRewritesOnlyTheCompactPrefix() {
         val drilled = listOf(InboxRoute, MachineDetailRoute("x"))
         assertEquals(listOf(AssistantRoute) + drilled, compactPrefix(drilled))

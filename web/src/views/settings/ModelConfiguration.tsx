@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, ApiError, enc, errorText } from "../../lib/api";
 import { extRoot } from "../../lib/extension-api";
 import {
@@ -20,12 +20,16 @@ import { formatNumber, t } from "../../i18n";
 import { Button, Dialog, IconButton, Loading, toast } from "../../ui/atoms";
 import { Segmented } from "../assistant/parts";
 import { Icon } from "../../ui/icons";
-import { ModelPicker, type ModelList } from "../../ui/ModelPicker";
+import type { ModelList } from "../../ui/ModelPicker";
+import { lazyPage } from "../../lib/lazy-page";
 import { Group, Pill, Row } from "./SettingsParts";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { ConfigurationManager } from "./ConfigurationManager";
 import { DirectAPIEditor, DirectEffortSelect, directEffortState } from "./DirectAPIEditor";
 import { ModelProfiles } from "./ModelProfiles";
+
+// The picker is shared with task execution; load it when editing a model, outside Settings' preload dependencies.
+const ModelPicker = lazyPage(() => import("../../ui/ModelPicker").then((m) => m.ModelPicker));
 
 const UNVERIFIED_STATUS = "未验证"; // i18n-ignore: stable wire sentinel, not user-facing text.
 
@@ -390,7 +394,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
             <option value="">{t("settings-modelconfiguration.follow_extension_default")}</option>
             {draft.model && !models.some((m) => m.id === draft.model) && <option value={draft.model}>{t("settings-modelconfiguration.model_current", { id: draft.model })}</option>}
             {models.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
-          </select> : picker ? <div inert={busy}><ModelPicker
+          </select> : picker ? <div inert={busy}><Suspense fallback={<Loading />}><ModelPicker
             models={launcherList}
             model={draft.model}
             followed={inherited}
@@ -407,7 +411,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
             onReload={reloadList}
             custom
             failedNote={t("settings-modelconfiguration.list_failed")}
-          /></div> : <input aria-label={t("settings-modelconfiguration.specific_model")} className={`${inputClass} font-mono`} value={draft.model} disabled={busy}
+          /></Suspense></div> : <input aria-label={t("settings-modelconfiguration.specific_model")} className={`${inputClass} font-mono`} value={draft.model} disabled={busy}
             placeholder={(following && inherited.model) || chosen?.model || p.effective?.model || t("settings-modelconfiguration.follow_default")}
             spellCheck={false} autoComplete="off" onChange={(e) => setDraft((d) => ({ ...d, model: e.target.value }))} />}
           <span className="mt-1 block text-[11px] text-ink-3">

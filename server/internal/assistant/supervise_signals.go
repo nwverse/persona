@@ -73,9 +73,10 @@ type superviseSignal struct {
 	Detail, Ask      string
 	Minutes          int
 	// A report's (sigReport): its kind (progress, question, blocked, done), evidence and the step it is on.
-	Report      string
-	Evidence    []string
-	Step, Steps int
+	SourcePermission proto.SourcePermission
+	Report           string
+	Evidence         []string
+	Step, Steps      int
 	// no_progress: the tool calls the hub saw in the stretch, and how many were waits or repeats (supervise_progress.go).
 	Calls, Waits int
 	// Orphan: why nobody works on it (sigOrphaned): orphanError, orphanClosed or orphanOffline.
@@ -438,6 +439,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.watchOutboundCommitments(ctx, now)
 	s.checkInboxReplyApprovals(ctx, now)
 	s.autoReviewTick(ctx, now)
+	s.sessionReviewTick(ctx, now)
 	s.askTick(now)                 // cards held past their time go up a rung (ask_route.go)
 	s.handOverUnreviewed(ctx, now) // a review a side conversation left waiting goes to the main one's follow-up (side_handover.go)
 	routed := s.routedSessions()

@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // ---- the hub's transport ----
@@ -122,12 +123,12 @@ func (s *Service) botMessages(ctx context.Context, messageID string) ([]feishubo
 }
 
 // botName is a user's name (the hub's contact lookup; "someone" when it can't be read).
-func (s *Service) botName(ctx context.Context, openID string) string {
+func (s *Service) botName(ctx context.Context, openID string, lang i18n.Lang) string {
 	var res struct {
 		Name string `json:"name"`
 	}
 	if err := s.appCall(ctx, AppFeishu, FeishuUserName, map[string]any{"open_id": openID}, &res); err != nil || res.Name == "" {
-		return "某人"
+		return i18n.T(lang, "assistant-feishu.unknown_sender")
 	}
 	return res.Name
 }
