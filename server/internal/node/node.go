@@ -353,6 +353,8 @@ type Node struct {
 
 	// claudeV is claude's version as last asked (agentplugin.go).
 	claudeV claudeVersionCache
+	// resumeSignIn: launchers' sign-in per profile as last asked for a resume (assistant_resume_signin.go).
+	resumeSignIn resumeSignInCache
 
 	// agentFilters: the extensions' filters of sessions kept out of the list (node.configure, agentfilters.go)
 	agentFilters []proto.AgentFilter
