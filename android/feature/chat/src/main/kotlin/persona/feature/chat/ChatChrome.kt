@@ -47,6 +47,7 @@ internal fun ChatHeader(
     onFiles: (() -> Unit)? = null, onGit: (() -> Unit)? = null, gitLabel: String = "Git",
     onSearch: (() -> Unit)? = null,
     statusState: StatusLineState = StatusLineState(), onDetails: () -> Unit = {},
+    onBackgroundTasks: (() -> Unit)? = null,
     onOpenTodo: ((String) -> Unit)? = null,
     agentShares: (() -> AgentShares)? = null,
     worktrees: (() -> persona.core.contracts.api.AgentCreationService?)? = null,
@@ -187,6 +188,7 @@ internal fun ChatHeader(
         onSearch?.let { add(JAction(stringResource(R.string.chat_chrome_search), PhIcons.MagnifyingGlass, onClick = it)) }
         onFiles?.let { add(JAction(stringResource(R.string.chat_chrome_files), PhIcons.FolderSimple, onClick = it)) }
         onGit?.let { add(JAction(gitLabel, onClick = it)) }
+        onBackgroundTasks?.let { add(JAction(stringResource(R.string.chat_background_title), PersonaIcons.backgroundTasks, onClick = it)) }
         add(JAction(stringResource(R.string.chat_chrome_details), onClick = onDetails))
         add(JAction(stringResource(R.string.chat_chrome_info), PhIcons.Info, enabled = session != null) { dialog = "info" })
         if (session?.assistant == false) {
