@@ -327,6 +327,27 @@ func TestAnExtensionsResumeBeforeTheComputersListIsRetryable(t *testing.T) {
 	}
 }
 
+// While a computer's engine runtime is away (Paseo restarting its bridge), its node answers any resume engine_missing,
+// the extension's marked one of an id it does not know too (node resumeHostRefusal, #10941): the hub passes that on
+// as the owner gets it, 409 engine_missing, never as its own 404, which reads as a chat that does not exist.
+func TestAnExtensionsResumeWhileTheEngineIsAwayIsTheOwnersAnswer(t *testing.T) {
+	const away = "这台电脑的引擎是 Paseo，但 Paseo 现在没有连上 Persona（没在运行，或刚启动还没连上），不能在这里新开或接着会话，这次没有发送。" // i18n-ignore: the node's words
+	h, url, b := extensionResumeHub(t, []string{nodeproto.Sessions, nodeproto.ResumeOutsideHealth}, func(string) (any, error) {
+		return nil, &rpc.Error{Code: "engine_missing", Message: away}
+	})
+	h.takeFleetSessions(assistantwire.FleetSessions{MachineID: "mb", Sessions: []proto.Session{}})
+	eventually(t, 5*time.Second, "mb's list", func() bool { return h.localMachine("mb").hadList() })
+	resume := `{"machine_id":"mb","launcher":"paseo-claude","cwd":"/work/project","resume_session_id":"7a1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a40","prompt":"go on"}`
+	extCode, extBody := extDo(t, url, http.MethodPost, "/api/v1/sessions", resume, nil)
+	ownerCode, ownerBody := ownerDo(t, h, url, http.MethodPost, "/api/v1/sessions", resume, nil)
+	if extCode != http.StatusConflict || !strings.Contains(extBody, `"code":"engine_missing"`) || extCode != ownerCode || extBody != ownerBody {
+		t.Fatalf("the extension's resume while the engine is away: %d %s; the owner's: %d %s", extCode, extBody, ownerCode, ownerBody)
+	}
+	if starts := sessionStarts(b, "7a1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a40"); len(starts) != 2 || !strings.Contains(starts[0], `"resume_outside_health":true`) {
+		t.Fatalf("starts sent: %v", starts)
+	}
+}
+
 // Minors 3 and 4 of the last #10941 review: the owner's resume a computer refuses with resume_unknown is worded in the
 // request's language (it reached English and Japanese owners in Chinese), and is not told to the manager as a failed
 // start, which a manager from before the refusal counted against the launcher.

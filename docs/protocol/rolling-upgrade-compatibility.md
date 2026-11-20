@@ -217,8 +217,11 @@ manager and the node may each be older:
 | Older hub, new node | The hub never marks a resume and lets an extension resume any id its computer is asked for, as before #10941. The node still refuses an id it has nothing of, so no conversation starts under the id of another; a transcript it has is resumed, health space included. |
 | New node, older hub: the owner's wording | `resume_unknown` comes with the node's own words, in Chinese: an older hub has no wording of that code in the reader's language. A hub since #10941 words it in en, zh-Hans and ja (`rpc-errors.resume_unknown`). |
 | New node, older assistant manager: launcher health | A hub since #10941 does not report a `resume_unknown` refusal to the manager (`StartEnded`). An older hub does, and a manager from before #10941 counts it against the launcher: the launcher shows as failing on that computer until its next check passes (`docs/server/launcher-health.md`). It takes a Resume of an id the computer has nothing of, which the apps offer only for chats a computer listed; updating the hub and its managers before the nodes avoids it. |
+| New node, an Agent an older node started through an engine runtime (Paseo, Cindy) | A node since #10941 keeps its record of every Agent it starts through an engine runtime, the folder the check reads. An older node kept one only for a start with a creation identity (an owner's start from an app), so an extension's Agent it started has none: once its engine no longer lists it, the extension's resume answers 404 and only the owner resumes it. |
 
-Nothing is stored: rolling either side back or forward changes only what the next resume does.
+The records are the node's own (the hub keeps its copy, as for any start), of the same shape an older node already
+writes for a start with a creation identity, so rolling the node back leaves them to be read as those. Nothing else
+is stored: rolling either side back or forward changes only what the next resume does.
 
 ### Launcher default models (#4663)
 

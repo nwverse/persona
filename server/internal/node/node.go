@@ -963,8 +963,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	}
 	// Before anything else reads the id (a backend session's pin, an alias, a Codex thread, a runtime's session): an
 	// extension's resume of a conversation the hub does not list goes on only for one this computer has outside the
-	// health space (#10941).
+	// health space (#10941). A refusal that holds for any id comes first (resumeHostRefusal): an engine that is away
+	// may have it, and the owner's resume is told the same, whatever the id.
 	if devicewire.IsSessionStart(method) && p.ResumeOutsideHealth && p.ResumeSessionID != "" && !n.resumeOutsideHealth(ctx, p.ResumeSessionID) {
+		if err := n.resumeHostRefusal(ctx, p.Host); err != nil {
+			return nil, err
+		}
 		return nil, resumeUnknown()
 	}
 	sessionSend := method == "session.send" || method == proto.MethodSessionSendUnseen

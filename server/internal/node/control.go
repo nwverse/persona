@@ -466,7 +466,8 @@ func (n *Node) resumeKnown(ctx context.Context, id string) bool {
 
 // resumeOutsideHealth: this computer has conversation id, and every directory it knows it by is outside the health
 // space and the Agent folders kept out of Persona: where its transcript or rollout started and where it last was (the
-// assistant's own health project too), its node record's, a start's of it, its running agent's. The hub asks it
+// assistant's own health project too), its node record's (an engine runtime's start keeps one too:
+// recordEngineStart), a start's of it, its running agent's, its omp session file's. The hub asks it
 // (session.start's resume_outside_health) for a resume an extension's token names that its computer does not list
 // (#10941): a quiet chat leaves the list after a week, or sooner on a busy computer, and a stopped Agent takes no
 // message, so a resume is the only way back to one the extension started. One it has nothing of, or nothing that
@@ -491,6 +492,9 @@ func (n *Node) resumeOutsideHealth(ctx context.Context, id string) bool {
 	}
 	if a, ok := n.agent(id); ok {
 		dirs = append(dirs, a.Cwd, a.ForegroundCwd)
+	}
+	if s, ok := n.ompResumeSession(id); ok { // where `omp --resume` opens it (ompresume.go), one Persona did not start too
+		dirs = append(dirs, s.Cwd)
 	}
 	if n.state != nil {
 		if n.state.loaded(ctx) != nil {

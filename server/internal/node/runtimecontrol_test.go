@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -319,6 +320,95 @@ func TestEngineRuntimeSessionOpenElsewhere(t *testing.T) {
 	_ = json.Unmarshal(host.got("session.start")[0], &start)
 	if start["open_elsewhere"] != true || len(host.got("session.send")) != 0 {
 		t.Fatalf("started with %v, sends %d", start, len(host.got("session.send")))
+	}
+}
+
+// The regression check of #10941's resume rule on a computer whose engine is Paseo. Paseo lists an archived Agent only
+// among the 80 newest archived in the last 7 days, and the node has no transcript under the id Persona named an Agent
+// by, so once it was not listed the node had nothing of it and refused an extension's resume (marked
+// resume_outside_health) that Paseo takes back through import_agent; while Paseo's bridge reconnected, the extension
+// got that refusal where the owner gets engine_missing. Now a start through the engine keeps the node's record of the
+// Agent's directory, which the check reads, and with the engine away any resume is engine_missing before the check.
+// One started in the health space, or an id the computer has nothing of, is still refused before Paseo is asked.
+func TestEngineRuntimeAnExtensionsResumeOfAnUnlistedAgent(t *testing.T) {
+	const (
+		own    = "bbbbbbbb-0000-4000-8000-000000000077"
+		health = "bbbbbbbb-0000-4000-8000-000000000078"
+		forged = "bbbbbbbb-0000-4000-8000-000000000079"
+	)
+	n, _ := runtimeNode(t)
+	if err := n.useEngine(context.Background(), proto.EnginePaseo); err != nil {
+		t.Fatal(err)
+	}
+	work := mkdir(t, filepath.Join(n.home, "errands"))
+	charts := mkdir(t, filepath.Join(identity.HealthDir(n.home), "charts"))
+	host := dialRuntime(t, n, paseoEngineHello())
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		var p struct {
+			SessionID string `json:"session_id"`
+			Resume    string `json:"resume"`
+			Cwd       string `json:"cwd"`
+		}
+		_ = json.Unmarshal(params, &p)
+		if method != "session.start" {
+			return map[string]any{"ok": true}, nil
+		}
+		id := p.SessionID
+		if p.Resume != "" {
+			id = p.Resume
+		}
+		return map[string]any{"session": map[string]any{"session_id": id, "status": "idle", "cwd": p.Cwd, "launcher": "paseo-claude",
+			"started_by_persona": true}}, nil
+	}
+	for id, cwd := range map[string]string{own: work, health: charts} {
+		if _, err := nodeCall(t, n, "session.start", map[string]any{"cwd": cwd, "launcher": "paseo-claude", "session_id": id, "prompt": "go"}); err != nil {
+			t.Fatal(err)
+		}
+		if st, ok := n.state.get(id); !ok || st.Cwd != cwd || st.Launcher != "paseo-claude" {
+			t.Errorf("the record of %s started through Paseo: launcher %q, directory %q, %v", id, st.Launcher, st.Cwd, ok)
+		}
+	}
+	// Archived a while ago: Paseo lists neither any more.
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{}})
+	waitFor(t, "Paseo's list emptied", func() bool { _, ok := listed(t, n)[own]; return !ok })
+	resume := func(id string, marked bool) error {
+		params := map[string]any{"cwd": work, "launcher": "paseo-claude", "resume_session_id": id}
+		if marked {
+			params["resume_outside_health"] = true
+		}
+		_, err := nodeCall(t, n, "session.start", params)
+		return err
+	}
+	starts := len(host.got("session.start"))
+	for _, id := range []string{health, forged} {
+		if err := resume(id, true); rpcCode(err) != proto.CodeResumeUnknown {
+			t.Errorf("the extension's resume of %s: %v (code %q), want %s", id, err, rpcCode(err), proto.CodeResumeUnknown)
+		}
+	}
+	if got := len(host.got("session.start")); got != starts {
+		t.Fatalf("a refused resume reached Paseo: %d starts, want %d", got, starts)
+	}
+	if err := resume(own, true); err != nil {
+		t.Fatalf("the extension's resume of its own Agent Paseo no longer lists: %v", err)
+	}
+	var start map[string]any
+	_ = json.Unmarshal(host.got("session.start")[starts], &start)
+	if start["resume"] != own {
+		t.Fatalf("taken back with %v", start)
+	}
+	if err := resume(health, false); err != nil {
+		t.Fatalf("the owner's resume of the health Agent: %v", err)
+	}
+
+	// The bridge restarts: every resume, the extension's of any id and the owner's, is engine_missing, as the owner's was.
+	_ = host.conn.Close()
+	waitFor(t, "Paseo away", func() bool { return n.engineRuntime(context.Background()) == nil })
+	for _, id := range []string{own, health, forged} {
+		for _, marked := range []bool{true, false} {
+			if err := resume(id, marked); rpcCode(err) != engineMissing {
+				t.Errorf("resume of %s (marked %v) while Paseo is away: %v (code %q), want %s", id, marked, err, rpcCode(err), engineMissing)
+			}
+		}
 	}
 }
 
