@@ -29,6 +29,9 @@ const (
 	// writing the defaults task Agents start with (GET /api/v1/assistant/worker-presets, GET/PUT
 	// /api/v1/assistant/start-defaults).
 	ScopeAssistantStartDefaults = "assistant.start_defaults"
+	// ScopeDispatchGuard: reading and writing the explicit-target dispatch guard and narrowing the affected
+	// conversations' tool lists (GET/PUT /api/v1/assistant/dispatch-guard). Granted by name only.
+	ScopeDispatchGuard = "dispatch.guard"
 	// ScopeAgentsPermissionMode: changing the permission mode of a conversation the extension opened itself, and of no
 	// other (the hub checks who opened it: hub/extension_modes.go).
 	ScopeAgentsPermissionMode = "agents.permission_mode"
