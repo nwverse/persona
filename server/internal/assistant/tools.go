@@ -52,7 +52,7 @@ func (s *Service) Tools(ctx context.Context) []proto.Tool {
 	if s.urgentOn(ctx) {
 		tools = append(tools, toolsNamed([]string{"urgent_call"})...)
 	}
-	return append(tools, s.knowledgeFolderTools(ctx)...)
+	return localizedMCPTools(append(tools, s.knowledgeFolderTools(ctx)...), s.toolLanguage(ctx))
 }
 
 // toolsNamed are the MCP tools of these names, as prompts/mcp has them.

@@ -88,10 +88,19 @@ func (s *Service) ownSettings() []ownSetting {
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleAutoCompactMinutes(ctx)), nil },
 			set: s.setIdleAutoCompactMinutes},
 		{Setting: Setting{Key: "assistant.idle_auto_compact_tokens", Title: "Context size before compaction", Actions: getSet,
-			About: "minimum context size before automatic compaction; 300000 tokens by default",
+			About: "minimum context size before automatic compaction; 300000 tokens by default. Once saved, it is also the size " +
+				"at which the main chat is compacted before its idle process is let go (assistant.idle_release_minutes), " +
+				"whatever assistant.idle_auto_compact says; never saved, that compaction stays at 75% of the conversation's window",
 			Value: "a whole number from 10000 to 10000000"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleAutoCompactTokens(ctx)), nil },
 			set: s.setIdleAutoCompactTokens},
+		{Setting: Setting{Key: "assistant.idle_release_minutes", Title: "Main chat stays loaded when idle", Actions: getSet,
+			About: "how long the main chat's process stays loaded after its last activity before it is let go (it resumes on the " +
+				"next message); 20 minutes by default. Just before, it is compacted when its context is large (assistant.idle_auto_compact_tokens " +
+				"once saved). Kept below an hour so that compaction still reads the prompt cache. Applies from the main chat's next message",
+			Value: "a whole number of minutes from 5 to 55"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleReleaseMinutes(ctx)), nil },
+			set: s.setIdleReleaseMinutes},
 		{Setting: Setting{Key: readonlyModeKey, Title: "Read-only task protection", Actions: getSet,
 			About: "sandbox (the default) keeps current runtime protection: Codex uses a read-only sandbox, while Claude uses " +
 				"bypassPermissions and a first-message read-only instruction. prompt keeps the instruction without forcing plan " +
@@ -463,6 +472,7 @@ func orNone(s string) string {
 // what the assistant reads).
 var settingTitles = map[string]string{standingAuthorizationsKey: "title_standing_authorizations", "assistant.notes": "title_notes", "assistant.main_tasks_quiet": "title_main_tasks_quiet",
 	"assistant.idle_auto_compact": "title_idle_auto_compact", "assistant.idle_auto_compact_minutes": "title_idle_auto_compact_minutes", "assistant.idle_auto_compact_tokens": "title_idle_auto_compact_tokens",
+	"assistant.idle_release_minutes":      "title_idle_release_minutes",
 	readonlyModeKey:                       "title_readonly_mode",
 	"assistant.task_workspace_preference": "title_task_workspace_preference",
 	"assistant.start_requested_tasks":     "title_start_requested_tasks", "assistant.launcher": "title_launcher",
@@ -524,7 +534,8 @@ func (s *Service) setIdleAutoCompactTokens(ctx context.Context, raw json.RawMess
 		return nil, i18n.Err("assistant-settings_tool.bad_idle_auto_compact_tokens")
 	}
 	before := s.idleAutoCompactTokens(ctx)
-	if value == before {
+	// Saving the default is a change while unset: a saved value is also the main chat's release-time threshold.
+	if value == before && s.settings(ctx).IdleAutoCompactTokens != nil {
 		return &ownChange{summary: i18n.T(s.lang(ctx), "assistant-settings_tool.idle_auto_compact_unchanged")}, nil
 	}
 	if s.store() == nil {
@@ -538,6 +549,29 @@ func (s *Service) setIdleAutoCompactTokens(ctx context.Context, raw json.RawMess
 		}
 		s.settingsChanged(ctx)
 		return i18n.T(s.lang(ctx), "assistant-settings_tool.idle_auto_compact_saved"), nil
+	}}, nil
+}
+
+func (s *Service) setIdleReleaseMinutes(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
+	var value int
+	if err := json.Unmarshal(raw, &value); err != nil || value < minIdleReleaseMinutes || value > maxIdleReleaseMinutes {
+		return nil, i18n.Err("assistant-settings_tool.bad_idle_release_minutes")
+	}
+	before := s.idleReleaseMinutes(ctx)
+	if value == before {
+		return &ownChange{summary: i18n.T(s.lang(ctx), "assistant-settings_tool.idle_release_unchanged")}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_idle_release_minutes", i18n.Args{"before": before, "after": value})
+	}, apply: func(ctx context.Context) (string, error) {
+		if _, err := s.updateSettings(ctx, func(v *Settings) error { v.IdleReleaseMinutes = &value; return nil }); err != nil {
+			return "", err
+		}
+		s.settingsChanged(ctx)
+		return i18n.T(s.lang(ctx), "assistant-settings_tool.idle_release_saved"), nil
 	}}, nil
 }
 

@@ -48841,6 +48841,28 @@
       },
       "extractionState" : "manual"
     },
+    "Continuation [Task Handoff Badge]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continuation"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "引き継ぎ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "续接"
+          }
+        }
+      }
+    },
     "Continue" : {
       "comment" : "Slash command title: let the agent keep going",
       "localizations" : {
@@ -61578,6 +61600,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没刷新：%1$@"
+          }
+        }
+      }
+    },
+    "Didn't start." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Didn't start."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始できませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没开起来"
           }
         }
       }
