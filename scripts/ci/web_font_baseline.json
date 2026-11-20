@@ -50,7 +50,6 @@
  "web/src/views/AssistantSwitcher.tsx": 3,
  "web/src/views/ConnectionPill.tsx": 4,
  "web/src/views/DirectionMarks.tsx": 2,
- "web/src/views/DisconnectBrowser.tsx": 2,
  "web/src/views/Home.tsx": 27,
  "web/src/views/Hubs.tsx": 7,
  "web/src/views/LauncherBlockedHelp.tsx": 10,

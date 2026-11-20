@@ -47,6 +47,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('RUNNER_TEMP', str(jobs["android"]))
         self.assertNotIn("Path('release/plan.json')", str(jobs["android"]))
         self.assertIn('release-pr-plan-${{ needs.plan.outputs.pr }}', str(jobs))
+        self.assertIn('release-pr-plan-${{ github.event.pull_request.number || 0 }}', str(jobs["plan"]))
+        self.assertNotIn('release-pr-plan-${{ steps.plan.outputs.pr }}-${{ steps.plan.outputs.commit }}', str(jobs["plan"]))
         self.assertNotIn('release-pr-plan-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}', str(jobs))
 
     def test_windows_requires_native_execution_and_authenticode(self):
@@ -167,6 +169,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("steps.owner.outputs.release_pr == 'false'", text)
         self.assertIn('release-publish owns its exact artifacts', text)
         self.assertIn('for name in VERSION SHA256SUMS android.json latest.json', PUBLISH.read_text())
+
+    def test_stable_latest_promotion_follows_independent_artifact_verification(self):
+        text = PUBLISH.read_text()
+        self.assertLess(text.index('Independently download every uploaded artifact'), text.index('stable_release.py'))
+        self.assertLess(text.index('stable_release.py'), text.index('beta_channel_release.py'))
+        stable = next(step for step in self.publish['jobs']['cli-web']['steps']
+                      if step.get('name') == 'Advance only the verified stable Latest pointer')
+        self.assertEqual(stable['if'], "needs.authorize.outputs.channel == 'release'")
+        self.assertIn('--manifest release/downloads/latest.json', stable['run'])
 
     def test_workflows_lint(self):
         result = subprocess.run(["actionlint", str(PR), str(PUBLISH), str(SCHEDULE)], capture_output=True, text=True)

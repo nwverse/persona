@@ -150,7 +150,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: steps.source.outputs.number != '0'
         with:
-          name: release-pr-plan-${{ steps.plan.outputs.pr }}-${{ steps.plan.outputs.commit }}
+          name: release-pr-plan-${{ github.event.pull_request.number || 0 }}
           path: release/plan.json
           if-no-files-found: error
           retention-days: 2

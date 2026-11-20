@@ -83,6 +83,10 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 		}
 		by := h.byRequest
 		switch {
+		case pattern == directionSessionFilingRoute:
+			// The selected/default manager owns the direction book. Its 404 for a session on another
+			// manager's computer is the route's contract, not a reason to relay to that computer's manager.
+			by = h.byRequest
 		case strings.Contains(pattern, "/machines/{mid}/"):
 			by = h.byMachine
 		case strings.Contains(pattern, "/sessions/{mid}/{sid}/"):

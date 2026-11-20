@@ -184,7 +184,7 @@ func launcherSyncList(zshrc []zshrcLaunchers) []LauncherSync {
 // machineLaunchers is what a machine can start (the pickers: new chat, the assistant's model): its own launchers
 // (the node's list) but the hidden ones, its reported built-in claude, then the managed ones.
 func (s *Service) machineLaunchers(ctx context.Context, machine string) ([]proto.Launcher, error) {
-	list, _, err := s.machineLaunchersOn(ctx, machine, "")
+	list, _, _, err := s.machineLaunchersOn(ctx, machine, "")
 	return list, err
 }
 
@@ -199,17 +199,18 @@ type machineLauncherListing struct {
 	HostRuntime bool                     `json:"host_runtime"`
 }
 
-func (s *Service) machineLaunchersOn(ctx context.Context, machine, host string) (list []proto.Launcher, hostRuntime bool, err error) {
+// known distinguishes an explicit node list (including []) from a missing/null catalog on an older node.
+func (s *Service) machineLaunchersOn(ctx context.Context, machine, host string) (list []proto.Launcher, hostRuntime, known bool, err error) {
 	var res machineLauncherListing
 	params := map[string]any{}
 	if host != "" {
 		params["host"] = host
 	}
 	if err := s.call(ctx, machine, DeviceLaunchersList, params, &res); err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	list, hostRuntime = s.machineLaunchersFrom(ctx, machine, res)
-	return list, hostRuntime, nil
+	return list, hostRuntime, res.Launchers != nil, nil
 }
 
 func (s *Service) machineLaunchersFrom(ctx context.Context, machine string, res machineLauncherListing) ([]proto.Launcher, bool) {
@@ -268,15 +269,20 @@ func (s *Service) pickerLaunchers(ctx context.Context, machine string) ([]Config
 
 // pickerLaunchersOn is pickerLaunchers for a new Agent's start in host (machineLaunchersOn).
 func (s *Service) pickerLaunchersOn(ctx context.Context, machine, host string) ([]ConfiguredLauncher, error) {
-	ls, _, err := s.machineLaunchersOn(ctx, machine, host)
+	ls, _, err := s.pickerLaunchersKnown(ctx, machine, host)
+	return ls, err
+}
+
+func (s *Service) pickerLaunchersKnown(ctx context.Context, machine, host string) ([]ConfiguredLauncher, bool, error) {
+	ls, _, known, err := s.machineLaunchersOn(ctx, machine, host)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	discovered := make([]ConfiguredLauncher, 0, len(ls))
 	for _, l := range ls {
 		discovered = append(discovered, ConfiguredLauncher{Launcher: l})
 	}
-	return sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[machine]), nil
+	return sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[machine]), known, nil
 }
 
 // assistantLaunchers are the machine's launchers backed by a provider the main conversation supports.

@@ -191,6 +191,7 @@ type Node struct {
 	firstWait sync.WaitGroup             // first messages being checked (firstprompt.go)
 	engLists  sync.WaitGroup             // new engines' session lists being built in the background (useEngine)
 	lostFirst lostPrompts                // session id -> why its first message did not go in (firstprompt.go)
+	workSent  workSent                   // Cursor / agy pane -> when a message last went in (worksent.go)
 	events    *herdrEvents               // herdr's event stream (herdrevents.go)
 	hostSig   map[string]*watcherSignals // change signals of the registered watcher hosts, by host kind (herdrevents.go)
 	cdirs     *claudeDirs                // Claude Code config directories in use (claudedirs.go)
@@ -222,6 +223,9 @@ type Node struct {
 	fileOps    fileOperations // copy / zip progress polled by the phone and web (fileoperation.go)
 	sysOnce    sync.Once      // system: read once (metrics.go)
 	sys        proto.System
+
+	// startsBegun: when the latest start of a session that starts does not hold began (transcript_files.go).
+	startsBegun startsBegun
 
 	// share: what the node keeps of launcher switches outside the state records, shared by a resident node's Nodes
 	// (switch_share.go, attach.go); nil until the first use when attach set none (switches).
@@ -875,6 +879,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		TaskInstructions string                        `json:"task_instructions"`
 		Goal             string                        `json:"goal"` // session.start: a /goal typed after the first message is in (startgoal.go)
 		DismissLost      bool                          `json:"dismiss_lost"`
+		TaskExecution    bool                          `json:"task_execution"`
 		ResumeOnly       bool                          `json:"resume_only"`
 		OnlyRunning      bool                          `json:"only_running"` // assistant.compact: refuse not_running rather than start the process
 		IsMain           bool                          `json:"is_main"`
@@ -1592,6 +1597,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.fork": // "Branch to new chat" (fork.go)
 		id, err := n.fork(ctx, p.SessionID, p.AtItemID)
 		return map[string]any{"session_id": id}, err
+	case "assistant.directory":
+		return n.taskDirectory(p.Path)
 	case "assistant.execution":
 		return n.assistantExecution(ctx, p.SessionID), nil
 	case "assistant.send", assistantwire.DeviceAssistantAnswerAgain:
@@ -1647,7 +1654,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		sctx = withClientMsgID(sctx, opts.ClientMsgID) // a runtime's message goes under it (assistant_runtime.go)
 		sctx = withSupervisionDelivery(sctx, p.MessageSource)
 		send := func() (string, error) {
-			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, OriginKnown: p.OriginKnown, OriginDecisionRequired: true, Public: p.Public, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
+			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{Strict: p.TaskExecution, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, OriginKnown: p.OriginKnown, OriginDecisionRequired: true, Public: p.Public, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
 		}
 		if p.NewSessionID == "" && p.SessionID == "" && opts.ClientMsgID != "" {
 			// A new conversation's first message with its client_msg_id (one a person's own app opened, the manager's
@@ -2047,7 +2054,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		_ = json.Unmarshal(params, &a)
 		f, err := n.file(p.SessionID)
 		if err != nil {
-			return nil, readErr(err)
+			return nil, n.readErr(p.SessionID, err)
 		}
 		n.refresh(p.SessionID, f)
 		it, err := f.Full(a.ItemID)
@@ -2075,7 +2082,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		_ = json.Unmarshal(params, &a)
 		f, err := n.file(p.SessionID)
 		if err != nil {
-			return nil, readErr(err)
+			return nil, n.readErr(p.SessionID, err)
 		}
 		n.refresh(p.SessionID, f)
 		it, err := f.Full(a.ItemID)
@@ -2087,13 +2094,19 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.items":
 		f, err := n.file(p.SessionID)
 		if err != nil {
-			if n.startingSession(p.SessionID) { // nothing written yet: an empty chat, not an error
+			if n.startingSession(p.SessionID) { // nothing written yet: an empty chat; else not_found with its reason
 				if p.UserInputs {
 					return proto.UserInputIndex{Inputs: []proto.UserInputPosition{}}, nil
 				}
 				return map[string]any{"items": []proto.Item{}, "has_more": false}, nil
 			}
-			return nil, readErr(err)
+			if session, _, _ := strings.Cut(p.SessionID, subagentSep); p.BeforeSeq > 0 && !p.UserInputs && n.knownSession(session) {
+				// An older page of a session the node knows (or of its subagent): the end of its history, as before
+				// #11388. Only the latest page says why there is none; released apps ask an older page again on an
+				// error (#11450).
+				return map[string]any{"items": []proto.Item{}, "has_more": false}, nil
+			}
+			return nil, n.readErr(p.SessionID, err)
 		}
 		if err := n.refresh(p.SessionID, f); err != nil && p.UserInputs {
 			return nil, err
