@@ -48,6 +48,14 @@ func TestNorthStarWeeklyInterruptionsPerFinishedTodo(t *testing.T) {
 	for _, event := range events {
 		mustDo(t, database.AddWorkEvent(ctx, event))
 	}
+	for _, prior := range []Todo{
+		{ID: "todo-cancelled", DoneAt: &closed, DoneBy: db.DoneByCancelled},
+		{ID: "todo-failed", DoneAt: &closed, StartError: "private launcher detail"},
+	} {
+		retry := closed.Add(time.Hour)
+		detail := reopenedDetail(&prior, db.TodoRow{UpdatedAt: retry})
+		mustDo(t, database.AddWorkEvent(ctx, db.WorkEvent{At: retry, Kind: todoReopenedEvent, Detail: detail}))
+	}
 
 	weekly, err := northStarWeeklyCommand(ctx, database, hub, "2026-11-04", loc.String(), now)
 	mustDo(t, err)
@@ -84,7 +92,7 @@ func TestNorthStarWeeklyInterruptionsPerFinishedTodo(t *testing.T) {
 	dailyTotal, dailyTasks := 0, 0
 	for day := 0; day < 7; day++ {
 		date := time.Date(2026, 10, 28, 0, 0, 0, 0, loc).AddDate(0, 0, day).Format(time.DateOnly)
-		ns, err := northStarCommand(ctx, database, hub, date, "", "", now)
+		ns, err := northStarCommand(ctx, database, hub, date, "", loc.String(), now)
 		mustDo(t, err)
 		dailyTotal += ns.Interruptions.Total
 		for _, category := range ns.Interruptions.Categories {
