@@ -125,11 +125,32 @@ The checker has negative tests for new files/directories, replacing an omission 
 mentions, include cycles and attempts to raise the baseline. Judge behavior and recording-language live checks
 still follow the rules below when those prompts change.
 
+### Channel, bot and shared prompts (#6275)
+
+The three delivery paths read the owner’s configured language when they prepare the new turn. Plugin IM uses
+`channelForward` for `channel/message`. A public mention selects `channel/mention_message` and retains its chat,
+thread and public audience. Feishu uses `botSendIn` for `bot/message`. A private reminder can include its to-do
+and the quoted message. A group topic carries only its own authorized reply. The templates retain each channel’s
+format, destination and confirmation instructions. Sender names, forwarded messages, attachment paths and the
+owner’s text keep their source language. Feishu rich posts retain the provider parser’s existing variant order
+(`zh_cn`, `en_us`, `ja_jp`) regardless of the owner’s language.
+
+When a conversation ends without a text answer, `askAgain` sends `channel/answer_again` once. Its context block
+has no owner text. The channel reader finds the turn by its client message ID and transcript probe. The author
+sentinel, context boundaries and structured `shared/message_source` metadata keep their existing wire meaning.
+`shared/all_stopped` supplies an internal observation in English.
+
+`shared/kb_blocks` receives the Inbox prompt’s language alongside the stored chat and project profiles. Only the
+profile headings change language. `shared/user_rules` supplies the precedence heading for Inbox triage, grouping,
+task selection and Agent delegation. The rule itself is the owner’s original text. The delegate retains its
+explicit Chinese language aliases. Caller goldens cover English, Japanese, Simplified Chinese and empty-language
+deliveries, including the shared blocks in the first processing turn. Empty language retains the original bytes.
+
 ### Inbox language migration
 
 Inbox request builders capture the owner's language once per model request (including grouping retries and draft
-rewrites), and use it for both instructions and input labels. Inbox-specific rule and knowledge wrappers keep the
-shared fragments' other callers unchanged. New processing conversations, their queued handling notes and handoffs
+rewrites), and use it for both instructions and input labels. Shared rule and knowledge fragments follow that
+same language. New processing conversations, their queued handling notes and handoffs
 also use the owner's current language. A later language change affects the next delivery, never a stored recap,
 chain entry, decision, folder, externally authored source description, quoted message or existing knowledge page.
 
@@ -287,8 +308,8 @@ localize Persona Link's client UI; they do not supply the language of model prom
 | `channel/message.md` | Representation of the owner's bot message from a plugin channel (WeChat, etc.; `docs/extensions/channels.md`) in a Persona chat: where replies return, format (plain text or Markdown), whether questions can be answered there, quoted messages, forwarded history, attachments saved to the computer, content the bot cannot forward | `assistant/channels_plugin.go` `channelForward` |
 | `channel/mention_message.md` | A public mention turn, in Chinese, English and Japanese: the answer returns as the owner; private context from other chats, sessions, mail and health stays undisclosed unless explicitly requested; chat, topic, gathered context, quote and forwarded history are data blocks. Used only for `mention` channels, including when their target is the main chat (#11130) | `assistant/channels_plugin.go` `channelForward` |
 | `channel/answer_again.md` | When a channel turn ends without an answer (empty or only a placeholder such as "No response requested."), hub asks the Persona chat once for that turn's answer | `assistant/channels_answer.go` `askAgain` (#4588) |
-| `shared/kb_blocks.md` | `<persona-context>` blocks for chat profiles + project profiles (shared by Lark /agent and AI twin) | |
-| `shared/user_rules.md` | "User-defined rules" section (shared by triage and judging) | |
+| `shared/kb_blocks.md` | Localized headings for stored chat and project profiles | `inbox/agent.md` through `startInboxAgents` |
+| `shared/user_rules.md` | Localized precedence heading and the owner's original rules | `inbox/triage.md`, `inbox/group.md`, `inbox/judge.md`, `agents/delegate.md` |
 
 Since #1571, prompts and context for Lark `/agent` (in chats / document comments) live with `/agent` in the Lark integration plugin. This repository has no `lark/` directory (`docs/extensions/lark-agent.md`).
 

@@ -187,8 +187,14 @@ func (n *Node) compactThenSendLocked(ctx context.Context, id, text string, image
 			n.logf("session %s: context %d of %d tokens: compacting before the message goes in", short(id), tokens, window)
 			if err := n.compactLocked(ctx, id); err != nil {
 				n.logf("session %s: compaction before the message failed after %s: %v", short(id), time.Since(began).Round(time.Second), err)
+				data := map[string]any{}
+				if _, live := n.agent(id); !live {
+					// It quit on a step of Persona's, not the user's: the assistant may resume it again (#11441).
+					n.state.stopped(id, proto.StopCompactFailed)
+					data["agent_quit"] = true
+				}
 				return refusal(proto.CodeCompactFailed, fmt.Sprintf("its context is nearly full (%d of %d tokens) and compacting it "+
-					"failed: %v. The message was not sent", tokens, window, err), nil)
+					"failed: %v. The message was not sent", tokens, window, err), data)
 			}
 			n.logf("session %s: compacted in %s; the message goes in now", short(id), time.Since(began).Round(time.Second))
 			noteCompact(ctx, false, true)
