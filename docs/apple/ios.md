@@ -1828,6 +1828,26 @@ state in `AppModel.readiness`, `AssistantReadinessModel`), using the same presen
 
 Screenshots: `-openDevices YES -openConnectDevice YES` (`web`: open the Browser mode); mock hub `MOCK_PAIR_SECONDS` shortens validity, `POST /api/v1/auth/tokens` simulates a new device connecting.
 
+## Primary device for phone calls (#12019)
+
+Settings › Devices has a **Primary Device** row below the device list, for someone who uses Persona on more than one phone or tablet
+(`DevicesView`, `PhonePrimaryChoices`). Audience: everyday owners with an iPhone and an iPad on one Apple ID; the plain-language
+footer says what the choice does and what "Automatic" means. The hub's rule is in `docs/apple/phone-tools.md`.
+
+- Shown only when `GET /api/v1/auth/tokens` carries a `phone` object and either `phone.candidates` has two or more devices or
+  `phone.primary` is not empty (so a chosen device can be changed back). An older hub (no `phone`) or an account with one phone shows
+  the page exactly as before.
+- Options: Automatic (`credential_id` ""), then every candidate in the hub's order, named as the device list names it, the device
+  in hand marked "This Device". A chosen device that is not a candidate now (its phone data is off) is listed after them so the
+  current choice always shows; a credential the list cannot name (revoked since) is left out and the row reads Automatic.
+  The pure rules are `PhonePrimaryChoices` (`PhonePrimaryChoicesTests`).
+- Choosing shows at once (local state first), then `PUT /api/v1/phone/primary` `{"credential_id": id}`; the hub's answer
+  (`{"primary", "candidates"}`) replaces the local value. A failure (409 `not_a_phone`, 403, network) puts the old value back and
+  shows the error the page always uses (`model.show`). One save at a time: the row is disabled while one is on its way, and a
+  refresh that arrives meanwhile does not overwrite it.
+- Screenshots: `-openDevices YES` against the mock hub; `MOCK_PHONE_PRIMARY=dev_phone` starts with one chosen, `MOCK_PHONE=none`
+  is a hub before this feature (no row), `MOCK_PHONE=single` has one candidate (no row).
+
 ## Add and confirm computers (#4196)
 
 Like the web (#3934) and Android: add a computer in the App and confirm that it is yours (`docs/assistant/onboarding.md` 4.2, 5.3; APIs in `docs/protocol/protocol.md` ("Computer pairing codes", "Computer trust")).

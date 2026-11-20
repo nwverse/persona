@@ -1,6 +1,29 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@ · This Device" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · This Device"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · このデバイス"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · 本机"
+          }
+        }
+      }
+    },
     "agentDirs.action" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -135,6 +158,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Agent 文件夹"
+          }
+        }
+      }
+    },
+    "Primary Device" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Primary Device"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メインのデバイス"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主设备"
           }
         }
       }
@@ -201850,6 +201896,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "跑完放进收件箱"
+          }
+        }
+      }
+    },
+    "When Persona needs your phone (your location, Health, reminders), it asks this device first. If it can't be reached, another of your devices answers and Persona says which. Automatic uses the device you used most recently." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When Persona needs your phone (your location, Health, reminders), it asks this device first. If it can't be reached, another of your devices answers and Persona says which. Automatic uses the device you used most recently."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona がスマートフォンの情報（現在地、ヘルスケア、リマインダーなど）を使うときは、まずこのデバイスに問い合わせます。つながらないときはほかのデバイスが応答し、Persona がどのデバイスかを伝えます。「自動」では、最近使ったデバイスを使います。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 需要用到手机（位置、健康、提醒事项等）时，先找这台设备；联系不上时，由你的其他设备回答，Persona 会说明是哪台。选「自动」时，用你最近用过的那台。"
           }
         }
       }

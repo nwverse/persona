@@ -11789,6 +11789,44 @@ TOKEN_PUSH = {
     "dev_phone": {"route": "relay"},
     "dev_work": {"route": "none", "reason": "relay_failed", "detail": "403 topic not served"},
 }
+# Settings › Devices › Primary Device (PUT /api/v1/phone/primary, the `phone` object of GET /api/v1/auth/tokens;
+# docs/apple/phone-tools.md). The devices that can be chosen are the active phone credentials, sorted by id.
+# MOCK_PHONE_PRIMARY=dev_phone: that device is chosen from the start (default: none, Automatic).
+# MOCK_PHONE=none: a hub before it (no `phone` object, the route 404s) | single: only one candidate | refuse: every choice
+# is refused with 409 not_a_phone (the page puts the old value back and shows the error).
+MOCK_PHONE = os.environ.get("MOCK_PHONE", "")
+PHONE_PRIMARY = [os.environ.get("MOCK_PHONE_PRIMARY", "")]
+
+
+def phone_candidates():
+    ids = sorted(t["id"] for t in TOKENS if t.get("kind") == "phone" and not t.get("revoked_at"))
+    return ids[:1] if MOCK_PHONE == "single" else ids
+
+
+def phone_view():
+    candidates = phone_candidates()
+    active = {t["id"] for t in TOKENS if not t.get("revoked_at")}
+    return {"primary": PHONE_PRIMARY[0] if PHONE_PRIMARY[0] in active else "", "candidates": candidates}
+
+
+def phone_primary_forbidden(h):  # a watch (answer-only) credential cannot change settings
+    token = h.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    tok = next((t for t in TOKENS if token in (t.get("token"), t.get("id"))), {})
+    return tok.get("role") in ("answer", "watch", "readonly") or h.headers.get("X-Mock-Role") in ("answer", "watch", "readonly")
+
+
+def phone_primary_put(h, body):
+    if MOCK_PHONE == "none": return h.send_json({"error": "not found"}, 404)
+    if phone_primary_forbidden(h): return h.send_json({"error": "this device can only view and answer"}, 403)
+    if not isinstance(body, dict) or not isinstance(body.get("credential_id"), str):
+        return h.send_json({"error": "credential_id is required"}, 400)
+    want = body["credential_id"]
+    if MOCK_PHONE == "refuse" or (want and want not in phone_candidates()):
+        return h.send_json({"code": "not_a_phone", "error": "这台设备不提供手机数据，不能作为主设备"}, 409)
+    PHONE_PRIMARY[0] = want
+    return h.send_json(phone_view())
+
+
 def _claude_settings():  # Settings › Claude Code Settings: the node's whitelist (server/internal/node/claudeconfig.go)
     return [
         {"key": "awaySummaryEnabled", "title": "回来时先说进展", "detail": "离开 5 分钟以上再回来时，Claude 先简单说说这段时间做了什么",
@@ -26399,7 +26437,9 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/assistant_ask": return self.send_json(*mock_assistant_ask(q))
         if p == "/mock/notify_user": return self.send_json(*mock_notify_user(q))
         if p == "/mock/renew": return self.send_json(*renew_requests(int(q.get("minutes", ["30"])[0] or 30)))
-        if p == "/api/v1/auth/tokens": return self.send_json({"tokens": TOKENS, "current": "dev_phone", "push": TOKEN_PUSH})
+        if p == "/api/v1/auth/tokens":
+            return self.send_json({"tokens": TOKENS, "current": "dev_phone", "push": TOKEN_PUSH,
+                                   **({} if MOCK_PHONE == "none" else {"phone": phone_view()})})
         if p == "/mock/sent": return self.send_json({"sent": SENT})
         if p == "/mock/picture.png":  # a picture for replies to show (MOCK_EXPORT): ?w=&h=, a blue-to-violet gradient
             data = _fs_png(min(int(q.get("w", ["600"])[0] or 600), 2000), min(int(q.get("h", ["400"])[0] or 400), 2000), (110, 160, 255), (190, 140, 255))
@@ -28828,6 +28868,8 @@ class H(BaseHTTPRequestHandler):
                     push_machine(s["machine_id"])
                     push_todos()
             return self.send_json({"session": with_fold(decorated_session(s))})
+        if p == "/api/v1/phone/primary" and self.command == "PUT":
+            return phone_primary_put(self, json.loads(self.last_body or b"{}"))
         if p.startswith("/api/v1/auth/tokens/") and self.command == "DELETE":
             for t in TOKENS:
                 if t["id"] == p.split("/")[-1]:
