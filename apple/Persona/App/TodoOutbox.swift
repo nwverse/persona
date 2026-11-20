@@ -409,6 +409,13 @@ final class TodoOutbox {
         armTimer()
     }
 
+    /// `forget` on the app's outbox, only while this build may show V1 (`TodosV1.allowedHere`): a Release build before the
+    /// switch-on never keeps a write, so its outbox is not made just to read no file and write an empty one.
+    static func forgetHubs(_ groups: Set<String>?) {
+        guard TodosV1.allowedHere else { return }
+        shared.forget(groups)
+    }
+
     // MARK: Sending
 
     /// Sends the shown hub's writes `which` picks, not those being sent; `finished` once they are answered.
@@ -609,7 +616,14 @@ final class TodoOutbox {
             guard !mine.contains(entry.id), !forgotten.all, !forgotten.groups.contains(entry.hub) else { return nil }
             var entry = entry
             if !entry.answered {
-                if !entry.write.edits && entry.sent && !entry.waits { entry.unsure = true } else { entry.waits = true }
+                // `sent` on disk is a send that began and whose answer never came (`.notSent` clears it), whether or not
+                // it had waited before: a new to-do then may be on the hub.
+                if !entry.write.edits && entry.sent {
+                    entry.unsure = true
+                    entry.waits = false
+                } else {
+                    entry.waits = true
+                }
             }
             return entry
         }

@@ -53,7 +53,7 @@ struct TodoListRow: View {
             Button(TodoRowActions.title(action)) { TodoRowActions.run(action, row.id, model) }
         }
         if voiceOver || switchControl, let held = model.undoable, !c.struck {
-            Button(String(localized: "Undo “\(held.title)” [To-dos Actions]")) { model.undo(held.id) }
+            Button(String(localized: "Undo “\(held.title)” [To-dos Actions]")) { model.undo(held.id, of: held.write) }
         }
     }
 

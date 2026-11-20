@@ -2115,7 +2115,9 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   and Remove from Someday inside Someday's window takes that write back instead. Each write keeps its op id
   (`X-Persona-Op-Id`) from the tap. The outbox is the StateCache entry `todo-outbox`, read off the main actor and
   written in order by `TodoOutboxFile` (numbered snapshots, so a late older one never wins); it is made only once V1
-  is (`TodoStore.V1.answered` is called only while V1 is on), and forgetting a hub or unpairing drops its writes.
+  is (`TodoStore.V1.answered` is called only while V1 is on), and forgetting a hub or unpairing drops its writes
+  (`TodoOutbox.forgetHubs`, only while the build may show V1, so a Release build before the switch-on never makes it;
+  a write a DEBUG launch with `-showTodosV1` kept for a hub forgotten without it goes only to that hub, and expires).
   - **Sending.** The writes whose window ended go; the shown hub's every write goes at once when the app leaves the
     foreground, under a background task that lasts until every send under way is answered. How an answer is read
     (`TodoOutbox.outcome`): a 404 on a to-do's own route (`not_found` or `todo_not_found`; not the hub's `no_manager`)

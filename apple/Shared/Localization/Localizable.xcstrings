@@ -74058,6 +74058,29 @@
         }
       }
     },
+    "It can't be undone anymore. [To-dos Toast]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It can't be undone anymore."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "もう取り消せません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已经没法撤销了。"
+          }
+        }
+      }
+    },
     "It was deleted already, so it can't come back. [To-dos Toast]" : {
       "extractionState" : "manual",
       "localizations" : {

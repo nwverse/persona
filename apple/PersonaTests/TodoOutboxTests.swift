@@ -331,6 +331,50 @@ struct TodoOutboxTests {
         #expect(third.sent.isEmpty && again.entries.isEmpty)
     }
 
+    /// A new to-do that first reached nothing, sent again once the hub answers, and the app ended while that second send
+    /// is out: it waited before, yet the hub may have it now, so the next launch does not send it again.
+    @Test func aNewToDoSentAgainAndEndedMidSendIsNotSentAgain() async throws {
+        let first = OutboxProbe()
+        first.answer = .notSent
+        let before = await first.ready()
+        let out = TodoOutbox.newID()
+        before.add(.create(title: "Buy stamps", notes: nil), todo: out, manager: nil)
+        try await waitForOutbox { first.sent.count == 1 && before.entries.first?.waits == true }
+        first.holding = true
+        first.answer = .done(created: "t9")
+        before.hubAnswered(read: 1)
+        try await waitForOutbox { first.sent.count == 2 && first.saved.first?.sent == true }
+        // Ended with the second send out.
+        let next = OutboxProbe()
+        let after = await next.ready(loading: first.saved)
+        after.hubAnswered(read: 1)
+        try await Task.sleep(for: .milliseconds(100)) // a send would have begun by now
+        #expect(next.sent.isEmpty, "never sent a third time")
+        #expect(after.writes[out]?.unsure == true, "drawn as Not sure it was saved")
+        first.release()
+    }
+
+    /// A new to-do kept on disk unsent, sent at the next launch, and the app ended again mid-send: the launch after that
+    /// does not send it again.
+    @Test func aNewToDoFromDiskEndedMidSendIsNotSentAgain() async throws {
+        let at = Date()
+        let out = TodoOutbox.newID()
+        let kept = TodoOutbox.Entry(id: UUID(), hub: "g", todo: out, manager: nil,
+                                    write: .create(title: "Buy stamps", notes: nil), made: at, due: at)
+        let second = OutboxProbe()
+        second.holding = true
+        let launch = await second.ready(loading: [kept])
+        launch.hubAnswered(read: 1)
+        try await waitForOutbox { second.sent.count == 1 && second.saved.first?.sent == true }
+        // Ended with it out.
+        let third = OutboxProbe()
+        let again = await third.ready(loading: second.saved)
+        again.hubAnswered(read: 1)
+        try await Task.sleep(for: .milliseconds(100)) // a send would have begun by now
+        #expect(third.sent.isEmpty && again.writes[out]?.unsure == true)
+        second.release()
+    }
+
     /// Only the shown hub's writes go, and are drawn.
     @Test func onlyTheShownHubsWritesGo() async throws {
         let probe = OutboxProbe()

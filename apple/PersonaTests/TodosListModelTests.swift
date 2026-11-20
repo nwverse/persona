@@ -388,7 +388,7 @@ struct TodosListWritesTests {
         list.close("/a")
         try await waitForListTest { list.row("/a")?.content.struck == true }
         guard case .takeBack(let id)? = list.tick(of: "/a") else { Issue.record("no tick to take back"); return }
-        list.undo(id)
+        list.undo(id, of: .done(true))
         try await waitForListTest { list.row("/a")?.content.struck == false }
         #expect(list.row("/a")?.content.closed == false)
         try await Task.sleep(for: .milliseconds(500)) // past the window: nothing may have gone
@@ -540,6 +540,20 @@ struct TodosListWritesTests {
         try await waitForListTest { !hub.sent("DELETE", "/api/v1/todos/a").isEmpty }
         try await waitForListTest { outbox.entries.isEmpty }
         #expect(store.byID["a"] == nil && !list.groups.contains { $0.keys.contains("/a") })
+    }
+
+    /// An Undo the outbox can no longer do says why by its kind: a delete the hub has is gone for good, any other write
+    /// it no longer remembers is only too late to undo.
+    @Test func anUndoTooLateSaysWhyByItsKind() async throws {
+        let hub = Self.hub([Self.needs, Self.plain])
+        let (store, _, list) = try await list(hub)
+        defer { store.forget() }
+        list.undo(UUID(), of: .delete)
+        let deleted = try #require(toasts.shown.last)
+        list.undo(UUID(), of: .done(true))
+        let late = try #require(toasts.shown.last)
+        #expect(deleted.style == .error && late.style == .error)
+        #expect(deleted.message != late.message, "a tick the outbox forgot is not said to be deleted")
     }
 
     /// New To-Do: listed first in To do at once, saying it is being saved, and sent with its op id; the hub's row takes

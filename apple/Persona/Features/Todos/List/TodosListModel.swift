@@ -201,7 +201,7 @@ final class TodosListModel {
     var dating: String?
     /// The latest tick, Someday or delete made here that still waits out its window (VoiceOver's and Switch Control's
     /// Undo on the rows, the toast being out of their reach).
-    private(set) var lastHeld: (id: UUID, todo: String, title: String)?
+    private(set) var lastHeld: (id: UUID, todo: String, title: String, write: TodoOutbox.Write)?
 
     func tick(of key: String) -> Tick? {
         guard let row = cells[key] else { return nil }
@@ -216,7 +216,7 @@ final class TodosListModel {
         switch tick(of: key) {
         case .close?: close(key)
         case .askFirst?: stopping = key
-        case .takeBack(let id)?: undo(id)
+        case .takeBack(let id)?: undo(id, of: .done(true))
         case .reopen?: reopen(key)
         case nil: break
         }
@@ -280,7 +280,7 @@ final class TodosListModel {
         guard let entry = deps.outbox.add(.create(title: title, notes: notes?.isEmpty == false ? notes : nil),
                                           todo: TodoOutbox.newID(), manager: made) else { return false }
         Haptics.tap()
-        toast(String(localized: "Added [To-dos Toast]"), undo: entry.id)
+        toast(String(localized: "Added [To-dos Toast]"), undo: entry.id, of: entry.write)
         return true
     }
 
@@ -298,21 +298,24 @@ final class TodosListModel {
         deps.outbox.takeBack(entry.id)
     }
 
-    /// Undo on a toast, VoiceOver's Undo, or the tick of a row ticked a moment ago.
-    func undo(_ id: UUID) {
+    /// Undo of `write` on a toast, VoiceOver's Undo, or the tick of a row ticked a moment ago. One that can't be taken
+    /// back is a delete the hub has, or a write the outbox no longer remembers (many later ones, or the app ended since).
+    func undo(_ id: UUID, of write: TodoOutbox.Write) {
         Haptics.tap()
         guard deps.outbox.takeBack(id) else {
             Haptics.error()
-            deps.toast(Toast(String(localized: "It was deleted already, so it can't come back. [To-dos Toast]"), style: .error))
+            let said = write == .delete ? String(localized: "It was deleted already, so it can't come back. [To-dos Toast]")
+                                        : String(localized: "It can't be undone anymore. [To-dos Toast]")
+            deps.toast(Toast(said, style: .error))
             return
         }
         if lastHeld?.id == id { lastHeld = nil }
     }
 
     /// The write VoiceOver's and Switch Control's Undo takes back while it waits out its window: the latest made here.
-    var undoable: (id: UUID, title: String)? {
+    var undoable: (id: UUID, title: String, write: TodoOutbox.Write)? {
         guard let held = lastHeld, deps.outbox.holds(held.id) else { return nil }
-        return (held.id, held.title)
+        return (held.id, held.title, held.write)
     }
 
     /// Today: due today, at the time of day it was due at if it had one.
@@ -365,13 +368,13 @@ final class TodosListModel {
         let window = deps.assistive() ? Theme.Motion.todoUndoAssistive : deps.undoWindow
         guard let entry = deps.outbox.add(write, todo: row.todoID, manager: row.inputs.item.manager, hold: window)
         else { return }
-        lastHeld = (entry.id, row.todoID, row.inputs.item.title)
-        toast(said, undo: entry.id, window: window)
+        lastHeld = (entry.id, row.todoID, row.inputs.item.title, write)
+        toast(said, undo: entry.id, of: write, window: window)
     }
 
-    private func toast(_ said: String, undo id: UUID, window: Duration? = nil) {
+    private func toast(_ said: String, undo id: UUID, of write: TodoOutbox.Write, window: Duration? = nil) {
         deps.toast(Toast(said, style: .success, action: Toast.Action(title: String(localized: "Undo")) { [weak self] in
-            self?.undo(id)
+            self?.undo(id, of: write)
         }, duration: window ?? deps.undoWindow))
     }
 
