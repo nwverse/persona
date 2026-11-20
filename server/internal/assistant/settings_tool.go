@@ -835,10 +835,11 @@ func (s *Service) setDeliveryGate(ctx context.Context, v json.RawMessage) (*ownC
 }
 
 func (s *Service) setDoneNeedsDelivery(ctx context.Context, v json.RawMessage) (*ownChange, error) {
-	var on bool
-	if err := json.Unmarshal(v, &on); err != nil {
+	var onPtr *bool
+	if err := json.Unmarshal(v, &onPtr); err != nil || onPtr == nil {
 		return nil, errors.New("value must be true or false")
 	}
+	on := *onPtr
 	target := deliveryGateOff
 	if on {
 		target = deliveryGateLive

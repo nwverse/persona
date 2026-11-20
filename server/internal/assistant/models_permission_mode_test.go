@@ -412,6 +412,134 @@ func TestPermissionModeLaunchPropagationAndPrecedence(t *testing.T) {
 		if err != nil || exExplicit.PermissionMode != "plan" {
 			t.Fatalf("scheduled task explicit mode: %+v err=%v", exExplicit, err)
 		}
+
+		// sendOnPick with empty pick.Model must NOT inject assistant purpose's permission_mode into an existing conversation.
+		if err := s.setModelPick(ctx, "conv-pick", &modelPick{MachineID: "server", Launcher: "claude"}); err != nil {
+			t.Fatal(err)
+		}
+		pickParams := map[string]any{"session_id": "conv-pick", "text": "follow up"}
+		if err := s.sendModel(ctx, "server", "conv-pick", pickParams, i18n.En); err != nil {
+			t.Fatalf("sendModel on saved pick: %v", err)
+		}
+		if _, has := pickParams["permission_mode"]; has {
+			t.Fatalf("sendOnPick injected permission_mode into existing chat: %v", pickParams)
+		}
+		pickExplicit := map[string]any{"session_id": "conv-pick", "text": "follow up", "permission_mode": "plan"}
+		if err := s.sendModel(ctx, "server", "conv-pick", pickExplicit, i18n.En); err != nil {
+			t.Fatalf("sendModel on saved pick with explicit mode: %v", err)
+		}
+		if pickExplicit["permission_mode"] != "plan" {
+			t.Fatalf("sendOnPick clobbered explicit permission_mode: %v", pickExplicit)
+		}
 		_ = i18n.En
 	})
+}
+
+func TestPermissionModePerMachineResolution(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	f.mu.Lock()
+	f.sessions["mac"] = nil
+	f.zshrc = map[string][]proto.Launcher{
+		"server": {
+			{Name: "grok", Agent: "paseo", Source: "paseo", Assistant: true, PermissionModes: proto.PermissionModeSetOf("default", "bypassPermissions")},
+			{Name: "custom-cli", Agent: "omp", Source: "zshrc"},
+		},
+		"mac": {
+			{Name: "grok", Agent: "paseo", Source: "paseo", Assistant: true, PermissionModes: proto.PermissionModeSetOf("default", "plan")},
+			{Name: "custom-cli", Agent: "claude", Source: "zshrc"},
+		},
+	}
+	f.mu.Unlock()
+
+	unionGrok := &ModelProvider{
+		ID:              "launcher.grok",
+		Kind:            "launcher",
+		Agent:           "paseo",
+		PermissionModes: proto.PermissionModeSetOf("default", "bypassPermissions", "plan"),
+	}
+	if modes := s.permissionModesForLauncher(ctx, "server", "grok", unionGrok); slices.Contains(modes, "plan") || !slices.Contains(modes, "bypassPermissions") {
+		t.Fatalf("server grok modes = %v, want only server's [default bypassPermissions]", modes)
+	}
+	if modes := s.permissionModesForLauncher(ctx, "mac", "grok", unionGrok); slices.Contains(modes, "bypassPermissions") || !slices.Contains(modes, "plan") {
+		t.Fatalf("mac grok modes = %v, want only mac's [default plan]", modes)
+	}
+
+	unionCustom := &ModelProvider{ID: "launcher.custom-cli", Kind: "launcher", Agent: "claude"}
+	if modes := s.permissionModesForLauncher(ctx, "server", "custom-cli", unionCustom); len(modes) != 0 {
+		t.Fatalf("server custom-cli (omp) modes = %v, want empty", modes)
+	}
+	if modes := s.permissionModesForLauncher(ctx, "mac", "custom-cli", unionCustom); !slices.Contains(modes, "acceptEdits") {
+		t.Fatalf("mac custom-cli (claude) modes = %v, want standard modes", modes)
+	}
+
+	// assistant is bound to "server": saving grok with mac-only "plan" must fail with 400, while server's "bypassPermissions" succeeds.
+	if w := modelRequest(s, http.MethodPatch, "assistant", `{"revision":0,"provider":"launcher.grok","permission_mode":"plan"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("assistant on server accepted mac-only grok mode: %d %s", w.Code, w.Body.String())
+	}
+	if w := modelRequest(s, http.MethodPatch, "assistant", `{"revision":0,"provider":"launcher.grok","permission_mode":"bypassPermissions"}`); w.Code != http.StatusOK {
+		t.Fatalf("assistant on server rejected server-supported grok mode: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestModelProfilePermissionModeValidationAndCapture(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	f.mu.Lock()
+	f.zshrc = map[string][]proto.Launcher{
+		"server": {
+			{Name: "grok", Agent: "paseo", Source: "zshrc", PermissionModes: proto.PermissionModeSetOf("default", "bypassPermissions")},
+			{Name: "alias-omp", Agent: "omp", Source: "zshrc"},
+		},
+	}
+	f.mu.Unlock()
+	putLaunchers(t, s, apiProvider(t, s, "direct", "messages"))
+
+	// HTTP PUT /api/v1/model-profiles/{id} returns 400 Bad Request (not 500) for launcher-only and unsupported permission modes.
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{
+			name: "api purpose with permission_mode",
+			body: `{"revision":1,"name":"Bad API","purposes":{"kb":{"provider":"launcher.direct","permission_mode":"acceptEdits"}}}`,
+		},
+		{
+			name: "purpose with runtime-unsupported permission_mode",
+			body: `{"revision":1,"name":"Bad Grok","purposes":{"agent.new":{"provider":"launcher.grok","permission_mode":"plan"}}}`,
+		},
+		{
+			name: "purpose with discovered omp alias",
+			body: `{"revision":1,"name":"Bad OMP Alias","purposes":{"agent.new":{"provider":"launcher.alias-omp","permission_mode":"acceptEdits"}}}`,
+		},
+		{
+			name: "tier with runtime-unsupported permission_mode",
+			body: `{"revision":1,"name":"Bad Grok Tier","tiers":{"fast":{"launcher":"grok","permission_mode":"plan"}}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if w := request(s, http.MethodPut, "/api/v1/model-profiles/custom", tc.body); w.Code != http.StatusBadRequest {
+				t.Fatalf("%s: status = %d, want 400; body = %s", tc.name, w.Code, w.Body.String())
+			}
+		})
+	}
+
+	// Supported mode on discovered runtime succeeds.
+	if w := request(s, http.MethodPut, "/api/v1/model-profiles/custom", `{"revision":1,"name":"Good Grok","purposes":{"agent.new":{"provider":"launcher.grok","permission_mode":"bypassPermissions"}}}`); w.Code != http.StatusOK {
+		t.Fatalf("supported runtime permission_mode rejected: %d %s", w.Code, w.Body.String())
+	}
+
+	// captureModels preserves purpose permission_mode but never copies assistant/agent.new permission_mode into seeded tiers.
+	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", PermissionMode: "bypassPermissions"})
+	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.claude", PermissionMode: "acceptEdits"})
+	purposes, _, tiers, err := s.captureModels(ctx)
+	if err != nil {
+		t.Fatalf("captureModels: %v", err)
+	}
+	if purposes["assistant"].PermissionMode != "bypassPermissions" || purposes["agent.new"].PermissionMode != "acceptEdits" {
+		t.Fatalf("captured purposes missing permission_mode: %+v", purposes)
+	}
+	if tiers["strong"].PermissionMode != "" || tiers["standard"].PermissionMode != "" {
+		t.Fatalf("captureModels leaked permission_mode into seeded tiers: %+v", tiers)
+	}
 }
