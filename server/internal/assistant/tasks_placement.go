@@ -375,7 +375,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	// The project background, and the decisions of the todo and its continuation ancestors (a task started again may
 	// have some), follow the assignment; they remain user context, never framework policy.
-	background := s.projectHandoffContext(ctx, m.ID, t.Cwd, s.taskSupervisorOf(t))
+	background := s.projectHandoffContextForTodo(ctx, m.ID, t.Cwd, s.taskSupervisorOf(t), s.todoForPlanContext(t))
 	var repoPaths []string
 	if t.backendWorkspace() {
 		for _, repo := range t.WorkspaceResolved.Repositories {

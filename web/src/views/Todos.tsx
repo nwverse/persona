@@ -2407,7 +2407,7 @@ function TodoDetail({
 
       {/* Code task stages from the hub. Its PR link is not drawn again here: the repository links below are the one
           place a task's issues and PRs are shown (legacy ones included). */}
-      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} className="mt-4" />
+      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} done={todo.stage_done} className="mt-4" />
 
       {todo.origin && <TaskCompletionCheck todo={todo} />}
 
