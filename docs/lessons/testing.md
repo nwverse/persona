@@ -1,5 +1,10 @@
 # Lessons: testing and validation
 
+- Execute release collection steps against the actual build-directory layout (#11684). The installer is rendered at
+  `build-publish/install.sh`, while archives and indexes live in `build-publish/bin/`. A receipt that only hashes files
+  that happened to be copied cannot detect an omitted installer. Stop on failed copies, require bootstrap files before
+  binding the CLI/Web receipt, and test missing outputs as well as a complete build.
+
 - New relayed routes need both extension-scope inventories checked (#7100): `TestRouteScopes` records the exact
   scope, and `TestEveryExtensionRouteIsBounded` records how ownership is enforced. Updating `extwire.RouteScopes`
   alone leaves those checks failing. Exercise allowed and refused tokens, another manager's Todo and explicit manager

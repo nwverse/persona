@@ -19,6 +19,7 @@
   "stage_merge": "マージ",
   "stage_deploy": "デプロイ",
   "stage_verify": "検証済み",
+  "stage_done": "完了",
   "accept_title": "確認してください：{task}",
   "accept_again": "まだ未確認：{task}",
   "accept_lines": "**変更点**：{changed}\n**見る場所**：{link}\n**確認方法**：{how}",
