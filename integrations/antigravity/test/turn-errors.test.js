@@ -305,6 +305,22 @@ test('a rejected ACP prompt publishes its failure through the normal session row
 })
 
 
+test('an attached picture that is cut short is not sent; the words and complete pictures are', async (t) => {
+  const { node, calls } = await fixture(t)
+  const seg = (marker, body) => Buffer.concat([Buffer.from([0xff, marker, 0, body.length + 2]), body])
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8]), seg(0xdb, Buffer.alloc(65)), seg(0xc0, Buffer.alloc(9)),
+    seg(0xda, Buffer.alloc(8)), Buffer.from([0x12, 0x34, 0xff, 0xd9])])
+  const whole = jpeg.toString('base64')
+  const cut = jpeg.subarray(0, jpeg.length - 2).toString('base64')
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Look at these.', images: [
+    { media_type: 'image/jpeg', data: whole }, { media_type: 'image/jpeg', data: cut }] })
+  await until('prompt sent', () => calls().some((call) => call.method === 'session/prompt'))
+  const blocks = calls().find((call) => call.method === 'session/prompt').params.prompt
+  assert.deepEqual(blocks.filter((b) => b.type === 'image').map((b) => b.data), [whole])
+  assert.match(blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n'), /Look at these\./)
+  assert.match(blocks.at(-1).text, /1 attached picture was incomplete or damaged and not sent/)
+})
+
 test('listing idle sessions does not start native error probes', async (t) => {
   const { calls, refresh } = await fixture(t)
   await refresh()

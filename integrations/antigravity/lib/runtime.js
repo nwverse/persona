@@ -10,6 +10,7 @@ import { pathToFileURL } from 'node:url'
 import { createRuntime, installCurrent, interactionId, page, RpcError, snippet, summaryOf, verifyPackage } from '../../runtime-sdk/index.js'
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
 import { AgyAcpClient } from './acp.js'
+import { inspectImage } from './media-guard.js'
 import { readMediaImage } from './media.js'
 import { discoverModels, mapModels, SIGNIN_TIMEOUT } from './models.js'
 import { nativeErrorStep } from './errors.js'
@@ -1862,8 +1863,18 @@ export function createAgyRuntime(options = {}) {
     if (fullText) {
       blocks.push({ type: 'text', text: fullText })
     }
+    let refused = 0
     for (const img of images) {
+      // A picture the model service cannot decode would stay in the history and fail every later request.
+      if (!inspectImage(Buffer.from(img.data, 'base64')).ok) {
+        refused++
+        continue
+      }
       blocks.push({ type: 'image', data: img.data, mimeType: img.mime })
+    }
+    if (refused) {
+      blocks.push({ type: 'text', text: `[${refused} attached picture${refused > 1 ? 's were' : ' was'} incomplete or damaged ` +
+        'and not sent; tell the user and go on without it]' })
     }
 
     const turn = {

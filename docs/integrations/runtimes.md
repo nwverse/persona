@@ -492,6 +492,18 @@ CLI companion sessions and herdr panes show images from exported tool results. C
 references; Persona loads the bytes when an image is shown. It accepts PNG, JPEG, GIF and WebP up to 1,152 KiB from
 the result's inline data or local file. The Desktop companion still omits these images.
 
+A picture the model service cannot decode never enters a conversation (`integrations/antigravity/lib/media-guard.js`, #11789).
+agy's own `read_file` sends a picture's bytes to the model and keeps them in the history, so one truncated JPEG (a chat
+attachment served cut short) makes every later request fail with `400 INVALID_ARGUMENT` / `INVALID_MEDIA`, a Continue
+included. The CLI companion writes an agy plugin, `<agy config>/../config/plugins/persona-media-guard`, whose
+`PreToolUse` hook checks the file `read_file` / `view_file` is about to open. A complete PNG, JPEG, GIF or WebP, and any
+file that is no picture, gets no opinion (`ask`: agy's own permissions decide). A cut or damaged one is refused (`deny`,
+which wins over another hook's `allow`) with a reason the model passes on, and the file is left as it is. A truncated
+JPEG whose image data began also gets a terminated copy under `<agy config>/persona-media-guard/`, named in the reason,
+so the model can still look at the part that arrived. The hook answers `ask` when its script is gone (the package moved
+on), so a stale plugin never blocks agy; `--no-media-guard` keeps the companion from writing it. Pictures attached to a
+message from Persona get the same check: a broken one is left out of the prompt with a line saying so.
+
 Native model errors can be omitted from the JSONL export even when ACP reports a completed prompt. When an idle
 summary has unexported steps, the companion reads at most the final eight native steps with `GetCascadeTrajectorySteps`.
 The result is cached against the summary and exported branch. Discovery opens the native service through read-only

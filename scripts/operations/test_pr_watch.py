@@ -1655,6 +1655,26 @@ class WatcherTests(unittest.TestCase):
             added = [line for chunk in chunks for line in chunk.splitlines() if line.startswith("+new-")]
             self.assertEqual(len(removed), 20000)
             self.assertEqual(len(added), 20000)
+            new_line = 1
+            for chunk in chunks:
+                header = re.search(r"(?m)^@@ -(\d+),(\d+) \+(\d+),(\d+) @@", chunk)
+                self.assertIsNotNone(header)
+                old_count = sum(line.startswith(("-", " ")) for line in chunk.splitlines()
+                                if not line.startswith("---"))
+                new_count = sum(line.startswith(("+", " ")) for line in chunk.splitlines()
+                                if not line.startswith("+++"))
+                self.assertEqual(int(header.group(2)), old_count)
+                self.assertEqual(int(header.group(4)), new_count)
+                self.assertEqual(int(header.group(3)), new_line - int(new_count == 0))
+                new_line += new_count
+
+    def test_split_hunk_header_uses_part_ranges(self):
+        self.assertEqual(pr_watch_review.split_hunk_header(
+            "@@ -100 +200 @@ function\n", 40, 80, 3, 2), "@@ -140,3 +280,2 @@ function\n")
+        self.assertEqual(pr_watch_review.split_hunk_header(
+            "@@ -100,0 +200,1 @@\n", 0, 10, 0, 1), "@@ -99,0 +210,1 @@\n")
+        self.assertEqual(pr_watch_review.split_hunk_header(
+            "@@ -100 +200 @@\n", 40, 0, 0, 2), "@@ -139,0 +200,2 @@\n")
 
     def test_large_single_diff_line_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -732,7 +732,10 @@ assistant's policy, not the node's. The goal is otherwise the documented Claude 
 
 A new Codex start takes the goal as Codex's own `/goal <objective>`, typed once the start found the thread its
 `prompt` began, and confirmed from the rollout's `thread_goal_updated` line instead of the screen; a Codex older than
-0.169 gets no command ([Agent goals](../integrations/agent-goal.md), "Codex").
+0.169 gets no command. When the command cannot set the goal (an older Codex, a screen not ready, a rollout that never
+confirms it), the node falls back to delivering the same condition as an ordinary message, read back from the rollout's
+user messages — never when the command may still sit in the input box, and never a fabricated native goal
+([Agent goals](../integrations/agent-goal.md), "Codex"). Neither outcome fails the start.
 
 ## Switching a running Agent to another provider (`launcher_switch`, #5035)
 
