@@ -14,6 +14,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -607,5 +608,128 @@ func TestRelayRefusedLineInTheOwnersLanguage(t *testing.T) {
 			waitFor(t, "the line to the sender", func() bool { return f.sentTo("conv2") == 1 })
 			golden(t, tc.golden, f.sentTexts("conv2")[0])
 		})
+	}
+}
+
+// A chat whose replies a conversation refuses for good pushes the owner once, not once per batch: the refusal counts
+// as the reply having gone for the gap between batches, so the next batch waits the gap and those after it merge into
+// it, and a later refusal of that conversation's chat replies pushes nobody again. A chat reply that goes in ends it:
+// the next refusal is pushed.
+func TestRefusedChatReplyPushesOncePerConversation(t *testing.T) {
+	h := newChatReplyHarness(t, replyConv("conv-a"))
+	now := time.Now()
+	h.wrote(t, "server", "conv-a", replyChat, now.Add(-time.Hour))
+	refusing := true
+	h.f.mu.Lock()
+	h.f.onAssistantSend = func(f *fakeHub, p map[string]any) {
+		f.failAssistant = nil
+		if p["session_id"] == "conv-a" && refusing {
+			f.failAssistant = &rpc.Error{Code: "unheard_of", Message: "this conversation will not take it"}
+		}
+	}
+	h.f.mu.Unlock()
+	tries := relayTries(h.f, "conv-a")
+	setRefusing := func(on bool) {
+		h.f.mu.Lock()
+		refusing = on
+		h.f.mu.Unlock()
+	}
+	// dueNow has the chat reply waiting for conv-a go in at once, as when its gap is over.
+	dueNow := func() {
+		b := &h.s.relays
+		b.mu.Lock()
+		if q := b.st.Queue["conv-a"]; len(q) == 1 {
+			q[0].Due = time.Time{}
+		}
+		b.mu.Unlock()
+		drainSettled(t, h.s, replyConv("conv-a"))
+	}
+
+	h.round(migratedConnectorID, replyBatch(replyChat, KindGroup, now.Add(-3*time.Minute), "m1"))
+	if got := len(triesOf(h.f, tries)); got != 1 || len(h.f.pushList()) != 1 || len(h.queued("conv-a")) != 0 {
+		t.Fatalf("the first batch: %d tries, %d pushes, %d queued; want one try, one push", got, len(h.f.pushList()), len(h.queued("conv-a")))
+	}
+	h.round(migratedConnectorID, replyBatch(replyChat, KindGroup, now.Add(-2*time.Minute), "m2"))
+	h.round(migratedConnectorID, replyBatch(replyChat, KindGroup, now.Add(-time.Minute), "m3"))
+	q := h.queued("conv-a")
+	if got := len(triesOf(h.f, tries)); got != 1 || len(h.f.pushList()) != 1 || len(q) != 1 || !q[0].Due.After(time.Now()) ||
+		!slices.Equal(q[0].Chat.IDs, []string{"m2", "m3"}) {
+		t.Fatalf("batches after a refusal: %d tries, %d pushes, queued %+v; want them waiting the gap in one message", got, len(h.f.pushList()), q)
+	}
+	dueNow() // refused again once the gap is over: it leaves, and the owner was told already
+	if got := len(triesOf(h.f, tries)); got != 2 || len(h.f.pushList()) != 1 || len(h.queued("conv-a")) != 0 {
+		t.Fatalf("the next refusal: %d tries, %d pushes, %d queued; want no second push", got, len(h.f.pushList()), len(h.queued("conv-a")))
+	}
+
+	setRefusing(false) // a chat reply goes in: the conversation takes them again
+	h.round(migratedConnectorID, replyBatch(replyChat, KindGroup, now, "m4"))
+	dueNow()
+	if got := h.told("conv-a"); len(got) != 1 || len(h.queued("conv-a")) != 0 {
+		t.Fatalf("the reply that goes in: told %d, queued %d", len(got), len(h.queued("conv-a")))
+	}
+	setRefusing(true)
+	h.round(migratedConnectorID, replyBatch(replyChat, KindGroup, now.Add(time.Second), "m5"))
+	dueNow()
+	if len(h.f.pushList()) != 2 {
+		t.Fatalf("%d pushes: a refusal after a reply went in is pushed again", len(h.f.pushList()))
+	}
+}
+
+// Every code the manager's devices layer answers a call with before or around the node (devices/machine.go callOnce,
+// devices/devices.go callNode and wireError) either waits on assistant.send or never answers it, so none ends a relay
+// that the owner's update or setup would let in. A new code there fails this until it is placed.
+func TestEveryDevicesLayerRefusalWaits(t *testing.T) {
+	known := map[string]string{
+		"proto.CodeNodeOutdated":         proto.CodeNodeOutdated,
+		"proto.CodeStartGoalUnsupported": proto.CodeStartGoalUnsupported,
+		"devicewire.CodeNoDevice":        devicewire.CodeNoDevice,
+		"devicewire.CodeDeadline":        devicewire.CodeDeadline,
+		"devicewire.CodeMachineOffline":  devicewire.CodeMachineOffline,
+		"devicewire.CodeNodeClosed":      devicewire.CodeNodeClosed,
+	}
+	notOnSend := map[string]string{ // the methods they answer; assistant.send is none of them
+		proto.CodeStartGoalUnsupported: "session.start with a goal",
+		"forbidden":                    "session.send_unseen",
+		"user_confirmation_required":   "session.codex.takeover.*",
+		"invalid_params":               "port.dial",
+	}
+	code := regexp.MustCompile(`Code:\s*([A-Za-z.]+|"[a-z_]+")`)
+	found := 0
+	for _, fn := range []struct{ file, sig string }{
+		{"../devices/machine.go", "func (m *Machine) callOnce("},
+		{"../devices/devices.go", "func (d *Devices) callNode("},
+		{"../devices/devices.go", "func wireError("},
+	} {
+		src, err := os.ReadFile(fn.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(src)
+		start := strings.Index(body, fn.sig)
+		if start < 0 {
+			t.Fatalf("%s is gone from %s: read the devices layer's codes where they are now", fn.sig, fn.file)
+		}
+		end := strings.Index(body[start:], "\n}\n")
+		for _, m := range code.FindAllStringSubmatch(body[start:start+end], -1) {
+			name := strings.Trim(m[1], `"`)
+			if !strings.HasPrefix(m[1], `"`) {
+				v, ok := known[m[1]]
+				if !ok {
+					t.Errorf("%s answers %s, which this test does not know: classify it in relay_refusal.go and add it here", fn.sig, m[1])
+					continue
+				}
+				name = v
+			}
+			found++
+			if _, never := notOnSend[name]; never {
+				continue
+			}
+			if f := relayFailureOf(&rpc.Error{Code: name}); f != relayFailedNotNow && f != relayFailedBusy && f != relayFailedSetup {
+				t.Errorf("%s (%s) ends a relay refused with it (%d)", name, fn.sig, f)
+			}
+		}
+	}
+	if found < 8 {
+		t.Fatalf("read %d codes, want the devices layer's whole list", found)
 	}
 }
