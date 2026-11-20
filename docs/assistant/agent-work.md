@@ -288,6 +288,27 @@ With a node announcing `task_instructions_v1`, the manager sends stable handoff,
 
 A closeout is a small record an Agent ends a turn with, so that a stopped session answers "done or not, merged or not, deployed or not, what is missing" without anyone reading its transcript or asking it (#3612). It is the Agent's own claim; nothing in it has been checked by the hub.
 
+On a node that announces `closeout.markdown.v1`, the Agent writes an ordinary Markdown report. A terminal shows the heading and fields directly. This is a complete example:
+
+```markdown
+### Persona work report
+
+- Status: blocked
+- Merged: no
+- Deployed: n/a
+- Did: Checked three of the four sample entries.
+- Artifact: doc notes/review.md
+- Verified: Three entries matched the checklist.
+- Missing: The fourth sample entry.
+- Waiting: The sample owner will supply the fourth entry.
+
+---
+```
+
+The other supported headings are `### Persona 工作报告` and `### Persona 作業報告`. Each report ends the reply with a standalone `---`, after its required Status, Merged and Deployed lines, in that order. Optional list fields are Did, Artifact, Delivery, Unblock, Verified, Missing and Waiting. A single-line `Next` label is reserved for compatible readers and passes through older-client projection. It has no effect on the work state. Field names and enumerated values stay fixed across languages. Ordinary headings/lists, quotations, code examples, reports without a closing rule and reports followed by further remarks remain ordinary text. The runtime's trailing citation footer may follow a report. Explicit delivery still needs the latest task-owned, complete assistant reply and its unambiguous PR artifact. A document-only completion still needs an artifact and explicit `n/a` for both merge and deployment.
+
+Archived XML records remain readable. A destination with unknown capability, including an older node, receives the following form:
+
 ```text
 <closeout status="done|not_done|blocked" merged="yes|no|n/a" deployed="yes|no|n/a">
 did: <what changed, one sentence; up to three such lines>
@@ -663,7 +684,7 @@ Pre-launch baseline (evening of 2026-11-04, non-assistant sessions on the hub): 
 - iOS / Mac (#2895): Agents-list and space-page card previews (`Session.listPreview`) switch to the same line when the session is stopped and the hub has triaged it (`Session.workLine`, `apple/Shared/Models.swift`).
   Host-provided reasons for needing the user (botmux) and failure notices still take precedence. Sessions the hub waits for go into "Waiting", not collapsed into idle (`WorkState.hubWaits`, `Session.isWaiting`). Unit tests: `SessionWorkTests`.
   **Settings › Session Triage** (below the assistant, `TriageSettingsView` / `TriageSettingsModel`) has the main switch, triage model (opens `agent.triage` in Model Settings), and three action switches (disabled when the main switch is off). Failed changes revert to the old value with an explanation; old hubs (404) report unsupported. Unit tests: `TriageSettingsTests`; DEBUG `-tab settings -openTriageSettings YES`.
-- iOS (#3612; iPad and Vision through the same views, not the frozen Mac app): a stopped Agent session's closeout is a card in its chat's header, above the transcript (`CloseoutCard`): the status, "The agent's own report", what changed, artifacts, merged and deployed each with the hub's finding (confirmed, contradicted in the caution color with the warning mark, or not checked), verified and still needs. While it shows, the last reply is drawn without its raw `<closeout>` block (`ChatLines.hidingCloseout`). List rows keep their line and add where the closeout stands ("merged ✓ · not deployed", "✗ says merged, isn't"; `Session.closeoutPreview`); a turn with an empty phase and a line shows that line. **Settings › Session Triage** has **Ask for a Closeout** (`closeout`; no row on a hub that does not name the switch), followed by **Ask for the Status Afterwards** (`closeout_ask`, #3616): a stopped → one question → report example, disabled only by the main switch rather than by `closeout`, and likewise hidden and unencoded when its field is absent. Details, tests and the DEBUG samples: `docs/apple/ios.md` ("Closeout, orphaned tasks and answerable decisions (#3612, #3618, #3804)").
+- iOS (#3612; iPad and Vision through the same views, not the frozen Mac app): a stopped Agent session's closeout is a card in its chat's header, above the transcript (`CloseoutCard`): the status, "The agent's own report", what changed, artifacts, merged and deployed each with the hub's finding (confirmed, contradicted in the caution color with the warning mark, or not checked), verified and still needs. While it shows, the last reply is drawn without its raw closeout record (`ChatLines.hidingCloseout`). List rows keep their line and add where the closeout stands ("merged ✓ · not deployed", "✗ says merged, isn't"; `Session.closeoutPreview`); a turn with an empty phase and a line shows that line. **Settings › Session Triage** has **Ask for a Closeout** (`closeout`; no row on a hub that does not name the switch), followed by **Ask for the Status Afterwards** (`closeout_ask`, #3616): a stopped → one question → report example, disabled only by the main switch rather than by `closeout`, and likewise hidden and unencoded when its field is absent. Details, tests and the DEBUG samples: `docs/apple/ios.md` ("Closeout, orphaned tasks and answerable decisions (#3612, #3618, #3804)").
 - Watch: list rows do not show last words; work previews are not displayed yet.
 
 ## Steps

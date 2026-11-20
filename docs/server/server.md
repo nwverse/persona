@@ -451,6 +451,29 @@ Script steps:
 - **`--output` must be outside the collected trees** (the knowledge base, `managers/assistant`, `extensions`, `skills`, `hub.machines_kept`); `create` refuses it with a message, since the bundle and its staging directory would be copied into themselves. `~/.persona/backups/` is fine. On a case-insensitive file system (macOS) a differently-cased spelling of such a path is not recognised; spell the path as it is.
 - **If a restore cannot put the databases back** (for example the server goes away during the swap), what happens to the runtime files follows what restore could establish. If a database from the bundle may be live (it could not be moved back, or the checks that would show it was not installed failed), the files stay as restored, so they match it, and the error names every database that may be the bundle's, the previous databases that may still exist (`persona_previous_*`), any staged copy that may remain (`persona_staged_*`, not in use; when something outside the restore changed the databases, so that what a staged name holds cannot be confirmed, the error says so instead of calling it safe to drop: check it before dropping), the directory with the previous files and, for an external knowledge base, its previous copy. Otherwise the files are rolled back, and the error still names any previous database left parked and any staged copy that could not be dropped. The files can therefore stay as restored while both live databases are in fact the install's own only when every check that would tell failed; when one database was put back and the other could not be, the files stay as restored while one live database is the install's own. Running restore again converges, and nothing is lost either way.
 
+### Inspect a backup offline
+
+Use `personad backup inspect` to check a copied or rotated bundle before a recovery environment is ready. It reads
+the bundle directly, so it needs no Persona install, PostgreSQL clients, live database, or extraction space.
+
+```sh
+personad backup inspect --bundle '<backup file>'
+personad backup inspect --bundle '<backup file>' --json
+```
+
+The file must be a regular owner-only archive. Inspection checks the manifest, member names, sizes, modes, and
+SHA-256 hashes, then checks the bundled hub and built-in manager keys against their manifest fingerprints. It checks
+the archive ending too, so a file cut off after its last payload still fails. An interrupted or failed check exits
+with an error and prints no partial report.
+
+The report gives the format, creation time, archive bytes, and file and byte totals for the hub dump, manager dump,
+runtime files, and knowledge base. It shows whether the knowledge base was absent, empty, or included and whether
+the manifest puts it outside the installation. It omits file paths, database names, configuration, keys, and
+fingerprints. JSON has `check: "offline_integrity"` and `database_restore_verified: false`.
+
+The checks compare the archive with its own manifest. Run `personad backup verify` for a temporary restore of both
+databases and a check of their schema and key identity.
+
 ### Restore drill (`scripts/test/backup_restore_drill.py`, #10497)
 
 `backup verify` proves the bundle (checksums, schema and key identity, both dumps restoring into temporary databases).

@@ -1,5 +1,7 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- `--allowedTools` and `--disallowedTools` govern approval, not a reliable tool-visibility boundary (#11736). Per-conversation MCP narrowing must filter the actual `sessionMCPTools` response and repeat the same decision at the assistant's call entry (`guardRefusal`). Changing only launch flags can leave stale clients or direct calls with the old tool set; hiding a tool is not a substitute for call admission.
+
 - Automatic-continuation triage and channel mirrors observe the same finished turn concurrently (#11848). The retry wake timestamp is not yet durable when the first mirror runs; gate Feishu and extension mirrors on the session's transient classification and the transient-retry switch instead. Cover several transient attempts, the later terminal error, and delivery with retry disabled.
 
 - Snapshot sequence numbers must order application as well as computation (#10514). `publish` numbered snapshots under `pubMu` but applied their interaction lists later, so a delayed older list could withdraw a prepared approval installed by a newer one. Recheck the sequence under `pubMu` immediately before `askOnPhone`; skip only superseded interaction lists and leave current omissions and explicit lifecycle endings unchanged. Force two real publishers across an existing leaf-mutex gate, then prove the owner's Allow returns once and applies once.

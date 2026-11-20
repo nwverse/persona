@@ -366,7 +366,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	rules = append(rules, prompts.RenderTaskFiles(answerLanguage(s.hello(ctx).Locale)))
 	// One structured closeout carries delivery too when both switches are on.
 	delivery := !t.Readonly && s.doneNeedsDelivery(ctx)
-	brief := s.closeoutBrief(ctx, delivery)
+	brief := s.closeoutBrief(ctx, m.ID, delivery)
 	if delivery { // what done means: live and checked (delivery.go)
 		rules = append(rules, prompts.RenderTaskDelivery(brief != ""))
 	}
