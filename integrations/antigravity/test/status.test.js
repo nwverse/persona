@@ -284,6 +284,10 @@ test('a failed summary read is reported apart from missing summaries', { timeout
   assert.equal(await refresh(), 'done')
   await refresh()
   assert.deepEqual(unknownReports(logs).slice(reports), ['agy unknown status: none'], 'an unchanged tally is not logged again')
+
+  db.exec('DROP TABLE conversation_summaries; CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, status TEXT)')
+  assert.equal(await refresh(), 'unknown', 'unsupported older schema')
+  assert.ok(logs.includes('agy native summaries unreadable: SQL logic error'), 'the result code, not the statement detail')
   assert.ok(!logs.some((line) => /Private|[0-9a-f]{8}-[0-9a-f]{4}/.test(line)), 'reasons and counts only')
 })
 
