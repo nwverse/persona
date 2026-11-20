@@ -118,11 +118,37 @@ func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, 
 // Discovery with a cursor must distinguish a denied/empty list from a failed
 // state read. Otherwise the failed list is cached until an unrelated link changes.
 func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session string, assistant, guestHint bool) ([]proto.Tool, error) {
-	assistant = assistant && s.assistantDiscovery(ctx, machine, session)
-	allowed, guest, err := s.guestOf(ctx, machine, session)
+	caller, err := s.toolDiscoveryCaller(ctx, machine, session, assistant, guestHint)
 	if err != nil {
 		return nil, err
 	}
+	return s.toolsForDiscoveryCaller(ctx, machine, session, caller, guestHint)
+}
+
+// Capture the caller's scope and effective guard together. A long poll can compare its revision
+// without rebuilding the catalog or asking a connected phone for its tools on every heartbeat.
+type toolDiscoveryCaller struct {
+	assistant bool
+	guest     bool
+	allowed   []string
+	denied    dispatchGuardDenials
+}
+
+func (s *Service) toolDiscoveryCaller(ctx context.Context, machine, session string, assistant, guestHint bool) (toolDiscoveryCaller, error) {
+	assistant = assistant && s.assistantDiscovery(ctx, machine, session)
+	allowed, guest, err := s.guestOf(ctx, machine, session)
+	if err != nil {
+		return toolDiscoveryCaller{}, err
+	}
+	caller := toolDiscoveryCaller{assistant: assistant, guest: guest, allowed: allowed}
+	if assistant && !guest && !guestHint && !s.isWorkMachine(machine) && (machine != "" || session != "") {
+		caller.denied = s.guardDenied(ctx, machine, session)
+	}
+	return caller, nil
+}
+
+func (s *Service) toolsForDiscoveryCaller(ctx context.Context, machine, session string, caller toolDiscoveryCaller, guestHint bool) ([]proto.Tool, error) {
+	assistant, guest, allowed := caller.assistant, caller.guest, caller.allowed
 	if _, room, err := s.roomOf(ctx, machine, session); guest && err == nil && room {
 		if s.isWorkMachine(machine) {
 			return []proto.Tool{}, nil
@@ -143,7 +169,7 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		}
 		tools := s.mcpTools(ctx, assistant)
 		if assistant {
-			tools = s.guardTools(ctx, machine, session, tools)
+			tools = caller.denied.filter(tools)
 		}
 		if !assistant {
 			tools = append(tools, s.leaderTools(ctx, machine, session)...)

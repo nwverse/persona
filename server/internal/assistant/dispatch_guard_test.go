@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -144,9 +146,9 @@ func TestDispatchGuardDefaultsAndFallback(t *testing.T) {
 
 func TestDispatchGuardFailsClosedOnReadError(t *testing.T) {
 	f := newGuardFakeHub()
-	st := &guardDownStore{memStore: &memStore{vals: map[string][]byte{}}}
+	st := &memStore{}
 	s := newServiceOn(t, f, st)
-	st.down = true
+	st.failKey(dispatchGuardSetting, errors.New("settings store unavailable"))
 
 	err := s.guardRefusal(context.Background(), guardMachine, guardSession, "conversation_send")
 	if err == nil || err.Error() != dispatchGuardRefusalText {
@@ -272,14 +274,135 @@ func TestDispatchGuardUnauthorizedWriteLeavesStartUnchanged(t *testing.T) {
 	}
 }
 
-type guardDownStore struct {
-	*memStore
-	down bool
+func TestDispatchGuardWriteRequiresACompleteKnownShape(t *testing.T) {
+	store := &memStore{}
+	s := newServiceOn(t, newGuardFakeHub(), store)
+	original := guardPolicy(t, "task_plan")
+	original.Enabled = false // a retained configuration should survive a rejected edit verbatim
+	putGuard(t, s, original)
+	initialWrites := store.puts
+	cursor, _ := s.mcpChanges.snapshot()
+	for name, body := range map[string]string{
+		"null envelope":     `null`,
+		"mistyped case":     `{"dispatch_guard":{"Enabled":false,"targets":[]}}`,
+		"repeated property": `{"dispatch_guard":{"enabled":false,"enabled":false,"targets":[]}}`,
+		"empty envelope":    `{}`,
+		"missing policy":    `{"example":{}}`,
+		"null policy":       `{"dispatch_guard":null}`,
+		"missing enabled":   `{"dispatch_guard":{"targets":[]}}`,
+		"null enabled":      `{"dispatch_guard":{"enabled":null,"targets":[]}}`,
+		"missing targets":   `{"dispatch_guard":{"enabled":true}}`,
+		"null targets":      `{"dispatch_guard":{"enabled":false,"targets":null}}`,
+		"unknown envelope":  `{"dispatch_guard":{"enabled":false},"extra":true}`,
+		"unknown policy":    `{"dispatch_guard":{"enabled":false,"extra":true}}`,
+		"unknown target":    `{"dispatch_guard":{"enabled":false,"targets":[{"machine_id":"desk","session_id":"notes","deny":["task_plan"],"extra":true}]}}`,
+		"trailing document": `{"dispatch_guard":{"enabled":false,"targets":[]}} {}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if res := serveAs(s, roleFull, http.MethodPut, dispatchGuardRoute, body); res.Code != http.StatusBadRequest {
+				t.Fatalf("expected a validation error, got %d", res.Code)
+			}
+			if stored, set, err := s.loadDispatchGuard(t.Context()); !set || err != nil || !reflect.DeepEqual(stored, original) {
+				t.Fatalf("rejected input changed the stored configuration: set=%t, err=%v", set, err)
+			}
+			if store.puts != initialWrites {
+				t.Fatal("rejected input wrote to the settings store")
+			}
+			if next, _ := s.mcpChanges.snapshot(); next != cursor {
+				t.Fatal("rejected input notified watchers")
+			}
+		})
+	}
 }
 
-func (s *guardDownStore) Setting(ctx context.Context, key string, out any) (bool, error) {
-	if s.down && key == dispatchGuardSetting {
-		return false, errors.New("database credential failure must stay out of refusals")
+func TestExplicitEmptyDispatchGuardTargetsClearBothRoles(t *testing.T) {
+	for _, role := range []string{roleFull, roleExtension} {
+		t.Run(role, func(t *testing.T) {
+			s := newTestService(t, newGuardFakeHub())
+			putGuard(t, s, guardPolicy(t, "task_plan"))
+			_, change := s.mcpChanges.snapshot()
+			w := serveAs(s, role, http.MethodPut, dispatchGuardRoute, `{"dispatch_guard":{"enabled":true,"targets":[]}}`)
+			if w.Code != http.StatusOK {
+				t.Fatalf("explicit clear: %d %s", w.Code, w.Body.String())
+			}
+			var receipt struct {
+				Guard DispatchGuard `json:"dispatch_guard"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil || receipt.Guard.Enabled || receipt.Guard.Targets == nil || len(receipt.Guard.Targets) != 0 {
+				t.Fatalf("clear receipt: %s", w.Body.String())
+			}
+			stored, ok, err := s.loadDispatchGuard(t.Context())
+			if err != nil || !ok || stored.Enabled || len(stored.Targets) != 0 || stored.ExpiresAt != nil {
+				t.Fatal("clear did not persist the disabled policy")
+			}
+			select {
+			case <-change:
+			default:
+				t.Fatal("clear did not wake live tool lists")
+			}
+		})
 	}
-	return s.memStore.Setting(ctx, key, out)
+}
+
+func TestDispatchGuardWatchRefreshesWithoutAPolicyWrite(t *testing.T) {
+	for _, transition := range []string{"expiry", "read recovery"} {
+		for _, when := range []string{"admission", "heartbeat"} {
+			t.Run(transition+"/"+when, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					f := newGuardFakeHub()
+					f.ownModels = true
+					st := &memStore{}
+					s := newServiceOn(t, f, st)
+					beforeExpiry := 5 * time.Second
+					if transition == "expiry" {
+						g := guardPolicy(t, "task_plan")
+						end := time.Now().Add(beforeExpiry)
+						g.ExpiresAt = &end
+						putGuard(t, s, g)
+					} else {
+						st.failKey(dispatchGuardSetting, errors.New("settings store unavailable"))
+					}
+					watch := func(since string) map[string]any {
+						return s.sessionMCPToolsSince(t.Context(), guardMachine, guardSession, true, false, since)
+					}
+					first := watch("")
+					tools, ok := first["tools"].([]proto.Tool)
+					if !ok || slices.Contains(guardNamesOf(tools), "task_plan") {
+						t.Fatal("the initial discovery list did not reflect its active constraint")
+					}
+					cursor := first["revision"].(string)
+					recover := func() {
+						if transition == "expiry" {
+							<-time.After(beforeExpiry) // advance the virtual clock to natural expiry
+						} else {
+							st.failKey(dispatchGuardSetting, nil)
+						}
+					}
+					if when == "admission" {
+						recover()
+					}
+					next := make(chan map[string]any, 1)
+					go func() { next <- watch(cursor) }()
+					synctest.Wait()
+					if when == "heartbeat" {
+						select {
+						case <-next:
+							t.Fatal("the watch returned before the effective tool set changed")
+						default:
+						}
+						recover()
+					}
+					restored := <-next
+					tools, ok = restored["tools"].([]proto.Tool)
+					if !ok || restored["revision"] == cursor || !slices.Contains(guardNamesOf(tools), "task_plan") {
+						t.Fatalf("the watch missed the restored tool list, revision=%v unchanged=%v", restored["revision"], restored["unchanged"])
+					}
+					stable := watch(restored["revision"].(string))
+					if stable["revision"] != restored["revision"] || stable["unchanged"] != true || stable["tools"] != nil {
+						t.Fatal("a stable list was sent again")
+					}
+				})
+			})
+		}
+	}
 }

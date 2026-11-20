@@ -2376,12 +2376,16 @@ named by `machine_id + session_id`:
 `deny` may also name `conversation_new` and `conversation_send`. No policy, `enabled:false`, expiry or a target that
 does not match leaves behavior unchanged. `GET` / `PUT /api/v1/assistant/dispatch-guard` accepts full credentials or
 an extension granted `dispatch.guard`; the legacy every-scope grant does not include it. An extension-written enabled
-policy must expire within one hour, and empty `targets` clears the policy.
+policy must expire within one hour. Writes require the `dispatch_guard` envelope and an explicit boolean `enabled`.
+An empty `targets` array clears the policy and returns `{"enabled":false,"targets":[]}` in that envelope.
+An explicit disable can omit targets. Unknown fields and null targets return HTTP 400 and preserve the current revision.
 
-`guardRefusal` runs at the model tool-call entry before business arguments are parsed. `guardTools` applies the same
-decision to the actual `sessionMCPTools` list, while `assistant.tools` accepts an optional `{machine_id, session_id}`
-and uses `ToolsFor`. Untargeted lists and other conversations stay unchanged. A stale client or direct invocation
-still meets the call guard. `--allowedTools` is not used as evidence of tool-list narrowing. An unreadable or invalid
+`guardRefusal` runs at the model tool-call entry before business arguments are parsed. The same denials filter
+the actual `sessionMCPTools` list, while `assistant.tools` accepts an optional `{machine_id, session_id}`
+and uses `ToolsFor`. Untargeted lists and other conversations stay unchanged. Discovery compares the caller's effective
+filter on entry and at the watch heartbeat. A change in that filter returns the refreshed list with a new revision, including after natural
+expiry or recovery from a storage failure. A stale client or direct invocation still meets the call guard.
+`--allowedTools` is not used as evidence of tool-list narrowing. An unreadable or invalid
 enabled policy fails closed for the four dispatch tools; unrelated tools remain available. The localized refusal
 contains no storage error, target, tool name, arguments, policy or credential.
 

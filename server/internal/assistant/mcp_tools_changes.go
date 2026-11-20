@@ -43,25 +43,37 @@ func (s *Service) sessionMCPToolsSince(ctx context.Context, machine, session str
 	if since != "" {
 		ctx = context.WithValue(ctx, revisionDiscoveryKey{}, true)
 	}
-	cursor, changed := s.mcpChanges.snapshot()
-	if since == cursor {
+	for heartbeat := false; ; heartbeat = true {
+		cursor, changed := s.mcpChanges.snapshot()
+		// Ordinary Agents have no per-conversation dispatch guard. A matching cursor can wait
+		// without resolving their roles, just as it did before the guard was introduced.
+		if assistant || cursor != since {
+			caller, err := s.toolDiscoveryCaller(ctx, machine, session, assistant, guest)
+			if err != nil {
+				return map[string]any{"error": err.Error()}
+			}
+			revision := caller.denied.revision(cursor)
+			if revision != since {
+				tools, err := s.toolsForDiscoveryCaller(ctx, machine, session, caller, guest)
+				if err != nil {
+					return map[string]any{"error": err.Error()}
+				}
+				if tools == nil {
+					tools = []proto.Tool{}
+				}
+				return map[string]any{"tools": tools, "revision": revision}
+			}
+		}
+		if heartbeat {
+			return map[string]any{"revision": since, "unchanged": true}
+		}
 		timer := time.NewTimer(mcpToolsHeartbeat)
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():
-			return map[string]any{"revision": cursor, "unchanged": true}
+			return map[string]any{"revision": since, "unchanged": true}
 		case <-timer.C:
-			return map[string]any{"revision": cursor, "unchanged": true}
 		case <-changed:
-			cursor, _ = s.mcpChanges.snapshot()
 		}
 	}
-	tools, err := s.sessionMCPToolsChecked(ctx, machine, session, assistant, guest)
-	if err != nil {
-		return map[string]any{"error": err.Error()}
-	}
-	if tools == nil {
-		tools = []proto.Tool{}
-	}
-	return map[string]any{"tools": tools, "revision": cursor}
 }

@@ -2,11 +2,14 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -137,7 +140,9 @@ func (s *Service) saveDispatchGuard(ctx context.Context, g DispatchGuard) error 
 	return nil
 }
 
-func allDispatchGuardTools() map[string]bool {
+type dispatchGuardDenials map[string]bool
+
+func allDispatchGuardTools() dispatchGuardDenials {
 	out := make(map[string]bool, len(dispatchGuardToolNames))
 	for _, name := range dispatchGuardToolNames {
 		out[name] = true
@@ -147,7 +152,7 @@ func allDispatchGuardTools() map[string]bool {
 
 // guardDenied is the one decision shared by the visible tool list and call admission. A read or validation failure
 // denies every dispatch tool; unrelated tools and non-target conversations with a valid policy are left alone.
-func (s *Service) guardDenied(ctx context.Context, machine, session string) map[string]bool {
+func (s *Service) guardDenied(ctx context.Context, machine, session string) dispatchGuardDenials {
 	g, ok, err := s.loadDispatchGuard(ctx)
 	now := time.Now().UTC()
 	if err != nil {
@@ -185,12 +190,21 @@ func (s *Service) guardRefusal(ctx context.Context, machine, session, tool strin
 	return nil
 }
 
-// guardTools narrows an actual tool list with the same decision as guardRefusal. Empty targets are unchanged.
-func (s *Service) guardTools(ctx context.Context, machine, session string, tools []proto.Tool) []proto.Tool {
-	if machine == "" && session == "" {
-		return tools
+// A watch revision follows the effective decisions for this caller, including expiry and storage recovery.
+func (denied dispatchGuardDenials) revision(cursor string) string {
+	if len(denied) == 0 {
+		return cursor
 	}
-	denied := s.guardDenied(ctx, machine, session)
+	var mask uint64
+	for i, name := range dispatchGuardToolNames {
+		if denied[name] {
+			mask |= 1 << i
+		}
+	}
+	return cursor + "." + strconv.FormatUint(mask, 16)
+}
+
+func (denied dispatchGuardDenials) filter(tools []proto.Tool) []proto.Tool {
 	if len(denied) == 0 {
 		return tools
 	}
@@ -205,7 +219,49 @@ func (s *Service) guardTools(ctx context.Context, machine, session string, tools
 
 // ToolsFor is the assistant's own tool list for one conversation.
 func (s *Service) ToolsFor(ctx context.Context, machine, session string) []proto.Tool {
-	return s.guardTools(ctx, machine, session, s.Tools(ctx))
+	tools := s.Tools(ctx)
+	if machine == "" && session == "" {
+		return tools
+	}
+	return s.guardDenied(ctx, machine, session).filter(tools)
+}
+
+// readDispatchGuardUpdate handles the write envelope separately from persisted settings, which keep
+// their original representation. A missing target list is valid only for an explicit disable.
+func readDispatchGuardUpdate(r io.Reader, full bool, now time.Time) (DispatchGuard, error) {
+	var in struct {
+		Guard *struct {
+			Enabled   *bool          `json:"enabled"`
+			ExpiresAt *time.Time     `json:"expires_at"`
+			Targets   jsontext.Value `json:"targets"`
+		} `json:"dispatch_guard"`
+	}
+	strict := jsonv2.RejectUnknownMembers(true)
+	if err := jsonv2.UnmarshalRead(r, &in, strict); err != nil {
+		return DispatchGuard{}, err
+	}
+	if in.Guard == nil || in.Guard.Enabled == nil {
+		return DispatchGuard{}, errors.New("expected a dispatch_guard object with enabled")
+	}
+	g := DispatchGuard{Enabled: *in.Guard.Enabled, ExpiresAt: in.Guard.ExpiresAt}
+	if in.Guard.Targets != nil {
+		if in.Guard.Targets.Kind() != '[' {
+			return DispatchGuard{}, errors.New("dispatch_guard.targets must be an array")
+		}
+		if err := jsonv2.Unmarshal(in.Guard.Targets, &g.Targets, strict); err != nil {
+			return DispatchGuard{}, err
+		}
+		if len(g.Targets) == 0 {
+			g.Enabled = false
+		}
+	}
+	if err := g.validate(full, now); err != nil {
+		return DispatchGuard{}, err
+	}
+	if len(g.Targets) == 0 {
+		return DispatchGuard{Targets: []DispatchGuardTarget{}}, nil
+	}
+	return g, nil
 }
 
 func (s *Service) dispatchGuardRoutes() {
@@ -232,25 +288,16 @@ func (s *Service) dispatchGuardRoutes() {
 			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot change the dispatch guard"))
 			return
 		}
-		var in struct {
-			Guard DispatchGuard `json:"dispatch_guard"`
-		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
+		g, err := readDispatchGuardUpdate(http.MaxBytesReader(w, r.Body, 1<<20), full, time.Now().UTC())
+		if err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
-		if err := in.Guard.validate(full, time.Now().UTC()); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
-			return
-		}
-		if err := s.saveDispatchGuard(r.Context(), in.Guard); err != nil {
+		if err := s.saveDispatchGuard(r.Context(), g); err != nil {
 			apierr.Write(w, http.StatusInternalServerError, errors.New("the dispatch guard could not be saved"))
 			return
 		}
 		s.mcpChanges.notify() // existing sessions must not keep a list made before this policy change
-		if in.Guard.Targets == nil {
-			in.Guard.Targets = []DispatchGuardTarget{}
-		}
-		apierr.WriteJSON(w, map[string]any{"dispatch_guard": in.Guard})
+		apierr.WriteJSON(w, map[string]any{"dispatch_guard": g})
 	})
 }
