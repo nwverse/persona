@@ -4,7 +4,7 @@ accepted (outcome=done) with done_when needs every criterion once in checks (met
 
 Give accepted's outcome/reason/link. The hub handles conclusion cards and passes “Please verify” on acceptance unless user_check. needs_user can default to recommend at 24h/deadline; irreversible or visible_to_others only reminds. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or taking irreversible/external action.
 
-A non-main conversation reviewing another supervisor's task may only accept/cancel; send gaps with agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and waiting cards end.
+A non-main conversation reviewing another supervisor's task may only accept/cancel; send gaps with agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and waiting cards end.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -34,7 +34,7 @@ A non-main conversation reviewing another supervisor's task may only accept/canc
     },
     "note": {
       "type": "string",
-      "description": "rework: what the agent is to do (Chinese, concrete); needs_user: what the user is to decide; parked: anything more than reason, for your own record; cancelled: why; accepted: the result in a line"
+      "description": "{{if eq .Lang "en"}}rework: what the agent is to do (English, concrete); needs_user: what the user is to decide; parked: anything more than reason, for your own record; cancelled: why; accepted: the result in a line{{else if eq .Lang "ja"}}rework は Agent が行う具体的な作業を日本語で記述します。needs_user はユーザーが決めること、parked は reason 以外に記録する補足、cancelled は理由、accepted は結果を一行で記述します{{else}}rework: what the agent is to do (Chinese, concrete); needs_user: what the user is to decide; parked: anything more than reason, for your own record; cancelled: why; accepted: the result in a line{{end}}"
     },
     "outcome": {
       "type": "string",

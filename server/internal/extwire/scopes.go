@@ -58,6 +58,7 @@ var RouteScopes = map[string]string{
 	"GET /api/v1/assistant/worker-presets":                       ScopeAssistantStartDefaults,
 	"GET /api/v1/assistant/start-defaults":                       ScopeAssistantStartDefaults,
 	"PUT /api/v1/assistant/start-defaults":                       ScopeAssistantStartDefaults,
+	"POST /api/v1/assistant/start-defaults/preview":              ScopeAssistantStartDefaults,
 	"GET /api/v1/sessions/archived":                              ScopeAgentsRead,
 	"GET /api/v1/sessions":                                       ScopeAgentsRead,
 	"GET /api/v1/sessions/{mid}/{sid}/info":                      ScopeAgentsRead,

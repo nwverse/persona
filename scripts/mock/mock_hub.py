@@ -1613,6 +1613,13 @@ if os.environ.get("MOCK_TERMINAL_ONLY") == "1":
                          "", agent="kiro", launcher="kiro", read_only_reason="Persona 还不能读 kiro 的对话：手机上只能看终端、按键盘"))  # i18n-ignore
 
 
+# MOCK_OMP=1 (docs/integrations/omp.md): every computer lists the omp launcher, which takes no model, mode, effort or
+# ultracode (omp's own config decides) and starts with its first message, as the node does (control.go): a start that
+# is async or sets any of those is refused (omp_options), else it answers with omp's session, the first message in it.
+MOCK_OMP = os.environ.get("MOCK_OMP") == "1"
+OMP_LAUNCHER = {"name": "omp", "model": "", "agent": "omp", "agent_type": "omp"}
+
+
 # MOCK_RUN_HERE_CODEX=<mid,…> (#5504): those computers start Codex in a shell pane the user picked and keep that pane when
 # the start fails (run_here), so Run agent here offers their Codex launchers; the others' stay out, as an older node's.
 RUN_HERE_CODEX = {x.strip() for x in os.environ.get("MOCK_RUN_HERE_CODEX", "").split(",") if x.strip()}
@@ -14820,6 +14827,7 @@ LAUNCHER_MODELS["sonnetcc"] = dict(LAUNCHER_MODELS["claude"], locked="启动器�
 # The Codex App's launcher (MOCK_DESKTOP_APPS): the App picks a chat's model, so the node answers no models and why
 # (server/internal/node/launcher_models.go), as for the Claude desktop app's.
 LAUNCHER_MODELS["codex-app"] = {"agent": "codex", "models": [], "locked": "Codex App 用它自己选的模型运行这个对话。"}
+LAUNCHER_MODELS["omp"] = {"agent": "omp", "models": []}  # MOCK_OMP: omp has no list to ask for (node launcherModels)
 LAUNCHER_MODELS["claude-desktop"] = {"agent": "claude", "models": [], "locked": "Claude 桌面版用它自己选的模型运行这个会话。"}
 # MOCK_PASEO_PROVIDERS=1 (#8142): Paseo's Grok and Cursor providers, as the node lists a runtime's launcher models (agent
 # "paseo": the runtime's own id, for an agent the apps have no id for).
@@ -15109,6 +15117,8 @@ def machine_launchers(mid=""):
         out = [l for l in out if l["name"] != "codex"]
     if mid in RUN_HERE_CODEX:
         out = [dict(l, run_here=True, prompt_optional=True) if l.get("agent") == "codex" else l for l in out]
+    if MOCK_OMP:
+        out.append(dict(OMP_LAUNCHER))
     if MOCK_PROVIDERS:
         out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source", "pi") if l.get(k)}
                 for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api" and l["name"] != OWN_SERVICE_PROVIDER["name"]]
@@ -28791,11 +28801,14 @@ class H(BaseHTTPRequestHandler):
                 SESSIONS.append(w)
                 push_machine(w["machine_id"])
                 return self.send_json({"session": decorated_session(w)})
+            omp = MOCK_OMP and body.get("launcher") == "omp"
+            if omp and (body.get("async") or any(body.get(k) for k in ("model", "permission_mode", "effort", "ultracode"))):
+                return self.send_json({"error": "omp 的模型和思考强度由 omp 自己的配置决定，这次没有启动。", "code": "omp_options"}, 400)
             n = len(STARTED)
             START_IDS[0] += 1
             s = sess(body["machine_id"], "d4e6f8a0-0000-4000-8000-%012d" % START_IDS[0], (body.get("prompt") or "新会话").split("\n")[0], body.get("cwd", ""),
                      "working", "working", body.get("cwd", "").rsplit("/", 1)[-1] or "new", 9, body.get("tab_name") or "agent-%d" % n, n, 0, "",
-                     agent="codex" if codex else "claude")
+                     agent="codex" if codex else "omp" if omp else "claude")
             s["launcher"] = body.get("launcher") or "claude"
             if os.environ.get("MOCK_ORCA_CHILDREN") and body.get("workspace_id"):
                 w = next((w for w in mock_workspaces() if w["machine_id"] == s["machine_id"] and w["source_id"] == body["workspace_id"] and w["source"] == "orca"), None)
@@ -28804,6 +28817,8 @@ class H(BaseHTTPRequestHandler):
                     if w.get("parent_source_id"): s["parent_space_id"] = w["parent_source_id"]
             if body.get("model"): s["model"] = body["model"]  # picked in "New Agent"
             if codex:  # the node answers once the first message is in the thread's rollout
+                ITEMS[s["session_id"]] = [it("user", "text", 0, text=body["prompt"])]
+            if omp and (body.get("prompt") or "").strip():  # typed into omp's command (node start_agent.go)
                 ITEMS[s["session_id"]] = [it("user", "text", 0, text=body["prompt"])]
             if body.get("async"):  # answered at once, claude still starting (node/starting.go); MOCK_START_SECONDS later it is up
                 s.update(status="idle", state="idle", starting=True, title=body.get("name_hint") or s["title"])

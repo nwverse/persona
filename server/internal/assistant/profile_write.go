@@ -120,6 +120,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_auto_compact_tokens"))
 		return
 	}
+	if m := in.IdleReleaseMinutes; m != nil && (*m < minIdleReleaseMinutes || *m > maxIdleReleaseMinutes) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_release_minutes"))
+		return
+	}
 	if in.MinutesRetention != nil {
 		if err := json.Unmarshal(in.MinutesRetention, &in.MinutesDays); err != nil || in.MinutesDays == nil ||
 			*in.MinutesDays < minMinutesDays || *in.MinutesDays > maxMinutesDays {
@@ -244,6 +248,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.IdleAutoCompactTokens != nil {
 			v.IdleAutoCompactTokens = in.IdleAutoCompactTokens
+		}
+		if in.IdleReleaseMinutes != nil {
+			v.IdleReleaseMinutes = in.IdleReleaseMinutes
 		}
 		if in.StartRequestedTasks != nil {
 			v.StartRequestedTasks = in.StartRequestedTasks
