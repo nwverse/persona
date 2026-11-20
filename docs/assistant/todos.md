@@ -163,7 +163,7 @@ Records associations between to-dos and Agent sessions:
 - `released_at` (timestamptz): time active association was released; `NULL` while active.
 - `title` (text, NOT NULL, DEFAULT ''): session-title snapshot (still displayable beyond the session-list time window).
 - `cwd` (text, NOT NULL, DEFAULT ''): session working-directory snapshot.
-- `agent` (text, NOT NULL, DEFAULT ''): Agent-kind snapshot (`claude` / `codex`, etc.) written by manual, adoption/dispatch, workspace/automatic, planned, spawned, successor and independent-review links from the session or start answer's `session.agent` (planned and spawned starts fall back to the explicitly resolved launcher kind); empty means not known, and a later link with an empty value keeps the stored kind.
+- `agent` (text, NOT NULL, DEFAULT ''): Agent-kind snapshot (`claude` / `codex`, etc.) written by manual, adoption/dispatch, workspace/automatic, planned, spawned, quiet `agent_start`, launcher-repair, successor and independent-review links from the session or start answer's `session.agent`. Planned, spawned and quiet `agent_start` tasks fall back to the explicitly resolved launcher kind when the answer (or the adopted session after a lost answer) omits it. A repair uses only its own start answer. Empty means unknown, and a later link with an empty value keeps the stored kind.
 - `start_error` (text, NOT NULL, DEFAULT ''): asynchronous creation failure reason (viewable/removable in To-dos).
 - `source` (text, NOT NULL, DEFAULT 'manual'): association source:
   - `manual`: manually linked or handed to an existing Agent;

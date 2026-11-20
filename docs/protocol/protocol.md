@@ -1211,8 +1211,9 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "spaces":[{"machine_id":"…","space":"group/alpha","linked_at":"..."}],
  "agents":[{"machine_id":"…","session_id":"…","linked_at":"...","released_at":null,
            "title":"…","cwd":"…","agent":"claude","start_error":"","source":"manual|space|spawned|leader|worker|review","via":""}]}   // review: an independent reviewer, released from the start (#2173)
- // agents[].agent is the link's Agent-kind snapshot from the session or start answer's session.agent; planned and spawned
- // starts use the explicitly resolved launcher kind when the answer omits it. Empty means unknown; an empty relink keeps it.
+ // agents[].agent is the link's Agent-kind snapshot from the session or start answer's session.agent. Planned, spawned and quiet agent_start links
+ // fall back to the explicitly resolved launcher kind, including when agent_start adopts a session after a lost answer.
+ // A launcher-repair link uses only the repair Agent's start answer. Empty means unknown. An empty relink preserves the stored kind.
 
 // Item: one normalized transcript entry (one per content block)
 {"id":"<entry uuid>#<block idx>","seq":123,            // seq = transcript line number, monotonically increasing, used for increments and paging
