@@ -4,7 +4,8 @@
 import { useEffect, useState } from "react";
 import type { ModelBinding } from "../lib/model-config";
 import { customModel, defaultDetail, defaultModel, listedModel, modelDetail, modelName, modelRows, type AgentModel, type LauncherModels } from "../lib/launcher-models";
-import { cleanModelId, typedModelProblem } from "../lib/model-id";
+import { cleanModelId } from "../lib/model-id";
+import { typedModelProblem } from "../lib/model-id-input";
 import { Collapse, cx, IconButton, Spinner } from "./atoms";
 import { Icon } from "./icons";
 import { ModelIdField } from "./ModelIdField";

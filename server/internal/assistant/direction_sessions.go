@@ -322,7 +322,9 @@ func (s *Service) answerDirectionFiling(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if out.Changed {
-		s.directionTreeSoon()
+		// The snapshot's keep follows the book at once (#11515), and publishing builds the tree again. Never under the
+		// book's lock: fileDirectionSession has let it go, and the snapshot reads the book.
+		s.publish(r.Context())
 	}
 	apierr.WriteJSON(w, out)
 }
