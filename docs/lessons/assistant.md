@@ -842,3 +842,12 @@ the hub's record of what was sent before looking at the client.
 When merging no-output turn handling, keep account-sealed compaction ahead of `no_output` / `stopped` handling in triage
 and clients. A generic kind must not restore Continue for a permanent error; ordinary silent turns keep their own text
 and Continue. Test both paths together, including the clients' independent invalid and plain-text flags.
+
+## The hub's codes reach the manager in two shapes (#11393)
+
+A relay refusal was classified with `errors.As(err, &rpc.Error{})` alone. That misses the hub's own codes: over the bus,
+`busError` gives `machine_offline`, `node_closed` and `no_device` back as a `codedError` that wraps a Go error kind
+(`apierr.ErrOffline`, `rpc.ErrClosed`, `ErrNoDevice`), not an `*rpc.Error`, and the manager's own machines answer
+`apierr.ErrOffline` with no code at all. Read from the code, `conversation_send` to a computer that was away returned
+the error instead of queueing the message as #10194 meant it to. Read a code from either shape (`relayErrCode`) and
+test each failure in the shape production delivers it (`busError(&rpc.Error{…})`), not only as a bare `*rpc.Error`.
