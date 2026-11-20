@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -105,31 +107,74 @@ func contextFull(c proto.Session) bool {
 	return proto.ContextNearlyFull(int(c.ContextTokens), int(c.ContextWindow))
 }
 
-// compactable: c runs on a runtime whose own compaction the node can run before a message (#11137): Claude Code or
-// Codex, not a runtime's session (Paseo and the like).
+// compactable: c runs on a runtime whose own compaction the node can run before a message (#11137): Claude Code in one
+// of Persona's terminals, and Codex wherever Persona reaches it to resume or send: its terminal, a thread nothing runs
+// that the node resumes there with codex resume (codex_history), or its app-server (codex_app_server). Not the Codex
+// App's chats, a Claude outside Persona's terminals (claude_bg, claude_desktop, claude_cli: its inbox runs no command)
+// or a runtime's session (Paseo and the like).
 func compactable(c proto.Session) bool {
-	return c.SourceKind == "" && (c.Agent == "" || c.Agent == "claude" || c.Agent == "codex")
+	switch c.Agent {
+	case "", "claude":
+		return c.SourceKind == ""
+	case "codex":
+		return c.SpaceKind != codexAppSpace && (c.SourceKind == "" || c.SourceKind == "codex_history" || c.SourceKind == "codex_app_server")
+	}
+	return false
 }
 
-// notCompactable says why c cannot be compacted from Persona.
+// codexAppSpace is the space_kind of the Codex App's chats (node codex_desktop.go).
+const codexAppSpace = "codex_app"
+
+// notCompactable says why c cannot be compacted from Persona, and what then.
 func notCompactable(c proto.Session) string {
-	if c.SourceKind != "" {
+	switch {
+	case c.Agent == "codex" && c.SpaceKind == codexAppSpace:
+		return "it is a Codex App chat, which takes no /compact from Persona (the App compacts on its own)"
+	case c.SourceKind == proto.SourceClaudeBg || c.SourceKind == proto.SourceClaudeDesktop || c.SourceKind == proto.SourceClaudeTerminal:
+		return "it is a Claude outside Persona's terminals, whose inbox runs no /compact"
+	case c.SourceKind != "" && (c.Agent == "" || c.Agent == "claude" || c.Agent == "codex"):
+		return "it is a " + c.SourceKind + " session, which Persona cannot compact"
+	case c.SourceKind != "":
 		return "it runs in " + c.SourceKind + ", which has no compaction Persona can run"
 	}
 	return c.Agent + " has no compaction Persona can run"
 }
 
 // compactFailed is a send whose compaction of a nearly full context failed (the node's compact_failed): nothing was
-// sent; what to do instead. resumed: the agent was resumed for it and now rests with its context.
+// sent; where the agent stands and what to do instead. resumed: the agent was resumed for it. The node says when the
+// agent quit meanwhile (agent_quit): then it is stopped again, recorded as compact_failed, which the assistant may
+// resume (#11441); the receipt never says it rests when it does not run.
 func compactFailed(c proto.Session, am Device, err error, resumed bool) error {
-	state := "It keeps its context as it was"
-	if resumed {
-		state = "It was resumed and now rests with its context as it was"
+	quit := agentQuit(err)
+	var state string
+	switch {
+	case resumed && quit:
+		state = "It was resumed, but its process quit again (see what its terminal shows above); it is stopped as " +
+			"compact_failed, so you may resume it again once that is dealt with"
+	case resumed:
+		state = "It was resumed and runs with its context as it was"
+	case quit:
+		state = "Its process quit (see what its terminal shows above); it is stopped as compact_failed, so you may " +
+			"resume it once that is dealt with"
+	default:
+		state = "It keeps running with its context as it was"
 	}
 	return fmt.Errorf("could not compact %s on %s before your text: %w. %s; nothing was sent. Send again to try once "+
 		"more, or, if it cannot be compacted, start a replacement (read this one with agent_read and give it what it "+
 		"needs): for its task, task_plan with continues (the task's todo id) and continues_why; for work on no task, "+
 		"agent_start in its directory", agentLabel(c), am.Name, err, state)
+}
+
+// agentQuit: a node's compact_failed says the agent quit while it was compacted (refusal data agent_quit).
+func agentQuit(err error) bool {
+	var re *rpc.Error
+	if !errors.As(err, &re) || len(re.Data) == 0 {
+		return false
+	}
+	var d struct {
+		AgentQuit bool `json:"agent_quit"`
+	}
+	return json.Unmarshal(re.Data, &d) == nil && d.AgentQuit
 }
 
 // compactSendWait bounds a send that may compact first: a compaction takes minutes (node compactBeforeSendDeadline).

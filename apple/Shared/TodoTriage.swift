@@ -33,7 +33,7 @@ nonisolated enum TodoSection: String, CaseIterable, Sendable {
         switch self {
         case .waiting: StateName.needsYou.text
         case .working: StateName.working.text
-        case .justDone: String(localized: "Just Finished")
+        case .justDone: StateName.justFinished.text
         case .pr: String(localized: "PR to Merge")
         case .other: String(localized: "Other Open")
         case .shelved: String(localized: "Shelved")
@@ -200,7 +200,7 @@ nonisolated enum TodoTriageLogic {
             return concern ? at(.other, .rest) : at(.done, .failedStart)
         }
         if status == .needsYou || status == .interrupted { return at(.waiting, .agentAsks) }
-        if todo.doneAt == nil, review == .needsUser || ask?.outcome == "decide" || ask?.outcome == "cannot" {
+        if todo.doneAt == nil, todo.delivery?.waitsForOwner == true || review == .needsUser || ask?.outcome == "decide" || ask?.outcome == "cannot" {
             return at(.waiting, .ownerDecides)
         }
         if status == .working { return at(.working, .agentRunning) }

@@ -1,6 +1,6 @@
 import { formatDate, t } from "../i18n";
 import { currentHeaders, noteItemManager } from "./manager-choice";
-import { acceptanceStands, reviewState, type Supervision } from "./supervision";
+import { acceptanceStands, linkedParkInteraction, linkedParkOwnerAsk, parkInteractionID, reviewState, type Supervision } from "./supervision";
 import type { LineageStep, TaskBrief } from "./brief";
 import type { RuleSuggestion } from "./rule-suggestion";
 import type { TodoSummary } from "./todo-view-wire";
@@ -11,10 +11,10 @@ import { stateOf } from "./format";
 import { foldedState } from "./child-sessions";
 import { foldRows } from "./folded-rows";
 import { splitAgentSessions, type AgentGroup, type AgentMutes } from "./agent-groups";
-import type { AgentState, Machine, Session } from "./types";
+import type { AgentState, Interaction, Machine, Question, Session } from "./types";
 import type { Route } from "./router";
 import { byTime } from "./times";
-import { stateName } from "./state-labels";
+import { stateName, waitName } from "./state-labels";
 import { usageLimitAgent } from "./usage-limit";
 
 export type TodoAgentSource = "manual" | "space" | "spawned" | "chat";
@@ -24,6 +24,7 @@ export interface TodoAgent {
   session_id: string;
   linked_at: string;
   released_at?: string | null;
+  dismissed_at?: string | null;
   title?: string;
   cwd?: string;
   agent?: string;
@@ -36,6 +37,23 @@ export interface TodoSpace {
   machine_id: string;
   space: string;
   linked_at: string;
+}
+
+/** Private image metadata on a to-do; bytes are read separately from `url`. */
+export interface TodoImage {
+  id: string;
+  mime: string;
+  width: number;
+  height: number;
+  url: string;
+  name?: string;
+  size?: number;
+}
+
+/** The additive image upload accepted by both to-do creation paths. */
+export interface TodoCreateOptions {
+  images?: { id: string; mime: string; data: string; name?: string }[];
+  operationId?: string;
 }
 
 /** What the hub last read of a PR on GitHub (pr_status.go). */
@@ -69,6 +87,8 @@ export interface Todo {
   updated_at: string;
   agents?: TodoAgent[];
   spaces?: TodoSpace[];
+  /** Stored pictures; their private bytes are not embedded in list responses (#11084). */
+  images?: TodoImage[];
   /** The assistant conversation that opened it as a task, and the plan (docs/assistant/unified-entry.md); unset for a todo made by hand. */
   origin?: string;
   plan_id?: string;
@@ -95,6 +115,9 @@ export interface Todo {
   stage?: string;
   /** "code" uses the six stages; "general" hides them. Unset or unknown kinds keep the existing stage behavior. */
   stage_kind?: string;
+  /** Closed with nothing left to deploy (#11590): the bar ends with Done after `stage` instead of marking it current.
+   *  Unset while open, for work that went out or is held short of live, and from hubs before it. */
+  stage_done?: boolean;
   /** The pull or merge request the work is in, when the hub knows one. */
   pr_url?: string;
   /** Fresh, observational pull request facts; these do not change the task lifecycle. */
@@ -145,6 +168,8 @@ export function orphanedLine(todo: Pick<Todo, "orphaned" | "done_at">): { lead: 
  * `asked_at` is the round, which POST /todos/{id}/accept takes back (an earlier round's is 409).
  */
 export interface TodoAsk {
+  /** An expired ask_user's original form. Answer it on the to-do, not its expired interaction. */
+  questions?: Question[];
   outcome?: "done" | "cannot" | "decide" | string;
   verdict: string;
   recommend?: string;
@@ -276,13 +301,18 @@ export const TODO_STATUS_RANK: Record<TodoStatus, number> = {
   done: 8,
 };
 
-/** The text color of a status's tone (TODO_STATUS_INFO), as the Tasks page and the overview draw it. */
-export const TODO_TONE_CLASS: Record<(typeof TODO_STATUS_INFO)[TodoStatus]["tone"], string> = {
+/** A status's tone. `attention` is a waiting to-do's that waits on its owner (lib/todo-wait-reason.ts todoLook, #11090):
+ *  no status has it of its own. */
+export type TodoTone = "red" | "green" | "amber" | "idle" | "off" | "attention";
+
+/** The text color of a status's tone (TODO_STATUS_INFO, todoLook), as the Tasks page and the overview draw it. */
+export const TODO_TONE_CLASS: Record<TodoTone, string> = {
   red: "text-red",
   green: "text-green",
   amber: "text-orange",
   idle: "text-ink-3",
   off: "text-ink-3",
+  attention: "text-attention",
 };
 
 /** A task that waits for the user's review while nothing of it runs or asks, so it is the user's rather than just stopped
@@ -297,14 +327,16 @@ export function todoRank(todo: Todo, status: TodoStatus): number {
   return awaitsReview(todo, status) ? 2 : TODO_STATUS_RANK[status];
 }
 
-export const TODO_STATUS_INFO: Record<TodoStatus, { label: string; tone: "red" | "green" | "amber" | "idle" | "off" }> = {
+/** Each status's word and tone. Waiting's are the word for a wait nothing names, neutral: where the to-do and its Agents
+ *  are at hand, lib/todo-wait-reason.ts todoLook names what it waits on (#11090). */
+export const TODO_STATUS_INFO: Record<TodoStatus, { label: string; tone: TodoTone }> = {
   done: { label: stateName("done"), tone: "off" },
   needs_you: { label: stateName("needs_you"), tone: "amber" },
   interrupted: { label: stateName("interrupted"), tone: "red" },
   usage_limit: { label: t("lib-usage-limit.short"), tone: "amber" },
   unread: { label: stateName("unread"), tone: "green" },
   working: { label: stateName("working"), tone: "amber" },
-  waiting: { label: stateName("task_waiting"), tone: "amber" },
+  waiting: { label: waitName("unknown"), tone: "idle" },
   follow_up: { label: stateName("follow_up"), tone: "idle" },
   not_started: { label: stateName("not_started"), tone: "off" },
   failed: { label: stateName("failed"), tone: "red" },
@@ -315,7 +347,10 @@ export function isRemovable(status: TodoStatus): boolean {
   return status !== "working" && status !== "needs_you";
 }
 
-export type SessionLookup = (mid: string, sid: string) => Session | undefined;
+export type SessionLookup = ((mid: string, sid: string) => Session | undefined) & {
+  /** Exact pending-card lookup, present when the caller supplied its current interaction list. */
+  interaction?: (id: string) => Interaction | undefined;
+};
 
 /** The hub closed it because its task's work was judged finished; reopening undoes it (docs/assistant/todos.md "Automatic completion"). */
 export function isAutoDone(todo: Todo): boolean {
@@ -325,6 +360,19 @@ export function isAutoDone(todo: Todo): boolean {
 /** Its supervisor closed it after reviewing the work (done_by review, #3124). */
 export function isReviewDone(todo: Todo): boolean {
   return Boolean(todo.done_at) && todo.done_by === "review";
+}
+
+/** A cancelled task: its supervisor ended it without the work being accepted (the row's status line says Cancelled).
+ *  Only this outcome is struck through, so an accepted or deployed one does not read as thrown away (#11677). */
+export function isCancelled(todo: Todo): boolean {
+  return isReviewDone(todo) && todo.supervision?.state === "cancelled";
+}
+
+/** Whether a finished row strikes its title through: only a cancelled to-do (#11677). A task that succeeded — accepted,
+ *  deployed, ticked by the owner or auto-completed — keeps a plain muted title; the filled check and the muted tone
+ *  already say it is closed. A row still open (a failed start waiting on the owner) is never struck (#3713). */
+export function strikesThrough(todo: Todo, open: boolean): boolean {
+  return !open && isCancelled(todo);
 }
 
 /** An open task its supervisor accepted, reopened by the hub when its agent got more work, with nothing of it running
@@ -344,16 +392,29 @@ export function shownStatus(todo: Todo, status: TodoStatus): TodoStatus {
 export function todoStatusLabel(todo: Todo, status: TodoStatus): string {
   if (acceptedAtRest(todo, status)) return t("lib-todos.review_done");
   if (status === "done" && isReviewDone(todo)) return todo.supervision?.state === "cancelled" ? t("lib-todos.review_cancelled") : t("lib-todos.review_done");
+  if (status === "follow_up" && todo.supervision?.state === "parked" && todo.supervision.parked?.handoff && !openAsk(todo)) {
+    return TODO_STATUS_INFO.waiting.label;
+  }
   return status === "done" && isAutoDone(todo) ? t("lib-todos.auto_done") : TODO_STATUS_INFO[status].label;
 }
 
-export function makeSessionLookup(sessions: Session[] | Record<string, Session[]>): SessionLookup {
+export function withInteractionLookup(base: SessionLookup, interactions: readonly Interaction[]): SessionLookup {
+  const lookup: SessionLookup = (mid: string, sid: string) => base(mid, sid);
+  // Resolve only when a park carries an explicit ID; ordinary status reads do not scan the pending cards.
+  lookup.interaction = (id) => interactions.find((ix) => ix.id === id);
+  return lookup;
+}
+
+export function makeSessionLookup(sessions: Session[] | Record<string, Session[]>, interactions?: readonly Interaction[]): SessionLookup {
+  let base: SessionLookup;
   if (Array.isArray(sessions)) {
     const map = new Map<string, Session>();
     for (const s of sessions) map.set(`${s.machine_id}/${s.session_id}`, s);
-    return (mid, sid) => map.get(`${mid}/${sid}`);
+    base = (mid, sid) => map.get(`${mid}/${sid}`);
+  } else {
+    base = (mid, sid) => (sessions[mid] ?? []).find((s) => s.session_id === sid);
   }
-  return (mid, sid) => (sessions[mid] ?? []).find((s) => s.session_id === sid);
+  return interactions ? withInteractionLookup(base, interactions) : base;
 }
 
 /**
@@ -373,6 +434,14 @@ export function makeSessionLookup(sessions: Session[] | Record<string, Session[]
 export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
   if (todo.start_error) return "failed";
   if (todo.done_at) return "done";
+  const linkedID = parkInteractionID(todo);
+  const ownerAsk = linkedParkOwnerAsk(todo);
+  const viewKeepsPark = linkedID && todo.view && !ownerAsk && todo.view.section !== "needs_you" && todo.view.section !== "can_wait";
+  const candidate = viewKeepsPark ? undefined : linkedID ? lookup?.interaction?.(linkedID) : undefined;
+  const linked = candidate && linkedParkInteraction(todo, [candidate]);
+  if (linked) return "needs_you";
+  // With no pending-card list, use the manager's view; a supplied list, including an empty one after resolution, wins.
+  if (linkedID && !lookup?.interaction && ownerAsk) return "needs_you";
   const active = (todo.agents ?? []).filter((a) => !a.released_at);
   if (active.length === 0) return "not_started";
 
@@ -392,6 +461,10 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
     // its child sessions' state folded in (#5120): one waiting on the user makes the task wait, one working works
     const st: AgentState = s ? foldedState(s) : "offline";
     if (st === "needs_you") {
+      if (linkedID && !linked && s?.work?.interaction_id === linkedID) {
+        // The exact linked card is gone; this is its stale session state, not a new owner question.
+        continue;
+      }
       hasNeedsYou = true;
       break;
     }
@@ -762,14 +835,40 @@ export async function setDecisionSupersedes(todoId: string, id: string, supersed
 // ── API helpers ──────────────────────────────────────────────
 
 /** A new to-do; `due` makes it due at a moment or on a day (one made on the calendar, #2029). */
-export async function createTodo(title: string, notes?: string, due?: { due_at?: string; due_date?: string }): Promise<Todo> {
+type TodoCreateResponse = { todo?: Todo; state?: string };
+
+/** A 202 receipt is not a created to-do. An older manager may also accept the request while ignoring its new image
+ * field; never call that a success or leave its image-less to-do behind (#11084). */
+export async function confirmTodoCreate(result: TodoCreateResponse, images: TodoCreateOptions["images"], request: Parameters<typeof api>[1]): Promise<Todo> {
+  if (request?.isAuthContextCurrent && !request.isAuthContextCurrent()) throw new Error("The editor connection changed");
+  if (result.state === "pending" || result.state === "unknown") throw new Error(t("lib-todos.create_unconfirmed"));
+  const todo = result.todo;
+  if (!todo || typeof todo.id !== "string" || !todo.id) throw new Error(t("lib-todos.create_unconfirmed"));
+  if (images?.length) {
+    const stored = todo.images ?? [];
+    const matches = stored.length === images.length && images.every((wanted) => stored.some((image) => image.id === wanted.id && image.mime === wanted.mime));
+    if (!matches) {
+      try {
+        await api(`/todos/${enc(todo.id)}`, { ...request, method: "DELETE" });
+      } catch {
+        throw new Error(t("lib-todos.images_cleanup_failed"));
+      }
+      throw new Error(t("lib-todos.images_not_saved"));
+    }
+  }
+  return todo;
+}
+
+export async function createTodo(title: string, notes?: string, due?: { due_at?: string; due_date?: string }, options?: TodoCreateOptions): Promise<Todo> {
+  const withImages = Boolean(options?.images?.length);
+  const headers = withImages ? { ...currentHeaders(), "X-Persona-Op-Id": options!.operationId! } : currentHeaders();
   // a to-do made here is the current assistant's (the list shows only its own)
-  const r = await api<{ todo: Todo }>("/todos", {
+  const r = await api<TodoCreateResponse>("/todos", {
     method: "POST",
-    headers: currentHeaders(),
-    json: { title: title.trim(), notes: notes?.trim() || undefined, ...due },
+    headers,
+    json: { title: title.trim(), notes: notes?.trim() || undefined, ...due, ...(withImages ? { images: options!.images } : {}) },
   });
-  return r.todo;
+  return confirmTodoCreate(r, options?.images, { headers });
 }
 
 /** A todo change as PATCH takes it; due_at / due_date / remind_at null clears them (#1683). */

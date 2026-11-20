@@ -55,6 +55,7 @@ internal class GroupNames(val namespace: String?) {
         is MessageSendStateEvent -> value.copy(machineId = machineId(value.machineId))
         is ItemsEvent -> value.copy(machineId = machineId(value.machineId))
         is SessionsEvent -> value.copy(machineId = machineId(value.machineId), sessions = value.sessions.map(::session))
+        is SessionRowEvent -> value.copy(session = session(value.session))
         is MachinesEvent -> value.copy(machines = value.machines.map(::machine))
         is RevsEvent -> value.copy(machineId = machineId(value.machineId))
         is InteractionEvent -> value.copy(interaction = interaction(value.interaction))
@@ -125,6 +126,9 @@ internal fun DraftRepository.inGroup(names: GroupNames): DraftRepository {
         override suspend fun save(key: DraftKey, text: String, expectedVersion: Long,
             attachments: List<DraftAttachment>, sessionVersion: DraftSessionVersion?) =
             names.draft(source.save(names.rawDraftKey(key), text, expectedVersion, attachments, sessionVersion))
+        override suspend fun save(key: DraftKey, text: String, expectedVersion: Long,
+            attachments: List<DraftAttachment>, sessionVersion: DraftSessionVersion?, hasPickedSavedPrompt: Boolean) =
+            names.draft(source.save(names.rawDraftKey(key), text, expectedVersion, attachments, sessionVersion, hasPickedSavedPrompt))
     }
 }
 
@@ -172,6 +176,10 @@ internal fun ChatActions.inGroup(names: GroupNames): ChatActions {
         override suspend fun verify(session: Session, action: ChatAction) = source.verify(names.rawSession(session), action)
         override suspend fun editQueue(session: Session, keep: List<Int>) = source.editQueue(names.rawSession(session), keep)
         override suspend fun sendQueuedNow(session: Session) = source.sendQueuedNow(names.rawSession(session))
+        override suspend fun retryUndelivered(session: Session, messageId: String) =
+            source.retryUndelivered(names.rawSession(session), messageId)
+        override suspend fun deleteUndelivered(session: Session, messageId: String) =
+            source.deleteUndelivered(names.rawSession(session), messageId)
         override suspend fun info(session: Session) = source.info(names.rawSession(session))
         override suspend fun completeRow(session: Session) = source.completeRow(names.rawSession(session))?.let(names::session)
         override suspend fun childRows(session: Session) = source.childRows(names.rawSession(session)).map(names::session)
@@ -281,6 +289,8 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun launchers(machineId: String) = source.launchers(names.rawMachine(machineId))
         override suspend fun assistantLaunchers(machineId: String) = source.assistantLaunchers(names.rawMachine(machineId))
         override suspend fun assistantLauncherList(machineId: String) = source.assistantLauncherList(names.rawMachine(machineId))
+        override suspend fun assistantLauncherList(machineId: String, refresh: Boolean) =
+            source.assistantLauncherList(names.rawMachine(machineId), refresh)
         override suspend fun launcherModels(machineId: String, launcher: String) = source.launcherModels(names.rawMachine(machineId), launcher)
         override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick) = source.setModelPick(names.raw(session), pick)
         override suspend fun clearModelPick(session: SessionKey) = source.clearModelPick(names.raw(session))
@@ -402,6 +412,8 @@ internal fun AgentCreationService.inGroup(names: GroupNames): AgentCreationServi
         override suspend fun newAgentModel() = source.newAgentModel()
         override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean) =
             source.launcherModels(names.rawMachine(machineId), launcher, refresh)
+        override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean, host: String?) =
+            source.launcherModels(names.rawMachine(machineId), launcher, refresh, host)
         override suspend fun worktreeStatus(machineId: String, cwd: String, kind: String?) = source.worktreeStatus(names.rawMachine(machineId), cwd, kind)
         override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String, kind: String?) =
             source.addWorktree(names.rawMachine(machineId), cwd, nameHint, branch, kind)
@@ -469,6 +481,8 @@ internal fun SessionFiles.inGroup(names: GroupNames): SessionFiles {
         override fun editsFiles(machineId: String) = source.editsFiles(names.rawMachine(machineId))
         override suspend fun rename(machineId: String, cwd: String, path: String, name: String) =
             source.rename(names.rawMachine(machineId), cwd, path, name)
+        override suspend fun move(machineId: String, cwd: String, path: String, directory: String, conflict: SessionMoveConflictPolicy?) =
+            source.move(names.rawMachine(machineId), cwd, path, directory, conflict)
         override suspend fun trash(machineId: String, cwd: String, paths: List<String>) = source.trash(names.rawMachine(machineId), cwd, paths)
         override suspend fun restore(machineId: String, trashIds: List<String>) = source.restore(names.rawMachine(machineId), trashIds)
     }

@@ -102,7 +102,8 @@ internal suspend fun createChatWiring(
     val composer = data.messages.connectComposer { transport ->
         HttpChatComposerService(data.scope, transport, connection, data.credentials.deviceToken,
             onRetryDelivery = data.messages::recordComposerDelivery,
-            onPairingExpired = { if (current()) connection.revoke() }, isCurrent = ::current)
+            onPairingExpired = { if (current()) connection.revoke() }, isCurrent = ::current,
+            onHeld = { session, held -> if (current()) repositories.sessions.showHeld(session, held) })
     }
     return ChatAppBindings(data.scope, data.coroutineScope, data.drafts, group,
         repositories.chats.trackActions(HttpChatActions(connection)), repositories.chats.trackComposer(composer),
@@ -153,6 +154,7 @@ private class RoutedAssistantManagement(
     override suspend fun launchers(machineId: String) = api().launchers(machineId)
     override suspend fun assistantLaunchers(machineId: String) = api().assistantLaunchers(machineId)
     override suspend fun assistantLauncherList(machineId: String) = api().assistantLauncherList(machineId)
+    override suspend fun assistantLauncherList(machineId: String, refresh: Boolean) = api().assistantLauncherList(machineId, refresh)
     override suspend fun launcherModels(machineId: String, launcher: String) = api().launcherModels(machineId, launcher)
     override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick) = api().setModelPick(session, pick)
     override suspend fun clearModelPick(session: SessionKey) = api().clearModelPick(session)

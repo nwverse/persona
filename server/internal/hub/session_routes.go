@@ -14,6 +14,8 @@ func (h *Hub) sessionRoutes(api *http.ServeMux) {
 	api.HandleFunc("GET /api/v1/sessions/{mid}/{sid}/items/{iid}/visualization", h.extensionReadable(h.withMachine(h.sessionVisualization)))
 	api.HandleFunc("GET /api/v1/sessions/{mid}/{sid}/items/{iid}/full", h.extensionReadable(h.withMachine(h.sessionItemFull)))
 	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/messages", h.withoutTerminalControls(h.withClientOp("message", h.withMachine(h.sendMessage))))
+	api.HandleFunc("GET /api/v1/sessions/{mid}/{sid}/agent-messages", h.withTerminalAgentTarget(h.terminalAgentCheck))
+	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/agent-messages", h.withTerminalAgentTarget(h.withClientOp("message", h.withMachine(h.sendMessage))))
 	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/attach", h.proxyBody("session.attach"))
 	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/interrupt", h.withClientOp("interrupt", h.withMachine(h.interruptSession)))
 	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/keys", h.proxyBody("session.keys"))

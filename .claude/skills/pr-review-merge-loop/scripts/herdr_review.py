@@ -389,7 +389,7 @@ def transcript_result(path, marker, schema):
     return value
 
 
-def wait_transcript(path, marker, schema, pane, unit, timeout):
+def wait_transcript(path, marker, schema, pane, unit, timeout, accepted_stall=False):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if path.is_file():
@@ -400,7 +400,9 @@ def wait_transcript(path, marker, schema, pane, unit, timeout):
                     raise
         agents = command("agent", "list", timeout=20).get("agents", [])
         agent = next((item for item in agents if item.get("pane_id") == pane), None)
-        if agent and agent.get("agent_status") == "blocked":
+        if agent and agent.get("agent_status") == "blocked" and accepted_stall:
+            accepted_stall = False
+        elif agent and agent.get("agent_status") == "blocked":
             raise RuntimeError("interactive reviewer requested an unexpected interaction")
         if not scope_running(unit):
             if path.is_file():
@@ -461,6 +463,44 @@ def terminal_result(screen, marker, schema):
     except (ValueError, jsonschema.ValidationError) as error:
         raise RuntimeError("interactive reviewer result does not match the watcher schema") from error
     return value
+
+
+def agent_state(pane):
+    agents = command("agent", "list", timeout=20).get("agents", [])
+    return next((item for item in agents if item.get("pane_id") == pane), None)
+
+
+def prompt_started(pane, transcript, marker, schema, unit):
+    """Retain accepted work, including a fast return to idle or a blocked turn."""
+    agent = agent_state(pane)
+    if agent is None:
+        return False
+    status = agent.get("agent_status")
+    if status in ("working", "blocked"):
+        return True
+    if status in ("idle", "done"):
+        try:
+            transcript_result(transcript, marker, schema)
+        except RuntimeError:
+            return False
+        return True
+    return False
+
+
+def submit_prompt(pane, prompt, transcript, marker, schema, unit):
+    """Keep an accepted prompt on its original pane across observation stalls."""
+    try:
+        command("agent", "prompt", pane, prompt, "--wait", "--until", "working",
+                "--until", "blocked",
+                "--timeout", str(int(_config.get("lifetime_seconds", 7200)) * 1000),
+                timeout=int(_config.get("prompt_timeout_seconds", 120)))
+    except RuntimeError as error:
+        if "agent prompt produced no observed state change" not in str(error):
+            raise
+        if not prompt_started(pane, transcript, marker, schema, unit):
+            raise RuntimeError("interactive reviewer prompt did not start: " + str(error)) from error
+        return True
+    return False
 
 
 def run(slot, flags):
@@ -526,18 +566,41 @@ def run(slot, flags):
                 session_id = wait_session_id(session_path, pane, unit)
                 transcript = transcript_path(os.getcwd(), session_id)
                 wait_agent(pane, unit)
-                command("agent", "prompt", pane, prompt, "--wait", "--until", "working",
-                        "--until", "blocked",
-                        "--timeout", str(int(_config.get("lifetime_seconds", 7200)) * 1000),
-                        timeout=int(_config.get("prompt_timeout_seconds", 120)))
+                accepted_stall = submit_prompt(pane, prompt, transcript, marker, schema, unit)
                 value = wait_transcript(transcript, marker, schema, pane, unit,
-                                        int(_config.get("lifetime_seconds", 7200)))
+                                        int(_config.get("lifetime_seconds", 7200)), accepted_stall)
                 result = {"is_error": False, "subtype": "success", "result": "",
                           "structured_output": value, "permission_denials": []}
                 sys.stdout.write(json.dumps(result, separators=(",", ":")))
             finally:
                 cleanup_tab()
                 cleanup_scope()
+
+
+def acquire_slot(root, slots, flags):
+    """Wait for a real free slot rather than failing a queued review.
+
+    The lock itself is the bound: no extra interactive agent is created while
+    waiting. Each request still has the watcher's overall review timeout.
+    """
+    while True:
+        for slot in range(slots):
+            lock = (root / ("slot-%02d.lock" % slot)).open("a+")
+            try:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    lock.close()
+                    continue
+                try:
+                    return run(slot, flags)
+                finally:
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+                    lock.close()
+            except BaseException:
+                lock.close()
+                raise
+        time.sleep(0.1)
 
 
 def main():
@@ -575,24 +638,11 @@ def main():
     slots = int(_config.get("slots", 1))
     if not 1 <= slots <= 64:
         raise RuntimeError("reviewer slots must be between 1 and 64")
-    locks = []
     try:
-        for slot in range(slots):
-            lock = (root / ("slot-%02d.lock" % slot)).open("a+")
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                lock.close()
-                continue
-            locks.append(lock)
-            return run(slot, flags)
-        raise RuntimeError("all %d bounded reviewer slots are occupied" % slots)
+        acquire_slot(root, slots, flags)
     finally:
         cleanup_tab()
         cleanup_scope()
-        for lock in locks:
-            fcntl.flock(lock, fcntl.LOCK_UN)
-            lock.close()
 
 
 if __name__ == "__main__":

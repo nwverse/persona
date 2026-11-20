@@ -172,6 +172,7 @@ class OkHttpHubConnection(
     @Volatile private var network = initialNetwork
     @Volatile private var foreground = true
     @Volatile private var socket: WebSocket? = null
+    private var socketDrop: (() -> Unit)? = null
     @Volatile private var mailbox: Channel<Signal>? = null
     /** Completed by [onWake] to cut a retry backoff short: the user is looking at hub content right now. */
     @Volatile private var retryWait: CompletableDeferred<Unit>? = null
@@ -647,6 +648,10 @@ class OkHttpHubConnection(
         }
         _heartbeat.value = Heartbeat(20, 15)
         _currentHello.value = null
+        val dropRecorded = AtomicBoolean()
+        fun recordDrop() {
+            if (dropRecorded.compareAndSet(false, true)) persona.core.contracts.DevProbe.socket("dropped")
+        }
         val owner = ownerOf(selected)
         resumed = false
         val resumeFrom = resumePoint
@@ -655,10 +660,6 @@ class OkHttpHubConnection(
         val ws = webSocketFactory.newWebSocket(
             authorized(socketUrl(selected.endpoint.baseUrl(), resumeFrom), owner).build(),
             object : WebSocketListener() {
-                private val dropRecorded = AtomicBoolean()
-                private fun recordDrop() {
-                    if (dropRecorded.compareAndSet(false, true)) persona.core.contracts.DevProbe.socket("dropped")
-                }
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     persona.core.contracts.DevProbe.socket("connected")
                     received()
@@ -707,6 +708,7 @@ class OkHttpHubConnection(
                 }
             },
         )
+        socketDrop = ::recordDrop
         socket = ws
         mailbox = messages
         _weakNetwork.value = false
@@ -976,6 +978,9 @@ class OkHttpHubConnection(
             recheck.cancel()
             syncing?.cancel()
             pingJob?.cancel()
+            // OkHttp's failure callback is asynchronous and the outer close also shuts down its dispatcher. Record
+            // this terminal socket locally before cancellation; the listener's later callback shares the same guard.
+            recordDrop()
             ws.cancel()
             messages.close()
             activity.close()
@@ -994,7 +999,7 @@ class OkHttpHubConnection(
         // The language the app shows (docs/protocol/i18n.md "Protocol"): this socket's notices, and the user's language.
         put("locale", persona.core.contracts.ClientLanguage.tag)
         putJsonArray("features") {
-            (setOf("endpoints", "ws_notify", "app_ping", "elicitation", ProtocolCompatibility.CAPABILITY) + config.clientFeatures).forEach { add(it) }
+            (setOf("endpoints", "ws_notify", "app_ping", "elicitation", persona.core.contracts.api.AgentMessageHoldFeature, ProtocolCompatibility.CAPABILITY) + config.clientFeatures).forEach { add(it) }
         }
         if ("heartbeat" in features) {
             putJsonObject("heartbeat") {
@@ -1228,6 +1233,10 @@ class OkHttpHubConnection(
         synchronized(lock) {
             if (closed) return
             closed = true
+            // Record this socket's terminal event before its callback dispatcher is stopped. Otherwise the first drop
+            // can be delivered after a later diagnostics sink is installed, attributing an old socket to a new owner.
+            socketDrop?.invoke()
+            socketDrop = null
             runner?.cancel()
             socket?.cancel()
             socket = null

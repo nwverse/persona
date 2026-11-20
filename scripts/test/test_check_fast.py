@@ -1,16 +1,18 @@
 """check-fast.sh runs the scripts/ unittests a change needs (#3968), and the scripts/test suites that guard docs,
-markdown, apple/ and deploy/docker/; Ctrl-C, SIGTERM and SIGHUP stop the checks it started. The server and web checks'
-inputs are tested in test_check_fast_inputs.py, split off so each file stays well under the per-suite limit of
-scripts/ci/python-tests.py on a loaded machine (#11017).
+markdown, apple/ and deploy/docker/; Ctrl-C, SIGTERM and SIGHUP stop the checks it started; the per-path table it reads
+its plan from (scripts/ci/check_fast_map.py, #11535) answers one line per path and names only checks it knows. The
+server and web checks' inputs are tested in test_check_fast_inputs.py, split off so each file stays well under the
+per-suite limit of scripts/ci/python-tests.py on a loaded machine (#11017).
 
-Each test builds a throwaway repository with check-fast.sh and stubs for the repository-wide checks it always picks
-for a scripts/ change (the privacy scan, the extension schema test, the PR workflow test), commits a base, makes a
-change on top and runs check-fast.sh --base against the base. The default-base tests run it without --base, against
-refs/remotes/origin/* refs they write themselves.
+Each test builds a throwaway repository with check-fast.sh, its table and stubs for the repository-wide checks it
+always picks for a scripts/ change (the privacy scan, the extension schema test, the PR workflow test), commits a base,
+makes a change on top and runs check-fast.sh --base against the base. The default-base tests run it without --base,
+against refs/remotes/origin/* refs they write themselves.
 """
 import importlib.util
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -27,6 +29,15 @@ GUARD_SUITES = ("test_doc_paths.py", "test_doc_go_paths.py", "test_doc_sections.
                 "test_apple_l10n.py", "test_docker_entrypoint.py")
 # A python3 that records each call ("<cwd>|<args>") instead of running anything.
 FAKE_PYTHON = '#!/bin/sh\nprintf "%s|%s\\n" "$PWD" "$*" >> "$FAKE_PYTHON_LOG"\n'
+# check-fast.sh and the per-path table it reads its plan from (#11535): what a throwaway repository needs to plan.
+CHECK_FAST_FILES = ("scripts/test/check-fast.sh", "scripts/ci/check_fast_map.py")
+
+
+def copy_check_fast(repo):
+    """Copy check-fast.sh and its table into the throwaway repository at repo."""
+    for name in CHECK_FAST_FILES:
+        (Path(repo) / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / name, Path(repo) / name)
 
 
 def ci_is_suite():
@@ -50,7 +61,7 @@ class ScriptsRepoTestCase(unittest.TestCase):
         self.repo = Path(tempfile.mkdtemp(prefix="check-fast-test-"))
         self.addCleanup(shutil.rmtree, self.repo)
         (self.repo / "scripts/test").mkdir(parents=True)
-        shutil.copy(ROOT / "scripts/test/check-fast.sh", self.repo / "scripts/test/check-fast.sh")
+        copy_check_fast(self.repo)
         self.write("scripts/privacy_check.py", "print('clean')\n")
         self.write("scripts/test/test_extension_schema.py", "")
         self.write("scripts/test/pr_needs_issue_test.mjs", "")
@@ -412,9 +423,11 @@ class CheckFastScriptsTests(ScriptsRepoTestCase):
 
     def test_check_fast_and_the_slot_helper_run_every_file_of_its_tests(self):
         # check-fast.sh's tests are three files (#11017); the other two import test_check_fast.py's fixtures, and
-        # test_check_fast_inputs.py runs check-fast.sh with heavy_slot.py, so a change to any of them runs them.
+        # test_check_fast_inputs.py runs check-fast.sh with heavy_slot.py, so a change to any of them, or to the table
+        # check-fast.sh plans from, runs them.
+        # android.sh's own suite does not run for check-fast.sh.
         everything = ("test_check_fast.py", "test_check_fast_guards.py", "test_check_fast_inputs.py")
-        for suite in (*everything, "test_heavy_slot.py"):
+        for suite in (*everything, "test_heavy_slot.py", "test_android_sh.py"):
             self.commit_on_top(f"scripts/test/{suite}", FAILING, "base")
         self.commit_on_top("scripts/heavy_slot.py", "", "base")
         self.commit_on_top("scripts/check-fast.sh", "#!/bin/bash\n", "base")
@@ -422,7 +435,9 @@ class CheckFastScriptsTests(ScriptsRepoTestCase):
             "scripts/test/check-fast.sh": everything,
             "scripts/check-fast.sh": everything,
             "scripts/test/test_check_fast.py": everything,
-            "scripts/heavy_slot.py": ("test_heavy_slot.py", "test_check_fast_inputs.py"),
+            "scripts/ci/check_fast_map.py": everything,  # the table check-fast plans from (#11535)
+            # test_android_sh.py runs android.sh with it (#11250).
+            "scripts/heavy_slot.py": ("test_heavy_slot.py", "test_check_fast_inputs.py", "test_android_sh.py"),
         }
         for path, suites in cases.items():
             with self.subTest(path=path):
@@ -433,6 +448,8 @@ class CheckFastScriptsTests(ScriptsRepoTestCase):
                 self.assertEqual(1, code, out)
                 for suite in suites:
                     self.assertIn(f"FAIL     scripts/test/{suite}", out)
+                if "test_android_sh.py" not in suites:
+                    self.assertNotIn("test_android_sh.py", out)
                 self.assertNotIn("scripts/tools/test_other.py", out)
 
     def test_the_debug_switch_list_and_its_checker_run_the_suites_that_read_them(self):
@@ -453,6 +470,36 @@ class CheckFastScriptsTests(ScriptsRepoTestCase):
                 self.assertIn("FAIL     scripts/test/test_apple_release_switch_names.py", out)
                 self.assertNotIn("scripts/tools/test_other.py", out)
 
+    def run_raw(self, *command, env=None):
+        """check-fast's exit code and output (stdout and stderr), with bytes that are not UTF-8 replaced."""
+        run = subprocess.run(command, cwd=self.repo, env=dict(os.environ, TMPDIR=str(self.repo), **(env or {})),
+                             capture_output=True, timeout=300)
+        return run.returncode, (run.stdout + run.stderr).decode("utf-8", "replace")
+
+    def test_output_that_is_not_utf8_keeps_its_log_tail(self):
+        # In a UTF-8 locale macOS sed stops at the first byte that is not UTF-8 ("illegal byte sequence"), so the
+        # summary lost a failed check's log tail (#11250).
+        self.write("scripts/tools/test_bytes.py",
+                   "import sys, unittest\n\nclass T(unittest.TestCase):\n    def test_bytes(self):\n"
+                   "        sys.stdout.buffer.write(b'\\xff\\xfe not UTF-8\\n')\n"
+                   "        sys.stdout.flush()\n        self.fail('the line after the bytes')\n")
+        utf8 = "en_US.UTF-8" if sys.platform == "darwin" else "C.UTF-8"
+        code, out = self.run_raw("bash", "scripts/test/check-fast.sh", "--base", "base", env={"LC_ALL": utf8})
+        self.assertEqual(1, code, out)
+        self.assertIn("FAIL     scripts/tools/test_bytes.py", out)
+        self.assertIn("AssertionError: the line after the bytes", out)  # the log's tail, under the summary line
+        self.assertNotIn("illegal byte sequence", out)
+
+    def test_with_stderr_closed_the_checks_still_report(self):
+        # The job subshells copy stderr for the live slot lines (4>&2); with it closed every job failed with "no
+        # status" (#11250). check-fast opens it on /dev/null instead and runs without the live lines. A doc change:
+        # the plan of a changed scripts module once opened a pipe that took the free fd 2 and hid the failure.
+        self.write("docs/x.md", "changed\n")
+        code, out = self.run_raw("bash", "-c", 'exec 2>&-; exec bash scripts/test/check-fast.sh --base base')
+        self.assertEqual(0, code, out)
+        self.assertIn("PASS     scripts/test/test_doc_paths.py", out)
+        self.assertNotIn("no status", out)
+
     def test_all_reports_a_slow_suite_as_timeout_and_runs_the_rest(self):
         self.write("scripts/tools/test_other.py", PASSING)
         self.write("scripts/tools/test_slow.py", PASSING.replace("pass", "__import__('time').sleep(30)"))
@@ -469,6 +516,120 @@ class CheckFastScriptsTests(ScriptsRepoTestCase):
         self.assertIn("TIMEOUT  scripts unittest suites (10)", out)
         self.assertIn("1 suite(s) timed out: scripts/tools/test_slow.py", out)
 
+    def test_a_diff_without_the_table_stops_before_planning(self):
+        # Without the table nothing says what a path selects; --all does not read it.
+        (self.repo / "scripts/ci/check_fast_map.py").unlink()
+        self.write("scripts/tools/test_new.py", PASSING)
+        code, out = self.check_fast()
+        self.assertEqual(2, code, out)
+        self.assertIn("check-fast: picking the checks for a change needs python3 and scripts/ci/check_fast_map.py; "
+                      "no plan made", out)
+        self.assertNotIn("queued:", out)
+        code, out = self.check_fast("--all", "--dry-run")
+        self.assertEqual(0, code, out)
+        self.assertIn("queued: scripts unittest suites", out)
+
+    def test_a_diff_without_python3_stops_before_planning(self):
+        # The toolchain_without_node_and_go tools, python3 left out too.
+        bin_dir = Path(self.toolchain_without_node_and_go())
+        (bin_dir / "python3").unlink(missing_ok=True)
+        self.write("scripts/tools/test_new.py", PASSING)
+        code, out = self.check_fast(path=str(bin_dir))
+        self.assertEqual(2, code, out)
+        self.assertIn("check-fast: picking the checks for a change needs python3 and scripts/ci/check_fast_map.py; "
+                      "no plan made", out)
+
+    def test_a_table_that_fails_or_answers_wrong_stops_before_planning(self):
+        cases = {
+            "raise SystemExit('broken on purpose')\n":
+                "python3 scripts/ci/check_fast_map.py failed (broken on purpose)",
+            "": "python3 scripts/ci/check_fast_map.py listed fewer lines than paths",
+            "import sys\nfor line in sys.stdin:\n    print('web\\tbogus')\n":
+                "python3 scripts/ci/check_fast_map.py named a check this script does not know: bogus",
+        }
+        for table, message in cases.items():
+            with self.subTest(message=message):
+                self.write("scripts/ci/check_fast_map.py", table)
+                code, out = self.check_fast()
+                self.assertEqual(2, code, out)
+                self.assertIn(f"check-fast: {message}; no plan made", out)
+                self.assertNotIn("queued:", out)
+
+
+class CheckFastTableTests(unittest.TestCase):
+    """The per-path table check-fast plans from (scripts/ci/check_fast_map.py, #11535): its command line, the order its
+    rules are tried in, and that check-fast.sh and the table name the same checks."""
+
+    TABLE = ROOT / "scripts/ci/check_fast_map.py"
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location("check_fast_map", cls.TABLE)
+        cls.table = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.table)
+
+    def run_table(self, data, *args):
+        return subprocess.run([sys.executable, str(self.TABLE), *args], input=data, capture_output=True, timeout=60)
+
+    def test_it_prints_the_checks_of_each_path_on_its_own_line(self):
+        paths = ["web/src/App.tsx", "notes/todo.txt", "server/cmd/personad/main.go", "integrations/pi/a b.js",
+                 "web/src/App.tsx"]
+        run = self.run_table("".join(path + "\n" for path in paths).encode())
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual(["web\tsuite:scripts/test/test_doc_sections.py", "unmapped",
+                          "go-package:cmd/personad\tgo-guards\tsuite:scripts/test/test_doc_sections.py",
+                          "integration:pi\tsuite:scripts/test/test_doc_sections.py",
+                          "web\tsuite:scripts/test/test_doc_sections.py", ""], run.stdout.decode().split("\n"))
+        self.assertEqual(b"", self.run_table(b"").stdout)
+
+    def test_a_path_that_is_not_utf8_keeps_its_bytes_and_its_line(self):
+        run = self.run_table(b"integrations/\xff/x.js\nnotes/\xfe\n")
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertEqual(b"integration:\xff\tsuite:scripts/test/test_doc_sections.py\nunmapped\n", run.stdout)
+
+    def test_help_prints_the_usage_and_anything_else_is_refused(self):
+        run = self.run_table(b"", "--help")
+        self.assertEqual(0, run.returncode)
+        self.assertIn(b"check-fast's per-path table", run.stdout)
+        self.assertEqual(2, self.run_table(b"", "--each").returncode)
+
+    def test_the_first_rule_of_a_group_that_matches_wins(self):
+        checks = self.table.checks
+        # A dedicated script's own rule, not the scripts/* one after it.
+        self.assertEqual(["external-refs", "suite:scripts/test/test_doc_sections.py"],
+                         checks("scripts/test/test_external_service_refs.py"))
+        # server/: a package group, a file directly in plugins/ (the guards run it), anything else a build.
+        self.assertEqual(["go-package:internal/hub", "go-guards", "suite:scripts/test/test_doc_wire.py",
+                          "suite:scripts/test/test_doc_sections.py"], checks("server/internal/hub/hub.go"))
+        self.assertEqual(["go-guards", "suite:scripts/test/test_doc_sections.py"], checks("server/plugins/plugins.go"))
+        self.assertEqual(["server-build", "go-guards"], checks("server/internal/README.md")[:2])
+        # A markdown file in a wire-list package is a doc first: the four doc suites, not the wire list alone.
+        self.assertIn("suite:scripts/test/test_doc_paths.py", checks("server/internal/proto/README.md"))
+        # name:test_* matches the file name only: a test file is not a slot caller, a file in a test_ directory is.
+        heavy = "suite:scripts/test/test_heavy_slot.py"
+        self.assertNotIn(heavy, checks("scripts/operations/test_pr_watch.py"))
+        self.assertIn(heavy, checks("scripts/operations/test_tools/watch.py"))
+        self.assertIn(heavy, checks("scripts/operations/pr_watch.py"))
+
+    def test_check_fast_and_the_table_name_the_same_checks(self):
+        text = (ROOT / "scripts/test/check-fast.sh").read_text()
+        block = text[text.index('case "$_c" in'):]
+        block = block[:block.index("esac")]
+        handled = set(re.findall(r"^\s+([a-z-]+)(?::\*)?\)", block, re.M))
+        self.assertEqual(set(self.table.CHECKS) | {"suite"}, handled)
+        named = {check for group in self.table.TABLE for _, listed in group for check in listed}
+        self.assertEqual(set(self.table.CHECKS), {check for check in named if "/" not in check})
+
+    def test_every_suite_the_table_names_is_a_unittest_suite_ci_runs(self):
+        is_suite = ci_is_suite()
+        suites = self.table.suites()
+        self.assertGreater(len(suites), 20)
+        for suite in suites:
+            with self.subTest(suite=suite):
+                self.assertTrue(suite.startswith("scripts/") and Path(suite).name.startswith("test_"), suite)
+                self.assertTrue((ROOT / suite).is_file(), suite)
+                self.assertTrue(is_suite(ROOT / suite), suite)
+
 
 # A privacy-scan stub that never finishes on its own: it records its own pid, its parent's (the GNU timeout that runs
 # it) and a sleeping child's, then waits.
@@ -481,6 +642,19 @@ time.sleep(60)
 """
 
 
+# The signals the tests send. A child inherits an ignored signal, and a shell can never trap one that was ignored when
+# it started, so check-fast.sh starts with them at their defaults whatever this runner got: check-fast runs each suite
+# as a background job, which bash starts with SIGINT ignored, and nohup or a detached shell ignores SIGHUP
+# (docs/lessons/testing.md, "Signal tests").
+SIGNALS = (signal.SIGINT, signal.SIGHUP, signal.SIGTERM)
+
+
+def default_signals():
+    """preexec_fn: SIGINT, SIGHUP and SIGTERM at their defaults in the child, as a terminal starts check-fast.sh."""
+    for sig in SIGNALS:
+        signal.signal(sig, signal.SIG_DFL)
+
+
 @unittest.skipUnless(shutil.which("ps"), "the signal tests list processes with ps")
 @unittest.skipUnless(shutil.which("timeout") or shutil.which("gtimeout"), "check-fast.sh needs GNU timeout")
 class CheckFastSignalTests(unittest.TestCase):
@@ -490,7 +664,7 @@ class CheckFastSignalTests(unittest.TestCase):
         self.repo = Path(tempfile.mkdtemp(prefix="check-fast-signal-"))
         self.addCleanup(shutil.rmtree, self.repo, True)
         (self.repo / "scripts/test").mkdir(parents=True)
-        shutil.copy(ROOT / "scripts/test/check-fast.sh", self.repo / "scripts/test/check-fast.sh")
+        copy_check_fast(self.repo)
         (self.repo / "scripts/privacy_check.py").write_text(HANGING_CHECK)
         (self.repo / "scripts/test/test_extension_schema.py").write_text("")
         (self.repo / "scripts/test/pr_needs_issue_test.mjs").write_text("")
@@ -516,11 +690,13 @@ class CheckFastSignalTests(unittest.TestCase):
 
     def interrupt(self, sig, code, group=False):
         pid_file = self.repo / "scripts/privacy_check.py.pids"
+        pid_file.unlink(missing_ok=True)  # a test that interrupts twice waits for the second run's check
         # An absolute script path puts the repo into the job subshells' command lines; TMPDIR puts it into tee's.
-        # start_new_session keeps a stray signal off the test runner.
+        # start_new_session keeps a stray signal off the test runner; default_signals undoes what the runner ignores.
         proc = subprocess.Popen(["bash", str(self.repo / "scripts/test/check-fast.sh"), "--base", "base"],
                                 cwd=self.repo, env=dict(os.environ, TMPDIR=str(self.repo)), stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True, start_new_session=True)
+                                stderr=subprocess.STDOUT, text=True, start_new_session=True,
+                                preexec_fn=default_signals)
         pids = set()
         try:
             deadline = time.monotonic() + 30
@@ -575,6 +751,17 @@ class CheckFastSignalTests(unittest.TestCase):
     def test_sighup_to_the_process_group_stops_the_running_checks(self):
         # Closing a terminal or a tmux pane sends SIGHUP to the whole foreground process group.
         self.interrupt(signal.SIGHUP, 129, group=True)
+
+    def test_a_runner_that_ignores_the_signals_does_not_pass_that_on(self):
+        # As check-fast runs this suite: a background job with SIGINT ignored, here SIGHUP and SIGTERM too (#11250).
+        saved = {sig: signal.signal(sig, signal.SIG_IGN) for sig in SIGNALS}
+        try:
+            for sig, code in ((signal.SIGINT, 130), (signal.SIGHUP, 129)):
+                with self.subTest(signal=sig.name):
+                    self.interrupt(sig, code)
+        finally:
+            for sig, handler in saved.items():
+                signal.signal(sig, handler)
 
 
 if __name__ == "__main__":

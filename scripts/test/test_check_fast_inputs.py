@@ -27,8 +27,9 @@ try:
 except ImportError:  # Windows
     fcntl = None
 
-# The stubbed suites and the passing test the throwaway repositories share with test_check_fast.py.
-from test_check_fast import GUARD_SUITES, PASSING
+# The stubbed suites, the passing test and the copy of check-fast the throwaway repositories share with
+# test_check_fast.py.
+from test_check_fast import GUARD_SUITES, PASSING, copy_check_fast
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -48,7 +49,7 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.repo = Path(tempfile.mkdtemp(prefix="check-fast-test-"))
         self.addCleanup(shutil.rmtree, self.repo)
         (self.repo / "scripts/test").mkdir(parents=True)
-        shutil.copy(ROOT / "scripts/test/check-fast.sh", self.repo / "scripts/test/check-fast.sh")
+        copy_check_fast(self.repo)
         self.write("scripts/privacy_check.py", "print('clean')\n")
         self.write("scripts/test/test_extension_schema.py", "")
         self.write("scripts/test/pr_needs_issue_test.mjs", "")
@@ -199,6 +200,56 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.assertEqual(0, run.returncode, run.stdout + run.stderr)
         self.assertIn("queued: server go test ./internal/contract/...", run.stdout)
         self.assertIn("queued: android i18n", run.stdout)
+
+    def plan(self, listed, env=None):
+        """check-fast's plan for the listed paths: (exit code, output)."""
+        run = subprocess.run(["bash", "scripts/test/check-fast.sh", "--dry-run", "--changed-from", "-"], cwd=self.repo,
+                             env=env or self.env, input="".join(p + "\n" for p in listed), capture_output=True,
+                             text=True, timeout=300)
+        return run.returncode, run.stdout + run.stderr
+
+    def test_a_large_client_diff_still_runs_the_packages_that_name_its_files(self):
+        # One alternation of every changed client path once grew past what git grep compiles, and every Go reader of a
+        # large apple/ or android/ diff was dropped without a word (#11250).
+        self.write("server/internal/contract/contract_test.go",
+                   'package contract\n\nvar models = read("apple/Shared/Models.swift")\n')
+        self.write("server/internal/kotlin/kotlin_test.go",
+                   'package kotlin\n\nvar sources = []string{"x", "android/core/contracts/src/Calls.kt"}\n')
+        self.write("server/internal/samples/samples_test.go",
+                   'package samples\n\nconst source = "apple/Shared/Models.swift: Fold"\n'
+                   '// Not "apple/Persona/Commented.swift" either: a comment line.\n')
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "readers")
+        listed = [f"apple/Generated/Group{i // 100}/File{i}.swift" for i in range(4000)]
+        listed += [f"android/generated/src/main/kotlin/File{i}.kt" for i in range(1000)]
+        listed += ["apple/Shared/Models.swift", "android/core/contracts/src/Calls.kt", "apple/Persona/Commented.swift"]
+        code, out = self.plan(listed)
+        self.assertEqual(0, code, out[-2000:])
+        queued = sorted(line.strip() for line in out.splitlines() if line.startswith("  queued: server go test"))
+        self.assertEqual(["queued: server go test ./internal/contract/...",
+                          "queued: server go test ./internal/kotlin/..."], queued, out[-2000:])
+
+    def test_a_search_that_fails_stops_the_plan(self):
+        # A reader a failed search would have found is not run otherwise: check-fast stops and says so (#11250).
+        bin_dir = Path(tempfile.mkdtemp(prefix="check-fast-git-"))
+        self.addCleanup(shutil.rmtree, bin_dir)
+        git = shutil.which("git")
+        # A git whose grep fails as one that cannot compile its pattern does; everything else is the real git.
+        (bin_dir / "git").write_text('#!/bin/sh\n'
+                                     'if [ "$1" = grep ]; then echo "fatal: no grep today" >&2; exit 128; fi\n'
+                                     f'exec "{git}" "$@"\n')
+        (bin_dir / "git").chmod(0o755)
+        env = dict(self.env, PATH=f"{bin_dir}{os.pathsep}{self.env['PATH']}")
+        self.write("scripts/tools/helper.py", "")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "helper")
+        for path in ("apple/Shared/Models.swift", "docs/example-guide.md", "spec/fixtures/x.json",
+                     "scripts/tools/helper.py"):
+            with self.subTest(path=path):
+                code, out = self.plan([path], env=env)
+                self.assertEqual(2, code, out)
+                self.assertRegex(out, r"check-fast: searching .* failed \(git grep exit 128\): fatal: no grep today")
+                self.assertNotIn("dry run,", out)
 
     def test_an_sdk_ts_source_runs_the_trusted_adapter_check(self):
         # The trusted Deno adapter bundles sdk/ts/src (#4221): a change there runs denohost's tests, where
@@ -504,7 +555,7 @@ class CheckFastWebInputsTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.repo)
         (self.repo / "scripts/test").mkdir(parents=True)
         (self.repo / "scripts/ci").mkdir(parents=True)
-        shutil.copy(ROOT / "scripts/test/check-fast.sh", self.repo / "scripts/test/check-fast.sh")
+        copy_check_fast(self.repo)
         shutil.copy(ROOT / "scripts/ci/paths.py", self.repo / "scripts/ci/paths.py")
         self.write("scripts/privacy_check.py", "print('clean')\n")
         self.write("scripts/test/test_extension_schema.py", "")
@@ -708,7 +759,7 @@ class CheckFastPlanTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.repo)
         (self.repo / "scripts/test").mkdir(parents=True)
         (self.repo / "scripts/ci").mkdir(parents=True)
-        shutil.copy(ROOT / "scripts/test/check-fast.sh", self.repo / "scripts/test/check-fast.sh")
+        copy_check_fast(self.repo)
         shutil.copy(ROOT / "scripts/ci/paths.py", self.repo / "scripts/ci/paths.py")
         self.write("scripts/privacy_check.py", "print('clean')\n")
         self.write("server/go.mod", "module example.com/server\n")

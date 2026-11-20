@@ -244,6 +244,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		}
 		params := map[string]any{"name": req.Name, "args": req.Args, "session_id": sid,
 			"assistant": assistant, "guest": req.Guest || n.guestOf(sid) != nil}
+		n.putSourcePermission(c, params, sid, req.Name, req.Args)
 		if origin := n.assistantOrigin(sid); origin != "" {
 			params["origin"] = origin
 		}
@@ -367,6 +368,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		ctx = withHookCall(ctx, req)
 	}
 	defer n.hookFlights.enter(in.SessionID)() // its process waits on this call: not idle (model_restore.go)
+	if n.sessionBlocked(in.SessionID, in.Cwd) {
+		return nil, nil // a blocked Agent folder (agentdirs.go): nothing reported, no card; Claude Code asks itself
+	}
 	if req.ReportOnly && !n.takesReport(in) {
 		return nil, nil // before the counters: a session the plugin reports for would count each prompt twice
 	}

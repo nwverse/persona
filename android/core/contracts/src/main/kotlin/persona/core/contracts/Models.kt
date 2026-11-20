@@ -102,6 +102,8 @@ data class Machine(
     @SerialName("error_code") val errorCode: String? = null,
     /** The manager it belongs to (docs/assistant/managers.md「Ownership」); null from an older hub: the default manager. */
     @SerialName("manager") val manager: String? = null,
+    /** The default for new sessions among [engineHosts]. Older hubs describe it with [engine]. */
+    @SerialName("engine_default") val engineDefault: String? = null,
 ) {
     val displayName: String get() = name.ifEmpty { id }
     val pending: Boolean get() = trust == "pending"
@@ -452,7 +454,11 @@ data class Session(
      * process by the node; #1379, #3957). False while unknown and from older hubs: then Allow Everything is a start's choice.
      */
     @SerialName("bypass_available") val bypassAvailable: Boolean = false,
-    /** Allow Everything takes effect by a restart after the current turn (#6476). */
+    /**
+     * Allow Everything was picked for this terminal Claude Code while it cannot reach it with shift+tab: the node restarts
+     * the session in it once its turn is over (#6476, docs/integrations/claude-integration.md "Full access by a restart").
+     * Until then the session still runs in [permissionMode]. False from older hubs.
+     */
     @SerialName("bypass_pending") val bypassPending: Boolean = false,
     @SerialName("assistant") val assistant: Boolean = false,
     /** An assistant conversation put away (POST /api/v1/assistant/conversations/{id}/archive): kept, not listed. */
@@ -648,6 +654,10 @@ data class Session(
      * waits. [launcher] stays the one it runs on until then. Summary rows leave it out.
      */
     @SerialName("pending_switch") val pendingSwitch: PendingSwitch? = null,
+    /** Earlier stretches of this conversation, oldest first, after a handoff to the other engine. */
+    @SerialName("engine_history") val engineHistory: List<EngineLeg> = emptyList(),
+    /** The manager's current queue. A complete session row without the field has no held messages. */
+    val undelivered: List<HeldAgentMessage>? = null,
 ) {
     val key: SessionKey get() = SessionKey(machineId, sessionId)
     /** A chat of the health space ([space]), which the assistant's own lists leave out. */
@@ -706,6 +716,14 @@ data class Session(
     val displayTitle: String get() = if (title.isEmpty() || title == "Claude Code") folderName.ifEmpty { sessionId.take(8) } else title
     /** Codex in a terminal, or a thread from a Codex app-server / Codex history. */
     val isCodex: Boolean get() = agent == "codex" || sourceKind == "codex_app_server" || sourceKind == "codex_history"
+
+    /** The launcher's catalog identity when a row omits an explicit launcher. */
+    val effectiveLauncher: String get() = launcher?.takeIf(String::isNotEmpty) ?: when {
+        spaceKind == "codex_app" -> "codex-app"
+        isCodex -> "codex"
+        else -> "claude"
+    }
+
     /** Claude Code, or an older hub that does not name the agent: what Claude-only controls (modes, /model, /clear) need. */
     val isClaude: Boolean get() = !isCodex && (agent.isNullOrEmpty() || agent == "claude")
     /**
@@ -970,6 +988,17 @@ data class PendingSwitch(
 
 object PendingSwitchSerializer : WireSerializer<PendingSwitch>(PendingSwitch.generatedSerializer())
 
+/** The session and cutoff of one earlier stretch of an Agent conversation. */
+@KeepGeneratedSerializer
+@Serializable(with = EngineLegSerializer::class)
+data class EngineLeg(
+    @SerialName("session_id") val sessionId: String = "",
+    val agent: String = "",
+    @WireTime val until: String? = null,
+)
+
+object EngineLegSerializer : WireSerializer<EngineLeg>(EngineLeg.generatedSerializer())
+
 /** A pending "back to the configured model" (server proto.ModelRestore): `next_start`, the next start asks for [to]. */
 @KeepGeneratedSerializer
 @Serializable(with = ModelRestoreSerializer::class)
@@ -1157,6 +1186,8 @@ data class Interaction(
     @SerialName("tool_name_title") val toolNameTitle: String? = null,
     /** The rule a question a supervisor passed up suggests (#4929); the card comes again without it once it was answered. */
     val suggestion: RuleSuggestion? = null,
+    /** A prepared approval whose current deadline is authoritative while the hub keeps it pending; absent on older hubs. */
+    @SerialName("can_clarify") val canClarify: Boolean = false,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
     /** A supported following mode; absent, plan and unknown values keep the legacy approval choices (#3784). */

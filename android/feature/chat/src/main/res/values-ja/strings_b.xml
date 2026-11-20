@@ -227,6 +227,7 @@
     <string name="chat_link_unsupported_text">このリンクはPersonaで開けません。</string>
     <string name="chat_link_ok">OK</string>
     <string name="chat_link_open">開く</string>
+    <string name="chat_link_open_in_app">Persona で開く</string>
     <string name="chat_link_no_app">このリンクを開けるアプリがありません</string>
     <string name="chat_links_mail_title">メールを作成しますか？</string>
     <string name="chat_links_mail_text">メールアプリを開いてメールを作成します。</string>
@@ -254,6 +255,11 @@
     <string name="chat_menu_context_title">%1$s · メッセージ</string>
     <string name="chat_draft_read_failed">下書きを読み込めませんでした。入力内容はこのページに一時的に残ります</string>
     <string name="chat_draft_save_failed">下書きを保存できませんでした。入力内容はこのページに残っています。アプリを終了しないでください</string>
+    <string name="chat_dictation_stop">音声入力を停止</string>
+    <string name="chat_dictation_listening">聞き取り中…</string>
+    <string name="chat_dictation_slide">左にスライドしてキャンセル</string>
+    <string name="chat_dictation_stopped">音声入力が停止しました。もう一度お試しください。</string>
+    <string name="chat_dictation_permission">音声入力にはマイクの使用を許可してください。</string>
     <string name="chat_dictation_prompt">どうぞ。話した内容は入力欄に入ります</string>
     <string name="chat_dictation_unavailable">このスマートフォンには音声入力がありません</string>
     <string name="chat_source_label">@%1$s</string>
@@ -485,4 +491,5 @@
     <string name="chat_turn_fix_model_route_launcher">%1$sでモデルを使えません</string>
     <string name="chat_turn_fix_model_route_detail">モデル名が正しくないか、このモデルは今使えません。別のモデルを試してください。</string>
     <string name="chat_turn_fix_action">直す</string>
+    <string name="chat_slash_saved_prompts">保存済みプロンプト</string>
 </resources>

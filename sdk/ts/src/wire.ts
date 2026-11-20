@@ -754,6 +754,11 @@ export interface UIItem {
   hosts?: string[];
   /** nav_page only. */
   icon?: NavIcon;
+  /**
+   * nav_page only: the icon's named color in the sidebar, the same colors as a row's icon_color, drawn only while the
+   * owner chose Colored sidebar icons (#10822); without it the icon stays the sidebar's neutral ink.
+   */
+  icon_color?: Color;
   /** overview_card, capsule_card and widget only: a nav_page or extension_page of the same extension. */
   opens?: string;
   /** inbox_item only: one of the extension's own connectors. */
@@ -1144,6 +1149,8 @@ export interface UIPlace {
   connector?: string;
   /** A nav_page's sidebar group, its title in the request's language (#9071). */
   group?: UIGroup;
+  /** A nav_page's icon color as its manifest names it, drawn only with Colored sidebar icons (#10822). */
+  icon_color?: Color;
 }
 
 export interface UIPlaces {
@@ -2015,10 +2022,11 @@ export interface CarouselComponent {
 /**
  * Nodes joined by edges, drawn as a canvas the person can pan, zoom, fit and open full screen (UI version 10): work
  * split into parts, a plan's steps, a family of things. The app lays it out (layout, direction) and draws each node
- * with its own design system; tapping a node does its action, as a row's; a node with children folds them. Each node
- * counts as a component of the page. The hub refuses ids that repeat, an edge naming an unknown node or itself, a
- * repeated edge, a cycle, a second parent in a tree, and selected or folded naming an unknown node. In a card it is a
- * still preview that opens full screen. An older app gets a row per node in reading order, indented.
+ * with its own design system; tapping a node does its action, as a row's (or opens its in-place inspector first on
+ * the web when the node carries facts, detail or links, with the action inside); a node with children folds them.
+ * Each node counts as a component of the page. The hub refuses ids that repeat, an edge naming an unknown node or
+ * itself, a repeated edge, a cycle, a second parent in a tree, and selected or folded naming an unknown node. In a
+ * card it is a still preview that opens full screen. An older app gets a row per node in reading order, indented.
  */
 export interface GraphComponent {
   type: "graph";
@@ -2039,7 +2047,7 @@ export interface GraphComponent {
 
 /**
  * One node of a graph (UI version 10): a box with a title, a state line, a badge, an icon and a progress bar, in
- * tone's role color or color's named color (never both).
+ * tone's role color or color's named color (never both), with optional timing and inspector details.
  */
 export interface GraphNode {
   id: string;
@@ -2057,6 +2065,24 @@ export interface GraphNode {
    */
   group?: string;
   action?: Action;
+  /** Unix timestamp in seconds when this node started. */
+  started_at?: number;
+  /** Unix timestamp in seconds when this node ended; omitted while still running. */
+  ended_at?: number;
+  /** Short label/value readings shown in the node inspector. */
+  facts?: Fact[];
+  /** Plain-text summary, verifier feedback or error shown in the node inspector. */
+  detail?: string;
+  /** HTTPS links shown in the node inspector (for example work and verifier sessions across attempts). */
+  links?: GraphNodeLink[];
+}
+
+/**
+ * An https link shown in a graph node's inspector (UI version 10).
+ */
+export interface GraphNodeLink {
+  title: string;
+  url: string;
 }
 
 /**
@@ -2792,6 +2818,8 @@ export interface MessagingAccount {
   id: string;
   name?: string;
   avatar?: string;
+  /** Hub-supplied avatar path derived from avatar. Old sources supply only avatar. */
+  avatar_url?: string;
   tenant?: string;
   signed_in: boolean;
   unread?: number;
@@ -2809,6 +2837,8 @@ export interface MessagingConversation {
   id: string;
   name: string;
   avatar?: string;
+  /** Hub-supplied avatar path derived from avatar. Old sources supply only avatar. */
+  avatar_url?: string;
   kind: MessagingConversationKind;
   unread: number;
   marked_unread?: boolean;
@@ -2833,6 +2863,8 @@ export interface MessagingPerson {
   id?: string;
   name: string;
   avatar?: string;
+  /** Hub-supplied avatar path derived from avatar. Old sources supply only avatar. */
+  avatar_url?: string;
   kind?: string;
 }
 
@@ -3246,6 +3278,8 @@ export interface MessagingProfile {
   id: string;
   name: string;
   avatar?: string;
+  /** Hub-supplied avatar path derived from avatar. Old sources supply only avatar. */
+  avatar_url?: string;
   cover?: string;
   kind?: string;
   subtitle?: string;
@@ -3670,6 +3704,12 @@ export interface ConnectorTool {
    * list whatever a connector sent.
    */
   defer_loading?: boolean;
+  /**
+   * Set by Persona itself on the tool list of an assistant conversation with the work guide on: the tool is found on
+   * demand through the guide (#11078). A connector does not need to send it; the manager sets it on every list
+   * whatever a connector sent.
+   */
+  work_guide_tool?: boolean;
 }
 
 /**
@@ -4237,6 +4277,8 @@ export interface ConnectorArchiveChat {
   state?: string;
   /** When the conversation got to state; omitted when unknown. */
   state_at?: string;
+  /** Stable HTTP(S) link to the conversation at its source, when available. */
+  source_url?: string;
 }
 
 /**
@@ -4810,6 +4852,20 @@ export interface ChannelMessage {
   /** The chat app's id of the message: the same message delivered again is taken once. */
   id: string;
   text?: string;
+  /** The chat where the owner invoked a mention channel, as display context rather than an instruction. */
+  chat?: string;
+  /** The topic or thread within chat, when the request came from one. */
+  topic?: string;
+  /**
+   * Context the extension gathered for this request, such as nearby chat history. It is data, not owner-authored
+   * instructions.
+   */
+  context?: string;
+  /**
+   * The extension's attestation that this is the owner's own request. A mention channel must send true; false or
+   * omitted is refused. Optional for an im channel's older messages.
+   */
+  owner?: boolean;
   /** At most 4 are kept. */
   images?: ChannelBlob[];
   files?: ChannelBlob[];
@@ -4819,6 +4875,12 @@ export interface ChannelMessage {
   forward?: string;
   /** The chat app's id of the message it answers. */
   reply_to?: string;
+  /**
+   * The chat app's thread the message is in, as an opaque key. For a channel with capabilities.threads, each thread
+   * has a conversation of its own: its first message starts a new one (the channel's target stays as it is), later
+   * ones continue it. Without it, or without threads, the message goes to the channel's target.
+   */
+  thread?: string;
   /** What it had that the channel cannot bring, for people (a voice message, a sticker). */
   unsupported?: string[];
 }
@@ -4985,6 +5047,10 @@ export interface KBEntry {
    * absent on other kinds, before a match and from an older hub.
    */
   meeting_id?: string;
+  /** Reference-only for a project that stores pointers. Omitted means full. */
+  project_mode?: string;
+  freshness?: KBProjectFreshness;
+  sources?: KBProjectSource[];
 }
 
 /**
@@ -5055,6 +5121,57 @@ export interface KBDetail {
    * (docs/assistant/knowledge.md "Person profiles").
    */
   profiles?: Record<string, KBProfileRecord>;
+  /** Reference-only for a project that stores pointers. Omitted means full. */
+  project_mode?: string;
+  freshness?: KBProjectFreshness;
+  sources?: KBProjectSource[];
+}
+
+export interface KBProjectSource {
+  /** Canonical source identity shared across project views. */
+  id: string;
+  url?: string;
+  refs?: string[];
+  /** State observed at the source, such as merged. */
+  delivery_state?: string;
+  delivery_at?: string;
+  /** Unverified when only source delivery facts are available. */
+  environment_verification?: string;
+}
+
+export interface KBProjectFreshness {
+  needs_review: boolean;
+  timeline_end: number;
+  evidence?: KBProjectEvidenceRef[];
+  fields: Record<string, KBProjectFieldFreshness>;
+}
+
+export interface KBProjectFieldFreshness {
+  /** Omitted when historical authorship is unknown. */
+  writer?: string;
+  source?: string;
+  cutoff?: KBProjectCutoff;
+  lock_reason?: string;
+  review_by: string;
+  needs_review: boolean;
+  review_reason?: string;
+  /** Omitted when the gap cannot be counted. */
+  uncovered_evidence_count?: number;
+}
+
+export interface KBProjectCutoff {
+  timeline_from: number;
+  timeline_through: number;
+  /** True if earlier timeline entries were outside this refresh window. */
+  timeline_truncated?: boolean;
+  sources?: KBProjectEvidenceRef[];
+}
+
+export interface KBProjectEvidenceRef {
+  ref: string;
+  /** Opaque revision of this input. */
+  position: string;
+  source_id?: string;
 }
 
 export interface KBProfileRecord {
