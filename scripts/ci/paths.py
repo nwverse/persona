@@ -300,6 +300,9 @@ SERVER_CLIENT_INPUTS = [
     "apple/LiveActivity/**", "apple/PersonaTests/**", "apple/Packages/PersonaWire/**", "android/core/contracts/**",
 ]
 
+# CI's lanes. check-fast's own per-path table, for the checks it runs beyond the web plan above, is beside this file in
+# scripts/ci/check_fast_map.py (#11535): a module of its own, because importing this one scans web/ and check-fast asks
+# the table on every run.
 FILTERS = {
     "server": ["server/**", "sdk/go/**", "sdk/ts/src/**", "schema/**", "spec/**", "integrations/**", "docs/assistant/prompts.md", "docs/protocol/**", "scripts/test/server_test_env.py", "scripts/test/go_trimpath.sh", "scripts/ci/*server*", "scripts/ci/postgres.py", "scripts/ci/gofmt.py", ".github/workflows/server-test.yml"] + SERVER_CLIENT_INPUTS,
     # The files outside web/ that web/src and its tests read are derived, never listed (web_inputs).

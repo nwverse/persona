@@ -20,7 +20,7 @@ func TestParse(t *testing.T) {
 	if err != nil || !q.Until.Equal(base) || q.Limit != DefaultLimit || q.Since.Month() != time.August {
 		t.Fatalf("defaults: %+v %v", q, err)
 	}
-	if q, _ := Parse("2026-08-21T00:00:00Z", "2026-09-01T00:00:00.5+08:00", "", 9999, base); q.Limit != MaxLimit || q.Until.Day() != 31 {
+	if q, _ := Parse("2026-08-21T00:00:00Z", "2026-09-01T00:00:00.5+08:00", "", 9999, base); q.Limit != MaxLimit || q.Until.UTC().Day() != 31 {
 		t.Fatalf("limit clamped, until parsed: %+v", q)
 	}
 	for _, c := range [][3]string{{"", "", ""}, {"yesterday", "", ""}, {"2026-08-21T00:00:00Z", "soon", ""}, {"2026-08-21T00:00:00Z", "", "%%%"}} {

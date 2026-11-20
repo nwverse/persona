@@ -203,6 +203,8 @@ class NewAgentAsyncTest {
         val model = NewAgentViewModel(Service(), store, machines, Sender())
         try {
             advanceUntilIdle()
+            model.forwardContext(null)
+            assertEquals(saved, model.state.value.pending?.firstMessage)
             assertEquals(forwards, model.state.value.context)
             assertEquals(context + "\n\n看这个", model.state.value.prompt)
         } finally { model.viewModelScope.cancel() }

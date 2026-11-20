@@ -12964,7 +12964,16 @@ def tg_thread(thread, before, limit):
     out = {"chat": chat, "messages": page}
     if len(msgs) > limit:
         out["before"] = page[0]["id"]
-    return out
+    return thread_avatars("telegram", out)
+
+
+def thread_avatars(source, page):
+    """List each picture on this thread through the hub, keeping its legacy connector ref."""
+    chat = page["chat"]
+    for row in [chat, chat.get("author")] + [m.get("sender") for m in page["messages"]]:
+        if row and row.get("avatar"):
+            row["avatar_url"] = avatar_path(source, row["avatar"])
+    return page
 
 
 def avatar_path(source, value):
@@ -12972,31 +12981,43 @@ def avatar_path(source, value):
     return "/api/v1/avatars/%s/%s" % (source, base64.urlsafe_b64encode(value.encode()).rstrip(b"=").decode())
 
 
-def avatars_area(h, p):
-    """GET /api/v1/avatars/{source}/{value}?size= (#10923, docs/protocol/protocol.md "Avatars"): the made-up pictures the
-    mock's lists name, drawn at the size asked (64, 128, 256 or 512); True when it answered."""
-    if not p.startswith("/api/v1/avatars/"):
-        return False
+def avatar_asked(h, p):
+    """(source, value, size) of a GET /api/v1/avatars/{source}/{value}?size=: value decoded (None when the segment is not
+    one the hub lists) and size the edge the picture is drawn at (64, 128, 256 or 512)."""
     source, _, seg = p[len("/api/v1/avatars/"):].partition("/")
     try:
         value = base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)).decode()
     except Exception:
-        return h.send_json({"error": "not an avatar", "code": "bad_url"}, 404) or True
+        value = None
     try:
         asked = int(parse_qs(urlparse(h.path).query).get("size", ["128"])[0])
     except ValueError:
         asked = 128
-    size = next((e for e in (64, 128, 256, 512) if e >= asked), 512)
-    parts = value.split(".")
-    if source != "telegram" or not TELEGRAM_MODE or parts[0] != "a" or len(parts) != 3 or parts[1] not in TG_AVATAR_COLORS:
-        return h.send_json({"error": "no such picture", "code": "fetch_failed"}, 502) or True
-    data = tg_avatar(parts[1], size)
+    return source, value, next((e for e in (64, 128, 256, 512) if e >= asked), 512)
+
+
+def send_avatar(h, data):
+    """Answers an avatars request with the PNG data, as the hub sends a picture; True."""
     h.send_response(200)
     h.send_header("Content-Type", "image/png"); h.send_header("Content-Length", str(len(data)))
     h.send_header("X-Content-Type-Options", "nosniff")
     h.send_header("Cache-Control", "private, max-age=31536000, immutable")
     h.end_headers(); h.wfile.write(data)
     return True
+
+
+def avatars_area(h, p):
+    """GET /api/v1/avatars/{source}/{value}?size= (#10923, docs/protocol/protocol.md "Avatars"): the made-up pictures the
+    mock's lists name, drawn at the size asked (64, 128, 256 or 512); True when it answered. GitHub's thread page draws
+    its own first (scripts/mock/github_mock.py, MOCK_GITHUB_INBOX=1); any other is no such picture."""
+    if not p.startswith("/api/v1/avatars/"):
+        return False
+    source, value, size = avatar_asked(h, p)
+    if value is None:
+        return h.send_json({"error": "not an avatar", "code": "bad_url"}, 404) or True
+    if source == "telegram" and TELEGRAM_MODE and len(parts := value.split(".")) == 3 and parts[0] == "a" and parts[1] in TG_AVATAR_COLORS:
+        return send_avatar(h, tg_avatar(parts[1], size))
+    return h.send_json({"error": "no such picture", "code": "fetch_failed"}, 502) or True
 
 
 # GET /mock/telegram_avatars?mode=before|1 (MOCK_TELEGRAM_INBOX, #10923): the Telegram rows as a hub before the avatars

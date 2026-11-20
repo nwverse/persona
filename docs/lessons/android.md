@@ -55,7 +55,9 @@ these races: use real JNI with independently controlled worker completion, frame
 
 ## Verify intermittent test failures with the whole module
 
-A WebSocket listener's terminal callback is asynchronous; closing the owning `OkHttpClient` can stop its dispatcher before that callback records a drop. Record the terminal diagnostics event in the production socket cleanup before cancelling the socket, and let `onClosing` / `onFailure` share its per-socket atomic guard. Test that `close()` records it before returning rather than waiting for a callback that may never run (#11487).
+A WebSocket listener's terminal callback is asynchronous; closing the owning `OkHttpClient` can stop its dispatcher before that callback records a drop. Record the terminal diagnostics event through the socket's own atomic guard in `close()` before cancelling the socket, not only in a later coroutine finally or callback. Keep `onClosing` / `onFailure` / the runner cleanup on the same guard so a socket still contributes exactly one drop. Test that `close()` records it before returning and keep an advertised endpoint list identical to the initial configuration when a topology change is not the behavior under test (#11548).
+
+Do not assert a process-wide diagnostics sink has zero drops immediately before calling `close()`: cancelling the socket lets its runner cleanup record the legitimate drop before that assertion evaluates. This is not a spontaneous disconnect or a timeout. Assert the connected count, the synchronous drop after close and exactly one drop in total, and isolate each test's sink so it does not attribute another test's connection to the current one.
 
 Do not run Linux and macOS Gradle processes against the same checkout's `build/` directories at once. The other process can replace compiled classes and test reports while tests run, producing unrelated `NoClassDefFoundError` failures and undeletable reports. Stop those runs, remove only the affected disposable outputs and use an isolated `GRADLE_USER_HOME` when shared caches are also suspect.
 

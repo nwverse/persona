@@ -1,6 +1,7 @@
 """GitHub's own routes in the mock hub (server/internal/connector/github), a domain of scripts/mock/mock_domains.py that
 moved out of mock_hub.py (#11543): the sign-in (GET / PUT /api/v1/connectors/github/auth, POST …/login and …/logout) and
-the thread page of MOCK_GITHUB_INBOX=1's pull request (GET …/thread and …/media, POST …/thread/reply).
+the thread page of MOCK_GITHUB_INBOX=1's pull request (GET …/thread and …/media, POST …/thread/reply), whose people's
+pictures it also draws on the hub's shared avatars route (GET /api/v1/avatars/github/…, #10923).
 
 mock_hub.py keeps the connector itself: GITHUB_CONNECTOR, listed in GET /api/v1/connectors and changed by PUT
 …/github/settings and by its MOCK_GITHUB* variants as the hub loads, and MOCK_GITHUB_INBOX=1's inbox rows. The routes here
@@ -143,7 +144,7 @@ def github_thread_area(h, method, p, raw):
         out = {"chat": chat, "messages": msgs[start:end]}
         if start > 0:
             out["before"] = msgs[start]["id"]
-        return h.send_json(out) or True
+        return h.send_json(HUB.thread_avatars("github", out)) or True
     if what == "media" and method == "GET":
         parts = q.get("ref", [""])[0].split(":")
         if len(parts) != 3 or parts[1] not in GH_AVATAR_COLORS:
@@ -195,6 +196,18 @@ def github_area(h, method, p, raw):
     return h.send_json(device) or True
 
 
+def github_avatar(h, req):
+    """GET /api/v1/avatars/github/{value}?size= (#10923): the thread page's people (MOCK_GITHUB_INBOX=1), drawn at the size
+    asked; any other value goes on to mock_hub.py's avatars_area, which refuses it as the hub does."""
+    if not os.environ.get("MOCK_GITHUB_INBOX"):
+        return False
+    _, value, size = HUB.avatar_asked(h, req.path)
+    parts = (value or "").split(":")
+    if len(parts) != 3 or parts[0] != "avatar" or parts[1] not in GH_AVATAR_COLORS:
+        return False
+    return HUB.send_avatar(h, HUB.png(size, size, GH_AVATAR_COLORS[parts[1]]))
+
+
 def route(h, req):
     """Every method under /api/v1/connectors/github/: mock_hub.py's GET and POST chains asked the thread page first and
     the sign-in next, and went on with the request when neither answered (PUT …/github/settings is still theirs)."""
@@ -206,3 +219,4 @@ def register(d):
     global HUB
     HUB = d.hub
     d.route(mock_domains.METHODS, r"/api/v1/connectors/github/.*", route)
+    d.route("GET", r"/api/v1/avatars/github/[^/]+", github_avatar)

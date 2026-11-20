@@ -750,6 +750,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	if strings.HasPrefix(method, "node.update.") {
 		return n.handleUpdate(ctx, method, params)
 	}
+	if method == "task.workspace.capabilities" {
+		return map[string]any{"capability": "task_workspace_v1"}, nil
+	}
+	if strings.HasPrefix(method, "task.workspace.") {
+		return n.taskWorkspace(ctx, strings.TrimPrefix(method, "task.workspace."), params)
+	}
 	switch method {
 	case nodeproto.SourceSend:
 		method = "session.send"
@@ -859,13 +865,14 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Pane                    string        `json:"pane"`      // panes.*: a pane the host lists
 		InPane                  string        `json:"in_pane"`   // session.start: a failed start's kept tab to start in (startremedy.go)
 		Direction               string        `json:"direction"` // panes.split: right or down
-		TabID                   string        `json:"tab_id"`    // tabs.*
+		TabID                   string        `json:"tab_id"`    // tabs.*, guarded session tab rename
 		Label                   string        `json:"label"`     // tabs.rename
 		Kind                    string        `json:"kind"`      // tabs.*, panes.git: the host kind ("" the engine's)
 		Op                      string        `json:"op"`        // panes.git: fetch, pull or push
 		Action                  string        `json:"action"`    // launchers.repair: which of its fixed repairs
 		TabName                 *string       `json:"tab_name"`
-		TZ                      string        `json:"tz"` // the user's time zone
+		ExpectedTabName         string        `json:"expected_tab_name"` // guarded session tab rename from automatic naming
+		TZ                      string        `json:"tz"`                // the user's time zone
 		// HTTP is a quota plugin's request to send to a launcher's gateway (launchers.http); nil asks for the gateway.
 		HTTP             *quota.Request                `json:"http,omitempty"`
 		Async            bool                          `json:"async"`
@@ -1432,6 +1439,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			if err := n.saveStopCause(ctx, p.ResumeSessionID, proto.StopUnknown); err != nil {
 				return nil, err
 			}
+			if p.ResumeAutomatic {
+				// The assistant's own resume that does not bring the Agent up leaves it stopped by that step, not by the
+				// user: resume_failed, which the assistant may try again, never unknown (#11441).
+				id := p.ResumeSessionID
+				defer func() { n.noteResumeFailed(id, resultErr) }()
+			}
 		}
 		if p.ResumeSessionID != "" && p.Host == "" {
 			p.Host = n.startKind(n.withResumeHost(ctx, p.ResumeSessionID))
@@ -1586,6 +1599,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			ctx = context.WithValue(ctx, taskTerminalStartKey{}, &mark)
 		}
 		s, err := n.start(ctx, r.cwd, r.launcher, p.Prompt, p.ResumeSessionID, r.workspaceID, r.mode, r.effort, r.tab, newID, p.AgentType, r.execution)
+		if err == nil && s != nil && p.ResumeSessionID == "" && p.Title != nil && strings.TrimSpace(*p.Title) != "" {
+			s.Title = cmp.Or(s.HerdrTabName(), strings.TrimSpace(*p.Title))
+		}
 		if err == nil && p.ResumeSessionID != "" {
 			n.forkStarted(p.ResumeSessionID)
 		}
@@ -2333,6 +2349,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return ok(n.renameWorktree(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, in.Name))
 	case "session.rename":
 		return ok(n.renameSession(ctx, p.SessionID, p.TabName, p.Title))
+	case assistantwire.DeviceSessionRenameTabIfCurrent:
+		if p.TabName == nil || strings.TrimSpace(*p.TabName) == "" || p.ExpectedTabName == "" {
+			return nil, fmt.Errorf("current and new tab names are required")
+		}
+		return ok(n.renameObservedTab(ctx, p.SessionID, p.TabID, p.ExpectedTabName, *p.TabName))
 	case "todo.sync_session_tokens":
 		var in struct {
 			Tokens map[string]map[string]string `json:"tokens"`

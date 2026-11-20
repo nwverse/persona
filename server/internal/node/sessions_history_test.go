@@ -81,7 +81,7 @@ func historyCall(t *testing.T, n *Node, params map[string]any) sessionhistory.An
 // runtime without the capability is not asked and is marked honored: false.
 func TestSessionsHistoryPagesARuntimeInFullAndMarksOneWithoutIt(t *testing.T) {
 	n, _ := runtimeNode(t)
-	now := time.Now().UTC()
+	now := time.Now().UTC().Add(-time.Minute) // the newest row before the window's end (until: now)
 	var rows []map[string]any
 	for i := 0; i < 450; i++ { // one every 4 hours: 75 days
 		rows = append(rows, map[string]any{"session_id": fmt.Sprintf("s%03d", i), "status": "offline",
@@ -190,7 +190,8 @@ func TestHistoryRowItemsGoToTheRuntime(t *testing.T) {
 	hello["caps"].(map[string]any)["history"] = true
 	host := dialRuntime(t, n, hello)
 	host.mu.Lock()
-	list := historyRuntime([]map[string]any{{"session_id": archived, "archived": true, "updated_at": time.Now().UTC().Format(time.RFC3339Nano)}})
+	// A minute back: a row updated this very millisecond is not before the window's end (until: now), so not in it.
+	list := historyRuntime([]map[string]any{{"session_id": archived, "archived": true, "updated_at": time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)}})
 	host.answer = func(method string, params json.RawMessage) (any, error) {
 		var p struct {
 			SessionID string `json:"session_id"`
@@ -269,7 +270,7 @@ func TestSessionsHistoryListsClaudeTranscriptsOlderThanAWeek(t *testing.T) {
 	if !live[ids[3]] || live[ids[20]] || live[ids[60]] {
 		t.Fatalf("the live list keeps only the last week: %v", live)
 	}
-	ans, err := n.sessionsHistory(t.Context(), mustJSON(t, map[string]any{"since": now.Add(-90 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)}))
+	ans, err := n.sessionsHistory(t.Context(), mustHistoryJSON(t, map[string]any{"since": now.Add(-90 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,12 +288,12 @@ func TestSessionsHistoryListsClaudeTranscriptsOlderThanAWeek(t *testing.T) {
 		t.Errorf("the node's own sources are complete: %+v", ans.Sources)
 	}
 	// A window ending before the newest one.
-	ans, _ = n.sessionsHistory(t.Context(), mustJSON(t, map[string]any{"since": now.Add(-90 * 24 * time.Hour).UTC().Format(time.RFC3339Nano),
+	ans, _ = n.sessionsHistory(t.Context(), mustHistoryJSON(t, map[string]any{"since": now.Add(-90 * 24 * time.Hour).UTC().Format(time.RFC3339Nano),
 		"until": now.Add(-10 * 24 * time.Hour).UTC().Format(time.RFC3339Nano), "source": "claude", "limit": 1}))
 	if len(ans.Rows) != 1 || ans.Rows[0].Session.SessionID != ids[20] || ans.NextCursor == "" {
 		t.Fatalf("first page of [90 days, 10 days): %+v", ans)
 	}
-	ans, _ = n.sessionsHistory(t.Context(), mustJSON(t, map[string]any{"since": now.Add(-90 * 24 * time.Hour).UTC().Format(time.RFC3339Nano),
+	ans, _ = n.sessionsHistory(t.Context(), mustHistoryJSON(t, map[string]any{"since": now.Add(-90 * 24 * time.Hour).UTC().Format(time.RFC3339Nano),
 		"until": now.Add(-10 * 24 * time.Hour).UTC().Format(time.RFC3339Nano), "source": "claude", "limit": 1, "cursor": ans.NextCursor}))
 	if len(ans.Rows) != 1 || ans.Rows[0].Session.SessionID != ids[60] || ans.NextCursor != "" {
 		t.Fatalf("second and last page: %+v", ans)
@@ -334,7 +335,7 @@ func TestSessionsHistoryListsCodexRolloutsOlderThanTwoWeeks(t *testing.T) {
 	dir, at = day(200)
 	write(dir, tooOld, `{"id":"`+tooOld+`","cwd":"/work/app","source":"cli"}`, at)
 
-	ans, err := n.sessionsHistory(t.Context(), mustJSON(t, map[string]any{"since": now.Add(-90 * 24 * time.Hour).UTC().Format(time.RFC3339Nano), "source": "codex"}))
+	ans, err := n.sessionsHistory(t.Context(), mustHistoryJSON(t, map[string]any{"since": now.Add(-90 * 24 * time.Hour).UTC().Format(time.RFC3339Nano), "source": "codex"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +351,7 @@ func TestSessionsHistoryListsCodexRolloutsOlderThanTwoWeeks(t *testing.T) {
 	}
 }
 
-func mustJSON(t *testing.T, v any) json.RawMessage {
+func mustHistoryJSON(t *testing.T, v any) json.RawMessage {
 	t.Helper()
 	b, err := json.Marshal(v)
 	if err != nil {

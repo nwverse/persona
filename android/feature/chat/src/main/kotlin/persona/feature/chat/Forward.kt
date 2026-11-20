@@ -389,7 +389,7 @@ object ForwardPlacements {
             homeState.value = value
         }
     private val homePhotos = mutableStateMapOf<String, RestoredPhotos>()
-    private val newAgentPhotos = mutableStateMapOf<String, RestoredPhotos>()
+    private val newAgentPhotos = mutableStateMapOf<String, List<ForwardPlacement>>()
 
     /** False when this message already waits for the target; its new photo handoff belongs to the caller to discard. */
     fun place(key: SessionKey, ref: ChatLinkContext, photos: RestoredPhotos = RestoredPhotos()): Boolean {
@@ -421,10 +421,11 @@ object ForwardPlacements {
         }
     }
 
-    /** The New Agent handoff is keyed by the exact context carried by its serializable route. */
-    fun placeNewAgent(context: String, photos: RestoredPhotos): RestoredPhotos? = newAgentPhotos.put(context, photos)
+    /** The route carries text; keep each staged photo with the source message that owns it. */
+    fun placeNewAgent(context: String, messages: List<ForwardPlacement>): List<ForwardPlacement> =
+        newAgentPhotos.put(context, messages.filter { it.photos.attachments.isNotEmpty() || it.photos.lost > 0 }).orEmpty()
 
-    fun takeNewAgent(context: String?): RestoredPhotos = context?.let(newAgentPhotos::remove) ?: RestoredPhotos()
+    fun takeNewAgent(context: String?): List<ForwardPlacement> = context?.let(newAgentPhotos::remove).orEmpty()
 }
 
 /** A pressed message on its way to Forward to: where it is and who wrote it, its text and photos, and its cut item. */
@@ -446,8 +447,7 @@ internal fun deliverForward(target: ForwardTarget, messages: List<ForwardPlaceme
     if (messages.isEmpty()) return
     if (target == ForwardTarget.NewAgent) {
         val context = messages.joinToString("\n") { it.ref.xml() }
-        val photos = RestoredPhotos(messages.flatMap { it.photos.attachments }, messages.sumOf { it.photos.lost })
-        ForwardPlacements.placeNewAgent(context, photos)?.let(onDuplicate)
+        ForwardPlacements.placeNewAgent(context, messages).forEach { onDuplicate(it.photos) }
         forwarding.openNewAgent(context)
         return
     }
