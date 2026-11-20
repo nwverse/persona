@@ -70,7 +70,7 @@ import { AWAIT_MS, awaitingTurn, DOCK_MAX, turnStart } from "./dock";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { AgentModelPill, AssistantModelPill, useAssistantTurnFix } from "./ModelPill";
 import { switchRefused } from "../../lib/session-models";
-import { mediaMatches, NARROW, NO_HOVER, SHORT, useFinePointer, useMedia } from "../../lib/viewport";
+import { mediaMatches, NARROW, NO_HOVER, PHONE, SHORT, useFinePointer, useMedia } from "../../lib/viewport";
 import { UserBubble } from "./SegmentView";
 import { LatestMessageTime } from "./latest-message-time";
 import { scrollsAFold } from "./fold-scroll";
@@ -2035,11 +2035,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // says a worker needs you while the panel is shut
   const showConversationTasks = Boolean((assistant || inPage) && !embedded && !chrome && session?.space !== "health");
   const conversationTasksOpen = panel?.kind === "conversation-tasks" && panel.mid === mid && panel.sid === sid;
-  const chatHeaderActions = useMemo(() => showConversationTasks ? <>
-    <IconButton icon="todo" label={t("sidepanel.conversation_tasks")} active={conversationTasksOpen}
-      onClick={() => togglePanel({ kind: "conversation-tasks", mid, sid, manager: skillManager })} />
-    {headerActions}
-  </> : headerActions, [showConversationTasks, conversationTasksOpen, mid, sid, skillManager, headerActions]);
+  const conversationTasks = useMemo(() => (showConversationTasks
+    ? { open: conversationTasksOpen, onToggle: () => togglePanel({ kind: "conversation-tasks", mid, sid, manager: skillManager }) }
+    : undefined), [showConversationTasks, conversationTasksOpen, mid, sid, skillManager]);
   const teamCount = leads ? workerCount(session) : 0;
   const teamNeeds = workers.some((w) => stateOf(w) === "needs_you");
   const toggleTeam = useCallback(() => {
@@ -2113,7 +2111,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         onTerminal={openTerminal}
         viewDot={view === "term" && (interactions.length > 0 || state === "needs_you")}
         termDot={terminalWaits(session, interactions, outbox)}
-        actions={chatHeaderActions}
+        actions={headerActions}
+        tasks={conversationTasks}
         team={team}
         sides={sideControl}
         panel={chrome}
@@ -2613,6 +2612,7 @@ export const Header = memo(function Header({
   viewDot,
   termDot,
   actions,
+  tasks,
   team,
   sides,
   panel: chrome,
@@ -2649,6 +2649,8 @@ export const Header = memo(function Header({
   termDot?: boolean;
   /** The page's own buttons, at the end of the right side (ChatView `headerActions`). */
   actions?: React.ReactNode;
+  /** The conversation's tasks panel: a button from 640 px, a row of ⋯ on a phone (the title keeps its room there). */
+  tasks?: { open: boolean; onToggle: () => void };
   /** A lead with workers (#5180): its Team panel's button, whether the panel is open, and whether a worker needs you. */
   team?: { open: boolean; needs: boolean; onToggle: () => void };
   /** A session with side sessions (#7944): how many, whether its Side sessions panel is open, whether one needs you. */
@@ -2658,6 +2660,7 @@ export const Header = memo(function Header({
   const identity = useAssistantIdentity();
   const layout = useLayout();
   const narrow = useMedia(NARROW);
+  const phone = useMedia(PHONE);
   // A rail and a phone drawer have no assistant head beside the page. Older hubs have a product head instead.
   const headBesidePage = !narrow && sidebarShown(layout) && !sidebarRail(layout) && identity !== null;
   const menu = useMenu();
@@ -2810,6 +2813,7 @@ export const Header = memo(function Header({
           ? [{ key: "resume-terminal", label: t("chat-chatview.resume_in_terminal"), icon: "play" as const, disabled: resumeOffer === "no_engine", detail: resumeOffer === "no_engine" ? t("chat-chatview.resume_no_engine", { computer: machineName }) : undefined, onSelect: resumeHere }]
           : []),
         ...(showFiles ? [{ key: "files", label: t("chat-chatview.files"), icon: "folder" as const, checked: here(panel, "files"), onSelect: openFiles }, { key: "git", label: "Git", icon: "git" as const, checked: here(panel, "git"), onSelect: openGit }, ...(reviews ? [{ key: "review", label: t("chat-chatview.review_changes"), icon: "pullRequest" as const, checked: here(panel, "review"), onSelect: openReview }] : [])] : []),
+        ...(tasks && phone ? [{ key: "conversation-tasks", label: t("sidepanel.conversation_tasks"), icon: "todo" as const, checked: tasks.open, onSelect: tasks.onToggle }] : []),
         ...sessionReviewItems,
         // a run of a comparison (#8916): back to its runs' page
         ...(compare ? [{ key: "compare", label: compare.label, icon: "branch" as const, onSelect: () => navigate({ name: "compare", id: compare.id }) }] : []),
@@ -2953,6 +2957,7 @@ export const Header = memo(function Header({
       )}
       {/* wide screens have New chat at the top of the sidebar; a phone's sidebar is a drawer */}
       {assistant && !chrome && session?.space !== "health" && <IconButton icon="compose" label={t("chat-chatview.new_chat")} onClick={() => navigate({ name: "persona-new" })} className="lg:hidden" />}
+      {tasks && <IconButton icon="todo" label={t("sidepanel.conversation_tasks")} active={tasks.open} onClick={tasks.onToggle} className="hidden sm:flex" />}
       {!chrome && actions}
       {!assistant && session && (session.agent === "codex" || session.source_kind === "codex_history" || session.source_kind === "codex_app_server") &&
         <Suspense fallback={null}><TakeoverAction key={`${session.machine_id}:${session.session_id}`} session={session} /></Suspense>}
