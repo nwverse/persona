@@ -1686,6 +1686,18 @@ operation then read as accepted and the bubble waited for the transcript and wen
 - **Device signed out** (#10708). The hub gives the manager the sending device's credential ID when it keeps a
   message. Signing out that device fails its kept messages. Their rows say why and offer Delete. Messages kept
   before the hub recorded the sending credential have no device to match.
+- **Messages that need no reply** (#11614, `server/internal/assistant/relay_later.go`). `conversation_send` with
+  `wake: false` is for acknowledgements and information the receiver does not have to act on. The message is kept
+  for the receiver (`relayState.Later`, kept across a restart, at most 20 per conversation and 7 days) and goes in,
+  as a context block in front (`prompts/assistant/relay_later.md`), with the next message the manager delivers to
+  that conversation for anything else: a supervision message, another conversation's message, a scheduled follow-up,
+  a notice. It starts no turn of its own, costs no hop and no place in the relay rate, and is dropped only once the
+  message carrying it went in. Before a send with a `once_id`, its quiet-message context (including an empty one) is
+  saved and reused on retries, including after restart. A retry clears only that original context; later arrivals wait
+  for a new send ID. These reservations expire after seven days, beyond the node's ten-minute send-ID memory.
+  Nothing is guessed from the words: only the explicit argument decides. A `quote` (the
+  owner's request) always wakes, so the two together are refused. A turn the owner starts from an app does not carry
+  it; it shows above the composer meanwhile.
 - **Between conversations.** `conversation_send` to a conversation that cannot take the message now no longer fails:
   the message goes into its relay queue and is tried again under the same `once_id`. A conversation that failed to
   take a relayed message is tried again after `relayRetryGap` (30 s), not on every session list.

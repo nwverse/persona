@@ -18601,6 +18601,98 @@
         }
       }
     },
+    "Allow again" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow again"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许再次关联"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再リンクを許可"
+          }
+        }
+      }
+    },
+    "Allow Persona to link %@ again" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow Persona to link %1$@ again"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许 Persona 再次关联「%1$@」"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona に「%1$@」との再リンクを許可"
+          }
+        }
+      }
+    },
+    "Allowing a link again lets Persona make it in a future update." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allowing a link again lets Persona make it in a future update."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许后，Persona 可以在之后的更新中重新建立关联。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "許可すると、今後の更新で Persona が再びリンクできるようになります。"
+          }
+        }
+      }
+    },
+    "Also stop automatic changes to both lists" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Also stop automatic changes to both lists"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同时停止自动更新这两个列表"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "両方のリストの自動更新も停止"
+          }
+        }
+      }
+    },
     "An Agent [To-dos Line]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -32762,25 +32854,48 @@
         }
       }
     },
-    "Both entries and what they hold are kept. Persona will stop changing the %@ linked to “%@” and the %@ linked to “%@” on its own." : {
+    "Both entries are kept." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Both entries and what they hold are kept. Persona will stop changing the %1$@ linked to “%2$@” and the %3$@ linked to “%4$@” on its own."
+            "value" : "Both entries are kept."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "两个条目和里面的内容都会保留。之后 Persona 不会再自动更改「%2$@」关联的%1$@，以及「%4$@」关联的%3$@。"
+            "value" : "两个条目都会保留。"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "両方の項目と中身はそのまま残ります。今後 Persona は、「%2$@」に関連する%1$@と「%4$@」に関連する%3$@を自動では変更しません。"
+            "value" : "両方の項目はそのまま残ります。"
+          }
+        }
+      }
+    },
+    "Both entries are kept. Persona won’t make this link again on its own. This leaves other links free to update." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Both entries are kept. Persona won’t make this link again on its own. This leaves other links free to update."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "两个条目都会保留。Persona 不会自动重新建立这条关联。这不会影响其他关联的自动更新。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "両方の項目はそのまま残ります。Persona はこのリンクを自動では作り直しません。ほかのリンクの自動更新には影響しません。"
           }
         }
       }
@@ -34713,6 +34828,29 @@
       },
       "extractionState" : "manual"
     },
+    "Couldn't allow the link again: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't allow the link again: %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法允许再次关联：%1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再リンクを許可できませんでした：%1$@"
+          }
+        }
+      }
+    },
     "Couldn't change thinking effort. Choose it again to send waiting messages." : {
       "localizations" : {
         "en" : {
@@ -34735,6 +34873,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Couldn't confirm the link was removed. The hub may need an update." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't confirm the link was removed. The hub may need an update."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确认关联已移除。可能需要更新中枢。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リンクが解除されたことを確認できませんでした。ハブの更新が必要な可能性があります。"
+          }
+        }
+      }
+    },
+    "Couldn't confirm this link can be made again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't confirm this link can be made again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确认已允许再次关联。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再リンクが許可されたことを確認できませんでした。"
+          }
+        }
+      }
     },
     "CPU, memory and network update every 10 seconds. Charts show the last hour." : {
       "localizations" : {
@@ -74884,6 +75068,52 @@
         }
       }
     },
+    "Persona can link these entries again" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona can link these entries again"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已允许 Persona 再次关联这两个条目"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が両方の項目を再びリンクできるようになりました"
+          }
+        }
+      }
+    },
+    "Persona will stop changing the %@ linked to “%@” and the %@ linked to “%@” on its own." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona will stop changing the %1$@ linked to “%2$@” and the %3$@ linked to “%4$@” on its own."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "之后 Persona 不会再自动更改「%2$@」关联的%1$@，以及「%4$@」关联的%3$@。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今後 Persona は、「%2$@」に関連する%1$@と「%4$@」に関連する%3$@を自動では変更しません。"
+          }
+        }
+      }
+    },
     "Play Sound" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -75110,6 +75340,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "重新打开"
+          }
+        }
+      }
+    },
+    "Removed by you" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Removed by you"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你移除的关联"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解除したリンク"
           }
         }
       }
@@ -92673,29 +92926,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "リンクを解除しました"
-          }
-        }
-      }
-    },
-    "Link removed, but checking it failed: %@" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Link removed, but checking it failed: %1$@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已移除关联，但核对失败：%1$@"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "リンクを解除しましたが、確認できませんでした：%1$@"
           }
         }
       }
@@ -174372,29 +174602,6 @@
         }
       },
       "extractionState" : "manual"
-    },
-    "The link is still there. The hub may need an update." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The link is still there. The hub may need an update."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "关联还在，Hub 可能需要更新。"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "リンクはまだ残っています。ハブのアップデートが必要かもしれません。"
-          }
-        }
-      }
     },
     "The machine is offline. Once it's connected you can check what this computer can do." : {
       "localizations" : {

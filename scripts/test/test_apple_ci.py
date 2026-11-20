@@ -85,7 +85,8 @@ class AppleCIPreparationTests(unittest.TestCase):
     def test_explicit_unsigned_build_lane_preserves_the_real_build_and_skips_devices(self):
         script = SCRIPT.read_text()
         workflow = (ROOT / '.github/workflows/apple-test.yml').read_text()
-        self.assertIn('options: [ios, ios18, ios-build]', workflow)
+        self.assertIn('options: [ios, ios18, ios-build, packages]', workflow)
+        self.assertIn("inputs.lane == 'packages' && 'Native package tests (Xcode 26.0)'", workflow)
         self.assertIn('all|ios|ios18|packages|ios-build', script)
         self.assertIn('[ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ]', script)
         self.assertIn('[ "$LANE" != packages ] && [ "$LANE" != ios-build ]', script)

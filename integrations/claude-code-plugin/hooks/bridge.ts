@@ -1,12 +1,15 @@
 // Protocol 1 between this plugin and the local Persona node (README.md): where the node's socket is, what a poll's
-// answer holds, which messages may go in as the person's words, and session-scoped model / effort overrides. Pure
-// functions; register.ts does the I/O.
+// answer holds, which messages or turn interrupts may go in as the person's own, and session-scoped model / effort
+// overrides. Pure functions; register.ts does the I/O.
 
 /** The base of the node's endpoints; the host name is not used (the request goes over the socket). */
 export const BASE = 'http://persona/claude-plugin/v1'
 
 /** Optional protocol capabilities this plugin version serves on /poll. */
-export const CAPABILITIES = ['settings'] as const
+export const CAPABILITIES = ['busy_input', 'interrupt', 'settings'] as const
+
+/** How long deliver waits for $.prompt.submit to reject or drop before treating a mid-turn call as queued. */
+export const SUBMIT_QUEUE_SETTLE_MS = 250
 
 /** How long the node may hold a poll: under the 30 s after which Claude Code's fetch gives up. */
 export const POLL_WAIT_MS = 25_000
@@ -61,6 +64,12 @@ export function homeDir(userProfile: string | undefined, home: string | undefine
 /** One message the node handed over: its id, the text, and the time after which it must not be submitted. */
 export type Message = { id: string; text: unknown; deadlineMs: number }
 
+/** An owner Stop handed over by the node to cancel the running main-loop turn via $.turn.abort. */
+export type InterruptRequest = { id: string; deadlineMs: number }
+
+/** The running main-loop turn tracked from turn.start / turn.step until turn.complete. */
+export type ActiveTurn = { session: string; turnId: string }
+
 /** A session-only model / effort switch handed over by the node. */
 export type SettingsUpdate = { id: string; model?: string; effort?: EffortChoice }
 
@@ -74,9 +83,16 @@ export type SessionOverride = {
 
 /** What a poll came to. */
 export type PollAnswer =
-  | { kind: 'messages'; messages: Message[]; settings?: SettingsUpdate; retryMs: number }
+  | { kind: 'messages'; messages: Message[]; interrupt?: InterruptRequest; settings?: SettingsUpdate; retryMs: number }
   | { kind: 'refused'; retryMs: number } // the node does not take this process for this session
   | { kind: 'unavailable' } // no node, an old node, or no answer
+
+function readInterrupt(raw: unknown): InterruptRequest | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const { id, deadline_ms: deadline } = raw as Record<string, unknown>
+  if (typeof id !== 'string' || !ID.test(id) || typeof deadline !== 'number') return undefined
+  return { id, deadlineMs: deadline }
+}
 
 function readSettings(raw: unknown): SettingsUpdate | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
@@ -87,7 +103,7 @@ function readSettings(raw: unknown): SettingsUpdate | undefined {
   const m = typeof model === 'string' && model !== '' ? model : undefined
   const ef = isEffortChoice(effort) ? effort : undefined
   if (m === undefined && ef === undefined) return undefined
-  return { id, ...(m !== undefined ? { model: m } : {}), ...(ef !== undefined ? { effort: ef } : {}) }
+  return { id, ...(m !== undefined ? { model: m } : {}), ...(ef !== undefined ? { effort: ef } : {})
 }
 
 /** Reads a poll's answer: status and body as `$.http.fetch` resolved them. */
@@ -104,10 +120,12 @@ export function readPoll(status: number, body: string): PollAnswer {
     if (typeof id !== 'string' || !ID.test(id) || typeof deadline !== 'number') continue
     messages.push({ id, text, deadlineMs: deadline })
   }
+  const interrupt = readInterrupt(answer.interrupt)
   const settings = readSettings(answer.settings)
   return {
     kind: 'messages',
     messages,
+    ...(interrupt !== undefined ? { interrupt } : {}),
     ...(settings !== undefined ? { settings } : {}),
     retryMs: retryOf(answer, 0),
   }
