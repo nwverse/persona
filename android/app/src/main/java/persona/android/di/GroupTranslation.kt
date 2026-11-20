@@ -55,6 +55,7 @@ internal class GroupNames(val namespace: String?) {
         is MessageSendStateEvent -> value.copy(machineId = machineId(value.machineId))
         is ItemsEvent -> value.copy(machineId = machineId(value.machineId))
         is SessionsEvent -> value.copy(machineId = machineId(value.machineId), sessions = value.sessions.map(::session))
+        is SessionRowEvent -> value.copy(session = session(value.session))
         is MachinesEvent -> value.copy(machines = value.machines.map(::machine))
         is RevsEvent -> value.copy(machineId = machineId(value.machineId))
         is InteractionEvent -> value.copy(interaction = interaction(value.interaction))
@@ -288,6 +289,8 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun launchers(machineId: String) = source.launchers(names.rawMachine(machineId))
         override suspend fun assistantLaunchers(machineId: String) = source.assistantLaunchers(names.rawMachine(machineId))
         override suspend fun assistantLauncherList(machineId: String) = source.assistantLauncherList(names.rawMachine(machineId))
+        override suspend fun assistantLauncherList(machineId: String, refresh: Boolean) =
+            source.assistantLauncherList(names.rawMachine(machineId), refresh)
         override suspend fun launcherModels(machineId: String, launcher: String) = source.launcherModels(names.rawMachine(machineId), launcher)
         override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick) = source.setModelPick(names.raw(session), pick)
         override suspend fun clearModelPick(session: SessionKey) = source.clearModelPick(names.raw(session))

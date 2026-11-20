@@ -32,7 +32,7 @@ export async function chooseStartPage(key: string) {
 }
 
 export function StartPageGroup() {
-  const { all } = useNavPages();
+  const { all, starredKnown } = useNavPages();
   const order = useSidebarPrefs().order;
   const key = useStartPage();
   const synced = useStartPageSynced() !== false;
@@ -43,7 +43,7 @@ export function StartPageGroup() {
   const byKey = new Map(all.map((p) => [p.k, p]));
   const pages = ordered(all.map((p) => p.k), order).filter((k) => k !== LOCKED).map((k) => byKey.get(k)!);
   const listed = !key || byKey.has(key);
-  const gone = !listed && online && startPageGone(key, false, { extensions: extensionsKnown || !slots, board: boardKnown }) === true;
+  const gone = !listed && online && startPageGone(key, false, { extensions: extensionsKnown || !slots, board: boardKnown, starred: starredKnown }) === true;
   // an extension's page with the extension it comes from (its NavPage.title is "Page · Extension", as in Sidebar pages)
   const name = (p: (typeof all)[number]) => (p.k.startsWith("p:") && p.title?.startsWith(`${p.label} · `) ? p.title : p.label);
 

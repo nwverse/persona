@@ -3115,6 +3115,38 @@ if os.environ.get("MOCK_TODO_BADGE") == "1":
         _badge_todo("tb_errand", "给家里的 NAS 换硬盘", 90),
     ]
 
+# MOCK_TODO_STEPS=1 (#11858, docs/web/web.md "A to-do's steps"): only these to-dos, each with the `view` a hub with the
+# To-dos view sends, as far as the row's steps go (`view.steps`). A goal whose three steps are all closed with nothing
+# arranged next, a goal with one of its three steps closed, one being done and one not started, and an errand with
+# neither steps nor view: the first reads "3/3 steps done · Next step not arranged yet", the second "Steps 1/3", the
+# errand "Not started · Not handed to an agent yet" as before. The views are fixed: a write here does not recount them.
+if os.environ.get("MOCK_TODO_STEPS") == "1":
+    def _steps_agent(n, title, last):
+        sid = f"c3d5e7f9-0000-4000-8000-{11858000 + n:012d}"
+        SESSIONS.append(sess("macbook", sid, title, "/Users/me/code/photos", "working", "working", "photos", 8, "1", n, 3, last))
+        return {"machine_id": "macbook", "session_id": sid, "linked_at": ago(minutes=40), "released_at": None, "title": title,
+                "cwd": "/Users/me/code/photos", "agent": "claude", "start_error": "", "source": "spawned", "via": ""}
+
+    def _steps_todo(tid, title, minutes, steps=None, **kw):
+        t = {"id": tid, "title": title, "notes": "", "done_at": None, "created_at": ago(minutes=minutes + 60),
+             "updated_at": ago(minutes=minutes), "origin": "", "spaces": [], "agents": [], "priority": ""}
+        if steps:
+            t["view"] = {"phase": "todo", "section": "todo", "reason": "rest", "rank": 0, "steps": {"done": steps[0], "total": steps[1]}}
+        t.update(kw)
+        return t
+
+    TODOS_INIT[:] = [
+        _steps_todo("ts_photos", "相册迁到新硬盘", 20, steps=(3, 3)),
+        *[_steps_todo(f"ts_photos_{i}", title, 30 + i, part_of="ts_photos", origin="conv_demo", quiet=True,
+                      done_at=ago(minutes=30 + i)) for i, title in enumerate(["导出旧相册", "校验照片数量", "切换同步目录"], 1)],
+        _steps_todo("ts_settings", "设置页改版上线", 5, steps=(1, 3)),
+        _steps_todo("ts_search", "设置页：分组和搜索", 3, part_of="ts_settings", origin="conv_demo",
+                    agents=[_steps_agent(1, "设置页分组和搜索", "在给每个分组补搜索关键词。")]),
+        _steps_todo("ts_dark", "设置页：深色模式配色", 50, part_of="ts_settings", origin="conv_demo", done_at=ago(minutes=50)),
+        _steps_todo("ts_copy", "设置页：改说明文字", 6, part_of="ts_settings", origin="conv_demo"),
+        _steps_todo("ts_errand", "给家里的 NAS 换硬盘", 90),
+    ]
+
 # MOCK_TODO_WAITS=1 (#11090, docs/assistant/todos.md "State calculation rules"): only these to-dos, one per thing a
 # waiting to-do can wait on, each with one Agent whose turn ended while something brings it back (task Waiting): a
 # decision only the owner can make and work held for their OK (Waiting on you, in the attention color; the sidebar's
@@ -11718,7 +11750,7 @@ HELLO = {}
 FEISHU_BOT = {"enabled": True, "app_id": "cli_example0001", "domain": "https://open.feishu.cn", "has_secret": True,
               "from_config": False, "connected": True, "bot_name": "Persona", "target": "主对话",
               "source_report_delay_minutes": 10, "source_report_full_reply": False,
-              "features": {"main": True, "cards": True, "all_cards": False, "pushes": True, "sync": False, "agents": True},
+              "features": {"main": True, "cards": True, "all_cards": False, "pushes": True, "sync": False, "agents": True, "read_group": False},
               "owner": {"name": "我", "paired_at": int(time.time()) - 86400 * 3},
               "agents": [{"title": "persona › api「修登录」 · server", "machine_id": "server", "session_id": "s1"}]}
 if os.environ.get("MOCK_BOT") == "pairing":

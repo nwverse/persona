@@ -118,12 +118,17 @@ A non-main conversation reviewing another supervisor's task may only accept/canc
         "kind": {
           "type": "string",
           "enum": ["person_reply", "merge_review", "external_event", "date"],
-          "description": "parked wait kind: person_reply, merge_review, external_event or date"
+          "description": "External wait kind"
         },
-        "target": {"type": "string", "maxLength": 200, "description": "the named person/reviewer or external object"},
-        "wake": {"type": "string", "maxLength": 600, "description": "the observable change that ends this wait"},
-        "url": {"type": "string", "maxLength": 2000, "description": "merge_review/external_event source URL; omit otherwise"},
-        "interaction_id": {"type": "string", "maxLength": 200, "description": "external_event only: exact pending interaction ID of this task's worker, from agents_list; the hub verifies and shows that existing request, never a new card"},
+        "target": {"type": "string", "maxLength": 200, "description": "The person or external object"},
+        "wake": {"type": "string", "maxLength": 600, "description": "Observable change that ends the wait"},
+        "url": {"type": "string", "maxLength": 2000, "description": "Required for merge_review (ready PR/MR) and external_event"},
+        "interaction_id": {"type": "string", "maxLength": 200, "description": "external_event only. This worker's exact pending owner request ID from agents_list. Shows the existing request"},
+        "pr_event": {
+          "type": "string",
+          "enum": ["terminal", "terminal_or_review"],
+          "description": "GitHub PR waits only. terminal for merge or close. terminal_or_review adds new submitted reviews"
+        },
         "contact": {
           "type": "object",
           "required": ["channel", "url", "sender", "sent_at", "request", "status"],
@@ -135,9 +140,9 @@ A non-main conversation reviewing another supervisor's task may only accept/canc
             "request": {"type": "string", "maxLength": 600},
             "status": {"type": "string", "enum": ["sent"]}
           },
-          "description": "required for person_reply and merge_review: the request has already been sent"
+          "description": "Sent request, required for person_reply and merge_review"
         },
-        "ready": {"type": "boolean", "enum": [true], "description": "merge_review only: the named reviewer can review the PR/MR"},
+        "ready": {"type": "boolean", "enum": [true], "description": "merge_review only. The PR/MR is ready for the reviewer"},
         "reply": {
           "type": "object",
           "required": ["source", "brand", "app_id", "account_open_id", "person_open_id", "chat_id", "thread_id", "request_message_id"],
@@ -154,7 +159,7 @@ A non-main conversation reviewing another supervisor's task may only accept/canc
           "description": "person_reply: exact IDs from a configured lark-cli reader, never names. contact.url must be the sent request's matching topic AppLink. A verified reply asks the current supervisor to review, not direct Agent delivery"
         }
       },
-      "description": "required for parked: source-backed evidence you inspected. recorded_by is server-authored/output only. Missing legacy evidence is unverified"
+      "description": "Required for parked. Inspect the source. recorded_by is output only. Missing legacy evidence is unverified"
     }
   }
 }

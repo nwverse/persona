@@ -465,6 +465,7 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | opencode (`opencode-<pid>`) | `integrations/opencode`: opencode plugin (one connection per opencode server process; list and chats read from opencode.db, live updates over the event stream, control through the plugin API) | `docs/integrations/opencode.md` |
 | Grok CLI (`grok-chat`) | `integrations/grok/companion.mjs`: optional standalone ACP companion with assistant tools, permission hooks, native renaming and restart recovery; also lists conversations started in a terminal (read-only while the terminal holds them) | `integrations/grok/README.md` |
 | Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
+| Managed Agents (`managed-agents`, configurable) | `integrations/managed-agents/companion.mjs`: standalone companion for Volcengine Ark Managed Agents and compatible endpoints (cloud or self-hosted, the user's own key); reads sessions over the REST API, sends, interrupts, starts, and answers tool confirmations and question / plan tools on the phone; `--listen` makes it a daemon | `docs/integrations/managed-agents.md` |
 | echo (example) | `integrations/runtime-sdk/examples/echo-runtime.mjs` (with `--listen <port>` it's a daemon) | "Minimal example" in this doc, `docs/integrations/daemons.md` |
 
 ### Antigravity Desktop (macOS, experimental)
