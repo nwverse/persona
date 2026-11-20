@@ -82,6 +82,16 @@ func nextNotesAt(prev *time.Time, now time.Time) time.Time {
 // *notesChanged says what is there now. Only that leader's policy changes, on the first message that finds it idle
 // (notesInEffect), no other conversation's.
 func (s *Service) setDirectionNotes(ctx context.Context, id, notes string, from *notesFrom) (string, *time.Time, error) {
+	return s.setDirectionNotesMode(ctx, id, notes, from, false)
+}
+
+// setCurrentDirectionNotes is the assistant-approved form: unlike the app route, it also refuses a direction that is
+// no longer current. Membership, notes_at and the write are checked under the same direction lock.
+func (s *Service) setCurrentDirectionNotes(ctx context.Context, id, notes string, from *notesFrom) (string, *time.Time, error) {
+	return s.setDirectionNotesMode(ctx, id, notes, from, true)
+}
+
+func (s *Service) setDirectionNotesMode(ctx context.Context, id, notes string, from *notesFrom, requireCurrent bool) (string, *time.Time, error) {
 	notes = cleanDirectionNotes(notes)
 	// What a current leader was told of its direction before this save: the baseline notesInEffect keeps while it
 	// works when no send has recorded one yet (a leader from before #11392, or one never sent to since). Read before
@@ -99,6 +109,10 @@ func (s *Service) setDirectionNotes(ctx context.Context, id, notes string, from 
 	}
 	d := b.m[id]
 	if d == nil {
+		b.mu.Unlock()
+		return "", nil, errNoDirection
+	}
+	if requireCurrent && !slices.Contains(s.settings(ctx).Leaders, id) {
 		b.mu.Unlock()
 		return "", nil, errNoDirection
 	}

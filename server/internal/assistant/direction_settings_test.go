@@ -3,10 +3,12 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -138,28 +140,38 @@ func TestDirectionPromptSettingFragmentValidation(t *testing.T) {
 // A late edit must be visible on the card, not clipped away by the unchanged prefix. Deny it after inspection so this
 // check also leaves the stored notes untouched.
 func TestDirectionPromptSettingCardShowsChangedLateFragment(t *testing.T) {
-	s, _ := notesEnv(t)
-	setSettings(t, s, func(v *Settings) { v.Main = "main_chat" })
-	before := strings.Repeat("Long unchanged context. ", 20) + "\n\nOld final rule."
-	if _, _, err := s.setDirectionNotes(context.Background(), "conv_lead", before, nil); err != nil {
-		t.Fatal(err)
-	}
-	done := setDirectionSetting(s, "main_chat", `{"old":"Old final rule.","new":"New final rule."}`)
-	card, ok := awaitCard(s)
-	if !ok {
-		t.Fatal("no late-fragment confirmation card")
-	}
-	answerDirectionSettingCard(t, s, card.ID, false)
-	if got := waitDirectionSetting(t, done); got.isErr {
-		t.Fatalf("denied late-fragment edit = %+v", got)
-	}
-	for _, want := range []string{"Old final rule.", "New final rule."} {
-		if !strings.Contains(card.Summary, want) {
-			t.Errorf("confirmation card %q hides the changed fragment %q", card.Summary, want)
-		}
-	}
-	if got := directionSettingNotes(s); got != before {
-		t.Fatalf("denial changed notes to %q", got)
+	for _, tc := range []struct {
+		name, prefix string
+	}{
+		{name: "ASCII", prefix: strings.Repeat("Long unchanged context. ", 20)},
+		{name: "CJK", prefix: strings.Repeat("前", 140)},
+		{name: "emoji", prefix: strings.Repeat("🙂", 140)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := notesEnv(t)
+			setSettings(t, s, func(v *Settings) { v.Main = "main_chat" })
+			before := tc.prefix + "\n\nOld final rule."
+			if _, _, err := s.setDirectionNotes(context.Background(), "conv_lead", before, nil); err != nil {
+				t.Fatal(err)
+			}
+			done := setDirectionSetting(s, "main_chat", `{"old":"Old final rule.","new":"New final rule."}`)
+			card, ok := awaitCard(s)
+			if !ok {
+				t.Fatal("no late-fragment confirmation card")
+			}
+			answerDirectionSettingCard(t, s, card.ID, false)
+			if got := waitDirectionSetting(t, done); got.isErr {
+				t.Fatalf("denied late-fragment edit = %+v", got)
+			}
+			for _, want := range []string{"Old final rule.", "New final rule."} {
+				if !strings.Contains(card.Summary, want) {
+					t.Errorf("confirmation card %q hides the changed fragment %q", card.Summary, want)
+				}
+			}
+			if got := directionSettingNotes(s); got != before {
+				t.Fatalf("denial changed notes to %q", got)
+			}
+		})
 	}
 }
 
@@ -251,6 +263,45 @@ func TestDirectionPromptSettingOwnerApprovalChain(t *testing.T) {
 	}
 	if got := directionSettingNotes(s); got != "# Rules\n\nWhole replacement." {
 		t.Fatalf("whole replacement = %q", got)
+	}
+}
+
+// The direction's current membership is rechecked under the same lock as notes_at and the write. The test holds that
+// lock until the approved apply has read the old Leaders list, then ends the direction before letting the write proceed.
+func TestDirectionPromptSettingDirectionEndDuringApprovalIsStale(t *testing.T) {
+	s, _ := notesEnv(t)
+	setSettings(t, s, func(v *Settings) { v.Main = "main_chat" })
+	if _, _, err := s.setDirectionNotes(context.Background(), "conv_lead", "before", nil); err != nil {
+		t.Fatal(err)
+	}
+	change, err := s.setDirectionPromptSetting(context.Background(), "conv_lead", "Weather", json.RawMessage(`"after"`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &s.directions
+	b.mu.Lock()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		_, err := change.apply(context.Background())
+		done <- err
+	}()
+	<-started
+	// Let apply reach directionPrompt's lock after its initial current-leader read; it cannot pass b.mu until we let go.
+	time.Sleep(50 * time.Millisecond)
+	if _, err := s.updateSettings(context.Background(), func(v *Settings) error {
+		v.Leaders = []string{"conv_other"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b.mu.Unlock()
+	if err := <-done; !errors.Is(err, approvalops.ErrStale) {
+		t.Fatalf("approval after the direction ended = %v, want stale", err)
+	}
+	if got := directionSettingNotes(s); got != "before" {
+		t.Fatalf("ended direction's notes changed to %q", got)
 	}
 }
 

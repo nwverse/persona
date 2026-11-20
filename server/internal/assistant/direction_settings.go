@@ -160,10 +160,7 @@ func (s *Service) setDirectionPromptSetting(ctx context.Context, id, name string
 			})
 		},
 		apply: func(ctx context.Context) (string, error) {
-			if !slices.Contains(s.settings(ctx).Leaders, id) {
-				return "", fmt.Errorf("%w: the direction ended after this card was prepared", approvalops.ErrStale)
-			}
-			_, _, err := s.setDirectionNotes(ctx, id, after, &notesFrom{At: beforeAt})
+			_, _, err := s.setCurrentDirectionNotes(ctx, id, after, &notesFrom{At: beforeAt})
 			var changed *notesChanged
 			switch {
 			case errors.As(err, &changed), errors.Is(err, errNoDirection):
