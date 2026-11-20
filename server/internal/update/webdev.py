@@ -12,6 +12,7 @@ import gzip
 import hashlib
 import json
 import os
+import posixpath
 from pathlib import Path, PurePosixPath
 import re
 import ntpath
@@ -202,7 +203,7 @@ def native_digest(path):
 
 def absolute_metadata_path(value):
     return (isinstance(value, str) and value.startswith("/") and
-            "\\" not in value and "\x00" not in value and ".." not in PurePosixPath(value).parts)
+            "\x00" not in value and ".." not in PurePosixPath(value).parts)
 
 
 def read_manifest(path):
@@ -359,13 +360,33 @@ def extract_history(path, destination):
             os.utime(destination / member.name, (member.mtime, member.mtime))
 
 
+def has_new_backslash_component(path):
+    current = path
+    while True:
+        try:
+            os.lstat(current)
+            return False
+        except FileNotFoundError:
+            if "\\" in current.name:
+                return True
+            parent = current.parent
+            if parent == current:
+                return False
+            current = parent
+        except OSError:
+            return False
+
+
 def backup_store(request):
     # The Web UI's folder (already canonical) or hub.json's advanced setting;
     # absent: the recommended directory the Hub has always used.
     directory = request["config"]["backup"].get("directory")
     if directory:
         if (not isinstance(directory, str) or not directory.startswith("/") or
-                "\\" in directory or "\x00" in directory or ".." in PurePosixPath(directory).parts):
+                "\x00" in directory or ".." in PurePosixPath(directory).parts):
+            raise ValueError("invalid backup directory")
+        if "\\" in directory and (posixpath.normpath(directory) != directory or
+                                  has_new_backslash_component(Path(directory))):
             raise ValueError("invalid backup directory")
         store = Path(directory)
     else:

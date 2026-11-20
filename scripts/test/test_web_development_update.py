@@ -275,6 +275,35 @@ pathlib.Path({str(resumed)!r}).touch()
         with self.assertRaisesRegex(ValueError, "quiesce"):
             webdev.snapshot(request)
 
+    def test_existing_backslash_runtime_and_backup_directory(self):
+        request = self.history_fixture()
+        original_runtime = Path(request["runtime"])
+        runtime = self.root / r"persona\prod"
+        original_runtime.rename(runtime)
+        request["runtime"] = str(runtime)
+        recommended = runtime / "update" / "development-backups"
+        request["config"]["backup"] = {"builtin": True, "directory": str(recommended)}
+        receipt = webdev.snapshot(request)
+        manifest = webdev.verify(recommended / receipt["id"])
+        self.assertEqual(manifest["roots"], [str(runtime.resolve())])
+
+        existing_store = self.root / r"existing\store"
+        existing_store.mkdir(mode=0o700)
+        request["config"]["backup"] = {"builtin": True, "directory": str(existing_store)}
+        receipt2 = webdev.snapshot(request)
+        webdev.verify(existing_store / receipt2["id"])
+
+        for bad in (
+            str(runtime / r"new\dir"),
+            str(runtime / r"new\dir" / "snapshots"),
+            str(runtime) + "//update/development-backups",
+            str(runtime / "update" / ".." / "escape"),
+            str(runtime / "bad\x00dir"),
+        ):
+            request["config"]["backup"] = {"builtin": True, "directory": bad}
+            with self.assertRaisesRegex(ValueError, "invalid backup directory"):
+                webdev.backup_store(request)
+
     def test_builtin_quiesce_refuses_extra_sources_and_other_local_managers(self):
         request = self.history_fixture()
         external = dict(request["config"]["backup"])

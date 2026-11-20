@@ -31,14 +31,34 @@ func SamePath(a, b string) bool {
 	return resolveExisting(filepath.Clean(a)) == resolveExisting(filepath.Clean(b))
 }
 
-func validateBackupPathChars(path string) error {
+func validateBackupPathNUL(path string) error {
 	if strings.ContainsRune(path, 0) {
 		return errors.New("the backup directory path may not contain NUL bytes")
 	}
-	if filepath.Separator != '\\' && strings.ContainsRune(path, '\\') {
-		return errors.New("the backup directory path may not contain backslashes")
-	}
 	return nil
+}
+
+// validateNewBackupPathComponents rejects backslashes only in path components
+// that do not yet exist and would be created by ValidateOutputDirectory. An
+// existing POSIX parent prefix or directory (for example a runtime home under
+// /srv/persona\prod) remains usable.
+func validateNewBackupPathComponents(clean string) error {
+	if filepath.Separator == '\\' {
+		return nil
+	}
+	for current := clean; ; current = filepath.Dir(current) {
+		_, err := os.Lstat(current)
+		if err == nil || !errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if strings.ContainsRune(filepath.Base(current), '\\') {
+			return errors.New("the backup directory path may not contain backslashes in new directory names")
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return nil
+		}
+	}
 }
 
 // ValidateOutputDirectory checks and prepares a snapshot directory chosen in
@@ -55,7 +75,7 @@ func ValidateOutputDirectory(home, dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := validateBackupPathChars(name); err != nil {
+	if err := validateBackupPathNUL(name); err != nil {
 		return "", err
 	}
 	if !filepath.IsAbs(name) {
@@ -65,11 +85,14 @@ func ValidateOutputDirectory(home, dir string) (string, error) {
 	if clean == string(filepath.Separator) {
 		return "", errors.New("the filesystem root is not a backup directory")
 	}
+	if err := validateNewBackupPathComponents(clean); err != nil {
+		return "", err
+	}
 	// Validate before creating anything, in both the path as given and as its
 	// symlinked parents resolve it: a refused path leaves no directory behind
 	// inside the data a snapshot collects.
 	resolved := resolveExisting(clean)
-	if err := validateBackupPathChars(resolved); err != nil {
+	if err := validateBackupPathNUL(resolved); err != nil {
 		return "", err
 	}
 	for _, candidate := range []string{clean, resolved} {
@@ -105,7 +128,7 @@ func ValidateOutputDirectory(home, dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := validateBackupPathChars(resolved); err != nil {
+	if err := validateBackupPathNUL(resolved); err != nil {
 		return "", err
 	}
 	if err := refuseOutputInsideCollectedTree(home, filepath.Join(resolved, ".persona-snapshot")); err != nil {

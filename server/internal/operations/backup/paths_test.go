@@ -96,6 +96,75 @@ func TestValidateOutputDirectoryRefusals(t *testing.T) {
 		if _, err := os.Lstat(backslash); !errors.Is(err, os.ErrNotExist) {
 			fatalf(t, "refused backslash path was created: %v", err)
 		}
+		nul := filepath.Join(t.TempDir(), "snap\x00shots")
+		if _, err := ValidateOutputDirectory(home, nul); err == nil || !strings.Contains(err.Error(), "NUL") {
+			fatalf(t, "ValidateOutputDirectory(%q) = %v, want NUL refusal", nul, err)
+		}
+	}
+}
+
+func TestValidateOutputDirectoryAllowsExistingBackslashPrefixes(t *testing.T) {
+	if filepath.Separator == '\\' {
+		skip(t, "POSIX backslash semantics")
+	}
+	base := t.TempDir()
+	home := filepath.Join(base, `persona\prod`)
+	if err := os.Mkdir(home, 0o700); err != nil {
+		fatal(t, err)
+	}
+	resolvedHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		fatal(t, err)
+	}
+
+	// Recommended backup directory under a runtime home containing a backslash.
+	recommended := RecommendedDevelopmentBackupDir(home)
+	got, err := ValidateOutputDirectory(home, recommended)
+	if err != nil {
+		fatalf(t, "ValidateOutputDirectory(recommended under backslash home) = %v", err)
+	}
+	wantRecommended := filepath.Join(resolvedHome, "update", "development-backups")
+	if got != wantRecommended {
+		fatalf(t, "resolved recommended = %q, want %q", got, wantRecommended)
+	}
+
+	// Existing private directory whose own name contains a backslash.
+	existing := filepath.Join(base, `existing\backups`)
+	if err := os.Mkdir(existing, 0o700); err != nil {
+		fatal(t, err)
+	}
+	resolvedExisting, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		fatal(t, err)
+	}
+	got, err = ValidateOutputDirectory(home, existing)
+	if err != nil {
+		fatalf(t, "ValidateOutputDirectory(existing backslash dir) = %v", err)
+	}
+	if got != resolvedExisting {
+		fatalf(t, "resolved existing = %q, want %q", got, resolvedExisting)
+	}
+
+	// Symlink parent resolving to a directory containing a backslash.
+	link := filepath.Join(base, "link-to-backslash")
+	if err := os.Symlink(existing, link); err != nil {
+		fatal(t, err)
+	}
+	got, err = ValidateOutputDirectory(home, filepath.Join(link, "snapshots"))
+	if err != nil {
+		fatalf(t, "ValidateOutputDirectory(through symlink to backslash dir) = %v", err)
+	}
+	if got != filepath.Join(resolvedExisting, "snapshots") {
+		fatalf(t, "resolved symlink child = %q, want %q", got, filepath.Join(resolvedExisting, "snapshots"))
+	}
+
+	// Newly created components containing a backslash remain refused and create nothing.
+	newBad := filepath.Join(home, `new\dir`, "snapshots")
+	if _, err := ValidateOutputDirectory(home, newBad); err == nil || !strings.Contains(err.Error(), "backslash") {
+		fatalf(t, "ValidateOutputDirectory(%q) = %v, want backslash refusal", newBad, err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, `new\dir`)); !errors.Is(err, os.ErrNotExist) {
+		fatalf(t, "refused new backslash component was created: %v", err)
 	}
 }
 
