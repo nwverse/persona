@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -48,6 +50,19 @@ func TestHubRelaysDurableHistoryCompleteness(t *testing.T) {
 			check(raw)
 		default:
 			t.Fatal("no subscription catch-up")
+		}
+	}
+}
+
+func TestDurableHistoryRoutesRequireFullCredentials(t *testing.T) {
+	patterns := routePatterns(t)
+	for _, method := range []string{"GET", "PUT"} {
+		pattern := method + " /api/v1/assistant/history"
+		if !slices.Contains(patterns, pattern) {
+			t.Fatalf("missing history route: %s", pattern)
+		}
+		if scope := extwire.RouteScopes[pattern]; scope != "" {
+			t.Fatalf("history operations must require full credentials: %s has scope %s", pattern, scope)
 		}
 	}
 }

@@ -2635,7 +2635,9 @@ that could mix a rewritten transcript with an older one. It can be indexed once 
 available. This is a source-data compatibility fallback, not an engine-kind restriction.
 
 Historical reads and main handoffs prefer covered database content. Handoffs retain the source engine's stored
-compaction summary and bounded recent complete messages; no model is called to populate this store. Strict source
+compaction summary and bounded recent complete messages; no model is called to populate this store. An incomplete
+cached window or handoff tries the source first; a source failure retains available data marked `partial`.
+Handoffs require both covered history and a verified summary checkpoint before bypassing an available source. Strict source
 exports and user-input position projections still use the runtime. A stale source revision is checked before old
 coverage is reused. Database failures retain the runtime read path.
 
