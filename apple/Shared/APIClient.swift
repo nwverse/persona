@@ -983,6 +983,8 @@ nonisolated struct APIClient: Sendable {
         var machineID: String
         var cwd: String
         var launcher: String
+        /// The launcher's actual agent when a synchronous start needs it on the wire; nil preserves older starts.
+        var agentType: String? = nil
         var prompt: String?
         var resumeSessionID: String?
         var workspaceID: String?
@@ -1004,7 +1006,7 @@ nonisolated struct APIClient: Sendable {
         var ultracode: Bool? = nil
         enum CodingKeys: String, CodingKey {
             case cwd, launcher, prompt, host, effort, async, model, ultracode
-            case machineID = "machine_id", resumeSessionID = "resume_session_id", workspaceID = "workspace_id",
+            case machineID = "machine_id", agentType = "agent_type", resumeSessionID = "resume_session_id", workspaceID = "workspace_id",
                  permissionMode = "permission_mode", tabName = "tab_name", nameHint = "name_hint", todoID = "todo_id"
         }
     }
