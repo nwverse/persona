@@ -103,8 +103,8 @@ func relayFailureOf(err error) relayFailure {
 
 // sendNotTaken: the failed send err (not nil) provably did not reach its conversation, so what it carried took no
 // effect there (a direction's notes block, direction_notes.go; #11392). What the node said decides (delivered);
-// without it, err is read by relayFailureOf, so the two never class an error differently, and only the classes that
-// rule out its having gone in count:
+// without it, err is read through relayFailureOf, so an error the relays class anew is read anew here too, and only
+// what rules out its having gone in counts, which within three classes is narrower than the class:
 //   - a setup to fix (relayFailedSetup: node_outdated, which the manager's devices layer answers before the computer is
 //     reached; no_device) and a conversation that is gone;
 //   - the computer away (relayFailedNotNow by apierr.ErrOffline or machine_offline), but not the class's node error
