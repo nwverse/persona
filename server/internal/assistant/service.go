@@ -469,9 +469,14 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			return beforeNodeWrite(method, err)
 		}
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
+	taken := false // the node took this send (or may have): a direction's notes block it carried counts as given
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend ||
+		method == DeviceSessionSendOnce || method == assistantwire.DeviceAssistantAnswerAgain) {
 		id, _ := p["session_id"].(string)
-		if err := s.putSupervisionInstructions(ctx, device, id, p); err != nil {
+		pctx, carry := withNotesCarry(ctx)
+		// Settled however this returns: a send refused before it left was not taken (direction_notes.go).
+		defer func() { s.notesSendOutcome(ctx, carry, taken) }()
+		if err := s.putSupervisionInstructions(pctx, device, id, p); err != nil {
 			return beforeNodeWrite(method, err)
 		}
 		if method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce {
@@ -599,12 +604,8 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if !ok {
 		res, err = s.hub.DeviceCall(ctx, p)
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
-		if id, _ := p["session_id"].(string); id != "" {
-			// A direction's notes block counts as given only once the node took the send (direction_notes.go).
-			s.notesSendOutcome(ctx, id, err == nil || nodeDelivered(err) != "none")
-		}
-	}
+	// Not taken: refused before anything was typed, or for a computer that is offline or not one of the hub's.
+	taken = err == nil || nodeDelivered(err) != "none" && !errors.Is(err, apierr.ErrOffline) && !errors.Is(err, ErrNoDevice)
 	if taskRoot != "" && (method == DeviceSessionSend || method == deviceTaskStart) {
 		s.noteTaskSpaceResult(ctx, taskRoot, device, res)
 	}

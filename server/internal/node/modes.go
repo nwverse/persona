@@ -187,6 +187,10 @@ func (n *Node) persistModes(id, mode, effort string) {
 
 // currentModes is the session's mode and effort: from its transcript, or what the app set since.
 func (n *Node) currentModes(id string, m quickMeta) (mode, effort string) {
+	return n.currentModesWithEffort(id, m, terminalEffort{})
+}
+
+func (n *Node) currentModesWithEffort(id string, m quickMeta, confirmed terminalEffort) (mode, effort string) {
 	mode, effort = m.mode, m.effort
 	if mode != "" && !slices.Contains(permissionModes, mode) && n.isAssistantSession(id) {
 		mode = modeFromCodex(mode, m.sandbox) // a Codex rollout records its approval policy and sandbox
@@ -211,8 +215,11 @@ func (n *Node) currentModes(id string, m quickMeta) (mode, effort string) {
 			mode = set.Mode
 		}
 		if set.Effort != "" && set.EffortAt.After(m.effortAt) {
-			effort = set.Effort
+			effort, m.effortAt = set.Effort, set.EffortAt
 		}
+	}
+	if confirmed.at.After(m.effortAt) {
+		effort = confirmed.value
 	}
 	return mode, effort
 }
@@ -238,6 +245,15 @@ func (n *Node) modesOf(id string) (mode, effort string) {
 	if p := n.transcriptPath(id); p != "" {
 		if st, err := os.Stat(p); err == nil {
 			m = n.meta(p, st)
+		}
+	}
+	n.mu.Lock()
+	a := n.agents[id]
+	n.mu.Unlock()
+	if a.Agent == "claude" && a.PaneID != "" {
+		_, confirmed := n.switches().terminalEfforts(id)
+		if confirmed.pane == a.PaneID {
+			return n.currentModesWithEffort(id, m, confirmed)
 		}
 	}
 	return n.currentModes(id, m)

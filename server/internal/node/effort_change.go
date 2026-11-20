@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -16,10 +17,21 @@ type effortChange struct {
 	failed bool
 }
 
+type terminalEffort struct {
+	pane  string
+	value string
+	at    time.Time
+}
+
 func (s *switchShare) effortChange(id string) effortChange {
+	change, _ := s.terminalEfforts(id)
+	return change
+}
+
+func (s *switchShare) terminalEfforts(id string) (effortChange, terminalEffort) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.efforts[id]
+	return s.efforts[id], s.confirmed[id]
 }
 
 func (s *switchShare) setEffortChange(id string, change effortChange) {
@@ -35,6 +47,18 @@ func (s *switchShare) setEffortChange(id string, change effortChange) {
 	s.efforts[id] = change
 }
 
+// The confirming picker can finish on a disconnected Node. Store its result and lift the barrier together so
+// every subsequent connection can list the confirmed value, even if no Node was serving when the picker finished.
+func (s *switchShare) confirmTerminalEffort(id, pane, effort string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.confirmed == nil {
+		s.confirmed = make(map[string]terminalEffort)
+	}
+	s.confirmed[id] = terminalEffort{pane: pane, value: effort, at: time.Now()}
+	delete(s.efforts, id)
+}
+
 func (c effortChange) refusal() error {
 	return refusal(proto.CodeEffortChangePending, i18n.T(i18n.Default, "rpc-errors.effort_change_pending"),
 		map[string]any{"effort": c.target})
@@ -42,7 +66,8 @@ func (c effortChange) refusal() error {
 
 // setTerminalEffort runs under the input locks also used by the queued worker.
 func (n *Node) setTerminalEffort(ctx context.Context, id, pane, effort string, pending *bool) error {
-	if a, live := n.agent(id); live && a.Agent == "claude" && pending != nil {
+	a, live := n.agent(id)
+	if live && a.Agent == "claude" && pending != nil {
 		h, _, err := n.paneHost(pane)
 		if err != nil {
 			return err
@@ -70,21 +95,33 @@ func (n *Node) setTerminalEffort(ctx context.Context, id, pane, effort string, p
 		return fmt.Errorf("Agent 正在工作，这一轮结束后再改思考强度")
 	}
 
-	if err := n.applyTerminalEffort(ctx, id, pane, effort); err != nil {
+	if err := n.driveTerminalEffort(ctx, id, pane, effort); err != nil {
 		return err
 	}
-	n.switches().setEffortChange(id, effortChange{})
+	share := n.switches()
+	if live && a.Agent == "claude" && a.PaneID == pane {
+		share.confirmTerminalEffort(id, pane, effort)
+		if serving := share.serving(); serving != nil && serving != n {
+			serving.notifySessionsSoon()
+		}
+	} else {
+		n.noteModes(id, "", effort)
+		share.setEffortChange(id, effortChange{})
+	}
 	return nil
 }
 
-// Read pending before reading confirmed effort so a row never sees the barrier lifted with the old effort.
+// Read pending and confirmed terminal effort from the same snapshot.
 func (n *Node) terminalModesRow(s *proto.Session, m quickMeta) {
-	change := n.switches().effortChange(s.SessionID)
+	change, confirmed := n.switches().terminalEfforts(s.SessionID)
 	if change.target != "" {
 		s.PendingEffort = &change.target
 		s.EffortChangeFailed = change.failed
 	}
-	s.PermissionMode, s.Effort = n.currentModes(s.SessionID, m)
+	if s.Agent != "claude" || s.PaneID != confirmed.pane {
+		confirmed = terminalEffort{}
+	}
+	s.PermissionMode, s.Effort = n.currentModesWithEffort(s.SessionID, m, confirmed)
 }
 
 // Held sends use the cached pane when present, and verify a disappearance before lifting the barrier.
@@ -131,7 +168,7 @@ func (n *Node) tryEffortChange(id string) {
 	h, _, err := n.paneHost(change.pane)
 	if err != nil {
 		share.setEffortChange(id, effortChange{})
-		n.notifySessionsSoon()
+		n.notifyEffortChange()
 		return
 	}
 	if err := n.refreshHosts(ctx, h); err != nil {
@@ -141,23 +178,31 @@ func (n *Node) tryEffortChange(id string) {
 	switch {
 	case !live || a.PaneID != change.pane || a.Agent != "claude":
 		share.setEffortChange(id, effortChange{})
-		n.notifySessionsSoon()
+		n.notifyEffortChange()
 		return
 	case change.failed || a.AgentStatus != proto.StatusIdle && a.AgentStatus != proto.StatusDone:
 		return
 	case n.checkPaneFor(ctx, change.pane, "claude", sendOpts{readBox: true}) != nil:
 		err = fmt.Errorf("Claude Code's prompt is not available")
 	default:
-		err = n.applyTerminalEffort(ctx, id, change.pane, change.target)
+		err = n.driveTerminalEffort(ctx, id, change.pane, change.target)
 	}
 	if err != nil {
 		n.logf("session %s: queued effort change failed: %v", id, err)
 		change.failed = true
+		share.setEffortChange(id, change)
 	} else {
-		change = effortChange{}
+		share.confirmTerminalEffort(id, change.pane, change.target)
 	}
-	share.setEffortChange(id, change)
-	n.notifySessionsSoon()
+	n.notifyEffortChange()
+}
+
+func (n *Node) notifyEffortChange() {
+	if serving := n.switches().serving(); serving != nil {
+		serving.notifySessionsSoon()
+	} else {
+		n.notifySessionsSoon()
+	}
 }
 
 // The terminal's mode controls can look blocked to herdr while the node drives them.
@@ -172,11 +217,7 @@ func (n *Node) driveModes(id string) func() {
 	}
 }
 
-func (n *Node) applyTerminalEffort(ctx context.Context, id, pane, effort string) error {
+func (n *Node) driveTerminalEffort(ctx context.Context, id, pane, effort string) error {
 	defer n.driveModes(id)()
-	if err := n.tuiSetEffort(ctx, pane, effort); err != nil {
-		return err
-	}
-	n.noteModes(id, "", effort)
-	return nil
+	return n.tuiSetEffort(ctx, pane, effort)
 }

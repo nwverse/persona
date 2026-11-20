@@ -59,9 +59,17 @@ jobs:
               previous="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["commit"])' <<< "$current")"
             fi
           fi
-          version="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" schedule-version --stable-tag "$stable" --commit "$commit" --previous-commit "$previous" --subjects release-subjects.txt --reserved $(tr '\n' ' ' < release-reserved.txt))"
+          version_command=(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" schedule-version --stable-tag "$stable" --commit "$commit" --previous-commit "$previous" --subjects release-subjects.txt --reserved)
+          while IFS= read -r reserved_version || [[ -n "$reserved_version" ]]; do
+            version_command+=("$reserved_version")
+          done < release-reserved.txt
+          version="$("${version_command[@]}")"
           if [[ "$CHANNEL" = beta ]] && gh api "repos/$REPOSITORY/releases/tags/v$version" >/dev/null 2>&1; then
-            version="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel beta next-version --stable-tag "$stable" --reserved $(tr '\n' ' ' < release-reserved.txt))"
+            version_command=(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel beta next-version --stable-tag "$stable" --reserved)
+            while IFS= read -r reserved_version || [[ -n "$reserved_version" ]]; do
+              version_command+=("$reserved_version")
+            done < release-reserved.txt
+            version="$("${version_command[@]}")"
           fi
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || exit 0
           branch="release/$version"
@@ -73,7 +81,12 @@ jobs:
           if git ls-remote --exit-code "https://github.com/$REPOSITORY.git" "refs/heads/$branch" >/dev/null 2>&1; then
             # A previous failed scheduler owns this version. Never overwrite its different source: allocate the next one.
             echo "$branch has no open PR; preserve its failed source and select a new immutable version."
-            version="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel beta next-version --stable-tag "$stable" --reserved $(tr '\n' ' ' < release-reserved.txt))"
+            git ls-remote --heads "https://github.com/$REPOSITORY.git" 'refs/heads/release/*' | cut -f2 | sed 's#refs/heads/release/##' > release-reserved.txt
+            version_command=(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel beta next-version --stable-tag "$stable" --reserved)
+            while IFS= read -r reserved_version || [[ -n "$reserved_version" ]]; do
+              version_command+=("$reserved_version")
+            done < release-reserved.txt
+            version="$("${version_command[@]}")"
             branch="release/$version"
             title="release: v$version"
           fi

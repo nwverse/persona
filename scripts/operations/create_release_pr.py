@@ -32,12 +32,14 @@ def create(repository, title, branch, body, token, attempts=6, wait=30, sleeper=
         raise ReleasePRError("release PR creation needs at least one attempt")
     # REST keeps release-PR recovery independent of GraphQL's separate rate budget. Both the read and the create
     # stay within the protected token's existing repository/pull-request permissions.
-    existing = gh(["api", f"repos/{repository}/pulls?state=open&head={branch}&base=main&per_page=10"], token, repository)
+    existing = gh(["api", f"repos/{repository}/pulls?state=open&base=main&per_page=100"], token, repository)
     if existing.returncode:
         raise ReleasePRError("could not check the existing release PR: " + existing.stderr.strip())
     pulls = json.loads(existing.stdout)
     if not isinstance(pulls, list):
         raise ReleasePRError("existing release PR response is not a list")
+    # A slash in a server-side head filter can return unrelated PRs. Only an exact ref match owns this version.
+    pulls = [pull for pull in pulls if (pull.get("head") or {}).get("ref") == branch]
     if len(pulls) > 1:
         raise ReleasePRError("more than one open release PR owns " + branch)
     if pulls:
