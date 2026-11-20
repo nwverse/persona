@@ -2209,6 +2209,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			n.refresh(p.SessionID, f)
 		}
 		it, err := f.Full(a.ItemID)
+		if errors.Is(err, transcript.ErrSourceChanged) {
+			return nil, &rpc.Error{Code: codeNotFound, Message: err.Error()}
+		}
 		if err != nil {
 			return nil, fmt.Errorf("session %s: %w", p.SessionID, err)
 		}
