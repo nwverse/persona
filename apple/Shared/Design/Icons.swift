@@ -49,6 +49,10 @@ extension Theme {
         /// Calls moved to the background.
         static let backgroundTask = "gearshape.2"
         static let backgroundTaskFilled = "gearshape.2.fill"
+        /// Running and recently completed background tasks in Agent chat.
+        static let backgroundTasks = taskPlan
+        /// A background command that watches an ongoing signal.
+        static let backgroundMonitor = screen
         /// A multi-agent workflow running in the background (Claude Code's Workflow tool).
         static let workflow = "flowchart"
         static let pinned = "pin.fill"
