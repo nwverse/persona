@@ -147,7 +147,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 		}
 		return v
 	}
-	resolvedPrefixes := map[string]bool{}
+	resolvedPrefixes := map[int]bool{}
 	cmd = normalizeLarkCommandTracked(cmd, cwd, gates, resolvedPrefixes)
 	v.unknown = shellCommandUnknown(cmd, false, depth)
 	segs, ok := shellcmd.Split(cmd)
@@ -235,11 +235,11 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 	if tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), ""); err == nil {
 		_, sequential = larkFlatStmts(tree.Stmts)
 	}
-	for _, s := range segs {
+	for position, s := range segs {
 		writes, notes := larkWritesFile(s.Redirect)
 		flow = append(flow, larkFlow{text: s.Text, writes: writes, notes: notes})
 		seg := &flow[len(flow)-1]
-		seg.resolved = resolvedPrefixes[larkWordsKey(s.Words)]
+		seg.resolved = resolvedPrefixes[position]
 		assignmentWords := s.Words
 		for len(assignmentWords) > 0 && (assignmentWords[0] == "do" || assignmentWords[0] == "then" || assignmentWords[0] == "else") {
 			assignmentWords = assignmentWords[1:]
@@ -329,7 +329,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 		words, parsed = unwrapCommand(words)
 		if !parsed {
 			v.other = true
-			v.unknown = v.unknown || larkCLIRe.MatchString(s.Text)
+			v.unknown = v.unknown || gateNamed(gates, s.Text) || gateNamedFields(gates, words) || larkCLIRe.MatchString(s.Text)
 			for _, word := range words {
 				v.unknown = v.unknown || strings.ContainsAny(word, "$`*?[]{}")
 			}
@@ -683,6 +683,23 @@ func gateNamed(gates []proto.CommandGate, cmd string) bool {
 	for _, word := range strings.Fields(cmd) {
 		if gateOf(gates, strings.Trim(word, "'\"`;&|()")) >= 0 {
 			return true
+		}
+	}
+	return false
+}
+
+// gateNamedFields keeps a gate name visible when an unsupported wrapper leaves its
+// command packed inside one quoted or option=value word (for example env -S).
+// This fallback only confirms; it never reinterprets or executes those words.
+func gateNamedFields(gates []proto.CommandGate, words []string) bool {
+	for _, word := range words {
+		fields := strings.FieldsFunc(word, func(r rune) bool {
+			return r == ' ' || r == '\t' || r == '\n' || strings.ContainsRune("='\"`;&|()", r)
+		})
+		for _, field := range fields {
+			if gateOf(gates, field) >= 0 {
+				return true
+			}
 		}
 	}
 	return false

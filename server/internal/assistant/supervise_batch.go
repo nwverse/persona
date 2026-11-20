@@ -31,6 +31,8 @@ func supervisionBatchImmediate(g superviseSignal) bool {
 	switch g.Kind {
 	case sigNeedsYou, sigAsk, sigEscalated, sigDecide, sigDecisionReply, sigParkDecided, sigOwnerCannot, sigRecheck, sigUndecidable, sigFailed:
 		return true
+	case sigCheck: // the owner's answer to a check's decision; the check's own news can wait for the batch
+		return g.Report == checkDecidedReport
 	}
 	return false
 }
@@ -45,6 +47,9 @@ func digestWaitWithBatch(now, last time.Time, pending []superviseSignal, p super
 	var due time.Time
 	for _, g := range pending {
 		at := g.At.Add(p.gather)
+		if g.NotBefore.After(at) {
+			at = g.NotBefore
+		}
 		if batch > 0 && !supervisionBatchImmediate(g) && g.batchUntil.After(at) {
 			at = g.batchUntil
 		}
