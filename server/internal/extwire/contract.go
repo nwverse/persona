@@ -47,6 +47,9 @@ const (
 	// ScopeTranscription: handing the extension's own audio to the transcription the owner chose for meetings
 	// (transcription.start / audio / finish / cancel), never a key and never anyone else's audio (#8485).
 	ScopeTranscription = "transcription"
+	// ScopeMarketRefreshOwn: asking for a background read of only the marketplace the calling extension was installed
+	// from. It is never inherited through an all-scope token; the manifest must name it and the owner must approve it.
+	ScopeMarketRefreshOwn = "market.refresh_own"
 	// ScopeCallPrefix and an extension's id: calling that extension's own HTTP (/api/v1/extensions/<id>/…).
 	ScopeCallPrefix = "extensions.call:"
 )

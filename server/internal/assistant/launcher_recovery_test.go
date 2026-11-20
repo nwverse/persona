@@ -122,19 +122,24 @@ func TestMainChatLauncherUsesCatalogFromWithinRecoveryBudget(t *testing.T) {
 		note, err := s.finishMainChatModel(context.Background(), "server", "assistant", params, false)
 		done <- result{note: note, err: err}
 	}()
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for {
-		fresh := false
+	fresh := func() bool {
 		for _, call := range launcherListCalls(f) {
-			fresh = fresh || call["refresh"] == true
+			if call["refresh"] == true {
+				return true
+			}
 		}
-		if fresh {
-			break
-		}
-		if time.Now().After(deadline) {
+		return false
+	}
+	deadline := time.NewTimer(500 * time.Millisecond)
+	poll := time.NewTicker(2 * time.Millisecond)
+	defer deadline.Stop()
+	defer poll.Stop()
+	for !fresh() {
+		select {
+		case <-deadline.C:
 			t.Fatal("recovery did not make a fresh discovery at the start of its budget")
+		case <-poll.C:
 		}
-		time.Sleep(2 * time.Millisecond)
 	}
 	// Any discovery after the recovery budget now fails. The fresh catalog obtained inside the budget must still be
 	// enough to select the explicit fallback; an additional post-deadline read would instead return this error.
