@@ -1333,7 +1333,9 @@ owner-bubble quote chip; `e2e/leader-background-rounds.mjs` checks the leader ch
 before/after screenshots.
 Opened, its inputs are source blocks, not raw model input; a scheduled task's or follow-up's input shows only its line,
 never the prompt (`promptHidden`), folded or not. The supervision visibility rule (`supervisionVisible`) keeps rounds that
-asked or told the user shown. Needs you groups rows by the task's supervising conversation (`needsYouBySupervisor`,
+asked or told the user shown. In the main conversation, a routine `conversation_send` reply stays inside the expandable
+background record even when nonempty, and sends no routine finished push; an explicit P0 / requested-result / decision
+promotion still opens and notifies. A leader conversation keeps the previous visible-reply fallback. Needs you groups rows by the task's supervising conversation (`needsYouBySupervisor`,
 `lib/assistant-entries.ts`) when more than one has rows. `e2e/background-rounds.mjs` checks it in a real browser with
 synthetic data and takes the screenshots; with the switch off the chat is pixel-identical to a build without the feature.
 
