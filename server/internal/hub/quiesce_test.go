@@ -1409,3 +1409,139 @@ func TestResumedPersonaTiersCannotOverwriteNewerState(t *testing.T) {
 		}
 	})
 }
+
+type liveActivityOrderStore struct {
+	*meshStore
+	mu          sync.Mutex
+	events      []string
+	heldUntil   map[string]time.Time
+	holdEntered chan struct{}
+	releaseHold chan struct{}
+	holdOnce    sync.Once
+}
+
+func (s *liveActivityOrderStore) HoldLiveActivityStart(_ context.Context, device string, asOf time.Time, hold time.Duration) (bool, error) {
+	if s.holdEntered != nil {
+		s.holdOnce.Do(func() {
+			close(s.holdEntered)
+			<-s.releaseHold
+		})
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, "hold")
+	if s.heldUntil == nil {
+		s.heldUntil = map[string]time.Time{}
+	}
+	s.heldUntil[device] = asOf.Add(hold)
+	return true, nil
+}
+
+func (s *liveActivityOrderStore) ClaimLiveActivityStart(_ context.Context, device, _ string, now time.Time, _, _ time.Duration) (time.Time, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, "claim")
+	if due := s.heldUntil[device]; now.Before(due) {
+		return due, false, nil
+	}
+	return time.Time{}, true, nil
+}
+
+// On resume, deferred Live Activity holds are persisted before the repair pass
+// (or any concurrent start claim) can call ClaimLiveActivityStart, preventing a
+// duplicate activity when a snapshot outlasts the rolling fleetRefresh cooldown.
+func TestLiveActivityResumeReplaysDeferredHoldBeforeStartClaim(t *testing.T) {
+	h := newTestHub(t)
+	startAt := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	afterSnapshot := startAt.Add(fleetRefresh + time.Minute)
+	store := &liveActivityOrderStore{
+		meshStore:   newMeshStore(),
+		holdEntered: make(chan struct{}),
+		releaseHold: make(chan struct{}),
+	}
+	h.store = store
+	la := h.live
+	la.now = func() time.Time { return afterSnapshot }
+	row := db.LiveActivity{DeviceID: "dev1", PushToStartToken: "start-tok"}
+
+	ctx := context.Background()
+	if err := h.quiesce.pause(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Defer both a fleetMaxAge hold and a start claim while paused.
+	la.holdStart(context.Background(), row.DeviceID, startAt, fleetMaxAge)
+	if _, claimed := la.claimStart(row, afterSnapshot); claimed {
+		t.Fatal("claimStart succeeded while paused")
+	}
+	store.mu.Lock()
+	pausedEvents := len(store.events)
+	store.mu.Unlock()
+	if pausedEvents != 0 {
+		t.Fatalf("live activity store called %d times while paused", pausedEvents)
+	}
+
+	// Resume: hold replay starts and blocks on releaseHold. Neither la.repair nor
+	// la.signal may wake start claims until the deferred hold finishes persisting,
+	// and a concurrent claimStart must also wait for the hold to commit.
+	h.resumeDevelopmentWriters()
+	select {
+	case <-store.holdEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("deferred hold replay did not start on resume")
+	}
+	la.mu.Lock()
+	repairBeforeHold := la.repair
+	la.mu.Unlock()
+	if repairBeforeHold {
+		t.Fatal("la.repair was set before deferred holds persisted")
+	}
+	select {
+	case <-la.signal:
+		t.Fatal("la.signal woke repair flush before deferred holds persisted")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	// Even an unrelated concurrent claimStart while the hold is still in flight
+	// waits for the hold to commit before consulting ClaimLiveActivityStart.
+	claimRes := make(chan bool, 1)
+	go func() {
+		_, claimed := la.claimStart(row, afterSnapshot)
+		claimRes <- claimed
+	}()
+	select {
+	case claimed := <-claimRes:
+		t.Fatalf("concurrent claimStart returned (claimed=%v) before deferred hold persisted", claimed)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(store.releaseHold)
+	select {
+	case claimed := <-claimRes:
+		if claimed {
+			t.Fatal("claimStart bypassed persisted fleetMaxAge hold and started a duplicate activity")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("claimStart did not finish after hold persisted")
+	}
+	h.nodeWorkers.Wait()
+
+	// Repair wake is delivered once the hold replay finishes.
+	la.mu.Lock()
+	repairAfterHold := la.repair
+	la.mu.Unlock()
+	if !repairAfterHold {
+		t.Fatal("la.repair was not set after deferred holds persisted")
+	}
+	select {
+	case <-la.signal:
+	default:
+		t.Fatal("la.signal was not signaled after deferred holds persisted")
+	}
+
+	store.mu.Lock()
+	gotEvents := slices.Clone(store.events)
+	store.mu.Unlock()
+	if !slices.Equal(gotEvents, []string{"hold", "claim"}) {
+		t.Fatalf("live activity resume event order = %v, want [hold claim]", gotEvents)
+	}
+}

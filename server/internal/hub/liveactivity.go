@@ -212,8 +212,11 @@ type liveActivities struct {
 	answers   []phoneAnswer
 	answering bool
 	// quiescedStart, deferredHolds and deferredSaves hold writes refused while
-	// a development snapshot pauses hub writers (quiesce.go). saveMu serializes
-	// SaveLiveActivity per device so resumed saves cannot overwrite newer state.
+	// a development snapshot pauses hub writers (quiesce.go). holdReplayMu
+	// serializes deferred hold replay ahead of start claims, and saveMu
+	// serializes SaveLiveActivity per device so resumed saves cannot overwrite
+	// newer state.
+	holdReplayMu  sync.Mutex
 	quiescedStart bool
 	deferredHolds []deferredLiveHold
 	deferredSaves map[string]bool
@@ -707,6 +710,16 @@ func (la *liveActivities) claimStart(r db.LiveActivity, now time.Time) (time.Tim
 		la.h.logf("live activity start deferred: reason=store_unavailable device=%s due=%s", trafficIdentity(r.DeviceID), retry.UTC().Format(time.RFC3339))
 		return retry, false
 	}
+	for !la.drainDeferredHolds() {
+		if !la.h.quiesce.beginOrDefer(func() {
+			la.mu.Lock()
+			la.quiescedStart = true
+			la.mu.Unlock()
+		}) {
+			return retry, false
+		}
+		la.h.quiesce.end()
+	}
 	if !la.h.quiesce.beginOrDefer(func() {
 		la.mu.Lock()
 		la.quiescedStart = true
@@ -775,6 +788,50 @@ func (la *liveActivities) holdStart(ctx context.Context, device string, asOf tim
 	defer cancel()
 	if _, err := la.h.store.HoldLiveActivityStart(ctx, device, asOf, hold); err != nil {
 		la.h.logf("live activity start hold: device=%s hold=%s error=%v", trafficIdentity(device), hold, err)
+	}
+}
+
+func (la *liveActivities) replayHold(h deferredLiveHold) bool {
+	if la.h.store == nil {
+		return true
+	}
+	if !la.h.quiesce.beginOrDefer(func() {
+		la.mu.Lock()
+		la.deferredHolds = append([]deferredLiveHold{h}, la.deferredHolds...)
+		la.mu.Unlock()
+	}) {
+		return false
+	}
+	defer la.h.quiesce.end()
+	ctx, cancel := context.WithTimeout(context.Background(), la.storeTimeout)
+	defer cancel()
+	if _, err := la.h.store.HoldLiveActivityStart(ctx, h.device, h.asOf, h.hold); err != nil {
+		la.h.logf("live activity start hold: device=%s hold=%s error=%v", trafficIdentity(h.device), h.hold, err)
+	}
+	return true
+}
+
+// drainDeferredHolds persists holds deferred during a quiesce pause in FIFO
+// order before any start claim can consult the store budget. Returns false if
+// writes were paused again before all deferred holds drained.
+func (la *liveActivities) drainDeferredHolds() bool {
+	if la.h.store == nil {
+		return true
+	}
+	la.holdReplayMu.Lock()
+	defer la.holdReplayMu.Unlock()
+	for {
+		la.mu.Lock()
+		if len(la.deferredHolds) == 0 {
+			la.mu.Unlock()
+			return true
+		}
+		h := la.deferredHolds[0]
+		la.deferredHolds = la.deferredHolds[1:]
+		la.mu.Unlock()
+		if !la.replayHold(h) {
+			return false
+		}
 	}
 }
 
@@ -1145,7 +1202,9 @@ func (la *liveActivities) flushDeviceSave(ctx context.Context, device string, de
 }
 
 // resumeWrites flushes Live Activity holds, saves and start claims deferred
-// while a development snapshot paused hub writers (quiesce.go).
+// while a development snapshot paused hub writers (quiesce.go). Deferred holds
+// are persisted before the repair flush is signaled so a resumed start claim
+// cannot read a stale start budget.
 func (la *liveActivities) resumeWrites() {
 	if la == nil {
 		return
@@ -1157,30 +1216,50 @@ func (la *liveActivities) resumeWrites() {
 	la.mu.Lock()
 	quiescedStart := la.quiescedStart
 	la.quiescedStart = false
-	holds := la.deferredHolds
-	la.deferredHolds = nil
+	hasHolds := len(la.deferredHolds) > 0
 	var saves []saveItem
 	for device := range la.deferredSaves {
 		saves = append(saves, saveItem{device: device, mu: la.deviceSaveMuLocked(device)})
 	}
-	if quiescedStart {
+	if quiescedStart && !hasHolds {
 		la.repair = true
 	}
 	la.mu.Unlock()
-	if quiescedStart {
+	signalRepair := func() {
+		la.mu.Lock()
+		la.repair = true
+		la.mu.Unlock()
 		select {
 		case la.signal <- struct{}{}:
 		default:
 		}
 	}
-	if len(holds) == 0 && len(saves) == 0 {
+	if quiescedStart && !hasHolds {
+		select {
+		case la.signal <- struct{}{}:
+		default:
+		}
+	}
+	if !hasHolds && len(saves) == 0 {
 		return
 	}
 	la.h.nodeWorkers.Add(1)
 	go func() {
 		defer la.h.nodeWorkers.Done()
-		for _, h := range holds {
-			la.holdStart(context.Background(), h.device, h.asOf, h.hold)
+		if hasHolds {
+			replayed := la.drainDeferredHolds()
+			if quiescedStart {
+				if replayed {
+					signalRepair()
+				} else if la.h.quiesce.beginOrDefer(func() {
+					la.mu.Lock()
+					la.quiescedStart = true
+					la.mu.Unlock()
+				}) {
+					la.h.quiesce.end()
+					signalRepair()
+				}
+			}
 		}
 		for _, s := range saves {
 			_ = la.flushDeviceSave(nil, s.device, s.mu, 0)
