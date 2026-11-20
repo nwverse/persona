@@ -60,6 +60,33 @@ func TestSharedWorkReportSamples(t *testing.T) {
 	}
 }
 
+func TestReportedNextStepSurvivesLegacyProjection(t *testing.T) {
+	const next = "Compare the two drafts."
+	for _, heading := range []string{textfmt.WorkReportEnglish, textfmt.WorkReportChinese, textfmt.WorkReportJapanese} {
+		report := heading + "\n\n- Status: done\n- Merged: n/a\n- Deployed: n/a\n- Next: " + next + "\n\n---"
+		decoded, ok := textfmt.FinalWorkReport(report)
+		if !ok {
+			t.Fatalf("unrecognized report %q", heading)
+		}
+		for _, text := range []string{report, decoded.LegacyText(report)} {
+			got, _, ok := Parse(text)
+			if !ok || got.Next != next || !WaitsOnNobody(text) {
+				t.Errorf("%q did not offer its optional reply: %+v", heading, got)
+			}
+		}
+		for _, invalid := range []string{
+			strings.Replace(report, "- Status: done", "- Status: blocked", 1),
+			strings.Replace(report, "\n\n---", "\n- Missing: Decide on the format.\n\n---", 1),
+			strings.Replace(report, "\n\n---", "\n- Next: A second reply.\n\n---", 1),
+		} {
+			got, _, _ := Parse(invalid)
+			if got.Next != "" {
+				t.Fatalf("unexpected next step %q", got.Next)
+			}
+		}
+	}
+}
+
 func TestTerminalWorkReport(t *testing.T) {
 	old := "<closeout status=\"blocked\" merged=\"no\" deployed=\"n/a\">\ndid: Wrote the fixture.\nartifact: pr #24\ndelivery: pr\nunblock: other\nverified: Ran four checks.\nmissing: A review.\nwaiting: The reviewer.\n</closeout>"
 	want, wantArtifacts, _ := Parse(old)
