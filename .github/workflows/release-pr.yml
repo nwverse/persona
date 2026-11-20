@@ -594,7 +594,7 @@ jobs:
   merge:
     name: Merge the verified release PR for post-merge verification
     needs: [plan, verify]
-    if: needs.plan.outputs.pr != '0' && needs.plan.outputs.version != '' && github.event_name == 'pull_request' && github.actor == 'chyroc' && github.triggering_actor == 'chyroc'
+    if: needs.plan.outputs.pr != '0' && needs.plan.outputs.version != '' && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: persona-release
@@ -609,12 +609,13 @@ jobs:
           persist-credentials: false
       - name: Squash the exact verified PR head, then require the main merge to be verified again
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ needs.plan.outputs.pr }}
           HEAD: ${{ needs.plan.outputs.source_commit }}
         run: |
           set -euo pipefail
+          test -n "$GH_TOKEN" || { echo 'persona-release is missing RELEASE_PR_TOKEN; refusing an unverifiable merge actor' >&2; exit 1; }
           gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json state,isDraft,baseRefName,headRefOid,headRepository,author,title,mergeCommit > release/merge-pr.json
           gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '{merge_commit_sha}' > release/merge-pr-rest.json
           python3 - <<'PY'

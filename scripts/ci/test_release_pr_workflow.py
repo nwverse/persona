@@ -141,6 +141,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("needs: [plan, verify]", text)
         self.assertIn("needs.plan.outputs.source_commit", text)
         self.assertIn("--match-head-commit \"$HEAD\"", text)
+        merge = self.pr["jobs"]["merge"]
+        self.assertEqual(merge["environment"], "persona-release")
+        self.assertEqual(merge["if"], "needs.plan.outputs.pr != '0' && needs.plan.outputs.version != '' && github.event_name == 'pull_request'")
+        self.assertEqual(merge["steps"][1]["env"]["GH_TOKEN"], "${{ secrets.RELEASE_PR_TOKEN }}")
+        self.assertIn("missing RELEASE_PR_TOKEN", merge["steps"][1]["run"])
+        self.assertIn('merged_by != "chyroc"', (ROOT / 'scripts/operations/release_pr.py').read_text())
         self.assertIn("github.event.workflow_run.conclusion == 'success'", PUBLISH.read_text())
         self.assertIn("github.event.workflow_run.head_branch == 'main'", PUBLISH.read_text())
         self.assertIn("verify-merged-pr", PUBLISH.read_text())
