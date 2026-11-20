@@ -385,7 +385,9 @@ type Availability struct {
 	ByOrigin      map[string]*Tally          `json:"by_origin"`
 	ByBuild       map[string]*Tally          `json:"by_build"`
 	Failures      []FailureReason            `json:"failures"`
-	Split         *AvailabilitySplit         `json:"split,omitempty"`
+	// FailuresByRole is the command's internal weekly aggregation seam; the daily JSON keeps its existing shape.
+	FailuresByRole map[string]map[string]int `json:"-"`
+	Split          *AvailabilitySplit        `json:"split,omitempty"`
 	// Gaps name what the window cannot see (docs/assistant/north-star.md "Coverage").
 	Gaps []string `json:"gaps"`
 }
@@ -611,7 +613,7 @@ func interruptions(q northStarQuery, roles convRoles, cards []db.NorthStarCard, 
 
 func availability(q northStarQuery, roles convRoles, attempts []nsAttempt, recordingSince *time.Time) Availability {
 	av := Availability{Conversations: []AvailabilityConversation{}, ByOp: map[string]*Tally{}, ByRole: map[string]*Tally{},
-		ByOrigin: map[string]*Tally{}, ByBuild: map[string]*Tally{}, Failures: []FailureReason{}, Gaps: []string{}}
+		ByOrigin: map[string]*Tally{}, ByBuild: map[string]*Tally{}, Failures: []FailureReason{}, FailuresByRole: map[string]map[string]int{}, Gaps: []string{}}
 	if roles.Main != "" {
 		av.Conversations = append(av.Conversations, AvailabilityConversation{SessionID: roles.Main, Role: roleMain})
 	}
@@ -636,7 +638,12 @@ func availability(q northStarQuery, roles convRoles, attempts []nsAttempt, recor
 		tally(av.ByOrigin, cmp.Or(a.Origin, "unknown")).add(a.Outcome)
 		tally(av.ByBuild, cmp.Or(a.Build, "before_recording")).add(a.Outcome)
 		if a.Outcome == outcomeFailed {
-			reasons[cmp.Or(a.Reason, "internal")]++
+			reason := cmp.Or(a.Reason, "internal")
+			reasons[reason]++
+			if av.FailuresByRole[a.Role] == nil {
+				av.FailuresByRole[a.Role] = map[string]int{}
+			}
+			av.FailuresByRole[a.Role][reason]++
 		}
 		if av.Split != nil {
 			if a.At.Before(av.Split.At) {
