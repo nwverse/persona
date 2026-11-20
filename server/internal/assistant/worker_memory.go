@@ -58,6 +58,7 @@ func (s *Service) goWorkerOutcome(run func()) {
 // background: the report's answer does not wait for the node, a model or the knowledge base.
 func (s *Service) goRecordWorkerReport(ctx context.Context, t Todo, machine, session, text string, evidence []string, at time.Time) {
 	ctx = context.WithoutCancel(ctx)
+	cwd := s.workerCwd(ctx, t, machine, session)
 	s.goWorkerOutcome(func() {
 		items, read := s.lastTurnItems(ctx, machine, session)
 		// A successful done report is always eligible. If WorkDone later commits, it reuses this report's stable identity.
@@ -75,9 +76,20 @@ func (s *Service) goRecordWorkerReport(ctx context.Context, t Todo, machine, ses
 			return
 		}
 		links := workerEvidenceLinks(evidence)
-		s.recordWorkerOutcome(ctx, t, machine, session, s.workerCwd(ctx, t, machine, session), turn, itemIndex,
+		s.recordWorkerOutcome(ctx, t, machine, session, cwd, turn, itemIndex,
 			workerOutcomeItemKey(items[index]), workerLegacyIDAllowed(items, index), text, links, text)
 	})
+}
+
+func workerNormalizedEvidence(evidence []string) []string {
+	normalized := make([]string, 0, len(evidence))
+	for _, item := range evidence {
+		item = clip(strings.TrimSpace(item), 300)
+		if item != "" && len(normalized) < 8 {
+			normalized = append(normalized, item)
+		}
+	}
+	return normalized
 }
 
 func workerEvidenceLinks(evidence []string) []string {
@@ -101,6 +113,34 @@ func workerReportEvidenceLinks(it proto.Item) []string {
 	return workerEvidenceLinks(report.Evidence)
 }
 
+// workerOutcomeCandidate reports whether an item could have owned a legacy outcome record: a successful done report or
+// final assistant text. Unrelated or failed tools do not make the old ID ambiguous.
+func workerOutcomeCandidate(items []proto.Item, index int) bool {
+	it := items[index]
+	if it.Role != "assistant" {
+		return false
+	}
+	if it.Kind == proto.KindText {
+		return strings.TrimSpace(it.Text) != ""
+	}
+	if it.Kind != proto.KindToolUse ||
+		it.ToolName != "report_to_supervisor" && !slices.Contains(compat.MCPToolNames([]string{"report_to_supervisor"}), it.ToolName) {
+		return false
+	}
+	var report struct {
+		Kind string `json:"kind"`
+	}
+	if json.Unmarshal(it.ToolInput, &report) != nil || report.Kind != upReportDone {
+		return false
+	}
+	for _, result := range items[index+1:] {
+		if result.Kind == proto.KindToolResult && result.ToolUseID == it.ToolUseID {
+			return !result.IsError
+		}
+	}
+	return true
+}
+
 // workerLegacyIDAllowed says whether the old Seq-only ID unambiguously names this outcome. When parallel items of the
 // same kind share a Seq, an old record cannot tell which one it was, so it must not suppress either keyed replacement.
 func workerLegacyIDAllowed(items []proto.Item, index int) bool {
@@ -109,7 +149,7 @@ func workerLegacyIDAllowed(items []proto.Item, index int) bool {
 	}
 	selected := items[index]
 	for i, other := range items {
-		if i != index && other.Seq == selected.Seq && other.Kind == selected.Kind && other.Role == selected.Role &&
+		if i != index && other.Seq == selected.Seq && other.Kind == selected.Kind && workerOutcomeCandidate(items, i) &&
 			workerOutcomeItemKey(other) != workerOutcomeItemKey(selected) {
 			return false
 		}
@@ -118,17 +158,18 @@ func workerLegacyIDAllowed(items []proto.Item, index int) bool {
 }
 
 // goRecordWorkerDone records a committed WorkDone using the exact items triage read, never a later turn. Resolve the todo
-// before starting the asynchronous write so a later assignment cannot change the durable ID or project ownership.
+// and its directory before starting the asynchronous write so a later assignment cannot change ownership.
 func (s *Service) goRecordWorkerDone(ctx context.Context, work db.SessionWork, items []proto.Item) {
 	ctx = context.WithoutCancel(ctx)
 	t, ok := s.workerTodoOf(ctx, work.MachineID, work.SessionID)
 	if !ok || t.DoneAt != nil && work.TurnAt.After(*t.DoneAt) {
 		return
 	}
-	s.goRecordWorkerDoneForTodo(ctx, t, work, items)
+	cwd := s.workerCwd(ctx, t, work.MachineID, work.SessionID)
+	s.goRecordWorkerDoneForTodo(ctx, t, cwd, work, items)
 }
 
-func (s *Service) goRecordWorkerDoneForTodo(ctx context.Context, t Todo, work db.SessionWork, items []proto.Item) {
+func (s *Service) goRecordWorkerDoneForTodo(ctx context.Context, t Todo, cwd string, work db.SessionWork, items []proto.Item) {
 	s.goWorkerOutcome(func() {
 		if len(items) == 0 {
 			s.logf("WARN worker memory todo %s: done turn has no captured transcript", t.ID)
@@ -157,7 +198,7 @@ func (s *Service) goRecordWorkerDoneForTodo(ctx context.Context, t Todo, work db
 		for _, a := range work.Work.Artifacts {
 			links = append(links, a.Ref)
 		}
-		s.recordWorkerOutcome(ctx, t, work.MachineID, work.SessionID, s.workerCwd(ctx, t, work.MachineID, work.SessionID),
+		s.recordWorkerOutcome(ctx, t, work.MachineID, work.SessionID, cwd,
 			turn, itemIndex, workerOutcomeItemKey(items[index]), workerLegacyIDAllowed(items, index), work.Work.Line, links, reply)
 	})
 }
@@ -369,7 +410,7 @@ func workerReportIndex(items []proto.Item, text string, at time.Time, evidence .
 		if text != "" && clip(strings.TrimSpace(report.Text), 2000) != text {
 			continue
 		}
-		if len(evidence) > 0 && !slices.Equal(workerEvidenceLinks(report.Evidence), workerEvidenceLinks(evidence[0])) {
+		if len(evidence) > 0 && !slices.Equal(workerNormalizedEvidence(report.Evidence), workerNormalizedEvidence(evidence[0])) {
 			continue
 		}
 		failed := false

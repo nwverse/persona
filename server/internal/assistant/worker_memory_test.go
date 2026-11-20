@@ -269,6 +269,38 @@ func TestWorkerMemorySameSequenceIdenticalTextUsesEvidence(t *testing.T) {
 	}
 }
 
+// Non-URL evidence is part of the accepted report too, so it can distinguish otherwise identical parallel calls.
+func TestWorkerMemorySameSequenceIdenticalTextUsesNonURLEvidence(t *testing.T) {
+	env := newWorkerMemoryEnv(t)
+	env.setProject(t, "explicit")
+	input := func(evidence string) json.RawMessage {
+		raw, _ := json.Marshal(map[string]any{"kind": "done", "text": workerMemoryConclusion, "evidence": []string{evidence}})
+		return raw
+	}
+	items := []proto.Item{
+		{ID: "prompt", Seq: 1, Kind: proto.KindText, Role: "user", Text: "Fix both retry loops."},
+		{ID: "report-a", Seq: 2, Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "call-a",
+			ToolName: "report_to_supervisor", ToolInput: input("test A passed"), TS: turnEnd},
+		{ID: "report-b", Seq: 2, Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "call-b",
+			ToolName: "report_to_supervisor", ToolInput: input("test B passed"), TS: turnEnd},
+	}
+	env.f.setItems(items...)
+	env.s.goRecordWorkerReport(context.Background(), env.todo, "box", "s1", workerMemoryConclusion, []string{"test A passed"}, turnEnd)
+	env.s.tasks.outcomeRuns.Wait()
+	env.s.goRecordWorkerReport(context.Background(), env.todo, "box", "s1", workerMemoryConclusion, []string{"test B passed"}, turnEnd)
+	env.s.tasks.outcomeRuns.Wait()
+	records := workerMemoryRecords(t, env.e, "explicit")
+	wantA := workerMemoryItemID(env.todo.ID, "box", "s1", 1, 1, "call-a")
+	wantB := workerMemoryItemID(env.todo.ID, "box", "s1", 1, 1, "call-b")
+	seen := map[string]bool{}
+	for _, record := range records {
+		seen[record.ID] = true
+	}
+	if len(records) != 2 || !seen[wantA] || !seen[wantB] {
+		t.Fatalf("non-URL evidence did not distinguish parallel reports: %+v", records)
+	}
+}
+
 // An ambiguous legacy prefix cannot prove which parallel item it recorded, so it must not suppress a new keyed outcome.
 func TestWorkerMemoryParallelItemIgnoresAmbiguousLegacyID(t *testing.T) {
 	env := newWorkerMemoryEnv(t)
@@ -321,6 +353,37 @@ func TestRecordWorkerOutcomeLegacyIDPreventsDuplicate(t *testing.T) {
 	env.f.mu.Unlock()
 	if asked != 0 {
 		t.Fatalf("an already recorded legacy outcome called the model %d time(s)", asked)
+	}
+}
+
+// Unrelated tools in the same assistant line were never outcome candidates, so they do not make a legacy report ID
+// ambiguous or cause a duplicate keyed append.
+func TestWorkerMemoryUnrelatedToolKeepsLegacyDedupe(t *testing.T) {
+	env := newWorkerMemoryEnv(t)
+	env.setProject(t, "explicit")
+	legacy := kb.ProjectMemoryRecord{ID: workerMemoryID(env.todo.ID, "box", "s1", 1, 1), TodoID: env.todo.ID,
+		Agent: "s1", Turn: 1, ItemIndex: 1, Conclusion: workerMemoryConclusion}
+	if err := env.e.AppendProjectMemory("explicit", legacy); err != nil {
+		t.Fatal(err)
+	}
+	env.f.setItems(
+		proto.Item{ID: "prompt", Seq: 1, Kind: proto.KindText, Role: "user", Text: "Start"},
+		proto.Item{ID: "report", Seq: 2, Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "report-call",
+			ToolName: "report_to_supervisor", ToolInput: workerMemoryReportInput(), TS: turnEnd},
+		proto.Item{ID: "bash", Seq: 2, Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "bash-call",
+			ToolName: "Bash", ToolInput: json.RawMessage(`{"command":"go test ./..."}`), TS: turnEnd})
+	env.s.goRecordWorkerReport(context.Background(), env.todo, "box", "s1", workerMemoryConclusion,
+		[]string{workerMemoryPR, workerMemoryIssue}, turnEnd)
+	env.s.tasks.outcomeRuns.Wait()
+	records := workerMemoryRecords(t, env.e, "explicit")
+	if len(records) != 1 || records[0].ID != legacy.ID {
+		t.Fatalf("unrelated tool disabled legacy dedupe: %+v", records)
+	}
+	env.f.mu.Lock()
+	asked := len(env.f.outcomeAsked)
+	env.f.mu.Unlock()
+	if asked != 0 {
+		t.Fatalf("legacy dedupe repeated the model call %d time(s)", asked)
 	}
 }
 
@@ -539,6 +602,34 @@ func TestWorkerMemoryDoneUsesPinnedTodo(t *testing.T) {
 	}
 }
 
+// Directory fallback is captured with the todo. A later session cwd change cannot move the old outcome to a new project.
+func TestWorkerMemoryDoneUsesPinnedCwd(t *testing.T) {
+	env := newWorkerMemoryEnv(t)
+	env.setProject(t, "")
+	if _, err := env.e.Apply(kb.KindProject, "other", kb.Update{Dirs: []string{"box:/code/other"}}); err != nil {
+		t.Fatal(err)
+	}
+	env.s.runWorkerOutcome = func(run func()) {
+		env.f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Cwd: "/code/other",
+			Status: proto.StatusDone, UpdatedAt: turnEnd, LastText: workerMemoryConclusion})
+		run()
+	}
+	items := []proto.Item{
+		{ID: "prompt", Seq: 10, Kind: proto.KindText, Role: "user", Text: "First turn"},
+		{ID: "answer", Seq: 11, Kind: proto.KindText, Role: "assistant", Text: workerMemoryConclusion},
+	}
+	work := db.SessionWork{MachineID: "box", SessionID: "s1", TurnAt: turnEnd,
+		Work: proto.WorkState{Phase: proto.WorkDone, Line: workerMemoryConclusion}}
+	env.s.goRecordWorkerDone(context.Background(), work, items)
+	env.s.tasks.outcomeRuns.Wait()
+	if got := workerMemoryRecords(t, env.e, "fallback"); len(got) != 1 {
+		t.Fatalf("pinned cwd did not retain the fallback project: %+v", got)
+	}
+	if got := workerMemoryRecords(t, env.e, "other"); len(got) != 0 {
+		t.Fatalf("later session cwd moved the old outcome: %+v", got)
+	}
+}
+
 // The opening prompt and item offset are absolute even when the latest capped page starts after the prompt.
 func TestWorkerIdentityStableAcrossCappedPage(t *testing.T) {
 	prompt := proto.Item{ID: "prompt", Seq: 1, Kind: proto.KindText, Role: "user", Text: "Start"}
@@ -597,6 +688,32 @@ func TestWorkerReportIndexFindsCompletedTurnReport(t *testing.T) {
 	}
 	if got := workerReportIndex(items, "", time.Time{}); got != 1 {
 		t.Fatalf("WorkDone did not reuse report item: %d", got)
+	}
+}
+
+// Live evidence has already been trimmed, clipped and capped by reportToSupervisor; apply the same acceptance rules to
+// the transcript's original JSON before comparing it, or a valid report can become impossible to find.
+func TestWorkerReportIndexNormalizesEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		transcript []string
+		live       []string
+	}{
+		{name: "caps at eight", transcript: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"}, live: []string{"1", "2", "3", "4", "5", "6", "7", "8"}},
+		{name: "trims and clips", transcript: []string{"  " + strings.Repeat("x", 320), strings.Repeat("y", 310)},
+			live: []string{clip(strings.Repeat("x", 320), 300), clip(strings.Repeat("y", 310), 300)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, _ := json.Marshal(map[string]any{"kind": "done", "text": workerMemoryConclusion, "evidence": tc.transcript})
+			items := []proto.Item{
+				{ID: "prompt", Seq: 1, Kind: proto.KindText, Role: "user", Text: "Start"},
+				{ID: "report", Seq: 2, Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "report-call",
+					ToolName: "report_to_supervisor", ToolInput: raw, TS: turnEnd},
+			}
+			if got := workerReportIndex(items, workerMemoryConclusion, turnEnd, tc.live); got != 1 {
+				t.Fatalf("normalized evidence did not find the accepted report: %d", got)
+			}
+		})
 	}
 }
 
