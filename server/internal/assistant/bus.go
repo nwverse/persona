@@ -85,6 +85,7 @@ type BusHub struct {
 	helloOnce sync.Once
 
 	events  chan busEvent // the hub's events, taken in the order they came
+	conns   atomic.Uint64 // the connections whose hello was answered: the current one's number (busEvent.conn)
 	pending atomic.Int64  // events received and not yet taken
 	// answering: the hub's requests being answered now (a tool call, an app's call): idle (idle.go) waits for them.
 	answering atomic.Int64
@@ -101,6 +102,21 @@ type BusHub struct {
 type busEvent struct {
 	name   string
 	params json.RawMessage
+	conn   uint64 // the connection it came on (BusHub.conns as it was read)
+}
+
+// hubConnKey holds, in a ctx, the connection to the hub an event came on (busEvent.conn).
+type hubConnKey struct{}
+
+// ctx is ctx for handling ev: it says which connection ev came on (hubConnOf).
+func (ev busEvent) ctx(ctx context.Context) context.Context {
+	return context.WithValue(ctx, hubConnKey{}, ev.conn)
+}
+
+// hubConnOf is the connection to the hub the event ctx handles came on: 0 for one that did not come over the bus.
+func hubConnOf(ctx context.Context) uint64 {
+	conn, _ := ctx.Value(hubConnKey{}).(uint64)
+	return conn
 }
 
 var _ Hub = (*BusHub)(nil)
@@ -207,6 +223,7 @@ func (b *BusHub) CredentialRevoked(ctx context.Context, id string) (bool, error)
 // onHello keeps the hub's answer to manager.hello. A new connection: the hub shows nothing of the assistant until it
 // reports the whole of it again.
 func (b *BusHub) onHello(res json.RawMessage) error {
+	b.conns.Add(1) // what the hub's events say of the hub is that connection's (busEvent.conn)
 	var h Hello
 	if err := json.Unmarshal(res, &h); err != nil {
 		return err
@@ -261,8 +278,7 @@ func (b *BusHub) onHello(res json.RawMessage) error {
 		svc.setMutes(*h.Mutes) // the hub's, before anything is pushed (fleet_mutes.go)
 	}
 	if svc != nil {
-		svc.workReconnected()   // turns that ended while it was away are looked for at the next tick (agents_work.go)
-		svc.notesHubConnected() // whether its notices name their messages is the new connection's to show (direction_notes.go)
+		svc.workReconnected() // turns that ended while it was away are looked for at the next tick (agents_work.go)
 		// The whole snapshot goes once the connection counts as up (after this returns): before that it is offline,
 		// and the hub would show nothing of the assistant until its next change.
 		go func() {
@@ -898,7 +914,7 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 		if err := decode(&p); err != nil {
 			return err
 		}
-		go s.ConversationSent(context.WithoutCancel(ctx), p)
+		go s.ConversationSent(ev.ctx(context.WithoutCancel(ctx)), p) // with the connection it came on (direction_notes.go)
 	case assistantwire.EventInteractionResolved:
 		var p InteractionResolved
 		if err := decode(&p); err != nil {

@@ -253,8 +253,10 @@ func (s *Service) leaderPolicy(ctx context.Context, id, policy string, idle bool
 // with a carry of its own.
 //
 // A carry whose policy step already ran (the hub's retry of the owner's message while the first attempt still waits
-// for its notice, notesOwnerCarry) moves nothing: it carries again the block of the move it carries while that move is
-// in flight, so the one notice settles the block that went; else the last confirmed block, as a send no one reports.
+// for its notice, notesOwnerCarry) moves nothing. While that attempt's move is in flight it carries the newest block in
+// flight, the block in effect: that move's own, so the one notice settles the block that went, unless a later message
+// moved the block again, whose block the lead runs if that message went in; else the last confirmed block, as a send
+// no one reports.
 func (s *Service) notesInEffect(ctx context.Context, id, block string, idle bool) string {
 	carry, _ := ctx.Value(notesCarryKey{}).(*notesCarry)
 	b := &s.directions
@@ -270,7 +272,7 @@ func (s *Service) notesInEffect(ctx context.Context, id, block string, idle bool
 	s.notesOwnerExpireLocked(ctx, id)
 	if carry != nil && carry.id != "" {
 		if f := b.inflight[id]; carry.id == id && carry.move != nil && f != nil && slices.Contains(f.moved, carry.move) {
-			return carry.move.block
+			return f.moved[len(f.moved)-1].block
 		}
 		carry = nil
 	}
@@ -347,7 +349,7 @@ func withNotesCarry(ctx context.Context) (context.Context, *notesCarry) {
 const notesInFlightMost = 8
 
 // notesSeenMost is how many of the owner's latest message ids the manager keeps per conversation, to know a retry of
-// one it already gave parameters for (notesOwnerSeen).
+// one it already gave parameters for (notesOwnerCarry).
 const notesSeenMost = 64
 
 // notesOwnerWait is how long the owner's message waits for the hub's notice: longer than the hub waits for any send to
@@ -536,15 +538,17 @@ func (s *Service) notesOwnerSent(ctx context.Context, carry *notesCarry, msg str
 
 // notesOwnerOutcome settles, by the hub's notice for conversation id, the owner's message msg (its client_msg_id) it
 // names, and only that one. A notice that names none settles the oldest message without an id still waiting for its
-// notice. Only while the hub has not shown on this connection that it names messages (an older hub names none) does
-// such a notice settle the oldest message waiting when none without an id waits: a hub that names messages sends a
-// notice without an id only for a message sent without one, such as one sent just before the manager restarted.
+// notice. Only while the hub has not shown, on the connection the notice came on (hubConnOf), that it names messages
+// (an older hub names none) does such a notice settle the oldest message waiting when none without an id waits: a hub
+// that names messages sends a notice without an id only for a message sent without one, such as one sent just before
+// the manager restarted. A new connection may be to another version of the hub, so it shows that anew.
 func (s *Service) notesOwnerOutcome(ctx context.Context, id, msg string, taken bool) {
 	b := &s.directions
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	conn := hubConnOf(ctx)
 	if msg != "" {
-		b.named = true
+		b.namedOn = max(b.namedOn, conn+1) // a notice of an older connection handled late shows nothing of a newer one
 	}
 	s.notesOwnerExpireLocked(ctx, id)
 	f := b.inflight[id]
@@ -552,7 +556,7 @@ func (s *Service) notesOwnerOutcome(ctx context.Context, id, msg string, taken b
 		return
 	}
 	i := slices.IndexFunc(f.owner, func(o notesOwnerSend) bool { return o.msg == msg })
-	if i < 0 && msg == "" && len(f.owner) > 0 && !b.named {
+	if i < 0 && msg == "" && len(f.owner) > 0 && b.namedOn != conn+1 {
 		i = 0
 	}
 	if i < 0 {
@@ -562,15 +566,6 @@ func (s *Service) notesOwnerOutcome(ctx context.Context, id, msg string, taken b
 	f.owner = slices.Delete(f.owner, i, i+1)
 	s.notesSettleLocked(ctx, carry, taken)
 	b.tidyFlight(id)
-}
-
-// notesHubConnected: the manager's connection to the hub is new (BusHub.onHello). The hub on it, which may be another
-// version, has yet to show that its notices name their messages.
-func (s *Service) notesHubConnected() {
-	b := &s.directions
-	b.mu.Lock()
-	b.named = false
-	b.mu.Unlock()
 }
 
 // notesOwnerExpireLocked settles the owner's messages to conversation id whose notice can no longer come

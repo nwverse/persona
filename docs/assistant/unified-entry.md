@@ -1137,23 +1137,31 @@ content, not memory: memory stays one for every conversation (#9440), and a dire
   written before it left. A failure that may have gone in keeps the block: a deadline or a closed link with the
   request out, a node error without a code, a cancel after the request was written.
 - **The owner's messages** are settled by the hub's `session.assistant_sent` notice, which names the message by its
-  `client_msg_id`, and at once as not taken when their `assistant.send_params` is refused. A notice settles only the
-  message it names; one that names none settles the oldest message without an id still waiting for one. Only while
-  the hub has not named a message in a notice on this connection (an older hub names none) does such a notice settle
-  the oldest message waiting when none without an id waits: a hub that names messages sends one without an id only
-  for a message sent without one, such as one sent just before the manager restarted.
+  `client_msg_id`, and at once as not taken when their `assistant.send_params` is refused (a retry's refusal settles
+  nothing, below). A notice settles only the message it names; one that names none settles the oldest message without
+  an id still waiting for one. Only while the hub has not named a message in a notice on the connection that notice
+  came on (an older hub names none) does such a notice settle the oldest message waiting when none without an id
+  waits: a hub that names messages sends one without an id only for a message sent without one, such as one sent just
+  before the manager restarted. Each event from the hub counts for the connection it was read on, the one whose hello
+  was answered last (`busEvent.conn`); a new connection, which may be to another version of the hub, shows it anew,
+  and a notice of the connection before it that is handled after the new hello says nothing of the new one.
 - **The hub's retry**: a second `assistant.send_params` for a message the manager already gave parameters for is the
   hub's retry, and moves nothing (the manager keeps each conversation's latest 64 ids). The hub sends a retry only
   when the first attempt reached nothing (it stopped before it claimed it, or it typed nothing), and else answers it
   from its record without sending it or telling how it went. So while the first attempt still waits for its notice,
-  the retry is tied to it: it carries the block the first attempt carried while that move is in flight (else the last
-  confirmed block), waits the whole 10 minutes again, and the one notice that comes settles that move. Once nothing
-  waits for that message (settled, or past the wait), the retry takes the last confirmed block and waits for no
-  notice.
+  the retry is tied to it, and the one notice that comes settles the first attempt's move. While that move is in
+  flight the retry carries the newest block in flight, the block in effect: the first attempt's own while its move is
+  the newest, else the block of a later message that moved it again, which the lead runs if that message went in.
+  When the first attempt's move is no longer in flight it carries the last confirmed block. A retry the hub sends
+  waits the whole 10 minutes again. A retry whose `assistant.send_params` is refused settles nothing, and the first
+  attempt keeps waiting on its own clock: the hub sends nothing for the retry, and the refusal says nothing of the
+  first attempt. Once nothing waits for that message (settled, or past the wait), the retry takes the last confirmed
+  block and waits for no notice.
 - **An outcome never learned keeps the block**. An owner's message whose notice never comes (the hub did not send it
   after all, as for a retry the manager did not know it had seen; it stopped while sending it; or the notice was lost
-  while the manager's connection was down) waits 10 minutes, longer than the hub waits for any send, and takes no
-  other message's notice meanwhile. Until then its move stays in flight, so a send nobody reports takes the block
+  while the manager's connection was down) waits 10 minutes, longer than the hub waits for any send. Meanwhile it
+  takes no other message's notice once the hub has named a message on the connection; before that, a notice without an
+  id may settle it (below). Until then its move stays in flight, so a send nobody reports takes the block
   before it; after that it counts as an outcome never learned, and its block stays in effect. The moves in flight are
   in memory only: after a manager restart between a send and its outcome the new block stays too, as it does for the
   oldest move or owner's message beyond eight in flight for one conversation. When the node had in fact refused that
@@ -1164,7 +1172,10 @@ content, not memory: memory stays one for every conversation (#9440), and a dire
   reaches the manager only after the hub asked for the retry's parameters (on a framed connection an event can wait
   behind later requests, and events wait in the manager's own queue), that notice settles the move as not taken
   while the retry tied to it still carries the moved block; if the node takes the retry, the lead runs that block and
-  the rest of its turn is refused until it is idle. Telling the attempts apart needs the hub to name the attempt.
+  the rest of its turn is refused until it is idle. Telling the attempts apart needs the hub to name the attempt. For
+  the same reason a retry that carries a later message's block, because that message's move was newer, is settled as
+  the first attempt: taken, only the first attempt's move counts as given and the later message's own outcome still
+  decides its block, so if that message is then refused, its block is taken back though the retry gave it.
   On a new connection, until the hub's first notice that names a message, a notice without an id still settles the
   oldest message waiting: when a manager that just restarted gets the notice of a message sent without an id before
   the restart first, it settles a message sent with an id since. The hub says nothing else about naming its messages,
@@ -1186,8 +1197,9 @@ content, not memory: memory stays one for every conversation (#9440), and a dire
 - **Checks**: `server/internal/assistant/direction_notes_test.go` (the route, the leader's policy and context, new
   Agents), `server/internal/assistant/lead_conversations_test.go` (`notes_at`, the idle rule across a restart, the
   outcome of the send that carried a block, in both orders and for every send that moves one, the hub's notice by the
-  message it names, a retry the hub sends or answers from its record, the error shapes of a send that never reached
-  the computer, notices with and without ids, an unknown outcome), `server/internal/hub/assistant_sent_test.go` (the
+  message it names, a retry the hub sends, answers from its record or refuses, a retry while a later move is in
+  flight, the error shapes of a send that never reached the computer, notices with and without ids and by the
+  connection they came on, an unknown outcome), `server/internal/hub/assistant_sent_test.go` (the
   notice names its message) and the
   goldens `direction_notes.*` / `todo_direction.*`; the web editor's browser check runs against the mock
   hub with `MOCK_LEADERS=1`: `node web/e2e/direction-notes.mjs` (desktop and phone width, light and dark).
