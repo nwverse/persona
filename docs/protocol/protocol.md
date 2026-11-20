@@ -1599,6 +1599,26 @@ Undo is a `restore` using the revision acknowledged by the delete, never a blind
 Another write invalidates that Undo. The visible entry order is the stored array order. Newer reads must not replace
 a dirty editor's draft or retarget an in-flight request after credential/default-manager changes.
 
+## Saved To-do views (#12091)
+
+The selected manager owns its named To-do views. Both routes require full credentials and return
+`{schema_version:1,revision,views:[{id,name,criteria,created_at,updated_at}],can_write}`.
+The revision is a decimal string. Times are RFC 3339. Names are trimmed, at most 64 characters, and
+unique ignoring case. Each manager can keep up to 50 views.
+
+| Route | Request |
+| --- | --- |
+| GET `/api/v1/assistant/saved-todo-views` | Return the current list. A manager from before this route answers 404. |
+| POST `/api/v1/assistant/saved-todo-views` | `{revision,op,name?,criteria?,id?}`. Use `add` with name and criteria, `update` with ID, name and criteria, or `delete` with ID. |
+
+A criterion is `{text,due_window,section_sort}`. Text is a literal substring query of up to 1,024
+UTF-8 bytes after trimming. Empty text is valid. Due windows are `all`, `no_due`, `today`, `week`
+and `month`. Section sorts are `default`, `due` and `priority`. The client applies the query using
+the list's existing matching and sorting. It holds the applied selection locally for the current manager.
+
+A changed write uses an atomic revision check and emits `saved_todo_views` with the new revision.
+A stale revision or a duplicate name returns 409. A failed write preserves the stored collection.
+
 ## Workspace board
 
 Workflow, upgrades and persistence are covered in [Workspace board](../web/workspace-board.md). The APIs below belong to the manager (the hub forwards them unchanged over the bus `http.request`, see "Forwarding App requests"; `503 assistant_offline` when the manager isn't there), and the two events are sent by the manager via `ws.broadcast` and pushed unchanged by the hub. The APIs use the hub machine's Postgres as the only persistent state, with no fallback to in-memory or JSON file writes. `answer` may GET the board and the list; POST requires `full`. `can_write` says whether the current request's role can edit; it grants no extra file, Git or Agent permissions.
@@ -2434,6 +2454,7 @@ Server → client:
 | `file_transfer` | `transfer` (`FileTransfer`): a computer-to-computer transfer started, progressed (at most once a second) or ended; `manager` identifies a non-default manager. Only full devices that declared `file_transfer` receive it; not in the event log, so clients `GET` the current transfers after reconnecting ([file-transfer.md](file-transfer.md)) |
 | `managers` | No payload: the manager roster changed (created, renamed, connected, disconnected, deleted, new reported bot identities); clients re-read `GET /api/v1/managers` ("Bus" below, [managers.md](../assistant/managers.md) "Clients"). Only sent to connections that asked for feature `managers` (`?features=` or `client_hello.features`), not in the event log |
 | `saved_agent_searches` | `revision` (decimal string): the default manager committed a saved-query mutation; re-read the collection while its view is open, respecting the message's manager stamp. No query/name payload; see "Saved Agent searches" |
+| `saved_todo_views` | `revision` (decimal string) for the selected manager’s saved To-do views. Clients reread using the event manager stamp. |
 | `workspace_board` | `revision`: a board change was saved; the client re-reads the full state; doesn't indicate an Agent state change |
 | `workspace_board_settings` | `enabled`: the board switch changed (`PUT /api/v1/workspace-board/settings`); clients show or hide the entry accordingly |
 | `navigation` | `start`, `pages` and / or `overview`, whichever changed (`PUT /api/v1/navigation`, "Navigation"): clients keep the start page for their next opening and draw the sidebar's arrangement and Overview's cards and sections |

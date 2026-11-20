@@ -1,4 +1,4 @@
-// Package saved holds the assistant's saved prompts (the user's own "/" prompts) saved Agent searches, and starred messages: their
+// Package saved holds the assistant's saved prompts, saved Agent searches, saved To-do views, and starred messages: their
 // rules, storage and HTTP routes. The assistant Service lends it what it needs through Host.
 package saved
 
@@ -27,6 +27,7 @@ type Host struct {
 func Register(h Host) {
 	(&promptBook{h: h}).routes()
 	(&searchBook{h: h}).routes()
+	(&todoViewBook{h: h}).routes()
 	(&starBook{h: h}).routes()
 }
 

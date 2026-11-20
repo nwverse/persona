@@ -28,6 +28,7 @@ import { useScrollMemory } from "../lib/scroll-memory";
 import { useAgentSessions, useFullAgentSessions } from "../lib/sessions";
 import { useScoped } from "../lib/current-assistant";
 import { lazyPage } from "../lib/lazy-page";
+import { afterBack, onOverlayEntry } from "../lib/back-close";
 import { dropTodo, refresh, refreshTodos, useStore } from "../lib/store";
 import {
   addTodoDecision,
@@ -71,7 +72,7 @@ import { todoLook, waitOf, type WaitReason } from "../lib/todo-wait-reason";
 import type { AgentState, Interaction, Launcher, Machine } from "../lib/types";
 import { Button, cx, Dialog, IconButton, Loading, Menu, toast, useMenu } from "../ui/atoms";
 import { contextMenuProps } from "../ui/context-menu";
-import { SHEET_QUERY } from "../ui/overlay";
+import { NARROW_QUERY, SHEET_QUERY } from "../ui/overlay";
 import type { MenuAt } from "../ui/menu-model";
 import { SearchField } from "../ui/SearchField";
 import { StatusMark } from "../ui/StatusMark";
@@ -107,6 +108,7 @@ import { resultExtras } from "../lib/brief";
 import { prLink } from "./TodoStageBar";
 import { projectChoices, projectNames, useTodoProjects } from "../lib/todo-projects";
 import { useFolded } from "../lib/use-folded";
+import { todoViewCriteria, todoViewSort, useSavedTodoViews, type SavedTodoCriteria } from "../lib/saved-todo-views";
 import { stateName } from "../lib/state-labels";
 import { Empty, Segmented, Tag } from "./assistant/parts";
 import { OfflineState, useShownOffline } from "./ManagerParts";
@@ -210,7 +212,7 @@ export function TodosView({
   const needs = useOwnerNeeds();
 
   const [activeId, setActiveId] = useState<string | undefined>(selectedId);
-  const [search, setSearch] = useState("");
+  const [baseSearch, setBaseSearch] = useState("");
   const [newOpen, setNewOpen] = useState(false);
   const [handoverOpen, setHandoverOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -280,23 +282,77 @@ export function TodosView({
   // the same row views below), so the rows and sections it did not touch skip their render.
   const views = useSteady(useMemo(() => todoRowViews(todos, lookup, interactions, sectionOf, needs), [todos, lookup, interactions, sectionOf, needs]), steadyViews);
 
+  // The list by status sections (#3156, docs/assistant/todo-status-sop.md), or by folder as before
+  const [chosenGrouping, setGrouping] = useState<TodoGrouping>(() => todoGrouping(pref(GROUPING_KEY)));
+  // "Pinned" (#4352): the hub's direction tree, offered while there is a leader; else the list goes by status and the
+  // choice is kept for when there is one. Before the first read lands (undefined) a saved 常驻 choice stays and the list
+  // shows its loading state, as the sidebar's Agents block does, rather than flashing the status grouping.
+  const directionTree = useDirectionTree();
+  const byDirection = groupsByDirection(directionTree);
+  const directionPending = chosenGrouping === "direction" && directionTree === undefined;
+  // "By request" is offered while some request is in pieces; else the list goes by status and the choice is kept, as
+  // for Pinned. Until the to-dos are read a saved choice stays.
+  const byRequest = useMemo(() => hasRequestPieces(todos), [todos]);
+  const requestGone = chosenGrouping === "request" && todosLoaded && !byRequest;
+  const grouping: TodoGrouping = (chosenGrouping === "direction" && !byDirection && !directionPending) || requestGone ? "status" : chosenGrouping;
+  const byStatus = grouping === "status";
+  // "By request": the requests graph takes the page's width, and the detail opens beside it only once a piece is picked
+  const requestMode = grouping === "request";
+  // A saved view overlays the status list only. A new assistant or credential retires both the view and any open draft.
+  const savedEligible = byStatus && !calendarOn;
+  const saved = useSavedTodoViews(savedEligible, repositoryManager, owner);
+  const [savedDialog, setSavedDialog] = useState<{ scope: number; mode: "manage" | "new" }>();
+  const [savedView, setSavedView] = useState<{ scope: number; criteria: SavedTodoCriteria }>();
+  const overlay = savedEligible && savedView?.scope === saved.scope ? savedView.criteria : undefined;
+
   // The filter by due date and the order inside each section (#3740): this browser's, in both groupings
-  const [listFilter, setListFilter] = useState<TodoListFilter>(() => {
+  const [baseFilter, setBaseFilter] = useState<TodoListFilter>(() => {
     const v = pref(FILTER_KEY);
     return isTodoListFilter(v) ? v : "all";
   });
-  const [listSort, setListSort] = useState<TodoListSort>(() => {
+  const [baseSort, setBaseSort] = useState<TodoListSort>(() => {
     const v = pref(SORT_KEY);
     return isTodoListSort(v) ? v : "recent";
   });
+  const listFilter = overlay?.due_window ?? baseFilter;
+  const listSort = overlay ? todoViewSort(overlay) : baseSort;
+  const search = overlay?.text ?? baseSearch;
+  const setSearch = (text: string) => {
+    if (overlay) setSavedView({ scope: saved.scope, criteria: { ...overlay, text } });
+    else setBaseSearch(text);
+  };
   const chooseFilter = (f: TodoListFilter) => {
-    setPref(FILTER_KEY, f);
-    setListFilter(f);
+    if (overlay) setSavedView({ scope: saved.scope, criteria: { ...overlay, due_window: f } });
+    else {
+      setPref(FILTER_KEY, f);
+      setBaseFilter(f);
+    }
   };
   const chooseSort = (s: TodoListSort) => {
-    setPref(SORT_KEY, s);
-    setListSort(s);
+    if (overlay) setSavedView({ scope: saved.scope, criteria: { ...overlay, section_sort: s === "recent" ? "default" : s } });
+    else {
+      setPref(SORT_KEY, s);
+      setBaseSort(s);
+    }
   };
+  const savedDocument = savedEligible ? saved.state.document : null;
+  const showSavedViews = savedDocument || (savedEligible && saved.state.error && !saved.state.unsupported);
+  const openSavedDialog = (mode: "manage" | "new") => {
+    const open = () => {
+      setSavedDialog({ scope: saved.scope, mode });
+      if (mode === "manage") void saved.model.refresh();
+    };
+    // The narrow menu removes a history entry. Wait for it before opening a lazy dialog.
+    if (matchMedia(NARROW_QUERY).matches && onOverlayEntry()) afterBack(open);
+    else open();
+  };
+  const savedMenu: MenuItem[] = [
+    ...(showSavedViews ? [{ key: "saved-todo-views", label: t("saved-todo-views.title"), divider: true,
+      onSelect: () => openSavedDialog("manage") }] : []),
+    ...(savedDocument?.can_write ? [{ key: "save-todo-view", label: t("saved-todo-views.save_current"),
+      onSelect: () => openSavedDialog("new") }] : []),
+    ...(overlay ? [{ key: "clear-todo-view", label: t("saved-todo-views.clear"), onSelect: () => setSavedView(undefined) }] : []),
+  ];
   const inFilter = (td: Todo) => matchesListFilter(td, listFilter, tick);
   // Filter by search query
   const matchesSearch = (t: Todo) => {
@@ -318,14 +374,17 @@ export function TodosView({
     },
     [todos, lookup, restored, search, listFilter, superseded, tick, fromView],
   );
-  // the header's counts: what the filter shows, whatever is searched
+  // Keep the header's ordinary due-filter counts when a temporary saved view is applied.
+  const summaryFilter = baseFilter;
+  const shownMatchesSummary = !overlay && !search.trim() ? triaged : undefined;
   const triageAll = useMemo(
     () => {
-      if (!search.trim()) return triaged;
-      const r = orderWaitGroups(triageTodos(todos.filter(inFilter), lookup, Date.now(), restored, { superseded }), Date.now());
+      if (shownMatchesSummary) return shownMatchesSummary;
+      const rows = todos.filter((td) => matchesListFilter(td, summaryFilter, tick));
+      const r = orderWaitGroups(triageTodos(rows, lookup, Date.now(), restored, { superseded }), Date.now());
       return fromView ? drawnFromView(r, Date.now()) : r;
     },
-    [todos, lookup, restored, search, listFilter, superseded, triaged, tick, fromView],
+    [todos, lookup, restored, summaryFilter, superseded, shownMatchesSummary, tick, fromView],
   );
   // Where the status sections place each to-do the search and the filter leave: its row's section (a merged row takes
   // its most urgent member's), and whether it counts as open (countsAsOpen, the header's Not done, its own reading).
@@ -364,22 +423,6 @@ export function TodosView({
     steadyLists,
   );
 
-  // The list by status sections (#3156, docs/assistant/todo-status-sop.md), or by folder as before
-  const [chosenGrouping, setGrouping] = useState<TodoGrouping>(() => todoGrouping(pref(GROUPING_KEY)));
-  // "Pinned" (#4352): the hub's direction tree, offered while there is a leader; else the list goes by status and the
-  // choice is kept for when there is one. Before the first read lands (undefined) a saved 常驻 choice stays and the list
-  // shows its loading state, as the sidebar's Agents block does, rather than flashing the status grouping.
-  const directionTree = useDirectionTree();
-  const byDirection = groupsByDirection(directionTree);
-  const directionPending = chosenGrouping === "direction" && directionTree === undefined;
-  // "By request" is offered while some request is in pieces; else the list goes by status and the choice is kept, as
-  // for Pinned. Until the to-dos are read a saved choice stays.
-  const byRequest = useMemo(() => hasRequestPieces(todos), [todos]);
-  const requestGone = chosenGrouping === "request" && todosLoaded && !byRequest;
-  const grouping: TodoGrouping = (chosenGrouping === "direction" && !byDirection && !directionPending) || requestGone ? "status" : chosenGrouping;
-  const byStatus = grouping === "status";
-  // "By request": the requests graph takes the page's width, and the detail opens beside it only once a piece is picked
-  const requestMode = grouping === "request";
   const leaderTitles = useStore((s) => s.assistant?.conversations);
   // The tree lists only open to-dos (server/internal/assistant/direction_tree.go, the same countsAsOpen rule), so a
   // direction holds the open ones it lists: one ticked here leaves at once, not when the tree's push comes.
@@ -685,7 +728,7 @@ export function TodosView({
                 {/* one count in every grouping (audit item 12): open as countsAsOpen counts it (the sidebar's badge, the
                     open ones that need the owner, #11085), the rest as the sections' titles do (a merged row's members
                     under its section) */}
-                {t(listFilter === "all" ? "todos.summary_triage" : "todos.summary_filtered", { filter: filterLabel(listFilter), open: triageAll.open, parked: sectionSize(triageAll, "parked"), shelved: sectionSize(triageAll, "shelved"), done: sectionSize(triageAll, "done") })}
+                {t(summaryFilter === "all" ? "todos.summary_triage" : "todos.summary_filtered", { filter: filterLabel(summaryFilter), open: triageAll.open, parked: sectionSize(triageAll, "parked"), shelved: sectionSize(triageAll, "shelved"), done: sectionSize(triageAll, "done") })}
               </span>
             )}
           </div>
@@ -787,7 +830,7 @@ export function TodosView({
                 <div className="min-w-0 flex-1">
                   <SearchField tone="inset" value={search} onChange={setSearch} placeholder={t("todos.search_placeholder")} />
                 </div>
-                <TodoListControls filter={listFilter} sort={listSort} counts={filterCounts} onFilter={chooseFilter} onSort={chooseSort} />
+                <TodoListControls filter={listFilter} sort={listSort} counts={filterCounts} onFilter={chooseFilter} onSort={chooseSort} savedMenu={savedMenu} />
               </>
             )}
             <Segmented
@@ -1028,6 +1071,13 @@ export function TodosView({
       )}
 
       {/* Dialogs */}
+      {savedDialog && savedDialog.scope === saved.scope && savedEligible && <Suspense fallback={null}>
+        <SavedTodoViewsDialog model={saved.model} mode={savedDialog.mode} criteria={todoViewCriteria(search, listFilter, listSort)}
+          onClose={() => setSavedDialog(undefined)} onApply={(criteria) => {
+            setSavedView({ scope: saved.scope, criteria });
+            setSavedDialog(undefined);
+          }} />
+      </Suspense>}
       <NewTodoDialog
         key={`${owner}:${repositoryManager}:${newOpen}`}
         manager={repositoryManager}
@@ -1229,12 +1279,14 @@ function TodoListControls({
   counts,
   onFilter,
   onSort,
+  savedMenu,
 }: {
   filter: TodoListFilter;
   sort: TodoListSort;
   counts: Record<TodoListFilter, number>;
   onFilter: (f: TodoListFilter) => void;
   onSort: (s: TodoListSort) => void;
+  savedMenu: MenuItem[];
 }) {
   const menu = useMenu();
   const items: MenuItem[] = [
@@ -1242,6 +1294,7 @@ function TodoListControls({
     ...TODO_LIST_FILTERS.map((f): MenuItem => ({ key: `filter-${f}`, label: filterLabel(f), hint: String(counts[f]), checked: f === filter, radio: true, onSelect: () => onFilter(f) })),
     { key: "sort", label: t("todos.sort_by"), heading: true, divider: true, onSelect: () => {} },
     ...TODO_LIST_SORTS.map((s): MenuItem => ({ key: `sort-${s}`, label: sortLabel(s), checked: s === sort, radio: true, onSelect: () => onSort(s) })),
+    ...savedMenu,
   ];
   return (
     <>
@@ -1997,6 +2050,8 @@ function askText(ix: Interaction | undefined): string {
 }
 
 // ── Todo Detail ──────────────────────────────────────────────
+
+const SavedTodoViewsDialog = lazyPage(() => import("./todos/SavedTodoViewsDialog").then((m) => m.SavedTodoViewsDialog));
 
 // A task's brief (#3822) comes with the first to-do that has one, not with the page.
 const TodoRequestGraph = lazy(() => import("./TodoRequestGraph"));

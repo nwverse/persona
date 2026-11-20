@@ -1,0 +1,10 @@
+{
+  "conflict": "The saved To-do views changed. Reload them and try again.",
+  "duplicate": "A saved To-do view already has this name.",
+  "invalid": "Enter a valid name and filters for this To-do view.",
+  "limit": "You can save at most 50 To-do views.",
+  "missing": "This saved To-do view no longer exists.",
+  "owner_only": "Only the owner can read or change saved To-do views.",
+  "storage": "The saved To-do views could not be loaded or saved.",
+  "unavailable": "This assistant cannot store saved To-do views."
+}

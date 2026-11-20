@@ -81,14 +81,15 @@ func ValidSearchID(id string) bool {
 func savedSearchText(s string) bool {
 	return utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl)
 }
+
+// ECMAScript String.trim also strips BOM while Go TrimSpace does not.
+func trimSavedInput(value string) string {
+	return strings.TrimFunc(value, func(r rune) bool { return r == '\uFEFF' || unicode.IsSpace(r) && r != '\u0085' })
+}
+
 func normalizeSavedSearch(name, query string) (string, string, error) {
-	// ECMAScript String.trim (used before applying a saved palette query) also
-	// strips BOM, while Go TrimSpace does not. Reject commands after that same
-	// normalization so a saved literal cannot become a command when reopened.
-	trim := func(value string) string {
-		return strings.TrimFunc(value, func(r rune) bool { return r == '\uFEFF' || unicode.IsSpace(r) && r != '\u0085' })
-	}
-	name, query = trim(name), trim(query)
+	// Reject commands after the same trim as the palette uses.
+	name, query = trimSavedInput(name), trimSavedInput(query)
 	if name == "" || utf8.RuneCountInString(name) > savedAgentSearchNameMax || !savedSearchText(name) || query == "" || len(query) > savedAgentSearchQueryMax || !savedSearchText(query) || strings.HasPrefix(query, ">") {
 		return "", "", savedSearchInvalid
 	}
@@ -146,18 +147,26 @@ func savedSearchString(fields map[string]json.RawMessage, key string, required b
 	}
 	return value, nil
 }
+func savedRevision(fields map[string]json.RawMessage) (int64, error) {
+	revision, err := savedSearchString(fields, "revision", true)
+	if err != nil || revision == "" || len(revision) > 19 || strings.Trim(revision, "0123456789") != "" || len(revision) > 1 && revision[0] == '0' {
+		return 0, savedSearchInvalid
+	}
+	n, err := strconv.ParseInt(revision, 10, 64)
+	if err != nil || n == math.MaxInt64 {
+		return 0, savedSearchInvalid
+	}
+	return n, nil
+}
+
 func parseSavedSearchMutation(raw []byte) (savedAgentSearchMutation, error) {
 	fields, err := savedSearchObject(raw, "revision", "action", "id", "name", "query", "before_id", "item")
 	if err != nil {
 		return savedAgentSearchMutation{}, err
 	}
-	revision, err := savedSearchString(fields, "revision", true)
-	if err != nil || revision == "" || len(revision) > 19 || strings.Trim(revision, "0123456789") != "" || len(revision) > 1 && revision[0] == '0' {
-		return savedAgentSearchMutation{}, savedSearchInvalid
-	}
-	n, err := strconv.ParseInt(revision, 10, 64)
-	if err != nil || n == math.MaxInt64 {
-		return savedAgentSearchMutation{}, savedSearchInvalid
+	n, err := savedRevision(fields)
+	if err != nil {
+		return savedAgentSearchMutation{}, err
 	}
 	action, err := savedSearchString(fields, "action", true)
 	if err != nil {

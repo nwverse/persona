@@ -247,6 +247,8 @@ type HTTPResponse struct {
 	Body           []byte                     `json:"body,omitempty"`
 }
 
+const SavedTodoViewsPath = "/api/v1/assistant/saved-todo-views"
+
 // Routes are the routes the assistant answers (net/http patterns): the hub relays the apps' requests on them as
 // http.request. The assistant registers exactly these (assistant.TestRoutesAreTheWireOnes).
 var Routes = []string{
@@ -318,6 +320,8 @@ var Routes = []string{
 	"POST /api/v1/assistant/places",
 	"PUT /api/v1/assistant/places/{id}",
 	"DELETE /api/v1/assistant/places/{id}",
+	"GET " + SavedTodoViewsPath,
+	"POST " + SavedTodoViewsPath,
 	"GET /api/v1/assistant/saved-prompts",
 	"POST /api/v1/assistant/saved-prompts",
 	"PUT /api/v1/assistant/saved-prompts/order",
