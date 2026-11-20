@@ -358,7 +358,8 @@ internal fun AssistantConversations.inGroup(names: GroupNames, scope: CoroutineS
             AssistantSnapshot(snapshot.mainSession?.let(names::key), snapshot.conversations.map(names::session), snapshot.manager, snapshot.managerId,
                 snapshot.leaders, snapshot.directionNames,
                 directionTree = snapshot.directionTree?.mapMachines(names::machineId),
-                backgroundSupervisor = snapshot.backgroundSupervisor, recentTaskChats = snapshot.recentTaskChats)
+                backgroundSupervisor = snapshot.backgroundSupervisor, recentTaskChats = snapshot.recentTaskChats,
+                externalDirections = snapshot.externalDirections.mapValues { it.value.mapMachine(names::machineId) })
         }
         override val pinned = source.pinned.mapIn(scope) { keys -> keys.mapTo(LinkedHashSet(), names::key) }
         override suspend fun refresh() = source.refresh()
