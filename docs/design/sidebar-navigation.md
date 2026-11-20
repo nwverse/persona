@@ -241,8 +241,8 @@ front pops; the shaded row follows the root (`AssistantSidebarShade`). An Agent 
 same `JRow` selected look and semantics as the other rows; a nested sub-Agent opens its parent without selecting both rows.
 An Agent pushed from inside Persona keeps Persona's root shade on either tab, including compact windows; compact Persona
 retains its existing conversation shading. The conversation and the fixed places (Inbox, To-dos,
-Knowledge and Computers) stay composed while another is in front, so the conversation keeps its non-saveable history, local
-operations, running effects and list anchor, and those places keep their list, filter and scroll. Folding inserts the
+Knowledge and Computers), plus the optional Lark Messages place while enabled, stay composed while another is in front, so the conversation keeps its non-saveable history, local
+operations, running effects and list anchor, and those places keep their list, filter and scroll. Messages is a retained Assistant secondary place, not a primary tab; its Lark chat drill-down stays on the Messages host so Back returns to that list. Turning its switch off forgets only that host and path and restores the Assistant path retained before it, even when Agents is selected; background cleanup leaves the selected tab unchanged. Folding inserts the
 conversation under that same list and unfolding removes it, so that page is not rebuilt. A to-do opened as its own root, or an
 extension page, keeps only its path and is composed only while it is in front (`SidebarRootHosts`). Folding that root copies it onto the conversation and leaves the fixed places composed. A place the phone drawer
 pushed over the conversation is promoted onto its own host when the window becomes regular, and that promotion rebuilds the

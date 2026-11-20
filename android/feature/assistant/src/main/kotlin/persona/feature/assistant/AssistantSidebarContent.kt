@@ -25,6 +25,7 @@ import persona.core.designsystem.*
 object AssistantSidebarShade {
     const val Conversation = "conversation"
     const val Inbox = "inbox"
+    const val Messages = "messages"
     const val Todos = "todos"
     const val Knowledge = "knowledge"
     const val Machines = "machines"

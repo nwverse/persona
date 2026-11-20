@@ -22,11 +22,15 @@ private val emptyReplyComposers: StateFlow<ReplyComposers?> = MutableStateFlow(n
 private val disconnectedMail: StateFlow<MailTransport?> = MutableStateFlow(null)
 private val emptyPersonaOutbox: StateFlow<List<OutboxMessage>> = MutableStateFlow(emptyList())
 private val emptyConversationInbox: StateFlow<InboxConversations?> = MutableStateFlow(null)
+private val emptyLarkMessages: StateFlow<LarkMessagesRepository?> = MutableStateFlow(null)
 private val emptyMessageReads: StateFlow<Set<InboxMessageRead>> = MutableStateFlow(emptySet())
 
 /** Feature capabilities until the shared repository contract exposes inbox details. */
 interface InboxRepository : persona.core.contracts.api.InboxRepository {
     val conversationInbox: StateFlow<InboxConversations?> get() = emptyConversationInbox
+    /** Optional all-chats browser; null in demo mode, lightweight fakes and while a real pairing assembles DI.
+     * No request is made merely by creating it. */
+    val larkMessages: StateFlow<LarkMessagesRepository?> get() = emptyLarkMessages
     val messageReads: StateFlow<Set<InboxMessageRead>> get() = emptyMessageReads
     val supportsThreadOutbox: Boolean get() = false
     val replyComposers: StateFlow<ReplyComposers?> get() = emptyReplyComposers

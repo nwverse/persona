@@ -53,6 +53,7 @@ import dev.chrisbanes.haze.HazeState
 import persona.core.designsystem.*
 import persona.core.designsystem.dense
 import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 import androidx.compose.foundation.background
 import persona.core.domain.inbox.buildInboxList
 import persona.core.navigation.*
@@ -532,6 +533,33 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     // The pages extensions draw for their connectors' inbox items (inbox_item, #1683): the inbox list and inbox links
     // open those. An item whose page broke opens its own page, which says so until "Retry" tries the extension's page again.
     val nativeInboxChats = persona.core.designsystem.LocalAppStyleStore.current?.nativeInboxChats?.collectAsState()?.value ?: true
+    val larkHomeMessages = persona.core.designsystem.LocalAppStyleStore.current?.larkHomeMessages?.collectAsState()?.value ?: false
+    val larkMessagesRepository by session.inbox.larkMessages.collectAsStateWithLifecycle()
+    val larkFeatures = persona.core.designsystem.LocalLarkFeatures.current
+    // A real pairing publishes null while DI assembles its repository. That is loading, not demo's unavailable state:
+    // keep a process-restored Messages/chat stack until the real repository arrives.
+    val larkMessagesLoading = session.demo == null && larkHomeMessages && larkFeatures.chats && larkMessagesRepository == null
+    // The saved choice survives a hub without Lark; only the effective destination disappears.
+    val showLarkMessages = larkMessagesVisible(
+        larkHomeMessages,
+        larkFeatures,
+        available = larkMessagesRepository != null,
+        loading = larkMessagesLoading,
+    )
+    LaunchedEffect(showLarkMessages) {
+        if (showLarkMessages) return@LaunchedEffect
+        if (window.pending == LarkMessagesRoute) window.clearPending()
+        val held = hosts.allStacks().any { stack -> LarkMessagesRoute in stack }
+        if (!held) return@LaunchedEffect
+        val visibleRoot = hosts.current.firstOrNull { it != AssistantRoute }
+        if (visibleRoot == LarkMessagesRoute && (window.regular || selected == AppTab.Persona)) {
+            // Regular cleanup only replaces Persona's retained host; it never selects that tab over Agents.
+            leaveDisabledLarkMessages(window.regular, pageRoots, hosts, ::showHost, ::showAssistantHome)
+        }
+        pageRoots.forgetPlace(LarkMessagesRoute)
+        hosts.forgetPlace(LarkMessagesRoute)
+        stacks[AppTab.Persona] = hosts.current
+    }
     val currentNativeInboxChats by rememberUpdatedState(nativeInboxChats)
     val itemPagePlaces = slotsState?.inboxItems.orEmpty()
     val itemPageFailures = remember(session.identity) { mutableStateMapOf<String, String>() }
@@ -653,7 +681,14 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         val demoBadge = if (session.demo != null) stringResource(R.string.app_demo_badge) else null
         val items = navigationItems(badges)
         val extensionPages = slotsState?.navPages.orEmpty()
-        val sidebarPages = listOf(NavItem("machines", stringResource(R.string.app_machines), PhIcons.Desktop)) +
+        val messagePages = if (showLarkMessages) listOf(
+            NavItem(
+                "messages",
+                stringResource(persona.feature.inbox.R.string.inbox_lark_messages_title),
+                PersonaIcons.messagesApp,
+            ),
+        ) else emptyList()
+        val sidebarPages = messagePages + listOf(NavItem("machines", stringResource(R.string.app_machines), PhIcons.Desktop)) +
             extensionPages.map { page ->
                 NavItem(extensionRailKey(page.extension, page.id), page.title.ifBlank { page.id }, extensionNavIcon(page.icon),
                     badge = page.badge?.text?.trim()?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
@@ -784,9 +819,12 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                     inboxCount = inboxUnread, settingsCount = slotBadge.count, settingsDot = slotBadge.dot, settingsBadge = demoBadge,
                     pages = sidebarPages,
                     onPage = { key ->
-                        if (key == "machines") sidebarDestination(MachinesRoute)
-                        else extensionPages.firstOrNull { extensionRailKey(it.extension, it.id) == key }?.let { page ->
-                            sidebarDestination(ExtensionUiRoute(page.extension, page.id, page.title.ifBlank { page.id }))
+                        when {
+                            key == "messages" && showLarkMessages -> sidebarDestination(LarkMessagesRoute)
+                            key == "machines" -> sidebarDestination(MachinesRoute)
+                            else -> extensionPages.firstOrNull { extensionRailKey(it.extension, it.id) == key }?.let { page ->
+                                sidebarDestination(ExtensionUiRoute(page.extension, page.id, page.title.ifBlank { page.id }))
+                            }
                         }
                     },
                     onRetired = { key -> sidebar.retired = sidebar.retired + key },
@@ -967,7 +1005,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             }
             entry<InteractionRoute> { ShellChat(it.chat, session, navigator, shell.feedback, it.requestId, navigator::sessionClosed,
                 ::openWithCard, navigator::groupGone, chatTerminal(it.chat)) }
-            inboxEntries(navigator, session.inbox, pictureMarkdown = { text, source, modifier ->
+            inboxEntries(navigator, session.inbox, larkMessagesLoading = larkMessagesLoading, pictureMarkdown = { text, source, modifier ->
                 persona.feature.chat.ExternalReplyMarkdown(text, source, modifier)
             }, connectors = services.connectors.takeUnless { services.demo }, onOpenCard = { card ->
                 openWithCard(ResolvedRoute(AppTab.Agents, AgentsRoute, card = card))
@@ -1328,6 +1366,30 @@ private fun Modifier.unplaced(): Modifier = layout { measurable, constraints ->
     val placeable = measurable.measure(constraints)
     layout(placeable.width, placeable.height) {}
 }
+
+/** Return from a disabled Messages place without resetting the conversation's previously retained regular-width path. */
+internal fun leaveDisabledLarkMessages(
+    regular: Boolean,
+    pageRoots: SidebarPageRoots,
+    hosts: SidebarRootHosts,
+    showHost: (NavKey, List<NavKey>) -> Unit,
+    showCompactHome: () -> Unit,
+) {
+    if (!regular) {
+        showCompactHome()
+        return
+    }
+    val step = pageRoots.select(AssistantRoute, hosts.current.drop(1))
+    showHost(step.root, step.stack)
+}
+
+/** Real DI loading keeps a restored place; losing the capability or demo repository hides it without erasing the choice. */
+internal fun larkMessagesVisible(
+    enabled: Boolean,
+    features: LarkFeatures,
+    available: Boolean,
+    loading: Boolean = false,
+): Boolean = enabled && features.chats && (available || loading)
 
 /** The only primary destinations; all other entries live in the shared sidebar. */
 @Composable

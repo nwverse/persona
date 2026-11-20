@@ -474,9 +474,110 @@ class PersonaShellOverlayTest {
         }
     }
 
+    @Test fun larkMessagesUsesTheRealShellEntryNativeChatAndDisableCleanup() {
+        val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
+        val styleStore = AppStyleStore(app).apply { setLarkHomeMessages(false) }
+        val messages = listedMessagesRepository()
+        shell(styleStore = styleStore, larkMessagesRepository = messages) { scenario ->
+            awaitText("The trip outline is ready.")
+            sidebar()
+            rule.onAllNodesWithText("Messages").assertCountEquals(0)
+            back(scenario)
+
+            rule.runOnIdle { styleStore.setLarkHomeMessages(true) }
+            frames()
+            sidebar()
+            clickText("Messages")
+            awaitText("Listed Lark chat")
+            clickText("Listed Lark chat")
+            awaitText("Native chat")
+            back(scenario)
+            awaitText("Listed Lark chat")
+
+            rule.runOnIdle { styleStore.setLarkHomeMessages(false) }
+            frames()
+            awaitText("The trip outline is ready.")
+            sidebar()
+            rule.onAllNodesWithText("Messages").assertCountEquals(0)
+        }
+    }
+
+    @Test fun disablingMessagesBehindAgentsRestoresThePreviousAssistantDetail() {
+        val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
+        val styleStore = AppStyleStore(app).apply { setLarkHomeMessages(true) }
+        val navigation = mutableStateOf<((Router) -> ResolvedRoute?)?>(null)
+        shell(withTodos = true, styleStore = styleStore, larkMessagesRepository = listedMessagesRepository(),
+            openNavigation = navigation) {
+            awaitText("The trip outline is ready.")
+            rule.runOnIdle { navigation.value = { ResolvedRoute(AppTab.Persona, TodoDetailRoute("trip")) } }
+            frames()
+            awaitText("Trip plan")
+            awaitText(otherAgent.displayTitle)
+
+            rule.runOnIdle { navigation.value = { ResolvedRoute(AppTab.Persona, LarkMessagesRoute) } }
+            frames()
+            awaitText("Listed Lark chat")
+            // The same detail over Messages makes Navigation trim its duplicate from the background conversation;
+            // the saved Assistant path is then the only copy that cleanup can restore.
+            rule.runOnIdle { navigation.value = { ResolvedRoute(AppTab.Persona, TodoDetailRoute("trip")) } }
+            frames()
+            awaitText(otherAgent.displayTitle)
+            rule.runOnIdle { navigation.value = { ResolvedRoute(AppTab.Agents, AgentsRoute) } }
+            frames()
+            awaitSavedTab(AppTab.Agents)
+            awaitText("Pick a session")
+
+            rule.runOnIdle { styleStore.setLarkHomeMessages(false) }
+            frames()
+            // Cleanup restores Persona's retained path without pulling the user out of Agents.
+            awaitText("Pick a session")
+            awaitSavedTab(AppTab.Agents)
+            clickText("Assistant")
+            awaitSavedTab(AppTab.Persona)
+            awaitText("Trip plan")
+            awaitText(otherAgent.displayTitle)
+        }
+    }
+
+    @Test fun realRepositoryLoadingKeepsMessagesReachableAndThenOpensNativeChat() {
+        val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
+        val styleStore = AppStyleStore(app).apply { setLarkHomeMessages(true) }
+        val messages = MutableStateFlow<LarkMessagesRepository?>(null)
+        shell(styleStore = styleStore, larkMessagesFlow = messages) {
+            awaitText("The trip outline is ready.")
+            sidebar()
+            awaitText("Messages")
+            clickText("Messages")
+            awaitText("Loading Lark chats")
+            rule.onAllNodesWithText("Messages are unavailable on this connection.").assertCountEquals(0)
+
+            rule.runOnIdle { messages.value = listedMessagesRepository() }
+            awaitText("Listed Lark chat")
+            clickText("Listed Lark chat")
+            awaitText("Native chat")
+        }
+    }
+
+    private fun listedMessagesRepository() = object : LarkMessagesRepository {
+        override val scope = "fixture"
+        override val state = MutableStateFlow(
+            LarkMessagesState(
+                rows = listOf(LarkChatSummary(id = "listed", name = "Listed Lark chat")),
+                loaded = true,
+                loading = false,
+            ),
+        )
+        override suspend fun refresh() = Unit
+        override suspend fun loadMore() = Unit
+        override fun avatar(ref: String?): AuthenticatedLarkImage? = null
+    }
+
     private fun shell(agents: Boolean = false, sideInset: Int = 0, width: MutableState<Int>? = null,
         withTodos: Boolean = false, groupByTodo: Boolean = false,
         automation: Boolean = true,
+        styleStore: AppStyleStore? = null,
+        larkMessagesRepository: LarkMessagesRepository? = null,
+        larkMessagesFlow: MutableStateFlow<LarkMessagesRepository?>? = null,
         openNavigation: MutableState<((Router) -> ResolvedRoute?)?>? = null,
         content: (@Composable (ShellSession) -> Unit)? = null,
         check: (ActivityScenario<ComponentActivity>) -> Unit) {
@@ -499,8 +600,12 @@ class PersonaShellOverlayTest {
         val inbox = object : persona.feature.inbox.InboxRepository {
             override val entries = MutableStateFlow(emptyList<InboxEntry>())
             override val snapshot = MutableStateFlow(InboxSnapshot())
+            override val larkMessages = larkMessagesFlow ?: MutableStateFlow(larkMessagesRepository)
             override suspend fun refresh() = Unit
-            override fun conversation(feedId: String, startPosition: Long?) = MutableStateFlow(LarkConversation())
+            override fun conversation(feedId: String, startPosition: Long?) = MutableStateFlow(
+                LarkConversation(loading = false, verified = true,
+                    title = if ((larkMessagesRepository ?: larkMessagesFlow?.value) == null) "" else "Native chat"),
+            )
             override suspend fun loadOlder(feedId: String) = Unit
             override suspend fun refreshConversation(feedId: String) = Unit
             override suspend fun setDone(itemId: String, done: Boolean) = Unit
@@ -603,7 +708,11 @@ class PersonaShellOverlayTest {
                                         historySession = snapshot.conversations.firstOrNull { it.key == key })
                                 })
                         }
-                        CompositionLocalProvider(LocalWindowInfo provides window, LocalAssistantHost provides assistantHost) {
+                        CompositionLocalProvider(
+                            LocalWindowInfo provides window,
+                            LocalAssistantHost provides assistantHost,
+                            LocalAppStyleStore provides styleStore,
+                        ) {
                             Box(Modifier.then(if (width == null) Modifier.fillMaxSize() else
                                 Modifier.width(width.value.dp).fillMaxHeight())) {
                                 if (content != null) content(session)

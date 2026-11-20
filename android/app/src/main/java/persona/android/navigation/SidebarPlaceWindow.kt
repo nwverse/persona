@@ -5,6 +5,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.navigation3.runtime.NavKey
 import persona.core.navigation.AssistantRoute
+import persona.core.navigation.LarkMessagesRoute
+import persona.feature.inbox.LarkRoute
 
 /**
  * When a place route may become the root (#9667).
@@ -55,6 +57,9 @@ internal class SidebarPlaceWindow {
         showHost: (NavKey, List<NavKey>) -> Unit,
         selectPersona: () -> Unit,
     ): Boolean {
+        // A chat opened from Messages belongs to that root. The generic LarkRoute -> Inbox mapping is for Inbox links;
+        // inspecting the real host also covers a compact [Assistant, Messages] prefix.
+        if (key is LarkRoute && hosts.current.firstOrNull { it != AssistantRoute } == LarkMessagesRoute) return false
         val place = placeRootFor(key) ?: return false
         pageRoots.markOpenedAsRoot(place)
         if (!measured) {
