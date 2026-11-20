@@ -39,8 +39,8 @@ class DevSocketProbeTest {
             assertEquals(1, sink.sockets.count { it == "connected" })
             assertEquals(0, sink.sockets.count { it == "dropped" })
             connection.close()
-            val dropped = await { sink.sockets.contains("dropped") }
-            assertTrue("closing the connection records one drop", dropped)
+            // The terminal event is synchronous: close must not depend on an OkHttp callback whose dispatcher it stops.
+            assertTrue("closing the connection records one drop", sink.sockets.contains("dropped"))
         } finally {
             connection.close()
             hub.close()

@@ -75,14 +75,14 @@ def tags(repository, runner=subprocess.check_output):
     return result
 
 
-def next_version(repository, beta, requested="", runner=subprocess.check_output, stable_tag=""):
+def next_version(repository, beta, requested="", runner=subprocess.check_output, stable_tag="", reserved=()):
     known = tags(repository, runner)
     if not beta:
         # A stable release is a deliberate PR decision: feature commits bump minor, fix-only commits bump patch.
         # Never silently reuse the current stable tag or guess that an unchanged tree needs another release.
         if not STABLE.fullmatch("v" + requested):
             raise ReleaseError("a stable release PR must request an explicit vX.Y.Z version")
-        if "v" + requested in known:
+        if "v" + requested in known or requested in reserved:
             raise ReleaseError("version already exists; choose a new immutable release PR version")
         return requested
     stable = []
@@ -100,7 +100,15 @@ def next_version(repository, beta, requested="", runner=subprocess.check_output,
             raise ReleaseError("no existing stable release version was found")
         base = max(stable)
     if beta:
-        number = max((int(match.group(4)) for tag in known if (match := BETA.fullmatch(tag))), default=0) + 1
+        # An orphaned release-PR branch also reserves its version. Its previous failed source must never be
+        # overwritten with a different main commit, even while no immutable tag exists for it yet.
+        reserved_beta = {value if value.startswith("v") else "v" + value for value in reserved
+                         if BETA.fullmatch(value if value.startswith("v") else "v" + value)}
+        used = {int(match.group(4)) for tag in (*known, *reserved_beta) if (match := BETA.fullmatch(tag))}
+        number = max(used, default=0) + 1
+        # An orphan may be newer than the latest tag, so its next number may already be reserved too.
+        while number in used:
+            number += 1
         version = "%d.%d.%d-beta.%d" % (*base, number)
     else:
         raise ReleaseError("version already exists; choose a new immutable release PR version")
@@ -118,13 +126,13 @@ def stable_version(stable_tag, subjects):
     return "%d.%d.%d" % (major, minor, patch + 1)
 
 
-def schedule_version(repository, channel, stable_tag, commit, previous_commit, subjects):
+def schedule_version(repository, channel, stable_tag, commit, previous_commit, subjects, reserved=()):
     if not isinstance(commit, str) or not SHA.fullmatch(commit):
         raise ReleaseError("the scheduler requires a full main commit")
     if channel == "beta":
         if previous_commit == commit:
             return None
-        return next_version(repository, True, stable_tag=stable_tag)
+        return next_version(repository, True, stable_tag=stable_tag, reserved=reserved)
     if channel != "release":
         raise ReleaseError("schedule channel must be release or beta")
     if previous_commit == commit:
@@ -193,8 +201,8 @@ def verify_merged_pr(pr, repository, channel, commit, actor):
     if (pr.get("author") or {}).get("login") != "chyroc":
         raise ReleaseError("release PR author must be the administrator")
     merged_by = (pr.get("mergedBy") or {}).get("login")
-    if merged_by is not None and merged_by not in ("chyroc", "github-actions[bot]", "github-actions"):
-        raise ReleaseError("release PR merger must be the administrator or its verified workflow")
+    if merged_by != "chyroc":
+        raise ReleaseError("the verified release workflow must merge with the administrator's protected token")
     version = release_title(pr.get("title", ""), channel == "beta")
     if (pr.get("mergeCommit") or {}).get("oid") != commit:
         raise ReleaseError("the merged commit differs from the release plan")
@@ -283,11 +291,13 @@ def main(argv=None):
     version = sub.add_parser("next-version")
     version.add_argument("--version", default="")
     version.add_argument("--stable-tag", default="")
+    version.add_argument("--reserved", nargs="*", default=[])
     schedule = sub.add_parser("schedule-version")
     schedule.add_argument("--stable-tag", required=True)
     schedule.add_argument("--commit", required=True)
     schedule.add_argument("--previous-commit", required=True)
     schedule.add_argument("--subjects", type=Path, required=True)
+    schedule.add_argument("--reserved", nargs="*", default=[])
     plan = sub.add_parser("plan")
     plan.add_argument("--version", required=True)
     plan.add_argument("--commit", required=True)
@@ -318,10 +328,10 @@ def main(argv=None):
     if args.command == "verify-pr":
         print(verify_pr(json.loads(args.pr_json.read_text()), args.repository, args.channel == "beta", args.merged, args.commit))
     elif args.command == "next-version":
-        print(next_version(args.repository, args.channel == "beta", args.version, stable_tag=args.stable_tag))
+        print(next_version(args.repository, args.channel == "beta", args.version, stable_tag=args.stable_tag, reserved=args.reserved))
     elif args.command == "schedule-version":
         subjects = args.subjects.read_text().splitlines()
-        selected = schedule_version(args.repository, args.channel, args.stable_tag, args.commit, args.previous_commit, subjects)
+        selected = schedule_version(args.repository, args.channel, args.stable_tag, args.commit, args.previous_commit, subjects, args.reserved)
         if selected:
             print(selected)
         else:

@@ -120,6 +120,14 @@ func TestInboxClaudeReadOnlyLocalResourceRules(t *testing.T) {
 	if err := os.Symlink(linkedData, filepath.Join(n.dir, "data")); err != nil {
 		t.Fatal(err)
 	}
+	// A link's target is allowed by its physical path: macOS's temporary directory is behind a link.
+	for _, dir := range []*string{&linkedSkill, &linkedData} {
+		physical, err := filepath.EvalSymlinks(*dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		*dir = physical
+	}
 	const id = "inbox-read-only-resources"
 	n.state.put(id, sessionState{Origin: originInbox})
 	flags := n.claudeAssistantMCPAndTools(id, cwd, true)
@@ -362,9 +370,10 @@ func TestInboxNodeRecoveryKeepsPersistedOrigin(t *testing.T) {
 			if in := f.file("stdin.jsonl"); !strings.Contains(in, `"mode":"default"`) {
 				t.Fatalf("node-owned recovery did not force default: %s", in)
 			}
-			cliWait(t, "recovered task cleanup", func() bool {
-				st, _ := f.n.state.get(id)
-				return len(st.Tasks) == 0 && st.Origin == originInbox && st.OriginKnown
+			// The CLI can publish its result before the recovery caller clears the delivered lost-task record.
+			cliWait(t, "cleared lost tasks and retained Inbox origin", func() bool {
+				st, ok := f.n.state.get(id)
+				return ok && len(st.Tasks) == 0 && st.Origin == originInbox && st.OriginKnown
 			})
 			if st, _ := f.n.state.get(id); len(st.Tasks) != 0 || st.Origin != originInbox || !st.OriginKnown {
 				t.Fatalf("recovered session state=%+v, want cleared tasks and retained origin decision", st)
@@ -430,7 +439,8 @@ func TestRecoveryWithoutModelAnswerPreservesStoredCwd(t *testing.T) {
 				t.Fatal(err)
 			}
 			const id = "11111111-1111-4111-8111-11111111111a"
-			cwd := filepath.Join(t.TempDir(), ".persona", "assistant")
+			// The fake CLI writes the shell's $PWD, the physical path: macOS's temporary directory is behind a link.
+			cwd := filepath.Join(physicalTempDir(t), ".persona", "assistant")
 			if err := os.MkdirAll(cwd, 0o700); err != nil {
 				t.Fatal(err)
 			}

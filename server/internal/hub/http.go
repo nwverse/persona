@@ -675,9 +675,8 @@ func (h *Hub) proxyBodyFor(method string, timeout time.Duration, mutate ...func(
 	})
 }
 
-// interruptSession stops a session's turn (session.interrupt). One of the assistant's conversations stopped here is
-// the user's stop button in an app: the assistant is told, so a Feishu /agent request it works on is stopped as well
-// (#3308; the plugin's own /stop goes through the assistant, not here).
+// interruptSession stops a session's turn (session.interrupt). The manager retires any pending follow-up for every
+// known session; a reporting Assistant conversation is also marked stopped for its plugin (#3308).
 func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machine) {
 	p, ok := optionalObject(w, r, 32<<20)
 	if !ok {
@@ -690,7 +689,7 @@ func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machin
 	if !ok {
 		return
 	}
-	if s, ok := m.session(sid); ok && (s.Assistant || m.isAssistant(s)) {
+	if _, ok := m.session(sid); ok {
 		h.asstOf(h.sessionOwner(m.cfg.ID, sid)).UserStopped(r.Context(), assistantwire.SessionRef{MachineID: m.cfg.ID, SessionID: sid})
 	}
 	writeRawJSON(w, out)
@@ -699,6 +698,15 @@ func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machin
 func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 	named, ok := h.sessionsManager(w, r) // ?manager=<id>: that manager's computers only (sessions_list.go)
 	if !ok {
+		return
+	}
+	// include_inactive=1: sessions active in a time window, inactive ones too (sessions_history.go). Without it, as
+	// before: since / cursor / limit stay the indexed list's.
+	if history, err := historyMode(r); err != nil {
+		sessionListErr(w, err)
+		return
+	} else if history {
+		h.historySessions(w, r, named)
 		return
 	}
 	_, lookup := r.URL.Query()["session_id"]
@@ -780,21 +788,25 @@ func writeSessionLists(w http.ResponseWriter, lists []stampedList) {
 
 func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	var p struct {
-		MachineID       string `json:"machine_id"`
-		Cwd             string `json:"cwd"`
-		Launcher        string `json:"launcher"`
-		AgentType       string `json:"agent_type,omitempty"`
-		WorkSession     bool   `json:"work_session,omitempty"`
-		Model           string `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
-		Prompt          string `json:"prompt"`
-		ResumeSessionID string `json:"resume_session_id"`
-		WorkspaceID     string `json:"workspace_id"`
+		MachineID       string        `json:"machine_id"`
+		Cwd             string        `json:"cwd"`
+		Launcher        string        `json:"launcher"`
+		AgentType       string        `json:"agent_type,omitempty"`
+		WorkSession     bool          `json:"work_session,omitempty"`
+		Model           string        `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
+		Prompt          string        `json:"prompt"`
+		Images          []proto.Image `json:"images,omitempty"`
+		ResumeSessionID string        `json:"resume_session_id"`
+		WorkspaceID     string        `json:"workspace_id"`
 		// Host: the machine's enabled engine host to open in (herdr, orca, paseo…; #2576); empty: its default host.
 		// Checked by the node (an older node ignores it and starts in its engine).
 		Host           string `json:"host,omitempty"`
 		PermissionMode string `json:"permission_mode,omitempty"`
 		Effort         string `json:"effort,omitempty"`
-		Ultracode      *bool  `json:"ultracode,omitempty"`
+		// LauncherDefaultEffort keeps an explicit launcher's effort at its native default.
+		LauncherDefaultEffort bool   `json:"launcher_default_effort,omitempty"`
+		Speed                 string `json:"speed,omitempty"`
+		Ultracode             *bool  `json:"ultracode,omitempty"`
 		// Goal: a one-line condition the node sets with /goal after the first message is in (node/startgoal.go); a
 		// start it cannot take there answers 409 start_goal_unsupported before anything starts.
 		Goal string `json:"goal,omitempty"`
@@ -858,6 +870,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	decided := ""
+	var handoffImages []proto.Image
 	if p.TodoID != "" {
 		// The manager checks the todo (404, 409, 503 assistant_offline while it is away) and puts its decisions before
 		// the prompt, a new agent's project background before those (#1618, #2820); they go to the agent, not into
@@ -867,7 +880,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 			hand.New, hand.MachineID, hand.Cwd = true, m.cfg.ID, startCwd(m, p.Cwd)
 		}
 		var ok bool
-		if decided, ok = h.todoHandoff(r.Context(), w, hand); !ok {
+		if decided, handoffImages, ok = h.todoHandoff(r.Context(), w, hand); !ok {
 			return
 		}
 	}
@@ -891,13 +904,21 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	if p.TodoID != "" {
 		p.Prompt = decided
 	}
-	async := startsAsync(p.Async, p.ResumeSessionID, p.AgentType)
+	if strings.TrimSpace(p.Prompt) == "" {
+		p.Images = nil // an empty start has no first message to attach pictures to
+	} else {
+		p.Images = append(p.Images, handoffImages...)
+	}
+	async := startsAsync(p.Async, p.ResumeSessionID, p.Launcher, p.AgentType)
+	nameAfterStart := async
 	parent := r.Context()
 	if r.Header.Get("X-Persona-Op-Id") != "" {
 		// Finish an accepted start even if its HTTP response is lost; client_ops records the outcome.
 		parent = context.WithoutCancel(parent)
 	}
-	ctx, cancel := context.WithTimeout(parent, startBudget(async && !p.WorkSession))
+	startedAt := time.Now()
+	budget := startBudget(async && !p.WorkSession)
+	ctx, cancel := context.WithDeadline(parent, startedAt.Add(budget))
 	defer cancel()
 	var res struct {
 		Session      proto.Session `json:"session"`
@@ -924,6 +945,16 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		}
 		callErr(w, err) // 503 assistant_offline without the manager (the machine is its to reach), else 502
 		return
+	}
+	resolvedLauncher, _ := params["launcher"].(string)
+	resolvedAgent, _ := params["agent_type"].(string)
+	async = startsAsync(p.Async, p.ResumeSessionID, resolvedLauncher, resolvedAgent)
+	if resolvedBudget := startBudget(async && !p.WorkSession); resolvedBudget != budget {
+		// The manager may have found a synchronous launcher after the request was admitted.
+		cancel()
+		resolvedCtx, cancelResolved := context.WithDeadline(parent, startedAt.Add(resolvedBudget))
+		defer cancelResolved()
+		ctx = resolvedCtx
 	}
 	method := "session.start"
 	if p.WorkSession {
@@ -992,7 +1023,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	m.mu.Unlock()
 	res.LauncherNote = apierr.JoinNotes(h.requestLang(r), note, apierr.StartInstead(h.requestLang(r), engine, m.name(), res.Instead, res.Session))
 	writeJSON(w, res)
-	if async && p.TabName == "" {
+	if nameAfterStart && p.TabName == "" {
 		// The name takes a model call (seconds): the tab opens as agent-<n> and is renamed when it comes.
 		go func(id string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1045,8 +1076,8 @@ func startEngine(info proto.NodeInfo) string {
 
 // startsAsync: a start the app asked to have answered at once is, when the node can acknowledge it before the session
 // is ready (only Claude can, and not a resume).
-func startsAsync(asked bool, resume, agentType string) bool {
-	return asked && resume == "" && (agentType == "" || agentType == "claude")
+func startsAsync(asked bool, resume, launcher, agentType string) bool {
+	return asked && resume == "" && (agentType == "claude" || (agentType == "" && launcher != "agy"))
 }
 
 // startBudget is how long a start may take: one acknowledged before the session is ready a moment, one answered only

@@ -17,16 +17,22 @@ import persona.core.contracts.Closeout
 import persona.core.contracts.Item
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
+import persona.core.contracts.UndeliveredMessage
 import persona.core.contracts.WorkState
 import persona.core.contracts.api.ChatRepository
+import persona.core.contracts.api.ChannelSources
 import persona.core.contracts.api.OutboxMessage
 import persona.core.contracts.api.DeliveryState
 import persona.core.contracts.api.MessageSendReceipt
 import persona.core.contracts.api.ChatComposerService
 import persona.core.designsystem.*
 import persona.core.domain.lines.ChatLine
+import persona.core.domain.lines.isUserMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+
+/** The Assistant feature supplies its source mark and label for an externally opened conversation. */
+val LocalOpeningMessageSource = staticCompositionLocalOf<(Session) -> (@Composable () -> Unit)?> { { null } }
 
 /** The reader inside a ChatPage's JPage content slot. This is the same reader/navigation/outbox code, moved behind a
  * narrow state-holder boundary to keep ChatPage itself below ART's method limit. No second UI state is created. */
@@ -59,6 +65,11 @@ internal fun ChatPageReaderContent(
     deferCount: Boolean,
     placed: persona.core.domain.lines.PlacedMessages,
     pendingDay: java.time.LocalDate?,
+    heldRows: List<persona.core.contracts.HeldAgentMessage>,
+    heldActions: persona.core.contracts.api.HeldAgentActions?,
+    undeliveredRows: List<UndeliveredMessage>,
+    undeliveredBusy: Set<String>,
+    onUndeliveredAction: ((UndeliveredMessage, DeliveryAction) -> Unit)?,
     composerDeliveries: Map<String, persona.core.contracts.api.ComposerDelivery>,
     deliveryActions: ChatDeliveryActions,
     readOnly: Boolean,
@@ -107,6 +118,19 @@ internal fun ChatPageReaderContent(
     // The closeout card takes the room under the top bar; the list then starts right under the card.
     val padding = if (closeoutShown != null) PaddingValues(bottom = pagePaddingValues.calculateBottomPadding()) else pagePaddingValues
     val closeoutReplyId = remember(lines, closeoutShown != null) { if (closeoutShown != null) closeoutReplyId(lines) else null }
+    val sourceFor = LocalOpeningMessageSource.current
+    val externalSource = remember(session, renderStyle, sourceFor) {
+        session?.takeIf { renderStyle == ChatRenderStyle.Assistant }?.let(sourceFor)
+    }
+    // A cache with an unknown boundary or a partial page may only contain a later user message.
+    val opening = remember(externalSource, snapshot.olderBoundaryKnown, snapshot.hasOlder, snapshot.items) {
+        if (externalSource != null && snapshot.olderBoundaryKnown && !snapshot.hasOlder)
+            snapshot.items.firstOrNull(::isUserMessage)
+        else null
+    }
+    val channels = LocalChannels.current
+    val openingChannel = remember(opening?.clientMsgId, channels) { ChannelSources.of(opening?.clientMsgId, channels) }
+    val openingSource: (@Composable () -> Unit)? = if (openingChannel != null) ({ JChannelSource(openingChannel) }) else externalSource
     Column(Modifier.fillMaxSize()) {
         if (search.selected != null) ReturnChip { search.returnToOrigin(chatList) }
         search.notice?.let { Text(it, Modifier.padding(horizontal = horizontalPadding), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
@@ -172,6 +196,15 @@ internal fun ChatPageReaderContent(
                 errorLine?.let { error -> item(key = ERROR_ROW, contentType = ERROR_ROW) { ChatSystemLine(error, failed = true) } }
                 readyLine?.let { words -> item(key = READY_ROW, contentType = READY_ROW) { TypingLine(words) } }
                 // Newest at the bottom (reverse layout). A failed send sits above the first line written after it.
+                heldRows.asReversed().forEach { row ->
+                    item(key = "held-${row.id}", contentType = "held") { HeldAgentBubble(row, heldActions, canSend, onNotice) }
+                }
+                undeliveredRows.asReversed().forEach { row ->
+                    item(key = "undelivered-${row.id}", contentType = "undelivered") {
+                        UndeliveredBubble(row, glass, row.id in undeliveredBusy, canSend,
+                            if (onUndeliveredAction == null) null else ({ action -> onUndeliveredAction(row, action) }))
+                    }
+                }
                 placed.rest.asReversed().forEach { message ->
                     item(key = "outbox-${message.clientMessageId}", contentType = "outbox") { outboxBubble(message) }
                 }
@@ -181,6 +214,12 @@ internal fun ChatPageReaderContent(
                         ChatSearchHighlight(search, line.contentKey) {
                             androidx.compose.runtime.CompositionLocalProvider(LocalAssistantTaskHost provides taskHost,
                                 LocalTurnErrorFixAction provides fixModel, LocalOpenRecap provides openRecap) {
+                                val pictures = contentUserImages[line.id].orEmpty()
+                                val isOpening = opening != null && when (line) {
+                                    is ChatLine.Row -> line.row.item?.id == opening.id || pictures.any { it.id == opening.id }
+                                    is ChatLine.UserImages -> line.images.any { it.id == opening.id }
+                                    else -> false
+                                }
                                 ChatLineContent(line, key, loader,
                                     line.recordedDuration(snapshot.recordedTurnDurations),
                                     onToggle, onExpand, folding, foldErrors,
@@ -190,7 +229,7 @@ internal fun ChatPageReaderContent(
                                     onLastLine = { extent -> chatList.reportLastLine(line.contentKey, extent) }, onFullText = onFullText,
                                     style = renderStyle, agentSession = session, textUpdates = textUpdates,
                                     liveText = snapshot.liveText, streamingItemIds = snapshot.streamingItemIds,
-                                    userImages = contentUserImages[line.id].orEmpty(),
+                                    userImages = pictures, openingSource = if (isOpening) openingSource else null,
                                     imagesInUserBubble = line.id in contentHiddenImages,
                                     workRunning = (line as? ChatLine.Step)?.let { contentWorkGroups[it.groupId]?.live } == true,
                                     lastWorkStep = (line as? ChatLine.Step)?.let {
@@ -218,13 +257,13 @@ internal fun ChatPageReaderContent(
             }
             val settling = snapshot.loading || projectedFrom == null || (snapshot.items.isNotEmpty() && projectedFrom !== snapshot.items)
             val readerPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = listBottomInset)
-            if (settling && lines.isEmpty() && messages.isEmpty()) {
+            if (settling && lines.isEmpty() && messages.isEmpty() && heldRows.isEmpty() && undeliveredRows.isEmpty()) {
                 // An Agent's chat on Glass: iOS's skeleton rows where its newest lines will be; Brief and Board keep the spinner.
                 if (glass && agentChat) ChatSkeleton(Modifier.align(Alignment.BottomCenter).padding(start = horizontalPadding, end = horizontalPadding,
                     bottom = listBottomInset + Tokens.Space.m))
                 else JLoading(Modifier.align(Alignment.Center).padding(readerPadding).padding(horizontal = horizontalPadding))
             }
-            else if (!settling && lines.isEmpty() && messages.isEmpty() && snapshot.error == null)
+            else if (!settling && lines.isEmpty() && messages.isEmpty() && heldRows.isEmpty() && undeliveredRows.isEmpty() && snapshot.error == null)
                 JEmptyState(stringResource(R.string.chat_screen_empty_title),
                     emptyChatHint(res, session, machineName, readOnly),
                     Modifier.align(Alignment.Center).padding(readerPadding).padding(horizontal = horizontalPadding))

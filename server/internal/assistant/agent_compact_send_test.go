@@ -100,7 +100,7 @@ func TestResumeCompactionFailureFallsBackWithTheReason(t *testing.T) {
 		t.Fatal("a failed compaction passed for a delivery")
 	}
 	for _, want := range []string{"could not compact full0001 on box", "Error during compaction: prompt is too long",
-		"resumed and now rests with its context", "nothing was sent", "start a replacement", "task_plan with continues", "agent_start"} {
+		"It was resumed; its context is as it was", "nothing was sent", "start a replacement", "task_plan with continues", "agent_start"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal lacks %q: %v", want, err)
 		}
@@ -216,5 +216,84 @@ func TestNotNearlyFullBehavesAsBefore(t *testing.T) {
 	}
 	if len(sessionSendCalls(f)) != 1 { // only the first test's send
 		t.Fatalf("session.send: %v", sessionSendCalls(f))
+	}
+}
+
+// A Codex thread nothing runs (codex_history: the node resumes it with codex resume in a new tab) is compacted like a
+// Claude Code agent: resumed without a first message, then the text with compact_if_full. A Codex App chat is refused,
+// saying why. (A stopped app-server thread, a Claude outside Persona's terminals or an identity conflict is read-only
+// before any resume, as before.)
+func TestResumeOfANearlyFullCodexCompactsBeforeTheText(t *testing.T) {
+	s, f := newQuietService(t)
+	c := stoppedBoxAgent("codx0001")
+	c.Agent, c.SourceKind, c.ContextTokens, c.ContextWindow = "codex", "codex_history", 428111, 475000
+	f.setSessions("box", c)
+	resumingNode(f)
+	f.answerNode(DeviceSessionSend, func(string, json.RawMessage) (any, error) {
+		return map[string]any{"ok": true, "compacted": true}, nil
+	})
+	res, err := runJSON(t, s, "conv1", "agent_send", map[string]any{"machine": "box", "session_id": "codx0001",
+		"text": "which base does the mirror have?", "resume": true, "resume_why": "it set up the gate machine", "task": map[string]any{"title": "接着做"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	starts, sends := startCalls(f), sessionSendCalls(f)
+	if len(starts) != 1 || starts[0]["prompt"] != nil || len(sends) != 1 || sends[0]["compact_if_full"] != true || !startedBeforeSent(f) {
+		t.Fatalf("started %v, sent %v", starts, sends)
+	}
+	if !strings.Contains(res, "nearly full (428111 of 475000 tokens)") {
+		t.Fatalf("receipt: %s", res)
+	}
+
+	s, f = newQuietService(t)
+	c.SpaceKind = "codex_app"
+	f.setSessions("box", c)
+	resumingNode(f)
+	_, err = runJSON(t, s, "conv1", "agent_send", map[string]any{"machine": "box", "session_id": "codx0001",
+		"text": "go on", "resume": true, "resume_why": "needs its context", "task": map[string]any{"title": "接着做"}})
+	if err == nil || !strings.Contains(err.Error(), "Codex App chat") || !strings.Contains(err.Error(), "cannot be compacted") {
+		t.Fatalf("refusal: %v", err)
+	}
+	if len(startCalls(f)) != 0 || len(sessionSendCalls(f)) != 0 {
+		t.Fatalf("started %v, sent %v", startCalls(f), sessionSendCalls(f))
+	}
+}
+
+// A running Codex on its app-server that is nearly full gets compact_if_full too (thread/compact/start on its node).
+func TestSendToANearlyFullCodexOnItsAppServerCompactsFirst(t *testing.T) {
+	s, f := newQuietService(t)
+	c := nearlyFull(boxAgent("codx0002"))
+	c.Agent, c.SourceKind = "codex", "codex_app_server"
+	c.Capabilities = &proto.SessionCapabilities{Read: true, Send: true, Interrupt: true}
+	f.setSessions("box", c)
+	f.answerNode(DeviceSessionSend, func(string, json.RawMessage) (any, error) {
+		return map[string]any{"ok": true, "compacted": true}, nil
+	})
+	if _, err := runJSON(t, s, "conv1", "agent_send", map[string]any{"machine": "box", "session_id": "codx0002", "text": "next"}); err != nil {
+		t.Fatal(err)
+	}
+	if sends := sessionSendCalls(f); len(sends) != 1 || sends[0]["compact_if_full"] != true {
+		t.Fatalf("session.send: %v", sends)
+	}
+}
+
+// A Codex that quit while it was to compact (it installed its own update) is named in the refusal with the step and
+// what its terminal shows, and nothing is sent (#11316).
+func TestResumeCompactionSaysWhereCodexQuit(t *testing.T) {
+	s, f := newQuietService(t)
+	c := stoppedBoxAgent("codx0001")
+	c.Agent, c.SourceKind, c.ContextTokens, c.ContextWindow = "codex", "codex_history", 428111, 475000
+	f.setSessions("box", c)
+	resumingNode(f)
+	f.answerNode(DeviceSessionSend, func(string, json.RawMessage) (any, error) {
+		return nil, &rpc.Error{Code: proto.CodeCompactFailed, Message: "its context is nearly full (428111 of 475000 tokens) and compacting it " +
+			"failed: the agent quit after /compact was typed, before any compaction was recorded; its terminal shows:\n" +
+			"Update ran successfully! Please restart Codex.. The message was not sent"}
+	})
+	_, err := runJSON(t, s, "conv1", "agent_send", map[string]any{"machine": "box", "session_id": "codx0001",
+		"text": "go on", "resume": true, "resume_why": "needs its context", "task": map[string]any{"title": "接着做"}})
+	if err == nil || !strings.Contains(err.Error(), "the agent quit after /compact was typed") ||
+		!strings.Contains(err.Error(), "Please restart Codex") || !strings.Contains(err.Error(), "nothing was sent") {
+		t.Fatalf("refusal: %v", err)
 	}
 }

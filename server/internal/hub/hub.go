@@ -42,6 +42,8 @@ type Hub struct {
 	extRoster rosterSeen
 	// extLost are when this hub started and when managers' bus connections ended here lately (extensions_proof.go).
 	extLost busLosses
+	// clarificationProofs are short-lived, one-time full-device web question proofs.
+	clarificationProofs hubClarificationProofBook
 	// tests: replaces os.Hostname
 	hostname func() (string, error)
 
@@ -168,6 +170,9 @@ type Hub struct {
 
 	mesh  meshState // the other hubs of the mesh group (mesh.go)
 	fleet fleet     // guards machines and byID (machines.go)
+	// historyReads are the history rows an extension's or scoped token was given lately, which it may read though
+	// the live list does not have them (sessions_history.go).
+	historyReads historyReads
 
 	todoLinks todoLinks // what the assistant reports of its todos' agents (assistant_todos.go)
 

@@ -63,6 +63,8 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 			SessionID string       `json:"session_id"`
 			Items     []proto.Item `json:"items"`
 			ToSeq     *int         `json:"to_seq"`
+			FromSeq   *int         `json:"from_seq"`
+			History   string       `json:"history"`
 		}
 		if json.Unmarshal(params, &p) != nil || !n.runtimes.owns(h, p.SessionID) {
 			return
@@ -77,7 +79,7 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 		if p.ToSeq != nil {
 			last = max(last, *p.ToSeq)
 		}
-		n.runtimes.pushed(p.SessionID, last)
+		n.runtimes.pushed(p.SessionID, last, p.History, p.FromSeq != nil && *p.FromSeq == 0)
 		if n.peer != nil {
 			_ = n.peer.Notify("session.items", n.echoedRaw(p.SessionID, params, "items")) // echo.go
 		}
@@ -88,7 +90,9 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 		if json.Unmarshal(params, &p) != nil || !n.runtimes.owns(h, p.SessionID) || n.peer == nil {
 			return
 		}
+		n.deltaMu.Lock()
 		_ = n.peer.Notify("session.delta", params)
+		n.deltaMu.Unlock()
 	case "interaction.cancel":
 		if n.peer != nil {
 			_ = n.peer.Notify("interaction.cancel", params)
@@ -258,6 +262,12 @@ func (n *Node) runtimeWatch(h *runtimeConn, id string, since int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), runtimeCallTimeout)
 	defer cancel()
 	params := map[string]any{"session_id": id, "since_seq": since}
+	n.runtimes.mu.Lock()
+	history := n.runtimes.lastHistory[id]
+	n.runtimes.mu.Unlock()
+	if history != "" {
+		params["history"] = history
+	}
 	if n.runtimeTranscript(id) != "" {
 		params["since_seq"], params["transcript"] = 0, true
 	}

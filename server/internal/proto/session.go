@@ -227,6 +227,15 @@ type Session struct {
 	// drives through its app-server has an Effort too (Codex's levels, see Efforts) but never a PermissionMode.
 	PermissionMode string `json:"permission_mode,omitempty"`
 	Effort         string `json:"effort,omitempty"`
+	// PendingEffort is a terminal change waiting for this Claude Code turn to end. If the attempt fails, the
+	// target stays visible and messages remain held until the user chooses an effort again. A pointer keeps
+	// optional effort metadata within the row size budget.
+	PendingEffort      *string `json:"pending_effort,omitempty"`
+	EffortChangeFailed bool    `json:"effort_change_failed,omitempty"`
+	// ContextRestartRecommended: the latest three measured requests each used over 300,000 input
+	// tokens since the last compaction. Omitted when false or the runtime has no request-level evidence.
+	// Kept with EffortChangeFailed so it fits the row's allocation size class.
+	ContextRestartRecommended bool `json:"context_restart_recommended,omitempty"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
 	// UltracodePending (beside AsksRead) means a requested change waits for an idle input box; LostAt asks the client
 	// to offer reopening after a resumed process reset an enabled switch. Reopening or dismissing the notice clears
@@ -337,9 +346,6 @@ type Session struct {
 	// It takes the first message (text only) and opens its terminal; once the thread exists the row goes and the
 	// thread's comes, in the same pane (docs/integrations/codex.md "Starting without a first message").
 	AwaitingFirstMessage bool `json:"awaiting_first_message,omitempty"`
-	// ContextRestartRecommended: the latest three measured requests each used over 300,000 input
-	// tokens since the last compaction. Omitted when false or the runtime has no request-level evidence.
-	ContextRestartRecommended bool `json:"context_restart_recommended,omitempty"`
 	// QueuedRelayed: the last this many of Queued are messages from other conversations that an assistant
 	// conversation's manager holds until its turn ends (docs/assistant/assistant.md "Queue while running"); the apps
 	// show them but take back, delete, move and send now only the others (#4342). A uint16 here sits in the padding
@@ -551,7 +557,8 @@ const (
 	// effort change only there. Its row's capabilities say modes: false.
 	CodeModesOnComputer = "modes_on_computer"
 	// CodeModesNotRunning: no process or pane runs the session; a message resumes it.
-	CodeModesNotRunning = "modes_not_running"
+	CodeModesNotRunning     = "modes_not_running"
+	CodeEffortChangePending = "effort_change_pending"
 )
 
 // CodeNotLoaded is what session.items and session.item refuse with when reading the session would start its agent: an
@@ -560,6 +567,16 @@ const (
 // open, docs/integrations/runtimes.md "What to implement", #8132). Nothing was read; the text is in the request's
 // language (apierr.Call). 409.
 const CodeNotLoaded = "not_loaded"
+
+// NotFoundNoTranscript and NotFoundUnknownSession are why a node's read of a session's history (session.items,
+// session.item, session.image, session.visualization) is not_found, its data.reason (node/transcript_files.go
+// readErr): a session the node knows with no transcript to read (its file gone, or none ever written), or an id it
+// has no record of. The hub words each in the request's language (apierr.Call); a not_found without one (an older
+// node, a runtime's own answer, a missing file) keeps the plain summary (#11388).
+const (
+	NotFoundNoTranscript   = "no_transcript"
+	NotFoundUnknownSession = "unknown_session"
+)
 
 // CodeTurnOverBackground is session.interrupt's answer when the Escape went to a session whose turn was already over
 // and only its background work (a background command, a subagent, a workflow) keeps it Working: nothing was
