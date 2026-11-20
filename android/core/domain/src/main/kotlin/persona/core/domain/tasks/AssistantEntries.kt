@@ -16,9 +16,8 @@ import java.time.Instant
  * Needs you lists everything waiting on the user, In progress everything running that does not. Each thing is one row
  * in exactly one of them, Needs you first; finished things are in neither: the handed-out ones that finished in the last
  * 24 hours are under Finished ([AssistantEntries.finished], #10922), every finished one on the board. Each entry's count
- * is its rows. A task waiting for its supervisor's review is In progress for the first hour of the wait
- * ([supervisorReviewing]), then Needs you. A task is one row whatever its agents: they are never rows of their own. In the main conversation an
- * Agent that belongs to no task (opened by hand) is a row of its own.
+ * is its rows. A task waiting only for its supervisor's review stays in In progress. A task is one row whatever its
+ * agents. In the main conversation, an Agent that belongs to no task (opened by hand) has a row of its own.
  */
 sealed interface NeedsYouEntry {
     val key: String
@@ -89,28 +88,10 @@ data class AssistantEntries(
     val finished: List<FinishedEntry> = emptyList(),
 )
 
-/** How long a task's review is its supervisor's alone (docs/assistant/unified-entry.md "Needs you and In progress"):
- *  past it the review is overdue and the task is the owner's, under Needs you. The web's `REVIEW_OVERDUE_MS`. */
-const val REVIEW_OVERDUE_MS = 60 * 60 * 1000L
-
-/**
- * The task waits for its supervisor's review, which is not the owner's to do yet: open, in `pending_review` for less than
- * [REVIEW_OVERDUE_MS] at [now] (epoch ms). False past that, and when the hub does not say since when (an older hub): the
- * review is then the owner's, as it was. An open ask or an asking Agent is the owner's whatever this says.
- */
-fun Todo.supervisorReviewing(now: Long): Boolean {
-    if (isDone || supervision?.state != "pending_review") return false
-    val since = parseTime(supervision?.pendingSince)?.toEpochMilli() ?: return false
-    return now - since < REVIEW_OVERDUE_MS
-}
-
-/** The task waits for the user's decision or review: an open ask (a decided one only while the task is open), or its
- *  supervisor's `needs_user` on an open task, or a `pending_review` that is the owner's: one waiting an hour or more at
- *  [now], or one the hub gives no start for ([supervisorReviewing]). A younger review is its supervisor's to do. */
-fun Todo.awaitsDecision(now: Long): Boolean {
+/** An open request for the owner to decide or verify, or the supervisor's explicit request for a decision. */
+private fun Todo.awaitsDecision(): Boolean {
     openAsk?.let { return !(isDone && it.outcome == "decide") }
-    if (isDone) return false
-    return supervision?.state == "needs_user" || (supervision?.state == "pending_review" && !supervisorReviewing(now))
+    return !isDone && supervision?.state == "needs_user"
 }
 
 /** Nothing of the task runs or asks (the web's `awaitsReview` statuses). */
@@ -191,10 +172,10 @@ fun assistantEntries(
         // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
         val waits = if (status == TriageStatus.Failed) bucket == TodoBucket.Open
             else !todo.isDone && (status == TriageStatus.NeedsYou || status == TriageStatus.Interrupted)
-        val decision = todo.awaitsDecision(now)
+        val decision = todo.awaitsDecision()
         val deliveryApproval = todo.hold?.unblock == HoldUnblock.User
-        // its supervisor's review is under way (not the owner's yet): in progress, whatever the To-dos page files it under
-        val reviewing = !decision && !deliveryApproval && todo.supervisorReviewing(now)
+        // The supervisor keeps the review even when an older hub omits its start time.
+        val reviewing = !todo.isDone && todo.supervision?.state == "pending_review"
         when {
             asks.isNotEmpty() -> asking += NeedsYouEntry.Task(todo, status, asks)
             waits || decision || deliveryApproval -> {

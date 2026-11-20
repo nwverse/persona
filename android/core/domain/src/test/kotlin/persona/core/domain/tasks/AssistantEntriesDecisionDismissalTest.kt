@@ -70,18 +70,15 @@ class AssistantEntriesDecisionDismissalTest {
         assertEquals(listOf("task:task"), got.needsYou.map { it.key })
     }
 
-    /** #8452: a review under an hour old is its supervisor's (In progress) whatever the dismissal; an overdue one is the
-     *  owner's decision, so a same-round Don't handle hides it. */
-    @Test fun dismissalOnlyHidesAReviewThatIsTheOwners() {
-        fun pending(sinceMs: Long) = dismissed.copy(supervision = dismissed.supervision!!.copy(state = "pending_review",
-            pendingSince = Instant.parse(at).minusMillis(sinceMs).toString()))
-        val young = run(pending(REVIEW_OVERDUE_MS - 1))
-        assertTrue(young.needsYou.isEmpty())
-        assertEquals(listOf("task:task"), young.running.map { it.key })
-        val overdue = run(pending(REVIEW_OVERDUE_MS))
-        assertTrue(overdue.needsYou.isEmpty())
-        assertTrue(overdue.running.isEmpty())
-        val undismissed = pending(REVIEW_OVERDUE_MS).copy(decisionReview = null)
-        assertEquals(listOf("task:task"), run(undismissed).needsYou.map { it.key })
+    @Test fun overdueSupervisorReviewStaysVisibleAfterAnEarlierOwnerDismissal() {
+        val pending = dismissed.copy(supervision = dismissed.supervision!!.copy(state = "pending_review",
+            pendingSince = Instant.parse(at).minusSeconds(3_600).toString()))
+        for (review in listOf(pending, pending.copy(decisionReview = null))) {
+            val entries = run(review)
+            assertTrue(entries.needsYou.isEmpty())
+            val row = entries.running.single() as RunningEntry.Task
+            assertEquals("task:task", row.key)
+            assertTrue(row.supervisorReview)
+        }
     }
 }

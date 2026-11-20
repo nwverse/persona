@@ -144,7 +144,7 @@ inside active work. Each thing is one row in exactly one entry, Needs you first;
 rule below. Native clients keep their existing two-entry presentation until they adopt this grouping:
 
 - **Needs you**: a task whose current agent asks something (one row, its cards under the task's name), a task waiting
-  for a decision that is the owner's (an open `ask`; `needs_user` on an open task; on Android and Apple also a
+  for a decision that is the owner's (an open `ask`; `needs_user` on an open task; on Apple also a
   `pending_review` that is overdue, next bullet), one whose turn broke off on a model error (`interrupted`) or whose start failed while it is
   still the user's to retry; in the main chat, an Agent opened by hand (no task) that asks something; a plan waiting
   for Start (one row per plan); a message card waiting for Send; the conversation's own cards.
@@ -164,16 +164,16 @@ rule below. Native clients keep their existing two-entry presentation until they
     reviewing" (zh 督办验收中, ja 監督の確認待ち) and open the task. A task under
     review whose PR is open and waits for a maintainer is here, not in Parked (`supervisor_review_with_open_pr`). A
     review whose agent is at work again is In progress with it. Until #8678 the web put a review overdue by an hour
-    (or with no `pending_since`) in Needs you, as Android and Apple still do: users opened such a row, found only the
+    (or with no `pending_since`) in Needs you, as Apple still does: users opened such a row, found only the
     Agent's finished conversation and nothing to answer, and could not tell what was wanted of them. The entry keeps a
     stalled or missing supervisor's review in sight without making it the owner's.
-  - **Android and Apple** (until they adopt the entry): the task is **In progress**, its row saying "Supervisor
-    reviewing", for the first hour of the review, and in Needs you after that (`supervision.pending_since`; the
-    threshold is `REVIEW_OVERDUE_MS` on Android, `AssistantEntries.reviewOverdueAfter` on Apple), or at once from a hub
-    that does not send `pending_since`. The row stays in In progress whatever the To-dos page files the task under,
-    each client re-reads the clock once a minute, and a task under review with an open PR is In progress, not Waiting
-    for merge, until the review is overdue. `spec/fixtures/entries` pins this split and, in `web_review`, the rows the
-    web lists under Persona reviewing instead.
+  - **Android** (#11917): a task waiting on its supervisor stays in **In progress**. Its resting row reads
+    “Supervisor reviewing” regardless of the review's age, whether an older hub supplies its start time, or whether
+    a PR is open. An Agent question, a delivery approval, an explicit verification request or a decision for the owner
+    takes precedence and puts the task in Needs you.
+  - **Apple**: the review stays in **In progress** for its first hour. At one hour, or when the hub omits
+    `supervision.pending_since`, it moves to Needs you (`AssistantEntries.reviewOverdueAfter`). The app rechecks
+    the clock once a minute. The shared examples in `spec/fixtures/entries` cover each client's placement.
 - **Parked** (web only, #9325): explicit supervisor holds and ready review/merge waits share one peer group. A fresh,
   matching open non-draft PR with nothing active or awaiting the owner keeps the existing `pr_open` rule, now displayed
   inside Parked. Generic person-reply holds do not become merge waits. The To-dos status list and All board use the

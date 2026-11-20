@@ -58,7 +58,6 @@ class AssistantEntriesSharedAgentTest {
     @Test fun keepsAnotherTodosOwnDecisionWithoutTheAgentsCard() {
         val decisions = listOf(
             todo("tests").copy(ask = TodoAsk(askedAt = at, outcome = "decide", verdict = "needs_user", question = "Which framework?")),
-            todo("tests").copy(supervision = Supervision(supervisor = "main", state = "pending_review")),
             todo("tests").copy(supervision = Supervision(supervisor = "main", state = "needs_user")),
         )
         for (decide in decisions) {
@@ -68,6 +67,14 @@ class AssistantEntriesSharedAgentTest {
             assertTrue((got.needsYou.last() as NeedsYouEntry.Task).asks.isEmpty())
             assertTrue(got.running.isEmpty())
         }
+    }
+
+    @Test fun aSharedAgentsQuestionAndTheOtherTasksSupervisorReviewKeepTheirOwnHomes() {
+        val reviewing = todo("tests").copy(supervision = Supervision(supervisor = "main", state = "pending_review"))
+        val got = run(listOf(todo("release"), reviewing), asking.copy(todo = SessionTodo("release", "release")))
+        assertEquals(listOf("task:release"), got.needsYou.map { it.key })
+        assertEquals(listOf("task:release"), withAsks(got))
+        assertEquals(listOf("task:tests"), got.running.map { it.key })
     }
 
     @Test fun onlyCurrentLinksInThisConversationsListCanBeTheHome() {

@@ -3,7 +3,7 @@
   "cases": [
     {
       "name": "task_waiting_for_review_only_in_needs_you",
-      "description": "A task its supervisor judged finished (pending_review), from a hub that does not say since when (no pending_since): it is in Needs you and not in In progress, as before the supervisor's review had its own place. The web lists the review rows under its Persona reviewing entry instead (web_review, #8678).",
+      "description": "A task judged finished on a hub with no pending_since: Apple lists it in Needs you, Android keeps it in In progress (#11917), and the web lists it under Persona reviewing (#8678).",
       "source": [
         "web/src/lib/assistant-entries.ts assistantEntries",
         "android/core/domain/src/main/kotlin/persona/core/domain/tasks/AssistantEntries.kt assistantEntries",
@@ -58,7 +58,16 @@
         "shelved": [],
         "web_review": [
           "task:t-review"
-        ]
+        ],
+        "android": {
+          "needs_you": [],
+          "running": [
+            "task:t-review"
+          ],
+          "supervisor_review": [
+            "task:t-review"
+          ]
+        }
       }
     },
     {
@@ -281,7 +290,7 @@
     },
     {
       "name": "supervisor_review_with_open_pr",
-      "description": "A task whose fresh, open PR waits for a maintainer (the web's Waiting for merge, #7614) and whose supervisor's review is under way: the review is Persona's own work, so it is in In progress saying its supervisor is reviewing it, not Waiting for merge, even after the owner looked at it (seen_at, which the To-dos page files as Waiting for merge). Once the review is overdue it is the owner's: Needs you wins over the PR. Clients without the Waiting for merge group read the same split. The web lists the review rows under its Persona reviewing entry instead (web_review, #8678).",
+      "description": "A task with an open PR and a supervisor review pending. Android keeps fresh and overdue reviews in In progress. Apple moves the overdue review to Needs you. The web lists both under Persona reviewing.",
       "source": [
         "web/src/lib/assistant-entries.ts assistantEntries",
         "android/core/domain/src/main/kotlin/persona/core/domain/tasks/AssistantEntries.kt assistantEntries",
@@ -394,12 +403,23 @@
         "web_review": [
           "task:t-overdue-pr",
           "task:t-review-pr"
-        ]
+        ],
+        "android": {
+          "needs_you": [],
+          "running": [
+            "task:t-review-pr",
+            "task:t-overdue-pr"
+          ],
+          "supervisor_review": [
+            "task:t-review-pr",
+            "task:t-overdue-pr"
+          ]
+        }
       }
     },
     {
       "name": "overdue_supervisor_review_needs_you",
-      "description": "A review still waiting an hour after the task entered pending_review comes to the owner: at the hour exactly and after it the task is in Needs you, as before, so a stalled or missing supervisor never hides a finished task. The web lists the review rows under its Persona reviewing entry instead (web_review, #8678).",
+      "description": "At the one-hour boundary and after it, Apple moves an automatic review to Needs you. Android keeps both rows in In progress and the web lists them under Persona reviewing.",
       "source": [
         "web/src/lib/assistant-entries.ts assistantEntries",
         "android/core/domain/src/main/kotlin/persona/core/domain/tasks/AssistantEntries.kt assistantEntries",
@@ -487,12 +507,23 @@
         "web_review": [
           "task:t-hour",
           "task:t-late"
-        ]
+        ],
+        "android": {
+          "needs_you": [],
+          "running": [
+            "task:t-hour",
+            "task:t-late"
+          ],
+          "supervisor_review": [
+            "task:t-hour",
+            "task:t-late"
+          ]
+        }
       }
     },
     {
       "name": "review_without_pending_since_needs_you",
-      "description": "A hub that does not send pending_since (or sends one that is no time) keeps the old rule: the task waiting for review is in Needs you. The ledger's updated_at is not read in its place. The web lists the review rows under its Persona reviewing entry instead (web_review, #8678).",
+      "description": "The hub omits pending_since or supplies an invalid time. Apple shows these reviews in Needs you, Android in In progress and the web under Persona reviewing. The task's updated_at is independent of its review.",
       "source": [
         "web/src/lib/assistant-entries.ts assistantEntries",
         "android/core/domain/src/main/kotlin/persona/core/domain/tasks/AssistantEntries.kt assistantEntries",
@@ -581,7 +612,18 @@
         "web_review": [
           "task:t-old-hub",
           "task:t-no-time"
-        ]
+        ],
+        "android": {
+          "needs_you": [],
+          "running": [
+            "task:t-old-hub",
+            "task:t-no-time"
+          ],
+          "supervisor_review": [
+            "task:t-old-hub",
+            "task:t-no-time"
+          ]
+        }
       }
     },
     {

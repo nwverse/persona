@@ -25,7 +25,8 @@ import java.time.Instant
 class AssistantEntriesFixtureTest(private val name: String, private val fixture: FixtureReader.Case) {
     @Test fun splits() {
         val input = fixture.value.getValue("input").jsonObject
-        val expected = fixture.value.getValue("expected").jsonObject
+        val shared = fixture.value.getValue("expected").jsonObject
+        val expected = JsonObject(shared + (shared["android"] as? JsonObject).orEmpty())
         val todos = input.list<Todo>("todos")
         val got = assistantEntries(
             conversation = input.getValue("conversation").jsonPrimitive.content,
