@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -170,6 +171,63 @@ func TestExpiredQuestionLostCommitReplyNeverReleasesAnAcceptedAnswer(t *testing.
 		t.Fatalf("the durable outbox must retain one accepted decision and one delivery: rows=%+v err=%v", rows, err)
 	}
 	t.Log("lost_commit_reply_http=503 reconciled_http=409 decisions=1 recovered_messages=1 closed=true")
+}
+
+func TestExpiredQuestionLostCommitReplySurvivesConcurrentDrain(t *testing.T) {
+	database := todoTestDB(t)
+	base := newAskTodoEnv(t, database).s.store()
+	e := newAskTodoEnv(t, expiredAnswerLostCommitReplyStore{Store: base, todoStore: base.(todoStore)})
+	ix, _ := e.expire()
+	todo := e.onlyAskTodo()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sending, resume := make(chan struct{}), make(chan struct{})
+	finishSend := sync.OnceFunc(func() { close(resume) })
+	defer finishSend()
+	e.f.mu.Lock()
+	e.f.beforeAssistantSend = func() {
+		close(sending)
+		select {
+		case <-resume:
+		case <-ctx.Done():
+		}
+	}
+	e.f.mu.Unlock()
+	// This message takes no relay hop on delivery, so there is no intervening queue read before its completion.
+	if n := e.s.queueRelay("m1", relayMsg{Tool: taskEndTool, From: "earlier_task", Text: "An earlier task ended.", At: decisionNow()}); n != 1 {
+		t.Fatalf("earlier message queue length = %d", n)
+	}
+	e.s.drainRelays("server", []proto.Session{{SessionID: "m1", Assistant: true, Status: proto.StatusIdle}})
+	select {
+	case <-sending:
+	case <-ctx.Done():
+		t.Fatal("the earlier relay did not reach its send")
+	}
+	answer := map[string]any{"option": "Wait"}
+	if code := answerExpiredQuestion(e, todo.ID, ix.CreatedAt, answer); code != 503 {
+		t.Fatalf("lost commit reply: HTTP %d, want 503", code)
+	}
+	finishSend()
+	waitFor(t, "the earlier drain to finish", func() bool {
+		e.s.relays.mu.Lock()
+		defer e.s.relays.mu.Unlock()
+		return !e.s.relays.draining["m1"]
+	})
+	var persisted relayState
+	if _, err := database.Setting(ctx, relayKey, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if earlier, answer := persisted.Queue["m1"], persisted.Queue["c1x1x1"]; len(earlier) != 0 || len(answer) != 1 || answer[0].From != todo.ID {
+		t.Fatalf("the earlier drain must remove its message and preserve the committed answer: earlier=%d answer=%+v", len(earlier), answer)
+	}
+	if code := answerExpiredQuestion(e, todo.ID, ix.CreatedAt, answer); code != 409 {
+		t.Fatalf("replay of committed answer: HTTP %d, want 409", code)
+	}
+	again := newAskTodoEnv(t, database)
+	waitFor(t, "the committed answer to reach its conversation after restart", func() bool { return len(again.told("c1x1x1")) == 1 })
+	if messages := again.told("c1x1x1"); len(messages) != 1 || !strings.Contains(messages[0], "Wait") {
+		t.Fatalf("the original conversation must receive the committed answer once: %q", messages)
+	}
 }
 
 func TestExpiredQuestionFailedCompletionDoesNotSendToIdleAsker(t *testing.T) {

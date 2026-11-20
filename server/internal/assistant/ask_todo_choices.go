@@ -171,14 +171,14 @@ func (s *Service) commitExpiredQuestionAnswer(ctx context.Context, st todoStore,
 	}
 	now := decisionNow()
 	var decisions []db.TodoDecisionRow
-	for _, c := range choices {
+	for i, c := range choices {
 		// The database dedupes on nonempty source_message, not the primary key. Include the choice so an identical
 		// retry is idempotent, including retries of records written by older versions.
 		key := sha256.Sum256([]byte(a.TodoID + "\x00" + c.Question + "\x00" + c.Choice))
 		source := hex.EncodeToString(key[:16])
 		decisions = append(decisions, db.TodoDecisionRow{ID: "dec_ask_" + source, TodoID: a.TodoID,
 			SourceMessage: "inline-answer:" + source, Question: decisionText(c.Question), Choice: c.Choice,
-			Source: db.DecisionManual, CreatedAt: now})
+			Source: db.DecisionManual, CreatedAt: now.Add(time.Duration(i) * time.Microsecond)})
 	}
 	msg := relayMsg{From: a.TodoID, FromTitle: "待办「" + title + "」", Tool: askAnswerTool, // i18n-ignore: existing relay label
 		Text: renderAskAnswer(a, s.location(ctx), choices, false, false), At: now, QueuedAt: now}

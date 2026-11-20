@@ -204,6 +204,11 @@ func TestExpiredQuestionSeveralAndMultipleSelectionStayWhole(t *testing.T) {
 	if rec := askRecord(t, database, ix.ID); rec.Resolution == nil || len(rec.Resolution.Answers) != 2 || rec.Resolution.Answers["Which clients?"] != "Web, Phone" {
 		t.Fatalf("the history must retain both answers: %+v", rec.Resolution)
 	}
+	rows, err := database.ListTodoDecisions(context.Background(), todo.ID, true)
+	if err != nil || len(rows) != 2 || rows[0].Question != "Which work?" || rows[1].Question != "Which clients?" ||
+		!rows[0].CreatedAt.Before(rows[1].CreatedAt) {
+		t.Fatalf("the decision history must preserve the question order regardless of decision IDs: rows=%+v err=%v", rows, err)
+	}
 	t.Log("whole_form questions=2 answers=2 asker_messages=1 closed=true")
 }
 
