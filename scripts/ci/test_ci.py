@@ -496,7 +496,12 @@ class AppleWorkflowTests(unittest.TestCase):
     def test_reusable_lane_uses_quoted_environment_not_script_interpolation(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / '.github/workflows/apple-test.yml').read_text()
-        self.assertIn('options: [ios]', workflow)
+        self.assertIn('options: [ios, ios18]', workflow)
+        self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.lane == 'ios18'", workflow)
+        floor = workflow.split('\n  ios18:\n', 1)[1]
+        for required in ('runs-on: macos-15', '/Applications/Xcode_26.3.app/Contents/Developer',
+                         'run: scripts/ci/apple.sh ios18', 'timeout-minutes: 150'):
+            self.assertIn(required, floor)
         self.assertIn('APPLE_CI_LANE: ${{ inputs.lane }}', workflow)
         self.assertIn('run: scripts/ci/apple.sh "$APPLE_CI_LANE"', workflow)
         self.assertNotIn('continue-on-error:', workflow)

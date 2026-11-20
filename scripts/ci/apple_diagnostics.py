@@ -8,7 +8,9 @@ import subprocess
 import apple_launch_diagnostics
 
 
-LOGS = ("simulator.log", "simulator-boot.log", "simulator-readiness.log")
+LOGS = ("simulator.log", "simulator-boot.log", "simulator-readiness.log",
+        "ios-unit.log", "ios-html-card.log", "ios-html-security.log",
+        "simulator-ipad.log", "simulator-ipad-boot.log", "ios-visual-compact.log", "ios-visual-regular.log")
 
 
 def collect(output, destination, runner=subprocess.run):
