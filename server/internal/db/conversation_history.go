@@ -150,7 +150,7 @@ type ConversationHistoryStats struct {
 func (d *DB) ConversationHistoryStats(ctx context.Context) (ConversationHistoryStats, error) {
 	var out ConversationHistoryStats
 	err := d.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM conversation_histories),count(*),
-		coalesce(sum(octet_length(payload::text)),0),count(*) FILTER (WHERE NOT complete) FROM conversation_items`).
+		coalesce(sum(octet_length(payload)),0),count(*) FILTER (WHERE NOT complete) FROM conversation_items`).
 		Scan(&out.Conversations, &out.Items, &out.PayloadBytes, &out.Incomplete)
 	return out, err
 }

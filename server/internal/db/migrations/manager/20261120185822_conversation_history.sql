@@ -16,7 +16,7 @@ CREATE TABLE conversation_items (
     item_id text NOT NULL CHECK (octet_length(item_id) BETWEEN 1 AND 512),
     seq integer NOT NULL CHECK (seq > 0),
     position integer NOT NULL CHECK (position >= 0),
-    payload jsonb NOT NULL,
+    payload bytea NOT NULL CHECK (octet_length(payload) <= 65536),
     complete boolean NOT NULL,
     source_bytes integer NOT NULL CHECK (source_bytes >= 0),
     PRIMARY KEY (machine_id, session_id, item_id),

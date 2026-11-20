@@ -80,6 +80,16 @@ func Bound(it proto.Item) (Item, error) {
 		ToolUseID: prefix(it.ToolUseID, 512), ClientMsgID: prefix(it.ClientMsgID, 512),
 		IsError: it.IsError, Queued: it.Queued, Wake: it.Wake,
 		FullSize: max(it.FullSize, len(it.Text))}
+	row.Item.From = prefix(it.From, 512)
+	if it.Source != nil {
+		row.Item.Source = &proto.MessageSource{Kind: prefix(it.Source.Kind, 64),
+			ConversationID: prefix(it.Source.ConversationID, 512), Title: prefix(it.Source.Title, 512)}
+	}
+	if it.Injected != nil {
+		row.Item.Injected = &proto.Injected{Kind: prefix(it.Injected.Kind, 64), State: prefix(it.Injected.State, 64),
+			Level: prefix(it.Injected.Level, 64), Title: prefix(it.Injected.Title, 512),
+			Machine: prefix(it.Injected.Machine, 512), TodoID: prefix(it.Injected.TodoID, 512), Line: prefix(it.Injected.Line, PreviewBytes)}
+	}
 	if it.Image != nil {
 		row.Item.Image = &proto.Image{Mime: prefix(it.Image.Mime, 128), Lazy: true,
 			Width: it.Image.Width, Height: it.Image.Height}

@@ -169,6 +169,25 @@ func TestConversationHistoryTailInvalidationAndStaleRevision(t *testing.T) {
 	}
 }
 
+func TestConversationHistoryKeepsJSONToolBytesIncludingNUL(t *testing.T) {
+	d, _ := historyDB(t)
+	ctx := context.Background()
+	it := historyItem("tool-result", 1, "literal \\u0000 and NUL \x00 stay distinct")
+	it.Kind = proto.KindToolResult
+	it.ToolInput = json.RawMessage(`{"literal":"\\u0000","nul":"\u0000","number":9007199254740993}`)
+	p := ConversationPage{MachineID: "box", SessionID: "chat", History: "h1", ThroughSeq: 1, Tail: true, Items: []proto.Item{it}}
+	if err := d.PutConversationPage(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := d.ConversationItems(ctx, "box", "chat", "h1", 0, 1, 100, false)
+	if err != nil || len(rows) != 1 || rows[0].Item.Text != it.Text || string(rows[0].Item.ToolInput) != string(it.ToolInput) {
+		t.Fatalf("tool bytes changed or JSONB rejected an escaped NUL: %+v %v", rows, err)
+	}
+	if _, err := d.pool.Exec(ctx, `UPDATE conversation_items SET payload=$1`, []byte(strings.Repeat("x", conversationlog.MaxItemBytes+1))); err == nil {
+		t.Fatal("database did not enforce the payload ceiling")
+	}
+}
+
 func TestConversationDeletionCascadesAndFencesConcurrentHistory(t *testing.T) {
 	d, _ := historyDB(t)
 	ctx := context.Background()
