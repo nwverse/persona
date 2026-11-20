@@ -21,7 +21,7 @@ import { scoped, useScope, useScopedCounts } from "../lib/current-assistant";
 import { useOwnerNeeds } from "../lib/todo-owner-needs";
 import { useLarkOn, useStore } from "../lib/store";
 import { connPhase } from "../lib/connection";
-import { useStarredCount } from "../lib/starred-rows";
+import { useStarredCount } from "../lib/starred-summary";
 import { useWorkspaceBoardSetting } from "../lib/workspace-board-setting";
 import type { Session } from "../lib/types";
 import type { MenuItem } from "../ui/atoms";
