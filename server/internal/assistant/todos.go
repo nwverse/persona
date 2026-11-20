@@ -84,6 +84,7 @@ type Todo struct {
 	// OtherPRs: the observed facts of its earlier PRs (PRs), newest first (#7935); the apps show each open one.
 	OtherPRs      []TodoPRStatus `json:"other_prs,omitempty"`
 	StageKind     string         `json:"stage_kind,omitempty"` // code or general; absent on older hubs
+	StageDone     bool           `json:"stage_done,omitempty"` // closed, nothing left to deploy: Done ends the strip (stageDone, set by formatTodo, #11590)
 	stageVerified bool           // explicit acceptance, kept with the stage setting
 	planPending   bool           // a live plan-approval card; never persisted as progress
 	// PRs are the earlier PRs its agents named before PRURL, newest last (reports.go todoStage.PRs): the Inbox links
@@ -702,6 +703,7 @@ func copyTodoLocked(t *Todo) Todo {
 func formatTodo(t Todo) Todo {
 	out := t
 	out.Delivery = currentDelivery(t)
+	out.StageDone = stageDone(t) // before the wire's done_by hides a cancellation
 	if out.Source != nil && out.Source.ReportFullReply {
 		source := *out.Source
 		source.ReportText = "" // the delivery payload is not part of the to-do list

@@ -210,7 +210,8 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			t.Queue = s.prerequisiteQueue(ctx, *t, s.requestBlockers(ctx, *t))
 		}
 		s.briefStarted(ctx, p, t, todo) // what was asked, kept from now on (task_brief_plan.go)
-		s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(t.Readonly, t.DoneWhen, todo.PRURL), false)
+		// Its stage kind from that brief; how it is handed out is kept for every later look (task_stage_kind.go).
+		s.restage(ctx, todo.ID, func(st *todoStage) { st.Readonly = t.Readonly })
 		if sup := supervisors[i]; sup != "" {
 			if t.Parent == "" && t.ReuseTodo == "" && sup != p.Conversation {
 				s.taskCard(ctx, sup, todo.ID, "")

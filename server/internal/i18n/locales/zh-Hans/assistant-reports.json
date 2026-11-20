@@ -19,6 +19,7 @@
   "stage_merge": "合入",
   "stage_deploy": "部署",
   "stage_verify": "已验证",
+  "stage_done": "完成",
   "accept_title": "请验收：{task}",
   "accept_again": "还没验收：{task}",
   "accept_lines": "**改了什么**：{changed}\n**去哪看**：{link}\n**怎么验**：{how}",

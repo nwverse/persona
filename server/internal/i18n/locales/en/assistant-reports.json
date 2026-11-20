@@ -19,6 +19,7 @@
   "stage_merge": "Merge",
   "stage_deploy": "Deploy",
   "stage_verify": "Verified",
+  "stage_done": "Done",
   "accept_title": "Please check: {task}",
   "accept_again": "Still to check: {task}",
   "accept_lines": "**What changed**: {changed}\n**Where to look**: {link}\n**How to check**: {how}",
