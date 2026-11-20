@@ -88,7 +88,11 @@ internal val LocalChatMarkdownCache = staticCompositionLocalOf<ChatMarkdownCache
 internal fun ChatMarkdown(text: String, id: String = text,
     bodyStyle: TextStyle = PersonaTheme.type.body, color: Color = PersonaTheme.palette.ink, selectable: Boolean = true,
     viewKeys: ((Int) -> String)? = null, streaming: Boolean? = null) {
-    if (selectable) SelectionContainer { ChatMarkdownBody(text, id, bodyStyle, color, viewKeys, streaming) }
+    if (selectable) SelectionContainer {
+        CompositionLocalProvider(LocalChatLinkMenu provides null) {
+            ChatMarkdownBody(text, id, bodyStyle, color, viewKeys, streaming)
+        }
+    }
     else ChatMarkdownBody(text, id, bodyStyle, color, viewKeys, streaming)
 }
 
@@ -172,7 +176,6 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
     val inlinePictures = rememberInlineReplyPictures(gallery, bodyStyle)
     val components = remember(color, bodyStyle, palette, type, gallery) {
         markdownComponents(
-            text = { model -> LinkAwareMarkdownText(model.content, model.node, model.typography.text) },
             paragraph = { model -> LinkAwareMarkdownText(model.content, model.node, model.typography.paragraph) },
             heading1 = { model -> LinkAwareMarkdownText(model.content, model.node, model.typography.h1, contentChildType = MarkdownTokenTypes.ATX_CONTENT, isHeading = true) },
             heading2 = { model -> LinkAwareMarkdownText(model.content, model.node, model.typography.h2, contentChildType = MarkdownTokenTypes.ATX_CONTENT, isHeading = true) },

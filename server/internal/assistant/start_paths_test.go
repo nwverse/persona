@@ -48,7 +48,7 @@ var supervisedStarts = map[string]string{
 // startOptOuts are the start paths that stay unsupervised on purpose, with why. Each is the user's own conversation or
 // Agent, the supervisor itself, or work some other part of the hub already follows.
 var startOptOuts = map[string]string{
-	"botSendIn":            "a Lark message opening a conversation: the user's own conversation",
+	"startBotRun":          "a Lark message (or the owner's /read in a group) opening a conversation: the user's own conversation",
 	"channelForward":       "a channel's message opening a conversation: the user's own conversation",
 	"request":              "the hub bus's assistant.start: an app opening a conversation for the user",
 	"startRoutes":          "the apps' POST /api/v1/sessions: the user started it by hand (assistant.agent_tasks makes it a task when on)",

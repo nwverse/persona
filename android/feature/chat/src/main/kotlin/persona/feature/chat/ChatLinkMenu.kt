@@ -299,7 +299,8 @@ internal fun LinkAwareMarkdownText(
     val settings = annotatorSettings()
     val annotated = buildAnnotatedString {
         pushStyle(style.toSpanStyle())
-        buildMarkdownAnnotatedString(content, targetNode, settings)
+        if (targetNode.children.isEmpty()) append(content.substring(targetNode.startOffset, targetNode.endOffset))
+        else buildMarkdownAnnotatedString(content, targetNode, settings)
         pop()
     }
     val extendedSpans = LocalMarkdownExtendedSpans.current.extendedSpans?.invoke()
