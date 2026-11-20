@@ -137,6 +137,11 @@ func (s *deviceSessionConnection) heartbeat(hb heartbeatConfig) {
 	if s == nil {
 		return
 	}
+	// A skipped heartbeat during a snapshot is written again on the next one.
+	if !s.hub.quiesce.begin() {
+		return
+	}
+	defer s.hub.quiesce.end()
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 	if err := s.hub.store.UpdateDeviceSessionHeartbeat(ctx, s.id, hb.Interval); err != nil {

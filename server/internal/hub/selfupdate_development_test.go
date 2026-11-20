@@ -159,6 +159,129 @@ func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T
 	}
 }
 
+func TestDevelopmentAvailableWithBuiltInQuiesce(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("development updates are unsupported on Windows")
+	}
+	h := newTestHub(t)
+	u := h.upd
+	// No hub.json development section: the hub pauses its own writers.
+	h.cfg.Update.Development = nil
+	if !u.developmentAvailable() {
+		t.Fatal("built-in pause did not make development updates available")
+	}
+	v, _ := getUpdate(t, u)
+	if !v.Development.Configured || v.Development.Why != "" {
+		t.Fatalf("development view: %+v", v.Development)
+	}
+	// Hooks are an override and must be a pair.
+	h.cfg.Update.Development = &update.DevelopmentConfig{Backup: update.DevelopmentBackupConfig{Quiesce: []string{"pause"}}}
+	if u.developmentAvailable() {
+		t.Fatal("a quiesce without resume was accepted")
+	}
+	if v, _ := getUpdate(t, u); v.Development.Configured || v.Development.Why == "" {
+		t.Fatalf("half-configured override: %+v", v.Development)
+	}
+	h.cfg.Update.Development.Backup = update.DevelopmentBackupConfig{Quiesce: []string{"pause"}, Resume: []string{"resume"}}
+	if !u.developmentAvailable() {
+		t.Fatal("a complete hook pair was refused")
+	}
+	if v, _ := getUpdate(t, u); v.Development.BuiltinQuiesce {
+		t.Fatal("external hooks still reported as the built-in pause")
+	}
+}
+
+func TestDevelopmentBackupSettingsAreValidatedAndExposed(t *testing.T) {
+	h := newTestHub(t)
+	u := h.upd
+	dir := filepath.Join(t.TempDir(), "snapshots")
+	w := nodePolicyRequest(t, u, http.MethodPut, fmt.Sprintf(`{"development_backup_directory":%q,"development_backup_retain":5}`, dir))
+	if w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	v, raw := getUpdate(t, u)
+	if v.Development.BackupDirectory != dir || v.Development.BackupRetain != 5 || !v.Development.BuiltinQuiesce {
+		t.Fatalf("settings not exposed: %+v", v.Development)
+	}
+	if v.Development.BackupDefaultDirectory != filepath.Join(h.cfg.dir, "update", "development-backups") {
+		t.Fatalf("recommended directory = %q", v.Development.BackupDefaultDirectory)
+	}
+	if raw["development"].(map[string]any)["backup_retain"] != float64(5) {
+		t.Fatal("retention missing from the JSON view")
+	}
+	// Empty restores the recommended folder.
+	if w := nodePolicyRequest(t, u, http.MethodPut, `{"development_backup_directory":""}`); w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	if v, _ := getUpdate(t, u); v.Development.BackupDirectory != v.Development.BackupDefaultDirectory {
+		t.Fatalf("reset directory = %q", v.Development.BackupDirectory)
+	}
+	// Collected data, relative paths and an out-of-range count are refused
+	// without changing the stored settings.
+	inside := filepath.Join(h.cfg.dir, "data", "snapshots")
+	for _, body := range []string{
+		fmt.Sprintf(`{"development_backup_directory":%q}`, inside),
+		`{"development_backup_directory":"relative/dir"}`,
+		`{"development_backup_retain":51}`,
+		`{"development_backup_retain":-1}`,
+	} {
+		if w := nodePolicyRequest(t, u, http.MethodPut, body); w.Code != http.StatusConflict {
+			t.Fatalf("%s -> %d: %s", body, w.Code, w.Body.String())
+		}
+	}
+	if v, _ := getUpdate(t, u); v.Development.BackupRetain != 5 {
+		t.Fatalf("refused request changed the retention: %+v", v.Development)
+	}
+}
+
+func TestDevelopmentBuiltInQuiescePausesWritesUntilResume(t *testing.T) {
+	h := newTestHub(t)
+	var ran bool
+	gated := h.quiesceGate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { ran = true }))
+	serve := func(method string) int {
+		ran = false
+		w := httptest.NewRecorder()
+		gated.ServeHTTP(w, httptest.NewRequest(method, "/api/v1/example", nil))
+		return w.Code
+	}
+	resume, err := h.upd.quiesceDevelopmentWriters(context.Background(), update.DevelopmentBackupConfig{Builtin: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := serve(http.MethodPost); code != http.StatusServiceUnavailable || ran {
+		t.Fatalf("write during pause: %d ran=%v", code, ran)
+	}
+	if code := serve(http.MethodGet); code != http.StatusOK || !ran {
+		t.Fatalf("read during pause: %d ran=%v", code, ran)
+	}
+	resume()
+	if code := serve(http.MethodPost); code != http.StatusOK || !ran {
+		t.Fatalf("write after resume: %d ran=%v", code, ran)
+	}
+	// A second resume is harmless.
+	resume()
+
+	// hub.json hooks are the helper's to run: the hub stays open.
+	resume, err = h.upd.quiesceDevelopmentWriters(context.Background(),
+		update.DevelopmentBackupConfig{Quiesce: []string{"pause"}, Resume: []string{"resume"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := serve(http.MethodPost); code != http.StatusOK || !ran {
+		t.Fatalf("external hooks paused the hub: %d ran=%v", code, ran)
+	}
+	resume()
+
+	// A half-configured override is never replaced by the built-in pause.
+	if _, err := h.upd.quiesceDevelopmentWriters(context.Background(),
+		update.DevelopmentBackupConfig{Quiesce: []string{"pause"}}); err == nil {
+		t.Fatal("half-configured hooks paused the hub")
+	}
+	if code := serve(http.MethodPost); code != http.StatusOK {
+		t.Fatal("refused quiesce left the hub paused")
+	}
+}
+
 func TestDevelopmentBackupsAPIDistinguishesFailureFromEmptyList(t *testing.T) {
 	h := newTestHub(t)
 	u := h.upd
@@ -280,8 +403,18 @@ func TestDevelopmentSettingsOptInAndActiveChannelGuard(t *testing.T) {
 		t.Fatal("switched during an update")
 	}
 	u.running = false
+	// The hub pauses its own writers, so no hub.json hook is needed.
+	if w := nodePolicyRequest(t, u, http.MethodPut, `{"auto":true}`); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	// A half-configured override is refused, not silently replaced by the
+	// built-in pause.
+	u.h.cfg.Update.Development.Backup = update.DevelopmentBackupConfig{Quiesce: []string{"pause"}}
+	if u.developmentAvailable() {
+		t.Fatal("availability accepted a quiesce without resume")
+	}
 	if w := nodePolicyRequest(t, u, http.MethodPut, `{"auto":true}`); w.Code != 409 {
-		t.Fatal("enabled without backup coordination")
+		t.Fatal("enabled automatic updates with a half-configured override")
 	}
 	u.h.cfg.Update.Development.Backup = update.DevelopmentBackupConfig{Quiesce: []string{"pause"}, Resume: []string{"resume"}}
 	if w := nodePolicyRequest(t, u, http.MethodPut, `{"auto":true}`); w.Code != 200 {

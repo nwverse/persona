@@ -22,9 +22,26 @@ accepted keeps its fixed candidate; source changes are refused until it ends. Re
 join that attempt. A rolled-back development commit is never automatically tried again.
 
 Development updates always use `https://github.com/nwverse/persona.git`, branch `main`.
-Configure `update.development` in the installation's private `hub.json`, then start the Hub
-through its original installation channel. The Web settings cannot supply a shell command,
-credential or arbitrary path:
+They work out of the box on a Linux or macOS Hub that starts the built-in child manager: the
+Hub pauses its own writers for the snapshot, so no hook script is needed. **Settings › Hub ›
+Update source › Web development** offers **Backup folder** and **Snapshots to keep**. The Web
+settings are declarative only: a folder and a count, never a shell command, credential or
+helper path.
+
+The recommended folder is `<runtime>/update/development-backups` (where the Hub has always
+kept these snapshots); it is shown as the placeholder and used when the field is empty. A
+custom folder is validated on the Hub with the backup command's rules (`internal/operations/backup`):
+it must be an absolute path (a leading `~` is expanded), may not be inside data a snapshot
+collects (the knowledge base, `managers/assistant`, extensions, skills or
+`hub.machines_kept`), may not be a symbolic link, and must be private (`0700`; an existing
+folder readable by other users is refused with the `chmod` to run). A folder chosen inside the
+runtime is never archived into the snapshot. The retention count defaults to three and may be
+1–50.
+
+For installations with writers outside the Hub's control, `update.development.backup.quiesce`
+and `resume` in private `hub.json` remain an optional advanced override. Both must be set
+together; a half-configured pair disables the channel rather than silently using the built-in
+pause. The Web settings cannot supply a shell command, credential or arbitrary path:
 
 ```json
 {
@@ -33,6 +50,8 @@ credential or arbitrary path:
       "backup": {
         "quiesce": ["/absolute/path/to/pause-persona-writers"],
         "resume": ["/absolute/path/to/resume-persona-writers"],
+        "directory": "/absolute/path/to/snapshots",
+        "retain": 5,
         "extra_roots": [],
         "extra_databases": []
       }
@@ -49,6 +68,21 @@ ingestion, extensions, uploads and manager/node children. Keep the Hub updater i
 every failure attempts resume, and a failed resume blocks adoption and subsequent attempts.
 Stopping a service that the Hub immediately respawns does not establish this contract. Do not
 use no-op hooks on real data. Missing coordination disables installation and automatic opt-in.
+`directory`/`retain` in `hub.json` are read when the Web UI does not set them; a Web choice
+wins.
+
+### Built-in writer pause
+
+Without hooks the Hub pauses the writers itself for the whole snapshot: request writes are
+refused with `503` until resume, writes already under way finish, and the built-in child
+manager is stopped and kept stopped until resume. Background writers (app registrations,
+extension reports, device-session heartbeats) leave their work pending and write it after
+resume. The Hub then checks both databases with the backup command's own `Quiesced` rules,
+counting only its own connection-pool sessions as its own (`backup.QuiescedExcept`), and
+refuses the snapshot when another session, or one it cannot see, is still connected. Resume
+runs on every failure path, including cancellation; a Hub process that dies mid-snapshot
+leaves the incomplete directory in the store, which the next attempt refuses until it is
+inspected. Snapshot JSON, SQL dumps and file history keep their existing privacy rules.
 
 The host needs Git, Python 3.11+, Node matching `web/package.json`, Go matching `server/go.mod`,
 and compatible `pg_dump`/`pg_restore` tools with access to every included database. Their libpq
@@ -134,7 +168,8 @@ switch until confirmation or rollback. The binaries retain the `release` ABI/cha
 the independent persisted `source: web-dev` identifies this update channel.
 
 After compilation and the existing idle wait, before changing executables, the helper makes
-a recovery point under `<runtime>/update/development-backups`. It includes:
+a recovery point in the configured backup folder (the recommended default is
+`<runtime>/update/development-backups`). It includes:
 
 - Custom-format PostgreSQL dumps of the Hub database and every local manager database found
   in `managers/*/manager.json` (shared databases deduplicated), plus `extra_databases`.
@@ -163,11 +198,12 @@ their own configured URLs. A stale URL cannot replace the named manager database
 Protect these snapshots like the original data.
 
 Only verified directories with this helper's exact name and ownership manifest are rotated,
-oldest timestamp/name first, retaining the newest **three**. Unknown directories, changed
-manifests, symlinks, additional user files, damaged archives and other backup systems are left
-alone. A failed/incomplete snapshot is not counted and removes no valid recovery point. Cleanup
-failure stops adoption; it can temporarily leave more than three valid snapshots rather than
-discard recovery evidence. The API retains the last snapshot/rotation receipt; the Web selector
+oldest timestamp/name first, retaining the newest **three** by default (the **Snapshots to
+keep** setting, 1–50, replaces that count). Unknown directories, changed manifests, symlinks,
+additional user files, damaged archives and other backup systems are left alone. A
+failed/incomplete snapshot is not counted and removes no valid recovery point. Cleanup failure
+stops adoption; it can temporarily leave more valid snapshots than the configured count rather
+than discard recovery evidence. The API retains the last snapshot/rotation receipt; the Web selector
 lists available program versions. Private phase logs are `update/development/<operation>.log`.
 
 The data archive intentionally captures the existing standalone `web/` override before it is

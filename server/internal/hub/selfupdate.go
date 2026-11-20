@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/hubedge"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/operations/backup"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/update"
 )
@@ -77,11 +78,15 @@ type updateSettings struct {
 	DevelopmentAuto   bool                      `json:"development_auto,omitempty"` // opt-in; never inherited from release
 	DevelopmentBad    []string                  `json:"development_bad,omitempty"`
 	DevelopmentBackup *update.DevelopmentBackup `json:"development_backup,omitempty"`
-	AutoUpdateNodes   *bool                     `json:"auto_update_nodes,omitempty"` // nil: use the startup configuration
-	Auto              *bool                     `json:"auto,omitempty"`              // nil: on (the default)
-	AutoNoticeSeen    bool                      `json:"auto_notice_seen"`
-	Bad               []int64                   `json:"bad,omitempty"` // builds that went back: not installed automatically again
-	History           []updateRecord            `json:"history,omitempty"`
+	// The snapshot settings chosen in Settings › Hub › Update source › Web
+	// development ("" / 0: hub.json's, else the recommended default).
+	DevelopmentBackupDirectory string         `json:"development_backup_directory,omitempty"`
+	DevelopmentBackupRetain    int            `json:"development_backup_retain,omitempty"`
+	AutoUpdateNodes            *bool          `json:"auto_update_nodes,omitempty"` // nil: use the startup configuration
+	Auto                       *bool          `json:"auto,omitempty"`              // nil: on (the default)
+	AutoNoticeSeen             bool           `json:"auto_notice_seen"`
+	Bad                        []int64        `json:"bad,omitempty"` // builds that went back: not installed automatically again
+	History                    []updateRecord `json:"history,omitempty"`
 }
 
 func (s updateSettings) auto() bool { return s.Auto == nil || *s.Auto }
@@ -756,7 +761,17 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 		AutoUpdateNodes: u.nodesEnabledLocked(), UpdateURL: source.url, UpdateFrom: source.from, UpdateProxy: proxyShown(source.proxy)}
 	v.Source = "release"
 	v.Backup = u.settings.DevelopmentBackup
-	v.Development = &developmentView{Configured: u.developmentConfig() != nil, Branch: "main", CurrentCommit: u.h.build.Commit, CurrentUpdatedAt: u.currentUpdatedAtLocked()}
+	dv := &developmentView{Configured: u.developmentAvailable(), Branch: "main", CurrentCommit: u.h.build.Commit,
+		CurrentUpdatedAt: u.currentUpdatedAtLocked()}
+	if !dv.Configured {
+		dv.Why = u.developmentUnavailableWhy(l)
+	}
+	backupConfig := u.developmentBackupConfigLocked()
+	dv.BackupDirectory, dv.BackupRetain, dv.BuiltinQuiesce = backupConfig.Directory, backupConfig.Retain, backupConfig.Builtin
+	if u.h.cfg != nil {
+		dv.BackupDefaultDirectory = backup.RecommendedDevelopmentBackupDir(u.h.cfg.dir)
+	}
+	v.Development = dv
 	if u.developmentLocked() {
 		v.Source, v.CanUpdate, v.Auto, v.AutoNotice = "web-dev", u.developmentAvailable(), u.settings.DevelopmentAuto, false
 	} else {
@@ -774,7 +789,10 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 		v.Busy = []busyItem{}
 	}
 	if !v.CanUpdate && u.developmentLocked() {
-		v.Why = su(l, "err_development_config")
+		v.Why = u.developmentUnavailableWhy(l)
+		if v.Why == "" {
+			v.Why = su(l, "err_development_config")
+		}
 	} else if !v.CanUpdate {
 		v.Why = u.whyNotReason(l)
 	}

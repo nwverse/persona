@@ -51,6 +51,10 @@ type Hub struct {
 	version  string
 	build    update.Build // channel, build number, where updates come from (docs/operations/hub-update.md)
 	upd      *updater     // updating itself to the publisher's release (selfupdate.go)
+	// quiesce and assistantProc pause the hub's own writers for a Web
+	// development snapshot (quiesce.go).
+	quiesce       writeQuiescer
+	assistantProc assistantGate
 	logger   *log.Logger
 	traffic  trafficLog // privacy-safe minute counters, flushed to the journal
 	machines []*Machine
