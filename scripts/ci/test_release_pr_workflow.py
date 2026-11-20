@@ -76,6 +76,42 @@ class ReleaseWorkflowTests(unittest.TestCase):
                                if step.get("uses") == "actions/upload-artifact@v4")
         self.assertEqual(verified_upload["if"], "success()")
 
+    def test_cli_web_collection_uses_the_rendered_installer_and_stops_on_missing_outputs(self):
+        step = next(step for step in self.pr["jobs"]["cli-web"]["steps"]
+                    if step.get("name") == "Bind the verified downloads to the release plan")
+        script = re.sub(r"\$\{\{.*?\}\}", "fixture", step["run"])
+        required = ("install.sh", "bin/personad-linux-amd64.gz", "bin/VERSION",
+                    "bin/SHA256SUMS", "bin/latest.json")
+        for missing in (None, *required):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                build = root / "build-publish"
+                (build / "bin").mkdir(parents=True)
+                for name in required:
+                    if name != missing:
+                        (build / name).write_text("rendered installer" if name == "install.sh" else name)
+                # A stale file in bin must never replace the rendered build-root installer.
+                (build / "bin/install.sh").write_text("stale installer")
+                commands = root / "commands"
+                commands.mkdir()
+                python = commands / "python3"
+                python.write_text('#!/bin/sh\nprintf called > bind-called\nexit "${BIND_EXIT:-0}"\n')
+                python.chmod(0o755)
+                env = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"])
+                result = subprocess.run(["bash", "-c", script], cwd=root, env=env,
+                                        capture_output=True, text=True, timeout=20)
+                if missing:
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertFalse((root / "bind-called").exists())
+                    continue
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual((root / "release/downloads/install.sh").read_text(), "rendered installer")
+                self.assertTrue((root / "bind-called").exists())
+                failed = subprocess.run(["bash", "-c", script], cwd=root, env=dict(env, BIND_EXIT="37"),
+                                        capture_output=True, text=True, timeout=20)
+                self.assertEqual(failed.returncode, 37)
+                self.assertIn("unverified artifacts are diagnostic only", failed.stderr)
+
     def test_windows_requires_native_execution_and_authenticode(self):
         text = PR.read_text()
         for program in ("persona-link", "personad", "persona-node"):
