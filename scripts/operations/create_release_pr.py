@@ -20,8 +20,7 @@ def gh(arguments, token, repository):
     environment = dict(os.environ)
     environment["GH_TOKEN"] = token
     environment.pop("GITHUB_TOKEN", None)
-    return subprocess.run(["gh", *arguments, "--repo", repository], env=environment,
-                          capture_output=True, text=True)
+    return subprocess.run(["gh", *arguments], env=environment, capture_output=True, text=True)
 
 
 def create(repository, title, branch, body, token, attempts=6, wait=30, sleeper=None):
