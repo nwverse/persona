@@ -156,7 +156,7 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
     /** A message only in the outbox, in this state: its menu offers what fits one not sent ([MessageTarget.pending]). */
     pending: persona.core.contracts.api.DeliveryState? = null,
     /** An unsent message's look on Glass ([OutboxBubble]): its bubble faded, its state's mark before it. */
-    faded: Boolean = false, leading: (@Composable () -> Unit)? = null) {
+    faded: Boolean = false, leading: (@Composable () -> Unit)? = null, openingSource: (@Composable () -> Unit)? = null) {
     // Keyed on this bubble's own texts: [updates] is the whole chat's, and changes with every streamed chunk of a reply.
     val texts = bubbleTexts(items, updates)
     val models = remember(items, texts) { items.mapIndexed { index, item -> messageModel(texts[index], item.from, user = true) } }
@@ -179,12 +179,13 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
     // A message that came in from a channel (WeChat, the Feishu bot…) says so under it; the app's own say nothing.
     val channels = LocalChannels.current
     val source = remember(items, channels) { items.firstNotNullOfOrNull { ChannelSources.of(it.clientMsgId, channels) } }
-    val footer: (@Composable () -> Unit)? = if (time == null && files.isEmpty() && source == null) null else ({
+    val sourceLine: (@Composable () -> Unit)? = if (source != null) ({ JChannelSource(source) }) else openingSource
+    val footer: (@Composable () -> Unit)? = if (time == null && files.isEmpty() && sourceLine == null) null else ({
         Column(horizontalAlignment = Alignment.End) {
             FileChips(files, alignEnd = true)
-            if (source == null) time?.let { Text(it, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }
+            if (sourceLine == null) time?.let { Text(it, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }
             else Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
-                JChannelSource(source)
+                sourceLine()
                 time?.let { Text(it, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }
             }
         }
@@ -219,7 +220,7 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
                     if (streaming) StreamingCursor()
                 }
             }
-        }
+        } else if (openingSource != null) Box(Modifier.align(Alignment.End)) { footer?.invoke() }
     }
 }
 
