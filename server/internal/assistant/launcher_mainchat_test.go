@@ -378,3 +378,31 @@ func TestMainChatOnAMissingRuntimeIsIncompatible(t *testing.T) {
 		}
 	})
 }
+
+// A Persona-managed provider in the computer's scope takes the place of the computer's own launcher by its name, in the
+// picker and in mainChatFit, so the status goes by the provider too: a managed Codex provider cx, which can't run the
+// main chat, stays "Provider missing or incompatible" while the computer's ~/.zshrc has a Claude alias cx that could.
+func TestMainChatOnAManagedProviderOverItsOwnLauncherIsIncompatible(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	f.mu.Lock()
+	f.zshrc = map[string][]proto.Launcher{"server": {{Name: "cx", Source: "zshrc"}, {Name: "cc", Source: "zshrc"}}}
+	f.mu.Unlock()
+	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.cx"})
+	if p := purposeOf(t, s, "assistant"); p.Status != modelUnverified {
+		t.Fatalf("on the computer's own Claude alias: %+v; want status %q, or this proves nothing", p, modelUnverified)
+	}
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "cx", Agent: "codex", BaseURL: "https://gw.example/v1", Model: "gpt"}})
+	if names := pickerNames(t, s, "assistant"); slices.Contains(names, "cx") {
+		t.Fatalf("the main chat's picker offers cx over the managed Codex provider: %v", names)
+	}
+	if fit, _ := s.mainChatFit(ctx, "server", "cx"); fit != mainChatRefused {
+		t.Fatalf("mainChatFit on the managed Codex provider: %v; want refused", fit)
+	}
+	want := mc(s.requestCtxLang(ctx), "status_provider_incompatible")
+	for _, id := range []string{"assistant", "schedule", purposeSupervise} {
+		if p := purposeOf(t, s, id); p.Effective.Provider != "launcher.cx" || p.Status != want {
+			t.Fatalf("%s on the managed Codex provider cx: %+v; want status %q", id, p, want)
+		}
+	}
+}

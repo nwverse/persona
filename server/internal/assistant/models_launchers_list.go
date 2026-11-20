@@ -285,6 +285,22 @@ func (s *Service) pickerLaunchersKnown(ctx context.Context, machine, host string
 	return sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[machine]), known, nil
 }
 
+// pickerLaunchersSeen is pickerLaunchers from seen, machine's own launchers as last seen, without asking its node: the
+// same rule (machineLaunchersFrom: a Persona-managed provider in the computer's scope takes the place of its own
+// launcher by that name, a hidden one is left out), then hub.json's launchers for it (sessionLaunchers).
+func (s *Service) pickerLaunchersSeen(ctx context.Context, machine string, seen []proto.Launcher) []ConfiguredLauncher {
+	res := machineLauncherListing{}
+	for _, l := range seen {
+		res.Launchers = append(res.Launchers, proto.LauncherEnvelope(l))
+	}
+	list, _ := s.machineLaunchersFrom(ctx, machine, res)
+	discovered := make([]ConfiguredLauncher, 0, len(list))
+	for _, l := range list {
+		discovered = append(discovered, ConfiguredLauncher{Launcher: l})
+	}
+	return sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[machine])
+}
+
 // assistantLaunchers are the machine's launchers backed by a provider the main conversation supports.
 func (s *Service) assistantLaunchers(ctx context.Context, machine string) ([]ConfiguredLauncher, error) {
 	picker, err := s.pickerLaunchers(ctx, machine)

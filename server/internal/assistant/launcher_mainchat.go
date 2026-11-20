@@ -82,11 +82,13 @@ func (s *Service) mainChatFit(ctx context.Context, machine, name string) (mainCh
 
 // mainChatOffers: p is one of the main chat's purposes (its own, a scheduled task's, the background supervisor's; not
 // the In-meeting conversation's, which has its own rule, models_room.go) and its computer's main-chat picker offers p's
-// launcher, by the picker's rule (assistantProviders) over that computer's launchers as last seen (roomLaunchers, no
+// launcher, by the picker's rule (assistantProviders) over that computer's picker as last seen (pickerLaunchersSeen, no
 // node asked). This is how Model settings' status tells a launcher the provider list leaves out from one that is not
 // there: a runtime's launcher that runs the assistant (a runtime declaring caps.assistant, #11772) or a hub.json
 // wrapper only that computer names. One gone from the list, or there but unable to run the assistant (a runtime without
-// the capability), is not offered. A hidden one still is, as mainChatFit has it: hiding takes it out of the pickers only.
+// the capability), is not offered, and neither is the computer's own launcher by the name of a Persona-managed provider
+// in its scope: the picker and mainChatFit run the provider, so its own compatibility is the answer. A hidden one is
+// still offered, as mainChatFit has it: hiding takes it out of the pickers only.
 func (s *Service) mainChatOffers(ctx context.Context, p ModelPurpose) bool {
 	if p.Kind != "launcher" || p.CategoryID != "assistant" || p.ID == purposeMeetingRoom || p.MachineID == "" {
 		return false
@@ -96,11 +98,17 @@ func (s *Service) mainChatOffers(ctx context.Context, p ModelPurpose) bool {
 		return false
 	}
 	ctx = withUnhidden(ctx, name)
-	seen := s.roomLaunchers(ctx, p.MachineID, "", false)
-	if !slices.ContainsFunc(seen, func(l ConfiguredLauncher) bool { return l.Name == name }) {
+	var seen []proto.Launcher
+	for _, m := range s.zshrcLaunchers(ctx, false) {
+		if m.MachineID == p.MachineID {
+			seen = m.Launchers
+		}
+	}
+	picker := s.pickerLaunchersSeen(ctx, p.MachineID, seen)
+	if !slices.ContainsFunc(picker, func(l ConfiguredLauncher) bool { return l.Name == name }) {
 		return false
 	}
-	allowed, err := s.assistantProviders(ctx, p.MachineID, seen)
+	allowed, err := s.assistantProviders(ctx, p.MachineID, picker)
 	return err == nil && allowed[name]
 }
 
