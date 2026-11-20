@@ -3330,7 +3330,7 @@ Who it serves: people working with their computers' files from the phone or the 
 
 ## Starting from what you already have (#5193)
 
-Where a form sets something up that the user may already have working elsewhere (the web provider wizard's first step),
+Where a form sets something up that the user may already have working elsewhere (the web and iPhone provider wizards' first step),
 the usual choices stay first and unchanged, and two more ways in follow them, each a row of the same list style:
 **Paste a configuration**, and, only when there is something to show, a group **Found on your computers** listing what
 the hub can import as it is, each row opening the import that already exists for it. The paste view is one monospace
