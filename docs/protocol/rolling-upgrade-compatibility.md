@@ -182,14 +182,23 @@ Nothing is stored: tokens live in each process's memory, so a restarted manager 
 Since #11463 the assistant manager's filing book (settings `assistant.direction_sessions`) keeps three fields per entry
 that a manager from before does not know: `parent` (a Codex sub-agent session's parent, for placement rule 1),
 `was` (the entry the write replaced, for its Undo) and `removed_at` (an entry taken out, kept seven days for its
-Undo). The book is the default manager's alone, so only a rollback of that manager meets them:
+Undo). Every manager answers the filing route and keeps its own book: the hub relays a write to the manager the request
+names, else to the default one (`server/internal/hub/assistant_link.go`), so a rollback of any manager meets them in
+the book that manager keeps:
 
 | Case | What happens |
 | --- | --- |
 | A new manager reads a book an older one wrote | Its entries have none of the three fields: the Undo of their last write is only `null` (taking the entry out), and a sub-agent session its computer no longer lists is placed by its filing, as before. Nothing is lost. |
 | An older manager (rolled back) reads a book a new one wrote | It reads an entry taken out (`removed_at`) as a filing: the session shows filed in that direction again and counts toward its 50. It ignores `was` and `parent`. |
 | That older manager writes the book once | It saves every entry without `removed_at`, `was` and `parent`. Rolled forward again, the entries taken out before are filings for good (the owner takes them out again), no write before the rollback can be undone exactly, and a not-listed sub-agent session is placed by its filing until it is listed again. |
-| Answers of an older manager | The write's `previous` is the opener of a chat a leader opened, or `""`, never `null`; a `null` direction is taken as `""` (on its own); a session whose computer could not be read is `offline`, one whose computer has given no list `not_listed`, and the read has no `sessions_unavailable`. Both versions name `direction_sessions`, so clients reach the same routes and get the older values. |
+| Answers of an older manager | The write's `previous` is the opener of a chat a leader opened, or `""`, never `null`; a `null` direction is taken as `""` (on its own); every write, `null` and `""` included, needs the session listed on its computer (404 `session_not_found` otherwise), and an Undo into an ended or full direction is refused (409 `direction_ended`, `direction_full`); a session whose computer could not be read is `offline`, one whose computer has given no list `not_listed`, and the read has no `sessions_unavailable`. Both versions name `direction_sessions`, so clients reach the same routes and get the older values. |
+
+What an operator can do: rolling forward again before the older manager's first write to the book loses nothing, as
+it reads the extra fields without saving. After such a write, a copy of the setting that holds the book
+(`assistant.direction_sessions`), taken before the rollback, is the only way to get the entries taken out and the
+`was` of each entry back. A manager from before #11515 also leaves the sessions placed under directions out of the
+profile's `keep`: a quiet one leaves its computer's list again and its automatic archive goes on, while the book stays
+as it was, so rolling forward keeps them listed again.
 
 ### Launcher default models (#4663)
 
