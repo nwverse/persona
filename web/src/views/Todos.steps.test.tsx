@@ -57,6 +57,9 @@ const todos: Todo[] = [
   todo("b1", "Settings: search", { part_of: "busy-goal", origin: "conv", agents: [link("b")] }),
   // its own Agent works on it, and it has steps
   todo("own", "Draft the newsletter", { origin: "conv", agents: [link("o")], view: view({ done: 1, total: 2 }) }),
+  // its supervisor accepted it and nothing runs: it reads Accepted, its steps after that
+  todo("accepted-goal", "Archive last year's invoices", { view: view({ done: 2, total: 2 }), supervision: { state: "accepted", reviews: [{ at: iso(2 * HOUR), verdict: "accepted" }] } as unknown as Todo["supervision"] }),
+  ...[1, 2].map((n) => todo(`a${n}`, `Invoice step ${n}`, { part_of: "accepted-goal", quiet: true, origin: "conv", done_at: iso(3 * HOUR) })),
   // the owner's errand: no steps, no view
   todo("errand", "Replace the disk in the home server"),
 ];
@@ -99,6 +102,23 @@ describe("a to-do split into steps on the To-dos page (#11858)", () => {
     // no view, no steps: as before
     expect(line("errand")?.endsWith(`· ${t("todos.not_handed")}`)).toBe(true);
     expect(line("errand")).not.toContain("Steps");
+  });
+
+  it("keeps Accepted on a to-do its supervisor accepted, its steps after it", async () => {
+    await render();
+    const accepted = line("accepted-goal")!;
+    expect(accepted.startsWith(t("lib-todos.review_done"))).toBe(true);
+    // the rest of its line is as before (#3156), with its steps after its status word
+    expect(accepted).toContain(`${t("lib-todos.review_done")}·Steps 2/2`);
+    expect(accepted).not.toContain(t("todos.steps_next_unplanned"));
+    expect(accepted).not.toContain("2/2 steps done");
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render("accepted-goal");
+    const page = host.querySelector<HTMLElement>("[data-testid=todo-detail]")!;
+    expect(page.querySelector("[data-testid=todo-detail-status]")?.textContent).toBe(t("lib-todos.review_done"));
+    expect(page.querySelector("[data-testid=todo-detail-steps]")?.textContent).toBe("Steps 2/2");
+    expect(page.querySelector("[data-testid=todo-detail-steps-next]")).toBeNull();
   });
 
   it("says the same on its page", async () => {

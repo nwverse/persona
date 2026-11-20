@@ -5,7 +5,7 @@
 
 import { t } from "../i18n";
 import type { TodoStepCount } from "./todo-view-wire";
-import type { Todo, TodoStatus } from "./todos";
+import { acceptedAtRest, type Todo, type TodoStatus } from "./todos";
 
 /** What the status line says about an open to-do's steps, each part in place of or beside today's words. */
 export interface StepsWords {
@@ -29,14 +29,15 @@ export function todoSteps(todo: Todo): TodoStepCount | undefined {
  * What an open to-do's status line says about its steps, from `todoSteps` and its status (todoStatus):
  *  - no Agent of its own (`not_started`): "Steps 3/9" in place of "Not started", nothing in place of "Not handed to an
  *    agent yet"; once every step is closed, "9/9 steps done" and "Next step not arranged yet";
- *  - otherwise its status stays, "Steps 3/9" after its Agent count.
+ *  - otherwise its status stays, "Steps 3/9" after its Agent count; so does an accepted one at rest (acceptedAtRest):
+ *    its supervisor settled it, so it keeps reading Accepted and nothing claims its next step is unplanned.
  * Undefined when it has no steps the hub counted: the line is as before.
  */
 export function stepsWords(todo: Todo, status: TodoStatus): StepsWords | undefined {
   const steps = todoSteps(todo);
   if (!steps) return undefined;
   const count = t("todos.steps_count", { done: steps.done, total: steps.total });
-  if (status !== "not_started") return { after: count };
+  if (status !== "not_started" || acceptedAtRest(todo, status)) return { after: count };
   if (steps.done >= steps.total) return { label: t("todos.steps_all_done", { done: steps.done, total: steps.total }), tail: t("todos.steps_next_unplanned") };
   return { label: count, tail: "" };
 }
