@@ -4875,6 +4875,12 @@ export interface ChannelMessage {
   forward?: string;
   /** The chat app's id of the message it answers. */
   reply_to?: string;
+  /**
+   * The chat app's thread the message is in, as an opaque key. For a channel with capabilities.threads, each thread
+   * has a conversation of its own: its first message starts a new one (the channel's target stays as it is), later
+   * ones continue it. Without it, or without threads, the message goes to the channel's target.
+   */
+  thread?: string;
   /** What it had that the channel cannot bring, for people (a voice message, a sticker). */
   unsupported?: string[];
 }
