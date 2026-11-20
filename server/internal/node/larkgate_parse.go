@@ -89,10 +89,11 @@ func larkLoneGateCall(cmd string, gates []proto.CommandGate) bool {
 	return true
 }
 
-// larkReadFormattingPipeline proves the narrow mixed command an Inbox default conversation may allow (#11991):
-// one literal configured GET/HEAD under an optional timeout, then only output filters or inert Python with no open
-// or file-writing API. The AST must be one pipeline, so an appended command, substitution, assignment or file redirect is not
-// formatting. The caller separately requires one classified, rule-allowed read; this helper never executes it.
+// larkReadFormattingPipeline proves the narrow command an Inbox default conversation may allow (#11991):
+// one literal configured GET/HEAD under an optional timeout, then only the fixed output filters below. The AST must
+// be one pipeline, so an appended command, substitution, assignment or file redirect is not formatting. Interpreters
+// are not filters: even apparently inert Python may evaluate a string through a standard-library API. The caller
+// separately requires one classified, rule-allowed read; this helper never executes it.
 func larkReadFormattingPipeline(cmd string, gates []proto.CommandGate) bool {
 	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
 	if err != nil || len(tree.Stmts) != 1 {
@@ -143,19 +144,14 @@ func larkReadFormattingPipeline(cmd string, gates []proto.CommandGate) bool {
 			}
 		}
 		if i > 0 {
-			// sort has output-file and compress-program options, and uniq can name an output file. Unlike the
-			// pre-existing pure-read pipeline, this new mixed-command exception does not inherit those write paths.
-			if larkFilters[words[0]] && words[0] != "cd" && words[0] != "sort" && words[0] != "uniq" {
+			// Do not inherit larkFilters: sort/uniq have output paths, and this exception never includes interpreters or
+			// general-purpose print commands. Only these fixed stdin/stdout filters qualify.
+			switch words[0] {
+			case "jq", "head", "tail", "grep", "cut", "tr", "wc", "column":
 				continue
-			}
-			if strings.Contains(words[0], "/") || !inertPythonCode(words) {
+			default:
 				return false
 			}
-			files, ok := pythonWrites(words)
-			if !ok || len(files) != 0 {
-				return false
-			}
-			continue
 		}
 		if words[0] == "timeout" {
 			if len(words) <= 2 || !timeoutArg.MatchString(words[1]) {

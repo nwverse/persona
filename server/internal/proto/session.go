@@ -92,6 +92,9 @@ func ProjectEfforts(levels, vocab []string) []string {
 	return out
 }
 
+// ModeDefault applies the ordinary permission rules.
+const ModeDefault = "default"
+
 // ModeBypass skips every permission prompt; a headless claude only takes it at start (--permission-mode).
 const ModeBypass = "bypassPermissions"
 
