@@ -4,7 +4,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { basename, join } from 'node:path'
 import { appToolName, clipInput, light, snippet } from '../../runtime-sdk/index.js'
-import { isImageReference } from './media.js'
+import { isImageReference, localMediaPath } from './media.js'
 
 export const RUNTIME = 'agy'
 export const LABEL = 'Antigravity'
@@ -59,6 +59,16 @@ export function cleanUserText(raw) {
     body = body.replace(SNAPSHOT_RE, '').replace(SNAPSHOT_END_RE, '')
   } while (body !== prev)
   return body.trim()
+}
+
+function attachedImagePaths(text) {
+  const paths = new Set()
+  for (const [, body] of text.matchAll(/<attached_images>([\s\S]*?)<\/attached_images>/g)) {
+    for (const path of body.split('\n')) {
+      if (path.trim()) paths.add(localMediaPath(path.trim()))
+    }
+  }
+  return paths
 }
 
 const PERSONA_MCP_TOOL_RE = new RegExp(`^mcp_(?:${MCP_SERVER_NAMES.join('|')})(?:_[0-9a-fA-F]{8,16})?_([a-z][a-z0-9_]*)$`)
@@ -152,7 +162,7 @@ export function cleanGenericOutput(content) {
 /**
  * Parse a transcript.jsonl file (or array of parsed step objects) into Persona items.
  * @param {object[]} steps
- * @param {{ brainDir?: string, full?: boolean, includeMedia?: boolean, mediaItemId?: string }} [opts]
+ * @param {{ brainDir?: string, full?: boolean, includeMedia?: boolean, mediaItemId?: string, clientMsgIdFor?: (index: number, text: string, ordinal: number) => string | undefined }} [opts]
  */
 export function stepsToItems(steps, opts = {}) {
   const items = []
@@ -162,6 +172,7 @@ export function stepsToItems(steps, opts = {}) {
   let turnError
   let afterWork = false
   let media
+  let userOrdinal = 0
 
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i]
@@ -187,12 +198,29 @@ export function stepsToItems(steps, opts = {}) {
         turnError = undefined
         afterWork = false
         const text = cleanUserText(step.content)
-        if (!text) break
-        const msgId = (typeof step.client_msg_id === 'string' && step.client_msg_id) || opts.clientMsgIdFor?.(nativeIdx, text)
-        const item = { id: `${line}#0`, seq, role: 'user', kind: 'text', text, ts, ...(msgId ? { client_msg_id: msgId } : {}) }
-        items.push(opts.full ? item : light(item))
+        userOrdinal++
+        const msgId = (typeof step.client_msg_id === 'string' && step.client_msg_id) || opts.clientMsgIdFor?.(nativeIdx, text, userOrdinal)
+        const user = { seq, role: 'user', ts, ...(msgId ? { client_msg_id: msgId } : {}) }
+        if (text) {
+          const item = { id: `${line}#0`, kind: 'text', text, ...user }
+          items.push(opts.full ? item : light(item))
+        }
+        if (opts.includeMedia === true && Array.isArray(step.media)) {
+          const attached = attachedImagePaths(text)
+          for (const [index, entry] of step.media.entries()) {
+            if (!isImageReference(entry)) continue
+            const path = entry.uri && localMediaPath(entry.uri)
+            if (path && attached.has(path)) continue
+            const id = `${line}#media${index}`
+            items.push({ id, kind: 'image', ...user, image: { mime: entry.mime_type, data: '', lazy: true } })
+            if (opts.mediaItemId === id) media = entry
+          }
+        }
         break
       }
+      case 'CHECKPOINT':
+        items.push({ id: `${line}#0`, seq, role: 'system', kind: 'notice', text: '上下文已压缩', ts })
+        break
       case 'PLANNER_RESPONSE': {
         turnError = undefined
         let sub = 0

@@ -330,6 +330,7 @@ Reduce Motion:
   No new style, setting or navigation is added; at accessibility sizes the market row puts its full name above the
   version and status instead of squeezing all three beside the logo.
 - Web draws about 80 stroke glyphs (`web/src/ui/icons.tsx`, 15 px, stroke 1.9). Android uses Phosphor. There is no shared glyph map.
+- The web sidebar's page icons are the neutral ink: `--ink-3`, the open page's `--ink` on its fill, never a page's own color. **Colored** sidebar icons are an opt-in (Settings › Appearance › Sidebar icons, #10822) that gives each page a named color; Monochrome stays the default, pixel-identical. The map and its contrast: "Sidebar icon colors" below.
 - `pullDown` (#10422, an alias of `expand`'s chevron) follows an action's words that open a menu of how far the action goes (a pull-down, as UIKit draws one): the Inbox group titles' **Mark All Seen ⌄** / **Clear All ⌄** (`docs/assistant/inbox.md` "Group titles"). A value that opens a menu of choices keeps `choices`; the web draws its `chevron`.
 - `sideSessions` (#7944) is a session's side sessions on every platform: SF Symbol `rectangle.stack` on Apple, its Phosphor match on Android, Lucide's gallery-vertical-end on the web.
 - Catalog package logos (#4780) replace only the generic extension glyph inside its existing leading tile in the market list, market detail, installed list and installed detail. A shared logo component keeps the tile's geometry and fallback glyph. Loaded artwork has a fixed light neutral backing (`--extension-logo-backing` on web, `PersonaPalette.catalogLogoBackground` on Android) so transparent dark marks remain legible in either appearance. Missing, invalid, loading and failed artwork retain the earlier role-tinted generic mark; a changed URL can retry. The image fits without cropping and is decorative beside the package name. Bundled catalog artwork (#5461) is a square PNG inside the versioned extension package; the hub verifies/reads it and returns an authenticated relative `icon_url`. Web uses its selected hub connection to fetch bytes and displays a local Blob URL; Android uses its authenticated hub image loader. Missing, stale or unavailable bundled files keep the same fallback. Legacy absolute HTTPS sources still load anonymously without hub or market credentials. Publisher limits and authenticated image routes are in `docs/extensions/extensions.md` ("Bundled catalog artwork"). Downloads, when supplied, use secondary text (`--extension-meta-size` on web, scaled by the existing text-size transform) and the same GHCR package total across versions on every surface, never an install/user count; unknown counts add no line. This adds package identity to an existing component, not a new style or theme. Other marks, actions and primary screens stay unchanged.
@@ -1126,7 +1127,7 @@ to-dos) or an extension's badge stays out. `docs/apple/ios.md` "App icon badge (
 
 "On another computer" (web, #5421, cindy's `RemoteSignalOverlay`): `AgentMark` `remote` adds one arc and a dot off the mark's upper right, in the mark's text color, overhanging its box without taking room (a 16-unit canvas whose lower-left 12.5 units are the mark). The web chat's top bar draws every Agent's mark with it, since an Agent always runs on one of the user's computers: the mark's hover and accessible name say "Agent runs on {computer}", and while that computer is offline the mark is at 75 % opacity and says it continues once the computer is back.
 
-Web chat top bar (#5421, the owner's requested alignment with cindy's `SessionContentHeader`, 2026-11-12; `docs/web/web.md` "The top bar"): one line. At its start, in order: the pin mark and the loop mark (13 px, `--ink-3`, only when they apply), the Agent's mark (14 px, `remote`), the title (14 px medium, truncating; a double-click edits it in place, Enter or blur saves, Esc cancels), ⋯ (28 px, 15 px icon, `--ink-3`) and the git branch (12 px, `--ink-3`, from 800 px of header width, not interactive). At its end, the side panels' buttons (Background tasks, Team, Side sessions, Files) and the one button to the other view. It shows no state, model, permission mode, subtitle, goal or space button: the state is the running status bar's and the row's, the mode the composer picker's, the goal a bar over the composer. The bar stays 56 px tall (cindy's 46) so it lines up with every other page header and side panel header. A Persona conversation keeps its face before the title and the same order. In a task's or an Agent's side panel (#5424, while Settings › How Agents open says Side panel) the same bar is the panel's only header: the task's title in place of the Agent's (its state and place in the title's tooltip, no in-place rename), a task with several Agents adds ⌄ to switch after the title, ⋯ starts with the panel's own rows (Open in new window, Remove task…), the same space's other Agents are left out, and × at the end closes the panel.
+Web chat top bar (#5421, the owner's requested alignment with cindy's `SessionContentHeader`, 2026-11-12; `docs/web/web.md` "The top bar"): one line. At its start, in order: the pin mark and the loop mark (13 px, `--ink-3`, only when they apply), the Agent's mark (14 px, `remote`), the title (14 px medium, truncating; a double-click edits it in place, Enter or blur saves, Esc cancels), ⋯ (28 px, 15 px icon, `--ink-3`) and the git branch (12 px, `--ink-3`, from 800 px of header width, not interactive). At its end, the side panels' buttons (Background tasks, Team, Side sessions, Files) and the one button to the other view. It shows no state, model, permission mode, subtitle, goal or space button: the state is the running status bar's and the row's, the mode the composer picker's, the goal a bar over the composer. The bar stays 56 px tall (cindy's 46) so it lines up with every other page header and side panel header. A Persona conversation keeps its face before the title and the same order. In a task's or an Agent's side panel (#5424, while Settings › How Agents open says Side panel) the same bar is the panel's only header: the task's title in place of the Agent's (its state and place in the title's tooltip, no in-place rename), a task with several Agents adds ⌄ to switch after the title, ⋯ starts with the panel's own rows (Open in new window, Remove task…), the same space's other Agents are left out, and × at the end closes the panel. Before ×, the chat bubble (`chat`, the icon the agent page's view button shows for Chat; "Open Agent page") opens the Agent shown as its own page with the way-back strip and closes the panel; it is absent while the task has no Agent up.
 
 Assistant avatar: a disc with the first character of the assistant's name. The default assistant's is the AI purple; any other takes one of five hues (blue, green, orange, pink, indigo, in that order) by the sum of its id's UTF-8 bytes modulo 5, so every client colors the same assistant alike. A status mark sits at its foot (online green, offline neutral, installing orange) and, on the sidebar's head only, a mark at its head when another assistant has something waiting. Web: `web/src/ui/AssistantAvatar.tsx` with the `--ai` and `--hue-*` tokens. The letter is sized by the disc, not by the system's text size, so it never outgrows it. Android: `JManagerAvatar` (the status mark's ring is cut out of the disc, so the surface behind shows around it), with `JAssistantSwitcherHeader` and `JAssistantSwitcherRow` for the sidebar's head and the roster's rows (an offline one's row faded with `HomeTokens.assistantOfflineAlpha`), and `JAssistantSettingsHeader` for the head of Settings' first group (the monogram at `HomeTokens.assistantAvatarHeader`, the title, and a Switch text button opening the same roster). Apple: `AssistantMonogram` (`Monogram` drawn on the assistant's hue, its letter in the panel's color and capped at the largest standard text size) with `AssistantStateDot` (ringed in the color it sits on), an offline row faded with `Theme.Fade.offline`; the sidebar's head keeps the Persona face with the same dot, and `AssistantWaitingDot` at its head. Why not the person avatar (`Monogram`, Android `JAvatar`): that one sits on the neutral surface, and here the color is what tells the assistants apart.
 
@@ -2538,6 +2539,48 @@ An experiment can supply a permanent note under its introduction or beside a fie
 hint styles. A choice with consequences can request confirmation for a specific change. Use the shared Dialog, with the
 affected scope, impact, timing and an action-specific button. All dismissal paths preserve the edit. On success the
 field’s polite save status can explain when the choice takes effect. Show this receipt once, in the field footer.
+
+## Sidebar icon colors (#10822)
+
+Who it serves: anyone whose sidebar lists many pages and who finds it quicker to scan when each page has a color. It is
+an option, off by default (principle 2): Settings › General › Appearance › **Sidebar icons**, **Monochrome** or
+**Colored**, kept in this browser as the theme color is (`web/src/lib/sidebar-icons.ts`). Monochrome is the sidebar as
+it was, pixel for pixel: every page's line icon in `--ink-3`, the open page's in `--ink`, and nothing is stored.
+
+With Colored:
+
+- Each built-in page's icon takes the fixed named color below (`Color`, `schema/extension/view.schema.json`), drawn in
+  the web's existing `--hue-*` tokens through the same `hue()` a row's `icon_color` uses
+  (`web/src/lib/extension-ui-v6.ts`). No color value is added.
+- An extension's `nav_page` takes the `icon_color` its manifest names (`docs/extensions/extensions.md` "UI slots"); a
+  page without one, or with a name no client knows, stays neutral.
+- The open page keeps today's rule: its icon is the open row's `--ink`, not its color, so the open page stands out as
+  before. Under the pointer the color stays and the hover fill shows.
+- Everywhere the sidebar draws its pages: the Pages list and the groups, More, the folded icon rail and a phone's grid
+  of pages. The More menu, ⌘K and Settings › Sidebar pages keep neutral icons; the main chat's row, All chats and the
+  Agents' rows are not pages and are unchanged. State marks, dots and counts never take these colors (#4538).
+- Theme colors and extension themes move neither the `--hue-*` tokens nor the sidebar's backgrounds, so the colors and
+  their contrast are the same under each of them; the text size does not scale icons.
+
+| Page | Icon | Color | Light: on `--canvas` / `--hover` | Dark: on `--canvas` / `--hover` |
+| --- | --- | --- | --- | --- |
+| Overview | `home` | amber | 3.26 / 3.35 | 9.05 / 7.59 |
+| Inbox | `inbox` | orange | 3.01 / 3.09 | 7.16 / 6.01 |
+| Health | `heart` | pink | 3.82 / 3.93 | 6.44 / 5.41 |
+| Messages | `chat` | green | 3.25 / 3.34 | 6.87 / 5.76 |
+| Workflow board | `layers` | yellow | 3.25 / 3.34 | 10.89 / 9.14 |
+| To-dos | `todo` | blue | 3.23 / 3.32 | 5.84 / 4.90 |
+| Scheduled tasks | `clock` | purple | 4.25 / 4.37 | 6.53 / 5.48 |
+| Knowledge | `book` | indigo | 4.79 / 4.92 | 5.80 / 4.87 |
+| Machines | `machine` | teal | 3.65 / 3.75 | 7.15 / 6.00 |
+| Settings | `gear` | gray | 3.54 / 3.63 | 6.27 / 5.26 |
+
+Each page has a color of its own. Red (3.55 / 3.65 light, 5.09 / 4.27 dark) is left to extensions: on a built-in page
+it would read as an error. An icon is a graphic, so the floor is 3:1; `web/src/ui/theme-contrast.test.ts` checks all
+eleven named colors on both backgrounds in light and dark, since an extension may name any of them, and the closest is
+light orange at 3.01:1. Why a new pattern: one ink let only the open page stand out; Colored keeps that and adds a
+second cue for scanning, so it is an option and never the default. iOS and Android follow with the same setting, the
+same map and the same `icon_color`, so a page has one color on every client (#10822 tracks them).
 
 ## A chosen page that is not there now (#9071)
 
