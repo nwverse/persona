@@ -252,7 +252,7 @@ struct ModelSwitchTests {
         let app = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString))
         app.forgetRestoredForTests()
         app.apiForTests = hub.client
-        app.linksUpForTests = true
+        app.linksUpForTests = false
         let row = try session(#","effort":"low","agent":"claude""#)
         let key = row.key
         app.applySessions([key.machineRef: [row]])
@@ -265,6 +265,13 @@ struct ModelSwitchTests {
         app.retry(key, failed)
 
         for _ in 0..<300 where store.pending.first?.state == .sending {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(store.pending.first?.state == .waiting)
+        #expect(hub.sent("POST", path).isEmpty)
+        app.linksUpForTests = true
+        app.flushOutbox()
+        for _ in 0..<300 where store.pending.first?.state != .sent {
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(hub.sent("POST", path).count == 1)
