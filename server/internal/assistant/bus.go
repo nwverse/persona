@@ -261,7 +261,8 @@ func (b *BusHub) onHello(res json.RawMessage) error {
 		svc.setMutes(*h.Mutes) // the hub's, before anything is pushed (fleet_mutes.go)
 	}
 	if svc != nil {
-		svc.workReconnected() // turns that ended while it was away are looked for at the next tick (agents_work.go)
+		svc.workReconnected()   // turns that ended while it was away are looked for at the next tick (agents_work.go)
+		svc.notesHubConnected() // whether its notices name their messages is the new connection's to show (direction_notes.go)
 		// The whole snapshot goes once the connection counts as up (after this returns): before that it is offline,
 		// and the hub would show nothing of the assistant until its next change.
 		go func() {
@@ -581,16 +582,13 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		ctx, note := withLauncherNote(ctx)
 		// The owner's message, which the hub sends and reports: its parameters may move a direction's notes block
 		// (direction_notes.go), settled by the hub's notice, or now when they are refused and nothing is sent. A
-		// message they were already given for is the hub's retry, which it may answer from its record without a
-		// notice: it moves nothing.
+		// message they were already given for is the hub's retry, which moves nothing: it is tied to its first attempt
+		// while that one waits for its notice (notesOwnerCarry).
 		msg, _ := p.Params["client_msg_id"].(string)
-		var carry *notesCarry
-		if !s.notesOwnerSeen(p.SessionID, msg) {
-			ctx, carry = withNotesCarry(ctx)
-		}
+		ctx, carry := s.notesOwnerCarry(ctx, p.SessionID, msg)
 		params, err := s.SendParams(ctx, p)
 		if err != nil {
-			s.notesSendOutcome(ctx, carry, false)
+			s.notesOwnerRefused(ctx, carry)
 			s.appSendRefused(p.MachineID, p.SessionID, err) // the hub sends nothing: no ConversationSent (north_star.go)
 			return nil, err
 		}

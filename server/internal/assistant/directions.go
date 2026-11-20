@@ -129,9 +129,11 @@ type directionBook struct {
 	now    func() time.Time // tests: the clock notes are saved and the owner's messages are aged by (nil: time.Now)
 	// inflight: by conversation, the moves of its notes block in effect and the owner's messages whose outcomes are
 	// not yet known (direction_notes.go notesSendOutcome); ownerSeen: the owner's latest message ids it gave parameters
-	// for (notesOwnerSeen). In memory only.
+	// for (notesOwnerCarry); named: the hub's notices on this connection name their messages (notesOwnerOutcome). In
+	// memory only.
 	inflight  map[string]*notesFlight
 	ownerSeen map[string][]string
+	named     bool
 }
 
 // clock is now on b's clock; b.mu is held.
