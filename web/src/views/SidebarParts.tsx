@@ -7,7 +7,8 @@ import { resolveTab } from "../lib/herdr-tree";
 import { useInboxBadge } from "../lib/inbox";
 import { useLarkHome } from "../lib/lark-chats";
 import { agentKey } from "../lib/pins";
-import { NAV_PAGES, extensionNavKey, sidebarActiveKey } from "../lib/persona-nav";
+import { NAV_PAGES, extensionNavKey, sidebarActiveKey, sidebarRoute } from "../lib/persona-nav";
+import { handoffFrom, sidebarPageOf } from "../lib/handoff";
 import { arrangeSections, useSidebarPrefs } from "../lib/sidebar-pages";
 import { useStartPageCheck } from "../lib/start-page";
 import { useExtensionSlot } from "../lib/extension-slots";
@@ -37,14 +38,17 @@ export const CURRENT_ROW = "bg-hover-2";
 /** The least an agent row's title gets behind a prefix (styles.css `--row-title-min`, about 4.5 characters). */
 export const ROW_TITLE_MIN = "min-w-(--row-title-min)";
 
-/** The row a route lights up in the sidebar: a tab's page is the pane it shows (its row in the tree is the tab's). */
+/** The row a route lights up in the sidebar: a tab's page is the pane it shows (its row in the tree is the tab's). An
+ *  Agent's page opened from inside another page lights that page's row (#12055): its history entry names it, and every
+ *  move to another entry draws the sidebar again with the route. */
 export function useActiveKey(route: Route): string {
   const all = useAgentSessions();
   const assistant = useStore((s) => s.assistant);
-  const tabPath = route.name === "tab" ? href(route) : "";
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- `route` is parsed anew each render; its path says it all
-  const tabPane = useMemo(() => (route.name === "tab" ? resolveTab(all, route) : undefined), [all, tabPath]);
-  return inWorkView(route) ? "terminal" : route.name === "tab" ? (tabPane ? rowKey(tabPane) : "") : sidebarActiveKey(route, assistant?.main);
+  const shown = inWorkView(route) ? route : sidebarRoute(route, sidebarPageOf(handoffFrom()));
+  const tabPath = shown.name === "tab" ? href(shown) : "";
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `shown` is parsed anew each render; its path says it all
+  const tabPane = useMemo(() => (shown.name === "tab" ? resolveTab(all, shown) : undefined), [all, tabPath]);
+  return inWorkView(route) ? "terminal" : shown.name === "tab" ? (tabPane ? rowKey(tabPane) : "") : sidebarActiveKey(shown, assistant?.main);
 }
 
 // One function for the component's life, so the rows given it skip a re-render (memo); a click still calls the

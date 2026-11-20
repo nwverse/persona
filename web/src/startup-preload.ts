@@ -524,7 +524,9 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // load on demand. The bound leaves 37 B above the measured ja size.
 // Merged, the two changes add 25 B + 610 B to their shared 483,143 B ja baseline, giving 483,778 B;
 // #7524's 37 B of room is kept on top.
-export const FIRST_SCREEN_BUDGET = 483_815;
+// #12055: an Agent's page opened from inside another page keeps that page's sidebar row lit (lib/persona-nav.ts
+// sidebarRoute), and a briefing's waiting and later rows open their chat in the app: 101 B more in ja.
+export const FIRST_SCREEN_BUDGET = 483_916;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
