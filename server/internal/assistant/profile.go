@@ -176,6 +176,9 @@ type Settings struct {
 	// MainSupervisesOwnTasks: the main conversation follows up the tasks no leader supervises itself. nil is off (the
 	// default, #4927): the background supervisor does (supervise_background.go).
 	MainSupervisesOwnTasks *bool `json:"main_supervises_own_tasks,omitempty"`
+	// SupervisionBatchMinutes independently batches routine supervision per final recipient, anchored at its first
+	// routine signal. Nil or 0 preserves the legacy shared gather and spacing. Immediate signals bypass the batch.
+	SupervisionBatchMinutes *int `json:"supervision_batch_minutes,omitempty"`
 	// BackgroundSupervisorKeepsContext: the background supervisor is one long conversation again from its next round,
 	// keeping each later round in context, as before #7315 (rounds already run from the first turn stay on their own
 	// branches). nil is off (the default): each round starts from its first turn with only that round's facts and tools
@@ -616,7 +619,8 @@ type assistantView struct {
 	NextSuggestions bool `json:"next_suggestions"`
 	// MainSupervisesOwnTasks is in effect, like DoneNeedsDelivery: false means the background supervisor follows up
 	// the tasks no leader supervises.
-	MainSupervisesOwnTasks bool `json:"main_supervises_own_tasks"`
+	MainSupervisesOwnTasks  bool `json:"main_supervises_own_tasks"`
+	SupervisionBatchMinutes int  `json:"supervision_batch_minutes"`
 }
 
 // view is GET /api/v1/assistant; withArchived lists archived conversations too (flagged `archived`). It lists the
@@ -655,7 +659,8 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		AgentAutoNamingMax:           agentNamingLimit(v),
 		AgentAutoNamingIntervalHours: agentNamingInterval(v),
 		InboxSignals:                 v.InboxSignals != nil && *v.InboxSignals, MainSupervisesOwnTasks: !s.backgroundOn(v),
-		NextSuggestions: v.NextSuggestions != nil && *v.NextSuggestions}
+		SupervisionBatchMinutes: supervisionBatchMinutesOf(v),
+		NextSuggestions:         v.NextSuggestions != nil && *v.NextSuggestions}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(d, sp)
 		var list []proto.Session

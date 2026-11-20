@@ -111,6 +111,9 @@ type runtimeHello struct {
 		// workspaces (workspace.prepare, workspace.create): as the machine's engine, they are the catalog's and its
 		// worktrees are made by it (runtimeworkspaces.go).
 		Workspaces bool `json:"workspaces"`
+		// History: sessions.history goes to it (its driver's listHistory), for sessions active in a time window,
+		// inactive ones too (sessions_history.go).
+		History bool `json:"history"`
 	} `json:"caps"`
 }
 
