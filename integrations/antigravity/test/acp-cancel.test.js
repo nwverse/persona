@@ -124,8 +124,8 @@ async function agyRuntime(t, options = {}) {
   t.after(() => runtime.stop())
   runtime.start()
   await n.ready
-  const start = async (prompt) => {
-    const { session } = await n.peer.call('session.start', { cwd: dir, prompt })
+  const start = async (prompt, params) => {
+    const { session } = await n.peer.call('session.start', { cwd: dir, prompt, ...params })
     assert.equal(session.session_id, toPersonaId(SESSION))
     return session.session_id
   }
@@ -139,6 +139,50 @@ async function agyRuntime(t, options = {}) {
   }
   return { n, record, start, status, refresh, idle: () => runtime.idle() }
 }
+
+test('queue edits preserve photos and send-now cancels just the active prompt', async (t) => {
+  const { n, record, start, idle } = await agyRuntime(t)
+  assert.equal(n.hello.caps.queue_edit, true)
+  assert.equal(n.hello.caps.queue_send_now, true)
+  const session_id = await start('ask', { assistant: true })
+  await until('permission card is waiting', () => n.asked.length > 0, SLOW)
+  const row = () => n.last('runtime.sessions')?.sessions.find((session) => session.session_id === session_id)
+  const send = (text, images) => n.peer.call('session.send', { session_id, text, images, assistant: true })
+  const edit = (keep) => n.peer.call('session.queue.edit', { session_id, keep })
+  const steer = () => n.peer.call('session.queue.send_now', { session_id })
+  await assert.rejects(edit([]), { code: 'nothing_queued' })
+  await assert.rejects(steer(), { code: 'nothing_queued' })
+  const image = { mime: 'image/png', data: 'aW1hZ2U=' }
+  for (const [text, images] of [['drop'], ['', [image]], ['reply']]) {
+    assert.deepEqual(await send(text, images), { ok: true, queued: true })
+  }
+  await until('raw queue is visible', () => row()?.queued?.length === 3, SLOW)
+  assert.deepEqual(row().queued, ['drop', '', 'reply'])
+  for (const keep of [[3], [-1], [0, 0], [0.5]]) {
+    await assert.rejects(edit(keep), { code: 'queue_changed' })
+  }
+  assert.deepEqual(await edit([2, 1]), { queue: ['drop', '', 'reply'], images: [null, [image], null] })
+  await until('edited queue is visible', () => row()?.queued?.length === 2, SLOW)
+  assert.deepEqual(row().queued, ['reply', ''])
+  assert.deepEqual(await steer(), { sent: true })
+  const prompts = () => received(record).filter((message) => message.method === 'session/prompt')
+  await until('both follow-ups reach ACP', () => prompts().length === 3, SLOW)
+  assert.deepEqual(prompts()[1].params.prompt, [{ type: 'text', text: 'reply' }])
+  assert.deepEqual(prompts()[2].params.prompt, [{ type: 'image', mimeType: image.mime, data: image.data }])
+  assert.equal(received(record).filter((message) => message.method === 'session/cancel').length, 1)
+  assert.deepEqual(permissionAnswers(record)[0]?.result, cancelled)
+  await until('popped queue is no longer visible', () => row() && !row().queued, SLOW)
+  assert.equal(idle(), false)
+  assert.equal((await n.peer.call('session.interrupt', { session_id })).settled, true)
+})
+
+test('start with empty image entries opens an idle session without prompting', async (t) => {
+  const { n, record, idle } = await agyRuntime(t)
+  const { session } = await n.peer.call('session.start', { images: [{ mime: 'image/png' }] })
+  assert.equal(session.status, 'idle')
+  assert.equal(idle(), true)
+  assert.equal(received(record).some((message) => message.method === 'session/prompt'), false)
+})
 
 test('a wedged prompt surfaces an error and the next send can recycle ACP', async (t) => {
   const { n, record, start, idle } = await agyRuntime(t, { runtime: { promptInactivityMs: 350 } })
@@ -296,6 +340,7 @@ test('interrupt cancels every queued follow-up without applying its options', as
   await n.peer.call('session.send', { session_id: pid, text: 'Queued one', model: 'queued-model' })
   await n.peer.call('session.send', { session_id: pid, text: 'Queued two' })
   assert.deepEqual(await n.peer.call('session.interrupt', { session_id: pid }), { ok: true, settled: true })
+  await assert.rejects(n.peer.call('session.queue.send_now', { session_id: pid }), { code: 'nothing_queued' })
   await until('queue no longer working', () => status(pid) !== 'working', SLOW)
   assert.equal(received(record).filter((m) => m.method === 'session/prompt').length, 1)
   assert.equal(received(record).some((m) => m.params?.modelId === 'queued-model'), false)

@@ -15,13 +15,45 @@ test('hello names the runtime and declares only the caps whose driver methods ex
   assert.equal(n.hello.runtime, 'toy')
   assert.equal(n.hello.name, 'Toy')
   assert.equal(n.hello.agent, 'claude')
-  assert.deepEqual(n.hello.caps, { start: false, send: true, interrupt: false, rename: false, close: false, assistant: false })
+  assert.deepEqual(n.hello.caps, { start: false, send: true, interrupt: false, rename: false, close: false, assistant: false,
+    queue_edit: false, queue_send_now: false })
   assert.equal(n.hello.launcher, undefined, 'no launcher without start')
   await until('list', () => n.last('runtime.sessions'))
   await n.peer.call('session.send', { session_id: 's1', text: 'x' })
   await assert.rejects(n.peer.call('session.interrupt', { session_id: 's1' }), /unsupported/)
+  for (const method of ['session.queue.edit', 'session.queue.send_now']) {
+    await assert.rejects(n.peer.call(method, { session_id: 's1' }), { code: 'unsupported' })
+  }
   await assert.rejects(n.peer.call('session.fork', { session_id: 's1' }), (error) => error.code === 'unsupported')
   assert.throws(() => createRuntime(minimal(), {}), /runtime id/)
+})
+
+test('queue capabilities forward edits and steering, and publish both changes', async (t) => {
+  const node = await startFakeNode(t)
+  const session_id = 's1'
+  let queued = ['first', 'second']
+  const rt = createRuntime(minimal({
+    listSessions: async () => [{ session_id, status: 'working', queued }],
+    editQueue: async (params) => {
+      assert.deepEqual(params, { session_id, keep: [1] })
+      const queue = queued
+      queued = params.keep.map((index) => queue[index])
+      return { queue }
+    },
+    sendNow: async (params) => {
+      assert.deepEqual(params, { session_id })
+      queued = []
+    },
+  }), { runtime: 'toy', socketPath: node.path, pushDelayMs: 5, refreshMs: 0 })
+  t.after(() => rt.stop())
+  await rt.start()
+  await until('initial queue published', () => node.last('runtime.sessions')?.sessions[0]?.queued?.length === 2)
+  assert.equal(node.hello.caps.queue_edit, true)
+  assert.equal(node.hello.caps.queue_send_now, true)
+  assert.deepEqual(await node.peer.call('session.queue.edit', { session_id, keep: [1] }), { queue: ['first', 'second'] })
+  await until('edit published', () => node.last('runtime.sessions').sessions[0].queued?.length === 1)
+  assert.deepEqual(await node.peer.call('session.queue.send_now', { session_id }), { sent: true })
+  await until('send-now published', () => node.last('runtime.sessions').sessions[0].queued?.length === 0)
 })
 
 test('fork advertises native support and returns the driver response', async (t) => {

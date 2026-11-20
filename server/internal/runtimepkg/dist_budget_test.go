@@ -6,10 +6,10 @@ import (
 )
 
 // TestDistBudget bounds what personad, persona-node and persona-manager embed of the runtime packages: every file
-// Generate writes from integrations/. Measured 189,454 B with Antigravity user images, checkpoint notices, and prompt
-// retry fixes (#11734). Raise it only for code a runtime needs, never to embed the packages raw again.
+// Generate writes from integrations/. Measured 190,063 B with Antigravity queue editing and steering (#11780).
+// Raise it only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 189_454
+	const budget = 190_063
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

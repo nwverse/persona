@@ -68,6 +68,13 @@ describe("QueuePanel row actions", () => {
     await settle();
   });
 
+  it.each([[true, true], [false, true], [true, false], [false, false]])("respects runtime queue capabilities (edit %s, steer %s)", (queue_edit, queue_send_now) => {
+    const runtime: Session = { ...session, agent: "agy", source_kind: "runtime", capabilities: { queue_edit, queue_send_now } };
+    render(<QueuePanel session={runtime} draftKey="qp-runtime-capabilities" canEdit />);
+    expect(Boolean(rows()[0].querySelector("[data-queue-edit]"))).toBe(queue_edit);
+    expect(Boolean(rows()[0].querySelector("[data-send-now]"))).toBe(queue_send_now);
+  });
+
   it("says in the Persona chat's words what sending now does", () => {
     const persona = { ...session, agent: undefined, assistant: true, queued: ["我的"] } as unknown as Session;
     render(<QueuePanel session={persona} draftKey="qp-persona-send" canEdit persona="Nova" />);
