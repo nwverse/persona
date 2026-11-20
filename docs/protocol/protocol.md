@@ -2368,13 +2368,21 @@ named by `machine_id + session_id`:
 `deny` may also name `conversation_new` and `conversation_send`. No policy, `enabled:false`, expiry or a target that
 does not match leaves behavior unchanged. `GET` / `PUT /api/v1/assistant/dispatch-guard` accepts full credentials or
 an extension granted `dispatch.guard`; the legacy every-scope grant does not include it. An extension-written enabled
-policy must expire within one hour, and empty `targets` clears the policy.
+policy must expire within one hour, and empty `targets` clears the policy even when the request leaves `enabled:true`.
+Requests must name `dispatch_guard`. Duplicate or unknown outer, policy or target fields, missing/null policies,
+`targets:null` and non-empty policies without an explicit `enabled` are 400 without a Store write or a tool-list
+notification. Complete JSON is walked for duplicate keys before any `RawMessage` occurrence can be discarded. Only an
+explicit `enabled:false` or `targets:[]` clears. Validation responses use localized typed errors in English,
+Simplified Chinese and Japanese.
 
 `guardRefusal` runs at the model tool-call entry before business arguments are parsed. `guardTools` applies the same
 decision to the actual `sessionMCPTools` list, while `assistant.tools` accepts an optional `{machine_id, session_id}`
 and uses `ToolsFor`. Untargeted lists and other conversations stay unchanged. A stale client or direct invocation
-still meets the call guard. `--allowedTools` is not used as evidence of tool-list narrowing. An unreadable or invalid
-enabled policy fails closed for the four dispatch tools; unrelated tools remain available. The localized refusal
+still meets the call guard. `--allowedTools` is not used as evidence of tool-list narrowing. The discovery cursor
+includes the effective filter state and heartbeat re-evaluates it, so natural expiry and Setting read recovery cannot
+leave an old narrowed list cached as `unchanged`. Each returned list and its revision come from the same captured
+effective guard decision, including when an admission read and the list read see a transient failure. An unreadable or
+invalid enabled policy fails closed for the four dispatch tools; unrelated tools remain available. The localized refusal
 contains no storage error, target, tool name, arguments, policy or credential.
 
 Layer / preview and push-layer integration are follow-up work, not part of this contract.
