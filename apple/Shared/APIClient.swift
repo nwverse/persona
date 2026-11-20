@@ -2379,6 +2379,12 @@ extension Error {
         return api.status == 504 || APIError.isTimeoutText(api.message)
     }
 
+    /// A history read the node answered as gone, not a route-level or retryable failure.
+    nonisolated var isHistoryNotFound: Bool {
+        guard let api = self as? APIError else { return false }
+        return api.status == 404 && api.code == "not_found"
+    }
+
     /// The request never got an answer because the phone has no network or cannot reach the hub (it may still have
     /// arrived when the link broke midway: networkConnectionLost). The title already says Waiting for Network / Connecting….
     nonisolated var isOffline: Bool {
