@@ -69,6 +69,8 @@ func acceptedNote(l i18n.Lang, a *acceptAsk) string {
 		return i18n.T(l, "assistant-reports.outside_answered_default")
 	case a.OutsideID != "":
 		return i18n.T(l, "assistant-reports.outside_answered")
+	case decideAsk(a) && a.AgentReply != nil && a.AgentReply.Handled:
+		return i18n.T(l, "assistant-reports.decision_handled_in_agent")
 	case decideAsk(a) && a.ByDefault:
 		return i18n.T(l, "assistant-reports.verdict_taken_default")
 	case decideAsk(a) && a.Check != "" && a.Chosen != "": // a check's decision: it went to the supervisor (checkDecided)
@@ -94,14 +96,16 @@ func acceptedNote(l i18n.Lang, a *acceptAsk) string {
 func (s *Service) conclusionCard(ctx context.Context, t Todo, a acceptAsk) *feishubot.Card {
 	l := s.botLang(ctx)
 	title := s.feishuDirection(ctx, t, s.feishuDirections(ctx)) + i18n.T(l, "assistant-reports.verdict_title", i18n.Args{"task": clip(oneLine(t.Title), 30)})
-	icon, color := "📌", feishubot.Green
-	switch a.Outcome {
-	case outcomeCannot:
+	color := feishubot.Green
+	switch {
+	case !a.AcceptedAt.IsZero(): // passed: over
+		color = feishubot.Grey
+	case a.Outcome == outcomeCannot:
 		color = feishubot.Red
-	case outcomeDecide:
+	case a.Outcome == outcomeDecide:
 		color = feishubot.Orange
 	}
-	c := feishubot.NewCard(icon+" "+title, color, verdictText(l, &a))
+	c := feishubot.NewCard(title, color, verdictText(l, &a)).Tag(i18n.T(l, "assistant-reports.tag_conclusion"), feishubot.Neutral)
 	// The goal, where it is now (with how far the work went out) and the evidence below (#3218).
 	now := feishubot.EscapeMarkdown(verdictText(l, &a))
 	if live := liveText(l, s.todoStages(ctx)[t.ID]); live != "" && a.Outcome != outcomeDecide {
@@ -131,7 +135,10 @@ func (s *Service) conclusionCard(ctx context.Context, t Todo, a acceptAsk) *feis
 	if !a.AcceptedAt.IsZero() {
 		return c.Note(acceptedNote(l, &a))
 	}
+	// One row: the primary answer, the first other option of a decision, and a "more" menu with the rest — the other
+	// options, the fixed answers for a decision they cannot answer as it is (decision.go), the link.
 	var bs []feishubot.Button
+	var menu []feishubot.MenuItem
 	hint := "assistant-reports.verdict_reply_hint"
 	switch {
 	case decideAsk(&a) && a.Recommend != "":
@@ -142,30 +149,29 @@ func (s *Service) conclusionCard(ctx context.Context, t Todo, a acceptAsk) *feis
 	default:
 		bs = append(bs, feishubot.Btn(i18n.T(l, "assistant-reports.verdict_ack"), feishubot.Primary, map[string]any{"a": "accept", "id": t.ID}))
 	}
-	if a.Link != "" {
-		bs = append(bs, feishubot.LinkBtn(i18n.T(l, "assistant-reports.accept_open"), a.Link))
-	}
-	if len(bs) > 0 {
-		c.Buttons(bs...)
-	}
 	if decideAsk(&a) {
-		// The other options, then the fixed answers for a decision they cannot answer as it is (decision.go).
-		var more []feishubot.Button
 		for i, o := range a.Options {
-			if i > 0 {
-				more = append(more, feishubot.Btn(clip(o.Label, 20), feishubot.Default, map[string]any{"a": "accept", "id": t.ID, "opt": o.Label}))
+			if i == 0 {
+				continue
 			}
+			if len(bs) < 2 {
+				bs = append(bs, feishubot.Btn(clip(o.Label, 20), feishubot.Default, map[string]any{"a": "accept", "id": t.ID, "opt": o.Label}))
+				continue
+			}
+			menu = append(menu, feishubot.MenuItem{Label: clip(o.Label, 20), Value: map[string]any{"opt": o.Label}})
 		}
-		if len(more) > 0 {
-			c.Buttons(more...)
-		}
-		var cannot []feishubot.Button
 		for _, r := range ownerResponses {
-			cannot = append(cannot, feishubot.Btn(i18n.T(l, "assistant-reports.decision_response_"+r), feishubot.Default,
-				map[string]any{"a": "accept", "id": t.ID, "resp": r}))
+			menu = append(menu, feishubot.MenuItem{Label: i18n.T(l, "assistant-reports.decision_response_"+r), Value: map[string]any{"resp": r}})
 		}
-		c.Buttons(cannot...)
 	}
+	if a.Link != "" {
+		if len(menu) == 0 {
+			bs = append(bs, feishubot.LinkBtn(i18n.T(l, "assistant-reports.accept_open"), a.Link))
+		} else {
+			menu = append(menu, feishubot.MenuItem{Label: i18n.T(l, "assistant-reports.accept_open"), URL: a.Link})
+		}
+	}
+	c.Buttons(append(bs, feishubot.Overflow(map[string]any{"a": "accept", "id": t.ID}, menu...))...)
 	return c.Note(i18n.T(l, hint))
 }
 

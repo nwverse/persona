@@ -25,7 +25,6 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/remoteimage"
 	"github.com/nwverse/persona/server/internal/secretkey"
-	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
 
 // Options are what a Service runs with.
@@ -115,6 +114,8 @@ type Service struct {
 	// trustSrc is Options.Trust.
 	trustSrc MachineTrust
 	logf     func(format string, args ...any)
+	// runWorkerOutcome overrides asynchronous outcome startup in tests; nil uses a goroutine.
+	runWorkerOutcome func(func())
 	// runRetry is how long after a failed run the retry goes (0: runRetryDelay; tests shorten it).
 	runRetry time.Duration
 	// turnPoll is how often a run's watcher reads its turn (0: turnPollInterval; tests shorten it).
@@ -185,6 +186,7 @@ type Service struct {
 	chatReplies      chatReplyBook         // chat_reply.go: what conversations that wrote as the user were told of the chats
 	undelivered      undeliveredBook       // undelivered.go: the owner's messages that could not go in
 	quotes           quoteBook             // relay_quote.go: the owner's messages relays carried, verified
+	handovers        handoverBook          // relay_handover.go: the owner's words handed to and from a direction's lead
 	avail            availBook             // availability.go
 	quiet            quietBook             // quiet.go
 	taskFileBook     taskFileBook          // task_files.go: the files tasks handed over, by todo id
@@ -604,12 +606,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if err != nil {
 		return beforeNodeWrite(method, err)
 	}
-	p := DeviceCall{Device: device, Method: method, Params: raw}
-	if fields, ok := params.(map[string]any); ok && method == DeviceSessionStart {
-		if _, managed := fields["backend_workspace"].(taskworkspace.Request); managed {
-			p.Method = devicewire.MethodStartBackendSession
-		}
-	}
+	p := DeviceCall{Device: device, Method: nodeMethod(method, params), Params: raw}
 	res, ok, err := s.localFleetDeviceCall(ctx, p) // what the hub answered before the nodes' events were the manager's
 	if !ok {
 		res, err = s.hub.DeviceCall(ctx, p)

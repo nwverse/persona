@@ -24896,6 +24896,9 @@ def markets_route(handler, p, body):
                     "size": "full", "icon": icon, "group": {"id": g, "title": gt}}
                    for i, title, icon, g, gt in (("lark", "Lark", "list", "workbench", "工作台"), ("calendar", "Calendar", "calendar", "workbench", "工作台"),
                                                  ("assets", "Assets", "money", "assets", "资产"), ("home", "Home devices", "gauge", "home", "家里"))]
+        if NAV_ICON_COLOR and placement in ("", "nav_page"):
+            ui += [{"plugin": "example-garden", "plugin_name": "Example Garden", "id": "garden", "title": "花园",
+                    "placement": "nav_page", "size": "full", "icon": "calendar", "icon_color": "green"}]
         if GAUGE_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-quota", "plugin_name": "Example Quota", "id": "quota", "title": "Quota",
                     "placement": "nav_page", "size": "full", "icon": "gauge"}]
@@ -24970,6 +24973,10 @@ def markets_route(handler, p, body):
 # restore, as #4858's interface says: only home is writable, not ~/.persona, ~/.persona, ~/Library; a name already
 # there is 409 `exists` unless conflict=replace|keep; the trash keeps what it took to put it back.
 FILE_OPS = bool(os.environ.get("MOCK_FILE_OPS"))
+if FILE_OPS and os.environ.get("MOCK_FILE_MOVE"):
+    # Tests has a conflicting name with different contents. The same name is free in docs.
+    MOCK_TREE[MOCK_REPO + "/Move sample.txt"] = "File to move.\n"
+    MOCK_TREE[MOCK_REPO + "/Tests/Move sample.txt"] = "File already in the destination.\n"
 FILE_TRASH = {}  # trash id -> (tree key, {key: value} of everything moved)
 FILE_OPS_LOG = []  # what the browser asked (a test reads it from the module)
 FILE_OPERATIONS = {}  # operation id -> synthetic copy / zip progress for the transfer bars
@@ -25140,19 +25147,29 @@ def file_ops_route(h, p, body):
         home, drel, err = file_ops_dir(mid, req.get("dir", ""), cwd)
         if err: return h.send_json(*err) or True
         moved = []
+        conflict = req.get("conflict")
+        dest_dir = req["dir"].rstrip("/")
         for path in req.get("paths", []):
             _, rel, err = file_ops_key(mid, path, cwd)
             if err: return h.send_json(*err) or True
             if gone(rel): return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
-            name = rel.rpartition("/")[2]
-            final = file_ops_free(drel, name, req.get("conflict"))
+            parent, slash, name = rel.rpartition("/")
+            if drel == parent + slash:
+                moved.append({"from": path, "to": dest_dir + "/" + name})
+                continue
+            if drel.startswith(rel + "/"):
+                return h.send_json({"error": "A folder can't be moved into itself", "code": "internal"}, 502) or True
+            final = file_ops_free(drel, name, conflict)
             if final is None: return h.send_json({"error": "已经有了", "code": "exists", "name": name}, 409) or True
-            if req.get("conflict") == "replace":  # the node moves the one there to the trash (#315), never deletes it
-                FILE_TRASH["t%d" % (len(FILE_TRASH) + 1)] = (req["dir"].rstrip("/") + "/" + final, file_ops_take(drel + final))
-            for k, v in file_ops_take(rel).items(): MOCK_TREE[drel + final + k[len(rel):]] = v
-            changed.update({(home + "/" + rel.rpartition("/")[0]).rstrip("/"), (home + "/" + drel).rstrip("/")})
-            moved.append({"from": path, "to": req["dir"].rstrip("/") + "/" + final})
-        fs_changed(mid, sorted(changed), True)
+            target = drel + final
+            if conflict == "replace" and not gone(target):
+                if rel + "/" in MOCK_TREE or target + "/" in MOCK_TREE:
+                    return h.send_json({"error": "已经有了", "code": "exists", "name": name}, 409) or True
+                FILE_TRASH["t%d" % (len(FILE_TRASH) + 1)] = (dest_dir + "/" + final, file_ops_take(target))
+            for k, v in file_ops_take(rel).items(): MOCK_TREE[target + k[len(rel):]] = v
+            changed.update({(home + "/" + parent).rstrip("/"), (home + "/" + drel).rstrip("/")})
+            moved.append({"from": path, "to": dest_dir + "/" + final})
+        if changed: fs_changed(mid, sorted(changed), True)
         return h.send_json({"moved": moved}) or True
     if op == "trash":
         trashed = []
@@ -30336,6 +30353,9 @@ def plugins_route(handler, p, body):
 COLUMNS_MODE = os.environ.get("MOCK_EXTENSION_COLUMNS") == "1"
 # MOCK_SIDEBAR_GROUPS=1 (with MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1): nav_pages naming sidebar groups (#9071)
 SIDEBAR_GROUPS = os.environ.get("MOCK_SIDEBAR_GROUPS") == "1"
+# MOCK_NAV_ICON_COLOR=1 (with MOCK_EXTENSIONS=1): a made-up extension's nav_page naming its icon's color (#10822), drawn
+# in it once Settings › Appearance › Sidebar icons is Colored; the gateway's 用量 names none and stays neutral
+NAV_ICON_COLOR = os.environ.get("MOCK_NAV_ICON_COLOR") == "1"
 
 
 def _today_row(key, title, subtitle="", value="", **extra):

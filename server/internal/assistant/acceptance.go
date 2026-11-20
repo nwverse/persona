@@ -67,7 +67,7 @@ type acceptAsk struct {
 	DueAt      time.Time `json:"due_at,omitzero"`
 	ByDefault  bool      `json:"by_default,omitempty"`
 	// AgentReply pauses the default while the supervisor checks an owner message in the task's Agent chat.
-	// It is not an option selection; only an explicit answer ends the decision.
+	// A handled reply takes the ask out of the owner's queue and leaves verification to the supervisor.
 	AgentReply *decisionAgentReply `json:"agent_reply,omitempty"`
 	// ByAssistant: a deployed task the supervising assistant accepted itself, not a big feature (ownerVerifies, #3205).
 	ByAssistant bool `json:"by_assistant,omitempty"`

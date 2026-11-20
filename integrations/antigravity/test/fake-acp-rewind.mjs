@@ -15,7 +15,7 @@ const server = createServer(async (req, res) => {
   for await (const chunk of req) chunks.push(chunk)
   const params = JSON.parse(Buffer.concat(chunks).toString())
   const method = req.url.split('/').at(-1)
-  appendFileSync(calls, JSON.stringify({ method, params }) + '\n')
+  appendFileSync(calls, JSON.stringify({ worker: process.pid, method, params }) + '\n')
   const snapshot = JSON.parse(readFileSync(`${directory}/trajectory.json`, 'utf8'))
   if (snapshot.fail && method === 'RevertToCascadeStep') {
     res.writeHead(409).end(JSON.stringify({ message: 'Native rewind refused' }))
@@ -83,7 +83,7 @@ const input = createInterface({ input: process.stdin })
 let prompts = 0
 input.on('line', (line) => {
   const req = JSON.parse(line)
-  appendFileSync(calls, JSON.stringify(req) + '\n')
+  appendFileSync(calls, JSON.stringify({ worker: process.pid, ...req }) + '\n')
   if (req.id === undefined) return
   if (req.method === 'session/list') openService()
   const snapshot = JSON.parse(readFileSync(`${directory}/trajectory.json`, 'utf8'))
@@ -96,14 +96,24 @@ input.on('line', (line) => {
     const tool = { sessionUpdate: 'tool_call_update', toolCallId: 'test-tool', status: 'completed' }
     if (plan.tool) update(tool)
     if (plan.lateTool) setTimeout(() => update(tool), plan.lateTool)
-    if (plan.export) {
+    if (plan.export || plan.flushReply) {
       const transcript = `${directory}/config/brain/${sessionId}/.system_generated/logs/transcript_full.jsonl`
       let index = readFileSync(transcript, 'utf8').trim().split('\n').length
+      const now = new Date().toISOString()
+      const created_at = plan.wholeSeconds ? now.replace(/\.\d{3}Z$/, 'Z') : now
       const append = (type, content) => appendFileSync(transcript,
-        JSON.stringify({ type, content, step_index: index++, status: 'DONE', created_at: new Date().toISOString() }) + '\n')
-      append('USER_INPUT', req.params.prompt[0].text)
-      if (plan.error) append('ERROR_MESSAGE', plan.error)
-      if (plan.reply) append('PLANNER_RESPONSE', plan.reply)
+        JSON.stringify({ type, content, step_index: index++, status: 'DONE', created_at }) + '\n')
+      if (plan.flushReply) {
+        append('USER_INPUT', plan.flushReply.prompt)
+        append('PLANNER_RESPONSE', plan.flushReply.reply)
+      }
+      if (plan.export) {
+        append('USER_INPUT', (plan.planMode ? '/plan ' : '') + req.params.prompt[0].text)
+        if (plan.undatedStep) appendFileSync(transcript,
+          JSON.stringify({ type: 'SYSTEM_MESSAGE', content: 'System notice.', step_index: index++, status: 'DONE' }) + '\n')
+        if (plan.error) append('ERROR_MESSAGE', plan.error)
+        if (plan.reply) append('PLANNER_RESPONSE', plan.reply)
+      }
     }
     if (plan.error && !plan.export) return send({ id: req.id, error: { code: -32000, message: plan.error } })
     return send({ id: req.id, result: { stopReason: 'end_turn' } })
