@@ -10,7 +10,7 @@ When repository identity needs resolving, consult repositories_list, and reposit
 
 For an existing todo with a saved workspace naming plan, explicitly select {"backend":{"operation_id":"<saved operation ID>"}}. Its selected repositories must all be ready before the session starts at the saved root on its owning computer. An optional backend.host selects a supported engine on that computer.
 
-Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-change"}} names its branch; {"existing":"<cwd or workspace_id>"} selects one; "none" creates nothing. Omitted: readonly uses none; writable Git follows assistant.task_workspace_preference (prefer-existing by default, prefer-new for isolation), and an occupied cwd uses new. Explicit existing never switches silently; refusal names its task owner. For an explicit new branch already checked out, reuse requires a clean checkout, no live Agent and no unfinished-task owner; otherwise refuse with its path and known owner. The machine's engine owns creation, location and registration; never run git worktree add. The card previews the path and is editable before Start. Default branch: task/<todo id>. Creation failure starts no Agent. Workspaces remain after acceptance. Organization read-only policy refusals include their reason: follow it, never retry unchanged.
+Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-change"}} names its branch; {"existing":"<cwd or workspace_id>"} selects one; "none" creates nothing. Omitted: readonly uses none; writable Git follows assistant.task_workspace_preference (prefer-existing by default, prefer-new for isolation), and an occupied cwd uses new. Explicit existing never switches silently; refusal names its task owner. For an explicit new branch already checked out, reuse requires a clean checkout, no live Agent and no unfinished-task owner; otherwise refuse with its path and known owner. The machine's engine owns creation, location and registration; never run git worktree add. The card previews the path and is editable before Start. Default branch: task/<todo id>. Creation failure starts no Agent. Workspaces remain after acceptance. Organization read-only policy refusals include their reason: follow it, never retry unchanged.{{template "shared/mcp_language" .}}
 
 `wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.
 
@@ -51,7 +51,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
         "properties": {
           "title": {
             "type": "string",
-            "description": "Card title in Chinese, under 20 characters."
+            "description": "{{if eq .Lang "en"}}the task in a short line the user reads on the card (English, under 20 characters){{else if eq .Lang "ja"}}カードに表示する短いタスク名（日本語、20文字未満）{{else}}the task in a short line the user reads on the card (Chinese, under 20 characters){{end}}"
           },
           "context": {"type": "string", "description": "facts the manager cannot resolve; omit project background"},
           "prompt": {
@@ -119,7 +119,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           },
           "why": {
             "type": "string",
-            "description": "Chinese one-line reason for machine, directory and model."
+            "description": "{{if eq .Lang "en"}}one line (English) on why this machine, directory and model{{else if eq .Lang "ja"}}このコンピュータ、ディレクトリ、モデルを選ぶ理由を日本語で一行に記述します{{else}}one line (Chinese) on why this machine, directory and model{{end}}"
           },
           "done_when": {
             "type": "array",
@@ -127,11 +127,11 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
             "items": {
               "type": "string"
             },
-            "description": "Chinese acceptance results told to Agent, one per entry. Nonempty for writable tasks; ignored with continues, which uses original todo's effective criteria."
+            "description": "{{if eq .Lang "en"}}what done means: results you will check before you accept it (English, one each), e.g. PR merged to master; light/dark screenshots attached to the PR; production hub deployed and verified; the agent is told them. Required for a writable task (at least one); with continues the effective criteria from the original to-do apply and this is ignored{{else if eq .Lang "ja"}}完了として受け入れる前に確認する結果を、日本語で一項目ずつ記述します。例：PR のマージ、PR への浅色・深色スクリーンショットの添付、本番 hub のデプロイと検証。Agent に伝えられます。書き込み可能なタスクは一つ以上必須です。continues 指定時は元のタスクの有効な完了条件が適用され、この値は無視されます{{else}}what done means: results you will check before you accept it (Chinese, one each), e.g. 「PR 合并到 master」「浅色 / 深色截图贴进 PR」「线上 hub 已部署并验证」; the agent is told them. Required for a writable task (at least one); with continues the effective criteria from the original to-do apply and this is ignored{{end}}"
           },
           "goal": {
             "type": "string",
-            "description": "Owner's one-line Chinese outcome. Required read-only; writable defaults to title."
+            "description": "{{if eq .Lang "en"}}the work in one sentence, as the owner would say what they get from it (English); required for a read-only task, the title when left out of a writable one{{else if eq .Lang "ja"}}ユーザーが得る結果として作業の目標を日本語の一文で記述します。読み取り専用タスクでは必須です。書き込み可能なタスクで省略した場合はタイトルを使います{{else}}the work in one sentence, as the owner would say what they get from it (Chinese); required for a read-only task, the title when left out of a writable one{{end}}"
           },
           "out_of_bounds": {
             "type": "array",
@@ -139,7 +139,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
             "items": {
               "type": "string"
             },
-            "description": "Optional forbidden actions/areas, in Chinese, one per entry."
+            "description": "{{if eq .Lang "en"}}optional: what the agent must not do or touch (English, one each), e.g. do not merge; do not change production{{else if eq .Lang "ja"}}任意：Agent が行ってはいけない操作や触れてはいけない対象を日本語で一項目ずつ記述します。例：マージしない、本番環境を変更しない{{else}}optional: what the agent must not do or touch (Chinese, one each), e.g. 「不合并」「不动线上」{{end}}"
           },
           "continues": {
             "type": "string",

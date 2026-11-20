@@ -50,7 +50,7 @@ records a justified compatibility change. Before claiming any follow-up, recheck
 | --- | --- | --- |
 | agents | #6268 | Remaining agent event and policy templates; audit source recognition and authorization branches. Wake is already covered here. |
 | assistant | #6269 | Generated instructions, snapshots, supervision and scheduled events; audit parser/role boundaries and preserve policy. |
-| mcp | #6270 | Tool descriptions and schema guidance; thread language through tool-list callers and keep names/arguments stable. |
+| mcp | #6270 | Owner-language tool-list rendering and generated-argument guidance; complete voice descriptions, preserving tool/schema contracts. |
 | inbox | #6271 | Triage, drafting, grouping and handling templates; preserve original incoming text and test callers. |
 | kb | #6272 | Classify internal data generation versus user-facing output, then migrate applicable prompts; preserve existing knowledge and source names. |
 | todo | #6273 | Task/to-do wording and review context; preserve criteria, decisions and authorization evidence. |
@@ -308,6 +308,7 @@ localize Persona Link's client UI; they do not supply the language of model prom
 | `channel/mention_message.md` | A public mention turn, in Chinese, English and Japanese: the answer returns as the owner; private context from other chats, sessions, mail and health stays undisclosed unless explicitly requested; chat, topic, gathered context, quote and forwarded history are data blocks. Used only for `mention` channels, including when their target is the main chat (#11130) | `assistant/channels_plugin.go` `channelForward` |
 | `channel/answer_again.md` | When a channel turn ends without an answer (empty or only a placeholder such as "No response requested."), hub asks the Persona chat once for that turn's answer | `assistant/channels_answer.go` `askAgain` (#4588) |
 | `shared/kb_blocks.md` | Localized headings for stored chat and project profiles | `inbox/agent.md` through `startInboxAgents` |
+| `shared/mcp_language.md` | Owner-language guidance for newly generated MCP arguments, preserving source data and permission boundaries | All MCP definitions |
 | `shared/user_rules.md` | Localized precedence heading and the owner's original rules | `inbox/triage.md`, `inbox/group.md`, `inbox/judge.md`, `agents/delegate.md` |
 
 Since #1571, prompts and context for Lark `/agent` (in chats / document comments) live with `/agent` in the Lark integration plugin. This repository has no `lark/` directory (`docs/extensions/lark-agent.md`).
@@ -327,8 +328,15 @@ Each operation uses its original MCP tool and caller authorization. A granted sc
 Reading a skill or other outside content still requires the ordinary Start approval.
 
 Each MCP tool hub provides to Agents / the assistant has one file: `mcp/<scenario>/<tool-name>.md`. The filename is the tool name. Contents: one paragraph of model-facing description, a blank line,
-then a ```json code block containing the input schema (parameters and their descriptions). These files are **not templates**; they are read verbatim. The schema is loaded with `json.Compact`,
-so layout is arbitrary (short arrays can be one line) and does not affect transmitted bytes.
+then a ```json code block containing the input schema (parameters and their descriptions). They are templates with `MCPData.Lang` (`en`, `ja`, or empty for the historical default). `Tool(name)` keeps the default; `Tool(name, lang)` renders the caller's language, with English fallback for other language codes. The schema is loaded with `json.Compact`, so layout is arbitrary and does not affect transmitted bytes. Literal recipe placeholders such as `{{since}}` must be escaped as template string literals, not evaluated as prompt actions.
+
+MCP language handling (#6270) serves people reading the titles, reasons, completion criteria and messages the model generates as tool arguments. The shared `shared/mcp_language.md` tells the model to write new user-facing arguments in the owner's language, preserving source quotations, identifiers, enums, command prefixes and approvals. Existing English tool policies stay intact; this is output-language guidance, not a claim that every English description has been translated into Japanese. Schema descriptions that previously required Chinese now have English/Japanese branches. All six voice tool definitions have complete English/Japanese descriptions and parameter guidance.
+
+The manager applies the owner language from `hello.Locale` after discovery filtering, including ordinary Agents, assistant/supervision lists, work-machine restrictions, guest meeting rooms and restricted task-leader aliases. Runtime leader registration follows the same contract. A profile update invalidates discovery revisions. The extension manager and connector registry/catalog use context language; the assistant supplies the owner language when collecting their tools. Voice session starts use the conversation's existing language precedence. Built-in phone-queue tools join normal discovery; device-authored schemas remain source data. Static mail/connector constructors can still return default definitions: localization occurs at registry/catalog and final manager discovery boundaries.
+
+`LocalizeTool` recognizes a built-in only when its name (or an explicit restricted alias), description and compact schema match a known built-in version. It never translates an arbitrary extension or phone declaration just because its name matches. Catalog localization copies shared slices. Empty language and `zh-Hans` retain every original description and compact schema byte, pinned for all 139 definitions against upstream `05567dc82` in `prompts/testdata/mcp_legacy.json`; language schemas differ only in description fields. Caller goldens cover the node's transmitted assistant/Agent lists and ordinary/bound/meeting voice lists, with an upstream session-start capture too.
+
+Source-sensitive text remains literal: conversation title kinds are fixed enum values consumed by `assistant/titles.go`; iMessage attachment markers describe source output; snapshot labels identify existing text; voice delegation uses the exact `状态：`, `停止：` and `回答：` prefixes consumed by `voice/send.go`. English/Japanese voice instructions explain those prefixes without renaming them. A meeting delegation has its own definition and must not acquire the bound Agent's status/stop/answer commands. Tool names, parameter keys, enum values, constraints, routing and permission semantics are unchanged.
 
 | Directory | Tools | Provider |
 | --- | --- | --- |
