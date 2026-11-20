@@ -699,9 +699,10 @@ func TestWorkerReportIndexNormalizesEvidence(t *testing.T) {
 		transcript []string
 		live       []string
 	}{
-		{name: "caps at eight", transcript: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"}, live: []string{"1", "2", "3", "4", "5", "6", "7", "8"}},
-		{name: "trims and clips", transcript: []string{"  " + strings.Repeat("x", 320), strings.Repeat("y", 310)},
-			live: []string{clip(strings.Repeat("x", 320), 300), clip(strings.Repeat("y", 310), 300)}},
+		{name: "caps at eight", transcript: []string{"https://example.com/1", "https://example.com/2", "https://example.com/3", "https://example.com/4", "https://example.com/5", "https://example.com/6", "https://example.com/7", "https://example.com/8", "https://example.com/9"},
+			live: []string{"https://example.com/1", "https://example.com/2", "https://example.com/3", "https://example.com/4", "https://example.com/5", "https://example.com/6", "https://example.com/7", "https://example.com/8"}},
+		{name: "trims and clips", transcript: []string{"  " + strings.Repeat("x", 299) + " https://example.com/after"},
+			live: []string{clip(strings.Repeat("x", 299)+" https://example.com/after", 300)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw, _ := json.Marshal(map[string]any{"kind": "done", "text": workerMemoryConclusion, "evidence": tc.transcript})
