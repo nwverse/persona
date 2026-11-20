@@ -3552,6 +3552,10 @@ type ConnectorTool struct {
 	// with tool search when needed (#7317). A connector does not need to send it; the manager sets it on every list
 	// whatever a connector sent.
 	DeferLoading bool `json:"defer_loading,omitempty"`
+	// Set by Persona itself on the tool list of an assistant conversation with the work guide on: the tool is found on
+	// demand through the guide (#11078). A connector does not need to send it; the manager sets it on every list
+	// whatever a connector sent.
+	WorkGuideTool bool `json:"work_guide_tool,omitempty"`
 }
 
 // ConnectorTools: tools.list and actions.list.

@@ -20,9 +20,8 @@ The manager sends one Ctrl+D through the selected session's terminal writer only
   SessionStart in `~/.codex/hooks.json`), `agent_session.value` is the Codex session id.
 - Panes without a session id (started before the integration was installed, or herdr recorded the id only at startup and `/resume` later switched threads in Codex):
   Codex writes the thread name in the terminal title ("thread name | directory", either part possibly truncated to `...`). Find a same-named thread in `session_index.jsonl` (`codexByTitle`);
-  among duplicates, prefer the id recorded by herdr / at startup, otherwise the most recently written. Resolve panes identifiable by title first; only then guess panes without a thread name (new threads) from
-  "the newest unclaimed rollout in the same working directory" (`codexSession`). Before 2026-10-31, recognition relied only on guessing: 4 of 5 Codex sessions in the same directory on one machine were misidentified,
-  the active one showed another session with a gray dot and none of the new turn's messages (9 of 26 Codex panes on that machine were misidentified overall).
+  a unique match or the matching id recorded by the host or by Persona identifies the thread. A manually opened Codex in herdr or Herdr App with no established identity gets a waiting row of its own.
+  A shared directory or an ambiguous title gives no evidence of which conversation that pane is running. Its earlier conversations keep their history and last-active times.
 - **Sub-Agent rollouts are not sessions**: Codex thread_spawn sub-Agents (and Guardian approval reviews, Codex's and the fork's, below) each write their own rollout,
   in the same directory and cwd as the main chat, with newer writes. Identify them from `session_meta` only: `thread_source` is `subagent`, or `source` is `{"subagent": …}`.
   Their parent chat is `session_id` (fall back to `parent_thread_id`). Skip them when guessing sessions; if herdr reports a sub-Agent id, replace it with the main chat's
@@ -369,7 +368,7 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   (an existing same-named shell variable wins; these words are not shell-expanded, so `$HOME` and `~` remain literal and cannot substitute values). pi's herdr-resume command `personad tab-start` shares this code without setting `HERDR_AGENT`.
 - **Match this request**: startup is synchronous. The node waits for the Codex thread to appear before replying, and returns that thread's session, so the App opens the actual Agents entry,
   not a separate "Starting" placeholder later replaced by another. Match a rollout in this directory started after launch (`session_meta` timestamp) whose first user message exactly matches what was sent.
-  During this wait the pane is excluded from "newest rollout in the same directory" guessing (`codexStarting`), preventing premature association with an old thread in the directory.
+  During this wait `codexStarting` reserves the pane for this explicit start. Discovery leaves the pane for the start to identify.
   Answer Codex's dialogs according to the user's intent: trust the directory (the user selected it), skip update prompts.
   The screen is read as `visible` (the blank rows under it left out): 0.167 draws its trust dialog from the top of the pane, and the last 40 `recent` rows of a 51-row pane were all blank (#2351).
   The trust dialog is known by its question asking about trust, the option by what it says ("Trust and continue", "Yes, continue"), not by its number or the other option
@@ -434,6 +433,7 @@ and answers with a **waiting row** for the pane (`node/codex_waiting.go`).
   `agent: codex`, the pane and tab, `status: idle` whatever herdr says (Codex starting its MCP servers reads as working, then done), or `blocked` while a dialog holds the pane.
   Its capabilities are read, send and terminal. Its conversation is empty. Modes, the queue and forking are refused until the thread exists, and it has no history, archive or resume.
   The node binds the pane to the row's id. The hub stores and returns that binding, so a restarted node knows the row again from the id's shape and its record.
+  A Codex started by hand in a herdr or Herdr App tab uses the same row. Its title is the tab's label, with the directory name as a fallback. The row's time is when Persona first saw that pane.
 - **Attaching the thread, never by directory**: the node looks every second while a row waits. It scans the Codex processes only when a new thread appeared in the row's directory or herdr or the title named one, and every 15 seconds otherwise.
   A new thread that no rule attached in three looks (one from a Codex outside herdr in the same repository) no longer triggers scans; only the 15-second scan looks at it again.
   1. The rollout the pane's own `codex` process holds open: `HERDR_PANE_ID` in its environment, `lsof` or `/proc` for its files. App-server processes are left out: a daemon a pane started inherits that pane's `HERDR_PANE_ID` and holds every thread it serves.
@@ -448,7 +448,8 @@ and answers with a **waiting row** for the pane (`node/codex_waiting.go`).
      - its first message shows, as a Codex user message (a `› ` line and the lines indented under it), on that pane's screen and on no other waiting pane's.
 
   Anything else attaches nothing, and the node logs why, once per reason. The row then stays, its terminal works, and the thread is listed as ordinary Codex history.
-  On attach, the start's record moves to the thread: launcher, directory, start time, read-only mode and creation receipt. The pane is bound to the thread, and requests that still name the row reach it.
+  On attach, an explicit Persona start transfers its launcher, directory, start time, read-only mode and creation receipt. A manually opened tab keeps its own name and ownership.
+  The pane is bound to the thread, and requests that still name the row reach it.
   The row leaves the list and the thread's row comes, in the same pane.
 - **The first message from the Apps** (`session.send` to the row): text only (photos refuse with `codex_first_text`, nothing typed). The node brings Codex to its empty input box first, at most 20 seconds.
   On the way it answers the trust dialog and the update offer, and waits out the model loading and "Starting MCP servers".

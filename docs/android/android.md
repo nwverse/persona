@@ -1954,6 +1954,8 @@ The Assistant and Agents roots retain their stacks while the sidebar's Separate 
 the pairing directory and restored on a normal cold start. Sign-out, revoke and re-pair remove that saved position,
 and retired writers cannot recreate the position file. The sidebar choice is device-wide.
 
+Agents badge counts the waiting agents, one per session however many cards it has (`ShellCounts.agentRows`: ordinary-Agent cards and Needs-you sessions, less quiet tasks' agents and muted agents and spaces, `needsYouBadgeRows`); Persona badge counts assistant interactions, each request counted separately even in one session. Inbox badge counts unread Needs-you items, one per item, taking the conversation list's reads before the hub's item list catches up (`inboxUnreadCount`).
+
 Connection state occupies each page's title (Agents, Inbox, Persona, chat); shell no longer adds a separate banner, avoiding duplication and top whitespace. Lightweight refresh failures show no extra notice; user-action failures go through one outlet, with a shared 4-second dedupe window for offline notices. This is notice-policy configuration, not measured performance. Unclear results retain in-chat checking.
 
 Second-batch module entries:

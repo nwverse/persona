@@ -218,7 +218,7 @@ func failingPosts(f *fakeHub, alwaysFail bool) (posts func() []string, reportAtt
 		_ = json.Unmarshal(p, &m)
 		mu.Lock()
 		got = append(got, m.Card)
-		isReport := strings.Contains(m.Card, `"content":"📋 `)
+		isReport := strings.Contains(m.Card, `"content":"汇报"}`)
 		if isReport {
 			attempts++
 		}
@@ -397,7 +397,7 @@ func TestTaskReportMergesChangeArrivedDuringPost(t *testing.T) {
 		_ = json.Unmarshal(p, &m)
 		mu.Lock()
 		got = append(got, m.Card)
-		firstReport := strings.Contains(m.Card, `"content":"📋 `)
+		firstReport := strings.Contains(m.Card, `"content":"汇报"}`)
 		if firstReport {
 			attempts++
 		}

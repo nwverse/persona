@@ -68,12 +68,30 @@ describe("QueuePanel row actions", () => {
     await settle();
   });
 
+  it.each([[true, true], [false, true], [true, false], [false, false]])("respects runtime queue capabilities (edit %s, steer %s)", (queue_edit, queue_send_now) => {
+    const runtime: Session = { ...session, agent: "agy", source_kind: "runtime", capabilities: { queue_edit, queue_send_now } };
+    render(<QueuePanel session={runtime} draftKey="qp-runtime-capabilities" canEdit />);
+    expect(Boolean(rows()[0].querySelector("[data-queue-edit]"))).toBe(queue_edit);
+    expect(Boolean(rows()[0].querySelector("[data-send-now]"))).toBe(queue_send_now);
+  });
+
   it("says in the Persona chat's words what sending now does", () => {
     const persona = { ...session, agent: undefined, assistant: true, queued: ["我的"] } as unknown as Session;
     render(<QueuePanel session={persona} draftKey="qp-persona-send" canEdit persona="Nova" />);
     const send = within(0, "[data-send-now]");
     expect(send.getAttribute("aria-label")).toBe("现在就把排队的消息全部发给 Nova，不用等到下一步");
     expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toContain("Nova 会马上收到");
+  });
+
+  it("explains that a runtime assistant stops its turn and starts only the next queued message", () => {
+    const runtime: Session = { ...session, agent: "agy", assistant: true, source_kind: "runtime", capabilities: { queue_send_now: true } };
+    render(<QueuePanel session={runtime} draftKey="qp-runtime-assistant-send" canEdit persona="Nova" />);
+    const send = within(0, "[data-send-now]");
+    const tip = "停止 Nova 当前这一轮，开始处理下一条排队消息";
+    const body = "Nova 会停止当前这一轮，开始处理下一条排队消息。其余消息仍按原顺序排队。";
+    expect(send.getAttribute("aria-label")).toBe(tip);
+    expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toBe(body);
+    expect(send.title).toBe(`${tip}\n${body}`);
   });
 
   it("shows a spinner where the busy row's actions were and takes no other action meanwhile", async () => {

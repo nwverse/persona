@@ -640,8 +640,9 @@ anthropics/claude-code#97074). Anthropic documents no such weighting, so this is
 
 ## Next-message suggestions (#4644)
 
-The strip over an empty composer (#2978: click or Tab fills it in, the arrow sends it) reads one field, `Session.suggestion`, which has
-two sources (`server/internal/assistant/suggest_next.go`):
+The strip over an empty composer (#2978) reads `Session.suggestion`. Click or Tab fills the composer. The arrow sends a suggestion eligible for direct send. The manager considers these sources in order (`server/internal/assistant/suggest_next.go`).
+
+- **An Agent's explicit offer** (#11874). A completed final work report can supply one optional `next` reply. It is available even if the owner opens the chat after the turn ends. The turn stays done and the owner decides whether to answer. A new message or turn spends the offer. Blocked or unfinished reports, pending decisions, quoted examples and free-form questions do not produce this suggestion.
 
 - **Claude Code in a terminal** keeps the suggestion Claude Code draws in its own input box, read off the screen by the node
   (`server/internal/node/suggestion.go`). The manager never calls a model for such a session.
@@ -663,7 +664,7 @@ Rules for the hub-made one:
   call is a plain completion with no tools, MCP or memory.
 - **Nothing sensible, nothing shown**: `NONE`, an empty answer, more than one line or more than 200 characters shows nothing; there is no
   stand-in and no retry.
-- **Risky suggestions** (either source): one that names a command, a path, a link, a secret-looking string or one of the risky actions
+- **Risky suggestions** (all sources): one that names a command, a path, a link, a secret-looking string or one of the risky actions
   of the Agents' safety boundary (`riskyWords`: delete, push, deploy, send…) carries `suggestion_risky: true`. The apps fill it in but
   show no one-tap send.
 - **Clients**: the web, iOS/iPadOS and Android show the strip in Agent and assistant conversations, the main Persona conversation included,
@@ -1472,14 +1473,20 @@ explicit user-facing actions still follow the usual visibility rules.
   unavailable, unless it settled with silent visibility. The full reply uses the ordinary reply bubble so its
   formatting and links remain available. Its work keeps the usual collapsed summary. Intermediate narration,
   generated quiet-heartbeat acknowledgements and empty turns stay folded. A successful silent finish keeps its round
-  folded unless an explicit user-visible action promoted it. This changes the chat display only and sends no push.
+  folded unless an explicit user-visible action promoted it. One exception is a routine `conversation_send` report to
+  the main conversation: with folding on, its input and nonblank reply both stay inside the expandable background
+  record, and a normal finished reply sends no push. A P0, a specifically requested result or a decision can still be
+  promoted through the explicit actions above, which keep their existing display and push paths. Final replies in
+  leader conversations and scheduled rounds stay visible as before. Relay delivery, processing and hop/answer
+  behavior are unchanged.
 - **Needs you** keeps its entry and its count. While folding is on and its rows come from more than one supervising
   conversation (a task's `origin`), they are grouped under that conversation's title, this conversation's own first;
   the rows and their order within a group are unchanged.
 - **Switch**: Settings › Assistant › **Fold background rounds** (`assistant.main_background_folded`, `PUT /api/v1/assistant`,
   on unless turned off; Persona's settings tool changes it only after the user confirms the card). Off, the main chat and
-  Needs you look exactly as before. A hub that does not send the field is treated as on. Display only: what the rounds do,
-  notify or push is unchanged.
+  Needs you look exactly as before. A hub that does not send the field is treated as on. The switch changes presentation
+  and routine main-relay finished-push eligibility only: relay execution, explicit `notify_user` actions and every other
+  push decision are unchanged.
 
 ## Messages from the system wait for the owner (#4925)
 
@@ -1601,6 +1608,13 @@ operation then read as accepted and the bubble waited for the transcript and wen
   `server/internal/assistant/undelivered.go`). The hub answers 202 `{"delivered":"later"}`, records the send as `later`
   (a retry of the id is answered the same and sends nothing) and tells the chat's subscribers `kept`. A manager that
   cannot keep it leaves the failure as before.
+- **Busy while its role changes.** A conversation at work (a turn, or background tasks a new process would kill) whose
+  task-follow-up role changed refuses the message with 409 `busy` (`assistantwire.CodeConversationBusy`): taking it
+  would need a new process with the new role, and the old process must not get a message meant for the new role.
+  Nothing was typed, so the hub keeps it like a 5xx instead of answering the owner "try again later" on every send.
+  It shows "Waits for this conversation's current work to finish" (`wait_idle`): a session list that still shows the
+  conversation working does not wake it, one that shows it settled sends it at once, and that send resolves the role
+  again, so it starts the process on the new role. Other 409 refusals are answered as before.
 - **Shown everywhere.** The row's `undelivered` (`proto.Session.Undelivered`) lists them; web, iOS and Android draw each as the
   owner's bubble marked "Not delivered", with why and "It will be sent automatically", and Delete; one that gave up
   in red with Retry and Delete. Every device sees it, not only the one that sent it (`web/src/lib/undelivered.ts`;
@@ -2220,6 +2234,30 @@ stopped or uninstalled extension leaves nothing in force. The full wire shape an
 - **What the model sees**: a localized refusal starting with "The current organization policy requires…", followed
   by the rule's own note when it has one, and a matching sentence in the `task_plan`, `agent_start`,
   `conversation_new` and `conversation_send` tool descriptions.
+
+## Explicit dispatch guard
+
+`internal/assistant/dispatch_guard.go` is a separate, opt-in guard for explicitly named conversations. It does not
+change the class-based dispatch policy above. A policy has
+`{"enabled":true,"expires_at":"…","targets":[{"machine_id":"…","session_id":"…","deny":["task_plan"]}]}`;
+`deny` may contain only `task_plan`, `agent_start`, `conversation_new` and `conversation_send`. Targets match the
+machine and session exactly; ordinary Agent start parameters are untouched.
+
+- **One decision for listing and calls**: `guardRefusal` runs at the model tool entry before business arguments are
+  parsed. `guardTools` applies the same decision to the real `sessionMCPTools` list, and `ToolsFor` exposes the same
+  filtering for `assistant.tools`. A stale client or a direct call still meets the call guard. A policy write calls
+  `mcpChanges.notify`, so revision-aware discovery cannot keep a pre-change list. `--allowedTools` is an approval rule,
+  not proof that a tool is hidden.
+- **Defaults and fallback**: no policy, `enabled:false`, expiry, a non-matching target and an empty target list all
+  leave existing behavior unchanged. Untargeted tool lists and other conversations keep their previous contents.
+  An unreadable or invalid enabled policy fails closed for the four dispatch tools; unrelated tools remain available.
+  The localized refusal contains no storage error, target, tool name, arguments, policy or credential.
+- **Scope and expiry**: `GET` / `PUT /api/v1/assistant/dispatch-guard` requires the `dispatch.guard` scope for an
+  extension. An extension-written enabled policy must expire within one hour; full credentials may read, write and
+  clear it. The legacy every-scope grant does not include `dispatch.guard`. An unauthorized write changes neither
+  the policy nor existing starts.
+- **Boundary**: layer / preview and push-layer integration remain follow-up work. This slice adds no preview, client
+  UI, push integration or production deployment.
 
 ## Start defaults
 
