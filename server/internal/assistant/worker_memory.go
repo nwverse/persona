@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"slices"
 	"strings"
 	"time"
@@ -34,6 +35,21 @@ func workerMemoryItemID(todoID, machine, session string, turn, itemIndex int, it
 }
 
 func workerOutcomeItemKey(it proto.Item) string {
+	if it.Kind == proto.KindToolUse {
+		var report struct {
+			Text     string   `json:"text"`
+			Evidence []string `json:"evidence"`
+		}
+		if json.Unmarshal(it.ToolInput, &report) == nil {
+			h := fnv.New64a()
+			_, _ = h.Write([]byte(clip(strings.TrimSpace(report.Text), 2000)))
+			for _, evidence := range workerNormalizedEvidence(report.Evidence) {
+				_, _ = h.Write([]byte{0})
+				_, _ = h.Write([]byte(evidence))
+			}
+			return fmt.Sprintf("report:%x", h.Sum64())
+		}
+	}
 	if it.ToolUseID != "" {
 		return it.ToolUseID
 	}

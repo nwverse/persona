@@ -227,6 +227,7 @@ func TestWorkerMemorySameSequenceReportsKeepDistinctItems(t *testing.T) {
 }
 
 // Exact duplicate handoffs are retries, not two outcomes. Only different report content needs a distinct durable item.
+// Timestamps may differ between the two calls; the normalized report payload determines the durable semantic key.
 func TestWorkerMemoryExactDuplicateReportsStayOne(t *testing.T) {
 	env := newWorkerMemoryEnv(t)
 	env.setProject(t, "explicit")
@@ -235,12 +236,12 @@ func TestWorkerMemoryExactDuplicateReportsStayOne(t *testing.T) {
 		{ID: "report-a", Seq: 2, Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "call-a",
 			ToolName: "report_to_supervisor", ToolInput: workerMemoryReportInput(), TS: turnEnd},
 		{ID: "report-b", Seq: 2, Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "call-b",
-			ToolName: "report_to_supervisor", ToolInput: workerMemoryReportInput(), TS: turnEnd},
+			ToolName: "report_to_supervisor", ToolInput: workerMemoryReportInput(), TS: turnEnd.Add(time.Second)},
 	}
 	env.f.setItems(items...)
-	for range 2 {
+	for _, at := range []time.Time{turnEnd, turnEnd.Add(time.Second)} {
 		env.s.goRecordWorkerReport(context.Background(), env.todo, "box", "s1", workerMemoryConclusion,
-			[]string{workerMemoryPR, workerMemoryIssue}, turnEnd)
+			[]string{workerMemoryPR, workerMemoryIssue}, at)
 		env.s.tasks.outcomeRuns.Wait()
 	}
 	assertOriginalWorkerMemory(t, workerMemoryRecords(t, env.e, "explicit"))
@@ -310,13 +311,7 @@ func TestWorkerMemorySameSequenceIdenticalTextUsesNonURLEvidence(t *testing.T) {
 	env.s.goRecordWorkerReport(context.Background(), env.todo, "box", "s1", workerMemoryConclusion, []string{"test B passed"}, turnEnd)
 	env.s.tasks.outcomeRuns.Wait()
 	records := workerMemoryRecords(t, env.e, "explicit")
-	wantA := workerMemoryItemID(env.todo.ID, "box", "s1", 1, 1, "call-a")
-	wantB := workerMemoryItemID(env.todo.ID, "box", "s1", 1, 1, "call-b")
-	seen := map[string]bool{}
-	for _, record := range records {
-		seen[record.ID] = true
-	}
-	if len(records) != 2 || !seen[wantA] || !seen[wantB] {
+	if len(records) != 2 || records[0].ID == records[1].ID {
 		t.Fatalf("non-URL evidence did not distinguish parallel reports: %+v", records)
 	}
 }
