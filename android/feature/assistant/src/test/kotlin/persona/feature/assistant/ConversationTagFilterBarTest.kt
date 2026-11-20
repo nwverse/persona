@@ -67,6 +67,17 @@ class ConversationTagFilterBarTest {
         }
     }
 
+    @Test fun defaultEmptySetAddsNoRowOrSettingsOnlyControl() {
+        val fixture = Fixture().apply {
+            entries = emptyList()
+            customized = false
+        }
+        show(fixture)
+
+        rule.onNodeWithTag("conversation-tag-filter").assertDoesNotExist()
+        rule.onNodeWithContentDescription("Customize tag filters").assertDoesNotExist()
+    }
+
     @Test fun automaticPresentationOnlyRevealsEditingOnRequestAndSelectionStaysControlled() {
         val fixture = Fixture().apply {
             entries = listOf("Planning", "Travel")

@@ -86,6 +86,8 @@ internal fun ConversationTagFilterBar(
     onEdit: () -> Unit,
     onDone: () -> Unit,
 ) {
+    // A fresh install keeps the old list exactly: no empty strip or settings-only row before any tag exists.
+    if (entries.isEmpty() && !customized && !editing) return
     var draft by rememberSaveable { mutableStateOf("") }
     var problem by remember { mutableStateOf<ConversationTagProblem?>(null) }
     var pending by remember { mutableStateOf(false) }
