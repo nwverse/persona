@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/webpush"
 )
 
 func TestWriteQuiescerWaitsForInFlightWrites(t *testing.T) {
@@ -1543,5 +1544,119 @@ func TestLiveActivityResumeReplaysDeferredHoldBeforeStartClaim(t *testing.T) {
 	store.mu.Unlock()
 	if !slices.Equal(gotEvents, []string{"hold", "claim"}) {
 		t.Fatalf("live activity resume event order = %v, want [hold claim]", gotEvents)
+	}
+}
+
+// When the hub's first Web Push VAPID key has not yet been created and a
+// background dispatch arrives during a snapshot pause, key creation and push
+// delivery are deferred without noting a failure, then completed on resume.
+func TestWebPushDefersFirstKeyCreationAndDispatchUntilResume(t *testing.T) {
+	for _, raceResume := range []bool{false, true} {
+		name := "pause-then-resume"
+		if raceResume {
+			name = "resume-racing-beginOrDefer"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newFakePushService(t)
+			h := webPushHub(t, f)
+			store := &bgWriteStore{meshStore: newMeshStore()}
+			h.store = store
+			w := h.push.web
+			w.store = store
+			w.quiesce = &h.quiesce
+
+			b := f.browser(t, "/push/first")
+			sub := webSub{Device: "web-first", Endpoint: b.Sub.Endpoint, P256DH: b.Sub.P256DH, Auth: b.Sub.Auth}
+			if err := w.subscribe(sub); err != nil {
+				t.Fatal(err)
+			}
+
+			var sentMu sync.Mutex
+			var sentErrs []error
+			w.sent = func(_ string, _ int, err error) {
+				sentMu.Lock()
+				sentErrs = append(sentErrs, err)
+				sentMu.Unlock()
+			}
+
+			ctx := context.Background()
+			if err := h.quiesce.pause(ctx); err != nil {
+				t.Fatal(err)
+			}
+
+			payload := []byte(`{"v":1,"kind":"alert","title":"Deferred first push"}`)
+			msg := webpush.Message{TTL: webPushTTL, Urgency: webpush.UrgencyHigh}
+
+			if raceResume {
+				inDefer := make(chan struct{})
+				release := make(chan struct{})
+				var once sync.Once
+				h.quiesce.testOnPauseDefer = func() {
+					once.Do(func() {
+						close(inDefer)
+						<-release
+					})
+				}
+				w.dispatch(sub, payload, msg)
+				select {
+				case <-inDefer:
+				case <-time.After(time.Second):
+					t.Fatal("webpush dispatch did not enter paused beginOrDefer")
+				}
+				resumeDone := make(chan struct{})
+				go func() {
+					h.resumeDevelopmentWriters()
+					close(resumeDone)
+				}()
+				time.Sleep(20 * time.Millisecond)
+				close(release)
+				select {
+				case <-resumeDone:
+				case <-time.After(time.Second):
+					t.Fatal("resumeDevelopmentWriters did not finish")
+				}
+			} else {
+				w.dispatch(sub, payload, msg)
+				waitFor(t, "first push queued while paused", func() bool {
+					w.mu.Lock()
+					defer w.mu.Unlock()
+					return len(w.pendingPushes) == 1
+				})
+				if store.settingWrites(webPushKeysSetting) != 0 {
+					t.Fatal("VAPID key was written while paused")
+				}
+				if d := w.delivery(sub.Device); d.FailedAt != nil || d.Error != "" {
+					t.Fatalf("paused deferral noted a delivery failure: %+v", d)
+				}
+				sentMu.Lock()
+				if len(sentErrs) != 0 {
+					sentMu.Unlock()
+					t.Fatalf("paused deferral invoked sent callback: %v", sentErrs)
+				}
+				sentMu.Unlock()
+				f.none(t)
+
+				h.resumeDevelopmentWriters()
+			}
+
+			r := f.next(t)
+			got := webOpened(t, b, r)
+			if got["title"] != "Deferred first push" {
+				t.Fatalf("delivered push = %v, want Deferred first push", got)
+			}
+			if store.settingWrites(webPushKeysSetting) != 1 {
+				t.Fatalf("VAPID key setting writes = %d, want 1", store.settingWrites(webPushKeysSetting))
+			}
+			waitFor(t, "delivery noted as OK after resume", func() bool {
+				d := w.delivery(sub.Device)
+				return d.OKAt != nil && d.FailedAt == nil && d.Error == ""
+			})
+			sentMu.Lock()
+			if len(sentErrs) != 1 || sentErrs[0] != nil {
+				sentMu.Unlock()
+				t.Fatalf("sent callbacks = %v, want [nil]", sentErrs)
+			}
+			sentMu.Unlock()
+		})
 	}
 }

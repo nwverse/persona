@@ -88,6 +88,14 @@ type webPushQueued struct {
 	done      chan struct{}
 }
 
+// webPushDeferred is a background dispatch deferred while a snapshot pause
+// prevents creating the hub's first VAPID key; replayed on resumeWrites.
+type webPushDeferred struct {
+	sub       webSub
+	plaintext []byte
+	message   webpush.Message
+}
+
 type webPusher struct {
 	store   Store
 	quiesce *writeQuiescer
@@ -110,6 +118,7 @@ type webPusher struct {
 	subs           map[string]webSub // by device
 	last           map[string]webDelivery
 	pendingForgets []webSub
+	pendingPushes  []webPushDeferred
 
 	queueMu sync.Mutex
 	tails   map[webPushSubscription]*webPushQueued // the last dispatch queued for each browser endpoint
@@ -146,36 +155,44 @@ func newWebPusher(store Store, logf func(string, ...any)) *webPusher {
 // key is the hub's VAPID key pair, made and stored the first time it is needed. A pair another hub process stored
 // meanwhile (blue-green) wins over the one made here: what is stored is what is read back.
 func (w *webPusher) key(ctx context.Context) (webpush.Keys, error) {
+	keys, _, err := w.keyOrDefer(ctx, nil)
+	return keys, err
+}
+
+func (w *webPusher) keyOrDefer(ctx context.Context, onPaused func()) (webpush.Keys, bool, error) {
 	if w == nil {
-		return webpush.Keys{}, errors.New("web push: no pusher")
+		return webpush.Keys{}, false, errors.New("web push: no pusher")
 	}
 	w.keyMu.Lock()
 	defer w.keyMu.Unlock()
 	if w.keys.Valid() {
-		return w.keys, nil
+		return w.keys, false, nil
 	}
 	if w.store != nil {
 		var stored webpush.Keys
 		if ok, err := w.store.Setting(ctx, webPushKeysSetting, &stored); err != nil {
-			return webpush.Keys{}, err
+			return webpush.Keys{}, false, err
 		} else if ok && stored.Valid() {
 			w.keys = stored
-			return stored, nil
+			return stored, false, nil
+		}
+		if !quiesceHeld(ctx) {
+			if !w.quiesce.beginOrDefer(onPaused) {
+				if onPaused != nil {
+					return webpush.Keys{}, true, nil
+				}
+				return webpush.Keys{}, false, i18n.Err("hub-selfupdate.err_quiesced")
+			}
+			defer w.quiesce.end()
 		}
 	}
 	made, err := webpush.NewKeys()
 	if err != nil {
-		return webpush.Keys{}, err
+		return webpush.Keys{}, false, err
 	}
 	if w.store != nil {
-		if !quiesceHeld(ctx) {
-			if !w.quiesce.begin() {
-				return webpush.Keys{}, i18n.Err("hub-selfupdate.err_quiesced")
-			}
-			defer w.quiesce.end()
-		}
 		if err := w.store.PutSetting(ctx, webPushKeysSetting, made); err != nil {
-			return webpush.Keys{}, err
+			return webpush.Keys{}, false, err
 		}
 		var stored webpush.Keys
 		if ok, err := w.store.Setting(ctx, webPushKeysSetting, &stored); err == nil && ok && stored.Valid() {
@@ -184,10 +201,11 @@ func (w *webPusher) key(ctx context.Context) (webpush.Keys, error) {
 	}
 	w.keys = made
 	w.logf("web push: made the VAPID key")
-	return made, nil
+	return made, false, nil
 }
 
-// currentKey is the key without making one ("" when none was made yet).
+// resumeWrites replays subscription drops and first-key dispatches deferred
+// while a snapshot paused writes.
 func (w *webPusher) resumeWrites() {
 	if w == nil {
 		return
@@ -195,7 +213,12 @@ func (w *webPusher) resumeWrites() {
 	w.mu.Lock()
 	forgets := w.pendingForgets
 	w.pendingForgets = nil
+	pushes := w.pendingPushes
+	w.pendingPushes = nil
 	w.mu.Unlock()
+	for _, p := range pushes {
+		w.dispatch(p.sub, p.plaintext, p.message)
+	}
 	if len(forgets) == 0 {
 		return
 	}
@@ -411,7 +434,22 @@ func (w *webPusher) noted(s webSub, status int, err error) {
 // push posts plaintext to s, tried again after each of retryWaits while the failure may pass. It returns the push
 // service's status (0: none came) and, when it did not take it, why. A subscription that is gone is dropped.
 func (w *webPusher) push(ctx context.Context, s webSub, plaintext []byte, m webpush.Message) (int, error) {
-	keys, err := w.key(ctx)
+	return w.deliver(ctx, s, plaintext, m, false)
+}
+
+func (w *webPusher) deliver(ctx context.Context, s webSub, plaintext []byte, m webpush.Message, deferOnQuiesce bool) (int, error) {
+	var onPaused func()
+	if deferOnQuiesce {
+		onPaused = func() {
+			w.mu.Lock()
+			w.pendingPushes = append(w.pendingPushes, webPushDeferred{sub: s, plaintext: plaintext, message: m})
+			w.mu.Unlock()
+		}
+	}
+	keys, deferred, err := w.keyOrDefer(ctx, onPaused)
+	if deferred {
+		return 0, nil
+	}
 	if err != nil {
 		w.noted(s, 0, err)
 		return 0, err
@@ -490,7 +528,7 @@ func (w *webPusher) dispatch(s webSub, plaintext []byte, m webpush.Message) {
 		// still close done above, allowing the next dispatch to proceed.
 		ctx, cancel := context.WithTimeout(context.Background(), webPushTimeout*time.Duration(len(w.retryWaits)+1)+10*time.Second)
 		defer cancel()
-		_, _ = w.push(ctx, queued.sub, queued.plaintext, queued.message)
+		_, _ = w.deliver(ctx, queued.sub, queued.plaintext, queued.message, true)
 	}()
 }
 
