@@ -252,6 +252,7 @@ func (s *Service) supervisedWorking(ctx context.Context, t Todo) {
 	b.mu.Lock()
 	delete(b.pending, t.ID+"|"+sigReview)
 	delete(b.pending, t.ID+"|"+sigParkedDue)
+	delete(b.pending, t.ID+"|"+sigEstimateDue)
 	b.mu.Unlock()
 }
 

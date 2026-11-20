@@ -30,6 +30,11 @@ follow-up turns. During an existing mirror retry, unreadable channel status is n
 consume that bounded retry budget and recheck before posting. Keep the same card and key; do not claim restart or eviction
 deduplication from this memory-only state.
 
+Classify every Feishu frequency-limit code at the shared rate-limit boundary (#11849). `boardPut` deliberately keeps
+the existing board after a transient edit failure so the next update edits that message; treating error 230429 as
+permanent replaces it with a duplicate board. Cover both typed and text-wrapped errors, and assert the next update's
+message id rather than only counting posts.
+
 ## Stage evidence is not runtime state (#3380)
 
 The final handoff alone misses progress while an agent still works or waits on background jobs. Observe complete assistant replies from session lists and followed items too, but never use user text, tool output or partial deltas as delivery evidence. Skip list snippets ending in an ellipsis and items marked with `FullSize`; never fetch full transcripts in the session-list event queue. Final handoffs and complete followed items supply the missing evidence. Keep list-row deduplication to avoid repeated deploy checks.

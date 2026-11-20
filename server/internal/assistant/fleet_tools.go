@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -27,6 +28,7 @@ const runtimeCLITool = "phone_runtime_cli"
 // are ok and give their tools to agents too (mail); for the assistant also its own, then Cua's, ego's and those of
 // the connectors only it gets (Feishu, GitHub…).
 func (s *Service) mcpTools(ctx context.Context, assistant bool) []proto.Tool {
+	ctx = i18n.With(ctx, s.lang(ctx))
 	var agents, assistantOnly []proto.Tool
 	if s.ext != nil {
 		agents, assistantOnly = s.ext.AgentTools(ctx, assistant)
@@ -41,7 +43,7 @@ func (s *Service) mcpTools(ctx context.Context, assistant bool) []proto.Tool {
 		tools = append(tools, s.Tools(ctx)...)
 		tools = append(tools, assistantOnly...)
 	}
-	return tools
+	return localizedMCPTools(tools, s.toolLanguage(ctx))
 }
 
 // phoneToolTries is how many times a tool list asks the hub for the phone's tools, phoneToolRetry apart, before it
@@ -117,7 +119,8 @@ func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, 
 
 // Discovery with a cursor must distinguish a denied/empty list from a failed
 // state read. Otherwise the failed list is cached until an unrelated link changes.
-func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session string, assistant, guestHint bool) ([]proto.Tool, error) {
+func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session string, assistant, guestHint bool) (result []proto.Tool, resultErr error) {
+	defer func() { result = localizedMCPTools(result, s.toolLanguage(ctx)) }()
 	assistant = assistant && s.assistantDiscovery(ctx, machine, session)
 	allowed, guest, err := s.guestOf(ctx, machine, session)
 	if err != nil {
@@ -385,4 +388,23 @@ func (s *Service) assistantSummary(ctx context.Context, tool, summary string) (s
 		return summary, false
 	}
 	return s.ext.AssistantSummary(ctx, tool, summary)
+}
+
+// Localize only fixed built-in definitions, after discovery/permission filtering.
+// The source slices and third-party tool contracts are never rewritten.
+func localizedMCPTools(tools []proto.Tool, lang string) []proto.Tool {
+	out := slices.Clone(tools)
+	for i, t := range out {
+		localized := prompts.LocalizeTool(prompts.MCPTool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}, lang)
+		out[i].Description, out[i].InputSchema = localized.Description, localized.InputSchema
+	}
+	return out
+}
+
+// A zero Service can enumerate its static tools without a configured hub.
+func (s *Service) toolLanguage(ctx context.Context) string {
+	if s.hub == nil {
+		return ""
+	}
+	return string(s.lang(ctx))
 }

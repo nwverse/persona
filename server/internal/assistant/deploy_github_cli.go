@@ -41,8 +41,8 @@ func githubCLIGet(ctx context.Context, path string, out any) error {
 	resp, err := githubCLIResponse(stdout.Bytes())
 	if err != nil {
 		if runErr != nil {
-			return fmt.Errorf("authenticated GitHub CLI unavailable (no anonymous fallback): %s; %s",
-				githubDiagnostic(runErr.Error()), githubDiagnostic(stderr.String()))
+			return fmt.Errorf("authenticated GitHub CLI unavailable (no anonymous fallback) (%w): %s; %s",
+				errGitHubUnconfigured, githubDiagnostic(runErr.Error()), githubDiagnostic(stderr.String()))
 		}
 		return fmt.Errorf("authenticated GitHub CLI returned an invalid response")
 	}

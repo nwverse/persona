@@ -18,20 +18,27 @@ const (
 // assistantOrigin is the manager-recorded origin for a model call. Session state covers Claude from before process
 // start and every resumed conversation; the process record covers Codex while its proc-* key is becoming a thread id.
 func (n *Node) assistantOrigin(id string) string {
+	origin, _ := n.assistantOriginCwd(id)
+	return origin
+}
+
+// assistantOriginCwd also returns the trusted directory the assistant process started in. A hook's current cwd may
+// have changed since then and must not inherit directory-local assumptions made for the original assistant directory.
+func (n *Node) assistantOriginCwd(id string) (string, string) {
 	if n.state != nil {
 		if st, ok := n.state.get(id); ok && st.Origin != "" {
-			return st.Origin
+			return st.Origin, st.Cwd
 		}
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	read := func(p *assistantProc) string {
+	read := func(p *assistantProc) (string, string) {
 		if p == nil {
-			return ""
+			return "", ""
 		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		return p.origin
+		return p.origin, p.cwd
 	}
 	if p := n.procs[id]; p != nil {
 		return read(p)
@@ -47,7 +54,7 @@ func (n *Node) assistantOrigin(id string) string {
 			return read(p)
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // inboxReadRules lets an Inbox investigation read the owner's installed Skills and knowledge base. Claude Code checks
