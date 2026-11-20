@@ -3140,19 +3140,14 @@ final class AppModel {
             // another device changed the list: only the shown assistant's is read again (#9436)
             if isHub, SavedPromptStore.concerns(eventManager: manager, shownManager: api?.shownManager) { SavedPromptStore.shared.reload() }
         case .personas:
-            // The new tier's package is downloaded whole before the face changes (PersonaStore.load). The list changed
+            // The new tier's package is downloaded whole before the face changes. The list changed
             // just now: a refresh already under way may have asked before, so it is read again after that one (#2405).
-            if isHub { Task { await personas.reload(api) } }
+            if isHub, let from = api { personas.packagesChanged(on: from) }
         case .look(let id, let effective):
             // Another device chose an avatar, or the hub went back to the default. Like every hub-level setting, the
             // avatar is the current hub's: another group's choice is its own (docs/protocol/multi-hub.md). The hub it
             // came from goes with it: when another group's became current before it is handled, it changes nothing.
-            if isHub, let from = api {
-                Task {
-                    guard api?.config.url == from.config.url else { return }
-                    await personas.follow(id, effective: effective, api: from)
-                }
-            }
+            if isHub { personas.receive(id, effective: effective, api: api) }
         case .managers:
             // Settings › Managers reads the roster again (ManagersView watches this).
             if isHub { managersRevision += 1 }
@@ -3760,18 +3755,27 @@ final class AppModel {
 
     func retry(_ key: SessionKey, _ msg: PendingMessage, clearDraft: String? = nil) {
         guard allowSend(key, forMessage: true) else { return }
-        guard let i = chat(key).pending.firstIndex(where: { $0.id == msg.id }) else { return }
-        guard chat(key).pending[i].mayHaveArrived == true else {
-            chat(key).pending[i].state = .sending
-            if chat(key).pending[i].refused == true {
+        let store = chat(key)
+        guard let i = store.pending.firstIndex(where: { $0.id == msg.id }) else { return }
+        guard store.pending[i].mayHaveArrived == true else {
+            let retryingEffort = store.pending[i].state == .failed && store.pending[i].requiredEffort != nil
+            if retryingEffort {
+                // An explicit resend follows the current effort. sendPending still waits if a new change is pending.
+                store.pending[i].requiredEffort = nil
+                store.pending[i].failure = nil
+                store.pending[i].stalledSince = nil
+            }
+            store.pending[i].state = .sending
+            let refused = store.pending[i].refused == true
+            if refused {
                 // Refused with nothing typed: under its old id the hub would answer that refusal again without asking
                 // the computer, and Clear and Send's clear_draft would be another op on a used id (op_id_reused).
                 // Saved before it goes: an app killed meanwhile sends it again under the id it went with.
-                chat(key).pending[i].id = UUID()
-                chat(key).pending[i].refused = nil
-                saveOutbox()
+                store.pending[i].id = UUID()
+                store.pending[i].refused = nil
             }
-            deliver(key, chat(key).pending[i], clearDraft: clearDraft)
+            if refused || retryingEffort { saveOutbox() }
+            deliver(key, store.pending[i], clearDraft: clearDraft)
             return
         }
         chat(key).pending[i].state = .sending
@@ -4722,11 +4726,13 @@ final class AppModel {
         SavedPromptStore.shared.reload()
         followScope()
         // The avatar is the new hub's from now, before its list is read below: a card tapped meanwhile goes to it.
-        personas.switchHub(api)
+        let avatarHub = api
+        personas.switchHub(avatarHub)
+        let avatarRequest = avatarHub.flatMap { personas.mark(for: $0) }
         let newChat = assistantNewChat
         Task {
             await refreshAssistant()
-            await personas.refresh(api)
+            if let avatarRequest { await personas.refresh(avatarHub, since: avatarRequest) }
             selectAssistantMain(after: newChat)
         }
         applyPersonaPalette()

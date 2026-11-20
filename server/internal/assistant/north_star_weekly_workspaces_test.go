@@ -46,6 +46,11 @@ func TestNorthStarWeeklyWorkspacesOfClosedTodos(t *testing.T) {
 	raw, err := json.Marshal(tasks)
 	mustDo(t, err)
 	mustDo(t, database.CreateTaskPlan(ctx, db.TaskPlanRow{ID: "plan-workspace", Conversation: "main-chat", Tasks: raw, State: "started", CreatedAt: closed.Add(-time.Hour), UpdatedAt: closed}))
+	// The other plan was created later but ran first. Taking over cleared its execution binding only.
+	former, err := json.Marshal([]PlanTask{{ReuseTodo: "todo-created", ReservedTodoID: "todo-created",
+		Workspace: &TaskWorkspace{Mode: workspaceExisting}, WorkspaceResolved: &TaskWorkspaceResolved{Path: "/private/former"}}})
+	mustDo(t, err)
+	mustDo(t, database.CreateTaskPlan(ctx, db.TaskPlanRow{ID: "former-plan", Conversation: "main-chat", Tasks: former, State: "started", CreatedAt: closed, UpdatedAt: closed}))
 
 	weekly, err := northStarWeeklyCommand(ctx, database, hub, "2026-11-04", loc.String(), now)
 	mustDo(t, err)

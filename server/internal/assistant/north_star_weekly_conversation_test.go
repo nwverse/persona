@@ -83,7 +83,7 @@ func TestNorthStarWeeklyConversationNotFoundMatchesSevenDailyReads(t *testing.T)
 
 	dailyTotal := 0
 	for day := 28; day <= 31; day++ {
-		ns, err := northStarCommand(ctx, database, hub, time.Date(2026, 10, day, 0, 0, 0, 0, loc).Format(time.DateOnly), "", "", now)
+		ns, err := northStarCommand(ctx, database, hub, time.Date(2026, 10, day, 0, 0, 0, 0, loc).Format(time.DateOnly), "", loc.String(), now)
 		mustDo(t, err)
 		for _, failure := range ns.Availability.Failures {
 			if failure.Reason == "conversation_not_found" {
@@ -92,7 +92,7 @@ func TestNorthStarWeeklyConversationNotFoundMatchesSevenDailyReads(t *testing.T)
 		}
 	}
 	for day := 1; day <= 3; day++ {
-		ns, err := northStarCommand(ctx, database, hub, time.Date(2026, 11, day, 0, 0, 0, 0, loc).Format(time.DateOnly), "", "", now)
+		ns, err := northStarCommand(ctx, database, hub, time.Date(2026, 11, day, 0, 0, 0, 0, loc).Format(time.DateOnly), "", loc.String(), now)
 		mustDo(t, err)
 		for _, failure := range ns.Availability.Failures {
 			if failure.Reason == "conversation_not_found" {
@@ -104,7 +104,7 @@ func TestNorthStarWeeklyConversationNotFoundMatchesSevenDailyReads(t *testing.T)
 		t.Fatalf("weekly total %v, seven daily reads %d", last, dailyTotal)
 	}
 
-	daily, err := northStarCommand(ctx, database, hub, "2026-11-01", "", "", now)
+	daily, err := northStarCommand(ctx, database, hub, "2026-11-01", "", loc.String(), now)
 	mustDo(t, err)
 	encoded, err := json.Marshal(daily)
 	mustDo(t, err)

@@ -13,8 +13,8 @@ import (
 
 func TestNorthStarWeeklyContractAndReadOnly(t *testing.T) {
 	ctx := context.Background()
-	_, _, _, dsn := northStarWeeklyDB(t)
-	setNorthStarWeeklyOwnConfig(t, `{}`)
+	_, database, _, dsn := northStarWeeklyDB(t)
+	seedWeeklyRows(t, database, []time.Time{time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)})
 	ro, err := attachReadOnly(ctx, dsn, db.ManagerSet)
 	mustDo(t, err)
 	t.Cleanup(ro.Close)
@@ -45,7 +45,7 @@ func TestNorthStarWeeklyContractAndReadOnly(t *testing.T) {
 	}
 	encoded, err := json.Marshal(weekly)
 	mustDo(t, err)
-	for _, private := range []string{"main-chat", "dot-chat", "/synthetic/private/path"} {
+	for _, private := range []string{"main-chat", "dot-chat", "/synthetic/private/path", "weekly-private-"} {
 		if strings.Contains(string(encoded), private) {
 			t.Errorf("weekly output contains %q: %s", private, encoded)
 		}
