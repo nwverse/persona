@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // Conversation tasks on a phone (#11511): under 640 px the header's button gives way, so the title keeps its room, and
-// ⋯ offers the panel instead; from 640 px the button is there and ⋯ is as it was.
+// ⋯ offers the panel instead; from 640 px the button is there and ⋯ is as it was. The "Loading earlier messages" row
+// is drawn over the chat's top padding, out of the flow: an older page starting or landing moves nothing on screen.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,7 +22,7 @@ const media = vi.hoisted(() => {
   return state;
 });
 
-const transcript = vi.hoisted(() => ({ items: [] as Item[], loading: false, error: "", hasMore: false, streaming: "" }));
+const transcript = vi.hoisted(() => ({ items: [] as Item[], loading: false, error: "", hasMore: false, streaming: "", loadingEarlier: false }));
 vi.mock("./useTranscript", () => ({ useTranscript: () => transcript }));
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
@@ -53,7 +54,7 @@ const openMore = async () => {
 
 beforeEach(() => {
   localStorage.clear();
-  Object.assign(transcript, { items: [reply], hasMore: false });
+  Object.assign(transcript, { items: [reply], hasMore: false, loadingEarlier: false });
   vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } })));
   host = document.createElement("div");
   document.body.append(host);
@@ -110,3 +111,19 @@ describe("conversation tasks in the header", () => {
   });
 });
 
+it("draws Loading earlier messages out of the flow, over the chat's top padding", async () => {
+  media.phone = true;
+  upsertSession(agent);
+  Object.assign(transcript, { hasMore: true, loadingEarlier: true });
+  act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
+  await flush();
+  const status = [...host.querySelectorAll('[data-chat-scroll] [role="status"]')].find((s) => s.textContent?.includes(t("chat-chatview.loading_earlier")))!;
+  expect(status).toBeDefined();
+  const row = status.parentElement!;
+  expect(row.hasAttribute("data-loading-earlier")).toBe(true);
+  expect(row.className.split(" ")).toEqual(expect.arrayContaining(["absolute", "pointer-events-none", "top-1"]));
+  // nothing positioned between it and the scroller, its containing block, which scrolls it with the chat
+  expect(row.parentElement!.hasAttribute("data-chat-content")).toBe(true);
+  expect(row.parentElement!.className.split(" ")).not.toContain("relative");
+  expect(row.parentElement!.parentElement!.matches("[data-chat-scroll].relative")).toBe(true);
+});

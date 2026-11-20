@@ -2146,8 +2146,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             ) : <div role="alert" className="rounded-control bg-inset px-3 py-2 text-[13px] text-red">{t("chat-chatview.start_failed", { error: session.start_error })}</div>)}
             {session?.start_error_code === "shell_waiting" && <Suspense fallback={null}><ShellQuestion session={session} /></Suspense>}
             {starting && !tr.loading && !outgoing && <Loading label={t("chat-chatview.starting_agent")} />}
+            {/* over the content's top padding, in the scroller: starting and ending an older page move nothing on screen,
+                and nothing writes scrollTop for it (that would stop a touch fling) */}
             {earlier.loadingEarlier && (
-              <div className="flex justify-center py-2">
+              <div data-loading-earlier className="pointer-events-none absolute inset-x-0 top-1 flex justify-center">
                 <Loading label={t("chat-chatview.loading_earlier")} />
               </div>
             )}
