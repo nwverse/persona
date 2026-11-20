@@ -142,6 +142,9 @@ With `assistant.done_needs_delivery` on, a supervisor's `accepted` waits until t
 (#6428). Which code host reads it is chosen by the link's host (#11584, `server/internal/assistant/code_host.go`):
 GitHub pull requests are read by built-in GitHub, exactly as before; a request on a host a provider claims is read
 through that provider: `repo.parse`, `repo.link` (it must answer `pull_request`), then `repo.describe`'s `state`.
+Merge requests on gitlab.com and on the GitLab instances the manager's `manager.json` names are read by built-in
+GitLab (`docs/assistant/managers.md`). The minute status sweep polls all of them, so a merged or closed request wakes
+the supervisor its merge wait parked, as a GitHub PR does.
 
 | The provider… | `accepted` |
 | --- | --- |
@@ -153,7 +156,7 @@ through that provider: `repo.parse`, `repo.link` (it must answer `pull_request`)
 A provider's request counts as a task's delivery when an Agent reports it as one; today that is an address ending in
 `/merge_requests/<n>`. Its state is read only through the manager, with the provider's own credentials; nothing of it
 reaches a model beyond the reply's one line. Code hosts have three layers kept apart: reading (above), events (none
-pushed yet) and writes (comments, reviews and merging stay connector tools behind the write gate).
+pushed; the sweep polls) and writes (comments, reviews and merging stay connector tools behind the write gate).
 
 ## Writing a provider
 

@@ -101,6 +101,7 @@ setting; the 4 GB Gradle daemon and non-heap allocations are separate.
 | Web / `.github/workflows/web-test.yml` | `scripts/ci/web.sh` | npm ci, scoped ESLint, TypeScript, complete Vitest, production build and privacy | ubuntu-latest | 2–4 / 4–7 min |
 | Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token/motion checker tests, translations/literals, token and motion ratchets, all-module lint and unit-test variants, debug APK | ubuntu-latest, two lanes | 8–15 / 15–30 min (branch runs with main's caches measured 15–18 min, #3056) |
 | Apple / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios` and `scripts/ci/apple.sh macos` | PersonaKit/iOS/Watch/HTML and Mac build/unit tests, and in the iOS lane the isolation lint with its own tests (`scripts/test/isolation-lint.sh`; `docs/apple/performance.md`, "Isolation lint") and the no-CallKit check of the device and simulator apps (`scripts/release/check_no_callkit.py`; `docs/operations/release.md`, "No CallKit"); synthetic configuration, no distribution signing; real results remain visible | macos-26 runners, Xcode 26.0.1 (Swift 6.2) | queue and execution measured separately |
+| iOS 18.6 compatibility / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios18` | offline `PersonaTests` at the deployment floor, with iPhone 16 Pro and iPad layout coverage, separate HTML batches and a test-host restart check | macos-15 (arm64), Xcode 26.3 | one runner for up to 150 minutes per manual dispatch, about 8.86 GB to download a missing runtime |
 | Scripts/docs / `.github/workflows/scripts-tests.yml` | `scripts/ci/scripts.sh` | every Python script test, doc/code paths and index, layout/shell/Python compatibility, privacy-rule regression, catalog/translation/token checks, actionlint, issue-link logic, website worker | ubuntu-latest | 2–4 / 4–7 min |
 | Rust core / `.github/workflows/core-test.yml` | `scripts/ci/core.sh` | rustfmt, clippy, the shared core's unit tests and the fixtures it implements (directly and through its runtime), generated codecs up to date, the HarmonyOS NAPI binding linted for `aarch64-unknown-linux-ohos` with its `ohos` feature (the Rust target only, no SDK and nothing linked) and its notices, the generated ArkTS codec against the real runtime on the host (`harmony/tests/core-host/`, Node.js from the workflow) plus the two existing ArkTS core tests, release library, an independently compiled C11 client and dynamic-export check on Linux (not Swift/Apple ABI); the Android lane also builds it for `:core:rustcore`'s binding tests | ubuntu-latest | measured on the first runs |
 | Runtimes / `.github/workflows/runtimes-test.yml` | `scripts/ci/runtimes.sh` | TypeScript SDK typecheck/test/portability, every runtime integration's npm tests | ubuntu-latest | 2–4 / 4–7 min |
@@ -118,10 +119,29 @@ are stored. Server Go and Robolectric caches restore with `actions/cache/restore
 repository's 10 GB cache. The initial SPM/runtime download makes a cold Apple run materially slower. Cache and parallelization work remains
 tracked in #1214; cache-based test substitution is not allowed.
 
+To check the iOS deployment floor (#10261), dispatch **Apple CI** with lane **ios18**
+(`gh workflow run apple-test.yml -f lane=ios18`). The regular CI workflow continues to select `ios`.
+The compatibility job uses the runner's installed iOS 18.6 image, or requests that exact version from Xcode.
+Each dispatch resolves packages, builds the ad-hoc test host, and runs the offline suites with the regular iOS fixture exclusions.
+The About version comparisons use their English visual configuration and disposable screenshot directories. The compact suite
+runs on the iPhone, and the regular-width suite runs on a stock 10th-generation iPad with the same 18.6 runtime.
+On Apple silicon with Xcode 27.2, the runtime installed and dependency caches warm, one local run took 28 minutes,
+including 9 minutes 52 seconds for the build and 10 minutes 53 seconds for the main iPhone test batch.
+The step summary records each dispatch's build and test time separately from queue time.
+Each xcresult must identify the selected iOS 18.6 device. The job scans each xcodebuild test log for host restarts and fails when a restart is unexpected or unattributed,
+even when Xcode reports passing totals.
+The two known `PersonaCoreContinuityTests` restarts in `testEveryContinuityFixtureAgainstNativeChatStore`
+and `testNativeAndCoreShadowReplayMatchesFoldAndReloadRules` are reported individually.
+Some Xcode versions record the known aborts as failed cases and exit 65. The result check reports them as crashes
+when the case, allocator diagnostic, restart and xcresult signal agree. An assertion failure in either test still fails
+the job. Failure artifacts include the batch logs and xcresults.
+
 Local prerequisites: Go from `server/go.mod`, Node from `web/.nvmrc`, Python 3.9+ (CI uses 3.11), Docker/Compose for server/image,
 `pip install -r scripts/ci/requirements.txt` and `go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12` for scripts, Bun 1.4.2 for
-TypeScript SDK. Android needs JDK 21 and SDK `platforms;android-37.0` / `build-tools;37.0.0` plus GNU timeout; Apple needs macOS 26,
-Xcode 26.0.1, XcodeGen and rsync. Local scripts fail on missing required tools rather than claim success. They do not deploy or publish.
+TypeScript SDK. Android needs JDK 21 and SDK `platforms;android-37.0` / `build-tools;37.0.0` plus GNU timeout.
+Both Apple lanes need XcodeGen and rsync. The regular lane needs macOS 26 and Xcode 26.0.1. For the iOS 18.6 lane use
+Xcode 26.3 on macOS 15, or set `DEVELOPER_DIR` to a newer local Xcode with the same 18.6 simulator image.
+Local scripts fail on missing required tools rather than claim success. They do not deploy or publish.
 Android also needs NDK `29.0.14206865` and the pinned Rust `aarch64-linux-android` / `x86_64-linux-android` targets to package
 `:core:rustcore-android` (its setup, ABI/size report and owned-device fixture replay: `android/core/rustcore-android/README.md`).
 The retired native-Mac offline-test entitlement preparation was removed with that target. iOS keeps its shipping entitlements and local ad-hoc test signing; no legacy profile-stripping helper is run.
