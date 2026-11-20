@@ -268,7 +268,7 @@ func (s *Service) dropQueuedNeeds(todoID string) bool {
 // stays an agent of its own (false). While assistant.agent_tasks is on (#3617, agent_tasks.go) an agent any other
 // conversation starts is a quiet task too, whatever main_tasks_quiet says: supervised by that conversation when it is
 // a leader, else by the main one. told is who hears of the task, as agent_start's answer says it.
-func (s *Service) quietAgentTask(ctx context.Context, conversation string, m Device, cwd, prompt string, tab any, sid string) (told string, ok bool) {
+func (s *Service) quietAgentTask(ctx context.Context, conversation string, m Device, cwd, prompt string, tab any, sid, agent string) (told string, ok bool) {
 	if sid == "" {
 		return "", false
 	}
@@ -310,7 +310,7 @@ func (s *Service) quietAgentTask(ctx context.Context, conversation string, m Dev
 		s.superviseTodo(ctx, todo.ID, supervisor, nil, 0)
 	}
 	s.briefFor(ctx, s.callerOrigin(ctx, conversation), todo, nil, 0) // who asked, before its agent is linked (task_brief.go)
-	if err := s.linkTodoAgent(ctx, todo.ID, m.ID, sid, title, cwd, ""); err != nil {
+	if err := s.linkTodoAgent(ctx, todo.ID, m.ID, sid, title, cwd, agent); err != nil {
 		s.logf("agent_start %s: link %s: %v", short(sid), todo.ID, err)
 	}
 	if _, err := s.appendFeed(ctx, conversation, feedTask, todo.ID, nil); err != nil {
