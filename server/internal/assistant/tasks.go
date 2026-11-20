@@ -184,6 +184,8 @@ type PlanTask struct {
 	rememberKind bool
 	// task_spawn preserves the caller's mode instead of applying a fresh task's Claude-family permission default.
 	preservePermission bool
+	// A spawned session can inherit a known launcher default even when agent.new configures another model.
+	launcherDefaultModel bool
 	// planFirst: start defaults asked for the self-planning constraint in the prompt (start_defaults.go); never
 	// serialized, this try only.
 	planFirst bool
@@ -965,7 +967,7 @@ func (s *Service) taskRoutes() {
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/route", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
-			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot send"))
+			writeTypedNothing(w, http.StatusForbidden, "", errors.New("read-only role cannot send"))
 			return
 		}
 		var in struct {
@@ -974,11 +976,11 @@ func (s *Service) taskRoutes() {
 			AskedAt string `json:"asked_at"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
+			writeTypedNothing(w, http.StatusBadRequest, "", err)
 			return
 		}
 		if strings.TrimSpace(in.Text) == "" || in.TodoID == "" {
-			apierr.Write(w, http.StatusBadRequest, errors.New("todo_id and text are required"))
+			writeTypedNothing(w, http.StatusBadRequest, "", errors.New("todo_id and text are required"))
 			return
 		}
 		var it FeedItem
@@ -988,8 +990,12 @@ func (s *Service) taskRoutes() {
 		} else {
 			it, err = s.routeToTask(r.Context(), r.PathValue("id"), in.TodoID, in.Text)
 		}
-		if err != nil {
-			apierr.Write(w, http.StatusConflict, err)
+		if err != nil { // 409 with delivered: send_in_doubt for words that may be with the Agent (todo_write_outcome.go)
+			keys := routeInDoubtKeys
+			if in.AskedAt != "" { // words that answer a decision, which may still show when they could not be recorded
+				keys = answerInDoubtKeys
+			}
+			writeRouteError(w, err, keys)
 			return
 		}
 		apierr.WriteJSON(w, map[string]any{"item": it})

@@ -8,13 +8,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 func spawnFixture(t *testing.T, launcher, mode string) (*Service, *fakeHub, Todo) {
 	t.Helper()
-	s, f := newQuietService(t)
+	return spawnFixtureOn(t, launcher, mode, nil)
+}
+
+func spawnFixtureOn(t *testing.T, launcher, mode string, store Store) (*Service, *fakeHub, Todo) {
+	t.Helper()
+	s, f := newQuietServiceOn(t, store)
 	// Install metadata before any asynchronous dispatch starts using the hub.
 	s.hub = &taskHandoffTestHub{fakeHub: f, info: map[string]proto.NodeInfo{"box": {Executable: "/test/persona-node"}}}
 	todo := startTaskLeader(t, s, f)
@@ -216,6 +224,214 @@ func TestTaskSpawnNonAssignmentAgentKeepsReportedModel(t *testing.T) {
 	}
 	if got := f.starts[len(f.starts)-1]["model"]; got != "upstream/model-x" {
 		t.Fatalf("child model = %v, want the parent's unchanged upstream/model-x", got)
+	}
+}
+
+// Exercise the supervised call through the node start, including the distinction between a
+// missing requested_model on an older node and an explicit launcher default on a newer one.
+func TestTaskSpawnStartsWithTheParentsLaunchModel(t *testing.T) {
+	const reply = "claude-opus-5-5"
+	requested, launcherDefault := "relay/model-x-1m", ""
+	row := proto.AgentModel{ID: "relay/model-x-1m", Resolved: reply}
+	var gatewayRow proto.AgentModel
+	if err := json.Unmarshal([]byte(`{"id":"relay/model-x-1m","resolved":"claude-opus-5-5","resolved_offered":true}`), &gatewayRow); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name       string
+		requested  *string
+		assignment string
+		spawned    bool
+		catalog    []proto.AgentModel
+		want       string
+	}{
+		{name: "node records the requested id", requested: &requested, want: requested},
+		{name: "node records the launcher default", requested: &launcherDefault},
+		{name: "spawned agent keeps its own request", requested: &requested, assignment: "relay/someone-else", spawned: true, want: requested},
+		{name: "original assignment wins", requested: &requested, assignment: "relay/planned", want: "relay/planned"},
+		{name: "older node reports a unique resolution", catalog: []proto.AgentModel{row}, want: row.ID},
+		{name: "gateway independently lists the exact reply", catalog: []proto.AgentModel{gatewayRow}, want: reply},
+		{name: "older node reports an offered id", catalog: []proto.AgentModel{row, {ID: reply}}, want: reply},
+		{name: "two routes resolve to the same reply", catalog: []proto.AgentModel{row, {ID: "relay/other", Resolved: reply}}, want: reply},
+		{name: "two context windows resolve to the same reply", catalog: []proto.AgentModel{row, {ID: row.ID + "[1m]", Resolved: reply}}, want: reply},
+		{name: "dynamic tier is not an exact source", catalog: []proto.AgentModel{{ID: "opusplan", Resolved: reply}}, want: reply},
+		{name: "only native default is reported", catalog: []proto.AgentModel{{ID: "default", Resolved: reply, Default: true}}, want: reply},
+		{name: "model list unknown", want: reply},
+		{name: "model absent from the list", catalog: []proto.AgentModel{{ID: "unrelated"}}, want: reply},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, todo := spawnFixtureOn(t, "claude", "plan", &profileTaskStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}})
+			ctx := context.Background()
+			setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.claude", Model: "an-unrelated-task-default", Effort: "low"})
+			if tc.spawned {
+				s.todos.mu.Lock()
+				s.todos.todos[todo.ID].Agents[0].Source = "spawned"
+				s.todos.mu.Unlock()
+			}
+			f.agentModels = map[string][]proto.AgentModel{"claude": tc.catalog}
+			f.setSessions("box", proto.Session{SessionID: "s1", Agent: "claude", Launcher: "claude", Cwd: "/code/app",
+				PermissionMode: "plan", Model: reply, RequestedModel: tc.requested, Effort: "high", Status: proto.StatusWorking})
+			if err := s.patchPlanTask(ctx, todo.PlanID, 0, func(task *PlanTask) {
+				task.Launcher, task.Model = "claude", tc.assignment
+			}); err != nil {
+				t.Fatal(err)
+			}
+			res := s.mcpCall(ctx, "box", "s1", "task_spawn", json.RawMessage(spawnArgs), false)
+			if res.IsError {
+				t.Fatal(res.Content)
+			}
+			start := f.starts[len(f.starts)-1]
+			if got, _ := start["model"].(string); got != tc.want || start["launcher"] != "claude" || start["permission_mode"] != "plan" {
+				t.Fatalf("child model=%q launcher=%v permissions=%v; want %q, claude, plan", got, start["launcher"], start["permission_mode"], tc.want)
+			}
+			if tc.requested == &launcherDefault {
+				want := map[string]any{}
+				if err := s.finishModel(ctx, "agent.new", want, ModelBinding{Provider: "launcher.claude", Effort: "high"}); err != nil {
+					t.Fatal(err)
+				}
+				ordinary := map[string]any{"launcher": "claude", "effort": "high"}
+				if err := s.applyModel(ctx, "agent.new", ordinary); err != nil {
+					t.Fatal(err)
+				}
+				if start["model"] != nil || start["effort"] != "high" || start["model_fingerprint"] != want["model_fingerprint"] ||
+					ordinary["model"] != "an-unrelated-task-default" || ordinary["model_fingerprint"] == start["model_fingerprint"] {
+					t.Fatalf("launcher default start %+v, expected fingerprint %v; ordinary start %+v", start, want["model_fingerprint"], ordinary)
+				}
+			}
+		})
+	}
+}
+
+func TestTaskSpawnKeepsExactGatewayID(t *testing.T) {
+	const name, reply, route = "test-relay", "upstream/model-x", "relay/model-x-1m"
+	models := []proto.ProviderModel{{ID: reply}}
+	presetModels := []extwire.ProviderModel{{ID: reply}}
+	for _, tc := range []struct {
+		name, kind, presetKind string
+		models                 []proto.ProviderModel
+	}{
+		{name: "provider catalog", kind: "launcher", models: models},
+		{name: "Messages API catalog", kind: "api", models: models},
+		{name: "associated launcher preset", kind: "launcher", presetKind: "launcher"},
+		{name: "associated Messages API preset", kind: "api", presetKind: "api"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			s, f, todo := spawnFixtureOn(t, name, "plan", &profileTaskStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}})
+			provider := storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: name, Kind: tc.kind, API: "messages",
+				BaseURL: "https://relay.example.invalid", Models: tc.models}}
+			if tc.presetKind != "" {
+				provider.Preset = "plugin/relay"
+				f.presets = []LauncherPreset{{ID: provider.Preset, Kind: tc.presetKind, API: "messages", Models: presetModels}}
+			}
+			putLaunchers(t, s, provider)
+			f.agentModels = map[string][]proto.AgentModel{name: {{ID: route, Resolved: reply}}}
+			f.setSessions("box", proto.Session{SessionID: "s1", Agent: "claude", Launcher: name, Cwd: "/code/app",
+				PermissionMode: "plan", Host: "herdr", Model: reply, Status: proto.StatusWorking})
+			if err := s.patchPlanTask(ctx, todo.PlanID, 0, func(p *PlanTask) { p.Launcher, p.Model = name, "" }); err != nil {
+				t.Fatal(err)
+			}
+			result := s.mcpCall(ctx, "box", "s1", "task_spawn", json.RawMessage(spawnArgs), false)
+			if result.IsError {
+				t.Fatal(result.Content)
+			}
+			start := f.starts[len(f.starts)-1]
+			if start["model"] != reply || start["launcher"] != name || start["permission_mode"] != "plan" {
+				t.Fatalf("session.start model=%v, launcher=%v, permission=%v", start["model"], start["launcher"], start["permission_mode"])
+			}
+		})
+	}
+}
+
+func TestTaskSpawnReadsOnlyTheParentsCatalog(t *testing.T) {
+	const launcher, reply, route = "relay", "upstream/model-x", "relay/model-x"
+	requested, launcherDefault := "explicit/model", ""
+	for _, tc := range []struct {
+		name, host, defaultHost, source, reported, assigned, want string
+		requested                                                 *string
+		exact                                                     bool
+		reads                                                     int
+	}{
+		{name: "assignment", reported: reply, requested: &requested, assigned: "plan/model", want: "plan/model"},
+		{name: "requested", reported: reply, requested: &requested, want: requested},
+		{name: "launcher default", reported: reply, requested: &launcherDefault},
+		{name: "no model"},
+		{name: "exact node row on cold fleet", host: "herdr", exact: true, reported: reply, want: reply, reads: 1},
+		{name: "shell provider", host: "herdr", reported: reply, want: reply, reads: 1},
+		{name: "runtime owns the same name", host: "paseo", reported: reply, want: route, reads: 1},
+		{name: "default engine owns the same name", defaultHost: "paseo", reported: reply, want: route, reads: 1},
+		{name: "runtime source without a host", source: proto.SourceRuntime, reported: reply, want: route, reads: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := newQuietServiceOn(t, &memStore{})
+			f.devices = []Device{{ID: "box", Online: true, Engine: tc.defaultHost}, {ID: "other", Online: true}}
+			if !tc.exact {
+				putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: launcher, Model: reply}})
+			}
+			rows := []proto.AgentModel{{ID: route, Resolved: reply}}
+			if tc.exact {
+				rows = append(rows, proto.AgentModel{ID: reply})
+			}
+			f.agentModels = map[string][]proto.AgentModel{launcher: rows}
+			parent := proto.Session{Launcher: launcher, Model: tc.reported, RequestedModel: tc.requested, Host: tc.host, SourceKind: tc.source}
+			before := f.callCount()
+			got := s.taskSpawnModel(t.Context(), "box", parent, &PlanTask{Launcher: launcher, Model: tc.assigned})
+			if got != tc.want {
+				t.Fatalf("model %q, want %q", got, tc.want)
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			reads := 0
+			for _, call := range f.calls[before:] {
+				if call.Method == DeviceLaunchersList || call.Device == "other" {
+					t.Fatalf("unexpected inventory read on %s: %s", call.Device, call.Method)
+				}
+				if call.Method == assistantwire.DeviceLaunchersModels {
+					reads++
+					var args struct {
+						Name, Host string
+						Refresh    bool
+					}
+					if err := json.Unmarshal(call.Params, &args); err != nil || call.Device != "box" || args.Name != launcher || args.Host != tc.host || args.Refresh {
+						t.Fatalf("wrong catalog request: %+v", call)
+					}
+				}
+			}
+			if reads != tc.reads {
+				t.Fatalf("target model reads %d, want %d", reads, tc.reads)
+			}
+		})
+	}
+}
+
+func TestTaskSpawnUsesOnlyDeclarationsOnTheParentsMachine(t *testing.T) {
+	const reply, route, gateway = "upstream/model-x", "relay/model-x", "https://relay.example.invalid"
+	ctx := t.Context()
+	s, f := newQuietServiceOn(t, &memStore{})
+	f.devices = []Device{{ID: "box", Online: true}, {ID: "other", Online: true}}
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "scoped", Model: reply},
+		Share: shareSelected, ScopeMachines: []string{"other"}})
+	if err := s.putSetting(ctx, launchersZshrcKey, map[string][]proto.Launcher{
+		"box":   {{Name: "shell", Source: "zshrc", BaseURL: gateway + "/v1"}, {Name: "wrapper", Source: "path", Model: reply}},
+		"other": {{Name: "other-shell", Source: "zshrc", BaseURL: gateway}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.presets = []LauncherPreset{{ID: "plugin/gw", Kind: "launcher", BaseURL: gateway, Models: []extwire.ProviderModel{{ID: reply}}}}
+	if err := s.putSetting(ctx, launchersCustomModelsKey, []customModel{
+		{Machine: "box", Launcher: "remembered", Model: reply}, {Machine: "other", Launcher: "other-pick", Model: reply},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"remembered": reply, "shell": reply, "wrapper": reply,
+		"scoped": route, "other-shell": route, "other-pick": route, "unknown": route} {
+		t.Run(name, func(t *testing.T) {
+			f.agentModels = map[string][]proto.AgentModel{name: {{ID: route, Resolved: reply}}}
+			got := s.taskSpawnModel(ctx, "box", proto.Session{Launcher: name, Model: reply, Host: "herdr"}, nil)
+			if got != want {
+				t.Fatalf("model %q, want %q for box/%s", got, want, name)
+			}
+		})
 	}
 }
 

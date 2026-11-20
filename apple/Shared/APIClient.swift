@@ -2067,21 +2067,25 @@ nonisolated struct APIClient: Sendable {
         var prompt: String
         var images: [ImagePayload]?
         var launcher: String?
+        /// The model picked under `launcher` (#11472); nil: the launcher's own default. Never sent without a launcher.
+        var model: String?
         var permissionMode: String?
         var effort: String?
         var main: Bool?
         /// "health": the conversation opens in the health space (docs/assistant/health.md); never with `main`.
         var space: String?
         var via: MessageVia?
-        enum CodingKeys: String, CodingKey { case prompt, images, launcher, effort, main, space, via; case permissionMode = "permission_mode" }
+        enum CodingKeys: String, CodingKey { case prompt, images, launcher, model, effort, main, space, via; case permissionMode = "permission_mode" }
     }
     /// `main`: the new conversation becomes the main one. `space`: the space it opens in (nil: the assistant's own).
+    /// `launcher` / `model`: the new conversation's pick (`AssistantStarterChoice.request`); a model goes only with its launcher.
     /// `via`: how the app sent the prompt when not typed in the app itself (Siri, the share sheet).
     /// `opID`: the first message's op id (`AssistantStart`, hub feature `assistant_start_ops`): the hub starts it once.
-    func startConversation(prompt: String, images: [ImagePayload] = [], launcher: String? = nil, permissionMode: String? = nil,
+    func startConversation(prompt: String, images: [ImagePayload] = [], launcher: String? = nil, model: String? = nil, permissionMode: String? = nil,
                            effort: String? = nil, main: Bool = false, space: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws -> Session {
         let body = NewConversation(prompt: HubNaming.outbound(prompt, canonical: personaNaming), images: images.isEmpty ? nil : images,
-                                   launcher: launcher, permissionMode: permissionMode, effort: effort, main: main ? true : nil, space: space, via: via)
+                                   launcher: launcher, model: launcher == nil ? nil : model, permissionMode: permissionMode, effort: effort,
+                                   main: main ? true : nil, space: space, via: via)
         // The health space is the default manager's (docs/assistant/health.md), whichever the Persona page shows.
         let api = space == nil ? self : showing(nil)
         var s = try JSON.decoder.decode(SessionResponse.self, from: try await api.post("/api/v1/assistant/conversations", body: body, timeout: 110, opID: opID)).session

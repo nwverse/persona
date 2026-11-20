@@ -488,12 +488,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // keyboard-aware palette and dock, the attachment ✕'s corner reach and Overview's task-card overlay (styles.css).
 // Where the toasts sit on a phone is a chunk of its own (ui/toast-lift.tsx) a narrow screen loads after the shell.
 // Main had 221 B of room, so the budget is this ja size plus those 221 B.
+// Preserve the backend workspace branch ceiling.
 // #10822: Colored sidebar icons, an Appearance choice off by default: the choice's store and the built-in pages' colors
 // (lib/sidebar-icons.ts), read where the sidebar draws its pages, and the style a colored icon takes. 267 B in each
 // language, measured in one environment against main 59296332c8 (ja 483,122 B to 483,389 B; en 480,237 B to 480,504 B,
 // zh-Hans 481,000 B to 481,267 B); the setting's row and words load with Settings. The budget is main's plus those
 // 267 B (a difference measured in one environment; absolute sizes there have run up to about 3 KB apart from others).
-export const FIRST_SCREEN_BUDGET = 483_532;
+export const FIRST_SCREEN_BUDGET = 482_793;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
