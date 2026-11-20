@@ -62,6 +62,8 @@ fun AppearanceSettings(modifier: Modifier = Modifier, agentsDisplay: AgentListDi
     val glass by store.glass.collectAsState()
     val palette = PersonaTheme.palette
     Column(modifier.fillMaxWidth()) {
+        SidebarOptions(store)
+        Spacer(Modifier.height(Tokens.Space.l))
         Text(stringResource(R.string.settings_style_intro), style = PersonaTheme.type.callout, color = palette.ink2)
         Spacer(Modifier.height(Tokens.Space.l))
         AppStyle.entries.forEach { style ->
@@ -72,7 +74,6 @@ fun AppearanceSettings(modifier: Modifier = Modifier, agentsDisplay: AgentListDi
         ExtensionThemeOptions()
         SchemeOptions(store)
         DensityOptions(store)
-        SidebarOptions(store)
         if (current == AppStyle.Glass) {
             JSectionHeader(stringResource(R.string.settings_style_transparency))
             JSegmented(GlassPreference.entries.map { JSegment(it.label) }, GlassPreference.entries.indexOf(glass), { store.setGlass(GlassPreference.entries[it]) })
