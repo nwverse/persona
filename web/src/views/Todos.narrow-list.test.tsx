@@ -34,7 +34,7 @@ vi.mock("../lib/api", async (orig) => ({
 }));
 
 const { getState } = await import("../lib/store");
-const { useRoute } = await import("../lib/router");
+const { navigate, useRoute } = await import("../lib/router");
 const { TodosView } = await import("./Todos");
 const { t } = await import("../i18n");
 
@@ -91,6 +91,8 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await act(async () => root.unmount());
+  // a sheet closed by the unmount goes Back off its history entry a task later: in this case, not in the next one's
+  await settle();
   host.remove();
   document.body.innerHTML = "";
   history.replaceState(null, "", "/");
@@ -128,6 +130,23 @@ describe("the to-do list at a phone's width", () => {
     await settle();
     expect(location.search).toBe("");
     expect(detail().querySelector("input")).toBeNull();
+  });
+
+  it("opens a link's to-do after Back from another, without the one left coming back first", async () => {
+    await mount("/todos");
+    await act(async () => row("a").click());
+    await settle();
+    await act(async () => host.querySelector<HTMLElement>("[data-testid=todos-back] button")!.click());
+    await settle();
+    expect(location.search).toBe("");
+    expect(current()).toEqual([]);
+    const readsOfA = () => api.mock.calls.filter(([path]) => path.startsWith("/todos/a/")).length;
+    const before = readsOfA();
+    await act(async () => navigate("/todos?id=b"));
+    await settle();
+    expect(detail().querySelector<HTMLInputElement>("input[type=text]")?.value).toBe("Renew the passport");
+    expect(loaded()).toEqual(["a", "b"]);
+    expect(readsOfA()).toBe(before);
   });
 
   it("opens a link's to-do, and its Hand to agent is for that one", async () => {
