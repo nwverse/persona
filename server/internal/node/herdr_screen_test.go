@@ -119,7 +119,6 @@ func effortSent(pane string, rights int) []string {
 		keys = append(keys, "right")
 	}
 	return []string{
-		call("session.snapshot", nil),
 		readANSI(pane), // the box, colored: Claude's grey suggestion is not a draft
 		call("pane.send_text", map[string]any{"pane_id": pane, "text": "/effort"}),
 		sendKeys(pane, "enter"),
@@ -165,14 +164,14 @@ func TestHerdrTUISetEffortRefusesADraftAndEscapesWithoutAPicker(t *testing.T) {
 	if err := setModes(t, n, sidA, "", "low"); err == nil {
 		t.Fatal("typed /effort after a draft")
 	}
-	assertTrace(t, f.trace(), []string{call("session.snapshot", nil), readANSI("w1:p1")})
+	assertTrace(t, f.trace(), []string{readANSI("w1:p1")})
 
 	f.reset()
 	f.setScreen("w1:p2", screenFixture(t, "claude-2.1.312-empty-162.txt"))
 	if err := setModes(t, n, sidB, "", "low"); err == nil || !strings.Contains(err.Error(), "/effort") {
 		t.Fatalf("err %v", err)
 	}
-	want := []string{call("session.snapshot", nil), readANSI("w1:p2"),
+	want := []string{readANSI("w1:p2"),
 		call("pane.send_text", map[string]any{"pane_id": "w1:p2", "text": "/effort"}), sendKeys("w1:p2", "enter")}
 	for range 15 {
 		want = append(want, readVisible("w1:p2"))
@@ -206,7 +205,7 @@ func TestHerdrTUISetEffortOverASuggestion(t *testing.T) {
 	if err := setModes(t, n, sidB, "", "low"); err == nil || !strings.Contains(err.Error(), "还没发出的文字") {
 		t.Fatalf("err %v", err)
 	}
-	assertTrace(t, f.trace(), []string{call("session.snapshot", nil), readANSI("w1:p2")})
+	assertTrace(t, f.trace(), []string{readANSI("w1:p2")})
 }
 
 // While Persona drives the effort picker herdr reports the agent blocked; the list shows it idle until the change is
