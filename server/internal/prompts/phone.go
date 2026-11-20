@@ -1,5 +1,7 @@
 package prompts
 
+import "strings"
+
 // RenderPhoneQueuedWrite adds the hub's optional delivery contract to a phone's description.
 func RenderPhoneQueuedWrite(description string) string {
 	return render("tools/phone_queued_write", description)
@@ -31,7 +33,10 @@ type PhoneStandIn struct {
 	Primary string // the primary device's name; empty when the hub does not know it
 }
 
-func RenderPhoneStandIn(p PhoneStandIn) string { return render("tools/phone_stand_in", p) }
+// RenderPhoneStandIn is the note without the template file's final newline: it goes into a JSON field or a text block.
+func RenderPhoneStandIn(p PhoneStandIn) string {
+	return strings.TrimSuffix(render("tools/phone_stand_in", p), "\n")
+}
 
 // PhonePrimaryOffline is a phone call's answer when the primary device is not connected, did not wake up, and no
 // other device can take the call.
@@ -40,5 +45,5 @@ type PhonePrimaryOffline struct {
 }
 
 func RenderPhonePrimaryOffline(p PhonePrimaryOffline) string {
-	return render("tools/phone_primary_offline", p)
+	return strings.TrimSuffix(render("tools/phone_primary_offline", p), "\n")
 }
