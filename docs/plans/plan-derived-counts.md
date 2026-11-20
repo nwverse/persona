@@ -94,8 +94,9 @@ Paths in the server rows are under `server/internal`. Every row was checked at e
 
 - **A new pure package**, server/internal/assistant/attention (name and home: D15), shaped like
   `assistant/todo/projection`: it imports only proto and assistantwire, so its tests skip the 58 s compile of the
-  assistant package's test binary. Each count is one function over the inputs fleetInputsInto already builds; the Live
-  Activity, Persona Link and the roster's Inbox count call it.
+  assistant package's test binary. Each agents count is one function over the inputs fleetInputsInto already builds,
+  and the Live Activity and Persona Link call it; the roster's Inbox count stays a function over the Inbox items'
+  status(), as tellInboxNeedsYou computes it today.
 - **Each count has an id and a one-line definition** in a new doc, docs/protocol/counts.md (principle 3). An id starts
   with the rule of the client it replaces, so no number changes before its decision.
 - **The pilot is the Agents count.** `agents_needs_you` is `spec/fixtures/needs-you`'s badge rule as iOS computes it
@@ -124,13 +125,17 @@ CountsView {                       // per manager; schema/wire, generated for Go
   as_of: int,                      // ms; only to say how old a kept view is
   counts: { <id>: { n: int,
                     keys: [{id, cards[]}],   // counted rows, agent:<machine>/<session> or card:<id>, at most 200
-                    held: [{id, why}],       // rows today's list keeps but the count leaves out: muted, quiet
+                    held: [{id, why}],       // rows today's list keeps but the count leaves out: muted
                     more: int } }
 }
 ```
 
-The first schema is only what today's rules already say. `held` lists the rows that `AgentsNeedsYou.rows` keeps and the
-badge leaves out; whether a header draws them is D6, and a delegating card becomes a `why` only if D11 holds it. A
+The first schema is only what today's rules already say. `held` lists the muted rows that `AgentsNeedsYou.rows` keeps
+and the badge leaves out; whether a header draws them is D6, and a delegating card becomes a `why` only if D11 holds it.
+Quiet rows are not in it: fleetInputsInto drops them before any input is built (`assistant/fleet_live.go:173`), so
+listing them would mean widening that function inside the repair PRs' hunks (and still keeping them out of FleetState
+and Link) or reading the lists a second time. If D6 wants the header to show quiet rows, the client keeps drawing them
+from its own list, or a later optional `why: quiet` comes with that cost stated. A
 `surfaces: {<surface>: <id>}` map (which count each surface draws, so a remap is a server change) is an optional field
 added after D5; until then each client names the id it draws.
 
@@ -269,8 +274,8 @@ internal/assistant failures on main are unchanged.
 
 **6. The schema and generated types.** *Change:* schema/wire/counts.schema.json (`x-out` ts, swift, go, kotlin;
 `x-guard` arkts, rust), its four outputs, `.gitattributes` rows and a `schema/wire/README.md` row; samples from step 5's
-Go output. The schema has no `surfaces` map (D5) and no delegating `held` reason (D11); each is an optional field added
-after its decision. *Conflict:* schema/wire, the generator and `scripts/test/test_wire_schema.py` have 0 open PRs.
+Go output. The schema has no `surfaces` map (D5), no delegating `held` reason (D11) and no quiet `held` reason
+(section 3.2); each is an optional field added after its decision. *Conflict:* schema/wire, the generator and `scripts/test/test_wire_schema.py` have 0 open PRs.
 *Gate:* step 5. *Rollback:* revert; nothing reads the types. *Done:* `--check` and test_wire_schema.py pass; round trips
 pass in Go, Kotlin, Swift (`swift test` in PersonaWire) and the web.
 
@@ -394,8 +399,8 @@ its scope, and how views travel and are drawn.
 - **D5** The `surfaces` map on the wire (an optional field after step 6), so a decided remap needs no client release
   (recommended), or ids pinned per client.
 - **D6** The Agents section header and filter against the badge: `DESIGN_SYSTEM.md` 3.8 says they are equal, the fixture
-  pins a split. Either the header counts the badge's rows with muted and quiet agents under one uncounted line (`held`),
-  or the doc is amended to the split.
+  pins a split. Either the header counts the badge's rows with muted agents under one uncounted line (`held`, which
+  has no quiet rows; see section 3.2) and quiet agents from the client's own list, or the doc is amended to the split.
 - **D7** The Inbox unit for the tab, the switcher, the widget and the face dot: unread action items, or open action
   items read or not; changed together.
 - **D8** The To-dos badge: N in blue (`docs/design/proposals/todos-redesign.md` 3.7), the SOP's open count in neutral
