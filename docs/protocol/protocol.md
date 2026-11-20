@@ -756,7 +756,8 @@ provider").
   (`models.used`).
 - `launcher` equal to the session's own drops a pending switch; `model`, `effort` and `permission_mode` then apply as
   without `launcher`. An empty `launcher` is the same as leaving it out. A session with `off_launcher` does not run
-  on its own launcher: that one is a switch back to it like any other (#11792).
+  on its own launcher: that one drops a pending switch to another launcher, and with none pending it is the switch
+  back to it, made with the model the session was started with there unless `model` names another (#11792).
 - `from` is the launcher the client saw the session on. When it is given and the session runs on another one by then (a
   switch was carried out meanwhile), the request is refused as `switch_stale` and nothing is recorded or dropped; the
   same when, without `from`, the session moved while the request waited for a message in flight. Clients send it with
@@ -770,7 +771,7 @@ Optional Session field:
 | Field | Meaning |
 | --- | --- |
 | `pending_switch: {launcher, model?, effort?, at}` | The switch waiting for the user's next message: the launcher, the model and effort picked (absent: the launcher's default, the current effort) and when it was picked. Absent when none waits. `launcher` on the row stays the one the agent runs on until the switch is carried out; while it is carried out the row is listed as `starting` on the new launcher |
-| `off_launcher: true` | Persona started this Claude Code Agent on `launcher`, but the claude that runs it now was not started by Persona's command (it lacks Persona's `--mcp-config`): herdr's bare `claude --resume <id>` after a restart on herdr older than 0.9.2, or a resume typed by hand (#11792). That launcher's settings, model, MCP and hooks do not apply; a switch to `launcher` itself brings it back there. Absent otherwise, and on computers whose command lines the node does not read (Windows) |
+| `off_launcher: true` | Persona started this Claude Code Agent on `launcher`, but the claude that runs it now was not started by Persona's command (it lacks Persona's `--mcp-config`): herdr's bare `claude --resume <id>` after a restart on herdr older than 0.9.2, or a resume typed by hand (#11792). That launcher's settings, model, MCP and hooks do not apply; a switch to `launcher` itself brings it back there. Absent otherwise, and on Windows, where the check is not on: how the start's `--mcp-config` path reaches claude through PowerShell and Git Bash is not verified, and a different spelling there would list every Agent off its launcher |
 
 **Who carries it out.** Only a `POST …/messages` with `"apply_switch": true`: the user's own message from the chat of a
 session that shows `pending_switch` (the web sends it then, and only then). Every other message (the assistant's, a

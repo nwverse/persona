@@ -54,7 +54,7 @@ type procEnv struct {
 	ConfigDir string // CLAUDE_CONFIG_DIR
 	BaseURL   string // ANTHROPIC_BASE_URL
 	Model     string // ANTHROPIC_MODEL
-	// From its command line, not its environment (offlauncher.go): Cmd says it was read (not on Windows), MCPConfig
+	// From its command line, not its environment (offlauncher.go): Cmd says it was kept (not on Windows, scanClaudeProcesses), MCPConfig
 	// is then each --mcp-config value it was started with, NUL-separated ("" for none).
 	Cmd       bool
 	MCPConfig string
@@ -453,8 +453,10 @@ func parseProcEnv(env string) procEnv {
 
 // scanClaudeProcesses maps this user's running claude processes to the variables procEnv keeps from their
 // environment and command line. Linux reads the environ of the claudes in the shared walk of this user's /proc entries
-// (userProcesses); macOS asks ps once for all; Windows reads the process table (scanClaudeProcessesOS), which leaves
-// out the command line, and with it the processes that set none of the variables (default directory and endpoint).
+// (userProcesses); macOS asks ps once for all; Windows reads the process table (scanClaudeProcessesOS). Windows keeps
+// no command line, and so leaves out the processes that set none of the variables (default directory and endpoint):
+// how the start's --mcp-config path reaches claude through PowerShell and Git Bash is not verified, and a different
+// spelling would list every Agent off its launcher (offlauncher.go).
 func scanClaudeProcesses() map[int]procEnv {
 	out := map[int]procEnv{}
 	if runtime.GOOS == "windows" {

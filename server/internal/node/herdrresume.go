@@ -2,7 +2,6 @@ package node
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -66,7 +65,7 @@ func (n *Node) claudeCommandLine(spec claudeLaunch, args string, q func(string) 
 	if spec.TaskInstructionFile != "" {
 		cmd += " --append-system-prompt-file " + q(spec.TaskInstructionFile)
 	}
-	cmd += " --mcp-config " + q(filepath.Join(n.dir, "mcp.json")) + " --allowedTools " + q(n.agentAllowedTools(spec.Plugins))
+	cmd += " --mcp-config " + q(n.agentMCPConfig()) + " --allowedTools " + q(n.agentAllowedTools(spec.Plugins))
 	if spec.Model != "" {
 		cmd += " --model " + q(spec.Model)
 	}

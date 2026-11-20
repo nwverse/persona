@@ -127,7 +127,7 @@ func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mod
 	}
 	ps := proto.PendingSwitch{Launcher: launcher, Model: strings.TrimSpace(model), Effort: effort}
 	// An agent whose claude Persona did not start with its command (herdr's bare resume, offlauncher.go) does not run
-	// on its own launcher: picking that one is a switch back to it, not a cancel.
+	// on its own launcher: picking that one may be a switch back to it, checked like any other.
 	off := n.offLauncher(id)
 	// The checks run a login shell, ask the hub for a provider's secrets, read the launcher's models: not while holding
 	// up the session's messages.
@@ -158,11 +158,15 @@ func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mod
 	// meanwhile; this one waits for it, and is then taken against the launcher the agent runs on by then.
 	unlock := n.typing.lock(id)
 	own, _ := n.engineOwnLauncher(id, n.liveEngine(id))
-	if from != "" && from != own || (launcher != own || off) && !checked {
+	// Off its launcher (again by then: a switch carried out meanwhile puts it back on), picking that launcher is the
+	// switch back to it, unless a switch to another one waits: that pick cancels it, as it does for an agent on it.
+	waiting := n.pendingSwitch(id)
+	back := launcher == own && n.offLauncher(id) && (waiting == nil || waiting.Launcher == own)
+	if from != "" && from != own || (launcher != own || back) && !checked {
 		unlock()
 		return true, refusal(proto.CodeSwitchStale, fmt.Sprintf("the session runs on launcher %s now, not %s", own, cmp.Or(from, launcher)), nil)
 	}
-	if launcher == own && !off {
+	if launcher == own && !back {
 		if n.pendingSwitch(id) != nil {
 			n.putPendingSwitch(id, nil)
 			n.logf("session %s: launcher switch cancelled", id)
@@ -263,6 +267,9 @@ func (n *Node) planSwitch(ctx context.Context, id string, ps proto.PendingSwitch
 		return nil, err
 	}
 	forward := modelExecution{Model: ps.Model, PlanThen: n.planThen(id)}
+	if st, _ := n.state.get(id); forward.Model == "" && st.Launcher == ps.Launcher && n.offLauncher(id) {
+		forward.Model = st.Model // back on the launcher it was started on (offlauncher.go): with the model it ran there
+	}
 	if forward.Model == "" {
 		model, ok := n.switchModel(ps.Launcher, cwd, dir, dirKnown)
 		if !ok {

@@ -27,12 +27,12 @@ func scannedClaude(t *testing.T, n *Node, home string, pid int, id string, e pro
 
 // A herdr restart brought a Persona Agent back with herdr's bare `claude --resume <id>` (#11792): its row says it runs
 // off the launcher it was started on, and moving it to that launcher is a switch, carried out with the user's next
-// message, not taken as one it runs on already (which used to drop it). Started again by Persona's command, it is on
-// its launcher.
+// message, not taken as one it runs on already (which used to drop it), and with the model it was started with there.
+// Started again by Persona's command, it is on its launcher.
 func TestPersonaAgentResumedBareRunsOffItsLauncher(t *testing.T) {
 	n, f, home, cwd, _ := switchNode(t, proto.StatusIdle, nil)
 	st, _ := n.state.get(sidA)
-	st.Launcher = "work" // started on the gateway launcher
+	st.Launcher, st.Model = "work", "model-w" // started on the gateway launcher, with one of its models
 	n.state.put(sidA, st)
 	scannedClaude(t, n, home, 4242, sidA, procEnv{Cmd: true}) // herdr's bare `claude --resume <id>`
 	if row := rowOf(t, n, sidA); row.Launcher != "work" || !row.OffLauncher {
@@ -51,7 +51,8 @@ func TestPersonaAgentResumedBareRunsOffItsLauncher(t *testing.T) {
 		t.Fatalf("send: %v\n%s", err, strings.Join(f.trace(), "\n"))
 	}
 	if starts := typedStarts(f, "w1:p1"); len(starts) != 1 || !strings.Contains(starts[0], " launch work ") ||
-		!strings.Contains(starts[0], "--resume "+sidA) || !strings.Contains(starts[0], "--mcp-config "+filepath.Join(n.dir, "mcp.json")) {
+		!strings.Contains(starts[0], "--resume "+sidA) || !strings.Contains(starts[0], "--mcp-config "+filepath.Join(n.dir, "mcp.json")) ||
+		!strings.Contains(starts[0], "--model model-w") {
 		t.Fatalf("typed %q", starts)
 	}
 	if st, _ := n.state.get(sidA); st.Launcher != "work" || st.PendingSwitch != nil {
@@ -65,9 +66,38 @@ func TestPersonaAgentResumedBareRunsOffItsLauncher(t *testing.T) {
 	}
 }
 
+// Off its launcher, an Agent still has a way to cancel a switch to another launcher: picking its own one then cancels
+// that switch, as it does for an Agent on it (agent_switch drops a pick whose message never got there that way); with
+// no other switch waiting, the same pick is the switch back.
+func TestOwnLauncherPickCancelsAnotherSwitchOffTheLauncher(t *testing.T) {
+	n, _, home, _, _ := switchNode(t, proto.StatusIdle, nil)
+	st, _ := n.state.get(sidA)
+	st.Launcher = "work"
+	n.state.put(sidA, st)
+	scannedClaude(t, n, home, 4242, sidA, procEnv{Cmd: true})
+	if err := pick(t, n, map[string]any{"launcher": "claude", "from": "work"}); err != nil {
+		t.Fatalf("a switch to another launcher: %v", err)
+	}
+	if ps := n.pendingSwitch(sidA); ps == nil || ps.Launcher != "claude" {
+		t.Fatalf("no switch to claude waits: %+v", ps)
+	}
+	if err := pick(t, n, map[string]any{"launcher": "work", "from": "work"}); err != nil {
+		t.Fatalf("cancelling it: %v", err)
+	}
+	if ps := n.pendingSwitch(sidA); ps != nil {
+		t.Fatalf("its own launcher picked while a switch to claude waited: %+v waits, want it cancelled", ps)
+	}
+	if err := pick(t, n, map[string]any{"launcher": "work", "from": "work"}); err != nil {
+		t.Fatalf("the switch back: %v", err)
+	}
+	if ps := n.pendingSwitch(sidA); ps == nil || ps.Launcher != "work" {
+		t.Fatalf("no switch back to its launcher waits: %+v", ps)
+	}
+}
+
 // Only a claude seen running a session Persona started, without Persona's --mcp-config, is off its launcher: not a
 // session Persona keeps no record of (the user's own), not a claude that has gone, not one whose command line the
-// scan cannot read (Windows), not an assistant conversation (its own MCP config).
+// scan does not keep (Windows), not an assistant conversation (its own MCP config).
 func TestOffLauncherNeedsALiveClaudeWithoutPersonasCommand(t *testing.T) {
 	n, _, home, cwd, _ := switchNode(t, proto.StatusIdle, nil)
 	n.state.put(sidA, sessionState{Launcher: "work", Cwd: cwd})

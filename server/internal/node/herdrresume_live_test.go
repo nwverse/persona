@@ -110,7 +110,7 @@ func TestLiveHerdrResumesThroughTheLauncher(t *testing.T) {
 		}
 		a.pane = tab.RootPane.ID
 	}
-	own := filepath.Join(n.dir, "mcp.json")
+	own := n.agentMCPConfig()
 	n.panes = map[string]string{}
 	for _, a := range agents {
 		a.id = newUUID()
@@ -241,9 +241,7 @@ type liveClaude struct {
 	configDir       string   // CLAUDE_CONFIG_DIR
 }
 
-func (r liveClaude) mcp(path string) bool {
-	return strings.Contains("\x00"+claudeMCPConfigs(r.argv)+"\x00", "\x00"+path+"\x00")
-}
+func (r liveClaude) mcp(path string) bool { return mcpConfigsHold(claudeMCPConfigs(r.argv), path) }
 
 // liveClaudeRunning is the one live claude whose command line names session id (zero when none or several do).
 func liveClaudeRunning(id string) liveClaude {

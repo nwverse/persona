@@ -36,13 +36,22 @@ func (n *Node) offLauncher(id string) bool {
 	if !ok || !processAlive(r.PID, r.Start) || n.isAssistantSession(id) {
 		return false
 	}
-	own := filepath.Clean(filepath.Join(n.dir, "mcp.json"))
-	for _, c := range strings.Split(r.MCPConfig, "\x00") {
-		if c != "" && filepath.Clean(c) == own {
-			return false
+	return !mcpConfigsHold(r.MCPConfig, n.agentMCPConfig())
+}
+
+// agentMCPConfig is the --mcp-config every Claude Code Agent Persona starts carries (claudeCommandLine): what tells
+// its claude from one started otherwise.
+func (n *Node) agentMCPConfig() string { return filepath.Join(n.dir, "mcp.json") }
+
+// mcpConfigsHold: path is one of configs, the NUL-separated --mcp-config values of a claude (claudeMCPConfigs).
+func mcpConfigsHold(configs, path string) bool {
+	want := filepath.Clean(path)
+	for _, c := range strings.Split(configs, "\x00") {
+		if c != "" && filepath.Clean(c) == want {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // claudeMCPConfigs are the --mcp-config values of a claude's command line, NUL-separated: Claude Code takes several
