@@ -31,7 +31,7 @@ may be undercounted. Steps find code by name, since line numbers drift. Paths th
   | One thing waiting | iPhone / Android Agents badge | Web title, favicon, Dock | Persona Link | Live Activity |
   | --- | --- | --- | --- | --- |
   | A muted agent | 0 | 1 | 1 | 0 |
-  | A quiet task's agent, hub with bounded lists | 0 (iPhone: on the Persona tab if it has a card) | 1 | 0 | 0 |
+  | A quiet task's agent, hub with bounded lists | 0 (iPhone: on the Persona tab if it has a card; Android: 1 if it has a card and its row is not loaded) | 1 | 0 | 0 |
   | A card on no session (`personad ask` outside herdr) | 1 | 0 | 0 | 0 |
   | A Persona conversation with a card | 0 (iPhone Persona tab 1) | 0 | 0 | 1 |
 
@@ -75,7 +75,7 @@ Paths in the server rows are under `server/internal`. Every row was checked at e
 | iOS switcher | `AssistantBadges.waiting` + `counts` | sessions, cards, roster | switcher, avatar dot | Sessions once, Persona conversations by their cards, plus `inbox_needs_you` |
 | iOS app icon | `AppIconBadge.count` | TabBadges, unreadCount | home screen | Persona + Agents + Inbox unread; set by the app only (`setBadgeCount`), so it goes stale while the app is not running |
 | Watch, Siri, visionOS | `WatchPet.status`; `IntentPicker.waiting`; `VisionShell` ornament | phone summary or own reads | frog and complication; Siri; ornament | Watch: card sessions plus needs_you sessions, muted and Persona included, unscoped. Siri: cards, one each. Ornament: Persona plus Agents |
-| Android Agents tab | `ShellCounts.agentRows` | cards, sessions | Agents badge | The iOS rule (`spec/fixtures/needs-you`) |
+| Android Agents tab | `ShellCounts.agentRows` | cards, sessions | Agents badge | The iOS rule (`spec/fixtures/needs-you`) over the rows the app holds. On a hub with bounded lists, until the Agents page is shown in a run, those are the 50 most recently updated (`HubSessionsRepository` firstPage, Mode.Paged; the cold-start snapshot is cut to 50 too): only that page asks for the complete list (`requiresCompleteMembership`, set while it is observed). Outside them, a session that waits with no card is not counted, and a card counts even if its task is quiet or its space muted, both read from the row |
 | Android Persona tab | `Root.kt` assistantRequests.size | cards | not drawn on Glass | Cards on Persona conversations only; a quiet task's card is on no tab |
 | Android page and others | `agentNeedsYouRows`; `inboxUnreadCount`; `ShellCounts.todos`; `ManagerRoster.waiting` | | Agents header; sidebar Inbox and To-dos; switcher | Muted and quiet kept; unread action items, minus read Lark rows; open and not quiet; sessions once with Persona conversations counted, plus `inbox_needs_you` |
 | Web Agents badge | `web/src/lib/sessions.ts` stateCounts / useCounts; `web/src/lib/current-assistant.ts` useScopedCounts | rows, or the hub's `state.needs_you` | tab title, favicon, Electron Dock (unscoped); sidebar Home, ShellSwitch (scoped) | Without bounded lists: quiet out, muted in, no sessionless cards. With them (the default): the hub's number, quiet and muted in (`quietCounted: true`) |
@@ -273,12 +273,15 @@ order hello, machines, counts, then session lists; TestBroadcastTypes, `test_doc
 guard pass, apart from `TestHubAnswersOnlyItsOwnRoutes`, which already fails on main (#9485) and is compared with
 `origin/main`.
 
-**8. Android reads `agents_needs_you`** (a pure replacement: the Android badge is the fixture rule). *Change:*
-ShellCounts and the switcher's agents part read the view, with the overlay and the frozen fallback; HubManagers.kt
-decodes the generated type. *Conflict:* `ShellCounts.kt` and `HubManagers.kt` 0; `Root.kt` (#11660d, #5969d) is not
-touched. *Gate:* steps 3 to 7b, D10 (mixed support) and D13 (a missing view). *Rollback:* revert, or turn off the hub
-feature. *Done:* ShellCountsTest and the surfaces replay pass; `scripts/app/android.sh shots` in three styles, light and
-dark, shows unchanged numbers.
+**8. Android reads `agents_needs_you`.** *Change:* ShellCounts and the switcher's agents part read the view, with the
+overlay and the frozen fallback; HubManagers.kt decodes the generated type. **Visible** only on hubs with bounded lists
+while the app holds its 50-row window (section 2, Android Agents tab): sessions outside it that wait with no card now
+count, and cards on unloaded quiet tasks' agents or in muted spaces leave. That is the written rule, applied once D1
+confirms it, with a self-check. *Conflict:* `ShellCounts.kt` and `HubManagers.kt` 0; `Root.kt` (#11660d, #5969d) is not
+touched. *Gate:* steps 3 to 7b, D1, D10 (mixed support) and D13 (a missing view). *Rollback:* revert, or turn off the
+hub feature. *Done:* ShellCountsTest, with a paged case (a wait with no card outside the window: counted from the view,
+not by the fallback), and the surfaces replay pass; `scripts/app/android.sh shots` in three styles, light and dark,
+shows today's numbers where the list is complete.
 
 **9. iOS reads `agents_needs_you`.** *Change:* the tab badge and the switcher's agents part read the view, and the Home
 Agents widget's number once D2 has set its scope (until then it keeps today's count). **Visible** only on hubs with
@@ -340,7 +343,8 @@ listed here to name each step's gate. D2 to D5, D10 and D12 to D15 are this plan
 its scope, and how views travel and are drawn.
 
 - **D1** The one Agents rule (#5974). Recommended: `spec/fixtures/needs-you`'s badge on every surface named for it,
-  which changes the web's number, then Link's and the Live Activity's.
+  which changes the web's number, Android's and the iPhone's where a bounded list is only partly loaded (steps 8 and
+  9), then Link's and the Live Activity's.
 - **D2** Scope of the numbers seen outside one assistant's pages (tab title, favicon, Dock, app icon, Live Activity,
   Link, watch, widgets, Siri): the whole hub (recommended: outside the app there is no current assistant, and the
   switcher's dot says where), the current assistant, or the default manager (the Live Activity today).
