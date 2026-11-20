@@ -57,7 +57,7 @@ describe("收件箱详情在手机宽度", () => {
   });
 
   // only a Feishu item's title wrapped: a review or a mail subject was cut to a few letters beside Done (#11511)
-  it("wraps the title up to three lines for every source; a wide screen keeps it on one line, cut at its end", () => {
+  it("wraps the title in full for every source; a wide screen keeps it on one line, cut at its end", () => {
     const sources = [{ id: "github:review12", source: "github", lark: undefined }, { id: "mail:a:t1:5", source: "mail", lark: undefined }, { source: "larkcli" }, {}] as Partial<InboxItem>[];
     try {
       for (const phone of [true, false]) {
@@ -69,8 +69,13 @@ describe("收件箱详情在手机宽度", () => {
           const title = host.querySelector("[data-item-title]")!;
           expect(title.classList.contains("flex-wrap")).toBe(phone);
           const words = title.querySelector("span")!.className.split(" ");
-          expect(words).toEqual(expect.arrayContaining(phone ? ["break-words", "line-clamp-3"] : ["truncate"]));
-          expect(words).not.toContain(phone ? "truncate" : "line-clamp-3");
+          if (phone) {
+            // all of it readable: no clamp, no ellipsis (a phone has no hover for the rest)
+            expect(words).toEqual(expect.arrayContaining(["min-w-0", "break-words"]));
+            expect(words.filter((c) => /truncate|line-clamp|ellipsis|overflow/.test(c))).toEqual([]);
+          } else {
+            expect(words).toEqual(["truncate"]);
+          }
         }
       }
     } finally {
