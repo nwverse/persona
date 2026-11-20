@@ -528,6 +528,8 @@ class OkHttpHubConnection(
         /** Longer than the client's 15 s, for answers the hub waits on a machine for (a CLI starting). */
         readTimeoutSeconds: Long? = null,
         sharingFence: HubSharingFence? = null,
+        /** A 403 on an optional read means the resource is unavailable even on hubs without error codes. */
+        allowForbidden: Boolean = false,
     ): Response {
         sharingFence?.requireCurrent()
         val selected = awaitRoute()
@@ -553,7 +555,7 @@ class OkHttpHubConnection(
         val client = readTimeoutSeconds?.let { http.client.newBuilder().readTimeout(it, java.util.concurrent.TimeUnit.SECONDS).build() } ?: http.client
         val response = client.newCall(request).awaitResponse(buffered)
         try { sharingFence?.requireCurrent() } catch (error: Exception) { response.close(); throw error }
-        if (!response.isSuccessful) {
+        if (!response.isSuccessful && !(allowForbidden && response.code == 403)) {
             val error = response.use { if (sharingFence != null) sharingFailure(it) else HubFailure.from(it) }
             // recordFailure owns revocation: it cancels the socket, clears the route and diagnostics. In a group only
             // the hub that refused is dropped, and the connection moves on to the others.

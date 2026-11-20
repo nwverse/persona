@@ -40,6 +40,9 @@
     <string name="phonetools_system_settings">系统设置</string>
     <string name="phonetools_error_system_settings">未能打开系统设置，请手动查看 Persona 的权限。</string>
     <string name="phonetools_footnote">Android 没有系统提醒事项接口。通知列表只包含 Persona 当前显示的通知。健康数据通过 Health Connect 读取（安卓 14 起系统自带）。</string>
+    <plurals name="phonetools_pending_writes">
+        <item quantity="other">此 Hub 有 %1$d 项手机写入待确认</item>
+    </plurals>
     <string name="phonetools_confirm_title">确认手机操作</string>
     <string name="phonetools_allow">允许</string>
     <string name="phonetools_deny">拒绝</string>

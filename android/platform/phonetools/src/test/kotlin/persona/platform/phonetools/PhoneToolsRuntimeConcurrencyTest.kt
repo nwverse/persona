@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -37,6 +39,7 @@ import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.HubConnection
 import persona.core.contracts.api.PhoneToolCall
 import persona.core.contracts.api.PhoneToolResult
+import persona.core.contracts.api.SocketHello
 import persona.core.contracts.api.PhoneToolSpec
 import persona.core.contracts.api.PhoneToolsTransport
 import persona.core.contracts.HubScope
@@ -58,6 +61,8 @@ class PhoneToolsRuntimeConcurrencyTest {
         override val calls: Flow<PhoneToolCall> = incoming.receiveAsFlow()
         val sent = mutableListOf<Pair<String, PhoneToolResult>>()
         val registered = mutableListOf<List<PhoneToolSpec>>()
+        var readCount: suspend () -> Int? = { null }
+        override suspend fun pendingWriteCount(): Int? = readCount()
         /** When false the next `result()` call fails; the runtime must hold the result in its outbox. */
         @Volatile var sendSucceeds = true
 
@@ -74,6 +79,7 @@ class PhoneToolsRuntimeConcurrencyTest {
 
     private class FakeConnection(initial: ConnectionState = ConnectionState.Online) : HubConnection {
         override val state = MutableStateFlow(initial)
+        override val currentHello = MutableStateFlow<SocketHello?>(SocketHello(1, Hello(hubId = "test-hub")))
         override val events = MutableSharedFlow<ServerEvent>(extraBufferCapacity = 16)
         override fun reconnect() {}
         override fun send(message: JsonObject): Boolean = true
@@ -106,6 +112,100 @@ class PhoneToolsRuntimeConcurrencyTest {
     }
 
     @After fun resetMainDispatcher() = Dispatchers.resetMain()
+
+    @Test fun queueCountIsSharedVisibleOnlyAndDropsThePriorAuthenticatedSocket() = runTest {
+        val connection = FakeConnection()
+        val transport = FakeTransport()
+        val rt = runtime(backgroundScope, transport, connection)
+        var reads = 0
+        var current: Int? = 3
+        transport.readCount = { reads++; current }
+        rt.setForeground(true)
+        runCurrent()
+        assertEquals(0, reads)
+
+        val settings = backgroundScope.launch { rt.pendingWriteCount.collect {} }
+        val card = backgroundScope.launch { rt.pendingWriteCount.collect {} }
+        runCurrent()
+        assertEquals(3, rt.pendingWriteCount.value)
+        assertEquals(1, reads)
+        current = 0 // Another phone answered, without a local event.
+        advanceTimeBy(30_001)
+        assertEquals(0, rt.pendingWriteCount.value)
+        settings.cancel(); card.cancel(); runCurrent()
+        assertNull(rt.pendingWriteCount.value)
+        val idle = reads
+        advanceTimeBy(60_000)
+        assertEquals(idle, reads)
+
+        val watching = backgroundScope.launch { rt.pendingWriteCount.collect {} }
+        runCurrent()
+        rt.setForeground(false); runCurrent()
+        assertNull(rt.pendingWriteCount.value)
+        val pending = CompletableDeferred<Int?>()
+        transport.readCount = { reads++; pending.await() }
+        rt.setForeground(true); runCurrent()
+        connection.currentHello.value = null // Socket drops during the Online UI grace period.
+        runCurrent()
+        transport.readCount = { reads++; 1 }
+        connection.currentHello.value = SocketHello(2, Hello(hubId = "other-hub"))
+        runCurrent()
+        pending.complete(8); runCurrent()
+        assertEquals(1, rt.pendingWriteCount.value)
+
+        transport.readCount = { reads++; null }
+        connection.currentHello.value = SocketHello(3, Hello(hubId = "legacy"))
+        runCurrent()
+        assertNull(rt.pendingWriteCount.value)
+        val unsupported = reads
+        advanceTimeBy(120_000)
+        assertEquals(unsupported, reads)
+        transport.readCount = { reads++; throw java.io.IOException("Disconnected") }
+        connection.currentHello.value = SocketHello(4, Hello(hubId = "current-hub"))
+        runCurrent()
+        assertNull(rt.pendingWriteCount.value)
+        transport.readCount = { reads++; 4 }
+        advanceTimeBy(30_001)
+        assertEquals(4, rt.pendingWriteCount.value)
+        rt.close()
+        assertNull(rt.pendingWriteCount.value)
+        watching.cancel()
+    }
+
+    @Test fun queueCountRefreshesOnWriteDeliveryAndEachExplicitDecision() = runTest {
+        val transport = FakeTransport()
+        val rt = runtime(backgroundScope, transport, FakeConnection()) { _, _ -> PhoneToolResult.text("complete") }
+        enableAllSources(rt)
+        var pending = 2
+        var reads = 0
+        transport.readCount = { reads++; pending }
+        rt.setForeground(true)
+        val watching = backgroundScope.launch { rt.pendingWriteCount.collect {} }
+        runCurrent()
+        assertEquals(2, rt.pendingWriteCount.value)
+        val args = buildJsonObject {
+            put("title", kotlinx.serialization.json.JsonPrimitive("Synthetic review"))
+            put("start", kotlinx.serialization.json.JsonPrimitive("2027-01-02T10:00:00Z"))
+            put("end", kotlinx.serialization.json.JsonPrimitive("2027-01-02T11:00:00Z"))
+        }
+        for ((index, allow) in listOf(false, true).withIndex()) {
+            val id = "write-$index"
+            val before = reads
+            transport.incoming.send(PhoneToolCall(id, "phone_calendar_create_event", args))
+            advanceTimeBy(301); runCurrent()
+            assertEquals(before + 1, reads)
+            assertTrue(transport.sent.none { it.first == id })
+            val token = requireNotNull(rt.confirmations.pending.value).token
+            pending--
+            rt.confirmations.resolve(token, allow)
+            advanceTimeBy(301); runCurrent()
+            assertEquals(before + 2, reads)
+            assertEquals(pending, rt.pendingWriteCount.value)
+            assertEquals(1, transport.sent.count { it.first == id })
+        }
+        watching.cancel()
+        rt.close()
+    }
 
     /**
      * #4456: transport delivers write-wait, two reads and a second write; the reads complete while the first

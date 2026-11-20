@@ -10651,9 +10651,11 @@ def mock_tool_call(name, args):
     """Send a tool_call to every connected phone that declared [name] (GET /mock/tool_call)."""
     call_id = uuid.uuid4().hex[:8]
     with FAULT_LOCK:
-        phones = [x["send"] for x in PHONES.values()
-                  if any(t.get("name") == name for t in x["registration"].get("tools") or [])]
-    for send in phones:
+        phones = {conn: phone["send"] for conn, phone in PHONES.items()
+                  if any(t.get("name") == name for t in phone["registration"].get("tools") or [])}
+        if phones and PHONE_WRITE_DELIVERY and name == "phone_calendar_create_event":
+            PHONE_WRITE_CALLS[call_id] = set(phones)
+    for send in phones.values():
         try: send({"type": "tool_call", "call_id": call_id, "name": name, "args": json.loads(args or "{}")})
         except OSError: pass
     return {"call_id": call_id, "sent": len(phones)}
@@ -11701,6 +11703,10 @@ elif os.environ.get("MOCK_BOT") == "off":
 # hub does when Claude calls it; GET /mock/phone shows the registrations and results.
 PHONES = {}  # socket -> {"send", "registration"}
 TOOL_RESULTS = []
+# Optional mobile queue scenario. A matching terminal reply completes one delivered write.
+PHONE_WRITE_INITIAL = os.environ.get("MOCK_PHONE_WRITE_PENDING")
+PHONE_WRITE_DELIVERY = PHONE_WRITE_INITIAL is not None and os.environ.get("MOCK_PHONE_WRITE_DELIVERY") == "1"
+PHONE_WRITE_CALLS = {}  # call_id -> recipient connections, or None once a recipient has answered
 # MOCK_CF_ACCESS=<client id>:<client secret>: the hub behind Cloudflare Access (docs/operations/network.md "Behind
 # Cloudflare Access"): /api/ without those CF-Access-Client-Id / CF-Access-Client-Secret headers gets Access's answers.
 MOCK_CF_ACCESS = tuple(os.environ.get("MOCK_CF_ACCESS", "").split(":", 1)) if ":" in os.environ.get("MOCK_CF_ACCESS", "") else None
@@ -25999,6 +26005,11 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"calls": [c for c in URGENT_CALLS if c["conversation_id"] == q.get("conversation", [""])[0]]})
         if p.startswith("/api/v1/assistant/calls/"):
             return self.send_json(URGENT_CALL)
+        # MOCK_PHONE_WRITE_PENDING=0..100 serves the mobile pending-write summary (#2597).
+        if p == "/api/v1/phone/write-queue" and q.get("count_only") == ["true"] and PHONE_WRITE_INITIAL is not None:
+            with FAULT_LOCK:
+                finished = sum(1 for recipients in PHONE_WRITE_CALLS.values() if recipients is None)
+            return self.send_json({"pending_count": max(0, int(PHONE_WRITE_INITIAL) - finished)})
         if p == "/api/v1/push/ln-mode":
             return self.send_json({"enabled": LN["on"]})
         if p == "/api/v1/push/intercepts":  # kept whether the mode is on or off, as the hub keeps them
@@ -29299,6 +29310,10 @@ class H(BaseHTTPRequestHandler):
                 if msg.get("type") == "tool_result":
                     with FAULT_LOCK:
                         TOOL_RESULTS.append(msg)
+                        call_id = msg.get("call_id")
+                        recipients = PHONE_WRITE_CALLS.get(call_id)
+                        if recipients and self.connection in recipients:
+                            PHONE_WRITE_CALLS[call_id] = None
                     continue
                 if msg.get("type") == "seen":
                     mark_seen(msg.get("session_id"))

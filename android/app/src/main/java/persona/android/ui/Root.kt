@@ -206,7 +206,7 @@ private fun PersonaRootContent(
                             }
                         }
                     }
-                    active.phone?.let { PhoneConfirmationHost(it.confirmations) }
+                    active.phone?.let { PhoneConfirmationHost(it) }
                 }
                 persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = Tokens.Space.m))
             }

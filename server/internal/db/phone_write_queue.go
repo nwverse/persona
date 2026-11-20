@@ -32,6 +32,8 @@ type PhoneWrite struct {
 
 const phoneWriteColumns = `id, tool, args, state, result, created_at, updated_at`
 
+const countPendingPhoneWritesSQL = `SELECT count(*) FROM phone_write_queue WHERE state IN ('queued', 'delivering')`
+
 const findQueuedPhoneWriteSQL = `SELECT ` + phoneWriteColumns + ` FROM phone_write_queue
 	WHERE state = 'queued' AND tool = $1 AND args = $2::jsonb ORDER BY sequence LIMIT 1`
 
@@ -103,7 +105,7 @@ func (d *DB) EnqueuePhoneWrite(ctx context.Context, id, tool string, args json.R
 			return err
 		}
 		var count int
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM phone_write_queue WHERE state IN ('queued', 'delivering')`).Scan(&count); err != nil {
+		if err := tx.QueryRow(ctx, countPendingPhoneWritesSQL).Scan(&count); err != nil {
 			return err
 		}
 		if count >= PhoneWritePendingLimit {
@@ -119,6 +121,13 @@ func (d *DB) EnqueuePhoneWrite(ctx context.Context, id, tool string, args json.R
 // PhoneWrites lists receipts without changing them. Admission and completion prune terminal history.
 func (d *DB) PhoneWrites(ctx context.Context) ([]PhoneWrite, error) {
 	return d.phoneWriteRows(ctx, `SELECT `+phoneWriteColumns+` FROM phone_write_queue ORDER BY sequence`)
+}
+
+// CountPendingPhoneWrites reads the shared queued and in-flight total without fetching any receipt.
+func (d *DB) CountPendingPhoneWrites(ctx context.Context) (int, error) {
+	var count int
+	err := d.pool.QueryRow(ctx, countPendingPhoneWritesSQL).Scan(&count)
+	return count, err
 }
 
 // QueuedPhoneWrites reads only unsent writes through the pending index; idle delivery polls never read history.

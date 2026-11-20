@@ -5,6 +5,7 @@ import persona.core.contracts.HubScope
 import persona.core.contracts.api.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Semaphore
 
 /**
@@ -35,6 +36,42 @@ class PhoneToolsRuntime(
     val permissions = PhonePermissions(context.applicationContext)
     val confirmations = PhoneConfirmations(context.applicationContext)
     private val visibility = MutableStateFlow(false)
+    private val queueChanges = Channel<Unit>(Channel.CONFLATED)
+
+    private val queueCount = MutableStateFlow<Int?>(null)
+    val pendingWriteCount = queueCount.asStateFlow()
+
+    // Both surfaces share a read from the current authenticated socket.
+    private suspend fun observePendingWrites() {
+        combine(connection.currentHello, connection.state, visibility, queueCount.subscriptionCount) { socket, state, visible, views ->
+            socket?.generation?.takeIf { views > 0 && visible && state == ConnectionState.Online }
+        }.distinctUntilChanged().collectLatest { generation ->
+            queueCount.value = null
+            if (generation == null) return@collectLatest
+            while (currentCoroutineContext().isActive) {
+                queueChanges.tryReceive()
+                val count = try {
+                    transport.pendingWriteCount()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    queueCount.value = null
+                    awaitQueueRefresh()
+                    continue
+                }
+                currentCoroutineContext().ensureActive()
+                queueCount.value = count
+                if (count == null) break // Unsupported or forbidden. Probe on the next visit or connection.
+                awaitQueueRefresh()
+            }
+        }
+    }
+
+    // Another phone can finish a write without an event on this socket. Only poll while a surface is visible.
+    private suspend fun awaitQueueRefresh() {
+        if (withTimeoutOrNull(30_000L) { queueChanges.receive() } != null) delay(300L)
+    }
+
     private val resident = MutableStateFlow(false)
     private val permissionRevision = MutableStateFlow(0)
     private val backend = AndroidPhoneTools(context) { visibility.value }
@@ -46,6 +83,7 @@ class PhoneToolsRuntime(
 
     init {
         require(deviceId.isNotBlank())
+        scope.launch { observePendingWrites() }
         scope.launch {
             connection.state.collectLatest { state ->
                 transport.discardPending()
@@ -63,6 +101,8 @@ class PhoneToolsRuntime(
                             .distinctUntilChanged().collect { specs -> transport.register(deviceId, deviceName, simulator, specs) }
                     }
                     transport.calls.collect { call ->
+                        val confirmedWrite = call.name in PhoneToolCatalog.confirmedWriteNames
+                        if (confirmedWrite) queueChanges.trySend(Unit)
                         // Acquire the permit *inside* the collector, before launching: the transport channel
                         // and the semaphore together bound how many calls are in flight, so a flood backs up
                         // into the channel (which then refuses new calls) instead of spawning unbounded
@@ -99,6 +139,7 @@ class PhoneToolsRuntime(
                                         // Send now if the socket can take it; otherwise hold only the result
                                         // (never the call) for a later flush on reconnect.
                                         outbox.send(call.callId, result) { transport.result(call.callId, result) }
+                                        if (confirmedWrite) queueChanges.trySend(Unit)
                                     } finally { watcher.cancel() }
                                 }
                             } finally {
@@ -117,7 +158,7 @@ class PhoneToolsRuntime(
     fun refreshPermissions() { permissionRevision.value += 1 }
     override fun close() {
         transport.register(deviceId, deviceName, simulator, emptyList())
-        confirmations.close(); outbox.close(); job.cancel(); transport.discardPending()
+        confirmations.close(); outbox.close(); job.cancel(); queueCount.value = null; transport.discardPending()
     }
 
     private companion object { const val MAX_IN_FLIGHT = 8 }

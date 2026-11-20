@@ -1934,7 +1934,7 @@ Second-batch module entries:
 - Confirmed Agent closure from list/chat removes its chat/request/terminal pages from every tab; unknown result keeps pages for checking. Sharing targets use Agents `agentRank`, then time and stable identity within state.
 - Chat ⋯ opens Files; once confirmed repository, shows Git and change count. Files/Git switch within original chat; path insertion preserves draft/valid selection and returns to composer.
 - Persona drawer Knowledge opens profiles/search/details; links open in App.
-- Settings › Phone data opens permissions/toggles. Foreground state plus actual foreground-service state determine availability; location/clipboard still require foreground. Old pairings without device identity require re-pairing.
+- Settings › Phone data opens permissions/toggles. The screen also shows pending phone writes for the selected hub, including writes already delivered for confirmation. Switching hubs discards the previous count. Foreground state plus actual foreground-service state determine availability; location/clipboard still require foreground. Old pairings without device identity require re-pairing.
 - Settings › Assistant (`SettingsPage.Assistant`) opens Persona settings, also Persona title menu Details and top-right avatar; see above.
 - Unpaired users can choose "No hub? Try it first". Demo mode has isolated data/cache/outbox and can be exited in Settings; terminal/monitoring/Knowledge without samples explain and never call real hub.
 

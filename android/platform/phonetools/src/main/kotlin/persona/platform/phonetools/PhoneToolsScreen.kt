@@ -1,5 +1,6 @@
 package persona.platform.phonetools
 
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import android.content.Intent
 import android.net.Uri
@@ -62,6 +63,11 @@ fun PhoneToolsScreen(runtime: PhoneToolsRuntime, navigator: Navigator) {
         item {
             Text(stringResource(R.string.phonetools_intro),
                 Modifier.padding(bottom = 16.dp.dense), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
+        }
+        item {
+            PendingPhoneWrites(runtime) { label ->
+                JNotice(label, Modifier.padding(bottom = Tokens.Space.m), status = Status.NeedsYou)
+            }
         }
         items(PhoneSource.entries, key = { it.name }) { source ->
             val status = remember(revision, source, healthGranted) {
@@ -134,15 +140,29 @@ fun PhoneToolsScreen(runtime: PhoneToolsRuntime, navigator: Navigator) {
     }
 }
 
+@Composable
+private fun PendingPhoneWrites(runtime: PhoneToolsRuntime, content: @Composable (String) -> Unit) {
+    key(runtime) {
+        val count by runtime.pendingWriteCount.collectAsStateWithLifecycle()
+        count?.takeIf { it > 0 }?.let { content(pluralStringResource(R.plurals.phonetools_pending_writes, it, it)) }
+    }
+}
+
 /** Mount once above the app's navigation host so any screen can confirm a pending call. */
 @Composable
-fun PhoneConfirmationHost(confirmations: PhoneConfirmations) {
+fun PhoneConfirmationHost(runtime: PhoneToolsRuntime) = key(runtime) {
+    val confirmations = runtime.confirmations
     val pending by confirmations.pending.collectAsStateWithLifecycle()
     pending?.let { request ->
         JDialog(onDismiss = { confirmations.resolve(request.token, false) }, title = stringResource(R.string.phonetools_confirm_title),
             content = {
-                Text(request.summary, Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
-                    style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
+                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                    Text(request.summary, style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
+                    PendingPhoneWrites(runtime) { label ->
+                        Text(label, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                    }
+                }
             }, confirm = stringResource(R.string.phonetools_allow) to { confirmations.resolve(request.token, true) },
             dismiss = stringResource(R.string.phonetools_deny) to { confirmations.resolve(request.token, false) })
     }

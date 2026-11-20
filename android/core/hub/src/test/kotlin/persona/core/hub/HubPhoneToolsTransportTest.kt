@@ -8,6 +8,10 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.RecordedRequest
+import java.util.concurrent.LinkedBlockingQueue
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -21,9 +25,47 @@ class HubPhoneToolsTransportTest {
         override fun send(message: JsonObject): Boolean { sent += message; return true }
     }
 
+    @Test fun pairedConnectionReadsOnlyTheCountAndARefusedOptionalReadKeepsTheSocket() = runBlocking {
+        val requests = LinkedBlockingQueue<RecordedRequest>()
+        val replies = LinkedBlockingQueue<MockResponse>()
+        LoopbackHub(api = { request ->
+            if (request.requestUrl!!.encodedPath == "/api/v1/phone/write-queue") {
+                requests.add(request)
+                replies.remove()
+            } else MockResponse().setResponseCode(404)
+        }).use { hub ->
+            OkHttpHubConnection(HubConnectionConfig(hub.hubId, null, "test-token", listOf(hub.endpoint("lan")), "test"),
+                HubNetwork("offline", available = false)).use { socket ->
+                socket.updateNetwork(HubNetwork("test"))
+                withTimeout(5_000) { socket.currentHello.first { it != null } }
+                HubPhoneToolsTransport(socket).use { transport ->
+                    suspend fun read(status: Int, json: String): Int? {
+                        replies.add(MockResponse().setResponseCode(status).setBody(json))
+                        val count = transport.pendingWriteCount()
+                        val request = requests.remove()
+                        assertEquals("GET", request.method)
+                        assertEquals("/api/v1/phone/write-queue?count_only=true", request.path)
+                        assertEquals("Bearer test-token", request.getHeader("Authorization"))
+                        return count
+                    }
+                    assertEquals(0, read(200, """{"pending_count":0}"""))
+                    assertEquals(3, read(200, """{"items":[{"args":{"unused":[1,"example"]}}],"pending_count":3}"""))
+                    assertNull(read(200, """{"items":[]}"""))
+                    assertNull(read(200, """{"pending_count":-1}"""))
+                    assertNull(read(404, "{}"))
+                    assertNull(read(403, """{"code":"permission_denied"}"""))
+                    assertNull(read(403, "{}"))
+                    assertEquals(1, read(200, """{"pending_count":1}"""))
+                    assertEquals(ConnectionState.Online, socket.state.value)
+                    assertEquals(1, hub.opened.get())
+                }
+            }
+        }
+    }
+
     @Test fun callsWithoutArgumentsAreEmptyObjectsAndOtherShapesAreRefused() = runBlocking {
         val socket = Socket()
-        val transport = HubPhoneToolsTransport(socket)
+        val transport = HubPhoneToolsTransport(socket) { error("Unexpected queue read") }
         fun call(id: String, args: JsonElement?) = buildJsonObject {
             put("type", "tool_call"); put("call_id", id); put("name", "phone_device_info"); args?.let { put("args", it) }
         }

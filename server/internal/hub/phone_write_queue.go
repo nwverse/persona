@@ -239,13 +239,18 @@ type phoneWriteList struct {
 	PendingCount int             `json:"pending_count"`
 }
 
-func (h *Hub) listPhoneWrites(ctx context.Context, id string) (phoneWriteList, error) {
+func (h *Hub) listPhoneWrites(ctx context.Context, id string, countOnly bool) (phoneWriteList, error) {
 	list := phoneWriteList{Items: []db.PhoneWrite{}}
 	if h.store == nil {
 		return list, errors.New("phone write queue unavailable: no database")
 	}
 	ctx, cancel := context.WithTimeout(ctx, phoneToolsTimeout)
 	defer cancel()
+	if countOnly {
+		count, err := h.store.CountPendingPhoneWrites(ctx)
+		list.PendingCount = count
+		return list, err
+	}
 	writes, err := h.store.PhoneWrites(ctx)
 	for _, write := range writes {
 		if write.State == "queued" || write.State == "delivering" {
@@ -296,7 +301,7 @@ func (h *Hub) phoneWriteTool(ctx context.Context, name string, args json.RawMess
 		return proto.TextResult("Expected JSON arguments with an optional id.", true), true
 	}
 	if name == "phone_write_queue_list" {
-		list, err := h.listPhoneWrites(ctx, input.ID)
+		list, err := h.listPhoneWrites(ctx, input.ID, false)
 		if err != nil {
 			return proto.TextResult(err.Error(), true), true
 		}
@@ -311,9 +316,15 @@ func (h *Hub) phoneWriteTool(ctx context.Context, name string, args json.RawMess
 
 func (h *Hub) phoneWriteRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/phone/write-queue", func(w http.ResponseWriter, r *http.Request) {
-		list, err := h.listPhoneWrites(r.Context(), r.URL.Query().Get("id"))
+		query := r.URL.Query()
+		countOnly := query.Get("count_only") == "true"
+		list, err := h.listPhoneWrites(r.Context(), query.Get("id"), countOnly)
 		if err != nil {
 			writeErr(w, http.StatusServiceUnavailable, err)
+			return
+		}
+		if countOnly {
+			writeJSON(w, map[string]int{"pending_count": list.PendingCount})
 			return
 		}
 		writeJSON(w, list)

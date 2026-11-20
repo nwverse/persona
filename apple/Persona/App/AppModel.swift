@@ -3348,17 +3348,23 @@ final class AppModel {
             return
         }
         #endif
+        let origin = link(group)
+        var asked = false
         let (content, isError) = await PhoneToolRegistry.call(name: name, args: args) { [weak self] summary in
-            await self?.confirm(summary) ?? false
+            asked = true
+            return await self?.confirm(summary, hub: origin.map(ObjectIdentifier.init)) ?? false
         }
         guard let data = try? JSON.encoder.encode(content), let arr = try? JSONSerialization.jsonObject(with: data) else { return }
         // Allowed just as the app came back from the background, the socket may not be up yet: kept until it is (#4456).
         toolResults.send(["type": "tool_result", "call_id": callID, "content": arr, "is_error": isError], callID: callID, group: group,
                          on: socket(group))
+        #if os(iOS)
+        if asked { origin?.phoneWrites.resultSent() }
+        #endif
     }
 
 
-    private func confirm(_ summary: String) async -> Bool {
+    private func confirm(_ summary: String, hub: ObjectIdentifier?) async -> Bool {
         Haptics.attention()
         #if os(macOS)
         // The alert hangs off the main window: bring it up (reopen it if it was closed) so the question is seen.
@@ -3367,7 +3373,7 @@ final class AppModel {
         NSApp.requestUserAttention(.criticalRequest)
         #endif
         // One at a time: a second write waits behind the one on screen instead of taking its place (#4456).
-        return await phoneConfirmations.ask(summary)
+        return await phoneConfirmations.ask(summary, hub: hub)
     }
 
     // MARK: Actions

@@ -4907,11 +4907,14 @@ PhoneWrite {
 | MCP `phone_write_queue_list {id?}` | `{items: [PhoneWrite], pending_count: N}`; an optional ID filters the list, but the count always includes all pending entries |
 | MCP `phone_write_queue_cancel {id}` | The cancelled `PhoneWrite`; an already-cancelled ID returns the same record, otherwise an error if missing or no longer queued |
 | `GET /api/v1/phone/write-queue?id=<optional id>` | The same list envelope; records in enqueue order, empty `items` if the ID is not retained |
+| `GET /api/v1/phone/write-queue?count_only=true` | `{pending_count: N}` for the entire paired hub. Reads the queued and delivering total without fetching arguments, results, or history. |
 | `POST /api/v1/phone/write-queue/{id}/cancel` | The cancelled record (also for a repeated cancellation); 404 if missing, 409 for any other nonqueued state |
 
 Both HTTP routes use normal hub authentication and require full credentials; answer-only devices and extension tokens
-cannot access them. They need no phone connection. Clients can poll the list on connection, foregrounding, and while a
-queue view is visible. `pending_count` counts `queued` plus `delivering` and can supply a badge. This API prepares the data for an App queue view; iOS and Android do not yet display that view or badge.
+cannot access them. They need no phone connection. The count is shared across the hub, since a write is delivered to a capable connected phone.
+The native Phone Data screens use the count-only read. Hubs with the original queue API ignore this optional query and return
+the same `pending_count` alongside the receipts. The clients read only the count. An unavailable response, a missing count,
+or insufficient credentials leaves the indicator hidden.
 
 At `register_phone`, the hub schedules a single asynchronous delivery loop. It picks the oldest queued entry whose tool
 is currently registered by a connected phone, commits `delivering` before sending, and waits for that phone's result

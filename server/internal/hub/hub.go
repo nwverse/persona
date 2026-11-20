@@ -207,6 +207,7 @@ type Store interface {
 	FindQueuedPhoneWrite(ctx context.Context, tool string, args json.RawMessage) (*db.PhoneWrite, error)
 	EnqueuePhoneWrite(ctx context.Context, id, tool string, args json.RawMessage) (*db.PhoneWrite, error)
 	PhoneWrites(ctx context.Context) ([]db.PhoneWrite, error)
+	CountPendingPhoneWrites(ctx context.Context) (int, error)
 	QueuedPhoneWrites(ctx context.Context) ([]db.PhoneWrite, error)
 	ClaimPhoneWrite(ctx context.Context, id string) (bool, error)
 	FinishPhoneWrite(ctx context.Context, id, state string, result json.RawMessage) error

@@ -523,7 +523,7 @@ final class LiveConnection {
     /// device (`AppModel.linkHooksForTests`).
     @ObservationIgnored var makeLocalForTests: (() -> LocalSocket)?
     #endif
-    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private(set) var generation = 0
     @ObservationIgnored private var backoff: TimeInterval = 1
     /// The hub said `hub_restarting` on this socket: its close is a restart whatever the close code.
     @ObservationIgnored private var restartNotice = false

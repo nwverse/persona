@@ -134,6 +134,7 @@ class CalendarContactSummaryShotsTest {
         val connection = Proxy.newProxyInstance(HubConnection::class.java.classLoader, arrayOf(HubConnection::class.java)) { _, method, _ ->
             when (method.name) {
                 "getState" -> MutableStateFlow(ConnectionState.WaitingForNetwork)
+                "getCurrentHello" -> MutableStateFlow<persona.core.contracts.api.SocketHello?>(null)
                 "getEvents" -> emptyFlow<Any>()
                 else -> error("not used: ${method.name}")
             }
@@ -152,7 +153,7 @@ class CalendarContactSummaryShotsTest {
             val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
                 PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Glass) {
-                    PhoneConfirmationHost(runtime.confirmations)
+                    PhoneConfirmationHost(runtime)
                 }
             }
         }

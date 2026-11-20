@@ -1,14 +1,37 @@
 package persona.core.hub
 
+import persona.core.contracts.JsonCodec
 import persona.core.contracts.api.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.ExperimentalSerializationApi
+import okhttp3.Response
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.serialization.json.*
 
 /** Feed accept from the socket text hook before ServerEvent.decode, which ignores tool_call. */
-class HubPhoneToolsTransport(private val connection: HubConnection) : PhoneToolsTransport, AutoCloseable {
+class HubPhoneToolsTransport internal constructor(
+    private val connection: HubConnection,
+    private val get: suspend (String) -> Response,
+) : PhoneToolsTransport, AutoCloseable {
+    constructor(connection: OkHttpHubConnection) : this(connection, { path -> connection.request(path, buffered = false, allowForbidden = true) })
+
     private val queue = Channel<PhoneToolCall>(16)
     override val calls = queue.receiveAsFlow()
+
+    @OptIn(ExperimentalSerializationApi::class)
+    override suspend fun pendingWriteCount(): Int? = try {
+        get("/api/v1/phone/write-queue?count_only=true").use { response ->
+            if (response.code == 403) return@use null
+            withContext(Dispatchers.IO) {
+                response.body?.byteStream()?.let { JsonCodec.decodeFromStream<PhoneWriteQueueSummary>(it) }
+                    ?.pendingCount?.takeIf { it >= 0 }
+            }
+        }
+    } catch (error: HubFailure) {
+        if (error.status == 404) null else throw error
+    }
 
     fun accept(message: JsonObject): Boolean {
         if ((message["type"] as? JsonPrimitive)?.contentOrNull != "tool_call") return false

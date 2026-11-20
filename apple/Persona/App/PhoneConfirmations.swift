@@ -5,6 +5,8 @@ import Observation
 struct PhoneConfirmation: Identifiable, Equatable {
     let id = UUID()
     let summary: String
+    /// The pairing that received this call. Another hub may be selected in Settings.
+    let hub: ObjectIdentifier?
 }
 
 /// The phone's writes ask the user one at a time (#4456): a second write that comes while the first is on screen
@@ -19,9 +21,9 @@ struct PhoneConfirmation: Identifiable, Equatable {
     @ObservationIgnored private var answers: [UUID: CheckedContinuation<Bool, Never>] = [:]
 
     /// Asks the user about `summary`: shown now, or after the ones before it are answered.
-    func ask(_ summary: String) async -> Bool {
+    func ask(_ summary: String, hub: ObjectIdentifier? = nil) async -> Bool {
         await withCheckedContinuation { cont in
-            let c = PhoneConfirmation(summary: summary)
+            let c = PhoneConfirmation(summary: summary, hub: hub)
             answers[c.id] = cont
             if current == nil { current = c } else { waiting.append(c) }
         }

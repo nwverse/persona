@@ -1,6 +1,8 @@
 package persona.core.contracts.api
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 
 data class PhoneToolSpec(val name: String, val description: String, val inputSchema: JsonObject) {
@@ -19,9 +21,15 @@ data class PhoneToolResult(val content: JsonArray, val isError: Boolean = false)
     }
 }
 
+/** Older hubs may also return queue items. The phone only decodes the shared count. */
+@Serializable
+data class PhoneWriteQueueSummary(@SerialName("pending_count") val pendingCount: Int? = null)
+
 /** Bound to the same authenticated connection and pairing generation as HubConnection. */
 interface PhoneToolsTransport {
     val calls: Flow<PhoneToolCall>
+    /** Null when this hub does not expose a count to the paired device. */
+    suspend fun pendingWriteCount(): Int? = null
     fun discardPending()
     fun register(deviceId: String, deviceName: String, simulator: Boolean, tools: List<PhoneToolSpec>): Boolean
     fun result(callId: String, result: PhoneToolResult): Boolean

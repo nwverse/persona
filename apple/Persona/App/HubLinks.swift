@@ -9,6 +9,7 @@ final class HubLink: Identifiable {
     let group: String
     var id: String { group }
     let live = LiveConnection()
+    @ObservationIgnored lazy var phoneWrites = PhoneWriteQueue()
     let larkDisplay = LarkMessageDisplayModel()
     /// Who answered on the socket: the hub's id, name, features and group (its hello).
     private(set) var hello = HubHello()

@@ -12486,6 +12486,40 @@
         }
       }
     },
+    "%lld phone writes awaiting confirmation on this hub" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld phone write awaiting confirmation on this hub"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld phone writes awaiting confirmation on this hub"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Hub で承認待ちのスマートフォンへの書き込みは %1$lld 件です"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Hub 有 %1$lld 项手机写入待确认"
+          }
+        }
+      }
+    },
     "%lld pins" : {
       "localizations" : {
         "en" : {

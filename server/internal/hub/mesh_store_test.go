@@ -598,6 +598,7 @@ func (s *meshStore) EnqueuePhoneWrite(context.Context, string, string, json.RawM
 	return nil, errors.New("phone write queue unavailable")
 }
 func (s *meshStore) PhoneWrites(context.Context) ([]db.PhoneWrite, error)  { return nil, nil }
+func (s *meshStore) CountPendingPhoneWrites(context.Context) (int, error)  { return 0, nil }
 func (s *meshStore) ClaimPhoneWrite(context.Context, string) (bool, error) { return false, nil }
 func (s *meshStore) FinishPhoneWrite(context.Context, string, string, json.RawMessage) error {
 	return nil

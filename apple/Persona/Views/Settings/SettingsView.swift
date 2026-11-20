@@ -686,8 +686,8 @@ struct PhoneDataView: View {
     var body: some View {
         List {
             #if os(iOS)
-            // Being operated by the assistant through a computer (docs/extensions/iphone.md): the guided setup, first,
-            // always offered on an iPhone (#8199).
+            PhoneWriteQueueNotice()
+            // The guided setup for operating this iPhone through a computer is always available (#8199, docs/extensions/iphone.md).
             IPhoneSetupEntry()
             #endif
             Section {
@@ -734,6 +734,9 @@ struct PhoneDataView: View {
         .themedPage()
         .navigationTitle(ConnectorText.device)
         .navigationBarTitleDisplayMode(.inline) // like the other connectors' pages
+        #if os(iOS)
+        .followingPhoneWrites(model.hub)
+        #endif
         .task { refresh() }
         // Back from the system's Settings, where a permission may have been given or taken away.
         .onChange(of: phase) { _, p in if p == .active { refresh() } }

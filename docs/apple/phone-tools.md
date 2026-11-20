@@ -276,9 +276,15 @@ error, such as missing permission), `uncertain`, and `cancelled`. Preserve the d
 unanswered confirmation; only the explicit phone decline result means the user refused.
 
 The authenticated hub API exposes the same list and cancellation operations at `GET /api/v1/phone/write-queue` and
-`POST /api/v1/phone/write-queue/{id}/cancel` (see `docs/protocol/protocol.md`, "Phone write queue"). Clients can poll the
-list and use `pending_count` for a pending-write badge. The iOS / Android queue screen and badge are not implemented;
-existing apps continue to show the usual per-write confirmation cards.
+`POST /api/v1/phone/write-queue/{id}/cancel` (see `docs/protocol/protocol.md`, "Phone write queue"). Phone Data on iOS and Android displays how many mobile writes are waiting for confirmation on the current hub.
+This shared number includes both queued writes and the write awaiting a reply. A capable phone still asks for each
+confirmation individually. The settings screens request `?count_only=true` and read just `pending_count`.
+Older hubs that return the full list with a count also work. If the hub omits the count or denies the request, the
+indicator is hidden.
+
+For a local mobile test, run `scripts/mock/mock_hub.py` with `MOCK_PHONE_WRITE_PENDING=2` to start with two pending
+writes. Add `MOCK_PHONE_WRITE_DELIVERY=1` to update the count when a registered phone answers a synthetic calendar
+write. Use the mock's phone-tool control to send each request and approve or decline it on the phone.
 
 ## Copying a file to the clipboard
 

@@ -40,6 +40,9 @@
     <string name="phonetools_system_settings">システム設定</string>
     <string name="phonetools_error_system_settings">システム設定を開けませんでした。Personaの権限を手動で確認してください。</string>
     <string name="phonetools_footnote">Androidにはシステムのリマインダー機能がありません。通知一覧にはPersonaが表示中の通知のみが含まれます。ヘルスケアデータはHealth Connectで読み取ります（Android 14以降は標準搭載）。</string>
+    <plurals name="phonetools_pending_writes">
+        <item quantity="other">この Hub で承認待ちのスマートフォンへの書き込みは %1$d 件です</item>
+    </plurals>
     <string name="phonetools_confirm_title">スマートフォンの操作を確認</string>
     <string name="phonetools_allow">許可</string>
     <string name="phonetools_deny">拒否</string>

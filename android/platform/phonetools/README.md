@@ -30,6 +30,8 @@ App 已依赖 `:platform:phonetools`；`AppServices` 按配对及同一 device_i
 
 **结果 outbox**：`transport.result` 返回 false 时，`PhoneToolResultOutbox` 只在 pairing runtime 内、内存中暂存结果（不是工具调用），连接恢复后按 FIFO 顺序补发；同一个 `call_id` 的新结果替换旧结果，容量有界。outbox 不落盘、不在进程重启后自动重放，也绝不调用 `registry` / `execute`；它补发的是结果，不是写入操作本身。`queue_if_offline` 由 hub 加 schema、接收并在转发前移除，Android 不实现第二队列。
 
+「手机数据」页和前台单条确认卡显示当前配对 Hub 的待确认手机写入总数。所有能够执行写入的手机共享这个数。界面可见时通过 `GET /api/v1/phone/write-queue?count_only=true` 读取 `pending_count`，在写入送达、返回结果和重新连线时刷新，也会每 30 秒刷新以反映其他手机的操作。数量为零、断线、无权限或旧 Hub 缺少该字段时隐藏提示。每项写入仍需单独确认。
+
 日历优先使用指定的可写日历，其次默认可写日历；完全没有可写日历时创建 Persona 本地日历。指定名称找不到时直接报错，防止误写到其他日历。全天日程以 UTC 日期保存，结束日期不包含在内。本地日历在国产系统日历 App 中的展示尚待真机验证。
 
 照片只读取系统允许的集合，支持 Android 14 部分授权；视频取图返回预览。没有申请媒体位置权限，因此照片元数据不含经纬度。联系人查询和日历返回量均有输入上限，照片缩放后以 MCP image 块返回。

@@ -85,6 +85,7 @@ class PhoneToolsShotsTest {
         val connection = Proxy.newProxyInstance(HubConnection::class.java.classLoader, arrayOf(HubConnection::class.java)) { _, method, _ ->
             when (method.name) {
                 "getState" -> MutableStateFlow(ConnectionState.WaitingForNetwork)
+                "getCurrentHello" -> MutableStateFlow<persona.core.contracts.api.SocketHello?>(null)
                 "getEvents" -> emptyFlow<Any>()
                 else -> error("not used: ${method.name}")
             }
@@ -108,7 +109,7 @@ class PhoneToolsShotsTest {
                 Box(Modifier.testTag("shot").width(400.dp).height(1760.dp).background(PersonaTheme.palette.background)) {
                     PhoneToolsScreen(runtime, navigator)
                 }
-                PhoneConfirmationHost(runtime.confirmations)
+                PhoneConfirmationHost(runtime)
             }
         }
         for (d in listOf(false, true)) {

@@ -40,6 +40,10 @@
     <string name="phonetools_system_settings">System settings</string>
     <string name="phonetools_error_system_settings">Couldn\'t open system settings. Check Persona\'s permissions there yourself.</string>
     <string name="phonetools_footnote">Android has no system reminders interface. The notification list only includes notifications Persona is showing. Health data is read through Health Connect (built in from Android 14).</string>
+    <plurals name="phonetools_pending_writes">
+        <item quantity="one">%1$d phone write awaiting confirmation on this hub</item>
+        <item quantity="other">%1$d phone writes awaiting confirmation on this hub</item>
+    </plurals>
     <string name="phonetools_confirm_title">Confirm phone action</string>
     <string name="phonetools_allow">Allow</string>
     <string name="phonetools_deny">Deny</string>

@@ -323,6 +323,7 @@ func TestPhoneWriteQueueAPIRequiresFullAuth(t *testing.T) {
 	for _, token := range []string{"", "jd_queue_answer"} {
 		for _, req := range []struct{ method, path string }{
 			{http.MethodGet, "/api/v1/phone/write-queue"},
+			{http.MethodGet, "/api/v1/phone/write-queue?count_only=true"},
 			{http.MethodPost, "/api/v1/phone/write-queue/" + row.ID + "/cancel"},
 		} {
 			status, _ := call(t, handler, req.method, req.path, token, "")
@@ -354,6 +355,40 @@ func TestPhoneWriteQueueAPIRequiresFullAuth(t *testing.T) {
 	if status != http.StatusConflict {
 		t.Fatalf("in-flight API cancel = %d", status)
 	}
+}
+
+// The phone badge reads a hub-wide count without retrieving write arguments or results.
+func TestPhoneWriteQueueCountOnly(t *testing.T) {
+	h := phoneWriteHub(t)
+	const token = "jd_phone_summary"
+	if err := h.store.CreateDeviceToken(t.Context(), db.DeviceToken{ID: "phone-summary", Name: "test phone", Role: roleFull}, hashToken(token)); err != nil {
+		t.Fatal(err)
+	}
+	handler := h.routes()
+	const endpoint = "/api/v1/phone/write-queue?count_only=true"
+	check := func(want int) {
+		t.Helper()
+		status, summary := call(t, handler, http.MethodGet, endpoint, token, "")
+		if status != http.StatusOK || len(summary) != 1 || summary["pending_count"] != float64(want) {
+			t.Fatalf("pending summary = %d %+v, want only count %d", status, summary, want)
+		}
+	}
+	check(0)
+	first := enqueuePhoneWriteTest(t, h, "first reminder")
+	second := enqueuePhoneWriteTest(t, h, "another reminder")
+	check(2)
+	if claimed, err := h.store.ClaimPhoneWrite(t.Context(), first.ID); err != nil || !claimed {
+		t.Fatalf("claim = %t, %v", claimed, err)
+	}
+	check(2)
+	if _, err := h.store.CancelPhoneWrite(t.Context(), second.ID); err != nil {
+		t.Fatal(err)
+	}
+	check(1)
+	if err := h.store.FinishPhoneWrite(t.Context(), first.ID, "declined", nil); err != nil {
+		t.Fatal(err)
+	}
+	check(0)
 }
 
 // A blocked queue scan must not hold the registration path or the hub's global lock.
