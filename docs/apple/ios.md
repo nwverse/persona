@@ -2157,8 +2157,10 @@ a follow-up's prompt (`injected.detail`, or the raw input) is never shown while 
 visible one; its block shows only the one-line `injected.line` (`ChatLine.hidesPrompt`). A round stays shown by exactly
 the supervision rule (`Supervision.visible`): a successful `ask_user` / `notify_user`, a pending live `ask_user`, an
 accepted / needs-user `task_review`, a `supervision_finish` receipt with user visibility, or `fold.supervision_user`.
-A completed round with a nonblank final reply also stays visible unless it successfully finished silent. The reply
-uses the usual bubble and the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
+A completed round with a nonblank final reply also stays visible unless it successfully finished silent, except for a
+routine cross-conversation report to the main conversation: that reply stays inside the expandable background record,
+just as on the web. Explicit owner-visibility actions above still open and notify. The reply uses the usual bubble and
+the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
 
 While folding is on, the main chat's Needs You tray groups task rows by the conversation that supervises them (the
 to-do's `origin`) when they come from more than one: the conversation's own group first without a header, then each
@@ -2852,7 +2854,7 @@ is listed), and a hub that answers it has no roster filters nothing (`AppModel.m
   default's conversations name none, and with one installed manager or no roster nothing is named.
 - **Counts**: the tab badges, the app icon's number (their sum), the sidebar's Inbox and To-dos counts, the home page's
   Needs You and the main conversation's dock count the current assistant's (`AppModel.countBadges`,
-  `InboxStore.actionCount`, `TodoStore.badgeCount`). The
+  `InboxStore.unreadCount` for the Inbox's badge and row, `TodoStore.badgeCount`). The
   switcher shows beside every other assistant what waits there (`AssistantBadges`, `AppModel.assistantBadges`): its agents
   waiting (a session with a pending card or in Needs You once, quiet and muted ones left out, a card on no session by
   itself; Persona's own conversations by their cards only) plus `inbox_needs_you`. The header's face carries a mark while
