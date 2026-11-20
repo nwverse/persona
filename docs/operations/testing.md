@@ -727,7 +727,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - Hand to AI per source (#2121): `MOCK_INBOX_EVENTS=1 MOCK_EVENT_MUTES=1` gives three events their mute options. The two mail notifications ("构建失败：主分支" and "会议室变更通知") share one sender, so handing one off preselects that target, marked Last time, on the other (`InboxHandOffBarTests`). With `MOCK_INBOX_EVENTS=legacy MOCK_EVENT_MUTES=1` the same two open as plain item pages, and `InboxHandOffSheetTests` checks the Hand to AI sheet the same way.
 - GitHub thread page (#1055): `MOCK_GITHUB_INBOX=1`, `-tab mail -openInboxItem github:review12` opens fictional example-org/example-repo#12:
   header (status/branches/three labels), Markdown description, request-changes/approve reviews, inline comment/reply, three checks (failed test logs), events.
-  Comments are in `/mock/sent` and appended to timeline. `github:ci7` (CI failure) isn't a PR, opens hub-collected text. Data: `gh_thread_page` in `mock_hub.py`.
+  Comments are in `/mock/sent` and appended to timeline. `github:ci7` (CI failure) isn't a PR, opens hub-collected text. Data: `gh_thread_page` in `scripts/mock/github_mock.py`.
 - Lark via lark-cli (飞书 · 我的消息): `MOCK_LARKCLI_INBOX=1`, `-tab mail -openInboxItem larkcli:example_oncall` opens a mention in a made-up on-call group as its conversation: a post's Markdown with a picture by image key, an interactive message's `<card title=…>` and an untitled one, plain text. `MOCK_LARKCLI_INBOX=legacy` gives the page as an older hub did (empty kind and name), which the apps still draw as a chat. Data: `larkcli_thread_page` in `mock_hub.py`.
 - Lark conversation page: `-tab mail -openInboxItem lark:f3:300` (Weekend hiking group) opens full chat: three days/date separators, over a page before first unread (scroll up, `has_older`),
   images, quoted/emoji replies, bots, 75-reply thread with paged sheet; 12 unread from message 300, read through 299 (`read_position`).
@@ -762,10 +762,16 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - `d.hub.<NAME>`: `mock_hub.py`'s globals, read when used (`SESSIONS`, `ITEMS`, `CLIENTS`, `broadcast(msg)`, `push_machine(id)`, …).
 
 Domains load in list order after every built-in switch has built its fixtures, and before the To-dos view
-(`todo_view_mock.py`), which replaces the to-dos. A domain reads its `MOCK_*` switch from `os.environ`; what exists only with the
-switch is registered only when it is on (the help line always), so with it off the hub answers as before. The first domain on the
-registry is desktop registration (`scripts/mock/desktops_mock.py`); `scripts/mock/test_mock_domains.py` checks every hook against a
-running mock.
+(`todo_view_mock.py`), which replaces the to-dos. A process that loads `mock_hub.py` again (`runpy` in a test) runs each domain
+module again too, so its module-level state starts over as `mock_hub.py`'s globals do. A domain reads its `MOCK_*` switch from
+`os.environ`; what exists only with the switch is registered only when it is on (the help line always), so with it off the hub
+answers as before. The domains on the registry are desktop registration (`scripts/mock/desktops_mock.py`, #11053), GitHub's
+sign-ins and thread page (`scripts/mock/github_mock.py`), Settings › Knowledge selection (`scripts/mock/kb_selection_mock.py`)
+and mail's accounts and write paths (`scripts/mock/mail_mock.py`), the last three moved out of `mock_hub.py` in #11543.
+`scripts/mock/test_mock_domains.py` checks every hook against a running mock. A block that moves out of `mock_hub.py` lists
+the names it took in that test's `MOVED`: a branch from before the move that kept the old block when it resolved its conflict
+then fails there, with the module to edit instead
+(`docs/lessons/testing.md`, "A moved file or block needs a test that fails when the old copy comes back").
 
 ### Readiness scenarios (`MOCK_READINESS`, #287)
 
