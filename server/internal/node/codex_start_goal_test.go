@@ -1,13 +1,13 @@
 package node
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,7 +17,7 @@ import (
 func withCodexGoalWait(t *testing.T, d time.Duration) {
 	t.Helper()
 	old, oldConfirm := codexGoalWait, codexConfirm
-	codexGoalWait, codexConfirm = d, d
+	codexGoalWait, codexConfirm = d, 5*time.Second // submission confirmation must outlast codexStep
 	t.Cleanup(func() { codexGoalWait, codexConfirm = old, oldConfirm })
 }
 
@@ -28,10 +28,22 @@ func withStartRolloutVersion(t *testing.T, v string) {
 	t.Cleanup(func() { startRolloutVersion = old })
 }
 
-// appendCodexRollout appends one line to the new thread's rollout, as Codex itself would.
+// appendCodexRollout appends one line to the new thread's rollout, as Codex itself would. The path lookup falls back
+// to a glob when the cached lookup has not caught up with the file the fake just made.
 func appendCodexRollout(t *testing.T, n *Node, line []byte) {
 	t.Helper()
-	file, err := os.OpenFile(n.codexPath(startThread), os.O_APPEND|os.O_WRONLY, 0)
+	path := n.codexPath(startThread)
+	if path == "" {
+		matches, _ := rolloutGlob(filepath.Join(n.codexHome(), "sessions", "*", "*", "*", "rollout-*-"+startThread+"*.jsonl"))
+		if len(matches) > 0 {
+			path = matches[0]
+		}
+	}
+	if path == "" {
+		t.Logf("the new thread's rollout is not found yet")
+		return
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Error(err)
 		return
@@ -143,7 +155,7 @@ func TestCodexStartGoalTextFallbackOnOldCodex(t *testing.T) {
 // /goal typed and submitted but never confirmed in the rollout: after the bounded wait the goal goes in once more as
 // text, and the start is as it was.
 func TestCodexStartGoalTextFallbackWhenUnconfirmed(t *testing.T) {
-	withCodexGoalWait(t, time.Second) // codexConfirm must outlast codexStep, or no submission is ever confirmed
+	withCodexGoalWait(t, 300*time.Millisecond)
 	n, f, _, _ := codexStartHerdr(t, 100*time.Millisecond)
 	logs := &syncBuffer{}
 	n.logger = log.New(logs, "", 0)
@@ -165,17 +177,37 @@ func TestCodexStartGoalTextFallbackWhenUnconfirmed(t *testing.T) {
 // A native goal the rollout confirms only after its wait ran out is not restated: the text fallback rechecks the
 // rollout right before it would type, sees the late confirmation and sends nothing.
 func TestCodexStartGoalTextFallbackLateNativeConfirmation(t *testing.T) {
+	withCodexGoalWait(t, 300*time.Millisecond)
 	n, f, _, _ := codexStartHerdr(t, 100*time.Millisecond)
 	logs := &syncBuffer{}
 	n.logger = log.New(logs, "", 0)
 	f.setScreen("w1:p2", cxEmpty)
-	startCodexWithGoal(t, n, "") // a thread and its rollout, no goal yet
 	goal := "CI is green"
-	typedAt := time.Now().Add(-time.Second)
-	appendCodexRollout(t, n, codexGoalEvent(goal)) // confirmed after /goal went in, as a late confirmation would be
+	// After /goal went in, the first screen read is the submission check's; the next one is the text fallback's
+	// readiness look. Confirm the native goal then, after its wait and before any text could be typed.
+	goalTyped := false
+	reads := 0
+	var mu sync.Mutex
+	f.after(func(c herdrCall) {
+		mu.Lock()
+		defer mu.Unlock()
+		if c.Method == "agent.prompt" && strings.HasPrefix(str(c.Params["text"]), "/goal ") {
+			goalTyped = true
+			reads = 0
+			return
+		}
+		if !goalTyped || c.Method != "pane.read" {
+			return
+		}
+		reads++
+		if reads == 2 {
+			appendCodexRollout(t, n, codexGoalEvent(goal))
+		}
+	})
 
-	n.codexTextGoal(context.Background(), startThread, "w1:p2", goal, codexGoalOutcome{fallback: true, path: n.codexPath(startThread), typedAt: typedAt})
-	if got := f.trace("agent.prompt"); len(got) != 0 {
+	startCodexWithGoal(t, n, goal)
+	got := f.trace("agent.prompt")
+	if len(got) != 1 || !strings.Contains(got[0], `"/goal `+goal+`"`) {
 		t.Fatalf("typed %v", got)
 	}
 	if !strings.Contains(logs.String(), "goal set, confirmed after its wait; no text goal sent") {
@@ -186,7 +218,7 @@ func TestCodexStartGoalTextFallbackLateNativeConfirmation(t *testing.T) {
 // The text fallback never fails a start: a goal the rollout never shows, even as a user message, is only logged.
 func TestCodexStartGoalTextFallbackNeverFailsTheStart(t *testing.T) {
 	withStartRolloutVersion(t, "0.168.2")
-	withCodexGoalWait(t, time.Second)
+	withCodexGoalWait(t, 300*time.Millisecond)
 	n, f, _, _ := codexStartHerdr(t, 100*time.Millisecond)
 	logs := &syncBuffer{}
 	n.logger = log.New(logs, "", 0)
@@ -284,7 +316,8 @@ func TestCodexStartGoalLongObjective(t *testing.T) {
 }
 
 // The text goal's readback: a user message at or after the send counts, also inside Codex's own wrapper and with the
-// terminal's whitespace; an earlier message with the same words (the task's first message) does not.
+// terminal's whitespace; the task's own first message never counts, even when it has the same words as the goal and is
+// less than a second old.
 func TestCodexRolloutUserMessage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
 	since := time.Now()
@@ -295,13 +328,13 @@ func TestCodexRolloutUserMessage(t *testing.T) {
 		return string(line)
 	}
 	goal := "CI is green"
-	// The task's first message, before the goal was typed: never the goal's readback.
-	before := userLine(since.Add(-time.Minute), goal) + "\n"
+	// The task's first message, just before the goal was typed and with the same words: never the goal's readback.
+	before := userLine(since.Add(-100*time.Millisecond), goal) + "\n"
 	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if codexRolloutUserMessage(path, goal, since) {
-		t.Fatal("a message from before the send counted")
+		t.Fatal("the task's own first message counted as the goal's delivery")
 	}
 	wrapped := "<user_instructions>\nCI  is\n green\n</user_instructions>"
 	if err := os.WriteFile(path, []byte(before+userLine(since.Add(time.Second), wrapped)+"\n"), 0o600); err != nil {

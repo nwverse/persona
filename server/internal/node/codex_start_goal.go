@@ -187,10 +187,11 @@ func (n *Node) codexTextGoal(ctx context.Context, id, pane, goal string, native 
 }
 
 // codexRolloutUserMessage says whether the rollout has a user message carrying text, recorded at or after since (a
-// second of clock tolerance, as the native goal check's). The text may sit inside Codex's own message wrapper, so a
-// message that contains it counts; the time bound keeps the task's first message out. Only a new thread's rollout is
-// scanned (a start's goal), so the file is small. item_completed/UserMessage lines carry the full text, also for a
-// paste the composer showed as a chip (codexThreadStart reads the first message the same way).
+// second of clock tolerance, as the native goal check's). The task's own first message never counts: a goal may be
+// the same words as the prompt, and the first message is often written within the tolerance. The text may sit inside
+// Codex's own message wrapper, so a message that contains it counts. Only a new thread's rollout is scanned (a
+// start's goal), so the file is small. item_completed/UserMessage lines carry the full text, also for a paste the
+// composer showed as a chip (codexThreadStart reads the first message the same way).
 func codexRolloutUserMessage(path, text string, since time.Time) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -200,12 +201,10 @@ func codexRolloutUserMessage(path, text string, since time.Time) bool {
 	want := strings.Join(strings.Fields(text), " ")
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64<<10), 8<<20)
+	first := true // the first user message is the task's prompt, never the goal's delivery
 	for sc.Scan() {
 		line := sc.Bytes()
 		if !strings.Contains(string(line), `"UserMessage"`) {
-			continue
-		}
-		if at := lineTime(line); at.Before(since.Add(-time.Second)) {
 			continue
 		}
 		var l struct {
@@ -221,6 +220,13 @@ func codexRolloutUserMessage(path, text string, since time.Time) bool {
 			} `json:"payload"`
 		}
 		if json.Unmarshal(line, &l) != nil || l.Payload.Type != "item_completed" || l.Payload.Item.Type != "UserMessage" {
+			continue
+		}
+		if first {
+			first = false
+			continue
+		}
+		if at := lineTime(line); at.Before(since.Add(-time.Second)) {
 			continue
 		}
 		var b strings.Builder
