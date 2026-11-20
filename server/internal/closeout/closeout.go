@@ -6,6 +6,7 @@ package closeout
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -19,6 +20,9 @@ var (
 	attrRe  = lazyre.New(`([a-z_]+)\s*=\s*"([^"]*)"`)
 )
 
+// nextMaxRunes is the longest reply that every version of the session list carries whole.
+const nextMaxRunes = 180
+
 // Example is the form an agent is asked to write, as the prompts show it.
 const Example = `<closeout status="done|not_done|blocked" merged="yes|no|n/a" deployed="yes|no|n/a">
 did: <what changed, one sentence; up to three such lines>
@@ -28,6 +32,7 @@ unblock: <user|agent|other; omit without a delivery gate>
 verified: <what you ran or measured and its reading, or "untested">
 missing: <what you still need from someone, if anything>
 waiting: <for status="blocked": who or what you wait for>
+next: <optional on done: one short reply naming the proposed action in the owner's language>
 </closeout>`
 
 // Parse reads the last closeout block in an agent's reply. ok is false when there is none or its status is not one
@@ -63,8 +68,27 @@ func Parse(reply string) (c proto.Closeout, artifacts []proto.WorkArtifact, ok b
 
 func readFields(c proto.Closeout, body string) (proto.Closeout, []proto.WorkArtifact, bool) {
 	var artifacts []proto.WorkArtifact
+	var seenNext, afterNext bool
 	for line := range strings.Lines(body) {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
 		key, val, found := cutKey(line)
+		followsNext := afterNext
+		if afterNext && !found { // a continuation cannot be sent as only its first line
+			c.Next = ""
+		}
+		afterNext = key == "next"
+		if afterNext {
+			if seenNext || nothing(val) || utf8.RuneCountInString(val) > nextMaxRunes ||
+				strings.IndexFunc(val, unicode.IsControl) >= 0 || strings.ContainsAny(val, "\u2028\u2029") || strings.HasPrefix(val, "<") {
+				c.Next = ""
+			} else {
+				c.Next = val
+			}
+			seenNext = true
+			continue
+		}
 		if !found || val == "" {
 			continue
 		}
@@ -99,7 +123,14 @@ func readFields(c proto.Closeout, body string) (proto.Closeout, []proto.WorkArti
 			if !nothing(val) {
 				c.Waiting = clip(val, 120)
 			}
+		default:
+			if followsNext { // a colon in free-form continuation text does not start a report field
+				c.Next = ""
+			}
 		}
+	}
+	if c.Status != proto.CloseoutDone || c.Missing != "" || c.Waiting != "" {
+		c.Next = ""
 	}
 	return c, artifacts, true
 }

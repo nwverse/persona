@@ -386,6 +386,12 @@ func (s *Service) channelAnswered(ctx context.Context, machine, session string) 
 	return ok && c.clock().Sub(at) < window
 }
 
+// transientRetryTurn is a failed turn the mechanical auto-continue loop will retry. Mirroring each attempt would
+// present transient retry state as a series of final answers; the chain's eventual non-transient turn mirrors as usual.
+func (s *Service) transientRetryTurn(ctx context.Context, sess proto.Session) bool {
+	return s.triageSwitches(ctx).transientOn() && turnErrorTransient(sess)
+}
+
 // channelTurnEnded: a conversation finished a turn (session.turn_ended). Its runs are checked at once rather than on
 // the next tick; a turn nobody asked for in a channel is mirrored to those that sync — not a quiet task's normal finish
 // (quietTaskTurn, #2396), whose news, if any, went out with notify_user.

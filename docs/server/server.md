@@ -28,6 +28,76 @@ The hub and the managers apart:
 - **One container in Docker.** The hub image runs the hub and the built-in manager as two processes under `personad supervise`, each restarted on its own, as `persona-hub run` and `persona-manager assistant` unless `PERSONA_SPLIT_PROGRAMS=0` ([docker.md](../operations/docker.md) ("Programs")).
 - **Two services on a new install.** `hub setup` installs the hub's service and the built-in manager's own (`persona-manager-assistant.service` running `persona-manager assistant`, or on a Mac the launchd agent `com.persona.manager.assistant`, running `persona-manager assistant` on a new install, each with `PERSONA_ASSISTANT_DEPLOY=service`), and binds the second to the first with a one-time code. Existing installs keep the hub's child until `hub setup --manager-service` ([upgrade.md](../operations/upgrade.md): every install type, step by step). See [managers.md](../assistant/managers.md) ("The built-in manager as its own service").
 
+## Send an Agent message and check its receipt
+
+Use `personad agent send` to hand a message to an existing Agent from a script or terminal. Use a full paired-device
+token file and either an HTTPS hub address or loopback HTTP. The hub must advertise `client_ops` and `agent_terminal_send`.
+
+```sh
+personad agent send --hub '<hub URL>' --token-file '<private token file>' \
+  --message-file instructions.txt --json '<computer ID>' '<session ID>'
+
+personad agent receipt --hub '<hub URL>' --token-file '<same private token file>' \
+  --wait --json '<request ID>'
+```
+
+The CLI checks the exact target before submitting. A listed Agent may be on an offline computer. Persona
+conversations, archived sessions and unknown targets are refused by the hub.
+
+Pass `--message-file -` to read stdin. Text must be nonempty UTF-8 and fit in 64 KiB. The command prints a generated
+request UUID on stderr before the POST. Scripts can supply their own stable UUID using `--request-id`. Keep the UUID
+with the chosen hub, device credential, target, text and hold choice. A reused ID with different input is a conflict. The CLI
+makes one POST and can recover a lost answer by reading the matching receipt. The recovery read gets a separate
+deadline of up to five seconds. It reuses the same hub and credential and verifies the stored target and input digest.
+
+Add `--hold` to opt in to the hub's existing hold for an Agent whose computer is away. A `held` receipt records admission
+to the outbox. It does not report eventual delivery or change when the outbox retries or discards the message. Use
+`personad outbox list` and the existing recovery actions to check what is still held. An Agent may also accept a message
+into its own queue, reported as `queued`. Delivery and queueing are transport outcomes and do not indicate that the
+Agent finished the work.
+
+`receipt --wait` polls a pending receipt and can continue through a transient read failure. The network deadline defaults to 30 seconds and accepts up to five minutes
+with `--timeout`. A missing or unusable receipt cannot establish whether a message was sent. Keep the same request
+ID and check the existing chat and outbox before making a new send decision.
+
+With `--json`, an outcome is one stdout object containing `request_id` and `state`, plus `http_status` or `reason` when
+known. Exit 0 means `delivered`, `queued`, or `held`. Exit 1 covers `pending`, `refused`, `conflict`, `unknown` and
+`unavailable`, plus connection setup failures. Exit 2 signals invalid usage. The command does not print message text,
+raw receipt bodies or credentials.
+
+## Export a conversation from the terminal
+
+People who work in a terminal can save an Agent or Persona conversation as Markdown for handoffs, tickets,
+or personal archives. Address one conversation using the computer ID and current session ID in the hub's session list.
+Use the hub's HTTPS address, including its mount path when applicable. Local HTTP also works. Keep the paired
+device's credential in a private file (see [Authentication](../protocol/protocol.md#authentication)).
+
+```sh
+personad chat export --hub '<hub URL>' --token-file '<private token file>' \
+  --output conversation.md '<computer ID>' '<current session ID>'
+
+personad chat export --hub '<hub URL>' --token-file '<private token file>' \
+  --output conversation-with-steps.md --include-steps '<computer ID>' '<current session ID>'
+```
+
+By default the export includes the visible conversation, with images and visualizations identified by placeholders.
+Add `--include-steps` to also keep tool calls, results, thinking and intermediate narration in collapsible sections.
+As in the Web export, tool inputs and results show up to 4,000 characters each and mark any omitted continuation.
+Tool inputs retain any size-limit markers already added by the runtime. In a conversation that switched engines, each
+session is read once and its items are placed inside the recorded switch windows. Existing chat permissions still apply.
+
+The command requires a hub that advertises `sessions_lookup` and a hub and node that confirm strict transcript reads.
+This currently means a readable local transcript, including a runtime session whose transcript the node reads locally.
+Export declines terminal-only views and transcripts reconstructed from Codex App or Traex databases. It captures each source's last sequence on the first page. New messages after
+that point stay out, and an observed rewrite or changed switch history triggers one fresh attempt. An unreadable
+page, incomplete full message, or exhausted budget fails without publishing a document. An attempt can read up to
+400 pages, 20,000 items, 512 full items, 64 conversation segments and 96 MiB of responses. Individual responses have a
+16 MiB limit and the command allows up to five minutes for the operation.
+
+Use a new path in an existing local folder that supports hard links. The document is published only after every
+read and the file write succeed, and an existing file is never replaced. On platforms with Unix file permissions the
+file is created with owner-only access. The credential is sent only to the supplied hub and never added to the export.
+
 ## Held Agent messages from the terminal
 
 Use `personad outbox` to check and recover messages waiting for one computer, even when the computer is offline or
@@ -702,16 +772,16 @@ Pairing: hub `~/.persona/bin/personad hub pair` calls running hub via loopback H
   - A session hosted in a Lark chat bridge that finished normally gets no push and no Lark card: the bridge answered in the topic it was asked in (#8592, `chatBridgeFinish` in `server/internal/assistant/fleet_push.go`). Hosted means origin `feishu` (`server/internal/sessionorigin/origin.go`, the Agents rows' "Lark group"), or a pane of the herdr session the bridge runs its agents in on its herdr backend, which the clients label a terminal (`sessionorigin.ChatBridge`, #8845); on Claude Code, Codex or TRAEX. An error, a cut-off, a stuck turn, a usage limit or a stop the host reports is pushed as ever; the Agents list still shows it finished and unread.
 - Extension notifications (`POST /api/v1/notify`, `hub/notify_api.go`): extension picks active / `time-sensitive`, filtered by device input and hidden status. Decision / rate limits belong to extension; `docs/extensions/extensions.md` (“Sending notifications”).
 
-### Push grading (push urgency filtering, `hub/lnmode.go`)
+### Push grading (push urgency filtering, `hub/push_grading.go`)
 
-The `ln` spellings in this section's file names, routes, setting keys, template fields, and reason values are shipped compatibility identifiers. The feature's current name is **push grading**.
+The `ln` spellings in this section's routes, setting keys, template fields, and reason values are shipped compatibility identifiers. The feature's current name is **push grading**.
 
-A hub-side switch (`hub_settings` key `hub.ln_mode`, default off; `GET`/`PUT /api/v1/push/ln-mode` — the GET is also open to an extension token with the `notify` scope, the PUT stays full credentials only). With it off every push behaves exactly as above. With it on, alerts are delivered by urgency instead of all alerting:
+A hub-side switch (`hub_settings` key `hub.ln_mode`, default off; `GET`/`PUT /api/v1/push/ln-mode` and its neutral alias `/api/v1/push/grading`, both served by the same handler — the GET is also open to an extension token with the `notify` scope, the PUT stays full credentials only). With it off every push behaves exactly as above. With it on, alerts are delivered by urgency instead of all alerting:
 
-- **Where the owner turns it on (#8157).** Settings › Notifications › **Push grading** on the web, iOS and Android: the page's last group, after this device's own rows, because the switch is the hub's and holds for every device; its footer says in plain words what still notifies (questions, approvals, decisions only the owner can make, their reminders, the main conversation's notices) and what waits for the briefing and Held pushes (task results, "Please verify" requests, other conversations' notices; finished agents are silent). The apps read and write it with the routes above on their own device credential; a hub without the route (404 / 405) gets no switch: iOS and Android show no row, the web says to update the hub. The assistant reads and changes it through `persona_settings` key `notifications.low_distraction` (`hub/self_settings_lnmode.go`): `get` answers what the `GET` answers, `set` shows a card on the phone (before → after and what that means) and changes the switch only once the owner approves it. The route's PUT and the setting both go through `setPushGrading`, which writes the switch and tells the managers (`Hello.QuietPush`).
+- **Where the owner turns it on (#8157).** Settings › Notifications › **Push grading** on the web, iOS and Android: the page's last group, after this device's own rows, because the switch is the hub's and holds for every device; its footer says in plain words what still notifies (questions, approvals, decisions only the owner can make, their reminders, the main conversation's notices) and what waits for the briefing and Held pushes (task results, "Please verify" requests, other conversations' notices; finished agents are silent). The apps read and write it with the routes above on their own device credential; a hub without the route (404 / 405) gets no switch: iOS and Android show no row, the web says to update the hub. The assistant reads and changes it through `persona_settings` key `notifications.low_distraction` (`hub/self_settings_push_grading.go`): `get` answers what the `GET` answers, `set` shows a card on the phone (before → after and what that means) and changes the switch only once the owner approves it. The route's PUT and the setting both go through `setPushGrading`, which writes the switch and tells the managers (`Hello.QuietPush`).
 
 - Every alert push carries a level and a related key. A manager notification may name them (`assistantwire.Notification.Level` / `RelatedKey`, omitempty; older managers let the hub derive them): `NotifyInput` / `NotifyDecide` / `NotifyReply` and other cards derive **P0**, `NotifyPush` (incl. `notify_user`) **P1**, `NotifyDone` **P2**. `POST /api/v1/notify` accepts `push_level` (`P0` / `P1` / `P2`, default `P1`).
-- A `notify_user` push that names no level gets an extra rule while the switch is on (`hub/fleet_link.go` `lnNotifyPushLevel`, reusing the hub's existing main-conversation check `isMainOn`): from the main conversation it is **P0**, from any other conversation (a supervisor, scheduled-task or oversight conversation) it stays **P1** and is held for the briefing. An explicitly named level (`P0`/`P1`/`P2`) always stands, and with the switch off nothing is re-levelled.
+- A `notify_user` push that names no level gets an extra rule while the switch is on (`hub/fleet_link.go` `pushGradingNotifyLevel`, reusing the hub's existing main-conversation check `isMainOn`): from the main conversation it is **P0**, from any other conversation (a supervisor, scheduled-task or oversight conversation) it stays **P1** and is held for the briefing. An explicitly named level (`P0`/`P1`/`P2`) always stands, and with the switch off nothing is re-levelled.
 - P0 still alerts; P1 is held for the “Needs you” list / briefings; P2 stays silent. The WebSocket `notify` event is never filtered, so app lists and briefings keep updating; only the APNs alert is withheld.
 - P0 always alerts: the level is judged before the 12-hour check, so no earlier push with the same key swallows what the owner must do or decide themself (a reply reminder is keyed by the question it waits on, not the session). After a P0, P1 / P2 pushes with its related key are held as repeats for 12 hours (`ln_dedup_12h`); the check and the note happen under one lock.
 - What the manager names P0: a card that names no level, an `ask_escalate` whose `why_owner` is `irreversible`, `visible_to_others` or `only_owner_knows` (or that sets `p0`), the owner's own to-do reminders, `ask_user` cards and decisions (`needs_user` without `can_wait`) with their overdue reminders. P1: task failures, plans waiting for Start, `notify_user` by default, other escalations (`priority`, `acceptance`).

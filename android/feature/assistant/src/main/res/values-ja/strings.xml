@@ -230,4 +230,12 @@
     <string name="assistant_usage_unavailable">トークン使用量を利用できません</string>
     <string name="assistant_usage_unavailable_detail">この Hub はトークン使用量の履歴を提供していません。</string>
     <string name="assistant_usage_unknown_machine">以前のコンピューター</string>
+    <string name="assistant_sidebar_pages">ページ</string>
+    <string name="assistant_sidebar_chats">Persona のチャット</string>
+    <string name="assistant_sidebar_search">検索</string>
+    <string name="assistant_sidebar_search_chats">チャット</string>
+    <string name="assistant_sidebar_search_agents">エージェント</string>
+    <string name="assistant_sidebar_search_no_agents">一致するエージェントがありません</string>
+    <string name="assistant_sidebar_search_no_agents_detail">別のキーワードで検索してください。</string>
+    <string name="assistant_sidebar_search_agent_field">エージェントを検索</string>
 </resources>

@@ -336,6 +336,10 @@ object PersonaIcons {
     val successFilled: PhIcon get() = PhIcons.CheckCircle
     /** SF Symbol `list.clipboard`. */
     val taskPlan: PhIcon get() = PhIcons.ListChecks
+    /** Running and recently completed background tasks in Agent chat. */
+    val backgroundTasks: PhIcon get() = PhIcons.ListChecks
+    /** A background command that watches an ongoing signal. */
+    val backgroundMonitor: PhIcon get() = PhIcons.Monitor
     /** SF Symbol `terminal`. */
     val terminal: PhIcon get() = PhIcons.TerminalWindow
     /** SF Symbol `terminal.fill`. */

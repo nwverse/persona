@@ -147,14 +147,24 @@ func (s *Service) channelCommand(ctx context.Context, id string, m channel.Messa
 		setTarget(channel.Target{Kind: channel.TargetMain})
 		reply(i18n.T(l, "assistant-channels_plugin.now_to_main"))
 	case "/new", "/新对话":
-		setTarget(channel.Target{Kind: channel.TargetNew})
+		// In a thread it starts the thread over; the channel's target stays where it is.
+		thread := s.channelThreadKey(ctx, id, m)
+		if thread != "" {
+			s.unbindChannelThread(id, thread)
+		} else {
+			setTarget(channel.Target{Kind: channel.TargetNew})
+		}
 		if rest == "" {
-			reply(i18n.T(l, "assistant-channels_plugin.next_is_new"))
+			if thread != "" {
+				reply(i18n.T(l, "assistant-channels_plugin.thread_next_is_new"))
+			} else {
+				reply(i18n.T(l, "assistant-channels_plugin.next_is_new"))
+			}
 			return true, ""
 		}
 		return false, rest // "/new help me…": the rest starts it
 	case "/stop", "/停":
-		rt, err := s.channelTarget(ctx, id)
+		rt, _, err := s.channelRoute(ctx, id, m)
 		switch {
 		case err != nil:
 			reply(i18n.T(l, "assistant-channels_plugin.not_stopped", i18n.Args{"error": err.Error()}))
@@ -175,17 +185,17 @@ func (s *Service) channelCommand(ctx context.Context, id string, m channel.Messa
 			reply(i18n.T(l, "assistant-channels_plugin.stopped"))
 		}
 	case "/status", "/状态":
-		reply(s.channelStatusText(ctx, id))
+		reply(s.channelStatusText(ctx, id, m))
 	default:
 		return false, text
 	}
 	return true, ""
 }
 
-func (s *Service) channelStatusText(ctx context.Context, id string) string {
+func (s *Service) channelStatusText(ctx context.Context, id string, m channel.Message) string {
 	l := s.botLang(ctx)
 	where := i18n.T(l, "assistant-channels_plugin.main_chat")
-	if rt, err := s.channelTarget(ctx, id); err == nil {
+	if rt, _, err := s.channelRoute(ctx, id, m); err == nil {
 		switch {
 		case rt.isNew && !rt.main:
 			where = i18n.T(l, "assistant-channels_plugin.next_new_chat")
@@ -237,6 +247,47 @@ func (s *Service) channelTarget(ctx context.Context, id string) (resolvedTarget,
 	return s.resolveBotTarget(ctx, botTarget{Kind: targetMain})
 }
 
+// channelThreadKey is the thread m is in when channel id keeps a conversation per thread (capabilities.threads), ""
+// when m goes to the channel's target.
+func (s *Service) channelThreadKey(ctx context.Context, id string, m channel.Message) string {
+	if v, ok := s.pluginChannel(ctx, id); !ok || !v.Capabilities.Threads {
+		return ""
+	}
+	return strings.TrimSpace(m.Thread)
+}
+
+// channelRoute is where channel id's message m goes: its thread's conversation when the channel keeps one per thread
+// (a new one for the thread's first message, or when the thread's is gone), else the channel's target. thread is the
+// thread's key, "" for the target.
+func (s *Service) channelRoute(ctx context.Context, id string, m channel.Message) (rt resolvedTarget, thread string, err error) {
+	thread = s.channelThreadKey(ctx, id, m)
+	if thread == "" {
+		rt, err = s.channelTarget(ctx, id)
+		return rt, "", err
+	}
+	if t := s.channelThreadOf(ctx, id, thread); t != nil {
+		if d, ok := s.device(ctx, t.MachineID); ok {
+			// Only a conversation its computer says is gone starts the thread over: one that can't be asked now is an
+			// error the owner is told, not a reason to lose the thread's history.
+			var res struct {
+				Session proto.Session `json:"session"`
+				OK      bool          `json:"ok"`
+			}
+			if err := s.call(ctx, d.ID, DeviceSessionGet, map[string]any{"session_id": t.SessionID}, &res); err != nil {
+				return resolvedTarget{}, thread, err
+			}
+			if res.OK {
+				sess := res.Session
+				sess.SessionID, sess.MachineID = t.SessionID, d.ID
+				main := s.settings(ctx).Main
+				return resolvedTarget{machine: d.ID, machineName: d.Name, session: sess, label: conversationName(sess, main), main: t.SessionID == main}, thread, nil
+			}
+		}
+	}
+	rt, err = s.resolveBotTarget(ctx, botTarget{Kind: targetPersona})
+	return rt, thread, err
+}
+
 // channelForward sends the owner's message to the conversation the channel talks to (starting it when there is none
 // yet) and follows its turn.
 func (s *Service) channelForward(ctx context.Context, id string, m channel.Message) error {
@@ -252,7 +303,7 @@ func (s *Service) channelForward(ctx context.Context, id string, m channel.Messa
 		return errors.New(i18n.T(s.botLang(ctx), "assistant-channels_plugin.mention_owner_required"))
 	}
 	caps := v.Capabilities.Normalized()
-	rt, err := s.channelTarget(ctx, id)
+	rt, thread, err := s.channelRoute(ctx, id, m)
 	if err != nil {
 		return err
 	}
@@ -302,7 +353,9 @@ func (s *Service) channelForward(ctx context.Context, id string, m channel.Messa
 		if err != nil {
 			return fmt.Errorf("%s%w", i18n.T(s.botLang(ctx), "assistant-channels_plugin.not_started"), err)
 		}
-		if !rt.main { // /new: the chat goes on in it
+		if thread != "" { // the thread's first message: the thread goes on in it, the channel's target stays
+			s.bindChannelThread(id, thread, sess.MachineID, sess.SessionID)
+		} else if !rt.main { // /new: the chat goes on in it
 			c := &s.chans
 			c.mu.Lock()
 			s.loadChannelsLocked(ctx)
@@ -331,6 +384,9 @@ func (s *Service) channelForward(ctx context.Context, id string, m channel.Messa
 		}
 		if err := s.sendOnce(ctx, rt.machine, params); err != nil {
 			return err
+		}
+		if thread != "" {
+			s.bindChannelThread(id, thread, rt.machine, sid) // the thread is still alive
 		}
 	}
 	s.startChannelRunForBinding(run, &generation)
@@ -783,8 +839,12 @@ func (s *Service) extensionMirror(ctx context.Context, machine, session string) 
 	if !main && task == "" {
 		return
 	}
-	if sess, ok := s.session(ctx, machine, session); !ok || sess.WokeByTask && !main || spaceOf(sess) == SpaceHealth {
+	sess, ok := s.session(ctx, machine, session)
+	if !ok || sess.WokeByTask && !main || spaceOf(sess) == SpaceHealth {
 		return // a health task's runs stay off the channels (health.go)
+	}
+	if s.transientRetryTurn(ctx, sess) {
+		return
 	}
 	asked, answer, ok := s.channelLastTurn(ctx, machine, session)
 	if !ok {
