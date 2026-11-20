@@ -3,6 +3,7 @@
 // so only the lazy-loaded editor chunk carries it.
 import { t } from "../i18n";
 import { EFFORT_LEVELS } from "./providers";
+import { PERMISSION_MODES } from "./session-actions";
 import { validModelId } from "./model-id";
 import type { ModelBinding } from "./model-config";
 import {
@@ -26,6 +27,7 @@ export interface PurposeDraftEntry {
   provider: string;
   model: string;
   effort: string;
+  permission_mode: string;
 }
 
 /** Tri-state per launcher field: undefined = leave unchanged on switch; "" = clear to launcher default; non-empty = set. */
@@ -41,6 +43,7 @@ export interface TierDraftEntry {
   launcher: string;
   model: string;
   effort: string;
+  permission_mode: string;
   speed: string;
   description: string;
 }
@@ -74,6 +77,7 @@ export function profileToDraft(profile: ModelProfile, catalogPurposeIds?: readon
       provider: b?.provider ?? "",
       model: b?.model ?? "",
       effort: b?.effort ?? "",
+      permission_mode: b?.permission_mode ?? "",
     };
   }
   const launchers: Record<string, LauncherDraftEntry> = {};
@@ -96,6 +100,7 @@ export function profileToDraft(profile: ModelProfile, catalogPurposeIds?: readon
       launcher: tier.launcher ?? "",
       model: tier.model ?? "",
       effort: tier.effort ?? "",
+      permission_mode: tier.permission_mode ?? "",
       speed: tier.speed ?? "",
       description: tier.description ?? "",
     }));
@@ -117,6 +122,7 @@ function validProfileValue(value: string): boolean {
 }
 
 const VALID_SPEEDS = new Set(["", "standard", "fast", "ultrafast"]);
+const VALID_PERMISSION_MODES = new Set<string>(PERMISSION_MODES.map((m) => m.id));
 
 /** Client-side checks mirroring server/internal/assistant/model_profiles_edit.go so users see clear inline reasons before saving. */
 export function profileDraftProblems(draft: ProfileDraft, launcherKinds?: Readonly<Record<string, "launcher" | "api" | undefined>>): string[] {
@@ -136,6 +142,10 @@ export function profileDraftProblems(draft: ProfileDraft, launcherKinds?: Readon
       if (value && !validProfileValue(value)) {
         problems.push(t("settings-modelprofiles.err_value", { where: id, field }));
       }
+    }
+    const permissionMode = p.permission_mode.trim();
+    if (permissionMode && (!validProfileValue(permissionMode) || !VALID_PERMISSION_MODES.has(permissionMode))) {
+      problems.push(t("settings-modelprofiles.err_value", { where: id, field: "permission_mode" }));
     }
   }
   for (const [launcherName, fields] of Object.entries(draft.launchers)) {
@@ -190,6 +200,10 @@ export function profileDraftProblems(draft: ProfileDraft, launcherKinds?: Readon
     if (effort && !EFFORT_LEVELS.includes(effort)) {
       problems.push(t("settings-modelprofiles.err_effort", { where: tierName || "?", effort }));
     }
+    const permissionMode = tier.permission_mode.trim();
+    if (permissionMode && (!validProfileValue(permissionMode) || !VALID_PERMISSION_MODES.has(permissionMode))) {
+      problems.push(t("settings-modelprofiles.err_value", { where: tierName || "?", field: "permission_mode" }));
+    }
     const speed = tier.speed.trim();
     if (!VALID_SPEEDS.has(speed)) {
       problems.push(t("settings-modelprofiles.err_tier_speed", { tier: tierName || "?", speed }));
@@ -211,9 +225,11 @@ export function draftToProfileInput(draft: ProfileDraft, revision: number): Mode
     const provider = entry.provider.trim();
     const model = entry.model.trim();
     const effort = entry.effort.trim();
+    const permissionMode = entry.permission_mode.trim();
     if (provider) binding.provider = provider;
     if (model) binding.model = model;
     if (effort) binding.effort = effort;
+    if (permissionMode) binding.permission_mode = permissionMode;
     purposes[id] = binding;
   }
   const launchers: Record<string, ModelProfileLauncherModels> = {};
@@ -236,10 +252,12 @@ export function draftToProfileInput(draft: ProfileDraft, revision: number): Mode
     const out: ModelProfileTier = { launcher: entry.launcher.trim() };
     const model = entry.model.trim();
     const effort = entry.effort.trim();
+    const permissionMode = entry.permission_mode.trim();
     const speed = entry.speed.trim();
     const description = entry.description.trim();
     if (model) out.model = model;
     if (effort) out.effort = effort;
+    if (permissionMode) out.permission_mode = permissionMode;
     if (speed) out.speed = speed;
     if (description) out.description = description;
     tiers[tierName] = out;

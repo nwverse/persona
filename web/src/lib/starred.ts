@@ -4,6 +4,7 @@ import { toast } from "../ui/atoms";
 import { api, ApiError, credentialOwner, errorText, fullItem, getToken, subscribeCredentialOwner } from "./api";
 import { chosenManager, defaultKnown, onDefaultManager, onManagerChoice, shownManager, stampedHeaders } from "./manager-choice";
 import { setStarredRows, starKey, type Star, type StarInput, type StarSource } from "./starred-rows";
+import { setStarredSummary } from "./starred-summary";
 import { onHubEvent } from "./store";
 
 const PATH = "/assistant/starred";
@@ -40,7 +41,8 @@ function publishRows() {
   const rows = new Map<string, { id?: string; pending?: "add" | "remove" }>();
   for (const [key, ref] of index) rows.set(key, { id: ref.id });
   for (const [key, operation] of pending) rows.set(key, { id: index.get(key)?.id, pending: operation });
-  setStarredRows(rows, indexState === "ready" ? index.size : indexState === "unavailable" ? null : undefined, indexWrite);
+  setStarredRows(rows);
+  setStarredSummary(indexState === "ready" ? index.size : indexState === "unavailable" ? null : undefined, indexWrite);
 }
 
 function clearIndex(state: "pending" | "unavailable") {

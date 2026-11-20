@@ -75,6 +75,8 @@ type Service struct {
 	repositoriesMu   sync.Mutex
 	repositoryConfig string
 	repositoryCheck  func(context.Context, repository.Identity) error // tests only; production uses the guarded checker
+	// gitlabReview reads a GitLab merge request (tests only; production uses the guarded checker, code_host_gitlab.go).
+	gitlabReview func(ctx context.Context, id repository.Identity, link repository.TaskLink, token string) (repository.ReviewStatus, error)
 	// repoExt is the extensions' repository providers (SetExtensions; repository_providers.go); nil: none.
 	repoExt repository.Extensions
 	// repoStarted is closed once repoExt lists its providers (its manager has started); nil: it always does.
@@ -97,6 +99,9 @@ type Service struct {
 	ext ExtensionTools
 	// startDefaultsFor answers a task start's defaults from the extension layer (start_defaults.go); nil: no defaults.
 	startDefaultsFor func(ctx context.Context, facts StartFacts) (StartDefaults, bool, error)
+	// startCandidates lists the presets a start-defaults rule can pick on a machine (start_candidates.go); nil: the
+	// built-in model-profile source. A dynamic candidates source is injected here without touching matching or retries.
+	startCandidates startCandidateSource
 	// refs is the provider extensions' values for launcher keys that are references (launcher_secrets.go); nil: none.
 	refs launcherSecrets
 	// trans reaches the transcription contributions (meeting_transcribe_ext.go): the extensions' when they offer it
@@ -556,9 +561,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		}
 	}
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce) && p["is_main"] == true {
-		p["idle_compaction"] = assistantwire.IdleCompaction{
-			Enabled: s.idleAutoCompact(ctx), IdleMinutes: s.idleAutoCompactMinutes(ctx), ContextTokens: s.idleAutoCompactTokens(ctx),
-		}
+		p["idle_compaction"] = s.idleCompactionPolicy(ctx)
 	}
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		// The window the main conversation is held to (main_compact_window.go), as sendModel puts it: a start, a relay,

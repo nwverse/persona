@@ -288,8 +288,21 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err := checkStartSpeed(params, fit, ""); err != nil {
 		return "", "", err
 	}
-	if fit.allowAll() && !t.preservePermission {
-		t.Permission = "bypassPermissions"
+	configuredMode, _ := params["permission_mode"].(string)
+	delete(params, "permission_mode")
+	if !t.preservePermission {
+		switch {
+		case t.Readonly:
+			if fit.allowAll() {
+				t.Permission = "bypassPermissions"
+			}
+		case configuredMode != "" && fit.supportsPermissionMode(configuredMode):
+			if t.Permission == "" {
+				t.Permission = configuredMode
+			}
+		case fit.allowAll():
+			t.Permission = "bypassPermissions"
+		}
 	}
 	modes := startTakesModes(fit.agent)
 	if !modes { // traex, omp…: no mode and no effort, whatever a default or a tier filled in (launcher_modes.go)

@@ -177,6 +177,9 @@ class AppleReadinessTests(unittest.TestCase):
     def run_preparation(self, regular_only=False, **options):
         source = SCRIPT.read_text()
         helpers = source[source.index("simulator_udid() {"):source.index("cleanup() {")]
+        helpers += source[source.index("result() {"):source.index('if [ "$LANE" = all ]', source.index("test_batch() {"))]
+        settings = source.index('  if [ "$LANE" = ios18 ]; then', source.index('if [ "$LANE" != packages ]; then'))
+        helpers += source[settings:source.index('  IOS_COMMON=(', settings)]
         if regular_only:
             start = source.index("  # The same compiled fixture and compatible runtime as #11289")
             block = source[start:source.index('  ci_run \'Verify token baseline', start)]
@@ -197,13 +200,9 @@ XCODE=(xcodebuild)
 TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER=)
 ''' + helpers + '''
 IOS_COMMON=(xcodebuild)
-result() {
-  local name="$1"; shift
-  ci_run "Inspect test results ($name)" 120 python3 "$CI_ROOT/scripts/ci/apple_result.py" "$OUTPUT/$name.xcresult" "$@"
-}
 ''' + block
         env = dict(os.environ, PATH=str(self.fixture.bin) + os.pathsep + os.environ["PATH"],
-                   CI_ROOT=str(ROOT), SOURCE=str(ROOT), OUTPUT=str(self.output),
+                   LANE="ios", CI_ROOT=str(ROOT), SOURCE=str(ROOT), OUTPUT=str(self.output),
                    PERSONA_CONFIG=str(self.output / "config.json"), SIM_NAME="owned readiness fixture",
                    IOS_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0", OWNED_UDID=owned_udid,
                    REGULAR_SIM_NAME="owned regular About fixture",
