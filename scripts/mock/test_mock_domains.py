@@ -185,6 +185,11 @@ class RegistryTests(unittest.TestCase):
                 self.assertEqual((r.loaded, r.help_lines), (["domain_two", "domain_one"], ["two", "one"]))
                 with self.assertRaises(TypeError):
                     mock_domains.load({}, ["domain_bad"])
+                # A second load runs the module again, as a second run of mock_hub.py makes its globals anew (runpy).
+                Path(tmp, "domain_state.py").write_text("SEEN = []\n\ndef register(d):\n    SEEN.append(d.name)\n")
+                mock_domains.load({}, ["domain_state"])
+                mock_domains.load({}, ["domain_state"])
+                self.assertEqual(sys.modules["domain_state"].SEEN, ["domain_state"])
             finally:
                 sys.path.remove(tmp)
         # Every listed domain is a module with register(d). A domain may read the hub's fixtures as it registers, so it

@@ -229,10 +229,14 @@ class Domain:
 
 def load(namespace, names=None):
     """Imports each domain module (DOMAINS unless `names`) in order and calls its register(d); the Registry, on
-    mock_hub.py's globals `namespace`."""
+    mock_hub.py's globals `namespace`.
+
+    A module imported before runs again (importlib.reload), as each run of mock_hub.py makes its globals anew: a process
+    that loads mock_hub.py more than once (runpy in a test) gets each domain's module-level state and switches afresh
+    too, not what the last load left."""
     registry = Registry(namespace)
     for name in DOMAINS if names is None else names:
-        module = importlib.import_module(name)
+        module = importlib.reload(sys.modules[name]) if name in sys.modules else importlib.import_module(name)
         if not callable(getattr(module, "register", None)):
             raise TypeError("mock domain %s has no register(d)" % name)
         module.register(Domain(registry, name))

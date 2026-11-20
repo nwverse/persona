@@ -761,14 +761,16 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - `d.hub.<NAME>`: `mock_hub.py`'s globals, read when used (`SESSIONS`, `ITEMS`, `CLIENTS`, `broadcast(msg)`, `push_machine(id)`, …).
 
 Domains load in list order after every built-in switch has built its fixtures, and before the To-dos view
-(`todo_view_mock.py`), which replaces the to-dos. A domain reads its `MOCK_*` switch from `os.environ`; what exists only with the
-switch is registered only when it is on (the help line always), so with it off the hub answers as before. The domains on the
-registry are desktop registration (`scripts/mock/desktops_mock.py`, #11053), GitHub's sign-ins and thread page
-(`scripts/mock/github_mock.py`), Settings › Knowledge selection (`scripts/mock/kb_selection_mock.py`) and mail's accounts and
-write paths (`scripts/mock/mail_mock.py`), the last three moved out of `mock_hub.py` in #11543. `scripts/mock/test_mock_domains.py`
-checks every hook against a running mock. A block that moves out of `mock_hub.py` lists the names it took in that test's `MOVED`:
-a branch from before the move that kept the old block when it resolved its conflict then fails there, with the module to edit
-instead (`docs/lessons/testing.md`, "A moved file or block needs a test that fails when the old copy comes back").
+(`todo_view_mock.py`), which replaces the to-dos. A process that loads `mock_hub.py` again (`runpy` in a test) runs each domain
+module again too, so its module-level state starts over as `mock_hub.py`'s globals do. A domain reads its `MOCK_*` switch from
+`os.environ`; what exists only with the switch is registered only when it is on (the help line always), so with it off the hub
+answers as before. The domains on the registry are desktop registration (`scripts/mock/desktops_mock.py`, #11053), GitHub's
+sign-ins and thread page (`scripts/mock/github_mock.py`), Settings › Knowledge selection (`scripts/mock/kb_selection_mock.py`)
+and mail's accounts and write paths (`scripts/mock/mail_mock.py`), the last three moved out of `mock_hub.py` in #11543.
+`scripts/mock/test_mock_domains.py` checks every hook against a running mock. A block that moves out of `mock_hub.py` lists
+the names it took in that test's `MOVED`: a branch from before the move that kept the old block when it resolved its conflict
+then fails there, with the module to edit instead
+(`docs/lessons/testing.md`, "A moved file or block needs a test that fails when the old copy comes back").
 
 ### Readiness scenarios (`MOCK_READINESS`, #287)
 
