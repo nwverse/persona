@@ -2057,7 +2057,7 @@ final class AppModel {
         return String(localized: "This conversation isn't available")
     }
 
-    func refreshSessionDetail(_ key: SessionKey, listHint: String? = nil) async {
+    func refreshSessionDetail(_ key: SessionKey, listHint: String? = nil, force: Bool = false) async {
         forgetRetainedIfUnheld(key)
         // Paged hubs refresh complete metadata for every open chat. Complete hubs fetch when the opened row is missing
         // from the filtered index, or when it was only kept by `retainHeldSessionRows` (another manager's Agent, #8748):
@@ -2065,7 +2065,7 @@ final class AppModel {
         let paged = sessionLists.lists[key.group]?.paged == true
         let missing = sessionIndex[key] == nil
         let retained = retainedSessionKeys.contains(key)
-        guard paged || missing || retained, let api = api(key.group) else { return }
+        guard force || paged || missing || retained, let api = api(key.group) else { return }
         var hint: String? = listHint
         while true {
             var gate = detailHints[key] ?? FetchHint()
@@ -2517,7 +2517,9 @@ final class AppModel {
             let res = try await api.items(key, beforeSeq: nil)
             settle(key, applyBatch(chat(key), kind: .latest, items: res.items, span: res.span, backlog: true, hasMore: res.hasMore))
         } catch {
-            chat(key).error = error.shown
+            let store = chat(key)
+            store.error = error.shown
+            store.historyNotFound = error.isHistoryNotFound
         }
     }
 
@@ -2585,6 +2587,11 @@ final class AppModel {
             ChatTrace.shared.note(key, "reload n=\(page.items.count) to=\(page.span.to.map(String.init) ?? "?") kept=\(chat(key).items.count - page.items.count)")
         } catch {
             // The defer reports one failed completion for both transport errors and fence cancellation.
+            if error.isHistoryNotFound, shouldApply?() ?? true {
+                let store = chat(key)
+                store.error = error.shown
+                store.historyNotFound = true
+            }
         }
     }
 
@@ -2622,6 +2629,7 @@ final class AppModel {
     func loadOlder(_ key: SessionKey, turns: Int = 2) async -> Bool {
         let store = chat(key)
         guard let api = api(key.group), store.hasMore, !store.isLoadingOlder, let first = store.items.first else { return false }
+        let requestedHistory = store.history
         store.isLoadingOlder = true
         #if DEBUG && os(iOS)
         ProductionContinuityShadow.shared.loadOlder(store)
@@ -2632,9 +2640,11 @@ final class AppModel {
             prependBatch(store, items: res.items, hasMore: res.hasMore)
             return true
         } catch {
+            let missing = error.isHistoryNotFound
             #if DEBUG && os(iOS)
-            ProductionContinuityShadow.shared.failed(.olderFailed, in: store)
+            if !missing { ProductionContinuityShadow.shared.failed(.olderFailed, in: store) }
             #endif
+            if missing, store.history == requestedHistory { prependBatch(store, items: [], hasMore: false) }
             if !error.isOffline { show(error) } // scrolling up while offline: the title says why nothing comes
             return false
         }
@@ -2868,7 +2878,19 @@ final class AppModel {
         if lists != sessionsByMachine { sessionsByMachine = lists }
         // WatchSync drops unchanged content; repeated calls still drive its freshness resend and the widget writer.
         summariesChanged()
+        var effortSettled = false
         for (old, new) in olds {
+            for session in new {
+                if let effort = session.pendingEffort {
+                    if effortRequests[session.key] == nil { updateOutboxEffort(session.key, to: effort) }
+                    if session.effortChangeFailed == true, visibleSession == session.key,
+                       old.first(where: { $0.key == session.key })?.effortChangeFailed != true {
+                        toast = Toast(String(localized: "Couldn't change thinking effort. Choose it again to send waiting messages."), style: .error)
+                    }
+                } else if existingChat(session.key)?.pending.contains(where: { $0.state == .waiting && $0.requiredEffort != nil }) == true {
+                    effortSettled = true
+                }
+            }
             for session in new where session.status != .working {
                 updateLiveRetry(session.key, nil, working: false, subscribed: isSubscribed(session.key))
             }
@@ -2881,6 +2903,7 @@ final class AppModel {
             notifyTransitions(old: old, new: new)
             AgentSync.shared.sessions(new)
         }
+        if effortSettled { flushOutbox() }
         readSettingsForNewTaskConversations(olds)
         // A link may have opened a child before this list held its parent. Once the parent row is here, that page is
         // the parent's. An ordinary open is not a child, so a list update does not move it.
@@ -3707,10 +3730,16 @@ final class AppModel {
         msg.via = via
         // The composer says "queued" while the agent works: such a message is drawn in the queue strip (#1461).
         if session(key)?.status.isActive == true { msg.queuedMode = true }
-        chat(key).pending.append(msg)
+        let store = chat(key)
+        msg.requiredEffort = effortRequests[key] ?? latest(key)?.pendingEffort
+            ?? store.pending.first(where: {
+                $0.requiredEffort != nil && ($0.state == .waiting || $0.state == .sending)
+            })?.requiredEffort
+        if msg.requiredEffort != nil { msg.state = .waiting }
+        store.pending.append(msg)
         saveOutbox()
         Haptics.tap()
-        deliver(key, msg)
+        if msg.state == .waiting { flushOutbox() } else { deliver(key, msg) }
         return true
     }
 
@@ -3731,18 +3760,27 @@ final class AppModel {
 
     func retry(_ key: SessionKey, _ msg: PendingMessage, clearDraft: String? = nil) {
         guard allowSend(key, forMessage: true) else { return }
-        guard let i = chat(key).pending.firstIndex(where: { $0.id == msg.id }) else { return }
-        guard chat(key).pending[i].mayHaveArrived == true else {
-            chat(key).pending[i].state = .sending
-            if chat(key).pending[i].refused == true {
+        let store = chat(key)
+        guard let i = store.pending.firstIndex(where: { $0.id == msg.id }) else { return }
+        guard store.pending[i].mayHaveArrived == true else {
+            let retryingEffort = store.pending[i].state == .failed && store.pending[i].requiredEffort != nil
+            if retryingEffort {
+                // An explicit resend follows the current effort. sendPending still waits if a new change is pending.
+                store.pending[i].requiredEffort = nil
+                store.pending[i].failure = nil
+                store.pending[i].stalledSince = nil
+            }
+            store.pending[i].state = .sending
+            let refused = store.pending[i].refused == true
+            if refused {
                 // Refused with nothing typed: under its old id the hub would answer that refusal again without asking
                 // the computer, and Clear and Send's clear_draft would be another op on a used id (op_id_reused).
                 // Saved before it goes: an app killed meanwhile sends it again under the id it went with.
-                chat(key).pending[i].id = UUID()
-                chat(key).pending[i].refused = nil
-                saveOutbox()
+                store.pending[i].id = UUID()
+                store.pending[i].refused = nil
             }
-            deliver(key, chat(key).pending[i], clearDraft: clearDraft)
+            if refused || retryingEffort { saveOutbox() }
+            deliver(key, store.pending[i], clearDraft: clearDraft)
             return
         }
         chat(key).pending[i].state = .sending
@@ -3969,18 +4007,46 @@ final class AppModel {
         } catch { show(error) }
     }
 
-    /// Changes a session's permission mode / effort level / model (nil leaves one). Shown right away; the hub's next session
-    /// list confirms it. Returns whether it worked.
+    /// An effort request has not answered yet. Follow-ups typed now wait in the same outbox as those typed once
+    /// the node has accepted the change.
+    @ObservationIgnored var effortRequests: [SessionKey: String] = [:]
+
+    /// Changes a session's permission mode, effort or model (nil leaves it). Returns whether the node took it.
     @discardableResult
     func setModes(_ key: SessionKey, permissionMode: String? = nil, effort: String? = nil, model claudeModel: String? = nil) async -> Bool {
         guard allowSend(key), let api = api(key.group) else { return false }
+        if let effort {
+            guard effortRequests[key] == nil else { return false }
+            effortRequests[key] = effort
+        }
+        defer {
+            if effort != nil {
+                effortRequests[key] = nil
+                flushOutbox()
+            }
+        }
         do {
-            try await api.setModes(key, permissionMode: permissionMode, effort: effort, model: claudeModel)
-            if var list = sessionsByMachine[key.machineRef], let i = list.firstIndex(where: { $0.sessionID == key.sessionID }) {
-                if let permissionMode { SessionModes.applyOptimistic(&list[i], permissionMode: permissionMode) }
-                if let effort { list[i].effort = effort }
-                if let claudeModel { list[i].model = claudeModel } // the node lists the pick too until the transcript moves on
-                sessionsByMachine[key.machineRef] = list
+            let pending = try await api.setModes(key, permissionMode: permissionMode, effort: effort, model: claudeModel, queueEffort: effort != nil)
+            landPendingSessions()
+            patchSession(key) { row in
+                if let permissionMode { SessionModes.applyOptimistic(&row, permissionMode: permissionMode) }
+                if let claudeModel { row.model = claudeModel } // the node lists the pick until the transcript moves on
+                if let effort {
+                    if let pending {
+                        if row.pendingEffort != pending, row.pendingEffort != nil || row.effort != pending {
+                            row.pendingEffort = pending
+                            row.effortChangeFailed = nil
+                        }
+                    } else {
+                        row.effort = effort
+                        row.pendingEffort = nil
+                        row.effortChangeFailed = nil
+                    }
+                }
+            }
+            if let effort { updateOutboxEffort(key, to: effort, includeFailed: true) }
+            if pending != nil, latest(key)?.effortChangeFailed != true {
+                toast = Toast(String(localized: "Thinking effort will change after this turn."))
             }
             Haptics.success()
             return true

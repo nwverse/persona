@@ -317,8 +317,9 @@ var rpcFailureKeys = map[string]string{
 	"push_failed":         "rpc-errors.push_failed",
 	"fetch_failed":        "rpc-errors.fetch_failed",
 	// session.modes (node/modes.go, #1843)
-	proto.CodeModesOnComputer: "rpc-errors.modes_on_computer",
-	proto.CodeModesNotRunning: "rpc-errors.modes_not_running",
+	proto.CodeModesOnComputer:     "rpc-errors.modes_on_computer",
+	proto.CodeModesNotRunning:     "rpc-errors.modes_not_running",
+	proto.CodeEffortChangePending: "rpc-errors.effort_change_pending",
 	// a message to a stopped agent: read-only, its terminal page's Resume brings it back (node stopped.go, #4754)
 	"agent_stopped":      "rpc-errors.agent_stopped",
 	"resume_not_allowed": "rpc-errors.resume_not_allowed",

@@ -55,6 +55,10 @@ these races: use real JNI with independently controlled worker completion, frame
 
 ## Verify intermittent test failures with the whole module
 
+A WebSocket listener's terminal callback is asynchronous; closing the owning `OkHttpClient` can stop its dispatcher before that callback records a drop. Record the terminal diagnostics event in the production socket cleanup before cancelling the socket, and let `onClosing` / `onFailure` share its per-socket atomic guard. Test that `close()` records it before returning rather than waiting for a callback that may never run (#11487).
+
+Do not run Linux and macOS Gradle processes against the same checkout's `build/` directories at once. The other process can replace compiled classes and test reports while tests run, producing unrelated `NoClassDefFoundError` failures and undeletable reports. Stop those runs, remove only the affected disposable outputs and use an isolated `GRADLE_USER_HOME` when shared caches are also suspect.
+
 An intermittent test is not verified by repeatedly running only its own class. In the hand-off recording tests, background work wrote the reply journal on `Dispatchers.IO` while the test deleted its directory, and the race appeared only under whole-module concurrency; `advanceUntilIdle()` drains the test scheduler but not those IO threads, so `cancelAndJoin()` the repository's scope before cleanup and run the whole module.
 
 Buffered hand-off evidence is acknowledged before its recording runs, leaving the journal delivered but unrecorded until that request completes. Coalesce the buffered operation IDs with the same recovery pass's journal scan, not with a permanent attempted tombstone: a later reconnect or process owner must still retry. If a disconnect during startup IO starts another recovery generation, watch hub state from transport acquisition rather than subscribing after the blocking write. Hold the journal mutex to force a failed buffered record before the scan, and use the following reply-recovery lookup as the completion barrier (#9868).

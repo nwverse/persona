@@ -102,6 +102,10 @@ PY
 export PERSONA_META_WEARABLES=NO
 # The whole project, with the watch app and the share extension (apple/lean-dev-build.yml is sim.sh's alone).
 unset PERSONA_LEAN_DEV_BUILD
+ci_run 'Stage resolved packages for Meta configuration' 60 python3 "$CI_ROOT/scripts/ci/apple_resolved.py" \
+  --tracked "$CI_ROOT/apple/Packages/PersonaSSH/Package.resolved" \
+  --staged "$SOURCE/apple/Packages/PersonaSSH/Package.resolved" \
+  --meta "$PERSONA_META_WEARABLES" --evidence "$DIAGNOSTICS/resolved-variant.txt"
 if [ "$LANE" = ios18 ]; then
   ci_run 'Build PersonaCore for the simulator' 1200 "$SOURCE/native/app-core/scripts/build-apple.sh" --simulator
 else

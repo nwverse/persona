@@ -306,7 +306,7 @@ FILTERS = {
     "web": ["web/**", *web_inputs(), "scripts/ci/web.sh", ".github/workflows/web-test.yml"],
     "android": ["android/**", "native/app-core/**", "schema/**", "spec/**", "scripts/app/*android*", "scripts/ci/*android*", ".github/workflows/android-test.yml"],
     "apple": ["apple/**", "native/app-core/**", "schema/**", "spec/**", "scripts/app/sim-boot.sh", "scripts/i18n/**", "scripts/ci/apple*", "scripts/test/isolation-lint*", "scripts/test/isolation-lint/**", "scripts/test/apple_isolation_baseline.json", "scripts/test/test_apple_no_callkit.py", "scripts/release/check_no_callkit.py", ".github/workflows/apple-test.yml"],
-    "core": ["native/app-core/**", "spec/fixtures/continuity/**", "android/core/rustcore/src/main/kotlin/**", "apple/Packages/PersonaCore/**", "harmony/entry/src/main/ets/core/rustcore/**", "harmony/entry/src/main/ets/core/PersonaCore.ts",
+    "core": ["native/app-core/**", "spec/fixtures/continuity/**", "spec/fixtures/sync-driver/**", "android/core/rustcore/src/main/kotlin/**", "apple/Packages/PersonaCore/**", "harmony/entry/src/main/ets/core/rustcore/**", "harmony/entry/src/main/ets/core/PersonaCore.ts",
                    "harmony/entry/src/main/cpp/types/libpersona_core/**", "harmony/tests/rustcore-*.test.mjs", "harmony/tests/core-host/**",
                    "scripts/ci/core.sh", ".github/workflows/core-test.yml"],
     "runtimes": ["integrations/**", "sdk/ts/**", "schema/**", "spec/**", "scripts/ci/runtimes.sh", ".github/workflows/runtimes-test.yml"],
