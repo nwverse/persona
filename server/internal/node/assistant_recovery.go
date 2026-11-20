@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/modelretry"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -147,9 +148,13 @@ func assistantRecoverableError(failed bool, result string, limitWords bool) bool
 		strings.Contains(t, "too many requests") || assistantServerError.MatchString(t)
 }
 
-// assistantSafeguardsRefusal: the provider's safeguards refused the turn.
+// assistantSafeguardsRefusal: the provider's safeguards refused the turn. Newer CLIs do not name the safeguard: they
+// stop on a frontier model's refusal and tell the user to start a new session, the refused prompt being stuck in the
+// resumed context.
 func assistantSafeguardsRefusal(result string) bool {
-	return strings.Contains(strings.ToLower(result), "safeguards flagged")
+	t := strings.ToLower(result)
+	return strings.Contains(t, "safeguards flagged") ||
+		strings.Contains(t, "can't help with this") && strings.Contains(t, "start a new session to continue")
 }
 
 // assistantModelUnavailable: the model asked for does not exist there, or this account cannot use it (Claude Code's
@@ -205,7 +210,7 @@ func assistantRecoverable(failed bool, result string, kinds []string) bool {
 		case proto.TurnErrorUsageLimit:
 			return false
 		case proto.TurnErrorUser:
-			if !strings.Contains(strings.ToLower(result), "safeguards flagged") {
+			if !assistantSafeguardsRefusal(result) {
 				return false
 			}
 		}
@@ -311,9 +316,17 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 	missing := failed && assistantModelUnavailable(result)
 	unavailable := missing && n.recoverySwitched(p.id)
 	p.mu.Lock()
+	strict := p.model.Strict
 	transient404 := missing && !unavailable && p.replyModel != "" && !p.repliedAt.IsZero() &&
 		time.Since(p.repliedAt) < assistantAnsweredRecently
 	p.mu.Unlock()
+	if failed && (!strict || modelretry.Permanent(result)) &&
+		(modelretry.Temporary(result) || modelretry.Permanent(result) || slices.Contains(kinds, assistantModelServiceFailure) || len(kinds) > 0 && kinds[0] == proto.TurnErrorTransient) &&
+		!assistantSafeguardsRefusal(result) && !assistantModelUnavailable(result) && !assistantwire.ToolSearchRefused(result) && ModelRecoveryReason(result) != proto.ModelRecoveryReasonQuota {
+		// Ordinary service failures go to the manager's durable scheduler. Strict task turns keep their
+		// bounded same-model retry here, where the exact execution and existing retry budget are known.
+		return false
+	}
 	ordinary := unavailable || transient404 || assistantRecoverable(failed, result, kinds)
 	// The endpoint refused Claude Code's tool search (#10365): remembered for the launcher and model, so their next
 	// start loads every tool, and the turn resent once in such a process, unseen. A process that started that way and
@@ -448,6 +461,11 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 		r.retried[key] = true
 	}
 	same := !r.retried[key]
+	if !same && execution.Strict {
+		// Leave the chain for the result handler to clear from both the Node and the process.
+		n.mu.Unlock()
+		return false
+	}
 	if same {
 		r.retried[key] = true
 	}
@@ -586,6 +604,7 @@ func init() {
 }
 
 func sendAssistantRecovery(ctx context.Context, n *Node, p *assistantProc, launcher, cwd string, execution modelExecution) error {
+	execution.OriginDecisionRequired = true
 	_, err := n.assistantSend(ctx, p.id, cwd, launcher, prompts.RenderModelRetry(), nil, "", "", execution)
 	return err
 }

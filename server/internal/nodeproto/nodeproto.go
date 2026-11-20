@@ -15,6 +15,9 @@ const (
 	CodeRestarting  = "node_restarting"
 )
 
+// TaskInstructions separates delegated framework rules from the first user message.
+const TaskInstructions = "task_instructions_v1"
+
 // EventUpdatePreflightFailed reports a refused resident reload for a committed node update.
 const EventUpdatePreflightFailed = "node.update.preflight_failed"
 
@@ -66,11 +69,18 @@ const (
 	AssistantSupervisionInstructions = "assistant_supervision_instructions"
 	// SessionSkills: session.skills and validated explicit skill selections on ordinary session.send.
 	SessionSkills = "session_skills_v1"
+	// TaskExecution validates task directories and refuses execution substitutions.
+	TaskExecution = "task_execution"
 	// OwnerControls separates verified owner actions from legacy RPCs that can carry arbitrary params.
 	OwnerControls = "owner_controls_v1"
+	// SourcePermissions isolates node-attested Agent messages from caller parameters.
+	SourcePermissions = "source_permissions_v1"
 	// AssistantServiceTier: assistant.send takes service_tier for a new Codex conversation and acknowledges it before
 	// the first turn. A node without it would start the conversation and silently drop an explicit, billable choice.
 	AssistantServiceTier = "assistant_service_tier"
+	// SessionStartSpeed: session.start and session.start.work take speed for a new terminal Codex or Claude Code Agent.
+	// A node without it would silently drop the explicit choice and start at the launcher's own speed.
+	SessionStartSpeed = "session_start_speed"
 	// NodeUpdate: the node.update.* methods (docs/operations/node-update.md). Whether an update can run right now is still
 	// node.info's node_update / node_update_reason.
 	NodeUpdate = "node_update"
@@ -220,7 +230,7 @@ const (
 const RestartExitCode = 75
 
 // Announced is what a node built from this code announces.
-var Announced = []string{OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, NodeLanes}
+var Announced = []string{TaskInstructions, SourcePermissions, OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, SessionStartSpeed, TaskExecution, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, NodeLanes}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"
@@ -233,3 +243,6 @@ const (
 	OwnerInterrupt  = "session.owner_interrupt"
 	OwnerCardAnswer = "codex.owner_answer"
 )
+
+// SourceSend is emitted only by a devices manager holding source provenance.
+const SourceSend = "session.source_send"

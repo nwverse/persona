@@ -54,7 +54,9 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 		}
 	}
 	skills := filepath.Join(cwd, ".claude", "skills")
-	n.syncRuntimeSkillDir(cwd, skills)
+	if n.assistantDirectoryPrepared(cwd) {
+		n.syncRuntimeSkillDir(cwd, skills)
+	}
 	bin := n.assistantBin(cwd)
 	_ = os.MkdirAll(bin, 0o755)
 	space := assistantSpace(cwd)

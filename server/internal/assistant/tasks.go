@@ -42,7 +42,9 @@ type PlanTask struct {
 	WaitInputID string `json:"wait_input_id,omitempty"`
 	Title       string `json:"title"`
 	Prompt      string `json:"prompt"`
-	Machine     string `json:"machine"`
+	// Context supplies relevant facts the manager cannot resolve from the project.
+	Context string `json:"context,omitempty"`
+	Machine string `json:"machine"`
 	// InboxItem explicitly names the handed-off item this task is for, never the conversation's latest item.
 	InboxItem string `json:"inbox_item,omitempty"`
 	// InboxHandoff is the hub-owned operation validated when the plan was made.
@@ -65,6 +67,7 @@ type PlanTask struct {
 	Launcher          string `json:"launcher,omitempty"`
 	Model             string `json:"model,omitempty"`
 	Effort            string `json:"effort,omitempty"`
+	Speed             string `json:"speed,omitempty"`
 	Tier              string `json:"tier,omitempty"`
 	Permission        string `json:"permission,omitempty"`
 	// Ultracode: the agent starts with Claude Code's ultracode on (#12). A pointer so that an edit from the card can
@@ -191,6 +194,9 @@ type PlanTask struct {
 	// startFilled: what the start-defaults policy filled in on this start try (start_defaults.go): the next try goes
 	// back to callerPick first, and the plan keeps the task's own value for exactly those. Never serialized.
 	startFilled startFill
+	// startedAgent is the kind this start's answer reported, or the explicitly resolved launcher kind when that answer omitted it.
+	// Kept only until the Agent is linked; never serialized.
+	startedAgent string
 	// admissionRelease, once the admission gate passed, releases this start's held machine/direction slot. It is kept
 	// across the whole start (not the session.start RPC alone) and run when the agent is linked or the start failed for
 	// good, so the slot stays counted through the metrics/ledger gap. Never serialized (admission.go).

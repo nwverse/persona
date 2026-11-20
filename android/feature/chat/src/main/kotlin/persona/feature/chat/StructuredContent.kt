@@ -74,7 +74,7 @@ internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? =
             SelectableWords(target) {
                 Column(Modifier.fillMaxWidth()) {
                     MessageParts(model.parts, user, item.id, boxed = boxed, streaming = update?.streaming == true,
-                        ancillaryCards = ancillary?.cards)
+                        ancillaryCards = ancillary?.cards, ownReply = item.role == "assistant" && item.from.isNullOrBlank() && item.source == null)
                 }
             }
         }
@@ -100,7 +100,7 @@ private fun StreamingCursor() {
 
 @Composable
 private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, onLastLine: ((Int) -> Unit)? = null, boxed: Boolean = false,
-    streaming: Boolean? = null, ancillaryCards: List<persona.core.domain.views.AssistantFence>? = null) {
+    streaming: Boolean? = null, ancillaryCards: List<persona.core.domain.views.AssistantFence>? = null, ownReply: Boolean = false) {
     // Bubble padding below the last text line, so the reported extent reaches the bottom of the row.
     val bottomPadding = with(LocalDensity.current) { Tokens.Space.m.roundToPx() }
     // A reply's ```persona-view blocks are numbered across the whole text item: `<item id>/<n>`, the hub's key.
@@ -123,14 +123,14 @@ private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, on
                         onLastLine?.invoke((layout.size.height - layout.getLineTop(layout.lineCount - 1)).toInt() + bottomPadding)
                 })
                 else AssistantAnswerFrame(boxed) {
-                    ChatMarkdown(part.text, "$id/$index", selectable = false,
+                    ReplyMarkdown(part.text, "$id/$index", ownReply,
                         viewKeys = { n -> persona.core.domain.views.AssistantFences.key(id, firstCard[index] + n) }, streaming = streaming)
                 }
             is MessagePart.Source -> JGroupItem(GroupPosition.Single) {
                 Column(Modifier.fillMaxWidth().padding(10.dp.dense)) {
                     Text(stringResource(R.string.chat_content_from, part.name.ifBlank { stringResource(R.string.chat_content_other_session) }), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                     // Markdown like an answer: agents write Markdown, and the hub turns a teammate's JSON notes into it.
-                    if (part.text.isNotBlank()) ChatMarkdown(keepLineBreaks(part.text), "$id/$index", selectable = false)
+                    if (part.text.isNotBlank()) ReplyMarkdown(keepLineBreaks(part.text), "$id/$index", ownReply = false)
                 }
             }
         }
@@ -156,7 +156,7 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
     /** A message only in the outbox, in this state: its menu offers what fits one not sent ([MessageTarget.pending]). */
     pending: persona.core.contracts.api.DeliveryState? = null,
     /** An unsent message's look on Glass ([OutboxBubble]): its bubble faded, its state's mark before it. */
-    faded: Boolean = false, leading: (@Composable () -> Unit)? = null) {
+    faded: Boolean = false, leading: (@Composable () -> Unit)? = null, openingSource: (@Composable () -> Unit)? = null) {
     // Keyed on this bubble's own texts: [updates] is the whole chat's, and changes with every streamed chunk of a reply.
     val texts = bubbleTexts(items, updates)
     val models = remember(items, texts) { items.mapIndexed { index, item -> messageModel(texts[index], item.from, user = true) } }
@@ -179,12 +179,13 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
     // A message that came in from a channel (WeChat, the Feishu bot…) says so under it; the app's own say nothing.
     val channels = LocalChannels.current
     val source = remember(items, channels) { items.firstNotNullOfOrNull { ChannelSources.of(it.clientMsgId, channels) } }
-    val footer: (@Composable () -> Unit)? = if (time == null && files.isEmpty() && source == null) null else ({
+    val sourceLine: (@Composable () -> Unit)? = if (source != null) ({ JChannelSource(source) }) else openingSource
+    val footer: (@Composable () -> Unit)? = if (time == null && files.isEmpty() && sourceLine == null) null else ({
         Column(horizontalAlignment = Alignment.End) {
             FileChips(files, alignEnd = true)
-            if (source == null) time?.let { Text(it, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }
+            if (sourceLine == null) time?.let { Text(it, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }
             else Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
-                JChannelSource(source)
+                sourceLine()
                 time?.let { Text(it, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }
             }
         }
@@ -219,7 +220,7 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
                     if (streaming) StreamingCursor()
                 }
             }
-        }
+        } else if (openingSource != null) Box(Modifier.align(Alignment.End)) { footer?.invoke() }
     }
 }
 

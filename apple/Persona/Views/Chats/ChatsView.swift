@@ -85,16 +85,6 @@ nonisolated struct SpaceGroup: Identifiable, Sendable {
     }
 }
 
-extension Session {
-    /// Nothing to look at now, but a /loop that has not fired yet, background work still running, or the hub waiting it
-    /// out (`WorkState.hubWaits`: a retry, a wake after a deploy) will wake it: new messages may come in minutes.
-    /// Waiting in the list.
-    nonisolated var isWaiting: Bool {
-        isQuiet && (listWaiting ?? (loop != nil || !(background ?? []).isEmpty || (subagents ?? []).contains(where: \.running)
-            || work?.hubWaits == true || !runningWorkflows.isEmpty))
-    }
-}
-
 extension DevGrouping {
     /// The groupings offered: 「按待办」 needs the hub's todos (an old hub answers 404 and has none), By Pinned the hub's
     /// direction tree (#4352).
@@ -988,6 +978,7 @@ private struct AgentsList: View {
     /// Folded sections (spaces, machines, states), one id per line.
     @StoredValue("dev.folded") private var foldedList = ""
     @State private var quick: AgentFilter = .all
+    @State private var showHiddenDirectories = false
     @State private var paginationArmed = false
 
     private var selectedHub: String? {
@@ -997,6 +988,7 @@ private struct AgentsList: View {
 
     private var listQuery: SessionListQuery {
         var q = SessionListQuery(state: quick.state?.rawValue ?? "", text: query)
+        q.includeHidden = showHiddenDirectories
         if !machineFilter.isEmpty { q.machine = MachineRef(path: machineFilter).id }
         let links = model.links.filter { selectedHub == nil || $0.group == selectedHub }
         let pins = links.contains { !$0.pins.pins.sessions.isEmpty || !$0.pins.pins.spaces.isEmpty }
@@ -1110,7 +1102,7 @@ private struct AgentsList: View {
                      searchScope: searchScope, searchAsCode: searchAsCode,
                      machine: machineFilter, harness: harnessFilter, project: projectFilter, model: modelFilter,
                      pinnedOnly: pinnedOnly, hub: hubFilter, multiHub: model.isMultiHub, kept: kept,
-                     held: model.heldInList, preferences: preferences,
+                     held: model.heldInList, heldJustFinished: model.heldJustFinished, preferences: preferences,
                      pagedGroups: Set(model.sessionLists.lists.filter { $0.value.paged }.keys),
                      listQuery: listQuery, sideFold: model.sideFoldGroups)
     }
@@ -1240,8 +1232,9 @@ private struct AgentsList: View {
         let pinnedAgents = projection.pinnedAgents
         // One row per session that waits for the user, its cards under it (`AgentsNeedsYou`): the section, the Needs
         // You filter and the tab's badge count these rows.
+        let cardSession = model.cardSessionResolver() // the same row for a card here as in the counts
         let waiting = AgentsNeedsYou.rows(
-            cards: AgentsNeedsYou.cards(feed.following ? feed.interactions : model.scopedInteractions, session: session,
+            cards: AgentsNeedsYou.cards(feed.following ? feed.interactions : model.scopedInteractions, session: { cardSession($0) ?? session($0) },
                                         machine: machineFilter, hub: model.isMultiHub ? hubFilter : nil),
             waiting: AgentsNeedsYou.waiting(base)) // a folded child's card sits under its parent; a subtask the hub did not fold stays its own row
         let _ = (lookup.needsYou = waiting.count)
@@ -1264,7 +1257,9 @@ private struct AgentsList: View {
                                    foldAll: { setFolded(folding($0, true, in: folded)); expandedQuiet = [] },
                                    unfoldAll: { setFolded(Set(Self.foldedByDefault.union(Self.foldedByChoice).map { "!" + $0 })) },
                                    onMachines: { openFromList(MachineListRoute()) },
-                                   onTerminals: { openFromList(TerminalsRoute()) })
+                                   onTerminals: { openFromList(TerminalsRoute()) },
+                                   showingHidden: showHiddenDirectories,
+                                   toggleHidden: { showHiddenDirectories.toggle() })
         #if os(macOS)
         let _ = macRows.update(rowsInOrder(unpinned: unpinned, pinned: pinnedAgents, active: active, quiet: quiet, tree: tree, byHost: byHost))
         #endif
@@ -1954,7 +1949,8 @@ private struct AgentsList: View {
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)
             .accessibilityIdentifier("sidebar-agents-heading")
-            AgentsListMenu(actions: menuActions)
+            // In a view graph of its own: the list's updates replaced the open menu and scrolled it to its top (#10738).
+            MenuIsland(content: SidebarAgentsListMenu(actions: menuActions))
             if showsPersonalEntry {
                 Button { openFromList(PersonalAgentsRoute()) } label: {
                     ThemedIcon(Theme.Icon.personalAgents).font(Theme.Font.label).foregroundStyle(.secondary)
@@ -2206,7 +2202,7 @@ private struct AgentsList: View {
             .accessibilityIdentifier("agents.space")
             TodoSpaceTag(group: g) { todoID in openFromList(TodoDetailRoute(id: todoID)) }
             Menu {
-                SpaceHeaderMenu(group: g, rename: { renamingSpace = g }, open: { openFromList(SpaceRoute(id: g.id)) },
+                SpaceHeaderMenu(group: g, isMuted: model.isMuted, rename: { renamingSpace = g }, open: { openFromList(SpaceRoute(id: g.id)) },
                                 linkTodo: { linkingSpace = g }).equatable()
             } label: {
                 headerMenuLabel
@@ -2397,7 +2393,7 @@ private struct AgentsList: View {
     @ViewBuilder private func repoMenu(_ r: RepoTree.Repo) -> some View {
         let prepared = lookup.projection?.repositories[r.id]
         if let space = prepared?.space {
-            SpaceHeaderMenu(group: space, rename: { renamingSpace = space }, open: { openFromList(SpaceRoute(id: space.id)) },
+            SpaceHeaderMenu(group: space, isMuted: model.isMuted, rename: { renamingSpace = space }, open: { openFromList(SpaceRoute(id: space.id)) },
                             linkTodo: { linkingSpace = space }).equatable()
             TodoSpaceMenuItem(group: space) { todoID in openFromList(TodoDetailRoute(id: todoID)) }
         } else {
@@ -2566,7 +2562,7 @@ private struct AgentsList: View {
             if space != nil || !unread.isEmpty {
                 Menu {
                     if let space {
-                        SpaceHeaderMenu(group: space, rename: { renamingSpace = space }, open: { openFromList(SpaceRoute(id: space.id)) },
+                        SpaceHeaderMenu(group: space, isMuted: model.isMuted, rename: { renamingSpace = space }, open: { openFromList(SpaceRoute(id: space.id)) },
                                         linkTodo: { linkingSpace = space }).equatable()
                     } else {
                         RepoMenuItems(unread: unread).equatable()
@@ -2747,7 +2743,7 @@ private struct AgentsList: View {
     // MARK: By state / by machine
 
     private var order: AgentListOrder {
-        AgentListOrder(isPinned: model.isPinned, isMuted: model.isMuted, byRank: quick == .all && sort == .state, held: model.heldInList)
+        AgentListOrder(isPinned: model.isPinned, isMuted: model.isMuted, byRank: quick == .all && sort == .state, held: model.heldInList, heldJustFinished: model.heldJustFinished)
     }
     /// By Machine's machines: those with live agents, in their own order; under Recently Updated the one with the latest agent first.
     /// The list and ↑ / ↓ (`rowsInOrder`) both go by it.
@@ -2771,6 +2767,7 @@ private struct AgentsList: View {
         ("awaiting", StateName.awaitsReply.text, StatusPalette.awaitingReply),
         ("working", StateName.working.text, StatusPalette.working),
         ("background", String(localized: "Waiting in the background"), StatusPalette.backgroundWaiting),
+        ("just_finished", StateName.justFinished.text, StatusPalette.unread),
         ("waiting", StateName.waiting.text, StatusTone(dot: Theme.loop, text: Theme.loop)),
         ("muted", String(localized: "Muted [Chats View b66705]"), StatusPalette.idle), ("idle", StateName.seen.text, StatusPalette.idle),
     ]
@@ -2811,6 +2808,13 @@ private struct AgentsList: View {
                     }
                     .modifier(FoldAnchor(id: id, reader: feed.reader))
                     .accessibilityIdentifier("agents.section")
+                    .contextMenu {
+                        if b.key == "just_finished", rows.contains(where: { $0.needsSeen() }) {
+                            Button { model.markSeen(rows.map(\.key)) } label: {
+                                Label(StateName.markAllSeen(), systemImage: Theme.Icon.success)
+                            }
+                        }
+                    }
                 }
                 .listSectionSpacing(isFolded(id) ? .custom(0) : .default)
             }
@@ -3268,6 +3272,9 @@ private struct AgentsList: View {
     private static let hostHeadingInsets = EdgeInsets(top: Theme.Space.l, leading: Theme.Space.page, bottom: Theme.Space.xs, trailing: Theme.Space.page)
     #endif
 
+    /// How far the Sidebar layout's selected shade reaches past an Agent row's content, into the row's insets (#11032).
+    private static let selectedOutset = EdgeInsets(top: -Theme.Space.xs, leading: -Theme.Space.s,
+                                                   bottom: -Theme.Space.xs, trailing: -Theme.Space.s)
     /// A capsule's room: the page's edges, a little air above and below.
     private static let capsuleInsets = EdgeInsets(top: Theme.Space.xs, leading: Theme.Space.page, bottom: Theme.Space.xs, trailing: Theme.Space.page)
     /// A capsule `level` levels in, under a working tree's row or a tab's starter: a level is as far in as a quiet space's
@@ -3444,14 +3451,19 @@ private struct AgentsList: View {
     /// An agent row's background: the tree's (`treeBackground`), none of its own in By Repository's cards on the Mac and
     /// in the floating list, else the list's.
     private func slotBackground(_ open: Bool) -> AnyView? {
-        if repoTree { return treeBackground(open) }
+        // The Sidebar layout's column shades its open Agent as its other rows (`SidebarSelectedShade`, `slotRowBody`).
+        if repoTree { return treeBackground(open && unified == nil) }
         return grouping == .repo || floating ? AnyView(Color.clear) : nil
     }
 
     /// The agent open beside the list in By Repository's cards (#2531; the split's list, not a phone's, whose list is
-    /// never beside a chat): its row is washed. The split's column is compact itself, so not its width class.
+    /// never beside a chat): its row is washed. The split's column is compact itself, so not its width class. In the
+    /// Sidebar layout's column (the drawer on a phone too) the root's Agent in every grouping (#11032): the column's one
+    /// selected row, as the main conversation's, a place's or a Persona chat's.
     private var treeOpenSession: SessionKey? {
-        repoTree && !ownsTop && openedWorkspace == nil ? shownAgent : nil
+        guard openedWorkspace == nil else { return nil }
+        if unified != nil { return shownAgent }
+        return repoTree && !ownsTop ? shownAgent : nil
     }
 
     private func treeSelected(_ key: SessionKey) -> Bool {
@@ -3461,7 +3473,7 @@ private struct AgentsList: View {
     /// The Agent whose row is shaded: the Sidebar layout's root while it is an Agent's chat, also with pages opened on it
     /// (#8359); elsewhere the chat on screen.
     private var shownAgent: SessionKey? {
-        if let unified { return unified.root.value?.base as? SessionKey }
+        if let unified { return unified.shownAgent }
         return model.visibleSession
     }
 
@@ -3511,6 +3523,11 @@ private struct AgentsList: View {
                 }
             }
         }
+            #if os(iOS)
+            // The Sidebar layout's one selected look (#11032): the shade under the main conversation's, a place's and a
+            // Persona chat's row, to the row's edges in every grouping.
+            .background { if open && unified != nil { SidebarSelectedShade().padding(Self.selectedOutset) } }
+            #endif
             .accessibilityIdentifier(compact ? "agents.compactRow" : "agents.row")
             .accessibilityAddTraits(open ? .isSelected : [])
             #if os(macOS)
@@ -3542,7 +3559,7 @@ private struct AgentsList: View {
                     Button { Task { await model.interrupt(s.key) } } label: { Label("Interrupt [Composer Buttons f9d193]", systemImage: Theme.Icon.interrupt) }
                         .tint(Theme.busy)
                 }
-                if s.state == .unread {
+                if s.needsSeen(muted: model.isMuted(s)) {
                     Button { model.markSeen(s.key) } label: { Label("Mark as Seen", systemImage: Theme.Icon.view) }
                         .tint(.gray)
                 }
@@ -4137,7 +4154,8 @@ struct QuickFilterBar: View, Equatable {
         }, selection: selection.rawValue, choose: { id in
             if let filter = AgentFilter(rawValue: id), filter != selection { choose(filter) }
         }) {
-            AgentsGroupingMenu(iconOnly: true)
+            // In a view graph of its own: the list's updates replaced the open menu and scrolled it to its top (#10738).
+            MenuIsland(content: AgentsGroupingMenu(iconOnly: true))
         }
     }
     #endif
@@ -4531,7 +4549,7 @@ nonisolated struct SlotRow: View, Equatable {
                         shape: taskShape(), isOpen: session.leadWorkflow != nil,
                         accessory: surface == .none || Self.endsInTime ? .none : .disclosure, titleLines: 2, subtitleLines: 1) {
                     // The badge's column is 24 pt: only the badge goes there (#3004); the source tag is under the time (#3043).
-                    if dot { AgentStateBadge(state: session.state, waiting: session.waitsInBackground).padding(.leading, indented ? Theme.Space.l : 0) }
+                    if dot { AgentStateBadge(state: session.state, waiting: session.waitsInBackground, justFinished: session.showsJustFinished(muted: muted)).padding(.leading, indented ? Theme.Space.l : 0) }
                 } trailing: {
                     HStack(alignment: .top, spacing: Theme.Space.s) {
                         VStack(alignment: .trailing, spacing: Theme.Space.xs) {
@@ -4541,8 +4559,8 @@ nonisolated struct SlotRow: View, Equatable {
                             if pendingCount { CountBadge(count: session.pendingInteractions, look: .needs) }
                             #endif
                             if session.state == .needsYou && !muted && !hideState && !pendingCount { BUIPill(session.state.label, tone: .custom(ink: StatusPalette.needsYou.text, fill: StatusPalette.needsYou.tint)) }
-                            if awaitingWord {
-                                let tone = StatusPalette.awaitingReply
+                            if showsReviewWord {
+                                let tone = session.stateTone(muted: muted)
                                 BUIPill(session.stateLabel(muted: muted), tone: .custom(ink: tone.text, fill: tone.tint))
                             }
                             if waitingWord {
@@ -4577,7 +4595,7 @@ nonisolated struct SlotRow: View, Equatable {
                     if dot {
                         HStack(spacing: Theme.Space.s) {
                             if !session.assistant { AgentMark(session) }
-                            StatusDot(state: session.state, size: 9, waiting: session.waitsInBackground)
+                            StatusDot(state: session.state, size: 9, waiting: session.waitsInBackground, justFinished: session.showsJustFinished(muted: muted))
                         }
                         .padding(.top, Theme.Space.xs)
                     }
@@ -4654,7 +4672,9 @@ nonisolated struct SlotRow: View, Equatable {
 
     /// Awaiting Reply spelled out (#5096), as Needs You is: a seen agent's gray dot does not say it waits on the user.
     /// Not for a muted one (it folds with the idle ones), nor where the section already says it.
-    var awaitingWord: Bool { session.awaitsYourReply(muted: muted) && !hideState }
+    var showsReviewWord: Bool {
+        !hideState && (session.awaitsYourReply(muted: muted) || session.showsJustFinished(muted: muted))
+    }
     /// Waiting in the Background spelled out (#6045): its clock alone is a small mark. Not where the section
     /// already says it waits.
     var waitingWord: Bool { session.waitsInBackground && !hideState }
@@ -4668,8 +4688,8 @@ nonisolated struct SlotRow: View, Equatable {
         if session.state == .needsYou && !muted && !hideState && !pendingCount {
             parts.append(Text(session.state.label).fontWeight(.semibold).foregroundStyle(session.state.tone.text))
         }
-        if awaitingWord {
-            parts.append(Text(session.stateLabel(muted: muted)).fontWeight(.semibold).foregroundStyle(StatusPalette.awaitingReply.text))
+        if showsReviewWord {
+            parts.append(Text(session.stateLabel(muted: muted)).fontWeight(.semibold).foregroundStyle(session.stateTone(muted: muted).text))
         }
         if waitingWord { parts.append(Text(session.stateLabel).fontWeight(.semibold).foregroundStyle(StatusPalette.backgroundWaiting.text)) }
         if hasDraft { parts.append(Text("Draft").fontWeight(.semibold).foregroundStyle(Theme.needsYou)) }
@@ -4689,8 +4709,8 @@ nonisolated struct SlotRow: View, Equatable {
     /// Awaiting Reply and Waiting in the Background (`states`), and Draft, spelled out as the rows before did.
     @MainActor private func stateParts(states: Bool) -> [Text] {
         var parts: [Text] = []
-        if states && awaitingWord {
-            parts.append(Text(session.stateLabel(muted: muted)).fontWeight(.semibold).foregroundStyle(StatusPalette.awaitingReply.text))
+        if states && showsReviewWord {
+            parts.append(Text(session.stateLabel(muted: muted)).fontWeight(.semibold).foregroundStyle(session.stateTone(muted: muted).text))
         }
         if states && waitingWord { parts.append(Text(session.stateLabel).fontWeight(.semibold).foregroundStyle(StatusPalette.backgroundWaiting.text)) }
         if hasDraft { parts.append(Text("Draft").fontWeight(.semibold).foregroundStyle(Theme.needsYou)) }
@@ -4835,9 +4855,9 @@ nonisolated struct CompactSlotRow: View, Equatable {
             if !session.assistant { AgentMark(session) }
             Group {
                 if AppStyle.current.usesBeautifulUI {
-                    AgentStateBadge(state: session.state, waiting: session.waitsInBackground).scaleEffect(0.8)
+                    AgentStateBadge(state: session.state, waiting: session.waitsInBackground, justFinished: session.showsJustFinished(muted: muted)).scaleEffect(0.8)
                 } else {
-                    StatusDot(state: session.state, size: Theme.Size.dot, waiting: session.waitsInBackground)
+                    StatusDot(state: session.state, size: Theme.Size.dot, waiting: session.waitsInBackground, justFinished: session.showsJustFinished(muted: muted))
                 }
             }
             .scaledFrame(width: CompactList.mark)
@@ -4864,8 +4884,8 @@ nonisolated struct CompactSlotRow: View, Equatable {
             .animation(UltracodeMark.motion, value: Ultracode.rowMark(session))
             Spacer(minLength: Theme.Space.xs)
             // Awaiting Reply in words (#5096): the dot is a seen agent's gray.
-            if session.awaitsYourReply(muted: muted) && !hideState {
-                Text(session.stateLabel(muted: muted)).font(CompactList.metaStrong).foregroundStyle(StatusPalette.awaitingReply.text).lineLimit(1).fixedSize()
+            if !hideState && (session.awaitsYourReply(muted: muted) || session.showsJustFinished(muted: muted)) {
+                Text(session.stateLabel(muted: muted)).font(CompactList.metaStrong).foregroundStyle(session.stateTone(muted: muted).text).lineLimit(1).fixedSize()
             }
             if muted { ThemedIcon(Theme.Icon.muted).font(CompactList.meta).foregroundStyle(.secondary).accessibilityLabel("Notifications muted") }
             AgentTimeText(time: time, fallback: session.updatedAt, font: CompactList.meta.monospacedDigit())
@@ -5146,7 +5166,7 @@ struct SpaceMenuItems: View {
         if let open {
             Button(action: open) { Label("Open Space", systemImage: Theme.Icon.openSpace) }
         }
-        let unread = group.sessions.filter { $0.state == .unread }.map(\.key)
+        let unread = group.sessions.filter { $0.needsSeen(muted: model.isMuted($0)) }.map(\.key)
         if !unread.isEmpty {
             Button { model.markSeen(unread) } label: { Label(StateName.markAllSeen(unread.count), systemImage: Theme.Icon.success) }
         }
@@ -5748,7 +5768,7 @@ struct AgentsTopBar: View, Equatable {
 enum AgentsNeedsYou {
     static func cards(_ all: [Interaction], session: (SessionKey) -> Session?, machine: String = "", hub: String? = nil) -> [Interaction] {
         all.filter { ix in
-            session(ix.sessionKey)?.assistant != true && (machine.isEmpty || ix.machineRef.path == machine)
+            session(ix.sessionKey)?.assistant != true && session(ix.sessionKey)?.hiddenByDirectory != true && (machine.isEmpty || ix.machineRef.path == machine)
                 && (hub.map { HubFilter.matches($0, ix.group) } ?? true)
         }
     }

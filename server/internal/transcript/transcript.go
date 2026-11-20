@@ -416,7 +416,7 @@ const APIRetrying = "（正在重试）"
 
 // OmpStoppedNotice is what a stopped omp session (listed from omp's own session files, node/ompdisk.go) shows in
 // place of its conversation. The hub puts it into the reader's language (hub/transcript_text.go noticeText).
-const OmpStoppedNotice = "这个 omp 会话已停止。现在只能在电脑上接着它（omp --resume），这里还不能给它发消息。"
+const OmpStoppedNotice = "这个 omp 会话已停止。发一条消息会在电脑上新开一个终端标签页，用 omp --resume 接着它。"
 
 // InterruptedNotice is the notice a turn stopped by the user becomes (Claude Code and Codex); APIErrorPrefix starts
 // the notice of a turn the model service failed. The channels read them as why a turn ended without words
@@ -434,18 +434,20 @@ const (
 // is tied to it (node/echo.go).
 const CompactNotice = "压缩上下文"
 
-// What the runtime bridges write themselves (integrations/paseo, opencode and pi lib/map.js), in Chinese as the node
+// What the runtime bridges write themselves (integrations/paseo, opencode, pi and antigravity), in Chinese as the node
 // writes its own lines: a failure's notice, and a runtime session's last words when its agent stopped on one
 // (RuntimeErrorLead, then the cause; RuntimeError alone when nothing was said of it); after a failed command's output,
 // its exit code (RuntimeExitHead, the code, RuntimeExitTail); a tool call cancelled before it gave anything back
-// (RuntimeCanceled). The hub rewrites them in the reader's language (hub/transcript_text.go, assistant/fleet_text.go).
+// (RuntimeCanceled); and agy's refused Auto mode falling back to Persona-side automatic approval. The hub rewrites them
+// in the reader's language (hub/transcript_text.go, assistant/fleet_text.go).
 // The bridges write them word for word: change both sides together.
 const (
-	RuntimeError     = "出错了"
-	RuntimeErrorLead = "出错了："
-	RuntimeExitHead  = "（退出码 "
-	RuntimeExitTail  = "）"
-	RuntimeCanceled  = "（已取消）"
+	RuntimeError                = "出错了"
+	RuntimeErrorLead            = "出错了："
+	RuntimeExitHead             = "（退出码 "
+	RuntimeExitTail             = "）"
+	RuntimeCanceled             = "（已取消）"
+	RuntimeAgyAutoRefusalNotice = "agy 拒绝了 Auto 模式，已改由 Persona 自动批准权限请求"
 )
 
 // ParseLine converts one JSONL line (1-based seq) into items, updating meta.

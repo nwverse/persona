@@ -629,6 +629,13 @@ nonisolated struct APIClient: Sendable {
         var launchers: [Launcher]
         var `default`: LauncherDefault?
         var unavailable: [UnavailableLauncher]?
+        /// New Agent's presets from the model profile in use; nil from an older hub or when none apply here.
+        var tiers: [AgentPreset]? = nil
+        var tiersProfile: AgentPresetProfile? = nil
+        enum CodingKeys: String, CodingKey {
+            case launchers, `default`, unavailable, tiers
+            case tiersProfile = "tiers_profile"
+        }
     }
 
     /// The body of PUT /api/v1/assistant/conversations/{id}/model (#5033): the pick kept for one conversation.
@@ -1127,8 +1134,10 @@ nonisolated struct APIClient: Sendable {
         var clearDraft: String?
         var todoID: String?
         var via: MessageVia?
+        var waitForEffort: Bool?
         enum CodingKeys: String, CodingKey {
             case text, images, launcher, model, via, clientMsgID = "client_msg_id", clearDraft = "clear_draft", todoID = "todo_id"
+            case waitForEffort = "wait_for_effort"
         }
     }
     /// launcher / model switch what a headless (assistant) conversation runs on from this message on. clientMsgID
@@ -1158,21 +1167,28 @@ nonisolated struct APIClient: Sendable {
 
     /// `send`, with the whole answer (`SendReply`).
     func sendReply(_ k: SessionKey, text: String, images: [ImagePayload] = [], launcher: String? = nil, model: String? = nil,
-                   clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws -> SendReply {
+                   clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, via: MessageVia? = nil, opID: UUID? = nil, holdsAgentMessages: Bool = false, waitForEffort: Bool = false) async throws -> SendReply {
         let data = try await post(sp(k) + "/messages", body: SendBody(text: HubNaming.outbound(text, canonical: personaNaming), images: images.isEmpty ? nil : images, launcher: launcher,
-                                                                      model: model, clientMsgID: clientMsgID, clearDraft: clearDraft, todoID: todoID, via: via),
-                                  timeout: 100, opID: opID)
+                                                                      model: model, clientMsgID: clientMsgID, clearDraft: clearDraft, todoID: todoID, via: via,
+                                                                      waitForEffort: waitForEffort ? true : nil),
+                                  timeout: 100, opID: opID, extraHeaders: holdsAgentMessages ? ["X-Persona-Features": UndeliveredMessage.agentHoldFeature] : [:])
         return (try? JSON.decoder.decode(SendReply.self, from: data)) ?? SendReply()
     }
 
-    /// Retry on a kept message that gave up (#10194): the assistant tries it again from now.
-    func retryUndelivered(conversation: String, id: String) async throws {
-        try await post("/api/v1/assistant/conversations/\(Self.pathPart(conversation))/undelivered/\(Self.pathPart(id))/retry", body: [String: String]())
+    private func keptPath(_ key: SessionKey, _ message: UndeliveredMessage) -> String {
+        let sid = Self.pathPart(key.sessionID), id = Self.pathPart(message.id)
+        if message.heldForComputer { return "/api/v1/sessions/\(Self.pathPart(key.machineID))/\(sid)/held/\(id)" }
+        return "/api/v1/assistant/conversations/\(sid)/undelivered/\(id)"
     }
 
-    /// Delete on a kept message (#10194): it is never sent.
-    func deleteUndelivered(conversation: String, id: String) async throws {
-        try await delete("/api/v1/assistant/conversations/\(Self.pathPart(conversation))/undelivered/\(Self.pathPart(id))")
+    /// Retry on a kept message that gave up.
+    func retryUndelivered(_ key: SessionKey, _ message: UndeliveredMessage) async throws {
+        try await post(keptPath(key, message) + "/retry", body: [String: String]())
+    }
+
+    /// Removes the kept copy and stops any further attempt.
+    func deleteUndelivered(_ key: SessionKey, _ message: UndeliveredMessage) async throws {
+        try await delete(keptPath(key, message))
     }
 
     private nonisolated static func pathPart(_ s: String) -> String {
@@ -1394,14 +1410,35 @@ nonisolated struct APIClient: Sendable {
         var ultracode: Bool? = nil
         /// Only takes the resume notice away (`ultracode_lost_at`), the switch untouched.
         var ultracodeDismissLost: Bool? = nil
+        var queueEffort: Bool? = nil
         enum CodingKeys: String, CodingKey {
             case effort, model, ultracode
             case permissionMode = "permission_mode", ultracodeDismissLost = "ultracode_dismiss_lost"
+            case queueEffort = "queue_effort"
         }
     }
     /// Changes a session's permission mode, effort level and / or model (nil leaves it); a TUI agent takes a second or two.
-    func setModes(_ k: SessionKey, permissionMode: String? = nil, effort: String? = nil, model: String? = nil) async throws {
-        try await post(sp(k) + "/modes", body: ModesBody(permissionMode: permissionMode, effort: effort, model: model), timeout: 30)
+    @discardableResult
+    func setModes(_ k: SessionKey, permissionMode: String? = nil, effort: String? = nil, model: String? = nil, queueEffort: Bool = false) async throws -> String? {
+        let body = ModesBody(permissionMode: permissionMode, effort: effort, model: model, queueEffort: queueEffort ? true : nil)
+        let data = try await post(sp(k) + "/modes", body: body, timeout: 30)
+        struct Answer: Decodable {
+            var pendingEffort: String?
+            enum CodingKeys: String, CodingKey { case pendingEffort = "pending_effort" }
+        }
+        return (try? JSON.decoder.decode(Answer.self, from: data))?.pendingEffort
+    }
+
+    private struct ServiceTierBody: Encodable {
+        var tier: String
+        enum CodingKeys: String, CodingKey { case tier = "service_tier" }
+    }
+
+    /// POST …/modes {"service_tier": tier}, always alone (docs/protocol/protocol.md "Codex speed settings"). The hub
+    /// acknowledges the native value through the session; an HTTP success does not make `tier` the value to draw.
+    func setServiceTier(_ k: SessionKey, tier: String) async throws {
+        // The hub's native speed call may take 90 seconds; leave it five seconds to answer for itself, as the web does.
+        try await post(sp(k) + "/modes", body: ServiceTierBody(tier: tier), timeout: 95)
     }
 
     /// POST …/modes {"ultracode": on} (docs/protocol/protocol.md "Claude Code ultracode"): its own request, never with
@@ -2340,6 +2377,12 @@ extension Error {
         if api.code == "timeout" { return true }
         if api.businessMessage != nil { return false }
         return api.status == 504 || APIError.isTimeoutText(api.message)
+    }
+
+    /// A history read the node answered as gone, not a route-level or retryable failure.
+    nonisolated var isHistoryNotFound: Bool {
+        guard let api = self as? APIError else { return false }
+        return api.status == 404 && api.code == "not_found"
     }
 
     /// The request never got an answer because the phone has no network or cannot reach the hub (it may still have

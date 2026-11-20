@@ -21,6 +21,7 @@ spec/
     injected/         hub 注入给模型的消息怎么认
     comments/         comment blocks a message leads with (web and iOS)
     sync/             chat sync scenarios: hub state, frames with faults, what each device shows
+    sync-driver/      one hub group's reconnect, event cursor and lifecycle decisions
     fold-changes/     the files a run of work changed, counted by the hub and the web alike
     fold-sources/     the web pages a run of work used, read by the hub and the web alike
     graph-layout/     an extension graph's layout, reading order and folds, checked by the web, iOS, Android and the hub
@@ -39,6 +40,7 @@ spec/
     provider-import-link/ provider import links: what the web builds and what the hub reads
     deep-links/       links to Persona's pages: the hub's paths and what each client opens for a link
     agent-names/      what every client calls each coding agent (names.json)
+    permission-modes/ what every client calls each permission mode, in en, zh-Hans and ja (names.json)
     star-prompt/      when the GitHub star prompts show (empty Agents pill, milestone card, onboarding toast)
     stream-chunks/     the completed-block split of a streaming reply, checked against iOS by the pure Rust core
     meeting-echo/     Persona's echo in a meeting: a line is one only when its time and its words match, checked by the hub and iOS
@@ -82,6 +84,7 @@ spec/
 | todo-layout | [README](fixtures/todo-layout/README.md): the To-dos window rule, a window, its text size and what the owner asked for → the sidebar, list, paper and conversation regions with their forms and widths, every window of the redesign's table included; checked by `scripts/test/test_todo_fixtures.py`, read by no client yet: each will replay it with its own pure function, iOS first (#10465) |
 | todo-push | [README](fixtures/todo-push/README.md): a decision's push, the `todo` a manager sends → the push's category, whether it sets `mutable-content`, and its `todo` (an older manager's unchanged, the lock-screen rule, the options forwarded), answered by the hub (`TestDecisionPushFixtures`), held to the schema by `scripts/test/test_wire_schema.py` and read back by the generated Go, Swift and Kotlin types (#10465) |
 | sync | [README](fixtures/sync/README.md): stories of one chat on one or more devices (sends, cards, reconnects, hub restarts, wakes, long chats) with faults, checked at every step by Go, the clients and the end-to-end runs (#1073) |
+| sync-driver | [README](fixtures/sync-driver/README.md): single-group socket, retry, cursor and lifecycle decisions derived from iOS and replayed against the pure Rust driver (#9783) |
 | stream-chunks | [README](fixtures/stream-chunks/README.md): the pure Rust projection of iOS `StreamChunks.split`, with source-cited Apple cases (#8607) |
 | tool-names | [README](fixtures/tool-names/README.md): a tool no table names in words ("GitHub · Create issue"), what its call is about, a shell's command line and its arguments as a key/value list, checked by Android; iOS's own tests hold the same cases until it reads them (#4339) |
 | fold-changes | [README](fixtures/fold-changes/README.md): the files a run of work's successful edits changed and their lines, counted by the hub for a fold and by the web for the same calls unfolded (#5157) |
