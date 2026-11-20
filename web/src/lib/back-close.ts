@@ -74,11 +74,11 @@ function takeOff(to: number, at: string) {
       return;
     }
     p.going = true;
-    const to = p.to;
+    const lands = p.to;
     afterBack((popped) => {
       if (pending !== p) return;
       pending = null;
-      if (popped && p.to < to) takeOff(p.to, p.at); // a close under its landing came while it went: on from there
+      if (popped && p.to < lands) takeOff(p.to, p.at); // a close under its landing came while it went: on from there
     });
     if (n === 1) history.back();
     else history.go(-n);

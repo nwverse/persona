@@ -12,9 +12,9 @@ import { markFor } from "../../../lib/git-marks";
 import { expandedKey, listingCache, readExpanded, toggleExpanded, treeRows, visibleDirs, withExpanded, writeExpanded, type Listed, type TreeRow } from "../../../lib/files-tree";
 import { hubHas, useStore } from "../../../lib/store";
 import { useFsLive } from "../../../lib/use-fs-live";
-import { Button, copyText, cx, IconButton, Loading, Spinner } from "../../../ui/atoms";
+import { Button, cx, Loading, Spinner } from "../../../ui/atoms";
 import { Icon } from "../../../ui/icons";
-import { RowCheck, rowClick, rowFrameProps, RowMore, type OpTarget, type RowOps } from "./FileOps";
+import { RowCheck, rowClick, RowEnd, rowFrameProps, type OpTarget, type RowOps } from "./FileOps";
 import { Empty, FileGlyph, GitBadge, GitDot } from "./parts";
 
 export function FilesTree({
@@ -239,12 +239,7 @@ function Row({
         <span className="flex-1" />
         {mark && (e.dir ? <GitDot letter={mark} /> : <GitBadge letter={mark} />)}
       </button>
-      {/* on hover (or focus); a touch screen, with no hover and on iOS no right click, always shows the ⋯, its only way to
-          the row's menu (which has Copy path, so not that button as well) */}
-      <span className="hidden items-center pr-2 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100 [@media(hover:hover)]:flex [@media(hover:none)]:flex [@media(hover:none)]:opacity-100">
-        <IconButton icon="copy" label={t("files-tree.copyPath")} onClick={() => copyText(r.path)} size={26} iconSize={13} className="[@media(hover:none)]:hidden" />
-        <RowMore ops={ops} x={x} open={open} />
-      </span>
+      <RowEnd ops={ops} x={x} open={open} />
     </div>
   );
 }

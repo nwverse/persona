@@ -23,7 +23,7 @@ export function useBackStack(depth: number, popTo: (n: number) => void, enabled 
         const i = open.length;
         open.push(
           openOverlay(() => {
-            open.length = Math.min(open.length, i);
+            open.splice(i);
             pop.current(i);
           }),
         );

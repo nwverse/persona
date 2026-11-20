@@ -17,7 +17,7 @@ import { initialLauncher, launcherBlock, usableFirst } from "../lib/launcher-hea
 import { defaultLabel, inlineTextStart, machineLaunchers, type LauncherDefault } from "../lib/launcher-models";
 import { providerLabel } from "../lib/provider-names";
 import { navigate } from "../lib/router";
-import { ONE_PANE, PHONE, useMedia } from "../lib/viewport";
+import { ONE_PANE, useMedia } from "../lib/viewport";
 import { settingsHref } from "./settings/nav";
 import { interactionAsk } from "../lib/inbox";
 import { usageLimitLabel } from "../lib/usage-limit";
@@ -69,6 +69,7 @@ import { todoLook, waitOf, type WaitReason } from "../lib/todo-wait-reason";
 import type { AgentState, Interaction, Launcher, Machine } from "../lib/types";
 import { Button, cx, Dialog, IconButton, Loading, Menu, toast, useMenu } from "../ui/atoms";
 import { contextMenuProps } from "../ui/context-menu";
+import { SHEET_QUERY } from "../ui/overlay";
 import type { MenuAt } from "../ui/menu-model";
 import { SearchField } from "../ui/SearchField";
 import { StatusMark } from "../ui/StatusMark";
@@ -3390,7 +3391,7 @@ export function HandoverDialog({
   const [tab, setTab] = useState<"new" | "existing">("new");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
-  const phone = useMedia(PHONE);
+  const phone = useMedia(SHEET_QUERY);
   const pickLabel = useId();
 
   // For "new":

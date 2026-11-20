@@ -37,7 +37,7 @@ import { FileInfoDialog } from "./files/FileInfo";
 import { FILE_CHMOD_FEATURE, PermissionsDialog } from "./files/Permissions";
 import { NewItemDialog, type NewKind } from "./files/NewItem";
 import { FileView } from "./files/FileView";
-import { DropHint, dragHasFiles, RowCheck, rowClick, rowFrameProps, RowMore, SelectionBar, useFileOps, type OpTarget, type RowOps } from "./files/FileOps";
+import { DropHint, dragHasFiles, RowCheck, rowClick, RowEnd, rowFrameProps, SelectionBar, useFileOps, type OpTarget, type RowOps } from "./files/FileOps";
 import { FilesTree } from "./files/FilesTree";
 import { Empty, FileGlyph, GitDot, GitBadge, useStoredFlag } from "./files/parts";
 
@@ -572,12 +572,7 @@ function EntryRow({ mid, e, full, mark, marked, onOpen, ops }: { mid: string; e:
         {mark && (e.dir ? <GitDot letter={mark} /> : <GitBadge letter={mark} />)}
         {e.dir && <Icon name="chevronRight" size={13} stroke={2.2} className="shrink-0 text-ink-3" />}
       </button>
-      {/* on hover (or focus); a touch screen, with no hover and on iOS no right click, always shows the ⋯, its only way to
-          the row's menu (which has Copy path, so not that button as well) */}
-      <span className="hidden items-center pr-2 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100 [@media(hover:hover)]:flex [@media(hover:none)]:flex [@media(hover:none)]:opacity-100">
-        <IconButton icon="copy" label={t("session-filespanel.copy_path")} onClick={() => copyText(full)} size={26} iconSize={13} className="[@media(hover:none)]:hidden" />
-        <RowMore ops={ops} x={x} open={onOpen} />
-      </span>
+      <RowEnd ops={ops} x={x} open={onOpen} />
     </div>
   );
 }
