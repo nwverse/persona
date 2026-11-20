@@ -33,7 +33,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         jobs = self.pr["jobs"]
         self.assertEqual(jobs["verify"]["needs"], ["plan", "cli-web", "android", "apple", "windows"])
         self.assertEqual(jobs["apple"]["needs"], ["plan", "cli-web", "android"])
-        self.assertEqual(jobs["windows"]["needs"], ["plan", "cli-web", "android", "apple"])
+        self.assertEqual(jobs["windows"]["needs"], ["plan", "cli-web", "android"])
         self.assertEqual(jobs["android"]["environment"], "persona-release")
         self.assertEqual(jobs["apple"]["environment"], "persona-release")
         self.assertEqual(jobs["windows"]["environment"], "persona-release")
@@ -124,6 +124,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("Get-AuthenticodeSignature", text)
         self.assertIn("beta.yml", text)
         self.assertIn("latest.yml", text)
+        # Native Windows checks must still run when Apple signing fails. Apple is a separate dependency of the
+        # final aggregate, not an input to the Windows executables or desktop package.
+        windows = self.pr["jobs"]["windows"]
+        self.assertNotIn("apple", windows["needs"])
+        self.assertNotIn("release-pr-apple", str(windows))
+        self.assertEqual(self.pr["jobs"]["verify"]["needs"], ["plan", "cli-web", "android", "apple", "windows"])
 
     def test_pr_metadata_survives_the_clean_source_checkout(self):
         text = PR.read_text()

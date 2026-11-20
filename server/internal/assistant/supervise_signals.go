@@ -163,7 +163,7 @@ func (g superviseSignal) urgent() bool {
 	switch g.Kind {
 	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigOwnerCannot, // the owner waits on a decision they cannot answer as it is
-		sigParkDecided, sigDecisionReply: // the owner answered: what they said is acted on soon
+		sigParkDecided, sigDecisionReply, sigHandoffResult:
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -404,6 +404,12 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 	}
 	switch v.state(t) {
 	case reviewPending:
+		if h := v.handoffResult(); h != nil {
+			if h.ToldAt.IsZero() {
+				return []superviseSignal{handoffResultSignal(t.ID, h)}
+			}
+			return nil
+		}
 		return []superviseSignal{{Todo: t.ID, Kind: sigReview, Key: reviewKey(v)}}
 	case reviewParked: // nothing until its time, then that it came (parked.go)
 		if g, ok := parkedDueSignal(t, now); ok {
@@ -514,6 +520,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 			continue
 		}
 		s.remedyWatch(ctx, t, now, history) // a failed start's kept tab expired (start_remedy.go)
+		t = s.checkTaskHandoff(ctx, t, now)
 		agents := s.taskAgentsIn(ctx, t, lists)
 		if backfilled < closeoutBackfillMost {
 			var scanned bool

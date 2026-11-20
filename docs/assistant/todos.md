@@ -834,6 +834,23 @@ Something the owner raises in the main conversation and wants an answer to is a 
 - **The supervisor** is told that nothing went out and not to ask the owner itself; when `can_wait` was ignored it is told why and the answer goes on as for any decision.
 - Not done here: the briefing lists it among "To verify", where decisions already are, not in a block of its own; the Android app marks a held decision on its card and on its To-dos row (#5802, `docs/android/android.md` "Rule suggestions, held decisions, recommended setup and purpose descriptions") and the Apple apps mark it "Comes with your next briefing" on its row and card (#5803, `docs/apple/ios.md` "Suggested standing rule and held decisions"); the web marks it on the decision's card in Needs you and on the to-do's ask line (#5803, `docs/web/web.md` "Decisions held for the briefing"); nothing counts how many decisions were held; and there is no switch of its own in Settings (above). A hub rolled back to a build from before #4930 drops `for_briefing` on its next write of the asks, and such a decision is then neither pushed nor carded by either build: it is still in Needs you and in the briefing.
 
+## Confirmed handoffs between active to-dos
+
+The supervisor of a stopped to-do can ask an Agent on another open supervised to-do to check a candidate. Use
+`agent_send` with `handoff` naming both to-dos, the full candidate commit, the requested check and a deadline. This
+uses the existing Agent session. A node acknowledgement, including acceptance into its queue, records the wait on
+the originating to-do. A refused send or one with an unknown outcome leaves its state unchanged.
+
+The originating to-do shows the receiving task, requested check and deadline in Waiting. The receiving Agent gets a
+receipt ID in the message. It uses `report_to_supervisor` with `handoff_receipt`, the head it checked and its evidence.
+A receipt from the bound Agent must match the active handoff ID, originating to-do, commit and check. Only that
+originating to-do returns to its supervisor for review. The result and the return to review are stored together.
+The supervision sweep recovers a result that has yet to be delivered after a restart.
+
+A failed check, a cancelled receiving to-do or a missed deadline returns the originating to-do to its supervisor
+with the reason. A receiving Agent stopping by itself leaves the wait in place. New work and later reviews of the
+originating to-do end the old wait. Owner decisions and acceptance keep their existing handling.
+
 ## Parked tasks
 
 (#3804, `assistant/parked.go`, `assistant/park_evidence.go`.) Parking is for an evidenced external wait, not a way to defer work or ask the owner a question. A new park must say what is awaited and include source-backed evidence.

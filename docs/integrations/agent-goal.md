@@ -128,8 +128,18 @@ objectives were checked by hand. When a turn ends with the goal still active, Co
 (`task_started` with `turn_attribution.turn_trigger: "goal"`). Checked 2026-11-18 with Codex 0.169 in a herdr pane:
 `/goal` typed while the first turn ran was recorded within a second, and a goal turn followed the first turn without a
 new message. Only a Codex whose rollout names version 0.169 or later gets the command (`goals` is stable and on by
-default there); an older one, a screen not ready for it, or a goal the rollout never shows is logged and never fails the
-start. A resumed Codex thread takes no start goal: it would replace the thread's own.
+default there). A resumed Codex thread takes no start goal: it would replace the thread's own.
+
+When the command cannot set the goal — an older Codex, a screen not ready for it, a clean refusal that typed nothing,
+or a goal the rollout never confirms — the node delivers the same condition as an ordinary message instead
+(`codexTextGoal`): the goal's text on its own, after the task's first message, under the same screen checks and typing
+lock a send uses, confirmed by reading the rollout's `item_completed` / `UserMessage` lines back (a message at or after
+the send, also inside Codex's own wrapper). It is a delivery fallback, not a native goal: no `thread_goal_updated` is
+invented, and `Session.goal` only ever shows a goal Codex itself recorded. Before the text is typed the rollout is
+checked once more, so a native goal confirmed after its wait is not restated; a goal that starts with `/` is left
+alone, since Codex would run it as a command. There is no text fallback when the `/goal` command may still sit in the
+input box (the two would go as one message), when the thread's rollout is unknown, or on a screenless host — those
+stay log-only, and a fallback that cannot be delivered or read back is logged too. No outcome ever fails the start.
 
 ## Screenshots
 

@@ -450,7 +450,9 @@ jobs:
 
   windows:
     name: Verify Windows programs natively and sign the desktop package
-    needs: [plan, cli-web, android, apple]
+    # Windows consumes only CLI/Web and Android artifacts. An unrelated Apple failure must not hide a native Windows
+    # execution or signing regression; the final aggregate still requires every platform to succeed.
+    needs: [plan, cli-web, android]
     if: needs.plan.outputs.pr != '0' && needs.plan.outputs.version != ''
     runs-on: windows-latest
     timeout-minutes: 120
@@ -469,10 +471,6 @@ jobs:
         with:
           name: release-pr-android-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}
           path: release/downloads
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-pr-apple-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}
-          path: release
       - name: Run every Windows CLI on its matching native architecture
         shell: pwsh
         run: |

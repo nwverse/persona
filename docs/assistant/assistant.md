@@ -2251,8 +2251,10 @@ is in `docs/protocol/protocol.md` ("Start defaults").
   model or launcher is never replaced, and an effort the caller's tier gives wins over the policy's.
 - **The goal** is the task's `done_when` as one checkable sentence (`prompts/assistant/task_goal.md`), set by the node
   after the first message is in the transcript, as Claude Code's `/goal` or Codex's own `/goal`
-  ([agent-goal.md](../integrations/agent-goal.md), "A goal set at the start"). A computer whose node cannot set it
-  starts the Agent without it once, and the task's why says so, as for ultracode. Only a new start (never a resume) of
+  ([agent-goal.md](../integrations/agent-goal.md), "A goal set at the start"). When Codex's `/goal` cannot be set
+  (an older Codex, a screen not ready, an unconfirmed goal), the node delivers the same sentence as an ordinary
+  message and reads it back from the rollout instead; no delivery outcome fails the start. A computer whose node
+  cannot set it starts the Agent without it once, and the task's why says so, as for ultracode. Only a new start (never a resume) of
   a task with `done_when` takes one (`startGoalSource`). The goal is decided apart from the rest of the rule: the first
   fitting rule that names `goal` decides, even when an earlier fitting rule silent on `goal` supplies the presets,
   effort and the rest. `done_when` sets it on Claude Code and Codex, `off` on neither. When no fitting rule names
