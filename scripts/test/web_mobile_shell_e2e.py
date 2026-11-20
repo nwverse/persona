@@ -672,6 +672,50 @@ def composer_back(browser, base, token, shots):
     ctx.close()
 
 
+# what of the panel a finger reaches: its buttons and its header's icon and title, as [leftmost left, rightmost right]
+PANEL_EDGES = """(sel) => { const a = document.querySelector(sel); if (!a) return null;
+  const els = [...a.querySelectorAll('button, header > *')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+  const r = a.getBoundingClientRect();
+  return { left: Math.min(...els.map((e) => e.getBoundingClientRect().left)), right: Math.max(...els.map((e) => e.getBoundingClientRect().right)),
+    aside: [r.left, r.right], pad: getComputedStyle(a).paddingLeft, inner: innerWidth }; }"""
+
+
+def panel_safe_area(browser, base, token, shots):
+    """A full-screen side panel on a phone on its side with a notch (#11511): Files and Git keep their buttons clear of
+    the left and right safe areas (the browser's insets, set through CDP), their background still under the notch; a
+    phone held upright has no inset and no padding."""
+    chat = TAB1 + "/" + CODEX
+    weather = "/home/me/code/weather"
+    open_panel = "async (p) => { const m = await import('/src/lib/panel.ts'); m.openPanel(p); }"
+    for theme in ("light", "dark"):
+        ctx, page = phone(browser, 844, 390, theme)
+        ctx.new_cdp_session(page).send("Emulation.setSafeAreaInsetsOverride", {"insets": {"left": 47, "right": 47}})
+        sign_in(page, base, token, theme)
+        page.goto(base + chat)
+        expect(page.locator("main header")).to_be_visible()
+        for kind, label in (("files", "文件"), ("git", "Git")):
+            page.evaluate(open_panel, {"kind": kind, "mid": "server", "sid": CODEX, "cwd": weather})
+            sel = f"aside[aria-label={label}]"
+            expect(page.locator(sel)).to_be_visible()
+            page.wait_for_timeout(500)  # its slide in
+            e = page.evaluate(PANEL_EDGES, sel)
+            assert e and e["left"] >= 47 and e["right"] <= e["inner"] - 47, f"{kind} {theme}: under the notch ({e})"
+            assert e["aside"][0] <= 0.5 and e["aside"][1] >= e["inner"] - 0.5, f"{kind} {theme}: the panel no longer spans the screen ({e})"
+            if shots:
+                page.screenshot(path=os.path.join(shots, f"panel-notch-{kind}-{theme}.png"))
+        ctx.close()
+    ctx, page = phone(browser, 390, 844)
+    sign_in(page, base, token)
+    page.goto(base + chat)
+    expect(page.locator("main header")).to_be_visible()
+    page.evaluate(open_panel, {"kind": "files", "mid": "server", "sid": CODEX, "cwd": weather})
+    expect(page.locator("aside[aria-label=文件]")).to_be_visible()
+    pad = page.evaluate(PANEL_EDGES, "aside[aria-label=文件]")["pad"]
+    assert pad == "0px", f"upright, the panel is padded ({pad})"
+    ctx.close()
+    ok("844×390 with a 47 px notch each side: Files' and Git's buttons start at 47 and end 47 short of the right edge; upright, no padding")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("base")
@@ -694,6 +738,7 @@ def main():
         offline(browser, base, a.token, a.shots)
         palette_back(browser, base, a.token)
         composer_back(browser, base, a.token, a.shots)
+        panel_safe_area(browser, base, a.token, a.shots)
         browser.close()
     print("PASS web mobile shell e2e")
 
