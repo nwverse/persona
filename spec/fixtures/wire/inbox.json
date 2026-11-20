@@ -176,6 +176,7 @@
           "title": "Example discussion",
           "sender": "Example sender",
           "avatar": "https://example.com/avatar.png",
+          "avatar_url": "/api/v1/avatars/lark/aHR0cHM6Ly9leGFtcGxlLmNvbS9hdmF0YXIucG5n?lark_account=2",
           "preview": "Please confirm the example.",
           "count": 2,
           "started_at": "2026-01-02T02:04:05Z",
