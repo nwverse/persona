@@ -35,7 +35,7 @@ The prototype is the UI and interaction standard; compare screen by screen durin
   | Auto-start | Read-only: research, read code to answer a question | `task_plan` queues dispatch with `permission: bypassPermissions` for Claude and a Paseo provider whose approval is Auto Accept (#8141), `plan` for Codex, and no mode for traex and omp (#7559); pi, cursor and agy have no read-only mode, so `task_plan` refuses the task (#8316). The first prompt carries the read-only constraint. The plan card collapses to "Started N tasks" |
   | Plan first | Change code, start multiple Agents, first start in this project | Show a plan card in the chat, with editable labels for each item; start only after "Start" |
 
-- Tasks you explicitly request in the chat (a direct instruction, "have an Agent do it," "go ahead and start," #2559) also start directly. Persona sets `user_requested: true` for that `task_plan` item, and the card shows progress only. A conversation your request reached through another one starts a writable task this way only when the message carried your verified words and it is not a direction's lead ("Across a relay": **Start in a relayed turn**).
+- Tasks you explicitly request in the chat (a direct instruction, "have an Agent do it," "go ahead and start," #2559) also start directly. Persona sets `user_requested: true` for that `task_plan` item, and the card shows progress only. In a turn another conversation's message opened, `user_requested` counts only for an answer to this conversation's own message, or for your verified words in a conversation that is not a direction's lead and that no lead passed on ("Across a relay": **Start in a relayed turn**).
   Inferred tasks you did not request still wait for Start. If any item in a plan needs to wait, the whole plan waits. "Start tasks I request in chat directly" under Settings › Assistant (`assistant.start_requested_tasks`, on by default) can disable this.
 - The plan card offers "Start These Directly," remembered per "computer × repository (or directory) × read-only / file changes." Similar tasks no longer ask. Stored in settings `tasks.trust`; entries can be viewed and deleted in Settings.
   An entry covers its directory and every directory under it (#8095, `assistant/task_trust_scope.go`). Directories are compared as the computer
@@ -722,16 +722,24 @@ A reply that is refused or dropped leaves its hand-over `delivered` for the next
 after the outcomes to report and before the rest (`docs/assistant/assistant.md`, "Messages from the system wait for the
 owner"). Nothing reads the hand-overs yet but the log: no route, event or client shows them.
 
-**Start in a relayed turn** (#11699). In a turn whose latest input is another conversation's message (`briefOrigin`'s
-trigger `conversation`), the owner wrote nothing, so `task_plan` ignores `user_requested`, as it does in a scheduled
-round, when that message carried no verified quote; and in a direction's lead conversation also when it did, since a
-hand-over can reach the wrong lead and a writable task would then start in the wrong repository before the owner sees
-it. This holds until misrouted hand-overs can be counted (#11399). Such a plan waits for the owner's Start. With a
-verified quote in any other conversation (one opened by `conversation_new` with `quote`, say), `user_requested` counts
-as before. Read-only tasks and kinds the owner trusts (`tasks.trust`) start as before, the owner's own turns are
-unchanged, and a task leader Agent's worker plan is untouched. The verified words still go into the brief's `request`,
-so the card shows them. The check reads the turn's origin from the plan's briefs, or once itself when every task of
-the plan continues another.
+**Start in a relayed turn** (#11699). A turn is told by the message that opened it, as a scheduled round is
+(`splitLastTurn`: what the owner types into the running turn does not change it). In a turn another conversation's
+message opened, the owner wrote nothing, so `task_plan` ignores `user_requested` unless that message:
+
+- answers this conversation's own earlier message to that conversation: the relay counted it the answer to this
+  conversation's request (#7391), or it answers one of this conversation's hand-overs ("Hand-overs" above); or
+- carried the owner's verified words, this conversation is not a direction's lead, and no current lead passed the
+  words on (`request.via`).
+
+A hand-over can reach the wrong lead, and a writable task would then start in the wrong repository before the owner
+sees it; this holds until misrouted hand-overs can be counted (#11399). Such a plan waits for the owner's Start.
+Read-only tasks and kinds the owner trusts (`tasks.trust`) start as before, the owner's own turns are unchanged, and a
+task leader Agent's worker plan is untouched. The verified words still go into the brief's `request`, so the card shows
+them. Whether a message answered is what the relay kept of it when it went in (`in` in `assistant.relay`, 24 hours); a
+previous version drops it on its next save, and a plan in such a turn then waits. On Codex, whose transcript gives a
+message steered into a running turn the shape of one that opens a turn, an owner message steered into a relayed turn
+reads as opening an owner's turn of its own; the scheduled-round check reads it the same way. A turn that cannot be
+read is taken as before.
 
 **Required.** `task_plan` refuses a writable task (`readonly` false) without `done_when` (at least one criterion) and
 `expect_minutes`, and a read-only task without `goal` and `expect_minutes`; the refusal names what is missing and
@@ -1324,7 +1332,7 @@ Table `task_plans`: `id`, `conversation`, `tasks` (JSON: each item's `title`, `n
 `state` (`open` / `started` / `dismissed`), `created_at`, `updated_at`. A task also carries its brief's fields (`goal`, `out_of_bounds`,
 `continues`, `continues_why`, `started_why`, and the hub's `brief`): "Briefs" above.
 
-- MCP tool `task_plan` (assistant only): accepts a task list. Start directly if every item is read-only, `user_requested` (with `assistant.start_requested_tasks` enabled; not in a turn another conversation's message started, unless it carried the owner's verified words and the conversation is not a direction's lead), covered by a `tasks.trust` entry (its directory or one above it), or, in a round the hub started for a scheduled task, covered by that scheduled task's own start grant ("A scheduled task's own start grant" below); otherwise save an `open` plan and emit chat activity.
+- MCP tool `task_plan` (assistant only): accepts a task list. Start directly if every item is read-only, `user_requested` (with `assistant.start_requested_tasks` enabled; in a turn another conversation's message opened, only for an answer to this conversation's own message, or for the owner's verified words in a conversation that is not a direction's lead and that no lead passed on), covered by a `tasks.trust` entry (its directory or one above it), or, in a round the hub started for a scheduled task, covered by that scheduled task's own start grant ("A scheduled task's own start grant" below); otherwise save an `open` plan and emit chat activity.
   Return the plan ID and each task's state (text). Automatic dispatch is reported as queued, not as proof of an Agent start. `machine_policy` defaults to `fixed` (including old saved plans); only explicit `flexible` tasks may move off an unhealthy machine. The policy survives storage, card edits and retry. Fixed tasks fail on their own target and can retry there after health recovery.
 - `POST /api/v1/task-plans/{id}/start`: may include user-edited fields. Create a to-do per task (`origin`, `plan_id`), then start its Agent (`startSession` with `todo_id`). An owner API client can set `close_tab_on_accept: true` on a new task in `tasks` (see `docs/assistant/todos.md` "Close a task's tab after acceptance").
   With `remember: true`, record this kind (`machine|<repository or folder>|read-or-edit`, "Start These Directly" above) in `tasks.trust`.
@@ -1369,8 +1377,9 @@ writable task it hands out used to wait on its card however much the owner wante
 - **`user_requested` in a round**: a round the hub started has no message of the owner's, so `task_plan` ignores
   `user_requested` in a turn a scheduled task started, with or without a grant: while the hub has a round under way in
   that conversation, or when its latest turn began with a scheduled prompt (after a hub restart too). An owner who
-  writes into that turn gets the card. A turn another conversation's message started is treated the same way unless
-  that message carried the owner's verified words and the conversation is not a direction's lead ("Across a relay":
+  writes into that turn gets the card. A turn another conversation's message opened is told the same way, by that
+  message, and `user_requested` counts there only for an answer to this conversation's own message, or for the owner's
+  verified words in a conversation that is not a direction's lead and that no lead passed on ("Across a relay":
   **Start in a relayed turn**); the check sits next to this one in `task_plan`.
 - **Everything else keeps the card**: other scheduled tasks' rounds, every turn the hub did not start for that
   schedule, kinds outside the grant.

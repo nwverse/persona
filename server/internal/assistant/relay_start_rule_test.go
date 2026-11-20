@@ -37,35 +37,39 @@ func (d *dispatchPolicyHarness) startsSoFar() int {
 	return len(d.f.starts)
 }
 
-// A turn another conversation's message started (#11699): a writable task the model marks user_requested waits for the
-// owner's Start when that message carried no verified quote, and in a direction's lead also when it did. With a
-// verified quote in a conversation that is no lead, and in the owner's own turn, it starts as before. Read-only tasks
-// and kinds the owner trusts start either way, and a plan whose every task continues another reads the turn itself.
+// A turn another conversation's message opened (#11699): a writable task the model marks user_requested waits for the
+// owner's Start when that message carried no verified quote, in a direction's lead also when it did, and when a current
+// lead passed the owner's words on. An answer to the planning conversation's own message is no hand-over: its plan
+// starts as before, as it does with a verified quote in a conversation that is no lead and in the owner's own turn.
+// The turn is told by the message that opened it: an owner message typed into it changes nothing. Read-only tasks and
+// kinds the owner trusts start either way, and a plan whose every task continues another reads the turn as well.
 func TestRelayedTurnStartsWritableWorkOnlyOnTheOwnersVerifiedWords(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		lead   bool   // the planning conversation is the lead (else an ordinary one)
-		turn   string // what started its turn: the owner, another conversation's message, or one with the owner's words
+		in     string // the planning conversation: side (an ordinary one), lead or main
+		turn   string // what opened its turn
 		over   map[string]any
 		trust  bool
 		starts bool
 	}{
-		{"no quote", false, "relay", nil, false, false},
-		{"no quote, in the lead", true, "relay", nil, false, false},
-		{"the owner's words, in the lead", true, "quoted", nil, false, false},
-		{"the owner's words, elsewhere", false, "quoted", nil, false, true},
-		{"the owner's own turn, in the lead", true, "owner", nil, false, true},
-		{"read-only, no quote", false, "relay", map[string]any{"readonly": true, "permission": "plan", "goal": "find why the export drops it"}, false, true},
-		{"a trusted kind, the owner's words, in the lead", true, "quoted", nil, true, true},
-		{"a continuation, no quote", false, "relay", map[string]any{"continues": "", "continues_why": "the first agent stopped"}, false, false},
+		{"no quote", "side", "relay", nil, false, false},
+		{"no quote, in the lead", "lead", "relay", nil, false, false},
+		{"the owner's words, in the lead", "lead", "quoted", nil, false, false},
+		{"the owner's words, elsewhere", "side", "quoted", nil, false, true},
+		{"the owner's words passed on by the lead", "side", "passed on", nil, false, false},
+		{"the owner's own turn, in the lead", "lead", "owner", nil, false, true},
+		{"the owner writes into a relayed turn", "side", "relay, then the owner", nil, false, false},
+		{"an answer to its own message", "main", "answer", nil, false, true},
+		{"an answer to its own hand-over, the hop record forgotten", "main", "answer to a hand-over", nil, false, true},
+		{"a request from the lead, no answer", "main", "request", nil, false, false},
+		{"read-only, no quote", "side", "relay", map[string]any{"readonly": true, "permission": "plan", "goal": "find why the export drops it"}, false, true},
+		{"a trusted kind, the owner's words, in the lead", "lead", "quoted", nil, true, true},
+		{"a continuation, no quote", "side", "relay", map[string]any{"continues": "", "continues_why": "the first agent stopped"}, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := newStartRuleHarness(t)
 			ctx := context.Background()
-			planner := d.sideID
-			if tc.lead {
-				planner = d.leaderID
-			}
+			planner := map[string]string{"side": d.sideID, "lead": d.leaderID, "main": d.mainID}[tc.in]
 			if _, ok := tc.over["continues"]; ok { // a task handed out earlier, on the owner's word, for this one to continue
 				d.f.setItems(ownerItem("m-first", "look into the export"))
 				first := relayedPlan(map[string]any{"title": "Look into the export", "readonly": true, "permission": "plan",
@@ -91,10 +95,37 @@ func TestRelayedTurnStartsWritableWorkOnlyOnTheOwnersVerifiedWords(t *testing.T)
 			case "relay":
 				d.send(t, d.mainID, planner, `"text":"please fix the export"`)
 				d.f.setItems(received(t, d.f, d.mainID))
+			case "relay, then the owner": // the owner's message typed while the relayed turn runs
+				d.send(t, d.mainID, planner, `"text":"please fix the export"`)
+				typed := ownerItem("m-typed", "yes, go ahead")
+				typed.Seq, typed.Queued = 3, true
+				d.f.setItems(received(t, d.f, d.mainID), typed)
 			case "quoted":
 				d.f.setItems(ownerItem("m-owner", quotedWords))
 				d.send(t, d.mainID, planner, `"text":"please fix the export","quote":"latest"`)
 				d.f.setItems(received(t, d.f, d.mainID))
+			case "passed on": // the main conversation hands the owner's words to the lead, which passes them on
+				d.f.setItems(ownerItem("m-owner", quotedWords))
+				d.send(t, d.mainID, d.leaderID, `"text":"please fix the export","quote":"latest"`)
+				d.f.setItems(received(t, d.f, d.mainID))
+				d.send(t, d.leaderID, planner, `"text":"you take the export part","quote":"latest"`)
+				d.f.setItems(received(t, d.f, d.leaderID))
+			case "answer": // the main conversation asked the lead; the lead's answer opens its turn
+				d.send(t, d.mainID, d.leaderID, `"text":"has the migration finished?"`)
+				d.send(t, d.leaderID, d.mainID, `"text":"it has; the cleanup can go ahead"`)
+				d.f.setItems(received(t, d.f, d.leaderID))
+			case "answer to a hand-over": // the lead answers the owner's words more than an hour later
+				d.f.setItems(ownerItem("m-owner", quotedWords))
+				d.send(t, d.mainID, d.leaderID, `"text":"please fix the export","quote":"latest"`)
+				b := &d.s.relays
+				b.mu.Lock()
+				delete(b.st.Hops, d.leaderID) // the relay's own answer owed is forgotten
+				b.mu.Unlock()
+				d.send(t, d.leaderID, d.mainID, `"text":"the export is fixed; clean up the old files?"`)
+				d.f.setItems(received(t, d.f, d.leaderID))
+			case "request": // the lead writes to the main conversation unasked
+				d.send(t, d.leaderID, d.mainID, `"text":"please start the cleanup"`)
+				d.f.setItems(received(t, d.f, d.leaderID))
 			}
 			before := d.startsSoFar()
 			res := d.tool(t, planner, "task_plan", relayedPlan(tc.over))

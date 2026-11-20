@@ -289,6 +289,31 @@ type relayState struct {
 	Spawned map[string]spawnedConv `json:"spawned,omitempty"`
 	// Spoke: when the owner last sent each conversation a message, kept for ownerPresentFor (relay_presence.go).
 	Spoke map[string]time.Time `json:"spoke,omitempty"`
+	// In: by receiving conversation and sender, the last conversation_send of that sender that went in, and whether it
+	// answered the receiver's own message to it (relayIn): a turn such an answer opens is no hand-over of a request
+	// (relayedTurnWaits, #11699). Kept relayInKeep. A version that does not know it drops it on its next save: a plan in
+	// such a turn then waits for Start.
+	In map[string]map[string]relayIn `json:"in,omitempty"`
+}
+
+// relayIn is a conversation_send that went in: when, and whether it answered the receiver's own message to its sender:
+// the relay counted it the answer to the receiver's request (relayMsg.Answer, #7391), or it answers a hand-over of the
+// receiver's (relayMsg.Answers).
+type relayIn struct {
+	At     time.Time `json:"at"`
+	Answer bool      `json:"answer,omitempty"`
+}
+
+// relayInKeep is how long what went in is kept: longer than a turn it opens lasts.
+const relayInKeep = 24 * time.Hour
+
+// relayAnswered: the last conversation_send of conversation from that went into conversation to answered to's own
+// message to from (relayIn).
+func (s *Service) relayAnswered(to, from string) bool {
+	b := &s.relays
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return s.relayLocked(context.Background()) && b.st.In[to][from].Answer
 }
 
 type relayBook struct {
@@ -377,6 +402,16 @@ func (s *Service) saveRelayLocked() error {
 	for id, c := range s.relays.st.Spawned {
 		if time.Since(c.At) > spawnedKeep {
 			delete(s.relays.st.Spawned, id)
+		}
+	}
+	for to, in := range s.relays.st.In {
+		for from, r := range in {
+			if time.Since(r.At) > relayInKeep {
+				delete(in, from)
+			}
+		}
+		if len(in) == 0 {
+			delete(s.relays.st.In, to)
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -861,6 +896,15 @@ func (s *Service) relayDelivered(ctx context.Context, to string, msg relayMsg) {
 			}
 		}
 		b.st.Hops[to] = hp
+		if msg.Tool == "conversation_send" { // what a turn it opens may start (relayedTurnWaits)
+			if b.st.In == nil {
+				b.st.In = map[string]map[string]relayIn{}
+			}
+			if b.st.In[to] == nil {
+				b.st.In[to] = map[string]relayIn{}
+			}
+			b.st.In[to][msg.From] = relayIn{At: now, Answer: msg.Answer || msg.Answers != ""}
+		}
 		s.saveRelayLocked()
 	}
 	b.mu.Unlock()

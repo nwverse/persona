@@ -7,6 +7,9 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // ---- the brief of a task_plan task (#3822) ----
@@ -141,22 +144,33 @@ func (s *Service) planBriefs(ctx context.Context, machine, conversation string, 
 	return nil
 }
 
-// relayedTurnWaits: the turn in which conversation (on machine) plans tasks was started by another conversation's
-// message (briefOrigin's trigger conversation), and the owner's Start is still needed for what they asked for
-// (user_requested, #11699): that message carried no verified quote of theirs, or conversation is a direction's lead,
-// where a hand-over meant for another lead could start writable work in the wrong place before the owner sees it. It
-// reads the origin the plan's briefs took (planBriefs), or, for a plan whose every task continues another, once here.
-func (s *Service) relayedTurnWaits(ctx context.Context, machine, conversation string, tasks []PlanTask) bool {
-	var origin briefRecord
-	if i := slices.IndexFunc(tasks, func(t PlanTask) bool { return t.Continues == "" && t.Brief != nil }); i >= 0 {
-		origin = tasks[i].Brief.briefRecord
-	} else {
-		origin = s.briefOrigin(ctx, machine, conversation)
-	}
-	if origin.Trigger != "conversation" {
+// relayedTurnWaits: the turn in which conversation (on machine) plans tasks was opened by another conversation's message,
+// and what the owner asked for (user_requested, #11699) still needs their Start. The turn is read as the scheduled-round
+// check reads it (lastTurnItems, splitLastTurn): by the item that opened it, so an owner message typed into the turn
+// (queued) changes nothing. On Codex, whose transcript gives a message steered into a running turn the shape of one
+// that opens a turn, such a message is taken for the owner's own turn, as there too. The turn needs Start unless the
+// message that opened it answers this conversation's own message to its sender (relayAnswered), or it carried the
+// owner's verified words, this conversation is no direction's lead and no current lead passed the words on (their
+// request.via): a hand-over can reach the wrong lead, and a writable task would start in the wrong repository before
+// the owner sees it. A turn that cannot be read is taken as before.
+func (s *Service) relayedTurnWaits(ctx context.Context, machine, conversation string) bool {
+	items, ok := s.lastTurnItems(ctx, machine, conversation)
+	if !ok || len(items) == 0 {
 		return false
 	}
-	return origin.Request == nil || s.isLeader(ctx, conversation)
+	opener := items[0]
+	if opener.Role != "user" || opener.Kind != proto.KindText || opener.Queued {
+		return false
+	}
+	src := prompts.ItemSource(opener)
+	if src == nil || src.Kind != proto.SourceConversation {
+		return src == nil && opener.From != "" && !opener.Wake // another Claude session's message: no verified words
+	}
+	if s.relayAnswered(conversation, src.ConversationID) {
+		return false
+	}
+	q := s.receivedQuote(ctx, opener, src)
+	return q == nil || s.isLeader(ctx, conversation) || slices.ContainsFunc(q.Via, func(id string) bool { return s.isLeader(ctx, id) })
 }
 
 // checkContinuationScope rejects a plan that was prepared against a different

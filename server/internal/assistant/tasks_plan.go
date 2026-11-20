@@ -232,10 +232,10 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			a.Tasks[i].UserRequested = false
 		}
 	}
-	// A turn another conversation's message started (#11699): the owner wrote nothing there, so "the user asked for
-	// this" holds only for their verified words that message carried, and not even then in a direction's lead, which a
-	// hand-over can reach by mistake.
-	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.relayedTurnWaits(ctx, machine, sessionID, a.Tasks) {
+	// A turn another conversation's message opened (#11699): the owner wrote nothing there, so "the user asked for this"
+	// holds only for an answer to this conversation's own message, or for the owner's verified words that message
+	// carried, and not even then in a direction's lead or after one passed them on: a hand-over can reach the wrong lead.
+	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.relayedTurnWaits(ctx, machine, sessionID) {
 		for i := range a.Tasks {
 			a.Tasks[i].UserRequested = false
 		}
