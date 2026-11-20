@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
 
 // ---- starting and dismissing a plan ----
@@ -58,6 +59,23 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		}
 		if err := checkModelID(p.Tasks[i].Model); err != nil { // typed on the card (#1644): refused before anything starts
 			return nil, planInvalid{err}
+		}
+		params := map[string]any{"speed": p.Tasks[i].Speed}
+		if _, err := validateStartSpeed(params); err != nil {
+			return nil, planInvalid{err}
+		}
+		preview := p.Tasks[i]
+		checkSpeed := false
+		if err := s.applyTaskTier(ctx, &preview); err == nil {
+			checkSpeed = proto.FasterSpeed(preview.Speed)
+		} else {
+			// An unknown tier has always been recorded as the task's start failure below, not an HTTP refusal here.
+			checkSpeed = false
+		}
+		if checkSpeed {
+			if _, err := s.fitPlanTaskSpeed(ctx, &p.Tasks[i]); err != nil {
+				return nil, planInvalid{err}
+			}
 		}
 		p.Tasks[i].Permission = strings.TrimSpace(p.Tasks[i].Permission)
 		if m, ok := s.machineByName(ctx, p.Tasks[i].Machine); ok && p.Tasks[i].Role == roleLeader && s.isWorkMachine(m.ID) {
@@ -193,7 +211,8 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			t.Queue = s.prerequisiteQueue(ctx, *t, s.requestBlockers(ctx, *t))
 		}
 		s.briefStarted(ctx, p, t, todo) // what was asked, kept from now on (task_brief_plan.go)
-		s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(t.Readonly, t.DoneWhen, todo.PRURL), false)
+		// Its stage kind from that brief; how it is handed out is kept for every later look (task_stage_kind.go).
+		s.restage(ctx, todo.ID, func(st *todoStage) { st.Readonly = t.Readonly })
 		if sup := supervisors[i]; sup != "" {
 			if t.Parent == "" && t.ReuseTodo == "" && sup != p.Conversation {
 				s.taskCard(ctx, sup, todo.ID, "")
@@ -285,6 +304,13 @@ func (s *Service) taskTodoForConversation(conversation, id string) (Todo, error)
 // holds them).
 func (s *Service) reusableTodo(ctx context.Context, conversation, id string, taking bool) (stopped []TodoAgent, err error) {
 	t, err := s.taskTodoForConversation(conversation, id)
+	if err != nil && ownerStarts(ctx) && ctx.Value(ownerBackendTodoKey{}) == id {
+		// An owner's manual to-do has no originating conversation. The owner
+		// route binds this one exact to-do; all ordinary takeover checks follow.
+		if manual, ok := s.todoNow(id); ok && manual.Origin == "" && supervisorOf(manual) == "" {
+			t, err = manual, nil
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -364,7 +390,8 @@ func (s *Service) todoAgentStopped(ctx context.Context, a TodoAgent) bool {
 // closed or taken since the plan was made) and held until the task's agent is linked (releaseTakenTodo). The hold is
 // also the to-do's one start on its way (claimTaskStart, which a Retry and task_retry take too), so a Retry of a failed
 // start and a plan taking it over never both start an agent on it, whichever comes first (#10365). The stopped agents
-// still linked to it are let go first: the new agent is the one working on it.
+// still linked to it are let go first: the new agent is the one working on it, in a new round of the to-do's
+// supervision (startSupervisionRound).
 func (s *Service) takeTodoForTask(ctx context.Context, planID, conversation string, task PlanTask) (Todo, error) {
 	id := task.ReuseTodo
 	s.tasks.mu.Lock()
@@ -444,6 +471,8 @@ func (s *Service) takeTodoForTask(ctx context.Context, planID, conversation stri
 			return Todo{}, err
 		}
 	}
+	// The new Agent's work is a new round of its supervision: an earlier round's acceptance is history now (#11553).
+	s.startSupervisionRound(ctx, id)
 	t, _ := s.todoNow(id)
 	return formatTodo(t), nil
 }
@@ -740,7 +769,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		}
 		args["launcher"] = s.startLauncher(ctx, t.Launcher)
 	}
-	if t.RequestGate == "" && s.beginRemedy(ctx, planID, i, t, err, code, args, reason) {
+	if !t.backendWorkspace() && t.RequestGate == "" && s.beginRemedy(ctx, planID, i, t, err, code, args, reason) {
 		return
 	}
 	// A retry the assistant asked for that failed so its tab is gone: the start fails for good, and the supervisor and
@@ -759,6 +788,12 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 	}
 	if perr := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {
 		pt.Error = err.Error()
+		var problem *taskworkspace.Problem
+		if errors.As(err, &problem) {
+			pt.WorkspaceError = problem
+		} else if t.backendWorkspace() && t.backendRequest != nil {
+			pt.WorkspaceError = taskworkspace.Failure("engine_start_failed", "start", t.backendRequest.OperationID, "", t.Cwd)
+		}
 		pt.ErrorCode, pt.ErrorArgs, pt.RetryWith = code, args, retryWith
 		if remedied && pt.Start != nil {
 			pt.Start.State, pt.Start.Pane, pt.Start.At = remedyFailed, "", time.Now().UTC()
@@ -1039,6 +1074,7 @@ func (s *Service) retryTaskStart(ctx context.Context, todoID string, with retryW
 	// other tasks recorded since p was read stays.
 	if err := s.patchPlanTask(ctx, p.ID, i, func(pt *PlanTask) {
 		*pt = t
+		pt.WorkspaceError = nil
 		pt.Error, pt.ErrorCode, pt.ErrorArgs, pt.RetryWith = "", "", nil, nil
 	}); err != nil {
 		s.logf("plan %s: %v", p.ID, err)
@@ -1074,6 +1110,9 @@ func (s *Service) continueTask(ctx context.Context, cur Todo) (json.RawMessage, 
 	if cut.SessionID == "" {
 		return s.todoView(ctx, cur.ID)
 	}
+	if proto.UnrecoverableTurnErrorCode(cut.TurnError) != "" || cut.TurnErrorKind == proto.TurnErrorUnrecoverable {
+		return nil, i18n.Err("assistant-agents_work.conversation_invalid")
+	}
 	at := s.cutRow(cut) // the turn picked, by the identity it shows by: every check below goes by it
 	m, ok := s.device(ctx, cut.MachineID)
 	if !ok || !m.Reachable {
@@ -1102,6 +1141,7 @@ func (s *Service) continueTask(ctx context.Context, cur Todo) (json.RawMessage, 
 		}
 		var err error
 		if started, err = s.startTaskSuccessor(ctx, cur, cut, continueText); err != nil {
+			_, st.uncertain = errors.AsType[*uncertainTaskStart](err)
 			return nil, err
 		}
 		return s.todoView(ctx, cur.ID)

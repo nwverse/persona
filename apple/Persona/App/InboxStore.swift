@@ -854,6 +854,7 @@ extension InboxItem {
         guard let l = lark else { return nil }
         var c = LarkConversation(id: l.feedID, name: title, avatar: avatar, isGroup: l.isGroup, isTopic: l.isTopic,
                                  unread: isDone ? 0 : count, atMe: kind == "mention")
+        c.avatarURL = avatarURL
         c.updatedAt = updatedAt
         c.readPosition = l.readPosition
         c.account = l.olAccount
@@ -866,7 +867,7 @@ extension InboxItem {
     /// The newest mail of the thread, for the mail reader.
     var mailSummary: MailSummary? {
         guard let m = mail, let uid = m.uids.last else { return nil }
-        return MailSummary(accountID: m.accountID, mailbox: m.mailbox, uid: uid, messageID: m.messageID, subject: title,
+        return MailSummary(accountID: m.accountID, mailbox: m.sourceMailbox ?? "INBOX", uid: uid, messageID: m.messageID, subject: title,
                            from: m.from, date: updatedAt, snippet: preview, seen: isDone || read == true)
     }
 }

@@ -1889,7 +1889,7 @@ var ComponentTypes = []string{"text", "metric", "progress", "row", "button", "li
 var ComponentSince = map[string]int{"text": 1, "metric": 1, "progress": 1, "row": 1, "button": 1, "link": 1, "field": 1, "divider": 1, "chart": 2, "stat_grid": 2, "segmented": 2, "markdown": 3, "table": 3, "empty": 3, "loading": 3, "html": 4, "header": 4, "breadcrumb": 4, "file_tree": 4, "code": 4, "diff": 4, "comment_thread": 4, "composer": 4, "image": 6, "grid": 6, "carousel": 6, "graph": 10}
 
 // GraphNode: one node of a graph (UI version 10): a box with a title, a state line, a badge, an icon and a progress
-// bar, in tone's role color or color's named color (never both).
+// bar, in tone's role color or color's named color (never both), with optional timing and inspector details.
 type GraphNode struct {
 	ID       string `json:"id"`
 	Title    string `json:"title"`
@@ -1904,6 +1904,22 @@ type GraphNode struct {
 	// task tried several ways).
 	Group  string  `json:"group,omitempty"`
 	Action *Action `json:"action,omitempty"`
+	// Unix timestamp in seconds when this node started.
+	StartedAt *float64 `json:"started_at,omitempty"`
+	// Unix timestamp in seconds when this node ended; omitted while still running.
+	EndedAt *float64 `json:"ended_at,omitempty"`
+	// Short label/value readings shown in the node inspector.
+	Facts []Fact `json:"facts,omitempty"`
+	// Plain-text summary, verifier feedback or error shown in the node inspector.
+	Detail string `json:"detail,omitempty"`
+	// HTTPS links shown in the node inspector (for example work and verifier sessions across attempts).
+	Links []GraphNodeLink `json:"links,omitempty"`
+}
+
+// GraphNodeLink: an https link shown in a graph node's inspector (UI version 10).
+type GraphNodeLink struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
 }
 
 // GraphEdge: an edge from one node to another (UI version 10): from is the parent, to the child.
@@ -2658,12 +2674,14 @@ type MessagingMe struct {
 }
 
 type MessagingAccount struct {
-	ID       string `json:"id"`
-	Name     string `json:"name,omitempty"`
-	Avatar   string `json:"avatar,omitempty"`
-	Tenant   string `json:"tenant,omitempty"`
-	SignedIn bool   `json:"signed_in"`
-	Unread   int    `json:"unread,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name,omitempty"`
+	Avatar string `json:"avatar,omitempty"`
+	// Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+	AvatarURL string `json:"avatar_url,omitempty"`
+	Tenant    string `json:"tenant,omitempty"`
+	SignedIn  bool   `json:"signed_in"`
+	Unread    int    `json:"unread,omitempty"`
 }
 
 type MessagingAccounts struct {
@@ -2683,9 +2701,11 @@ const (
 var MessagingConversationKinds = []string{"direct", "group", "topic_group", "bot"}
 
 type MessagingConversation struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	Avatar          string    `json:"avatar,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Avatar string `json:"avatar,omitempty"`
+	// Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+	AvatarURL       string    `json:"avatar_url,omitempty"`
 	Kind            string    `json:"kind"`
 	Unread          int       `json:"unread"`
 	MarkedUnread    bool      `json:"marked_unread,omitempty"`
@@ -2710,7 +2730,9 @@ type MessagingPerson struct {
 	ID     string `json:"id,omitempty"`
 	Name   string `json:"name"`
 	Avatar string `json:"avatar,omitempty"`
-	Kind   string `json:"kind,omitempty"`
+	// Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+	AvatarURL string `json:"avatar_url,omitempty"`
+	Kind      string `json:"kind,omitempty"`
 }
 
 type MessagingMembers struct {
@@ -3030,9 +3052,11 @@ type MessagingProfileField struct {
 }
 
 type MessagingProfile struct {
-	ID          string                  `json:"id"`
-	Name        string                  `json:"name"`
-	Avatar      string                  `json:"avatar,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Avatar string `json:"avatar,omitempty"`
+	// Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+	AvatarURL   string                  `json:"avatar_url,omitempty"`
 	Cover       string                  `json:"cover,omitempty"`
 	Kind        string                  `json:"kind,omitempty"`
 	Subtitle    string                  `json:"subtitle,omitempty"`
@@ -4013,6 +4037,8 @@ type ConnectorArchiveChat struct {
 	State string `json:"state,omitempty"`
 	// When the conversation got to state; omitted when unknown.
 	StateAt time.Time `json:"state_at,omitzero"`
+	// Stable HTTP(S) link to the conversation at its source, when available.
+	SourceURL string `json:"source_url,omitempty"`
 }
 
 // ConnectorArchiveMessage: one archived message. The archive only appends: a message without at, or without text and
@@ -4507,6 +4533,16 @@ type ChannelMessage struct {
 	// The chat app's id of the message: the same message delivered again is taken once.
 	ID   string `json:"id"`
 	Text string `json:"text,omitempty"`
+	// The chat where the owner invoked a mention channel, as display context rather than an instruction.
+	Chat string `json:"chat,omitempty"`
+	// The topic or thread within chat, when the request came from one.
+	Topic string `json:"topic,omitempty"`
+	// Context the extension gathered for this request, such as nearby chat history. It is data, not owner-authored
+	// instructions.
+	Context string `json:"context,omitempty"`
+	// The extension's attestation that this is the owner's own request. A mention channel must send true; false or
+	// omitted is refused. Optional for an im channel's older messages.
+	Owner *bool `json:"owner,omitempty"`
 	// At most 4 are kept.
 	Images []ChannelBlob `json:"images,omitempty"`
 	Files  []ChannelBlob `json:"files,omitempty"`
@@ -4674,6 +4710,10 @@ type KBEntry struct {
 	// A recording's imported meeting: the id of the meetings item it overlaps, as the meetings list has it (#8872);
 	// absent on other kinds, before a match and from an older hub.
 	MeetingID string `json:"meeting_id,omitempty"`
+	// Reference-only for a project that stores pointers. Omitted means full.
+	ProjectMode string              `json:"project_mode,omitempty"`
+	Freshness   *KBProjectFreshness `json:"freshness,omitempty"`
+	Sources     []KBProjectSource   `json:"sources,omitempty"`
 }
 
 // KBRecentParams: kb.recent (kb.read): what came in from every source in [since, until), newest first, across kinds:
@@ -4734,6 +4774,57 @@ type KBDetail struct {
 	// A person's profiles by writer ("user", "ext:<id>"), as written; summary shows them too
 	// (docs/assistant/knowledge.md "Person profiles").
 	Profiles map[string]KBProfileRecord `json:"profiles,omitempty"`
+	// Reference-only for a project that stores pointers. Omitted means full.
+	ProjectMode string              `json:"project_mode,omitempty"`
+	Freshness   *KBProjectFreshness `json:"freshness,omitempty"`
+	Sources     []KBProjectSource   `json:"sources,omitempty"`
+}
+
+type KBProjectSource struct {
+	// Canonical source identity shared across project views.
+	ID   string   `json:"id"`
+	URL  string   `json:"url,omitempty"`
+	Refs []string `json:"refs,omitempty"`
+	// State observed at the source, such as merged.
+	DeliveryState string    `json:"delivery_state,omitempty"`
+	DeliveryAt    time.Time `json:"delivery_at,omitzero"`
+	// Unverified when only source delivery facts are available.
+	EnvironmentVerification string `json:"environment_verification,omitempty"`
+}
+
+type KBProjectFreshness struct {
+	NeedsReview bool                               `json:"needs_review"`
+	TimelineEnd int64                              `json:"timeline_end"`
+	Evidence    []KBProjectEvidenceRef             `json:"evidence,omitempty"`
+	Fields      map[string]KBProjectFieldFreshness `json:"fields"`
+}
+
+type KBProjectFieldFreshness struct {
+	// Omitted when historical authorship is unknown.
+	Writer       string           `json:"writer,omitempty"`
+	Source       string           `json:"source,omitempty"`
+	Cutoff       *KBProjectCutoff `json:"cutoff,omitempty"`
+	LockReason   string           `json:"lock_reason,omitempty"`
+	ReviewBy     string           `json:"review_by"`
+	NeedsReview  bool             `json:"needs_review"`
+	ReviewReason string           `json:"review_reason,omitempty"`
+	// Omitted when the gap cannot be counted.
+	UncoveredEvidenceCount *int `json:"uncovered_evidence_count,omitempty"`
+}
+
+type KBProjectCutoff struct {
+	TimelineFrom    int64 `json:"timeline_from"`
+	TimelineThrough int64 `json:"timeline_through"`
+	// True if earlier timeline entries were outside this refresh window.
+	TimelineTruncated bool                   `json:"timeline_truncated,omitempty"`
+	Sources           []KBProjectEvidenceRef `json:"sources,omitempty"`
+}
+
+type KBProjectEvidenceRef struct {
+	Ref string `json:"ref"`
+	// Opaque revision of this input.
+	Position string `json:"position"`
+	SourceID string `json:"source_id,omitempty"`
 }
 
 type KBProfileRecord struct {
@@ -6520,6 +6611,7 @@ var newDef = map[string]func() any{
 	"Section":                       func() any { return new(Section) },
 	"Component":                     func() any { return new(Component) },
 	"GraphNode":                     func() any { return new(GraphNode) },
+	"GraphNodeLink":                 func() any { return new(GraphNodeLink) },
 	"GraphEdge":                     func() any { return new(GraphEdge) },
 	"ImageSource":                   func() any { return new(ImageSource) },
 	"RowControl":                    func() any { return new(RowControl) },
@@ -6755,6 +6847,11 @@ var newDef = map[string]func() any{
 	"KBGetParams":                   func() any { return new(KBGetParams) },
 	"KBGetResult":                   func() any { return new(KBGetResult) },
 	"KBDetail":                      func() any { return new(KBDetail) },
+	"KBProjectSource":               func() any { return new(KBProjectSource) },
+	"KBProjectFreshness":            func() any { return new(KBProjectFreshness) },
+	"KBProjectFieldFreshness":       func() any { return new(KBProjectFieldFreshness) },
+	"KBProjectCutoff":               func() any { return new(KBProjectCutoff) },
+	"KBProjectEvidenceRef":          func() any { return new(KBProjectEvidenceRef) },
 	"KBProfileRecord":               func() any { return new(KBProfileRecord) },
 	"KBPersonProfile":               func() any { return new(KBPersonProfile) },
 	"KBProfileItem":                 func() any { return new(KBProfileItem) },
