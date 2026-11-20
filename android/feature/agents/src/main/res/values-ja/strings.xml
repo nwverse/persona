@@ -299,6 +299,11 @@
     <string name="agents_new_prefill_offline">「%1$s」はオフラインのため、別のマシンを選びました。接続後に戻せます</string>
     <string name="agents_new_reload">オプションを再読み込み</string>
     <string name="agents_new_agent_type">エージェントの種類</string>
+    <string name="agents_new_presets">エージェントプリセット</string>
+    <string name="agents_new_preset_loading">このプリセットのモデル一覧の読み込みが完了するまで開始できません。</string>
+    <string name="agents_new_preset_left_out">このプリセットの一部はここでは適用されません：</string>
+    <string name="agents_new_preset_left_out_model">モデル「%1$s」はここでは使えません。ランチャーのモデルで実行します。</string>
+    <string name="agents_new_preset_left_out_effort">思考の強さ「%1$s」はここでは使えません。ランチャーまたはモデル自身の設定で実行します。</string>
     <string name="agents_new_type_other">その他のエージェント</string>
     <string name="agents_new_launcher_this_time">ランチャー（今回だけ変更）</string>
     <string name="agents_new_launcher">ランチャー</string>
@@ -500,9 +505,6 @@
     <string name="agents_source_feishu_open">このトピックを Lark で開く</string>
     <string name="agents_filter_feishu">Lark グループ</string>
     <string name="agents_filter_terminal">ターミナル</string>
-    <string name="agents_botmux">botmux</string>
-    <string name="agents_botmux_hide">botmux のセッションを隠す</string>
-    <string name="agents_botmux_show">botmux のセッションを表示</string>
     <string name="agents_menu_sort">並び順：%1$s</string>
     <string name="agents_sort_state">状態優先</string>
     <string name="agents_sort_updated">最近の更新</string>

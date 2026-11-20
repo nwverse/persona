@@ -22,7 +22,7 @@ import { isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { launcherTitle } from "../../lib/provider-names";
 import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
 import {
-  agentCatalogScope, assistantCatalogScope, assistantLaunchers, machineLauncherList, modelList, pendingView, pillView, readAgentLauncherNames, readAssistantLaunchers, readForPanel, readModels, readSuperviseDefault, sessionSwitches, superviseDefault, useModelLists, currentModelRow, type PillSetup,
+  agentCatalogScope, assistantCatalogScope, assistantLaunchers, machineLauncherList, modelList, pendingView, pillView, readAgentLauncherNames, readAssistantLaunchers, readForPanel, readModels, readSuperviseDefault, sessionModelHost, sessionSwitches, superviseDefault, useModelLists, currentModelRow, type PillSetup,
 } from "../../lib/session-models";
 import { turnErrorFix, type TurnFix } from "../../lib/readiness";
 import { getSession, hubHas, useStore } from "../../lib/store";
@@ -142,7 +142,7 @@ export function ModelPill({
   );
   const shell = cx(
     // Cindy's bare toolbar pill: no frame at rest, the capsule shows on hover and while its panel is open
-    "flex h-[30px] max-w-[min(320px,100%)] min-w-[72px] shrink items-center rounded-full border border-transparent px-2.5 text-[13px] leading-none whitespace-nowrap transition-colors duration-150",
+    "flex h-[30px] max-w-[min(320px,100%)] min-w-[72px] shrink items-center rounded-full border border-transparent px-2.5 text-[13px] leading-normal whitespace-nowrap transition-colors duration-150",
     // narrow, it still takes the width its words need (a fixed width cut "Opus 5.5" to "Opus …" beside free room) and
     // shrinks, the name first, only when the row is short of room
     "@max-[520px]/composer:text-[12px] @max-[420px]/composer:min-w-[64px]",
@@ -191,12 +191,13 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
   const scope = agentCatalogScope();
   const mid = session.machine_id;
   const own = sessionLauncher(session);
+  const ownHost = sessionModelHost(session);
   const switches = sessionSwitches(session);
-  const view = pillView(session, modelList(mid, own));
+  const view = pillView(session, modelList(mid, own, undefined, ownHost));
   const opens = switches.model || switches.effort || view.engine === "codex";
   useEffect(() => {
-    if (opens) void readModels(mid, own, { first: true });
-  }, [opens, mid, own, scope]);
+    if (opens) void readModels(mid, own, { first: true, host: ownHost });
+  }, [opens, mid, own, ownHost, scope]);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   const key = `${mid}/${session.session_id}`;
@@ -210,8 +211,8 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
   const shown = Boolean(anchor) && opens;
   // every list again behind the one shown, once per opening (while the panel's code loads, the first time)
   useEffect(() => {
-    if (shown) readForPanel(mid, own);
-  }, [shown, mid, own, scope]);
+    if (shown) readForPanel(mid, own, ownHost);
+  }, [shown, mid, own, ownHost, scope]);
 
   // a switch to another launcher that the next message carries out (#5035): its list names the model picked
   const target = session.pending_switch?.launcher;
