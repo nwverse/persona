@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -100,10 +101,20 @@ func (d *dispatchPolicyHarness) handoverLogs(id string) []string {
 // neither of which is a lead, and one refused at once are none.
 func TestHandoverEntriesAreMadeForQuotedSendsWithALead(t *testing.T) {
 	d := newDispatchPolicyHarness(t)
+	var titled []proto.Session // the lead named, so its title and the main conversation's differ from the sender's
+	for _, id := range []string{d.mainID, d.leaderID, d.bgID, d.patrolID, d.sideID} {
+		c := d.idle(id)
+		if id == d.leaderID {
+			c.Title = "Export lead"
+		}
+		titled = append(titled, c)
+	}
+	d.f.setSessions("server", titled...)
+	mainTitle := conversationName(d.idle(d.mainID), d.mainID)
 	d.f.setItems(ownerItem("m-owner", quotedWords))
 	d.send(t, d.mainID, d.leaderID, `"text":"take this one: the export fix","quote":"latest"`)
 	e := onlyHandover(t, d.s)
-	if e.ID == "" || e.From != d.mainID || e.To != d.leaderID || e.ToTitle == "" || e.Conversation != d.mainID ||
+	if e.ID == "" || e.From != d.mainID || e.To != d.leaderID || e.ToTitle != "Export lead" || e.Conversation != d.mainID ||
 		e.MessageID != "m-owner" || e.State != handoverDelivered || e.Code != "" || e.At.IsZero() || e.ChangedAt.Before(e.At) {
 		t.Fatalf("main → lead: %+v", e)
 	}
@@ -118,7 +129,8 @@ func TestHandoverEntriesAreMadeForQuotedSendsWithALead(t *testing.T) {
 		t.Fatalf("lead → main: %d hand-overs, want two: %+v", len(list), list)
 	}
 	back := list[1]
-	if back.From != d.leaderID || back.To != d.mainID || back.Conversation != d.mainID || back.MessageID != "m-owner" || back.State != handoverDelivered {
+	if back.From != d.leaderID || back.To != d.mainID || back.ToTitle != mainTitle || back.Conversation != d.mainID ||
+		back.MessageID != "m-owner" || back.State != handoverDelivered {
 		t.Fatalf("lead → main: %+v", back)
 	}
 
@@ -217,16 +229,27 @@ func TestHandoverAnswerIsMatchedOnTheEntries(t *testing.T) {
 		t.Run(after, func(t *testing.T) {
 			d := newDispatchPolicyHarness(t)
 			stopHolds(t, d.s)
-			d.f.setItems(ownerItem("m-owner", quotedWords))
+			owner := ownerItem("m-owner", quotedWords)
+			if after == "a quote in the answer" {
+				owner.TS = time.Now() // within the hour a quote of the owner's goes free (relayAdmit)
+			}
+			d.f.setItems(owner)
 			d.send(t, d.mainID, d.leaderID, `"text":"take this one: the export fix","quote":"latest"`)
 			e := onlyHandover(t, d.s)
 			args := `"text":"on it; the fix lands today"`
 			switch after {
-			case "more than an hour":
+			case "more than an hour": // the hand-over and the hop record both an hour and more old
+				ago := relayHopMemory + time.Minute
+				h := &d.s.handovers
+				h.mu.Lock()
+				aged := h.m[e.ID]
+				aged.At, aged.ChangedAt = aged.At.Add(-ago), aged.ChangedAt.Add(-ago)
+				h.m[e.ID] = aged
+				h.mu.Unlock()
 				b := &d.s.relays
 				b.mu.Lock()
 				hp := b.st.Hops[d.leaderID]
-				hp.At = hp.At.Add(-relayHopMemory - time.Minute)
+				hp.At = hp.At.Add(-ago)
 				b.st.Hops[d.leaderID] = hp
 				b.mu.Unlock()
 			case "the owner spoke to the lead":
@@ -240,6 +263,266 @@ func TestHandoverAnswerIsMatchedOnTheEntries(t *testing.T) {
 			d.send(t, d.leaderID, d.mainID, args)
 			if s := handoverState(d.s, e.ID); s != handoverAnswered {
 				t.Fatalf("after %s: %s", after, s)
+			}
+			if after == "a quote in the answer" { // it went free, so the hop record took it for a request of its own
+				b := &d.s.relays
+				b.mu.Lock()
+				_, free := b.quoted[d.mainID+"|"+d.mainID+"/m-owner"]
+				from := b.st.Hops[d.mainID].From
+				b.mu.Unlock()
+				if !free || from != d.leaderID {
+					t.Fatalf("the answer was not admitted free with the owner's words (free %v, the hop record's request from %q)", free, from)
+				}
+			}
+		})
+	}
+}
+
+// An answer that goes in while its hand-over's own try is still in doubt (the lead's turn that try started answers before
+// any look) answers it once the look finds the try went in, and the next answer goes to the newer hand-over. If the
+// looks never find it and the message is sent again, that answer does not count.
+func TestAnAnswerWhileItsHandoverIsInDoubt(t *testing.T) {
+	for _, found := range []bool{true, false} {
+		name := "found by the look"
+		if !found {
+			name = "never found, sent again"
+		}
+		t.Run(name, func(t *testing.T) {
+			d := newDispatchPolicyHarness(t)
+			stopHolds(t, d.s)
+			d.f.setItems(ownerItem("m-owner", quotedWords), ownerItem("m-owner-2", "and the import as well"))
+			var tried string
+			d.f.mu.Lock()
+			d.f.onAssistantSend = func(f *fakeHub, p map[string]any) {
+				if p["session_id"] == d.leaderID && tried == "" {
+					tried, _ = p["text"].(string)
+				}
+			}
+			d.f.mu.Unlock()
+			refuseSendsTo(d.f, d.leaderID, context.DeadlineExceeded) // written, then no answer in time
+			d.send(t, d.mainID, d.leaderID, `"text":"take this one: the export fix","quote":"m-owner"`)
+			e := onlyHandover(t, d.s)
+			d.send(t, d.leaderID, d.mainID, `"text":"on it; the fix lands today"`) // before any look
+			h := handoverList(d.s)[0]
+			if h.State != handoverQueued || h.AnswerAt.IsZero() {
+				t.Fatalf("an answer while in doubt: %+v", h)
+			}
+			if found {
+				d.f.mu.Lock()
+				d.f.items = append(d.f.items, proto.Item{Seq: len(d.f.items) + 1, Role: "user", Kind: proto.KindText, Text: tried, TS: time.Now()})
+				d.f.mu.Unlock()
+				drainRelayTest(t, d.s, d.idle(d.leaderID))
+				if s := handoverState(d.s, e.ID); s != handoverAnswered {
+					t.Fatalf("found by the look: %s", s)
+				}
+				logs := d.handoverLogs(e.ID)
+				if len(logs) != 4 || !strings.HasSuffix(logs[2], ": delivered") || !strings.HasSuffix(logs[3], ": answered") {
+					t.Fatalf("log lines %q", logs)
+				}
+			} else {
+				for looks := 0; looks < relayLookLimit; looks++ {
+					if looks > 0 {
+						advanceRelayLook(t, d.s, d.leaderID, looks)
+					}
+					if looks == relayLookLimit-1 {
+						refuseSendsTo(d.f, d.leaderID, nil) // the last look misses, and the message is sent again
+					}
+					drainRelayTest(t, d.s, d.idle(d.leaderID))
+				}
+				if got := handoverList(d.s)[0]; got.State != handoverDelivered || !got.AnswerAt.IsZero() {
+					t.Fatalf("sent again after the looks: %+v", got)
+				}
+			}
+			refuseSendsTo(d.f, d.leaderID, nil)
+			d.send(t, d.mainID, d.leaderID, `"text":"and the import","quote":"m-owner-2"`)
+			newer := handoverList(d.s)[1]
+			d.send(t, d.leaderID, d.mainID, `"text":"the import is fixed too"`)
+			want := handoverAnswered
+			if !found { // the next answer takes the older one, delivered and not answered yet
+				want = handoverDelivered
+			}
+			if s := handoverState(d.s, newer.ID); s != want {
+				t.Fatalf("the newer hand-over after the next answer: %s, want %s", s, want)
+			}
+		})
+	}
+}
+
+// A hand-over past its 14 days is not answered: the answer names none, and its state no longer changes.
+func TestAnExpiredHandoverIsNotAnswered(t *testing.T) {
+	d := newDispatchPolicyHarness(t)
+	stopHolds(t, d.s)
+	d.f.setItems(ownerItem("m-owner", quotedWords))
+	d.send(t, d.mainID, d.leaderID, `"text":"take this one: the export fix","quote":"latest"`)
+	e := onlyHandover(t, d.s)
+	h := &d.s.handovers
+	h.mu.Lock()
+	old := h.m[e.ID]
+	old.At = old.At.Add(-handoverMemory - time.Hour)
+	h.m[e.ID] = old
+	h.mu.Unlock()
+	d.setStatus(d.mainID, proto.StatusWorking)
+	d.send(t, d.leaderID, d.mainID, `"text":"on it"`)
+	if q := queuedRelays(d.s, d.mainID); len(q) != 1 || q[0].Answers != "" {
+		t.Fatalf("an answer named an expired hand-over: %+v", q)
+	}
+	d.setStatus("", "")
+	drainRelayTest(t, d.s, d.idle(d.mainID))
+	if s := handoverState(d.s, e.ID); s == handoverAnswered {
+		t.Fatal("an expired hand-over was answered")
+	}
+	if d.s.handoverSet(e.ID, handoverAnswered, "", nil) {
+		t.Fatal("an expired hand-over changed state")
+	}
+}
+
+// A hand-over's state never goes back: not from delivered to queued (queueRelay writes queued after it let go of the
+// relay lock, and a drain may have delivered the message meanwhile), not from answered, and nothing comes out of
+// not_delivered.
+func TestAHandoverStateNeverGoesBack(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newQuietService(t)
+	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
+	quote := &relayRequest{BriefRequest: BriefRequest{Conversation: "conv1", MessageID: "m1", Text: quotedWords}}
+	made := func() string {
+		t.Helper()
+		id, done := s.handoverFor(ctx, "conv1", "lead1", "Lead", quote)
+		t.Cleanup(done)
+		return id
+	}
+	// queueRelay's queued comes after a drain delivered the message.
+	late := made()
+	if !s.handoverSet(late, handoverDelivered, "", nil) {
+		t.Fatal("not delivered")
+	}
+	s.queueRelay("lead1", relayMsg{From: "conv1", FromTitle: "Main", Tool: "conversation_send", Text: "take this", At: time.Now().UTC(), Handover: late})
+	if got := handoverState(s, late); got != handoverDelivered {
+		t.Fatalf("a late queued took a delivered hand-over back to %s", got)
+	}
+	answered := made()
+	for _, state := range []string{handoverQueued, handoverDelivered, handoverAnswered} {
+		if !s.handoverSet(answered, state, "", nil) {
+			t.Fatalf("not %s", state)
+		}
+	}
+	ended := made()
+	if !s.handoverSet(ended, handoverQueued, "", nil) || !s.handoverSet(ended, handoverNotDelivered, "unheard_of", nil) {
+		t.Fatal("not ended")
+	}
+	for _, tc := range []struct {
+		id, from string
+		to       []string
+	}{
+		{late, handoverDelivered, []string{handoverQueued}},
+		{answered, handoverAnswered, []string{handoverQueued, handoverDelivered, handoverNotDelivered}},
+		{ended, handoverNotDelivered, []string{handoverQueued, handoverDelivered, handoverAnswered}},
+	} {
+		for _, to := range tc.to {
+			if s.handoverSet(tc.id, to, "", nil) || handoverState(s, tc.id) != tc.from {
+				t.Errorf("%s went back to %s", tc.from, to)
+			}
+		}
+	}
+}
+
+// A hand-over dropped because its receiver is gone is not delivered before the queue without it is saved: a manager
+// that stops in between leaves no hand-over saying queued for a message that is gone.
+func TestAGoneHandoverEndsBeforeItsMessageLeavesTheQueue(t *testing.T) {
+	ctx := context.Background()
+	st := &handoverOrderStore{memStore: &memStore{}}
+	s, f := newQuietServiceOn(t, st)
+	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
+	f.mu.Lock()
+	f.known["lead1"] = true
+	f.mu.Unlock()
+	lead := proto.Session{SessionID: "lead1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}, lead)
+	id, done := s.handoverFor(ctx, "conv1", "lead1", "Lead", &relayRequest{BriefRequest: BriefRequest{Conversation: "conv1", MessageID: "m1"}})
+	s.queueRelay("lead1", relayMsg{From: "conv1", FromTitle: "Main", Tool: "conversation_send", Text: "take this", At: time.Now().UTC(), Handover: id})
+	done()
+	st.watch(id)
+	refuseSendsTo(f, "lead1", errors.New("conversation lead1 is gone"))
+	drainSettled(t, s, lead)
+	if got := handoverState(s, id); got != handoverNotDelivered {
+		t.Fatalf("gone: %s", got)
+	}
+	if seen := st.seen(); len(seen) == 0 || seen[0] != handoverNotDelivered {
+		t.Fatalf("when the queue without it was saved, the saved hand-over said %q", seen)
+	}
+}
+
+// handoverOrderStore is memStore that notes, each time the relay queue is saved without the watched hand-over's message,
+// what the hand-overs saved before say of it.
+type handoverOrderStore struct {
+	*memStore
+	mu    sync.Mutex
+	id    string
+	saved []string
+}
+
+func (o *handoverOrderStore) watch(id string) {
+	o.mu.Lock()
+	o.id = id
+	o.mu.Unlock()
+}
+
+func (o *handoverOrderStore) seen() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return slices.Clone(o.saved)
+}
+
+func (o *handoverOrderStore) PutSetting(ctx context.Context, key string, v any) error {
+	o.mu.Lock()
+	id := o.id
+	o.mu.Unlock()
+	if rs, ok := v.(relayState); ok && id != "" && !slices.ContainsFunc(rs.Queue["lead1"], func(m relayMsg) bool { return m.Handover == id }) {
+		var m map[string]handover
+		if _, err := o.memStore.Setting(ctx, handoversKey, &m); err != nil {
+			return err
+		}
+		o.mu.Lock()
+		o.saved = append(o.saved, m[id].State)
+		o.mu.Unlock()
+	}
+	return o.memStore.PutSetting(ctx, key, v)
+}
+
+// A hand-over queued for a background supervisor that is gone follows its message to where it waits now, the main
+// conversation, and goes on from there; with nowhere to move it is not delivered.
+func TestAHandoverQueuedForALostBackgroundSupervisor(t *testing.T) {
+	for _, moves := range []bool{true, false} {
+		name := "moved to the main conversation"
+		if !moves {
+			name = "nowhere to move"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			d := newDispatchPolicyHarness(t)
+			stopHolds(t, d.s)
+			quote := &relayRequest{BriefRequest: BriefRequest{Conversation: d.mainID, MessageID: "m-owner", Text: quotedWords}}
+			id, done := d.s.handoverFor(ctx, d.leaderID, d.bgID, "Background", quote)
+			d.s.queueRelay(d.bgID, relayMsg{From: d.leaderID, FromTitle: "Export lead", Tool: "conversation_send", Text: "check this",
+				At: time.Now().UTC(), Handover: id, Quote: quote})
+			done()
+			to := d.mainID
+			if !moves {
+				to = ""
+			}
+			d.s.backgroundLost(ctx, d.bgID, to, d.s.webBase(ctx))
+			e := onlyHandover(t, d.s)
+			if !moves {
+				if e.State != handoverNotDelivered || e.Code != handoverGone || d.s.queuedFor(d.bgID) != 0 {
+					t.Fatalf("dropped: %+v", e)
+				}
+				return
+			}
+			if e.State != handoverQueued || e.To != d.mainID || e.ToTitle != conversationName(d.idle(d.mainID), d.mainID) {
+				t.Fatalf("moved: %+v", e)
+			}
+			drainRelayTest(t, d.s, d.idle(d.mainID))
+			if s := handoverState(d.s, id); s != handoverDelivered || d.f.sentTo(d.mainID) != 1 {
+				t.Fatalf("after it went into the main conversation: %s, %d sent", s, d.f.sentTo(d.mainID))
 			}
 		})
 	}

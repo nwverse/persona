@@ -697,9 +697,18 @@ only once it is true and never goes back, and each change is one log line:
   it was queued, `gone` when it was dropped because the receiver is gone. The sender still gets the line that says so
   (`docs/assistant/assistant.md`, "Between conversations").
 
+A try in doubt that did go in starts the receiver's turn before any look finds it, so an answer sent in that turn
+goes in while the hand-over is still `queued`: it counts once the look finds the try, which makes the hand-over
+`delivered` and then `answered`. If the looks never find it and the message is sent again, that answer does not count.
+A hand-over past its 14 days is no longer answered or changed. One queued for a background supervisor that is gone
+follows its message to where it waits now (the new background supervisor or the main conversation), receiver and title
+included; with nowhere to move it is `not_delivered` with `gone`. An end or a move is saved before the queue without
+the message is.
+
 An answer is matched on the hand-overs, not on the relay's hop record, which forgets after an hour, when the owner
 speaks in the receiver, or when a third conversation's request reaches it. The reply names the hand-over it answers
-(`answers` on the queued message): of the pair's delivered hand-overs, the oldest that no other reply on its way names.
+(`answers` on the queued message): of the pair's hand-overs that are delivered or still in doubt, the oldest that no
+other reply on its way names.
 A reply that is refused or dropped leaves its hand-over `delivered` for the next one. In a lead's queue a hand-over goes
 after the outcomes to report and before the rest (`docs/assistant/assistant.md`, "Messages from the system wait for the
 owner"). Nothing reads the hand-overs yet but the log: no route, event or client shows them.

@@ -941,6 +941,10 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 				}
 			}
 			leaves := stale || refused && !stays || !keep && (err == nil || failure == relayFailedGone)
+			if leaves && err != nil && failure == relayFailedGone {
+				// Dropped: a hand-over it carried will not be tried again, marked before the queue without it is saved.
+				s.handoverEnded(msg.Handover, handoverGone)
+			}
 			b.mu.Lock()
 			delete(b.draining, id)
 			delete(b.stuck, id)
@@ -977,9 +981,6 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			}
 			if then != nil {
 				then(context.Background())
-			}
-			if taken && err != nil && failure == relayFailedGone {
-				s.handoverEnded(msg.Handover, handoverGone) // dropped: a hand-over it carried will not be tried again
 			}
 			if stale || refused && !stays {
 				if list, err := s.sessions(context.Background(), machine); err == nil {
