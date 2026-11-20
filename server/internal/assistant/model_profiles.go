@@ -93,18 +93,19 @@ type launcherField struct {
 
 func profileValue(v string) *string { return &v }
 
-// ModelTier is what an Agent started on a tier runs on: a launcher, and its model, effort and start speed ("" for its
-// defaults). Description says when to use it (Paseo's "When to use"): the assistant reads it to pick a tier, the New
-// Agent form shows it.
+// ModelTier is what an Agent started on a tier runs on: a launcher, and its model, effort, start speed and permission
+// mode ("" for its defaults). Description says when to use it (Paseo's "When to use"): the assistant reads it to pick
+// a tier, the New Agent form shows it.
 type ModelTier struct {
-	Launcher    string `json:"launcher"`
-	Model       string `json:"model,omitempty"`
-	Effort      string `json:"effort,omitempty"`
-	Speed       string `json:"speed,omitempty"`
-	Description string `json:"description,omitempty"`
+	Launcher       string `json:"launcher"`
+	Model          string `json:"model,omitempty"`
+	Effort         string `json:"effort,omitempty"`
+	Speed          string `json:"speed,omitempty"`
+	PermissionMode string `json:"permission_mode,omitempty"`
+	Description    string `json:"description,omitempty"`
 }
 
-// runs is what the tier runs on, in a line: its launcher, then the model and effort it sets.
+// runs is what the tier runs on, in a line: its launcher, then the model, effort, speed and permission mode it sets.
 func (t ModelTier) runs() string {
 	parts := []string{t.Launcher}
 	for _, v := range []string{t.Model, t.Effort} {
@@ -114,6 +115,9 @@ func (t ModelTier) runs() string {
 	}
 	if proto.FasterSpeed(t.Speed) {
 		parts = append(parts, t.Speed)
+	}
+	if t.PermissionMode != "" {
+		parts = append(parts, t.PermissionMode)
 	}
 	return strings.Join(parts, " · ")
 }
@@ -293,7 +297,8 @@ func (s *Service) captureModels(ctx context.Context) (map[string]ModelBinding, m
 				model = "" // configured before #1644 held models to the rule: the launcher's default, as applyModel runs it
 			}
 			tiers[tier] = ModelTier{Launcher: name, Model: model, Effort: effective.Effort,
-				Description: i18n.T(l, "assistant-model_profiles.tier_"+tier)}
+				PermissionMode: effective.PermissionMode,
+				Description:    i18n.T(l, "assistant-model_profiles.tier_"+tier)}
 		}
 	}
 	launchers := map[string]LauncherModels{}

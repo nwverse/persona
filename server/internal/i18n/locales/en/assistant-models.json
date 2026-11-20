@@ -148,5 +148,7 @@
   "err_candidates_not_callable": "{provider} can’t be called directly, so it can’t be a candidate. Choose a direct API provider or a provider with an address and a key",
   "candidate_not_offered": "no provider in Settings › Model providers offers it",
   "candidate_not_direct": "{provider} cannot be called directly",
-  "candidate_provider_gone": "the provider {provider} is gone or cannot be called directly"
+  "candidate_provider_gone": "the provider {provider} is gone or cannot be called directly",
+  "err_permission_mode_launcher_only": "Permission mode can only be set on launcher-backed model uses",
+  "err_permission_mode_unsupported": "This launcher does not support the selected permission mode"
 }

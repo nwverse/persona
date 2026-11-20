@@ -148,5 +148,7 @@
   "err_candidates_not_callable": "{provider} 不能直接调用，不能作为候选。请选择直连 API 的供应商，或有地址和密钥的供应商",
   "candidate_not_offered": "设置中的模型供应商均未提供此模型",
   "candidate_not_direct": "无法直接调用供应商 {provider}",
-  "candidate_provider_gone": "供应商 {provider} 已移除或无法直接调用"
+  "candidate_provider_gone": "供应商 {provider} 已移除或无法直接调用",
+  "err_permission_mode_launcher_only": "只有启动器类型的模型用途才能设置权限模式",
+  "err_permission_mode_unsupported": "该启动器不支持所选的权限模式"
 }

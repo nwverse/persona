@@ -41,20 +41,21 @@ type modelRecord struct {
 
 // ModelProvider is one provider as Settings › Model configuration offers it: never its key.
 type ModelProvider struct {
-	ID           string                `json:"id"`
-	Name         string                `json:"name"`
-	Kind         string                `json:"kind"`
-	Agent        string                `json:"agent,omitempty"`
-	API          string                `json:"api,omitempty"`
-	ChatEffort   bool                  `json:"chat_effort,omitempty"`
-	Effort       string                `json:"effort,omitempty"`
-	Model        string                `json:"model,omitempty"`
-	Machines     []string              `json:"machines,omitempty"`
-	Hidden       bool                  `json:"hidden,omitempty"`
-	HasKey       bool                  `json:"has_key,omitempty"`
-	Models       []proto.ProviderModel `json:"models,omitempty"`
-	ModelAliases map[string]string     `json:"model_aliases,omitempty"`
-	Status       string                `json:"status,omitempty"`
+	ID              string                  `json:"id"`
+	Name            string                  `json:"name"`
+	Kind            string                  `json:"kind"`
+	Agent           string                  `json:"agent,omitempty"`
+	API             string                  `json:"api,omitempty"`
+	ChatEffort      bool                    `json:"chat_effort,omitempty"`
+	Effort          string                  `json:"effort,omitempty"`
+	Model           string                  `json:"model,omitempty"`
+	Machines        []string                `json:"machines,omitempty"`
+	Hidden          bool                    `json:"hidden,omitempty"`
+	HasKey          bool                    `json:"has_key,omitempty"`
+	PermissionModes proto.PermissionModeSet `json:"permission_modes,omitempty"`
+	Models          []proto.ProviderModel   `json:"models,omitempty"`
+	ModelAliases    map[string]string       `json:"model_aliases,omitempty"`
+	Status          string                  `json:"status,omitempty"`
 }
 
 type ModelChoice = assistantwire.ModelChoice
@@ -488,7 +489,7 @@ func (s *Service) modelProviders(ctx context.Context) []ModelProvider {
 				}
 			}
 		}
-		out = append(out, ModelProvider{ID: "launcher." + v.Name, Name: cmp.Or(v.DisplayName, v.Name), Kind: kind, Agent: agent, API: apiName, ChatEffort: kind == "api" && apiName == "chat", Effort: v.Effort, Model: v.Model, Machines: v.Machines, Hidden: v.Hidden, HasKey: v.HasKey, Models: v.Models, ModelAliases: aliases})
+		out = append(out, ModelProvider{ID: "launcher." + v.Name, Name: cmp.Or(v.DisplayName, v.Name), Kind: kind, Agent: agent, API: apiName, ChatEffort: kind == "api" && apiName == "chat", Effort: v.Effort, Model: v.Model, Machines: v.Machines, Hidden: v.Hidden, HasKey: v.HasKey, PermissionModes: v.PermissionModes, Models: v.Models, ModelAliases: aliases})
 	}
 	if !slices.ContainsFunc(out, func(p ModelProvider) bool { return p.ID == "launcher.claude" }) {
 		p := ModelProvider{ID: "launcher.claude", Name: mc(l, "provider_claude_default"), Kind: "launcher", Agent: "claude"}

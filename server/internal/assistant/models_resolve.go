@@ -182,7 +182,7 @@ func (s *Service) fallbackAPIProvider(ctx context.Context) string {
 	return fallbackAPIProviderFrom(s.storedLaunchers(ctx), s.hiddenLaunchers(ctx))
 }
 
-// mergeModel puts over's choices on base: another provider starts from nothing (its model and effort are its own).
+// mergeModel puts over's choices on base: another provider starts from nothing (its model, effort and permission mode are its own).
 func mergeModel(base, over ModelBinding) ModelBinding {
 	if over.Provider != "" && over.Provider != base.Provider {
 		base = ModelBinding{Provider: over.Provider, ConfigDir: base.ConfigDir}
@@ -192,6 +192,9 @@ func mergeModel(base, over ModelBinding) ModelBinding {
 	}
 	if over.Effort != "" {
 		base.Effort = over.Effort
+	}
+	if over.PermissionMode != "" {
+		base.PermissionMode = over.PermissionMode
 	}
 	if over.ConfigDir != "" {
 		base.ConfigDir = over.ConfigDir
@@ -409,7 +412,8 @@ func (s *Service) modelFingerprint(ctx context.Context, id string) (string, erro
 
 // modelBindingFingerprint changes when what the binding runs on does (the provider's settings, the key sealed anew).
 func (s *Service) modelBindingFingerprint(ctx context.Context, b ModelBinding) string {
-	b.ConfigDir = "" // where new conversations start, not what this binding runs on (#4633)
+	b.ConfigDir = ""      // where new conversations start, not what this binding runs on (#4633)
+	b.PermissionMode = "" // applies to new starts/conversations, does not restart running ones
 	raw, _ := json.Marshal(b)
 	if strings.HasPrefix(b.Provider, "legacy.") {
 		v, _ := json.Marshal(s.legacyModelConfig(ctx, b.Provider))
