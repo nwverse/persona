@@ -240,6 +240,15 @@ struct AssistantActionBarTests {
         }
     }
 
+    /// The next conversation shares the action row's capsule, not a second, taller strip (#7770).
+    @Test(arguments: [DynamicTypeSize.large, .xxxLarge, .accessibility2])
+    func nextConversationUsesTheSameCapsuleHeight(size: DynamicTypeSize) {
+        let all = height(Text("All 7").dockCapsule(), size)
+        let next = height(NextNeedsYouCapsule(title: "A conversation whose title must yield before the row wraps", open: {}), size)
+        #expect(next > 0)
+        #expect(abs(next - all) <= 1, "Next \(next) pt, the dock capsule \(all) pt at \(size)")
+    }
+
     /// At the default text size the capsule is the caption's line (footnote, 13 pt) plus 6 pt above and below: 28 pt
     /// for Latin text, nowhere near the 44 pt tap-target buttons the bar must not become.
     @Test func defaultCapsuleIsTheCaptionLineAndItsPadding() {

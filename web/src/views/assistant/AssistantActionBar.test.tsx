@@ -6,8 +6,8 @@ import { formatDate, t } from "../../i18n";
 import { getFeedState, loadFeed, type FeedItem, type TaskPlan } from "../../lib/feed";
 import { setAgentOpenMode } from "../../lib/agent-open";
 import { closePanel, getPanel } from "../../lib/panel";
+import { endInteraction, getState, putTodo, refresh, refreshTodos, reset, upsertSession } from "../../lib/store";
 import { loadPages } from "../../lib/lazy-page";
-import { getState, putTodo, refresh, refreshTodos, reset, upsertSession } from "../../lib/store";
 import type { Todo } from "../../lib/todos";
 import { stateName } from "../../lib/state-labels";
 import { usageLimitLabel } from "../../lib/usage-limit";
@@ -364,6 +364,50 @@ describe("Assistant Needs you / In progress trays", () => {
     // the task's agent is in its row, not a row of its own
     expect(host.querySelector("[data-running-agent]")).toBeNull();
     expect(trays()).not.toContain("Demo agent");
+  });
+
+  it("puts the next chat's waiting card in the same capsule row after an answer here, and folds it while streaming (#7770)", async () => {
+    const other = { id: "ix-other", machine_id: "elsewhere", session_id: "waiting", session_title: "Another task", kind: "question", created_at: at, questions: [{ question: "Which option?", options: [] }] } as Interaction;
+    moreInteractions = [other];
+    await act(async () => refresh());
+    const mine = { id: "ix-answered-here", machine_id: "demo", session_id: conversation, kind: "question", created_at: at, questions: [{ question: "Done here?", options: [] }] } as Interaction;
+    act(() => endInteraction(mine.id, { ix: mine, resolution: { answers: { q: "A" } } }));
+    const offerNext = { mid: "demo", sid: conversation };
+    act(() => root.render(<StrictMode><AssistantActionBar conversation={conversation} offerNext={offerNext} />{feed.map((item) => <FeedLineView key={item.id} item={item} simplified />)}</StrictMode>));
+    const next = host.querySelector<HTMLElement>("[data-assistant-actionbar] [data-chat-next-waiting]")!;
+    expect(next).not.toBeNull();
+    expect(next.getAttribute("data-compact")).toBe("true");
+    expect(next.textContent).toContain("Another task");
+    expect(next.parentElement).toBe(entry("needs").parentElement);
+    // Streaming folds the whole row, but keeps the component mounted with both entries' state intact.
+    act(() => root.render(<StrictMode><AssistantActionBar conversation={conversation} offerNext={offerNext} streaming />{feed.map((item) => <FeedLineView key={item.id} item={item} simplified />)}</StrictMode>));
+    expect(host.querySelector("[data-chat-next-waiting]")).toBeNull();
+    expect(host.querySelector<HTMLElement>("[data-assistant-actionbar]")!.hidden).toBe(true);
+    expect(entries().map((button) => button.getAttribute("data-tray-entry"))).toEqual(["needs", "running"]);
+    // A pending card of this conversation takes priority over the onward link.
+    act(() => root.render(<StrictMode><AssistantActionBar conversation={conversation} offerNext={offerNext} ownAsks={[mine]} />{feed.map((item) => <FeedLineView key={item.id} item={item} simplified />)}</StrictMode>));
+    expect(host.querySelector("[data-chat-next-waiting]")).toBeNull();
+  });
+
+  it("hides a detailed tray while streaming without unmounting it or allowing events to reopen it (#7770)", () => {
+    act(() => entry("running").click());
+    const section = host.querySelector<HTMLElement>("section")!;
+    expect(section.hidden).toBe(false);
+    const draw = (streaming: boolean) => <StrictMode><AssistantActionBar conversation={conversation} streaming={streaming} />{feed.map((item) => <FeedLineView key={item.id} item={item} simplified />)}</StrictMode>;
+    act(() => root.render(draw(true)));
+    expect(section.hidden).toBe(true);
+    expect(host.querySelector<HTMLElement>("[data-assistant-actionbar]")!.hidden).toBe(true);
+    expect(entry("running").getAttribute("aria-expanded")).toBe("false");
+    // Neither a manual tap nor an automatic pending/start event can cover the growing answer.
+    act(() => entry("running").click());
+    act(() => window.dispatchEvent(new CustomEvent("persona:task-pending", { detail: conversation })));
+    expect(section.hidden).toBe(true);
+    expect(host.querySelector("section")).toBe(section);
+    // The same mounted tray and its local state return when streaming ends.
+    act(() => root.render(draw(false)));
+    expect(section.hidden).toBe(false);
+    expect(host.querySelector<HTMLElement>("[data-assistant-actionbar]")!.hidden).toBe(false);
+    expect(entry("running").getAttribute("aria-expanded")).toBe("true");
   });
 
   it("draws the dispatched Agent as a hand-off card that opens it in the side panel, or its page set to Full page, not the In progress tray (#3700, #5096, #5424)", () => {

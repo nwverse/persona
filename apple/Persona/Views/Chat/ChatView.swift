@@ -2138,6 +2138,8 @@ struct ChatView: View {
 
     /// Streamed words are drawn after the lines (`ChatLiveText`'s rule: not once the message is in the rows).
     private var liveShown: Bool { ChatLiveText.shows(store) }
+    /// A reply is actively streaming, not merely a tool or the composer working: auxiliary task chrome yields to it (#7770).
+    private var streamingReply: Bool { drawsLive && liveShown && !store.liveDone }
     /// The chat draws live text: the assistant's in the main chat, and an agent's as Claude shows it in any chat of it
     /// (docs/integrations/claude-integration.md "Live replies (MessageDisplay)"), the same way.
     private var drawsLive: Bool { style == .assistant || store.liveIsAgents }
@@ -2803,7 +2805,9 @@ struct ChatView: View {
             let newest = lines.last?.id ?? ""
             let shown = Set(scratch.visibleLines)
             let lastShown = lines.lastIndex { shown.contains($0.id) }.map { lines.count - 1 - $0 } ?? -1
-            Text("bottom=\(follow.near ? 1 : 0) follows=\(follow.follows ? 1 : 0) mode=\(follow.mode) frozen=\(frozen == nil ? 0 : 1) arrow=\(arrowShows ? 1 : 0) newestShown=\(shown.contains(newest) ? 1 : 0) behind=\(lastShown) items=\(store.items.count) withheld=\(store.items.count - (frozen.map { f in Self.prefixCount(store.items) { ($0.seq, $0.part) <= (f.seq, f.part) } } ?? store.items.count)) key=\(key.machineID)/\(key.sessionID)")
+            let reading = lines.first { shown.contains($0.id) }
+            let readingY = reading.flatMap { scratch.workHeadY[$0.id] ?? scratch.lineY[$0.id] } ?? -1
+            Text("bottom=\(follow.near ? 1 : 0) follows=\(follow.follows ? 1 : 0) mode=\(follow.mode) frozen=\(frozen == nil ? 0 : 1) arrow=\(arrowShows ? 1 : 0) newestShown=\(shown.contains(newest) ? 1 : 0) behind=\(lastShown) items=\(store.items.count) withheld=\(store.items.count - (frozen.map { f in Self.prefixCount(store.items) { ($0.seq, $0.part) <= (f.seq, f.part) } } ?? store.items.count)) reading=\(reading?.id ?? "none") readingY=\(Int(readingY.rounded())) key=\(key.machineID)/\(key.sessionID)")
                 .font(Theme.Font.label).opacity(Self.scrollProbeVisible ? 1 : 0.01).allowsHitTesting(false)
                 .accessibilityIdentifier("chat.scrollState")
         }
@@ -2863,8 +2867,15 @@ struct ChatView: View {
         }
         // Out of the way of a voice call (docs/assistant/voice.md 6.2「通话期间」), back when it ends.
         VoiceCallHides(key: key) {
-            // Needs You / In Progress in the dock's capsules, each opening its tray (#3393), on every device.
-            AssistantActionBar(conversation: conversation, key: key, computer: computerActivity)
+            // Needs You / In Progress and the next waiting conversation share one low row (#7770). Active reply text
+            // takes its space without destroying tray or answer state; the row returns when the stream settles.
+            let next = nextNeedsYouSession
+            AssistantActionBar(conversation: conversation, key: key, computer: computerActivity,
+                               nextTitle: next.map { $0.assistant ? ($0.title.isEmpty ? model.assistantShownName : $0.title) : $0.displayTitle },
+                               openNext: next.map { item in { openNext(item) } })
+                .opacity(streamingReply ? 0 : 1)
+                .allowsHitTesting(!streamingReply)
+                .accessibilityHidden(streamingReply)
             RouteChip(conversation: conversation)
             // Items handed to the main conversation that are still open: "Wrap up" asks it for the final write-back (#5932).
             if model.assistantMain == key { WrapUpChips(key: key) }
@@ -2962,8 +2973,8 @@ struct ChatView: View {
                 if let answered = model.delegated(for: key).last {
                     DelegatedCard(answer: answered)
                 }
-                // The last card was answered: one low-key entry to the next conversation that needs you (#4348).
-                if let next = nextNeedsYouSession {
+                // Agent chats keep the standalone post-resolution row; the Assistant's is inside its action bar (#7770).
+                if style != .assistant, let next = nextNeedsYouSession {
                     NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.assistantShownName : next.title) : next.displayTitle) {
                         openNext(next)
                     }
@@ -5540,6 +5551,40 @@ struct NextNeedsYouStrip: View {
     }
 }
 
+/// The same next-conversation entry inside the AssistantActionBar's one capsule row (#7770). Long titles yield first;
+/// at narrow widths and larger text the row keeps its short label, then just its icon, rather than wrapping.
+struct NextNeedsYouCapsule: View {
+    var title: String
+    var open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            ViewThatFits(in: .horizontal) {
+                content(title: true, words: true)
+                content(title: false, words: true)
+                content(title: false, words: false)
+            }
+            .dockCapsule(.waiting(.needsYou))
+            .background(Theme.pageBackground, in: .capsule)
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text("Next Needing You"))
+        .accessibilityValue(Text(title))
+        .accessibilityIdentifier("chat.nextNeedsYou")
+        .layoutPriority(-1)
+    }
+
+    @ViewBuilder private func content(title showTitle: Bool, words showWords: Bool) -> some View {
+        HStack(spacing: Theme.Space.xs) {
+            ThemedIcon(Theme.Icon.needsYou).font(Theme.Font.labelStrong)
+            if showWords { Text("Next Needing You").fixedSize() }
+            if showTitle { Text(title).lineLimit(1).truncationMode(.tail).layoutPriority(-1) }
+            ThemedIcon(Theme.Icon.forward).font(Theme.Font.label)
+        }
+    }
+}
+
 /// Its host stopped the last turn on an error it will not retry by itself (a botmux notice): what went wrong, a retry
 /// (a message to go on, delivered by the host) and its Feishu topic. Not a wait for the user: no 「需要你」.
 struct FailureNote: View {
@@ -7077,7 +7122,7 @@ struct QueueStrip: View {
     @Environment(AppModel.self) private var model
     let key: SessionKey
     var queued: [String]
-    /// The user's own messages come first; relayed ones are only shown and copied.
+    /// The user's own messages come first; messages from other conversations contribute only to the total (#7770).
     var own: Int
     /// Messages sent from this phone while the agent worked that Claude has not reported queued yet (#1461): drawn
     /// after the queued ones as sending, waiting for the network or failed, with the actions each state has.
@@ -7094,57 +7139,78 @@ struct QueueStrip: View {
     private var agent: String { persona ?? agentName }
     @State private var busy = false
     @State private var expanded = false
-    /// Messages from other conversations collapse into one line until the owner opens them (#6394).
-    @State private var relayedExpanded = false
     /// One row's height with its spacing, as drawn (it follows the text size and the rows' line counts).
     @State private var rowHeight: CGFloat = 0
     @Environment(\.dynamicTypeSize) private var typeSize
     private static let visibleRows: CGFloat = 3
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            ScrollView {
-                rows
-            }
-            .scrollBounceBehavior(.basedOnSize)
-            // Its rows' own height until one is measured, not what it is offered: the footer is laid out first (#3703).
-            .fixedSize(horizontal: false, vertical: rowHeight == 0)
-            .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(drawnCount), Self.visibleRows) : nil)
-            .padding(.top, Theme.Space.sm)
-        } label: {
-            Group {
-                if typeSize >= Theme.interfaceLargestTypeSize {
-                    // At the interface's largest size, where the accessibility sizes land too, Send Now (which keeps its
-                    // width) left the title a few characters and took the tap that opens the strip (#4846, #7730):
-                    // unless both fit on one line, the title wraps and Send Now has the line under it. Smaller sizes
-                    // keep the one line, the title cut short where it must be.
-                    ViewThatFits(in: .horizontal) {
-                        oneLine
-                        VStack(alignment: .leading, spacing: Theme.Space.sm) {
-                            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
-                                tray
-                                title.multilineTextAlignment(.leading) // the label centers wrapped lines
-                            }
-                            sendNowButton
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                } else {
-                    oneLine
+        Group {
+            if drawnCount > 0 {
+                DisclosureGroup(isExpanded: $expanded) {
+                    Color.clear.frame(height: 0)
+                } label: {
+                    summary
                 }
+            } else {
+                // Relayed-only messages still count, but there are no rows to disclose and no Send Now action.
+                summary
             }
-            .font(Theme.Font.labelStrong)
-            .foregroundStyle(.secondary)
-            .contentShape(.rect)
         }
         .tint(.secondary)
         .padding(Theme.Space.m)
         .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
-        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .transition(.opacity)
         .accessibilityIdentifier("queue-strip")
+        // Expanded rows float behind the summary instead of changing the footer height (#7770): its height and the
+        // newest end stay fixed, and the one real Send Now button remains above the rows in layout and hit order.
+        .background(alignment: .top) {
+            if expanded && drawnCount > 0 {
+                ScrollView {
+                    rows
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .fixedSize(horizontal: false, vertical: rowHeight == 0)
+                .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(drawnCount), Self.visibleRows) : nil)
+                .padding(.horizontal, Theme.Space.m)
+                .padding(.bottom, Theme.Space.sm)
+                .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
+                .alignmentGuide(.top) { $0[.bottom] }
+                .transition(.opacity)
+            }
+        }
+        .onChange(of: drawnCount) { _, new in if new == 0 { expanded = false } }
     }
 
     private var tray: some View { ThemedIcon("tray.and.arrow.down").accessibilityHidden(true) }
+
+    @ViewBuilder private var summary: some View {
+        Group {
+            if typeSize >= Theme.interfaceLargestTypeSize {
+                // At the interface's largest size, where the accessibility sizes land too, Send Now (which keeps its
+                // width) left the title a few characters and took the tap that opens the strip (#4846, #7730):
+                // unless both fit on one line, the title wraps and Send Now has the line under it. Smaller sizes
+                // keep the one line, the title cut short where it must be.
+                ViewThatFits(in: .horizontal) {
+                    oneLine
+                    VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
+                            tray
+                            title.multilineTextAlignment(.leading) // the label centers wrapped lines
+                        }
+                        sendNowButton
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                oneLine
+            }
+        }
+        .font(Theme.Font.labelStrong)
+        .foregroundStyle(.secondary)
+        .contentShape(.rect)
+    }
+
     private var title: Text { Text("\(total) queued · \(agent) will handle them in order [Queue Strip]") }
 
     /// The tray, the title on one line and Send Now at the end.
@@ -7242,46 +7308,13 @@ struct QueueStrip: View {
         .accessibilityIdentifier("queue-sending-item")
     }
 
-    /// Messages other conversations sent in, behind the owner's own in the queue (#4342).
-    private var relayedCount: Int { max(queued.count - own, 0) }
-    /// How many rows the opened strip actually draws, for measuring one row's height (a folded relayed block is one line).
-    private var drawnCount: Int {
-        own + sending.count + (relayedCount > 0 ? (relayedExpanded ? relayedCount : 1) : 0)
-    }
+    /// How many rows the opened strip draws: only the owner's messages and this phone's pending sends (#7770).
+    private var drawnCount: Int { own + sending.count }
 
     private var rows: some View {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
             ForEach(0..<own, id: \.self) { i in
                 ownRow(i)
-            }
-            if relayedCount > 0 {
-                Button {
-                    withAnimation(Theme.Motion.state) { relayedExpanded.toggle() }
-                } label: {
-                    HStack(spacing: Theme.Space.s) {
-                        ThemedIcon(Theme.Icon.sendNow).font(Theme.Font.label).foregroundStyle(.secondary)
-                        Text("\(relayedCount) messages from other conversations are waiting [Queue Strip]")
-                            .font(Theme.Font.secondary)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                        ThemedIcon(Theme.Icon.expand)
-                            .font(Theme.Font.captionStrong)
-                            .foregroundStyle(.secondary)
-                            .rotationEffect(.degrees(relayedExpanded ? 180 : 0))
-                    }
-                    .padding(.horizontal, Theme.Space.m)
-                    .padding(.vertical, Theme.Space.s)
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("queue-relayed-summary")
-                .accessibilityLabel(Text("\(relayedCount) messages from other conversations are waiting [Queue Strip]"))
-                if relayedExpanded {
-                    ForEach(own..<queued.count, id: \.self) { i in
-                        relayedRow(i)
-                    }
-                }
             }
             ForEach(Array(sending.enumerated()), id: \.element.id) { j, msg in
                 sendingRow(msg, number: queued.count + j + 1)
@@ -7339,38 +7372,6 @@ struct QueueStrip: View {
         .accessibilityIdentifier("queue-item")
         .accessibilityHint(Text("Edit, copy or delete"))
         .accessibilityValue(photos > 0 ? Text("\(photos) images") : Text(""))
-    }
-
-    /// One message relayed from another conversation: shown only, the only action is copy (#4342).
-    @ViewBuilder
-    private func relayedRow(_ i: Int) -> some View {
-        let q = queued[i]
-        let draft = QueuedDraft(q)
-        Menu {
-            Button { UIPasteboard.general.string = draft.text.isEmpty ? q : draft.text } label: { Label("Copy [Readiness Views d37380]", systemImage: Theme.Icon.copy) }
-        } label: {
-            HStack(alignment: .top, spacing: Theme.Space.s) {
-                Text("\(i + 1)")
-                    .font(Theme.Font.labelHeavy.monospacedDigit())
-                    .foregroundStyle(Theme.accent)
-                    .scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge)
-                    .background(Theme.accent.opacity(0.14), in: .circle)
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    QueuedWords(draft: draft)
-                    Text("Arrives when this turn ends [Queue Strip]")
-                        .font(Theme.Font.caption).foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-                ThemedIcon(Theme.Icon.more).font(Theme.Font.label).foregroundStyle(.secondary).padding(.top, Theme.Space.xs)
-            }
-            .padding(.horizontal, Theme.Space.m)
-            .padding(.vertical, Theme.Space.s)
-            .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
-        }
-        .disabled(busy)
-        .accessibilityLabel(Text("Item \(i + 1): \(QueuedWords.spoken(draft)), arrives when this turn ends [Queue Strip]"))
-        .accessibilityIdentifier("queue-item")
-        .accessibilityHint(Text("Copy [Readiness Views d37380]"))
     }
 
     private func act(_ i: Int, delete: Bool) {

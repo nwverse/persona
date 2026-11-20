@@ -445,6 +445,9 @@ struct AssistantActionBar: View {
     var key: SessionKey? = nil
     /// The conversation's model operating a Mac (#1343): its pill after the entries.
     var computer: ComputerActivity? = nil
+    /// Another conversation to open after this one's last card was answered (#4348), in the same row (#7770).
+    var nextTitle: String? = nil
+    var openNext: (() -> Void)? = nil
     @State private var open: ActionTray?
     /// The open tray's rows, measured: the tray is as tall as they are, up to its cap.
     @State private var listHeight: CGFloat = 0
@@ -475,19 +478,15 @@ struct AssistantActionBar: View {
         let row = entryRow
         let inMain = conversation == AppModel.shared.assistantMain?.sessionID && AppModel.shared.api != nil
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            if let open {
-                tray(open, content)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if heldOpen, let held {
-                PushInterceptsTray(model: held) { withAnimation(Theme.Motion.state) { heldOpen = false } }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
             // Wider than the bar (Finished beside the two, Held Pushes and the computer's pill, a large text size), the
             // entries scroll sideways instead of running off its edge, as on the web and Android (#10922); while they fit
             // nothing moves.
             ScrollView(.horizontal, showsIndicators: false) {
                 row {
                     ForEach(content.entries(open: open)) { entry($0, count: content.count($0)) }
+                    if let nextTitle, let openNext {
+                        NextNeedsYouCapsule(title: nextTitle, open: openNext)
+                    }
                     if inMain, let held {
                         PushInterceptsEntry(model: held, open: heldOpen) {
                             withAnimation(Theme.Motion.state) {
@@ -508,6 +507,21 @@ struct AssistantActionBar: View {
             #endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // An open tray floats above the entry row instead of changing the footer's height (#7770). Its own expanded
+        // rows change only the overlay too, so a chat at either the newest end or a historical row never gets pushed.
+        .overlay(alignment: .top) {
+            if let open {
+                tray(open, content)
+                    .padding(.bottom, Theme.Space.s)
+                    .alignmentGuide(.top) { $0[.bottom] }
+                    .transition(.opacity)
+            } else if heldOpen, let held {
+                PushInterceptsTray(model: held) { withAnimation(Theme.Motion.state) { heldOpen = false } }
+                    .padding(.bottom, Theme.Space.s)
+                    .alignmentGuide(.top) { $0[.bottom] }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
         // No fade of its own: the chat runs on behind the bar and fades out there (`FooterFog`, #3696).
         .onChange(of: conversation) { open = nil; expanded = []; drawn = []; planChoices = [:] }
         // One tray at a time: Needs You's or In Progress' opening closes the held pushes'.

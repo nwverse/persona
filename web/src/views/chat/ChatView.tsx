@@ -2318,7 +2318,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             {voiceState === "live" && <TaskQuestions conversation={sid} />}
             {/* The conversation's own cards are in the chat under the bar (#4883, as iOS): Needs you counts them and
                 lists a row for each that closes the tray onto its card. */}
-            {voiceState !== "live" && <AssistantActionBar key={sid} conversation={sid} ownAsks={interactions} />}
+            {voiceState !== "live" && <AssistantActionBar key={sid} conversation={sid} ownAsks={interactions} streaming={!!tr.streaming} offerNext={assistant || inPage ? { mid, sid } : undefined} />}
             {voiceState !== "live" && <RouteChip conversation={sid} />}
             {/* items handed to this conversation that are still open: "Wrap up" asks it for the final write-back (#5932) */}
             {voiceState !== "live" && isMain && <Suspense fallback={null}><LazyWrapUpChips conversation={sid} /></Suspense>}

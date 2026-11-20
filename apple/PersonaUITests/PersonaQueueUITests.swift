@@ -1,6 +1,6 @@
 import XCTest
 
-/// A Persona chat's queued messages (#4475): the user's own messages and the ones relayed from other conversations.
+/// A Persona chat's queued messages (#4475): the user's own rows and actions; relayed messages only add to the total (#7770).
 /// The mock (`MOCK_PERSONA_QUEUE=1`, `PERSONA_MOCK_HUB`) has two of the user's messages, one with a photo, and one relayed.
 final class PersonaQueueUITests: XCTestCase {
     private var hub: String!
@@ -90,30 +90,18 @@ final class PersonaQueueUITests: XCTestCase {
         try shot(app, "sent")
     }
 
-    @MainActor func testRelayedMessagesAreReadOnly() throws {
+    @MainActor func testRelayedMessagesOnlyCountTowardTheCollapsedSummary() throws {
         let app = launch()
         let strip = app.descendants(matching: .any)["queue-strip"].firstMatch
         XCTAssertTrue(strip.waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertTrue(strip.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "排队中 3 条")).firstMatch.exists)
+        XCTAssertFalse(app.buttons["queue-relayed-summary"].exists, "another conversation gets no insertion row above the composer")
+        XCTAssertEqual(app.buttons.matching(identifier: "queue-item").count, 0, "a fresh queue is collapsed")
         if strip.elementType == .button { strip.tap() } else { strip.buttons.firstMatch.tap() }
-        // Messages from other conversations fold into one line (#6394) that says how many, in words: never the catalog
-        // key's context (#6703).
-        let fold = app.buttons["queue-relayed-summary"]
-        XCTAssertTrue(fold.waitForExistence(timeout: 5), "no fold row for the relayed message:\n\(app.debugDescription)")
-        XCTAssertEqual(fold.label, "还有 1 条别的对话在排队", "the fold row's words")
-        XCTAssertEqual(app.buttons.matching(identifier: "queue-item").count, 2, "the relayed message is folded away")
-        try shotLightAndDark(app, "relayed-fold")
-        fold.tap()
-        let relayed = app.buttons.matching(identifier: "queue-item").element(boundBy: 2)
-        XCTAssertTrue(relayed.waitForExistence(timeout: 5), "the fold row did not open:\n\(app.debugDescription)")
-        XCTAssertTrue(relayed.label.contains("对话空闲后送达"), "the relayed row says when it arrives:\n\(relayed.debugDescription)")
-        try shotLightAndDark(app, "relayed-open")
-        relayed.tap()
-        XCTAssertTrue(app.buttons["拷贝"].waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertFalse(app.buttons["撤回编辑"].exists, "a relayed message cannot be taken back")
-        XCTAssertFalse(app.buttons["删除"].exists, "a relayed message cannot be deleted")
-        XCTAssertFalse(app.buttons["queue-move-up"].exists)
-        XCTAssertFalse(app.buttons["queue-move-down"].exists)
-        try shot(app, "relayed-menu")
+        XCTAssertEqual(app.buttons.matching(identifier: "queue-item").count, 2, "only the owner's two messages open")
+        XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "来自「早报")).firstMatch.exists)
+        XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "对话空闲后送达")).firstMatch.exists)
+        try shotLightAndDark(app, "relayed-count-only")
     }
 
     @MainActor func testTakeBackRestoresWordsAndPhotos() throws {
@@ -197,12 +185,13 @@ final class PersonaQueueUITests: XCTestCase {
         XCTAssertTrue(sendNow.waitForExistence(timeout: 5), app.debugDescription)
         sendNow.tap() // at one tap (#7169)
         XCTAssertTrue(sendNow.waitForNonExistence(timeout: 10), "one tap on Send Now did not send:\n\(app.debugDescription)")
-        XCTAssertTrue(strip.exists, "the relayed message stays listed")
-        let fold = app.buttons["queue-relayed-summary"]
-        XCTAssertTrue(fold.waitForExistence(timeout: 5), "the relayed message stays, folded:\n\(app.debugDescription)")
-        fold.tap()
-        XCTAssertTrue(items.element(boundBy: 0).waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertTrue(items.element(boundBy: 0).label.contains("来自「早报"), "only the relayed message remains")
+        XCTAssertTrue(strip.exists, "the relayed message still counts toward the queue summary")
+        XCTAssertTrue(strip.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "排队中 1 条")).firstMatch.exists)
+        XCTAssertFalse(app.buttons["queue-relayed-summary"].exists)
+        XCTAssertEqual(items.count, 0, "a relayed-only queue has no rows to expand")
+        XCTAssertNotEqual(strip.elementType, .button, "a relayed-only summary must not expose a no-op disclosure")
+        XCTAssertEqual(strip.buttons.count, 0, "a relayed-only summary has no Send Now ghost or disclosure button")
+        XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "来自「早报")).firstMatch.exists)
 
         let assistant = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(string: hub + "/api/v1/assistant")!)) as? [String: Any]
         let conversations = assistant?["conversations"] as? [[String: Any]]
@@ -211,6 +200,17 @@ final class PersonaQueueUITests: XCTestCase {
         XCTAssertEqual((main?["queued"] as? [String])?.count, 1)
         XCTAssertTrue((main?["queued"] as? [String])?.first?.contains("来自「早报") == true)
         try shot(app, "relayed-only")
+
+        // A new owner message later must not reopen the panel left by the old expanded state (#7770).
+        let collapsedHeight = strip.frame.height
+        let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
+        field.tap()
+        field.typeText("后来新增的主人消息")
+        app.buttons["发送"].tap()
+        XCTAssertTrue(strip.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "排队中 2 条")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(items.count, 0, "the new owner message stays collapsed until the user taps again")
+        XCTAssertEqual(app.buttons.matching(identifier: "queue-sending-item").count, 0, "a pending send stays collapsed too")
+        XCTAssertEqual(strip.frame.height, collapsedHeight, accuracy: 0.5, "the count alone must not change the collapsed height")
     }
 
     @MainActor func testPhotoMarkForMessageSentFromThisDevice() throws {

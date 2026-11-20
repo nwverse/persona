@@ -70,7 +70,7 @@ import { feedWake, HandoffCard, HandoffCards, taskHandoffs } from "./Handoff";
 import { latestReview, parkedLine, progressLine } from "../../lib/supervision";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
 import { useChosenManager, useLinkManager } from "../../lib/manager-choice";
-import { AnsweredSummary, InteractionCard, underCard } from "../chat/Interactions";
+import { AnsweredSummary, InteractionCard, NextWaitingRow, underCard } from "../chat/Interactions";
 import type { RuleCard } from "../../lib/rule-suggestion";
 import { cardLine } from "../chat/dock";
 import { interactionKicker } from "../../lib/row-line";
@@ -1114,7 +1114,14 @@ function OwnAskRow({ ix, onOpen }: { ix: Interaction; onOpen: () => void }) {
   );
 }
 
-export const AssistantActionBar = memo(function AssistantActionBar({ conversation, ownAsks = NO_ASKS }: { conversation: string; ownAsks?: Interaction[] }) {
+export const AssistantActionBar = memo(function AssistantActionBar({ conversation, ownAsks = NO_ASKS, streaming, offerNext }: {
+  conversation: string;
+  ownAsks?: Interaction[];
+  /** A growing answer keeps the one-line entries, but hides detailed trays and the next-chat link (#7770). */
+  streaming?: boolean;
+  /** In a full-page Assistant chat, offer another chat's next request after an answer here. */
+  offerNext?: { mid: string; sid: string };
+}) {
   const [tray, setTrayNow] = useState<AssistantTray | null>(null);
   // the open tray filling the chat column (#4656), for going through many cards; closing or switching trays undoes it
   const [expanded, setExpanded] = useState(false);
@@ -1123,6 +1130,8 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const bar = useRef<HTMLDivElement>(null);
   const lastOwn = useRef<string | null>(null);
   const setTray = (next: AssistantTray | null) => {
+    // Streaming must not open or replace a tray. An already open one stays mounted while hidden, preserving any draft.
+    if (streaming && next) return;
     setTrayNow(next);
     setExpanded(false);
     setOpenRows(new Set());
@@ -1222,7 +1231,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
       window.removeEventListener("persona:task-pending", needs);
       window.removeEventListener("persona:task-start", needs);
     };
-  }, [conversation]);
+  }, [conversation, streaming]);
   const labels: Record<AssistantTray, string> = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running"), parked: t("todos.section_parked"), review: t("assistant-tasks.tray_review"), finished: t("assistant-tasks.tray_finished") };
   // Parked is a peer, not folded inside In progress; keep an emptied tray reachable until it closes. Finished comes last,
   // as what just finished comes after the unfinished work on the To-dos page (#10922).
@@ -1243,14 +1252,24 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     setTray(null);
     entry?.focus();
   };
+  const answeredHere = offerNext && Object.values(answered).some((card) =>
+    card.ix.machine_id === offerNext.mid && (card.ix.session_id === offerNext.sid || card.ix.folded_under === offerNext.sid));
+  const next = offerNext && answeredHere && !ownAsks.length && !streaming ? (
+    <NextWaitingRow
+      mid={offerNext.mid}
+      sid={offerNext.sid}
+      compact
+      className={cx(DOCK_CAPSULE, "max-w-60 gap-2 bg-field font-medium text-ink transition-colors hover:bg-hover")}
+    />
+  ) : null;
   return (
     // shrinks with the dock (ChatView's DOCK_MAX): an open tray gives up its height and scrolls inside, instead of
     // standing taller than the dock and leaving its bottom (a card's answer row) and the entries under the composer
-    <div ref={bar} className={cx("flex min-h-0 flex-col gap-2", ownAsks.length > 0 && !tray ? "shrink-0" : "shrink")} data-assistant-actionbar onKeyDownCapture={onTrayKey}>
+    <div ref={bar} className={cx("flex min-h-0 flex-col gap-2", ownAsks.length > 0 && !tray ? "shrink-0" : "shrink")} data-assistant-actionbar hidden={streaming} onKeyDownCapture={onTrayKey}>
       {tray && (
         // its height follows what is visible (styles.css: an open tray lets the dock take most of it); the header stays
         // and the list scrolls under it, so a plan card's Start (sticky to the list's bottom) is never under the header
-        <section id={trayId} aria-label={labels[tray]} data-expanded={expanded || undefined} className="assistant-action-tray flex min-h-0 flex-col overflow-hidden rounded-card bg-surface shadow-card">
+        <section id={trayId} aria-label={labels[tray]} hidden={streaming} data-expanded={expanded || undefined} className="assistant-action-tray flex min-h-0 flex-col overflow-hidden rounded-card bg-surface shadow-card">
           <div className="flex shrink-0 items-center gap-2 bg-surface px-3 py-2 text-sm"><h2 className="min-w-0 flex-1 truncate font-semibold">{labels[tray]}</h2><Button onClick={() => setBoard(true)}>{t("assistant-tasks.all")}</Button><IconButton icon={expanded ? "collapse" : "expand"} label={t(expanded ? "assistant-tasks.tray_restore" : "assistant-tasks.tray_expand")} onClick={() => setExpanded((v) => !v)} /><IconButton icon="x" label={t("ui-atoms.close")} onClick={() => setTray(null)} /></div>
           <div data-tray-list className="min-h-0 grow overflow-y-auto overscroll-contain">
           {tray === "running" && <div className="divide-y divide-line">
@@ -1303,7 +1322,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
           </button>
         )}
         {entryKeys.map((key) => {
-          const open = tray === key;
+          const open = !streaming && tray === key;
           // An empty entry is drawn quiet (grey), Needs you and In progress alike, and still opens its "nothing here" line.
           const quiet = !counts[key];
           return (
@@ -1323,6 +1342,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             </button>
           );
         })}
+        {next}
         {main === conversation && <Suspense fallback={null}><HeldPushesEntry className={cx(DOCK_CAPSULE, "gap-2 bg-field font-medium text-ink-2 hover:bg-hover")} /></Suspense>}
       </div>
       {board && <Suspense fallback={null}><TaskBoard open conversation={conversation} onClose={() => setBoard(false)} /></Suspense>}

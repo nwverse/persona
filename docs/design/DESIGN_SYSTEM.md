@@ -473,23 +473,29 @@ on-demand model panel, not the everyday Assistant home (#6887).
   context chip. Opening either picker refreshes the inventory and can display the composer's last same-scope result
   while waiting. Fresh results preserve the selected identity while it is available.
 - Editing state (web, #4503): editing the last message puts its words and quotes back into the box under a one-line bar at the box's top, above the context chips and quote bars. The bar has an accent pencil, **Editing last message** (`ink-2`, medium), a truncating hint (`ink-3`, precise pointers only) and a × with the quote bar's 24 px look. It is the only sign of the state, and the text field stays the same field. The irreversible step (the rewind) waits for an explicit send, which the bar's hint names. Esc or × leaves with nothing changed (`docs/web/web.md` "Pages", **Edit last message**).
-- Queued messages (web, #5327): drawn as cindy's pending queue at the owner's request (where cindy and the older design
-  differ, cindy wins for this area). They sit in the composer's `top` slot, first in the card, flush with its border and
-  edges, with a `line` hairline between them and the input; the card's own border and focus ring hold both. List: at
-  most 196 px, then it scrolls; padding 4 px sides, 6 px top. Row: 8 px radius, 2 px vertical padding, 6 px gap, one
-  line of 13 px / 1.25 text, `ink-2` at rest and `ink` with the `hover` fill while hovered or focused; no visible
-  number (labels carry the index). Left, a 20 px drag handle (`grip` icon, 12 px, `ink-3`) shown with the row's actions;
-  right, 20 px round buttons with a `line` ring on `surface` (↑ Send now 12 px, pencil and trash 11 px), shown on hover
-  or focus and always on a screen without hover, a spinner in their place while the row's request is out. Send now acts
-  at one press (4.4), its tooltip saying what happens. Messages from
-  other conversations come last, folded into one 32 px line: a `chat` mark in the rows' 20 px handle column, **N messages
-  from other chats** (12 px, `ink-2`, medium) and "· Arrives when this chat is free" (`ink-3`), a chevron at the end.
-  Opened, each row names the chat it came from once (medium, `ink`, at most 40%; the hub's 「来自「…」：」 prefix taken off)
-  and then its words, with no mark, handle or buttons; a line cut short has a chevron and opens in place to its whole
-  text (at most 132 px, then it scrolls, selectable). Only the groups that are there are drawn: with none of the owner's
-  rows the relayed line is the card's first thing, with no hairline over it (#9749). Four rows or fewer show in full; from five, three and a centered 12 px **N more** / **Show less**
-  with a chevron under a `line` divider. On a phone on its side the queue is one "N queued" line beside the run's status
-  that opens the same rows. Spec: `docs/web/web.md` ("Queued messages").
+- Queued messages (web, #5327; the collapsed default was tightened in #7770): drawn as cindy's pending queue at the
+  owner's request (where cindy and the older design differ, cindy wins for this area). They sit in the composer's `top`
+  slot, first in the card, flush with its border and edges, with a `line` hairline between them and the input; the
+  card's own border and focus ring hold both. **Every presentation starts as one 28 px "N queued" summary.** N counts
+  both the owner's messages and messages relayed from other conversations, so changing the count never changes the
+  collapsed row's height. Only an explicit tap opens the owner's rows. Relayed contents never expand above the owner's
+  composer; a relayed-only queue has the informational summary but no disclosure control.
+  Opened list: at most 196 px, then it scrolls; padding 4 px sides, 6 px top. Row: 8 px radius, 2 px vertical padding,
+  6 px gap, one line of 13 px / 1.25 text, `ink-2` at rest and `ink` with the `hover` fill while hovered or focused;
+  no visible number (labels carry the index). Left, a 20 px drag handle (`grip` icon, 12 px, `ink-3`) shown with the
+  row's actions; right, 20 px round buttons with a `line` ring on `surface` (↑ Send now 12 px, pencil and trash 11 px),
+  shown on hover or focus and always on a screen without hover, a spinner in their place while the row's request is out.
+  Send now acts at one press (4.4), its tooltip saying what happens. Within the opened owner's list, four rows or fewer
+  show in full; from five, three and a centered 12 px **N more** / **Show less** with a chevron under a `line` divider.
+  On a phone on its side the same summary sits beside the run's status and opens the same owner-only rows. Spec:
+  `docs/web/web.md` ("Queued messages").
+- Assistant action row (iOS and web, #7770): **Needs You**, **In Progress** and the post-answer next-conversation entry
+  share one capsule row. A long conversation title truncates before the row wraps. While reply text is actively
+  streaming, the whole row is visually hidden without being unmounted, so an edited answer or open tray survives and
+  returns when streaming ends. On iOS, expanded queues and trays float over the chat rather than changing footer
+  height. The conversation's own pending question / approval cards stay visible and answerable; this never folds
+  those cards or the separate run-status bar. Footer height changes keep newest-end following and a manually chosen
+  reading position stable.
 - Duplicates: four composer implementations exist (DS-19).
 
 #### Large-window hardware input (Android)
@@ -908,7 +914,7 @@ A section of a page about one thing (a computer's page) lists its items in place
 - **Where the list opens**: iOS pushes a page of its own (`BrowserLoginsListView`, a `List`); the web opens it in place under the summary row (`Collapse`, the list held to 60% of the viewport and scrolling), the machine page's way of showing more (Node health's "Show all checks").
 - **The whole list**: a search field that filters by name, applied 150 ms after the last key; an order, by name by default, with the one that matters for the list as the other choice (Expiring first: expired on top, those without a date last); a mark on the items that need attention (an Expired chip in caution, as the brief box's Overdue in 3.3; not red: nothing failed).
 - **Row actions**: a swipe and the long press on iOS, a row-end ⋯ menu on the web (and on iOS's in-place rows), never a button on every row. Several at once: Select (iOS edit mode, Select All / Deselect All and "Clear N" in the bottom bar) or checkboxes with a select-all box (web). Every destructive action asks first (4.4, rung 2), naming the item, or how many.
-- Why three: the session's file card shows three rows before "Show N more files" (3.3), and on a phone a fourth row with its date already pushes the sections below a screen away. The chat's queued messages show four in full because each is one line without actions.
+- Why three: the session's file card shows three rows before "Show N more files" (3.3), and on a phone a fourth row with its date already pushes the sections below a screen away. The chat's queue avoids the problem by default: one collapsed count opens only on request, and its opened owner list shows at most three rows before "N more" (#7770).
 
 #### Sessions that need the user
 

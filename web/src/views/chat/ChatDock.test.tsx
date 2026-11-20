@@ -428,16 +428,25 @@ describe("QueuePanel (#5327, cindy's pending queue)", () => {
   const panel = (props: Partial<Parameters<typeof QueuePanel>[0]> & { session: Session }) => renderToStaticMarkup(<QueuePanel draftKey="t" canEdit {...props} />);
   const rows = (html: string) => html.match(/data-queue-row="/g) ?? [];
 
-  it("lists the messages in send order without numbers, one line each, a hairline under them", () => {
+  it("starts as one collapsed summary in every layout, with the owner's rows behind explicit disclosure (#7770)", () => {
     const html = panel({ session: queued });
     expect(html).toMatch(/^<div role="region" aria-label="排队的消息" data-queue-panel="true" class="w-full border-b border-line"/);
-    expect(rows(html)).toHaveLength(2);
+    expect(html).toContain("data-queue-toggle");
+    expect(html).toContain("排队中 2 条");
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toMatch(/<div class="grid [^"]*"[^>]*inert/);
+    expect(rows(html)).toHaveLength(2); // Collapse keeps the rows mounted, but inert and zero-height.
     expect(html.indexOf("顺便把截图换掉")).toBeLessThan(html.indexOf("跑一遍 UI 测试"));
     // the place is in the labels only
     expect(html).toContain('aria-label="排队的第 1 条：顺便把截图换掉"');
     expect(html).not.toMatch(/>1</);
     expect(html).toMatch(/data-queue-row-body="true" class="[^"]*truncate text-\[13px\]/);
     expect(html).toMatch(/max-h-\[196px\][^"]*overflow-y-auto/);
+    const one = panel({ session: { ...queued, queued: ["一"] } });
+    const many = panel({ session: { ...queued, queued: ["一", "二", "三", "四", "五", "六"] } });
+    const summaryClass = (value: string) => value.match(/data-queue-summary="true"[^>]*class="([^"]*)"/)?.[1] ?? value.match(/class="([^"]*)"[^>]*data-queue-summary="true"/)?.[1];
+    expect(summaryClass(one)).toBe(summaryClass(many));
+    expect(summaryClass(one)).toContain("h-7");
   });
 
   it("is one line that opens the same rows on a phone on its side, beside the run's status", () => {
@@ -482,24 +491,26 @@ describe("QueuePanel (#5327, cindy's pending queue)", () => {
     expect(viewOnly).not.toMatch(/data-queue-(handle|edit|delete)|data-send-now/);
   });
 
-  it("in a Persona chat offers the user's own rows the same; one from another conversation is folded into one line (#4342, #6394)", () => {
+  it("counts another conversation's queued message but never exposes its contents above the owner's composer (#7770)", () => {
     const persona = { ...queued, agent: undefined, assistant: true, queued: ["顺便把截图换掉", "来自「日报」：今天的汇总"], queued_relayed: 1 } as Session;
     const html = panel({ session: persona, persona: "Nova" });
     expect(html.match(/data-send-now/g)).toHaveLength(1);
     expect(html).toContain("现在就把排队的消息全部发给 Nova");
-    // collapsed: no relayed row markup yet, just the summary line
+    expect(html).toContain("排队中 2 条");
+    expect(html).not.toContain("还有 1 条别的对话在排队");
+    expect(html).not.toContain("data-queue-relayed-summary");
     expect(html).not.toContain("data-queue-relayed-list");
-    expect(html).toContain("1 条消息来自其他对话");
-    expect(html).toContain("对话空闲后送达");
-    // an own row sits above it, so the group has its hairline
-    expect(html).toMatch(/data-queue-relayed-group="true" class="[^"]*border-t border-line/);
-    expect(html).toContain("data-queue-relayed-summary");
-    // relayed ones alone: nothing to send now
-    const onlyRelayed = panel({ session: { ...persona, queued_relayed: 2 }, persona: "Nova" });
-    expect(onlyRelayed).not.toContain("data-send-now");
-    // no own rows: no own list and no hairline on the relayed group
-    expect(onlyRelayed).not.toContain("px-1 pt-1.5");
-    expect(onlyRelayed).not.toMatch(/data-queue-relayed-group="true" class="[^"]*border-t/);
+    expect(html).not.toContain("data-queue-relayed=");
+    expect(html).not.toContain("来自「日报」");
+    // relayed ones alone: an informational count, with no Send now or expandable panel
+    const relayedOnly = panel({ session: { ...persona, queued: ["来自「日报」：今天的汇总", "另一条汇总"], queued_relayed: 2 }, persona: "Nova" });
+    expect(relayedOnly).toContain("排队中 2 条");
+    expect(relayedOnly).not.toContain("data-queue-toggle");
+    expect(relayedOnly).not.toContain("data-send-now");
+    expect(relayedOnly).not.toContain("来自「日报」");
+    // no own rows: no own list and no hairline on a relayed group
+    expect(relayedOnly).not.toContain("px-1 pt-1.5");
+    expect(relayedOnly).not.toMatch(/data-queue-relayed-group="true" class="[^"]*border-t/);
   });
 
   it("marks the photos a Persona chat's queued message went with when this browser sent it (#4342)", () => {

@@ -1598,13 +1598,15 @@ function FoldRow({ label, detail, onClick }: { label: string; detail: string; on
 }
 
 /** "N more need you · Next: <agent> · <what it asks> ›", opening that chat with that card first (lib/card-focus.ts).
- *  Mounted only right after an answer here: the cards of other chats coming and going redraw this, not the chat. */
-function NextWaitingRow({ mid, sid }: { mid: string; sid: string }) {
+ *  Agent chats use the standalone row; the Assistant places the same link in its one-line action bar (#7770). */
+export function NextWaitingRow({ mid, sid, compact = false, className }: { mid: string; sid: string } & (
+  | { compact: true; className: string }
+  | { compact?: false; className?: string }
+)) {
   const next = useStore((s) => nextWaiting(s.interactions, mid, sid));
   const session = useStore((s) => (next ? (s.sessions[next.ix.machine_id] ?? []).find((x) => x.session_id === next.ix.session_id) : undefined));
   if (!next) return null;
   const { ix, count } = next;
-  // named as "Overview"'s "Needs you" row names it, worded as the folded cards' line (cardLine)
   const title = ix.session_title?.trim() || (session ? sessionTitle(session) : ix.cwd || t("home.session"));
   const ask = plainMarkdown(cardLine(ix)).replace(/\s+/g, " ").trim();
   const to: Route = { name: "session", mid: ix.machine_id, sid: ix.session_id };
@@ -1612,13 +1614,14 @@ function NextWaitingRow({ mid, sid }: { mid: string; sid: string }) {
     <a
       href={href(to)}
       data-chat-next-waiting
+      data-compact={compact || undefined}
       onClick={(e) => onLinkClick(e, to, cardState(ix.id))}
-      className="flex h-11 shrink-0 items-center gap-2 rounded-card bg-surface px-3.5 shadow-card transition-colors hover:bg-hover"
-      style={{ animation: `fade-up 250ms ${EASE} both` }}
+      className={compact ? className : "flex h-11 shrink-0 items-center gap-2 rounded-card bg-surface px-3.5 shadow-card transition-colors hover:bg-hover"}
+      style={compact ? undefined : { animation: `fade-up 250ms ${EASE} both` }}
     >
-      <span className="size-1.5 shrink-0 rounded-full bg-attention" />
-      <span className="shrink-0 text-[13px] font-medium whitespace-nowrap text-ink">{t("chat-interactions.next_waiting", { count })}</span>
-      <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-3">{t("chat-interactions.next_waiting_detail", { title, ask })}</span>
+      <span className={cx("shrink-0 rounded-full bg-attention", compact ? "size-2" : "size-1.5")} />
+      <span className={cx("shrink-0 font-medium whitespace-nowrap text-ink", !compact && "text-[13px]")}>{t("chat-interactions.next_waiting", { count })}</span>
+      <span className={cx("min-w-0 flex-1 truncate text-ink-3", !compact && "text-[12.5px]")}>{t("chat-interactions.next_waiting_detail", { title, ask })}</span>
       <Icon name="chevronRight" size={14} stroke={2.2} className="shrink-0 text-ink-3" />
     </a>
   );
