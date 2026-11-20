@@ -657,6 +657,14 @@ Only currently listed, owned sessions count. The row's agent must match the runt
 
 Daemon links allow the same event and prefix its session ID as usual. Runtime usage goes to the same token totals and agent buckets as file usage. It is added, rather than replacing a minute's total, and full file scans preserve these unreconstructable buckets.
 
+### Runtime subscription usage windows
+
+A runtime with read-only access to a subscription's rate-limit windows calls `rt.usageWindows({provider, name, plan?, sampled_at, windows})`. Each window is `{label, window_minutes, used_percent, resets_at?, model?}`; timestamps are RFC3339, lengths are positive safe-integer minutes, percentages are finite numbers from 0 through 100, and one report has at most 32 windows. This is the same account shape that `docs/server/usage-windows.md` defines; it is separate from the per-request token counts above.
+
+The node advertises `usage_windows` only to runtimes on the local socket, not to daemons (their accounts must not be attributed to the node's machine). The SDK returns false while disconnected or with an older node and does not queue reports. A connected hub is not required because the node stores the snapshot locally. Reports replace the source named by the runtime id, so a companion restart does not duplicate its account. An older sample cannot replace a newer one; a valid empty `windows` array explicitly clears the source. The machine's existing `usage_windows` off switch rejects these reports too.
+
+Antigravity implements this source with its ACP process's native `RetrieveUserQuotaSummary` method and `forceRefresh: false`. It does not read the status-line command's account fields, invoke an account API itself, or start a model request.
+
 ### Shared runtime behavior
 
 Antigravity item identities include native creation time and the replacement branch's generation (#9410). Native
