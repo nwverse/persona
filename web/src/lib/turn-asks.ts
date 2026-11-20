@@ -12,17 +12,11 @@ declare const holdsTurn: unique symbol;
 export type TurnAsk = Interaction & { readonly folded_under?: undefined; readonly folded_side?: undefined; readonly [holdsTurn]: true };
 
 /** Whether `ix` is the conversation `sid`'s own request on its computer `mid`, not one of a session folded under it. */
-export function holdsTheTurn(ix: Interaction, mid: string, sid: string): ix is TurnAsk {
-  return ix.machine_id === mid && ix.session_id === sid && !ix.folded_under && !ix.folded_side;
-}
+export const holdsTheTurn = (ix: Interaction, mid: string, sid: string): ix is TurnAsk =>
+  ix.machine_id === mid && ix.session_id === sid && !ix.folded_under && !ix.folded_side;
 
 /** The conversation's waiting cards, in their order: those its own turn waits on, and the rest. */
-export function splitTurnAsks(cards: readonly Interaction[], mid: string, sid: string): { turn: TurnAsk[]; rest: Interaction[] } {
-  const turn: TurnAsk[] = [];
-  const rest: Interaction[] = [];
-  for (const ix of cards) {
-    if (holdsTheTurn(ix, mid, sid)) turn.push(ix);
-    else rest.push(ix);
-  }
-  return { turn, rest };
-}
+export const splitTurnAsks = (cards: readonly Interaction[], mid: string, sid: string) => ({
+  turn: cards.filter((ix): ix is TurnAsk => holdsTheTurn(ix, mid, sid)),
+  rest: cards.filter((ix) => !holdsTheTurn(ix, mid, sid)),
+});
