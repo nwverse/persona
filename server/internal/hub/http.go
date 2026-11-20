@@ -112,7 +112,7 @@ func (h *Hub) routes() http.Handler {
 	h.runtimeCLIRoutes(api)
 	// What the center serves: its own apps' requests and those the members pass on (peer_http.go), whose source the
 	// member judged (no gate here for them). A member passes everything but its own few routes on (memberForward).
-	centerAPI := h.centerSharing(h.auth(h.extensionAPIs(jsonRouteErrors(api), api)))
+	centerAPI := h.centerSharing(h.auth(h.quiesceGate(h.extensionAPIs(jsonRouteErrors(api), api))))
 	h.mesh.centerAPI.Store(centerAPI)
 	appAPI := h.gate(h.memberForward(centerAPI))
 	h.busRoutes(mux)

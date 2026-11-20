@@ -412,6 +412,8 @@ internal fun AgentCreationService.inGroup(names: GroupNames): AgentCreationServi
         override suspend fun newAgentModel() = source.newAgentModel()
         override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean) =
             source.launcherModels(names.rawMachine(machineId), launcher, refresh)
+        override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean, host: String?) =
+            source.launcherModels(names.rawMachine(machineId), launcher, refresh, host)
         override suspend fun worktreeStatus(machineId: String, cwd: String, kind: String?) = source.worktreeStatus(names.rawMachine(machineId), cwd, kind)
         override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String, kind: String?) =
             source.addWorktree(names.rawMachine(machineId), cwd, nameHint, branch, kind)

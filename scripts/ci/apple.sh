@@ -132,6 +132,8 @@ result() {
 }
 
 if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
+  # Real loopback sshd and mock hub, with temporary keys: exercise tunnel recovery before the app builds (#11671).
+  ci_run 'PersonaSSH native tunnel integration tests' 900 env PERSONA_SSH_TRACE="$OUTPUT/native-ssh-trace.log" xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaSSH" --scratch-path "$SPM/PersonaSSH"
   ci_run 'PersonaCore strict-concurrency tests and C-binding fixture replay' 900 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaCore" --scratch-path "$SPM/PersonaCore" -Xswiftc -warnings-as-errors
   ci_run 'PersonaKit unit tests' 900 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaKit" --scratch-path "$SPM/PersonaKit"
   # The live screen's video wire and capture decisions (#3954): PersonaScreenCore, all Persona Link's helper is built from
