@@ -24,7 +24,7 @@ import { useStore } from "../../lib/store";
 import { openPanel, type GitSpot } from "../../lib/panel";
 import { REVIEW_FEATURE } from "../../lib/session-review";
 import { useFsLive } from "../../lib/use-fs-live";
-import { useBackStack } from "../../lib/back-close";
+import { useBackStack } from "../../lib/back-stack";
 import { NARROW, useMedia } from "../../lib/viewport";
 import { Button, copyText, cx, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";

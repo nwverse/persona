@@ -10,7 +10,7 @@ import { storedValue, storeValue } from "../../lib/compatibility";
 // for one of those. Folders outside the home are read-only.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, enc, errorText, isAbort } from "../../lib/api";
-import { useBackStack } from "../../lib/back-close";
+import { useBackStack } from "../../lib/back-stack";
 import { t } from "../../i18n";
 import { entryPayload, ENTRY_DRAG_TYPE } from "../../lib/entry-drag";
 import { aheadBehind, dirName, fileName, gitMark, joinPath, type FsEntry, type FsListing, type GitStatus } from "../../lib/files";

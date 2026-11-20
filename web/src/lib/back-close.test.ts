@@ -2,7 +2,8 @@
 import { act, createElement as h, Fragment, StrictMode, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isOverlayEntry, onOverlayEntry, openOverlay, overlayDepth, overlayState, settleOverlayEntry, takeOverlayEntry, useBackStack, useCloseOnBack } from "./back-close";
+import { isOverlayEntry, onOverlayEntry, openOverlay, overlayDepth, overlayState, settleOverlayEntry, takeOverlayEntry, useCloseOnBack } from "./back-close";
+import { useBackStack } from "./back-stack";
 import { navigate } from "./router";
 
 describe("overlay history entries", () => {

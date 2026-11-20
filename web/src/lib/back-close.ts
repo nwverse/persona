@@ -1,7 +1,7 @@
 // Back (the browser's button, a phone's back gesture) closes what is open over the page before it leaves the page
 // (#1996): the drawer, a full-screen side panel, the picture viewer, a bottom sheet. Opening one pushes an entry with
 // the same URL; going back pops it and closes the overlay; closing it from the page takes its entry back off, with the
-// entries of whatever is open over it, in one Back (a file open in the side panel goes with the panel, useBackStack).
+// entries of whatever is open over it, in one Back (a file open in the side panel goes with the panel, lib/back-stack.ts).
 import { useEffect, useRef } from "react";
 
 const KEY = "personaOverlay";
@@ -13,8 +13,8 @@ let next = 0;
 // overlay that opens again before then (React's StrictMode runs every effect twice in development; a sheet swapped for
 // another) takes the lowest of those entries instead of racing an async Back that would pop the new one and close it at
 // once. Once that Back is `going`, it stays here until it lands: closes it takes off meanwhile (the effects of the
-// views over the overlay) do not go back again, and one under where it lands (`then`) goes on from there.
-type Unwind = { to: number; at: string; going: boolean; then?: number };
+// views over the overlay) do not go back again, and one under where it lands lowers `to` to go on from there.
+type Unwind = { to: number; at: string; going?: boolean };
 let pending: Unwind | null = null;
 
 /** For a navigation: whether the current entry is an open overlay's, which the new page should replace instead of
@@ -60,12 +60,11 @@ function clearOverlayMarkers(state: Record<string, unknown>) {
 /** Takes the entries over depth `to` off, a tick from now (see `pending`). */
 function takeOff(to: number, at: string) {
   if (pending) {
-    if (pending.to <= to) return; // the Back already takes this one off
-    if (pending.going) pending.then = Math.min(pending.then ?? to, to);
-    else pending.to = to;
+    // the Back takes this one off already, or is to go lower (a Back under way goes on once it lands)
+    if (pending.to > to) pending.to = to;
     return;
   }
-  const p: Unwind = { to, at, going: false };
+  const p: Unwind = { to, at };
   pending = p;
   setTimeout(() => {
     if (pending !== p) return; // reopened or taken by a navigation
@@ -75,10 +74,11 @@ function takeOff(to: number, at: string) {
       return;
     }
     p.going = true;
-    afterBack(() => {
+    const to = p.to;
+    afterBack((popped) => {
       if (pending !== p) return;
       pending = null;
-      if (p.then !== undefined) takeOff(p.then, p.at);
+      if (popped && p.to < to) takeOff(p.to, p.at); // a close under its landing came while it went: on from there
     });
     if (n === 1) history.back();
     else history.go(-n);
@@ -89,19 +89,14 @@ function takeOff(to: number, at: string) {
 export function openOverlay(onClose: () => void): () => void {
   const id = `o${++next}`;
   const top = overlayDepth(history.state);
-  let depth: number;
-  if (pending && !pending.going && pending.to < top) {
+  let depth = top + 1;
+  if (pending && !pending.going) {
     // an entry closed this tick, not off yet: this one takes it (the lowest, as the overlays reopen in their order)
-    depth = ++pending.to;
-    if (depth === top) {
-      pending = null;
-      history.replaceState(overlayState(history.state, id), "", location.href);
-    }
-  } else {
-    if (pending && !pending.going) pending = null; // nothing over its depth left to take off
-    depth = top + 1;
-    history.pushState({ ...overlayState(history.state, id), [AT]: location.href, [DEPTH]: depth }, "", location.href);
+    if (pending.to < top) depth = ++pending.to;
+    if (depth >= top) pending = null; // nothing over it left to take off
   }
+  if (depth > top) history.pushState({ ...overlayState(history.state, id), [AT]: location.href, [DEPTH]: depth }, "", location.href);
+  else if (depth === top) history.replaceState(overlayState(history.state, id), "", location.href);
   // where it opened: a replace that moves the page under it (an old link turned into its new one, a delete going
   // home) keeps the marker, so Back still closes it; closing it from the page then must not go back from the new page
   const at = location.href;
@@ -170,42 +165,4 @@ export function useCloseOnBack(open: boolean, onClose: () => void, enabled = tru
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => (open && enabled ? openOverlay(() => close.current()) : undefined), [open, enabled]);
-}
-
-/** Views opened inside an overlay, one over another (a file in the Files panel, a diff in Git): `depth` of them. While
- *  `enabled` (a narrow screen) each has an entry over the overlay's, so Back steps out of the top one (`popTo(i)` keeps
- *  the first i) before it closes the overlay; closing the overlay takes them off with its own, in one Back. */
-export function useBackStack(depth: number, popTo: (n: number) => void, enabled = true): void {
-  const pop = useRef(popTo);
-  pop.current = popTo;
-  const levels = useRef<(() => void)[]>([]);
-  const want = enabled ? depth : 0;
-  useEffect(() => {
-    // once this commit's effects have run: the overlay the views are in (its effect runs after its children's) has
-    // pushed its own entry by then, so theirs go over it even when it mounts with one open (a panel restored on a file)
-    let current = true;
-    queueMicrotask(() => {
-      if (!current) return;
-      const open = levels.current;
-      for (const close of open.splice(want)) close();
-      while (open.length < want) {
-        const i = open.length;
-        open.push(
-          openOverlay(() => {
-            open.length = Math.min(open.length, i);
-            pop.current(i);
-          }),
-        );
-      }
-    });
-    return () => {
-      current = false;
-    };
-  }, [want]);
-  useEffect(
-    () => () => {
-      for (const close of levels.current.splice(0)) close();
-    },
-    [],
-  );
 }
