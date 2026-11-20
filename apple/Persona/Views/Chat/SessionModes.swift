@@ -508,9 +508,9 @@ struct SessionModeBar: View {
                 .pickerStyle(.inline)
                 if let effortChange {
                     Label(effortChange.spoken, systemImage: effortChange.symbol)
-                    if let effort {
-                        Button("Keep Current Effort") { change(effort: effort) }
-                    }
+                }
+                if let effort, effortChange != nil || model.canKeepOutboxEffort(key, effort: effort) {
+                    Button("Keep Current Effort") { Task { await model.keepCurrentEffort(key, effort: effort) } }
                 }
                 if !UltracodeMenuSection.leadsEffort { UltracodeMenuSection(key: key, session: session) }
                 // The model in the same chip (#3119, the web's #2434): Claude Code takes `/model`, typed by the node.
@@ -704,11 +704,12 @@ struct SessionModesMenu: View {
             // the menu lists its items the other way round, `UltracodeMenuSection.leadsEffort`).
             if UltracodeMenuSection.leadsEffort { UltracodeMenuSection(key: key, session: session) }
             Section("Thinking Effort") { // switches, so the title is drawn (#4322, `MenuChoice`)
-                if let change = SessionModes.effortChange(session) {
-                    Label(change.spoken, systemImage: change.symbol)
-                    if let effort {
-                        Button("Keep Current Effort") { self.change(effort: effort) }
-                    }
+                let effortChange = SessionModes.effortChange(session)
+                if let effortChange {
+                    Label(effortChange.spoken, systemImage: effortChange.symbol)
+                }
+                if let effort, effortChange != nil || model.canKeepOutboxEffort(key, effort: effort) {
+                    Button("Keep Current Effort") { Task { await model.keepCurrentEffort(key, effort: effort) } }
                 }
                 ForEach(SessionModes.effortOptions(session)) { o in
                     MenuChoice(id: o.id, selected: effort ?? "", pick: { change(effort: $0) }) {

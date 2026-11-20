@@ -173,6 +173,10 @@ struct ModelSwitchTests {
         for _ in 0..<300 where app.chat(key).pending.first?.state == .sending {
             try await Task.sleep(for: .milliseconds(10))
         }
+        app.flushOutbox()
+        for _ in 0..<300 where app.flushingOutbox.contains(key.group) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         #expect(app.chat(key).pending.first?.state == .waiting)
         #expect(app.chat(key).pending.first?.refused == true)
         app.flushOutbox()
@@ -191,6 +195,29 @@ struct ModelSwitchTests {
         #expect(hub.sent("POST", path).count == 2)
         #expect(app.chat(key).pending.first?.state == .sent)
         #expect(app.chat(key).pending.first?.id != originalID)
+    }
+
+    @MainActor @Test func keepingCurrentEffortAfterALostChangeLetsTheUserRetry() async throws {
+        let app = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString))
+        app.forgetRestoredForTests()
+        let row = try session(#","effort":"low","agent":"claude""#)
+        let key = row.key
+        app.applySessions([key.machineRef: [row]])
+
+        var failed = PendingMessage(text: "follow-up", images: [], state: .failed)
+        failed.requiredEffort = "high"
+        var uncertain = PendingMessage(text: "check the receipt", images: [], state: .failed)
+        uncertain.requiredEffort = "high"
+        uncertain.mayHaveArrived = true
+        let store = app.chat(key)
+        store.pending = [failed, uncertain]
+
+        #expect(app.canKeepOutboxEffort(key, effort: "low"))
+        await app.keepCurrentEffort(key, effort: "low")
+        #expect(store.pending.map(\.requiredEffort) == ["low", "high"])
+        #expect(store.pending.map(\.state) == [.failed, .failed])
+        #expect(store.pending.map(\.id) == [failed.id, uncertain.id])
+        #expect(!app.canKeepOutboxEffort(key, effort: "low"))
     }
 
     /// "Other Model…" (#1644): a typed ID goes through …/modes like a listed one; the list it comes with is the

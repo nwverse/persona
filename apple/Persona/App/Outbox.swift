@@ -186,6 +186,23 @@ extension AppModel {
         }
     }
 
+    func canKeepOutboxEffort(_ key: SessionKey, effort: String) -> Bool {
+        existingChat(key)?.pending.contains {
+            $0.onlyHere && $0.mayHaveArrived != true && $0.requiredEffort.map { $0 != effort } == true
+        } == true
+    }
+
+    /// Cancel an active change on the node. If the change was lost, the user's choice can instead update the outbox.
+    func keepCurrentEffort(_ key: SessionKey, effort: String) async {
+        guard effortRequests[key] == nil, let row = latest(key), row.effort == effort else { return }
+        if row.pendingEffort != nil {
+            await setModes(key, effort: effort)
+        } else if canKeepOutboxEffort(key, effort: effort), allowSend(key) {
+            updateOutboxEffort(key, to: effort, includeFailed: true)
+            flushOutbox()
+        }
+    }
+
     /// A later choice also applies to the messages still waiting behind the earlier one.
     func updateOutboxEffort(_ key: SessionKey, to effort: String, includeFailed: Bool = false) {
         guard let store = existingChat(key) else { return }
@@ -193,7 +210,8 @@ extension AppModel {
         for i in store.pending.indices {
             let message = store.pending[i]
             let retryable = includeFailed && message.state == .failed && message.requiredEffort != nil && message.mayHaveArrived != true
-            guard message.state == .waiting || retryable, message.requiredEffort != effort else { continue }
+            guard message.state == .waiting || retryable, message.mayHaveArrived != true,
+                  message.requiredEffort != effort else { continue }
             store.pending[i].requiredEffort = effort
             changed = true
         }
