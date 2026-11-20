@@ -118,6 +118,8 @@ type TaskReview struct {
 	Evidence *ParkEvidence `json:"evidence,omitempty"`
 	// Reply is the source receipt that ended this exact park, committed with the pending-review transition.
 	Reply *connectorwire.LarkReplyObservation `json:"reply,omitempty"`
+	// ExternalPR is this external-event park's observed object, independent of the task's PR associations.
+	ExternalPR *externalPRObservation `json:"external_pr,omitempty"`
 	// Decided: the owner's decision (its id) that ended this park before its time (parkDecided, parked.go), and
 	// DecidedTold: when a supervision message carried that to the supervisor.
 	Decided     string    `json:"decided,omitempty"`
@@ -133,6 +135,8 @@ type TaskReview struct {
 	OwnerResponse   string    `json:"owner_response,omitempty"`
 	OwnerResponseAt time.Time `json:"owner_response_at,omitzero"`
 	HoldReleased    bool      `json:"hold_released,omitempty"`
+	// Handoff is an internal wait recorded after session.send was acknowledged.
+	Handoff *taskHandoff `json:"handoff,omitempty"`
 }
 
 // OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
@@ -159,12 +163,20 @@ func (v *Supervision) clone() *Supervision {
 	out.Reviews = make([]TaskReview, len(v.Reviews))
 	for i, r := range v.Reviews {
 		out.Reviews[i] = r
+		if r.Handoff != nil {
+			handoff := *r.Handoff
+			out.Reviews[i].Handoff = &handoff
+		}
 		out.Reviews[i].Checks = slices.Clone(r.Checks)
 		out.Reviews[i].Options = slices.Clone(r.Options)
 		out.Reviews[i].Evidence = r.Evidence.clone()
 		if r.Reply != nil {
 			receipt := *r.Reply
 			out.Reviews[i].Reply = &receipt
+		}
+		if r.ExternalPR != nil {
+			observation := *r.ExternalPR
+			out.Reviews[i].ExternalPR = &observation
 		}
 	}
 	if out.DoneWhen == nil {
@@ -328,12 +340,17 @@ func (s *Service) updateSupervision(ctx context.Context, id string, change func(
 		v = (&Supervision{}).clone()
 	}
 	before := v.State
+	park := v.parking()
 	if !change(v) {
 		return *v, false, nil
 	}
 	v.Criteria = db.AlignTodoCriteria(v.DoneWhen, v.Criteria)
 	v.UpdatedAt = time.Now().UTC()
 	v.PendingSince = pendingSince(before, v.State, v.PendingSince, v.UpdatedAt)
+	if park != nil && v.State == reviewPending && park.ExternalPR != nil && park.ExternalPR.wakes(park) {
+		// Match the review period after a reload. Postgres stores PendingSince to microsecond precision.
+		park.ExternalPR.PendingSince = v.UpdatedAt.Truncate(time.Microsecond)
+	}
 	if st := s.supervisionDB(); st != nil && s.todoDB() != nil {
 		if err := st.PutTodoSupervision(ctx, v.row(id)); err != nil {
 			return Supervision{}, false, err

@@ -33,7 +33,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         jobs = self.pr["jobs"]
         self.assertEqual(jobs["verify"]["needs"], ["plan", "cli-web", "android", "apple", "windows"])
         self.assertEqual(jobs["apple"]["needs"], ["plan", "cli-web", "android"])
-        self.assertEqual(jobs["windows"]["needs"], ["plan", "cli-web", "android", "apple"])
+        self.assertEqual(jobs["windows"]["needs"], ["plan", "cli-web", "android"])
         self.assertEqual(jobs["android"]["environment"], "persona-release")
         self.assertEqual(jobs["apple"]["environment"], "persona-release")
         self.assertEqual(jobs["windows"]["environment"], "persona-release")
@@ -70,6 +70,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         })
         self.assertIn('test "$result" = success', verify_script)
         self.assertIn("--conclusion success", verify_script)
+        # GitHub skips the whole aggregate after a failed or skipped dependency by default. That would also skip
+        # its failure-conclusion step and leave the exact merge-result check in_progress forever.
+        self.assertEqual(jobs["verify"]["if"],
+                         "always() && needs.plan.outputs.pr != '0' && needs.plan.outputs.version != ''")
         self.assertTrue(any(step.get("if") == "failure()" and "--conclusion failure" in step["run"]
                             for step in jobs["verify"]["steps"]))
         verified_upload = next(step for step in jobs["verify"]["steps"]
@@ -120,6 +124,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("Get-AuthenticodeSignature", text)
         self.assertIn("beta.yml", text)
         self.assertIn("latest.yml", text)
+        # Native Windows checks must still run when Apple signing fails. Apple is a separate dependency of the
+        # final aggregate, not an input to the Windows executables or desktop package.
+        windows = self.pr["jobs"]["windows"]
+        self.assertNotIn("apple", windows["needs"])
+        self.assertNotIn("release-pr-apple", str(windows))
+        self.assertEqual(self.pr["jobs"]["verify"]["needs"], ["plan", "cli-web", "android", "apple", "windows"])
 
     def test_pr_metadata_survives_the_clean_source_checkout(self):
         text = PR.read_text()
@@ -190,6 +200,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("RELEASE_PR_TOKEN", text)
         self.assertIn("missing RELEASE_PR_TOKEN", text)
         self.assertIn("git diff --cached --quiet", text)
+        select = next(step for step in yaml.load(text, Loader=yaml.BaseLoader)["jobs"]["plan"]["steps"]
+                      if step.get("id") == "select")["run"]
+        self.assertLess(select.index("git fetch --no-tags origin main"), select.index('commit="$(git rev-parse HEAD)"'))
+        self.assertLess(select.index("git switch --detach FETCH_HEAD"), select.index('commit="$(git rev-parse HEAD)"'))
         self.assertNotIn("gh pr create", text)
         self.assertIn("refs/heads/$branch", text)
         self.assertIn("preserve its failed source", text)

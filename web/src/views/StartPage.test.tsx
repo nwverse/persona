@@ -34,6 +34,7 @@ const otherPlace = { extension: "example-notes", extension_name: "Notes", id: "n
 let places: unknown[];
 let navigation: { start?: string } | "missing";
 let puts: unknown[];
+let starredIndex: Promise<number> | undefined;
 let host: HTMLDivElement;
 let unmount = () => {};
 
@@ -45,11 +46,16 @@ beforeEach(() => {
   places = [todayPlace, otherPlace];
   navigation = {};
   puts = [];
+  starredIndex = undefined;
   vi.stubGlobal("WebSocket", Socket);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string, init?: RequestInit) => {
       const url = new URL(String(input), location.href);
+      if (url.pathname === "/api/v1/assistant/starred") {
+        const status = starredIndex ? await starredIndex : 404;
+        return Response.json(status === 200 ? { refs: [], can_write: true } : { error: "starred index unavailable" }, { status });
+      }
       if (url.pathname === "/api/v1/extensions/-/ui") return Response.json({ ui: places });
       if (url.pathname === "/api/v1/navigation") {
         if (navigation === "missing") return Response.json({ error: "not found" }, { status: 404 });
@@ -136,6 +142,25 @@ describe("opening on a page that is not there", { timeout: 30_000 }, () => {
     act(() => router.navigate({ name: "inbox" }));
     await hello();
     expect(location.pathname).toBe("/inbox");
+  });
+
+  it.each([200, 404, 500])("settles a Starred start page only after a definitive index answer (HTTP %i)", async (status) => {
+    let resolve = (_status: number) => {};
+    starredIndex = new Promise<number>((done) => { resolve = done; });
+    const { hello, flush } = await open("starred", "sidebar", ["starred_messages"]);
+    await hello();
+    await vi.waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([path]) => String(path).includes("/assistant/starred?index=1"))).toBe(true));
+    expect(location.pathname).toBe("/starred");
+    resolve(status);
+    await flush();
+    expect(location.pathname).toBe(status === 404 ? "/" : "/starred");
+    expect(localStorage.getItem("persona.startPage")).toBe("starred");
+  });
+
+  it("gives way when the hub does not advertise Starred", async () => {
+    const { hello } = await open("starred", "sidebar", []);
+    await hello();
+    expect(location.pathname).toBe("/");
   });
 
   it("keeps a built-in page, which is always there", async () => {

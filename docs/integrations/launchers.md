@@ -28,6 +28,15 @@ The answer adds `sync`: one item per computer, with `state` `ok` / `offline` / `
 (settings `launchers.zshrc.meta`). A computer that didn't answer still shows its last list, but the entries' `stale` names that computer; every client marks them “Not updated” and explains why in the per-computer group.
 An entry's `rc_files` are the files it came from (`source: "zshrc"` only; older nodes don't report it, so it is `~/.zshrc`).
 
+The Assistant picker gives shell discovery 10 seconds and reserves one further second for own-service checks. A check
+cut short by this budget uses the last answer if one exists. On a shell timeout the picker can show that computer's
+last known shell and PATH launchers and the providers in its current scope.
+Runtime launchers require a live response. Confirmed unavailable providers still show their reason. If the picker has
+neither available nor unavailable entries, it returns a timeout so the client can offer Retry. The node bounds the
+shell scan and stops its child processes when it times out. An incomplete scan keeps the previous launcher list for
+one more minute when one exists. Retry asks the node to scan again. If the new scan is slow or fails, the picker can
+read the node's last completed shell list and live runtime entries within the same 10-second discovery budget.
+
 ## External model adapters (#7940)
 
 For advanced users who already manage connections in another local tool, an optional adapter supplies the model
@@ -168,7 +177,7 @@ disabling the registry takes effect when the node is restarted; it does not rewr
 
 ## Which shell
 
-The node runs the list script and the launchers in an interactive shell (`loginShellProgram`): zsh when there is one, but bash when the user's login shell is bash (`$SHELL`, or `/etc/passwd` under systemd, where it is unset) and there is no `~/.zshrc`;
+The node runs the list script and shell-defined launchers in an interactive shell (`loginShellProgram`): zsh when there is one, but bash when the user's login shell is bash (`$SHELL`, or `/etc/passwd` under systemd, where it is unset) and there is no `~/.zshrc`;
 always bash without zsh (Git Bash on Windows). Bash runs as `bash -ic` and reads `~/.bashrc`, not `~/.bash_profile` / `~/.profile`: aliases kept there aren't listed.
 Bash has no zsh `(z)` / `(Q)`, and macOS's bundled bash 3.2 has no `BASH_ALIASES`, so under bash the script prints `alias -p`, and the node splits words and strips quotes by the shell's rules itself (nothing expanded or run, `node/launchers_shell.go`) before handing them to the same parser.
 
@@ -244,6 +253,11 @@ The script frames what it prints with begin/end markers, and node reads only bet
   A function-based launcher's `--settings` is not visible and still gets overridden on these claude versions.
 - Model listing (`node/launcher_models.go`) passes `--settings '{"disableAllHooks":true}'` to avoid triggering hooks (alias and managed-launcher settings are still merged). A function's own
   `--settings` is still overridden here, so the listed models omit its effects: disabling hooks can only be specified in `--settings`, and merging requires first reading the settings supplied by the function (#1411).
+  On Unix, model discovery for a Persona-managed Claude Code provider invokes `personad launch` directly for native
+  CLI binaries and for npm scripts whose Node.js is already available. For npm installations, including Node Version
+  Manager (NVM) and Homebrew prefixes, the probe uses the matching Node.js executable when it finds one and keeps the
+  child's search path in its original order. Other launcher scripts and CLIs that need shell setup run through the
+  user's interactive shell.
 
 ## How herdr recognizes Agents started by launchers (`HERDR_AGENT`, #3454)
 

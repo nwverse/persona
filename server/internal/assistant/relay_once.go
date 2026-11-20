@@ -149,6 +149,7 @@ func (s *Service) tryQueuedRelay(ctx context.Context, machine, to string, head *
 	} else {
 		// A duplicate relay is less harmful than a lost one when there is no owner to ask. Retry under the same id.
 		s.logf("relay to %s: no match after %d transcript checks; trying again", short(to), relayLookLimit)
+		s.handoverRetried(msg.Handover) // an answer that went in meanwhile did not answer it (relay_handover.go)
 	}
 	msg.Looks, msg.LookAfter = 0, time.Time{}
 
@@ -156,6 +157,11 @@ func (s *Service) tryQueuedRelay(ctx context.Context, machine, to string, head *
 	b := &s.relays
 	b.mu.Lock()
 	q := b.st.Queue[to]
+	if !b.loaded || len(q) == 0 || q[0] != previous {
+		// A reload can invalidate the selection before the attempt is saved. Let the next drain pick again.
+		b.mu.Unlock()
+		return previous, relayRetryGap, nil
+	}
 	q[0] = msg
 	err := s.saveRelayLocked()
 	if err != nil {
