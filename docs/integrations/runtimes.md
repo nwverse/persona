@@ -462,7 +462,7 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | DSH (`dsh`, configurable) | `integrations/dsh`: a Cordis plugin for `dsh web`; companion process `companion.mjs` (`dsh-files`) for when DSH isn't running | `docs/integrations/dsh.md` |
 | pi (`pi-<pid>`, `pi-web`, `pi-files`) | `integrations/pi`: pi extension (one connection per pi process) + pi-web companion process | `docs/integrations/pi.md` |
 | omp (`omp-<pid>`) | `integrations/omp`: the pi host under omp's identity (agent and name `omp`); no companion and no auto-update | `docs/integrations/omp.md` |
-| opencode (`opencode-<pid>`) | `integrations/opencode`: opencode plugin (one connection per opencode server process; list and chats read from opencode.db, live updates over the event stream, control through the plugin API) | `docs/integrations/opencode.md` |
+| opencode (`opencode` / `opencode-<pid>`) | `integrations/opencode`: standalone ACP companion (`companion.mjs`, `start`, `models`, `modes`, `assistant: true` with loopback HTTP MCP proxy, reads 1.x & 2.x `opencode.db`) and opencode server plugin (`index.js`, one connection per `opencode serve` process, merges with herdr TUI panes) | `docs/integrations/opencode.md` |
 | Grok CLI (`grok-chat`) | `integrations/grok/companion.mjs`: optional standalone ACP companion with assistant tools, permission hooks, native renaming and restart recovery; also lists conversations started in a terminal (read-only while the terminal holds them) | `integrations/grok/README.md` |
 | Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
 | Managed Agents (`managed-agents`, configurable) | `integrations/managed-agents/companion.mjs`: standalone companion for Volcengine Ark Managed Agents and compatible endpoints (cloud or self-hosted, the user's own key); reads sessions over the REST API, sends, interrupts, starts, and answers tool confirmations and question / plan tools on the phone; `--listen` makes it a daemon | `docs/integrations/managed-agents.md` |
@@ -612,6 +612,15 @@ While a conversation is watched, the companion polls its native export every 400
 their existing poll. Unwatch, disconnection and shutdown release the watched poll. Native records that update an
 existing step carry a stable content revision in the history token, so a response completed at the same sequence
 replaces retained content. Ordinary appends preserve that revision and continue through incremental item batches.
+
+Until the native export catches up, a Persona-owned prompt's steps come from ACP: the sent message, thinking, tool
+calls and results, and the settled reply; a background wake's steps the same way. While they only grow they keep the
+conversation's history token, so a send and every live update arrive as appends and clients keep their page (#12014).
+Their item IDs are not the export's, so the token changes once when the export replaces them, or when an interrupt
+drops some (a send that takes over a running wake included). The token that follows is written to the conversation's
+`.persona-history-epoch` file before the first such step shows, so a restarted companion never reports the token
+clients hold those steps under, and an idle conversation keeps its token across restarts. Where that file cannot be
+written, the token changes as soon as such steps appear.
 
 Session inventory, watch cursors, item pages and live item pushes read `transcript_full.jsonl` when available.
 Antigravity Agent and Assistant sessions publish waiting messages in `Session.queued`, using an empty string for a

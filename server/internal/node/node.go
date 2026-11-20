@@ -798,9 +798,10 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	if method == "session.send" || method == "codex.answer" {
 		ctx = promptLanguageContext(ctx, params)
 	}
+	if method == "sessions.history" {
+		return n.handleSessionsHistory(ctx, method, params)
+	}
 	switch method {
-	case "sessions.history": // sessions active in a time window, inactive ones too (sessions_history.go)
-		return n.sessionsHistory(ctx, params)
 	case "workspace.naming.resolve":
 		return n.resolveWorkspaceNaming(ctx, params)
 	case "session.share_projection":
