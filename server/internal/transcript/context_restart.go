@@ -2,34 +2,36 @@ package transcript
 
 const restartContextThreshold = 300_000
 
-type contextRequest struct {
-	id   string
-	high bool
+type contextRestart struct {
+	lastID      string
+	pending     bool
+	first       bool
+	recommended bool
 }
 
-// observeRequestContext keeps the three latest measured requests. Claude repeats a request across content
-// blocks. Codex already deduplicates by the running total and therefore needs no message ID here.
-func (m *Meta) observeRequestContext(id string, tokens int64) {
-	recent := &m.restartContext
+// compact waits for the next measured request. Keep the last Claude message ID so replayed blocks of the
+// pre-compaction request cannot count as that request.
+func (r *contextRestart) compact() {
+	r.pending, r.first, r.recommended = true, false, false
+}
+
+func (r *contextRestart) observe(id string, tokens int64) {
 	high := tokens > restartContextThreshold
-	if id != "" {
-		for i := range recent {
-			if recent[i].id == id {
-				recent[i].high = recent[i].high || high
-				return
-			}
+	if id != "" && id == r.lastID {
+		// Claude can report more usage in another content block of the same request.
+		if r.first {
+			r.recommended = r.recommended || high
 		}
+		return
 	}
-	copy(recent[:], recent[1:])
-	recent[len(recent)-1] = contextRequest{id: id, high: high}
+	r.lastID = id
+	r.first = r.pending
+	r.pending = false
+	// Only the first request may turn the recommendation on. A later drop clears it until another compact.
+	r.recommended = high && (r.first || r.recommended)
 }
 
-// ContextRestartRecommended reports sustained large input after the most recent compaction.
+// ContextRestartRecommended reports high input on the first measured request after compaction, still above the limit.
 func (m *Meta) ContextRestartRecommended() bool {
-	for _, req := range m.restartContext {
-		if !req.high {
-			return false
-		}
-	}
-	return true
+	return m.restartContext.recommended
 }

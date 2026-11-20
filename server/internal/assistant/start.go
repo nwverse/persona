@@ -927,7 +927,8 @@ func (s *Service) startRoutes() {
 			Guest *GuestSpec `json:"guest"`
 			// Via: how the user's app sent its first message when not typed in the app itself: "intent" (Siri,
 			// Shortcuts, an App Intent, which may run on a locked phone), "share" (the share sheet) or "card" (a card's
-			// button that wrote it). Such a message never counts as the user's own words (secret_handoff.go
+			// button that wrote it), or "handoff" (a generated context transfer). Such a message never counts as the
+			// user's own words (secret_handoff.go
 			// handoffUserTurn, the decision on #3962).
 			Via string `json:"via"`
 		}
@@ -976,7 +977,7 @@ func (s *Service) startRoutes() {
 		origin, ref := requestOrigin(r, in.Purpose)
 		sentence := in.Prompt // as the owner wrote it, for the route (route.go)
 		own := false          // only the user's words in it, as filled in (workspace_mention.go fillWorkspaces)
-		if in.Guest == nil {
+		if in.Guest == nil && in.Via != "handoff" {
 			in.Prompt, own = s.fillWorkspaces(ctx, in.Prompt) // as SendParams does for the next messages
 		}
 		// The main conversation is the assistant's, on its machine.
@@ -1002,7 +1003,7 @@ func (s *Service) startRoutes() {
 			s.markReporter(ctx, sess.MachineID, sess.SessionID)
 		}
 		// The owner's New chat: is it a direction? In the background; nothing waits for it (route.go).
-		if origin == OriginUser && !in.Main && in.Guest == nil && in.Space == "" && in.Purpose == "" && !in.ReportTasks {
+		if origin == OriginUser && !in.Main && in.Guest == nil && in.Space == "" && in.Purpose == "" && !in.ReportTasks && in.Via != "handoff" {
 			go s.routeNewChat(sess.MachineID, sess.SessionID, sentence)
 		}
 		if *note != "" {

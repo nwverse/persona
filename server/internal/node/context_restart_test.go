@@ -59,23 +59,33 @@ func TestContextRestartRecommendation(t *testing.T) {
 		`{"type":"api-request-blob","data":{"usage":{"input_tokens":1000000,"output_tokens":0}}}`)
 	check("two distinct requests despite repeated usage and a long reply", false)
 	add(high("c", ""))
-	check("third large request", true)
+	check("three large requests without compact", false)
 
-	add(`{"type":"system","subtype":"compact_boundary","compactMetadata":{"preTokens":510000,"postTokens":9000}}`)
-	check("compact clears the recommendation", false)
-	add(high("d", ""), high("e", ""))
-	check("compact also clears the partial streak", false)
-	add(high("f", ""))
-	check("third large request since compact", true)
+	add(`{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":510000,"postTokens":9000}}`)
+	add(high("c", ""))
+	check("pre-compact duplicate does not count", false)
+	add(high("d", ""))
+	check("first request after automatic compact is still high", true)
+	add(high("e", ""))
+	check("another high request keeps the recommendation", true)
+	add(`{"type":"assistant","message":{"id":"f","usage":{"input_tokens":300000}}}`)
+	check("a request at the threshold clears the recommendation", false)
 
-	add(`{"type":"assistant","message":{"id":"g","usage":{"input_tokens":300000}}}`)
-	check("a lower request breaks the streak without compact", false)
+	add(`{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":510000,"postTokens":9000}}`)
+	check("manual compact waits for a new measurement", false)
+	add(`{"type":"assistant","message":{"id":"g","usage":{"input_tokens":90000}}}`)
+	check("first request after manual compact drops", false)
+	add(high("h", ""), high("i", ""), high("j", ""))
+	check("gradual growth after a drop does not rearm", false)
+
+	add(`{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual"}}`, high("k", ""))
+	check("first request after manual compact is still high", true)
 }
 
 func TestContextRestartRecommendationCodex(t *testing.T) {
 	var transcript strings.Builder
-	add := func(total int) {
-		fmt.Fprintf(&transcript, `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":%d},"last_token_usage":{"input_tokens":310000,"cached_input_tokens":300000}}}}`+"\n", total)
+	add := func(total, input int) {
+		fmt.Fprintf(&transcript, `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":%d},"last_token_usage":{"input_tokens":%d}}}}`+"\n", total, input)
 	}
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
 	check := func(want bool) {
@@ -93,17 +103,19 @@ func TestContextRestartRecommendationCodex(t *testing.T) {
 			t.Fatalf("Codex context restart: got %v, want %v", m.contextRestartRecommended, want)
 		}
 	}
-	add(310001)
-	add(310001)
-	add(620002)
+	add(310001, 310000)
+	add(620002, 310000)
+	add(930003, 310000)
 	check(false)
-	add(930003)
-	check(true)
 	transcript.WriteString(`{"type":"compacted","payload":{"message":""}}` + "\n")
-	add(930003)
-	add(1240004)
-	add(1550005)
+	add(930003, 310000) // repeated usage around the boundary
 	check(false)
-	add(1860006)
+	add(1240004, 310000)
 	check(true)
+	transcript.WriteString(`{"type":"event_msg","payload":{"type":"context_compacted"}}` + "\n")
+	add(1330005, 90000)
+	add(1640006, 310000)
+	add(1950007, 310000)
+	add(2260008, 310000)
+	check(false)
 }

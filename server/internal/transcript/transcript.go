@@ -141,7 +141,7 @@ type Meta struct {
 	// ContextCompacted: a compaction came after the latest reply, so the context is not known (ContextTokens 0) until
 	// the next one; the size before it no longer stands (#9207).
 	ContextCompacted bool
-	restartContext   [3]contextRequest
+	restartContext   contextRestart
 	restartCodex     tokenuse.CodexTotal
 	// ContextWindow is the model's context window when the transcript says it (a Codex rollout's token_count carries
 	// model_context_window); 0 for Claude Code, whose transcripts do not (node/contextwindow.go knows by model id).
@@ -345,24 +345,24 @@ func (m *Meta) ObserveNamingMetadata(line []byte) {
 			t, _, ok := tokenuse.ClaudeTokens(e.Message.Model, e.Message.Usage, e.APIError)
 			tokens := t.Input + t.CacheRead + t.CacheWrite
 			if ok && e.Message.ID != "" && tokens > 0 && tokens <= MaxContextTokens {
-				m.observeRequestContext(e.Message.ID, tokens)
+				m.restartContext.observe(e.Message.ID, tokens)
 			}
 		}
 	case "system":
 		if e.Subtype == "compact_boundary" && !e.IsSidechain {
-			m.restartContext = [3]contextRequest{}
+			m.restartContext.compact()
 		}
 	case "compacted":
-		m.restartContext = [3]contextRequest{}
+		m.restartContext.compact()
 	case "event_msg":
 		switch e.Payload.Type {
 		case "context_compacted":
-			m.restartContext = [3]contextRequest{}
+			m.restartContext.compact()
 		case "token_count":
 			if info := e.Payload.Info; info != nil {
 				m.OutputTokens = int(info.Total.Output)
-				if m.restartCodex.Grew(info.Total.Total) && info.Last.Input > 0 {
-					m.observeRequestContext("", info.Last.Input)
+				if m.restartCodex.Grew(info.Total.Total) && info.Last.Input > 0 && info.Last.Input <= MaxContextTokens {
+					m.restartContext.observe("", info.Last.Input)
 				}
 			}
 		}

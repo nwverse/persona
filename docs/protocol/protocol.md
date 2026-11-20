@@ -642,12 +642,16 @@ Reasoning effort (`docs/integrations/codex.md` "Thinking effort"): Codex session
 
 Context usage (#2430): sessions carry `context_tokens` (the tokens the model saw on the agent's latest reply: for Claude `input + cache_read + cache_creation`, for Codex the latest rollout `token_count`'s `last_token_usage.input_tokens`) and `context_window` (the model's window). The node computes these from the transcript tail that `readQuickMetaSince` already reads, without reading extra files; when the tail has no reply it keeps the last value read (`node/contextwindow.go`), except after a compaction: from a main-thread `compact_boundary` until the next reply `context_tokens` is omitted, since the size before it no longer stands and the boundary's `postTokens` leaves out the system prompt and tools (#9207). Window: Codex uses the `model_context_window` recorded in its own rollout; Claude goes by model id: a `[1m]` suffix is 1 million, so is a model whose window is 1 million without it in Claude Code's own model list (Opus from 4.7, Sonnet and Haiku from 5, every Fable and Mythos; #5758), and a session that has already seen more than 200k tokens also counts as 1 million (ids in the transcript have no suffix); other `claude-*` (Opus and Sonnet 4.6 and earlier, Haiku 4.5, 3.x) are 200k. For non-Claude models (the gateway's own) the window is unknown and only `context_tokens` is sent. Unknown fields are omitted (`omitempty`): no reply yet, old node. Clients compute the percentage as `context_tokens / context_window` and draw nothing if either is missing.
 
-`context_restart_recommended` is an optional session flag. The node's incremental transcript scan sets it when the
-latest three distinct measured requests each used over 300,000 input tokens (including cache reads and writes).
-It clears when a request falls to or below the threshold or the conversation compacts. Evidence comes from Claude Code
-reply usage or Codex rollout token counts. The web composer offers a fresh chat, with the existing summary carry dialog
-for the main chat, and remembers a dismissal per session in that browser. Opening the notice or starting a normal
-chat does not archive the current conversation.
+`context_restart_recommended` is an optional session flag. The node sets it if the first measured request after
+manual or automatic compaction still uses over 300,000 input tokens, including cache reads and writes. It clears on a
+request at or below that threshold or at the next compaction. Later growth after a smaller first request leaves the flag
+clear. Evidence comes from Claude Code reply usage or Codex rollout token counts. The web composer offers a fresh
+chat and remembers dismissal in that browser. The main chat uses the existing summary carry confirmation.
+
+`POST /api/v1/sessions/{mid}/{sid}/continue-in-new-chat` starts a fresh side conversation or Agent for a full device.
+It reads the previous chat's latest compact summary on its computer and falls back to its bounded recent messages.
+The new Agent uses the previous Agent's machine, folder and launcher. The response is `{session}`; use the usual
+`X-Persona-Op-Id` receipt to retry a lost answer. The previous chat is available for the owner to archive explicitly.
 
 `POST /api/v1/sessions/{mid}/{sid}/attach`: the user asks to attach live. The node requests resume only for a thread still loaded on its original instance with a unique owner, and without overriding run configuration. Discovery and ordinary history reads don't call resume. Attach permission is stored in settings per thread / stable instance; after a disconnect the owner is re-checked, with no automatic cold resume or instance switch. loaded/list and resume aren't atomic, so there's no promise against an unload race in between.
 
