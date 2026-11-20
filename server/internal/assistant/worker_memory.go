@@ -61,7 +61,7 @@ func (s *Service) goRecordWorkerReport(ctx context.Context, t Todo, machine, ses
 	s.goWorkerOutcome(func() {
 		items, read := s.lastTurnItems(ctx, machine, session)
 		// A successful done report is always eligible. If WorkDone later commits, it reuses this report's stable identity.
-		index := workerReportIndex(items, text, at)
+		index := workerReportIndex(items, text, at, evidence)
 		if !read || len(items) == 0 || index < 0 {
 			return
 		}
@@ -74,13 +74,18 @@ func (s *Service) goRecordWorkerReport(ctx context.Context, t Todo, machine, ses
 			s.logf("WARN worker memory todo %s: done report has no stable transcript identity", t.ID)
 			return
 		}
-		var links []string
-		for _, e := range evidence {
-			links = append(links, urlRe.FindAllString(e, -1)...)
-		}
+		links := workerEvidenceLinks(evidence)
 		s.recordWorkerOutcome(ctx, t, machine, session, s.workerCwd(ctx, t, machine, session), turn, itemIndex,
-			workerOutcomeItemKey(items[index]), text, links, text)
+			workerOutcomeItemKey(items[index]), workerLegacyIDAllowed(items, index), text, links, text)
 	})
+}
+
+func workerEvidenceLinks(evidence []string) []string {
+	var links []string
+	for _, item := range evidence {
+		links = append(links, urlRe.FindAllString(item, -1)...)
+	}
+	return links
 }
 
 func workerReportEvidenceLinks(it proto.Item) []string {
@@ -93,11 +98,23 @@ func workerReportEvidenceLinks(it proto.Item) []string {
 	if json.Unmarshal(it.ToolInput, &report) != nil {
 		return nil
 	}
-	var links []string
-	for _, evidence := range report.Evidence {
-		links = append(links, urlRe.FindAllString(evidence, -1)...)
+	return workerEvidenceLinks(report.Evidence)
+}
+
+// workerLegacyIDAllowed says whether the old Seq-only ID unambiguously names this outcome. When parallel items of the
+// same kind share a Seq, an old record cannot tell which one it was, so it must not suppress either keyed replacement.
+func workerLegacyIDAllowed(items []proto.Item, index int) bool {
+	if index < 0 || index >= len(items) {
+		return false
 	}
-	return links
+	selected := items[index]
+	for i, other := range items {
+		if i != index && other.Seq == selected.Seq && other.Kind == selected.Kind && other.Role == selected.Role &&
+			workerOutcomeItemKey(other) != workerOutcomeItemKey(selected) {
+			return false
+		}
+	}
+	return true
 }
 
 // goRecordWorkerDone records a committed WorkDone using the exact items triage read, never a later turn. Resolve the todo
@@ -141,7 +158,7 @@ func (s *Service) goRecordWorkerDoneForTodo(ctx context.Context, t Todo, work db
 			links = append(links, a.Ref)
 		}
 		s.recordWorkerOutcome(ctx, t, work.MachineID, work.SessionID, s.workerCwd(ctx, t, work.MachineID, work.SessionID),
-			turn, itemIndex, workerOutcomeItemKey(items[index]), work.Work.Line, links, reply)
+			turn, itemIndex, workerOutcomeItemKey(items[index]), workerLegacyIDAllowed(items, index), work.Work.Line, links, reply)
 	})
 }
 
@@ -150,7 +167,7 @@ func (s *Service) goRecordWorkerDoneForTodo(ctx context.Context, t Todo, work db
 // conclusion and links. No in-memory claim is made: memory.jsonl alone decides whether a replay is already recorded.
 // Live callers pin the outcome text; direct callers may omit it and use the session's listed last text instead.
 func (s *Service) recordWorkerOutcome(ctx context.Context, t Todo, machine, session, cwd string, turn, itemIndex int,
-	itemKey, conclusion string, links []string, pinnedText ...string) {
+	itemKey string, allowLegacy bool, conclusion string, links []string, pinnedText ...string) {
 	if strings.TrimSpace(conclusion) == "" || !s.kbWritable(ctx) {
 		return
 	}
@@ -167,9 +184,10 @@ func (s *Service) recordWorkerOutcome(ctx context.Context, t Todo, machine, sess
 	id := workerMemoryItemID(t.ID, machine, session, turn, itemIndex, itemKey)
 	pending := make([]*kb.Project, 0, len(projects))
 	for _, p := range projects {
-		// A record written before item keys were added still owns this outcome. Checking the legacy prefix also keeps
-		// retries idempotent across a rolling upgrade; newly written records carry only their fully discriminated ID.
-		if !e.ProjectMemoryHas(p.Slug, id) && (id == legacyID || !e.ProjectMemoryHas(p.Slug, legacyID)) {
+		// An unambiguous record written before item keys were added still owns this outcome. A legacy prefix shared by
+		// parallel items is not enough evidence to suppress either one; newly written records carry their keyed ID.
+		if !e.ProjectMemoryHas(p.Slug, id) &&
+			(!allowLegacy || id == legacyID || !e.ProjectMemoryHas(p.Slug, legacyID)) {
 			pending = append(pending, p)
 		}
 	}
@@ -329,8 +347,9 @@ func (s *Service) workerTurnPage(ctx context.Context, machine, session string, b
 }
 
 // workerReportIndex finds a done report's tool call. For a live report, at selects the matching call if a turn repeated
-// the same report text. For WorkDone it finds the latest non-error done report and reuses its identity.
-func workerReportIndex(items []proto.Item, text string, at time.Time) int {
+// the same report text, and supplied evidence breaks a tie between parallel calls. WorkDone omits that filter and finds
+// the latest non-error done report so it reuses the same identity.
+func workerReportIndex(items []proto.Item, text string, at time.Time, evidence ...[]string) int {
 	best := -1
 	bestDelta := time.Duration(1<<63 - 1)
 	for i := len(items) - 1; i >= 0; i-- {
@@ -340,13 +359,17 @@ func workerReportIndex(items []proto.Item, text string, at time.Time) int {
 			continue
 		}
 		var report struct {
-			Kind string `json:"kind"`
-			Text string `json:"text"`
+			Kind     string   `json:"kind"`
+			Text     string   `json:"text"`
+			Evidence []string `json:"evidence"`
 		}
 		if json.Unmarshal(it.ToolInput, &report) != nil || report.Kind != upReportDone {
 			continue
 		}
 		if text != "" && clip(strings.TrimSpace(report.Text), 2000) != text {
+			continue
+		}
+		if len(evidence) > 0 && !slices.Equal(workerEvidenceLinks(report.Evidence), workerEvidenceLinks(evidence[0])) {
 			continue
 		}
 		failed := false

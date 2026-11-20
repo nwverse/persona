@@ -111,7 +111,7 @@ func (env *workerMemoryEnv) record(t *testing.T) {
 	t.Helper()
 	// Test-only contract for the shared completion path: both report_to_supervisor(done) and a WorkDone transition call
 	// this method with these same fields. Turn and itemIndex come from that turn's transcript item.
-	env.s.recordWorkerOutcome(context.Background(), env.todo, "box", "s1", env.cwd, 7, 2, "report-call",
+	env.s.recordWorkerOutcome(context.Background(), env.todo, "box", "s1", env.cwd, 7, 2, "report-call", true,
 		workerMemoryConclusion, []string{workerMemoryPR, workerMemoryIssue})
 }
 
@@ -223,6 +223,82 @@ func TestWorkerMemorySameSequenceReportsKeepDistinctItems(t *testing.T) {
 	}
 	if len(records) != 2 || !seen[first] || !seen[second] {
 		t.Fatalf("WorkDone duplicated or replaced a same-Seq report: %+v", records)
+	}
+}
+
+// Identical parallel report text and timestamps are disambiguated by their evidence links, not by which one happens to
+// appear last in the transcript page.
+func TestWorkerMemorySameSequenceIdenticalTextUsesEvidence(t *testing.T) {
+	env := newWorkerMemoryEnv(t)
+	env.setProject(t, "explicit")
+	input := func(evidence string) json.RawMessage {
+		raw, _ := json.Marshal(map[string]any{"kind": "done", "text": workerMemoryConclusion, "evidence": []string{evidence}})
+		return raw
+	}
+	items := []proto.Item{
+		{ID: "prompt", Seq: 1, Kind: proto.KindText, Role: "user", Text: "Fix both retry loops."},
+		{ID: "report-a", Seq: 2, Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "call-a",
+			ToolName: "report_to_supervisor", ToolInput: input(workerMemoryPR), TS: turnEnd},
+		{ID: "report-b", Seq: 2, Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "call-b",
+			ToolName: "report_to_supervisor", ToolInput: input(workerMemoryIssue), TS: turnEnd},
+	}
+	env.f.setItems(items...)
+	env.s.goRecordWorkerReport(context.Background(), env.todo, "box", "s1", workerMemoryConclusion, []string{workerMemoryPR}, turnEnd)
+	env.s.tasks.outcomeRuns.Wait()
+	env.s.goRecordWorkerReport(context.Background(), env.todo, "box", "s1", workerMemoryConclusion, []string{workerMemoryIssue}, turnEnd)
+	env.s.tasks.outcomeRuns.Wait()
+	records := workerMemoryRecords(t, env.e, "explicit")
+	if len(records) != 2 {
+		t.Fatalf("identical parallel reports collapsed: %+v", records)
+	}
+	links := map[string]bool{}
+	for _, record := range records {
+		if len(record.Links) == 1 {
+			links[record.Links[0]] = true
+		}
+	}
+	if !links[workerMemoryPR] || !links[workerMemoryIssue] {
+		t.Fatalf("identical parallel reports lost their distinct evidence: %+v", records)
+	}
+	work := db.SessionWork{MachineID: "box", SessionID: "s1", TurnAt: turnEnd,
+		Work: proto.WorkState{Phase: proto.WorkDone, Line: workerMemoryConclusion}}
+	env.s.goRecordWorkerDone(context.Background(), work, items)
+	env.s.tasks.outcomeRuns.Wait()
+	if got := workerMemoryRecords(t, env.e, "explicit"); len(got) != 2 {
+		t.Fatalf("WorkDone duplicated an identical parallel report: %+v", got)
+	}
+}
+
+// An ambiguous legacy prefix cannot prove which parallel item it recorded, so it must not suppress a new keyed outcome.
+func TestWorkerMemoryParallelItemIgnoresAmbiguousLegacyID(t *testing.T) {
+	env := newWorkerMemoryEnv(t)
+	env.setProject(t, "explicit")
+	const earlier = "The earlier parallel outcome."
+	const current = "The current parallel outcome."
+	legacy := kb.ProjectMemoryRecord{ID: workerMemoryID(env.todo.ID, "box", "s1", 1, 1), TodoID: env.todo.ID,
+		Agent: "s1", Turn: 1, ItemIndex: 1, Conclusion: earlier}
+	if err := env.e.AppendProjectMemory("explicit", legacy); err != nil {
+		t.Fatal(err)
+	}
+	input := func(text string) json.RawMessage {
+		raw, _ := json.Marshal(map[string]any{"kind": "done", "text": text})
+		return raw
+	}
+	env.f.setItems(
+		proto.Item{ID: "prompt", Seq: 1, Kind: proto.KindText, Role: "user", Text: "Start"},
+		proto.Item{ID: "report-a", Seq: 2, Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "call-a",
+			ToolName: "report_to_supervisor", ToolInput: input(earlier), TS: turnEnd},
+		proto.Item{ID: "report-b", Seq: 2, Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "call-b",
+			ToolName: "report_to_supervisor", ToolInput: input(current), TS: turnEnd})
+	env.s.goRecordWorkerReport(context.Background(), env.todo, "box", "s1", current, nil, turnEnd)
+	env.s.tasks.outcomeRuns.Wait()
+	records := workerMemoryRecords(t, env.e, "explicit")
+	seen := map[string]bool{}
+	for _, record := range records {
+		seen[record.Conclusion] = true
+	}
+	if len(records) != 2 || !seen[earlier] || !seen[current] {
+		t.Fatalf("ambiguous legacy ID suppressed a parallel outcome: %+v", records)
 	}
 }
 
