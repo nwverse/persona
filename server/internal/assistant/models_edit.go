@@ -7,6 +7,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -210,58 +211,85 @@ func permissionModeSupported(agent string, listed proto.PermissionModeSet, mode 
 	return slices.Contains(permissionModesForAgent(agent, listed), mode)
 }
 
+func (s *Service) targetMachineLauncher(ctx context.Context, machine, name string) (ConfiguredLauncher, bool) {
+	if name == "" || machine == "" {
+		return ConfiguredLauncher{}, false
+	}
+	ctx = withUnhidden(ctx, name)
+	find := func(merged []ConfiguredLauncher) (ConfiguredLauncher, bool) {
+		for _, l := range merged {
+			if l.Name != name {
+				continue
+			}
+			if c, ok := s.configuredLauncher(ctx, machine, name); ok {
+				if c.PermissionModes != 0 {
+					l.PermissionModes = c.PermissionModes
+				} else if c.AgentType != "" && l.Agent != "" && c.AgentType != l.Agent {
+					l.PermissionModes = 0
+				}
+			}
+			return l, true
+		}
+		return ConfiguredLauncher{}, false
+	}
+	var seen []proto.Launcher
+	foundMachine := false
+	for _, m := range s.zshrcLaunchers(ctx, false) {
+		if m.MachineID == machine {
+			seen = m.Launchers
+			foundMachine = true
+			break
+		}
+	}
+	// In-scope managed API providers (e.g. Messages API backing Claude Code) shadow same-named zshrc launchers in
+	// machineLaunchersFrom without being emitted as non-API launchers; resolve a matching one with hub.json
+	// overrides before falling back to live discovery.
+	managedInScope := false
+	if m, ok := s.managedNamed(ctx, name); ok && !proto.IsExternalLauncher(m.Name) && s.usableOnAsking(ctx, m, machine, false) {
+		managedInScope = true
+		if m.Kind == "api" {
+			merged := sessionLaunchers([]ConfiguredLauncher{{Launcher: proto.Launcher{
+				Name: m.Name, BaseURL: m.BaseURL, Model: m.Model, Source: "persona", Agent: m.AgentType(),
+			}}}, s.hello(ctx).Models.Launchers[machine])
+			if l, ok := find(merged); ok {
+				return l, true
+			}
+		}
+	}
+	cachedKnown := foundMachine && (name == "claude" || managedInScope || slices.ContainsFunc(seen, func(l proto.Launcher) bool { return l.Name == name }))
+	if cachedKnown {
+		if l, ok := find(s.pickerLaunchersSeen(ctx, machine, seen, false)); ok {
+			return l, true
+		}
+	}
+	// When the cached machine snapshot does not contain name (or machine is absent from the cache), query the live
+	// node through pickerLaunchers so newly added launchers on machine are validated against their real capabilities
+	// and hub.json overrides rather than falling back to a hub.json-only default or cross-machine provider union.
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if live, err := s.pickerLaunchers(cctx, machine); err == nil {
+		if l, ok := find(live); ok {
+			return l, true
+		}
+	}
+	if !cachedKnown {
+		if l, ok := find(s.pickerLaunchersSeen(ctx, machine, seen, false)); ok {
+			return l, true
+		}
+	}
+	return ConfiguredLauncher{}, false
+}
+
 func (s *Service) permissionModesForLauncher(ctx context.Context, machine, name string, provider *ModelProvider) []string {
 	var agent string
 	var listed proto.PermissionModeSet
 	machineResolved := false
-	if name != "" && machine != "" {
-		// When a specific machine is known, use that machine's authoritative launcher definition instead of
-		// the cross-machine union carried on provider.
-		var machineAgent string
-		var machineListed proto.PermissionModeSet
-		for _, m := range s.zshrcLaunchers(ctx, false) {
-			if m.MachineID != machine {
-				continue
-			}
-			for _, l := range m.Launchers {
-				if l.Name == name {
-					machineAgent = l.Agent
-					machineListed = l.PermissionModes
-					machineResolved = true
-					break
-				}
-			}
-			if machineResolved {
-				break
-			}
-		}
-		if c, ok := s.configuredLauncher(ctx, machine, name); ok {
-			if c.AgentType != "" {
-				machineAgent = c.AgentType
-			} else if machineAgent == "" && c.Agent != "" {
-				machineAgent = c.Agent
-			}
-			if c.PermissionModes != 0 || !machineResolved {
-				machineListed = c.PermissionModes
-			}
-			machineResolved = true
-		}
-		if !machineResolved {
-			if list, known := s.launchersHere(ctx, machine); known {
-				for _, l := range list {
-					if l.Name == name {
-						machineAgent = l.Agent
-						machineListed = l.PermissionModes
-						machineResolved = true
-						break
-					}
-				}
-			}
-		}
-		if machineResolved {
-			agent = machineAgent
-			listed = machineListed
-		}
+	if l, ok := s.targetMachineLauncher(ctx, machine, name); ok {
+		// When a specific machine is known, use that machine's merged launcher definition (managed-provider
+		// precedence + discovered launcher + hub.json overrides) instead of the cross-machine provider union.
+		agent = cmp.Or(l.AgentType, l.Agent)
+		listed = l.PermissionModes
+		machineResolved = true
 	}
 	if !machineResolved && provider != nil {
 		agent = provider.Agent
