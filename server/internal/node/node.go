@@ -758,7 +758,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 }
 
 func (n *Node) handleMethod(ctx context.Context, method string, params json.RawMessage) (result any, resultErr error) {
-	if verb, ok := strings.CutPrefix(method, "git.backend."); ok {
+	if verb, ok := strings.CutPrefix(method, methodGitBackendPrefix); ok {
 		return n.backendGit(ctx, verb, params)
 	}
 	if method == devicewire.MethodStartBackendSession {

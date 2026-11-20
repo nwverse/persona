@@ -487,6 +487,7 @@ func TestAgyPaneWatchFromTheEndPastAnInvisibleStep(t *testing.T) {
 	for range 3 {
 		n.pollAgyPane(w)
 	}
+	waitFor(t, "the invisible step's batch reaches the hub", func() bool { return len(hub.spans()) >= 1 })
 	if got := hub.spans(); len(got) != 1 || got[0].n != 0 || got[0].fromSeq != 2 || got[0].toSeq != 3 {
 		t.Fatalf("after the invisible step: %+v", got)
 	}
@@ -494,6 +495,87 @@ func TestAgyPaneWatchFromTheEndPastAnInvisibleStep(t *testing.T) {
 	waitFor(t, "the visible step", func() bool { return len(hub.spans()) >= 2 })
 	if got := hub.spans(); len(got) != 2 || got[1].n != 1 || got[1].fromSeq != 3 || got[1].toSeq != 4 || hub.got()[0].Text != "Visible" {
 		t.Fatalf("after the visible step: %+v, items %+v", got, hub.got())
+	}
+}
+
+func TestAgyPaneWakeKeepsDeliveredReplyAndCatchUp(t *testing.T) {
+	n, f, home := herdrNode(t)
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
+	seedAgents(t, n, f, agyTestAgent(agyTestPane, home, agyTestID))
+	raw, err := os.ReadFile("../../../integrations/antigravity/test/fixtures/autonomous-wake.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitAfter(string(raw), "\n")
+	file := agyTestFile(t, n.agyDataRoot(), agyTestID, strings.Join(lines[:3], ""))
+	prior, page := agyTestItems(t, n, agyTestRow, nil)
+	if len(prior) != 2 || !strings.Contains(prior[1].Text, "file: /synthetic/chart.png") {
+		t.Fatalf("foreground answer: %+v", prior)
+	}
+	hub := withHub(t, n)
+	agyTestCall(t, n, "session.watch", agyTestRow, map[string]any{"since_seq": page["to_seq"]})
+	t.Cleanup(func() { n.unwatch(agyTestRow) })
+	agyTestAppend(t, file, strings.Join(lines[3:5], ""))
+	waitFor(t, "the private notifications advance the cursor", func() bool { return len(hub.spans()) >= 1 })
+	if got := hub.spans()[0]; got.n != 0 || got.toSeq != 5 {
+		t.Fatalf("notifications before anything resumed: %+v", got)
+	}
+	agyTestAppend(t, file, strings.Join(lines[5:], ""))
+	waitFor(t, "background work reaches the watcher", func() bool { return len(hub.spans()) >= 2 })
+	rows, _ := agyTestItems(t, n, agyTestRow, map[string]any{"after_seq": 5})
+	watched := hub.got()
+	if len(rows) != 4 || len(watched) != len(rows) || !rows[0].Wake || rows[0].Role != "system" || rows[0].Kind != proto.KindNotice ||
+		rows[0].Seq != 6 || rows[0].ID != strings.Split(prior[1].ID, "#")[0]+"#-1" || rows[0].Text != transcript.BackgroundTaskUpdate ||
+		rows[1].Text != "The check is complete." || rows[2].Role != "user" || rows[3].Text != "Another answer." {
+		t.Fatalf("native catch-up: %+v (watched %+v)", rows, watched)
+	}
+	full, _ := agyTestItems(t, n, agyTestRow, nil)
+	if len(full) != len(rows)+len(prior) || full[1].ID != prior[1].ID || full[1].Text != prior[1].Text {
+		t.Fatalf("foreground answer across the wake: %+v", full)
+	}
+	for i, row := range rows {
+		if watched[i].ID != row.ID || full[i+len(prior)].ID != row.ID {
+			t.Fatalf("unstable row %d: page %s, live %s, cold %s", i, row.ID, watched[i].ID, full[i+len(prior)].ID)
+		}
+	}
+}
+
+func TestAgyPaneReplaysOnlyTheMatchingObservedWake(t *testing.T) {
+	n, f, home := herdrNode(t)
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
+	seedAgents(t, n, f, agyTestAgent(agyTestPane, home, agyTestID))
+	const fixtures = "../../../integrations/antigravity/test/fixtures/"
+	raw, err := os.ReadFile(fixtures + "autonomous-wake.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitAfter(string(raw), "\n")
+	background := strings.Replace(lines[5], `"step_index":5`, `"step_index":3`, 1)
+	file := agyTestFile(t, n.agyDataRoot(), agyTestID, strings.Join(lines[:3], "")+background)
+	prior, page := agyTestItems(t, n, agyTestRow, nil)
+	if len(prior) != 3 || prior[2].Wake {
+		t.Fatalf("ordinary adjacent replies: %+v", prior)
+	}
+	hub := withHub(t, n)
+	agyTestCall(t, n, "session.watch", agyTestRow, map[string]any{"since_seq": page["to_seq"]})
+	t.Cleanup(func() { n.unwatch(agyTestRow) })
+
+	// This is the file the registered companion produces in the markerless ACP test.
+	receipt, err := os.ReadFile(fixtures + "observed-wake.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agyTestWrite(t, filepath.Join(n.agyDataRoot(), "brain", agyTestID, agyWakeReceipts), string(receipt))
+	waitFor(t, "the same native export gains its observed wake", func() bool { return len(hub.spans()) > 0 })
+	rows, matchedPage := agyTestItems(t, n, agyTestRow, nil)
+	if len(rows) != 4 || rows[1].ID != prior[1].ID || rows[3].ID != prior[2].ID || !rows[2].Wake ||
+		rows[2].Seq != rows[3].Seq || matchedPage["history"] == page["history"] || hub.spans()[0].fromSeq != 0 {
+		t.Fatalf("observed wake: %+v, span %+v", rows, hub.spans())
+	}
+	agyTestAppend(t, file, lines[2]+background)
+	other, _ := agyTestItems(t, n, agyTestRow, nil)
+	if len(other) != 3 || other[1].ID == prior[1].ID {
+		t.Fatalf("receipt crossed a rewind: %+v", other)
 	}
 }
 
