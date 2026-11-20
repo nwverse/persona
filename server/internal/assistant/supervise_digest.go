@@ -633,12 +633,15 @@ func (s *Service) replaceQueuedSupervise(to string, msg relayMsg) bool {
 // digestEntry is signal g as the message lists it; false when it no longer holds.
 func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string) (prompts.SuperviseEntry, bool) {
 	t, ok := s.todoNow(g.Todo)
-	if !ok || t.Supervision == nil && g.Kind != sigFailed || t.DoneAt != nil && g.Kind != sigFailed {
+	if !ok || t.Supervision == nil && g.Kind != sigFailed && g.Kind != sigReport || t.DoneAt != nil && g.Kind != sigFailed {
 		return prompts.SuperviseEntry{}, false
 	}
 	v := t.Supervision
 	if v == nil {
-		v = &Supervision{} // a failed start can be told to its origin without creating an acceptance authority
+		if g.Kind != sigFailed && g.Kind != sigReport {
+			return prompts.SuperviseEntry{}, false
+		}
+		v = &Supervision{} // a failed start or reporting conversation has no ledger and grants no acceptance authority
 	}
 	st := v.state(t)
 	var replyAsk acceptAsk

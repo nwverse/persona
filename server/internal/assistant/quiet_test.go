@@ -370,7 +370,7 @@ func TestGoldenTaskNotice(t *testing.T) {
 	}
 }
 
-// A reporting conversation keeps its task notices, while the main conversation supervises the same task (#5732).
+// A reporting conversation keeps its task notices without gaining a supervision ledger (#12152).
 // agent_start from it is a task too.
 func TestReportingConversationIsToldItsTasks(t *testing.T) {
 	s, f := newQuietService(t)
@@ -383,7 +383,7 @@ func TestReportingConversationIsToldItsTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "the link", func() bool { return len(onlyTodo(s).Agents) == 1 })
-	if todo := onlyTodo(s); !todo.Quiet || todo.Origin != "lark1" || todo.Supervision == nil || todo.Supervision.Supervisor != "conv1" {
+	if todo := onlyTodo(s); !todo.Quiet || todo.Origin != "lark1" || todo.Supervision != nil {
 		t.Fatalf("todo = %+v", todo)
 	}
 	agentTurn(s, f, proto.StatusWorking, "", 0)
@@ -410,9 +410,8 @@ func TestReportingConversationIsToldItsTasks(t *testing.T) {
 	if strings.Contains(n, "主对话") {
 		t.Errorf("the notice talks of the main conversation:\n%s", n)
 	}
-	waitFor(t, "the main supervision", func() bool { return len(f.notices()) == 1 })
-	if got := f.notices(); len(got) != 1 || !strings.Contains(got[0], "📋 督办") {
-		t.Fatalf("the main supervision: %q", got)
+	if got := f.notices(); len(got) != 0 {
+		t.Fatalf("the reporting task moved its completion supervision to main: %q", got)
 	}
 
 	s2, _ := newQuietService(t)

@@ -28,7 +28,10 @@ func (d *DB) PutConversationDeletion(ctx context.Context, machine, session strin
 		if _, err := tx.Exec(ctx, `UPDATE settings SET value=value || jsonb_build_object($2::text,$3::jsonb), updated_at=now() WHERE key=$1`, ConversationDeletionsKey, conversationDeletionKey(machine, session), row); err != nil {
 			return err
 		}
-		return dropSearchConversationTx(ctx, tx, machine, session)
+		if err := dropSearchConversationTx(ctx, tx, machine, session); err != nil {
+			return err
+		}
+		return dropConversationHistoryTx(ctx, tx, machine, session)
 	})
 }
 

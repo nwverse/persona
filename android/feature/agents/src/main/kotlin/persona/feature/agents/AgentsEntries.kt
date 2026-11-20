@@ -1,6 +1,7 @@
 package persona.feature.agents
 
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
@@ -237,6 +238,7 @@ fun AgentsListHost(
     terminalPanes: kotlinx.coroutines.flow.Flow<Boolean>,
     listOwner: androidx.lifecycle.ViewModelStoreOwner? = null,
     sidebar: AgentsSidebarLayout? = null,
+    providedListState: LazyListState? = null,
 ) {
     val owner = listOwner ?: checkNotNull(androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner.current)
     val context = LocalContext.current.applicationContext
@@ -296,6 +298,6 @@ fun AgentsListHost(
         val groups by dependencies.groups().groups.collectAsStateWithLifecycle()
         val panes by terminalPanes.collectAsStateWithLifecycle(false)
         AgentsScreen(model, navigator, metadata.copy(rows = rows), creationModel, onMachineSelected, groups, panes,
-            sidebar = sidebar)
+            sidebar = sidebar, providedListState = providedListState)
     }
 }

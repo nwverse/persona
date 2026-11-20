@@ -41,11 +41,15 @@ func (s *Service) supervises(ctx context.Context, id string) bool {
 	return s.isMain(ctx, id) || s.isLeader(ctx, id)
 }
 
-// defaultPlanSupervisor is the main conversation for every task a conversation hands out (#5732). Only a task
-// leader's worker keeps its leader Agent as supervisor, and a plan with no conversation has no supervisor to assign.
-// The planning conversation remains the todo's origin and hears the outcome; supervision and acceptance stay in main.
+// defaultPlanSupervisor is the main conversation for every ordinary task a conversation hands out (#5732). A task
+// leader's worker keeps its leader Agent, an active reporting conversation keeps its existing unsupervised notice route,
+// and a plan with no conversation has no supervisor to assign. The planning conversation remains the todo's origin and
+// hears the outcome; supervision and acceptance for ordinary work stay in main.
 func (s *Service) defaultPlanSupervisor(ctx context.Context, conversation, parent string) (string, bool) {
 	if parent != "" || conversation == "" {
+		return "", false
+	}
+	if _, reports := s.reporterOf(ctx, conversation); reports {
 		return "", false
 	}
 	main := s.settings(ctx).Main

@@ -1295,6 +1295,39 @@ func (s *Service) applyTaskDone(ctx context.Context, t Todo, work time.Time, wor
 		s.setTaskDelivery(ctx, t.ID, *c.Delivery) // where it is held, on its card (delivery.go)
 	}
 	if t.Supervision == nil {
+		if _, reporting := s.reporterOf(ctx, t.Origin); reporting {
+			// An active reporting conversation deliberately keeps its task unsupervised (#12152): preserve its ordinary
+			// quiet completion instead of attaching main here. Other legacy unsupervised tasks join main below (#5732).
+			s.turnJudged(ctx, t.ID, c, err, "")
+			if err != nil {
+				if !ai.IsPaused(err) {
+					s.logf("task %s: done judge: %v (left open)", t.ID, err)
+				}
+				return
+			}
+			if !c.WouldClose {
+				s.logf("task %s: not closed: %s (%s)", t.ID, c.Verdict, c.Reason)
+				return
+			}
+			reason := c.Reason
+			if reason == "" {
+				reason = mc(s.lang(ctx), doneReasonFallback)
+			}
+			if !worked {
+				work = t.CreatedAt
+			}
+			ok, err := s.finishCurrentTask(ctx, t.ID, reason, work)
+			switch {
+			case err != nil:
+				s.logf("task %s: auto done: %v", t.ID, err)
+			case ok:
+				s.logf("task %s: done (auto): %s", t.ID, reason)
+				s.taskClosedReport(t, reason)
+			default:
+				s.logf("task %s: changed while judged: left as it is", t.ID)
+			}
+			return
+		}
 		// Tasks created before universal supervision still join the main conversation instead of being closed (#5732).
 		main := s.settings(ctx).Main
 		if main == "" {

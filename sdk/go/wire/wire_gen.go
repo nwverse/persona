@@ -784,16 +784,19 @@ type ChannelItem struct {
 }
 
 type ChannelCapabilities struct {
-	ImagesIn bool   `json:"images_in,omitempty"`
-	FilesIn  bool   `json:"files_in,omitempty"`
-	VoiceIn  bool   `json:"voice_in,omitempty"`
-	Format   string `json:"format,omitempty"`
-	MaxText  int    `json:"max_text,omitempty"`
-	Asks     string `json:"asks,omitempty"`
-	Push     bool   `json:"push,omitempty"`
-	Typing   bool   `json:"typing,omitempty"`
-	Progress bool   `json:"progress,omitempty"`
-	Threads  bool   `json:"threads,omitempty"`
+	ImagesIn bool `json:"images_in,omitempty"`
+	// It can send pictures: the hub puts an answer's pictures in channel.send's images instead of leaving them as
+	// Markdown in the text.
+	ImagesOut bool   `json:"images_out,omitempty"`
+	FilesIn   bool   `json:"files_in,omitempty"`
+	VoiceIn   bool   `json:"voice_in,omitempty"`
+	Format    string `json:"format,omitempty"`
+	MaxText   int    `json:"max_text,omitempty"`
+	Asks      string `json:"asks,omitempty"`
+	Push      bool   `json:"push,omitempty"`
+	Typing    bool   `json:"typing,omitempty"`
+	Progress  bool   `json:"progress,omitempty"`
+	Threads   bool   `json:"threads,omitempty"`
 }
 
 type EventsItem struct {
@@ -4602,6 +4605,9 @@ type ChannelSendParams struct {
 	Kind         string `json:"kind"`
 	// The owner's message it answers (ChannelMessage.id).
 	ReplyTo string `json:"reply_to,omitempty"`
+	// Pictures to send after text, in order, to a channel with capabilities.images_out only: JPEG or PNG of at most 3 MB
+	// each. text may then be empty. They belong to this ref: sent once with it, like the text.
+	Images []ChannelBlob `json:"images,omitempty"`
 }
 
 // ChannelSendResult: channel.send's answer: the chat app's id of what was sent, for channel.edit.
