@@ -35,6 +35,7 @@ vi.mock("../lib/api", async (orig) => ({
 
 const { getState } = await import("../lib/store");
 const { navigate, useRoute } = await import("../lib/router");
+const { afterBack, onOverlayEntry } = await import("../lib/back-close");
 const { TodosView } = await import("./Todos");
 const { t } = await import("../i18n");
 
@@ -90,8 +91,11 @@ beforeEach(() => {
   root = createRoot(host);
 });
 afterEach(async () => {
+  // a sheet closed by the unmount goes Back off its history entry later, by a popstate a loaded machine can delay past
+  // any fixed wait: in this case, not in the next one's (it would put that one at the address under the sheet)
+  const sheet = onOverlayEntry() ? new Promise<boolean>((done) => afterBack(done, 3000)) : undefined;
   await act(async () => root.unmount());
-  // a sheet closed by the unmount goes Back off its history entry a task later: in this case, not in the next one's
+  if (sheet) await sheet;
   await settle();
   host.remove();
   document.body.innerHTML = "";
