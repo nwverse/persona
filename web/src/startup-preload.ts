@@ -488,13 +488,14 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // keyboard-aware palette and dock, the attachment ✕'s corner reach and Overview's task-card overlay (styles.css).
 // Where the toasts sit on a phone is a chunk of its own (ui/toast-lift.tsx) a narrow screen loads after the shell.
 // Main had 221 B of room, so the budget is this ja size plus those 221 B.
-// #11511: phone fixes add 292 B in ja, measured in one environment against main bf52dc0967 (ja 483,225 B to 483,517 B;
-// en 480,340 B to 480,632 B, zh-Hans 481,103 B to 481,395 B): one Back taking an overlay off with every overlay stacked
+// #11511: phone fixes add 206 B in ja, measured in one environment against main eddde4986c (ja 483,307 B to 483,513 B;
+// en 480,422 B to 480,628 B, zh-Hans 481,185 B to 481,391 B): one Back taking an overlay off with every overlay stacked
 // on it, several closes in a tick going back once (lib/back-close.ts; the levels a side panel opens are lib/back-stack.ts,
 // in the panels' chunks), Conversation tasks in ⋯ on a phone and the chat's pills' touch targets, with the Loading
 // earlier row drawn over the top padding (views/chat/ChatView.tsx), the Agents page's scroll kept on Back and its title
 // row's and By to-do rows' touch boxes (views/Sidebar.tsx, views/SidebarTree.tsx), and Back closing the Assistant tray
-// (views/assistant/Tasks.tsx). Main had 40 B of room, so the budget is this ja size plus those 40 B.
+// (views/assistant/Tasks.tsx). Main was already 42 B over the 483,265 B limit there (after #11582's queue panel), so
+// the budget is this ja size plus 44 B, the room main had before that.
 export const FIRST_SCREEN_BUDGET = 483_557;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
