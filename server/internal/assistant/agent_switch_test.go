@@ -219,4 +219,20 @@ func TestAgentSwitchBackOntoTheLauncherAnAgentRunsOff(t *testing.T) {
 	if calls := nodeCalls(ft.f); len(calls) != 2 {
 		t.Fatalf("taken back with a pick of its own launcher (a switch back for this one): %+v", calls)
 	}
+
+	// To another launcher, a pick whose message did not go is dropped as for any agent: off its launcher, its own
+	// launcher picked while that switch waits cancels it (launcherModes).
+	ft.f.mu.Lock()
+	ft.f.calls = nil
+	ft.f.mu.Unlock()
+	if _, err := switchTool(ft, map[string]any{"machine": "mac", "session_id": "s1abcdef", "launcher": "work", "text": "go on"}); err == nil {
+		t.Fatal("the node's refusal did not come back")
+	}
+	calls = nodeCalls(ft.f)
+	if len(calls) != 3 || calls[2].Method != DeviceSessionModes {
+		t.Fatalf("the switch to work was not dropped: %+v", calls)
+	}
+	if p := callParams(t, calls[2]); p["launcher"] != "kimi" || p["from"] != "kimi" {
+		t.Errorf("drop: %v", p)
+	}
 }

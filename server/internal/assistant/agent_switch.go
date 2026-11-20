@@ -162,9 +162,10 @@ func (s *Service) moveAgent(ctx context.Context, am Device, c proto.Session, t s
 		params["apply_switch"], params["switch_now"] = true, true
 		err = s.call(wctx, am.ID, DeviceSessionSend, params, nil)
 	}
-	// An agent off its launcher has no pick that takes the switch back: picking its own launcher is the switch back to
-	// it. The node drops it on a refusal; one whose message never got there waits for the user's next message (or 24 h).
-	if err != nil && !c.OffLauncher {
+	// For an agent off its launcher, picking that launcher again is no way to drop the switch back to it: it is the
+	// switch back (a switch to another launcher it does cancel). The node drops it on a refusal; one whose message never
+	// got there waits for the user's next message (or 24 h).
+	if err != nil && !(c.OffLauncher && t.Launcher == own) {
 		s.dropAgentSwitch(wctx, am.ID, c.SessionID, own)
 	}
 	return err

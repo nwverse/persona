@@ -452,7 +452,7 @@ func (s *Service) runSwitchQueue(ctx context.Context, machine string) {
 			drop = "queued over a day ago"
 		case !ok || switchStopped(c) && !c.StartedByPersona:
 			drop = "it stopped or is gone"
-		case cmp.Or(c.Launcher, "claude") == w.Launcher:
+		case cmp.Or(c.Launcher, "claude") == w.Launcher && !c.OffLauncher: // off it: the switch back (#11792)
 			drop = "it runs there already"
 		case cmp.Or(c.Launcher, "claude") != w.From:
 			drop = "it moved to another launcher meanwhile"

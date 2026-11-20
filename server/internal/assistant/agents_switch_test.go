@@ -320,4 +320,18 @@ func TestAgentsSwitchBackOntoTheLauncherAnAgentRunsOff(t *testing.T) {
 	if got := callsFor(ft.f, "s2there001"); len(got) != 0 {
 		t.Errorf("on it already, reached its node: %v", got)
 	}
+
+	// Working, it is queued, and switched back when its turn ends, not dropped as running there already.
+	busy := agentRow("s3offbusy1", "kimi", proto.StatusWorking)
+	busy.StartedByPersona, busy.OffLauncher = true, true
+	ft.sessions("mac", busy)
+	if res, err := batchSwitch(ft, map[string]any{"launcher": "kimi", "agents": []map[string]any{{"machine": "mac", "session_id": "s3offbusy1"}}}); err != nil || !strings.Contains(res, "1 queued") {
+		t.Fatalf("busy, off its launcher: %v\n%s", err, res)
+	}
+	idle := busy
+	idle.Status, idle.State = proto.StatusIdle, proto.StateIdle
+	ft.sessions("mac", idle)
+	if got := waitCallsFor(t, ft.f, "s3offbusy1", 2); strings.Join(got, ",") != "session.modes,session.switch" {
+		t.Fatalf("at the end of its turn: %v", got)
+	}
 }
