@@ -446,6 +446,68 @@ def toasts_phone(browser, base):
     ctx.close()
 
 
+HANDOVER = """() => { const d = document.querySelector('[role=dialog]'); const r = (e) => e.getBoundingClientRect();
+  const foot = d.querySelector('[data-dialog-footer]'); const go = foot && [...foot.querySelectorAll('button')].pop();
+  const hit = (e) => { const b = r(e); return e.contains(document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)); };
+  const tabs = [...d.querySelectorAll('.bg-field.p-0\\\\.5 > button')]; const x = d.querySelector('button[aria-label="关闭"]');
+  return { vv: visualViewport.height, go: go && { text: go.textContent.trim(), top: r(go).top, bottom: r(go).bottom, hit: hit(go) },
+    tabs: tabs.map((t) => Math.round(r(t).height)), x: x && hit(x),
+    radios: [...d.querySelectorAll('[role=radiogroup] [role=radio]')].map((e) => [e.tagName, e.getAttribute('aria-checked'), Math.round(r(e).height)]) }; }"""
+
+
+def handover_keyboard(browser, base, shots):
+    """The to-do hand-over dialog with the keyboard up (#11511): its Cancel and primary are the sheet's footer, so the
+    primary stays in what the keyboard leaves (iOS at 390 with __kb(508), Android's resize to 440 at 360); its tabs take
+    a finger and the title's ✕ still answers; the Existing agent rows are radios a finger can take."""
+    for w, h, ios in ((390, 844, True), (360, 740, False)):
+        ctx, page = phone(browser, w, h, ios=ios)
+        login(page, base)
+        go(page, "/todos?id=todo_weather")
+        page.get_by_role("button", name="交给 Agent", exact=True).first.tap()
+        page.wait_for_selector("[role=dialog] textarea")
+        page.wait_for_timeout(500)  # the sheet's slide
+        page.locator("[role=dialog] textarea").tap()
+        if ios:
+            page.evaluate("__kb(508)")
+        else:
+            page.set_viewport_size({"width": w, "height": 440})
+        page.wait_for_timeout(700)
+        res = page.evaluate(HANDOVER)
+        go_ = res["go"]
+        if not go_ or go_["text"] != "启动并交给 Agent" or go_["top"] < 0 or go_["bottom"] > res["vv"] + 0.5 or not go_["hit"]:
+            fail(f"{w}: with the keyboard up the primary is not in sight above it ({res})")
+        if min(res["tabs"]) < 44 or not res["x"]:
+            fail(f"{w}: the tabs should take a finger (44 px) and leave the title's ✕ its taps ({res})")
+        ok(f"{w}: with the keyboard up ({res['vv']:.0f} px) 启动并交给 Agent ends at {go_['bottom']:.0f}, in the footer; tabs {res['tabs']} px, ✕ answers")
+        if shots:
+            page.screenshot(path=os.path.join(shots, f"handover-keyboard-{w}.png"))
+        if ios:
+            page.evaluate("__kb(844)")
+        else:
+            page.set_viewport_size({"width": w, "height": h})
+        page.wait_for_timeout(400)
+        page.locator("[role=dialog]").get_by_role("button", name="交给已有的 Agent").tap()
+        page.wait_for_timeout(500)
+        res = page.evaluate(HANDOVER)
+        if not res["radios"] or any(tag != "BUTTON" or hgt < 44 for tag, _, hgt in res["radios"]) or [c for _, c, _ in res["radios"]].count("true") != 1:
+            fail(f"{w}: the Existing agent rows should be radio buttons, one picked, 44 px tall ({res['radios']})")
+        if not res["go"] or res["go"]["text"] != "发送并交给 Agent":
+            fail(f"{w}: the Existing agent tab's primary should be in the footer ({res})")
+        ok(f"{w}: {len(res['radios'])} Existing agent rows are radios of 44 px; 发送并交给 Agent is in the footer")
+        ctx.close()
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = ctx.new_page()
+    page.on("pageerror", lambda e: ERRORS.append(str(e)))
+    login(page, base)
+    go(page, "/todos?id=todo_weather")
+    page.get_by_role("button", name="交给 Agent", exact=True).first.click()
+    page.wait_for_selector("[role=dialog] textarea")
+    if page.locator("[role=dialog] [data-dialog-footer]").count() or page.locator("[role=dialog] button", has_text="启动并交给 Agent").count() != 1:
+        fail("1280: the hand-over dialog's buttons should end its form, as before")
+    ok("1280: the hand-over dialog's buttons end its form, as before")
+    ctx.close()
+
+
 def run(base, shots, hub=None):
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="chrome")
@@ -676,6 +738,7 @@ def run(base, shots, hub=None):
         lark_keyboard(browser, base, shots)
         tile_hits(browser, base, shots)
         toasts_phone(browser, base)
+        handover_keyboard(browser, base, shots)
         browser.close()
     if ERRORS:
         fail(f"uncaught page errors: {ERRORS[:3]}")
