@@ -387,6 +387,77 @@ func TestCodexUsageRefreshPrefersAccountBoundWindowsAndFallsBackBySource(t *test
 	}
 }
 
+func TestCodexUsageRefreshWithNPMCodex(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("npm uses a POSIX shebang launcher on Unix")
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := "#!/bin/sh\n[ \"$2\" = app-server ] || exit 1\nexec " + shellQuote(binary) + " -test.run='^TestFakeCodexUsageApp$'\n"
+
+	previous := codexUsageCLI
+	codexUsageCLI = func() (string, error) { return agentExecutable("codex") }
+	t.Cleanup(func() { codexUsageCLI = previous })
+
+	for _, tc := range []struct {
+		name        string
+		serviceNode bool
+	}{
+		{name: "paired Node.js"},
+		{name: "Node.js already on PATH", serviceNode: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			prefix := filepath.Join(home, ".nvm", "versions", "node", "v22.0.0")
+			cli := writeExecutable(t, filepath.Join(prefix, "lib", "node_modules", "@openai", "codex", "bin", "codex.js"), "#!/usr/bin/env node\n")
+			bin := filepath.Join(prefix, "bin")
+			mkdir(t, bin)
+			npmLauncher := filepath.Join(bin, "codex")
+			if err := os.Symlink(cli, npmLauncher); err != nil {
+				t.Fatal(err)
+			}
+			localBin := filepath.Join(home, ".local", "bin")
+			mkdir(t, localBin)
+			if err := os.Symlink(npmLauncher, filepath.Join(localBin, "codex")); err != nil {
+				t.Fatal(err)
+			}
+			serviceBin := filepath.Join(home, "service-bin")
+			mkdir(t, serviceBin)
+			if tc.serviceNode {
+				writeExecutable(t, filepath.Join(serviceBin, "node"), node)
+				writeExecutable(t, filepath.Join(bin, "node"), "#!/bin/sh\nexit 1\n")
+			} else {
+				writeExecutable(t, filepath.Join(bin, "node"), node)
+			}
+
+			t.Setenv("HOME", home)
+			t.Setenv("PATH", serviceBin)
+			t.Setenv("PERSONA_NODEJS", "")
+			t.Setenv("PERSONA_TEST_CODEX_USAGE_APP", "1")
+			n := &Node{home: home, dir: t.TempDir()}
+			mkdir(t, n.codexHome())
+			const accountID = "fixture-npm-account"
+			writeCodexUsageReply(t, n.codexHome(), fmt.Sprintf(`{"accountId":%q,
+				"rateLimits":{"planType":"pro","primary":{"usedPercent":42,"windowDurationMins":10080}}}`, accountID))
+
+			n.refreshUsageWindows(t.Context())
+			snap := n.usageSnapshot()
+			if len(snap.Accounts) != 1 {
+				t.Fatalf("expected one account from npm Codex, got %+v", snap)
+			}
+			account := snap.Accounts[0]
+			if account.AccountKey != codexUsageKey(accountID) || len(account.Windows) != 1 || account.Windows[0].UsedPercent != 42 {
+				t.Fatalf("expected account-bound usage, got %+v", account)
+			}
+			if got := os.Getenv("PATH"); got != serviceBin {
+				t.Fatalf("poll changed the node's PATH to %q", got)
+			}
+		})
+	}
+}
+
 func TestCodexUsageRefreshDoesNotBlockSnapshotsAndDisableCancelsIt(t *testing.T) {
 	useFakeCodexUsageApp(t)
 	n := &Node{home: t.TempDir(), dir: t.TempDir()}
