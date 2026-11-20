@@ -234,6 +234,115 @@ def check_viewer(page, tag):
     ok(f"{tag}: Back closes the viewer and stays on the chat")
 
 
+# Every frame from here on: the viewer's picture, once the browser has it and it shows, drawn at its fit in the room.
+VIEWER_FRAMES = """() => {
+  const px = (v) => parseFloat(v) || 0;
+  const s = window.__viewerFrames = { seen: 0, wrong: [] };
+  const tick = () => {
+    const img = document.querySelector('[role=dialog][aria-modal="true"] img');
+    if (img && img.complete && img.naturalWidth && getComputedStyle(img).visibility !== 'hidden') {
+      const area = img.parentElement, cs = getComputedStyle(area);
+      const rw = area.clientWidth - px(cs.paddingLeft) - px(cs.paddingRight), rh = area.clientHeight - px(cs.paddingTop) - px(cs.paddingBottom);
+      const k = Math.min(rw / img.naturalWidth, rh / img.naturalHeight);
+      s.seen++;
+      if (Math.abs(px(img.style.width) - img.naturalWidth * k) > 1 || Math.abs(px(img.style.height) - img.naturalHeight * k) > 1)
+        s.wrong.push(`${img.naturalWidth}x${img.naturalHeight} drawn ${img.style.width || 'at its own size'} in ${Math.round(rw)}x${Math.round(rh)}`);
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}"""
+
+# Each control of the viewer's top row and bottom bar: its drawn size, its touch square (the button grown by
+# touch-hit's ::before), its row, and the points 21.5 px out from its middle (and the middle) a tap there misses.
+VIEWER_HITS = """d => {
+  const px = (v) => parseFloat(v) || 0;
+  const rows = [d.querySelector(':scope > div:first-of-type'), d.querySelector(':scope > div:last-of-type')];
+  return rows.map((row) => { const box = row.getBoundingClientRect();
+    return [...row.querySelectorAll('button')].filter((b) => b.getClientRects().length).map((b) => {
+      const r = b.getBoundingClientRect(), pb = getComputedStyle(b, '::before');
+      const grown = pb.content !== 'none' && pb.position === 'absolute';
+      const sq = grown ? { l: r.left + px(pb.left), t: r.top + px(pb.top), r: r.right - px(pb.right), b: r.bottom - px(pb.bottom) } : { l: r.left, t: r.top, r: r.right, b: r.bottom };
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const miss = [[0, 0], [0, -21.5], [0, 21.5], [-21.5, 0], [21.5, 0]]
+        .filter(([dx, dy]) => { const e = document.elementFromPoint(cx + dx, cy + dy); return !(e && b.contains(e)); }).map(([dx, dy]) => `${dx},${dy}`);
+      return { name: b.getAttribute('aria-label') || b.textContent.trim(), w: r.width, h: r.height, sq, box: { l: box.left, t: box.top, r: box.right, b: box.bottom }, miss };
+    }); });
+}"""
+
+
+def check_viewer_controls(page, tag):
+    """The first picture opened after a page load (the viewer's chunk not fetched yet) is fitted to the screen from its
+    first drawn frame, and so is the next one a swipe brings (#11511). With either (a file's four icon buttons below it,
+    then a long name and two worded buttons), every control in the viewer's top row and bottom bar answers a 44 px
+    square around its middle, inside its row and clear of its neighbours, and the top row's buttons stay round."""
+    page.goto(S["base"] + "/overview?token=mock")
+    page.wait_for_selector("aside", state="attached", timeout=15000)
+    go(page, REVIEW)
+    page.evaluate(VIEWER_FRAMES)
+    strip = page.locator("main [data-turn-images] button").first
+    strip.scroll_into_view_if_needed()
+    strip.tap()
+    dlg = page.locator('[role=dialog][aria-modal="true"]')
+    img = dlg.locator("img").first
+    expect(img).to_be_visible()
+    page.wait_for_timeout(500)
+    w, h = page.viewport_size["width"], page.viewport_size["height"]
+
+    def fitted(what):
+        frames = page.evaluate("() => window.__viewerFrames")
+        if not frames["seen"]:
+            fail(f"{tag}: {what} never showed")
+        if frames["wrong"]:
+            fail(f"{tag}: {what} was drawn at the wrong size in {len(frames['wrong'])} of {frames['seen']} frames ({frames['wrong'][0]})")
+        if not img.evaluate("e => !!e.style.scale"):
+            fail(f"{tag}: {what} is not fitted, so it cannot zoom")
+        page.evaluate("() => { window.__viewerFrames.seen = 0; }")
+        return frames["seen"]
+
+    def controls(what):
+        for row, buttons in zip(("top row", "bottom bar"), dlg.evaluate(VIEWER_HITS)):
+            if not buttons:
+                fail(f"{tag}: the viewer's {row} has no buttons with {what}")
+            for i, c in enumerate(buttons):
+                sq, box = c["sq"], c["box"]
+                if row == "top row" and abs(c["w"] - c["h"]) > 0.5:
+                    fail(f"{tag}: {c['name']} in the top row is squeezed to {c['w']:.0f}x{c['h']:.0f} with {what}")
+                if sq["r"] - sq["l"] < 43.5 or sq["b"] - sq["t"] < 43.5:
+                    fail(f"{tag}: {c['name']} in the {row} answers only {sq['r'] - sq['l']:.0f}x{sq['b'] - sq['t']:.0f} with {what}")
+                if c["miss"]:
+                    fail(f"{tag}: a tap at {c['miss']} from {c['name']}'s middle does not reach it with {what}")
+                if sq["l"] < max(box["l"], 0) - 0.5 or sq["r"] > min(box["r"], w) + 0.5 or sq["t"] < box["t"] - 0.5 or sq["b"] > min(box["b"], h) + 0.5:
+                    fail(f"{tag}: {c['name']}'s square leaves the {row} with {what} ({sq} in {box})")
+                for o in buttons[i + 1:]:
+                    if min(sq["r"], o["sq"]["r"]) - max(sq["l"], o["sq"]["l"]) > 0.5 and min(sq["b"], o["sq"]["b"]) - max(sq["t"], o["sq"]["t"]) > 0.5:
+                        fail(f"{tag}: {c['name']}'s square overlaps {o['name']}'s in the {row} with {what}")
+            ok(f"{tag}: with {what}, the viewer's {row} ({', '.join(c['name'] for c in buttons)}) answers 44 px squares, apart and inside it")
+
+    ok(f"{tag}: the first picture after a load is fitted in each of its {fitted('the first picture')} frames")
+    controls("the first picture")
+    first = img.get_attribute("src")
+    x, y = center(img)
+    send = touches(page)
+    send("touchStart", [(x + 90, y)])
+    for k in range(1, 10):
+        send("touchMove", [(x + 90 - k * 20, y)])
+        page.wait_for_timeout(16)
+    send("touchEnd", [])
+    expect(dlg.locator('[aria-live="polite"]')).to_contain_text("2 / ")
+    page.wait_for_timeout(500)
+    if img.get_attribute("src") == first:
+        fail(f"{tag}: a swipe did not bring the next picture")
+    ok(f"{tag}: a swipe brings the next picture, fitted in each of its {fitted('the next picture')} frames")
+    controls("the next picture")
+    if S["shots"]:
+        page.add_style_tag(content="[role=dialog] .touch-hit::before { outline: 1px solid rgb(255 64 64) }")
+        shot(page, f"{tag}-viewer-hits")
+    page.go_back()
+    expect(dlg).to_have_count(0)
+    page.wait_for_timeout(500)
+
+
 def check_table(page, tag):
     """Every table's last column holds a few characters a line (it was one a line): the narrow table and the wide one
     that scrolls sideways alike, measured as its cell's text width over the font size, and its height in lines."""
@@ -336,6 +445,7 @@ def phone(browser, name, theme, full):
         check_revisit(page, tag)
         check_diff(page, tag)
         check_pending(page, tag)
+    check_viewer_controls(page, tag)
     ctx.close()
 
 
