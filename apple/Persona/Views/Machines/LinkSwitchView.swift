@@ -159,7 +159,7 @@ struct MachineLinkSwitchView: View {
         switch notice {
         case .refused(let code): MachineLinkSwitchText.reason(code, home: machine.home)
         case .forbidden: String(localized: "This device can't switch computers. Use a device with full access.")
-        case .uncertain: String(localized: "Couldn't confirm whether the switch started. Check the hub's status before starting another one.")
+        case .uncertain: String(localized: "Couldn't confirm that the switch started. If nothing changes here, try again.")
         }
     }
 
@@ -167,7 +167,7 @@ struct MachineLinkSwitchView: View {
         guard let api = model.api(machine.group) else { return }
         let ref = machine.ref
         Task {
-            await store.start(machine, api: api) {
+            await store.start(machine, userConfirmed: true, api: api) {
                 await model.refresh()
                 return model.machine(ref, inFront: false)
             }

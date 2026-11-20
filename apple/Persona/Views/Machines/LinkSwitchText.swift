@@ -3,7 +3,7 @@ import Foundation
 /// Plain words for the hub's Link-switch codes. The codes stay off the screen; an unknown one gets a safe generic line.
 nonisolated enum MachineLinkSwitchText {
     private static let knownCodes: Set<String> = ["offline", "unsupported_os", "link_unavailable", "hub_old", "pending",
-        "custom_node", "busy", "in_progress", "no_systemd", "linger_off", "existing_link", "no_node", "unsafe_permissions",
+        "custom_node", "busy", "in_progress", "link_switch_in_progress", "no_systemd", "linger_off", "existing_link", "no_node", "unsafe_permissions",
         "no_package", "hub_unanswered", "transfer_failed", "install_failed", "link_timeout", "config_changed", "interrupted", "unknown"]
 
     static func step(_ phase: String) -> String {
@@ -31,7 +31,7 @@ nonisolated enum MachineLinkSwitchText {
         case "unsafe_permissions": return String(localized: "Persona's folders on this computer aren't safe to switch from here: the home folder, ~/.persona or ~/.persona/bin belongs to another user or can be changed by other users. On that computer, make them yours and writable only by you (for example: chmod go-w ~ ~/.persona ~/.persona/bin), then try again.")
         case "hub_unanswered": return String(localized: "The hub didn't answer for an hour, so the switch couldn't be undone.")
         case "busy": return String(localized: "Persona is updating this computer. Try again once that's done.")
-        case "in_progress": return String(localized: "This computer is already switching to Persona Link.")
+        case "in_progress", "link_switch_in_progress": return String(localized: "This computer is already switching to Persona Link.")
         case "no_systemd": return String(localized: "This computer has no systemd user services, which Persona Link needs to keep running.")
         case "linger_off":
             let user = homeUser(home) ?? String(localized: "<user>")

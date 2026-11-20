@@ -111,24 +111,24 @@
         }
       }
     },
-    "Couldn't confirm whether the switch started. Check the hub's status before starting another one." : {
+    "Couldn't confirm that the switch started. If nothing changes here, try again." : {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Couldn't confirm whether the switch started. Check the hub's status before starting another one."
+            "value": "Couldn't confirm that the switch started. If nothing changes here, try again."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "切り替えが始まったか確認できませんでした。別の切り替えを始める前に、ハブの状態を確認してください。"
+            "value": "切り替えが始まったか確認できませんでした。ここに変化がなければ、もう一度お試しください。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "无法确认是否已开始切换。请先检查 hub 的状态，再开始另一次切换。"
+            "value": "无法确认切换是否已开始。如果这里一直没有变化，请再试一次。"
           }
         }
       }

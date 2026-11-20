@@ -499,8 +499,10 @@ The one other live edit of an entry is its kind, from `ssh` to `link` and back (
 
 The iPhone / iPad client decodes the optional `link_switch` in `apple/Shared/Models.swift` and starts through `APIClient`; an absent
 field is the older-hub gate. `MachineLinkSwitchStore` keeps one attempt per `MachineRef` across detail-page remounts and reconciles
-the accepted answer with pushed/read machine snapshots. `MachineLinkSwitchView` is the advanced-detail card; its expected-disconnect
-guard also suppresses the ordinary offline explanation and Reconnect while the switch runs (#10671).
+the accepted answer with pushed/read machine snapshots. Settled attempts expire after two minutes; an uncertain answer never reposts
+automatically, while a new explicit confirmation may follow the hub's unchanged eligibility. `MachineLinkSwitchView` is the
+advanced-detail card; its expected-disconnect guard also suppresses the ordinary offline explanation and Reconnect while the switch
+runs (#10671).
 
 ## API
 

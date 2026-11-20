@@ -78,7 +78,12 @@ import PersonaWire
         hub.onAsync("POST", Self.path) { _ in try await gate.wait() }
         let initial = machine()
         #expect(hub.sent("POST", Self.path).isEmpty, "opening the page and its confirmation sends nothing")
-        let first = Task { await store.start(initial, api: hub.client, refresh: { initial }) }
+        let unconfirmedHub = FakeHub(), unconfirmedStore = MachineLinkSwitchStore()
+        unconfirmedHub.on("POST", Self.path, json: acceptedAnswer)
+        await unconfirmedStore.start(initial, userConfirmed: false, api: unconfirmedHub.client, refresh: { initial })
+        #expect(unconfirmedHub.sent("POST", Self.path).isEmpty, "an unconfirmed call cannot start work")
+        #expect(!unconfirmedStore.isStarting(initial))
+        let first = Task { await store.start(initial, userConfirmed: true, api: hub.client, refresh: { initial }) }
         await gate.started()
         #expect(store.isStarting(initial))
         #expect(!store.canStart(initial))
@@ -86,7 +91,7 @@ import PersonaWire
         otherHub.group = "two"
         #expect(store.canStart(otherHub), "the same machine id on another hub has its own single flight")
         #expect(!store.isStarting(otherHub))
-        await store.start(initial, api: hub.client, refresh: { initial })
+        await store.start(initial, userConfirmed: true, api: hub.client, refresh: { initial })
         #expect(hub.sent("POST", Self.path).count == 1, "a repeated confirmation while the answer is out does not POST again")
         gate.succeed()
         await first.value
@@ -99,7 +104,7 @@ import PersonaWire
         let hub = FakeHub(), store = MachineLinkSwitchStore()
         hub.on("POST", Self.path, json: acceptedAnswer)
         let initial = machine(MachineLinkSwitch(available: true, phase: "failed", error: "link_timeout", at: at(1)))
-        await store.start(initial, api: hub.client, refresh: { initial })
+        await store.start(initial, userConfirmed: true, api: hub.client, refresh: { initial })
         #expect(store.shown(initial)?.phase == "checking")
         store.reconcile(initial) // a push from before the start cannot take it back to the old failure
         #expect(store.shown(initial)?.phase == "checking")
@@ -119,7 +124,7 @@ import PersonaWire
         let hub = FakeHub(), store = MachineLinkSwitchStore()
         hub.on("POST", Self.path, json: #"{"link_switch":{"available":false,"reason":"in_progress","phase":"checking"}}"#)
         let initial = machine(MachineLinkSwitch(available: true, phase: "failed", error: "link_timeout"))
-        await store.start(initial, api: hub.client, refresh: { initial })
+        await store.start(initial, userConfirmed: true, api: hub.client, refresh: { initial })
         #expect(store.shown(initial)?.phase == "checking")
         store.reconcile(initial)
         #expect(store.shown(initial)?.phase == "checking")
@@ -150,7 +155,7 @@ import PersonaWire
         hub.on("POST", Self.path) { _ in throw APIError(status: 409, message: "raw hub text", fields: ["code": "offline"]) }
         let initial = machine()
         var refreshes = 0
-        await store.start(initial, api: hub.client, refresh: { refreshes += 1; return initial })
+        await store.start(initial, userConfirmed: true, api: hub.client, refresh: { refreshes += 1; return initial })
         #expect(refreshes == 1)
         #expect(store.notice(initial) == .refused("offline"))
         #expect(store.canStart(initial), "a definite refusal did not start work and may be confirmed again")
@@ -170,27 +175,63 @@ import PersonaWire
         #expect(store.needsStatusCheck(failed))
     }
 
-    @Test func uncertainAnswerNeverStartsAgainBeforeTheListChanges() async {
+    @Test func uncertainAnswerDoesNotRepostAndAllowsConfirmedRetry() async {
         let hub = FakeHub(), store = MachineLinkSwitchStore()
-        hub.on("POST", Self.path) { _ in throw APIError(status: 503, message: "raw hub text") }
+        var answers = 0
+        hub.on("POST", Self.path) { _ in
+            answers += 1
+            if answers == 1 { throw APIError(status: 503, message: "raw hub text") }
+            throw APIError(status: 409, message: "raw hub text", fields: ["code": "link_switch_in_progress"])
+        }
         let initial = machine()
         var refreshes = 0
-        await store.start(initial, api: hub.client, refresh: { refreshes += 1; return initial })
+        await store.start(initial, userConfirmed: true, api: hub.client, refresh: { refreshes += 1; return initial })
         #expect(refreshes == 1)
         #expect(store.notice(initial) == .uncertain)
         #expect(store.needsStatusCheck(initial))
-        #expect(!store.canStart(initial))
-        await store.start(initial, api: hub.client, refresh: { refreshes += 1; return initial })
-        #expect(hub.sent("POST", Self.path).count == 1)
-        #expect(refreshes == 1, "the blocked second start neither POSTs nor refreshes")
+        #expect(store.canStart(initial), "the unchanged hub state offers another explicitly confirmed start")
+
+        // Rendering and receiving the same authoritative snapshot never constitute another confirmation.
+        store.reconcile(initial)
+        _ = store.shown(initial)
+        _ = store.notice(initial)
+        _ = store.canStart(initial)
+        #expect(hub.sent("POST", Self.path).count == 1, "no automatic repost after the one status read")
+        #expect(refreshes == 1)
+
+        await store.start(initial, userConfirmed: true, api: hub.client, refresh: { refreshes += 1; return initial })
+        #expect(hub.sent("POST", Self.path).count == 2, "only the second confirmed call posts again")
+        #expect(refreshes == 2)
+        #expect(store.notice(initial) == .refused("link_switch_in_progress"))
+        #expect(MachineLinkSwitchText.reason("link_switch_in_progress") == MachineLinkSwitchText.reason("in_progress"))
+        #expect(store.canStart(initial), "a definite in-progress refusal is recoverable")
+    }
+
+    @Test func attemptNoticeRetiresWhenTheListChangesOrTTLExpires() async {
+        var now = at(0)
+        let hub = FakeHub(), store = MachineLinkSwitchStore(now: { now })
+        hub.on("POST", Self.path) { _ in throw APIError(status: 503, message: "raw hub text") }
+        let initial = machine()
+        await store.start(initial, userConfirmed: true, api: hub.client, refresh: { initial })
+        #expect(store.notice(initial) == .uncertain)
 
         var running = initial
         running.linkSwitch = accepted("checking", second: 8)
         store.reconcile(running)
         #expect(store.notice(running) == nil)
         #expect(store.shown(running)?.phase == "checking")
+        #expect(!store.hasAttempt(running))
         #expect(!store.canStart(running))
-        #expect(hub.sent("POST", Self.path).count == 1)
+
+        await store.start(initial, userConfirmed: true, api: hub.client, refresh: { initial })
+        #expect(store.notice(initial) == .uncertain)
+        now = now.addingTimeInterval(MachineLinkSwitchStore.attemptTTL)
+        #expect(store.notice(initial) == nil, "a finished attempt speaks for at most two minutes")
+        #expect(!store.needsStatusCheck(initial))
+        #expect(store.canStart(initial))
+        store.reconcile(initial)
+        #expect(!store.hasAttempt(initial))
+        #expect(hub.sent("POST", Self.path).count == 2, "neither list reconciliation nor expiry retries automatically")
     }
 
     @Test func forbiddenDoesNotRefreshOrOfferAnotherStart() async {
@@ -198,7 +239,7 @@ import PersonaWire
         hub.on("POST", Self.path) { _ in throw APIError(status: 403, message: "forbidden", fields: ["code": "forbidden"]) }
         let initial = machine()
         var refreshes = 0
-        await store.start(initial, api: hub.client, refresh: { refreshes += 1; return initial })
+        await store.start(initial, userConfirmed: true, api: hub.client, refresh: { refreshes += 1; return initial })
         #expect(refreshes == 0)
         #expect(store.notice(initial) == .forbidden)
         #expect(!store.canStart(initial))
@@ -207,7 +248,7 @@ import PersonaWire
 
     @Test func everyKnownCodeHasPlainWordsAndLingerNamesTheAccount() {
         let codes = ["offline", "unsupported_os", "link_unavailable", "hub_old", "pending", "custom_node", "busy",
-                     "in_progress", "no_systemd", "existing_link", "no_node", "unsafe_permissions", "no_package",
+                     "in_progress", "link_switch_in_progress", "no_systemd", "existing_link", "no_node", "unsafe_permissions", "no_package",
                      "hub_unanswered", "transfer_failed", "install_failed", "link_timeout", "config_changed", "interrupted", "unknown"]
         for code in codes {
             let words = MachineLinkSwitchText.reason(code)

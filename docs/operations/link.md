@@ -766,9 +766,11 @@ the accepted 202 is held only until the machine list catches up by the hub's `at
 While a phase is running, its expected disconnect does not also show the ordinary offline error or **Reconnect**.
 
 A definite refusal other than 403 reads the machine list once and keeps its localized reason recoverable; 403 explains the full-access requirement without another read. A lost, unreadable, cancelled, 408, 429
-or 5xx answer is uncertain: the app reads the list once and never POSTs again while that list stays unchanged. **Check Status**
-only reads it again; a changed authoritative list clears the notice and shows the hub's state. A failed result with
-`rollback_unconfirmed` never claims the SSH fallback was restored and offers the same status check.
+or 5xx answer is uncertain: the app reads the list once and never retries automatically. If the unchanged hub state still offers
+**Switch to Persona Link**, the owner may tap it and confirm again; a duplicate already running is the hub's ordinary 409 refusal.
+**Check Status** only reads the list again. A changed authoritative list clears the notice, and every settled attempt expires after
+two minutes as on web. A failed result with `rollback_unconfirmed` never claims the SSH fallback was restored and offers the same
+status check.
 
 
 ## Status line
