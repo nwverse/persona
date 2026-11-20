@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -82,16 +83,16 @@ func (s *Service) planTaskSupervisor(ctx context.Context, conversation string, t
 	if supervisor == cfg.Main {
 		machine = cfg.mainRouteMachine()
 	}
-	if !s.runtimeConversation(ctx, machine, supervisor) {
+	if !s.runtimeWithoutSupervisionPolicy(ctx, machine, supervisor) {
 		return supervisor, nil
 	}
 	if cfg.Main == "" {
 		return "", planInvalid{i18n.Err("assistant-conversations.supervision_reviewer_required")}
 	}
-	if supervisor != cfg.Main && !s.runtimeConversation(ctx, cfg.mainRouteMachine(), cfg.Main) {
+	if supervisor != cfg.Main && !s.runtimeWithoutSupervisionPolicy(ctx, cfg.mainRouteMachine(), cfg.Main) {
 		return cfg.Main, nil
 	}
-	if background := s.ownSupervisor(cfg); background != cfg.Main && !s.runtimeConversation(ctx, cfg.MachineID, background) {
+	if background := s.ownSupervisor(cfg); background != cfg.Main && !s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, background) {
 		return cfg.Main, nil
 	}
 	return "", planInvalid{i18n.Err("assistant-conversations.supervision_reviewer_required")}
@@ -105,8 +106,10 @@ func (s *Service) digestTo(cfg Settings, g superviseSignal) string {
 	own := s.ownSupervisor(cfg)
 	if g.To != "" {
 		switch {
-		case g.Kind == sigDecide && g.To == cfg.Main:
-			return own // a task leader's decision for the conversation above it, whose task is one no leader conversation supervises
+		case (g.Kind == sigDecide || g.Kind == sigCheck) && g.To == cfg.Main:
+			// A task leader's decision, or the owner's answer to a check's decision on its worker, for the conversation
+			// above it, whose task is one no leader conversation supervises.
+			return own
 		case g.To == cfg.BackgroundSupervisor && g.To != own:
 			return cfg.Main // named the background supervisor, which was switched off or moved meanwhile
 		}
@@ -132,6 +135,21 @@ func (s *Service) digestTo(cfg Settings, g superviseSignal) string {
 		return cfg.Main
 	}
 	return lead
+}
+
+// digestTarget is digestTo, except that a conversation hosted by a runtime without supervision_policy is never the
+// target: it has no separate policy channel, so a supervision message to it would be refused (CodeSupervisionRuntime)
+// and only end in a "did not send" notice. What it supervises from before its tasks went to the main conversation's
+// route (planTaskSupervisor) is followed up by that route now: the background supervisor while it is on, else the main
+// conversation (ownSupervisor).
+func (s *Service) digestTarget(ctx context.Context, cfg Settings, g superviseSignal) string {
+	to := s.digestTo(cfg, g)
+	if to == "" || to == cfg.Main || to == cfg.BackgroundSupervisor || !s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, to) {
+		return to
+	}
+	own := s.ownSupervisor(cfg)
+	s.logf("supervise: %s runs on a runtime that cannot take supervision policy: its signal goes to %s", short(to), short(own))
+	return own
 }
 
 // escalatedIn: one of the entries is a leader's needs_user.
@@ -189,6 +207,47 @@ func (s *Service) setLeaders(ctx context.Context, v json.RawMessage) (*ownChange
 		return nil, errors.New("value must be a list of conversation ids ([] for none)")
 	}
 	cfg := s.settings(ctx)
+	list, err := s.leaderList(ctx, cfg, in)
+	if err != nil {
+		return nil, err
+	}
+	before := cfg.Leaders
+	if sameLeaders(list, before) {
+		return &ownChange{summary: "assistant.leaders did not change"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	shown := func(l i18n.Lang, ids []string) string { return clipped(l, strings.Join(ids, ", ")) }
+	// The approval compares the whole list the card was raised against with the current one, not the card's text
+	// (#11392): the card clips both lists to 120 characters, three ids and a bit, so with four or more leaders the
+	// owner's pin or unpin after them left the text as it was, and approving wrote the card's list over it.
+	return &ownChange{applyChecksProposal: true, cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_leaders", i18n.Args{"before": shown(l, before), "after": shown(l, list)})
+	},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.leaderList(ctx, s.settings(ctx), in); err != nil {
+				return "", fmt.Errorf("%w: validate the approved operation against current state: %v", approvalops.ErrNotApplied, err)
+			}
+			if _, err := s.updateSettings(ctx, func(v *Settings) error {
+				if !sameLeaders(v.Leaders, before) {
+					return fmt.Errorf("assistant.leaders changed after the card was shown, so nothing was saved: get it and set it again for a new card (%w)", approvalops.ErrStale)
+				}
+				v.Leaders = list
+				return nil
+			}); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			return fmt.Sprintf("assistant.leaders is %q: tasks these conversations hand out with task_plan from now on are theirs to "+
+				"supervise (tasks handed out before keep their supervisor).", list), nil
+		}}, nil
+}
+
+// leaderList is in as assistant.leaders would keep it with settings cfg: trimmed, without blanks or repeats, each a
+// Persona conversation on the assistant's machine other than the main one and the background supervisor, at most
+// leadersMost.
+func (s *Service) leaderList(ctx context.Context, cfg Settings, in []string) ([]string, error) {
 	list := []string{}
 	for _, id := range in {
 		id = strings.TrimSpace(id)
@@ -209,25 +268,12 @@ func (s *Service) setLeaders(ctx context.Context, v json.RawMessage) (*ownChange
 	if len(list) > leadersMost {
 		return nil, fmt.Errorf("at most %d leader conversations", leadersMost)
 	}
-	before := cfg.Leaders
-	if slices.Equal(list, before) || len(list) == 0 && len(before) == 0 { // nil and [] are both none
-		return &ownChange{summary: "assistant.leaders did not change"}, nil
-	}
-	if s.store() == nil {
-		return nil, errors.New("no database on this hub")
-	}
-	shown := func(l i18n.Lang, ids []string) string { return clipped(l, strings.Join(ids, ", ")) }
-	return &ownChange{cardText: func(l i18n.Lang) string {
-		return i18n.T(l, "assistant-settings_tool.change_leaders", i18n.Args{"before": shown(l, before), "after": shown(l, list)})
-	},
-		apply: func(ctx context.Context) (string, error) {
-			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.Leaders = list; return nil }); err != nil {
-				return "", err
-			}
-			s.settingsChanged(ctx)
-			return fmt.Sprintf("assistant.leaders is %q: tasks these conversations hand out with task_plan from now on are theirs to "+
-				"supervise (tasks handed out before keep their supervisor).", list), nil
-		}}, nil
+	return list, nil
+}
+
+// sameLeaders: lists a and b name the same leaders in the same order (nil and [] are both none).
+func sameLeaders(a, b []string) bool {
+	return slices.Equal(a, b) || len(a) == 0 && len(b) == 0
 }
 
 // ---- a cancelled task's agents ----

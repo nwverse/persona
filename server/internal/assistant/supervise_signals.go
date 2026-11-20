@@ -35,6 +35,17 @@ const (
 	// sigLeaderStuck: a leader's task is stuck (leader_reports.go): the main conversation says so in one line, no push
 	// (the owner's ruling after H1, #3609). Detail is the direction's name and where it is stuck.
 	sigLeaderStuck = "leader_stuck"
+	// sigCheck: a recurring schedule linked to the task (schedule_todo.go) has news of it, the hub's and never its
+	// Agent's (#11587). Report says which: its check saw no progress, could not save what it saw, or the owner
+	// answered the decision it raised (checkDecided), which did not go to the Agent.
+	sigCheck = "check"
+)
+
+// sigCheck's kinds of news (superviseSignal.Report).
+const (
+	checkNoProgressReport = "no_progress"
+	checkErrorReport      = "error"
+	checkDecidedReport    = "decided"
 )
 
 var (
@@ -73,9 +84,10 @@ type superviseSignal struct {
 	Detail, Ask      string
 	Minutes          int
 	// A report's (sigReport): its kind (progress, question, blocked, done), evidence and the step it is on.
-	Report      string
-	Evidence    []string
-	Step, Steps int
+	SourcePermission proto.SourcePermission
+	Report           string
+	Evidence         []string
+	Step, Steps      int
 	// no_progress: the tool calls the hub saw in the stretch, and how many were waits or repeats (supervise_progress.go).
 	Calls, Waits int
 	// Orphan: why nobody works on it (sigOrphaned): orphanError, orphanClosed or orphanOffline.
@@ -90,6 +102,10 @@ type superviseSignal struct {
 	Decision *prompts.SuperviseDecision
 	// Inbox: the Inbox item an inbox signal names, and how many new messages it tells (supervise_inbox.go).
 	Inbox *prompts.SuperviseInbox
+	// Optional routine batching keeps these in memory only, after routing and before delivery. They are never part of
+	// a persisted relay payload: once admitted, the existing queue owns delivery.
+	batchTo    string
+	batchUntil time.Time
 }
 
 const (
@@ -111,7 +127,7 @@ func (g superviseSignal) id() string {
 	if g.Kind == sigDraftPR {
 		return g.Todo + "|" + g.Kind + "@" + g.PRURL
 	}
-	if g.Kind == sigReport {
+	if g.Kind == sigReport || g.Kind == sigCheck {
 		return g.Todo + "|" + g.Kind + ":" + g.Report
 	}
 	if g.Kind == sigAsk { // its cards with each rung are an entry of their own
@@ -138,6 +154,8 @@ func (g superviseSignal) urgent() bool {
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
+	case sigCheck: // the owner answered: what they chose is acted on soon
+		return g.Report == checkDecidedReport
 	}
 	return false
 }
@@ -157,6 +175,7 @@ type superviseBook struct {
 	asks    map[string]string            // todo → what its agent last asked (InteractionRaised)
 	last    time.Time                    // when the last supervision message went out
 	queued  map[string][]superviseSignal // conversation → the signals of the message still waiting in its queue
+	batch   map[string]time.Time         // conversation → its routine batch's first-signal deadline
 	timer   *time.Timer
 	timerAt time.Time
 
@@ -181,6 +200,9 @@ func (b *superviseBook) init() {
 	}
 	if b.failSeen == nil {
 		b.failSeen = map[string]failSeen{}
+	}
+	if b.batch == nil {
+		b.batch = map[string]time.Time{}
 	}
 }
 
@@ -285,6 +307,7 @@ func (s *Service) queueSignal(g superviseSignal) {
 				g.Inbox = cur.Inbox // the same message again: counted once
 			}
 		}
+		g.batchTo, g.batchUntil = cur.batchTo, cur.batchUntil
 	}
 	b.pending[g.id()] = g
 	s.scheduleDigestLocked(time.Now())
@@ -298,7 +321,7 @@ func (s *Service) scheduleDigestLocked(now time.Time) {
 	for _, g := range b.pending {
 		list = append(list, g)
 	}
-	wait, ok := digestWait(now, b.last, list, s.superviseTimings())
+	wait, ok := digestWaitWithBatch(now, b.last, list, s.superviseTimings(), s.supervisionBatchInterval(context.Background()))
 	if !ok {
 		return
 	}
@@ -433,6 +456,7 @@ func (s *Service) superviseLoop(ctx context.Context) {
 // main conversation's pushes that outlived superviseHoldMax.
 func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.autoReviewTick(ctx, now)
+	s.sessionReviewTick(ctx, now)
 	s.askTick(now)                 // cards held past their time go up a rung (ask_route.go)
 	s.handOverUnreviewed(ctx, now) // a review a side conversation left waiting goes to the main one's follow-up (side_handover.go)
 	routed := s.routedSessions()

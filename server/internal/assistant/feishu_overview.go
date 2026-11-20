@@ -33,7 +33,7 @@ func (s *Service) tasksOverview(ctx context.Context) []overviewCard {
 	}
 
 	label("assistant-reports.decide")
-	if ixs := s.pendingInteractions(); len(ixs) > 0 {
+	if ixs := s.visiblePendingInteractions(); len(ixs) > 0 {
 		for _, ix := range ixs {
 			where := transcript.Title(ix.SessionTitle)
 			if where == "" {
@@ -111,7 +111,11 @@ func (s *Service) overviewTodos(ctx context.Context, l i18n.Lang, web string, ad
 		for _, x := range sessions[t.ID] {
 			btn("assistant-reports.open_agent", sessionLink(web, x[0], x[1], false))
 		}
-		add("**"+feishubot.EscapeMarkdown(clip(oneLine(t.Title), 40))+"**\n"+stageBar(l, t.Stage), bs)
+		md := "**" + feishubot.EscapeMarkdown(clip(oneLine(t.Title), 40)) + "**"
+		if t.StageKind != "general" { // general work has no strip, as on the other cards and in the apps (#11590)
+			md += "\n" + stageBar(l, t.Stage, false) // open work: never done
+		}
+		add(md, bs)
 	}
 }
 

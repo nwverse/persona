@@ -164,7 +164,7 @@ func (s *Service) workbenchCount(ctx context.Context, now time.Time) (wbCounts, 
 		}
 		list, _ := s.sessions(ctx, d.ID)
 		for _, sess := range list {
-			if sess.Assistant {
+			if sess.Assistant || sess.HiddenByDirectory() {
 				continue
 			}
 			switch sess.State {
@@ -183,7 +183,7 @@ func (s *Service) workbenchCount(ctx context.Context, now time.Time) (wbCounts, 
 	}
 	order := map[string]int{proto.StateNeedsYou: 0, proto.StateWorking: 1, proto.StateUnread: 2}
 	slices.SortStableFunc(busy, func(a, b wbAgent) int { return order[a.sess.State] - order[b.sess.State] })
-	c.pending = len(s.pendingInteractions())
+	c.pending = len(s.visiblePendingInteractions())
 	for _, it := range s.workbenchInbox() {
 		if wbNeedsYou(it) {
 			c.inboxNeed++
@@ -258,12 +258,17 @@ func (s *Service) homeCard(ctx context.Context, f FeishuFeatures) (card *feishub
 	// The agents at work.
 	card.HR().Markdown("**🤖 " + wbAgentsLine(l, c) + "**")
 	icons := map[string]string{proto.StateNeedsYou: "🔴", proto.StateWorking: "🟢", proto.StateUnread: "🔵"}
+	preferTab := s.useHerdrTabName(ctx)
 	for i, r := range busy {
 		if i == wbHomeRows {
 			break
 		}
-		label := clip(oneLine(agentLabel(r.sess)), 24)
+		primary, secondary := feishuSessionNames(r.sess, preferTab)
+		label := clip(oneLine(primary), 24)
 		line := icons[r.sess.State] + " **" + feishubot.EscapeMarkdown(label) + "** · " + feishubot.EscapeMarkdown(r.d.Name)
+		if secondary != "" {
+			line += "\n" + feishubot.EscapeMarkdown(secondary)
+		}
 		if r.sess.LastText != "" {
 			line += "\n" + feishubot.EscapeMarkdown(clip(oneLine(stripMarkdownMarks(r.sess.LastText)), 70))
 		}

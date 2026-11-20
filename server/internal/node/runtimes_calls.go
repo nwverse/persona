@@ -17,8 +17,8 @@ import (
 // claimMethods are the calls that ask the connected runtimes about a session nobody claimed yet: what the apps do
 // with a session they show (open it, page it, send to it, stop it).
 var claimMethods = map[string]bool{"session.send": true, "session.items": true, "session.item": true, "session.image": true,
-	"session.visualization": true,
-	"session.watch":         true, "session.info": true, "session.interrupt": true}
+	"session.visualization": true, "session.fork": true,
+	"session.watch": true, "session.info": true, "session.interrupt": true}
 
 // awayReads are the calls the node answers itself for a session of a runtime that is away whose conversation is a
 // Claude transcript here (runtimeaway.go): its content, its info and the watch of its transcript.
@@ -48,6 +48,11 @@ func (n *Node) runtimeFor(ctx context.Context, method, id string) (*runtimeConn,
 		return h, nil
 	}
 	if known {
+		// An omp whose extension left with it (omp exited): a stopped session the node answers from its file and a
+		// message resumes (ompcalls.go), not a runtime that is away.
+		if n.ompStopped(method, id) {
+			return nil, nil
+		}
 		if awayReads[method] && n.runtimeTranscript(id) != "" {
 			return nil, nil // the node reads the transcript (n.file), as it does while the runtime lists the session
 		}
@@ -138,7 +143,9 @@ type runtimeCallParams struct {
 	Text           string        `json:"text"`
 	Images         []proto.Image `json:"images"`
 	SinceSeq       int           `json:"since_seq"`
+	History        string        `json:"history"`
 	FoldWork       bool          `json:"fold_work"`
+	BeforeSeq      int           `json:"before_seq"`
 	LazyImages     bool          `json:"lazy_images"`
 	UserInputs     bool          `json:"user_inputs"`
 	AfterSeq       *int          `json:"after_seq"`
@@ -213,15 +220,24 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		if json.Unmarshal(page["items"], &items) != nil {
 			return out, nil, true
 		}
-		folded, _ := json.Marshal(nonNil(transcript.FoldWork(items)))
+		if p.BeforeSeq == 0 {
+			items = transcript.FoldWorkLatest(items)
+		} else {
+			items = transcript.FoldWork(items)
+		}
+		folded, _ := json.Marshal(nonNil(items))
 		page["items"] = folded
 		return page, nil, true
 	case "session.image", "session.item", "session.visualization":
 		out, err := call(method, params)
 		return out, err, true
 	case "session.watch":
-		attempt := n.runtimes.watch(h, p.SessionID, p.SinceSeq, rpc.ConnContext(ctx))
-		_, err := call("session.watch", map[string]any{"session_id": p.SessionID, "since_seq": p.SinceSeq})
+		attempt := n.runtimes.watch(h, p.SessionID, p.SinceSeq, p.History, rpc.ConnContext(ctx))
+		params := map[string]any{"session_id": p.SessionID, "since_seq": p.SinceSeq}
+		if p.History != "" {
+			params["history"] = p.History
+		}
+		_, err := call("session.watch", params)
 		if err != nil {
 			n.runtimes.watchFailed(h, p.SessionID, attempt.token)
 		}

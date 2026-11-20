@@ -43,6 +43,9 @@ func (n *Node) startAgentType(launcher, declared string) string {
 	if l, ok := n.managedLauncher(launcher); ok && l.AgentType() == traexAgent {
 		return traexAgent
 	}
+	if n.agentKindOf(launcher, "") == agyAgent {
+		return agyAgent
+	}
 	return launcherAgentType(launcher)
 }
 
@@ -173,7 +176,7 @@ func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, l
 				continue
 			}
 		}
-		n.state.put(id, sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: time.Now().UTC()})
+		n.putAgentState(ctx, launch, id, sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: time.Now().UTC()})
 		n.bindPane(pane, id)
 		session := n.sessionFor(id, agent)
 		session.Agent = kind
