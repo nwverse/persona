@@ -40,6 +40,19 @@ describe("a to-do's steps on its status line (#11858)", () => {
     expect(stepsWords(goal({ view: view({ done: 1, total: 3 }), supervision }), "not_started")).toEqual({ after: "Steps 1/3", tail: "" });
   });
 
+  it("keeps the status of a to-do whose own result is finished or awaits review, as the hub's finish reads it", () => {
+    const all = view({ done: 3, total: 3 });
+    const pending = { state: "pending_review" } as unknown as Todo["supervision"];
+    expect(stepsWords(goal({ view: all, supervision: pending }), "not_started")).toEqual({ after: "Steps 3/3", tail: "" });
+    expect(stepsWords(goal({ view: all, delivery: { state: "live" } }), "not_started")).toEqual({ after: "Steps 3/3", tail: "" });
+    expect(stepsWords(goal({ view: all, ask: { verdict: "done", outcome: "done", asked_at: at } }), "not_started")).toEqual({ after: "Steps 3/3", tail: "" });
+    expect(stepsWords(goal({ view: all, ask: { verdict: "check it", asked_at: at } }), "not_started")).toEqual({ after: "Steps 3/3", tail: "" });
+    // not finished: an ask to decide, a concern deployed, a pr delivery
+    expect(stepsWords(goal({ view: all, ask: { verdict: "which", outcome: "decide", asked_at: at } }), "not_started")?.label).toBe("3/3 steps done");
+    expect(stepsWords(goal({ view: all, kind: "concern", delivery: { state: "live" } }), "not_started")?.label).toBe("3/3 steps done");
+    expect(stepsWords(goal({ view: all, delivery: { state: "pr" } }), "not_started")?.label).toBe("3/3 steps done");
+  });
+
   it("keeps the status of a to-do its own Agent is on, the steps after its Agent count", () => {
     expect(stepsWords(goal({ view: view({ done: 1, total: 2 }) }), "working")).toEqual({ after: "Steps 1/2" });
     expect(stepsWords(goal({ view: view({ done: 2, total: 2 }) }), "follow_up")).toEqual({ after: "Steps 2/2" });

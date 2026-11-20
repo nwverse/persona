@@ -5,7 +5,8 @@
 
 import { t } from "../i18n";
 import type { TodoStepCount } from "./todo-view-wire";
-import { acceptedAtRest, type Todo, type TodoStatus } from "./todos";
+import { reviewState } from "./supervision";
+import { acceptedAtRest, openAsk, type Todo, type TodoStatus } from "./todos";
 
 /** What the status line says about an open to-do's steps, each part in place of or beside today's words. */
 export interface StepsWords {
@@ -29,9 +30,9 @@ export function todoSteps(todo: Todo): TodoStepCount | undefined {
  * What an open to-do's status line says about its steps, from `todoSteps` and its status (todoStatus):
  *  - no Agent of its own (`not_started`): "Steps 3/9" in place of "Not started", nothing in place of "Not handed to an
  *    agent yet"; once every step is closed, "9/9 steps done" and "Next step not arranged yet";
- *  - otherwise its status stays, "Steps 3/9" after its Agent count; so does an accepted one at rest (acceptedAtRest):
- *    its supervisor settled it, so it keeps reading Accepted, nothing claims its next step is unplanned, and nothing
- *    says it was not handed over.
+ *  - otherwise its status stays, "Steps 3/9" after its Agent count; so does an accepted one at rest (acceptedAtRest)
+ *    and one whose own result is finished or awaits review (ownWorkFinished): it keeps its status word, nothing claims
+ *    its next step is unplanned, and nothing says it was not handed over.
  * Undefined when it has no steps the hub counted: the line is as before.
  */
 export function stepsWords(todo: Todo, status: TodoStatus): StepsWords | undefined {
@@ -41,6 +42,18 @@ export function stepsWords(todo: Todo, status: TodoStatus): StepsWords | undefin
   // accepted at rest: Accepted stays, its steps after it, and nothing about handing it over (its steps were handed out)
   if (acceptedAtRest(todo, status)) return { after: count, tail: "" };
   if (status !== "not_started") return { after: count };
+  // its own result is finished or awaits review: its status word stays (Awaiting review), its steps after it
+  if (ownWorkFinished(todo)) return { after: count, tail: "" };
   if (steps.done >= steps.total) return { label: t("todos.steps_all_done", { done: steps.done, total: steps.total }), tail: t("todos.steps_next_unplanned") };
   return { label: count, tail: "" };
+}
+
+/** Its own work finished as the hub reads it (server/internal/assistant/todo/projection/view.go finish): deployed, a
+ *  review not done yet, or its ask saying done or please verify; accepted is acceptedAtRest's. An open concern is never
+ *  deployed. Such a to-do began and waits on its result, so its steps do not take its status word. */
+function ownWorkFinished(todo: Todo): boolean {
+  if (todo.kind !== "concern" && todo.delivery?.state === "live") return true;
+  if (reviewState(todo) === "pending_review") return true;
+  const ask = openAsk(todo);
+  return !!ask && (!ask.outcome || ask.outcome === "done");
 }
