@@ -1135,9 +1135,10 @@ nonisolated struct APIClient: Sendable {
         var todoID: String?
         var via: MessageVia?
         var waitForEffort: Bool?
+        var approvalReplyTo: String?
         enum CodingKeys: String, CodingKey {
             case text, images, launcher, model, via, clientMsgID = "client_msg_id", clearDraft = "clear_draft", todoID = "todo_id"
-            case waitForEffort = "wait_for_effort"
+            case waitForEffort = "wait_for_effort", approvalReplyTo = "approval_reply_to"
         }
     }
     /// launcher / model switch what a headless (assistant) conversation runs on from this message on. clientMsgID
@@ -1161,8 +1162,13 @@ nonisolated struct APIClient: Sendable {
         var waitsOnComputer: Bool?
         var delivered: String?
         var undelivered: UndeliveredMessage?
+        var approvalReply: Bool?
+        var interactionID: String?
         var kept: Bool { delivered == "later" }
-        enum CodingKeys: String, CodingKey { case waitsOnComputer = "waits_on_computer", delivered, undelivered }
+        enum CodingKeys: String, CodingKey {
+            case waitsOnComputer = "waits_on_computer", delivered, undelivered
+            case approvalReply = "approval_reply", interactionID = "interaction_id"
+        }
     }
 
     /// `send`, with the whole answer (`SendReply`).
@@ -1173,6 +1179,22 @@ nonisolated struct APIClient: Sendable {
                                                                       waitForEffort: waitForEffort ? true : nil),
                                   timeout: 100, opID: opID, extraHeaders: holdsAgentMessages ? ["X-Persona-Features": UndeliveredMessage.agentHoldFeature] : [:])
         return (try? JSON.decoder.decode(SendReply.self, from: data)) ?? SendReply()
+    }
+
+    /// A proposal-only exact owner reply. The event id is the answer attempt's stable UUID; there is no composer/outbox
+    /// fallback and no via, quote, image, launcher, model or draft metadata. The hub must confirm the same target.
+    func replyOwnerApproval(_ ix: Interaction, phrase: String, opID: UUID) async throws {
+        guard ix.ownerApprovalPhrase == phrase else {
+            throw APIError(status: 400, message: String(localized: "This card did not advertise that exact reply."))
+        }
+        let eventID = opID.uuidString.lowercased()
+        let data = try await post(sp(ix.sessionKey) + "/messages",
+                                  body: SendBody(text: phrase, clientMsgID: eventID, approvalReplyTo: ix.id),
+                                  timeout: 100, opID: opID)
+        let reply = try JSON.decoder.decode(SendReply.self, from: data)
+        guard reply.approvalReply == true, reply.interactionID == ix.id else {
+            throw APIError(status: 502, message: String(localized: "The hub did not confirm this exact approval reply."))
+        }
     }
 
     private func keptPath(_ key: SessionKey, _ message: UndeliveredMessage) -> String {
@@ -1564,6 +1586,9 @@ nonisolated struct APIClient: Sendable {
         var agentAutoNamingMax: Int?
         /// Hours between regular name updates after new output, 1–8760; 0 (the default) is off.
         var agentAutoNamingIntervalHours: Int?
+        var ownerReplyApproval: Bool?
+        var persistentOwnerActionCards: Bool?
+        var ownerReplyApprovalPhrases: [String]?
         enum CodingKeys: String, CodingKey {
             case launcher, cwd, conversations, timezone, main, leaders, manager
             case machineID = "machine_id", mainMachineID = "main_machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
@@ -1579,6 +1604,8 @@ nonisolated struct APIClient: Sendable {
             case closeEndedTerminals = "close_ended_terminals"
             case agentAutoNaming = "agent_auto_naming", agentAutoNamingMax = "agent_auto_naming_max"
             case agentAutoNamingIntervalHours = "agent_auto_naming_interval_hours"
+            case ownerReplyApproval = "owner_reply_approval", persistentOwnerActionCards = "persistent_owner_action_cards"
+            case ownerReplyApprovalPhrases = "owner_reply_approval_phrases"
         }
 
         /// Whether conversation `id` is the built-in background supervisor (#5083): listed with the scheduled tasks'
@@ -1688,6 +1715,9 @@ nonisolated struct APIClient: Sendable {
         var agentAutoNamingMax: Int?
         var agentAutoNamingIntervalHours: Int?
         var kbTopics: Bool?
+        var ownerReplyApproval: Bool?
+        var persistentOwnerActionCards: Bool?
+        var ownerReplyApprovalPhrases: [String]?
         enum CodingKeys: String, CodingKey {
             case launcher, timezone, notes
             case machineID = "machine_id", mainTasksQuiet = "main_tasks_quiet", meetingAttendanceDefault = "meeting_attendance_default"
@@ -1701,6 +1731,8 @@ nonisolated struct APIClient: Sendable {
             case closeEndedTerminals = "close_ended_terminals"
             case agentAutoNaming = "agent_auto_naming", agentAutoNamingMax = "agent_auto_naming_max"
             case agentAutoNamingIntervalHours = "agent_auto_naming_interval_hours"
+            case ownerReplyApproval = "owner_reply_approval", persistentOwnerActionCards = "persistent_owner_action_cards"
+            case ownerReplyApprovalPhrases = "owner_reply_approval_phrases"
         }
     }
     /// A sparse write of the assistant's settings: only the fields set are sent (Agent Follow-Up, #7005).

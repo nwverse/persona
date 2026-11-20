@@ -55,6 +55,10 @@ func (h *Manager) channelsAppCall(ctx context.Context, p assistantwire.AppCall) 
 			Action        string `json:"action"`
 			Channel       string `json:"channel"`
 			Kind          string `json:"kind"`
+			ApprovalReply bool   `json:"approval_reply"`
+			MessageID     string `json:"message_id"`
+			ParentID      string `json:"parent_id"`
+			ChatID        string `json:"chat_id"`
 			Clarify       bool   `json:"clarify"`
 			Text          string `json:"text"`
 			ClientMsgID   string `json:"client_msg_id"`
@@ -72,14 +76,26 @@ func (h *Manager) channelsAppCall(ctx context.Context, p assistantwire.AppCall) 
 				return nil, true, errors.New("invalid clarification proof request")
 			}
 		}
-		// The assistant answers a card from a channel only with the owner's action handed over with that press or
-		// message in that channel (a card's for that card, a message's for a kind it takes typed), once
-		// (fleet_routes.go channelResolve there; kind is the queue's).
-		err = h.takeOwnerAction(a.Action, a.Channel, strings.TrimSpace(a.InteractionID), a.Kind)
-		if err == nil && a.Clarify {
-			out = map[string]any{"clarification_proof": h.clarificationProofs.issue(question)}
+		if a.ApprovalReply {
+			if a.Clarify || a.Channel != channel.Feishu {
+				return nil, true, errors.New("invalid owner approval proof request")
+			}
+			expected := assistantwire.OwnerApprovalProof{MessageID: a.MessageID, ParentID: a.ParentID, ChatID: a.ChatID, Text: a.Text}
+			var proof assistantwire.OwnerApprovalProof
+			proof, err = h.takeOwnerApproval(a.Action, a.Channel, strings.TrimSpace(a.InteractionID), a.Kind, expected)
+			if err == nil {
+				out = map[string]any{"owner_approval_proof": proof}
+			}
 		} else {
-			out = map[string]any{}
+			// The assistant answers a card from a channel only with the owner's action handed over with that press or
+			// message in that channel (a card's for that card, a message's for a kind it takes typed), once
+			// (fleet_routes.go channelResolve there; kind is the queue's).
+			err = h.takeOwnerAction(a.Action, a.Channel, strings.TrimSpace(a.InteractionID), a.Kind)
+			if err == nil && a.Clarify {
+				out = map[string]any{"clarification_proof": h.clarificationProofs.issue(question)}
+			} else {
+				out = map[string]any{}
+			}
 		}
 	default:
 		return nil, false, nil

@@ -155,6 +155,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, err)
 		return
 	}
+	if in.OwnerApprovalPhrases != nil {
+		if _, err := ownerApprovalPhrases(Settings{OwnerApprovalPhrases: in.OwnerApprovalPhrases}); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+	}
 	if (in.AgentAutoNaming != nil || in.AgentAutoNamingMax != nil || in.AgentAutoNamingIntervalHours != nil) && !s.explicitSettingsTarget(w, r) {
 		return
 	}
@@ -302,6 +308,15 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.ClaudeInteractive != nil {
 			v.ClaudeInteractive = in.ClaudeInteractive
+		}
+		if in.OwnerReplyApproval != nil {
+			v.OwnerReplyApproval = in.OwnerReplyApproval
+		}
+		if in.PersistentOwnerActionCards != nil {
+			v.PersistentOwnerActionCards = in.PersistentOwnerActionCards
+		}
+		if in.OwnerApprovalPhrases != nil {
+			v.OwnerApprovalPhrases = in.OwnerApprovalPhrases
 		}
 		if in.AgentTasks != nil {
 			v.AgentTasks = in.AgentTasks

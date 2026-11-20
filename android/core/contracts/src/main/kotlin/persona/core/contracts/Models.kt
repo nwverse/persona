@@ -1165,8 +1165,20 @@ data class Interaction(
     val suggestion: RuleSuggestion? = null,
     /** A prepared approval whose current deadline is authoritative while the hub keeps it pending; absent on older hubs. */
     @SerialName("can_clarify") val canClarify: Boolean = false,
+    /** A server-owned exact proposal; its complete original payload, not an Always rule, is the approval authority. */
+    @SerialName("approval_batch_id") val approvalBatchId: String? = null,
+    @SerialName("approval_item_id") val approvalItemId: String? = null,
+    @SerialName("owner_proposal") val ownerProposal: Boolean? = null,
+    @SerialName("no_expiry") val noExpiry: Boolean? = null,
+    @SerialName("owner_approval_phrases") val ownerApprovalPhrases: List<String>? = null,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
+    /** The one exact reply this card advertises. Anything else stays an ordinary card action. */
+    val ownerApprovalPhrase: String?
+        get() = ownerApprovalPhrases?.firstOrNull()?.takeIf {
+            kind == "permission" && ownerProposal == true && !approvalBatchId.isNullOrBlank() &&
+                machineId.isNotBlank() && sessionId.isNotBlank() && it.isNotBlank()
+        }
     /** A supported following mode; absent, plan and unknown values keep the legacy approval choices (#3784). */
     val recordedPlanThen: String?
         get() = when (planThen) {
@@ -1271,6 +1283,8 @@ data class Resolution(
     @SerialName("reason") val reason: String? = null,
     val action: String? = null,
     val content: kotlinx.serialization.json.JsonObject? = null,
+    /** Runtime-only exact proposal reply; deliberately never serialized into an ordinary card resolution. */
+    @kotlinx.serialization.Transient val ownerApprovalPhrase: String? = null,
 )
 
 /** A row of GET /api/v1/interactions/history (iOS `InteractionRecord`): a session's card, how it ended, its answer and when. */

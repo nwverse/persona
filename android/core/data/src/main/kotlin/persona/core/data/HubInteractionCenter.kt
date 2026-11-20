@@ -143,6 +143,12 @@ class HubInteractionCenter(
         return outcome
     }
 
+    override suspend fun replyOwnerApproval(interaction: Interaction, phrase: String) {
+        restored.await()
+        transport.replyOwnerApproval(interaction, phrase)
+        lock.withLock { end(interaction.id, here = true) }
+    }
+
     override fun dropDelegated(id: String) = mutableDelegated.update { list -> list.filterNot { it.id == id } }
 
     override suspend fun reanswer(id: String, answers: Map<String, String>, manager: String?) {

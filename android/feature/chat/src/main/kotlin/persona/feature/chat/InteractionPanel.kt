@@ -269,8 +269,14 @@ internal fun InteractionForm(
                 DecisionButtons(
                     primary = JAction(stringResource(R.string.chat_request_allow), enabled = enabled(AnswerAction.Allow)) { act(AnswerAction.Allow) },
                     secondary = JAction(stringResource(R.string.chat_request_deny), enabled = enabled(AnswerAction.Deny)) { act(AnswerAction.Deny) },
-                    more = if (interaction.offersAlways) listOf(JAction(interaction.alwaysActionLabel.text(),
-                        enabled = enabled(AnswerAction.Always)) { act(AnswerAction.Always) }) else emptyList(),
+                    more = buildList {
+                        interaction.ownerApprovalPhrase?.let { phrase ->
+                            add(JAction(stringResource(R.string.chat_request_owner_reply, phrase),
+                                enabled = enabled(AnswerAction.OwnerReply)) { act(AnswerAction.OwnerReply) })
+                        }
+                        if (interaction.offersAlways) add(JAction(interaction.alwaysActionLabel.text(),
+                            enabled = enabled(AnswerAction.Always)) { act(AnswerAction.Always) })
+                    },
                 )
                 interaction.alwaysScopeDetail?.takeIf { interaction.offersAlways }?.let {
                     Text(stringResource(R.string.chat_request_always_allows, it.text()), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)

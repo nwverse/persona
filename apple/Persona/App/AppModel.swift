@@ -3403,6 +3403,9 @@ final class AppModel {
         // To the hub of the interaction's own group (docs/protocol/multi-hub.md「Connections and routing」).
         // A stopped Agent's work card still takes the answers that send it nothing: put off, or dismissed (#6839).
         guard canAnswer(ix) || ix.isLocalResolution(r), let api = api(ix.group) else { return }
+        if let phrase = r.ownerApprovalPhrase {
+            guard ix.ownerApprovalPhrase == phrase else { return }
+        }
         let handoff = ix.isSecretHandoff && r.allow == true
         if handoff && !handoffCard {
             toast = Toast(String(localized: "Approve it on its card in the chat."), style: .error)
@@ -3412,7 +3415,7 @@ final class AppModel {
         guard connection.networkUp else { notDone(); return }
         // A question's card stays where it is, greyed and marked "Sending…", until the hub has the answer: its picks and
         // text stay for a retry (#6279). Every other card goes at once and comes back if its answer fails.
-        let keepsCard = ix.kind == .question
+        let keepsCard = ix.kind == .question || r.ownerApprovalPhrase != nil
         guard let op = answerAttempts.begin(ix.uid, r) else { return } // its answer is on the way: a second tap sends nothing
         if !keepsCard {
             interactions[ix.uid] = nil
@@ -3430,6 +3433,15 @@ final class AppModel {
             endedInteractionIDs.insert(ix.uid)
         }
         do {
+            if let phrase = r.ownerApprovalPhrase {
+                _ = try await OpRetry.untilDelivered { () async throws -> Bool in
+                    try await api.replyOwnerApproval(ix, phrase: phrase, opID: op)
+                    return true
+                }
+                over()
+                Haptics.success()
+                return
+            }
             let res = try await OpRetry.untilDelivered { try await api.resolve(ix.id, r, opID: op, handoffCard: handoff) }
             if res.already == true, let existing = res.resolution, existing.answeredBy == AssistantAnswer.assistant, ix.kind == .question {
                 // The assistant answered first: its answer shows in the chat, where the user may change it.

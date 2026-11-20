@@ -321,6 +321,14 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 			writeAssistantErr(w, err)
 			return
 		}
+		if target, _ := p["owner_approval_handled"].(string); target != "" {
+			// The manager verified and resolved this exact owner-action reply. It is
+			// not a conversation turn, so no node send or model execution follows.
+			delete(p, "owner_approval_handled")
+			body, _ := json.Marshal(map[string]any{"ok": true, "approval_reply": true, "interaction_id": target})
+			writeRaw(w, http.StatusOK, append(body, '\n'))
+			return
+		}
 		if kept, _ := p["model"].(string); strings.TrimSpace(asked) != "" && kept == strings.TrimSpace(asked) {
 			picked = kept
 		}

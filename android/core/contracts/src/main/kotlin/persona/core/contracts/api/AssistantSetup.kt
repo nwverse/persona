@@ -59,6 +59,10 @@ data class AssistantConfig(
     val manager: String? = null,
     @SerialName("default_permission_mode") val defaultPermissionMode: String? = null,
     @SerialName("permission_defaults") val permissionDefaults: AssistantPermissionDefaults? = null,
+    /** Exact one-shot owner replies and persistent proposals; null hides these controls on an older hub. */
+    @SerialName("owner_reply_approval") val ownerReplyApproval: Boolean? = null,
+    @SerialName("persistent_owner_action_cards") val persistentOwnerActionCards: Boolean? = null,
+    @SerialName("owner_reply_approval_phrases") val ownerReplyApprovalPhrases: List<String>? = null,
 ) {
     /** Whether the main conversation folds its background rounds: on unless turned off, also on a hub that omits it. */
     val backgroundFolded: Boolean get() = mainBackgroundFolded ?: true
@@ -97,6 +101,9 @@ data class AssistantConfigUpdate(
     @SerialName("main_supervises_own_tasks") val mainSupervisesOwnTasks: Boolean? = null,
     @SerialName("close_ended_terminals") val closeEndedTerminals: Boolean? = null,
     @SerialName("default_permission_mode") val defaultPermissionMode: String? = null,
+    @SerialName("owner_reply_approval") val ownerReplyApproval: Boolean? = null,
+    @SerialName("persistent_owner_action_cards") val persistentOwnerActionCards: Boolean? = null,
+    @SerialName("owner_reply_approval_phrases") val ownerReplyApprovalPhrases: List<String>? = null,
 ) {
     companion object {
         const val CLEAR_MAIN = "-"
