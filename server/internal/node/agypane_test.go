@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 const (
@@ -84,6 +85,44 @@ func agyTestItems(t *testing.T, n *Node, id string, params map[string]any) ([]pr
 	t.Helper()
 	page := agyTestCall(t, n, "session.items", id, params).(map[string]any)
 	return page["items"].([]proto.Item), page
+}
+
+func TestAgyPaneUserImagesAndCheckpoints(t *testing.T) {
+	node, herdr, home := herdrNode(t)
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
+	seedAgents(t, node, herdr, agyTestAgent(agyTestPane, home, agyTestID))
+	const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB9sAAAAASUVORK5CYII="
+	agyTestFile(t, node.agyDataRoot(), agyTestID, fmt.Sprintf(`{"step_index":0,"type":"USER_INPUT","content":"Look\n<attached_images>\nuser.png\n</attached_images>","media":[{"mime_type":"image/png","uri":"./user.png"},{"mime_type":"image/png","data":%q}]}
+{"step_index":1,"type":"PLANNER_RESPONSE","content":"Done"}
+{"step_index":2,"type":"USER_INPUT","client_msg_id":"photo-only","media":[{"mime_type":"image/png","data":%q},{"mime_type":"image/png","data":%q}]}
+{"step_index":3,"type":"CHECKPOINT"}
+`, png, png, png))
+	index := agyTestCall(t, node, "session.items", agyTestRow, map[string]any{"user_inputs": true}).(proto.UserInputIndex)
+	if index.Total != 2 || index.Inputs[0].Seq != 1 || index.Inputs[1].Seq != 3 {
+		t.Fatalf("user inputs: %+v", index)
+	}
+	recent, page := agyTestItems(t, node, agyTestRow, map[string]any{"turns": 1})
+	if page["has_more"] != true || len(recent) != 3 || index.Inputs[1].ID != recent[0].ID {
+		t.Fatalf("latest turn: %+v", page)
+	}
+	for _, image := range recent[:2] {
+		if image.Role != "user" || image.Kind != proto.KindImage || image.ToolUseID != "" || image.ClientMsgID != "photo-only" ||
+			image.Image == nil || !image.Image.Lazy || image.Image.Data != "" {
+			t.Fatalf("user image: %+v", image)
+		}
+		fetched := agyTestCall(t, node, "session.image", agyTestRow, map[string]any{"item_id": image.ID}).(*proto.Image)
+		if fetched.Mime != "image/png" || fetched.Data != png {
+			t.Fatalf("fetched image: %+v", fetched)
+		}
+	}
+	if notice := recent[2]; notice.Role != "system" || notice.Kind != proto.KindNotice || notice.Text != transcript.CompactedNotice {
+		t.Fatalf("checkpoint: %+v", notice)
+	}
+	older, page := agyTestItems(t, node, agyTestRow, map[string]any{"turns": 1, "before_seq": 3})
+	if page["has_more"] != false || len(older) != 3 || older[0].Kind != proto.KindText || older[1].Kind != proto.KindImage ||
+		older[0].Seq != older[1].Seq || !strings.HasSuffix(older[1].ID, "#media1") {
+		t.Fatalf("earlier turn did not suppress the duplicate path: %+v", page)
+	}
 }
 
 func TestAgyPaneSessionImage(t *testing.T) {

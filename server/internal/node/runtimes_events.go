@@ -50,6 +50,12 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 	if !ready {
 		return // hello first
 	}
+	var about struct {
+		SessionID string `json:"session_id"`
+	}
+	if json.Unmarshal(params, &about) == nil && about.SessionID != "" && n.runtimeSessionBlocked(about.SessionID, "") {
+		return // a blocked Agent folder (agentdirs.go): nothing of it is sent
+	}
 	switch event {
 	case "usage.report":
 		n.runtimeUsageReport(h, params, time.Now())
@@ -299,6 +305,9 @@ func (n *Node) runtimeAsk(ctx context.Context, h *runtimeConn, params json.RawMe
 	}
 	if !n.runtimes.owns(h, ix.SessionID) {
 		return nil, fmt.Errorf("session %s is not listed by this runtime", ix.SessionID)
+	}
+	if n.runtimeSessionBlocked(ix.SessionID, ix.Cwd) {
+		return proto.Resolution{Dismiss: true}, nil // a blocked Agent folder (agentdirs.go): handed back to the computer
 	}
 	rt := h.id()
 	// An id the runtime chose is the same when it asks again: the runtime SDK asks the next node with the same card

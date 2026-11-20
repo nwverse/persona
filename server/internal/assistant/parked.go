@@ -57,11 +57,12 @@ const maxReparks = 3
 // sentence, until when, what kind of thing it waits on, and how many times in a row it was parked with no agent turn
 // in between (1: parked once).
 type Parked struct {
-	Reason    string        `json:"reason"`
-	Until     time.Time     `json:"until"`
-	WaitingOn string        `json:"waiting_on"`
-	Count     int           `json:"count"`
-	Evidence  *ParkEvidence `json:"evidence,omitempty"`
+	Reason    string             `json:"reason"`
+	Until     time.Time          `json:"until"`
+	WaitingOn string             `json:"waiting_on"`
+	Count     int                `json:"count"`
+	Evidence  *ParkEvidence      `json:"evidence,omitempty"`
+	Handoff   *taskHandoffTarget `json:"handoff,omitempty"`
 }
 
 // parking is what holds v parked now: its latest review, when the ledger's state is parked and that review parked it.
@@ -82,7 +83,12 @@ func (v *Supervision) parked() *Parked {
 	if r == nil {
 		return nil
 	}
-	return &Parked{Reason: r.Reason, Until: r.Until, WaitingOn: r.WaitingOn, Count: max(1, r.Parks), Evidence: r.Evidence.clone()}
+	p := &Parked{Reason: r.Reason, Until: r.Until, WaitingOn: r.WaitingOn, Count: max(1, r.Parks), Evidence: r.Evidence.clone()}
+	if r.Handoff != nil {
+		target := r.Handoff.Target
+		p.Handoff = &target
+	}
+	return p
 }
 
 // parseParkUntil reads a park's time: a duration ("3d", "36h", "2d12h", "90m") or an RFC 3339 time; "" is parkDefault
@@ -204,7 +210,7 @@ func parkedDueSignal(t Todo, now time.Time) (superviseSignal, bool) {
 		return superviseSignal{}, false
 	}
 	r := v.parking()
-	if r == nil || !r.DueAt.IsZero() || now.Before(r.Until) {
+	if r == nil || r.Handoff != nil || !r.DueAt.IsZero() || now.Before(r.Until) {
 		return superviseSignal{}, false
 	}
 	return superviseSignal{Todo: t.ID, Kind: sigParkedDue, Key: parkKey(r), Detail: r.Reason,
@@ -246,7 +252,9 @@ func decisionEndsPark(source string) bool {
 
 // parkWaitsForDecision: a task parked waiting on on waits for an answer (the owner's call, or someone else's), which
 // a decision of the owner's recorded on it may be.
-func parkWaitsForDecision(on string) bool { return on == parkOwnerPriority || on == parkSomeoneElse }
+func parkWaitsForDecision(on string) bool {
+	return on == parkOwnerPriority || on == parkSomeoneElse || on == parkTodoHandoff
+}
 
 // decidedPark is the latest park of v that a recorded decision ended (parkDecided), whatever was reviewed since: a
 // review that followed it, parking it again included, does not mean its supervisor heard of the decision, so the
@@ -409,6 +417,6 @@ func (s *Service) parkedEntry(ctx context.Context, r *TaskReview) *prompts.Super
 // parkedHealth is a parked task's supervision in the snapshot's words: until when and why.
 func parkedHealth(p *Parked, loc *time.Location) string {
 	on := map[string]string{parkOwnerPriority: "等用户定优先级", parkSomeoneElse: "等别人", parkExternalEvent: "等外部的事", // i18n-ignore: the snapshot is the assistant's prompt
-		parkDate: "等到时间"}[p.WaitingOn] // i18n-ignore: the snapshot is the assistant's prompt
+		parkDate: "等到时间", parkTodoHandoff: "等另一条待办回传结果"}[p.WaitingOn] // i18n-ignore: the snapshot is the assistant's prompt
 	return fmt.Sprintf("已搁置到 %s（%s）：%s", p.Until.In(loc).Format("01-02 15:04"), on, p.Reason) // i18n-ignore: the snapshot is the assistant's prompt
 }

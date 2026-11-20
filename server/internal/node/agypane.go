@@ -76,7 +76,7 @@ type agyWatch struct {
 }
 
 func agyStepsHistory(conversation string) agyHistory {
-	return agyHistory{token: "agy-pane:" + conversation + ":steps:lazy-tool-media"}
+	return agyHistory{token: "agy-pane:" + conversation + ":steps:lazy-media:checkpoints"}
 }
 
 // agyRead loads the compact export for pages and live updates. The revision memo
@@ -166,11 +166,15 @@ func (h agyHistory) after(since int) (items []proto.Item, span transcript.Span, 
 	return agyLightItems(items), span, more
 }
 
+func agyUserInput(it proto.Item) bool {
+	return it.Role == "user" && (it.Kind == proto.KindText || (it.Kind == proto.KindImage && it.ToolUseID == ""))
+}
+
 func (h agyHistory) page(p agyPageParams) any {
 	if p.UserInputs {
 		index := proto.UserInputIndex{History: h.token, Inputs: []proto.UserInputPosition{}}
 		for _, it := range h.items {
-			if it.Role == "user" && it.Kind == proto.KindText {
+			if agyUserInput(it) && (len(index.Inputs) == 0 || index.Inputs[len(index.Inputs)-1].Seq != it.Seq) {
 				index.Inputs = append(index.Inputs, proto.UserInputPosition{ID: it.ID, Seq: it.Seq})
 			}
 		}
@@ -207,8 +211,10 @@ func (h agyHistory) page(p agyPageParams) any {
 	if p.Turns > 0 {
 		turns := min(p.Turns, 10)
 		start = max(0, len(items)-2000)
+		lastSeq := -1
 		for i := len(items) - 1; i >= start; i-- {
-			if items[i].Role == "user" && items[i].Kind == proto.KindText {
+			if agyUserInput(items[i]) && items[i].Seq != lastSeq {
+				lastSeq = items[i].Seq
 				turns--
 				if turns == 0 {
 					start = i
