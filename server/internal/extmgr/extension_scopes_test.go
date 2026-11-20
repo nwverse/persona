@@ -122,6 +122,8 @@ func TestExtensionScopedToken(t *testing.T) {
 		{"GET /api/v1/sessions", "/api/v1/sessions", "agents.read"},
 		{"PUT /api/v1/kb/{kind}/{id}", "/api/v1/kb/people/x", "kb.write"},
 		{"POST /api/v1/sessions/{mid}/{sid}/messages", "/api/v1/sessions/m/s/messages", "agents.control"},
+		{"GET /api/v1/assistant/dispatch-guard", "/api/v1/assistant/dispatch-guard", "dispatch.guard"},
+		{"PUT /api/v1/assistant/dispatch-guard", "/api/v1/assistant/dispatch-guard", "dispatch.guard"},
 		{"GET /api/v1/ws", "/api/v1/ws", ""},
 		{"POST /api/v1/auth/tokens", "/api/v1/auth/tokens", ""},
 	} {

@@ -2218,6 +2218,30 @@ stopped or uninstalled extension leaves nothing in force. The full wire shape an
   by the rule's own note when it has one, and a matching sentence in the `task_plan`, `agent_start`,
   `conversation_new` and `conversation_send` tool descriptions.
 
+## Explicit dispatch guard
+
+`internal/assistant/dispatch_guard.go` is a separate, opt-in guard for explicitly named conversations. It does not
+change the class-based dispatch policy above. A policy has
+`{"enabled":true,"expires_at":"…","targets":[{"machine_id":"…","session_id":"…","deny":["task_plan"]}]}`;
+`deny` may contain only `task_plan`, `agent_start`, `conversation_new` and `conversation_send`. Targets match the
+machine and session exactly; ordinary Agent start parameters are untouched.
+
+- **One decision for listing and calls**: `guardRefusal` runs at the model tool entry before business arguments are
+  parsed. `guardTools` applies the same decision to the real `sessionMCPTools` list, and `ToolsFor` exposes the same
+  filtering for `assistant.tools`. A stale client or a direct call still meets the call guard. A policy write calls
+  `mcpChanges.notify`, so revision-aware discovery cannot keep a pre-change list. `--allowedTools` is an approval rule,
+  not proof that a tool is hidden.
+- **Defaults and fallback**: no policy, `enabled:false`, expiry, a non-matching target and an empty target list all
+  leave existing behavior unchanged. Untargeted tool lists and other conversations keep their previous contents.
+  An unreadable or invalid enabled policy fails closed for the four dispatch tools; unrelated tools remain available.
+  The localized refusal contains no storage error, target, tool name, arguments, policy or credential.
+- **Scope and expiry**: `GET` / `PUT /api/v1/assistant/dispatch-guard` requires the `dispatch.guard` scope for an
+  extension. An extension-written enabled policy must expire within one hour; full credentials may read, write and
+  clear it. The legacy every-scope grant does not include `dispatch.guard`. An unauthorized write changes neither
+  the policy nor existing starts.
+- **Boundary**: layer / preview and push-layer integration remain follow-up work. This slice adds no preview, client
+  UI, push integration or production deployment.
+
 ## Start defaults
 
 What a task Agent starts with beyond what its caller named can come from an optional start-defaults policy

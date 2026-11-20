@@ -1,5 +1,7 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- `--allowedTools` and `--disallowedTools` govern approval, not a reliable tool-visibility boundary (#11736). Per-conversation MCP narrowing must filter the actual `sessionMCPTools` response and repeat the same decision at the assistant's call entry (`guardRefusal`). Changing only launch flags can leave stale clients or direct calls with the old tool set; hiding a tool is not a substitute for call admission.
+
 - Snapshot sequence numbers must order application as well as computation (#10514). `publish` numbered snapshots under `pubMu` but applied their interaction lists later, so a delayed older list could withdraw a prepared approval installed by a newer one. Recheck the sequence under `pubMu` immediately before `askOnPhone`; skip only superseded interaction lists and leave current omissions and explicit lifecycle endings unchanged. Force two real publishers across an existing leaf-mutex gate, then prove the owner's Allow returns once and applies once.
 
 - A publisher gate must not hold a mutex needed to create the state the test waits for (#11572). The out-of-order snapshot fixture held `tasks.quiet.mu`; after prepared-card registration gained a cache-miss session lookup, that lookup waited on the same mutex and the test spun before the fresh publisher. Seed the already-observed session list with `fleetKeepPrevious` so the real prepared path bypasses that unrelated lookup, and keep the production ordering guard proved by mutation rather than weakening the race assertions.

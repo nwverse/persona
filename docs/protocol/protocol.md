@@ -2084,6 +2084,7 @@ Clients report their errors and crashes only while `features` has `error_reports
 | GET | `/api/v1/assistant/leaders` | Every direction (leader conversation): `{"leaders":[{"id","title","name"?,"project"?,"ended"?,"progress"?,"notes"?,"notes_at","by","at","ended_at"?}]}`, current ones first, then ended ones, each by `at` then `id`; `name` is what the direction is called (the owner's or the secretary's name, else the project's name, else the title without its date and kind), `progress` the leader's latest own summary `{reached?,doing?,needs_you?,links?,at}`, `notes` what the owner wrote for it (#10086), `notes_at` when they were saved: always present, `null` without notes (the value a notes save takes as `notes_at`, #11392); titles or directions not readable 503 (`docs/assistant/unified-entry.md` "Leader conversations") |
 | GET | `/api/v1/assistant/dispatch-policy` | The assistant's dispatch policy: `{"dispatch_policy":{"rules":[{"conversation_class","deny":["task_plan"|"agent_start"|"start_conversation"|"send_to_main"|"send_to_leader"],"message"?}],"expires_at"?}}`. A conversation class is `main`, `leader`, `background_supervisor`, `scheduled` (a scheduled task's own conversation) or `other`; with no policy in force the answer is `{"dispatch_policy":{"rules":[]}}`. Full credentials, or an extension token granted `assistant.dispatch_policy`. See "Dispatch policy" below |
 | PUT | `/api/v1/assistant/dispatch-policy` | Replace the dispatch policy with `{"dispatch_policy":{…}}`; empty `rules` clears it (`{"rules":[]}`). A full-credential write may omit `expires_at`; an extension write must name an `expires_at` no more than one hour ahead (a past or later one is 400), so a stopped or uninstalled extension leaves nothing in force. An unknown class or action, a repeated class, an empty `deny` or an over-long `message` is 400; read-only devices are 403. The same field may be written with `PUT /api/v1/assistant` (full credentials, expiry optional). Full credentials, or an extension token granted `assistant.dispatch_policy`; see "Dispatch policy" below |
+| GET / PUT | `/api/v1/assistant/dispatch-guard` | The explicit-target dispatch guard: `{"dispatch_guard":{"enabled","expires_at"?,"targets":[{"machine_id","session_id","deny"}]}}`, where `deny` may contain only `task_plan`, `agent_start`, `conversation_new` and `conversation_send`. Empty `targets` clears it; `enabled:false` or an expired policy is inert. Full credentials, or an extension token granted `dispatch.guard`. An extension-written enabled policy must expire within one hour; read-only devices and unscoped extensions are 403. See "Explicit dispatch guard" below |
 | GET | `/api/v1/assistant/worker-presets?machine=<id>` | The Agent presets (the active model profile's tiers) a task can start with on that computer: `{"presets":[{"name","launcher","model"?,"effort"?,"speed"?,"description"?,"unavailable"?}]}`, only those whose launcher the machine has; `unavailable` says its latest health check fails right now (for example a usage limit), and an absent check leaves it false. Full credentials, or an extension token granted `assistant.start_defaults`; read-only, it carries no credentials. Unknown machine 404 |
 | GET | `/api/v1/assistant/start-defaults` | The start-defaults policy: `{"start_defaults":{"rules":[{"when":{"supervisor"?,"role"?,"readonly"?},"then":{"presets"?,"effort"?,"ultracode"?,"goal"?,"plan_first"?}}],"expires_at"?,"by"?}}`; with no policy in force `{"start_defaults":{"rules":[]}}`. Full credentials, or an extension token granted `assistant.start_defaults`. See "Start defaults" below |
 | PUT | `/api/v1/assistant/start-defaults` | Replace it with `{"start_defaults":{…}}`; empty `rules` clears it. A full-credential write may omit `expires_at`; an extension write must name one no more than one hour ahead (a past or later one is 400). An unknown field, class, role, effort or goal source, a rule whose `then` names nothing, more than 16 rules or presets, a preset name over 64 characters or a weight outside 0–1000 is 400; read-only devices are 403. `by` is set by the manager (the extension's id, or `owner`), never taken from the body. See "Start defaults" below |
@@ -2342,6 +2343,35 @@ token granted the `assistant.dispatch_policy` hub scope. Its shape:
 The checks run on the model's tool-call entry only: the hub's own internal starts are not affected, and the main
 conversation, leader conversations and the background supervisor keep working unless a rule explicitly names their
 class.
+
+### Explicit dispatch guard
+
+The explicit guard is separate from the class-based dispatch policy. It is off by default and applies only to targets
+named by `machine_id + session_id`:
+
+```json
+{
+  "enabled": true,
+  "expires_at": "RFC 3339, required for an extension-written enabled policy",
+  "targets": [
+    {"machine_id": "example-machine", "session_id": "example-session", "deny": ["task_plan", "agent_start"]}
+  ]
+}
+```
+
+`deny` may also name `conversation_new` and `conversation_send`. No policy, `enabled:false`, expiry or a target that
+does not match leaves behavior unchanged. `GET` / `PUT /api/v1/assistant/dispatch-guard` accepts full credentials or
+an extension granted `dispatch.guard`; the legacy every-scope grant does not include it. An extension-written enabled
+policy must expire within one hour, and empty `targets` clears the policy.
+
+`guardRefusal` runs at the model tool-call entry before business arguments are parsed. `guardTools` applies the same
+decision to the actual `sessionMCPTools` list, while `assistant.tools` accepts an optional `{machine_id, session_id}`
+and uses `ToolsFor`. Untargeted lists and other conversations stay unchanged. A stale client or direct invocation
+still meets the call guard. `--allowedTools` is not used as evidence of tool-list narrowing. An unreadable or invalid
+enabled policy fails closed for the four dispatch tools; unrelated tools remain available. The localized refusal
+contains no storage error, target, tool name, arguments, policy or credential.
+
+Layer / preview and push-layer integration are follow-up work, not part of this contract.
 
 ## WebSocket `/api/v1/ws`
 
