@@ -60,11 +60,11 @@ export function ConversationTagFilterBar({ entries, active, customized, editing,
             {editing && <IconButton icon="x" label={t("conversation-tag-filters.remove", { tag })} disabled={busy} onClick={() => void change(entries.filter((x) => x !== tag))} size={22} iconSize={11} className="touch-hit" />}
           </span>
         ))}
-        {!entries.length && customized && !editing && <span className="px-1 py-1 text-[12px] text-ink-3">{t("conversation-tag-filters.empty")}</span>}
+        {!entries.length && customized && !editing && <span className="px-1 py-1 text-label text-ink-3">{t("conversation-tag-filters.empty")}</span>}
         {editing && (
           <>
             <form className="inline-flex items-center gap-1" onSubmit={(event) => { event.preventDefault(); void add(); }}>
-              <input value={draft} disabled={busy} onChange={(event) => { setDraft(event.target.value); setError(""); }} placeholder={t("conversation-tag-filters.placeholder")} aria-label={t("conversation-tag-filters.placeholder")} className={cx(inputClass, "h-8 w-36 px-2 text-[12px]")} />
+              <input value={draft} disabled={busy} onChange={(event) => { setDraft(event.target.value); setError(""); }} placeholder={t("conversation-tag-filters.placeholder")} aria-label={t("conversation-tag-filters.placeholder")} className={cx(inputClass, "h-8 w-36 px-2 text-label")} />
               <Button type="submit" size="sm" tone="quiet" icon="plus" disabled={busy || !draft.trim()}>{t("conversation-tag-filters.add")}</Button>
             </form>
             {customized && <Button size="sm" tone="quiet" disabled={busy} onClick={() => void change(null)}>{t("conversation-tag-filters.reset")}</Button>}
@@ -72,7 +72,7 @@ export function ConversationTagFilterBar({ entries, active, customized, editing,
           </>
         )}
       </div>
-      {error && <p role="alert" className="mt-1.5 px-1 text-[12px] text-red">{error}</p>}
+      {error && <p role="alert" className="mt-1.5 px-1 text-label text-red">{error}</p>}
     </div>
   );
 }
