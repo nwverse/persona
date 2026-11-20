@@ -767,9 +767,10 @@ confirms them. The brief is kept when the task starts, dated from the start. Onl
 automatic estimate: manually started terminal/herdr Agents, manual `agent_start`, adopted Agents and direct
 human-to-Agent work keep their existing optional ledger values but get no `estimate_source`, no `estimate_due` clock
 and no calibration history. A continuation or reuse through `task_plan` is a new automatic dispatch even when its
-brief began as manual or legacy work. The web draws `tasks[i].brief` on the plan card and the to-do's `brief` and `lineage`
-on its page (the criteria stay in the page's one list, the ledger's; a finished task adds the dropped ones and
-`also_done` under it) (`docs/web/web.md`, "Pages": **A task's brief**); the iOS and Android plan cards and task pages do not yet.
+brief began as manual or legacy work. The web, iOS and Android draw `tasks[i].brief` on the plan card; the web also draws
+the to-do's `brief` and `lineage` on its page (the criteria stay in the page's one list, the ledger's; a finished task adds the
+dropped ones and `also_done` under it) (`docs/web/web.md`, "Pages": **A task's brief**). Android task-detail briefs, lineage
+and receipts remain later work (`docs/android/android.md`, "Unified main-chat entry").
 
 **How the estimate learns.** Persona groups work by its existing task kind, read-only mode, role and tier. It looks
 at the newest 256 accepted samples of that kind in the past 90 days, within one manager. It uses the most specific
