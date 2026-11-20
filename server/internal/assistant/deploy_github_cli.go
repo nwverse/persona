@@ -114,11 +114,26 @@ func isGitHubCLIUnconfigured(runErr error, stderr string) bool {
 		return true
 	}
 	lower := strings.ToLower(stderr)
+	for _, networkErr := range []string{
+		"proxyconnect",
+		"proxy authentication",
+		"407 proxy",
+		"http 407",
+		"dial tcp",
+		"no such host",
+		"tls:",
+		"x509:",
+		"connection refused",
+		"i/o timeout",
+	} {
+		if strings.Contains(lower, networkErr) {
+			return false
+		}
+	}
 	for _, needle := range []string{
 		"gh auth login",
 		"not logged into",
 		"no github authentication",
-		"authentication required",
 		"to authenticate, please run",
 		"no oauth token",
 		"failed to log in",
