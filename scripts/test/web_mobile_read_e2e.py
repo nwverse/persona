@@ -503,10 +503,18 @@ def check_chat_pills(page, tag):
         # a search hit gone to: "Back to where you were" over the chat's top edge, the failed-refresh pill under it
         page.locator("header").get_by_role("button", name="更多操作", exact=True).tap()
         page.get_by_role("menuitem", name="会话内搜索").tap()
-        page.locator("[data-chat-search] input").fill("第 3 个问题")
+        page.locator("[data-chat-search] input").fill("第 1 个问题")
         page.locator("[data-search-result]").first.tap()
         expect(page.locator("[data-search-return]")).to_be_visible()
-        expect(page.locator(reload)).to_be_visible(timeout=10000)  # the hit is near the top: the older page fails again
+        # The hit is the first exchange, at the top. Opening the search re-read the newest page, which took the error
+        # away and dropped the older page's waiting retry (#11522); the failed page is asked for again only on a scroll
+        # once its wait (3 s) is over: the reader moves a pixel at a time until it has failed again and the pill is back.
+        for i in range(30):
+            if page.locator(reload).is_visible():
+                break
+            page.evaluate(f"document.querySelector('[data-chat-scroll]').scrollTop += {1 if i % 2 else -1}")
+            page.wait_for_timeout(500)
+        expect(page.locator(reload)).to_be_visible()
         page.wait_for_timeout(300)
         hits = page.evaluate(PILL_HITS, [reload, "[data-search-return]", jump])
         for d in hits:
