@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -363,8 +364,9 @@ func TestDefaultMergedDeliveryGate(t *testing.T) {
 // delivery gate tests run without requiring PostgreSQL.
 type memRepoStore struct {
 	*memStore
-	sets  map[string]repository.TaskSet
-	plans map[string]db.TaskPlanRow
+	sets         map[string]repository.TaskSet
+	plans        map[string]db.TaskPlanRow
+	todoReposErr error
 }
 
 func newMemRepoStore() *memRepoStore {
@@ -440,6 +442,9 @@ func (m *memRepoStore) FeedByRef(context.Context, string, []string, int) ([]db.F
 func (m *memRepoStore) TodoRepositories(_ context.Context, id string) (repository.TaskSet, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.todoReposErr != nil {
+		return repository.TaskSet{}, m.todoReposErr
+	}
 	if set, ok := m.sets[id]; ok {
 		return set, nil
 	}
@@ -632,6 +637,94 @@ func TestDeliveryGateChecksLinkedRepositoryIssuesAndPRs(t *testing.T) {
 			t.Fatalf("explicit PR-only task was blocked under merged gate: %v", err)
 		}
 	})
+
+	t.Run("unconfigured GitHub linked issue is non-blocking under merged but fails closed under live", func(t *testing.T) {
+		st := newMemRepoStore()
+		s, _ := newQuietServiceOn(t, st)
+		ctx := context.Background()
+		raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
+			"title": "Fix bug #42", "prompt": "Fix issue #42",
+			"machine": "box", "cwd": "/code/app", "readonly": false, "user_requested": true, "why": "repo",
+			"done_when": []string{"Issue #42 closed"},
+		}}})
+		if _, err := s.toolTaskPlan(ctx, "conv1", raw); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "agent", func() bool { return len(onlyTodo(s).Agents) == 1 })
+		todo := onlyTodo(s)
+		linkTodo(t, st, todo.ID, "https://github.com/o/r/issues/42")
+		s.deploy.forge = &fakeForge{merged: true, sha: mergeSHA, issueStateErr: fmt.Errorf("%w: no gh auth", errGitHubUnconfigured)}
+		s.deploy.hubBuild = func(context.Context) (string, string, error) { return "dev", "", nil }
+		s.deploy.listPaths = []string{}
+
+		checks := []ReviewCheck{{Criterion: "Issue #42 closed", Met: true, Evidence: "verified"}}
+		// Under live, unconfigured GitHub issue check must fail closed with delivery_verification_unavailable.
+		setDeliveryGate(t, s, deliveryGateLive)
+		if res, err := acceptReview(s, todo.ID, map[string]any{"checks": checks}); err == nil ||
+			(!strings.Contains(err.Error(), "暂时无法验证") && !strings.Contains(err.Error(), "temporarily cannot be verified")) {
+			t.Fatalf("live gate did not fail closed on unconfigured GitHub issue: res=%q err=%v", res, err)
+		}
+		if got := todoNow(s, todo.ID); got.DoneAt != nil {
+			t.Fatal("task closed under live gate despite unconfigured GitHub issue check")
+		}
+
+		// Under merged, unconfigured GitHub issue check degrades to a non-blocking reply note.
+		setDeliveryGate(t, s, deliveryGateMerged)
+		res, err := acceptReview(s, todo.ID, map[string]any{"checks": checks})
+		if err != nil {
+			t.Fatalf("merged gate blocked unconfigured GitHub issue: %v", err)
+		}
+		if !strings.Contains(res, "github.com") {
+			t.Fatalf("merged gate reply missing host-not-connected note: %q", res)
+		}
+		if got := todoNow(s, todo.ID); got.DoneAt == nil {
+			t.Fatal("task did not close under merged gate with unconfigured GitHub note")
+		}
+	})
+
+	t.Run("repository link store failure fails closed as temporary verification error", func(t *testing.T) {
+		st := newMemRepoStore()
+		s, _ := newQuietServiceOn(t, st)
+		ctx := context.Background()
+		raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
+			"title": "Fix bug #42", "prompt": "Fix issue #42",
+			"machine": "box", "cwd": "/code/app", "readonly": false, "user_requested": true, "why": "repo",
+			"done_when": []string{"Fix merged"},
+		}}})
+		if _, err := s.toolTaskPlan(ctx, "conv1", raw); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "agent", func() bool { return len(onlyTodo(s).Agents) == 1 })
+		todo := onlyTodo(s)
+		s.deploy.forge = &fakeForge{merged: true, sha: mergeSHA}
+		s.deploy.hubBuild = func(context.Context) (string, string, error) { return "dev", "", nil }
+		s.deploy.listPaths = []string{}
+
+		st.mu.Lock()
+		st.todoReposErr = errors.New("db connection reset")
+		st.mu.Unlock()
+
+		checks := []ReviewCheck{{Criterion: "Fix merged", Met: true, Evidence: "merged"}}
+		res, err := acceptReview(s, todo.ID, map[string]any{"checks": checks})
+		if err == nil || !strings.Contains(err.Error(), "db connection reset") ||
+			(!strings.Contains(err.Error(), "暂时无法验证") && !strings.Contains(err.Error(), "temporarily cannot be verified")) {
+			t.Fatalf("repository store failure did not fail closed: res=%q err=%v", res, err)
+		}
+		if got := todoNow(s, todo.ID); got.DoneAt != nil {
+			t.Fatal("task closed despite repository link store failure")
+		}
+
+		// Once store recovers, acceptance succeeds.
+		st.mu.Lock()
+		st.todoReposErr = nil
+		st.mu.Unlock()
+		if _, err := acceptReview(s, todo.ID, map[string]any{"checks": checks}); err != nil {
+			t.Fatalf("acceptance failed after repository store recovery: %v", err)
+		}
+		if got := todoNow(s, todo.ID); got.DoneAt == nil {
+			t.Fatal("task did not close after repository store recovery")
+		}
+	})
 }
 
 // Three-tier delivery_gate setting works via HTTP PUT/GET and persona_settings while staying backward-compatible
@@ -694,6 +787,48 @@ func TestDeliveryGateSettingsAndBackwardCompat(t *testing.T) {
 	if out, _ := tool(`{"action":"get","key":"assistant.delivery_gate"}`); out != deliveryGateMerged {
 		t.Fatalf("after set, get = %q, want merged", out)
 	}
+
+	// Regression: setting legacy assistant.done_needs_delivery=false from default merged must disable the gate (off),
+	// not return "unchanged", and clearing DeliveryGate persists the off tier.
+	approveNext := func(wantSummary string) {
+		go func() {
+			q, ok := awaitCard(s)
+			if !ok {
+				t.Error("no approval card")
+				return
+			}
+			if wantSummary != "" && q.Summary != wantSummary {
+				t.Errorf("card %q, want %q", q.Summary, wantSummary)
+			}
+			allow := true
+			raw, _ := json.Marshal(proto.Resolution{Allow: &allow})
+			_, _ = s.Action(ctx, Action{Op: "answer", InteractionID: q.ID, Answer: raw})
+		}()
+	}
+	wantMergedToOff := i18n.T(i18n.Default, "assistant-settings_tool.change_delivery_gate", i18n.Args{
+		"before": i18n.T(i18n.Default, "assistant-settings_tool.delivery_gate_merged"),
+		"after":  i18n.T(i18n.Default, "assistant-settings_tool.delivery_gate_off"),
+	})
+	approveNext(wantMergedToOff)
+	if out, isErr := tool(`{"action":"set","key":"assistant.done_needs_delivery","value":false}`); isErr || !strings.Contains(out, "assistant.done_needs_delivery is false") {
+		t.Fatalf("legacy done_needs_delivery=false from merged failed: %v %s", isErr, out)
+	}
+	if v := s.view(ctx, false); v.DeliveryGate != deliveryGateOff || v.DoneNeedsDelivery {
+		t.Fatalf("after legacy false, view = %q / %v, want off / false", v.DeliveryGate, v.DoneNeedsDelivery)
+	}
+	// Repeating false when already off reports unchanged without asking again.
+	if out, isErr := tool(`{"action":"set","key":"assistant.done_needs_delivery","value":false}`); isErr || !strings.Contains(out, "没有变化") {
+		t.Fatalf("repeat legacy false = %v %q, want unchanged", isErr, out)
+	}
+	// Legacy true transitions off -> live.
+	approveNext("")
+	if out, isErr := tool(`{"action":"set","key":"assistant.done_needs_delivery","value":true}`); isErr || !strings.Contains(out, "assistant.done_needs_delivery is true") {
+		t.Fatalf("legacy done_needs_delivery=true failed: %v %s", isErr, out)
+	}
+	if v := s.view(ctx, false); v.DeliveryGate != deliveryGateLive || !v.DoneNeedsDelivery {
+		t.Fatalf("after legacy true, view = %q / %v, want live / true", v.DeliveryGate, v.DoneNeedsDelivery)
+	}
+
 	// Repository provider non-GitHub issue check does not block when host is unknown.
 	if _, ok := repository.RemoteHost("https://github.com/o/r/issues/1"); !ok {
 		t.Fatal("expected valid host")

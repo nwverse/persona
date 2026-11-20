@@ -825,14 +825,46 @@ func (s *Service) setDeliveryGate(ctx context.Context, v json.RawMessage) (*ownC
 }
 
 func (s *Service) setDoneNeedsDelivery(ctx context.Context, v json.RawMessage) (*ownChange, error) {
-	ch, err := s.setBoolSetting(ctx, v, s.doneNeedsDelivery, "「上线并实测才算做完」没有变化", func(l i18n.Lang, before, after string) string {
-		return i18n.T(l, "assistant-settings_tool.change_done_needs_delivery", i18n.Args{"before": before, "after": after})
-	}, func(v *Settings) **bool {
-		v.DeliveryGate = nil
-		return &v.DoneNeedsDelivery
+	var on bool
+	if err := json.Unmarshal(v, &on); err != nil {
+		return nil, errors.New("value must be true or false")
+	}
+	target := deliveryGateOff
+	if on {
+		target = deliveryGateLive
+	}
+	beforeGate := s.deliveryGate(ctx)
+	if beforeGate == target {
+		return &ownChange{summary: "「上线并实测才算做完」没有变化"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	word := map[bool]string{true: "assistant-settings_tool.on", false: "assistant-settings_tool.off"}
+	beforeBool := beforeGate == deliveryGateLive
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		if beforeGate == deliveryGateMerged && !on {
+			return i18n.T(l, "assistant-settings_tool.change_delivery_gate", i18n.Args{
+				"before": i18n.T(l, "assistant-settings_tool.delivery_gate_"+beforeGate),
+				"after":  i18n.T(l, "assistant-settings_tool.delivery_gate_"+target),
+			})
+		}
+		return i18n.T(l, "assistant-settings_tool.change_done_needs_delivery", i18n.Args{
+			"before": i18n.T(l, word[beforeBool]),
+			"after":  i18n.T(l, word[on]),
+		})
 	},
-		"assistant.done_needs_delivery is %v from the next judgment and task on.")
-	return ch, err
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error {
+				v.DoneNeedsDelivery = &on
+				v.DeliveryGate = nil
+				return nil
+			}); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			return fmt.Sprintf("assistant.done_needs_delivery is %v from the next judgment and task on.", on), nil
+		}}, nil
 }
 
 func (s *Service) setReviewSamplePercent(ctx context.Context, v json.RawMessage) (*ownChange, error) {
