@@ -312,7 +312,7 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		// (runtimeworkspaces.go).
 		features := []string{"prefer_running", "resume_argv", "handover", "transcript", "launchers", "start_params", "modes", "resume", "codex_thread", "unlisted_transcripts", "workspaces", "usage"}
 		if !h.isDaemon() {
-			features = append(features, "leader_tools", "supervision_policy")
+			features = append(features, "usage_windows", "leader_tools", "supervision_policy")
 			if hello.Caps.Assistant {
 				features = append(features, "assistant_pids")
 			}

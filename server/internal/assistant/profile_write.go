@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var in struct {
 		Settings
+		ConversationTagFilters json.RawMessage `json:"conversation_tag_filters"`
 		ExpectedWorkGuide      *bool           `json:"expected_work_guide"`
 		WorkspaceRulesPatch    json.RawMessage `json:"workspace_rules"`
 		Permission             json.RawMessage `json:"default_permission_mode"`
@@ -106,6 +108,25 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if d := in.RecordingDays; d != nil && (*d < minRecordingDays || *d > maxRecordingDays) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("recording_days must be 1–365"))
+		return
+	}
+	var conversationTagFilters []string
+	tagFiltersWritten := len(in.ConversationTagFilters) > 0
+	if tagFiltersWritten && !bytes.Equal(bytes.TrimSpace(in.ConversationTagFilters), []byte("null")) {
+		if err := json.Unmarshal(in.ConversationTagFilters, &conversationTagFilters); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		var err error
+		conversationTagFilters, err = normalizeConversationTagFilters(conversationTagFilters)
+		if err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	conversationOrder, orderErr := normalizeConversationOrder(in.ConversationOrder)
+	if orderErr != nil {
+		apierr.Write(w, http.StatusBadRequest, orderErr)
 		return
 	}
 	if m := in.IdleAutoCompactMinutes; m != nil && (*m < minIdleAutoCompactMinutes || *m > maxIdleAutoCompactMinutes) {
@@ -282,6 +303,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.RecentTaskChats != nil {
 			v.RecentTaskChats = in.RecentTaskChats
+		}
+		if in.ConversationOrder != nil {
+			v.ConversationOrder = conversationOrder
+		}
+		if tagFiltersWritten {
+			v.ConversationTagFilters = conversationTagFilters
 		}
 		if in.MeetingAttendanceDefault != nil {
 			v.MeetingAttendanceDefault = in.MeetingAttendanceDefault

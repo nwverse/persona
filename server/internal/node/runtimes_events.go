@@ -59,6 +59,8 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 	switch event {
 	case "usage.report":
 		n.runtimeUsageReport(h, params, time.Now())
+	case "usage.windows":
+		n.runtimeUsageWindows(h, params, time.Now())
 	case proto.EventModeSet:
 		var e proto.ModeSetEvent
 		if json.Unmarshal(params, &e) == nil && n.runtimes.owns(h, e.SessionID) && n.peer != nil {
