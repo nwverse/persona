@@ -66,6 +66,9 @@ type handover struct {
 	// may have gone in); it is answered once that try is found to have gone in, and it is cleared when the message is
 	// sent again instead.
 	AnswerAt time.Time `json:"answer_at,omitzero"`
+	// ResentAt: when its message was last sent again after the looks for an earlier try missed, or moved to another
+	// receiver: an answer named before then (gone in, queued or on its way) does not count.
+	ResentAt time.Time `json:"resent_at,omitzero"`
 }
 
 // handoverBook holds the hand-overs. Its lock is taken before the relay lock (handoverToAnswer, backgroundLost), never
@@ -228,6 +231,10 @@ func (s *Service) handoverWentIn(to string, msg relayMsg) {
 		if e.From != to || e.To != msg.From {
 			return false
 		}
+		if !e.ResentAt.IsZero() && msg.At.Before(e.ResentAt) {
+			s.logf("hand-over %s from %s to %s: an answer named before it was sent again does not count", e.ID, short(e.From), short(e.To))
+			return false
+		}
 		if e.State == handoverQueued && e.AnswerAt.IsZero() {
 			e.AnswerAt = now
 			s.logf("hand-over %s from %s to %s: an answer went in while it is in doubt", e.ID, short(e.From), short(e.To))
@@ -238,15 +245,15 @@ func (s *Service) handoverWentIn(to string, msg relayMsg) {
 }
 
 // handoverRetried: hand-over id's message is sent again, its earlier try taken as not gone in after the looks for it
-// (tryQueuedRelay), so an answer that went in meanwhile answered something else.
+// (tryQueuedRelay), so an answer named before then answered something else: one that went in meanwhile (AnswerAt) and
+// one still queued or on its way (ResentAt).
 func (s *Service) handoverRetried(id string) {
 	s.handoverChange(id, func(e *handover, now time.Time) bool {
-		if e.State != handoverQueued || e.AnswerAt.IsZero() {
+		if e.State != handoverQueued {
 			return false
 		}
-		e.AnswerAt = time.Time{}
-		s.logf("hand-over %s from %s to %s: sent again; the answer that went in while it was in doubt does not count", e.ID,
-			short(e.From), short(e.To))
+		e.AnswerAt, e.ResentAt = time.Time{}, now
+		s.logf("hand-over %s from %s to %s: sent again; an answer named before does not count", e.ID, short(e.From), short(e.To))
 		return true
 	})
 }
@@ -257,8 +264,10 @@ func (s *Service) handoverEnded(id, code string) {
 }
 
 // handoversMovedLocked: the hand-overs ids, queued for a background supervisor that is gone, now wait for conversation
-// to (title) instead; with to "" they are dropped and will not be tried again (backgroundLost). The caller holds
-// s.handovers.mu, taken before the relay lock, so the hand-overs change before the queue that moves them is saved.
+// to (title) instead; with to "" they are dropped and will not be tried again (backgroundLost). One whose queueRelay
+// has not written queued yet is queued here first. An answer named for one that moves was the old receiver's: it does
+// not count (AnswerAt, ResentAt). The caller holds s.handovers.mu, taken before the relay lock, so the hand-overs change
+// before the queue that moves them is saved.
 func (s *Service) handoversMovedLocked(ids []string, to, title string) {
 	b := &s.handovers
 	if len(ids) == 0 || !b.loadLocked(context.Background(), s) {
@@ -268,14 +277,19 @@ func (s *Service) handoversMovedLocked(ids []string, to, title string) {
 	changed := false
 	for _, id := range ids {
 		changed = b.changeLocked(s, id, now, func(e *handover, now time.Time) bool {
+			queued := false
+			if e.State == "" { // its message is in the queue, its queued not written yet (queueRelay)
+				queued = s.handoverMove(e, handoverQueued, "", now)
+			}
 			if to == "" {
-				return s.handoverMove(e, handoverNotDelivered, handoverGone, now)
+				return s.handoverMove(e, handoverNotDelivered, handoverGone, now) || queued
 			}
 			if e.State != handoverQueued {
-				return false
+				return queued
 			}
 			s.logf("hand-over %s from %s: its message moved from %s to %s", e.ID, short(e.From), short(e.To), short(to))
 			e.To, e.ToTitle, e.ChangedAt = to, title, now
+			e.AnswerAt, e.ResentAt = time.Time{}, now
 			return true
 		}) || changed
 	}
@@ -285,8 +299,8 @@ func (s *Service) handoversMovedLocked(ids []string, to, title string) {
 }
 
 // handoverToAnswer is the hand-over a conversation_send from → to answers (relayMsg.Answers): of those from to to from,
-// kept and that no other reply on its way answers (queued for to, or being sent now), the oldest that was delivered or
-// whose message is still in doubt (queued after a try that may have gone in). "" for none. done lets go of it once the
+// kept and that no other reply on its way answers (queued for to, or being sent now), the oldest that was delivered,
+// else the oldest whose message is still in doubt (queued after a try that may have gone in). "" for none. done lets go of it once the
 // reply is queued, went in or was refused: a reply that does not go in leaves it for the next one to answer.
 func (s *Service) handoverToAnswer(from, to string) (string, func()) {
 	b := &s.handovers
@@ -307,7 +321,15 @@ func (s *Service) handoverToAnswer(from, to string) (string, func()) {
 		return "", func() {}
 	}
 	answered, inDoubt := s.relayHandoverMarks(to, from)
-	slices.SortFunc(open, func(x, y handover) int { return cmp.Or(x.At.Compare(y.At), strings.Compare(x.ID, y.ID)) })
+	slices.SortFunc(open, func(x, y handover) int {
+		if xd, yd := x.State == handoverDelivered, y.State == handoverDelivered; xd != yd { // in doubt: after every delivered one
+			if xd {
+				return -1
+			}
+			return 1
+		}
+		return cmp.Or(x.At.Compare(y.At), strings.Compare(x.ID, y.ID))
+	})
 	for _, e := range open {
 		if answered[e.ID] || e.State == handoverQueued && !inDoubt[e.ID] {
 			continue
@@ -346,14 +368,6 @@ func (s *Service) relayHandoverMarks(asker, replier string) (answered, inDoubt m
 		}
 	}
 	return answered, inDoubt
-}
-
-// queuedHandover: a hand-over waits in conversation id's queue.
-func (s *Service) queuedHandover(id string) bool {
-	b := &s.relays
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return s.relayLocked(context.Background()) && slices.ContainsFunc(b.st.Queue[id], func(m relayMsg) bool { return m.Handover != "" })
 }
 
 // queueLeads are the conversations that are a direction's lead (isLeader), for a drain to rank a hand-over in a lead's
