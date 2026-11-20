@@ -74,6 +74,8 @@ nonisolated enum ServerEvent: Sendable {
     /// The user's saved prompts changed (#7329, #9436): read `GET /api/v1/assistant/saved-prompts` again. `manager`: the
     /// assistant whose list it is when not the default one; only the shown assistant's counts.
     case savedPrompts(manager: String?)
+    /// An invalidation for the assistant's starred snapshots. The event does not carry saved text.
+    case starredMessages(manager: String?)
     /// The personas the hub offers changed, e.g. a tiered look moved to another tier (docs/apple/persona.md): list them again.
     case personas
     /// The avatar chosen on the hub changed (another device chose one, or the hub went back to the default when its
@@ -301,6 +303,7 @@ nonisolated enum ServerEvent: Sendable {
         case "inbox": return .inbox
         case "todos": return .todos
         case "assistant_saved_prompts": return .savedPrompts(manager: e.manager?.string)
+        case "assistant_starred": return .starredMessages(manager: e.manager?.string)
         case "personas": return .personas
         case "look":
             guard (e.effective ?? e.id).map({ !$0.isEmpty }) == true else { return nil }
@@ -380,7 +383,7 @@ nonisolated extension ServerEvent {
             return .sessionsDelta(machineID: machine, upsert: upsert.map { var s = $0; s.group = group; return s }, remove: remove)
         case .sessionsList, .hello, .interactionResolved, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
              .personas, .look, .managers, .directions, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
-             .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth, .meetingLive, .urgentCall, .savedPrompts: return self
+             .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth, .meetingLive, .urgentCall, .savedPrompts, .starredMessages: return self
         }
     }
 }
