@@ -9,13 +9,13 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// persona_settings notifications.low_distraction: the push grading switch (lnmode.go), the one Settings › Notifications
+// persona_settings notifications.low_distraction: the push grading switch (push_grading.go), the one Settings › Notifications
 // shows on every client and GET / PUT /api/v1/push/ln-mode reads and writes. get answers what the route's GET answers;
 // set is a card on the phone and changes the switch only once the owner approves it, like every hub setting here.
-const lowDistractionKey = "notifications.low_distraction"
+const pushGradingSelfSettingKey = "notifications.low_distraction"
 
-func (h *Hub) lowDistractionSetting() selfSetting {
-	return selfSetting{key: lowDistractionKey, title: i18n.T(h.userLang(), "hub-self_settings_lnmode.title"),
+func (h *Hub) pushGradingSelfSetting() selfSetting {
+	return selfSetting{key: pushGradingSelfSettingKey, title: i18n.T(h.userLang(), "hub-self_settings_lnmode.title"),
 		about: "low-distraction mode for every device of the owner (Settings › Notifications; the hub's push grading switch, " +
 			"GET /api/v1/push/ln-mode). Off (the default): every push as before. On: only what needs the owner rings " +
 			"(questions, plan and tool approvals, decisions only they can make, their reminders, main-conversation notices); " +
@@ -23,19 +23,19 @@ func (h *Hub) lowDistractionSetting() selfSetting {
 			"briefing and the Held pushes list, and finished Agent turns are silent. Ask the owner before proposing it; never " +
 			"turn it on just to quiet one task",
 		value: "true or false",
-		get:   func(context.Context) (string, error) { return fmt.Sprint(h.push.lnModeOn()), nil },
-		set:   h.setLowDistraction}
+		get:   func(context.Context) (string, error) { return fmt.Sprint(h.push.pushGradingOn()), nil },
+		set:   h.setPushGradingSelf}
 }
 
-func (h *Hub) setLowDistraction(_ context.Context, v json.RawMessage) (*selfChange, error) {
+func (h *Hub) setPushGradingSelf(_ context.Context, v json.RawMessage) (*selfChange, error) {
 	var on bool
 	if err := json.Unmarshal(v, &on); err != nil {
 		return nil, errors.New("value must be true or false")
 	}
 	l := h.userLang()
-	before := h.push.lnModeOn()
+	before := h.push.pushGradingOn()
 	if on == before {
-		return &selfChange{summary: fmt.Sprintf("%s is already %v: nothing changed.", lowDistractionKey, on)}, nil
+		return &selfChange{summary: fmt.Sprintf("%s is already %v: nothing changed.", pushGradingSelfSettingKey, on)}, nil
 	}
 	word := map[bool]string{true: "hub-self_settings_lnmode.on", false: "hub-self_settings_lnmode.off"}
 	what := map[bool]string{true: "hub-self_settings_lnmode.when_on", false: "hub-self_settings_lnmode.when_off"}
@@ -45,6 +45,6 @@ func (h *Hub) setLowDistraction(_ context.Context, v json.RawMessage) (*selfChan
 			if err := h.setPushGrading(ctx, on); err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("%s is %v for every device from now on (Settings › Notifications shows it).", lowDistractionKey, on), nil
+			return fmt.Sprintf("%s is %v for every device from now on (Settings › Notifications shows it).", pushGradingSelfSettingKey, on), nil
 		}}, nil
 }
