@@ -95,6 +95,53 @@ func (d *interruptedEstimateProjection) AcceptTaskEstimateRound(ctx context.Cont
 	return d.DB.AcceptTaskEstimateRound(ctx, round, todo, at, minutes)
 }
 
+type deadlineExhaustingEstimateStore struct {
+	*memStore
+	todoStore
+	taskEstimateStore
+	reconcileCalls atomic.Int32
+	sampleCalls    atomic.Int32
+}
+
+func (d *deadlineExhaustingEstimateStore) ReconcileTaskEstimateRounds(ctx context.Context, _ db.TaskEstimateCohort, _, _ time.Time, _ int) error {
+	d.reconcileCalls.Add(1)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (d *deadlineExhaustingEstimateStore) RecentTaskEstimateSamples(ctx context.Context, _ db.TaskEstimateCohort, _, _ time.Time, _ int) ([]db.TaskEstimateSample, error) {
+	d.sampleCalls.Add(1)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return []db.TaskEstimateSample{
+		{Machine: "box", ActualMinutes: 8},
+		{Machine: "box", ActualMinutes: 10},
+		{Machine: "box", ActualMinutes: 12},
+		{Machine: "box", ActualMinutes: 14},
+		{Machine: "box", ActualMinutes: 120},
+	}, nil
+}
+
+func TestTaskEstimateHistorySurvivesReconciliationDeadline(t *testing.T) {
+	store := &deadlineExhaustingEstimateStore{memStore: &memStore{}}
+	s, _, _ := briefServiceOn(t, nil, "please fix the fixture issue")
+	s.store = func() Store { return store }
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	task := PlanTask{Goal: "Return a fixture answer", Readonly: true, Machine: "box"}
+	s.estimateNewPlanTask(ctx, "conv1", &task)
+	want := TaskEstimateEvidence{Minutes: 12, SampleCount: 5, Cohort: estimateMachine}
+	if task.ExpectMinutes != 12 || task.EstimateSource != briefEstimateLearned ||
+		task.EstimateEvidence == nil || *task.EstimateEvidence != want {
+		t.Fatalf("reconciliation deadline hid durable history: %d minutes (%s), evidence %+v",
+			task.ExpectMinutes, task.EstimateSource, task.EstimateEvidence)
+	}
+	if store.reconcileCalls.Load() == 0 || store.sampleCalls.Load() == 0 {
+		t.Fatalf("estimate store calls: reconcile=%d samples=%d", store.reconcileCalls.Load(), store.sampleCalls.Load())
+	}
+}
+
 // The seed process runs actual plan, link, completion and review paths. The
 // child process plans again against the same DB with no shared manager state.
 func TestTaskEstimateCalibrationAfterProcessRestart(t *testing.T) {

@@ -77,13 +77,14 @@ func (s *Service) estimateNewPlanTask(ctx context.Context, conversation string, 
 	query, cancel := context.WithTimeout(ctx, estimateReadTimeout)
 	defer cancel()
 	since := now.Add(-estimateHistoryAge)
-	if err := store.ReconcileTaskEstimateRounds(query, cohort, since, now, estimateRepairLimit); err != nil {
-		s.logf("task estimate reconcile: %v", err)
-	}
+	// Optional recovery must not consume the primary history read's deadline.
 	samples, err := store.RecentTaskEstimateSamples(query, cohort, since, now, estimateHistoryLimit)
 	if err != nil {
 		s.logf("task estimate history: %v", err)
 		return
+	}
+	if err := store.ReconcileTaskEstimateRounds(query, cohort, since, now, estimateRepairLimit); err != nil {
+		s.logf("task estimate reconcile: %v", err)
 	}
 	selected, learned := chooseTaskEstimate(cohort, samples)
 	t.ExpectMinutes, t.EstimateEvidence = selected.Minutes, &selected
