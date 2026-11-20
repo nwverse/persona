@@ -109,7 +109,7 @@ struct ModelSwitchTests {
         #expect(row.effortChangeFailed == true)
     }
 
-    @Test func summaryConfirmationWinsOverCachedEffort() throws {
+    @MainActor @Test func summaryConfirmationWinsOverCachedEffort() throws {
         let pending = try session(#","effort":"low","pending_effort":"high""#)
         let confirmed = try session(#","effort":"high","waiting":false"#)
         let merged = confirmed.preservingDetails(from: pending)
