@@ -28,6 +28,39 @@ The hub and the managers apart:
 - **One container in Docker.** The hub image runs the hub and the built-in manager as two processes under `personad supervise`, each restarted on its own, as `persona-hub run` and `persona-manager assistant` unless `PERSONA_SPLIT_PROGRAMS=0` ([docker.md](../operations/docker.md) ("Programs")).
 - **Two services on a new install.** `hub setup` installs the hub's service and the built-in manager's own (`persona-manager-assistant.service` running `persona-manager assistant`, or on a Mac the launchd agent `com.persona.manager.assistant`, running `persona-manager assistant` on a new install, each with `PERSONA_ASSISTANT_DEPLOY=service`), and binds the second to the first with a one-time code. Existing installs keep the hub's child until `hub setup --manager-service` ([upgrade.md](../operations/upgrade.md): every install type, step by step). See [managers.md](../assistant/managers.md) ("The built-in manager as its own service").
 
+## Export a conversation from the terminal
+
+People who work in a terminal can save an Agent or Persona conversation as Markdown for handoffs, tickets,
+or personal archives. Address one conversation using the computer ID and current session ID in the hub's session list.
+Use the hub's HTTPS address, including its mount path when applicable. Local HTTP also works. Keep the paired
+device's credential in a private file (see [Authentication](../protocol/protocol.md#authentication)).
+
+```sh
+personad chat export --hub '<hub URL>' --token-file '<private token file>' \
+  --output conversation.md '<computer ID>' '<current session ID>'
+
+personad chat export --hub '<hub URL>' --token-file '<private token file>' \
+  --output conversation-with-steps.md --include-steps '<computer ID>' '<current session ID>'
+```
+
+By default the export includes the visible conversation, with images and visualizations identified by placeholders.
+Add `--include-steps` to also keep tool calls, results, thinking and intermediate narration in collapsible sections.
+As in the Web export, tool inputs and results show up to 4,000 characters each and mark any omitted continuation.
+Tool inputs retain any size-limit markers already added by the runtime. In a conversation that switched engines, each
+session is read once and its items are placed inside the recorded switch windows. Existing chat permissions still apply.
+
+The command requires a hub that advertises `sessions_lookup` and a hub and node that confirm strict transcript reads.
+This currently means a readable local transcript, including a runtime session whose transcript the node reads locally.
+Export declines terminal-only views and transcripts reconstructed from Codex App or Traex databases. It captures each source's last sequence on the first page. New messages after
+that point stay out, and an observed rewrite or changed switch history triggers one fresh attempt. An unreadable
+page, incomplete full message, or exhausted budget fails without publishing a document. An attempt can read up to
+400 pages, 20,000 items, 512 full items, 64 conversation segments and 96 MiB of responses. Individual responses have a
+16 MiB limit and the command allows up to five minutes for the operation.
+
+Use a new path in an existing local folder that supports hard links. The document is published only after every
+read and the file write succeed, and an existing file is never replaced. On platforms with Unix file permissions the
+file is created with owner-only access. The credential is sent only to the supplied hub and never added to the export.
+
 ## Held Agent messages from the terminal
 
 Use `personad outbox` to check and recover messages waiting for one computer, even when the computer is offline or
@@ -450,6 +483,29 @@ Script steps:
 - **If restoring the files cannot be undone completely**, the originals that could not be put back stay in the previous-files directory (`.persona-backup-previous-<id>` in the runtime directory, or `.<name>.persona-backup-previous-<id>` beside an external knowledge base), each as `NNN-<name>`; the error names the directory and each file, and the directory is deleted only once it is empty. Move each back by hand.
 - **`--output` must be outside the collected trees** (the knowledge base, `managers/assistant`, `extensions`, `skills`, `hub.machines_kept`); `create` refuses it with a message, since the bundle and its staging directory would be copied into themselves. `~/.persona/backups/` is fine. On a case-insensitive file system (macOS) a differently-cased spelling of such a path is not recognised; spell the path as it is.
 - **If a restore cannot put the databases back** (for example the server goes away during the swap), what happens to the runtime files follows what restore could establish. If a database from the bundle may be live (it could not be moved back, or the checks that would show it was not installed failed), the files stay as restored, so they match it, and the error names every database that may be the bundle's, the previous databases that may still exist (`persona_previous_*`), any staged copy that may remain (`persona_staged_*`, not in use; when something outside the restore changed the databases, so that what a staged name holds cannot be confirmed, the error says so instead of calling it safe to drop: check it before dropping), the directory with the previous files and, for an external knowledge base, its previous copy. Otherwise the files are rolled back, and the error still names any previous database left parked and any staged copy that could not be dropped. The files can therefore stay as restored while both live databases are in fact the install's own only when every check that would tell failed; when one database was put back and the other could not be, the files stay as restored while one live database is the install's own. Running restore again converges, and nothing is lost either way.
+
+### Inspect a backup offline
+
+Use `personad backup inspect` to check a copied or rotated bundle before a recovery environment is ready. It reads
+the bundle directly, so it needs no Persona install, PostgreSQL clients, live database, or extraction space.
+
+```sh
+personad backup inspect --bundle '<backup file>'
+personad backup inspect --bundle '<backup file>' --json
+```
+
+The file must be a regular owner-only archive. Inspection checks the manifest, member names, sizes, modes, and
+SHA-256 hashes, then checks the bundled hub and built-in manager keys against their manifest fingerprints. It checks
+the archive ending too, so a file cut off after its last payload still fails. An interrupted or failed check exits
+with an error and prints no partial report.
+
+The report gives the format, creation time, archive bytes, and file and byte totals for the hub dump, manager dump,
+runtime files, and knowledge base. It shows whether the knowledge base was absent, empty, or included and whether
+the manifest puts it outside the installation. It omits file paths, database names, configuration, keys, and
+fingerprints. JSON has `check: "offline_integrity"` and `database_restore_verified: false`.
+
+The checks compare the archive with its own manifest. Run `personad backup verify` for a temporary restore of both
+databases and a check of their schema and key identity.
 
 ### Restore drill (`scripts/test/backup_restore_drill.py`, #10497)
 

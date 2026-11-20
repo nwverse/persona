@@ -647,4 +647,5 @@
         <item quantity="one">1 without a due date</item>
         <item quantity="other">%1$d without a due date</item>
     </plurals>
+    <string name="agents_sidebar_heading">Agents</string>
 </resources>

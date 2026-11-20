@@ -67,7 +67,7 @@ const WaitingTaskRow = lazy(() => import("./WaitingTaskRow"));
 const ruleLine = (of: RuleCard) => (of.suggestion || underCard.made?.has(of.id!)) && <Suspense fallback={null}><NeedsYouPart rule={of} /></Suspense>;
 underCard.line = ruleLine;
 import { SentLine } from "./Sent";
-import { feedWake, HandoffCard, HandoffCards, taskHandoffs } from "./Handoff";
+import { feedWake, HandoffCard, HandoffCards, TASK_LINE_SLACK_MS, taskHandoffs } from "./Handoff";
 import { latestReview, parkedLine, progressLine } from "../../lib/supervision";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
 import { useChosenManager, useLinkManager } from "../../lib/manager-choice";
@@ -457,7 +457,7 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
     if (item.kind === "plan") {
       const shown = plan ?? itemPlan(item);
       if (!shown) return null;
-      return shown.state === "started" ? <PlanHandoffs plan={shown} /> : <PlanCard plan={shown} />;
+      return shown.state === "started" ? <PlanHandoffs plan={shown} since={item.at} /> : <PlanCard plan={shown} />;
     }
     if (item.kind === "task") return planned ? null : <TaskHandoffs item={item} />;
     if (item.kind === "message" && !cardSent(item) && !cardFiled(item)) return null;
@@ -763,13 +763,34 @@ const EMPTY_FEED: FeedItem[] = [];
 const EMPTY_CARDS: TaskCardMetadata[] = [];
 
 /** A started plan's tasks in the conversation (#3700, #5096): a hand-off card for each Agent they started (one per task
- *  while its Agent is starting, or says why it did not start), in plan order; live to-do titles over the plan's. */
-function PlanHandoffs({ plan }: { plan: TaskPlan }) {
+ *  while its Agent is starting, or says why it did not start), in plan order; live to-do titles over the plan's. `since`:
+ *  the plan line's time, so each card keeps the Agents this plan started (#11854). */
+function PlanHandoffs({ plan, since }: { plan: TaskPlan; since?: string }) {
   const plans = useFeed((s) => s.plans);
   const handoffs = useStoreRows((s) =>
-    plan.tasks.flatMap((task, i) => taskHandoffs(task.todo_id ? s.todos.find((x) => x.id === task.todo_id) : undefined, { key: `${plan.id}/${i}`, title: task.title, error: task.error, todoId: task.todo_id }, "created", plans, s.todosLoaded)),
+    plan.tasks.flatMap((task, i) => {
+      const id = planTaskTodo(plan, i, s.todos);
+      // a later plan that continued the to-do holds it now; this plan's todo_id was cleared then (tasks_start.go)
+      const superseded = Boolean(id && !task.todo_id && Object.values(plans).some((p) => p.id !== plan.id && p.tasks.some((x) => x.todo_id === id)));
+      return taskHandoffs(id ? s.todos.find((x) => x.id === id) : undefined, { key: `${plan.id}/${i}`, title: task.title, error: task.error, todoId: id, superseded }, "created", plans, s.todosLoaded, since);
+    }),
   );
   return <HandoffCards handoffs={handoffs} />;
+}
+
+/** The to-do plan task i ran on: its todo_id, or, once a later plan continued that to-do and cleared it (#11854), the
+ *  one it continued or reused, else the one only this task can have made (the to-do keeps the plan it came from). A
+ *  task that failed to start keeps none: its card says why. */
+function planTaskTodo(plan: TaskPlan, i: number, todos: Todo[]): string | undefined {
+  const task = plan.tasks[i];
+  if (!task) return undefined;
+  if (task.todo_id) return task.todo_id;
+  if (task.error || plan.state !== "started") return undefined;
+  if (task.continues || task.reuse_todo) return task.continues || task.reuse_todo;
+  const bare = plan.tasks.filter((x) => !x.todo_id && !x.error && !x.continues && !x.reuse_todo);
+  const held = new Set(plan.tasks.map((x) => x.todo_id || x.continues || x.reuse_todo).filter(Boolean));
+  const made = todos.filter((x) => x.plan_id === plan.id && !held.has(x.id));
+  return bare.length === 1 && made.length === 1 ? made[0]!.id : undefined;
 }
 
 /** A task the conversation dispatched on its own (agent_start), or one made of an Agent already running
@@ -777,7 +798,7 @@ function PlanHandoffs({ plan }: { plan: TaskPlan }) {
 function TaskHandoffs({ item }: { item: FeedItem }) {
   const plans = useFeed((s) => s.plans);
   const wake = feedWake(field(item, "wake"));
-  const handoffs = useStoreRows((s) => (item.ref ? taskHandoffs(s.todos.find((x) => x.id === item.ref), { key: item.id, title: "", todoId: item.ref }, wake, plans, s.todosLoaded) : []));
+  const handoffs = useStoreRows((s) => (item.ref ? taskHandoffs(s.todos.find((x) => x.id === item.ref), { key: item.id, title: "", todoId: item.ref }, wake, plans, s.todosLoaded, item.at, TASK_LINE_SLACK_MS) : []));
   return <HandoffCards handoffs={handoffs} />;
 }
 
@@ -1217,8 +1238,9 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   };
   return (
     // shrinks with the dock (ChatView's DOCK_MAX): an open tray gives up its height and scrolls inside, instead of
-    // standing taller than the dock and leaving its bottom (a card's answer row) and the entries under the composer
-    <div ref={bar} className={cx("flex min-h-0 flex-col gap-2", ownAsks.length > 0 && !tray ? "shrink-0" : "shrink")} data-assistant-actionbar onKeyDownCapture={onTrayKey}>
+    // standing taller than the dock and leaving its bottom (a card's answer row) and the entries under the composer;
+    // closed it is the capsules alone, which never give way to the cards over them (#10347, #11794)
+    <div ref={bar} className={cx("flex min-h-0 flex-col gap-2", !tray ? "shrink-0" : "shrink")} data-assistant-actionbar onKeyDownCapture={onTrayKey}>
       {tray && (
         // its height follows what is visible (styles.css: an open tray lets the dock take most of it); the header stays
         // and the list scrolls under it, so a plan card's Start (sticky to the list's bottom) is never under the header

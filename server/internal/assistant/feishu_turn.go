@@ -64,6 +64,9 @@ func (s *Service) chansNow() time.Time {
 func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Duration, steps []string, live string) {
 	ctx = feishuSendAs(ctx, "progress", r.MachineID, r.SessionID)
 	s := f.s
+	if s.runExt(r, readChatKey) != "" {
+		return // a /read shows no progress in its group: the reaction says it is being worked on (feishu_read.go)
+	}
 	if s.runExt(r, "chat") != "" {
 		// The topic's card keeps its own immediate lifecycle; the native API must not hold it back.
 		defer func() { f.cotProgressNow(ctx, r) }()
@@ -214,6 +217,12 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 	if !f.cotFinishNow(ctx, r) {
 		steps = append([]string{}, all...)
 	}
+	// A /read's answer is read by the whole group: the process (commands, paths on the computer) and the web link to
+	// the conversation stay out of it (feishu_read.go).
+	read := readRun(r.Ext)
+	if read {
+		steps = nil
+	}
 	card := r.Ext["card"]
 	if card != "" {
 		// Its last write is as a message: the card stops streaming first (the run's lock is held, feishu_stream.go).
@@ -249,7 +258,7 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 	}()
 	for i, ac := range cards {
 		c, piece := ac.card, ac.fallback
-		if i == len(cards)-1 && r.SessionID != "" {
+		if i == len(cards)-1 && r.SessionID != "" && !read {
 			// The conversation's web link goes under the last piece only, as on pushed and mirrored turns, in the row of
 			// the answer's own links.
 			c.AppendToLinks(s.openButton(ctx, r.MachineID, r.SessionID))

@@ -171,6 +171,10 @@ const (
 	EventConversationSent = "session.assistant_sent"
 )
 
+// DispatchGuardTools are the assistant tools an opt-in dispatch guard may hide and refuse for an explicitly named
+// conversation. List filtering and call admission use the same names, so a hidden tool is not left callable.
+var DispatchGuardTools = []string{"task_plan", "agent_start", "conversation_new", "conversation_send"}
+
 // Error codes that cross the bus where a Go error would lose its kind (rpc.Error.Code).
 const (
 	CodeNoDevice         = "no_device"         // ErrNoDevice
@@ -270,6 +274,8 @@ var Routes = []string{
 	"GET /api/v1/assistant/leaders",
 	"GET /api/v1/assistant/dispatch-policy",
 	"PUT /api/v1/assistant/dispatch-policy",
+	"GET /api/v1/assistant/dispatch-guard",
+	"PUT /api/v1/assistant/dispatch-guard",
 	"GET /api/v1/assistant/worker-presets",
 	"GET /api/v1/assistant/start-defaults",
 	"PUT /api/v1/assistant/start-defaults",
@@ -316,6 +322,9 @@ var Routes = []string{
 	"PUT /api/v1/assistant/saved-prompts/order",
 	"PUT /api/v1/assistant/saved-prompts/{id}",
 	"DELETE /api/v1/assistant/saved-prompts/{id}",
+	"GET /api/v1/assistant/starred",
+	"POST /api/v1/assistant/starred",
+	"DELETE /api/v1/assistant/starred/{id}",
 	"GET /api/v1/assistant/runs",
 	"GET /api/v1/assistant/routines",
 	"PUT /api/v1/assistant/routines",
