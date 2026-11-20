@@ -44,6 +44,7 @@
   "err_development_backup": "此程序备份已不可用，请刷新历史备份版本。",
   "err_development_backup_path": "不能使用这个备份文件夹：{error}",
   "err_development_backup_retain": "保留的快照数量应在 1 到 {max} 之间。",
+  "err_development_backup_recovery": "当前快照文件夹需要先恢复才能更换：{error}",
   "err_quiesced": "hub 正在为备份暂停写入，请稍后再试。",
   "err_quiesce_timeout": "内置助手没有为备份及时停止。",
   "err_development_docker": "Docker 里的 hub 不能使用开发版更新，请用新镜像更新。"

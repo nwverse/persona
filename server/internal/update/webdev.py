@@ -529,6 +529,12 @@ def snapshot(request):
     if type(retain) is not int or not 1 <= retain <= 50:
         raise ValueError("invalid snapshot retention")
     store = backup_store(request)
+    # A store that is a collected root or holds one cannot be left out of the
+    # archive without dropping that root, so the snapshot would be hollow.
+    resolved_store = store.resolve()
+    for root in roots:
+        if root == resolved_store or root.is_relative_to(resolved_store):
+            raise ValueError("the backup directory may not be the runtime or contain a collected root")
     store.mkdir(mode=0o700, parents=True, exist_ok=True)
     if store.is_symlink():
         raise ValueError("linked backup directory")
@@ -574,10 +580,13 @@ def snapshot(request):
                     run(["pg_restore", "--list", str(target)], output=True)
                     manifest["files"][target.name] = digest(target)
                 excluded = {runtime / n for n in ("update", "bin", "cache", "logs")}
-                # A chosen folder inside the runtime is never collected: each
-                # snapshot would otherwise carry every earlier one.
-                excluded.add(store)
-                excluded.add(store.resolve())
+                # A chosen folder inside a collected root is never archived:
+                # each snapshot would otherwise carry every earlier one. A
+                # folder outside the roots needs no exclusion (and one that
+                # holds a root was refused above).
+                if any(store.is_relative_to(root) or store.resolve().is_relative_to(root) for root in roots):
+                    excluded.add(store)
+                    excluded.add(store.resolve())
                 count = 0
 
                 def include(info):

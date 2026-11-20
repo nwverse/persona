@@ -73,7 +73,9 @@ function HubUpdates() {
       if (!updateWorking(status)) void loadBackups();
     }
     else { setBackups([]); setSelectedVersion(""); setConfirmBackup(false); }
-  }, [status?.source, status?.state, status?.backup?.id, loadBackups]);
+    // The effective folder too: after a change the list must come from the new
+    // one, or a selection would name a snapshot the hub cannot find there.
+  }, [status?.source, status?.state, status?.backup?.id, status?.development?.backup_directory, loadBackups]);
 
   useEffect(() => {
     void load();
@@ -369,7 +371,7 @@ function DevelopmentBackup({ s, onSaved }: { s: HubUpdateStatus; onSaved: (s: Hu
     <Group title={t("settings-hubsettings.dev_backup")} anchor="hub-dev-backup" footer={t("settings-hubsettings.dev_backup_footer")}>
       <Row label={t("settings-hubsettings.backup_folder")} stackOnNarrow>
         <input aria-label={t("settings-hubsettings.backup_folder")} spellCheck={false}
-          className={cx(settingsInputClass, "w-[320px] max-w-full font-mono text-[12px]")}
+          className={cx(settingsInputClass, "w-[320px] max-w-full font-mono text-xs")}
           placeholder={recommended} value={dir} onChange={(e) => setDir(e.target.value)} />
       </Row>
       <SettingsHint>{t("settings-hubsettings.backup_folder_hint", { path: recommended })}</SettingsHint>

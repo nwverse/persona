@@ -79,8 +79,11 @@ type updateSettings struct {
 	DevelopmentBad    []string                  `json:"development_bad,omitempty"`
 	DevelopmentBackup *update.DevelopmentBackup `json:"development_backup,omitempty"`
 	// The snapshot settings chosen in Settings › Hub › Update source › Web
-	// development ("" / 0: hub.json's, else the recommended default).
-	DevelopmentBackupDirectory string         `json:"development_backup_directory,omitempty"`
+	// development. Directory is a tri-state: nil keeps hub.json's directory
+	// (else the recommended one), and a persisted path — including the
+	// recommended one, which "Use recommended" stores — is the Web choice and
+	// wins over hub.json. Retain 0 is unset (hub.json's, else three).
+	DevelopmentBackupDirectory *string        `json:"development_backup_directory,omitempty"`
 	DevelopmentBackupRetain    int            `json:"development_backup_retain,omitempty"`
 	AutoUpdateNodes            *bool          `json:"auto_update_nodes,omitempty"` // nil: use the startup configuration
 	Auto                       *bool          `json:"auto,omitempty"`              // nil: on (the default)

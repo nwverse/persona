@@ -55,10 +55,14 @@ type Hub struct {
 	// development snapshot (quiesce.go).
 	quiesce       writeQuiescer
 	assistantProc assistantGate
-	logger        *log.Logger
-	traffic       trafficLog // privacy-safe minute counters, flushed to the journal
-	machines      []*Machine
-	byID          map[string]*Machine
+	// deviceFinishes: device sessions that ended while a snapshot paused
+	// writes, written on resume (devicesessions.go).
+	deviceFinishesMu sync.Mutex
+	deviceFinishes   []deviceSessionFinish
+	logger           *log.Logger
+	traffic          trafficLog // privacy-safe minute counters, flushed to the journal
+	machines         []*Machine
+	byID             map[string]*Machine
 	// fs.watch: generation fences stale node writes, and forced replays survive machine-ID recreation.
 	fsWatchGenMu     sync.Mutex
 	fsWatchGen       map[string]uint64

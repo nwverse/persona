@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,5 +126,78 @@ func TestValidateOutputDirectoryFollowsParentsButRefusesCollectedTargets(t *test
 	}
 	if _, err := ValidateOutputDirectory(home, filepath.Join(intoKB, "snapshots")); err == nil {
 		fatal(t, "accepted a directory reached through a link into the knowledge base")
+	}
+}
+
+// A store that is the runtime or contains it cannot be left out of the
+// archive without dropping the runtime: refused, for the path as given and
+// through a symlink.
+func TestValidateOutputDirectoryRefusesTheRuntimeAndItsAncestors(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "data"), 0o700); err != nil {
+		fatal(t, err)
+	}
+	for name, c := range map[string]struct{ dir, want string }{
+		"the runtime":        {home, "may not contain"},
+		"an ancestor":        {filepath.Dir(home), "may not contain"},
+		"the knowledge base": {filepath.Join(home, "data"), "which the backup collects"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ValidateOutputDirectory(home, c.dir); err == nil || !strings.Contains(err.Error(), c.want) {
+				fatalf(t, "ValidateOutputDirectory(%q) = %v, want %q", c.dir, err, c.want)
+			}
+		})
+	}
+	// A symlink that only makes the chosen folder reach the runtime is caught
+	// before anything is created.
+	link := filepath.Join(t.TempDir(), "home-link")
+	if err := os.Symlink(filepath.Dir(home), link); err != nil {
+		fatal(t, err)
+	}
+	if _, err := ValidateOutputDirectory(home, link); err == nil || !strings.Contains(err.Error(), "may not contain") {
+		fatalf(t, "accepted an ancestor reached through a link: %v", err)
+	}
+}
+
+// A refused path through a symlinked parent leaves no directory behind.
+func TestValidateOutputDirectoryCreatesNothingWhenRefused(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "data"), 0o700); err != nil {
+		fatal(t, err)
+	}
+	intoKB := filepath.Join(home, "intolink")
+	if err := os.Symlink(filepath.Join(home, "data"), intoKB); err != nil {
+		fatal(t, err)
+	}
+	if _, err := ValidateOutputDirectory(home, filepath.Join(intoKB, "snapshots")); err == nil {
+		fatal(t, "accepted a directory reached through a link into the knowledge base")
+	}
+	if _, err := os.Lstat(filepath.Join(home, "data", "snapshots")); !errors.Is(err, os.ErrNotExist) {
+		fatalf(t, "the refused path was created: %v", err)
+	}
+}
+
+func TestUnrecoveredSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	if err := UnrecoveredSnapshot(dir); err != nil {
+		fatalf(t, "an empty folder needs recovery: %v", err)
+	}
+	if err := UnrecoveredSnapshot(""); err != nil {
+		fatalf(t, "no folder needs recovery: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "coordination-pending.json"), []byte("{}"), 0o600); err != nil {
+		fatal(t, err)
+	}
+	if err := UnrecoveredSnapshot(dir); err == nil || !strings.Contains(err.Error(), "coordination") {
+		fatalf(t, "coordination marker = %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "coordination-pending.json")); err != nil {
+		fatal(t, err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, ".incomplete-fixture"), 0o700); err != nil {
+		fatal(t, err)
+	}
+	if err := UnrecoveredSnapshot(dir); err == nil || !strings.Contains(err.Error(), "incomplete") {
+		fatalf(t, "incomplete snapshot = %v", err)
 	}
 }

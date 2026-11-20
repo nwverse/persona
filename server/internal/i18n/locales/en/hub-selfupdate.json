@@ -45,6 +45,7 @@
   "err_development_backup": "This program backup is no longer available. Refresh the backup versions.",
   "err_development_backup_path": "That backup folder can't be used: {error}",
   "err_development_backup_retain": "Keep between 1 and {max} snapshots.",
+  "err_development_backup_recovery": "The current snapshot folder needs recovery before it can be changed: {error}",
   "err_quiesced": "The hub is pausing its writers for a backup. Try again in a moment.",
   "err_quiesce_timeout": "The built-in manager did not stop in time for the backup.",
   "err_development_docker": "Web development updates aren't available for a Docker hub; update it with a new image."

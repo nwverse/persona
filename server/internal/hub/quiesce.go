@@ -15,9 +15,10 @@ import (
 // itself instead of requiring operator hooks. Requests that write are refused
 // for the duration, writes already under way are waited for, the built-in
 // manager is stopped, and the background writers (app registrations, extension
-// reports, device-session heartbeats) leave their work pending until resume.
-// The database is then checked with the same Quiesced rules the backup command
-// uses, counting only the hub's own pool connections as its own.
+// reports, device-session rows and pruning, the computer-trust sweep) leave
+// their work pending until resume. The database is then checked with the same
+// Quiesced rules the backup command uses, counting only the hub's own pool
+// connections as its own.
 
 // writeQuiescer counts request and background writes and stops them.
 type writeQuiescer struct {
@@ -200,6 +201,7 @@ func (h *Hub) pauseDevelopmentWriters(ctx context.Context) error {
 	defer cancel()
 	if err := h.quiesce.pause(ctx); err != nil {
 		h.quiesce.resume()
+		h.flushDeviceSessionFinishes()
 		return err
 	}
 	if err := h.assistantProc.pause(ctx); err != nil {
@@ -207,17 +209,21 @@ func (h *Hub) pauseDevelopmentWriters(ctx context.Context) error {
 		// again rather than leave the gate closed.
 		h.assistantProc.start()
 		h.quiesce.resume()
+		h.flushDeviceSessionFinishes()
 		return err
 	}
 	return nil
 }
 
-// resumeDevelopmentWriters lets the writers go again: pending reports are
-// written, then the manager starts, then request writes are admitted.
+// resumeDevelopmentWriters lets the writers go again. Writes are admitted
+// before the pending workers are woken: each of them refuses its work while
+// the pause holds, and a wake it consumed then is not repeated, so the work
+// would stay pending until some unrelated later report.
 func (h *Hub) resumeDevelopmentWriters() {
+	h.quiesce.resume()
 	h.resumeExtReportSave()
 	h.wakeHelloWriters()
 	h.wakePhoneWrites()
+	h.flushDeviceSessionFinishes()
 	h.assistantProc.start()
-	h.quiesce.resume()
 }

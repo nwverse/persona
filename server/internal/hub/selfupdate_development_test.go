@@ -216,6 +216,13 @@ func TestDevelopmentBackupSettingsAreValidatedAndExposed(t *testing.T) {
 	if v, _ := getUpdate(t, u); v.Development.BackupDirectory != v.Development.BackupDefaultDirectory {
 		t.Fatalf("reset directory = %q", v.Development.BackupDirectory)
 	}
+	// An omitted field keeps the stored folder, including across a retention change.
+	if w := nodePolicyRequest(t, u, http.MethodPut, `{"development_backup_retain":4}`); w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	if v, _ := getUpdate(t, u); v.Development.BackupDirectory != v.Development.BackupDefaultDirectory || v.Development.BackupRetain != 4 {
+		t.Fatalf("omitted folder changed it: %+v", v.Development)
+	}
 	// Collected data, relative paths and an out-of-range count are refused
 	// without changing the stored settings.
 	inside := filepath.Join(h.cfg.dir, "data", "snapshots")
@@ -223,14 +230,91 @@ func TestDevelopmentBackupSettingsAreValidatedAndExposed(t *testing.T) {
 		fmt.Sprintf(`{"development_backup_directory":%q}`, inside),
 		`{"development_backup_directory":"relative/dir"}`,
 		`{"development_backup_retain":51}`,
+		`{"development_backup_retain":0}`,
 		`{"development_backup_retain":-1}`,
 	} {
 		if w := nodePolicyRequest(t, u, http.MethodPut, body); w.Code != http.StatusConflict {
 			t.Fatalf("%s -> %d: %s", body, w.Code, w.Body.String())
 		}
 	}
-	if v, _ := getUpdate(t, u); v.Development.BackupRetain != 5 {
+	if v, _ := getUpdate(t, u); v.Development.BackupRetain != 4 {
 		t.Fatalf("refused request changed the retention: %+v", v.Development)
+	}
+}
+
+// An explicit Web choice of the recommended folder wins over hub.json's
+// directory, while an omitted field keeps hub.json's.
+func TestDevelopmentRecommendedFolderOverridesHubConfig(t *testing.T) {
+	h := newTestHub(t)
+	u := h.upd
+	custom := filepath.Join(t.TempDir(), "hub-config-snapshots")
+	h.cfg.Update.Development = &update.DevelopmentConfig{Backup: update.DevelopmentBackupConfig{Directory: custom}}
+	if v, _ := getUpdate(t, u); v.Development.BackupDirectory != custom {
+		t.Fatalf("hub.json directory = %q", v.Development.BackupDirectory)
+	}
+	if v, _ := getUpdate(t, u); v.Development.BackupDirectory == v.Development.BackupDefaultDirectory {
+		t.Fatal("fixture has no hub.json directory")
+	}
+	// Omitting the field keeps hub.json's directory.
+	if w := nodePolicyRequest(t, u, http.MethodPut, `{"development_backup_retain":2}`); w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	if v, _ := getUpdate(t, u); v.Development.BackupDirectory != custom {
+		t.Fatalf("omitted field lost hub.json's directory: %q", v.Development.BackupDirectory)
+	}
+	// "Use recommended" (an explicit empty value) selects the recommended one.
+	if w := nodePolicyRequest(t, u, http.MethodPut, `{"development_backup_directory":""}`); w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	v, _ := getUpdate(t, u)
+	if v.Development.BackupDirectory != v.Development.BackupDefaultDirectory {
+		t.Fatalf("explicit recommended folder = %q, want %q", v.Development.BackupDirectory, v.Development.BackupDefaultDirectory)
+	}
+	u.mu.Lock()
+	got := u.developmentBackupConfigLocked().Directory
+	u.mu.Unlock()
+	if got != v.Development.BackupDefaultDirectory {
+		t.Fatalf("snapshot folder = %q, want %q", got, v.Development.BackupDefaultDirectory)
+	}
+}
+
+// Snapshots that still need recovery keep the folder they are in: changing it
+// would pause and dump writers again past the helper's fail-closed gates.
+func TestDevelopmentFolderChangeRefusedWhileRecoveryPending(t *testing.T) {
+	h := newTestHub(t)
+	u := h.upd
+	current := filepath.Join(t.TempDir(), "current")
+	if w := nodePolicyRequest(t, u, http.MethodPut, fmt.Sprintf(`{"development_backup_directory":%q}`, current)); w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	if err := os.WriteFile(filepath.Join(current, "coordination-pending.json"), []byte(`{"phase":"quiescing"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(t.TempDir(), "other")
+	w := nodePolicyRequest(t, u, http.MethodPut, fmt.Sprintf(`{"development_backup_directory":%q}`, other))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("folder changed with a coordination marker: %d %s", w.Code, w.Body.String())
+	}
+	if v, _ := getUpdate(t, u); v.Development.BackupDirectory != current {
+		t.Fatalf("refused change moved the folder: %q", v.Development.BackupDirectory)
+	}
+	if err := os.Remove(filepath.Join(current, "coordination-pending.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(current, ".incomplete-fixture"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if w := nodePolicyRequest(t, u, http.MethodPut, fmt.Sprintf(`{"development_backup_directory":%q}`, other)); w.Code != http.StatusConflict {
+		t.Fatalf("folder changed with an incomplete snapshot: %d %s", w.Code, w.Body.String())
+	}
+	if err := os.RemoveAll(filepath.Join(current, ".incomplete-fixture")); err != nil {
+		t.Fatal(err)
+	}
+	if w := nodePolicyRequest(t, u, http.MethodPut, fmt.Sprintf(`{"development_backup_directory":%q}`, other)); w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	if v, _ := getUpdate(t, u); v.Development.BackupDirectory != other {
+		t.Fatalf("folder after recovery = %q", v.Development.BackupDirectory)
 	}
 }
 

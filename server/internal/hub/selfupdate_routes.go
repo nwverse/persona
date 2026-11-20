@@ -106,19 +106,39 @@ func (u *updater) routes(api *http.ServeMux) {
 			return
 		}
 		// The folder is checked with the backup command's own rules before any
-		// setting changes (IO, so outside the lock).
-		backupDir := ""
-		if body.DevelopmentBackupDirectory != nil && *body.DevelopmentBackupDirectory != "" {
-			dir, err := backup.ValidateOutputDirectory(u.h.cfg.dir, *body.DevelopmentBackupDirectory)
+		// setting changes (IO, so outside the lock). An explicitly empty folder
+		// is the Web choice of the recommended one: it is stored as that path so
+		// it wins over hub.json's directory, while an omitted field keeps it.
+		var backupDir *string
+		if body.DevelopmentBackupDirectory != nil {
+			dir := *body.DevelopmentBackupDirectory
+			if dir == "" {
+				dir = backup.RecommendedDevelopmentBackupDir(u.h.cfg.dir)
+			}
+			validated, err := backup.ValidateOutputDirectory(u.h.cfg.dir, dir)
 			if err != nil {
 				writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_development_backup_path", i18n.Args{"error": err.Error()}))
 				return
 			}
-			backupDir = dir
+			backupDir = &validated
 		}
-		if body.DevelopmentBackupRetain != nil && (*body.DevelopmentBackupRetain < 0 || *body.DevelopmentBackupRetain > developmentBackupRetainMax) {
+		if body.DevelopmentBackupRetain != nil && (*body.DevelopmentBackupRetain < 1 || *body.DevelopmentBackupRetain > developmentBackupRetainMax) {
 			writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_development_backup_retain", i18n.Args{"max": developmentBackupRetainMax}))
 			return
+		}
+		if backupDir != nil {
+			// Snapshots in the folder being left must not be stranded: the
+			// helper's coordination marker and its incomplete snapshots both
+			// stop any retry until someone looked at them.
+			u.mu.Lock()
+			current := u.developmentBackupConfigLocked().Directory
+			u.mu.Unlock()
+			if *backupDir != current {
+				if err := backup.UnrecoveredSnapshot(current); err != nil {
+					writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_development_backup_recovery", i18n.Args{"error": err.Error()}))
+					return
+				}
+			}
 		}
 		u.mu.Lock()
 		if err := u.loadLocked(r.Context()); err != nil {
@@ -163,7 +183,7 @@ func (u *updater) routes(api *http.ServeMux) {
 			enabled := *body.AutoUpdateNodes
 			u.settings.AutoUpdateNodes = &enabled
 		}
-		if body.DevelopmentBackupDirectory != nil {
+		if backupDir != nil {
 			u.settings.DevelopmentBackupDirectory = backupDir
 		}
 		if body.DevelopmentBackupRetain != nil {

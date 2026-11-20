@@ -275,6 +275,17 @@ pathlib.Path({str(resumed)!r}).touch()
         with self.assertRaisesRegex(ValueError, "quiesce"):
             webdev.snapshot(request)
 
+    def test_store_may_not_be_or_contain_a_collected_root(self):
+        request = self.history_fixture()
+        runtime = Path(request["runtime"])
+        # The store and everything below it leave the archive: a store that is
+        # the runtime, or holds it, would drop what the snapshot is for.
+        for store in (runtime, runtime.parent):
+            request["config"]["backup"] = {"builtin": True, "directory": str(store)}
+            with self.assertRaisesRegex(ValueError, "may not be the runtime or contain"):
+                webdev.snapshot(request)
+        self.assertFalse((runtime / "update" / "development-backups").exists())
+
     def test_apply_backup_stages_only_saved_programs_and_preserves_live_data(self):
         request = self.history_fixture()
         request.update(from_version="web-dev-old", from_commit="b"*40, from_build=202611120001,

@@ -44,6 +44,7 @@
   "err_development_backup": "このプログラムバックアップは利用できません。バックアップ一覧を更新してください。",
   "err_development_backup_path": "このバックアップフォルダーは使えません：{error}",
   "err_development_backup_retain": "スナップショットの保持数は1〜{max}にしてください。",
+  "err_development_backup_recovery": "現在のスナップショットフォルダーは、変更する前に復旧が必要です：{error}",
   "err_quiesced": "hubはバックアップのために書き込みを停止しています。少し待ってからもう一度お試しください。",
   "err_quiesce_timeout": "バックアップのために内蔵アシスタントを時間内に停止できませんでした。",
   "err_development_docker": "Docker内のhubでは開発版の更新を使えません。新しいイメージで更新してください。"

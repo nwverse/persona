@@ -20,9 +20,15 @@ vi.mock("../../lib/hub-update", async (original) => ({
     status = { ...status, state: "applying_backup", auto: false };
     return status;
   },
-  setHubUpdateSettings: async (input: { source?: "release" | "beta" | "web-dev" }) => {
+  setHubUpdateSettings: async (input: { source?: "release" | "beta" | "web-dev"; development_backup_directory?: string }) => {
     saved.push(input);
     status = { ...status, ...input, auto: false };
+    if (input.development_backup_directory !== undefined || (input as { development_backup_retain?: number }).development_backup_retain !== undefined) {
+      status = { ...status, development: { ...status.development!,
+        backup_directory: input.development_backup_directory === undefined ? status.development!.backup_directory
+          : input.development_backup_directory || status.development!.backup_default_directory,
+        backup_retain: (input as { development_backup_retain?: number }).development_backup_retain ?? status.development!.backup_retain } };
+    }
     return status;
   },
 }));
@@ -163,4 +169,20 @@ it("saves a declarative backup folder and retention, and resets to the recommend
   expect((group.querySelector('input[aria-label="Backup folder"]') as HTMLInputElement).value).toBe("");
   await act(async () => save().click());
   expect(saved).toContainEqual({ development_backup_directory: "", development_backup_retain: 10 });
+});
+
+it("reloads the snapshot list after the folder changes", async () => {
+  await mount();
+  expect(backupReads).toBe(1);
+  const group = host.querySelector('[data-settings-group="hub-dev-backup"]')!;
+  const folder = group.querySelector('input[aria-label="Backup folder"]') as HTMLInputElement;
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  await act(async () => {
+    setValue.call(folder, "/srv/persona-snapshots");
+    folder.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const save = [...group.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
+  await act(async () => save.click());
+  // A snapshot listed from the old folder cannot be found in the new one.
+  expect(backupReads).toBe(2);
 });

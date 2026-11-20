@@ -90,16 +90,17 @@ func (u *updater) developmentUnavailableWhy(l i18n.Lang) string {
 }
 
 // developmentBackupConfigLocked is the snapshot configuration in effect: the
-// folder chosen in the Web UI, else hub.json's, else the recommended one under
-// the runtime's update/ directory; the chosen retention, else three. Builtin
-// says the hub itself pauses the writers. Caller holds u.mu.
+// folder chosen in the Web UI (which may be the recommended one an operator
+// chose over hub.json's), else hub.json's, else the recommended one under the
+// runtime's update/ directory; the chosen retention, else three. Builtin says
+// the hub itself pauses the writers. Caller holds u.mu.
 func (u *updater) developmentBackupConfigLocked() update.DevelopmentBackupConfig {
 	var c update.DevelopmentBackupConfig
 	if u.h.cfg != nil && u.h.cfg.Update.Development != nil {
 		c = u.h.cfg.Update.Development.Backup
 	}
-	if u.settings.DevelopmentBackupDirectory != "" {
-		c.Directory = u.settings.DevelopmentBackupDirectory
+	if u.settings.DevelopmentBackupDirectory != nil {
+		c.Directory = *u.settings.DevelopmentBackupDirectory
 	} else if c.Directory == "" && u.h.cfg != nil {
 		c.Directory = backup.RecommendedDevelopmentBackupDir(u.h.cfg.dir)
 	}
@@ -221,17 +222,17 @@ func (u *updater) waitDevelopmentQuiesced(ctx context.Context) error {
 	if u.h.cfg == nil || u.h.cfg.DatabaseURL == "" {
 		return errors.New("the hub has no database connection to verify")
 	}
-	// Discover resolves the hub and built-in manager databases exactly as
-	// `personad backup create` does, so a manager that still shares the hub's
-	// database is checked there and one with its own database is checked after.
-	hubTarget, managerTarget, err := backup.Discover(backup.Options{Home: u.h.cfg.dir, DatabaseURL: u.h.cfg.DatabaseURL})
+	// The same targets webdev.py's inventory dumps: a built-in manager whose
+	// tables are still in the hub database needs only that one checked, and one
+	// that moved to its own is checked separately.
+	hubTarget, managerTarget, shared, err := backup.DiscoverDevelopment(backup.Options{Home: u.h.cfg.dir, DatabaseURL: u.h.cfg.DatabaseURL})
 	if err != nil {
 		return err
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		err := backup.QuiescedExcept(ctx, hubTarget, hubTarget.Database, pids.BackendPIDs()...)
-		if err == nil {
+		if err == nil && !shared {
 			err = backup.QuiescedDatabase(ctx, managerTarget, managerTarget.Database, true)
 		}
 		if err == nil {

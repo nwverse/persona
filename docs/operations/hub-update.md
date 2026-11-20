@@ -29,14 +29,21 @@ settings are declarative only: a folder and a count, never a shell command, cred
 helper path.
 
 The recommended folder is `<runtime>/update/development-backups` (where the Hub has always
-kept these snapshots); it is shown as the placeholder and used when the field is empty. A
+kept these snapshots); it is shown as the placeholder and used when no folder is set. **Use
+recommended** and an empty field are an explicit Web choice of it, so they win over a
+`directory` in `hub.json`; leaving the field out of a request keeps whatever is set. A
 custom folder is validated on the Hub with the backup command's rules (`internal/operations/backup`):
 it must be an absolute path (a leading `~` is expanded), may not be inside data a snapshot
 collects (the knowledge base, `managers/assistant`, extensions, skills or
-`hub.machines_kept`), may not be a symbolic link, and must be private (`0700`; an existing
-folder readable by other users is refused with the `chmod` to run). A folder chosen inside the
-runtime is never archived into the snapshot. The retention count defaults to three and may be
-1–50.
+`hub.machines_kept`), may not be the runtime directory or contain it (or an external
+knowledge base) — a snapshot leaves its own store out of the archive, so such a store would
+drop what the snapshot is for — it may not be a symbolic link, and it must be private
+(`0700`; an existing folder readable by other users is refused with the `chmod` to run). A
+folder chosen inside the runtime is never archived into the snapshot. The folder cannot be
+changed while the current one holds a `coordination-pending.json` marker or an
+`.incomplete-*` snapshot: those fail-closed gates stop any retry until someone inspects them,
+and a new folder would otherwise pause and dump writers again past them. The retention count
+defaults to three and may be 1–50; an explicit `0` is refused (omit the field to inherit).
 
 For installations with writers outside the Hub's control, `update.development.backup.quiesce`
 and `resume` in private `hub.json` remain an optional advanced override. Both must be set
@@ -74,12 +81,18 @@ wins.
 ### Built-in writer pause
 
 Without hooks the Hub pauses the writers itself for the whole snapshot: request writes are
-refused with `503` until resume, writes already under way finish, and the built-in child
-manager is stopped and kept stopped until resume. Background writers (app registrations,
-extension reports, device-session heartbeats) leave their work pending and write it after
-resume. The Hub then checks both databases with the backup command's own `Quiesced` rules,
+refused with `503` until resume — the apps' API, signing in with a password or a browser, a
+manager trading its install code, and the admin pages — writes already under way finish, and
+the built-in child manager is stopped and kept stopped until resume. Background writers (app
+registrations, extension reports, device-session rows, heartbeats and pruning, the
+computer-trust sweep) leave their work pending and write it after resume; the pause is lifted
+before those pending workers are woken, so the wake they use is not consumed by a refused
+write. The Hub then checks the databases with the backup command's own `Quiesced` rules,
 counting only its own connection-pool sessions as its own (`backup.QuiescedExcept`), and
-refuses the snapshot when another session, or one it cannot see, is still connected. Resume
+refuses the snapshot when another session, or one it cannot see, is still connected. A
+built-in manager whose tables still share the Hub's database (before
+`moved_to_own_database`) needs only that database checked; one moved to its own is checked
+separately (`backup.DiscoverDevelopment`, the same rules as the helper's inventory). Resume
 runs on every failure path, including cancellation; a Hub process that dies mid-snapshot
 leaves the incomplete directory in the store, which the next attempt refuses until it is
 inspected. Snapshot JSON, SQL dumps and file history keep their existing privacy rules.
