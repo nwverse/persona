@@ -88,10 +88,19 @@ func (s *Service) ownSettings() []ownSetting {
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleAutoCompactMinutes(ctx)), nil },
 			set: s.setIdleAutoCompactMinutes},
 		{Setting: Setting{Key: "assistant.idle_auto_compact_tokens", Title: "Context size before compaction", Actions: getSet,
-			About: "minimum context size before automatic compaction; 300000 tokens by default",
+			About: "minimum context size before automatic compaction; 300000 tokens by default. Once saved, it is also the size " +
+				"at which the main chat is compacted before its idle process is let go (assistant.idle_release_minutes), " +
+				"whatever assistant.idle_auto_compact says; never saved, that compaction stays at 75% of the conversation's window",
 			Value: "a whole number from 10000 to 10000000"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleAutoCompactTokens(ctx)), nil },
 			set: s.setIdleAutoCompactTokens},
+		{Setting: Setting{Key: "assistant.idle_release_minutes", Title: "Main chat stays loaded when idle", Actions: getSet,
+			About: "how long the main chat's process stays loaded after its last activity before it is let go (it resumes on the " +
+				"next message); 20 minutes by default. Just before, it is compacted when its context is large (assistant.idle_auto_compact_tokens " +
+				"once saved). Kept below an hour so that compaction still reads the prompt cache. Applies from the main chat's next message",
+			Value: "a whole number of minutes from 5 to 55"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleReleaseMinutes(ctx)), nil },
+			set: s.setIdleReleaseMinutes},
 		{Setting: Setting{Key: readonlyModeKey, Title: "Read-only task protection", Actions: getSet,
 			About: "sandbox (the default) keeps current runtime protection: Codex uses a read-only sandbox, while Claude uses " +
 				"bypassPermissions and a first-message read-only instruction. prompt keeps the instruction without forcing plan " +
@@ -167,10 +176,18 @@ func (s *Service) ownSettings() []ownSetting {
 		{Setting: Setting{Key: "assistant.meeting_transcription_default", Title: i18n.T(i18n.Default, "assistant-settings_tool.title_meeting_transcription_default"), Actions: getSet,
 			About: prompts.RenderMeetingTranscriptionSetting(), Value: "device or hub"},
 			get: s.getMeetingTranscriptionDefault, set: s.setMeetingTranscriptionDefault},
+		{Setting: Setting{Key: "assistant.delivery_gate", Title: i18n.T(i18n.Default, "assistant-settings_tool.title_delivery_gate"), Actions: getSet,
+			About: "merged (the default): supervised tasks with linked PR(s) or GitHub issue(s) stay open until the PR is merged " +
+				"and linked issue(s) are closed (unless explicitly PR-only/draft-only or outcome cannot). off: close strictly on " +
+				"done_when with no delivery gate. live: also require the change to be deployed and live on the running hub " +
+				"(equivalent to assistant.done_needs_delivery=true). Applies from the next judgment / review",
+			Value: "off, merged or live"},
+			get: func(ctx context.Context) (string, error) { return s.deliveryGate(ctx), nil },
+			set: s.setDeliveryGate},
 		{Setting: Setting{Key: "assistant.done_needs_delivery", Title: "上线并实测才算做完", Actions: getSet,
-			About: "off (the default): a task_plan task closes when its work is judged done; on: only once it is live and checked " +
-				"(or has nothing to ship): stopped at a PR, merged or off by default it stays open with where it is held, its agent is told " +
-				"so with its prompt, and the ones waiting for the user's nod are listed together in the snapshot. Applies from the next judgment / task",
+			About: "legacy boolean alias for assistant.delivery_gate: true sets delivery_gate to live (close only once live and " +
+				"checked, and hand the delivery standard to the agent); false sets delivery_gate to off (no delivery gate). " +
+				"Prefer assistant.delivery_gate (off / merged / live). Applies from the next judgment / task",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.doneNeedsDelivery(ctx)), nil },
 			set: s.setDoneNeedsDelivery},
@@ -463,10 +480,11 @@ func orNone(s string) string {
 // what the assistant reads).
 var settingTitles = map[string]string{standingAuthorizationsKey: "title_standing_authorizations", "assistant.notes": "title_notes", "assistant.main_tasks_quiet": "title_main_tasks_quiet",
 	"assistant.idle_auto_compact": "title_idle_auto_compact", "assistant.idle_auto_compact_minutes": "title_idle_auto_compact_minutes", "assistant.idle_auto_compact_tokens": "title_idle_auto_compact_tokens",
+	"assistant.idle_release_minutes":      "title_idle_release_minutes",
 	readonlyModeKey:                       "title_readonly_mode",
 	"assistant.task_workspace_preference": "title_task_workspace_preference",
 	"assistant.start_requested_tasks":     "title_start_requested_tasks", "assistant.launcher": "title_launcher",
-	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery",
+	"assistant.recording_days": "title_recording_days", "assistant.delivery_gate": "title_delivery_gate", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context",
 	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", "model_profiles.tiers": "title_model_tiers",
 	"assistant.load_all_tools":                "title_load_all_tools",
@@ -524,7 +542,8 @@ func (s *Service) setIdleAutoCompactTokens(ctx context.Context, raw json.RawMess
 		return nil, i18n.Err("assistant-settings_tool.bad_idle_auto_compact_tokens")
 	}
 	before := s.idleAutoCompactTokens(ctx)
-	if value == before {
+	// Saving the default is a change while unset: a saved value is also the main chat's release-time threshold.
+	if value == before && s.settings(ctx).IdleAutoCompactTokens != nil {
 		return &ownChange{summary: i18n.T(s.lang(ctx), "assistant-settings_tool.idle_auto_compact_unchanged")}, nil
 	}
 	if s.store() == nil {
@@ -538,6 +557,29 @@ func (s *Service) setIdleAutoCompactTokens(ctx context.Context, raw json.RawMess
 		}
 		s.settingsChanged(ctx)
 		return i18n.T(s.lang(ctx), "assistant-settings_tool.idle_auto_compact_saved"), nil
+	}}, nil
+}
+
+func (s *Service) setIdleReleaseMinutes(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
+	var value int
+	if err := json.Unmarshal(raw, &value); err != nil || value < minIdleReleaseMinutes || value > maxIdleReleaseMinutes {
+		return nil, i18n.Err("assistant-settings_tool.bad_idle_release_minutes")
+	}
+	before := s.idleReleaseMinutes(ctx)
+	if value == before {
+		return &ownChange{summary: i18n.T(s.lang(ctx), "assistant-settings_tool.idle_release_unchanged")}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_idle_release_minutes", i18n.Args{"before": before, "after": value})
+	}, apply: func(ctx context.Context) (string, error) {
+		if _, err := s.updateSettings(ctx, func(v *Settings) error { v.IdleReleaseMinutes = &value; return nil }); err != nil {
+			return "", err
+		}
+		s.settingsChanged(ctx)
+		return i18n.T(s.lang(ctx), "assistant-settings_tool.idle_release_saved"), nil
 	}}, nil
 }
 
@@ -753,11 +795,44 @@ func (s *Service) setMeetingAttendanceDefault(ctx context.Context, v json.RawMes
 		}}, nil
 }
 
+func (s *Service) setDeliveryGate(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var gate string
+	if err := json.Unmarshal(v, &gate); err != nil || !slices.Contains(deliveryGates, gate) {
+		return nil, errors.New("value must be off, merged or live")
+	}
+	before := s.deliveryGate(ctx)
+	if gate == before {
+		return &ownChange{summary: "assistant.delivery_gate is unchanged"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	name := func(l i18n.Lang, tier string) string { return i18n.T(l, "assistant-settings_tool.delivery_gate_"+tier) }
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_delivery_gate", i18n.Args{"before": name(l, before), "after": name(l, gate)})
+	},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error {
+				v.DeliveryGate = &gate
+				v.DoneNeedsDelivery = nil
+				return nil
+			}); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			return fmt.Sprintf("assistant.delivery_gate is %s from the next judgment and review on.", gate), nil
+		}}, nil
+}
+
 func (s *Service) setDoneNeedsDelivery(ctx context.Context, v json.RawMessage) (*ownChange, error) {
-	return s.setBoolSetting(ctx, v, s.doneNeedsDelivery, "「上线并实测才算做完」没有变化", func(l i18n.Lang, before, after string) string {
+	ch, err := s.setBoolSetting(ctx, v, s.doneNeedsDelivery, "「上线并实测才算做完」没有变化", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_done_needs_delivery", i18n.Args{"before": before, "after": after})
-	}, func(v *Settings) **bool { return &v.DoneNeedsDelivery },
+	}, func(v *Settings) **bool {
+		v.DeliveryGate = nil
+		return &v.DoneNeedsDelivery
+	},
 		"assistant.done_needs_delivery is %v from the next judgment and task on.")
+	return ch, err
 }
 
 func (s *Service) setReviewSamplePercent(ctx context.Context, v json.RawMessage) (*ownChange, error) {

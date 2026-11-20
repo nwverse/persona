@@ -151,6 +151,25 @@ newest `updated_at`. The title comes from the Inbox list or loaded Done history.
 `openFromInbox` records the item's address in the new history entry: the strip goes Back when that address names the same
 item, and otherwise pushes the item's route. ✕ dismisses the strip only for that mounted conversation page.
 
+**An Agent opened from inside a page is a drill-down** (#12055, the rule of #9971; iOS #12006, Android `openedFrom`): a
+to-do's Agent rows and Hand to Agent's existing Agent (`views/Todos.tsx`), the requests graph's Agent lines
+(`views/TodoRequestGraph.tsx`), a knowledge project's **Agents on This Project** (`views/knowledge/KBDetail.tsx`), a
+meeting's hand-off row (`views/knowledge/RecordingHandoff.tsx`), and any full-page hand-off from a page that is not a
+conversation (the workflow board, a side panel's Open Agent page) open the Agent's page through `lib/handoff.ts`
+(`openFromPage` / `leaveChat`). The new history entry names the page's address (`handoff.path`), so the Agent's page shows
+the same strip, **Came from &lt;to-do or Agent title, else the page's sidebar name&gt; · click to return** (**Back to the
+previous page** for a page it cannot name, `views/chat/HandoffBack.tsx` `fromTitle`), and the browser's Back returns to the
+page. The sidebar keeps that page's row lit instead of the Agent's (`sidebarRoute` in `lib/persona-nav.ts`, read by
+`useActiveKey`), the Persona row for a Persona conversation's card opened as a page included. An Agent opened from an Agent's
+page that was itself opened from a page carries that first page too (`handoff.page`), so the lit row stays put through the
+chain. An Agent picked in the sidebar, reached by a link (`leaveChat(…, false)`) or opened by ⌘-click in a new tab lights
+its own row as before; a reload keeps the entry, and with it the lit row and the strip.
+
+A `brief` card's waiting and later rows open the chat the row names (`machine_id` / `session_id`, #2320) in the app, as iOS
+and Android do: an Agent's where Settings › How Agents open says (the side panel, or its page with the way back), a Persona
+conversation as its page (`views/assistant/Brief.tsx` `RowOpen`). Before #12055 they opened the hub's public link in a new
+tab, and showed no Open at all on a hub without `public_url`; a row from a hub that does not name its chat keeps that link.
+
 ## Color hierarchy and quiet surfaces
 
 Approvals, plan decisions, permissions and **Needs you** are routine work, not errors. This rule is shared with the Apple and Android clients:
@@ -410,7 +429,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   Creating a new one asks for confirmation (**Bring a summary of the old chat** is on by default); on success it returns to the new-chat page at `/`, and the old one appears under **All chats › Archived** as "Old main chat · until <month day>".
   **Clear context** (#5095, user-requested alignment with Cindy's `/clear`; hub feature `assistant_main_clear`, `lib/main-clear.ts`): the main chat's ⋯ menu has it between **Compact context** and **New main chat…**, and its `/` list has `/clear` (the main chat's only command; other Persona chats have none). Sending `/clear` alone clears instead of going to Persona; anything more is a message, and so is an edit of the last message to `/clear` (its rewind already ran). On the cleared page `/clear` is listed and does nothing (there is nothing to clear, and it never becomes the new chat's first message). Neither asks first: nothing is deleted, the old chat goes to **All chats › Archived** as with New main chat (`DESIGN_SYSTEM.md` 4.4, the reversible rung). A running turn does not block it (the hub stops it). The page clears in place: the same top bar, an empty middle and the box docked at the bottom, not the centered new-chat page, and the first message starts the new main chat right there (`Starter` with `cleared`). Only the tab that cleared keeps that layout, for the manager it cleared; a reload, another manager, or another device's empty main chat shows the ordinary new-chat page. Until the new chat starts, the top bar has no ⋯ (its items act on a chat) and the box shows the new chat's launcher chip.
   In every chat, a compaction is drawn as a divider "Content above compacted · manual · N×10k tokens before compaction", and `/compact`'s **Compact context** and "Continued from compacted context" fold into that line (hover to see the original text).
-  **The currently open row** (#2283): always has the `--hover-2` background (one step darker than the hover `--hover`, visible in both light and dark) and `aria-current="page"`; the sliding hover highlight only follows the mouse and no longer takes the current row's background with it.
+  **The currently open row** (#2283): always has the `--hover-2` background (one step darker than the hover `--hover`, visible in both light and dark) and `aria-current="page"`; the sliding hover highlight only follows the mouse and no longer takes the current row's background with it. On an Agent's page opened from inside another page it is that page's row, not the Agent's (#12055, "An Agent opened from inside a page is a drill-down" above).
   Besides being measured when the sidebar re-renders, the sliding highlight's position is re-measured when the list layout changes (#2476, `useGlide`): a `ResizeObserver` watches the list, its sections and every row, plus the end of fold animations and scrolling in the list, measuring at most once per frame;
   the highlight covers only the visible part of the row (`lib/glide.ts` intersects the row with every enclosing `overflow: hidden` box). When the row goes into a folded group, has zero height or disappears, it fades out, and when it reappears it slides over from where it was.
   When **Recent (not running)** has more than 8 entries or there are more than 5 personal Agents and the current session is further down, it is appended after them. **最近** under Persona chats lists its setting's count (#4873, #5146): an older chat opened from **All chats**, ⌘K, the Inbox or a link joins it once it is among the most recently active that are shown.
