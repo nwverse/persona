@@ -16,11 +16,13 @@ describe("the Assistant's Needs you and In progress entries (spec/fixtures/entri
       // the web lists every task waiting for its supervisor's review under Persona reviewing (#8678), out of the two
       // entries the other clients put it in: the rest of the split is theirs
       const review = (c.expected as { web_review?: string[] }).web_review ?? [];
-      const shared = (keys: string[]) => keys.filter((key) => !review.includes(key));
+      const parked = (c.expected as { web_parked?: string[] }).web_parked ?? [];
+      const shared = (keys: string[]) => keys.filter((key) => !review.includes(key) && !parked.includes(key));
       expect(got.needsYou.map((item) => item.key)).toEqual(shared(c.expected.needs_you));
       expect(got.running.map((item) => item.key)).toEqual(shared(c.expected.running));
       expect(got.shelved.map((item) => item.key)).toEqual(shared(c.expected.shelved));
       expect(got.review.map((item) => item.key)).toEqual(review);
+      expect(got.parked.map((item) => item.key)).toEqual(parked);
       // Finished (#10922): what the conversation handed out that finished in the last 24 hours, newest first, and which
       // of them nobody has opened since (drawn as new)
       const finished = c.expected as { finished?: string[]; finished_new?: string[] };
@@ -70,6 +72,83 @@ describe("a parked task in the Assistant's entries", () => {
     const at = "2026-11-05T08:00:00Z";
     expect(keys(entries(todo("parked", at), at))).toEqual({ needsYou: [], running: [], parked: ["task:todo_1"], shelved: [] });
     expect(keys(entries(todo("", at), at)).running).toEqual([]);
+  });
+});
+
+describe("a parked external event linked to an existing owner prompt (#10527)", () => {
+  const at = "2026-11-10T08:00:00Z";
+  const interactionID = "ix_read_only_permission";
+  const prompt: Interaction = {
+    id: interactionID, machine_id: "box", session_id: "s1", kind: "question", created_at: at,
+    questions: [{ question: "Allow read-only access to the connector?", options: [{ label: "Allow read-only" }, { label: "Later", action: "defer" }] }],
+    delegate: { what: "Read-only connector preflight", deadline: "2026-11-10T14:00:00Z" },
+  } as Interaction;
+  const idle: Session = { machine_id: "box", session_id: "s1", title: "Connector worker", state: "idle", status: "idle", updated_at: at } as Session;
+  const todo = (id: string | undefined, released = true): Todo => ({
+    id: "todo_1", title: "Check the connector", origin: "main", created_at: at, updated_at: at,
+    agents: [{ machine_id: "box", session_id: "s1", linked_at: at, ...(released ? { released_at: "2026-11-10T08:30:00Z" } : {}) }],
+    supervision: {
+      supervisor: "main", state: "parked",
+      parked: {
+        reason: "The connector preflight needs the owner's read-only decision", until: "2026-11-14T09:00:00Z", waiting_on: "external_event", count: 1,
+        evidence: { kind: "external_event", target: "Read-only connector preflight", url: "https://example.test/connector/permissions/4", wake: "The owner answers the existing prompt", ...(id ? { interaction_id: id } : {}) },
+      },
+    },
+  } as unknown as Todo);
+  const entries = (td: Todo, interactions: Interaction[]) => assistantEntries({
+    conversation: "main", main: "main", todos: [td], sessions: [idle], interactions, plans: {}, feed: [], now: Date.parse("2026-11-10T09:00:00Z"),
+    cards: [{ id: "plan:plan_1:0", todo_id: td.id, plan_id: "plan_1", index: 0, at, updated_at: at, state: "working" }],
+  });
+
+  it("shows the exact pending prompt once after its worker is released, without duplicating an active worker's card", () => {
+    const got = entries(todo(interactionID), [prompt]);
+    expect(got.needsYou).toHaveLength(1);
+    expect(got.needsYou[0]).toMatchObject({ kind: "task", key: "task:todo_1", asks: [prompt] });
+    expect(got.parked).toEqual([]);
+    // The existing active-agent path and the explicit link must not put the same prompt on two rows or twice on one row.
+    const active = entries(todo(interactionID, false), [prompt]);
+    expect(active.needsYou).toHaveLength(1);
+    expect(active.needsYou[0]).toMatchObject({ kind: "task", key: "task:todo_1", asks: [prompt] });
+    expect(active.parked).toEqual([]);
+  });
+
+  it("keeps one home when a released linked task shares its worker with a tied active task", () => {
+    const linked = todo(interactionID);
+    const other = { ...todo(undefined, false), id: "todo_2", title: "Other task" };
+    const tied = { ...idle, state: "needs_you", todo: { id: "todo_2", title: "Other task" } } as Session;
+    const cards = [linked, other].map((td) => ({ id: `plan:${td.id}:0`, todo_id: td.id, plan_id: `plan_${td.id}`, index: 0, at, updated_at: at, state: "working" as const }));
+    const got = assistantEntries({ conversation: "main", main: "main", todos: [linked, other], sessions: [tied], interactions: [prompt], plans: {}, feed: [],
+      now: Date.parse("2026-11-10T09:00:00Z"), cards });
+    expect(got.needsYou).toHaveLength(1);
+    expect(got.needsYou[0]).toMatchObject({ kind: "task", key: "task:todo_2", asks: [prompt] });
+    expect(got.parked.map((item) => item.key)).toEqual(["task:todo_1"]);
+  });
+
+  it("returns an active worker to Parked when its linked interaction resolved but its session is stale", () => {
+    const stale = { ...idle, state: "needs_you", status: "blocked", work: { phase: "blocked", interaction_id: interactionID } } as Session;
+    const input = { conversation: "main", main: "main", todos: [todo(interactionID, false)], sessions: [stale], interactions: [] as Interaction[], plans: {}, feed: [],
+      now: Date.parse("2026-11-10T09:00:00Z"),
+      cards: [{ id: "plan:plan_1:0", todo_id: "todo_1", plan_id: "plan_1", index: 0, at, updated_at: at, state: "working" as const }] };
+    const got = assistantEntries(input);
+    expect(got.needsYou).toEqual([]);
+    expect(got.parked.map((item) => item.key)).toEqual(["task:todo_1"]);
+
+    // A different current card is still real owner input, not the resolved one.
+    const newer = { ...prompt, id: "ix_new" };
+    const next = assistantEntries({ ...input, sessions: [{ ...stale, work: { phase: "blocked", interaction_id: "ix_new" } }], interactions: [newer] });
+    expect(next.needsYou).toHaveLength(1);
+    expect(next.needsYou[0]).toMatchObject({ kind: "task", key: "task:todo_1", asks: [newer] });
+  });
+
+  it.each([
+    ["no interaction is linked", undefined, [prompt]],
+    ["the referenced interaction is unknown", "ix_not_pending", []],
+    ["the referenced interaction is resolved", interactionID, []],
+    ["the pending interaction belongs to another worker", interactionID, [{ ...prompt, session_id: "another-worker" }]],
+  ])("keeps the external wait Parked when %s", (_name, id, interactions) => {
+    const got = entries(todo(id), interactions);
+    expect(got.needsYou).toEqual([]);
+    expect(got.parked.map((item) => item.key)).toEqual(["task:todo_1"]);
   });
 });
 

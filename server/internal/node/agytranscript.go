@@ -22,15 +22,17 @@ import (
 const agyTranscriptPath = ".system_generated/logs/transcript.jsonl"
 
 type agyStep struct {
-	Index           *int     `json:"step_index"`
-	Type            string   `json:"type"`
-	Source          string   `json:"source"`
-	Status          string   `json:"status"`
-	CreatedAt       string   `json:"created_at"`
-	Content         string   `json:"content"`
-	Thinking        string   `json:"thinking"`
-	Error           string   `json:"error"`
-	TruncatedFields []string `json:"truncated_fields"`
+	Index           *int            `json:"step_index"`
+	Type            string          `json:"type"`
+	Source          string          `json:"source"`
+	Status          string          `json:"status"`
+	CreatedAt       string          `json:"created_at"`
+	Content         string          `json:"content"`
+	ClientMsgID     string          `json:"client_msg_id"`
+	Thinking        string          `json:"thinking"`
+	Error           string          `json:"error"`
+	TruncatedFields []string        `json:"truncated_fields"`
+	Media           json.RawMessage `json:"media"`
 	ToolCalls       []*struct {
 		Name string          `json:"name"`
 		Args json.RawMessage `json:"args"`
@@ -46,6 +48,7 @@ type agyHistory struct {
 	items []proto.Item
 	// A compact export can leave full tool output in its step directory.
 	outputs map[string]int
+	media   map[string]agyMedia
 }
 
 type agyRevision struct {
@@ -238,6 +241,25 @@ func mapAgySteps(steps []agyStep, fallback time.Time) agyHistory {
 				Role: role, Kind: kind, TS: at, Text: text})
 			return &history.items[len(history.items)-1]
 		}
+		addMedia := func(role, toolUseID, clientMsgID string, attached map[string]bool) {
+			var entries []json.RawMessage
+			if len(step.Media) == 0 || json.Unmarshal(step.Media, &entries) != nil {
+				return
+			}
+			for index, entry := range entries {
+				var media agyMedia
+				if json.Unmarshal(entry, &media) != nil || !media.isImage() || attached[agyImagePath(media.URI)] {
+					continue
+				}
+				image := add("media"+strconv.Itoa(index), role, proto.KindImage, "")
+				image.ToolUseID, image.ClientMsgID = toolUseID, clientMsgID
+				image.Image = &proto.Image{Mime: media.Mime, Lazy: true}
+				if history.media == nil {
+					history.media = make(map[string]agyMedia)
+				}
+				history.media[image.ID] = media
+			}
+		}
 		// A call's result follows its planner step. One that never came (interrupted, dropped) must not stay queued
 		// to take the next result, which would shift every later result onto the wrong call.
 		switch step.Type {
@@ -247,10 +269,14 @@ func mapAgySteps(steps []agyStep, fallback time.Time) agyHistory {
 		switch step.Type {
 		case "USER_INPUT":
 			if step.Source == "" || step.Source == "USER_EXPLICIT" {
-				if text := agyUserText(step.Content); text != "" {
-					add("0", "user", proto.KindText, text)
+				text := agyUserText(step.Content)
+				if text != "" {
+					add("0", "user", proto.KindText, text).ClientMsgID = step.ClientMsgID
 				}
+				addMedia("user", "", step.ClientMsgID, agyAttachedImagePaths(text))
 			}
+		case "CHECKPOINT":
+			add("0", "system", proto.KindNotice, transcript.CompactedNotice)
 		case "PLANNER_RESPONSE":
 			for _, part := range []struct{ kind, text string }{{proto.KindThinking, step.Thinking}, {proto.KindText, step.Content}} {
 				if text := strings.TrimSpace(part.text); text != "" {
@@ -287,7 +313,7 @@ func mapAgySteps(steps []agyStep, fallback time.Time) agyHistory {
 					break
 				}
 			}
-			// Pane transcripts omit media because they have no session.image handler.
+			addMedia("assistant", callID, "", nil)
 		case "ERROR_MESSAGE":
 			text := step.Error
 			if text == "" {
@@ -303,6 +329,26 @@ func mapAgySteps(steps []agyStep, fallback time.Time) agyHistory {
 		}
 	}
 	return history
+}
+
+func agyAttachedImagePaths(text string) map[string]bool {
+	var paths map[string]bool
+	for {
+		_, rest, open := strings.Cut(text, "<attached_images>")
+		block, tail, closed := strings.Cut(rest, "</attached_images>")
+		if !open || !closed {
+			return paths
+		}
+		for line := range strings.SplitSeq(block, "\n") {
+			if path := agyImagePath(strings.TrimSpace(line)); path != "" {
+				if paths == nil {
+					paths = make(map[string]bool)
+				}
+				paths[path] = true
+			}
+		}
+		text = tail
+	}
 }
 
 var agyToolNames = map[string]string{

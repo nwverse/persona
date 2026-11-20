@@ -63,15 +63,21 @@ func TestWaitCompaction(t *testing.T) {
 		{"its error", []compactProgress{busy, {live: true, reason: "Error during compaction: prompt is too long"}},
 			"without compacting: Error during compaction: prompt is too long"},
 		{"never begins", []compactProgress{rest}, "did not start compacting within"},
+		// A Codex whose status lags its rollout: written to, never seen at work, then its record.
+		{"codex written to, then its record", []compactProgress{rest, {grew: true, live: true}, {grew: true, live: true}, {compacted: true, grew: true, live: true}}, ""},
 		{"refused at once", []compactProgress{{live: true, reason: "Error during compaction: Not enough messages to compact"}},
 			"did not compact: Error during compaction: Not enough messages"},
 		{"stops", []compactProgress{busy, {}}, "stopped while compacting"},
 		{"no record in time", []compactProgress{busy}, "no compaction record within"},
+		{"written to, no record in time", []compactProgress{{grew: true, live: true}}, "no compaction record within"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			d := deadline
-			if c.name == "no record in time" {
+			if strings.Contains(c.name, "no record in time") {
 				d = 30 * time.Millisecond
+			}
+			if strings.HasPrefix(c.name, "written to") {
+				d = 3 * grace // past the grace: a transcript written to keeps it waiting for its record
 			}
 			err := waitCompaction(context.Background(), scripted(c.reads...), poll, grace, d)
 			switch {
@@ -112,13 +118,69 @@ func TestCompactionSince(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p, off := write(strings.ReplaceAll(c.name, " ", "-")+".jsonl", c.before, c.after)
-			compacted, reason := compactionSince(p, off)
+			compacted, grew, reason := compactionSince(p, off)
+			if !grew {
+				t.Fatal("nothing read as written after the offset")
+			}
 			if compacted != c.compacted || !strings.HasPrefix(reason, strings.SplitN(c.reason, "<", 2)[0]) || (c.reason == "") != (reason == "") {
 				t.Fatalf("compactionSince = %v, %q", compacted, reason)
 			}
 		})
 	}
-	if compacted, reason := compactionSince(filepath.Join(dir, "none"), 0); compacted || reason != "" {
+	if compacted, grew, reason := compactionSince(filepath.Join(dir, "none"), 0); compacted || grew || reason != "" {
 		t.Fatal("a missing transcript")
+	}
+	p, off := write("quiet.jsonl", old, "")
+	if compacted, grew, _ := compactionSince(p, off); compacted || grew {
+		t.Fatal("nothing written after the offset")
+	}
+}
+
+// A reply after the /compact that sees far less than before counts as the compaction (Codex writes its token_count on
+// the next turn); a small drop does not.
+func TestContextShrank(t *testing.T) {
+	if !contextShrank(428111, 60000) || contextShrank(428111, 400000) || contextShrank(0, 1000) || contextShrank(428111, 0) {
+		t.Fatal("contextShrank")
+	}
+}
+
+// Before /compact goes into a Codex just resumed, its update offer (whose default, Update now, installs and quits
+// Codex) is skipped with Esc, any other dialog with numbered options is never taken for the input box, and a plain
+// input box is neither (#11316).
+func TestCodexStartupScreen(t *testing.T) {
+	read := func(name string) string {
+		b, err := os.ReadFile(filepath.Join("..", "screen", "testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	for _, c := range []struct {
+		name, text string
+		skip       bool
+		dialog     bool
+	}{
+		{"update offer 0.153", cxUpdateOffer, true, false},
+		{"update offer 0.169", cxUpdate0169, true, false},
+		{"other setup choice", strings.Replace(cxUpdate0169, "Update available", "Other setup", 1), false, true},
+		{"trust", cxTrust0153, false, true},
+		{"exec approval", read("codex-0.163.0-exec-approval-120.txt"), false, true},
+		{"ready", cxReady, false, false},
+		{"starting MCP", cxMCP, false, false},
+		{"loading", cxLoading, false, false},
+		{"empty box 0.163", read("codex-0.163.0-empty-120.txt"), false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			skip, dialog := codexStartupScreen(c.text)
+			if (skip != nil) != c.skip || (dialog != "") != c.dialog {
+				t.Fatalf("codexStartupScreen = %v, %q", skip, dialog)
+			}
+			if c.skip && (len(skip) != 1 || skip[0] != "escape") {
+				t.Fatalf("keys %v", skip)
+			}
+		})
+	}
+	if got := clipLine("a\n  b   c", 3); got != "a b…" {
+		t.Fatalf("clipLine = %q", got)
 	}
 }

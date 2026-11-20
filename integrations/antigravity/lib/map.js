@@ -4,6 +4,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { basename, join } from 'node:path'
 import { appToolName, clipInput, light, snippet } from '../../runtime-sdk/index.js'
+import { isImageReference, localMediaPath } from './media.js'
 
 export const RUNTIME = 'agy'
 export const LABEL = 'Antigravity'
@@ -58,6 +59,16 @@ export function cleanUserText(raw) {
     body = body.replace(SNAPSHOT_RE, '').replace(SNAPSHOT_END_RE, '')
   } while (body !== prev)
   return body.trim()
+}
+
+function attachedImagePaths(text) {
+  const paths = new Set()
+  for (const [, body] of text.matchAll(/<attached_images>([\s\S]*?)<\/attached_images>/g)) {
+    for (const path of body.split('\n')) {
+      if (path.trim()) paths.add(localMediaPath(path.trim()))
+    }
+  }
+  return paths
 }
 
 const PERSONA_MCP_TOOL_RE = new RegExp(`^mcp_(?:${MCP_SERVER_NAMES.join('|')})(?:_[0-9a-fA-F]{8,16})?_([a-z][a-z0-9_]*)$`)
@@ -151,7 +162,7 @@ export function cleanGenericOutput(content) {
 /**
  * Parse a transcript.jsonl file (or array of parsed step objects) into Persona items.
  * @param {object[]} steps
- * @param {{ brainDir?: string, full?: boolean }} [opts]
+ * @param {{ brainDir?: string, full?: boolean, includeMedia?: boolean, mediaItemId?: string, clientMsgIdFor?: (index: number, text: string, ordinal: number) => string | undefined }} [opts]
  */
 export function stepsToItems(steps, opts = {}) {
   const items = []
@@ -160,11 +171,15 @@ export function stepsToItems(steps, opts = {}) {
   let lastText = ''
   let turnError
   let afterWork = false
+  let media
+  let userOrdinal = 0
 
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i]
     if (!step || typeof step !== 'object') continue
     const idx = typeof step.step_index === 'number' ? step.step_index : i
+    // Synthetic notices can move the projected sequence without moving the native record's files or message binding.
+    const nativeIdx = typeof step.native_step_index === 'number' ? step.native_step_index : idx
     const seq = idx + 1
     if (seq > maxSeq) maxSeq = seq
     const ts = step.created_at || new Date().toISOString()
@@ -183,12 +198,29 @@ export function stepsToItems(steps, opts = {}) {
         turnError = undefined
         afterWork = false
         const text = cleanUserText(step.content)
-        if (!text) break
-        const msgId = (typeof step.client_msg_id === 'string' && step.client_msg_id) || opts.clientMsgIdFor?.(idx, text)
-        const item = { id: `${line}#0`, seq, role: 'user', kind: 'text', text, ts, ...(msgId ? { client_msg_id: msgId } : {}) }
-        items.push(opts.full ? item : light(item))
+        userOrdinal++
+        const msgId = (typeof step.client_msg_id === 'string' && step.client_msg_id) || opts.clientMsgIdFor?.(nativeIdx, text, userOrdinal)
+        const user = { seq, role: 'user', ts, ...(msgId ? { client_msg_id: msgId } : {}) }
+        if (text) {
+          const item = { id: `${line}#0`, kind: 'text', text, ...user }
+          items.push(opts.full ? item : light(item))
+        }
+        if (opts.includeMedia === true && Array.isArray(step.media)) {
+          const attached = attachedImagePaths(text)
+          for (const [index, entry] of step.media.entries()) {
+            if (!isImageReference(entry)) continue
+            const path = entry.uri && localMediaPath(entry.uri)
+            if (path && attached.has(path)) continue
+            const id = `${line}#media${index}`
+            items.push({ id, kind: 'image', ...user, image: { mime: entry.mime_type, data: '', lazy: true } })
+            if (opts.mediaItemId === id) media = entry
+          }
+        }
         break
       }
+      case 'CHECKPOINT':
+        items.push({ id: `${line}#0`, seq, role: 'system', kind: 'notice', text: '上下文已压缩', ts })
+        break
       case 'PLANNER_RESPONSE': {
         turnError = undefined
         let sub = 0
@@ -233,7 +265,7 @@ export function stepsToItems(steps, opts = {}) {
         const callId = explicitCallId || (paired ? paired.callId : `call_${line}_0`)
         let rawOut = step.error || step.content || ''
         if (opts.full && opts.brainDir && Array.isArray(step.truncated_fields) && step.truncated_fields.includes('content')) {
-          const outFile = join(opts.brainDir, '.system_generated', 'steps', String(idx), 'output.txt')
+          const outFile = join(opts.brainDir, '.system_generated', 'steps', String(nativeIdx), 'output.txt')
           if (existsSync(outFile)) {
             try {
               rawOut = readFileSync(outFile, 'utf8')
@@ -253,21 +285,20 @@ export function stepsToItems(steps, opts = {}) {
           ts,
         }
         items.push(opts.full ? resItem : light(resItem))
-        if (Array.isArray(step.media)) {
-          step.media.forEach((m, mi) => {
-            if (m && typeof m.mime_type === 'string' && m.mime_type.startsWith('image/')) {
-              items.push({
-                id: `${line}#img${mi}`,
-                seq,
-                role: 'user',
-                kind: 'image',
-                mime: m.mime_type,
-                lazy: true,
-                ts,
-              })
-            }
-          })
+        if (opts.includeMedia === true && Array.isArray(step.media)) {
+          for (const [index, entry] of step.media.entries()) {
+            if (!isImageReference(entry)) continue
+            const id = `${line}#media${index}`
+            items.push({ id, seq, role: 'assistant', kind: 'image', tool_use_id: callId, ts,
+              image: { mime: entry.mime_type, data: '', lazy: true } })
+            if (opts.mediaItemId === id) media = entry
+          }
         }
+        break
+      }
+      case 'PERSONA_MODE_NOTICE': {
+        const item = { id: `${line}#0`, seq, role: 'system', kind: 'notice', text: String(step.content || ''), ts }
+        items.push(opts.full ? item : light(item))
         break
       }
       case 'ERROR_MESSAGE': {
@@ -283,15 +314,29 @@ export function stepsToItems(steps, opts = {}) {
     }
   }
 
-  return { items, toSeq: maxSeq, lastText, turnError }
+  return { items, toSeq: maxSeq, lastText, turnError, ...(media ? { media } : {}) }
 }
 
 const transcriptCache = new Map()
 const transcriptRevisions = new Map()
-const MAX_CACHED_TRANSCRIPTS = 16
+const MAX_CACHED_TRANSCRIPTS = 128
 const MAX_TRANSCRIPT_REVISIONS = 256
 const MAX_TRANSCRIPT_CACHE_BYTES = 64 * 1024 * 1024
 let transcriptCacheBytes = 0
+
+export function forkReplyPosition(itemId, steps) {
+  const legacy = !itemId.includes('@')
+  const item = stepsToItems(steps).items.find((entry) => entry.role === 'assistant' && entry.kind === 'text' &&
+    (entry.id === itemId || (legacy && entry.id.replace(/@[^#]+/, '') === itemId)))
+  return item ? steps.findIndex((entry, index) => entry?.type === 'PLANNER_RESPONSE' && (entry.step_index ?? index) + 1 === item.seq) : -1
+}
+
+export function forkStepIndex(index, trajectory) {
+  if (trajectory[index]?.type !== 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') return undefined
+  const nextInput = trajectory.findIndex((entry, position) => position > index && entry?.type === 'CORTEX_STEP_TYPE_USER_INPUT' &&
+    (!entry.metadata?.source || entry.metadata.source === 'CORTEX_STEP_SOURCE_USER_EXPLICIT'))
+  return (nextInput < 0 ? trajectory.length : nextInput) - 1
+}
 
 export function readTranscriptSteps(brainDir, full = false) {
   return readTranscript(brainDir, full).steps
@@ -408,17 +453,21 @@ export function transcriptStatus(steps, summary) {
   return 'unknown'
 }
 
-export function workspacePathOf(summary, fallbackCwd = '') {
+export function workspacePathOf(summary, fallbackCwd = '', skip = null) {
   if (Array.isArray(summary?.WorkspaceURIs) && summary.WorkspaceURIs.length > 0) {
-    const u = String(summary.WorkspaceURIs[0])
-    if (u.startsWith('file://')) {
-      try {
-        return decodeURIComponent(new URL(u).pathname)
-      } catch {
-        return u.slice('file://'.length)
+    for (const raw of summary.WorkspaceURIs) {
+      const u = String(raw)
+      let p = u
+      if (u.startsWith('file://')) {
+        try {
+          p = decodeURIComponent(new URL(u).pathname)
+        } catch {
+          p = u.slice('file://'.length)
+        }
       }
+      if (skip && skip(p)) continue
+      return p
     }
-    return u
   }
   return fallbackCwd
 }

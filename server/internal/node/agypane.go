@@ -75,10 +75,14 @@ type agyWatch struct {
 	file                        os.FileInfo
 }
 
+func agyStepsHistory(conversation string) agyHistory {
+	return agyHistory{token: "agy-pane:" + conversation + ":steps:lazy-media:checkpoints"}
+}
+
 // agyRead loads the compact export for pages and live updates. The revision memo
 // distinguishes a rewrite of complete records from an append or partial write.
 func (n *Node) agyRead(root *os.Root, key, conversation string, previous os.FileInfo) (agyHistory, os.FileInfo, error) {
-	empty := agyHistory{token: "agy-pane:" + conversation + ":steps"}
+	empty := agyStepsHistory(conversation)
 	info, err := root.Stat(agyTranscriptPath)
 	if err != nil {
 		return empty, nil, err
@@ -162,11 +166,15 @@ func (h agyHistory) after(since int) (items []proto.Item, span transcript.Span, 
 	return agyLightItems(items), span, more
 }
 
+func agyUserInput(it proto.Item) bool {
+	return it.Role == "user" && (it.Kind == proto.KindText || (it.Kind == proto.KindImage && it.ToolUseID == ""))
+}
+
 func (h agyHistory) page(p agyPageParams) any {
 	if p.UserInputs {
 		index := proto.UserInputIndex{History: h.token, Inputs: []proto.UserInputPosition{}}
 		for _, it := range h.items {
-			if it.Role == "user" && it.Kind == proto.KindText {
+			if agyUserInput(it) && (len(index.Inputs) == 0 || index.Inputs[len(index.Inputs)-1].Seq != it.Seq) {
 				index.Inputs = append(index.Inputs, proto.UserInputPosition{ID: it.ID, Seq: it.Seq})
 			}
 		}
@@ -203,8 +211,10 @@ func (h agyHistory) page(p agyPageParams) any {
 	if p.Turns > 0 {
 		turns := min(p.Turns, 10)
 		start = max(0, len(items)-2000)
+		lastSeq := -1
 		for i := len(items) - 1; i >= start; i-- {
-			if items[i].Role == "user" && items[i].Kind == proto.KindText {
+			if agyUserInput(items[i]) && items[i].Seq != lastSeq {
+				lastSeq = items[i].Seq
 				turns--
 				if turns == 0 {
 					start = i
@@ -230,7 +240,7 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 	case "session.unwatch":
 		n.unwatch(id)
 		return okResult(nil), nil, true
-	case "session.items", "session.item", "session.watch":
+	case "session.items", "session.item", "session.image", "session.watch":
 	default:
 		return nil, nil, false
 	}
@@ -249,7 +259,7 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 	h := agyNotice(id)
 	conversation := n.agyConversation(id, pane)
 	if conversation != "" {
-		h = agyHistory{token: "agy-pane:" + conversation + ":steps"}
+		h = agyStepsHistory(conversation)
 		dir := n.agyDataRoot()
 		root, err := agyBrain(dir, conversation)
 		if err == nil {
@@ -258,6 +268,15 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 		}
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("read Antigravity transcript: %w", err), true
+		}
+		if method == "session.image" {
+			media, found := h.media[p.ItemID]
+			if found && n.agyConversation(id, pane) == conversation {
+				image, err := media.image(root)
+				if n.agyConversation(id, pane) == conversation {
+					return image, err, true
+				}
+			}
 		}
 		if method == "session.item" {
 			for _, it := range h.items {
@@ -282,6 +301,9 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 	}
 	if method == "session.item" {
 		return nil, fmt.Errorf("no item"), true
+	}
+	if method == "session.image" {
+		return nil, fmt.Errorf("no image"), true
 	}
 	return h.page(p), nil, true
 }
@@ -317,7 +339,7 @@ func (n *Node) pollAgyPane(w *watch) {
 	conversation := n.agyConversation(w.id, a.pane)
 	var info os.FileInfo
 	if conversation != "" {
-		h = agyHistory{token: "agy-pane:" + conversation + ":steps"}
+		h = agyStepsHistory(conversation)
 		dir := n.agyDataRoot()
 		root, err := agyBrain(dir, conversation)
 		if err == nil {
