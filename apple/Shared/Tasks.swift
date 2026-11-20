@@ -741,6 +741,10 @@ nonisolated struct TodoDelivery: Codable, Hashable, Sendable {
     var unblock: String?
     var at: Date?
 
+    var waitsForOwner: Bool {
+        unblock == "user" && (state == "pr" || state == "merged" || state == "off")
+    }
+
     enum CodingKeys: String, CodingKey { case state, gate, unblock, at }
 
     init(state: String, gate: String? = nil, unblock: String? = nil, at: Date? = nil) {

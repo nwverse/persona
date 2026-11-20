@@ -78,6 +78,11 @@ func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Dura
 	sum := sha256.Sum256([]byte(c.JSON()))
 	if card := s.runExt(r, "card"); card != "" {
 		now := s.chansNow()
+		if k := s.kitOf(r, prog); k != nil && f.kitGone(ctx, k, card) {
+			s.forgetProgressCard(r, prog)
+			s.logf("bots: progress card gone (withdrawn or deleted); the next tick posts a new one")
+			return
+		}
 		if sum == prog.sentCard {
 			return // nothing new
 		}
@@ -98,8 +103,7 @@ func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Dura
 			s.logf("bots: progress update: %v; quiet for %s", err, prog.backoff)
 		case feishubot.MessageGone(err):
 			// Withdrawn or deleted: the next tick posts a new card, and the answer does not go into this one.
-			s.setRunExt(r, "card", "")
-			prog.sentCard = [32]byte{}
+			s.forgetProgressCard(r, prog)
 			s.logf("bots: progress card gone: %v", err)
 		default:
 			s.logf("bots: progress update: %v", err)
@@ -109,6 +113,9 @@ func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Dura
 	to := runTo(s.runExts(r, "chat", "thread"))
 	mid, err, kit := f.kitPost(ctx, r, prog, c, to)
 	if !kit {
+		// A card sent as a message has no entity, even one an earlier card of the run had (forgetProgressCard).
+		s.setRunExt(r, "card_id", "")
+		prog.kit = nil
 		mid, err = s.botPostTo(ctx, to, r.ReplyTo, c, "", "")
 	}
 	if err != nil {
@@ -226,7 +233,7 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 	if newCard {
 		answerSteps = nil // they go into the folded progress card
 	}
-	cards := answerCards(l, answer, quiet, answerSteps, foot)
+	cards := answerCards(l, s.linkNamer(ctx), answer, quiet, answerSteps, foot)
 	if quiet {
 		c := feishubot.NewCard("", "", foot)
 		processPanel(l, c, steps)
@@ -243,8 +250,9 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 	for i, ac := range cards {
 		c, piece := ac.card, ac.fallback
 		if i == len(cards)-1 && r.SessionID != "" {
-			// The conversation's web link goes under the last piece only, as on pushed and mirrored turns.
-			c.Buttons(s.openButton(ctx, r.MachineID, r.SessionID))
+			// The conversation's web link goes under the last piece only, as on pushed and mirrored turns, in the row of
+			// the answer's own links.
+			c.AppendToLinks(s.openButton(ctx, r.MachineID, r.SessionID))
 		}
 		if i == 0 {
 			endHeader(l, c, end)

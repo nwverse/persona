@@ -64,13 +64,15 @@ type runtimeHello struct {
 		Hash string `json:"hash"`
 	} `json:"package,omitempty"`
 	Caps struct {
-		Start     bool `json:"start"`
-		Send      bool `json:"send"`
-		Interrupt bool `json:"interrupt"`
-		Rename    bool `json:"rename"`
-		Close     bool `json:"close"`
-		Rewind    bool `json:"rewind"`
-		Fork      bool `json:"fork"`
+		Start        bool `json:"start"`
+		Send         bool `json:"send"`
+		Interrupt    bool `json:"interrupt"`
+		Rename       bool `json:"rename"`
+		Close        bool `json:"close"`
+		Rewind       bool `json:"rewind"`
+		Fork         bool `json:"fork"`
+		QueueEdit    bool `json:"queue_edit"`
+		QueueSendNow bool `json:"queue_send_now"`
 		// Assistant: its launcher may run the Persona assistant (assistant_runtime.go; docs/integrations/runtimes.md "Assistant").
 		Assistant bool `json:"assistant"`
 		// SupervisionPolicy: the runtime carries manager-owned supervision_instructions on its own authoritative
@@ -135,6 +137,7 @@ type runtimeConn struct {
 	// reset while it can have an RPC outstanding, so a late error cannot clear a newer attempt or a later hub watch.
 	watchTokens    map[string]uint64
 	nextWatchToken uint64
+	assistantPIDs  map[string]int
 	// onWatchFailed is nil in production and used by concurrency tests to observe completion after locks are released.
 	onWatchFailed func()
 	// drivenTold: sessions this connection was told the hub started through another runtime (runtime.driven).
