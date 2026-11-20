@@ -175,3 +175,64 @@ func TestUsageWindowsRouteIncludesBalanceAccounts(t *testing.T) {
 		t.Errorf("a balance account has no windows: %s", body)
 	}
 }
+
+// A key replaced after a good read does not lend its amount to the next credential: a failed read after the change
+// shows no amount rather than another account's last known balance (#11825).
+func TestBalancePollerDropsTheAmountWhenTheCredentialChanges(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().Truncate(time.Second)
+	step := 0
+	var b usageBalances
+	b.init(func(context.Context) ([]proto.UsageAccount, bool) {
+		switch step {
+		case 0:
+			a := balance("DeepSeek", "12.34", time.Time{})
+			a.BalanceCredential = "old"
+			return []proto.UsageAccount{a}, true
+		default:
+			return []proto.UsageAccount{{Provider: "deepseek", Name: "DeepSeek", Ref: "balance:DeepSeek",
+				Problem: "rejected", BalanceCredential: "new"}}, true
+		}
+	}, nil, nil)
+
+	b.pollDue(ctx, now)
+	if got := b.accounts(now); len(got) != 1 || got[0].Balance == nil || got[0].Balance.Amount != "12.34" {
+		t.Fatalf("first read: %+v", got)
+	}
+
+	step = 1
+	later := now.Add(usageBalancePoll)
+	b.pollDue(ctx, later)
+	got := b.accounts(later)
+	if len(got) != 1 || got[0].Balance != nil || got[0].Problem != "rejected" {
+		t.Fatalf("another credential's amount must not be kept: %+v", got)
+	}
+	if now.Sub(got[0].SampledAt) > usageBalancePoll {
+		t.Fatalf("the failed read must be sampled now: %+v", got[0])
+	}
+}
+
+// A failure on the same credential still keeps its last known amount (#11825).
+func TestBalancePollerKeepsTheAmountForTheSameCredential(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().Truncate(time.Second)
+	step := 0
+	var b usageBalances
+	b.init(func(context.Context) ([]proto.UsageAccount, bool) {
+		if step == 0 {
+			a := balance("DeepSeek", "12.34", time.Time{})
+			a.BalanceCredential = "same"
+			return []proto.UsageAccount{a}, true
+		}
+		return []proto.UsageAccount{{Provider: "deepseek", Name: "DeepSeek", Ref: "balance:DeepSeek",
+			Problem: "unreachable", BalanceCredential: "same"}}, true
+	}, nil, nil)
+	b.pollDue(ctx, now)
+	step = 1
+	later := now.Add(usageBalancePoll)
+	b.pollDue(ctx, later)
+	got := b.accounts(later)
+	if len(got) != 1 || got[0].Balance == nil || got[0].Balance.Amount != "12.34" || got[0].Problem != "unreachable" {
+		t.Fatalf("same credential keeps the amount: %+v", got)
+	}
+}

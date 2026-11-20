@@ -27,6 +27,9 @@ const (
 type balanceState struct {
 	account proto.UsageAccount // the last sample; its Balance is nil before the first successful read
 	errCode string             // why the last attempt failed; "" when it worked
+	// credential is the non-secret digest of the key the last attempt used (UsageAccount.BalanceCredential). A
+	// different one means the launcher's key was replaced: the kept amount belongs to another account.
+	credential string
 }
 
 // usageBalances polls the launchers' balances and holds their last samples.
@@ -114,6 +117,15 @@ func (b *usageBalances) applyLocked(samples []proto.UsageAccount, now time.Time)
 		if st == nil {
 			st = &balanceState{}
 			b.state[a.Ref] = st
+		}
+		// A key the user replaced is another credential: the amount kept from the old one is not this credential's
+		// last known balance, so a failed read after the change must not keep showing it.
+		if a.BalanceCredential != "" && st.credential != "" && a.BalanceCredential != st.credential {
+			st.account.Balance, st.account.SampledAt, st.account.Stale, st.account.StaleAt = nil, time.Time{}, false, nil
+			st.errCode = ""
+		}
+		if a.BalanceCredential != "" {
+			st.credential = a.BalanceCredential
 		}
 		switch {
 		case a.Balance != nil:

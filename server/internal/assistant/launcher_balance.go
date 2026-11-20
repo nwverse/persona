@@ -3,14 +3,18 @@ package assistant
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/net/http/httpproxy"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -41,8 +45,8 @@ type deepseekBalanceBody struct {
 
 // LauncherBalances reads the balance of every official DeepSeek launcher added in Persona, one sample each. It never
 // returns a key: the account shape has no field for one, and an error is only a code. known is false when the
-// launcher list itself could not be read, so that the caller keeps what it had rather than treating every launcher as
-// removed.
+// launcher list or the computers' key store could not be read, so that the caller keeps what it had rather than
+// treating every launcher as removed.
 //
 // A launcher keeps its own key, or one key per computer (machine_keys). The manager reads the first of those it can
 // open, in machine-name order; the launcher's own key wins when it has one.
@@ -51,22 +55,21 @@ func (s *Service) LauncherBalances(ctx context.Context) (accounts []proto.UsageA
 	if !known {
 		return nil, false
 	}
-	machineKeys := s.launcherMachineKeys(ctx)
-	seen := map[[sha256.Size]byte]bool{}
+	machineKeys, err := s.launcherMachineKeys(ctx)
+	if err != nil {
+		// A store that could not be read is not "every computer's key is gone": keep what the caller had. Without
+		// this, launchers that rely on a per-computer key would be omitted and the caller would drop their samples.
+		return nil, false
+	}
+	seen := map[[sha256.Size]byte]bool{}   // openable keys, by the key itself
+	broken := map[[sha256.Size]byte]bool{} // sealed material that could not be opened, already reported
 	for _, l := range stored {
 		base, ok := officialDeepSeekURL(l.BaseURL)
 		if !ok {
 			continue
 		}
-		sealed, machine := l.KeySealed, ""
-		if sealed == "" {
-			keys := machineKeys[l.Name]
-			sort.Slice(keys, func(i, j int) bool { return keys[i].Machine < keys[j].Machine })
-			if len(keys) > 0 {
-				sealed, machine = keys[0].KeySealed, keys[0].Machine
-			}
-		}
-		if sealed == "" {
+		candidates := launcherKeyCandidates(l, machineKeys[l.Name])
+		if len(candidates) == 0 {
 			continue // no key the manager may read: nothing to ask the provider with
 		}
 		name := strings.TrimSpace(l.DisplayName)
@@ -74,9 +77,38 @@ func (s *Service) LauncherBalances(ctx context.Context) (accounts []proto.UsageA
 			name = l.Name
 		}
 		sample := proto.UsageAccount{Provider: "deepseek", Name: name, Ref: "balance:" + l.Name}
-		key, err := s.openLauncherKey(ctx, sealed, l.Name, machine)
-		if err != nil {
-			sample.Problem = "rejected" // the key cannot be used: a reference that does not resolve, or one that does not open
+		// The first key that opens wins: a corrupt or unresolvable key on the first computer must not hide a usable
+		// one on the next.
+		key, credential := "", ""
+		for _, c := range candidates {
+			if k, err := s.openLauncherKey(ctx, c.sealed, l.Name, c.machine); err == nil {
+				key, credential = k, sealedCredential(c.sealed)
+				break
+			}
+		}
+		if key == "" {
+			// Every key this launcher may use failed before any request: a local credential problem (a sealed value
+			// that does not open, an extension that is gone, a reference that no longer resolves), not the provider
+			// turning a key away. One row per broken key, so two launchers sharing one emit it once.
+			fresh := false
+			digests := make([][sha256.Size]byte, 0, len(candidates))
+			sealed := make([]string, 0, len(candidates))
+			for _, c := range candidates {
+				d := sha256.Sum256([]byte(c.sealed))
+				digests = append(digests, d)
+				sealed = append(sealed, c.sealed)
+				if !broken[d] {
+					fresh = true
+				}
+			}
+			for _, d := range digests {
+				broken[d] = true
+			}
+			if !fresh {
+				continue
+			}
+			sample.Problem = "failed"
+			sample.BalanceCredential = sealedCredential(sealed...)
 			accounts = append(accounts, sample)
 			continue
 		}
@@ -86,22 +118,56 @@ func (s *Service) LauncherBalances(ctx context.Context) (accounts []proto.UsageA
 			continue
 		}
 		seen[digest] = true
-		sample.Balance, sample.Problem = readDeepSeekBalance(ctx, base, key)
+		sample.BalanceCredential = credential
+		sample.Balance, sample.Problem = readDeepSeekBalance(ctx, base, key, s.balanceClient(l))
 		accounts = append(accounts, sample)
 	}
 	return accounts, true
 }
 
-// launcherMachineKeys is the computers' own keys by launcher, for a launcher that has no key of its own. An unreadable
-// list is no keys: the launcher's own key, when it has one, is still read.
-func (s *Service) launcherMachineKeys(ctx context.Context) map[string][]machineKey {
+// sealedCredential is the non-secret digest a balance sample carries: the sealed material it was read with. It changes
+// when the launcher's key is replaced or another computer's key is chosen, and never carries the material itself.
+func sealedCredential(sealed ...string) string {
+	h := sha256.New()
+	for _, s := range sealed {
+		h.Write([]byte(s))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// launcherKeyCandidate is one sealed key the manager may read for a launcher: its own, or one a computer holds.
+type launcherKeyCandidate struct {
+	sealed  string
+	machine string // "" for the launcher's own key
+}
+
+// launcherKeyCandidates is the keys to try for l, its own first, then its computers' in machine-name order.
+func launcherKeyCandidates(l storedLauncher, machineKeys []machineKey) []launcherKeyCandidate {
+	keys := slices.Clone(machineKeys)
+	sort.Slice(keys, func(i, j int) bool { return keys[i].Machine < keys[j].Machine })
+	out := make([]launcherKeyCandidate, 0, 1+len(keys))
+	if l.KeySealed != "" {
+		out = append(out, launcherKeyCandidate{sealed: l.KeySealed})
+	}
+	for _, k := range keys {
+		if k.KeySealed != "" {
+			out = append(out, launcherKeyCandidate{sealed: k.KeySealed, machine: k.Machine})
+		}
+	}
+	return out
+}
+
+// launcherMachineKeys is the computers' own keys by launcher, for a launcher that has no key of its own. An error means
+// the store could not be read, not that there are no keys.
+func (s *Service) launcherMachineKeys(ctx context.Context) (map[string][]machineKey, error) {
 	st := s.store()
 	if st == nil {
-		return nil
+		return nil, nil
 	}
 	var keys []machineKey
 	if _, err := memoSetting(ctx, st, launchersMachineKeysKey, &keys); err != nil {
-		return nil
+		return nil, err
 	}
 	out := map[string][]machineKey{}
 	for _, k := range keys {
@@ -109,11 +175,48 @@ func (s *Service) launcherMachineKeys(ctx context.Context) map[string][]machineK
 			out[k.Launcher] = append(out[k.Launcher], k)
 		}
 	}
-	return out
+	return out, nil
+}
+
+// balanceClient is the client for one launcher's balance read. It goes where the launcher's own calls go: through the
+// computer it names, through its proxy (honoring no_proxy), or directly, as probeTarget.do sends a probe. A redirect
+// is never followed, so the key stays with the address asked, and one read is bounded like a probe.
+func (s *Service) balanceClient(l storedLauncher) *http.Client {
+	client := &http.Client{Timeout: balanceTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	if l.ViaMachine != "" {
+		client.Transport = viaNode{s: s, machine: l.ViaMachine}
+		return client
+	}
+	if strings.TrimSpace(l.Proxy) == "" && strings.TrimSpace(l.NoProxy) == "" {
+		return client
+	}
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return client
+	}
+	t := transport.Clone()
+	t.DisableKeepAlives = true
+	if u, err := url.Parse(strings.TrimSpace(l.Proxy)); err == nil && u.Host != "" {
+		t.Proxy = balanceProxy(u, l.NoProxy)
+	}
+	client.Transport = t
+	return client
+}
+
+// balanceProxy is the launcher's proxy for a request, except for an address its bypass list (no_proxy) exempts.
+func balanceProxy(proxy *url.URL, noProxy string) func(*http.Request) (*url.URL, error) {
+	if strings.TrimSpace(noProxy) == "" {
+		return http.ProxyURL(proxy)
+	}
+	cfg := httpproxy.Config{HTTPProxy: proxy.String(), HTTPSProxy: proxy.String(), NoProxy: noProxy}
+	use := cfg.ProxyFunc()
+	return func(r *http.Request) (*url.URL, error) { return use(r.URL) }
 }
 
 // readDeepSeekBalance asks the provider once; balance nil with a problem code says why (see proto.UsageAccount.Problem).
-func readDeepSeekBalance(ctx context.Context, base *url.URL, key string) (*proto.UsageBalance, string) {
+func readDeepSeekBalance(ctx context.Context, base *url.URL, key string, client *http.Client) (*proto.UsageBalance, string) {
 	u := *base
 	u.Path, u.RawPath = deepseekBalancePath, ""
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -126,9 +229,7 @@ func readDeepSeekBalance(ctx context.Context, base *url.URL, key string) (*proto
 	req.Header.Set("x-api-key", key)
 	req.Header.Set("Accept", "application/json")
 	// Redirects are not followed: a redirect would take the launcher's key to another address.
-	res, err := (&http.Client{Timeout: balanceTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}}).Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		return nil, "unreachable"
 	}

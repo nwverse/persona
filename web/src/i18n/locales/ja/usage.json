@@ -32,6 +32,7 @@
   "balance_label": "プリペイド残高",
   "balance_unavailable": "残高不明",
   "balance_rejected": "DeepSeek がキーを拒否しました。設定 → モデルプロバイダーで更新してください",
+  "balance_rejected_kept": "DeepSeek がキーを拒否しました。設定 → モデルプロバイダーで更新してください。前回の残高を表示しています",
   "balance_unreachable": "DeepSeek に接続できません",
   "balance_unreachable_kept": "DeepSeek に接続できません。前回の残高を表示しています",
   "balance_failed": "残高を読み取れませんでした",

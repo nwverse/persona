@@ -69,6 +69,10 @@ type UsageAccount struct {
 	// Ref is the account's identity at its gateway ("<source id>:<account id>"), when the source has one. Hub-internal:
 	// it is never sent out. Two samples with refs from one source but different accounts are never merged.
 	Ref string `json:"-"`
+	// BalanceCredential is a non-secret digest of the credential a prepaid balance was read with (#11825). The usage
+	// manager keeps it to tell a replaced key from the one the last amount was read with, so another account's amount
+	// is never shown as this credential's last known balance. Hub-internal: never sent out.
+	BalanceCredential string `json:"-"`
 	// CodexAccountKey is the node's digest of the upstream account ID, used only by the usage manager.
 	CodexAccountKey string `json:"-"`
 	// Origin distinguishes unidentified sources. On a machine it uses the machine ID and source digest or legacy

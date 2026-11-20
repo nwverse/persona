@@ -34,7 +34,8 @@ function balanceProblemText(a: UsageAccount): string {
   if (!isBalanceAccount(a)) return "";
   switch (a.problem) {
     case "rejected":
-      return tr("usage.balance_rejected");
+      // A refused key after an earlier good read keeps the amount: say it is the last known one, not a fresh number.
+      return a.balance ? tr("usage.balance_rejected_kept") : tr("usage.balance_rejected");
     case "unreachable":
       return a.balance ? tr("usage.balance_unreachable_kept") : tr("usage.balance_unreachable");
     case "failed":
