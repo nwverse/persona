@@ -529,6 +529,23 @@ Ordinary `go test` and CI do not include `//go:build herdrlive`, so a node helpe
 
 - With `http_proxy` (or `HTTPS_PROXY`, `ALL_PROXY`) set in the shell, about 30 suites under `scripts/mock/` run by hand failed with socket timeouts: their `urlopen` calls to the mock on `127.0.0.1` went to the proxy. CI never sees it, since `scripts/ci/python-tests.py` starts every suite with the environment `server_test_env.clean_environment` cleans. By hand, unset the proxy variables or go through `python3 scripts/ci/python-tests.py`; a new suite opens loopback URLs with `build_opener(ProxyHandler({}))` (as `scripts/mock/test_todo_view_mock.py` does) and needs neither.
 
+## A moved file or block needs a test that fails when the old copy comes back (2026-11-20, #11476, #11543)
+
+When a file is split or a block moves to another file, branches written before the move still edit the old copy. Their
+merge stops on a modify/delete conflict (the old file is gone) or a content conflict (the block is gone), and the quick
+resolution keeps their side, so the old copy returns beside the new one and nothing fails at once. After #11288 split the
+MCP tool goldens into one file per tool, three PRs from before the split recreated the whole-list `mcp_tools.*.golden`
+files, and the per-tool files went stale until the prompt size ratchets failed on main (#11476). A domain block put back
+into `scripts/mock/mock_hub.py` after it moved into a module of its own would exist twice: the module's routes answer
+first, and the old copy's state goes its own way.
+
+- Ship the guard in the same PR as the move: a test that fails as soon as the old copy is back, by its file name or by
+  the names the block defined, and that names the file to edit instead. `TestNoWholeListMCPToolGoldens` in
+  `server/internal/hub` does it for the goldens; `MovedBlocksTests` in `scripts/mock/test_mock_domains.py` does it for
+  the mock hub's domains (a new move lists its names in that file's `MOVED`).
+- Leave a one-line pointer where the block was. It is what the person resolving the conflict sees on the other side of
+  the markers.
+
 ## When Go on the hub is older than the repository (2026-11-03, #984)
 
 - `test-server.sh` only says "server test environment preparation failed; tests were not started". `server_test_env.py` first runs `go env`;
