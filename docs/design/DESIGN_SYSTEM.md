@@ -2532,6 +2532,8 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] Model and product separate: names which of speed, model, presentation or features it touches, and changes none of the others (principle 5).
 - [ ] Checkable: each item above marked done carries its evidence (screenshot, test name, command output) in the PR (principle 6).
 - [ ] Fast, local-first and stateful: local Sending is immediate, hub receipt shows Processing, failure recovers; before/after feedback and execution timings are separate (principle 7).
+- [ ] Other platforms: done / issue #N / not applicable (reason)
+- [ ] Parity list row updated
 
 **Rules**
 
