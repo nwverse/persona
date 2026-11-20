@@ -3704,6 +3704,12 @@ export interface ConnectorTool {
    * list whatever a connector sent.
    */
   defer_loading?: boolean;
+  /**
+   * Set by Persona itself on the tool list of an assistant conversation with the work guide on: the tool is found on
+   * demand through the guide (#11078). A connector does not need to send it; the manager sets it on every list
+   * whatever a connector sent.
+   */
+  work_guide_tool?: boolean;
 }
 
 /**
