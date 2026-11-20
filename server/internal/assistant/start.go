@@ -967,6 +967,10 @@ func (s *Service) startRoutes() {
 			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: health or none", in.Space))
 			return
 		}
+		if in.Space == SpaceHealth && r.Header.Get(RoleHeader) == roleExtension {
+			apierr.WriteCode(w, http.StatusForbidden, "permission_denied", i18n.Err("apierr-apierr.health_start_forbidden"))
+			return
+		}
 		if in.Model = strings.TrimSpace(in.Model); checkModelID(in.Model) != nil {
 			apierr.Write(w, http.StatusBadRequest, checkModelID(in.Model))
 			return

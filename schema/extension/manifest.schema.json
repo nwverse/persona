@@ -804,6 +804,7 @@
       "additionalProperties": false,
       "properties": {
         "images_in": {"type": "boolean"},
+        "images_out": {"type": "boolean", "description": "It can send pictures: the hub puts an answer's pictures in channel.send's images instead of leaving them as Markdown in the text."},
         "files_in": {"type": "boolean"},
         "voice_in": {"type": "boolean"},
         "format": {"type": "string", "enum": ["markdown", "plain"]},

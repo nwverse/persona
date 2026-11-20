@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/identity"
@@ -29,6 +30,7 @@ func TestExtensionTokensNeverSeeTheHealthSpace(t *testing.T) {
 		{MachineID: "mb", SessionID: "b1", Title: "B-SESSION", Cwd: "/work/project"},
 		{MachineID: "mb", SessionID: "bh", Title: "HEALTH-SESSION", Cwd: "/home/me/.persona/health", Assistant: true, Space: "health"},
 		{MachineID: "mb", SessionID: "bd", Title: "HEALTH-DIR", Cwd: "/home/me/.persona/health/notes", Assistant: true},
+		{MachineID: "mb", SessionID: "bm", Title: "HEALTH-MOVED", Cwd: "/work/project", Space: "health"},
 	}})
 	eventually(t, 5*time.Second, "mb's sessions", func() bool { _, ok := h.localMachine("mb").session("bd"); return ok })
 	cards := []proto.Interaction{
@@ -47,7 +49,7 @@ func TestExtensionTokensNeverSeeTheHealthSpace(t *testing.T) {
 	for _, path := range []string{"/api/v1/sessions", "/api/v1/sessions?machine_id=mb", "/api/v1/sessions?limit=50",
 		"/api/v1/sessions?limit=50&summary=1", "/api/v1/sessions?counts=1&machine_id=mb", "/api/v1/sessions?limit=50&with_counts=1&machine_id=mb"} {
 		code, body := extDo(t, url, http.MethodGet, path, "", nil)
-		if code != http.StatusOK || strings.Contains(body, "HEALTH") || strings.Contains(body, `"bh"`) || strings.Contains(body, `"bd"`) {
+		if code != http.StatusOK || strings.Contains(body, "HEALTH") || strings.Contains(body, `"bh"`) || strings.Contains(body, `"bd"`) || strings.Contains(body, `"bm"`) {
 			t.Fatalf("%s: %d %s", path, code, body)
 		}
 		if !strings.Contains(path, "counts=1&") && !strings.Contains(body, "B-SESSION") {
@@ -63,7 +65,7 @@ func TestExtensionTokensNeverSeeTheHealthSpace(t *testing.T) {
 		t.Fatalf("counts %s", body)
 	}
 
-	for _, sid := range []string{"bh", "bd", "never-listed"} {
+	for _, sid := range []string{"bh", "bd", "bm", "never-listed"} {
 		for _, path := range []string{"/items", "/items?fold_work=1", "/items/i1/full", "/items/i1/image", "/items/i1/visualization", "/info", "/screen"} {
 			if code, body := extDo(t, url, http.MethodGet, "/api/v1/sessions/mb/"+sid+path, "", nil); code != http.StatusNotFound {
 				t.Errorf("%s%s: %d %s", sid, path, code, body)
@@ -441,6 +443,62 @@ func TestResumeUnknownIsWordedForTheOwnerAndNotALauncherFailure(t *testing.T) {
 	for _, e := range ended {
 		if strings.Contains(e, proto.CodeResumeUnknown) {
 			t.Fatalf("a resume_unknown refusal was told to the manager: %v", ended)
+		}
+	}
+}
+
+// Exercise the registered HTTP handlers with in-memory credentials and a fake node that records queue calls.
+func TestRestrictedSessionQueueRoutes(t *testing.T) {
+	h := newTestHub(t)
+	h.store = &tokenStore{rows: map[string]db.DeviceToken{}}
+	node := newAssistantNode(t, h)
+	dirs := withAgentDirs(t, h)
+	dirs.rules[node.m.cfg.ID] = []proto.HiddenAgentDir{{Pattern: "/work/hidden", Enabled: true, Action: proto.AgentDirHide}}
+	node.m.setSessions([]proto.Session{
+		{SessionID: "ordinary", Cwd: "/work/project"},
+		{SessionID: "private-dir", Cwd: "/home/me/.persona/health/reports"},
+		{SessionID: "private-marker", Cwd: "/work/project", Space: "health"},
+		{SessionID: "hidden", Cwd: "/work/hidden"},
+	})
+	h.historyReads.remember(node.m.cfg.ID, "history-only", time.Now())
+	extension := extTokensOf(t, h).issue("example-extension", "Example Extension", []string{extwire.ScopeAgentsControl})
+	eventually(t, 5*time.Second, "the hidden directory rule reached the hub", func() bool {
+		row, ok := node.m.session("hidden")
+		return ok && row.HiddenByDirectory()
+	})
+	routes := h.routes()
+	code, out := call(t, routes, http.MethodPost, "/api/v1/auth/tokens", h.cfg.Token, `{"kind":"other","scopes":["agents.control"]}`)
+	scoped, _ := out["token"].(string)
+	if code != http.StatusOK || out["role"] != roleScoped || scoped == "" {
+		t.Fatalf("scoped fixture issuance: status %d, role %v", code, out["role"])
+	}
+
+	for _, credential := range []struct{ name, token string }{{"extension", extension}, {"scoped", scoped}} {
+		for _, route := range []struct{ suffix, method, body string }{
+			{"queue", "session.queue.edit", `{"keep":[0]}`},
+			{"queue/send-now", "session.queue.send_now", `{}`},
+		} {
+			t.Run(credential.name+"/"+route.suffix, func(t *testing.T) {
+				path := func(id string) string {
+					return "/api/v1/sessions/" + node.m.cfg.ID + "/" + id + "/" + route.suffix
+				}
+				for _, id := range []string{"private-dir", "private-marker", "hidden", "history-only", "absent"} {
+					before := node.sent()
+					code, out := call(t, routes, http.MethodPost, path(id), credential.token, route.body)
+					if code != http.StatusNotFound || node.sent() != before {
+						t.Errorf("%s: status %d, %d node calls, response %v", id, code, node.sent()-before, out)
+					}
+				}
+				before := node.sent()
+				code, out := call(t, routes, http.MethodPost, path("ordinary"), credential.token, route.body)
+				if code != http.StatusOK || node.sent() != before+1 {
+					t.Fatalf("ordinary: status %d, %d node calls, response %v", code, node.sent()-before, out)
+				}
+				params, _ := node.lastSend(t)[route.method].(map[string]any)
+				if params["session_id"] != "ordinary" {
+					t.Errorf("expected %s for ordinary, got %v", route.method, node.lastSend(t))
+				}
+			})
 		}
 	}
 }

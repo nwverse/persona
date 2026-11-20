@@ -26,6 +26,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -885,8 +886,9 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		scopedPermissionDenied(w, extwire.ScopeAgentsPermissionMode)
 		return
 	}
-	if pr.Role == roleScoped && p.ResumeSessionID != "" && !h.scopedPublicSession(p.MachineID, p.ResumeSessionID) {
-		writeErr(w, http.StatusNotFound, errDeleteUnknown)
+	m := h.localMachine(p.MachineID)
+	if m == nil {
+		writeErr(w, http.StatusNotFound, i18n.Err("devices-api.unknown_machine"))
 		return
 	}
 	if pr.Role == roleExtension && p.ResumeSessionID != "" && p.PermissionMode != "" {
@@ -895,10 +897,15 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	m := h.localMachine(p.MachineID)
-	if m == nil {
-		writeErr(w, http.StatusNotFound, i18n.Err("devices-api.unknown_machine"))
-		return
+	if restrictedAgentData(r) {
+		if p.ResumeSessionID != "" && !h.publicSessionForControl(m, p.ResumeSessionID) {
+			writeErr(w, http.StatusNotFound, errDeleteUnknown)
+			return
+		}
+		if identity.InHealthSpace(startCwd(m, p.Cwd)) {
+			writeErrCode(w, http.StatusForbidden, "permission_denied", i18n.Err("apierr-apierr.health_start_forbidden"))
+			return
+		}
 	}
 	if h.machineUntrusted(m.cfg.ID) { // not confirmed yet (machine_trust.go)
 		writeErrCode(w, http.StatusConflict, "machine_pending", i18n.Err("hub-machine_trust.start_pending"))
