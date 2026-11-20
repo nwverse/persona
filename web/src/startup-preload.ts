@@ -526,7 +526,9 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // #7524's 37 B of room is kept on top.
 // #12038: the sidebar's Starred count/access has a small summary store of its own. Per-message identity and marks
 // belong to the lazy message controls, not the first screen. ja 483,895 B to 483,788 B; the budget stays 483,815 B.
-export const FIRST_SCREEN_BUDGET = 483_815;
+// #12090: the offline face's own outline and shadow tokens (the dark disc keeps its ink outline) add 100 B in ja
+// (and in en and zh-Hans) against main 793b042b8c.
+export const FIRST_SCREEN_BUDGET = 483_915;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
