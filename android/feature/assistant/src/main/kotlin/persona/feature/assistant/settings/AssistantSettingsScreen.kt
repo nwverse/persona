@@ -302,7 +302,7 @@ private fun SettingsHome(
             item("in-chats") { JSectionHeader(stringResource(R.string.assistant_saved_prompts_in_chats)) }
             rows("in-chats", listOf({
                 JRow(stringResource(R.string.assistant_saved_prompts_title), subtitle = stringResource(R.string.assistant_saved_prompts_entry),
-                    leadingIcon = PhIcons.Lightning, onClick = { open(SettingsPart.Prompts) })
+                    leadingIcon = PersonaIcons.document, onClick = { open(SettingsPart.Prompts) })
             }))
         }
         if (config != null) {

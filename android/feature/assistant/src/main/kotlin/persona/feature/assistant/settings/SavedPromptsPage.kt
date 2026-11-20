@@ -16,7 +16,6 @@ import kotlinx.coroutines.launch
 import persona.core.contracts.api.SavedPrompt
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PersonaIcons
-import persona.core.designsystem.icons.PhIcons
 import persona.feature.assistant.R
 
 @Composable
@@ -92,17 +91,17 @@ internal fun SavedPromptsPage(store: SavedPromptsStore, onBack: () -> Unit) {
         when {
             state.loadFailure != null && prompts.isEmpty() -> item("read-error") {
                 JEmptyState(stringResource(R.string.assistant_saved_prompts_load_failed), failureReasonText(requireNotNull(state.loadFailure)).text(),
-                    icon = PhIcons.Lightning,
+                    icon = PersonaIcons.error,
                     action = { JButton(stringResource(R.string.assistant_settings_retry), refresh) })
             }
             state.available == null -> item("loading") { JLoading(text = stringResource(R.string.assistant_settings_loading)) }
             state.available == false -> item("unavailable") {
                 JEmptyState(stringResource(R.string.assistant_saved_prompts_unavailable), stringResource(R.string.assistant_saved_prompts_unavailable_detail),
-                    icon = PhIcons.Lightning)
+                    icon = PersonaIcons.document)
             }
             prompts.isEmpty() && !state.writing -> item("empty") {
                 JEmptyState(stringResource(R.string.assistant_saved_prompts_empty), stringResource(R.string.assistant_saved_prompts_use),
-                    icon = PhIcons.Lightning, action = { JButton(addLabel, { open(null) }) })
+                    icon = PersonaIcons.document, action = { JButton(addLabel, { open(null) }) })
             }
         }
         if (prompts.isNotEmpty()) {
@@ -152,10 +151,10 @@ private fun SavedPromptRow(
                 JIconButton(PersonaIcons.more, stringResource(R.string.assistant_saved_prompts_actions, prompt.name), { menu = true },
                     enabled = enabled)
                 JMenu(menu && enabled, { menu = false }, buildList {
-                    add(JAction(stringResource(R.string.assistant_saved_prompts_edit), PhIcons.PencilSimple, onClick = onEdit))
-                    moveUp?.let { add(JAction(stringResource(R.string.assistant_saved_prompts_up), PhIcons.ArrowUp, onClick = it)) }
-                    moveDown?.let { add(JAction(stringResource(R.string.assistant_saved_prompts_down), PhIcons.ArrowDown, onClick = it)) }
-                    add(JAction(stringResource(R.string.assistant_settings_delete), PhIcons.Trash, destructive = true, onClick = onDelete))
+                    add(JAction(stringResource(R.string.assistant_saved_prompts_edit), PersonaIcons.edit, onClick = onEdit))
+                    moveUp?.let { add(JAction(stringResource(R.string.assistant_saved_prompts_up), PersonaIcons.queueUp, onClick = it)) }
+                    moveDown?.let { add(JAction(stringResource(R.string.assistant_saved_prompts_down), PersonaIcons.down, onClick = it)) }
+                    add(JAction(stringResource(R.string.assistant_settings_delete), PersonaIcons.delete, destructive = true, onClick = onDelete))
                 })
             }
         },
@@ -180,7 +179,7 @@ private fun SavedPromptEditor(
         title = stringResource(if (creating) R.string.assistant_saved_prompts_new else R.string.assistant_saved_prompts_edit),
         onBack = onBack, titleBusy = state.writing,
         actions = {
-            JIconButton(PhIcons.Check, stringResource(R.string.assistant_settings_save), {
+            JIconButton(PersonaIcons.done, stringResource(R.string.assistant_settings_save), {
                 tried = true
                 if (!nameInvalid && !nameTaken && !textInvalid) onSave(cleanName, cleanText)
             }, enabled = editable && state.available == true)
