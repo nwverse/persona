@@ -2745,8 +2745,8 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
   (`ManagersText.switcherLocked`, `switcherNote`); turned off while it is in use, the footer says it is listed for now and why.
   An older hub answers yes and keeps nothing: the list read after it still says shown, the switch goes back and a toast says to
   update the hub. While the hub marks it `hidden` its row in the list carries a Hidden chip. Tests `ManagersModelTests`.
-- **Low-distraction mode** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
-  push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`); its footer says it holds
+- **Push grading** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
+  push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`, the legacy wire route); its footer says it holds
   for every device and what still notifies. A hub without the route, or one that does not answer, shows no section; a change
   shows at once, and a refusal puts it back and says why. `docs/server/server.md` "Push grading (push urgency filtering, `hub/lnmode.go`)".
 - **Quiet hours**: Settings › Notifications has this device's quiet hours (a switch, then From / Until), only when the prefs answer
