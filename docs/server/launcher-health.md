@@ -287,6 +287,45 @@ belongs to at most one group:
 - **Change it** like the other lines: `persona_settings` reads and sets `assistant.admission` with the phone approval card; the next start
   uses the new groups.
 
+### Wait for a gateway's quota recovery
+
+A launcher group can also opt in to a bounded wait before the first background launch of a plan task (#2409).
+Set `quota_pool` on that group through the existing `assistant.admission` setting and its approval card.
+
+```json
+{
+  "launcher_groups": [
+    {
+      "name": "shared-pool",
+      "launchers": ["launcher-a", "launcher-b"],
+      "cap": 4,
+      "quota_pool": {"source": "gateway-source-id", "provider": "claude"}
+    }
+  ]
+}
+```
+
+Use the ID of the configured relay usage source and its provider, `claude` or `codex`. Use this binding only when the
+listed launchers use the same account pool that the usage source can observe across every computer where they run. Persona confirms the selected launcher and
+provider on the computer before queueing. Removing the binding or switching off admission removes the reason to wait.
+A group with no binding only enforces its existing concurrency cap.
+
+The gate uses the latest cached account inventory for that source and provider. It needs a complete read, source and
+enabled account observations no more than ten minutes old, and a known future recovery for every account that can
+take work. It ignores disabled accounts and model-only windows. When an account has several active quota restrictions,
+its latest recovery controls. The pool's estimate is the first account's recovery. Incomplete or stale evidence,
+a working account, and a recovery beyond the wait budget leave the start to ordinary admission.
+
+The task card shows the expected recovery while it waits without occupying an admission slot. The manager checks
+again after at most 90 seconds or at the estimated recovery, whichever is sooner, on its existing minute sweep.
+The 30-minute budget is recorded with the task plan and survives a restart. At the deadline, or sooner if the
+evidence no longer warrants waiting, the manager releases the task to its ordinary start gate. A resource or
+concurrency refusal can still queue it there. It retains the launch claim rules for later retries. Direct Agent starts, explicit task retries and tasks reusing an existing to-do use their ordinary start paths.
+
+When the manager releases a task, it checks the saved to-do while committing a launch claim and again just before sending the start to the computer. A completed,
+cancelled, or already linked task leaves the queue. If a restart or disconnect leaves the launch outcome unknown, the card asks the
+owner to check the computer and Persona does not replay the launch automatically.
+
 ## Not done
 
 - An Agent that starts but fails on its first turn (the gateway rejecting the model name; `session.start` succeeded) is not recorded from the session; periodic checks find it. Only a usage limit with a known reset is recorded from the session.

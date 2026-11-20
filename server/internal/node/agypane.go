@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
@@ -72,16 +73,25 @@ func agyNotice(id string) agyHistory {
 type agyWatch struct {
 	pane, history, conversation string
 	since                       int
-	file                        os.FileInfo
+	file                        *agyPaneFiles
+}
+
+type agyPaneFiles struct{ transcript, receipts os.FileInfo }
+
+func sameAgyFile(a, b os.FileInfo) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime() == b.ModTime()
 }
 
 func agyStepsHistory(conversation string) agyHistory {
-	return agyHistory{token: "agy-pane:" + conversation + ":steps:lazy-tool-media"}
+	return agyHistory{token: "agy-pane:" + conversation + ":steps:lazy-media:checkpoints:wakes"}
 }
 
 // agyRead loads the compact export for pages and live updates. The revision memo
 // distinguishes a rewrite of complete records from an append or partial write.
-func (n *Node) agyRead(root *os.Root, key, conversation string, previous os.FileInfo) (agyHistory, os.FileInfo, error) {
+func (n *Node) agyRead(root *os.Root, key, conversation string, previous *agyPaneFiles) (agyHistory, *agyPaneFiles, error) {
 	empty := agyStepsHistory(conversation)
 	info, err := root.Stat(agyTranscriptPath)
 	if err != nil {
@@ -90,9 +100,13 @@ func (n *Node) agyRead(root *os.Root, key, conversation string, previous os.File
 	if !info.Mode().IsRegular() {
 		return empty, nil, os.ErrNotExist
 	}
-	if previous != nil && os.SameFile(info, previous) && info.Size() == previous.Size() &&
-		info.ModTime() == previous.ModTime() && time.Since(info.ModTime()) > time.Second {
-		return agyHistory{}, info, nil
+	receiptsFile, _ := root.Lstat(agyWakeReceipts)
+	if receiptsFile != nil && !receiptsFile.Mode().IsRegular() {
+		receiptsFile = nil
+	}
+	files := &agyPaneFiles{transcript: info, receipts: receiptsFile}
+	if previous != nil && sameAgyFile(info, previous.transcript) && sameAgyFile(receiptsFile, previous.receipts) && time.Since(info.ModTime()) > time.Second {
+		return agyHistory{}, files, nil
 	}
 	raw, err := root.ReadFile(agyTranscriptPath)
 	if err != nil {
@@ -114,12 +128,26 @@ func (n *Node) agyRead(root *os.Root, key, conversation string, previous os.File
 	n.agyRevisions.put(key, rev)
 	n.mu.Unlock()
 
-	h := mapAgySteps(steps, info.ModTime())
+	var receipts map[string]bool
+	if receiptsFile != nil {
+		if data, err := root.ReadFile(agyWakeReceipts); err == nil {
+			receipts = make(map[string]bool)
+			for row := range strings.SplitSeq(string(data), "\n") {
+				if row != "" {
+					receipts[row] = true
+				}
+			}
+		}
+	}
+	h := mapAgySteps(steps, info.ModTime(), receipts)
 	h.token = empty.token
 	if rev.branch != "" || rev.native != "" || rev.rewrite != "" {
 		h.token += ":" + rev.branch + ":" + rev.native + ":" + rev.rewrite
 	}
-	return h, info, nil
+	if h.observedWakeRevision != "" {
+		h.token += ":wake:" + h.observedWakeRevision
+	}
+	return h, files, nil
 }
 
 type agyPageParams struct {
@@ -166,11 +194,15 @@ func (h agyHistory) after(since int) (items []proto.Item, span transcript.Span, 
 	return agyLightItems(items), span, more
 }
 
+func agyUserInput(it proto.Item) bool {
+	return it.Role == "user" && (it.Kind == proto.KindText || (it.Kind == proto.KindImage && it.ToolUseID == ""))
+}
+
 func (h agyHistory) page(p agyPageParams) any {
 	if p.UserInputs {
 		index := proto.UserInputIndex{History: h.token, Inputs: []proto.UserInputPosition{}}
 		for _, it := range h.items {
-			if it.Role == "user" && it.Kind == proto.KindText {
+			if agyUserInput(it) && (len(index.Inputs) == 0 || index.Inputs[len(index.Inputs)-1].Seq != it.Seq) {
 				index.Inputs = append(index.Inputs, proto.UserInputPosition{ID: it.ID, Seq: it.Seq})
 			}
 		}
@@ -207,8 +239,10 @@ func (h agyHistory) page(p agyPageParams) any {
 	if p.Turns > 0 {
 		turns := min(p.Turns, 10)
 		start = max(0, len(items)-2000)
+		lastSeq := -1
 		for i := len(items) - 1; i >= start; i-- {
-			if items[i].Role == "user" && items[i].Kind == proto.KindText {
+			if agyUserInput(items[i]) && items[i].Seq != lastSeq {
+				lastSeq = items[i].Seq
 				turns--
 				if turns == 0 {
 					start = i
@@ -331,14 +365,14 @@ func (n *Node) pollAgyPane(w *watch) {
 	a := w.agy
 	h := agyNotice(w.id)
 	conversation := n.agyConversation(w.id, a.pane)
-	var info os.FileInfo
+	var info *agyPaneFiles
 	if conversation != "" {
 		h = agyStepsHistory(conversation)
 		dir := n.agyDataRoot()
 		root, err := agyBrain(dir, conversation)
 		if err == nil {
 			defer root.Close()
-			var previous os.FileInfo
+			var previous *agyPaneFiles
 			if a.conversation == conversation {
 				previous = a.file
 			}
