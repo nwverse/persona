@@ -122,18 +122,17 @@ func larkReadFormattingPipeline(cmd string, gates []proto.CommandGate) bool {
 			return false
 		}
 		for _, redirect := range st.Redirs {
-			// Descriptor duplication such as 2>&1 cannot read or write a file. Every path redirection stays opaque.
-			if redirect.Op != syntax.DplOut && redirect.Op != syntax.DplIn || redirect.Word == nil {
+			// Only stdout/stderr duplication such as 2>&1 is inert. An inherited descriptor may name a file or socket,
+			// so neither an arbitrary target (>&3) nor an inherited input (<&3) belongs in this exception.
+			if redirect.Op != syntax.DplOut || redirect.Word == nil {
 				return false
 			}
 			fd, dynamic := executionWord(redirect.Word)
-			if dynamic || fd == "" {
+			if dynamic || fd != "1" && fd != "2" {
 				return false
 			}
-			for j := 0; j < len(fd); j++ {
-				if fd[j] < '0' || fd[j] > '9' {
-					return false
-				}
+			if redirect.N != nil && redirect.N.Value != "1" && redirect.N.Value != "2" {
+				return false
 			}
 		}
 		words := make([]string, len(call.Args))

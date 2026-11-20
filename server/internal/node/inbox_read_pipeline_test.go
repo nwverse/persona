@@ -40,6 +40,8 @@ print(dict(counts))
 		{name: "uniq output file", origin: originInbox, command: `example-api GET /accounts | uniq /dev/stdin /tmp/accounts.txt | python3 -c 'import sys; print(sys.stdin.read())'`, want: ""},
 		{name: "Python network import", origin: originInbox, command: `example-api GET /accounts | python3 -c 'import urllib.request; print(urllib.request.urlopen("https://example.com").read())'`, want: ""},
 		{name: "file redirect", origin: originInbox, command: `example-api GET /accounts > /tmp/accounts.json | python3 -c 'import sys; print(sys.stdin.read())'`, want: ""},
+		{name: "inherited output descriptor", origin: originInbox, command: `example-api GET /accounts >&3 | python3 -c 'import sys; print(sys.stdin.read())'`, want: ""},
+		{name: "inherited input descriptor", origin: originInbox, command: `example-api GET /accounts <&3 | python3 -c 'import sys; print(sys.stdin.read())'`, want: ""},
 		{name: "second gate call", origin: originInbox, command: `example-api GET /accounts | example-api GET /accounts | python3 -c 'import sys; print(sys.stdin.read())'`, want: ""},
 		{name: "confirmation required GET", origin: originInbox, command: `example-api GET /private | python3 -c 'import sys; print(sys.stdin.read())'`, want: ""},
 		{name: "ordinary origin", command: readPipeline, want: ""},
