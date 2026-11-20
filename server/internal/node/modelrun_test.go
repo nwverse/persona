@@ -371,8 +371,8 @@ func TestModelRunRejectsUnsupportedAgent(t *testing.T) {
 }
 
 // Regression test (#12043 P2): structured NDJSON stdout events whose model text contains "authentication required" or
-// "waiting for authentication" must never trigger early interactive-auth cancellation; a complete SUCCESS result also
-// wins even if non-JSON diagnostic output mentioned an auth phrase before exiting cleanly.
+// "waiting for authentication" must never trigger early interactive-auth cancellation; once a complete SUCCESS result
+// has been emitted, it also wins deterministically even if a subsequent non-JSON diagnostic triggers early auth cancel.
 func TestModelRunAgyIgnoresAuthPhrasesInStructuredOutput(t *testing.T) {
 	// Phrase in both step_update and final result response.
 	fakeModelRunCLIHome(t, "agy", "agy", `printf '{"event":"init","conversation_id":"c-auth","init":{"model":"gemini-4-hydrogen-low"}}\n'
@@ -385,14 +385,17 @@ printf '{"event":"result","result":{"conversation_id":"c-auth","status":"SUCCESS
 		t.Fatalf("structured auth phrases failed: %#v %v", got, err)
 	}
 
-	// Complete SUCCESS result also wins even if non-JSON diagnostic text contained an auth phrase.
-	fakeModelRunCLIHome(t, "agy", "agy", `echo "note: waiting for authentication cache refresh" >&2
-printf '{"event":"init","conversation_id":"c-auth-2","init":{"model":"gemini-4-hydrogen-low"}}\n'
+	// Deterministic result-before-loggedOutFast check (#12120 review 5998639344): emit complete SUCCESS before the
+	// plain-text auth diagnostic so the result is guaranteed buffered before early-auth cancellation kills the process;
+	// trailing sleep proves early-auth cancel actually fired (without hitting TimeoutMS) while SUCCESS still wins.
+	fakeModelRunCLIHome(t, "agy", "agy", `printf '{"event":"init","conversation_id":"c-auth-2","init":{"model":"gemini-4-hydrogen-low"}}\n'
 printf '{"event":"result","result":{"conversation_id":"c-auth-2","status":"SUCCESS","response":"all good","num_turns":1}}\n'
+echo "note: waiting for authentication cache refresh" >&2
+sleep 5
 `)
-	got, err = runModel(t, proto.ModelRunParams{Launcher: "agy", Prompt: "ping"})
+	got, err = runModel(t, proto.ModelRunParams{Launcher: "agy", Prompt: "ping", TimeoutMS: 2000})
 	if a, ok := got.(proto.ModelRunAnswer); err != nil || !ok || a.Text != "all good" {
-		t.Fatalf("complete SUCCESS after diagnostic note failed: %#v %v", got, err)
+		t.Fatalf("complete SUCCESS before early-auth diagnostic failed: %#v %v", got, err)
 	}
 }
 
