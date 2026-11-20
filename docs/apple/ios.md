@@ -2758,7 +2758,8 @@ web's routes (`docs/protocol/protocol.md`, `/api/v1/assistant/saved-prompts`) an
 - DEBUG: `-tab settings -openAssistantPage prompts|prompt|newPrompt` (`promptsEntry`: the profile scrolled to In Chats).
   Tests: `PersonaTests/SavedPromptsTests.swift`; UI suite `SavedPromptsUITests` against the mock with
   `MOCK_SAVED_PROMPTS=1` (`TEST_RUNNER_PERSONA_MOCK_HUB`; skips without it) swipes a row, checks Delete asks first and
-  Cancel sends nothing, light and dark; `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps `saved-prompts-<light|dark>-<swipe|confirm>.png`.
+  Cancel sends nothing, and opens the editor, checks its ✕ and ✓ and that the ✕ saves nothing, light and dark;
+  `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps `saved-prompts-<light|dark>-<swipe|confirm|editor>.png`.
 
 ## The pages show the current assistant
 
