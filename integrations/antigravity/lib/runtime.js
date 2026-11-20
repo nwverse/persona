@@ -32,7 +32,7 @@ import {
   rememberObservedWake,
   RUNTIME,
   stepsToItems,
-  transcriptStatus,
+  transcriptState,
   toAgyId,
   toPersonaId,
   workspacePathOf,
@@ -1004,9 +1004,27 @@ export function createAgyRuntime(options = {}) {
     return check
   }
 
+  // A failed summary read leaves the same empty map as missing summaries, so say so once per change (#12003).
+  let summaryReadFailure = { reason: '', count: 0 }
+  function noteSummaryRead(error) {
+    const previous = summaryReadFailure
+    if (!error) {
+      if (previous.count) log(`agy native summary reads recovered after ${previous.count} failure(s)`)
+      summaryReadFailure = { reason: '', count: 0 }
+      return
+    }
+    // SQLite's result-code text ("database is locked"), never a path or row content.
+    const reason = String(error.errstr || error.code || 'read error')
+    if (reason !== previous.reason) log(`agy native summaries unreadable: ${reason}`)
+    summaryReadFailure = { reason, count: previous.count + 1 }
+  }
+
   function readConversationStates() {
     const path = join(agyDir, 'conversation_summaries.db')
-    if (!existsSync(path)) return new Map()
+    if (!existsSync(path)) {
+      noteSummaryRead()
+      return new Map()
+    }
     let db
     try {
       db = new DatabaseSync(path, { readOnly: true })
@@ -1016,7 +1034,7 @@ export function createAgyRuntime(options = {}) {
                title, workspace_uris, last_modified_time
         FROM conversation_summaries
       `).all()
-      return new Map(rows.map((row) => {
+      const states = new Map(rows.map((row) => {
         let workspaceUris = []
         try {
           const parsed = JSON.parse(row.workspace_uris)
@@ -1024,8 +1042,11 @@ export function createAgyRuntime(options = {}) {
         } catch {}
         return [row.conversation_id, { ...row, WorkspaceURIs: workspaceUris }]
       }))
-    } catch {
+      noteSummaryRead()
+      return states
+    } catch (error) {
       // A missing or unavailable native summary cannot establish that a text reply ended the turn.
+      noteSummaryRead(error)
       return new Map()
     } finally {
       db?.close()
@@ -1082,6 +1103,7 @@ export function createAgyRuntime(options = {}) {
   async function listSessions() {
     const { convs, cwdByConv } = readCacheMetadata()
     const states = readConversationStates()
+    const statesFailed = summaryReadFailure.count > 0
     const brainRoot = join(agyDir, 'brain')
     const seenIds = new Set([...Object.keys(convs), ...states.keys(), ...createdAt.keys()])
     if (existsSync(brainRoot)) {
@@ -1136,17 +1158,24 @@ export function createAgyRuntime(options = {}) {
       updatedAt: (c) => c.mtimeMs,
     })
 
-    return chosen.map(({ rawId, pid, summary, native, cwd, mtimeMs, running, hasTranscript }) => {
+    const unknown = new Map() // reason -> sessions listed as unknown for it
+    const rows = chosen.map(({ rawId, pid, summary, native, cwd, mtimeMs, running, hasTranscript }) => {
       const nativeTranscript = transcriptOf(rawId, native || null)
       const transcript = withModeNotice(rawId, nativeTranscript)
       const { steps, history } = transcript
       const parsed = stepsToItems(steps, { brainDir: brainDirOf(rawId), full: false, clientMsgIdFor: clientMsgIdFor(rawId) })
       if (!lastPushedSeq.has(pid)) lastPushedSeq.set(pid, parsed.toSeq)
       if (!lastPushedHistory.has(pid)) lastPushedHistory.set(pid, history)
-      let status = running ? 'working' : transcriptStatus(nativeTranscript.steps, native)
+      const state = running ? { status: 'working' } : transcriptState(nativeTranscript.steps, native)
+      let status = state.status
       if (!hasTranscript && !running) {
         if (completedTurns.has(pid)) status = 'done'
         else if (createdAt.has(rawId)) status = 'idle'
+      }
+      if (status === 'unknown') {
+        // Without the summaries, a summary-dependent reason would hide the failed read.
+        const reason = statesFailed ? 'read_failed' : state.reason
+        unknown.set(reason, (unknown.get(reason) || 0) + 1)
       }
       const title =
         sessionTitles.get(rawId) ||
@@ -1180,6 +1209,17 @@ export function createAgyRuntime(options = {}) {
       if (queued?.length) row.queued = queued.map((entry) => entry.queueText)
       return row
     })
+    reportUnknown(unknown)
+    return rows
+  }
+
+  // Why listed sessions are unknown, as reason counts, logged when they change (#12003).
+  let unknownReport = ''
+  function reportUnknown(unknown) {
+    const report = [...unknown].sort(([a], [b]) => a.localeCompare(b)).map(([reason, count]) => `${reason} ${count}`).join(', ')
+    if (report === unknownReport) return
+    log(`agy unknown status: ${report || 'none'}`)
+    unknownReport = report
   }
 
   // The agy id of one of this runtime's sessions. Every id it hands out carries PREFIX; anything else is another
