@@ -77,14 +77,20 @@ func (s *Service) estimateNewPlanTask(ctx context.Context, conversation string, 
 	query, cancel := context.WithTimeout(ctx, estimateReadTimeout)
 	defer cancel()
 	since := now.Add(-estimateHistoryAge)
-	// Optional recovery must not consume the primary history read's deadline.
+	// Recovery runs first so this plan can use what it restores, but it may
+	// spend only half of the remaining deadline: the history read that follows
+	// always starts with a live context.
+	deadline, _ := query.Deadline()
+	repair, cancelRepair := context.WithTimeout(query, time.Until(deadline)/2)
+	err := store.ReconcileTaskEstimateRounds(repair, cohort, since, now, estimateRepairLimit)
+	cancelRepair()
+	if err != nil {
+		s.logf("task estimate reconcile: %v", err)
+	}
 	samples, err := store.RecentTaskEstimateSamples(query, cohort, since, now, estimateHistoryLimit)
 	if err != nil {
 		s.logf("task estimate history: %v", err)
 		return
-	}
-	if err := store.ReconcileTaskEstimateRounds(query, cohort, since, now, estimateRepairLimit); err != nil {
-		s.logf("task estimate reconcile: %v", err)
 	}
 	selected, learned := chooseTaskEstimate(cohort, samples)
 	t.ExpectMinutes, t.EstimateEvidence = selected.Minutes, &selected

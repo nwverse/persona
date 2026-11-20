@@ -99,12 +99,18 @@ type deadlineExhaustingEstimateStore struct {
 	*memStore
 	todoStore
 	taskEstimateStore
+	recovered      atomic.Bool
 	reconcileCalls atomic.Int32
 	sampleCalls    atomic.Int32
 }
 
+// ReconcileTaskEstimateRounds restores the fifth accepted round, as after an
+// interrupted projection, then keeps working until its deadline.
 func (d *deadlineExhaustingEstimateStore) ReconcileTaskEstimateRounds(ctx context.Context, _ db.TaskEstimateCohort, _, _ time.Time, _ int) error {
 	d.reconcileCalls.Add(1)
+	if d.sampleCalls.Load() == 0 {
+		d.recovered.Store(true)
+	}
 	<-ctx.Done()
 	return ctx.Err()
 }
@@ -114,15 +120,20 @@ func (d *deadlineExhaustingEstimateStore) RecentTaskEstimateSamples(ctx context.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return []db.TaskEstimateSample{
+	samples := []db.TaskEstimateSample{
 		{Machine: "box", ActualMinutes: 8},
 		{Machine: "box", ActualMinutes: 10},
 		{Machine: "box", ActualMinutes: 12},
 		{Machine: "box", ActualMinutes: 14},
-		{Machine: "box", ActualMinutes: 120},
-	}, nil
+	}
+	if d.recovered.Load() {
+		samples = append(samples, db.TaskEstimateSample{Machine: "box", ActualMinutes: 120})
+	}
+	return samples, nil
 }
 
+// Slow recovery must neither hide durable history nor run after the read
+// whose missing sample it restores.
 func TestTaskEstimateHistorySurvivesReconciliationDeadline(t *testing.T) {
 	store := &deadlineExhaustingEstimateStore{memStore: &memStore{}}
 	s, _, _ := briefServiceOn(t, nil, "please fix the fixture issue")
@@ -137,7 +148,7 @@ func TestTaskEstimateHistorySurvivesReconciliationDeadline(t *testing.T) {
 		t.Fatalf("reconciliation deadline hid durable history: %d minutes (%s), evidence %+v",
 			task.ExpectMinutes, task.EstimateSource, task.EstimateEvidence)
 	}
-	if store.reconcileCalls.Load() == 0 || store.sampleCalls.Load() == 0 {
+	if store.reconcileCalls.Load() != 1 || store.sampleCalls.Load() != 1 {
 		t.Fatalf("estimate store calls: reconcile=%d samples=%d", store.reconcileCalls.Load(), store.sampleCalls.Load())
 	}
 }
