@@ -347,13 +347,11 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	if p.Launcher != "" {
 		fit, refusal := s.mainChatFit(ctx, machine, p.Launcher)
-		switch fit {
-		case mainChatRefused:
+		if fit == mainChatRefused {
 			return proto.Session{}, refusal
-		case mainChatGone:
-			delete(params, "launcher")
-			delete(params, "model") // picked for the launcher that is gone, not for the one it falls back to
 		}
+		// A missing launcher stays in params: finishMainChatModel owns its bounded rediscovery and explicitly configured
+		// substitutes. Dropping it here would silently turn the start into an ordinary default-launcher start.
 	}
 	if p.TaskModel != nil && p.TaskExecution {
 		params["launch"] = "headless"
@@ -974,8 +972,7 @@ func (s *Service) startRoutes() {
 			guestTools, in.ReportTasks = in.Guest.Tools, false // it hands nothing out
 		}
 		origin, ref := requestOrigin(r, in.Purpose)
-		sentence := in.Prompt // as the owner wrote it, for the route (route.go)
-		own := false          // only the user's words in it, as filled in (workspace_mention.go fillWorkspaces)
+		own := false // only the user's words in it, as filled in (workspace_mention.go fillWorkspaces)
 		if in.Guest == nil {
 			in.Prompt, own = s.fillWorkspaces(ctx, in.Prompt) // as SendParams does for the next messages
 		}
@@ -1000,10 +997,6 @@ func (s *Service) startRoutes() {
 		}
 		if in.ReportTasks && !in.Main {
 			s.markReporter(ctx, sess.MachineID, sess.SessionID)
-		}
-		// The owner's New chat: is it a direction? In the background; nothing waits for it (route.go).
-		if origin == OriginUser && !in.Main && in.Guest == nil && in.Space == "" && in.Purpose == "" && !in.ReportTasks {
-			go s.routeNewChat(sess.MachineID, sess.SessionID, sentence)
 		}
 		if *note != "" {
 			apierr.WriteJSON(w, map[string]any{"session": sess, "launcher_note": *note})
@@ -1348,21 +1341,16 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	if proto.IsExternalLauncher(l) {
 		return i18n.Err("external-adapter.scope_required") // a side conversation cannot inherit an old external launcher
 	}
-	// A launcher or model that is gone (a renamed managed launcher, a model the gateway dropped), or a launcher that
-	// can't run the assistant (a Paseo provider, a managed Codex one: launcher_mainchat.go) fails every turn: fall back
-	// to the assistant's launcher and its default. One picked for this message that can't run it is refused, saying why.
+	// One picked for this message that can't run the assistant is refused, saying why. Otherwise keep the conversation's
+	// binding intact: finishMainChatModel owns rediscovery and explicitly configured substitutes for a launcher that is
+	// gone or no longer compatible. Replacing it with launcherNow here would bypass that policy before it can run.
 	if l != "" {
 		model, _ := p["model"].(string)
 		fit, refusal := s.mainChatFit(ctx, machine, l)
 		switch {
 		case fit == mainChatRefused && asked:
 			return refusal
-		case fit != mainChatFits:
-			l = s.launcherNow(ctx)
-			s.logf("[%s] %s: its launcher can't run it any more, using %s", machine, short(sid), l)
-			p["launcher"] = l
-			delete(p, "model")
-		case model != "" && !picked:
+		case fit == mainChatFits && model != "" && !picked:
 			resolved, ok := s.resolveLauncherModel(ctx, machine, l, model)
 			if !ok {
 				s.logf("[%s] %s: model %s is not in %s's list any more, using its default", machine, short(sid), model, l)

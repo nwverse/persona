@@ -162,6 +162,8 @@ internal fun mergedChats(stacks: GroupStacks, storage: ChatLocalStorage): ChatRe
                     ?: flowOf(ChatSnapshot(loading = false, verified = false))
             }
         override suspend fun loadOlder(session: SessionKey) = stacks.use(session) { it.repositories.chats.loadOlder(it.names.raw(session)) }
+        override suspend fun earlierEnginePage(session: SessionKey, beforeSeq: Int?) =
+            stacks.use(session) { it.repositories.chats.earlierEnginePage(it.names.raw(session), beforeSeq) }
         override suspend fun modeChanges(session: SessionKey): List<ModeChange> =
             stacks.use(session) { it.repositories.chats.modeChanges(it.names.raw(session)) }
         override suspend fun expandFold(session: SessionKey, fromSeq: Int, toSeq: Int) =
@@ -379,6 +381,8 @@ internal fun routedFiles(lookup: (machineId: String) -> SessionFiles?): SessionF
     override suspend fun convertToPdf(machineId: String, cwd: String, path: String) = of(machineId).convertToPdf(machineId, cwd, path)
     override fun editsFiles(machineId: String) = lookup(machineId)?.editsFiles(machineId) == true
     override suspend fun rename(machineId: String, cwd: String, path: String, name: String) = of(machineId).rename(machineId, cwd, path, name)
+    override suspend fun move(machineId: String, cwd: String, path: String, directory: String, conflict: SessionMoveConflictPolicy?) =
+        of(machineId).move(machineId, cwd, path, directory, conflict)
     override suspend fun trash(machineId: String, cwd: String, paths: List<String>) = of(machineId).trash(machineId, cwd, paths)
     override suspend fun restore(machineId: String, trashIds: List<String>) = of(machineId).restore(machineId, trashIds)
 }

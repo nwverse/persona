@@ -224,6 +224,10 @@ type Node struct {
 	sysOnce    sync.Once      // system: read once (metrics.go)
 	sys        proto.System
 
+	// droppedResume: herdr servers (ServerID) found too old to keep a resume command, each warned about once
+	// (herdrresume.go warnDroppedResume).
+	droppedResume map[string]bool
+
 	// startsBegun: when the latest start of a session that starts does not hold began (transcript_files.go).
 	startsBegun startsBegun
 
@@ -291,6 +295,7 @@ type Node struct {
 	// codexAttached: such a row's id → the thread it became; codexWaitLooking: the look for their threads runs.
 	codexWaiting     map[string]*codexWait
 	codexAttached    map[string]codexAttach
+	codexManual      map[string]string // a manually attached thread, only while Codex still runs in its pane
 	codexWaitLooking bool
 	// codexAbandoned: failed starts whose pane could not be closed; a retry must close it before opening another.
 	codexAbandoned map[string][]codexAbandonedStart
@@ -353,6 +358,8 @@ type Node struct {
 
 	// claudeV is claude's version as last asked (agentplugin.go).
 	claudeV claudeVersionCache
+	// resumeSignIn: launchers' sign-in per profile as last asked for a resume (assistant_resume_signin.go).
+	resumeSignIn resumeSignInCache
 
 	// agentFilters: the extensions' filters of sessions kept out of the list (node.configure, agentfilters.go)
 	agentFilters []proto.AgentFilter
@@ -752,14 +759,30 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			defer done()
 		}
 	}
+	return n.handleMethod(ctx, method, params)
+}
+
+func (n *Node) handleMethod(ctx context.Context, method string, params json.RawMessage) (result any, resultErr error) {
+	if verb, ok := strings.CutPrefix(method, methodGitBackendPrefix); ok {
+		return n.backendGit(ctx, verb, params)
+	}
+	if method == devicewire.MethodStartBackendSession {
+		var envelope struct {
+			Workspace json.RawMessage `json:"backend_workspace"`
+		}
+		if err := json.Unmarshal(params, &envelope); err != nil {
+			return nil, err
+		}
+		return n.taskWorkspace(ctx, method, envelope.Workspace, params)
+	}
 	if strings.HasPrefix(method, "node.update.") {
 		return n.handleUpdate(ctx, method, params)
 	}
 	if method == "task.workspace.capabilities" {
-		return map[string]any{"capability": "task_workspace_v1"}, nil
+		return map[string]any{"capability": "task_workspace_v1", "start": true}, nil
 	}
 	if strings.HasPrefix(method, "task.workspace.") {
-		return n.taskWorkspace(ctx, strings.TrimPrefix(method, "task.workspace."), params)
+		return n.taskWorkspace(ctx, strings.TrimPrefix(method, "task.workspace."), params, nil)
 	}
 	switch method {
 	case nodeproto.SourceSend:
@@ -863,6 +886,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Turns                   int           `json:"turns"`
 		LazyImages              bool          `json:"lazy_images"`
 		UserInputs              bool          `json:"user_inputs"`
+		StrictRead              bool          `json:"strict_read"`
 		FoldWork                bool          `json:"fold_work"`
 		FromSeq                 int           `json:"from_seq"`
 		ThroughSeq              int           `json:"through_seq"`
@@ -905,7 +929,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		MessageSource    *proto.MessageSource          `json:"message_source"`
 		ClientMsgID      string                        `json:"client_msg_id"`
 		AtItemID         string                        `json:"at_item_id"`     // session.fork: the reply to branch off at
-		Refresh          bool                          `json:"refresh"`        // launchers.models: ask again, not the kept list
+		Refresh          bool                          `json:"refresh"`        // launchers.models/list: ask again, not the kept list
+		CacheOnly        bool                          `json:"cache_only"`     // launchers.list: read the last completed shell discovery without waiting
 		Purpose          string                        `json:"purpose"`        // launchers.models/check: assistant runs outside the Agent engine
 		AssistantTurn    bool                          `json:"assistant_turn"` // launchers.check: shaped as an assistant turn (launchercheck_assistant.go)
 		Conversation     string                        `json:"conversation"`   // launchers.check with assistant_turn: the conversation whose profile it runs in
@@ -936,6 +961,21 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 	}
 	sessionSend := method == "session.send" || method == proto.MethodSessionSendUnseen
+	if backendLaunchFrom(ctx) == nil && (sessionSend || method == "session.start" && p.ResumeSessionID != "") {
+		id := p.ResumeSessionID
+		if sessionSend {
+			id = p.SessionID
+		}
+		b, lock, err := n.pinBackendSession(ctx, id, p.Cwd, !sessionSend)
+		if err != nil {
+			return nil, err
+		}
+		if b != nil {
+			defer lock.Close()
+			ctx = context.WithValue(ctx, backendLaunchKey{}, b)
+			p.Cwd = b.executor.journal.Plan.RootPath
+		}
+	}
 	hasSelectedSkills := false
 	if sessionSend && !n.isAssistantSession(p.SessionID) {
 		refs, err := assistantskills.References(p.Text)
@@ -1299,17 +1339,40 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 				return map[string]any{"launchers": typedLaunchers(ls), "host": p.Host, "host_runtime": true}, nil
 			}
 		}
-		ls, err := n.launchers(ctx)
+		forced := p.Refresh
+		cacheOnly := p.CacheOnly && !forced && p.Host == "" && p.Source == ""
+		var ls []proto.Launcher
+		var err error
+		if cacheOnly {
+			launcherCache.Lock()
+			ls = launcherCache.list
+			launcherCache.Unlock()
+		} else {
+			ls, err = n.launchers(ctx, forced)
+		}
 		bl := n.runtimes.launchers()
 		if len(bl) > 0 {
 			// Explicit shell launchers keep their names; a discovered CLI fallback yields to its connected runtime.
-			ls, err = n.runtimes.withShell(bl, ls), nil
+			// Ordinary pickers keep independently usable overlays when shell discovery fails. Forced recovery reads
+			// retain the error: a partial catalog is not fresh evidence that an alias disappeared.
+			ls = n.runtimes.withShell(bl, ls)
+			if !forced {
+				err = nil
+			}
 		}
-		if withDesktop, added := n.withDesktopLauncher(ls); added { // Claude's desktop app (claudedesktop_new.go)
-			ls, err = withDesktop, nil
-		}
-		if withApp, added := n.withCodexAppLauncher(ls); added { // the Codex App (codexapp_new.go)
-			ls, err = withApp, nil
+		if !cacheOnly { // Desktop executable discovery can run through the login shell.
+			if withDesktop, added := n.withDesktopLauncher(ls); added { // Claude's desktop app (claudedesktop_new.go)
+				ls = withDesktop
+				if !forced {
+					err = nil
+				}
+			}
+			if withApp, added := n.withCodexAppLauncher(ls); added { // the Codex App (codexapp_new.go)
+				ls = withApp
+				if !forced {
+					err = nil
+				}
+			}
 		}
 		shell, rcFile := launcherShell()
 		out := map[string]any{"launchers": typedLaunchers(ls), "shell": shell, "rc_file": rcFile}
@@ -1402,15 +1465,24 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		p.Speed = speed
-		if method == "session.start" && strings.TrimSpace(p.Prompt) != "" && len(p.Images) > 0 &&
+		rawPrompt := p.Prompt
+		echoImages := 0
+		var runtimeImages []proto.Image
+		if method == "session.start" && len(p.Images) > 0 &&
 			(p.ResumeSessionID == "" || p.AgentType != ompAgent && launcherAgentType(p.Launcher) != ompAgent) {
-			paths, err := n.saveImages(p.Images)
-			if err != nil {
-				return nil, err
+			echoImages = len(p.Images)
+			startCtx := withStartHost(ctx, p.Host)
+			runtime, _ := n.startRuntimeIn(startCtx, p.Launcher)
+			if p.ResumeSessionID == "" && runtime != nil && runtime.id() == agyAgent && !n.usesAgyPane(startCtx, p.Launcher, p.AgentType) {
+				runtimeImages = p.Images
+			} else {
+				paths, err := n.saveImages(p.Images)
+				if err != nil {
+					return nil, err
+				}
+				// Terminal starts use the same attachment block as session.send.
+				p.Prompt = strings.TrimSpace(strings.TrimSpace(p.Prompt) + "\n\n<attached_images>\n" + strings.Join(paths, "\n") + "\n</attached_images>")
 			}
-			// The first prompt uses the same attachment block as session.send; firstPrompt adds keepImagePaths for Claude.
-			// An omp resume instead carries the images in ompResumeParams, so they never arrive twice.
-			p.Prompt = strings.TrimSpace(p.Prompt) + "\n\n<attached_images>\n" + strings.Join(paths, "\n") + "\n</attached_images>"
 		}
 		ctx, taskSpace := withTaskSpace(ctx, p.TaskID, p.WorkspaceID, p.WorkspaceLabel)
 		// Optional tool waits correlate the first input through the existing echo ledger.
@@ -1428,7 +1500,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 				session, _ := out["session"].(*proto.Session)
 				if resultErr == nil && session != nil {
 					r := echoRecord{SessionID: session.SessionID, ClientMsgID: echoOpts.ClientMsgID,
-						Text: p.Prompt, SentAt: sentAt, AfterSeq: after.seq, In: after.in}
+						Text: rawPrompt, Images: echoImages, SentAt: sentAt, AfterSeq: after.seq, In: after.in}
 					if n.echoes.expect(r) {
 						n.notifyEcho(r)
 					}
@@ -1439,6 +1511,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			unlock := n.recovery.lock(p.ResumeSessionID)
 			defer unlock()
 			ctx = withOmpResumeSend(ctx, p.Images, p.ClientMsgID) // what a resumed omp is sent with the prompt (ompresume.go)
+			if p.AgentType == ompAgent || launcherAgentType(p.Launcher) == ompAgent {
+				echoImages = len(p.Images)
+			}
 		}
 		if p.ResumeAutomatic {
 			if err := n.supervisorResumeAllowed(p.ResumeSessionID, p.PermissionMode, p.Launcher); err != nil {
@@ -1534,7 +1609,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			tab = *p.TabName
 		}
 		rp := runtimeStartParams{Cwd: p.Cwd, Prompt: taskFallback(taskFallback(p.Prompt, p.TaskInstructions), p.TaskAttachments), Launcher: p.Launcher, Model: p.Model, PermissionMode: p.PermissionMode,
-			Effort: p.Effort, WorkspaceID: p.WorkspaceID, Resume: p.ResumeSessionID, AgentType: p.AgentType}
+			Effort: p.Effort, WorkspaceID: p.WorkspaceID, Resume: p.ResumeSessionID, AgentType: p.AgentType, ClientMsgID: p.ClientMsgID, Images: runtimeImages}
 		if p.ResumeSessionID == "" && runtimeIDRe.MatchString(p.SessionID) {
 			// The id the hub named for a new session goes to a runtime too (Paseo gives its session that id, #8130), so
 			// a start whose answer never comes back is found by it there as in a terminal (the start below).
@@ -2118,27 +2193,52 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			ItemID string `json:"item_id"`
 		}
 		_ = json.Unmarshal(params, &a)
-		f, err := n.file(p.SessionID)
+		read := n.file
+		if p.StrictRead {
+			read = n.exportFile
+		}
+		f, err := read(p.SessionID)
 		if err != nil {
 			return nil, n.readErr(p.SessionID, err)
 		}
-		n.refresh(p.SessionID, f)
+		if p.StrictRead {
+			if err := n.refreshExport(p.SessionID, f); err != nil {
+				return nil, err
+			}
+		} else {
+			n.refresh(p.SessionID, f)
+		}
 		it, err := f.Full(a.ItemID)
+		if errors.Is(err, transcript.ErrSourceChanged) {
+			return nil, &rpc.Error{Code: codeNotFound, Message: err.Error()}
+		}
 		if err != nil {
 			return nil, fmt.Errorf("session %s: %w", p.SessionID, err)
 		}
 		it.Image = nil // images come from session.image
-		return n.echoed(p.SessionID, f, []proto.Item{it})[0], nil
+		it = n.echoed(p.SessionID, f, []proto.Item{it})[0]
+		if p.StrictRead {
+			return struct {
+				proto.Item
+				StrictRead      bool `json:"strict_read"`
+				SourceTextBytes int  `json:"source_text_bytes"`
+			}{it, true, len(it.Text)}, nil
+		}
+		return it, nil
 	case "session.items":
-		f, err := n.file(p.SessionID)
+		read := n.file
+		if p.StrictRead {
+			read = n.exportFile
+		}
+		f, err := read(p.SessionID)
 		if err != nil {
-			if n.startingSession(p.SessionID) { // nothing written yet: an empty chat; else not_found with its reason
+			if !p.StrictRead && n.startingSession(p.SessionID) { // nothing written yet: an empty chat; else not_found with its reason
 				if p.UserInputs {
 					return proto.UserInputIndex{Inputs: []proto.UserInputPosition{}}, nil
 				}
 				return map[string]any{"items": []proto.Item{}, "has_more": false}, nil
 			}
-			if session, _, _ := strings.Cut(p.SessionID, subagentSep); p.BeforeSeq > 0 && !p.UserInputs && n.knownSession(session) {
+			if session, _, _ := strings.Cut(p.SessionID, subagentSep); p.BeforeSeq > 0 && !p.UserInputs && !p.StrictRead && n.knownSession(session) {
 				// An older page of a session the node knows (or of its subagent): the end of its history, as before
 				// #11388. Only the latest page says why there is none; released apps ask an older page again on an
 				// error (#11450).
@@ -2146,7 +2246,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 			return nil, n.readErr(p.SessionID, err)
 		}
-		if err := n.refresh(p.SessionID, f); err != nil && p.UserInputs {
+		if p.StrictRead {
+			if err := n.refreshExport(p.SessionID, f); err != nil {
+				return nil, err
+			}
+		} else if err := n.refresh(p.SessionID, f); err != nil && p.UserInputs {
 			return nil, err
 		}
 		if p.UserInputs {
@@ -2189,7 +2293,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return withSpan(map[string]any{"items": items(fold(page)), "has_more": more}, span, false), nil
 		}
 		page, more, span := f.Page(p.BeforeSeq, limit)
-		return withSpan(map[string]any{"items": items(fold(page)), "has_more": more}, span, false), nil
+		result := withSpan(map[string]any{"items": items(fold(page)), "has_more": more}, span, p.StrictRead)
+		if p.StrictRead {
+			result["strict_read"] = true
+		}
+		return result, nil
 	case "session.watch":
 		// The stream outlives this request: it follows the connection (rpc.ConnContext), not the reply.
 		return ok(n.watchFor(rpc.ConnContext(ctx), p.SessionID, p.SinceSeq))

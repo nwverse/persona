@@ -94851,19 +94851,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Low-Distraction Mode"
+            "value" : "Push grading"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "通知を抑えるモード"
+            "value" : "プッシュ通知の優先度フィルター"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "低打扰模式"
+            "value" : "推送分级"
           }
         }
       }
@@ -217140,6 +217140,30 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "列表在另一台设备上改过了，这里显示的是最新的。"
+          }
+        }
+      }
+    },
+    "Done [Todo Stage Bar]" : {
+      "comment" : "The step that ends a to-do's stage bar when its work closed with nothing left to deploy.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完成"
           }
         }
       }

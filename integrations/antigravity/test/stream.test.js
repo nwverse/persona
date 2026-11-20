@@ -16,7 +16,7 @@ const FAKE = fileURLToPath(new URL('./fake-acp-stream.mjs', import.meta.url))
 const RAW = '11111111-2222-4333-8444-555555555555'
 const SESSION = `agy-${RAW}`
 
-async function fixture(t, options = {}) {
+async function fixture(t, options = {}, startParams = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'agy-stream-'))
   writeFileSync(join(directory, 'updates.jsonl'), '')
   writeFileSync(join(directory, 'calls.jsonl'), '')
@@ -29,7 +29,7 @@ async function fixture(t, options = {}) {
   t.after(async () => { await runtime.stop(); rmSync(directory, { recursive: true, force: true }) })
   runtime.start()
   await node.ready
-  await node.peer.call('session.start', { cwd: directory })
+  await node.peer.call('session.start', { cwd: directory, ...startParams })
   await node.peer.call('session.watch', { session_id: SESSION })
   await until('initial session is listed', () => sessionStatus(node))
   const calls = () => readFileSync(join(directory, 'calls.jsonl'), 'utf8').split('\n').filter(Boolean).map(JSON.parse)
@@ -325,11 +325,12 @@ test('an autonomous wake preserves a previous unexported reply through interrupt
   nativeState(directory, 'IDLE', 5)
   await until('both replies are exported despite a mid-prompt system message', () => runtime.idle() && node.last('session.items')?.to_seq === 5)
   const final = await node.peer.call('session.items', { session_id: SESSION })
-  assert.deepEqual(final.items.map((item) => item.text), ['Run the workflow.', 'Workflow started.', 'Workflow finished.'])
+  assert.deepEqual(final.items.filter((item) => !item.wake).map((item) => item.text), ['Run the workflow.', 'Workflow started.', 'Workflow finished.'])
+  assert.deepEqual(final.items.filter((item) => item.wake).map((item) => item.seq), [5])
 })
 
-test('a text-only wake does not rewrite the unexported prompt history', async (t) => {
-  const { node, update, chunk, promptCount, runtime } = await fixture(t)
+test('a text-only wake preserves the unexported prompt and opens its own live exchange', async (t) => {
+  const { node, directory, update, chunk, promptCount, runtime } = await fixture(t, { exportPollMs: 20 })
   await node.peer.call('session.send', { session_id: SESSION, text: 'Run the workflow.' })
   await promptCount(1)
   await chunk('Workflow started.')
@@ -337,7 +338,77 @@ test('a text-only wake does not rewrite the unexported prompt history', async (t
   await until('prompt reply held until export', () => runtime.idle() && node.last('session.items')?.items.some((item) => item.text === 'Workflow started.'))
   const prior = await node.peer.call('session.items', { session_id: SESSION })
   await chunk('Workflow finished.')
-  assert.deepEqual(await node.peer.call('session.items', { session_id: SESSION }), prior)
+  const live = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(live.items.slice(0, prior.items.length), prior.items)
+  assert.deepEqual(live.items.slice(prior.items.length).map((item) => [item.kind, item.wake]), [['notice', true]])
+  assert.equal(node.last('session.items')?.items.at(-1)?.id, live.items.at(-1).id)
+
+  const exported = [userStep(0, 'Run the workflow.'), replyStep(1, 'Workflow started.'), replyStep(2, 'Workflow finished.')]
+  transcripts(directory, exported, exported)
+  nativeState(directory, 'IDLE', 3)
+  await until('both exact replies land in one markerless export', () => runtime.idle())
+  const settled = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(settled.items.map(item => item.wake ? 'wake' : item.text),
+    ['Run the workflow.', 'Workflow started.', 'wake', 'Workflow finished.'])
+})
+
+test('live and native wakes keep one identity across batched notifications and a watched file attachment', async (t) => {
+  const { node, directory, chunk, runtime } = await fixture(t, { exportPollMs: 20 })
+  const steps = readFileSync(new URL('./fixtures/autonomous-wake.jsonl', import.meta.url), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  const visible = () => node.peer.call('session.items', { session_id: SESSION })
+  transcripts(directory, steps.slice(0, 3), steps.slice(0, 3))
+  nativeState(directory, 'IDLE', 3)
+  const prior = await visible()
+  await chunk(steps[5].content)
+  const live = await visible()
+  assert.deepEqual(live.items.slice(0, prior.items.length), prior.items)
+  assert.ok(live.items.at(-1).wake)
+  const wakeID = live.items.at(-1).id
+  assert.equal(node.last('session.items').items.at(-1).id, wakeID)
+  transcripts(directory, steps.slice(0, 6), steps.slice(0, 6))
+  nativeState(directory, 'IDLE', 6)
+  await until('one completed native wake replaces the stream', () => runtime.idle() && node.last('session.items')?.to_seq === 6)
+  const final = await visible()
+  assert.deepEqual(final.items.slice(0, prior.items.length), prior.items)
+  assert.deepEqual(final.items.filter(item => item.wake).map(item => item.id), [wakeID])
+  assert.equal(final.items.at(-1).text, steps[5].content)
+})
+
+test('an observed ACP wake keeps its boundary when the native export omits its scheduler notice', async (t) => {
+  const { node, directory, chunk, runtime } = await fixture(t, { exportPollMs: 20 })
+  const steps = readFileSync(new URL('./fixtures/autonomous-wake.jsonl', import.meta.url), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  const priorSteps = steps.slice(0, 3)
+  transcripts(directory, priorSteps, priorSteps)
+  nativeState(directory, 'IDLE', 3)
+  const read = () => node.peer.call('session.items', { session_id: SESSION })
+  const prior = await read()
+  await chunk('The check is complete.')
+  const live = await read()
+  const wake = live.items.find(item => item.wake)
+  assert.ok(wake)
+  const exported = [...priorSteps, { ...steps[5], step_index: 3 }]
+  transcripts(directory, exported, exported)
+  nativeState(directory, 'IDLE', 4)
+  await until('matching native reply settles the observed ACP wake', () => runtime.idle())
+  const final = await read()
+  assert.deepEqual(final.items.slice(0, prior.items.length), prior.items)
+  assert.deepEqual(final.items.filter(item => item.wake).map(item => item.id), [wake.id])
+  assert.equal(final.items.at(-1).text, 'The check is complete.')
+  const receipt = readFileSync(join(directory, 'config/brain', RAW, '.persona-observed-wakes'), 'utf8')
+  assert.equal(receipt, readFileSync(new URL('./fixtures/observed-wake.txt', import.meta.url), 'utf8'))
+
+  await runtime.stop()
+  const cold = await startFakeNode(t)
+  const next = createAgyRuntime({ agyBin: join(directory, 'agy'), agyDir: join(directory, 'config'),
+    home: directory, socketPath: cold.path, log: () => {} })
+  t.after(() => next.stop())
+  next.start()
+  await cold.ready
+  const coldPage = () => cold.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual((await coldPage()).items, final.items)
+  // Reusing the same indices and timestamps in a native replacement branch is not that observed wake.
+  transcripts(directory, [...exported, ...exported.slice(2)], [...exported, ...exported.slice(2)])
+  assert.deepEqual((await coldPage()).items.filter(item => item.wake), [])
 })
 
 test('a late export of one wake cannot settle the next wake', async (t) => {
@@ -939,6 +1010,46 @@ for (const truncated of [false, true]) {
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF8sAAAAASUVORK5CYII=', 'base64')
 
+for (const prompt of ['', 'Check the photo.']) {
+  test(`start keeps ${prompt ? 'text and an image' : 'an image-only prompt'} through shifted native export`, async (t) => {
+    const data = PNG.toString('base64')
+    const client_msg_id = 'client-start'
+    const { node, directory, update, promptCount, runtime } = await fixture(t, {}, {
+      prompt, client_msg_id, images: [{ mime: 'image/png', data }],
+    })
+    await promptCount(1)
+    const read = () => node.peer.call('session.items', { session_id: SESSION, turns: 1 })
+    const checkUser = async (page) => {
+      const user = page.items.filter((item) => item.role === 'user')
+      assert.deepEqual(user.map((item) => item.kind), prompt ? ['text', 'image'] : ['image'])
+      assert.ok(user.every((item) => item.client_msg_id === client_msg_id && item.seq === user[0].seq))
+      const { id, tool_use_id, image } = user.at(-1)
+      assert.equal(tool_use_id, undefined)
+      assert.deepEqual(image, { mime: 'image/png', data: '', lazy: true })
+      assert.deepEqual(await node.peer.call('session.image', { session_id: SESSION, item_id: id }), { mime: 'image/png', data })
+      return id
+    }
+    const live = await read()
+    const liveId = await checkUser(live)
+    const steps = [
+      { step_index: 0, type: 'CHECKPOINT' },
+      { ...userStep(1, prompt ? `/plan ${prompt}` : ''), media: [{ mime_type: 'image/png', data }] },
+      replyStep(2, 'Checked.'),
+      { step_index: 3, type: 'CHECKPOINT' },
+    ]
+    transcripts(directory, steps, steps)
+    nativeState(directory, 'IDLE', steps.length)
+    update({ end: true })
+    await until('native export settles', () => runtime.idle() && sessionStatus(node) === 'done')
+    const native = await read()
+    assert.notEqual(await checkUser(native), liveId)
+    assert.notEqual(native.history, live.history)
+    assert.deepEqual(native.items.map((item) => item.kind), [...(prompt ? ['text'] : []), 'image', 'text', 'notice'])
+    assert.equal(native.items.at(-1).text, '上下文已压缩')
+    assert.equal(node.last('runtime.sessions').sessions.find((row) => row.session_id === SESSION).last_text, 'Checked.')
+  })
+}
+
 test('runtime pages and pushes lazy tool media, keeping Read metadata and turn pagination', async (t) => {
   const { node, directory } = await fixture(t)
   const brain = join(directory, 'config/brain', RAW)
@@ -964,12 +1075,12 @@ test('runtime pages and pushes lazy tool media, keeping Read metadata and turn p
     },
     { ...replyStep(3, 'Looks clean.'), created_at: '2026-01-01T00:00:03Z' },
     { ...userStep(4, '<USER_REQUEST>\n<attached_images>\n/tmp/only-photo.png\n</attached_images>\n</USER_REQUEST>'),
-      media: [{ mime_type: 'image/png', data: PNG.toString('base64') }] },
+      media: [{ mime_type: 'image/png', uri: 'file:///tmp/./only-photo.png' }] },
     replyStep(5, 'Second reply.'),
   ]
   transcripts(directory, steps, steps)
   const recent = await node.peer.call('session.items', { session_id: SESSION, turns: 1 })
-  assert.match(recent.history, /:lazy-tool-media(?:$|:)/)
+  assert.match(recent.history, /:lazy-media:checkpoints(?:$|:)/)
   assert.equal(recent.has_more, true)
   assert.deepEqual(recent.items.map((item) => item.text), ['<attached_images>\n/tmp/only-photo.png\n</attached_images>', 'Second reply.'])
   const paged = await node.peer.call('session.items', { session_id: SESSION, turns: 1, before_seq: recent.items[0].seq })

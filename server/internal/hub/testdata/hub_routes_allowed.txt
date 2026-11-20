@@ -80,6 +80,7 @@ GET /api/v1/personas
 GET /api/v1/personas/{id}/{file...}
 GET /api/v1/pins
 GET /api/v1/sessions
+GET /api/v1/sessions/{mid}/{sid}/agent-messages
 GET /api/v1/sessions/{mid}/{sid}/info
 GET /api/v1/sessions/{mid}/{sid}/items
 GET /api/v1/sessions/{mid}/{sid}/items/{iid}/full
@@ -178,6 +179,7 @@ POST /api/v1/managers/{id}/sources
 POST /api/v1/notify
 POST /api/v1/phone/runtime-cli
 POST /api/v1/sessions
+POST /api/v1/sessions/{mid}/{sid}/agent-messages
 POST /api/v1/sessions/{mid}/{sid}/attach
 POST /api/v1/sessions/{mid}/{sid}/close
 POST /api/v1/sessions/{mid}/{sid}/fork

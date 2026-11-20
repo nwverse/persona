@@ -213,8 +213,8 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
             root = Path(directory)
             output, destination = root / 'output', root / 'artifacts'
             output.mkdir()
-            for name in ('simulator.log', 'simulator-boot.log', 'simulator-readiness.log', 'native-ssh-trace.log',
-                         'runtimes-iOS-before.json'):
+            for name in ('simulator.log', 'simulator-boot.log', 'simulator-readiness.log', 'runtimes-iOS-before.json',
+                         'regular-simulator.log', 'regular-simulator-boot.log', 'native-ssh-trace.log'):
                 (output / name).write_text('diagnostic fixture')
             (output / 'config.json').write_text('configuration must stay in output')
             (output / 'private.key').write_text('key fixture must stay in output')
@@ -236,8 +236,8 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
             self.assertEqual(calls[1][1]['timeout'], 30)
             self.assertEqual((destination / 'disk-space.txt').read_text(), 'disk space diagnostic')
             self.assertEqual({path.name for path in destination.iterdir()}, {
-                'simulator.log', 'simulator-boot.log', 'simulator-readiness.log', 'native-ssh-trace.log',
-                'runtimes-iOS-before.json',
+                'simulator.log', 'simulator-boot.log', 'simulator-readiness.log', 'runtimes-iOS-before.json',
+                'regular-simulator.log', 'regular-simulator-boot.log', 'native-ssh-trace.log',
                 'ios-unit.xcresult', 'simctl-list.json', 'simctl-list.stderr.txt', 'simctl-list.status.txt',
                 'disk-space.txt', 'disk-space.stderr.txt', 'disk-space.status.txt',
                 'simulator-launch.status.txt',
@@ -267,7 +267,13 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
         self.assertIn('--create-only --profile stock', script)
         self.assertIn('2> >(tee "$5" >&2)', script)
         self.assertIn('if [ "$code" -ne 0 ]; then', script)
-        self.assertLess(script.index("ci_run 'Collect Apple failure diagnostics'"), script.index("ci_run 'Shut down owned simulator'"))
+        cleanup = script[script.index('cleanup() {'):script.index('trap cleanup EXIT')]
+        self.assertLess(cleanup.index("ci_run 'Collect Apple failure diagnostics'"), cleanup.index('cleanup_device "$SIM"'))
+        cleanup_helper = script[script.index('cleanup_device() {'):script.index('simulator_udid() {')]
+        self.assertIn("ci_run 'Shut down owned simulator'", cleanup_helper)
+        self.assertIn("ci_run 'Delete owned simulator'", cleanup_helper)
+        self.assertEqual(cleanup.count('cleanup_device "$SIM"'), 1)
+        self.assertEqual(cleanup.count('cleanup_device "$REGULAR_SIM"'), 1)
         self.assertIn('exit "$code"', script)
         self.assertIn('if: failure()\n        uses: actions/upload-artifact@v4', workflow)
         self.assertIn('CI_APPLE_DIAGNOSTICS: ${{ runner.temp }}/persona-apple-diagnostics-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}', workflow)

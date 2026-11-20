@@ -652,6 +652,8 @@ data class Session(
      * waits. [launcher] stays the one it runs on until then. Summary rows leave it out.
      */
     @SerialName("pending_switch") val pendingSwitch: PendingSwitch? = null,
+    /** Earlier stretches of this conversation, oldest first, after a handoff to the other engine. */
+    @SerialName("engine_history") val engineHistory: List<EngineLeg> = emptyList(),
     /** The manager's current queue. A complete session row without the field has no held messages. */
     val undelivered: List<HeldAgentMessage>? = null,
 ) {
@@ -712,6 +714,14 @@ data class Session(
     val displayTitle: String get() = if (title.isEmpty() || title == "Claude Code") folderName.ifEmpty { sessionId.take(8) } else title
     /** Codex in a terminal, or a thread from a Codex app-server / Codex history. */
     val isCodex: Boolean get() = agent == "codex" || sourceKind == "codex_app_server" || sourceKind == "codex_history"
+
+    /** The launcher's catalog identity when a row omits an explicit launcher. */
+    val effectiveLauncher: String get() = launcher?.takeIf(String::isNotEmpty) ?: when {
+        spaceKind == "codex_app" -> "codex-app"
+        isCodex -> "codex"
+        else -> "claude"
+    }
+
     /** Claude Code, or an older hub that does not name the agent: what Claude-only controls (modes, /model, /clear) need. */
     val isClaude: Boolean get() = !isCodex && (agent.isNullOrEmpty() || agent == "claude")
     /**
@@ -975,6 +985,17 @@ data class PendingSwitch(
 )
 
 object PendingSwitchSerializer : WireSerializer<PendingSwitch>(PendingSwitch.generatedSerializer())
+
+/** The session and cutoff of one earlier stretch of an Agent conversation. */
+@KeepGeneratedSerializer
+@Serializable(with = EngineLegSerializer::class)
+data class EngineLeg(
+    @SerialName("session_id") val sessionId: String = "",
+    val agent: String = "",
+    @WireTime val until: String? = null,
+)
+
+object EngineLegSerializer : WireSerializer<EngineLeg>(EngineLeg.generatedSerializer())
 
 /** A pending "back to the configured model" (server proto.ModelRestore): `next_start`, the next start asks for [to]. */
 @KeepGeneratedSerializer

@@ -104,26 +104,37 @@ func TestLinkedRunsInOneConversationKeepTheirOwnReasons(t *testing.T) {
 	otherTask := Task{ID: "other-check", Title: "First ad check", Prompt: "Advance the validation", TodoID: other.ID,
 		Repeat: repeatInterval, EveryMinutes: 10, Enabled: true, Push: pushAsked, SessionID: "conv1", MachineID: "server"}
 	setTasks(s, backfillTask, otherTask)
-
-	for round := 1; round <= 2; round++ {
+	run := func(round int) (mine, theirs ScheduleTodoAssessment) {
 		chat := twoRunsChat(false, false, "backfill-"+string(rune('0'+round)), "other-"+string(rune('0'+round)))
 		// Both watchers read the conversation after the second answer; each run takes the reply to its own prompt.
-		mine := sourceRun(t, s, f, backfillTask, "backfill-"+string(rune('0'+round)), chat)
-		theirs := sourceRun(t, s, f, otherTask, "other-"+string(rune('0'+round)), chat)
-		if mine.State != "no_progress" || mine.NoProgress != round || mine.Reason != backfillReply {
-			t.Fatalf("round %d: the backfill run's assessment %+v, want its own reply as the reason", round, mine)
-		}
-		if theirs.Reason != otherReply {
-			t.Fatalf("round %d: the other run's assessment %+v, want its own reply as the reason", round, theirs)
+		return sourceRun(t, s, f, backfillTask, "backfill-"+string(rune('0'+round)), chat),
+			sourceRun(t, s, f, otherTask, "other-"+string(rune('0'+round)), chat)
+	}
+	if mine, theirs := run(0); mine.State != "baseline" || theirs.State != "baseline" {
+		t.Fatalf("the first linked runs were more than baselines (#11587): %+v %+v", mine, theirs)
+	}
+	// Both to-dos move: a progress assessment quotes its own run's reply, never the other run's.
+	cur := todoNow(s, backfill.ID)
+	cur.Supervision.Criteria[0].State = "met"
+	putTodo(s, cur)
+	s.noteProgress(t.Context(), other.ID, TaskProgress{Kind: upReportProgress, Text: "Compared the first fields", Step: 1, Steps: 3, At: time.Now()})
+	if mine, theirs := run(1); mine.State != "progress" || mine.Reason != backfillReply || theirs.State != "progress" || theirs.Reason != otherReply {
+		t.Fatalf("a run quoted another run's reply: backfill %+v, other %+v", mine, theirs)
+	}
+	// Two runs without progress: their reason, and so the owner's question, is what the hub saw (#11587), which
+	// quotes neither run's words.
+	for round := 2; round <= 3; round++ {
+		if mine, _ := run(round); mine.State != "no_progress" || mine.NoProgress != round-1 ||
+			strings.Contains(mine.Reason, "930,000") || strings.Contains(mine.Reason, strings.TrimSuffix(backfillReply, ".")) {
+			t.Fatalf("round %d: the backfill run's assessment %+v, want the hub's evidence as the reason", round, mine)
 		}
 	}
-	// The second no-progress run asks the owner, with the backfill run's own words, never the other task's.
 	waitFor(t, "the owner decision", func() bool { return todoNow(s, backfill.ID).Supervision.State == reviewNeedsUser })
 	reviews := todoNow(s, backfill.ID).Supervision.Reviews
 	review := reviews[len(reviews)-1]
-	if !strings.Contains(review.Reason, strings.TrimSuffix(backfillReply, ".")) || strings.Contains(review.Reason, "930,000") ||
-		strings.Contains(review.Note, "930,000") {
-		t.Fatalf("the backfill to-do's decision is about another task: reason %q, note %q", review.Reason, review.Note)
+	if strings.Contains(review.Reason, "930,000") || strings.Contains(review.Note, "930,000") ||
+		strings.Contains(review.Reason, strings.TrimSuffix(backfillReply, ".")) {
+		t.Fatalf("the backfill to-do's decision quotes a run instead of the evidence: reason %q, note %q", review.Reason, review.Note)
 	}
 }
 
@@ -134,17 +145,28 @@ func TestLinkedRunWithoutItsOwnTurn(t *testing.T) {
 	s, f, backfill := scheduledTodoFixture(t)
 	task := todoProgressTask(backfill.ID)
 	setTasks(s, task)
+	// A progress assessment is where the run's explanation shows; the first linked run only sets the baseline (#11587).
+	sourceRun(t, s, f, task, "key-0", twoRunsChat(false, false, "key-0", "key-other"))
+	progress := func() {
+		cur := todoNow(s, backfill.ID)
+		cur.Supervision.Criteria[0].State = map[string]string{"met": "not_met"}[cur.Supervision.Criteria[0].State]
+		if cur.Supervision.Criteria[0].State == "" {
+			cur.Supervision.Criteria[0].State = "met"
+		}
+		putTodo(s, cur)
+	}
+	progress()
 	got := sourceRun(t, s, f, task, "key-first", twoRunsChat(false, true, "key-first", "key-second"))
-	if want := i18n.T(s.lang(context.Background()), "assistant-schedule.todo_no_evidence"); got.Reason != want {
-		t.Fatalf("a shared turn's reply became the run's reason: %q, want %q", got.Reason, want)
+	if want := i18n.T(s.lang(context.Background()), "assistant-schedule.todo_no_evidence"); got.State != "progress" || got.Reason != want {
+		t.Fatalf("a shared turn's reply became the run's reason: %+v, want %q", got, want)
 	}
 
 	f.mu.Lock()
 	f.page = nil
 	f.mu.Unlock()
 	f.setItems(proto.Item{Kind: proto.KindText, Role: "assistant", Text: "Nothing was started because execution slots are busy."})
-	_, own := assessTodoRun(t, s, task.ID, nil)
-	if own.Reason != "Nothing was started because execution slots are busy." {
-		t.Fatalf("a run in its own conversation lost its latest turn's reply: %q", own.Reason)
+	_, own := assessTodoRun(t, s, task.ID, progress)
+	if own.State != "progress" || own.Reason != "Nothing was started because execution slots are busy." {
+		t.Fatalf("a run in its own conversation lost its latest turn's reply: %+v", own)
 	}
 }

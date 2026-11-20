@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
 
 // Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md, #930). The assistant hands the user a plan
@@ -62,14 +63,17 @@ type PlanTask struct {
 	Workspace         *TaskWorkspace         `json:"workspace,omitempty"`
 	WorkspaceResolved *TaskWorkspaceResolved `json:"workspace_resolved,omitempty"`
 	// Hub-owned identity for the default branch's preview, before a todo exists.
-	ReservedTodoID    string `json:"reserved_todo_id,omitempty"`
-	WorkspaceInferred bool   `json:"workspace_inferred,omitempty"`
-	Launcher          string `json:"launcher,omitempty"`
-	Model             string `json:"model,omitempty"`
-	Effort            string `json:"effort,omitempty"`
-	Speed             string `json:"speed,omitempty"`
-	Tier              string `json:"tier,omitempty"`
-	Permission        string `json:"permission,omitempty"`
+	ReservedTodoID     string                 `json:"reserved_todo_id,omitempty"`
+	BackendStartDigest string                 `json:"backend_start_digest,omitempty"`
+	WorkspaceError     *taskworkspace.Problem `json:"workspace_error,omitempty"`
+	backendRequest     *taskworkspace.Request
+	WorkspaceInferred  bool   `json:"workspace_inferred,omitempty"`
+	Launcher           string `json:"launcher,omitempty"`
+	Model              string `json:"model,omitempty"`
+	Effort             string `json:"effort,omitempty"`
+	Speed              string `json:"speed,omitempty"`
+	Tier               string `json:"tier,omitempty"`
+	Permission         string `json:"permission,omitempty"`
 	// Ultracode: the agent starts with Claude Code's ultracode on (#12). A pointer so that an edit from the card can
 	// turn it off, and one from a client that does not know it keeps the assistant's choice.
 	Ultracode *bool `json:"ultracode,omitempty"`
@@ -97,10 +101,11 @@ type PlanTask struct {
 	// Reroute is set once a flexible task has been moved to another machine; nil while it runs where it was asked.
 	// Repeated moves keep the original FromMachine and refresh ToMachine and Reason (#2271).
 	Reroute *PlanReroute `json:"reroute,omitempty"`
-	// DoneWhen: what done means, criteria the supervisor checks before it accepts the work; ExpectMinutes: how long it
-	// should take (#3124, supervise.go). Both optional; the agent is told the criteria with its prompt.
-	DoneWhen      []string `json:"done_when,omitempty"`
-	ExpectMinutes int      `json:"expect_minutes,omitempty"`
+	// DoneWhen: what done means, criteria the supervisor checks before it accepts the work. ExpectMinutes is an optional
+	// override of the hub-selected estimate; EstimateSource records which automatic estimate the brief owns (#11685).
+	DoneWhen       []string `json:"done_when,omitempty"`
+	ExpectMinutes  int      `json:"expect_minutes,omitempty"`
+	EstimateSource string   `json:"estimate_source,omitempty"`
 	// The brief (#3822, task_brief.go): Goal is the work in one sentence (the title when left out), OutOfBounds what
 	// the agent must not do. Continues: the to-do this task carries on in (a retry on another computer or a rework
 	// round), for ContinuesWhy: it keeps that to-do and its brief instead of creating another. Brief is

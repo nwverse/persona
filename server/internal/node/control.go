@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/screen"
 	"github.com/nwverse/persona/server/internal/shellcmd"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
 
 func newUUID() string {
@@ -164,6 +165,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	if !proto.FasterSpeed(execution.Speed) {
 		argv, codex = n.codexLauncher(ctx, launcher)
 	}
+	if backend := backendLaunchFrom(ctx); backend != nil && codex && mode != "plan" {
+		for _, repo := range backend.executor.journal.Repositories {
+			argv = append(argv, "--add-dir", repo.CommonDir)
+		}
+	}
 	if codex && execution.SecretTicket != "" { // Codex would start without the values (secretenv.go)
 		return nil, refusal(secretEnvAgentCode, secretEnvAgentText, nil)
 	}
@@ -281,6 +287,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	// No tier alias on the command line for a gateway provider (#10365): its model for that tier, else its default.
 	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: n.claudeModelArg(launcher, execution.Model),
 		Plugins: n.claudeLoadsPlugins(ctx), TaskInstructionFile: instructionFile}
+	if backend := backendLaunchFrom(ctx); backend != nil && mode != "plan" {
+		for _, repo := range backend.executor.journal.Repositories {
+			spec.AdditionalDirs = append(spec.AdditionalDirs, repo.CommonDir)
+		}
+	}
 	lineSpec := spec
 	if execution.FastMode {
 		lineSpec.Settings, err = n.claudeFastModeSettings(ctx, launcher, settings, cwd)
@@ -363,6 +374,16 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	typed.done()
 	if err != nil {
 		return nil, n.startTabFailed(ctx, launch, created, ws, id, err)
+	}
+	if b := backendLaunchFrom(ctx); b != nil && a.Cwd != b.executor.journal.Plan.RootPath {
+		if resume == "" {
+			err := b.executor.recordLaunchSession(id)
+			n.closeNewTab(ctx, launch, created, ws)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return nil, taskworkspace.Failure("result_mismatch", "start", b.executor.journal.OperationID, "", b.executor.journal.Plan.RootPath)
 	}
 	n.bindPane(pane, id)
 	n.starts.recovered(id)

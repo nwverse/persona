@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
 
 // ---- starting and dismissing a plan ----
@@ -210,7 +211,8 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			t.Queue = s.prerequisiteQueue(ctx, *t, s.requestBlockers(ctx, *t))
 		}
 		s.briefStarted(ctx, p, t, todo) // what was asked, kept from now on (task_brief_plan.go)
-		s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(t.Readonly, t.DoneWhen, todo.PRURL), false)
+		// Its stage kind from that brief; how it is handed out is kept for every later look (task_stage_kind.go).
+		s.restage(ctx, todo.ID, func(st *todoStage) { st.Readonly = t.Readonly })
 		if sup := supervisors[i]; sup != "" {
 			if t.Parent == "" && t.ReuseTodo == "" && sup != p.Conversation {
 				s.taskCard(ctx, sup, todo.ID, "")
@@ -302,6 +304,13 @@ func (s *Service) taskTodoForConversation(conversation, id string) (Todo, error)
 // holds them).
 func (s *Service) reusableTodo(ctx context.Context, conversation, id string, taking bool) (stopped []TodoAgent, err error) {
 	t, err := s.taskTodoForConversation(conversation, id)
+	if err != nil && ownerStarts(ctx) && ctx.Value(ownerBackendTodoKey{}) == id {
+		// An owner's manual to-do has no originating conversation. The owner
+		// route binds this one exact to-do; all ordinary takeover checks follow.
+		if manual, ok := s.todoNow(id); ok && manual.Origin == "" && supervisorOf(manual) == "" {
+			t, err = manual, nil
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -632,7 +641,8 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 	t.Permission = strings.TrimSpace(t.Permission)
 	mid, sid, err := s.startTaskAgent(ctx, &t, retry)
 	var lost startLinkLost
-	if t.RequestGate == "" && errors.As(err, &lost) && lost.back {
+	var quota *gatewayQuotaWaitError
+	if !t.startWithoutReplay() && errors.As(err, &lost) && lost.back {
 		// The link took the start's answer and the machine, back, does not show the agent: start it once more, with
 		// a whole start's time of its own (the first may have spent its own on the dead link). Not counted against
 		// the launcher (#7511).
@@ -641,7 +651,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		defer rcancel()
 		ctx = rctx
 		mid, sid, err = s.startTaskAgent(ctx, &t, retry)
-	} else if t.RequestGate == "" && err != nil && ctx.Err() == nil && !startStalled(err) {
+	} else if !t.startWithoutReplay() && err != nil && ctx.Err() == nil && !startStalled(err) && !errors.As(err, &quota) {
 		// The machine's link dropped (a node restarting, a tunnel blinking): try once more after a moment. Any other
 		// launcher failure may move a flexible task, after verifying its directory on the destination.
 		// An unknown result (the wait ran out or the link dropped while the answer was out) already went through
@@ -675,6 +685,23 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 			case <-ctx.Done():
 			}
 		}
+	}
+	if errors.As(err, &quota) {
+		if saveErr := s.persistGatewayWait(ctx, t, quota.queue); saveErr != nil {
+			s.logf("task %s: save gateway quota wait: %v", t.TodoID, saveErr)
+			err = i18n.Err("assistant-tasks.gateway_quota_unsaved")
+		} else {
+			return
+		}
+	}
+	if errors.Is(err, errGatewayTaskHandled) {
+		s.replaceTaskQueue(ctx, t, nil, queueCAS)
+		return
+	}
+	var quotaState *gatewayQueueStateError
+	if errors.As(err, &quotaState) {
+		s.logf("task %s: queued launch eligibility unconfirmed: %v", t.TodoID, quotaState)
+		return
 	}
 	if t.Machine != placed || t.Why != placedWhy || t.Permission != placedPermission { // workspace admission already persisted the actual checkout
 		s.updatePlanTask(ctx, planID, i, t)
@@ -720,10 +747,12 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 			s.requeueRequestStart(ctx, t, blocked.ids)
 			return
 		}
+	}
+	if t.startWithoutReplay() {
 		var remote *rpc.Error
 		if launched || startResultUnknown(err) || errors.As(err, &lost) || nodeMayHaveTaken(err) ||
 			errors.As(err, &remote) && remote.Code == "identity_conflict" {
-			s.logf("task %s: request launch unconfirmed, not replaying: %v", t.TodoID, err)
+			s.logf("task %s: queued launch unconfirmed, not replaying: %v", t.TodoID, err)
 			return
 		}
 	}
@@ -760,7 +789,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		}
 		args["launcher"] = s.startLauncher(ctx, t.Launcher)
 	}
-	if t.RequestGate == "" && s.beginRemedy(ctx, planID, i, t, err, code, args, reason) {
+	if !t.backendWorkspace() && t.RequestGate == "" && s.beginRemedy(ctx, planID, i, t, err, code, args, reason) {
 		return
 	}
 	// A retry the assistant asked for that failed so its tab is gone: the start fails for good, and the supervisor and
@@ -779,6 +808,12 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 	}
 	if perr := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {
 		pt.Error = err.Error()
+		var problem *taskworkspace.Problem
+		if errors.As(err, &problem) {
+			pt.WorkspaceError = problem
+		} else if t.backendWorkspace() && t.backendRequest != nil {
+			pt.WorkspaceError = taskworkspace.Failure("engine_start_failed", "start", t.backendRequest.OperationID, "", t.Cwd)
+		}
 		pt.ErrorCode, pt.ErrorArgs, pt.RetryWith = code, args, retryWith
 		if remedied && pt.Start != nil {
 			pt.Start.State, pt.Start.Pane, pt.Start.At = remedyFailed, "", time.Now().UTC()
@@ -1059,6 +1094,7 @@ func (s *Service) retryTaskStart(ctx context.Context, todoID string, with retryW
 	// other tasks recorded since p was read stays.
 	if err := s.patchPlanTask(ctx, p.ID, i, func(pt *PlanTask) {
 		*pt = t
+		pt.WorkspaceError = nil
 		pt.Error, pt.ErrorCode, pt.ErrorArgs, pt.RetryWith = "", "", nil, nil
 	}); err != nil {
 		s.logf("plan %s: %v", p.ID, err)

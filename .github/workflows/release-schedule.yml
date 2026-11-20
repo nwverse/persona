@@ -46,6 +46,10 @@ jobs:
           set -euo pipefail
           test -n "$GH_TOKEN" || { echo 'persona-release is missing RELEASE_PR_TOKEN; no release PR or branch was created' >&2; exit 1; }
           test "$CHANNEL" = release || test "$CHANNEL" = beta
+          # The environment approval may be hours after the scheduled checkout. Select the source only now, rather
+          # than publishing the old main SHA that happened to trigger this run. A PR pins the selected source next.
+          git fetch --no-tags origin main
+          git switch --detach FETCH_HEAD
           commit="$(git rev-parse HEAD)"
           stable="$(gh api "repos/$REPOSITORY/releases/latest" --jq .tag_name)"
           previous="$(git rev-parse "$stable^{commit}")"
