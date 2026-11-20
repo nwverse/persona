@@ -260,6 +260,10 @@ or 9) adds a view-path case that asserts the fixture value instead. Android fail
 `:core:domain:test --tests '*AgentsNeedsYouFixtureTest*'` (`--max-workers=4`) and iOS AgentsNeedsYouFixtureTests pass,
 each marked case at today's value, iOS on the implementer's own simulator.
 
+*Landed (#11823):* `badge_rows` on every case and the six cases; iOS's replays (with `HomeWidgetTests`) now drop
+directory-hidden cards and fold sides as the app does, and the one mark is Android's on
+`a_directory_hidden_card_counts_nowhere` (D1); iOS needs none.
+
 **4. The surface table and the agreement report** (section 3.5). *Change:* spec/fixtures/counts (README, surfaces.json),
 the guard, the report switch in the existing replays, the lane differ, and entries in `scripts/ci/paths.py` and
 `scripts/ci/check_fast_map.py`. *Conflict:* new files; `spec/README.md` has 1 open PR (#5969d), `paths.py` and

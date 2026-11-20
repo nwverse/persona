@@ -510,7 +510,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // clock), and ownerNeeds keeps why each to-do counts. 88 B in each language, measured in one environment against main
 // 136308faf5 (ja 482,906 B to 482,994 B; en 479,979 B to 480,067 B, zh-Hans 480,757 B to 480,845 B); the rows' mark
 // and its words load with the To-dos page. The budget is main's 482,970 B ceiling plus those 88 B.
-export const FIRST_SCREEN_BUDGET = 483_058;
+// #11804 + #11820: Antigravity queue/send-now runtime copy and launcher-scoped Assistant sign-in guidance add
+// 85 B to the ja first screen (ja 483,143 B, en 480,233 B, zh-Hans 480,987 B). The budget is main's 483,058 B
+// ceiling plus those 85 B.
+export const FIRST_SCREEN_BUDGET = 483_143;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

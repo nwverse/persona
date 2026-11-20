@@ -783,8 +783,12 @@ func (s *Service) extensionMirror(ctx context.Context, machine, session string) 
 	if !main && task == "" {
 		return
 	}
-	if sess, ok := s.session(ctx, machine, session); !ok || sess.WokeByTask && !main || spaceOf(sess) == SpaceHealth {
+	sess, ok := s.session(ctx, machine, session)
+	if !ok || sess.WokeByTask && !main || spaceOf(sess) == SpaceHealth {
 		return // a health task's runs stay off the channels (health.go)
+	}
+	if s.transientRetryTurn(ctx, sess) {
+		return
 	}
 	asked, answer, ok := s.channelLastTurn(ctx, machine, session)
 	if !ok {

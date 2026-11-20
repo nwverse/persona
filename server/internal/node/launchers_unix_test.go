@@ -194,29 +194,31 @@ func TestLaunchersQueuedRefreshUsesDiscoveryCompletedWhileWaiting(t *testing.T) 
 		list, err := n.launchers(ctx, true)
 		firstDone <- answer{list: list, err: err}
 	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	waitFor(t, "the first discovery to start", func() bool {
 		if _, err := os.Stat(started); err == nil {
-			break
+			return true
 		} else if !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("the first discovery did not start")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+		return false
+	})
 	cancel() // The RPC caller may give up; node discovery deliberately finishes and publishes its result.
 	if err := os.WriteFile(rc, []byte("alias custom-c='claude'\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	secondDone := make(chan answer, 1)
+	queued := make(chan struct{})
+	secondCtx := context.WithValue(context.Background(), launcherFetchObserverKey{}, func() { close(queued) })
 	go func() {
-		list, err := n.launchers(context.Background(), true)
+		list, err := n.launchers(secondCtx, true)
 		secondDone <- answer{list: list, err: err}
 	}()
-	// Keep the first shell blocked until the queued refresh has entered launchers and recorded the old generation.
-	time.Sleep(100 * time.Millisecond)
+	// Keep the first shell blocked until the queued refresh has recorded the old generation and reached the fetch lock.
+	select {
+	case <-queued:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second refresh did not queue for discovery")
+	}
 	if err := os.WriteFile(release, []byte("release\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -334,26 +336,28 @@ func TestLaunchersCanceledQueuedRefreshDoesNotStartAnotherShell(t *testing.T) {
 		_, err := n.launchers(firstCtx, true)
 		firstDone <- err
 	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	waitFor(t, "the first discovery to start", func() bool {
 		if _, err := os.Stat(started); err == nil {
-			break
+			return true
 		} else if !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("the first discovery did not start")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+		return false
+	})
 	cancelFirst() // this discovery still finishes, but fails without publishing a generation
 	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	queued := make(chan struct{})
+	secondCtx = context.WithValue(secondCtx, launcherFetchObserverKey{}, func() { close(queued) })
 	secondDone := make(chan error, 1)
 	go func() {
 		_, err := n.launchers(secondCtx, true)
 		secondDone <- err
 	}()
-	time.Sleep(100 * time.Millisecond) // let the second caller queue behind the first shell
+	select {
+	case <-queued:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second refresh did not queue for discovery")
+	}
 	cancelSecond()
 	if err := os.WriteFile(release, []byte("release\n"), 0o600); err != nil {
 		t.Fatal(err)
