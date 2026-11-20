@@ -200,6 +200,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("RELEASE_PR_TOKEN", text)
         self.assertIn("missing RELEASE_PR_TOKEN", text)
         self.assertIn("git diff --cached --quiet", text)
+        select = next(step for step in yaml.load(text, Loader=yaml.BaseLoader)["jobs"]["plan"]["steps"]
+                      if step.get("id") == "select")["run"]
+        self.assertLess(select.index("git fetch --no-tags origin main"), select.index('commit="$(git rev-parse HEAD)"'))
+        self.assertLess(select.index("git switch --detach FETCH_HEAD"), select.index('commit="$(git rev-parse HEAD)"'))
         self.assertNotIn("gh pr create", text)
         self.assertIn("refs/heads/$branch", text)
         self.assertIn("preserve its failed source", text)

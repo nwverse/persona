@@ -28,6 +28,33 @@ The hub and the managers apart:
 - **One container in Docker.** The hub image runs the hub and the built-in manager as two processes under `personad supervise`, each restarted on its own, as `persona-hub run` and `persona-manager assistant` unless `PERSONA_SPLIT_PROGRAMS=0` ([docker.md](../operations/docker.md) ("Programs")).
 - **Two services on a new install.** `hub setup` installs the hub's service and the built-in manager's own (`persona-manager-assistant.service` running `persona-manager assistant`, or on a Mac the launchd agent `com.persona.manager.assistant`, running `persona-manager assistant` on a new install, each with `PERSONA_ASSISTANT_DEPLOY=service`), and binds the second to the first with a one-time code. Existing installs keep the hub's child until `hub setup --manager-service` ([upgrade.md](../operations/upgrade.md): every install type, step by step). See [managers.md](../assistant/managers.md) ("The built-in manager as its own service").
 
+## Held Agent messages from the terminal
+
+Use `personad outbox` to check and recover messages waiting for one computer, even when the computer is offline or
+the Agent is absent from the session list. Use the computer ID from the hub's machine list and a full paired-device
+token. See [Authentication](../protocol/protocol.md#authentication) for issuing and revoking a device token.
+Store it in a private file or provide it in `PERSONA_OUTBOX_TOKEN`. The command takes the hub's HTTPS address
+(including its mount path, if any) or a local HTTP address.
+
+```sh
+personad outbox list --hub '<hub URL>' --token-file '<private token file>' '<computer ID>'
+personad outbox list --hub '<hub URL>' --token-file '<private token file>' --state failed --json '<computer ID>'
+personad outbox retry --hub '<hub URL>' --token-file '<private token file>' '<computer ID>' '<session ID>' '<message ID>'
+personad outbox discard --hub '<hub URL>' --token-file '<private token file>' '<computer ID>' '<session ID>' '<message ID>'
+```
+
+The list shows queue order, message and session IDs, the send time and delivery status. Add `--session` to narrow it to one
+Agent. The default page is 50 messages. Set `--limit` to 1–100 and pass the returned cursor to `--after` with the same
+filters for the next page. This is a live view, so a message can leave the queue between a read and an action. The
+inventory omits messages' contents and attachments.
+
+Waiting means the manager still has the message. Sending and checking mean it is trying delivery or looking for
+evidence of a previous delivery. A failed message may have been refused, expired, or reached the chat without
+confirmation. Retry follows the chat's existing behavior, including checking for a message that may have arrived and
+requiring a separate owner retry when the check cannot confirm delivery. Discard removes the held copy. A copy that
+already reached the chat stays there. Messages from a signed-out device can only be discarded. If a request's outcome
+is unclear, list the outbox again before trying an action. See [Messages to an Agent whose computer is away](../assistant/assistant.md#messages-to-an-agent-whose-computer-is-away-10661).
+
 ## Team project documents pilot
 
 An operator can run `persona-projects` separately to hand a versioned text document to another project member. Build the pilot from source in the `server` directory with `go build -o persona-projects ./cmd/persona-projects`. Provision a dedicated PostgreSQL database and login that can create tables in it. Set `TEAM_PROJECT_DATABASE_URL` in the operator's environment to that database's connection URL. Use a TLS-verified database connection for a remote database.
@@ -423,6 +450,29 @@ Script steps:
 - **If restoring the files cannot be undone completely**, the originals that could not be put back stay in the previous-files directory (`.persona-backup-previous-<id>` in the runtime directory, or `.<name>.persona-backup-previous-<id>` beside an external knowledge base), each as `NNN-<name>`; the error names the directory and each file, and the directory is deleted only once it is empty. Move each back by hand.
 - **`--output` must be outside the collected trees** (the knowledge base, `managers/assistant`, `extensions`, `skills`, `hub.machines_kept`); `create` refuses it with a message, since the bundle and its staging directory would be copied into themselves. `~/.persona/backups/` is fine. On a case-insensitive file system (macOS) a differently-cased spelling of such a path is not recognised; spell the path as it is.
 - **If a restore cannot put the databases back** (for example the server goes away during the swap), what happens to the runtime files follows what restore could establish. If a database from the bundle may be live (it could not be moved back, or the checks that would show it was not installed failed), the files stay as restored, so they match it, and the error names every database that may be the bundle's, the previous databases that may still exist (`persona_previous_*`), any staged copy that may remain (`persona_staged_*`, not in use; when something outside the restore changed the databases, so that what a staged name holds cannot be confirmed, the error says so instead of calling it safe to drop: check it before dropping), the directory with the previous files and, for an external knowledge base, its previous copy. Otherwise the files are rolled back, and the error still names any previous database left parked and any staged copy that could not be dropped. The files can therefore stay as restored while both live databases are in fact the install's own only when every check that would tell failed; when one database was put back and the other could not be, the files stay as restored while one live database is the install's own. Running restore again converges, and nothing is lost either way.
+
+### Inspect a backup offline
+
+Use `personad backup inspect` to check a copied or rotated bundle before a recovery environment is ready. It reads
+the bundle directly, so it needs no Persona install, PostgreSQL clients, live database, or extraction space.
+
+```sh
+personad backup inspect --bundle '<backup file>'
+personad backup inspect --bundle '<backup file>' --json
+```
+
+The file must be a regular owner-only archive. Inspection checks the manifest, member names, sizes, modes, and
+SHA-256 hashes, then checks the bundled hub and built-in manager keys against their manifest fingerprints. It checks
+the archive ending too, so a file cut off after its last payload still fails. An interrupted or failed check exits
+with an error and prints no partial report.
+
+The report gives the format, creation time, archive bytes, and file and byte totals for the hub dump, manager dump,
+runtime files, and knowledge base. It shows whether the knowledge base was absent, empty, or included and whether
+the manifest puts it outside the installation. It omits file paths, database names, configuration, keys, and
+fingerprints. JSON has `check: "offline_integrity"` and `database_restore_verified: false`.
+
+The checks compare the archive with its own manifest. Run `personad backup verify` for a temporary restore of both
+databases and a check of their schema and key identity.
 
 ### Restore drill (`scripts/test/backup_restore_drill.py`, #10497)
 

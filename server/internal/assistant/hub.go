@@ -51,6 +51,7 @@ type (
 	Device              = assistantwire.Device
 	ClientApp           = assistantwire.ClientApp
 	ConfiguredLauncher  = assistantwire.ConfiguredLauncher
+	LauncherRecovery    = assistantwire.LauncherRecovery
 	HubModels           = assistantwire.HubModels
 	AppCall             = assistantwire.AppCall
 	ModelBinding        = assistantwire.ModelBinding

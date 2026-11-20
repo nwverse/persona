@@ -16,8 +16,11 @@ import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -28,6 +31,7 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
+import java.net.SocketTimeoutException
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.ModelPick
 import persona.core.contracts.PendingSwitch
@@ -64,12 +68,15 @@ class ModelPillTest {
         assertFalse(switchesNext(null, on = true))
     }
 
-    @Test fun aSwitchDrawnAtOnceStandsUntilTheNextPush() {
-        val drawn = DrawnSwitch(PendingSwitch("work", "glm-5.3"), rev = 7)
-        assertEquals(PendingSwitch("work", "glm-5.3"), drawn.over(agent).pendingSwitch)
-        assertNull("the next push says what the hub has", drawn.over(agent.copy(rev = 8)).pendingSwitch)
-        assertNull("dropped at once", DrawnSwitch(null, 7).over(agent.copy(pendingSwitch = PendingSwitch("work"))).pendingSwitch)
-        assertEquals(agent, (null as DrawnSwitch?).over(agent))
+    @Test fun aSwitchDrawnAtOnceStandsUntilAWholeRowIsObserved() {
+        val drawn = DrawnSwitch(PendingSwitch("work", "glm-5.3"), observation = 1L)
+        assertEquals(PendingSwitch("work", "glm-5.3"), drawn.over(agent, 1L).pendingSwitch)
+        assertEquals("a transcript size change isn't evidence of a new switch", drawn.switch,
+            drawn.over(agent.copy(rev = 8), 1L).pendingSwitch)
+        assertNull("a fresh whole row wins even at the same transcript size", drawn.over(agent, 2L).pendingSwitch)
+        assertNull("a local cancel gives immediate feedback",
+            DrawnSwitch(null, 1L).over(agent.copy(pendingSwitch = PendingSwitch("work")), 1L).pendingSwitch)
+        assertEquals(agent, (null as DrawnSwitch?).over(agent, 1L))
     }
 
     @Test fun whatThePhoneKeepsReadsBack() {
@@ -120,8 +127,9 @@ class ModelPillTest {
     }
 
     /** Records what the pill asks the hub. */
-    private class Hub : AssistantManagement {
+    private open class Hub : AssistantManagement {
         val asked = mutableListOf<String>()
+        val launcherListRefreshes = mutableListOf<Boolean>()
         var launcherListReads = 0
             private set
         override suspend fun config() = AssistantConfig(machineId = "box", launcher = "claude", main = "main")
@@ -129,6 +137,10 @@ class ModelPillTest {
             launcherListReads++
             return AssistantLaunchers(
                 listOf(AgentLauncher("claude"), AgentLauncher("team", displayName = "Team API")), LauncherDefault("claude", "opus", "high"))
+        }
+        override suspend fun assistantLauncherList(machineId: String, refresh: Boolean): AssistantLaunchers {
+            launcherListRefreshes += refresh
+            return assistantLauncherList(machineId)
         }
         override suspend fun launcherModels(machineId: String, launcher: String) = when (launcher) {
             "claude" -> LauncherModels("claude", listOf(AgentModel("default", "Default", resolved = "claude-opus-5-5", isDefault = true),
@@ -153,6 +165,120 @@ class ModelPillTest {
     }
 
     private fun hasDialogText(text: String) = hasText(text) and hasAnyAncestor(isDialog())
+
+    private fun showAssistantPill(hub: Hub) {
+        val session = Session("box", "main", assistant = true, launcher = "claude", status = "idle", rev = 3)
+        rule.setContent {
+            CompositionLocalProvider(LocalHubFeatures provides setOf("assistant_model_pick")) {
+                PersonaTheme(reduceMotion = true, style = AppStyle.Glass) {
+                    Box {
+                        PersonaModelPill(session, "box", hub, ModelPillWidth.Wide, pagePick = null, onPagePick = {}, onNotice = {})
+                    }
+                }
+            }
+        }
+    }
+
+    private fun waitForDialogText(text: String) = rule.waitUntil(5_000) {
+        rule.onAllNodes(hasDialogText(text), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+    }
+
+    @Test fun anAssistantProviderTimeoutCanBeRetriedInTheOpenSheet() = assertAssistantProviderRetry(SocketTimeoutException())
+
+    @Test fun aDiscardedAssistantRouteCanBeRetriedInTheOpenSheet() = assertAssistantProviderRetry(CancellationException("Pairing changed"))
+
+    private fun assertAssistantProviderRetry(failure: Exception) {
+        val first = CompletableDeferred<Unit>()
+        val retry = CompletableDeferred<Unit>()
+        val hub = object : Hub() {
+            override suspend fun assistantLauncherList(machineId: String): AssistantLaunchers {
+                val result = super.assistantLauncherList(machineId)
+                (if (launcherListReads == 1) first else retry).await()
+                return result
+            }
+        }
+        showAssistantPill(hub)
+        rule.onNodeWithTag("model-pill").performClick()
+        waitForDialogText("Loading models…")
+        rule.runOnIdle { first.completeExceptionally(failure) }
+        waitForDialogText("Couldn't load models")
+        rule.onNode(hasDialogText("Loading models…"), useUnmergedTree = true).assertDoesNotExist()
+
+        rule.onNode(hasDialogText("Retry"), useUnmergedTree = true).performClick()
+        waitForDialogText("Loading models…")
+        rule.runOnIdle { retry.complete(Unit) }
+        waitForDialogText("Sonnet 4.5")
+        rule.onNode(hasDialogText("Retry"), useUnmergedTree = true).assertDoesNotExist()
+        rule.runOnIdle { assertEquals(listOf(false, true), hub.launcherListRefreshes) }
+    }
+
+    @Test fun openingTheAssistantModelSheetRetriesAFailedPrefetch() {
+        val first = CompletableDeferred<Unit>()
+        val retry = CompletableDeferred<Unit>()
+        val hub = object : Hub() {
+            override suspend fun assistantLauncherList(machineId: String): AssistantLaunchers {
+                val result = super.assistantLauncherList(machineId)
+                (if (launcherListReads == 1) first else retry).await()
+                return result
+            }
+        }
+        showAssistantPill(hub)
+        rule.waitUntil(5_000) { hub.launcherListReads == 1 }
+        rule.runOnIdle { first.completeExceptionally(SocketTimeoutException()) }
+        rule.onNode(isDialog()).assertDoesNotExist()
+
+        rule.onNodeWithTag("model-pill").performClick()
+        waitForDialogText("Loading models…")
+        rule.runOnIdle {
+            assertEquals(listOf(false, true), hub.launcherListRefreshes)
+            retry.complete(Unit)
+        }
+        waitForDialogText("Sonnet 4.5")
+        rule.onNode(hasDialogText("Retry"), useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun aFailedAssistantProviderRefreshKeepsTheModelsInTheOpenSheet() {
+        val refresh = CompletableDeferred<Unit>()
+        val hub = object : Hub() {
+            override suspend fun assistantLauncherList(machineId: String): AssistantLaunchers {
+                val result = super.assistantLauncherList(machineId)
+                if (launcherListReads > 1) refresh.await()
+                return result
+            }
+        }
+        showAssistantPill(hub)
+        rule.waitUntil(5_000) { hub.launcherListReads == 1 }
+        rule.onNodeWithTag("model-pill").performClick()
+        waitForDialogText("Sonnet 4.5")
+        rule.waitUntil(5_000) { hub.launcherListReads == 2 }
+        rule.runOnIdle { refresh.completeExceptionally(SocketTimeoutException()) }
+        waitForDialogText("Retry")
+        rule.runOnIdle { assertEquals(listOf(false, false), hub.launcherListRefreshes) }
+        rule.onNodeWithTag("model-panel-list").performScrollToNode(hasText("Sonnet 4.5"))
+        rule.onNode(hasDialogText("Sonnet 4.5"), useUnmergedTree = true).assertExists()
+        rule.onNode(hasDialogText("Loading models…"), useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun aFallbackProviderCanRetryAfterTheRouteChangedAndShowAnEmptyModelList() {
+        val first = CompletableDeferred<LauncherModels>()
+        val retry = CompletableDeferred<LauncherModels>()
+        val hub = object : Hub() {
+            private var reads = 0
+
+            override suspend fun assistantLauncherList(machineId: String) = AssistantLaunchers()
+            override suspend fun launcherModels(machineId: String, launcher: String): LauncherModels =
+                (if (++reads == 1) first else retry).await()
+        }
+        showAssistantPill(hub)
+        rule.onNodeWithTag("model-pill").performClick()
+        rule.runOnIdle { first.completeExceptionally(CancellationException("Pairing changed")) }
+        waitForDialogText("Retry")
+        rule.onNode(hasDialogText("Retry"), useUnmergedTree = true).performClick()
+        rule.onNode(hasDialogText("Retry"), useUnmergedTree = true).assertDoesNotExist()
+        rule.runOnIdle { retry.complete(LauncherModels()) }
+        waitForDialogText("No models available")
+        rule.onNode(hasDialogText("Loading models…"), useUnmergedTree = true).assertDoesNotExist()
+    }
 
     @Test fun aPersonaChatsPickIsKeptOnTheHubAndUndone() {
         val hub = Hub()

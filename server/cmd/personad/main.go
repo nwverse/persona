@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/nodecmd"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/operations/backup"
+	"github.com/nwverse/persona/server/internal/outboxcli"
 
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/extension/sourcevalidate"
@@ -80,7 +81,8 @@ const usage = `usage:
                            secret, uninstall, markets (docs/extensions/extensions.md "Command line"; personad extension for the details;
                            also personad ext …, and personad plugin … as before)
 ` + nodecmd.SysmonUsage + `
-  personad backup create|verify|restore …
+` + outboxcli.Usage + `
+  personad backup create|inspect|verify|restore …
                            verified whole-install backup and staged recovery (personad backup <command> -h)
   personad release manifest|verify|check-next …
                            the publisher's release manifest and checks (scripts/release/publish.sh, docs/operations/hub-update.md "Public publishing")
@@ -122,6 +124,8 @@ func main() {
 			b := buildInfo()
 			fmt.Printf("channel %s, build %d\n", b.Channel, b.Number)
 		}
+	case "outbox":
+		err = outboxcli.Run(ctx, os.Args[2:], os.Stdout)
 	case "backup":
 		err = backup.Run(ctx, os.Args[2:], os.Stdout, os.Stderr)
 	case "release":

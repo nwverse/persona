@@ -227,7 +227,7 @@ and `manager.resync` (a request for a full snapshot; the assistant still answers
 Inbox (`assistant/inbox_bus.go`): `inbox.collected` (hub hands over a source round: `{epoch, seq, round, sources:[{id, name, off?, extension?, migrated?, group?, meta?, meta_description?, settles?, kinds?, things, read_error?}], mail?: {accounts, failed?: [{id, email, read_error}]}, names}`; assistant synthesizes / triages items then answers; `epoch` identifies this hub run, `seq` the round, discard older already-used rounds; unreadable stored Inbox returns `inbox_unavailable`, retried next round), `inbox.item {id}` → `{item, ok}` (stored JSON for plugin detail slots), `inbox.forget {source}` → `{deleted}`, `inbox.repo_mutes {source, set?, add?, repos?}` → `{repos}` (GitHub settings "Muted repositories"); `inbox.mutes {source?}` → `{mutes}` and `inbox.unmute {id}` → `{}` (the Inbox Sources pages' Muted list, #5278); `inbox.post {on?}` → `{on}` (the Assistant source's switch on those pages, #6430: whether the assistant may put its conversations into the Inbox; on unless turned off); `inbox.triage_preview {source, name, kinds?, things}` → `{verdicts: [{tier?, summary?, reason?, urgent?, state?, why?}]}` (the pages' Try Triage with the Model: at most 3 things, each asked about once as a round's item would be, nothing kept). Snapshots add `inbox: {agents:[{machine_id, session_id}]}` for AI twin chats, suppressing hub completion push (`null` if unreadable, retain previous).
 Hub errors cross the bus with codes (`no_device`, `machine_offline`, `node_closed`, `stale_snapshot`, `assistant_in_doubt` for interrupted partial Inbox replies), restored by the assistant to original errors with unchanged decisions. App routes, events, fields, and pushes are unchanged.
 
-**State** uses the assistant's `assistant.Store` (`assistant/store.go`): settings `assistant` (its own profile, below), model config `model_config.*`, `launchers.managed`, `launchers.hidden`, `launchers.zshrc` (`docs/assistant/model-config.md` ("Who owns models")), `assistant.main_handoff`, `assistant.titles`, `assistant.archived`, `assistant.conversation_tags`, `assistant.direction_sessions` (the owner's per-computer/session direction filing book, including explicit on-its-own entries, #11391), `assistant.model_picks`, `assistant.relay`, `assistant.quotes`, `assistant.tasks`, `assistant.runs`, `tasks.trust`, Inbox `inbox_mutes` (legacy `assistant.routines` / `assistant.followups` still migrate only on first read), channel `channels`, `channels.state`, `bots.feishu.state` (since 2026-11-04; `bots.feishu` credentials, pairing, and switches still belong to hub); tables `task_plans`, `assistant_feed`, `todos`, `todo_spaces`, `todo_agents`, `todo_decisions`, `inbox_items`.
+**State** uses the assistant's `assistant.Store` (`assistant/store.go`): settings `assistant` (its own profile, below), model config `model_config.*`, `launchers.managed`, `launchers.hidden`, `launchers.zshrc` (`docs/assistant/model-config.md` ("Who owns models")), `assistant.main_handoff`, `assistant.titles`, `assistant.archived`, `assistant.conversation_tags`, `assistant.direction_sessions` (the owner's per-computer/session direction filing book, including explicit on-its-own entries, #11391), `assistant.model_picks`, `assistant.relay`, `assistant.quotes`, `assistant.handovers`, `assistant.tasks`, `assistant.runs`, `tasks.trust`, Inbox `inbox_mutes` (legacy `assistant.routines` / `assistant.followups` still migrate only on first read), channel `channels`, `channels.state`, `bots.feishu.state` (since 2026-11-04; `bots.feishu` credentials, pairing, and switches still belong to hub); tables `task_plans`, `assistant_feed`, `todos`, `todo_spaces`, `todo_agents`, `todo_decisions`, `inbox_items`.
 Knowledge state is files in `~/.persona/data`, the manager's `handles.key` (`~/.persona/managers/assistant/`), and `kb_entities` (`docs/assistant/knowledge.md`).
 This is hub's same Postgres, with unchanged keys / tables and no data migration; the assistant connects itself using the same `database_url`. Only it reads / writes these keys and tables; hub doesn't touch them.
 Scheduled-task and finished-task Agent-closing loops belong to the assistant (`Service.Run`, beginning only after first hub connection and handshake).
@@ -640,8 +640,9 @@ anthropics/claude-code#97074). Anthropic documents no such weighting, so this is
 
 ## Next-message suggestions (#4644)
 
-The strip over an empty composer (#2978: click or Tab fills it in, the arrow sends it) reads one field, `Session.suggestion`, which has
-two sources (`server/internal/assistant/suggest_next.go`):
+The strip over an empty composer (#2978) reads `Session.suggestion`. Click or Tab fills the composer. The arrow sends a suggestion eligible for direct send. The manager considers these sources in order (`server/internal/assistant/suggest_next.go`).
+
+- **An Agent's explicit offer** (#11874). A completed final work report can supply one optional `next` reply. It is available even if the owner opens the chat after the turn ends. The turn stays done and the owner decides whether to answer. A new message or turn spends the offer. Blocked or unfinished reports, pending decisions, quoted examples and free-form questions do not produce this suggestion.
 
 - **Claude Code in a terminal** keeps the suggestion Claude Code draws in its own input box, read off the screen by the node
   (`server/internal/node/suggestion.go`). The manager never calls a model for such a session.
@@ -663,7 +664,7 @@ Rules for the hub-made one:
   call is a plain completion with no tools, MCP or memory.
 - **Nothing sensible, nothing shown**: `NONE`, an empty answer, more than one line or more than 200 characters shows nothing; there is no
   stand-in and no retry.
-- **Risky suggestions** (either source): one that names a command, a path, a link, a secret-looking string or one of the risky actions
+- **Risky suggestions** (all sources): one that names a command, a path, a link, a secret-looking string or one of the risky actions
   of the Agents' safety boundary (`riskyWords`: delete, push, deploy, send…) carries `suggestion_risky: true`. The apps fill it in but
   show no one-tap send.
 - **Clients**: the web, iOS/iPadOS and Android show the strip in Agent and assistant conversations, the main Persona conversation included,
@@ -1472,14 +1473,20 @@ explicit user-facing actions still follow the usual visibility rules.
   unavailable, unless it settled with silent visibility. The full reply uses the ordinary reply bubble so its
   formatting and links remain available. Its work keeps the usual collapsed summary. Intermediate narration,
   generated quiet-heartbeat acknowledgements and empty turns stay folded. A successful silent finish keeps its round
-  folded unless an explicit user-visible action promoted it. This changes the chat display only and sends no push.
+  folded unless an explicit user-visible action promoted it. One exception is a routine `conversation_send` report to
+  the main conversation: with folding on, its input and nonblank reply both stay inside the expandable background
+  record, and a normal finished reply sends no push. A P0, a specifically requested result or a decision can still be
+  promoted through the explicit actions above, which keep their existing display and push paths. Final replies in
+  leader conversations and scheduled rounds stay visible as before. Relay delivery, processing and hop/answer
+  behavior are unchanged.
 - **Needs you** keeps its entry and its count. While folding is on and its rows come from more than one supervising
   conversation (a task's `origin`), they are grouped under that conversation's title, this conversation's own first;
   the rows and their order within a group are unchanged.
 - **Switch**: Settings › Assistant › **Fold background rounds** (`assistant.main_background_folded`, `PUT /api/v1/assistant`,
   on unless turned off; Persona's settings tool changes it only after the user confirms the card). Off, the main chat and
-  Needs you look exactly as before. A hub that does not send the field is treated as on. Display only: what the rounds do,
-  notify or push is unchanged.
+  Needs you look exactly as before. A hub that does not send the field is treated as on. The switch changes presentation
+  and routine main-relay finished-push eligibility only: relay execution, explicit `notify_user` actions and every other
+  push decision are unchanged.
 
 ## Messages from the system wait for the owner (#4925)
 
@@ -1505,7 +1512,9 @@ other conversations) goes through one per-conversation queue (`assistant.relay`,
 - **The queue is ranked.** The next message to go is the best rank among those not held, the one that queued first
   within a rank: (1) late `ask_user` answers, (2) messages that wait on a decision, (3) outcomes to report to the owner
   (a task notice of state `done`; a concern's outcome reaches the conversation this way, since a concern has no message
-  of its own), (4) everything else. One message goes per turn, as before. A supervision message or task notice that
+  of its own), (4) in a direction's lead conversation, the owner's words handed to it (a hand-over,
+  `docs/assistant/unified-entry.md` "Across a relay"; in any other conversation one ranks with everything else),
+  (5) everything else. One message goes per turn, as before. A supervision message or task notice that
   replaces the one still queued for the same conversation or task keeps the time the first one queued (`queued_at`,
   the time the queue wait of "Availability metrics" below counts from), so merging never restarts its wait; one that
   only then starts to wait on a decision counts its 5 minutes from then (`decision_at`), its queue wait still from when
@@ -1524,9 +1533,10 @@ other conversations) goes through one per-conversation queue (`assistant.relay`,
   ever). Typically the owner wrote, the turn raised the card and ended, and they tap it within the 2 minutes; the
   conversation takes the answer up at once. That such a card was closed or ran out is the system's to tell and waits
   as any late answer does, as does the owner's later decision on a question's to-do.
-- **Compatibility.** `urgent`, `decision_at`, `owner` and `spoke` are optional fields; the queue's shape is otherwise unchanged.
-  A previous version reads the queue as before and drops the fields on its next save, after which those messages rank
-  and wait as ordinary ones and no hold applies. A message queued before `queued_at` existed counts its 5 minutes from
+- **Compatibility.** `urgent`, `decision_at`, `owner`, `handover`, `answers` and `spoke` are optional fields; the queue's
+  shape is otherwise unchanged. A previous version reads the queue as before and drops the fields on its next save, after
+  which those messages rank and wait as ordinary ones and no hold applies; a hand-over then stays `queued` until it
+  expires, and the one a reply answered stays `delivered`. A message queued before `queued_at` existed counts its 5 minutes from
   its own time (`at`).
 - **The owner's whole round comes first (#6394).** On top of the two-minute presence window stands the owner-turn
   gate (`relayBook.ownerTurns`, in memory only). When the owner sends a message to a conversation, the gate arms for
@@ -1598,6 +1608,13 @@ operation then read as accepted and the bubble waited for the transcript and wen
   `server/internal/assistant/undelivered.go`). The hub answers 202 `{"delivered":"later"}`, records the send as `later`
   (a retry of the id is answered the same and sends nothing) and tells the chat's subscribers `kept`. A manager that
   cannot keep it leaves the failure as before.
+- **Busy while its role changes.** A conversation at work (a turn, or background tasks a new process would kill) whose
+  task-follow-up role changed refuses the message with 409 `busy` (`assistantwire.CodeConversationBusy`): taking it
+  would need a new process with the new role, and the old process must not get a message meant for the new role.
+  Nothing was typed, so the hub keeps it like a 5xx instead of answering the owner "try again later" on every send.
+  It shows "Waits for this conversation's current work to finish" (`wait_idle`): a session list that still shows the
+  conversation working does not wake it, one that shows it settled sends it at once, and that send resolves the role
+  again, so it starts the process on the new role. Other 409 refusals are answered as before.
 - **Shown everywhere.** The row's `undelivered` (`proto.Session.Undelivered`) lists them; web, iOS and Android draw each as the
   owner's bubble marked "Not delivered", with why and "It will be sent automatically", and Delete; one that gave up
   in red with Retry and Delete. Every device sees it, not only the one that sent it (`web/src/lib/undelivered.ts`;
@@ -1664,10 +1681,10 @@ operation then read as accepted and the bubble waited for the transcript and wen
   | The owner's answer to a card | It moves to the main conversation, as it does when the conversation that asked is gone (`askTarget`), and a turn the main conversation holds with its own question lets go for it, as for any message queued there. One the main conversation refuses as well stays queued there. |
   | Approval result | It stays queued for the conversation the approval came from: approval results have no fallback. One refused with `assistant_supervision_runtime` ends with the owner's push instead, as it did before. |
   | Persona's notices: a task's notice or end, a spawned conversation's notice, a chat's reply, the line to a sender | They leave the queue. A quiet task's "needs you" notice sends the push of the card it stood for (`relayMsg.Card`), a "failed" one the failed start's push. Every other one sends the owner one push saying the conversation refused an update (with `assistant_supervision_runtime`, the push that code always had). A chat's reply refused for good counts as gone for the gap between the chat's batches, so later batches wait and merge into one, and its push is sent once per conversation until a chat reply goes into it again or the day-long reply window ends. |
-  | A message from another conversation (`conversation_send`, `conversation_new`) | It leaves the queue. The sending conversation gets one line saying the message was not delivered and will not be retried (`prompts/assistant/relay_refused.md`). |
+  | A message from another conversation (`conversation_send`, `conversation_new`) | It leaves the queue. The sending conversation gets one line saying the message was not delivered and will not be retried (`prompts/assistant/relay_refused.md`). A hand-over of the owner's words it was becomes `not_delivered` with the refusal's code (`docs/assistant/unified-entry.md`, "Across a relay"); the line is still the only thing the sender is told. |
 
   Each refusal for good is logged once; no work event records it yet (#11399), which is why Persona's own notices
-  end with a push.
+  end with a push. A queued hand-over dropped because its receiver is gone becomes `not_delivered` with `gone`.
 
 ### Messages to an Agent whose computer is away (#10661)
 
@@ -2217,6 +2234,30 @@ stopped or uninstalled extension leaves nothing in force. The full wire shape an
 - **What the model sees**: a localized refusal starting with "The current organization policy requires…", followed
   by the rule's own note when it has one, and a matching sentence in the `task_plan`, `agent_start`,
   `conversation_new` and `conversation_send` tool descriptions.
+
+## Explicit dispatch guard
+
+`internal/assistant/dispatch_guard.go` is a separate, opt-in guard for explicitly named conversations. It does not
+change the class-based dispatch policy above. A policy has
+`{"enabled":true,"expires_at":"…","targets":[{"machine_id":"…","session_id":"…","deny":["task_plan"]}]}`;
+`deny` may contain only `task_plan`, `agent_start`, `conversation_new` and `conversation_send`. Targets match the
+machine and session exactly; ordinary Agent start parameters are untouched.
+
+- **One decision for listing and calls**: `guardRefusal` runs at the model tool entry before business arguments are
+  parsed. `guardTools` applies the same decision to the real `sessionMCPTools` list, and `ToolsFor` exposes the same
+  filtering for `assistant.tools`. A stale client or a direct call still meets the call guard. A policy write calls
+  `mcpChanges.notify`, so revision-aware discovery cannot keep a pre-change list. `--allowedTools` is an approval rule,
+  not proof that a tool is hidden.
+- **Defaults and fallback**: no policy, `enabled:false`, expiry, a non-matching target and an empty target list all
+  leave existing behavior unchanged. Untargeted tool lists and other conversations keep their previous contents.
+  An unreadable or invalid enabled policy fails closed for the four dispatch tools; unrelated tools remain available.
+  The localized refusal contains no storage error, target, tool name, arguments, policy or credential.
+- **Scope and expiry**: `GET` / `PUT /api/v1/assistant/dispatch-guard` requires the `dispatch.guard` scope for an
+  extension. An extension-written enabled policy must expire within one hour; full credentials may read, write and
+  clear it. The legacy every-scope grant does not include `dispatch.guard`. An unauthorized write changes neither
+  the policy nor existing starts.
+- **Boundary**: layer / preview and push-layer integration remain follow-up work. This slice adds no preview, client
+  UI, push integration or production deployment.
 
 ## Start defaults
 

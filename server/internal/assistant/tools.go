@@ -68,6 +68,9 @@ func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
 		return proto.TextResult(err.Error(), true)
 	}
 	call.Name = compat.Tool(call.Name)
+	if err := s.guardRefusal(ctx, call.MachineID, call.SessionID, call.Name); err != nil {
+		return proto.TextResult(err.Error(), true)
+	}
 	if res, refused := s.inboxModelRefusal(ctx, call.MachineID, call.SessionID, "", call.Name); refused {
 		return res
 	}
@@ -703,8 +706,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
 		title := s.tabName(sctx, a.Prompt)
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "tab_name": title, "title": title}
-		prompt := s.withCloseoutBrief(sctx, a.Prompt, false)
-		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, self, prompt)
+		prompt := s.withProjectContext(sctx, am.ID, a.Cwd, self, a.Prompt)
 		if a.Ultracode {
 			params["ultracode"] = true
 		}
@@ -723,6 +725,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
 		}
+		params["prompt"] = s.withCloseoutBrief(sctx, am.ID, prompt, false)
 		if err := checkStartSpeed(params, fit, ""); err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
@@ -1490,6 +1493,10 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		if c.Launcher != "" && c.SourceKind == "" && !c.Assistant { // what agent_switch moves it from (agent_switch.go)
 			fmt.Fprintf(&b, " · launcher=%s", c.Launcher)
+			if c.OffLauncher { // its claude was resumed without Persona's command (#11792)
+				fmt.Fprintf(&b, " (off_launcher: started on it, but its claude now runs without Persona's start command, "+
+					"e.g. herdr's bare resume after a restart, so not on %s; agent_switch to %s brings it back)", c.Launcher, c.Launcher)
+			}
 		}
 		if to := s.queuedSwitchOf(r.m.ID, c.SessionID); to != "" { // agents_switch queued it for the end of its turn
 			fmt.Fprintf(&b, " · switch_queued=%s", to)

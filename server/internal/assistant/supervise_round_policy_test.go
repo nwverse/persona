@@ -194,7 +194,7 @@ func namedTools(text string) []string {
 // for the round's tools, or listed here when it is one of these.
 var roundPassingMentions = map[string][]string{
 	"agent_archive":      {"agent_unarchive", "conversation_archive"},
-	"agent_send":         {"agent_start", "agent_supervise", "ask_user"},
+	"agent_send":         {"agent_start", "ask_user"},
 	"agents_list":        {"agent_start", "agent_switch", "agent_unarchive"},
 	"conversation_read":  {"conversations_list"},
 	"kb_get":             {"kb_list"},

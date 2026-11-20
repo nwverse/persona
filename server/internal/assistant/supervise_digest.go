@@ -372,6 +372,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		}
 		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
 		s.automaticParksTold(ctx, kept)
+		s.estimateDueTold(ctx, kept)
 		s.parkDecidedTold(ctx, kept)
 		s.agentDecisionRepliesTold(ctx, kept)
 		s.handoffResultsTold(ctx, kept)
@@ -563,6 +564,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	st := v.state(t)
 	var replyAsk acceptAsk
 	var draft *TodoPRStatus
+	var estimateBrief *TaskBrief
 	switch g.Kind {
 	case sigParkedSummary:
 		r := v.parking()
@@ -606,8 +608,14 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		}
 	case sigDecisionReply:
 		a, ok := s.askCopy(t.ID)
-		if st != reviewNeedsUser || !ok || !a.AcceptedAt.IsZero() || a.AgentReply == nil ||
-			!a.AgentReply.ToldAt.IsZero() || agentDecisionReplyKey(a) != g.Key || acceptAskStale(&a, t) || acceptAskEnded(&a, t) {
+		if !ok || a.AgentReply == nil || !a.AgentReply.ToldAt.IsZero() || agentDecisionReplyKey(a) != g.Key || acceptAskStale(&a, t) {
+			return prompts.SuperviseEntry{}, false
+		}
+		if a.AgentReply.Handled {
+			if r := triageLatestReview(v); st != reviewPending || r == nil || r.At.After(a.AskedAt) {
+				return prompts.SuperviseEntry{}, false
+			}
+		} else if !a.AcceptedAt.IsZero() || acceptAskEnded(&a, t) {
 			return prompts.SuperviseEntry{}, false
 		}
 		replyAsk = a
@@ -620,6 +628,13 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	case sigReview:
 		if st != reviewPending || v.handoffResult() != nil {
 			return prompts.SuperviseEntry{}, false
+		}
+		if g.externalPRReview() {
+			r := v.externalPRWake()
+			if r == nil || g.Key != reviewKey(v) {
+				return prompts.SuperviseEntry{}, false
+			}
+			g.Detail = strings.TrimSpace(g.Detail + " " + r.ExternalPR.detail())
 		}
 	case sigNeedsYou:
 		if !s.taskWaits(ctx, t) {
@@ -639,6 +654,12 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		if b, ok := s.briefOfTodo(t.ID); !ok || b.Overdue == nil || st == reviewNeedsUser || st == reviewParked {
 			return prompts.SuperviseEntry{}, false // re-scoped, with the owner, or parked meanwhile
 		}
+	case sigEstimateDue:
+		b, ok := s.briefOfTodo(t.ID)
+		if !ok || !s.estimateDueCurrent(t, b, g.Key) {
+			return prompts.SuperviseEntry{}, false // completed, reviewed, re-scoped or already told meanwhile
+		}
+		estimateBrief = &b
 	case sigAllStopped:
 		fresh, holds := s.checkedAllStopped(ctx, t, g)
 		if !holds {
@@ -701,12 +722,17 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		e.Detail = prompts.RenderDraftPR(prompts.DraftPR{Language: answerLanguage(string(s.botLang(ctx))),
 			URL: draft.URL, Head: draft.HeadOID})
 	}
+	if estimateBrief != nil {
+		e.Detail = prompts.RenderEstimateDue(prompts.EstimateDue{Language: answerLanguage(string(s.botLang(ctx))),
+			Expected: estimateBrief.ExpectNow, Elapsed: g.Minutes})
+	}
 	// The last review, shown only in a Fresh message (supervise_round.go): a decision reply's round confirms the decision
 	// that review put to the owner.
 	e.LastReview = s.lastReviewEntry(ctx, v)
 	if g.Kind == sigDecisionReply {
 		e.AgentReply = &prompts.DecisionAgentReply{Language: answerLanguage(string(s.botLang(ctx))),
-			Machine: replyAsk.AgentReply.MachineID, Session: replyAsk.AgentReply.SessionID}
+			Machine: replyAsk.AgentReply.MachineID, Session: replyAsk.AgentReply.SessionID, Handled: replyAsk.AgentReply.Handled,
+			Text: replyAsk.AgentReply.Text, Closeout: replyAsk.AgentReply.Closeout}
 		return e, true // the reply's exact session is in AgentReply; no arbitrary last Agent is evidence
 	}
 	if a := v.AutoReview; g.Kind == sigReview && a != nil && a.Round == v.Round && (a.State == autoClean || a.State == autoBlocking || a.State == autoFailed) {
@@ -836,7 +862,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigOrphaned: 4, sigReview: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigOrphaned: 4, sigReview: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind == sigCheck && e.Report == checkDecidedReport: // the owner's answer

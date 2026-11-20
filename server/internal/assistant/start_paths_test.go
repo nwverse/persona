@@ -25,6 +25,8 @@ var startPrimitives = []string{"startOn", "start", "startConversationOn", "start
 // startWrappers pass a start on: their callers are the entry points.
 var startWrappers = map[string]string{
 	"startTaskAgent": "a planned task's agent start (tasks_placement.go), called by runPlanTaskStart",
+	// the same start into a prepared backend workspace (#11687), called only by startTaskAgent: startPlan's ledger
+	"startBackendTask": "a planned task's agent start in its backend workspace (tasks_backend_launch.go), called by startTaskAgent",
 }
 
 // supervisedStarts are the entry points that give their work a ledger, and the function that does it: it must call

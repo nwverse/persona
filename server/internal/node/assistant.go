@@ -802,7 +802,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			if roleChanged {
 				// Do not kill active work, or deliver a new role's message on the old system
 				// policy. Manager-generated messages remain queued for an idle retry.
-				return "", refusal("busy", i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
+				return "", refusal(assistantwire.CodeConversationBusy, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
 			}
 			if execution.Strict && executionChanged {
 				return "", errors.New("task execution context differs from this conversation; start a new conversation")
