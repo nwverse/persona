@@ -89,7 +89,7 @@ func (h *Hub) routes() http.Handler {
 	h.assistantRoutes(api)
 	h.pinRoutes(api)
 	h.notifyRoutes(api)
-	h.lnRoutes(api)
+	h.pushGradingRoutes(api)
 	h.personaRoutes(api)
 	h.lookRoutes(api)
 	h.lookUploadRoutes(api)

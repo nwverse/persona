@@ -549,7 +549,7 @@ func (u *updater) rollback(p update.Pending, reason string) error {
 	if p.Development == nil && !u.adoptionUnresolved() {
 		u.removeDownloads(u.stagedDir(p.ToBuild))
 	}
-	// The old build reads only the hub.push_sent setting, and an exec skips the stop that writes it (lnmode.go).
+	// The old build reads only the hub.push_sent setting, and an exec skips the stop that writes it (push_grading.go).
 	if err := u.h.push.mirrorSent(context.Background()); err != nil {
 		u.h.logf("update: delivered pushes for %s: %v", p.FromVersion, err)
 	}

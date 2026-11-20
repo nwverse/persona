@@ -175,7 +175,7 @@ func TestSupervisionEventsContainFactsNotPolicy(t *testing.T) {
 	for _, name := range []string{"overdue", "estimate_due", "parked_due", "park_decided", "inbox", "ask", "escalated", "leader_stuck", "recheck", "undecidable", "owner_cannot_answer", "decide", "all_stopped", "pr_conflict"} {
 		t.Run(name, func(t *testing.T) {
 			p := prompts.Supervise{Leader: true, Side: true, Background: true, Escalated: true, BackgroundEscalated: true,
-				LeaderStuck: true, Overdue: true, ParkedDue: true, ParkDecided: true, Asked: true, AskMinutes: 5, LowDistraction: true, Decisions: true, Inbox: true,
+				LeaderStuck: true, Overdue: true, ParkedDue: true, ParkDecided: true, Asked: true, AskMinutes: 5, PushGrading: true, Decisions: true, Inbox: true,
 				Entries: []prompts.SuperviseEntry{{ID: "todo_example", Title: "Example task", Kind: name, Last: "Task evidence"}}}
 			text := prompts.RenderSupervise(p)
 			for _, banned := range []string{"怎么处理", "task_review", "agent_send", "ask_escalate", "interaction_answer", "supervision_finish", "task_scope", "验收以它", "按任务本身", "Check each participant's stated wait", "Waiting on another stopped participant"} {
