@@ -2114,7 +2114,14 @@ Keep selectors disjoint. Overlapping matches or missing confirmation text block 
 selector disables its field. The writer still enforces authorization and revision checks for every client. Guidance
 belongs to the Web module registration and adds nothing to the portable configuration document or update.
 
-**Terminal renderer** (the first module; `web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
+**Work management guide on demand** (#11055, `web/src/lib/labs-work-guide.ts`). This switch applies to the selected
+Assistant across devices and defaults to off. Enabling it moves the workflows for to-dos, delegation, supervision and
+review into the built-in `persona-work` skill. On a fresh chat, the MCP server offers `work_tools_search` and adds
+only the work tools requested by name to that connection. Switching it off restores the full startup instructions
+and the original MCP list, including the existing load-all or deferred-loading preference. After either
+change, the form asks the user to start a new chat. Existing chats may retain earlier guidance and tool information.
+
+**Terminal renderer** (`web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
 (`views/session/terminal/feed.ts`) draw with xterm's DOM renderer (Standard, the default) or WebGL (`@xterm/addon-webgl`,
 its own chunk, loaded only when chosen). Full view always uses the DOM renderer and is not affected. It is kept by this
 browser (`localStorage`) because GPU support differs per browser and machine; it never reaches the hub, another browser,
@@ -2243,7 +2250,7 @@ It renders escaped plain text (no HTML, links, images or cards), keeps work deta
 ## Subscription usage (bottom of the sidebar, #2432)
 
 At the very bottom of the sidebar (below the Agents list): one thin bar for each of the two fullest subscription accounts, turning the warning color at ≥ 80%. Clicking opens a popover with one row per window per account (length, % used, bar, reset countdown, pace hint),
-with the sample time to the right of the title. **With no data the whole block is not drawn.** Data comes from `GET /api/v1/usage/windows` (each computer's node reads local files, the manager merges the same account, the hub forwards),
+with the sample time to the right of the title. **With no data the whole block is not drawn.** Data comes from `GET /api/v1/usage/windows` (the manager groups samples from each computer's node and the hub forwards them),
 refreshed once a minute, with no requests while the page is in the background. The pace and countdown algorithms, and how Claude's usage is hooked up, are in [usage-windows.md](../server/usage-windows.md).
 Accounts come from files read on the computers and from the account-pool gateways the hub queries (#2595): in the popover, the line under each account's title gives the plan and the source ("MacBook · Relay": the computers that read it by name, then the gateways; with only one source it names that one).
 Single-model windows put the model name next to the length (not used for sorting); when a gateway can't be read it says "these are its last numbers". The sidebar bar's tooltip also gives the source. Gateways are configured under "Usage sources" in the admin interface (`docs/operations/admin.md`).

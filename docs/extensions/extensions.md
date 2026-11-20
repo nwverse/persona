@@ -547,6 +547,13 @@ The locked fields it writes become its own with `evidence` (`[{chat, day, n?, no
 
 The update fields follow the existing knowledge base update API, plus `pinned`, `lock` and `remove_people/remove_chats/remove_aliases/remove_projects`.
 A link the user removed (`excluded` in the entity's meta, `removed` in `kb.get`) is not made again: it is dropped from `people` / `chats` / `projects` and named in `ignored`, and the rest applies ("Removed links" in `docs/assistant/knowledge.md`).
+
+Project list rows and detail include `freshness`, canonical `sources`, and `project_mode` when the owner made the
+project reference-only. Check `freshness.needs_review` before relying on a conclusion, and inspect the field's own
+cutoff and maintainer for the review. A project source's `delivery_state` records the source observation and
+`environment_verification` records the independent verification status. A detail write to a reference-only project
+returns `invalid_params` with the refused fields and applies none of the update. The project mode and external
+pointers are controlled by the owner. See `docs/assistant/knowledge.md` ("Project freshness and reference-only sources").
 Each kind takes only the fields it uses ("Fields each kind takes" in `docs/assistant/knowledge.md`); the others are not applied, and the answer names them in `ignored: [{field, reason}]`, so nothing is dropped silently (a person's `summary` and `log`, for one).
 
 **A person's profile** (`profile`, people only): what the extension knows of the person, in four parts kept apart: `facts`, the user's own words about them (`views`), `inferences` (each with its `basis`, shown as only a hint), and `commitments` either way (`owes: user | them`, `due?`, `done?`). Every item needs `sources`.
