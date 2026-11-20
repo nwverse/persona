@@ -4,7 +4,7 @@ This maintainer-side service watches explicitly configured GitHub repositories, 
 
 **Main verification is a separate responsibility.** The Persona and Persona Extensions maintainer queues use `semantic_only`: they do not repeat full build/vet, cross-platform or full-test suites on every PR. New `main` commits are checked and repaired by `main-verify-fix-loop` (`docs/operations/main-verification.md`), not by this PR watcher. Other repositories retain their configured full-verification profiles.
 
-The implementation is `scripts/operations/pr_watch.py`. It replaces a local focused-test-only watcher whose comments explicitly disclaimed semantic review. A pre-existing GitHub comment or review is **not** a verification credential: only this service's versioned record for `(repository, PR number, head SHA)` can satisfy its own gates.
+The implementation is `scripts/operations/pr_watch.py`. It replaces a local focused-test-only watcher whose comments explicitly disclaimed semantic review. A pre-existing GitHub comment or review is **not** a verification credential: only this service's versioned record for `(repository, PR number, head SHA)` can satisfy its own gates. The sole exception is the opt-in `respect_human_reviews` policy described below, which accepts only a real human user's review on the exact head as an alternative *semantic* evidence source and leaves every other gate intact.
 
 ## Review and merge contract
 
@@ -30,6 +30,18 @@ The watcher reads the PR's actual comments, reviews and commits before deciding.
 
 The default is **review-only**: no configured repositories, and `"merge": false` for every added repository. Enabling merge is a separate local maintainer decision. `scripts/hooks/merge-pr.sh` and the generic `pr_watch_merge.py` hold the same shared-Git-directory lock, so manual and automated merges cannot race. The wrapper retains the machine-private scan of the exact changed range and squash message. Do not apply one checkout's private-word configuration to another repository.
 
+## Respect human reviews on the exact head (opt-in)
+
+A repository may set `"respect_human_reviews": true`; the default is `false`, so an existing deployment keeps running its own independent semantic review on every head unchanged. When enabled, before preparing a checkout or invoking the reviewer the watcher reads the PR's GitHub reviews for the current exact head and classifies only reviews from real user accounts (`user.type == "User"`):
+
+- A human **APPROVED** review on the exact head replaces the watcher's independent semantic review. No reviewer CLI call is made and the watcher publishes no review or comment for that head. The semantic evidence is stored with `semantic_source: "human"` plus the GitHub review id and commit id. Every other gate still runs on that exact head: the configured verification profile (including the privacy scan), linked-issue, mergeability, exact-head/base re-read and the outstanding-change-request merge block. A human approval never merges a PR by itself.
+- A human **CHANGES_REQUESTED** review on the exact head also skips the reviewer, but the head is parked (`human_changes_requested`) and cannot merge until a new commit or a new human state on the same head resolves it.
+- When the exact head has only human **COMMENTED** reviews it is parked (`human_commented`): the reviewer is skipped, but comments are neither approval nor a merge pass.
+- Reviews bound to an older commit are never reused. After every push the head changes, classification filters on `commit_id == head`; a head without a qualifying human review receives the normal independent review.
+- Bot and GitHub App reviews, missing reviewer identities and reviews authored by the watcher's own authenticated login never qualify as human. Dismissed and pending reviews are neutral; when one reviewer submits several reviews on one head, their latest effective state wins, so an approval followed by a change request on the same head blocks.
+
+Parked heads are re-read on every poll, so a reviewer approving or changing their request on the same commit is observed without waiting for a new push. Toggling the switch changes the configuration fingerprint and therefore goes through the offline `--migrate-config` flow, but the field is excluded from the repository-policy fingerprint: it only adds an evidence source and never weakens a gate, so existing exact-head semantic and verification evidence, repair rounds and publication history are preserved.
+
 ## Configure
 
 Copy `scripts/operations/pr-watch.example.json` outside the checkout, for example to `~/.config/persona/pr-watch.json`, and restrict it to the maintainer (`chmod 600`). Use absolute paths. For the Persona and Persona Extensions repositories, start with `scripts/operations/pr-watch.persona.example.json`: it has both repository profiles, ten workers and a one-hour reviewer timeout, and keeps merging disabled. Replace the `/path/to/...` placeholders with your own absolute paths; opt into merging separately in that private copy if wanted. No account, machine-specific path, credential, token or live state belongs in either example. The service uses the local `gh` login; tokens stay in `gh`'s credential store, not in this file or the service unit.
@@ -43,6 +55,7 @@ Each repository entry has:
 | `base` | Base branch to watch, normally `main` |
 | `merge` | Opt-in live squash merging; `false` means review and verification only |
 | `close_stale` | Opt-in stale-PR closure; `false` keeps a repository out of this cleanup. The live maintainer configuration enables it separately |
+| `respect_human_reviews` | Opt-in, default `false`: real-user reviews on the exact head can replace the watcher's own semantic review (approval skips it but keeps every other gate; change requests and comment-only heads park without merging). See "Respect human reviews on the exact head" |
 | `verify.profile` | `persona`, `extensions`, or an explicit `commands` array |
 | `verify.timeout_seconds` | Bound for each command, 60–21600 seconds |
 | `privacy` | Optional public-content scanner for a generic repository, not a path to another checkout's private configuration |

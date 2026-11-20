@@ -1492,13 +1492,13 @@ CLOSEOUT_BLOCKED = "a9c00000-0000-4000-8000-000000000003"
 CLOSEOUT_NOT_DONE = "a9c00000-0000-4000-8000-000000000004"
 CLOSEOUT_REPLIES = {
     CLOSEOUT_DONE: ("导出超时修好了：大报表改成分页流式写出，线上导出 50 万行用时从 94 秒降到 11 秒。\n\n"
-                    '<closeout status="done" merged="yes" deployed="yes">\n'
-                    "did: 报表导出改成分页流式写出，不再一次读进内存\n"
-                    "did: 给导出接口补了 50 万行的压测用例\n"
-                    "artifact: pr https://github.com/example/app/pull/31\n"
-                    "artifact: commit 4f2a91c\n"
-                    "verified: `go test ./export/...`\n"
-                    "</closeout>"),
+                    "### Persona 工作报告\n\n- Status: done\n- Merged: yes\n- Deployed: yes\n"
+                    "- Did: 报表导出改成分页流式写出，不再一次读进内存\n"
+                    "- Did: 给导出接口补了 50 万行的压测用例\n"
+                    "- Artifact: pr https://github.com/example/app/pull/31\n"
+                    "- Artifact: commit 4f2a91c\n"
+                    "- Verified: `go test ./export/...`\n"
+                    "\n---"),
     CLOSEOUT_DISPROVED: ("支付 SDK 升到 v4 了，回调验签换成了新接口，PR 已经合并。\n\n"
                          '<closeout status="done" merged="yes" deployed="no">\n'
                          "did: 支付 SDK 从 v3 升到 v4，回调验签换成新接口\n"
@@ -1507,13 +1507,13 @@ CLOSEOUT_REPLIES = {
                          "missing: 上线前要有人在沙箱里走一遍真实支付\n"
                          "</closeout>"),
     CLOSEOUT_BLOCKED: ("迁移脚本写好了，在预发库上跑过一遍。正式库要等 DBA 给迁移窗口，我先停在这里。\n\n"
-                       '<closeout status="blocked" merged="no" deployed="n/a">\n'
-                       "did: 写了用户表拆分的迁移脚本，可重复执行\n"
-                       "artifact: branch feat/split-users\n"
-                       "artifact: doc docs/migrations/split-users.md\n"
-                       "verified: `./scripts/migrate.sh --env staging`\n"
-                       "waiting: DBA 批准正式库的迁移窗口\n"
-                       "</closeout>"),
+                       "### Persona 工作报告\n\n- Status: blocked\n- Merged: no\n- Deployed: n/a\n"
+                       "- Did: 写了用户表拆分的迁移脚本，可重复执行\n"
+                       "- Artifact: branch feat/split-users\n"
+                       "- Artifact: doc docs/migrations/split-users.md\n"
+                       "- Verified: `./scripts/migrate.sh --env staging`\n"
+                       "- Waiting: DBA 批准正式库的迁移窗口\n"
+                       "\n---"),
     CLOSEOUT_NOT_DONE: ('<closeout status="not_done">\n'
                         "did: 搜索页的结果高亮做了一半，中文分词还没接\n"
                         "verified: untested\n"
@@ -3113,6 +3113,38 @@ if os.environ.get("MOCK_TODO_BADGE") == "1":
         _badge_todo("tb_dark", "设置页：深色模式配色", 3, part_of="tb_goal", origin="conv_demo",
                     agents=[_badge_agent(2, "设置页深色配色", "在核对深色模式下的对比度。")]),
         _badge_todo("tb_errand", "给家里的 NAS 换硬盘", 90),
+    ]
+
+# MOCK_TODO_STEPS=1 (#11858, docs/web/web.md "A to-do's steps"): only these to-dos, each with the `view` a hub with the
+# To-dos view sends, as far as the row's steps go (`view.steps`). A goal whose three steps are all closed with nothing
+# arranged next, a goal with one of its three steps closed, one being done and one not started, and an errand with
+# neither steps nor view: the first reads "3/3 steps done · Next step not arranged yet", the second "Steps 1/3", the
+# errand "Not started · Not handed to an agent yet" as before. The views are fixed: a write here does not recount them.
+if os.environ.get("MOCK_TODO_STEPS") == "1":
+    def _steps_agent(n, title, last):
+        sid = f"c3d5e7f9-0000-4000-8000-{11858000 + n:012d}"
+        SESSIONS.append(sess("macbook", sid, title, "/Users/me/code/photos", "working", "working", "photos", 8, "1", n, 3, last))
+        return {"machine_id": "macbook", "session_id": sid, "linked_at": ago(minutes=40), "released_at": None, "title": title,
+                "cwd": "/Users/me/code/photos", "agent": "claude", "start_error": "", "source": "spawned", "via": ""}
+
+    def _steps_todo(tid, title, minutes, steps=None, **kw):
+        t = {"id": tid, "title": title, "notes": "", "done_at": None, "created_at": ago(minutes=minutes + 60),
+             "updated_at": ago(minutes=minutes), "origin": "", "spaces": [], "agents": [], "priority": ""}
+        if steps:
+            t["view"] = {"phase": "todo", "section": "todo", "reason": "rest", "rank": 0, "steps": {"done": steps[0], "total": steps[1]}}
+        t.update(kw)
+        return t
+
+    TODOS_INIT[:] = [
+        _steps_todo("ts_photos", "相册迁到新硬盘", 20, steps=(3, 3)),
+        *[_steps_todo(f"ts_photos_{i}", title, 30 + i, part_of="ts_photos", origin="conv_demo", quiet=True,
+                      done_at=ago(minutes=30 + i)) for i, title in enumerate(["导出旧相册", "校验照片数量", "切换同步目录"], 1)],
+        _steps_todo("ts_settings", "设置页改版上线", 5, steps=(1, 3)),
+        _steps_todo("ts_search", "设置页：分组和搜索", 3, part_of="ts_settings", origin="conv_demo",
+                    agents=[_steps_agent(1, "设置页分组和搜索", "在给每个分组补搜索关键词。")]),
+        _steps_todo("ts_dark", "设置页：深色模式配色", 50, part_of="ts_settings", origin="conv_demo", done_at=ago(minutes=50)),
+        _steps_todo("ts_copy", "设置页：改说明文字", 6, part_of="ts_settings", origin="conv_demo"),
+        _steps_todo("ts_errand", "给家里的 NAS 换硬盘", 90),
     ]
 
 # MOCK_TODO_WAITS=1 (#11090, docs/assistant/todos.md "State calculation rules"): only these to-dos, one per thing a
@@ -8979,6 +9011,35 @@ if MOCK_TASKS:
         TODOS.append(copy.deepcopy(_starting))
         TASK_FEED[ASK1].append(_feed("feed_starting", 1, "task", "todo_task_starting", {"wake": "created"}))
         TASK_FEED[ASK1].append(_feed("feed_resumed", 2, "task", "todo_task_blog", {"wake": "resumed"}))
+    # MOCK_TASKS_CONTINUED=1 (#11854): one to-do two later plans continued (task_plan's continues). Each released the Agent
+    # before it and cleared the older plan's todo_id, as the hub does; the third Agent runs. Each plan's hand-off card shows
+    # the Agent that plan started: the newest the running one, never the first. =starting: the newest plan's Agent is
+    # not linked yet, so its card says it is starting.
+    _continued = os.environ.get("MOCK_TASKS_CONTINUED", "")
+    if _continued in ("1", "starting"):
+        _todo = _task_todo("todo_task_continued", "订单接口提速", "把 /orders 的 P95 降到 300 ms 以内。", "macbook", RECIPE,
+                           "/Users/me/code/shop-api", 60 * 15, "plan_continued_a")
+        _todo["agents"] = [
+            dict(_todo["agents"][0], machine_id="server", session_id=ORDERS, title="排查 /orders 接口变慢", linked_at=ago(minutes=4)),
+            dict(_todo["agents"][0], machine_id="macbook", session_id=REVIEW, title="检查 PR #42 的改动", linked_at=ago(minutes=60 * 5 - 1),
+                 released_at=ago(minutes=5)),
+            dict(_todo["agents"][0], linked_at=ago(minutes=60 * 15 - 1), released_at=ago(minutes=60 * 5)),
+        ]
+        if _continued == "starting":
+            _todo["agents"] = _todo["agents"][1:]
+            _todo["agents"][0]["released_at"] = ago(minutes=0.5)
+        TODOS_INIT.append(_todo)
+        TODOS.append(copy.deepcopy(_todo))
+        _ct = lambda **kw: dict(_ptask("订单接口提速", False, "shop-api 在服务器上。"), machine="server", cwd="/home/me/code/shop-api", **kw)
+        TASK_PLANS.update({
+            "plan_continued_a": _plan("plan_continued_a", "started", 60 * 15, [_ct()]),
+            "plan_continued_b": _plan("plan_continued_b", "started", 60 * 5, [_ct(continues="todo_task_continued")]),
+            "plan_continued_c": _plan("plan_continued_c", "started", 5, [_ct(continues="todo_task_continued", todo_id="todo_task_continued")]),
+        })
+        TASK_FEED[ASK1] += [_feed("feed_continued_a", 60 * 15, "plan", "plan_continued_a"),
+                            _feed("feed_continued_b", 60 * 5, "plan", "plan_continued_b"),
+                            _feed("feed_continued_c", 5, "plan", "plan_continued_c")]
+        TASK_FEED[ASK1].sort(key=lambda f: f["at"])
     # MOCK_TASKS_MESSAGE=filed / sent: the message card's inbox item was handled elsewhere (filed_at, #4797), or its reply
     # went out from the card (sent_at): the apps draw it handled / sent, with no Send.
     _msg = os.environ.get("MOCK_TASKS_MESSAGE", "")
@@ -29649,7 +29710,8 @@ def features():
     return _features_without_channels() + (["channels"] if CHANNELS_MODE else [])
 
 
-MOCK_HELP.append("MOCK_BG_MONITOR=1  The widget chat's Background tasks also list a running Monitor whose output file is not known yet (#10852); GET /mock/monitor_event names it, as its first event would")
+MOCK_HELP.append("MOCK_TASKS_CONTINUED=1|starting  (with MOCK_TASKS=1) One to-do two later plans continued: two released Agents and a running one, each plan's hand-off card its own Agent (#11854); starting: the newest Agent not linked yet")
+MOCK_HELP.append("MOCK_BG_MONITOR=1 The widget chat's Background tasks also list a running Monitor whose output file is not known yet (#10852); GET /mock/monitor_event names it, as its first event would")
 MOCK_HELP.append("MOCK_SIDEBAR_GROUPS=1  (with MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1) Today, Lark and Calendar name the sidebar group 工作台, Assets 资产 and Home devices 家里 (#9071)")
 MOCK_HELP.append("MOCK_NAVIGATION=off  A hub (or default manager) from before the start page (#9071): GET / PUT /api/v1/navigation answer 404, so the web keeps the choice in the browser")
 MOCK_HELP.append("MOCK_NAVIGATION=no-overview  A default manager from before Overview's card arrangement (#9745): a PUT of only `overview` is 400 and no answer has it, so the web keeps the arrangement in the browser")

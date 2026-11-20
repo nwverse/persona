@@ -218,6 +218,10 @@ rule below. Native clients keep their existing two-entry presentation until they
   keeps them in Needs you (without the Agent's cards). Before, each task listing the Agent showed and counted the same
   approval. The shared cases (`spec/fixtures/entries`) pin it; the whole-client Needs you rule is #5974's.
 
+An open task whose delivery is held for the owner appears in **Needs you** with the reason for the hold.
+A structured decision already shown for the task keeps its controls. A wait assigned to CI, a reviewer or an Agent
+continues to use the normal task placement.
+
 The split is one pure function per client: web `assistantEntries` (`web/src/lib/assistant-entries.ts`), Android
 `assistantEntries` (`persona.core.domain.tasks`), iOS / iPad / Mac `AssistantEntries.split`
 (`apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift`, #3393). All three replay `spec/fixtures/entries`, which pins
@@ -475,7 +479,8 @@ lines, and in the user's own color and alignment they read as something the user
   to-do and its `wake` (`created`, `active`, `resumed`) is the badge; a started plan's `tasks[].todo_id` identify its tasks
   (a plan's tasks are New). Live to-do titles override plan titles. A plan task without a to-do keeps its title as a card
   with no link, red "Didn't start: <reason>" from the plan task's `error`, and its per-task feed items do not add
-  duplicate cards. Agents linked within 120 s of the first are each a card; a later Agent is not on this hand-off.
+  duplicate cards. Agents linked within 120 s of the first are each a card; a later Agent is not on this hand-off. The web
+  anchors "the first" at the card's feed line (#11854, below); iOS and Android still take the to-do's earliest Agents.
   The title is the session's, then the Agent row's, then the task's. The second line is that Agent's `activity_at` (else `updated_at`) as a relative time and
   its state; before there is an Agent it says "Starting the agent", a task closed without one "Closed
   before an Agent started", a task the list no longer has "This task no longer exists".
@@ -500,7 +505,9 @@ are drawn the same whichever way they open; the owner then asked for the side pa
 page one setting away (#5424):
 
 - **One card per Agent.** Each Agent a dispatch started or a task took over is one full-width card where the dispatch is in the chat, stacked by plan order, with no heading over them. This covers a started plan, a standalone `task` item, and a message that started a new Agent for its task (`routed` with `new_agent`).
-  - A task's line shows the Agents the hand-off went to: its first Agents, linked within two minutes of each other. That covers the plan's several Agents and a retry. An Agent linked later has its own card where that happened.
+  - A task's line shows the Agents the hand-off went to: the first Agents linked from its feed line's time on (for a standalone `task` line an Agent linked up to 30 s before still counts, since that line is written just after its link; a plan line has no look-behind, since its Agents start after it, so a previous continuation's Agent linked just before never stands in for the plan's own), within two minutes of each other. That covers the plan's several Agents and a retry. An Agent linked later has its own card where that happened (#11854, `handoffAgents` in `web/src/views/assistant/Handoff.tsx`).
+  - After a plan continues a to-do (task_plan's `continues`), the card under that plan is the Agent it started; until that Agent is linked the card says it is starting, never an older Agent. Cards under earlier plans keep the Agents those plans started: a plan whose `todo_id` the continuation cleared finds its to-do again through its `continues` / `reuse_todo`, or as the one to-do whose `plan_id` is that plan.
+  - A line with nothing linked since (a task that took over an Agent already running, an earlier plan with no Agent of its own) or with no usable time shows the newest Agents still linked, else the one released last.
   - **Head:** a round ↳ mark, the Agent session's title (the task's until it has one) and a badge: **New**, **Already active** when the task took over an Agent that was running already, or **Resumed** when the hand-off's message resumed a closed one.
   - **Second line:** "last active …" and the Agent's state word. The state shows that an Agent needs you without opening anything.
   - **End:** ↗.
@@ -648,7 +655,9 @@ record per piece of work, made when the work is handed out and never rewritten (
 | `request` | the hub | The owner's words that led to the task. `text` keeps their original wording and spacing, up to 2000 characters (`truncated` if clipped). `part: true` marks a selected passage. `at`, `conversation` and `message_id` identify the original message. `via` lists the conversations that relayed it, oldest first. Absent when the owner did not ask for it |
 | `started_by`, `trigger`, `trigger_title`, `reason` | the hub, `reason` from the model | Who started it: `owner`, `assistant`, `leader`, `routine`, `hub`, or `unknown`; what the turn followed when it was not the owner (`supervision`, `followup`, `routine`, `conversation`, `notice`, `meeting`, `wake`); and why (`task_plan`'s `started_why`) |
 | `goal` | the model | The work in one sentence (the task's title when a writable task gives none) |
-| `done_when`, `expect_minutes`, `out_of_bounds` | the model | What done means, about how long it should take, what the Agent must not do |
+| `done_when`, `out_of_bounds` | the model | What done means and what the Agent must not do |
+| `expect_minutes` | the model, optional override | About how long it should take; omitted uses the hub's automatic estimate |
+| `estimate_source` | the hub | `system_default` for the initial 60-minute default, `override` for an explicit value; a dispatch records this on the brief's log |
 | `reconstructed`, `handover` | the hub | A brief made later for a task from before briefs ("Backfill" below) |
 
 **Who asked.** The hub reads the conversation that made the tool call (its last three turns) and goes by the latest
@@ -667,6 +676,10 @@ contains several candidates, the tool lists their ids and first words so the sen
 none, or its start is outside the transcript page, the sender can give the exact words of an earlier request or omit
 `quote`.
 
+A Codex transcript page can show a message steered into a running turn with the same shape as the turn's first
+message. On Codex, or when the manager cannot identify the session, select the message by id or exact words. In
+the list of choices, copy the displayed id to select the whole entry; the text next to it is a preview.
+
 A message id or the owner's exact words can select from the last ten turns. An id takes precedence. Text matches
 the newest owner message or verified incoming quote that contains it, with at least four characters and runs of
 whitespace compared as a single space. The receiver gets the original spacing. A selected passage sets
@@ -676,16 +689,61 @@ Just me question remains ineligible afterwards. A refusal uses no relay allowanc
 The hub keeps the verified words for 14 days, up to 64 entries in `assistant.quotes`, keyed by sender and the id
 in the receiver's `<persona-context kind="owner-request" message_id="…">` block. A whole message keeps its id.
 Each passage has its own stable reference so different receivers can pass on their own passage using the id in
-their block. The receiver's brief takes the stored words by that reference and the relay item's source. Only a
+their block. A source message's id selects the whole message when the receiver has it. The receiver's brief takes
+the stored words by that reference and the relay item's source. On upgrade, the manager discards retained quote
+records whose source predates the shareability check. The owner can select an eligible original message again. Only a
 block directly following the canonical relay context counts (`prompts.ParseRelayQuoteID`). The brief keeps
 `started_by` as `leader` or `assistant`, trigger `conversation`, and the conversation ids in `request.via`.
 A scope change requiring the owner's approval still needs a message they wrote in the conversation making it.
 
-**Required.** `task_plan` refuses a writable task (`readonly` false) without `done_when` (at least one criterion) and
-`expect_minutes`, and a read-only task without `goal` and `expect_minutes`; the refusal names what is missing and
-nothing is planned. The plan's task carries the brief (`tasks[i].brief`) from the moment the plan is made, so the card
-can show the owner's words, the criteria and the time, and "Start" confirms them. The brief is kept when the task
-starts, dated from the start. The web draws `tasks[i].brief` on the plan card and the to-do's `brief` and `lineage`
+**Hand-overs** (#11699, `server/internal/assistant/relay_handover.go`). A `conversation_send` that carries a verified
+quote and has a direction's lead conversation (`assistant.leaders`, not a task leader Agent) on either end is one
+hand-over: from the main conversation to a lead, from a lead back to it, or between a lead and any other conversation.
+The hub records it once the send is accepted, sent at once or queued (setting `assistant.handovers`, by id, kept like
+the quotes: 14 days, at most 64, the oldest dropped first): the sending and receiving conversation, the receiver's
+title, where the owner wrote the words (conversation and message id), its state and code, and when it was made and
+last changed. A send refused at once (the sending model has the error), one without a quote and one between two
+conversations neither of which is a lead are none. Its state follows what the relay does with the message, is written
+only once it is true and never goes back, and each change is one log line:
+
+- `queued`: the message waits in the receiver's queue.
+- `delivered`: the message went in: sent at once, from the queue, or a try in doubt later found in the receiver's
+  transcript. A try in doubt is never `delivered` on its own.
+- `answered`: the receiver's first `conversation_send` back to the sender since the hand-over was delivered went into
+  the sender, however much later, while the hand-over is kept.
+- `not_delivered`: the message will not be tried again; its code is the refusal's when it was refused for good after
+  it was queued, `gone` when it was dropped because the receiver is gone. The sender still gets the line that says so
+  (`docs/assistant/assistant.md`, "Between conversations").
+
+A try in doubt that did go in starts the receiver's turn before any look finds it, so an answer sent in that turn
+goes in while the hand-over is still `queued`: it counts once the look finds the try, which makes the hand-over
+`delivered` and then `answered`. If the looks never find it and the message is sent again, an answer named before then
+does not count, whether it went in already, waits in the sender's queue or is on its way; the same holds when the
+message moves to another receiver.
+A hand-over past its 14 days is no longer answered or changed. One queued for a background supervisor that is gone
+follows its message to where it waits now (the new background supervisor or the main conversation), receiver and title
+included, also one whose `queued` was not written yet; with nowhere to move it is `not_delivered` with `gone`. An end
+or a move is saved before the queue without the message is.
+
+An answer is matched on the hand-overs, not on the relay's hop record, which forgets after an hour, when the owner
+speaks in the receiver, or when a third conversation's request reaches it. The reply names the hand-over it answers
+(`answers` on the queued message): of the pair's hand-overs that no other reply on its way still answers (one named
+before the hand-over was sent again or moved does not), the oldest delivered one, else the oldest still in doubt; one
+that waits untried is never named.
+A reply that is refused or dropped leaves its hand-over `delivered` for the next one. In a lead's queue a hand-over goes
+after the outcomes to report and before the rest (`docs/assistant/assistant.md`, "Messages from the system wait for the
+owner"). Nothing reads the hand-overs yet but the log: no route, event or client shows them.
+
+**Required.** `task_plan` refuses a writable task (`readonly` false) without `done_when` (at least one criterion),
+and a read-only task without `goal`; the refusal names what is missing and nothing is planned. `expect_minutes` is an
+optional override, not a number the dispatching model must invent. With no override the hub assigns 60 minutes and
+records `system_default`; a positive override records `override`. The plan's task carries the brief (`tasks[i].brief`)
+from the moment the plan is made, so the card can show the owner's words, the criteria and the time, and "Start"
+confirms them. The brief is kept when the task starts, dated from the start. Only `task_plan` dispatches create this
+automatic estimate: manually started terminal/herdr Agents, manual `agent_start`, adopted Agents and direct
+human-to-Agent work keep their existing optional ledger values but get no `estimate_source`, no `estimate_due` clock
+and no calibration history. A continuation or reuse through `task_plan` is a new automatic dispatch even when its
+brief began as manual or legacy work. The web draws `tasks[i].brief` on the plan card and the to-do's `brief` and `lineage`
 on its page (the criteria stay in the page's one list, the ledger's; a finished task adds the dropped ones and
 `also_done` under it) (`docs/web/web.md`, "Pages": **A task's brief**); the iOS and Android plan cards and task pages do not yet.
 
@@ -712,6 +770,15 @@ when the owner's own message started the turn that makes it, and that message is
 most 40 scope changes per brief. The response distinguishes the original brief, effective criteria and dropped
 criteria, and reports the new revision.
 
+**The estimate review clock.** Every automatic dispatch appends a `dispatch` event to the brief's log with its plan,
+round id, estimate and source. At `estimate_clock_at + expect_minutes_now`, the supervisor gets one `estimate_due`
+review cue through the existing supervision digest (urgent spacing, and the usual queue when the supervisor is busy).
+It is a request to inspect progress and acceptance criteria, not an overdue judgment. A new dispatch or an actual
+`expect_minutes` change starts a new estimate clock; a criteria-only `task_scope` does not re-arm it. The `estimate_due`
+event is written only after direct delivery or durable queue admission, including all three leader-delivery paths, so
+a restart before delivery re-derives the cue and a restart after it does not repeat. A done report, pending review,
+owner decision, parked task, closed task or superseded leg suppresses it; a queued old revision is dropped.
+
 **The clock.** A brief runs to `max(expect_minutes × 3, 24 h)` from when the work was handed out (of the brief, not of
 the latest take-over), or from its latest scope change. Past that with no end (not done, not waiting for review, not
 waiting for the owner's decision), the supervisor gets one `overdue` signal in a supervision message: close it,
@@ -723,6 +790,15 @@ them, with the dropped ones named, not only the latest prompt. `task_review` che
 criteria; an accepted or cancelled review (and the judge's own acceptance) records the brief's `result`: each
 criterion `met`, `not_met`, `unchecked` or `dropped` (with the scope change that dropped it), then `also_done`. The
 review's feed item carries it (`body.result`), and the tool's answer says it.
+
+**Actual duration.** The first active completion of each automatic dispatch round appends a `completion` event with
+`round_id`, `source` (`report_to_supervisor`, `task_review` or `judge`) and `actual_minutes`, rounded up from the
+dispatch timestamp (or `reopened_at` when the owner reopened the to-do later) to the report timestamp. An Agent's
+`report_to_supervisor(kind=done)` records immediately and suppresses any queued `estimate_due`; supervisor acceptance
+and the judge's own acceptance are fallbacks when no report arrived. Later reviews and duplicate reports do not
+rewrite the first event. A superseded leg, manual/legacy work without a new `task_plan` dispatch, and a failed start
+produce no sample. The latest `actual_minutes` and `completion_reported_at` are also on the brief; the per-round events
+remain in its log for the follow-up calibration PR.
 
 Two more places concern the criteria (`server/internal/assistant/task_brief_result.go`):
 
@@ -798,7 +874,7 @@ The depth is dot (the main chat or a leader conversation) → task leader → wo
 
 - **Marking one**: `task_plan` takes `role: "leader"` per task, from any conversation (a task leader's own reports need a supervisor to reach; any other role, or a task leader planning one itself, is refused before anything is planned). The role is part of the saved plan task, so a retried or restarted start keeps it, and the apps' card edits never change it. When the agent is linked, its `todo_agents` row gets `source: leader`; no migration, as `source: review` marks a reviewer. Its `agent` snapshot comes from the start answer's `session.agent`, else the explicitly resolved launcher kind. The leader's own task is an ordinary supervised task (`supervisor` as usual, and #3608's `supervisor` hand-over applies), so its `report_to_supervisor`, reviews and cards go where they always went.
 - **What a leader gets**: its first message says it leads and how its workers reach it (`prompts/agents/task_leader.md`), and the MCP tools list (`mcp.tools`: the node names the agent by its pane, `node/hooks.go`) adds a restricted `task_plan` and `task_review` (`mcp/leader/`, listed under those names). Discovery is refreshable: `personad mcp` advertises `tools.listChanged`, and task-link changes wake a cursor-based `mcp.tools` long poll. Only a changed tool list sends `notifications/tools/list_changed`. A registration after the first list is therefore not limited by a startup wait window. The node re-resolves the calling pane on each request, discarding the old cursor when the session changes; a 30-second heartbeat also recovers late identity. Watches have a 45-second client deadline, retry failures with 1–30 second exponential backoff, keep the last list during an outage, and do not prevent an idle manager restart. A fresh manager cursor forces a new snapshot after restart. The manager, node and the new session's MCP binary must all support this protocol; older nodes/managers retain one-shot discovery. Other computers require their own node upgrade. A continuation uses the new saved plan's role when linking its replacement Agent: `todo_agents.source`, not a role column on the original to-do, is authoritative. The list is only the listing: `mcp.call` runs only for the agent of an open task whose row says `leader` (`leaderTaskPlan`, `leaderTaskReview`, `server/internal/assistant/task_leader.go`); any other agent gets "unknown tool", a worker is told why for `task_plan` (the depth cap below).
-- **What it may plan**: new worker tasks beneath its own open task, nothing else. The arguments are read strictly: `todo_id`, `role`, `attachments`, `project`, `user_requested` and any other field outside the tool's schema are refused, so it cannot take over or reuse another to-do, make another leader or give a worker a role; every task is a worker. `machine` and `cwd` default to the leader's own computer and directory; `done_when` and `expect_minutes` are the worker's. At most 8 workers of one leader are open at a time. The workers start at once: there is no plan card and no Start for the user, no push, no feed item in any conversation.
+- **What it may plan**: new worker tasks beneath its own open task, nothing else. The arguments are read strictly: `todo_id`, `role`, `attachments`, `project`, `user_requested` and any other field outside the tool's schema are refused, so it cannot take over or reuse another to-do, make another leader or give a worker a role; every task is a worker. `machine` and `cwd` default to the leader's own computer and directory; `done_when` is the worker's and `expect_minutes` is an optional override of the automatic estimate. At most 8 workers of one leader are open at a time. The workers start at once: there is no plan card and no Start for the user, no push, no feed item in any conversation.
 - **A worker is a supervised task whose supervisor is its leader's agent**: its to-do has the leader's agent session as the ledger's `supervision.supervisor` (what the to-do API shows, kept across restarts) and its `done_when`, and the leader's session as `origin`, so no conversation shows it. Its agent's row has `source: worker` and `via` the leader's task id, with `agent` from its own start answer's `session.agent`, else the explicitly resolved launcher kind; a leader started again has a new session, so the current agent of that task is the one reached. The supervisor is told apart from a conversation by being a leader agent's `machine/session` (`isLeaderRef`; both, since a session id alone is not unique across computers, and a worker's to-do `origin` is the same reference): `digestTo`, which would send anything else to the main chat, is never asked. A leader started again on another computer is reached through its task's current agent. The done judge does not close it, as for any supervised task, and its spot-check close (`judgeClose`) is off for it: it waits for its leader's review. A worker's own question cards stay the user's (`fleet_ix.go` does not route them up the conversations' ladder in `ask_route.go`, and upgrading worker permission or plan cards to the leader is another task); a failed start of a worker has no remedy tools and is told to the leader. The leader's own `report_to_supervisor` goes to its own supervisor, as always.
 - **Signals and reports**: every signal about a worker, the worker's `report_to_supervisor` included (`urgent: false` too: a task leader has no briefing to wait for), is one message into the leader agent's session on the leader's own computer (`sendDigest` hands them to `deliverToLeaderAgent`: gathering, deduplication and spacing as for a conversation, `session.send` so it queues behind a running turn and resumes a closed agent), starting with "Persona · supervision" (`prompts/agents/worker_supervise.md`): what stopped, stalled or waits for review, its `done_when`, what it said and its evidence. **Nothing is dropped.** A failed send puts the signals back for the next digest. A leader agent that is not reachable (its row was released) turns each signal into a `decide` entry for the conversation above the leader, naming the worker (so that conversation can `task_review` it) and saying its task leader cannot be reached; a closed leader agent whose background resume fails is escalated the same way and its message is retried on its own context, with a growing wait, while the leader's task is open, whether or not anyone is above it. So is a listed leader agent that has stopped (read-only, #4754), whose node refuses the send with `agent_stopped` (#8518): the conversation above hears of it once, and the leader is tried again with the growing wait, not at every digest, so a leader the user resumes still gets the message. **A leader whose own task closed** leaves its open workers to the conversation above it: `rehomeLeaderlessWorkers` (every digest and the supervise loop, idempotent) moves the ledger's `supervisor` and the to-do's `origin` together to that conversation (its notices, receipts and listings follow the origin), sends a review signal for a worker that waited, and with no conversation above cancels the worker with a reason. A worker's own `report_to_supervisor` in that window rehomes it first, so the report is told to the conversation above, or the worker is told it was cancelled; it is never answered "nobody receives this" and lost.
 - **Reviewing**: the leader's `task_review` takes `todo_id`, `verdict` (accepted, rework, needs_user, cancelled), `note`, `checks`, `reason` and `recommend`, and reaches its direct workers only (the ledger names this leader; its own task, any other task and a worker's siblings are refused). accepted closes the worker by review, cancelled closes it and stops its agent, rework sends the gaps to the worker (two rounds, then it goes up); no conclusion card, "Please verify" or push goes to the user. needs_user goes to the conversation that handed the leader its task, as the signal `decide` ("它的 leader（一个编码 Agent）判断要用户决定", with the leader's reason and recommendation); that conversation asks the user or decides, and reviews the worker with its own `task_review`, which does not take the worker over. The leader cannot message a worker or read its transcript: for a worker that did not start or is stuck it plans a new worker and cancels the old one.
@@ -1385,7 +1461,9 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
   `AssistantEntries.split`, a port of the web's `assistantEntries`; `ActionTrayContent` puts the conversation's own cards
   in front of Needs You (their row closes the tray onto the card below). The web (`OwnAskRow` in `AssistantActionBar`,
   the cards in `ChatView`'s dock) and Android (`panelRequests`, the chat's `InteractionPanel`) do the same since #4883:
-  the conversation's own cards are above its composer, never only inside the closed tray. An Agent linked to a to-do made by hand (no
+  the conversation's own cards are above its composer, never only inside the closed tray. On the web, a card its own turn
+  waits on (`TurnAsk`, `lib/turn-asks.ts`, #11794) stands open above the capsules instead and Needs you leaves it out;
+  only the cards of sessions folded under the conversation keep a row there. An Agent linked to a to-do made by hand (no
   `origin`) is that to-do's row in the main chat, not a second row of its own (#3387's `dockAgents` leaves out only the
   agents of conversations' tasks, so web and Android list it twice; the fixture has no such case yet). Message cards also leave Needs You once the inbox
   has the item handled or the user put the card off with Later. Rows: a task opens its details (right-click or long press

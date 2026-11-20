@@ -64,12 +64,15 @@ class ModelPillTest {
         assertFalse(switchesNext(null, on = true))
     }
 
-    @Test fun aSwitchDrawnAtOnceStandsUntilTheNextPush() {
-        val drawn = DrawnSwitch(PendingSwitch("work", "glm-5.3"), rev = 7)
-        assertEquals(PendingSwitch("work", "glm-5.3"), drawn.over(agent).pendingSwitch)
-        assertNull("the next push says what the hub has", drawn.over(agent.copy(rev = 8)).pendingSwitch)
-        assertNull("dropped at once", DrawnSwitch(null, 7).over(agent.copy(pendingSwitch = PendingSwitch("work"))).pendingSwitch)
-        assertEquals(agent, (null as DrawnSwitch?).over(agent))
+    @Test fun aSwitchDrawnAtOnceStandsUntilAWholeRowIsObserved() {
+        val drawn = DrawnSwitch(PendingSwitch("work", "glm-5.3"), observation = 1L)
+        assertEquals(PendingSwitch("work", "glm-5.3"), drawn.over(agent, 1L).pendingSwitch)
+        assertEquals("a transcript size change isn't evidence of a new switch", drawn.switch,
+            drawn.over(agent.copy(rev = 8), 1L).pendingSwitch)
+        assertNull("a fresh whole row wins even at the same transcript size", drawn.over(agent, 2L).pendingSwitch)
+        assertNull("a local cancel gives immediate feedback",
+            DrawnSwitch(null, 1L).over(agent.copy(pendingSwitch = PendingSwitch("work")), 1L).pendingSwitch)
+        assertEquals(agent, (null as DrawnSwitch?).over(agent, 1L))
     }
 
     @Test fun whatThePhoneKeepsReadsBack() {

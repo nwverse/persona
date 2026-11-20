@@ -23,8 +23,9 @@ import (
 //
 //   - only gated calls (and a few output filters): each call goes by its gate's rules (the first match: allow, confirm
 //     on the phone first with method, path and body on the card, or deny; none matching is confirmed); lark-cli's
-//     by its own risk level (larkcligate.go). Assistant bypass skips cards only for classified reads and ordinary
-//     writes; Lark sends as the user, deletion and calls it cannot classify still ask. Non-Lark commands such as
+//     by its own risk level (larkcligate.go). Assistant bypass skips cards only for classified reads, ordinary
+//     writes, and calls allowed by configured or per-chat rules; unconfigured Lark sends as the user, deletion and
+//     calls it cannot classify still ask. Non-Lark commands such as
 //     rm, git and tee remain outside this gate. Local redirect targets do not change a call's classification.
 //     Opaque execution requires confirmation when the
 //     command text names the CLI (including paths or interpreter code), or an expansion supplies
@@ -181,12 +182,12 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	var ask, covered, bypassed []larkCall
 	for _, c := range v.calls {
 		decision := larkDecision(cfg, c)
-		if bypass {
+		if bypass && decision != "allow" {
 			if larkBypassSafe(c) {
 				bypassed = append(bypassed, c)
 				continue
 			}
-			decision = "confirm" // a configured allow does not waive a hard boundary
+			decision = "confirm" // unconfigured outbound/deletion still requires confirmation
 		}
 		if decision == "allow" && health && !larkRead(c) {
 			decision = "confirm"

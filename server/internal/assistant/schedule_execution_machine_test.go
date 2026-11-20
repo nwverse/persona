@@ -106,13 +106,18 @@ func TestRecurringTaskKeepsItsConversationDuringLauncherDiscoveryFailure(t *test
 }
 
 func TestTaskExecutionInheritsOnItsComputer(t *testing.T) {
+	fastLauncherRecovery(t)
 	for _, name := range []string{"remote-agent", "shared"} {
 		t.Run(name, func(t *testing.T) {
 			f := newFakeHub().withMachine()
 			f.sessions["remote"] = nil
 			f.zshrc = map[string][]proto.Launcher{
 				"server": {{Name: "shared", Agent: "claude", Source: "zshrc", BaseURL: "https://main.example"}},
-				"remote": {{Name: name, Agent: "codex", Source: "zshrc", BaseURL: "https://remote.example", Model: "remote-default"}},
+				"remote": {{Name: name, Agent: "claude", Source: "zshrc", BaseURL: "https://remote.example", Model: "remote-default"}},
+			}
+			// A remote default is used only when the operator names it as a same-agent recovery fallback.
+			f.hello.Models.LauncherRecovery = map[string]LauncherRecovery{
+				"remote": {WaitSeconds: 1, Fallbacks: map[string][]string{"shared": {name}}},
 			}
 			s := newTestService(t, f)
 			setModel(t, s, "assistant", ModelBinding{Provider: "launcher.shared", Model: "main-only", Effort: "high"})
@@ -191,12 +196,17 @@ func TestTaskExecutionRuntimeReusesScheduledAndManualRuns(t *testing.T) {
 }
 
 func TestTaskExecutionMovingComputersKeepsInheritanceSparse(t *testing.T) {
+	fastLauncherRecovery(t)
 	f := newFakeHub().withMachine()
 	f.sessions["first"], f.sessions["second"] = nil, nil
 	f.zshrc = map[string][]proto.Launcher{
 		"server": {{Name: "main-agent", Source: "zshrc"}},
 		"first":  {{Name: "first-agent", Source: "zshrc"}},
 		"second": {{Name: "second-agent", Source: "zshrc"}},
+	}
+	f.hello.Models.LauncherRecovery = map[string]LauncherRecovery{
+		"first":  {WaitSeconds: 1, Fallbacks: map[string][]string{"main-agent": {"first-agent"}}},
+		"second": {WaitSeconds: 1, Fallbacks: map[string][]string{"main-agent": {"second-agent"}}},
 	}
 	s := newTestService(t, f)
 	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.main-agent", Model: "main-only"})
@@ -217,7 +227,7 @@ func TestTaskExecutionMovingComputersKeepsInheritanceSparse(t *testing.T) {
 			t.Fatalf("inherited provider was pinned: %+v %v", rc, err)
 		}
 	}
-	setModel(t, s, "task.job", ModelBinding{Provider: "launcher.main-agent", Model: "explicit-model"})
+	setModel(t, s, "task.job", ModelBinding{Provider: "launcher.missing-agent", Model: "explicit-model"})
 	before := f.sent()
 	if _, err := runNow(t, s, "job"); err == nil || f.sent() != before {
 		t.Fatalf("explicit unavailable configuration was substituted: %v", err)

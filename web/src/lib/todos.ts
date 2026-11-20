@@ -11,7 +11,7 @@ import { stateOf } from "./format";
 import { foldedState } from "./child-sessions";
 import { foldRows } from "./folded-rows";
 import { splitAgentSessions, type AgentGroup, type AgentMutes } from "./agent-groups";
-import type { AgentState, Interaction, Machine, Session } from "./types";
+import type { AgentState, Interaction, Machine, Question, Session } from "./types";
 import type { Route } from "./router";
 import { byTime } from "./times";
 import { stateName, waitName } from "./state-labels";
@@ -168,6 +168,8 @@ export function orphanedLine(todo: Pick<Todo, "orphaned" | "done_at">): { lead: 
  * `asked_at` is the round, which POST /todos/{id}/accept takes back (an earlier round's is 409).
  */
 export interface TodoAsk {
+  /** An expired ask_user's original form. Answer it on the to-do, not its expired interaction. */
+  questions?: Question[];
   outcome?: "done" | "cannot" | "decide" | string;
   verdict: string;
   recommend?: string;
@@ -358,6 +360,19 @@ export function isAutoDone(todo: Todo): boolean {
 /** Its supervisor closed it after reviewing the work (done_by review, #3124). */
 export function isReviewDone(todo: Todo): boolean {
   return Boolean(todo.done_at) && todo.done_by === "review";
+}
+
+/** A cancelled task: its supervisor ended it without the work being accepted (the row's status line says Cancelled).
+ *  Only this outcome is struck through, so an accepted or deployed one does not read as thrown away (#11677). */
+export function isCancelled(todo: Todo): boolean {
+  return isReviewDone(todo) && todo.supervision?.state === "cancelled";
+}
+
+/** Whether a finished row strikes its title through: only a cancelled to-do (#11677). A task that succeeded — accepted,
+ *  deployed, ticked by the owner or auto-completed — keeps a plain muted title; the filled check and the muted tone
+ *  already say it is closed. A row still open (a failed start waiting on the owner) is never struck (#3713). */
+export function strikesThrough(todo: Todo, open: boolean): boolean {
+  return !open && isCancelled(todo);
 }
 
 /** An open task its supervisor accepted, reopened by the hub when its agent got more work, with nothing of it running
