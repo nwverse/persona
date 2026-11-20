@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { closeoutClaim, closeoutContradicted, closeoutLine, closeoutSuffix, shownCloseout, stripCloseout } from "./closeout";
+import { closeoutClaim, closeoutContradicted, closeoutLine, closeoutSuffix, shownCloseout } from "./closeout";
+import { stripCloseout } from "./closeout-text";
 import { sessionPreview } from "./format";
 import { orphanedLine } from "./todos";
 import type { Closeout, Session } from "./types";

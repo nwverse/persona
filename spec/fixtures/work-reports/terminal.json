@@ -26,6 +26,30 @@
       "markdown": true
     },
     {
+      "name": "combining-text",
+      "text": "The café sample matched. 📋\n\n### Persona work report\n\n- Status: done\n- Merged: n/a\n- Deployed: n/a\n- Did: Checked café and 📋.\n- Artifact: doc notes/review.md\n- Verified: Four entries matched the checklist.\n\n---",
+      "display": "The café sample matched. 📋",
+      "markdown": true
+    },
+    {
+      "name": "combining-mark-in-heading",
+      "text": "### Persóna work report\n\n- Status: done\n- Merged: n/a\n- Deployed: n/a\n- Did: Reviewed the four sample entries.\n- Artifact: doc notes/review.md\n- Verified: Four entries matched the checklist.\n\n---",
+      "display": "### Persóna work report\n\n- Status: done\n- Merged: n/a\n- Deployed: n/a\n- Did: Reviewed the four sample entries.\n- Artifact: doc notes/review.md\n- Verified: Four entries matched the checklist.\n\n---",
+      "markdown": false
+    },
+    {
+      "name": "fullwidth-heading",
+      "text": "＃＃＃ Persona work report\n\n- Status: done\n- Merged: n/a\n- Deployed: n/a\n- Did: Reviewed the four sample entries.\n- Artifact: doc notes/review.md\n- Verified: Four entries matched the checklist.\n\n---",
+      "display": "＃＃＃ Persona work report\n\n- Status: done\n- Merged: n/a\n- Deployed: n/a\n- Did: Reviewed the four sample entries.\n- Artifact: doc notes/review.md\n- Verified: Four entries matched the checklist.\n\n---",
+      "markdown": false
+    },
+    {
+      "name": "nonbreaking-heading-gap",
+      "text": "### Persona work report\n\n- Status: done\n- Merged: n/a\n- Deployed: n/a\n- Did: Reviewed the four sample entries.\n- Artifact: doc notes/review.md\n- Verified: Four entries matched the checklist.\n\n---",
+      "display": "### Persona work report\n\n- Status: done\n- Merged: n/a\n- Deployed: n/a\n- Did: Reviewed the four sample entries.\n- Artifact: doc notes/review.md\n- Verified: Four entries matched the checklist.\n\n---",
+      "markdown": false
+    },
+    {
       "name": "after-example",
       "text": "````md\nA sample.\n```\n````\n\n### Persona work report\n\n- Status: done\n- Merged: n/a\n- Deployed: n/a\n- Did: Reviewed the four sample entries.\n- Artifact: doc notes/review.md\n- Verified: Four entries matched the checklist.\n\n---",
       "display": "````md\nA sample.\n```\n````",

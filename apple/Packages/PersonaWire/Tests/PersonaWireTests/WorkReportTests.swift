@@ -17,7 +17,7 @@ import Testing
         for sample in samples.cases {
             #expect(Closeout.holdsBlock(sample.text) == (sample.text != sample.display), "\(sample.name)")
             if sample.name == "done" { #expect(Closeout.strip(sample.text, complete: false) == sample.text) }
-            #expect(Closeout.strip(sample.text) == sample.display, "\(sample.name)")
+            #expect(Closeout.strip(sample.text).utf8.elementsEqual(sample.display.utf8), "\(sample.name)")
         }
     }
 }

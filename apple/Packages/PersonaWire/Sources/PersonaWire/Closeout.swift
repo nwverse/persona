@@ -207,7 +207,9 @@ public nonisolated struct Closeout: Codable, Hashable, Sendable {
     }
 
     private static func finalReport(_ text: String, in range: NSRange) -> NSTextCheckingResult? {
-        guard text.contains("### Persona "), let match = report.firstMatch(in: text, range: range),
+        // The published heading starts with these literal ASCII bytes. A grapheme search makes ordinary long replies expensive.
+        guard (text as NSString).range(of: "### Persona ", options: .literal).location != NSNotFound,
+              let match = report.firstMatch(in: text, range: range),
               !insideReportFence(text, before: match.range.location) else { return nil }
         return match
     }
