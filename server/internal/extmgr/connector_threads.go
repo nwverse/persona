@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/subscriptions"
@@ -132,10 +133,7 @@ func (h *Manager) connectorThreadRoutes(api *http.ServeMux) {
 			h.threadFailed(w, r.Context(), c, err)
 			return
 		}
-		if page.Messages == nil {
-			page.Messages = []connector.ThreadMessage{}
-		}
-		writeJSON(w, page)
+		writeJSON(w, threadPageForApps(c.ID(), page))
 	})
 	// One media's bytes: ?ref=<a page's avatar or media ref>. Kept on disk, and by the app for good.
 	api.HandleFunc("GET /api/v1/connectors/{id}/media", func(w http.ResponseWriter, r *http.Request) {
@@ -245,6 +243,23 @@ func (h *Manager) connectorThreadRoutes(api *http.ServeMux) {
 		}
 		writeJSON(w, map[string]any{"ok": true, "result": out})
 	})
+}
+
+// Only the manager knows the app-facing path. Keep a connector's original refs for older apps
+// and its own page untouched, including the author and messages it may reuse on a later read.
+func threadPageForApps(source string, page connector.ThreadPage) connector.ThreadPage {
+	page.Chat.AvatarURL = extwire.AvatarURL(source, page.Chat.Avatar)
+	if page.Chat.Author != nil {
+		author := *page.Chat.Author
+		author.AvatarURL = extwire.AvatarURL(source, author.Avatar)
+		page.Chat.Author = &author
+	}
+	page.Messages = append([]connector.ThreadMessage{}, page.Messages...)
+	for i := range page.Messages {
+		sender := &page.Messages[i].Sender
+		sender.AvatarURL = extwire.AvatarURL(source, sender.Avatar)
+	}
+	return page
 }
 
 // mediaDir is where connectors' media are kept: <hub dir>/cache/connector-media/<connector>/<hash of the ref>.
