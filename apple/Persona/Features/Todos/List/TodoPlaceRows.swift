@@ -48,13 +48,14 @@ struct TodoPlaceRows<Head: View, Row: View>: View {
             if entries.isEmpty {
                 head(shown, open, nil)
             } else {
-                head(shown && places.current.isAll, {
-                    places.reopen(inFront: shown)
+                let shownRows = folded ? [] : items(entries)
+                // The place shown has its row shaded; one with no row in sight (folded away, a sixth project, one with
+                // nothing open picked in All Projects…) shades All Projects… for a project, else To-dos itself.
+                head(shown && !shownRows.contains(where: \.selected), {
+                    places.pickRow()
                     open()
                 }, TodoPlacesFold(folded: $folded))
-                if !folded {
-                    ForEach(items(entries)) { item in row(item) }
-                }
+                ForEach(shownRows) { item in row(item) }
             }
         }
         .sheet(isPresented: $allProjects, onDismiss: {
@@ -83,8 +84,10 @@ struct TodoPlaceRows<Head: View, Row: View>: View {
                                         selected: shown && current == ref, gapBefore: n == 0, run: { go(ref) }))
         }
         if entries.more {
+            let unlisted = current.project != nil && !out.contains { $0.id == current.id }
             out.append(TodoPlaceRowItem(id: "more", title: String(localized: "All Projects… [To-dos Places]"),
-                                        symbol: Theme.Icon.moreMenu, gapBefore: entries.projects.isEmpty, run: { allProjects = true }))
+                                        symbol: Theme.Icon.moreMenu, selected: shown && unlisted, gapBefore: entries.projects.isEmpty,
+                                        run: { allProjects = true }))
         }
         return out
     }
@@ -96,25 +99,51 @@ struct TodoPlaceRows<Head: View, Row: View>: View {
 }
 
 /// The To-dos row's chevron on the V1 path: folds its places away and back (`sidebar.fold.todos`, kept on the device;
-/// it starts unfolded and never folds by itself, so the rows under it never jump). Spoken as what it folds.
+/// it starts unfolded and never folds by itself, so the rows under it never jump). Spoken as what it folds, To-dos, as a
+/// Pinned direction's chevron says its direction.
 struct TodoPlacesFold: View {
     @Binding var folded: Bool
+    /// Laid over the row's end (`overRow`): as tall as the row, not a row's height of its own.
+    private var over = false
+
+    init(folded: Binding<Bool>) {
+        _folded = folded
+    }
+
+    /// The chevron to lay over a row that keeps room for it: the row's height, whatever the style's rows measure.
+    func overRow() -> Self {
+        var fold = self
+        fold.over = true
+        return fold
+    }
 
     var body: some View {
         Button {
             withAnimation(Theme.Motion.state) { folded.toggle() }
         } label: {
-            ThemedIcon(folded ? Theme.Icon.expand : Theme.Icon.collapse)
-                .font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
-                .padding(.trailing, Theme.Space.s)
-                .padding(.vertical, Theme.Sidebar.rowPadding)
-                .scaledFrame(minWidth: Theme.Size.tapTarget, minHeight: Theme.Sidebar.row)
-                .contentShape(.rect)
+            if over {
+                glyph
+                    .padding(.trailing, Theme.Space.s)
+                    .scaledFrame(minWidth: Theme.Size.tapTarget, alignment: .trailing)
+                    .frame(maxHeight: .infinity)
+                    .contentShape(.rect)
+            } else {
+                glyph
+                    .padding(.trailing, Theme.Space.s)
+                    .padding(.vertical, Theme.Sidebar.rowPadding)
+                    .scaledFrame(minWidth: Theme.Size.tapTarget, minHeight: Theme.Sidebar.row)
+                    .contentShape(.rect)
+            }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(String(localized: "Today, Upcoming and Projects [To-dos Places]"))
+        .accessibilityLabel(String(localized: "To-dos"))
         .accessibilityValue(folded ? String(localized: "Collapsed") : String(localized: "Expanded"))
         .accessibilityIdentifier("sidebar-todos-fold")
+    }
+
+    private var glyph: some View {
+        ThemedIcon(folded ? Theme.Icon.expand : Theme.Icon.collapse)
+            .font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
     }
 }
 #endif

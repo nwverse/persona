@@ -22,8 +22,9 @@ private final class TodoSessionCell {
 }
 
 /// One number per place (#10465, docs/apple/ios.md "Filing and counts"): with one manager the hub's counts and places as
-/// sent; with several, counted from the current assistant's rows, with only its own project places; less the answers
-/// given on this device that the hub's view does not show yet.
+/// sent, each project's part counted from the rows as its place counts them; with several, counted from the current
+/// assistant's rows, with only its own project places; less the answers given on this device that the hub's view does
+/// not show yet.
 @MainActor
 struct TodoCountsSourceTests {
     @MainActor private final class Flag { var on = false }
@@ -52,7 +53,8 @@ struct TodoCountsSourceTests {
         return hub
     }
 
-    /// One manager: the numbers are the hub's as sent, its places too, All carrying N.
+    /// One manager: the numbers are the hub's as sent, its places too, All carrying N; a project's part is its rows',
+    /// as its place's own bar says it.
     @Test func oneManagerShowsTheHubsNumbers() async throws {
         let hub = Self.hub()
         // The hub's counts differ from what the rows would give: they are the ones shown.
@@ -64,7 +66,9 @@ struct TodoCountsSourceTests {
         #expect(store.countsSource.needsYou == 5 && store.countsSource.counts.open == 9)
         #expect(store.countsSource.places.map(\.id) == ["all", "today", "upcoming", "project:kyoto", "project:release"])
         #expect(store.countsSource.places.first?.needsYou == 5, "All carries N")
-        #expect(store.countsSource.places.last?.needsYou == 2)
+        #expect(store.countsSource.places.last?.needsYou == 0, "the hub says 2, but no row of it needs the owner")
+        await store.refresh(api: Self.hub().client)
+        #expect(store.countsSource.places.last?.needsYou == 2, "the release's two rows in Needs you")
     }
 
     /// Several managers: the hub adds both up, the pages list the current assistant's: N is counted from its rows, and

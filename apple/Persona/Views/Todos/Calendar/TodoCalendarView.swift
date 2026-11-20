@@ -48,6 +48,8 @@ struct TodosModeBar<ListControls: View>: View {
     /// The list view's own controls at the trailing end, where the calendar has its day / week / month (the phone's
     /// filter and sort, #3740).
     @ViewBuilder var listControls: ListControls
+    /// The calendar's options (Show Done): not for a calendar of open to-dos alone (To-dos' Upcoming, #10465).
+    var options = true
     @StoredValue("todos.calendar.showDone") private var showDone = true
 
     private var viewChoice: some View {
@@ -82,7 +84,11 @@ struct TodosModeBar<ListControls: View>: View {
             ViewThatFits(in: .horizontal) {
                 bar
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                    HStack(spacing: Theme.Space.m) { viewChoice; Spacer(minLength: Theme.Space.s); optionsMenu }
+                    HStack(spacing: Theme.Space.m) {
+                        viewChoice
+                        Spacer(minLength: Theme.Space.s)
+                        if options { optionsMenu }
+                    }
                     modeChoice
                 }
                 .padding(.horizontal, Theme.Space.page)
@@ -121,7 +127,7 @@ struct TodosModeBar<ListControls: View>: View {
             }
             if view == .calendar {
                 modeChoice
-                optionsMenu
+                if options { optionsMenu }
             } else {
                 listControls
             }
@@ -132,8 +138,8 @@ struct TodosModeBar<ListControls: View>: View {
 }
 
 extension TodosModeBar where ListControls == EmptyView {
-    init(view: Binding<TodosViewMode>, mode: Binding<TodoCalendarMode>, grouping: Binding<TodosGrouping>? = nil) {
-        self.init(view: view, mode: mode, grouping: grouping) { EmptyView() }
+    init(view: Binding<TodosViewMode>, mode: Binding<TodoCalendarMode>, grouping: Binding<TodosGrouping>? = nil, options: Bool = true) {
+        self.init(view: view, mode: mode, grouping: grouping, listControls: { EmptyView() }, options: options)
     }
 }
 
@@ -400,11 +406,15 @@ struct TodoCalendarView: View {
 }
 
 /// A new to-do made on the calendar: due where it was tapped (a moment, or the day), a title to type; the rest is set
-/// on its page.
+/// on its page. Made in a To-dos project's place instead (#10465, its empty state's New To-Do in ‹project›), it is put in
+/// that project in the same write and asks for no date.
 struct TodoQuickAddSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var store = TodoStore.shared
-    var slot: TodoCalendarSlot
+    /// Where it was tapped; nil for a project's.
+    var slot: TodoCalendarSlot?
+    /// The project's slug and name.
+    var project: (slug: String, name: String)?
 
     @State private var title = ""
     @State private var allDay: Bool
@@ -418,25 +428,31 @@ struct TodoQuickAddSheet: View {
         _due = State(initialValue: slot.time ?? Calendar.current.date(bySettingHour: TodoCalendar.morning + 1, minute: 0, second: 0, of: slot.day) ?? slot.day)
     }
 
+    init(project slug: String, name: String) {
+        project = (slug, name)
+        _allDay = State(initialValue: true)
+        _due = State(initialValue: .distantFuture) // no date is asked for
+    }
+
     private var trimmed: String { title.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    TextField(String(localized: "Title"), text: $title)
-                        .lineLimit(1)
-                        .focused($typing)
-                        .onSubmit(add)
-                        .accessibilityIdentifier("todo.calendar.newTitle")
+                if let project {
+                    Section { titleField } footer: { Text("In \(project.name) [To-dos Places]") }
+                } else {
+                    Section { titleField }
                 }
-                Section {
-                    FormDatePicker("Due", selection: $due, displayedComponents: allDay ? [.date] : [.date, .hourAndMinute],
-                                   identifier: "todo.calendar.newDue")
-                    Toggle(String(localized: "All Day"), isOn: $allDay)
-                        .accessibilityIdentifier("todo.calendar.newAllDay")
-                } footer: {
-                    Text("Set a reminder, the priority and notes on the to-do's page.")
+                if slot != nil {
+                    Section {
+                        FormDatePicker("Due", selection: $due, displayedComponents: allDay ? [.date] : [.date, .hourAndMinute],
+                                       identifier: "todo.calendar.newDue")
+                        Toggle(String(localized: "All Day"), isOn: $allDay)
+                            .accessibilityIdentifier("todo.calendar.newAllDay")
+                    } footer: {
+                        Text("Set a reminder, the priority and notes on the to-do's page.")
+                    }
                 }
             }
             .themedPage()
@@ -457,14 +473,22 @@ struct TodoQuickAddSheet: View {
         .onAppear { typing = true }
     }
 
+    private var titleField: some View {
+        TextField(String(localized: "Title"), text: $title)
+            .lineLimit(1)
+            .focused($typing)
+            .onSubmit(add)
+            .accessibilityIdentifier("todo.calendar.newTitle")
+    }
+
     private func add() {
         guard !trimmed.isEmpty, !saving else { return }
         saving = true
-        let when: APIClient.TodoPlanChange.Due = allDay ? .day(TodoPlanText.day(due)) : .at(due)
-        // The sheet closes only once the to-do is saved: a failed save keeps what was typed.
+        let when: APIClient.TodoPlanChange.Due? = slot == nil ? nil : allDay ? .day(TodoPlanText.day(due)) : .at(due)
+        // The sheet closes only once the to-do is saved: a failed save keeps what was typed, and made nothing.
         Task {
             do {
-                _ = try await store.create(title: trimmed, due: when)
+                _ = try await store.create(title: trimmed, due: when, project: project?.slug)
                 dismiss()
             } catch {
                 saving = false

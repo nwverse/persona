@@ -12348,29 +12348,6 @@
         }
       }
     },
-    "Today, Upcoming and Projects [To-dos Places]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Today, Upcoming and Projects"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "今日、今後の予定、プロジェクト"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "今天、即将到来和项目"
-          }
-        }
-      }
-    },
     "Upcoming [To-dos Places]" : {
       "extractionState" : "manual",
       "localizations" : {

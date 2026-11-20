@@ -4,8 +4,8 @@ import SwiftUI
 
 /// The list's title as a menu of the same places as the sidebar (#10465; proposal 3.3: "All To-dos ▾", the second way
 /// to a place, which the HIG asks for): All To-dos, Today and Upcoming, then the projects with their part of N, then
-/// All Projects…. The system's title menu (`toolbarTitleMenu`); a pick changes the list where it is, with no animation.
-/// Without the hub's places there is nothing to pick and no menu.
+/// All Projects…. The system's title menu (`toolbarTitleMenu`, given by `TodoPlaceFollower` only while the hub lists
+/// places); a pick changes the list where it is, with no animation.
 struct TodoTitleMenu: View {
     var places: TodosPlacesModel
     /// All Projects…: the sheet of every project.
@@ -47,17 +47,25 @@ struct TodoTitleMenu: View {
     }
 }
 
-/// Tells the page the place to show and its name, as the owner picks it or once the hub stops listing it: a view of its
-/// own, so the places' numbers changing redraw this and not the page (P5).
+/// Tells the page the place to show and its name, as the owner picks it or once the hub stops listing it, and gives
+/// the page's title its menu while there are places to pick (none: a plain title, no menu to open): a view of its own,
+/// so the places' numbers changing redraw this and not the page (P5).
 struct TodoPlaceFollower: View {
     var places: TodosPlacesModel
+    /// All Projects… in the title menu.
+    var allProjects: () -> Void
     var follow: (TodoPlaceRef, String) -> Void
 
     var body: some View {
         let place = places.current
         let title = places.title(place)
-        Color.clear
+        let follower = Color.clear
             .onChange(of: PlaceShown(place: place, title: title), initial: true) { _, shown in follow(shown.place, shown.title) }
+        if places.entries.isEmpty {
+            follower
+        } else {
+            follower.toolbarTitleMenu { TodoTitleMenu(places: places, allProjects: allProjects) }
+        }
     }
 
     private struct PlaceShown: Equatable {

@@ -1526,7 +1526,8 @@ extension AssistantSidebar {
 
     #if os(iOS)
     /// The To-dos row over its places: its chevron beside it, not in it (the row keeps its own tap), and one shade
-    /// across both, as a Pinned direction's row (`AssistantSidebarDirection`).
+    /// across both, as a Pinned direction's row (`AssistantSidebarDirection`). In BeautifulUI the chevron lies over the
+    /// row's end, where the row keeps room for it, so the row keeps its siblings' height.
     @ViewBuilder private func todosHead(selected: Bool, run: @escaping () -> Void, fold: TodoPlacesFold?) -> some View {
         let title = String(localized: "To-dos")
         let count = TodoStore.shared.sidebarCount
@@ -1534,9 +1535,10 @@ extension AssistantSidebar {
             if AppStyle.current.usesBeautifulUI {
                 BUISidebarRow(title, symbol: Theme.Icon.styled(Theme.Icon.todo), isActive: selected, action: run) {
                     if count > 0 { CountBadge(count: count, look: .needs) }
+                    Color.clear.scaledFrame(width: Theme.Size.tapTarget)
                 }
                 .accessibilityIdentifier("sidebar-todos")
-                .safeAreaInset(edge: .trailing, spacing: Theme.Space.flush) { fold }
+                .overlay(alignment: .trailing) { fold.overRow() }
             } else {
                 plainAction(title, Theme.Icon.todo, id: "sidebar-todos", count: count, run: run)
                     .accessibilityAddTraits(selected ? .isSelected : [])
@@ -1550,18 +1552,26 @@ extension AssistantSidebar {
         }
     }
 
-    /// A To-dos place under To-dos: the sidebar's row, set in so its symbol is where To-dos' words start. Its own
-    /// function, so the rows every sidebar draws keep their stack frames (`MainPagesStackTests`).
+    /// A To-dos place under To-dos: the sidebar's row, set in so its symbol is where To-dos' words start (BeautifulUI's
+    /// row by its own measures), its part of N said in words. Its own function, so the rows every sidebar draws keep
+    /// their stack frames (`MainPagesStackTests`).
     @ViewBuilder private func todoPlaceRow(_ item: TodoPlaceRowItem) -> some View {
-        HStack(spacing: Theme.Sidebar.gap) {
-            Color.clear.scaledFrame(width: Theme.Sidebar.glyphColumn)
+        let count = item.count > 0 ? StateName.count(.needsYou, item.count) : ""
+        Group {
             if AppStyle.current.usesBeautifulUI {
-                BUISidebarRow(item.title, symbol: Theme.Icon.styled(item.symbol), isActive: item.selected, action: item.run) {
+                BUISidebarRow(item.title, symbol: Theme.Icon.styled(item.symbol), isActive: item.selected, indent: 1, action: item.run) {
                     if item.count > 0 { CountBadge(count: item.count, look: .needs) }
                 }
+                .accessibilityLabel(item.title)
+                .accessibilityValue(count)
                 .accessibilityIdentifier(item.identifier)
             } else {
-                plainAction(item.title, item.symbol, id: item.identifier, count: item.count, selected: item.selected, run: item.run)
+                HStack(spacing: Theme.Sidebar.gap) {
+                    Color.clear.scaledFrame(width: Theme.Sidebar.glyphColumn)
+                    plainAction(item.title, item.symbol, id: item.identifier, count: item.count, selected: item.selected, run: item.run)
+                        .accessibilityLabel(item.title)
+                        .accessibilityValue(count)
+                }
             }
         }
         .padding(.top, item.gapBefore ? Theme.Space.m : Theme.Space.flush)

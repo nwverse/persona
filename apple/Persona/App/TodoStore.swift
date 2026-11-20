@@ -71,6 +71,10 @@ final class TodoStore {
     @ObservationIgnored private var lastTimerRead = Date.distantPast
     /// Ends the first V1 launch's wait for the views (`viewsRead`) when the first read is slow.
     @ObservationIgnored private var holdTimer: Task<Void, Never>?
+    /// The hub listed `todo_places` in this run: its places are read on when a later hello leaves it out (a manager
+    /// reconnecting, as `TodosV1` keeps the view), so the place the owner picked never widens under them; only a 404 or
+    /// 405, or another hub, takes them away (plan S2-1).
+    @ObservationIgnored private var placesListed = false
     /// Counts again each `Timing.rulesTick` while a row is filed by the app's own rules, which read the clock.
     @ObservationIgnored private var rulesClock: Task<Void, Never>?
     /// The scene is in front: the timer runs only then (P9).
@@ -288,6 +292,7 @@ final class TodoStore {
         views = [:]
         counts = nil
         places = nil
+        placesListed = false
         viewsRead = false
         changes = []
         firedFor = .distantPast
@@ -412,12 +417,13 @@ final class TodoStore {
         armTimer()
     }
 
-    /// The places, read with the list while V1 is on and the hub lists them: again only when the list changed (a 304
-    /// changes none of its numbers). A hub or manager without the route ("not there"), or a hub whose hello stopped
-    /// listing them, has none (All only); any other failure keeps the last until the next read.
+    /// The places, read with the list while V1 is on and the hub has listed them in this run: again only when the list
+    /// changed (a 304 changes none of its numbers). A hub or manager without the route ("not there"), or a hub that has
+    /// not listed them, has none (All only); any other failure keeps the last until the next read.
     private func readPlaces(_ api: APIClient, listChanged: Bool, generation requested: Int) async {
         guard v1.isOn() else { return }
-        guard v1.features().places else {
+        if v1.features().places { placesListed = true }
+        guard placesListed else {
             guard places != nil else { return }
             places = nil
             persistView()
@@ -554,12 +560,13 @@ final class TodoStore {
     }
 
     /// A new to-do is the current assistant's (or `owner`'s): its manager is named, and the answer stamped with it.
-    func create(title: String, notes: String? = nil, due: APIClient.TodoPlanChange.Due? = nil, owner: Owner = .current,
-                api injected: APIClient? = nil) async throws -> TodoItem {
+    /// `project`: made in that knowledge-base project, in the same write (one write: a retry never makes a second).
+    func create(title: String, notes: String? = nil, due: APIClient.TodoPlanChange.Due? = nil, project: String? = nil,
+                owner: Owner = .current, api injected: APIClient? = nil) async throws -> TodoItem {
         let made = manager(of: owner)
         guard let api = (injected ?? AppModel.shared.api)?.manager(managers.naming(made)) else { throw APIError(status: 0, message: String(localized: "Not connected to a hub [Todo Store 04f822]")) }
         let targetGeneration = generation
-        let created = try await stamped(api.createTodo(title: title, notes: notes, due: due), as: made)
+        let created = try await stamped(api.createTodo(title: title, notes: notes, due: due, project: project), as: made)
         guard generation == targetGeneration else { return created }
         mutationRevision += 1
         var updated = todos

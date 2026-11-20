@@ -195,7 +195,12 @@ struct AssistantView: View {
                                     : column ? nil : { drawer.close(); model.selectedTab = .settings },
                                 drawer: column ? nil : drawer,
                                 openInbox: places ? { show(.inbox) } : nil,
-                                openTodos: places ? { show(.todos) } : { drawer.close(); showTodos = true },
+                                openTodos: places ? { show(.todos) } : {
+                                    // A place picked in the sidebar is taken here too (its list changes in place).
+                                    _ = TodoWorkspace.shared.opening(inFront: showTodos)
+                                    drawer.close()
+                                    showTodos = true
+                                },
                                 onMachines: places ? { show(.machines) } : nil,
                                 onOpenExtension: places ? { show(.extensionPage($0)) } : { r in drawer.close(); openedExtension = r },
                                 openHealth: places ? { show(.health) } : { drawer.close(); enterHealth() },
@@ -568,8 +573,8 @@ struct AssistantView: View {
     private func show(_ page: ShellPage?) {
         guard let page else { return }
         // A To-dos place the sidebar picked (#10465): To-dos opens on it at its root, what it kept being the place
-        // before's.
-        let fresh = page == .todos && TodoWorkspace.shared.takePick()
+        // before's. Its own row is All To-dos where To-dos is the place in front.
+        let fresh = page == .todos && TodoWorkspace.shared.opening(inFront: todosInFront)
         #if os(iOS)
         if embedded, let unified { return showRoot(page, in: unified, fresh: fresh) }
         #endif
@@ -628,6 +633,15 @@ struct AssistantView: View {
     }
 
     #if os(iOS)
+    /// Whether To-dos is the place in front, whatever is pushed on it: the Sidebar layout's root, else the place this
+    /// page shows over the conversation (the shell's and the iPad's), else the classic page.
+    private var todosInFront: Bool {
+        #if os(iOS)
+        if embedded, let unified { return unified.shownPlace == .todos }
+        #endif
+        return placesByValue ? places.current == .todos : showTodos
+    }
+
     /// The Sidebar layout (#8359): each page the sidebar opens is a root of the page beside it, the conversation one of
     /// them. Picking one replaces the root at once, the one left keeping what was opened on it; picking the one in front
     /// goes back to it (`SidebarPageRoots`). The shaded row follows the root (`UnifiedSidebar.shownPlace`, `atRoot`).

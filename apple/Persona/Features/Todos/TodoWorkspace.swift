@@ -25,8 +25,8 @@ final class TodoWorkspace {
     /// Sidebar picks that changed the place, and how many of them an opening of To-dos has taken (`takePick`).
     @ObservationIgnored private var picks = 0
     @ObservationIgnored private var taken = 0
-    /// V1 To-dos pages on screen, the drawer lying over one or not (`page(up:)`).
-    @ObservationIgnored private var pagesUp = 0
+    /// The sidebar's To-dos row itself was picked, not one of its places: the opening that follows decides (`opening`).
+    @ObservationIgnored private var rowPicked = false
     /// To-dos pages that still draw today's list though the gate is on now (it came on after they were made,
     /// `TodosPlacePage`): while one is up, the drawer's and the sidebar's To-dos number is today's too
     /// (`TodoStore.sidebarCount`), so the page and the drawer never say two numbers.
@@ -54,17 +54,27 @@ final class TodoWorkspace {
     /// The owner picked `place` in the sidebar, which then opens To-dos: what To-dos kept pushed belongs to the place
     /// before, so that opening shows the place at its root, without a pop (`takePick`).
     func open(_ place: String) {
+        rowPicked = false
         if pick(place) { picks += 1 }
     }
 
-    /// A V1 To-dos page came on screen (`up`) or went: pushed over, or left for another page.
-    func page(up: Bool) {
-        pagesUp = max(0, pagesUp + (up ? 1 : -1))
+    /// The owner picked the sidebar's To-dos row itself, which then opens To-dos (`opening`).
+    func pickRow() {
+        rowPicked = true
     }
 
-    /// Whether a V1 To-dos page is on screen: the sidebar's To-dos row then means All To-dos, its root; otherwise it
-    /// brings To-dos back as it was left, on its last place (proposal 3.3; `TodoPlaceRows`).
-    var pageUp: Bool { pagesUp > 0 }
+    /// To-dos opens: `inFront`, it was the place in front already, whatever is pushed on it (the host's own state: the
+    /// shell's place, the Sidebar layout's root, the classic page). After its own row it is All To-dos there, its root
+    /// as the tab-bar rule has it, and from anywhere else To-dos as it was left, on its last place (proposal 3.3,
+    /// DESIGN_SYSTEM 3.5 "To-dos places"). Returns whether To-dos opens for a place picked since it last opened, which
+    /// then starts at its root (`takePick`).
+    func opening(inFront: Bool) -> Bool {
+        if rowPicked {
+            rowPicked = false
+            if inFront { open(TodoPlaceKind.allValue) }
+        }
+        return takePick()
+    }
 
     /// Whether To-dos opens for a place the sidebar picked since it last opened; taken once.
     func takePick() -> Bool {

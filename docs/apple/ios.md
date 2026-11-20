@@ -2027,6 +2027,15 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   the path that reads the hub's counts and places as sent; the default roster lists several.
   `docs/operations/testing.md` has the details, including `GET /mock/churn?todos=1` for measuring a push on the list
   and where the mock is not a hub.
+- **UI suites** (`TodosV1ListTests`, `TodosV1PlacesTests`): they run against that mock, whose address the runner gets as
+  `TEST_RUNNER_PERSONA_TODOS_HUB=http://127.0.0.1:<port>` (skipped without it), with `-showTodosV1 YES` standing for the
+  switch-on; `TEST_RUNNER_PERSONA_UI_STYLE=beautiful` runs them in BeautifulUI. Their `testFrames` save the V1 frames
+  for review instead of checking: `TEST_RUNNER_PERSONA_TODOS_FRAMES=1` and `TEST_RUNNER_PERSONA_SHOTS=<dir>`, with
+  `…_TODOS_SCHEME` (light or dark), `…_TODOS_LANGUAGE`, `…_TODOS_COLOR`, `…_TODOS_SIZE` (a content size category),
+  `…_TODOS_SUFFIX` and `…_TODOS_FRAMES_ONLY` (frame names, as `~drawer,~kyoto`); on an iPad the places' frames are the
+  Sidebar layout's (`ipad11-landscape-closed~today`, `~kyoto-place`). `testTodayFrames` (`…_TODOS_TODAY=1`) shoots
+  today's To-dos with the gate off, for a before and after against a build of `main`. Reset the mock
+  (`/mock/reset`) before each run.
 - **The data** (`TodoStore`, `apple/Persona/Features/Todos/`): `GET /api/v1/todos` is decoded into its rows and, beside
   them, each row's `view` (by to-do id) and the list's `counts` (`TodosPage`); a view that does not decode is none.
   `TodoItem` gains only facts (`part_of`, `after`, `restored_at`, `someday_until`); the store keeps `views`, `counts` and
@@ -2039,8 +2048,9 @@ built in stages behind the hub's `todo_view`; this section grows with it.
     of whose views is for the kept rows is not used at all;
   - the first V1 launch without it: `viewsRead` stays false until the first read ends, so the list does not file its
     rows twice, but no longer than a second (no connection yet, or a hub that does not answer);
-  - the places, read with the list while the hub lists `todo_places`, again only when the list changed; a hub without
-    the route, or whose hello stopped listing it, has none (All only);
+  - the places, read with the list once the hub has listed `todo_places` in this run, again only when the list changed;
+    a hub without the route (404 or 405), or that has not listed it, has none (All only). A later hello without it (a
+    manager reconnecting) takes nothing away, as the gate keeps the view; another hub starts again;
   - one timer, to the earliest `next_change_at` of any row, reads the list again (coalesced) through the app's hub, only
     while the scene is in front. A read that still shows that moment (the hub's clock behind) is tried again after 5 s
     and 30 s, then left to the next push, and the timer never reads sooner than 5 s after its last read. The timer is
@@ -2055,7 +2065,8 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   app's own rules (`TodoTriageLogic`, frozen) mapped onto the V1 sections (Needs you → Needs you, Working → Working,
   PR to merge → Waiting, Other open → To do, Just finished → Just finished, Shelved → To do with the Inactive mark,
   Done → Done); a section's rows go by `rank`, then `manager`, then `id`. Every To-dos number comes from
-  `TodoStore.countsSource` (`TodoCountsSource`): the hub's `counts` and places with one manager; with several, counted
+  `TodoStore.countsSource` (`TodoCountsSource`): the hub's `counts` and places with one manager (each project's part of
+  N counted from its rows, as its place's own bar counts it); with several, counted
   from the current assistant's filed rows (`TodoCountsFallback`, the hub's rules, replayed against
   `spec/fixtures/todo-counts`) with only its own project places; less the answers given on the device that the hub's
   view does not show yet. The rows are filed there once (`countsSource.filed`, the current assistant's in the list's
@@ -2113,22 +2124,30 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   app's own rules runs while a counted row is filed so (the drawer's N included, whether or not the list was drawn) and
   follows whatever changes that, another assistant made current included (`TodoCountsSource.byRulesChanged`).
 - **Places** (DESIGN_SYSTEM 3.5 "To-dos places"; `docs/design/sidebar-navigation.md` section 7). `TodosPlacesModel` reads
-  the store's places (`countsSource.places`: the hub's with one manager, the current assistant's projects with several)
-  and the place picked (`TodoWorkspace.place`, kept for the app's run). `TodoPlaceRows` is the sidebar's To-dos row
-  with its places folded under it (`sidebar.fold.todos`), each drawn by the sidebar's own row, and reads only the places
-  and the place shown, so their numbers redraw those rows alone. The list's title is the system's title menu of the
-  same places (`TodoTitleMenu`). A place a hub no longer lists (no `todo_places`, a 404 or 405, another assistant's
-  project) is All To-dos (`TodosPlaces.effective`). The list filters the one list on the device (`TodosPlaces.holds`;
-  the list route has no place): Today, open and due today, overdue or reminding today; Upcoming, open and dated, laid
-  out by day (`TodoUpcomingLayout`) with no section bar; a project, its rows. A place's bar and Needs you header count
-  its rows (`TodoCountsSource.counts(of:)`, less the answers given on the device), never held, and every place but All
-  To-dos says what needs the owner outside it (`TodosListModel.hiddenNeeds`). A pick in the sidebar opens To-dos on the
-  place at its root (`TodoWorkspace.open`, taken once by `AssistantView.show` as `fresh`); the To-dos row is All To-dos
-  while To-dos is in front and otherwise reopens it as it was left (`TodosPlacesModel.reopen`; the page says whether it
-  is on screen, `TodoWorkspace.pageUp`); a pick in the title menu, Show All and "3 coming up this week" change the list
-  in place. Upcoming's ⋯ › Show as Calendar (`todos.v1.upcomingCalendar`)
-  draws the to-dos calendar coloured by each row's view (`TodoCalendarView`'s `state`; today's page keeps its session
-  reader). DEBUG `-openTodoPlace today|upcoming|project:<slug>` opens To-dos on a place.
+  the store's places (`countsSource.places`: the hub's with one manager, the current assistant's projects with several,
+  each project's part of N counted from the rows) and the place picked (`TodoWorkspace.place`, kept for the app's run).
+  `TodoPlaceRows` is the sidebar's To-dos row with its places folded under it (`sidebar.fold.todos`), each drawn by the
+  sidebar's own row, and reads only the places and the place shown, so their numbers redraw those rows alone. The
+  list's title is the system's title menu of the same places (`TodoTitleMenu`), given by `TodoPlaceFollower` only while
+  there are places, so the page's own body reads none of them. A place a hub does not list (no `todo_places` in this
+  run, a 404 or 405, another assistant's project) is All To-dos (`TodosPlaces.effective`). The list filters the one
+  list on the device (`TodosPlaces.holds`; the list route has no place): Today, open and due today, overdue or reminding
+  today; Upcoming, open and dated, laid out by day (`TodoUpcomingLayout`) under the section bar without its grouping
+  control; a project, its rows. A step counts with its parent where the place holds the parent, else it is a row there.
+  A place's bar and Needs you header count its rows (`TodoCountsSource.counts(of:)`, less the answers given on the
+  device), never held, and every place but All To-dos says what needs the owner outside it (`TodosListModel.hiddenNeeds`,
+  kept, so other numbers moving redraw nothing). The place's rows are worked out once per change for its numbers and
+  its layout. A project with nothing open, closed to-dos only too, has its own empty state (`placeIsEmpty`), whose New
+  To-Do is the calendar's sheet without a date (`TodoQuickAddSheet(project:name:)`), the project set in the one create
+  (`TodoStore.create(project:)`). A pick in the sidebar opens To-dos on the place at its root (`TodoWorkspace.open`,
+  taken once by `AssistantView.show` as `fresh`). The To-dos row itself (`TodoWorkspace.pickRow`) is All To-dos where
+  To-dos is the place in front and otherwise reopens it as it was left: the host decides, from its own state
+  (`TodoWorkspace.opening(inFront:)`: the shell's `ShellPlaces.current`, the Sidebar layout's root, the classic page),
+  not from whether the list is on screen. A pick in the title menu, Show All and "3 coming up this week" change the list
+  in place. Upcoming's ⋯ › Show as Calendar (`todos.v1.upcomingCalendar`) draws Upcoming's own to-dos on the to-dos
+  calendar, coloured by each row's view (`TodoCalendarView`'s `state`; today's page keeps its session reader), with the
+  place's notice above it and no Show Done (`TodosModeBar(options:)`). DEBUG `-openTodoPlace today|upcoming|project:<slug>`
+  opens To-dos on a place.
 - **404 and 405.** An older hub answers 405 for `GET /api/v1/todos/{id}` and `GET /api/v1/todos/places` (the `PATCH` and
   `DELETE` routes of `/api/v1/todos/{id}` match the path) and 404 for the other new routes: `TodoNotThere` takes both
   as "not there". A 404 with `todo_not_found` is the to-do itself gone. `GET /api/v1/todos` answering 404 still hides

@@ -526,15 +526,19 @@ extension APIClient {
         /// Due at a moment or on a day ("yyyy-MM-dd"), as `TodoPlanChange.Due` (#2029: one made on the calendar).
         var dueAt: Date?
         var dueDate: String?
+        /// The knowledge-base project it is made in (a To-dos project's place, #10465), in the same write.
+        var project: String?
 
         enum CodingKeys: String, CodingKey {
-            case title, notes
+            case title, notes, project
             case dueAt = "due_at", dueDate = "due_date"
         }
     }
 
-    public func createTodo(title: String, notes: String? = nil, due: TodoPlanChange.Due? = nil) async throws -> TodoItem {
-        var body = CreateTodoRequest(title: title.trimmingCharacters(in: .whitespacesAndNewlines), notes: notes?.trimmingCharacters(in: .whitespacesAndNewlines))
+    public func createTodo(title: String, notes: String? = nil, due: TodoPlanChange.Due? = nil,
+                           project: String? = nil) async throws -> TodoItem {
+        var body = CreateTodoRequest(title: title.trimmingCharacters(in: .whitespacesAndNewlines), notes: notes?.trimmingCharacters(in: .whitespacesAndNewlines),
+                                     project: project)
         switch due {
         case .some(.at(let at)): body.dueAt = at
         case .some(.day(let day)): body.dueDate = day

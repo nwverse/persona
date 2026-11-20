@@ -4,27 +4,40 @@ import SwiftUI
 /// a row, a group label and the search field.
 
 /// A sidebar row: a symbol, the label with an optional line under it (a chat's last message), the host's views at the
-/// end (a time, a state mark, a count); the current row keeps a fill.
+/// end (a time, a state mark, a count); the current row keeps a fill. A row under another (`indent`) is set in so its
+/// symbol stands where the row above's label starts.
 public struct BUISidebarRow<Trailing: View>: View {
     var symbol: String?
     var label: String
     var detail: String?
     var isActive: Bool
+    /// How many rows deep it is set in.
+    var indent: Int
     var action: () -> Void
     var trailing: Trailing
     @Environment(\.buiTheme) private var theme
 
-    public init(_ label: String, symbol: String? = nil, detail: String? = nil, isActive: Bool = false,
+    public init(_ label: String, symbol: String? = nil, detail: String? = nil, isActive: Bool = false, indent: Int = 0,
                 action: @escaping () -> Void, @ViewBuilder trailing: () -> Trailing) {
         self.label = label
         self.symbol = symbol
         self.detail = detail
         self.isActive = isActive
+        self.indent = indent
         self.action = action
         self.trailing = trailing()
     }
 
     public var body: some View {
+        if indent > 0 {
+            // The symbol's column and the gap after it, as the row draws them below.
+            row.padding(.leading, CGFloat(indent) * (20 * theme.typeScale + 8))
+        } else {
+            row
+        }
+    }
+
+    private var row: some View {
         Button(action: action) {
             HStack(spacing: 8) {
                 if let symbol {

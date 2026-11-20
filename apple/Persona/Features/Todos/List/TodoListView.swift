@@ -56,27 +56,25 @@ struct TodoListView: View {
         if #available(iOS 26.0, *) { true } else { false }
     }
 
-    private var drawsBar: Bool { model.ready && !model.calm && model.hasRows && model.place != .upcoming }
+    private var drawsBar: Bool { model.ready && !model.calm && model.hasRows }
 
     var body: some View {
         Group {
             if model.place == .upcoming && upcomingCalendar {
-                TodoUpcomingCalendar(asCalendar: $upcomingCalendar) { pushedTodo = TodoDetailRoute(id: $0) }
+                TodoUpcomingCalendar(asCalendar: $upcomingCalendar, model: model, title: title, showAll: { places.show(.all) }) {
+                    pushedTodo = TodoDetailRoute(id: $0)
+                }
             } else {
                 list
             }
         }
         .background {
-            TodoPlaceFollower(places: places) { place, title in
+            TodoPlaceFollower(places: places, allProjects: { allProjects = true }) { place, title in
                 if model.place != place { model.place = place }
                 if placeTitle != title { placeTitle = title }
             }
-            // On screen or not, for the sidebar's To-dos row (`TodoWorkspace.pageUp`).
-            .onAppear { workspace.page(up: true) }
-            .onDisappear { workspace.page(up: false) }
         }
         .detailTitle(title)
-        .toolbarTitleMenu { TodoTitleMenu(places: places) { allProjects = true } }
         .navigationBarTitleDisplayMode(.inline)
         .pageToolbar {
             ToolbarItem(placement: .primaryAction) { moreMenu }
@@ -96,7 +94,7 @@ struct TodoListView: View {
         .task { await model.refresh() }
         .navigationDestination(item: $pushedTodo) { r in TodoDetailView(todoID: r.id) }
         .sheet(item: $addingDay) { slot in TodoQuickAddSheet(slot: slot) }
-        .sheet(item: $newInProject) { place in TodoPlaceNewSheet(project: place.project ?? "", projectName: places.title(place)) }
+        .sheet(item: $newInProject) { place in TodoQuickAddSheet(project: place.project ?? "", name: places.title(place)) }
         .sheet(isPresented: $allProjects) {
             TodoAllProjectsSheet(places: places) { place in
                 allProjects = false
@@ -159,7 +157,7 @@ struct TodoListView: View {
                 let place = model.place.id
                 guard model.ready, placedIn != place else { return }
                 let switched = placedIn != nil
-                guard let key = workspace.scrolled(in: place), model.row(key) != nil else {
+                guard let key = workspace.scrolled(in: place), model.draws(key) else {
                     placedIn = place
                     if switched, let top = topRow { proxy.scrollTo(top, anchor: .top) }
                     return
@@ -274,7 +272,7 @@ struct TodoListView: View {
     @ViewBuilder private var emptyState: some View {
         if let offline = app.assistantManagerOffline, !model.hasRows {
             AssistantOfflineNotice(manager: offline)
-        } else if !model.place.isAll && !model.hasRows {
+        } else if model.placeIsEmpty {
             TodoPlaceEmptyState(place: model.place, title: title, comingUp: model.comingUp,
                                 show: { places.show($0) }, capture: { newInProject = model.place })
         } else {
@@ -356,7 +354,8 @@ private struct TodosSectionBar: View {
             guard let choice = TodosChoice(rawValue: id), choice != model.choice else { return }
             Haptics.tap()
             model.choice = choice
-        }, scrollID: "todos.bar", itemIDPrefix: "todos.bar.", revealsSelection: true, showsTrailing: model.choice != .done) {
+        }, scrollID: "todos.bar", itemIDPrefix: "todos.bar.", revealsSelection: true,
+           showsTrailing: model.choice != .done && model.place != .upcoming) { // Upcoming is by day
             groupingMenu
         }
         .padding(.horizontal, Theme.Space.page)

@@ -14,7 +14,7 @@ struct TodosPlacesModelTests {
         c.timeZone = TimeZone(identifier: "UTC")!
         return c
     }()
-    /// Wednesday 18 November 2026, 10:14 UTC: the prototype's now.
+    /// Wednesday 18 November 2026, 12:14 UTC (the prototype's now is 10:14 local time).
     private static let now = Date(timeIntervalSince1970: 1_795_004_040)
 
     private static func place(_ id: String, needsYou: Int = 0, manager: String? = nil) -> TodoPlace {
@@ -38,16 +38,20 @@ struct TodosPlacesModelTests {
 
     // MARK: The sidebar's and the title menu's places
 
-    @Test func theSidebarListsTodayUpcomingAndTheProjectsInTheHubsOrder() {
-        let entries = TodosPlaces.entries(Self.fixed + [Self.place("project:home"), Self.place("project:kyoto", needsYou: 1),
-                                                       Self.place("project:weather", needsYou: 1)])
+    /// Today and Upcoming, then the projects by name (the hub sends them by slug), as the Finder sorts names.
+    @Test func theSidebarListsTodayUpcomingAndTheProjectsByName() {
+        let named = { (slug: String, title: String) in
+            TodoPlace(id: "project:" + slug, kind: TodoPlaceKind.project, title: title, project: slug)
+        }
+        let entries = TodosPlaces.entries(Self.fixed + [named("a-home", "Home"), named("b-trip", "Kyoto trip"),
+                                                       named("c-app", "app 10"), named("d-app", "app 9")])
         #expect(entries.fixed.map(\.id) == ["today", "upcoming"])
-        #expect(entries.projects.map(\.id) == ["project:home", "project:kyoto", "project:weather"])
+        #expect(entries.projects.map(\.title) == ["app 9", "app 10", "Home", "Kyoto trip"])
         #expect(entries.more, "All Projects… follows the projects")
     }
 
-    /// Five projects at most; one that needs the owner is never left behind All Projects…, and the ones listed keep the
-    /// hub's order.
+    /// Five projects at most; one that needs the owner is never left behind All Projects…, and the ones listed go by
+    /// name.
     @Test func atMostFiveProjectsThoseThatNeedYouFirst() {
         let projects = (1...7).map { Self.place("project:p\($0)", needsYou: $0 >= 6 ? 1 : 0) }
         let entries = TodosPlaces.entries(Self.fixed + projects)
@@ -131,12 +135,24 @@ struct TodosPlacesModelTests {
         #expect(TodosPlaces.comingUp(rows, items: items, now: Self.now, calendar: Self.calendar) == 3)
     }
 
-    @Test func eachPlaceCapturesWithItsDefault() {
-        let today = TodosPlaces.capture(.today, now: Self.now, calendar: Self.calendar)
-        #expect(today.due == Self.calendar.startOfDay(for: Self.now) && today.project == nil)
-        #expect(TodosPlaces.capture(.upcoming, now: Self.now, calendar: Self.calendar).asksDate)
-        #expect(TodosPlaces.capture(.project("kyoto"), now: Self.now, calendar: Self.calendar).project == "kyoto")
-        #expect(TodosPlaces.capture(.all, now: Self.now, calendar: Self.calendar) == TodoPlaceCapture())
+    /// A step its parent carries is a row of its own where the place leaves the parent out: a dated step of an undated
+    /// to-do is on Today and Upcoming; under a dated parent it is not.
+    @Test func aStepIsARowWhereItsParentIsNot() {
+        let items: [String: TodoItem] = [
+            "trip": TodoItem(id: "trip", title: "Plan the trip"),
+            "ryokan": TodoItem(id: "ryokan", title: "Book the ryokan", dueDate: Self.day(0)),
+            "visa": TodoItem(id: "visa", title: "Visa", dueDate: Self.day(1)),
+            "photo": TodoItem(id: "photo", title: "Photo", dueDate: Self.day(1)),
+        ]
+        let rows = [Self.filed("trip", project: "kyoto"), Self.filed("ryokan", project: "kyoto", partOf: "trip"),
+                    Self.filed("visa"), Self.filed("photo", partOf: "visa")]
+        let rowsIn = { (place: TodoPlaceRef) in
+            TodosPlaces.rows(rows, in: place, items: items, now: Self.now, calendar: Self.calendar).map(\.id)
+        }
+        #expect(rowsIn(.today) == ["ryokan"])
+        #expect(rowsIn(.upcoming) == ["ryokan", "visa"])
+        #expect(rowsIn(.project("kyoto")) == ["trip"])
+        #expect(TodosPlaces.comingUp(rows, items: items, now: Self.now, calendar: Self.calendar) == 1, "the visa, its photo with it")
     }
 
     // MARK: Upcoming
@@ -156,7 +172,22 @@ struct TodosPlacesModelTests {
         #expect(TodoUpcomingLayout.day(out.groups[1].id, calendar: Self.calendar) == Self.calendar.date(byAdding: .day, value: 1,
                                                                                                          to: Self.calendar.startOfDay(for: Self.now)))
         #expect(TodoUpcomingLayout.day(TodoUpcomingLayout.overdue, calendar: Self.calendar) == nil)
-        #expect(!out.calm && out.sections.count == 4)
+        #expect(out.calm && out.sections.count == 4, "plain To do rows alone: calm, no bar")
+    }
+
+    /// Upcoming keeps the section bar: a choice keeps its sections' rows, still by day.
+    @Test func upcomingsBarChoosesItsRowsByDay() {
+        let items: [String: TodoItem] = [
+            "ask": TodoItem(id: "ask", title: "ask", dueDate: Self.day(1)),
+            "plain": TodoItem(id: "plain", title: "plain", dueDate: Self.day(1)),
+            "run": TodoItem(id: "run", title: "run", dueDate: Self.day(2)),
+        ]
+        let rows = [Self.filed("ask", TodoListSection.needsYou), Self.filed("plain"), Self.filed("run", TodoListSection.working)]
+        let all = TodoUpcomingLayout.layout(rows, items: items, now: Self.now, calendar: Self.calendar)
+        #expect(!all.calm && all.groups.flatMap(\.keys).count == 3)
+        let needs = TodoUpcomingLayout.layout(rows, items: items, now: Self.now, calendar: Self.calendar, choice: .needsYou)
+        #expect(needs.groups.map(\.id) == ["day:" + Self.day(1)] && needs.groups[0].keys == ["/ask"])
+        #expect(needs.sections.count == 3, "every row of the place still counts as one (the bar stays)")
     }
 
     /// Upcoming's calendar colours each to-do by its view's phase, not by its sessions.
@@ -188,8 +219,9 @@ struct TodosPlacesModelTests {
         #expect(workspace.place == TodoPlaceKind.upcoming)
     }
 
-    /// The sidebar's To-dos row: from elsewhere To-dos comes back on its last place; while it is in front (beside the
-    /// sidebar, or its page under the drawer) it is All To-dos, at its root.
+    /// The sidebar's To-dos row: from elsewhere To-dos comes back on its last place, with what it kept; where To-dos is
+    /// the place in front (beside the sidebar or under the drawer, whatever is pushed on it: the host says) it is All
+    /// To-dos at its root. A place picked after the row is that place.
     @Test func theToDosRowReopensOnTheLastPlace() {
         let workspace = TodoWorkspace(active: { true })
         let hub = FakeHub()
@@ -197,15 +229,17 @@ struct TodosPlacesModelTests {
         defer { store.forget() }
         let places = TodosPlacesModel(deps: .init(store: store, workspace: workspace, projects: { [] }))
         places.open(.today)
-        _ = workspace.takePick()
-        #expect(!places.reopen(inFront: false) && workspace.place == TodoPlaceKind.today && !workspace.takePick())
-        workspace.page(up: true)
-        #expect(places.reopen(inFront: false) && workspace.place == TodoPlaceKind.allValue && workspace.takePick())
-        workspace.page(up: false)
+        #expect(workspace.opening(inFront: false), "the pick: Today at its root")
+        places.pickRow()
+        #expect(!workspace.opening(inFront: false) && workspace.place == TodoPlaceKind.today, "from elsewhere: as it was left")
+        places.pickRow()
+        #expect(workspace.opening(inFront: true) && workspace.place == TodoPlaceKind.allValue, "in front: All To-dos, its root")
+        places.pickRow()
+        #expect(!workspace.opening(inFront: true), "All To-dos in front: the tab-bar rule alone")
+        places.pickRow()
         places.open(.upcoming)
-        _ = workspace.takePick()
-        #expect(places.reopen(inFront: true) && workspace.place == TodoPlaceKind.allValue)
-        #expect(!places.reopen(inFront: true), "All To-dos in front: nothing to pick, the tab-bar rule")
+        #expect(workspace.opening(inFront: true) && workspace.place == TodoPlaceKind.upcoming, "the place picked after the row")
+        #expect(!workspace.opening(inFront: true), "nothing left over for the next opening")
     }
 
     // MARK: Against a hub
@@ -305,6 +339,68 @@ struct TodosPlacesModelTests {
         #expect(list.hiddenNeeds == 0 && list.groups.count == 3)
     }
 
+    /// A hello that stops listing `todo_places` (a manager reconnecting after the hub restarted) takes nothing away: the
+    /// places and the place picked stay, and are read on.
+    @Test func aHelloWithoutPlacesKeepsThem() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos", json: Self.list)
+        hub.on("GET", "/api/v1/todos/places", json: Self.placesJSON)
+        let listed = PlacesTestFlag()
+        var v1 = TodoStore.V1.on(api: hub.client)
+        v1.features = { TodoFeatures(view: true, places: listed.on) }
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: v1)
+        defer { store.forget() }
+        let workspace = TodoWorkspace(active: { true })
+        let places = placesModel(store, workspace)
+        await store.refresh(api: hub.client)
+        try await waitForPlacesTest { !places.entries.isEmpty }
+        workspace.pick("project:kyoto")
+        listed.on = false
+        hub.on("GET", "/api/v1/todos", json: Self.list.replacingOccurrences(of: "\"t11\"", with: "\"t12\""))
+        await store.refresh(api: hub.client)
+        #expect(hub.sent("GET", "/api/v1/todos/places").count == 2, "read on")
+        #expect(!places.entries.isEmpty && places.current == .project("kyoto"))
+    }
+
+    /// A project whose to-dos are all closed (none today) is a place with nothing open: its own empty state, with New
+    /// To-Do in it, not All To-dos'.
+    @Test func aProjectWithOnlyClosedToDosSaysNothingIsOpenInIt() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos", json: TodoViewJSON.list([
+            TodoViewJSON.row("t08", extra: #""project":"kyoto","done":true,"done_at":"2026-11-10T09:00:00Z""#,
+                             view: TodoViewJSON.view(TodoListSection.done, phase: TodoPhase.done)),
+            TodoViewJSON.row("t02", extra: #""project":"weather""#, view: TodoViewJSON.view(TodoListSection.todo)),
+        ]))
+        hub.on("GET", "/api/v1/todos/places", json: Self.placesJSON)
+        let store = store(hub)
+        defer { store.forget() }
+        let list = listModel(store, hub: hub)
+        list.start()
+        await store.refresh(api: hub.client)
+        try await waitForPlacesTest { list.ready && list.hasRows }
+        list.place = .project("kyoto")
+        #expect(list.hasRows && list.isEmpty && list.placeIsEmpty)
+        list.place = .project("weather")
+        #expect(!list.isEmpty && !list.placeIsEmpty)
+        list.place = .all
+        #expect(!list.placeIsEmpty)
+    }
+
+    /// A to-do made in a project's place is put in it by the one write that makes it (a retry after a failure never
+    /// makes a second).
+    @Test func aToDoMadeInAProjectIsMadeInIt() async throws {
+        let hub = FakeHub()
+        hub.on("POST", "/api/v1/todos", json: #"{"todo":{"id":"n1","title":"Book the ryokan","project":"kyoto"}}"#)
+        let store = store(hub)
+        defer { store.forget() }
+        let made = try await store.create(title: "Book the ryokan", project: "kyoto", api: hub.client)
+        #expect(made.project == "kyoto")
+        let sent = hub.sent("POST", "/api/v1/todos")
+        #expect(sent.count == 1 && hub.requests.allSatisfy { $0.method != "PATCH" })
+        let body = try JSONSerialization.jsonObject(with: try #require(sent.first?.body)) as? [String: Any]
+        #expect(body?["project"] as? String == "kyoto" && body?["due_date"] == nil)
+    }
+
     /// Two assistants: the places' projects are the current one's, each part counted from its own rows.
     @Test func twoManagersListTheCurrentAssistantsProjects() async throws {
         let hub = FakeHub()
@@ -338,6 +434,11 @@ struct TodosPlacesModelTests {
 /// Whether the test's scene is active.
 @MainActor private final class PlacesTestScene {
     var active = true
+}
+
+/// Whether the test's hub lists its places.
+@MainActor private final class PlacesTestFlag {
+    var on = true
 }
 
 /// Waits (up to 5 s) for something the store does.

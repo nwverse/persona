@@ -87,6 +87,9 @@ final class TodosListModel {
     /// A place's own numbers (its bar, its Needs you header), counted from its rows; nil for All To-dos, which shows the
     /// store's. Never held, as the store's are not.
     private(set) var placeCounts: TodoCounts?
+    /// What needs the owner outside the place shown (its notice, "2 more need you, not in Today"); 0 in All To-dos. Kept,
+    /// set only when it changes, so the store's other numbers moving never redraw the page that reads it (P5).
+    private(set) var hiddenNeeds = 0
     /// Today's "3 coming up this week".
     private(set) var comingUp = 0
     /// The folds the owner opened (Can wait, Someday, Done today): this list's, not kept.
@@ -111,6 +114,9 @@ final class TodosListModel {
     @ObservationIgnored private var now = Date.distantPast
     /// A minute passed while the list was held: every row's time is said again once it rests, not mid-glide.
     @ObservationIgnored private var clockWaits = false
+    /// The place's rows as last worked out, and what from: the place's numbers and its layout share one pass (P4).
+    @ObservationIgnored private var placeRowsMemo: (place: TodoPlaceRef, now: Date, filed: [TodoFiled], items: [String: TodoItem],
+                                                    rows: [TodoFiled])?
 
     /// What the list reads of the store and the app.
     private struct Snapshot: Equatable {
@@ -137,15 +143,22 @@ final class TodosListModel {
     }
     /// N, as the drawer, the bar and the Needs you header say it; in a place, its part of N.
     var needsYou: Int { placeCounts?.needsYou ?? deps.store.countsSource.needsYou }
-    /// What needs the owner outside the place shown (its notice, "2 more need you, not in Today"); 0 in All To-dos.
-    var hiddenNeeds: Int { placeCounts.map { max(0, deps.store.countsSource.needsYou - $0.needsYou) } ?? 0 }
     /// Nothing to list under the current choice.
     var isEmpty: Bool { layout.groups.allSatisfy { $0.keys.isEmpty && $0.folds.isEmpty } }
     /// The list has rows, under any choice: the bar is drawn (unless calm), so an empty choice can be left.
     var hasRows: Bool { !layout.sections.isEmpty }
+    /// A place other than All To-dos with nothing open in it says so in its own words (`TodoPlaceEmptyState`). A project
+    /// keeps its closed rows, which All lists only as Done today, so an empty list under All (or a calm one, which draws
+    /// All) is a place with nothing open, whatever closed rows it has; under another choice, that choice's empty state.
+    var placeIsEmpty: Bool { !place.isAll && isEmpty && (!hasRows || calm || choice == .all) }
 
     /// A drawn row's cell; kept until the layout that drops its row lands.
     func row(_ key: String) -> Row? { cells[key] }
+
+    /// Whether `key`'s row is drawn now: in a group, or in a fold that is open (the place shown may leave it out).
+    func draws(_ key: String) -> Bool {
+        layout.groups.contains { group in group.keys.contains(key) || group.folds.contains { $0.open && $0.keys.contains(key) } }
+    }
 
     /// Follows the store from now on; the first layout lands at once.
     func start() {
@@ -300,22 +313,33 @@ final class TodosListModel {
         return at
     }
 
+    /// The rows the place shows of `filed` at `at`: worked out once per place, rows and minute.
+    private func placeRows(_ filed: [TodoFiled], items: [String: TodoItem], at: Date) -> [TodoFiled] {
+        if let m = placeRowsMemo, m.place == place, m.now == at, m.filed == filed, m.items == items { return m.rows }
+        let rows = TodosPlaces.rows(filed, in: place, items: items, now: at, calendar: deps.calendar())
+        placeRowsMemo = (place, at, filed, items, rows)
+        return rows
+    }
+
     /// A place's numbers and Today's "coming up", from the store's rows as they are now.
     private func recountPlace() {
         let calendar = deps.calendar()
         let at = now == .distantPast ? deps.now() : now
         let counts = place.isAll ? nil
-            : deps.store.countsSource.counts(of: TodosPlaces.rows(snapshot.filed, in: place, items: snapshot.items, now: at,
-                                                                  calendar: calendar))
+            : deps.store.countsSource.counts(of: placeRows(snapshot.filed, items: snapshot.items, at: at))
         if counts != placeCounts { placeCounts = counts }
+        let hidden = counts.map { max(0, snapshot.counts.needsYou - $0.needsYou) } ?? 0
+        if hidden != hiddenNeeds { hiddenNeeds = hidden }
         let coming = place == .today ? TodosPlaces.comingUp(snapshot.filed, items: snapshot.items, now: at, calendar: calendar) : 0
         if coming != comingUp { comingUp = coming }
     }
 
     private func makeLayout(_ from: Snapshot) -> TodosListLayout.Output {
         let projects = from.projects
-        let rows = TodosPlaces.rows(from.filed, in: place, items: from.items, now: now, calendar: deps.calendar())
-        if place == .upcoming { return TodoUpcomingLayout.layout(rows, items: from.items, now: now, calendar: deps.calendar()) }
+        let rows = placeRows(from.filed, items: from.items, at: now)
+        if place == .upcoming {
+            return TodoUpcomingLayout.layout(rows, items: from.items, now: now, calendar: deps.calendar(), choice: choice)
+        }
         return TodosListLayout.layout(.init(
             rows: rows, items: from.items, choice: choice, grouping: grouping, sort: sort, unfolded: unfolded,
             now: now, calendar: deps.calendar(),
@@ -327,6 +351,8 @@ final class TodosListModel {
     private func updateCells(force: Bool, held: Bool) {
         let calendar = deps.calendar()
         let projects = snapshot.projects
+        // A project's place names its project, as By Project does: line 3 leaves it out.
+        let grouping = place.project == nil ? self.grouping : .project
         for filed in snapshot.filed {
             guard let item = snapshot.items[filed.id] else { continue }
             let key = TodosListLayout.key(filed)

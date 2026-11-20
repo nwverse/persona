@@ -6,7 +6,8 @@ import XCTest
 /// from the list's title menu is the list; every place but All To-dos says what needs the owner elsewhere, with Show All.
 /// `-showTodosV1 YES` stands for the release. With `PERSONA_TODOS_FRAMES=1` and `PERSONA_SHOTS=<dir>`, the V1 frames
 /// this step draws are saved for review instead (`PERSONA_TODOS_SCHEME`, `PERSONA_TODOS_LANGUAGE`, `PERSONA_TODOS_COLOR`,
-/// `PERSONA_TODOS_SIZE`, `PERSONA_TODOS_SUFFIX`, `PERSONA_TODOS_FRAMES_ONLY`, as `TodosV1ListTests`).
+/// `PERSONA_TODOS_SIZE`, `PERSONA_TODOS_SUFFIX`, `PERSONA_TODOS_FRAMES_ONLY`, as `TodosV1ListTests`); on an iPad, the
+/// Sidebar layout's on its side (`ipad11-landscape-closed~…`).
 final class TodosV1PlacesTests: XCTestCase {
     private var app: XCUIApplication!
     private let env = ProcessInfo.processInfo.environment
@@ -15,11 +16,19 @@ final class TodosV1PlacesTests: XCTestCase {
         continueAfterFailure = false
     }
 
+    override func tearDown() {
+        if UIDevice.current.userInterfaceIdiom == .pad { XCUIDevice.shared.orientation = .portrait }
+        super.tearDown()
+    }
+
+    /// The app on To-dos: on an iPhone in its own layout; on an iPad only in the Sidebar layout (its frames).
     @MainActor private func launch(_ hub: String, _ extra: [String] = [], layout: String = "separate", v1: Bool = true) throws {
-        guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("iPhone only") }
+        let pad = UIDevice.current.userInterfaceIdiom == .pad
+        guard !pad || layout == "sidebar" else { throw XCTSkip("iPhone only") }
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openShellPage", "todos", "-app.navigation", layout]
+            + (pad ? ["-app.tab", "assistant", "-openSplitFresh", "YES"] : [])
             + (v1 ? ["-showTodosV1", "YES"] : []) + extra
         app.launchPinned()
     }
@@ -69,9 +78,12 @@ final class TodosV1PlacesTests: XCTestCase {
             XCTAssertTrue(element("sidebar-todos-place-" + id).exists, "no \(id) under To-dos:\n\(app.debugDescription)")
         }
         for project in ["kyoto", "weather", "home"] {
-            XCTAssertEqual(number(element("sidebar-todos-place-project:" + project).label), 1, "\(project)'s part of N")
+            // Said in words beside its name ("1 needs you"), as the title menu says it.
+            let row = element("sidebar-todos-place-project:" + project)
+            XCTAssertEqual(number(row.value as? String ?? ""), 1, "\(project)'s part of N: \(row.label), \(String(describing: row.value))")
         }
         XCTAssertNil(number(element("sidebar-todos-place-today").label), "Today draws no count")
+        XCTAssertNil(number(element("sidebar-todos-place-today").value as? String ?? ""))
         // Folded by the owner and back: the places go and come, To-dos stays.
         element("sidebar-todos-fold").tap()
         XCTAssertTrue(element("sidebar-todos-place-today").waitForNonExistence(timeout: 5), "the places folded away")
@@ -115,7 +127,7 @@ final class TodosV1PlacesTests: XCTestCase {
         XCTAssertTrue(element("todos.v1").waitForExistence(timeout: 60), "no V1 list:\n\(app.debugDescription)")
         let days = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'todos.upcoming.add.day:'"))
         XCTAssertTrue(days.firstMatch.waitForExistence(timeout: 20), "no day headings:\n\(app.debugDescription)")
-        XCTAssertFalse(element("todos.bar.all").exists, "Upcoming is by day, with no section bar")
+        XCTAssertFalse(element("todos.grouping").exists, "Upcoming is grouped by day: its bar has no Group By")
         XCTAssertTrue(element("todos.row.t11").exists, "the passport is dated")
         XCTAssertFalse(element("todos.row.t13").exists, "the car insurance has no date")
         // Another page, then To-dos again: still Upcoming.
@@ -125,16 +137,45 @@ final class TodosV1PlacesTests: XCTestCase {
         drawer(showing: "sidebar-todos")
         element("sidebar-todos").tap()
         XCTAssertTrue(days.firstMatch.waitForExistence(timeout: 20), "To-dos reopened on Upcoming:\n\(app.debugDescription)")
+        // To-dos in front: its row is All To-dos.
+        drawer(showing: "sidebar-todos")
+        element("sidebar-todos").tap()
+        XCTAssertTrue(element("todos.grouping").waitForExistence(timeout: 20), "All To-dos, its bar's Group By:\n\(app.debugDescription)")
+        XCTAssertFalse(days.firstMatch.exists, "no day headings")
     }
 
     // MARK: Frames
 
     /// The app again with `args`, on its list or Upcoming's calendar.
-    @MainActor private func relaunch(_ hub: String, _ args: [String]) throws {
+    @MainActor private func relaunch(_ hub: String, _ args: [String], layout: String = "separate") throws {
         app?.terminate()
-        try launch(hub, args)
+        try launch(hub, args, layout: layout)
         let up = element("todos.v1").waitForExistence(timeout: 60) || element("todo.calendar.title").exists
         XCTAssertTrue(up, "no V1 list")
+    }
+
+    /// The Sidebar layout's frames on an iPad on its side (`ipad11-landscape/closed`): the places in the sidebar with the
+    /// one shown shaded, on Today, on a project and on All To-dos, and a place picked while a to-do is pushed: its root,
+    /// swapped in without a pop.
+    @MainActor private func padFrames(_ hub: String, _ extra: [String], wants: (String) -> Bool, shot: (String) -> Void) throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let relaunch = { (args: [String]) in try self.relaunch(hub, extra + args, layout: "sidebar") }
+        for (frame, place) in [("~today", "today"), ("~kyoto-place", "project:kyoto"), ("~all", "all")] where wants(frame) {
+            try relaunch(["-openTodoPlace", place, "-todos.v1.upcomingCalendar", "NO"])
+            _ = element("sidebar-todos-place-today").waitForExistence(timeout: 20)
+            shot(frame)
+        }
+        if wants("~swap") {
+            try relaunch(["-openTodoPlace", "project:kyoto"])
+            let row = element("todos.row.t01")
+            XCTAssertTrue(row.waitForExistence(timeout: 20), "no Kyoto trip's to-do:\n\(app.debugDescription)")
+            row.tap()
+            XCTAssertTrue(row.waitForNonExistence(timeout: 10), "the to-do did not open")
+            shot("~swap-pushed")
+            element("sidebar-todos-place-today").tap()
+            XCTAssertTrue(element("todos.v1").waitForExistence(timeout: 10), "Today not at its root:\n\(app.debugDescription)")
+            shot("~swap-today")
+        }
     }
 
     /// The frames this step draws, for the review (no checks beyond reaching them): `~drawer`, `~menu`, `~today`,
@@ -152,11 +193,13 @@ final class TodosV1PlacesTests: XCTestCase {
         let frames = Set((env["PERSONA_TODOS_FRAMES_ONLY"] ?? "").split(separator: ",").map(String.init))
         let wants = { (frame: String) in frames.isEmpty || frames.contains(frame) }
         let suffix = env["PERSONA_TODOS_SUFFIX"].map { "-" + $0 } ?? ""
+        let device = UIDevice.current.userInterfaceIdiom == .pad ? "ipad11-landscape-closed" : "iphone-list"
         let shot = { (frame: String) in
             sleep(2) // the bar's reveal and the rows' marks settle
             let png = XCUIScreen.main.screenshot().pngRepresentation
-            try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("iphone-list\(frame)\(suffix)-\(scheme).png"))
+            try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(device)\(frame)\(suffix)-\(scheme).png"))
         }
+        if UIDevice.current.userInterfaceIdiom == .pad { return try padFrames(hub, extra, wants: wants, shot: shot) }
         let relaunch = { (args: [String]) in try self.relaunch(hub, extra + args) }
         try relaunch(["-openTodoPlace", "all"])
         _ = element("todos.bar.all").waitForExistence(timeout: 10)

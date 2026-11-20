@@ -6,7 +6,8 @@ import PersonaWire
 /// that collects requests shows the same number"): the To-dos row in the drawer and sidebar, the folded Pages tally, the section bar, the Needs
 /// you header, the places and the to-do's page all read these, so an answer anywhere moves every number in one update.
 ///
-/// - One manager: the hub's `counts` and places as sent.
+/// - One manager: the hub's `counts` and places as sent, each project's part of N counted from the rows as filed (as
+///   its place's own bar counts them, so the two never disagree, a failed read of the places included).
 /// - Several managers, or a hub that sends no counts: counted from the current assistant's rows as filed
 ///   (`TodoFiling`, `TodoCountsFallback`), since the hub adds every manager's up while the pages list the current
 ///   assistant's; only its own project places are shown, each with its part of N counted the same way.
@@ -23,8 +24,9 @@ final class TodoCountsSource {
     /// The current assistant's rows as filed, in the list's order (`TodoFiling.ordered`): the V1 list draws its sections
     /// from these, the rows the numbers were counted from.
     private(set) var filed: [TodoFiled] = []
-    /// N: the to-dos that need the owner.
-    var needsYou: Int { counts.needsYou }
+    /// N: the to-dos that need the owner. Kept apart from `counts`, set only when it changes, so the drawer's and the
+    /// sidebar's To-dos rows, which read N alone, never redraw for In progress or To do moving (P5).
+    private(set) var needsYou = 0
     /// Whether a counted row is filed by the app's own rules, which read the clock: the store counts again each minute
     /// while there is one (its sessions are watched here).
     @ObservationIgnored private(set) var byRules = false {
@@ -95,7 +97,10 @@ final class TodoCountsSource {
     /// What the last run showed, kept with the views (`TodoViewCache`), until the first count of this one: the first
     /// frame draws the numbers it will keep.
     func seed(_ counts: TodoCounts?, places: [TodoPlace]?) {
-        if let counts, counts != self.counts { self.counts = counts }
+        if let counts, counts != self.counts {
+            self.counts = counts
+            if counts.needsYou != needsYou { needsYou = counts.needsYou }
+        }
         if let places, !places.isEmpty, places != self.places { self.places = places }
     }
 
@@ -125,6 +130,7 @@ final class TodoCountsSource {
         var next = hubCounts ?? TodoCountsFallback.counts(filed)
         let awayByProject = lessAnswered(&next, filed)
         if next != counts { counts = next }
+        if next.needsYou != needsYou { needsYou = next.needsYou }
         let nextPlaces = places(scope: scope, filed: filed, awayByProject: awayByProject)
         if nextPlaces != places { places = nextPlaces }
     }
@@ -158,7 +164,7 @@ final class TodoCountsSource {
         guard let sent = input.places?.places, !sent.isEmpty else {
             return [TodoPlace(id: TodoPlaceKind.allValue, kind: TodoPlaceKind.allValue, needsYou: counts.needsYou)]
         }
-        let byProject = scope == nil ? [:] : TodoCountsFallback.needsYouByProject(filed)
+        let byProject = TodoCountsFallback.needsYouByProject(filed)
         var out: [TodoPlace] = []
         for var place in sent {
             switch place.kind {
@@ -166,11 +172,8 @@ final class TodoCountsSource {
                 place.needsYou = counts.needsYou
             case TodoPlaceKind.project:
                 let slug = place.project ?? ""
-                if let scope {
-                    guard scope.has(place.manager) else { continue }
-                    place.needsYou = byProject[slug] ?? 0
-                }
-                place.needsYou = max(0, place.needsYou - (awayByProject[slug] ?? 0))
+                if let scope, !scope.has(place.manager) { continue }
+                place.needsYou = max(0, (byProject[slug] ?? 0) - (awayByProject[slug] ?? 0))
             default:
                 break // Today and Upcoming draw no count; a kind this build does not know is kept as sent
             }
