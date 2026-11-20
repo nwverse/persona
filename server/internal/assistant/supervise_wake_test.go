@@ -335,12 +335,22 @@ func TestConversationSendWithoutWakeDropsExpiredBeforeDelivery(t *testing.T) {
 }
 
 func TestQuietRelayRetryKeepsItsOriginalCarryAcrossRestart(t *testing.T) {
-	for _, initiallyEmpty := range []bool{false, true} {
-		t.Run(map[bool]string{false: "with context", true: "empty context"}[initiallyEmpty], func(t *testing.T) {
-			st := &memStore{}
+	for _, tc := range []struct {
+		name           string
+		initiallyEmpty bool
+		postgres       bool
+	}{
+		{"with context/memory", false, false}, {"empty context/memory", true, false},
+		{"with context/postgres", false, true}, {"empty context/postgres", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var st Store = &memStore{}
+			if tc.postgres {
+				st = todoTestDB(t)
+			}
 			s, _ := newQuietServiceOn(t, st)
 			ctx := context.Background()
-			if !initiallyEmpty {
+			if !tc.initiallyEmpty {
 				if _, ok := s.keepRelayLater("conv1", relayMsg{Text: "Original acknowledgement.", At: time.Now().UTC()}); !ok {
 					t.Fatal("could not keep original")
 				}
