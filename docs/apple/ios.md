@@ -2854,7 +2854,7 @@ is listed), and a hub that answers it has no roster filters nothing (`AppModel.m
   default's conversations name none, and with one installed manager or no roster nothing is named.
 - **Counts**: the tab badges, the app icon's number (their sum), the sidebar's Inbox and To-dos counts, the home page's
   Needs You and the main conversation's dock count the current assistant's (`AppModel.countBadges`,
-  `InboxStore.actionCount`, `TodoStore.badgeCount`). The
+  `InboxStore.unreadCount` for the Inbox's badge and row, `TodoStore.badgeCount`). The
   switcher shows beside every other assistant what waits there (`AssistantBadges`, `AppModel.assistantBadges`): its agents
   waiting (a session with a pending card or in Needs You once, quiet and muted ones left out, a card on no session by
   itself; Persona's own conversations by their cards only) plus `inbox_needs_you`. The header's face carries a mark while

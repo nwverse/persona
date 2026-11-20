@@ -137,7 +137,7 @@ func openingTitleWords(text string, content feishubot.Content, mentions []feishu
 }
 
 func topicSeparator(r rune) bool {
-	return unicode.IsSpace(r) || strings.ContainsRune(",;:，；：、", r)
+	return unicode.IsSpace(r) || strings.ContainsRune(",;:，；：、", r) // i18n-ignore: punctuation in the owner's incoming words, matched as written
 }
 
 // Match a whole request, so "Have a look at the seed order" keeps its subject.
@@ -145,7 +145,7 @@ func genericTopicRequest(text string) bool {
 	if !strings.ContainsFunc(text, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }) {
 		return true
 	}
-	switch strings.ToLower(strings.Trim(strings.TrimSpace(text), ".!?。！？")) {
+	switch strings.ToLower(strings.Trim(strings.TrimSpace(text), ".!?。！？")) { // i18n-ignore: punctuation in the owner's incoming words, matched as written
 	case "have a look", "take a look", "please have a look", "please take a look",
 		"看看", "看一下", "看下", "帮我看看", "请看一下", "見てください", "確認してください": // i18n-ignore: the owner's incoming words
 		return true
