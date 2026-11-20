@@ -92,6 +92,12 @@ func (s *Service) setCurrentDirectionNotes(ctx context.Context, id, notes string
 }
 
 func (s *Service) setDirectionNotesMode(ctx context.Context, id, notes string, from *notesFrom, requireCurrent bool) (string, *time.Time, error) {
+	if requireCurrent {
+		// Every Leaders update goes through updateSettings (prefs.change). Hold it across the membership check and the
+		// notes write so ending or remaking the direction cannot slip between them and produce a false success.
+		s.prefs.change.Lock()
+		defer s.prefs.change.Unlock()
+	}
 	notes = cleanDirectionNotes(notes)
 	// What a current leader was told of its direction before this save: the baseline notesInEffect keeps while it
 	// works when no send has recorded one yet (a leader from before #11392, or one never sent to since). Read before

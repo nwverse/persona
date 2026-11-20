@@ -266,9 +266,10 @@ func TestDirectionPromptSettingOwnerApprovalChain(t *testing.T) {
 	}
 }
 
-// The direction's current membership is rechecked under the same lock as notes_at and the write. The test holds that
-// lock until the approved apply has read the old Leaders list, then ends the direction before letting the write proceed.
-func TestDirectionPromptSettingDirectionEndDuringApprovalIsStale(t *testing.T) {
+// Current Leaders membership, notes_at and the write are serialized with direction end. The direction clock fires
+// under the direction lock after the membership check but before the write. If ending the direction finishes there,
+// approval must be stale; if the approved write holds the settings change lock, ending waits and may succeed after it.
+func TestDirectionPromptSettingDirectionEndDuringApprovalIsSerialized(t *testing.T) {
 	s, _ := notesEnv(t)
 	setSettings(t, s, func(v *Settings) { v.Main = "main_chat" })
 	if _, _, err := s.setDirectionNotes(context.Background(), "conv_lead", "before", nil); err != nil {
@@ -279,29 +280,58 @@ func TestDirectionPromptSettingDirectionEndDuringApprovalIsStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := &s.directions
-	b.mu.Lock()
-	started := make(chan struct{})
-	done := make(chan error, 1)
+	oldNow := b.now
+	t.Cleanup(func() { b.now = oldNow })
+	reachedWrite := make(chan struct{})
+	finishWrite := make(chan struct{})
+	b.now = func() time.Time {
+		close(reachedWrite)
+		<-finishWrite
+		return time.Now()
+	}
+	applyDone := make(chan error, 1)
 	go func() {
-		close(started)
 		_, err := change.apply(context.Background())
-		done <- err
+		applyDone <- err
 	}()
-	<-started
-	// Let apply reach directionPrompt's lock after its initial current-leader read; it cannot pass b.mu until we let go.
-	time.Sleep(50 * time.Millisecond)
-	if _, err := s.updateSettings(context.Background(), func(v *Settings) error {
-		v.Leaders = []string{"conv_other"}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+	<-reachedWrite
+	endDone := make(chan error, 1)
+	go func() {
+		_, err := s.updateSettings(context.Background(), func(v *Settings) error {
+			v.Leaders = []string{"conv_other"}
+			return nil
+		})
+		endDone <- err
+	}()
+	endedBeforeWrite := false
+	var endErr error
+	select {
+	case endErr = <-endDone:
+		endedBeforeWrite = true
+	case <-time.After(50 * time.Millisecond):
 	}
-	b.mu.Unlock()
-	if err := <-done; !errors.Is(err, approvalops.ErrStale) {
-		t.Fatalf("approval after the direction ended = %v, want stale", err)
+	close(finishWrite)
+	applyErr := <-applyDone
+	if !endedBeforeWrite {
+		endErr = <-endDone
 	}
-	if got := directionSettingNotes(s); got != "before" {
-		t.Fatalf("ended direction's notes changed to %q", got)
+	if endErr != nil {
+		t.Fatal(endErr)
+	}
+	if endedBeforeWrite {
+		if !errors.Is(applyErr, approvalops.ErrStale) {
+			t.Fatalf("direction ended before the write, approval = %v, want stale", applyErr)
+		}
+		if got := directionSettingNotes(s); got != "before" {
+			t.Fatalf("ended direction's notes changed to %q", got)
+		}
+		return
+	}
+	if applyErr != nil {
+		t.Fatalf("approval serialized before direction end = %v", applyErr)
+	}
+	if got := directionSettingNotes(s); got != "after" {
+		t.Fatalf("approved notes = %q, want after", got)
 	}
 }
 
