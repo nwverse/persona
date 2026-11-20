@@ -73,6 +73,8 @@ func awayRow(s proto.Session) proto.Session {
 	}
 	if c := s.Capabilities; c != nil {
 		cp := *c
+		cp.SupervisionPolicy = false
+		cp.Fork = false
 		cp.Interrupt, cp.Close, cp.Rename, cp.Modes, cp.Model = false, proto.CanModes(false), proto.CanModes(false), proto.CanModes(false), proto.CanModes(false)
 		cp.Rewind, cp.RewindCode = proto.CanModes(false), proto.CanModes(false)
 		s.Capabilities = &cp

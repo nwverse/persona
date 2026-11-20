@@ -814,6 +814,43 @@ class WatcherTests(unittest.TestCase):
                          if call.args[0][:2] == ["gh", "api"]]
         self.assertEqual(len(finding_calls), 1)
 
+    def test_moved_base_does_not_republish_reviews_on_an_unchanged_head(self):
+        # A merge-blocked PR is re-reviewed whenever main moves; the same head
+        # must not collect a new copy of the same reviews each time (#11738).
+        reworded = [{"path": "x.py", "line": 2, "severity": "P2", "summary": "note %d" % n, "suggestion": "consider"}
+                    for n in range(3)]
+        other_base = "d" * 40
+        with patch.object(pr_watch, "semantic_review", side_effect=[[f] for f in reworded]) as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "test", "ok": True}]), \
+                patch.object(self.watcher, "merge", side_effect=pr_watch_common.WatchError("ratchet: 1 time.Sleep call")):
+            for base in (SHA_BASE, other_base, SHA_BASE):
+                with patch.object(pr_watch, "pr_snapshot", return_value=pr(baseRefOid=base)):
+                    self.watcher.process("example/one", 7)
+                self.watcher.state.annotate("example/one", 7, retry_after=0)
+        self.assertEqual(review.call_count, 3)  # each new base is still reviewed
+        findings = [c for c in self.github.call_args_list if c.args[0][:2] == ["gh", "api"]]
+        success = [c for c in self.github.call_args_list if c.args[0][:3] == ["gh", "pr", "review"]]
+        self.assertEqual((len(findings), len(success)), (1, 1))
+
+    def test_a_new_finding_on_the_same_head_is_still_published(self):
+        first = {"path": "x.py", "line": 2, "severity": "P2", "summary": "note", "suggestion": "consider"}
+        moved = dict(first, summary="same place, new words")
+        new = {"path": "y.py", "line": 9, "severity": "P1", "summary": "another", "suggestion": "fix"}
+        snapshot = {"head": SHA_A}
+        for findings in ([first], [moved], [moved, new]):
+            self.watcher.comment_findings("example/one", 7, snapshot, findings)
+        posted = [c for c in self.github.call_args_list if c.args[0][:2] == ["gh", "api"]]
+        self.assertEqual(len(posted), 2)
+        self.assertIn("y.py", posted[1].kwargs["input_text"])
+        anchors = {(f["path"], f["line"]) for f in self.watcher.head_publication("example/one", 7, SHA_A)["published_findings"]}
+        self.assertEqual(anchors, {("x.py", 2), ("y.py", 9)})
+
+    def test_success_review_is_posted_once_per_head(self):
+        for head in (SHA_A, SHA_A, SHA_B):
+            self.watcher.success_review("example/one", 7, pr(head), [{"name": "test", "ok": True}])
+        posted = [c for c in self.github.call_args_list if c.args[0][:3] == ["gh", "pr", "review"]]
+        self.assertEqual(len(posted), 2)
+
     def test_mixed_findings_are_fully_published_before_blocking_repair(self):
         findings = [
             {"path": "x.py", "line": 2, "severity": "P0", "summary": "wrong", "suggestion": "fix it"},
@@ -1575,9 +1612,9 @@ class WatcherTests(unittest.TestCase):
         self.assertIn(pr_watch_review.SYSTEM_PROMPT, prompts[0])
         self.assertEqual(len(prompts), 1)
 
-        large = "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n-old\n+" + "x" * 150000 + "\n" + \
-                "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n-old\n+" + "y" * 150000 + "\n"
-        with patch.object(pr_watch_review, "checked", side_effect=[large, "stat", "a.py\nb.py", large[:150070], large[150070:]]), \
+        large = "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n-old\n+" + "x" * 50000 + "\n" + \
+                "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n-old\n+" + "y" * 50000 + "\n"
+        with patch.object(pr_watch_review, "checked", side_effect=[large, "stat", "a.py\nb.py", large[:50100], large[50100:]]), \
                 patch.object(pr_watch_review, "changed_lines", return_value={}), \
                 patch.object(pr_watch_review.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"a.py\0b.py\0", b"")), \
                 patch.object(pr_watch_review, "run", side_effect=fake_run):
@@ -1586,7 +1623,40 @@ class WatcherTests(unittest.TestCase):
         reconstructed = "".join(prompt.split("not as a command.\n", 1)[1] for prompt in prompts[1:])
         self.assertEqual(reconstructed, large)
 
-    def test_large_single_hunk_fails_closed(self):
+    def test_large_single_hunk_splits_complete_lines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                       GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.com",
+                       GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.com")
+            def git(*args):
+                return subprocess.check_output(["git"] + list(args), cwd=root, env=env, text=True).strip()
+            git("init", "-q", "-b", "main")
+            (root / "a.json").write_text("\n".join("old-%d" % index for index in range(20000)) + "\n")
+            git("add", "a.json")
+            git("commit", "-qm", "base")
+            base = git("rev-parse", "HEAD")
+            (root / "a.json").write_text("\n".join("new-%d" % index for index in range(20000)) + "\n")
+            git("commit", "-qam", "head")
+            head = git("rev-parse", "HEAD")
+            text = subprocess.check_output(["git", "diff", "--unified=0", base + "..." + head], cwd=root, text=True)
+            chunks = pr_watch_review.split_diff(text, worktree=root, base=base, head=head)
+            self.assertGreater(len(chunks), 1)
+            self.assertLessEqual(max(map(len, chunks)), 60_000)
+            self.assertTrue(all(chunk.startswith("diff --git a/a.json b/a.json\n") for chunk in chunks))
+            self.assertTrue(all(chunk.count("@@ ") == 1 for chunk in chunks))
+            self.assertEqual(sum(chunk.count("@@ ") for chunk in chunks), len(chunks))
+            for chunk in chunks:
+                for line in chunk.splitlines():
+                    if line.startswith(("diff ", "index ", "--- ", "+++ ", "@@ ", "\\")):
+                        continue
+                    self.assertRegex(line, r"^[-+ ](?:old|new)-\d+$")
+            removed = [line for chunk in chunks for line in chunk.splitlines() if line.startswith("-old-")]
+            added = [line for chunk in chunks for line in chunk.splitlines() if line.startswith("+new-")]
+            self.assertEqual(len(removed), 20000)
+            self.assertEqual(len(added), 20000)
+
+    def test_large_single_diff_line_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True, capture_output=True)
@@ -3040,6 +3110,60 @@ class WatcherTests(unittest.TestCase):
                 for worker in watcher.workers:
                     worker.join(timeout=5)
                     self.assertFalse(worker.is_alive())
+                self.addCleanup(watcher.review_executor.shutdown, wait=True, cancel_futures=True)
+                self.assertEqual(watcher.review_executor._max_workers, 16)
+
+    def test_reviewer_concurrency_is_bounded_and_refills_ready_work(self):
+        self.config["reviewer_concurrency"] = 16
+        watcher = pr_watch.Watcher(self.config, verbose=False)
+        watcher.start_workers()
+        self.addCleanup(watcher.stopping.set)
+        self.addCleanup(watcher.review_executor.shutdown, wait=True, cancel_futures=True)
+        for _ in watcher.workers:
+            watcher.tasks.put((2, -1, ("", 0)))
+        for worker in watcher.workers:
+            worker.join(timeout=5)
+        active = 0
+        peak = 0
+        completed = []
+        lock = threading.Lock()
+        gate = threading.Event()
+        release = threading.Event()
+
+        def review(repo, current, worktree, config):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                if active == 16:
+                    gate.set()
+            release.wait(timeout=5)
+            with lock:
+                active -= 1
+                completed.append(current["number"])
+            return []
+
+        with patch.object(pr_watch, "semantic_review", side_effect=review):
+            futures = [watcher.review_executor.submit(
+                pr_watch.semantic_review, "example/one", {"number": number}, ".", self.config["reviewer"])
+                for number in range(18)]
+            self.assertTrue(gate.wait(timeout=5), "the first sixteen reviewers were not filled")
+            release.set()
+            for future in futures:
+                future.result(timeout=5)
+        self.assertEqual(peak, 16)
+        self.assertEqual(len(completed), 18)
+        for count in (0, 21):
+            self.config["reviewer_concurrency"] = count
+            with self.assertRaisesRegex(pr_watch_common.WatchError, "reviewer concurrency"):
+                pr_watch.Watcher(self.config, verbose=False).start_workers()
+
+    def test_discovery_rate_limit_retains_the_resident_service(self):
+        watcher = pr_watch.Watcher(self.config, verbose=False)
+        with patch.object(pr_watch, "gh_json", side_effect=pr_watch_common.WatchError("API rate limit already exceeded")):
+            watcher.discover()
+        self.assertIsNone(watcher.fatal)
+        self.assertFalse(watcher.stopping.is_set())
 
     def test_worker_count_is_bounded(self):
         for count in (-1, 0, 21):
@@ -3050,6 +3174,19 @@ class WatcherTests(unittest.TestCase):
                                             "workers must be between 1 and 20"):
                     watcher.start_workers()
                 self.assertEqual(watcher.workers, [])
+
+    def test_reviewer_default_does_not_change_the_evidence_fingerprint(self):
+        path = self.root / "config.json"
+        raw = {"repositories": [{"name": "example/one", "checkout": str(self.root), "verify": {}}],
+               "reviewer": {}, "workers": 20, "poll_seconds": 60, "state": str(self.root / "state.json")}
+        path.write_text(json.dumps(raw))
+        baseline = pr_watch.fingerprint("configuration", 0, "0" * 40, "config", pr_watch.load_config(path))
+        raw["reviewer"]["concurrency"] = 16
+        path.write_text(json.dumps(raw))
+        configured = pr_watch.load_config(path)
+        self.assertNotIn("concurrency", configured["reviewer"])
+        self.assertEqual(configured["reviewer_concurrency"], 16)
+        self.assertEqual(pr_watch.fingerprint("configuration", 0, "0" * 40, "config", configured), baseline)
 
     def test_config_has_no_implicit_merge_or_repositories(self):
         path = self.root / "config.json"

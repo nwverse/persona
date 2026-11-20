@@ -176,6 +176,7 @@ fun AssistantScreen(
     mentionFiles: persona.core.contracts.api.SessionFiles? = assistantSessionFiles(),
     /** The selected hub group's name while several are paired, which ends the title menu's heading as on iOS; null with one. */
     hubGroup: String? = null,
+    composerUpload: persona.feature.chat.ComposerAttachmentUpload? = null,
 ) = PersonaTheme {
     val receivedSnapshot by repository.assistant.collectAsStateWithLifecycle()
     val conversationsOf = repository as? persona.core.contracts.api.AssistantConversations
@@ -929,12 +930,30 @@ fun AssistantScreen(
                         }
                         val mentions = if (mentionsHere) mentionSessions?.collectAsStateWithLifecycle()?.value
                             ?.let { starterMentionSource(it, folders) } else null
-                        // A forward waiting for the new conversation (#3901): its card over the composer, sent with it.
+                        // A forward waiting for the new conversation (#3901): its card and source photos over the composer.
                         val homeForwards = if (active == null) persona.feature.chat.ForwardPlacements.home else emptyList()
+                        val homePhotoHandoffs = if (active == null) persona.feature.chat.ForwardPlacements.homePhotoHandoffs() else emptyMap()
+                        LaunchedEffect(homeForwards, composer, homePhotoHandoffs, composer.attachments.map { it.id }) {
+                            if (homeForwards.isEmpty()) return@LaunchedEffect
+                            val present = composer.attachments.mapTo(mutableSetOf()) { it.id }
+                            val pending = homePhotoHandoffs.mapValues { (_, handoff) ->
+                                handoff.copy(attachments = handoff.attachments.filterNot { it.id in present })
+                            }
+                            val rejected = persona.feature.chat.attachForwardedPhotos(context, composer, pending.values.toList())
+                            val lost = pending.values.sumOf { it.lost } + rejected.size
+                            if (lost > 0) {
+                                val message = persona.feature.chat.forwardedPhotoNotice(resources, lost)
+                                if (feedback?.notice(message) != true) toast.show(persona.core.designsystem.FeedbackNotice(message))
+                            }
+                            if (rejected.isNotEmpty() || pending.values.any { it.lost > 0 }) {
+                                persona.feature.chat.ForwardPlacements.finishHomePhotoHandoffs(rejected.mapTo(mutableSetOf()) { it.id })
+                            }
+                        }
                         ChatComposer(uploadTarget, composer, working = false, sending = sending || !draftReady,
                             // The health page sends no files: an upload goes to the main chat's machine, outside the health space.
                             canClear = false, service = composerService?.takeIf { uploadTarget.machineId.isNotBlank() && !healthPage },
                             uploadDestination = if (onHealthChat) "health" else null,
+                            upload = composerUpload,
                             onSend = { submit() }, onCommand = { composer.insert(it, composer.focused) },
                             onNotice = { message ->
                                 if (feedback?.notice(message) != true) toast.show(persona.core.designsystem.FeedbackNotice(message))
@@ -962,10 +981,8 @@ fun AssistantScreen(
                             // A new conversation's launcher, for it alone (iOS StarterComposer, web StarterLauncherChip); Glass's is the pill.
                             accessory = if (homeForwards.isNotEmpty() || starterQuotes.isNotEmpty() ||
                                 (active == null && !healthPage && pageManagement != null && startConversationWith != null && !demo)) ({
-                                homeForwards.forEach { ref ->
-                                    persona.feature.chat.ForwardComposerCard(ref, lines = if (homeForwards.size == 1) 2 else 1) {
-                                        persona.feature.chat.ForwardPlacements.home = persona.feature.chat.ForwardPlacements.home.filterNot { it.id == ref.id }
-                                    }
+                                persona.feature.chat.ForwardComposerCards(homeForwards) { removed ->
+                                    persona.feature.chat.ForwardPlacements.home = persona.feature.chat.ForwardPlacements.home - removed.toSet()
                                 }
                                 if (active == null && !healthPage && pageManagement != null && startConversationWith != null && !demo) {
                                     if (mentionsHere) StarterQuoteCards(starterMentions)
@@ -1421,8 +1438,8 @@ internal fun AssistantDrawer(
     fullWindowSearch: Boolean = false,
     onFullSearch: () -> Unit = {},
     /**
-     * The place row that stays shaded while that place is the page's root (iOS `shownPlace`).
-     * Null: the phone drawer, which shades the open conversation as before.
+     * The row that stays shaded for the visible root (iOS `shownPlace`), including an Agent on either tab.
+     * Null: the compact Persona drawer, which shades the open conversation as before.
      */
     shadedPlace: String? = null,
     /** Folds the sidebar column from its own header while it sits beside the page; null in a drawer or floating overlay. */
@@ -1585,7 +1602,7 @@ internal fun AssistantDrawer(
                 // With the hub's direction tree a lead folds open to its to-dos and their Agents (#4352, DirectionRows.kt).
                 DirectionLeadRows(groups.tree?.direction(session.sessionId)?.takeUnless { it.secretary },
                     groups.names[session.sessionId] ?: session.conversationTitle(conversationWords()),
-                    GroupPosition.of(index, groups.directions.size), onOpenTodo, onOpenAgent) { position, disclosure ->
+                    GroupPosition.of(index, groups.directions.size), onOpenTodo, onOpenAgent, shadedPlace) { position, disclosure ->
                     ConversationRow(session, selected = shadeConversations && session.key == active,
                         position = position,
                         onOpen = { onOpen(session.key) }, onEnd = onEnd?.let { action -> { action(session) } },
@@ -1770,9 +1787,23 @@ private fun ConversationRow(
  * (#10358, ConversationOpener.kt); until then, and for every fallback, the origin's mark and words stay.
  */
 @Composable
-private fun ConversationOriginMark(source: AssistantConversationOrigin, opener: ConversationOpener? = null) {
+private fun ConversationOriginMark(source: AssistantConversationOrigin, opener: ConversationOpener? = null, withText: Boolean = false) {
     val drawn = rememberDrawnOpener(opener, source)
     val label = originMarkLabel(source, drawn?.name, androidx.compose.ui.platform.LocalResources.current)
+    if (withText) JSourceLine(label) { OriginIcon(source, drawn, label) }
+    else OriginIcon(source, drawn, label)
+}
+
+/** The first user message uses the drawer's exact mark, label, manager and icon fallbacks. */
+fun conversationOpeningSource(session: Session): (@Composable () -> Unit)? {
+    val source = automaticConversationOrigin(session.origin)
+    if (source != AssistantConversationOrigin.LarkAgent && source != AssistantConversationOrigin.Extension) return null
+    val opener = ConversationOpener.of(session)
+    return { ConversationOriginMark(source, opener, withText = true) }
+}
+
+@Composable
+private fun OriginIcon(source: AssistantConversationOrigin, drawn: DrawnOpener?, label: String) {
     if (drawn != null) {
         JSourceMark(label, size = MarkSize.Inline, picture = drawn.picture)
     } else if (source == AssistantConversationOrigin.LarkAgent) {

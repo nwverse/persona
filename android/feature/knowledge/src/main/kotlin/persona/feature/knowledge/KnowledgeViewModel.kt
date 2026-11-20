@@ -72,7 +72,11 @@ internal class KnowledgeViewModel(
             emit(initial.copy(loading = true, entries = shown?.entries.orEmpty(), tags = shown?.tags.orEmpty(), groups = shown?.groups.orEmpty()))
             try {
                 if (selection.query.isBlank()) {
-                    val result = repository.list(selection.kind, selection.tag)
+                    val result = if (selection.kind == KnowledgeKind.Meetings) coroutineScope {
+                        val meetings = async(start = CoroutineStart.UNDISPATCHED) { repository.list(KnowledgeKind.Meetings, selection.tag) }
+                        val recordings = async(start = CoroutineStart.UNDISPATCHED) { repository.list(KnowledgeKind.Recordings, selection.tag) }
+                        mergeMeetingLists(meetings.await(), recordings.await())
+                    } else repository.list(selection.kind, selection.tag)
                     val entries = withContext(dispatcher) { result.items.filter { it.inScope() }.distinctBy { it.key } }
                     remember(repository.scope, entries)
                     emit(initial.copy(entries = entries, tags = result.tags.orEmpty().distinct(), loaded = true))
@@ -104,7 +108,11 @@ internal class KnowledgeViewModel(
         namesScope == scope && names.keys.any { it.startsWith("${kind.wire}/") }
     }
 
-    fun kind(kind: KnowledgeKind) { filter.update { it.copy(kind = kind, tag = null) } }
+    fun kind(kind: KnowledgeKind) {
+        // Recordings live under Meetings; keep old callers and restored selections opening that one home.
+        val listed = if (kind == KnowledgeKind.Recordings) KnowledgeKind.Meetings else kind
+        filter.update { it.copy(kind = listed, tag = null) }
+    }
     fun tag(tag: String?) { filter.update { it.copy(tag = tag) } }
     fun query(query: String) { filter.update { it.copy(query = query) } }
     fun refresh() { filter.update { it.copy(revision = it.revision + 1) } }

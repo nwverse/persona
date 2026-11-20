@@ -308,6 +308,8 @@
     </plurals>
     <string name="chat_tasks_plan_single">Start like this</string>
     <string name="chat_tasks_default_model">Default model</string>
+    <string name="chat_tasks_preset">Preset %1$s</string>
+    <string name="chat_tasks_launcher_preset">%1$s · %2$s</string>
     <string name="chat_tasks_read_only">Read-only requested</string>
     <string name="chat_tasks_plan_remember">Start directly here and in subfolders</string>
     <plurals name="chat_tasks_plan_start_count">
