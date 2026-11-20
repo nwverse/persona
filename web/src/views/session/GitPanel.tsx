@@ -24,8 +24,6 @@ import { useStore } from "../../lib/store";
 import { openPanel, type GitSpot } from "../../lib/panel";
 import { REVIEW_FEATURE } from "../../lib/session-review";
 import { useFsLive } from "../../lib/use-fs-live";
-import { useBackStack } from "../../lib/back-stack";
-import { NARROW, useMedia } from "../../lib/viewport";
 import { Button, copyText, cx, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { PanelHeader } from "../../ui/PanelHeader";
@@ -57,8 +55,6 @@ export function GitPanel({ mid, sid, cwd, at, onClose }: { mid: string; sid: str
   const [noMore, setNoMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [views, setViews] = useState<View[]>([]);
-  // narrow, the panel covers the page: Back steps out of the view on top (a diff, a commit, branches) first
-  useBackStack(views.length, (n) => setViews((vs) => vs.slice(0, n)), useMedia(NARROW));
   const [reloads, setReloads] = useState(0);
   const lastReload = useRef(reloads);
   const head = useRef<string | undefined>(undefined);

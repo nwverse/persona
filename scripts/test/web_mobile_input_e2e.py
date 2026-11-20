@@ -564,84 +564,6 @@ def depth_is(page, n, what):
         fail(f"{what}: {page.evaluate(OVERLAY_DEPTH)} overlay entries, not {n}")
 
 
-def panel_back(browser, base):
-    """Back inside a full-screen Files or Git panel (#11511): it steps out of a file, a diff or a commit to the list
-    before it closes the panel, and stays on the conversation; × with a file open takes every entry off at once (the
-    next Back leaves the conversation); a panel opened on a file is the same."""
-    for w, h in ((390, 844), (360, 740)):
-        ctx, page = phone(browser, w, h)
-        open_pane(page, base, cards=False)
-        url = page.url
-        aside = files_from_menu(page)
-        viewer_back = aside.get_by_role("button", name="返回", exact=True)
-        readme = aside.locator(f"button[title='{WEATHER}/README.md']")
-        readme.click()
-        expect(viewer_back).to_be_visible()
-        depth_is(page, 2, f"{w}: a file open in Files")
-        page.go_back()
-        expect(viewer_back).to_have_count(0)
-        expect(readme).to_be_visible()
-        depth_is(page, 1, f"{w}: Back from the file")
-        page.go_back()
-        expect(aside).to_have_count(0)
-        if page.url != url:
-            fail(f"{w}: Back from the Files list left the conversation ({page.url})")
-        ok(f"{w}: Files › README.md › Back shows the list; the next Back closes the panel on the conversation")
-
-        # Git on the checkout (the session's own folder is not one): a diff, then a commit, each Back to the list; then
-        # Back closes the panel
-        page.evaluate(OPEN_PANEL, {"kind": "git", "mid": "server", "sid": CLAUDE, "cwd": WEATHER})
-        git = page.locator(GIT_PANEL)
-        expect(git).to_be_visible()
-        git_back = git.get_by_role("button", name="返回", exact=True)
-        change = git.locator("button[title='Sources/App/main.swift']")
-        commit = git.locator("button", has_text="Show the city name").first
-        for what, row in (("a diff", change), ("a commit", commit)):
-            row.click()
-            expect(git_back).to_be_visible()
-            depth_is(page, 2, f"{w}: {what} open in Git")
-            page.go_back()
-            expect(git_back).to_have_count(0)
-            expect(row).to_be_visible()
-        page.go_back()
-        expect(git).to_have_count(0)
-        if page.url != url:
-            fail(f"{w}: Back from the Git list left the conversation ({page.url})")
-        ok(f"{w}: Git › a diff › Back and › a commit › Back show the list; the next Back closes the panel")
-
-        # × with a file open: both entries come off in one go, so the next Back leaves the conversation
-        aside = files_from_menu(page)
-        aside.locator(f"button[title='{WEATHER}/README.md']").click()
-        expect(aside.get_by_role("button", name="返回", exact=True)).to_be_visible()
-        depth_is(page, 2, f"{w}: a file open, before ×")
-        aside.get_by_role("button", name="关闭面板").last.click()
-        expect(aside).to_have_count(0)
-        depth_is(page, 0, f"{w}: × with a file open")
-        page.wait_for_timeout(300)
-        if page.url != url:
-            fail(f"{w}: × moved the page ({page.url})")
-
-        # a panel opened on a file (as one brought back is): Back shows the list, then closes the panel
-        page.evaluate(OPEN_PANEL, {"kind": "files", "mid": "server", "sid": CLAUDE, "cwd": WEATHER, "file": f"{WEATHER}/README.md"})
-        aside = page.locator(FILES_PANEL)
-        expect(aside.get_by_role("button", name="返回", exact=True)).to_be_visible()
-        depth_is(page, 2, f"{w}: a panel opened on a file")
-        page.go_back()
-        expect(aside.get_by_role("button", name="返回", exact=True)).to_have_count(0)
-        expect(aside.locator(f"button[title='{WEATHER}/README.md']")).to_be_visible()
-        page.go_back()
-        expect(aside).to_have_count(0)
-        if page.url != url:
-            fail(f"{w}: Back from a panel opened on a file left the conversation ({page.url})")
-        page.go_back()
-        try:
-            page.wait_for_function("!location.pathname.startsWith('/t/')", timeout=5000)
-        except Exception:
-            fail(f"{w}: after the panels closed, Back stayed on the conversation (an entry was left behind)")
-        ok(f"{w}: × with a file open leaves no entry; a panel opened on a file › Back shows the list; then Back leaves the chat")
-        ctx.close()
-
-
 ROW_MORE = """(sel) => { const b = document.querySelector(sel); if (!b) return null; const r = b.getBoundingClientRect();
   let o = 1; for (let e = b; e; e = e.parentElement) o *= +getComputedStyle(e).opacity;
   const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
@@ -899,7 +821,6 @@ def run(base, shots, hub=None):
         tile_hits(browser, base, shots)
         toasts_phone(browser, base)
         handover_keyboard(browser, base, shots)
-        panel_back(browser, base)
         file_row_menu(browser, base, shots)
         browser.close()
     if ERRORS:

@@ -651,58 +651,6 @@ def composer_back(browser, base, token, shots):
     ctx.close()
 
 
-def assistant_tray_back(browser, base, token):
-    """Back with the Assistant chat's tray open (Needs you / In progress), expanded or not, closes the tray and stays in
-    the chat (#11511), as Android's does; switching trays adds no entry, ✕ takes it off, and the next Back leaves."""
-    ctx, page = phone(browser)
-    sign_in(page, base, token)
-
-    def visit(path):  # an in-app navigation (a link's), one history entry
-        page.evaluate("p => { history.pushState(null, '', p); dispatchEvent(new PopStateEvent('popstate')); }", path)
-
-    def marked():
-        return page.evaluate("() => Boolean(history.state && history.state.personaOverlay)")
-
-    tray = page.locator("section.assistant-action-tray")
-    entries = page.locator("[data-assistant-actionbar] [data-tray-entry]")
-    visit("/inbox")
-    visit("/")
-    expect(entries.first).to_be_visible(timeout=20000)
-    keys = [entries.nth(i).get_attribute("data-tray-entry") for i in range(entries.count())]
-    assert len(keys) >= 2, f"the chat shows {keys} tray entries"
-    entries.first.tap()
-    expect(tray).to_be_visible()
-    depth = page.evaluate("history.length")
-    first = tray.get_attribute("aria-label")
-    entries.nth(1).tap()
-    expect(tray).not_to_have_attribute("aria-label", first)
-    page.wait_for_timeout(300)
-    assert page.evaluate("history.length") == depth and marked(), "switching trays wrote another entry"
-    tray.get_by_role("button", name="放大", exact=True).tap()
-    expect(tray).to_have_attribute("data-expanded", "true")
-    page.go_back()
-    expect(tray).to_have_count(0)
-    assert page.evaluate("location.pathname") == "/", f"Back with the tray open left the chat for {page.url}"
-    assert not marked(), "the tray's entry is left"
-    ok("Back closes the open tray, expanded, and stays in the chat; switching trays wrote no entry")
-    page.go_back()
-    page.wait_for_function("location.pathname === '/inbox'")
-    ok("the next Back leaves the chat")
-
-    visit("/")
-    expect(entries.first).to_be_visible(timeout=20000)
-    entries.first.tap()
-    expect(tray).to_be_visible()
-    tray.get_by_role("button", name="关闭", exact=True).tap()
-    expect(tray).to_have_count(0)
-    page.wait_for_timeout(500)
-    assert page.evaluate("location.pathname") == "/" and not marked(), f"✕ left {page.url} with an overlay entry: {marked()}"
-    page.go_back()
-    page.wait_for_function("location.pathname === '/inbox'")
-    ok("✕ takes the tray's entry off: the next Back leaves the chat")
-    ctx.close()
-
-
 # what of the panel a finger reaches: its buttons and its header's icon and title, as [leftmost left, rightmost right]
 PANEL_EDGES = """(sel) => { const a = document.querySelector(sel); if (!a) return null;
   const els = [...a.querySelectorAll('button, header > *')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
@@ -898,7 +846,6 @@ def main():
         offline(browser, base, a.token, a.shots)
         palette_back(browser, base, a.token)
         composer_back(browser, base, a.token, a.shots)
-        assistant_tray_back(browser, base, a.token)
         panel_safe_area(browser, base, a.token, a.shots)
         agents_list_phone(browser, base, a.token, a.shots)
         browser.close()

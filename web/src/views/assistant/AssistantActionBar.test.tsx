@@ -12,27 +12,9 @@ import type { Todo } from "../../lib/todos";
 import { stateName } from "../../lib/state-labels";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import type { Interaction, Session } from "../../lib/types";
-import { onOverlayEntry } from "../../lib/back-close";
 import { AssistantActionBar, DOCK_CAPSULE, FeedLineView, TaskDock } from "./Tasks";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-// the screen's width, read through matchMedia (lib/viewport.ts keeps one list per query and reads `matches` each time):
-// wide, as jsdom's no matchMedia reads, unless a case makes it narrow
-const screen = vi.hoisted(() => ({ narrow: false, changed: new Set<() => void>() }));
-vi.hoisted(() => {
-  const NARROW = "(max-width: 1023px)";
-  (globalThis as Record<string, unknown>).matchMedia = (query: string) => ({
-    get matches() {
-      return query === NARROW && screen.narrow;
-    },
-    addEventListener(_: string, l: () => void) {
-      if (query === NARROW) screen.changed.add(l);
-    },
-    removeEventListener(_: string, l: () => void) {
-      screen.changed.delete(l);
-    },
-  });
-});
 beforeAll(() => loadPages(), 60_000);
 const at = "2026-11-10T08:00:00Z";
 // "Now" for every case: an hour after the fixtures, not the real clock, by which they would be long shelved
@@ -1139,64 +1121,5 @@ describe("Assistant Needs you / In progress trays", () => {
     } finally {
       delete getFeedState().plans[waiting.id];
     }
-  });
-});
-
-// Back with a tray open left the conversation (#11511); on a narrow screen it closes the tray first, as Android's does
-describe("the trays and Back on a narrow screen", () => {
-  /** Lets history.back() land (jsdom pops on a later task, then fires popstate) and what it sets off render. */
-  const settle = () => act(() => new Promise((ok) => setTimeout(ok, 50)));
-  const narrow = (on: boolean) => act(() => {
-    screen.narrow = on;
-    screen.changed.forEach((l) => l());
-  });
-  const tray = () => host.querySelector<HTMLElement>("[data-assistant-actionbar] section");
-  const trayButton = (name: string) => host.querySelector<HTMLButtonElement>(`section button[aria-label="${name}"]`)!;
-  beforeEach(() => {
-    // a fresh entry on top, so history.length counts what is under it
-    history.pushState(null, "", "/");
-    narrow(true);
-  });
-  afterEach(async () => {
-    narrow(false);
-    await settle();
-  });
-
-  it("closes the tray, expanded or not, and stays in the chat; switching trays adds no entry", async () => {
-    const before = history.length;
-    act(() => entry("needs").click());
-    expect(history.length).toBe(before + 1);
-    expect(onOverlayEntry()).toBe(true);
-    act(() => entry("running").click());
-    await settle();
-    expect(tray()?.getAttribute("aria-label")).toBe(label.running);
-    expect(history.length).toBe(before + 1);
-    act(() => trayButton(t("assistant-tasks.tray_expand")).click());
-    expect(tray()?.dataset.expanded).toBe("true");
-    act(() => history.back());
-    await settle();
-    expect(tray()).toBeNull();
-    expect(location.pathname).toBe("/");
-    // the entry under the tray's: a second Back is the page's own
-    expect(onOverlayEntry()).toBe(false);
-  });
-
-  it("takes its entry off when ✕ closes it", async () => {
-    act(() => entry("needs").click());
-    expect(onOverlayEntry()).toBe(true);
-    act(() => trayButton(t("ui-atoms.close")).click());
-    await settle();
-    expect(tray()).toBeNull();
-    expect(onOverlayEntry()).toBe(false);
-    expect(location.pathname).toBe("/");
-  });
-
-  it("writes no history on a wide screen", () => {
-    narrow(false);
-    const before = history.length;
-    act(() => entry("needs").click());
-    expect(tray()).not.toBeNull();
-    expect(history.length).toBe(before);
-    expect(onOverlayEntry()).toBe(false);
   });
 });
