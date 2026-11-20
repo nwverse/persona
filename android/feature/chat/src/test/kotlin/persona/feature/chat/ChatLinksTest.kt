@@ -99,6 +99,11 @@ class ChatLinksTest {
         assertTrue(ChatLinks.toPreload(listOf(item("u", "2026-10-30T09:59:00Z", role = "user")), now).isEmpty())
         assertTrue(ChatLinks.toPreload(listOf(item("t", "2026-10-30T09:59:00Z", kind = "tool_result")), now).isEmpty())
         assertTrue(ChatLinks.toPreload(listOf(item("o", "2026-10-30T09:40:00Z")), now).isEmpty())
+        for (text in listOf("![map](https://images.example/a)", "![map](https://images.example/a",
+            "![map][cover]\n\n[cover]: https://images.example/a")) {
+            assertTrue(ChatLinks.toPreload(listOf(item("picture", "2026-10-30T09:59:00Z", text = text)), now).isEmpty())
+        }
+        assertTrue(ChatLinks.toPreload(listOf(item("outside", "2026-10-30T09:59:00Z").copy(from = "A channel")), now).isEmpty())
         // A hub in a local zone writes offsets.
         assertEquals(2, ChatLinks.toPreload(listOf(item("z", "2026-10-30T17:59:00+08:00")), now).size)
         val many = (1..5).map { item("m$it", "2026-10-30T09:59:00Z", text = "https://example.com/m$it") }

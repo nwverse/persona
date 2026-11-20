@@ -70,6 +70,35 @@ func HumanStartOf(ctx context.Context) bool {
 	return human
 }
 
+type clarificationProofKey struct{}
+
+// WithClarificationProof carries the opaque one-time token the hub attached to
+// an authenticated clarify request, or the extension manager attached after a
+// fresh channel owner action. It never carries a caller-supplied owner_input.
+func WithClarificationProof(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, clarificationProofKey{}, token)
+}
+
+// ClarificationProofOf returns the opaque token, empty when this is an older
+// hub/manager combination without clarification provenance.
+func ClarificationProofOf(ctx context.Context) string {
+	token, _ := ctx.Value(clarificationProofKey{}).(string)
+	return token
+}
+
+type replyInputKey struct{}
+
+// WithReplyInput marks a conversation start as a direct legacy app start for missing-reply recovery.
+func WithReplyInput(ctx context.Context) context.Context {
+	return context.WithValue(ctx, replyInputKey{}, true)
+}
+
+// ReplyInputOf reports whether WithReplyInput marked ctx.
+func ReplyInputOf(ctx context.Context) bool {
+	reply, _ := ctx.Value(replyInputKey{}).(bool)
+	return reply
+}
+
 // ToolCall is assistant.tool's params.
 type ToolCall struct {
 	Name      string          `json:"name"`

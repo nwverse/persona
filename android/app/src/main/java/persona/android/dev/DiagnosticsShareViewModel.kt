@@ -92,6 +92,10 @@ class DiagnosticsShareViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
+            if (owner == null) {
+                owner = wiring.current.filterNotNull().first().scope
+                if (error == application.getString(R.string.app_share_pair_first)) error = null
+            }
             recents = try { targets.read() } catch (error: CancellationException) { throw error } catch (_: Exception) { emptyList() }
             refresh()
         }

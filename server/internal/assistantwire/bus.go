@@ -81,6 +81,10 @@ const (
 	// (#6282, docs/protocol/protocol.md "Assistant chat search"). The hub lists the assistant_search feature only while
 	// the default manager names it; the apps keep filtering titles and last messages without it.
 	CapabilityAssistantSearch = "assistant_search"
+	// CapabilityDirectionSessions: the manager files sessions under a direction and reads one direction
+	// (PUT /api/v1/assistant/sessions/{mid}/{sid}/direction, GET /api/v1/assistant/directions/{id}, and the tree's
+	// additive sessions; #11391). The hub lists direction_sessions only while the default manager names it.
+	CapabilityDirectionSessions = "direction_sessions"
 	// CapabilityAssistantStartServiceTier: the manager forwards a new conversation's native service_tier to the node,
 	// which acknowledges it before the first turn (#6240). The hub lists the feature only for the default manager and
 	// refuses an explicit tier sent to a manager that does not name this capability.
@@ -111,6 +115,10 @@ const (
 	// the to-do's results and what changed since the owner looked (TodoItemDetail). The hub lists the todo_timeline
 	// feature only while every manager whose to-dos it merges names it; until then clients draw none of them.
 	CapabilityTodoTimeline = "todo_timeline"
+	// CapabilityTodoImages: the manager creates to-dos with images and serves their private bytes (#11084). The hub
+	// lists todo_images only while every manager whose to-dos it merges names it, so an older manager never receives an
+	// image create it would silently drop. Existing image metadata and byte reads remain available on capable managers.
+	CapabilityTodoImages = "todo_images"
 )
 
 // BodyStream is where MethodHTTPStreamed's body comes from: the relay the hub holds with ID (devicewire.RelayPath
@@ -203,14 +211,19 @@ type HTTPRequest struct {
 	Caller          *devicewire.Caller         `json:"caller,omitempty"`
 	ShareAuthority  *devicewire.ShareAuthority `json:"share_authority,omitempty"`
 	HandoffApprover *HandoffApprover           `json:"handoff_approver,omitempty"`
+	// ClarificationProof is the hub-issued opaque, one-time proof for this exact
+	// authenticated question. Older managers ignore it and keep unmarked delivery.
+	ClarificationProof string `json:"clarification_proof,omitempty"`
 	// Human is the hub's word that a person's own app opens this conversation (POST /api/v1/assistant/conversations
 	// with a full device's credential, decided as for SendParams.Human): its first message counts as theirs
 	// (WithHumanStart). Set by the hub on that route only, never from the request; an older hub never sends it.
-	Human  bool                `json:"human,omitempty"`
-	Method string              `json:"method"`
-	Path   string              `json:"path"`
-	Query  string              `json:"query,omitempty"`
-	Header map[string][]string `json:"header,omitempty"`
+	Human bool `json:"human,omitempty"`
+	// ReplyInput marks a legacy authenticated app start for missing-reply recovery, as in SendParams.
+	ReplyInput bool                `json:"reply_input,omitempty"`
+	Method     string              `json:"method"`
+	Path       string              `json:"path"`
+	Query      string              `json:"query,omitempty"`
+	Header     map[string][]string `json:"header,omitempty"`
 	// BodyStream is set on MethodHTTPStreamed only, in place of Body: where the body comes from.
 	BodyStream *BodyStream `json:"body_stream,omitempty"`
 	// Body stays the last field: hub/bus_forward.go httpParams appends it to the rest as written.
@@ -258,6 +271,7 @@ var Routes = []string{
 	"GET /api/v1/assistant/availability",
 	"GET /api/v1/assistant/directions/tree",
 	"GET /api/v1/assistant/directions/offers",
+	"GET /api/v1/assistant/directions/{id}",
 	"DELETE /api/v1/assistant/directions/offers/{id}",
 	"POST /api/v1/assistant/directions/{id}/start",
 	"POST /api/v1/assistant/directions/{id}/make",
@@ -266,6 +280,7 @@ var Routes = []string{
 	"POST /api/v1/assistant/agents/{mid}/{sid}/supervisor",
 	"PUT /api/v1/assistant/directions/{id}/name",
 	"PUT /api/v1/assistant/directions/{id}/notes",
+	"PUT /api/v1/assistant/sessions/{mid}/{sid}/direction",
 	"GET /api/v1/assistant/conversations/{id}/feed",
 	"POST /api/v1/assistant/feed/{id}/dismiss",
 	"POST /api/v1/assistant/feed/{id}/undo-dismiss",
@@ -312,8 +327,9 @@ var Routes = []string{
 	"DELETE /api/v1/task-trust",
 	// The todos (the assistant's todos.go, docs/assistant/todos.md).
 	"GET /api/v1/todos",
-	"GET /api/v1/todos/places", // the To-dos places and counts (todo_view_routes.go, #10226); the literal wins over {id}
-	"GET /api/v1/todos/{id}",   // one to-do as the list has it, with its view
+	"GET /api/v1/todos/places",              // the To-dos places and counts (todo_view_routes.go, #10226); the literal wins over {id}
+	"GET /api/v1/todos/{id}",                // one to-do as the list has it, with its view
+	"GET /api/v1/todos/{id}/images/{image}", // one attached picture's exact bytes (todo_images.go, #11084)
 	"GET /api/v1/todos/{id}/repositories",
 	"GET /api/v1/todos/{id}/workspace-rules",
 	"PUT /api/v1/todos/{id}/workspace-rules",
