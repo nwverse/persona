@@ -17,11 +17,11 @@ import (
 )
 
 // A connector's command line (personad tool, internal/toolcli) reaches the hub through the node's socket like the MCP
-// server, but the node, not the caller, says whether the assistant is asking: only a process the node started for the assistant,
-// or one of its descendants (its Bash tool), gets the assistant's tools. Any other caller (an agent, a program run by
-// hand) is refused; so is a system where the other end of a socket cannot be known.
+// server, but the node, not the caller, says whether the assistant is asking. Only an assistant's own process or a
+// verified runtime worker, or one of their descendants (its Bash tool), gets the assistant's tools. Any other caller
+// (an agent, a program run by hand) is refused; so is a system where the other end of a socket cannot be known.
 //
-// The MCP server's requests (mcp.tools, mcp.call) are decided the same way (mcpAssistantOf): its PERSONA_ASSISTANT is
+// The MCP server's requests (mcp.tools, mcp.call) have their own process checks (mcpAssistantOf): its PERSONA_ASSISTANT is
 // repeated by every process started with the assistant's environment, an agent in an engine started from the
 // assistant's Bash tool among them. Such an agent still counts as the assistant while its engine stays a descendant of
 // the assistant's process (a server the Bash tool did not detach), as any program run there does.
