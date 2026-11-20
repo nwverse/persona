@@ -224,6 +224,10 @@ type Node struct {
 	sysOnce    sync.Once      // system: read once (metrics.go)
 	sys        proto.System
 
+	// droppedResume: herdr servers (ServerID) found too old to keep a resume command, each warned about once
+	// (herdrresume.go warnDroppedResume).
+	droppedResume map[string]bool
+
 	// startsBegun: when the latest start of a session that starts does not hold began (transcript_files.go).
 	startsBegun startsBegun
 

@@ -25,7 +25,9 @@ import (
 // the restored pane's shell like herdr's own (so ~/.zshrc launchers work). Agents that the user starts in a terminal
 // are never touched: herdr resumes them as before. The user's herdr config is not changed. herdr keeps the command
 // across later session reports with another id (checked against v0.9.5), so a Claude that moved to a new session
-// (/clear) is reported again from its SessionStart hook.
+// (/clear) is reported again from its SessionStart hook. herdr before 0.9.2 answers the report ok and drops
+// resume_argv: on such a server nothing is reported, the node says once why, and a new server (an upgrade) is told
+// (#11792).
 
 // resumeSource is the reporter Persona sends resume_argv as (a custom source: herdr's own integration keeps its own).
 const resumeSource = "custom:persona"
@@ -42,9 +44,10 @@ type agentLaunch struct {
 	Plugins                          bool   // claude loads plugins: Persona's plugin directory and office rule
 	ID                               string
 	AgyConversation                  string // native ID verified for this pane, separate from the Persona row ID
-	// Server is the herdr server instance (herdr.Client.ServerID) that last took the resume command; "" before. A
-	// pane whose server changed since (a restart, a live handoff, an upgrade from a herdr older than 0.9.2, which
-	// ignored resume_argv) is reported again by backfillResume.
+	// Server is the herdr server instance (herdr.Client.ServerID) that last took the resume command, or that was
+	// found too old to keep one (herdrDropsResume); "" before. A pane whose server changed since (a restart, a live
+	// handoff, an upgrade from a herdr older than 0.9.2, which ignored resume_argv) is reported again by
+	// backfillResume.
 	Server string
 }
 
@@ -107,6 +110,33 @@ func (n *Node) claudeResumeArgv(spec claudeLaunch, id string) (argv []string, ok
 
 // maxResumeArgv is herdr's limit on a resume_argv's total length (agent_resume.rs, v0.9.5).
 const maxResumeArgv = 8192
+
+// resumeArgvMinHerdr is the first herdr that keeps a reported resume_argv. An older server answers the report ok and
+// drops the field, so its restart resumes the agent with herdr's bare `claude --resume <id>` (#11792).
+var resumeArgvMinHerdr = [3]int{0, 9, 2}
+
+// herdrDropsResume: v, the version a herdr server answers ping with, is older than resumeArgvMinHerdr. A server that
+// names no version is not taken to drop it: its command is reported as before.
+func herdrDropsResume(v string) bool {
+	return versionAtLeast(v, [3]int{}) && !versionAtLeast(v, resumeArgvMinHerdr)
+}
+
+// warnDroppedResume says once per herdr server (its ServerID) that it drops resume commands, which only an upgrade of
+// herdr on this computer changes.
+func (n *Node) warnDroppedResume(server, version string) {
+	n.mu.Lock()
+	seen := n.droppedResume[server]
+	if n.droppedResume == nil {
+		n.droppedResume = map[string]bool{}
+	}
+	n.droppedResume[server] = true
+	n.mu.Unlock()
+	if !seen {
+		n.logf("herdr resume: herdr %s drops resume commands (they need herdr %d.%d.%d or later): after a herdr restart the agents "+
+			"Persona started in it resume bare (claude --resume <id>), off their launchers, until herdr is upgraded",
+			version, resumeArgvMinHerdr[0], resumeArgvMinHerdr[1], resumeArgvMinHerdr[2])
+	}
+}
 
 // resumeSayable reports whether herdr takes cmd as eval's argument: no apostrophe, no control character (both make
 // herdr answer invalid_resume_argv) and within herdr's length limit, counting "eval".
@@ -226,16 +256,26 @@ func (n *Node) reportResume(ctx context.Context, h *herdrHost, pane string, spec
 		agentName = "claude"
 	}
 	server := h.serverID(ctx, host.ParsePane(pane)) // before the report: a server that replaces this one meanwhile is newer
+	settled := func() {
+		n.mu.Lock()
+		if cur, ok := n.launches[pane]; ok && cur.ID == spec.ID && cur.AgyConversation == spec.AgyConversation {
+			cur.Server = server
+			n.launches[pane] = cur
+		}
+		n.mu.Unlock()
+	}
+	if v := h.serverVersion(ctx, host.ParsePane(pane)); herdrDropsResume(v) {
+		// It would answer ok and keep nothing. Settled against this server all the same, so the server an upgrade
+		// brings (a new one) is given the command (backfillResume).
+		n.warnDroppedResume(server, v)
+		settled()
+		return
+	}
 	if err := h.PaneReportResume(ctx, host.ParsePane(pane), resumeSource, agentName, reportID, argv); err != nil {
 		n.logf("herdr resume: %s (%s): %v", pane, spec.ID, err)
 		return
 	}
-	n.mu.Lock()
-	if cur, ok := n.launches[pane]; ok && cur.ID == spec.ID && cur.AgyConversation == spec.AgyConversation {
-		cur.Server = server
-		n.launches[pane] = cur
-	}
-	n.mu.Unlock()
+	settled()
 }
 
 // resumeOnSessionStart follows a Persona-started Claude to its new session (/clear, /resume in it): herdr would
