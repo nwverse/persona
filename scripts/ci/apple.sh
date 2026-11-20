@@ -188,7 +188,8 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ]; then
   for sdk in iphoneos iphonesimulator watchos watchsimulator; do
     ci_run "Require $sdk SDK" 60 xcrun --sdk "$sdk" --show-sdk-version
   done
-  if [ "$LANE" != ios-build ]; then
+  # Generic device builds require the matching platform support even when no
+  # simulator is created. Keep the pinned runtime preparation in every iOS lane.
   # Current hosted images omit the Xcode 26.0-compatible iOS/watch runtimes.
   # Generic device builds validate both platforms for the embedded watch app,
   # even though SDK lookup succeeds. Prepare both before resolving/building.
@@ -206,7 +207,6 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ]; then
     printf 'apple-ci: selected compatible %s runtime %s\n' "$platform" "$runtime"
     if [ "$platform" = iOS ]; then IOS_RUNTIME="$runtime"; fi
   done
-  fi
   resolve Persona
   # Generic device builds compile the actual watch/widget/notification/share
   # dependency graph; do not delete the watch target to accommodate the runner.

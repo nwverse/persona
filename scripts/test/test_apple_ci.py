@@ -92,7 +92,6 @@ class AppleCIPreparationTests(unittest.TestCase):
         start = script.index('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ]')
         end = script.index('if [ "$LANE" = ios18 ]; then', start)
         device = script[start:end]
-        runtime = device[device.index('if [ "$LANE" != ios-build ]'):device.index('resolve Persona')]
         for step in ('Stage resolved packages for Meta configuration',
                      'Build PersonaCore XCFramework before package resolution',
                      'Generate public unsigned Apple config',
@@ -100,13 +99,12 @@ class AppleCIPreparationTests(unittest.TestCase):
             self.assertLess(script.index(step), start)
         for expected in ('resolve Persona', "-destination 'generic/platform=iOS'",
                          '-disableAutomaticPackageResolution "${UNSIGNED[@]}" build',
-                         'No CallKit in the device build', 'Debug view stack frames (device build)'):
+                         'No CallKit in the device build', 'Debug view stack frames (device build)',
+                         'Download matching $platform 26.0 simulator runtime'):
             self.assertIn(expected, device)
-        self.assertIn('Download matching $platform 26.0 simulator runtime', runtime)
         self.assertNotIn('sim-boot.sh', device)
         self.assertNotIn('PersonaSSH native tunnel integration tests', script[start:])
         self.assertNotIn('Blocking calls on the main actor (isolation lint)', script[start:])
-
     def test_native_ssh_tests_run_before_the_app_and_fail_the_lane_on_error(self):
         script = SCRIPT.read_text()
         packages = script.split('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then\n', 1)[1].split('\nfi', 1)[0]
