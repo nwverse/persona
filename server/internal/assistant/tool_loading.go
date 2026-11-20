@@ -59,10 +59,10 @@ func (s *Service) withToolLoading(ctx context.Context, self string, tools []prot
 	leader := deferring && s.isLeader(ctx, self)
 	out := slices.Clone(tools)
 	for i := range out {
-		// A granted scheduled round must call task_plan first. Discovering it
-		// would itself add a tool call to the transcript the grant checks.
+		// Keep planning and its allowed preflight reads directly available in a granted round.
+		// Discovery would add a separate tool call to the grant's transcript check.
 		out[i].WorkGuideTool = guide && slices.Contains(workGuideTools, out[i].Name) &&
-			!(cleanRound && out[i].Name == "task_plan")
+			!(cleanRound && (out[i].Name == "task_plan" || grantSafeTools[out[i].Name]))
 		out[i].DeferLoading = deferring && !slices.Contains(coreTools, out[i].Name) &&
 			!(leader && slices.Contains(leaderCoreTools, out[i].Name))
 	}

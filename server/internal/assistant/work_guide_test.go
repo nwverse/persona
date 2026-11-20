@@ -1,10 +1,14 @@
 package assistant
 
 import (
+	"encoding/json"
 	"net/http"
 	"reflect"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestWorkGuideFreshChatSettings(t *testing.T) {
@@ -124,5 +128,52 @@ func TestWorkGuidePersistsForSelectedManager(t *testing.T) {
 	w, view := permissionSettingsRequest(t, reloaded, "GET", "/api/v1/assistant", s.id, "full", "")
 	if w.Code != http.StatusOK || view.Manager != s.id || !view.WorkGuide {
 		t.Fatal("lost manager preference on reload")
+	}
+}
+
+// Two native chats in one workspace share the same instruction and skill files.
+func TestWorkGuideConcurrentPrepareAfterRollback(t *testing.T) {
+	s, f, _ := briefService(t, "release checklist")
+	setSettings(t, s, func(v *Settings) { v.WorkGuide = ptr(true) })
+	first, release := make(chan struct{}), make(chan struct{})
+	var count atomic.Int32
+	f.answerAppBlocking(AppPlugins, PluginsAssistant, func(json.RawMessage) (any, error) {
+		if count.Add(1) == 1 {
+			close(first)
+			<-release
+		}
+		return map[string]any{"skills": nil}, nil
+	})
+	start := func() <-chan error {
+		done := make(chan error, 1)
+		go func() { _, err := s.prepare(t.Context(), "server"); done <- err }()
+		return done
+	}
+	earlier := start()
+	<-first
+	setSettings(t, s, func(v *Settings) { v.WorkGuide = ptr(false) })
+	later := start()
+	// Observe the new prepare waiting for the same directory before letting the old render finish.
+	waited := false
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		waited = s.prepareLocks.waiting("server\x00"+s.assistantRel()) == 2
+		if waited {
+			break
+		}
+		runtime.Gosched()
+	}
+	close(release)
+	for _, done := range []<-chan error{earlier, later} {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !waited {
+		t.Fatal("concurrent writes to one assistant workspace")
+	}
+	ps := f.prepared
+	if len(ps) < 2 || ps[len(ps)-2]["work_guide_md"] == nil || ps[len(ps)-1]["work_guide_md"] != nil {
+		t.Fatal("stale prepared instructions after rollback")
 	}
 }

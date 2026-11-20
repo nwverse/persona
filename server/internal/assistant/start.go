@@ -102,6 +102,14 @@ func (s *Service) prepareSpace(ctx context.Context, machine, space string) (stri
 // a skill's files always goes: plugins.assistant hands them out once, so skipping would leave the old files on the
 // machine until the CLAUDE.md changed.
 func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onlyChanged bool) (string, bool, error) {
+	// Read settings and publish both instruction files in the same per-directory order.
+	dir := s.assistantRel()
+	if space == SpaceHealth {
+		dir = s.healthRel()
+	}
+	key := machine + "\x00" + dir
+	s.prepareLocks.acquire(key)
+	defer s.prepareLocks.release(key)
 	if s.isWorkMachine(machine) {
 		return "", false, errWorkAssistant
 	}
@@ -138,11 +146,10 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	if len(plugins.Skills) == 0 {
 		plugins.Skills = json.RawMessage("null")
 	}
-	dir, md := s.assistantRel(), own+plugins.Instructions
+	md := own + plugins.Instructions
 	if space == SpaceHealth {
-		dir, md = s.healthRel(), s.healthClaudeMD(ctx, machine)
+		md = s.healthClaudeMD(ctx, machine)
 	}
-	key := machine + "\x00" + dir
 	digests, files := skillDigests(plugins.Skills)
 	given := preparedState{md: md, skills: digests, workGuide: onDemand != ""}
 	if onlyChanged && !files {

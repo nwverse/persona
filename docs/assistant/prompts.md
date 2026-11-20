@@ -303,8 +303,8 @@ catalog description short and retain the contracts that task Agents use. A sched
 its planning steps inline and keeps `task_plan` available on its first call when the guide is enabled.
 Keep the exact built-in names taught by the skill in `server/internal/assistant/tool_loading.go`. With the Lab on,
 `work_tools_search` advertises selected definitions to that MCP connection using `notifications/tools/list_changed`.
-Each operation uses its original MCP tool and caller authorization. The existing scheduled grant requires
-`task_plan` as the first call. A tool lookup or skill read before planning goes through the usual Start approval.
+Each operation uses its original MCP tool and caller authorization. A granted scheduled round can use its existing safe preflight reads and then call `task_plan` directly.
+Reading a skill or other outside content still requires the ordinary Start approval.
 
 Each MCP tool hub provides to Agents / the assistant has one file: `mcp/<scenario>/<tool-name>.md`. The filename is the tool name. Contents: one paragraph of model-facing description, a blank line,
 then a ```json code block containing the input schema (parameters and their descriptions). These files are **not templates**; they are read verbatim. The schema is loaded with `json.Compact`,

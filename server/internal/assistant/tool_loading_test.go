@@ -319,3 +319,24 @@ func TestWorkGuideLoadingScopeAndScheduledGrant(t *testing.T) {
 		t.Fatal("rollback or copy", string(off), string(b))
 	}
 }
+
+func TestWorkGuideScheduledPreflightKeepsOriginalTools(t *testing.T) {
+	s := newFleetTest(t).s
+	ctx := t.Context()
+	s.noteCleanRound("grant", "task")
+	tools := []proto.Tool{{Name: "task_plan"}}
+	for name := range grantSafeTools {
+		tools = append(tools, proto.Tool{Name: name})
+	}
+	before := s.withToolLoading(ctx, "grant", tools, true)
+	setSettings(t, s, func(v *Settings) { v.WorkGuide = ptr(true) })
+	after := s.withToolLoading(ctx, "grant", tools, true)
+	b, _ := json.Marshal(before)
+	a, _ := json.Marshal(after)
+	if string(b) != string(a) {
+		t.Fatalf("grant preflight changed: %s -> %s", b, a)
+	}
+	if grantSafeTools["work_tools_search"] {
+		t.Fatal("discovery should not authorize a scheduled dispatch")
+	}
+}

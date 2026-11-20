@@ -9,6 +9,7 @@ package assistantskills
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -131,7 +132,7 @@ func Sync(dir, user string, selection Selection, logf func(string, ...any)) erro
 		target := filepath.Join(user, name)
 		at := filepath.Join(dir, name)
 		if cur, err := os.Readlink(at); err == nil {
-			if cur == target {
+			if cur == target || name == workGuideName {
 				continue
 			}
 			_ = os.Remove(at)
@@ -216,13 +217,85 @@ func installedNames(stamp []byte) []string {
 // WorkGuideInstalled distinguishes our managed guide from a user's or an extension's same-name skill.
 func WorkGuideInstalled(dir string) bool {
 	stamp, _ := os.ReadFile(filepath.Join(dir, builtinStamp))
-	return slices.Contains(installedNames(stamp), workGuideName) && workGuideFilePresent(dir)
+	return slices.Contains(installedNames(stamp), workGuideName) && ownsWorkGuide(dir, stamp) && workGuideFilePresent(dir)
 }
 
 // WorkGuideReady reports whether the assistant workspace can use compact instructions in both runtimes.
 func WorkGuideReady(cwd string) bool {
 	return cwd != "" && WorkGuideInstalled(filepath.Join(cwd, ".claude", "skills")) &&
 		WorkGuideInstalled(filepath.Join(cwd, ".agents", "skills"))
+}
+
+const guideDigestFile = ".persona-work-digest"
+
+func filePresent(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.Mode().IsRegular()
+}
+
+func codexSkillDir(dir string) bool {
+	return filepath.Base(dir) == "skills" && filepath.Base(filepath.Dir(dir)) == ".agents"
+}
+
+// A directory-wide stamp outlives a user's replacement of one of its entries. Check
+// the exact Codex link or the canonical copy's recorded tree before touching either.
+func ownsWorkGuide(dir string, stamp []byte) bool {
+	at := filepath.Join(dir, workGuideName)
+	if codexSkillDir(dir) {
+		link, err := os.Readlink(at)
+		return err == nil && link == filepath.FromSlash(runtimeGuideLink)
+	}
+	st, err := os.Lstat(at)
+	if err != nil || !st.IsDir() {
+		return false
+	}
+	if saved, err := os.ReadFile(filepath.Join(dir, guideDigestFile)); err == nil {
+		hash, err := importTree(context.Background(), at)
+		return err == nil && hash == strings.TrimSpace(string(saved))
+	}
+	// Earlier installations only recorded the combined embedded version. Rebuild
+	// it with this on-disk guide, including extra files, before adopting the copy.
+	version, _, _ := strings.Cut(string(stamp), " ")
+	h := sha256.New()
+	write := func(source fs.FS, path string, entry fs.DirEntry) error {
+		if !entry.Type().IsRegular() {
+			return fs.ErrInvalid
+		}
+		info, err := entry.Info()
+		if err != nil || info.Size() > MaxImportFile {
+			return fs.ErrInvalid
+		}
+		data, err := fs.ReadFile(source, path)
+		if err != nil {
+			return err
+		}
+		h.Write([]byte(path))
+		h.Write(data)
+		return nil
+	}
+	err = fs.WalkDir(builtin, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == workGuideName {
+			src := os.DirFS(dir)
+			err := fs.WalkDir(src, path, func(p string, d fs.DirEntry, err error) error {
+				if err != nil || d.IsDir() {
+					return err
+				}
+				return write(src, p, d)
+			})
+			if err != nil {
+				return err
+			}
+			return fs.SkipDir
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		return write(builtin, path, entry)
+	})
+	return err == nil && version == hex.EncodeToString(h.Sum(nil))[:12]
 }
 
 func workGuideFilePresent(dir string) bool {
@@ -238,15 +311,16 @@ func installBuiltins(dir string, mine []string, selection Selection) error {
 	old, _ := os.ReadFile(stamp)
 	installed := installedNames(old)
 	var guideLink string
-	if filepath.Base(dir) == "skills" && filepath.Base(filepath.Dir(dir)) == ".agents" {
+	if codexSkillDir(dir) {
 		guideLink = filepath.FromSlash(runtimeGuideLink)
 		if selection.WorkGuide && !WorkGuideInstalled(filepath.Dir(filepath.Join(dir, guideLink))) {
 			selection.WorkGuide = false
 		}
 	}
+	ownsGuide := slices.Contains(installed, workGuideName) && ownsWorkGuide(dir, old)
 	var names []string
 	for _, n := range builtinNames() {
-		if n == workGuideName && !slices.Contains(installed, n) {
+		if n == workGuideName && !ownsGuide {
 			// An upgrade may find a handwritten skill here. Leave it in place.
 			if _, err := os.Lstat(filepath.Join(dir, n)); err == nil {
 				continue
@@ -264,12 +338,15 @@ func installBuiltins(dir string, mine []string, selection Selection) error {
 			return nil
 		}
 		target, _ := os.Readlink(filepath.Join(dir, workGuideName))
-		if target == guideLink && workGuideFilePresent(dir) {
+		if target == guideLink && workGuideFilePresent(dir) && (guideLink != "" || filePresent(filepath.Join(dir, guideDigestFile))) {
 			return nil
 		}
 	}
 	for _, n := range installed {
 		if fs.ValidPath(n) && n != "." && filepath.Base(n) == n && !slices.Contains(names, n) {
+			if n == workGuideName && !ownsGuide {
+				continue
+			}
 			at := filepath.Join(dir, n)
 			target, _ := os.Readlink(at)
 			managedLink := n == workGuideName && guideLink != "" && target == guideLink
@@ -295,6 +372,17 @@ func installBuiltins(dir string, mine []string, selection Selection) error {
 		if err := os.Rename(tmp, final); err != nil {
 			return err
 		}
+	}
+	if guideLink == "" && slices.Contains(names, workGuideName) {
+		digest, err := importTree(context.Background(), filepath.Join(dir, workGuideName))
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, guideDigestFile), []byte(digest+"\n"), 0o600); err != nil {
+			return err
+		}
+	} else if err := os.Remove(filepath.Join(dir, guideDigestFile)); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return os.WriteFile(stamp, []byte(want+"\n"), 0o644)
 }

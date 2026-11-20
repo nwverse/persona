@@ -6,9 +6,9 @@ import { t } from "../../i18n";
 import type { ConfigurationSource } from "../../lib/configuration/contract";
 import type { ConfigurationGuidance } from "../../lib/configuration/guidance";
 import { workGuideLabsSource } from "../../lib/labs-work-guide";
-import { ConfigurationManager } from "./ConfigurationManager";
+import { useChosenManager, useKnownDefault } from "../../lib/manager-choice";
 import { terminalLabsSource } from "../../lib/labs-terminal";
-import { Dialog } from "../../ui/atoms";
+import { Dialog, Loading } from "../../ui/atoms";
 import { ConfigurationForm } from "./configuration/ConfigurationForm";
 import { Group, SettingsHint } from "./SettingsParts";
 
@@ -20,15 +20,22 @@ export interface LabsModule {
 /** Modules in display order. Each registers its source and optional localized guidance. */
 const MODULES: readonly LabsModule[] = [{ source: terminalLabsSource() }];
 
+// This field follows the selected manager. The browser-local experiments below render
+// immediately, even while the roster is resolving the default manager.
+function WorkGuideSettings() {
+  const chosen = useChosenManager();
+  const knownDefault = useKnownDefault();
+  const manager = chosen ?? knownDefault;
+  return manager ? <div className="mb-6"><ConfigurationForm key={manager} source={workGuideLabsSource(manager)} /></div> : <Loading />;
+}
+
 export function LabsSettings({ modules }: { modules?: readonly LabsModule[] } = {}) {
   return (
     <>
       <Group anchor="labs" footer={t("settings-labs.scope_note")}>
         <SettingsHint>{t("settings-labs.intro")}</SettingsHint>
       </Group>
-      {!modules && <ConfigurationManager>{(manager) => (
-        <div className="mb-6"><ConfigurationForm source={workGuideLabsSource(manager)} /></div>
-      )}</ConfigurationManager>}
+      {!modules && <WorkGuideSettings />}
       {(modules ?? MODULES).map(({ source, guidance }) => (
         <div key={source.key} className="mb-6">
           <ConfigurationForm source={source} guidance={guidance} />

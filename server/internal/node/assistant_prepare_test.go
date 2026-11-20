@@ -279,9 +279,10 @@ func TestWorkGuideSurvivesNodeRestart(t *testing.T) {
 		if slices.Contains(args, "features.mcp_tool_list_changed=true") != (guide != "") {
 			t.Fatal("wrong Codex discovery mode", args)
 		}
+		_, release, _ := n.assistantLarkEnvNamed(cwd, "resumed")
+		release()
 		for _, runtime := range []string{".claude", ".agents"} {
 			dir := filepath.Join(cwd, runtime, "skills")
-			n.syncRuntimeSkillDir(cwd, dir)
 			_, err := os.Stat(filepath.Join(dir, "persona-work", "references", "record.md"))
 			if guide != "" && err != nil || guide == "" && !os.IsNotExist(err) {
 				t.Fatalf("guide=%q resumed %s: %v", guide, runtime, err)

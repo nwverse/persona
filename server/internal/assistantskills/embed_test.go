@@ -3,6 +3,7 @@ package assistantskills
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -366,6 +367,43 @@ func TestWorkGuideRoutesToNativeReferences(t *testing.T) {
 		ref := "references/" + area.reference + ".md"
 		if !strings.Contains(catalog, area.cue) || !strings.Contains(entry, "]("+ref+")") || !strings.Contains(read(ref), area.operation) {
 			t.Errorf("%s must route from the catalog to %s and its %s workflow", area.cue, ref, area.operation)
+		}
+	}
+}
+
+func TestWorkGuidePreservesReplacementAfterInstall(t *testing.T) {
+	for _, runtime := range []string{".claude", ".agents"} {
+		for _, enabled := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/enabled=%t", runtime, enabled), func(t *testing.T) {
+				cwd, user := t.TempDir(), t.TempDir()
+				sync := func(on bool) {
+					t.Helper()
+					for _, r := range []string{".claude", ".agents"} {
+						if err := Sync(filepath.Join(cwd, r, "skills"), user, Selection{WorkGuide: on}, t.Logf); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				sync(true)
+				at := filepath.Join(cwd, runtime, "skills", workGuideName)
+				if err := os.RemoveAll(at); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(at, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				f := filepath.Join(at, "SKILL.md")
+				if err := os.WriteFile(f, []byte("local replacement"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if WorkGuideReady(cwd) {
+					t.Fatal("replacement mistaken for the native guide")
+				}
+				sync(enabled)
+				if b, e := os.ReadFile(f); e != nil || string(b) != "local replacement" || WorkGuideReady(cwd) {
+					t.Fatalf("replacement lost or selected: %q %v", b, e)
+				}
+			})
 		}
 	}
 }
