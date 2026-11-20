@@ -50,16 +50,31 @@ const (
 
 // relayBusyCodes are the refusals of a conversation that cannot take a message now and will later: its process is at
 // work (busy on a role change, adapter_busy on an external launcher), compacting, out of start attempts for now
-// (assistant_control_failed) or waiting on its adapter (adapter_timeout, adapter_unavailable); its runtime is away or
-// hands it to the runtime taking over (runtime_away, handover); its node is restarting (node_restarting); or the call
-// ran out of time with the node on it (deadline). Read from the node's refusals, not observed: a code missing here
-// reads as refused for good.
+// (assistant_control_failed), waiting on its adapter or changed before it could start (adapter_timeout,
+// adapter_unavailable, adapter_revision_mismatch); its runtime is away or hands it to the runtime taking over
+// (runtime_away, handover); its node is restarting (node_restarting); or the call ran out of time with the node on it
+// (deadline). Read from the node's and the manager's devices layer's refusals on assistant.send, not observed: a code
+// missing here and in relaySetupCodes reads as refused for good.
 var relayBusyCodes = []string{"busy", "adapter_busy", "compacting", "runtime_away", "assistant_control_failed",
-	"adapter_timeout", "adapter_unavailable", "handover", "node_restarting", devicewire.CodeDeadline}
+	"adapter_timeout", "adapter_unavailable", "adapter_revision_mismatch", "handover", "node_restarting", devicewire.CodeDeadline}
 
-// relaySetupCodes are the refusals the owner ends by fixing the setup: Claude Code or the launcher missing on the
-// computer, or a computer the hub does not know.
-var relaySetupCodes = []string{proto.CodeClaudeMissing, proto.CodeLauncherMissing, assistantwire.CodeNoDevice}
+// relaySetupCodes are the refusals the owner ends by fixing the setup, after which the message goes in: Claude Code or
+// the launcher missing on the computer, a computer the hub does not know, a node too old for what the message carries
+// (node_outdated, which the devices layer answers before the node is reached), a conversation's model pick that cannot
+// run there (out of the provider's scope, its own service, another agent kind, another launcher's private profile),
+// and an external launcher's connection that is off, unsigned, misconfigured or cannot serve this conversation
+// (relayAdapterSetupCodes).
+var relaySetupCodes = append([]string{proto.CodeClaudeMissing, proto.CodeLauncherMissing, assistantwire.CodeNoDevice,
+	proto.CodeNodeOutdated, proto.CodeLauncherOutOfScope, proto.CodeLauncherOwnService, assistantwire.CodeLauncherOtherKind,
+	"assistant_launcher_profile_switch"}, relayAdapterSetupCodes...)
+
+// relayAdapterSetupCodes are an external launcher's refusals (node/external_assistant.go externalStderrCode) that its
+// connection's setup ends: the owner enables, signs in, reconfigures, updates or restores the connection, or picks
+// another model for the conversation. Its other refusals are in relayBusyCodes.
+var relayAdapterSetupCodes = []string{"adapter_disabled", "adapter_credentials_missing", "adapter_config_conflict",
+	"adapter_scope_required", "adapter_sandbox_unsupported", "adapter_probe_unsupported", "adapter_protocol_unsupported",
+	"adapter_runtime_unsupported", "adapter_purpose_unsupported", "adapter_platform_unsupported", "adapter_target_not_found",
+	"adapter_model_not_found", "adapter_inventory_invalid"}
 
 // relayFailureOf classifies err, the failure of a relay send (not nil).
 func relayFailureOf(err error) relayFailure {
@@ -118,20 +133,24 @@ const approvalResultFrom = "approval-result-"
 func (s *Service) relayRefused(machine, to string, msg relayMsg, err error) (stays bool, then func(context.Context)) {
 	code, _ := relayErrCode(err)
 	ctx := context.Background()
-	what := "it leaves the queue"
+	what := "it leaves the queue; the owner is told"
 	defer func() { s.logf("relay %s to %s: refused for good (%s): %s", msg.Tool, short(to), code, what) }()
-	switch msg.Tool {
-	case superviseTool:
+	push := func(ctx context.Context) { s.reportRelayRefused(ctx, machine, to, msg.Tool, code) }
+	switch {
+	case msg.Tool == superviseTool:
 		// One try and the owner's push; the task stays open for review. Whether it should move to the main
 		// conversation's supervision route instead waits on #11393's decision 2.
 		what = "delivery stopped; the owner is told"
-		return false, func(ctx context.Context) { s.reportRelayRefused(ctx, machine, to, code) }
-	case askAnswerTool:
-		if strings.HasPrefix(msg.From, approvalResultFrom) {
-			// It waits for the conversation the approval came from: it has no fallback (deliverApprovalResults).
-			what = "an approval result stays queued"
-			return true, nil
+		return false, push
+	case msg.Tool == askAnswerTool && strings.HasPrefix(msg.From, approvalResultFrom):
+		// It waits for the conversation the approval came from: it has no fallback (deliverApprovalResults). A
+		// runtime conversation that cannot take it at all ends it with the owner's push, as it always did (#10338).
+		if code == assistantwire.CodeSupervisionRuntime {
+			return false, push
 		}
+		what = "an approval result stays queued"
+		return true, nil
+	case msg.Tool == askAnswerTool:
 		// The owner's answer to a card goes to the main conversation, as when the conversation that asked is gone
 		// (askTarget). Moved before it leaves, so it is never lost; one the main conversation refuses stays there.
 		here := s.settings(ctx)
@@ -150,16 +169,16 @@ func (s *Service) relayRefused(machine, to string, msg relayMsg, err error) (sta
 				s.drainRelays(here.MachineID, []proto.Session{c})
 			}
 		}
-	case "conversation_send", "conversation_new":
+	case msg.Tool == "conversation_send" || msg.Tool == "conversation_new":
 		what = "its sender is told"
 		return false, func(ctx context.Context) { s.tellRelayRefused(ctx, machine, to, msg, code) }
-	case noticeTool:
-		if msg.State == "needs" || msg.State == "failed" {
-			what = "the push it stood for goes out"
-			return false, func(ctx context.Context) { s.quietNoticeRefused(ctx, msg) }
-		}
+	case msg.Tool == noticeTool && (msg.State == "needs" || msg.State == "failed"):
+		what = "the push it stood for goes out"
+		return false, func(ctx context.Context) { s.quietNoticeRefused(ctx, msg) }
 	}
-	return false, nil // Persona's own notices: a task's notice, a task's end, a spawned conversation's, a chat's reply
+	// Persona's own notices: a quiet task's other notices, a task's end, a spawned conversation's notice, a chat's
+	// reply, the line to a sender. Nothing else records the refusal yet, so the owner is pushed once.
+	return false, push
 }
 
 // moveRelay queues msg, which another conversation refused, for conversation to instead, once: a copy already
@@ -187,21 +206,34 @@ func (s *Service) moveRelay(to string, msg relayMsg) bool {
 		}
 		return false
 	}
+	go s.releaseHeldAsks(to) // as queueRelay: a turn to holds with its own question lets go of it for the answer
 	return true
 }
 
-// reportRelayRefused pushes the owner that conversation to refused a supervision message for good (code): it was
-// not sent and will not be sent again, and the task is still there to open.
-func (s *Service) reportRelayRefused(ctx context.Context, machine, to, code string) {
+// reportRelayRefused pushes the owner that conversation to refused a message of kind tool for good (code): it was not
+// delivered and will not be sent again. A supervision message's push says the task is still there to open, and with
+// assistant_supervision_runtime that the follow-up needs a Claude Code or Codex conversation; any other message's
+// says that this runtime cannot take Persona's separate instructions, or else that an update was refused.
+func (s *Service) reportRelayRefused(ctx context.Context, machine, to, tool, code string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	lang := s.lang(ctx)
-	body := "assistant-conversations.supervision_delivery_refused"
-	if code == assistantwire.CodeSupervisionRuntime { // a runtime without supervision policy: the owner picks another
-		body = "assistant-conversations.supervision_delivery_failed"
-	}
 	s.push(ctx, Notification{DeviceID: machine, SessionID: to,
-		Title: i18n.T(lang, "assistant-conversations.relay_delivery_failed"), Body: i18n.T(lang, body)})
+		Title: i18n.T(lang, "assistant-conversations.relay_delivery_failed"), Body: i18n.T(lang, relayRefusedBody(tool, code))})
+}
+
+// relayRefusedBody is the key of the push's text when a message of kind tool is refused for good with code.
+func relayRefusedBody(tool, code string) string {
+	runtime := code == assistantwire.CodeSupervisionRuntime
+	switch {
+	case tool == superviseTool && runtime:
+		return "assistant-conversations.supervision_delivery_failed"
+	case tool == superviseTool:
+		return "assistant-conversations.supervision_delivery_refused"
+	case runtime:
+		return "rpc-errors.assistant_supervision_runtime"
+	}
+	return "assistant-conversations.notice_delivery_refused"
 }
 
 // relayRefusedTool marks the line that tells a conversation its message was refused for good (relayMsg.Tool);
@@ -224,9 +256,9 @@ func (s *Service) tellRelayRefused(ctx context.Context, machine, to string, msg 
 		At: time.Now().UTC()})
 }
 
-// quietNoticeRefused: the main conversation refused quiet task msg.From's notice for good, so the push the notice
-// stood for goes out after all (quiet.go): the cards the task's agents still wait on (needs), or its failed start
-// (failed).
+// quietNoticeRefused: the conversation refused quiet task msg.From's notice for good, so the push the notice stood
+// for goes out after all (quiet.go): the card it stands for while that card still waits (needs), or the failed start
+// (failed). A needs notice queued before it named its card stands for the task's newest waiting card.
 func (s *Service) quietNoticeRefused(ctx context.Context, msg relayMsg) {
 	t, ok := s.todoNow(msg.From)
 	if !ok {
@@ -234,22 +266,12 @@ func (s *Service) quietNoticeRefused(ctx context.Context, msg relayMsg) {
 	}
 	switch msg.State {
 	case "needs":
-		want := map[string]map[string]bool{}
-		for _, a := range t.Agents {
-			if a.ReleasedAt != nil {
-				continue
-			}
-			if want[a.MachineID] == nil {
-				want[a.MachineID] = map[string]bool{}
-			}
-			want[a.MachineID][a.SessionID] = true
+		ix, ok := s.pendingIx(msg.Card)
+		if msg.Card == "" {
+			ix, ok = s.newestTaskCard(t)
 		}
-		for _, list := range s.pendingOf(want) {
-			for _, ix := range list {
-				if !s.muted(ix.MachineID, ix.SessionID) {
-					s.notifyInteraction(s.withTask(ix), s.machineName(ix.MachineID), s.linkCovers(ix))
-				}
-			}
+		if ok && !s.muted(ix.MachineID, ix.SessionID) {
+			s.notifyInteraction(s.withTask(ix), s.machineName(ix.MachineID), s.linkCovers(ix))
 		}
 	case "failed":
 		machine, reason := "", ""
@@ -260,6 +282,30 @@ func (s *Service) quietNoticeRefused(ctx context.Context, msg relayMsg) {
 		}
 		s.notifyTaskFailed(ctx, t, machine, reason)
 	}
+}
+
+// newestTaskCard is the card raised last among those task t's agents wait on; false when none waits.
+func (s *Service) newestTaskCard(t Todo) (proto.Interaction, bool) {
+	want := map[string]map[string]bool{}
+	for _, a := range t.Agents {
+		if a.ReleasedAt != nil {
+			continue
+		}
+		if want[a.MachineID] == nil {
+			want[a.MachineID] = map[string]bool{}
+		}
+		want[a.MachineID][a.SessionID] = true
+	}
+	var newest proto.Interaction
+	found := false
+	for _, list := range s.pendingOf(want) {
+		for _, ix := range list {
+			if !found || ix.CreatedAt.After(newest.CreatedAt) {
+				newest, found = ix, true
+			}
+		}
+	}
+	return newest, found
 }
 
 // refusedDirect: a direct try of msg into conversation to failed with err. A refusal for good is handled by msg's kind

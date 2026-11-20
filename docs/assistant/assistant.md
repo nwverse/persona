@@ -1617,25 +1617,27 @@ operation then read as accepted and the bubble waited for the transcript and wen
   | Outcome | Errors | `conversation_send` | Every other path |
   | --- | --- | --- | --- |
   | In doubt | the time ran out, or the link dropped while it went (`relayInDoubt`) | queued | looked for in the conversation, then tried again under the same `once_id` (#10690) |
-  | Not now | a node error with no code, `internal`, `machine_offline` (also as the bus hands it back), `node_closed` | queued | stays queued |
-  | Not now, by a code | `busy`, `adapter_busy`, `compacting`, `runtime_away`, `assistant_control_failed`, `adapter_timeout`, `adapter_unavailable`, `handover`, `node_restarting`, `deadline` | returned to the sender until decision 1 of #11393 is answered | stays queued |
-  | The owner fixes the setup | `claude_missing`, `launcher_missing`, `no_device` | returned | stays queued and goes in once the setup is fixed |
+  | Not now | a node error with no code, `internal`, `machine_offline` (also in the shapes the bus and the manager's own computers give it), `node_closed` | queued | stays queued |
+  | Not now, by a code | `busy`, `adapter_busy`, `compacting`, `runtime_away`, `assistant_control_failed`, `adapter_timeout`, `adapter_unavailable`, `adapter_revision_mismatch`, `handover`, `node_restarting`, `deadline` | returned to the sender until decision 1 of #11393 is answered | stays queued |
+  | The owner fixes the setup | `claude_missing`, `launcher_missing`, `no_device`, `node_outdated` (the manager's devices layer answers it before the node is reached), the conversation's model pick that cannot run there (`launcher_out_of_scope`, `launcher_own_service`, `launcher_other_kind`, `assistant_launcher_profile_switch`), and every other refusal of an external launcher's connection (`adapter_disabled`, `adapter_credentials_missing`, `adapter_config_conflict` and the rest of `relayAdapterSetupCodes`) | returned | stays queued and goes in once the setup is fixed |
   | Gone | the conversation "is gone" | returned | dropped |
   | The manager's own | an error the manager raises without a code (a pick, model or connection that is gone or cannot be read) | returned | stays queued |
   | Refused for good | any other code, `assistant_supervision_runtime` included | returned | leaves delivery once, by its kind (below) |
 
-  The "not now" codes were read from the node's refusals, not observed: a code missing from the list reads as refused
-  for good. A message refused for good is handled in one place, `relayRefused`, by its kind, and is reported once:
+  The "not now" and setup codes were read from the refusals the node and the manager's devices layer give on
+  `assistant.send`, not observed: a code missing from both lists reads as refused for good. A message refused for good
+  is handled in one place, `relayRefused`, by its kind, and is reported once:
 
   | Message | Then |
   | --- | --- |
-  | Supervision message | One try, then the owner's push ("Message could not be delivered"). It is not moved to another conversation, and its task stays open for review. Whether it should move to the main conversation's supervision route is decision 2 of #11393. |
-  | The owner's answer to a card | It moves to the main conversation, as it does when the conversation that asked is gone (`askTarget`). One the main conversation refuses as well stays queued there. |
-  | Approval result | It stays queued for the conversation the approval came from: approval results have no fallback. |
-  | Persona's notices: a task's notice or end, a spawned conversation's notice, a chat's reply | They leave the queue. A quiet task's "needs you" or "failed" notice sends the push it stood for: the card's push, or the failed start's. |
+  | Supervision message | One try, then the owner's push ("Message could not be delivered"; with `assistant_supervision_runtime` it asks for a Claude Code or Codex supervisor, otherwise it says the follow-up was refused). It is not moved to another conversation, and its task stays open for review. Whether it should move to the main conversation's supervision route is decision 2 of #11393. |
+  | The owner's answer to a card | It moves to the main conversation, as it does when the conversation that asked is gone (`askTarget`), and a turn the main conversation holds with its own question lets go for it, as for any message queued there. One the main conversation refuses as well stays queued there. |
+  | Approval result | It stays queued for the conversation the approval came from: approval results have no fallback. One refused with `assistant_supervision_runtime` ends with the owner's push instead, as it did before. |
+  | Persona's notices: a task's notice or end, a spawned conversation's notice, a chat's reply, the line to a sender | They leave the queue. A quiet task's "needs you" notice sends the push of the card it stood for (`relayMsg.Card`), a "failed" one the failed start's push. Every other one sends the owner one push saying the conversation refused an update (with `assistant_supervision_runtime`, the push that code always had). |
   | A message from another conversation (`conversation_send`, `conversation_new`) | It leaves the queue. The sending conversation gets one line saying the message was not delivered and will not be retried (`prompts/assistant/relay_refused.md`). |
 
-  Each refusal for good is logged once; no work event records it yet (#11399).
+  Each refusal for good is logged once; no work event records it yet (#11399), which is why Persona's own notices
+  end with a push.
 
 ### Messages to an Agent whose computer is away (#10661)
 

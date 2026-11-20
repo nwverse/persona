@@ -223,6 +223,9 @@ type relayMsg struct {
 	At        time.Time `json:"at"`
 	// State is a task notice's state (quiet.go: done | needs | interrupted | failed); "" for other relays.
 	State string `json:"state,omitempty"`
+	// Card: the card a quiet task's needs notice stands for (quietCard), pushed if the notice is refused for good. A
+	// version that does not know it drops it on its next save: the task's newest waiting card is pushed then.
+	Card string `json:"card,omitempty"`
 	// Urgent: a supervision message with a signal that waits on a decision (relay_presence.go). A version that does
 	// not know it drops it on its next save: the message then ranks and waits as any other supervision message.
 	Urgent bool `json:"urgent,omitempty"`

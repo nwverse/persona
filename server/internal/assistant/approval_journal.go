@@ -301,7 +301,7 @@ func (s *Service) deliverApprovalResult(a approvalJournalEntry) error {
 		if err := s.tryDirectRelay(ctx, a.MachineID, a.SessionID, &msg); err == nil {
 			return nil
 		} else if s.refusedDirect(ctx, a.MachineID, a.SessionID, msg, err) {
-			return nil // never: refused for good, an approval result stays queued as well (relayRefused)
+			return nil // a runtime conversation that cannot take it: the owner was pushed (relayRefused)
 		} else if !relayInDoubt(err) && !refusedForGood(err) {
 			// A transient send refusal may still be retried through the durable
 			// queue; an actually missing conversation was rejected above.
