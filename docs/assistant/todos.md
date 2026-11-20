@@ -1082,6 +1082,7 @@ When one thing the owner asked for is split into several pieces of work, the pie
 - **`task_plan`** checks a task's links when the plan is made and writes them when the task starts. For advisory requests, a stale link is logged and left out rather than stopping an approved start. The apps' edits of a plan card do not change links.
 - **Deleting** a to-do leaves its id in other to-dos' `part_of` / `after`. The graph cannot draw edges to missing nodes; enforced starts stay blocked until their references are repaired.
 - `todo_list` / `todo_get` show a piece as `(piece of todo_…, after todo_…)`.
+- **The request's own row** (web, #11858): its status line says its steps as the hub counts them on its view (`view.steps`, closed of all; iOS's "Steps 2/5"): with no Agent of its own, "Steps 1/3" in place of Not started and nothing about handing it over, and once every step is closed "3/3 steps done · Next step not arranged yet"; with one, "· Steps 1/2" after its Agent count. Its page says the same. A row without the view (an older manager) reads as before; its section is unchanged.
 
 ### Enforce prerequisites at launch
 
