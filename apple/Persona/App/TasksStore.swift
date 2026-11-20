@@ -298,9 +298,45 @@ final class TasksStore {
     }
 
     private func planError(_ todo: TodoItem) -> String? {
-        guard let plan = todo.planID.flatMap({ plans[$0] }),
-              let error = plan.tasks.first(where: { $0.todoID == todo.id })?.error, !error.isEmpty else { return nil }
+        guard let error = planTask(todo)?.error, !error.isEmpty else { return nil }
         return error
+    }
+
+    /// The plan task behind this to-do, including one a plan took over without leaving `plan_id` on the to-do.
+    func planTask(_ todo: TodoItem) -> PlanTask? { TaskStartRemedy.planTask(of: todo, in: plans) }
+
+    func retryLauncher(_ todo: TodoItem, features: Set<String> = AppModel.shared.hubFeatures) -> String? {
+        TaskStartRemedy.retryLauncher(planTask(todo), features: features)
+    }
+
+    func startQuestion(_ todo: TodoItem, features: Set<String> = AppModel.shared.hubFeatures, now: Date = .now) -> ShellQuestion? {
+        TaskStartRemedy.taskQuestion(planTask(todo), features: features, now: now)
+    }
+
+    func startFailureRow(_ todo: TodoItem) -> String? {
+        let task = planTask(todo)
+        if let line = TaskStartRemedy.failureLine(code: task?.errorCode, args: task?.errorArgs) { return line }
+        return startFailure(todo).map(StartFailureWords.rowLine)
+    }
+
+    func startFailureCard(_ todo: TodoItem) -> String? {
+        let task = planTask(todo)
+        if let line = TaskStartRemedy.failureLine(code: task?.errorCode, args: task?.errorArgs) {
+            return String(localized: "Didn't start: \(line) [Tasks Store 38bbb7]")
+        }
+        return startFailure(todo).map(StartFailureWords.cardLine)
+    }
+
+    /// The detail page leads with the coded short line; its raw hub error remains available under Details.
+    func startFailureSummary(_ todo: TodoItem) -> String? {
+        let task = planTask(todo)
+        return TaskStartRemedy.failureLine(code: task?.errorCode, args: task?.errorArgs) ?? startFailure(todo)
+    }
+
+    /// A direct to-do link may arrive before its conversation's feed; read it so the coded remedy fields can appear.
+    func loadStartRemedy(_ todo: TodoItem) async {
+        guard planTask(todo) == nil, startFailure(todo) != nil, let origin = todo.origin, !origin.isEmpty else { return }
+        await load(origin, refreshTodos: false)?.value
     }
 
     /// What a waiting task waits for (#3274): the first of its agents that waits to be woken, in its own words.
@@ -500,16 +536,22 @@ final class TasksStore {
     }
 
     /// Retry on a task whose agent did not start, Continue on one a model error cut off: `POST /todos/{id}/retry`.
+    /// An alternative launcher is sent only to a hub that advertises it; both variants share one busy ticket.
     @discardableResult
-    func retry(_ todo: TodoItem, api injected: APIClient? = nil) async -> Bool {
+    func retry(_ todo: TodoItem, launcher: String? = nil, features: Set<String> = AppModel.shared.hubFeatures,
+               api injected: APIClient? = nil) async -> Bool {
         guard !busyRetries.contains(todo.id), let api = (injected ?? AppModel.shared.api)?.manager(todoStore.named(todo.id)) else { return false }
+        if launcher != nil, !features.contains(TaskStartRemedy.retryLauncherFeature) {
+            showToast(Toast(String(localized: "This hub can't start it on another launcher yet. Update Persona on the hub, or Retry."), style: .error))
+            return false
+        }
         busyRetries.insert(todo.id)
         defer { busyRetries.remove(todo.id) }
         let ticket = generation
         do {
-            _ = try await api.retryTodo(todo.id)
+            let result = try await api.retryTodo(todo.id, launcher: launcher)
             guard generation == ticket else { return false }
-            reloadTodos(api: injected)
+            try await todoStore.applyConfirmed(result, api: api)
             Haptics.success()
             return true
         } catch {
@@ -518,6 +560,20 @@ final class TasksStore {
             if let e = error as? APIError, e.status == 409 { reloadTodos(api: injected) }
             return false
         }
+    }
+
+    /// Answers the task's startup question. The hub restarts the task itself, so no chat message is resent here.
+    func answerStart(_ todo: TodoItem, choice: String, features: Set<String> = AppModel.shared.hubFeatures,
+                     api injected: APIClient? = nil) async throws {
+        guard features.contains(TaskStartRemedy.answerFeature) else {
+            throw APIError(status: 0, message: String(localized: "This hub can't answer this startup question yet."))
+        }
+        guard let api = (injected ?? AppModel.shared.api)?.manager(todoStore.named(todo.id)) else {
+            throw APIError(status: 0, message: String(localized: "Not connected to a hub [Todo Store 04f822]"))
+        }
+        let result = try await api.answerTaskStart(todo.id, choice: choice)
+        if let result { try await todoStore.applyConfirmed(result, api: api) } else { reloadTodos(api: injected) }
+        Haptics.success()
     }
 
     enum MessageState { case open, sent, filed, dismissed }

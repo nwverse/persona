@@ -939,7 +939,7 @@ struct AssistantActionBar: View {
             return String(localized: "Starting the agent")
         case .failed:
             // in plain words; the raw error is the task's details' (#8237)
-            return store.startFailure(todo).map(StartFailureWords.rowLine)
+            return store.startFailureRow(todo)
         case .needsYou:
             return TaskAsk.waitingLine(store.interactions(todo))
         case .working, .waiting:
@@ -962,19 +962,30 @@ struct AssistantActionBar: View {
         let invalid = lead?.turnErrorKind == "unrecoverable" || lead?.turnErrorCode == "compaction_sealed" ||
             APIErrorInfo.unrecoverable(lead?.turnError)
         let resume = !invalid && (status == .interrupted || status == .usageLimit && lead.map { !$0.usageLimitContinues } == true)
-        if retry || resume || status == .failed {
+        if retry {
+            HStack(spacing: Theme.Space.s) {
+                Color.clear.scaledFrame(width: Theme.Size.markM, height: 0).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    if let task = store.planTask(todo) { TaskShellQuestion(todo: todo, task: task) }
+                    TaskRetryButtons(todo: todo, idPrefix: "action-tray", remove: { store.askRemove(todo, pending: $removing) })
+                }
+            }
+            .font(Theme.Font.captionStrong)
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.bottom, Theme.Space.s)
+        } else if resume || status == .failed {
             let busy = store.busyRetries.contains(todo.id)
             HStack(spacing: Theme.Space.s) {
                 // under the words: as wide as the row's mark and the gap after it
                 Color.clear.scaledFrame(width: Theme.Size.markM, height: 0).accessibilityHidden(true)
-                if retry || resume {
+                if resume {
                     Button { Task { await store.retry(todo) } } label: {
-                        Text(retry ? String(localized: "Retry") : String(localized: "Continue")).lineLimit(1)
+                        Text("Continue").lineLimit(1)
                             .opacity(busy ? 0 : 1).overlay { if busy { ProgressView().controlSize(.small) } }
                     }
                     .themedButton(prominent: true)
                     .disabled(busy)
-                    .accessibilityIdentifier(retry ? "action-tray.retry" : "action-tray.continue")
+                    .accessibilityIdentifier("action-tray.continue")
                 }
                 if status == .failed {
                     Button { store.askRemove(todo, pending: $removing) } label: {

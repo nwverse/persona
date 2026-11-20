@@ -725,6 +725,8 @@ final class AppModel {
     }
     /// Per group: the one retry of its waiting messages due in a few seconds (`retryOutboxSoon`).
     @ObservationIgnored var outboxRetry: [String: Task<Void, Never>] = [:]
+    /// One selective shell-question resend per conversation; ordinary outbox flushing remains independent.
+    @ObservationIgnored var resendingShellStarts = Set<SessionKey>()
     #if DEBUG
     @ObservationIgnored var inboxHandOffDoneForTests: ((PendingMessage.InboxHandOff) -> Void)?
     #endif
@@ -1721,7 +1723,7 @@ final class AppModel {
         if let w = warmed, w.launcher == launcher, w.manager == api.shownManager, Date().timeIntervalSince(w.at) < 180 { return }
         warmed = (launcher, api.shownManager, Date())
         if let r = try? await api.warmAssistant(launcher: launcher), hubFeatures.contains(AssistantReadiness.feature), showsPage(of: api) {
-            readiness.land(r)
+            readiness.land(r, modelPick: assistantMain.flatMap { session($0) }?.modelPick)
         }
     }
 
@@ -1732,7 +1734,7 @@ final class AppModel {
     /// ask again now. Nothing on a hub without readiness.
     func readinessChanged() {
         guard hubFeatures.contains(AssistantReadiness.feature) else { return }
-        Task { await readiness.refresh(api: api, force: true) }
+        Task { await readiness.refresh(api: api, force: true, modelPick: assistantMain.flatMap { session($0) }?.modelPick) }
     }
 
     func setAssistantLauncher(_ launcher: String) async {

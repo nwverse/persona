@@ -10,6 +10,7 @@ struct TodoDetailView: View {
     var onOpenAgent: ((SessionKey) -> Void)? = nil
 
     @State private var store = TodoStore.shared
+    @State private var tasks = TasksStore.shared
     @State private var text = TodoEditorText()
     @FocusState private var titleFocused: Bool
     @State private var isEditingNotes = false
@@ -89,6 +90,10 @@ struct TodoDetailView: View {
             if UserDefaults.standard.bool(forKey: "showDecisionHistory"), decisions.all == nil { decisions.showAll = true }
             #endif
             await decisions.load()
+        }
+        .tabActiveTask(id: "start-remedy-\(todoID)-\(currentTodo?.origin ?? "")") {
+            guard let todo = currentTodo else { return }
+            await tasks.loadStartRemedy(todo)
         }
         #if os(macOS)
         .macLinkPanel($link)
@@ -231,6 +236,15 @@ struct TodoDetailView: View {
             }
 
             stageSection(todo)
+
+            if let failure = tasks.startFailure(todo) {
+                Section {
+                    let summary = tasks.startFailureSummary(todo) ?? failure
+                    ReadinessCard(title: String(localized: "The agent didn't start"), detail: summary, tone: .danger,
+                                  details: summary == failure ? [] : [failure])
+                    if let task = tasks.planTask(todo) { TaskShellQuestion(todo: todo, task: task) }
+                }
+            }
 
             Section {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -515,8 +529,43 @@ struct TodoDetailView: View {
     /// at its full size (`minimumScale: 1`): with the row's 0.8 allowance "Hand to Agent" stayed beside Done at
     /// xxxLarge, cut to "Hand to Age…" instead of shrunk (#9008).
     @ViewBuilder private func bottomButtons(_ todo: TodoItem) -> some View {
+        // A failed start can carry done_at while it still checks open and waits for its owner (#3713).
+        let open = TodoTriageLogic.checksAsOpen(todo, among: { store.todos }, lookup: {
+            TodosLogic.makeSessionLookup(model.allSessions(inFront: inFront))
+        }, now: .now)
+        let canRetry = open && tasks.state(todo) == .failed && !(todo.origin ?? "").isEmpty
+        let instead = canRetry ? tasks.retryLauncher(todo, features: model.hubFeatures) : nil
+        let busy = tasks.busyRetries.contains(todo.id)
+        if let instead {
+            Button { Task { await tasks.retry(todo, launcher: instead, features: model.hubFeatures) } } label: {
+                HStack(spacing: Theme.Space.xs) {
+                    ThemedIcon(Theme.Icon.retry)
+                    Text("Use \(instead) instead").buttonLabelLine(minimumScale: 1)
+                }
+                .opacity(busy ? 0 : 1).overlay { if busy { ProgressView().controlSize(.small) } }
+                .floatingPill(prominent: true)
+            }
+            .buttonStyle(.plain)
+            .disabled(busy)
+            .accessibilityShowsLargeContentViewer()
+            .accessibilityIdentifier("todo.retry-launcher")
+        }
+        if canRetry {
+            Button { Task { await tasks.retry(todo, features: model.hubFeatures) } } label: {
+                HStack(spacing: Theme.Space.xs) {
+                    ThemedIcon(Theme.Icon.retry)
+                    Text("Retry [Components b8784c]").buttonLabelLine(minimumScale: 1)
+                }
+                .opacity(busy ? 0 : 1).overlay { if busy { ProgressView().controlSize(.small) } }
+                .floatingPill(prominent: instead == nil)
+            }
+            .buttonStyle(.plain)
+            .disabled(busy)
+            .accessibilityShowsLargeContentViewer()
+            .accessibilityIdentifier("todo.retry")
+        }
         // A done to-do can't be handed over (the hub refuses, #1856): Reopen comes first.
-        if !todo.isDone {
+        if open {
             Button {
                 showHandoff = true
             } label: {
@@ -525,7 +574,7 @@ struct TodoDetailView: View {
                     // Its own string (#6151): the sheet's title keeps the longer Japanese, which the half-width button cut off.
                     Text("Hand to Agent [To-do Page Button]").buttonLabelLine(minimumScale: 1)
                 }
-                .floatingPill(prominent: true)
+                .floatingPill(prominent: !canRetry)
             }
             .buttonStyle(.plain)
             .accessibilityShowsLargeContentViewer()
@@ -536,8 +585,8 @@ struct TodoDetailView: View {
             store.toggleDone(todo)
         } label: {
             HStack(spacing: Theme.Space.xs) {
-                ThemedIcon(todo.isDone ? Theme.Icon.undo : Theme.Icon.done)
-                Text(todo.isDone ? String(localized: "Reopen") : String(localized: "Done [Extension System Presentation c0b3fb]")).buttonLabelLine(minimumScale: 1)
+                ThemedIcon(open ? Theme.Icon.done : Theme.Icon.undo)
+                Text(open ? String(localized: "Done [Extension System Presentation c0b3fb]") : String(localized: "Reopen")).buttonLabelLine(minimumScale: 1)
             }
             .floatingPill(prominent: false)
         }

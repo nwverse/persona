@@ -719,6 +719,11 @@ final class TodoStore {
         try await confirmed(id, api: api) { try await $0.clearSomeday(id: id) }
     }
 
+    /// Applies a write's returned to-do immediately, then confirms it with the same list read as other confirmed writes.
+    func applyConfirmed(_ result: TodoItem, api: APIClient) async throws {
+        try await confirmed(result.id, api: api) { _ in result }
+    }
+
     /// Restore on an inactive to-do: the hub's, so every device sees it (the app's own rules keep theirs on the device,
     /// `TodoRestores`, for hubs without `todo_view`).
     func restore(id: String, api injected: APIClient? = nil) async throws {

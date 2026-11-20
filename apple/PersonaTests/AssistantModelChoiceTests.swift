@@ -81,6 +81,53 @@ struct AssistantModelChoiceTests {
         #expect(e.source == .defaultValue)
     }
 
+    @Test func anOrdinarySideConversationKeepsWhatItStartedWith() {
+        let main = response(default: def(launcher: "team-api", model: "claude-opus-5-5", effort: "high"))
+        let e = AssistantModelChoice.effective(launcher: "claude", model: "claude-haiku-5-5", effort: "low",
+                                               pick: nil, response: main, rule: .own)
+        #expect(e == AssistantModelChoice.Effective(launcher: "claude", model: "claude-haiku-5-5",
+                                                    effort: "low", source: .own))
+        let picked = AssistantModelChoice.effective(launcher: "claude", model: "claude-haiku-5-5", effort: "low",
+                                                    pick: ModelPick(launcher: "fast", model: "swift"), response: main, rule: .own)
+        #expect(picked.launcher == "fast" && picked.model == "swift" && picked.source == .pick)
+    }
+
+    @Test func theSupervisorUsesItsOwnPurposeInsteadOfMainChat() {
+        let main = response(default: def(launcher: "claude", model: "claude-haiku-5-5"))
+        let supervise = response(default: def(launcher: "team-api", model: "claude-opus-5-5", effort: "high"))
+        let e = AssistantModelChoice.effective(launcher: "claude", model: "claude-haiku-5-5", effort: nil,
+                                               pick: nil, response: main, rule: .supervise, superviseResponse: supervise)
+        #expect(e == AssistantModelChoice.Effective(launcher: "team-api", model: "claude-opus-5-5",
+                                                    effort: "high", source: .defaultValue))
+        // While the separate purpose is loading it still inherits Main chat, as the hub does until set apart.
+        let loading = AssistantModelChoice.effective(launcher: "claude", model: "claude-haiku-5-5", effort: nil,
+                                                     pick: nil, response: main, rule: .supervise)
+        #expect(loading.model == "claude-haiku-5-5")
+        // An answered purpose with no override falls back to this session, not to an unrelated Main-chat model.
+        let empty = AssistantModelChoice.effective(launcher: "side", model: "side-model", effort: "low",
+                                                   pick: nil, response: main, rule: .supervise, superviseResponse: response())
+        #expect(empty.launcher == "side" && empty.model == "side-model" && empty.effort == "low")
+    }
+
+    @Test func onlyTheSupervisorPanelReadsTheSupervisePurpose() async {
+        let key = SessionKey(group: "", machineID: "box", sessionID: "s")
+        let main = response()
+        let supervise = response(default: def(launcher: "team-api", model: "claude-opus-5-5"))
+        var superviseReads = 0
+        func deps() -> AssistantModelPanelModel.Deps {
+            .init(launchers: { _, _ in main }, supervise: { _, _ in superviseReads += 1; return supervise },
+                  models: { _, _, _ in LauncherModels(agent: "claude", models: []) },
+                  keep: { _, _ in true }, drop: { _ in true })
+        }
+        let mainPanel = AssistantModelPanelModel(key: key, machine: key.machineRef, deps: deps())
+        await mainPanel.load()
+        #expect(superviseReads == 0)
+        let supervisorPanel = AssistantModelPanelModel(key: key, machine: key.machineRef, defaultRule: .supervise, deps: deps())
+        await supervisorPanel.load()
+        #expect(superviseReads == 1)
+        #expect(supervisorPanel.superviseResponse?.default?.launcher == "team-api")
+    }
+
     // MARK: Sheet ticking and pick building
 
     @Test func selectedModelTicksOnlyTheEffectiveLauncher() {
@@ -148,6 +195,42 @@ struct AssistantModelChoiceTests {
         ], locked: nil, machine: nil)
         #expect(AssistantModelChoice.selectedModel(
             e, launcher: "claude", aliases: AssistantModelChoice.selectionAliases(withDefault)) == "opus")
+    }
+
+    @Test func theModelRouteBackActionNamesWhatTheConversationFollows() {
+        #expect(AssistantModelChoice.followsDefault(isMain: true, supervisor: false, leader: false, origin: nil))
+        #expect(AssistantModelChoice.followsDefault(isMain: false, supervisor: true, leader: false, origin: nil))
+        #expect(AssistantModelChoice.followsDefault(isMain: false, supervisor: false, leader: true, origin: nil))
+        #expect(AssistantModelChoice.followsDefault(isMain: false, supervisor: false, leader: false, origin: "task"))
+        #expect(!AssistantModelChoice.followsDefault(isMain: false, supervisor: false, leader: false, origin: "manual"))
+    }
+
+    @Test func foldedAliasesTickTheConcreteRowAndMakeItANoOp() {
+        let list = LauncherModels(agent: "claude", models: [
+            AgentModel(id: "default", name: "Default", resolved: "claude-opus-5-5", isDefault: true),
+            AgentModel(id: "claude-opus-5-5", name: "Opus 5.5", aliases: ["opus", "fable", "sonnet", "haiku"]),
+            AgentModel(id: "kiro/claude-opus-5-5", name: "Opus 5.5 (kiro)"),
+        ], locked: nil, machine: nil)
+        let aliases = AssistantModelChoice.selectionAliases(list)
+        let canonical = AssistantModelChoice.Effective(launcher: "claude", model: "claude-opus-5-5", effort: "high", source: .pick)
+        #expect(AssistantModelChoice.selectedModel(canonical, launcher: "claude", aliases: aliases) == "claude-opus-5-5",
+                "a concrete exact ID wins over Default resolving to the same model")
+        for saved in ["opus", "fable", "sonnet", "haiku"] {
+            let current = AssistantModelChoice.Effective(launcher: "claude", model: saved, effort: "high", source: .pick)
+            #expect(AssistantModelChoice.selectedModel(current, launcher: "claude", aliases: aliases) == "claude-opus-5-5")
+            #expect(AssistantModelChoice.pick(launcher: "claude", model: "claude-opus-5-5", effort: "high",
+                                              current: current, aliases: aliases) == nil)
+        }
+        let current = AssistantModelChoice.Effective(launcher: "claude", model: "sonnet", effort: "high", source: .pick)
+        #expect(AssistantModelChoice.pick(launcher: "claude", model: "kiro/claude-opus-5-5", effort: "high",
+                                          current: current, aliases: aliases)
+                == ModelPick(launcher: "claude", model: "kiro/claude-opus-5-5", effort: "high"))
+
+        let collision = LauncherModels(agent: "claude", models: [
+            AgentModel(id: "claude-opus-5-5", name: "Folded", aliases: ["sonnet"]),
+            AgentModel(id: "sonnet", name: "Exact"),
+        ], locked: nil, machine: nil)
+        #expect(AssistantModelChoice.selectionAliases(collision)["sonnet"] == "sonnet", "an exact row ID beats an alias")
     }
 
     @Test func lockedLaunchersKeepOnlyTheirSelectableDefault() {

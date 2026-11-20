@@ -7,11 +7,17 @@ nonisolated enum AssistantModelChoice {
     enum Source: Equatable {
         /// The conversation's own pick (`model_pick`).
         case pick
-        /// Model configuration › Main chat's effective value (the picker's `default`).
+        /// The effective value of the model purpose this conversation follows.
         case defaultValue
+        /// Another Persona conversation keeps the setup it started with.
+        case own
         /// Only what the running process last reported, while the picker has not answered.
         case running
     }
+
+    /// Which setup a conversation with no saved pick runs on. Main chat, leaders and task conversations follow Main
+    /// chat; the supervisor has its own model purpose; every other Persona conversation keeps its own setup.
+    enum DefaultRule: Equatable { case main, own, supervise }
 
     /// What the conversation's next message runs on.
     struct Effective: Equatable {
@@ -23,22 +29,38 @@ nonisolated enum AssistantModelChoice {
         var picked: Bool { source == .pick }
     }
 
-    /// The setup the next message runs on, as the hub decides it (the web's `assistantSetup` for the main chat).
-    /// A pick wins; with none, the Main chat default (`response.default`) names the launcher and its model; before the
-    /// picker answers, the running session is all there is.
-    static func effective(session: Session?, response: APIClient.LaunchersResponse?) -> Effective {
+    /// The setup the next message runs on, as the hub decides it (the web's `assistantSetup`). A pick wins; with none,
+    /// the conversation's default rule decides between Main chat, `assistant.supervise`, and what a side chat started
+    /// with. Before the picker answers, the running session is all there is.
+    static func effective(session: Session?, response: APIClient.LaunchersResponse?,
+                          rule: DefaultRule = .main, superviseResponse: APIClient.LaunchersResponse? = nil) -> Effective {
         effective(launcher: session?.launcher, model: session?.model, effort: session?.effort,
-                  pick: session?.modelPick, response: response)
+                  pick: session?.modelPick, response: response, rule: rule, superviseResponse: superviseResponse)
     }
 
     /// Core resolution on plain fields, so the rule is unit-tested without building a whole `Session`.
     static func effective(launcher: String?, model: String?, effort: String?, pick: ModelPick?,
-                          response: APIClient.LaunchersResponse?) -> Effective {
+                          response: APIClient.LaunchersResponse?, rule: DefaultRule = .main,
+                          superviseResponse: APIClient.LaunchersResponse? = nil) -> Effective {
         if let pick, !pick.launcher.isEmpty {
             return Effective(launcher: pick.launcher, model: pick.model?.emptyAsNil,
                              effort: pick.effort?.emptyAsNil ?? effort, source: .pick)
         }
-        let def = response?.default
+        if rule == .own {
+            // A side conversation does not silently change when Main chat's setting changes. Its session's launcher
+            // and model remain authoritative, including before or without a picker answer.
+            return Effective(launcher: launcher?.emptyAsNil ?? "claude", model: model?.emptyAsNil,
+                             effort: effort?.emptyAsNil, source: .own)
+        }
+        let def: LauncherDefault?
+        switch rule {
+        case .main: def = response?.default
+        case .supervise:
+            // Nil means the separate purpose has not answered yet, so Main chat remains the temporary inherited value.
+            // An answered purpose with no default falls back to the session, never to an unrelated Main-chat model.
+            def = superviseResponse.map(\.default) ?? (superviseResponse == nil ? response?.default : nil)
+        case .own: def = nil // returned above
+        }
         let provider = def?.launcher?.emptyAsNil
             ?? launcher?.emptyAsNil
             ?? "claude"
@@ -48,6 +70,11 @@ nonisolated enum AssistantModelChoice {
         return Effective(launcher: provider, model: defaultModel,
                          effort: effort ?? def?.effort?.emptyAsNil,
                          source: response == nil ? .running : .defaultValue)
+    }
+
+    /// Which way back the model-route remedy names: these conversations follow a default; a side conversation undoes its pick.
+    static func followsDefault(isMain: Bool, supervisor: Bool, leader: Bool, origin: String?) -> Bool {
+        isMain || supervisor || leader || origin == "task"
     }
 
     /// The model id ticked for `launcher` in the sheet: nil when the setup runs on another launcher, "" on its Default
@@ -66,11 +93,20 @@ nonisolated enum AssistantModelChoice {
         for model in list?.models ?? [] {
             let row = model.isDefault ? "" : model.id
             let key = model.id.lowercased()
-            if out[key] == nil { out[key] = row }
+            if out[key] == nil || !model.isDefault { out[key] = row }
             if let resolved = model.resolved {
                 // Default and its concrete alias often resolve to the same ID: the concrete alias wins, as on the web.
                 let resolvedKey = resolved.lowercased()
                 if out[resolvedKey] == nil || !model.isDefault { out[resolvedKey] = row }
+            }
+        }
+        // Folded spellings select their containing row too. IDs and resolved values win over aliases, including a
+        // synthetic collision where an early alias is also a later row's own ID; aliases never become new rows.
+        for model in list?.models ?? [] {
+            let row = model.isDefault ? "" : model.id
+            for alias in model.aliases ?? [] {
+                let key = alias.lowercased()
+                if out[key] == nil { out[key] = row }
             }
         }
         return out
@@ -161,12 +197,21 @@ private extension String {
 final class AssistantModelPanelModel {
     struct Deps {
         var launchers: (_ machine: MachineRef, _ refresh: Bool) async throws -> APIClient.LaunchersResponse
+        var supervise: (_ machine: MachineRef, _ refresh: Bool) async throws -> APIClient.LaunchersResponse = { _, _ in
+            APIClient.LaunchersResponse(launchers: [], default: nil, unavailable: nil)
+        }
         var models: (_ machine: MachineRef, _ launcher: String, _ refresh: Bool) async throws -> LauncherModels
         var keep: (_ key: SessionKey, _ pick: ModelPick) async -> Bool
         var drop: (_ key: SessionKey) async -> Bool
         static var live: Deps {
             Deps(
                 launchers: { try await AppModel.shared.assistantLaunchers($0, refresh: $1) },
+                supervise: { machine, _ in
+                    guard let client = AppModel.shared.api(machine.group)?.currentAssistantSettings() else {
+                        return APIClient.LaunchersResponse(launchers: [], default: nil, unavailable: nil)
+                    }
+                    return try await client.launcherList(machine: machine.id, purpose: "assistant.supervise")
+                },
                 models: { try await AppModel.shared.api($0.group)?.launcherModels(machine: $0.id, launcher: $1, refresh: $2, purpose: "assistant")
                     ?? LauncherModels(agent: "", models: [], locked: nil, machine: nil) },
                 keep: { await AppModel.shared.keepConversationModel($0, pick: $1) },
@@ -176,7 +221,9 @@ final class AssistantModelPanelModel {
 
     let key: SessionKey
     let machine: MachineRef
+    let defaultRule: AssistantModelChoice.DefaultRule
     private(set) var response: APIClient.LaunchersResponse?
+    private(set) var superviseResponse: APIClient.LaunchersResponse?
     private(set) var offeredLauncherNames: Set<String> = []
     private(set) var unavailableLauncherNames: Set<String> = []
     /// Each launcher's `/model` list, by launcher name.
@@ -192,9 +239,10 @@ final class AssistantModelPanelModel {
     private(set) var busyLauncher: String?
     @ObservationIgnored private let deps: Deps
 
-    init(key: SessionKey, machine: MachineRef, deps: Deps = .live) {
+    init(key: SessionKey, machine: MachineRef, defaultRule: AssistantModelChoice.DefaultRule = .main, deps: Deps = .live) {
         self.key = key
         self.machine = machine
+        self.defaultRule = defaultRule
         self.deps = deps
     }
 
@@ -220,6 +268,9 @@ final class AssistantModelPanelModel {
             response = r
             offeredLauncherNames = Set(r.launchers.map(\.name))
             unavailableLauncherNames = Set((r.unavailable ?? []).map(\.name))
+            if defaultRule == .supervise {
+                superviseResponse = try await deps.supervise(machine, refresh)
+            }
         } catch {
             guard !error.isCancellation else { return }
             loadError = error.shown
@@ -256,7 +307,8 @@ final class AssistantModelPanelModel {
 
     /// Keeps `model` (nil: its default) for `launcher`; returns whether the hub took it.
     func choose(launcher: String, model: String?, session: Session?) async -> Bool {
-        let current = AssistantModelChoice.effective(session: session, response: response)
+        let current = AssistantModelChoice.effective(session: session, response: response, rule: defaultRule,
+                                                     superviseResponse: superviseResponse)
         let launcherInfo = response?.launchers.first { $0.name == launcher }
         let fallback = launcherInfo.flatMap {
             AssistantModelChoice.configuredFallback($0, models: models(launcher), locked: list(launcher)?.locked)
@@ -288,7 +340,34 @@ struct AssistantModelSheet: View {
     @State private var typingFor: String?
 
     private var effective: AssistantModelChoice.Effective {
-        AssistantModelChoice.effective(session: session, response: panel.response)
+        AssistantModelChoice.effective(session: session, response: panel.response, rule: panel.defaultRule,
+                                       superviseResponse: panel.superviseResponse)
+    }
+
+    private var backTitle: String {
+        String(localized: panel.defaultRule == .own ? "Undo pick" : "Follow default")
+    }
+
+    private var backFooter: String {
+        switch panel.defaultRule {
+        case .own:
+            String(localized: "This conversation has its own model. Undoing the pick makes its next messages use the setup it started with again.")
+        case .supervise:
+            String(localized: "This conversation has its own model. Following the default makes its next messages use Model configuration › Background supervisor again.")
+        case .main:
+            String(localized: "This conversation has its own model. Following the default makes its next messages use Model configuration › Main chat again.")
+        }
+    }
+
+    private var missingRecovery: String {
+        switch panel.defaultRule {
+        case .own:
+            String(localized: "This conversation's launcher is no longer available. Undo the pick or choose another launcher.")
+        case .supervise:
+            String(localized: "This conversation's launcher is no longer available. Follow the Background supervisor default or choose another launcher.")
+        case .main:
+            String(localized: "This conversation's launcher is no longer available. Follow the Main Chat default or choose another launcher.")
+        }
     }
 
     var body: some View {
@@ -310,12 +389,12 @@ struct AssistantModelSheet: View {
                                 if await panel.followDefault() { dismiss() }
                             }
                         } label: {
-                            Label(String(localized: "Follow Main Chat default"), systemImage: Theme.Icon.clearContext)
+                            Label(backTitle, systemImage: Theme.Icon.clearContext)
                                 .lineLimit(1)
                         }
                         .disabled(panel.busyLauncher != nil)
                     } footer: {
-                        Text(String(localized: "This conversation has its own model. Following the default makes its next messages use Model configuration › Main chat again."))
+                        Text(backFooter)
                     }
                 }
                 if panel.isMissing(effective.launcher) {
@@ -326,7 +405,7 @@ struct AssistantModelSheet: View {
                                 Text(SessionModes.modelName(model) ?? model)
                                     .font(Theme.Font.label).foregroundStyle(.secondary)
                             }
-                            Text("This conversation's launcher is no longer available. Follow the Main Chat default or choose another launcher.")
+                            Text(missingRecovery)
                                 .font(Theme.Font.label).foregroundStyle(.secondary)
                         }
                         .accessibilityIdentifier("assistantModel.missing.\(effective.launcher)")

@@ -50,6 +50,10 @@ struct TaskDetailSheet: View {
             // it and nothing led back (#2625). The page's own headers below hide it where they are.
         }
         .confirmTaskRemoval($removing)
+        .tabActiveTask(id: todoID.flatMap { store.todos[$0] } != nil) {
+            guard let todo = todoID.flatMap({ store.todos[$0] }) else { return }
+            await store.loadStartRemedy(todo)
+        }
         .presentationDetents([.fraction(0.6), .large], selection: $detent)
         .presentationDragIndicator(.visible)
         .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.6)))
@@ -90,8 +94,17 @@ struct TaskDetailSheet: View {
                 Divider()
                 Group {
                     if let failure = store.startFailure(todo) ?? todo.agents.first?.startError {
-                        EmptyStateView(symbol: Theme.Icon.errorFilled, title: String(localized: "The agent didn't start"), message: failure,
-                                       action: (title: String(localized: "Remove Task"), run: { store.askRemove(todo, pending: $removing) }))
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: Theme.Space.m) {
+                                let summary = store.startFailureSummary(todo) ?? failure
+                                ReadinessCard(title: String(localized: "The agent didn't start"), detail: summary, tone: .danger,
+                                              details: summary == failure ? [] : [failure])
+                                if let task = store.planTask(todo) { TaskShellQuestion(todo: todo, task: task) }
+                                TaskRetryButtons(todo: todo, remove: { store.askRemove(todo, pending: $removing) })
+                            }
+                            .padding(Theme.Space.page)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     } else {
                         EmptyStateView(symbol: Theme.Icon.working, title: String(localized: "Starting the agent"), message: String(localized: "Once it's up, its chat appears here."))
                     }
