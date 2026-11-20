@@ -184,6 +184,7 @@ type Service struct {
 	search       searchIndex          // search_index.go
 
 	deletedConversations conversationDeleteBook // conversation_delete.go
+	convSpaces           convSpaceBook          // conversation_space.go
 	conversationWrites   sync.RWMutex
 
 	modelPicks modelPickBook // model_pick.go
@@ -968,6 +969,8 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.drainRelays(d.MachineID, d.Sessions)
 	s.undeliveredSeen(d)                      // kept owner messages go once their conversation runs again (undelivered.go)
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)
+	// The conversations' spaces, before what may tell an extension of a to-do (conversation_space.go).
+	s.conversationSpacesListed(d.MachineID, d.Sessions)
 	s.todosSessionsChanged(ctx, d)
 	s.todoRunsChanged(d.MachineID) // a to-do's view may file it elsewhere now (todo_view_push.go)
 	s.taskStageSessions(ctx, d)

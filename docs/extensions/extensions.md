@@ -802,7 +802,9 @@ Whatever scopes it was granted, an extension's token never sees:
   whose space cannot be told. `agent.finished` is not sent of such a chat either.
 - **Private and health cards**: a card a Just me turn raised (`private`, `docs/assistant/meeting-minutes.md` "Just me"), a card of
   the health space (by its directory or its conversation's space), and a card without a directory whose conversation cannot be found
-  are left out of `GET /api/v1/interactions` and `/interactions/history`, and `agent.needs_you` is not sent of them.
+  are left out of `GET /api/v1/interactions` and `/interactions/history`, and `agent.needs_you` is not sent of them. An extension
+  page's own confirmation card (`confirm` on an action) names no computer or directory, so it is one of them: the page's action
+  already waits for its answer.
 - **Values typed into a card's fields** (`resolution.values` in the history), and the answer to a card: a `resolve` of a card
   answered already says so (`already`) without its `resolution`.
 - **A to-do that may hold the health space's words, and a to-do's answered cards** (#10941;
@@ -812,17 +814,24 @@ Whatever scopes it was granted, an extension's token never sees:
   included), when any run it ever had works in the space (taken off it or not, done or not), and when one of its steps
   or a to-do on its brief may (its row carries their asks, log and lineage). This is decided from what the manager keeps
   of the to-do (the directory each run's link keeps, the conversations its history was written in, the record of a
-  deleted one), not only from what is live, and it fails closed: a conversation the hub does not list and has no
-  deletion record of, a history whose conversations cannot be read, or a run whose link keeps no directory and whose
-  session cannot be read, counts too. The one rule decides every way a to-do leaves its manager: such a to-do is not on
-  `GET /api/v1/todos`, every route of it answers 404 `todo_not_found` as for a to-do that does not exist (its item,
-  timeline, decisions and repositories, and every write: `PATCH`, its runs, spaces, decisions and repositories), and
-  `todo.changed` and `todo.decision` are not sent of it. Nor can a token take onto a to-do of its own a run of the
-  space, a run its computer does not list or one of such a to-do, or a space such a to-do has or such a run is in
-  (404). Every to-do it is shown reads as a device reads it, and the list's `counts` are a device's, which count, as
-  numbers, the to-dos it is not shown too. What told a to-do's history stays: a run's link keeps a directory in the
+  deleted one, and the space the manager noted of each conversation when it started it or a computer listed it), not
+  only from what is live, so a chat its computer no longer lists (a quiet chat is listed for a week, and only the 100
+  newest) or has not listed since a restart is told by its noted space. The chats unfinished tasks came from or report
+  to are listed however quiet (the assistant's profile `keep`), so one quiet since before a manager noted spaces is
+  noted too. It fails closed: a conversation no computer lists, never noted and with no deletion record, a history
+  whose conversations cannot be read, or a run whose link keeps no directory and whose session cannot be read, counts
+  too. The one rule decides every way a to-do leaves its manager: such a to-do is not on `GET /api/v1/todos`, every
+  route of it answers 404 `todo_not_found` as for a to-do that does not exist (its item, timeline, decisions and
+  repositories, and every write: `PATCH`, its runs, spaces, decisions and repositories), and `todo.changed` and
+  `todo.decision` are not sent of it; one that only cannot be told yet waits rather than being dropped, and is sent once
+  it can be told (judged again after 30 seconds, then less often, up to every 10 minutes; at most 512 wait). Nor can a
+  token take onto a to-do of its own a run of the space, one of such a to-do, or a space such a to-do has or such a run
+  is in (404), nor a run its computer does not list yet (409 `agent_not_listed`, with `Retry-After`: an Agent just
+  started is answered before its computer lists it, so try again). Every to-do it is shown reads as a device reads it,
+  and the list's `counts` are a device's, which count, as numbers, the to-dos it is not shown too. What told a to-do's history stays: a run's link keeps a directory in the
   space when the run's shell leaves it, and a space's unlink, move or void releases such a link rather than delete it.
-  Such a task's outcome is not written into a knowledge-base project's timeline either, where `kb.read` would read it.
+  The outcome of a task the space's words are known to be in is not written into a knowledge-base project's timeline
+  either, where `kb.read` would read it; one that only cannot be told is written, as it is the owner's own record.
   A chat's feed (`assistant.ask`) leaves out the same: the items, plans and task cards of such a to-do, a plan with a task in
   the space, every answered card, and the digests that gather many to-dos and cards at once (a routine's `brief`, the
   Today card).

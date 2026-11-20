@@ -93,28 +93,10 @@ func healthRun(c proto.Session) bool {
 }
 
 // conversationSpace is the space of the conversation a to-do names, id ("" the assistant's own, as for no
-// conversation), and whether it could be told. An assistant conversation's as the assistant's machine lists it
-// (selfSpace), the main conversation's also as the computer it is routed to lists it (Settings.mainRouteMachine: one
-// kept on the assistant's former computer), else as the record of its deletion keeps it; a task leader's agent
-// (task_leader.go, whose workers' to-dos it opens and supervises) as its run's (leaderSpace). One neither knows (the
-// node not connected yet, the call failed, the conversation no longer listed) is not told.
+// conversation), and whether it could be told, as conversationSpaces tells it.
 func (s *Service) conversationSpace(ctx context.Context, id string) (string, bool) {
-	if machine, sid, ok := parseLeaderRef(id); ok && s.isLeaderSession(machine, sid) {
-		return s.leaderSpace(ctx, s.canonical(machine), sid)
-	}
-	if space, ok := s.selfSpace(ctx, id); ok {
-		return space, true
-	}
-	set := s.settings(ctx)
-	if routed := set.mainRouteMachine(); id == set.Main && routed != set.MachineID {
-		if c, ok := s.session(ctx, routed, id); ok {
-			return spaceOf(c), true
-		}
-	}
-	if row, ok, err := s.deletedConversation(ctx, set.MachineID, id); err == nil && ok {
-		return row.Space, true
-	}
-	return "", false
+	t := s.conversationSpaces(ctx, []string{id})[id]
+	return t.space, t.known
 }
 
 // leaderSpace is the space of task leader agent machine/sid, and whether it could be told: the health space's when any

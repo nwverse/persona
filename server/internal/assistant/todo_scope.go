@@ -22,35 +22,30 @@ import (
 // space. One rule (todosHidden) decides every way a to-do leaves the manager for an extension: GET /api/v1/todos leaves
 // it out (extensionRows), every route of one to-do (/api/v1/todos/{id}…) answers 404 as for a to-do that does not
 // exist, a write as a read (todoScoped), and neither todo.changed nor todo.decision is sent of it (todoChangedFlush,
-// todoDecisionHidden). A
-// to-do is hidden with any of its steps, whose asks and line its row's view carries, and with any to-do on its brief,
-// whose log and lineage its row carries, so every row an extension is shown is a device's, byte for byte; the list's
-// counts are a device's. Nor can an extension take a run in the space, or one off a to-do it is not shown, onto one
+// todoDecisionVerdict); one whose verdict cannot be told yet (todoUntold) waits for it instead. A to-do is hidden
+// with any of its steps, whose asks and line its row's view carries, and with any to-do on its brief, whose log and
+// lineage its row carries, so every row an extension is shown is a device's, byte for byte; the list's counts are a
+// device's. Nor can an extension take a run in the space, or one off a to-do it is not shown, onto one
 // of its own (todoTakeRefused), and what told a to-do's history stays: a link keeps a directory in the space
-// (writeTodoAgentLink), and a space's unlink, move or void releases such a link rather than delete it
-// (keepHealthLinks).
+// (writeTodoAgentLink), and a space's unlink, move or void releases such a link rather than delete it, in the same
+// write (healthLinksOf).
 
 // feedConversationStore reads the conversations of every to-do's history in one query (db.FeedConversations).
 type feedConversationStore interface {
 	FeedConversations(ctx context.Context, refs, kinds []string) (map[string][]string, error)
 }
 
-// healthLinkStore keeps a to-do's links in the health space when the space they came through goes (keepHealthLinks).
-type healthLinkStore interface {
-	KeepTodoAgents(ctx context.Context, todoID, machineID string, sessionIDs []string, at time.Time) error
-}
-
-// The database tells and keeps both: a store that is it but lacked one would hide every to-do from an extension, or
-// lose a link that told one.
-var (
-	_ feedConversationStore = (*db.DB)(nil)
-	_ healthLinkStore       = (*db.DB)(nil)
-)
+// The database tells it: a store that is it but lacked it would hide every to-do from an extension.
+var _ feedConversationStore = (*db.DB)(nil)
 
 var errNoFeedConversations = errors.New("this store cannot tell the conversations of a to-do's history")
 
-// todoNoticeTimeout bounds the reads that decide whether events are told (todoChangedFlush, todoDecisionHidden).
+// todoNoticeTimeout bounds the reads that decide whether events are told (todoChangedFlush, todoDecisionVerdict).
 const todoNoticeTimeout = 10 * time.Second
+
+// todoTakeRetrySeconds is the Retry-After of an extension's take of a run its computer does not list yet: a computer
+// lists a session it just started within a few seconds.
+const todoTakeRetrySeconds = 2
 
 // todoEvidence is what of one to-do todosHidden decides by, copied under the to-dos' lock.
 type todoEvidence struct {
@@ -67,24 +62,46 @@ func evidenceOf(t *Todo) *todoEvidence {
 	return e
 }
 
-// todosHidden are those of to-dos ids an extension's token is not shown, by id (other to-dos it had to decide too).
-// A to-do's own history may hold the health space's words when a conversation it came from or was written in is a
+// todoVerdict is whether an extension's token is shown a to-do (todoVerdicts).
+type todoVerdict uint8
+
+const (
+	// todoShown: nothing of its history is in the health space.
+	todoShown todoVerdict = iota
+	// todoUntold: nothing says its history is in the space, but a conversation or a run of it cannot be told now (not
+	// listed, never noted, unreadable). An extension is not shown it, and what would tell it of the to-do waits for
+	// the verdict to be told (todoChangedFlush, todoSendEvents); the owner's own records do not (outcomeLog).
+	todoUntold
+	// todoHidden: its history holds, or may hold, the space's words for good (a conversation or a run of the space, a
+	// step or a to-do on its brief that does), or it is no longer kept to be told.
+	todoHidden
+)
+
+// todosHidden are those of to-dos ids an extension's token is not shown, by id (other to-dos it had to decide too):
+// todoVerdicts' that are not todoShown.
+func (s *Service) todosHidden(ctx context.Context, ids []string, read map[[2]string]proto.Session) map[string]bool {
+	v := s.todoVerdicts(ctx, ids, nil, read)
+	hidden := make(map[string]bool, len(v))
+	for id, verdict := range v {
+		hidden[id] = verdict != todoShown
+	}
+	return hidden
+}
+
+// todoVerdicts are whether an extension's token is shown each of to-dos ids, by id (other to-dos it had to decide
+// too), with gone the to-dos no longer kept as they last were (a deletion's todo.changed, a closed task's outcome). A
+// to-do's own history may hold the health space's words when a conversation it came from or was written in is a
 // health conversation (its origin, its supervisor, those of the feed's items about it, todoFeedConversations), or one
 // of the runs it ever had works there, its link released, dismissed (which the apps' row leaves out) or done included;
 // and a to-do is hidden with any of its steps and any to-do on its brief (above). It is decided from the to-dos as the
 // manager keeps them, never only from what is live now, and it fails closed as /interactions/history does
-// (extensionHiddenCards): a conversation whose space cannot be told (not listed, and no deletion record keeps it), a
-// history whose conversations cannot be read, or a run whose link keeps no directory and whose session cannot be read,
-// hides it, and so does a to-do asked about that is no longer kept. read are sessions already read of the active runs of
-// the open to-dos (todoFactsOf: a list's view), by computer and id; the others its views would read are read in one
-// call a computer, so the verdict is the same whichever route asks, and the conversations are told at once
-// (unshownConversations).
-func (s *Service) todosHidden(ctx context.Context, ids []string, read map[[2]string]proto.Session) map[string]bool {
-	return s.todosHiddenOf(ctx, ids, nil, read)
-}
-
-// todosHiddenOf is todosHidden, with gone the to-dos no longer kept as they last were (a deletion's todo.changed).
-func (s *Service) todosHiddenOf(ctx context.Context, ids []string, gone map[string]Todo, read map[[2]string]proto.Session) map[string]bool {
+// (extensionHiddenCards): a conversation whose space cannot be told (conversationSpaces: not listed, never noted, no
+// deletion record), a history whose conversations cannot be read, or a run whose link keeps no directory and whose
+// session cannot be read, makes it todoUntold, and a to-do asked about that is no longer kept todoHidden. read are
+// sessions already read of the active runs of the open to-dos (todoFactsOf: a list's view), by computer and id; the
+// others its views would read are read in one call a computer, so the verdict is the same whichever route asks, and
+// the conversations are told at once.
+func (s *Service) todoVerdicts(ctx context.Context, ids []string, gone map[string]Todo, read map[[2]string]proto.Session) map[string]todoVerdict {
 	briefs := s.briefLinksNow()
 	asked := make(map[string]bool, len(ids))
 	for _, id := range ids {
@@ -124,25 +141,33 @@ func (s *Service) todosHiddenOf(ctx context.Context, ids []string, gone map[stri
 	}
 	slices.Sort(decided)
 
-	// own: what each to-do's own history says. A brief's to-do since deleted says nothing; one asked about hides.
-	own := make(map[string]bool, len(ev))
+	// own: what each to-do's own history says, one for every to-do decided (a caller tells one decided from one it
+	// did not ask about). A brief's to-do since deleted says nothing; one asked about is hidden.
+	own := make(map[string]todoVerdict, len(ev))
+	raise := func(id string, v todoVerdict) { own[id] = max(own[id], v) }
 	for _, id := range decided {
+		own[id] = todoShown
 		e := ev[id]
 		if e == nil {
-			own[id] = asked[id]
+			if asked[id] {
+				own[id] = todoHidden
+			}
 			continue
 		}
 		// Where a run started, as its link keeps it, is its space for good.
-		own[id] = slices.ContainsFunc(e.links, func(a TodoAgent) bool {
+		if slices.ContainsFunc(e.links, func(a TodoAgent) bool {
 			c, seen := read[[2]string{a.MachineID, a.SessionID}]
 			return identity.InHealthSpace(a.Cwd) || seen && healthRun(c)
-		})
+		}) {
+			own[id] = todoHidden
+		}
 	}
-	undecided := func() []string {
-		return slices.DeleteFunc(slices.Clone(decided), func(id string) bool { return ev[id] == nil || own[id] })
+	// open are the to-dos nothing has hidden yet: those that are only untold are read on, for what would hide them.
+	open := func() []string {
+		return slices.DeleteFunc(slices.Clone(decided), func(id string) bool { return ev[id] == nil || own[id] == todoHidden })
 	}
 	// Then the conversations they came from and those of their history.
-	if todos := undecided(); len(todos) > 0 {
+	if todos := open(); len(todos) > 0 {
 		feed, err := s.todoFeedConversations(ctx, todos)
 		if err != nil {
 			s.logf("todos: the conversations of their history: %v", err)
@@ -152,19 +177,24 @@ func (s *Service) todosHiddenOf(ctx context.Context, ids []string, gone map[stri
 			conversations = append(conversations, ev[id].conversations...)
 			conversations = append(conversations, feed[id]...)
 		}
-		var bad map[string]bool
-		if err == nil {
-			bad = s.unshownConversations(ctx, conversations)
-		}
+		bad := s.unshownConversations(ctx, conversations)
 		for _, id := range todos {
-			own[id] = err != nil || slices.ContainsFunc(ev[id].conversations, func(c string) bool { return bad[c] }) ||
-				slices.ContainsFunc(feed[id], func(c string) bool { return bad[c] })
+			if err != nil {
+				raise(id, todoUntold)
+			}
+			for _, c := range append(slices.Clone(ev[id].conversations), feed[id]...) {
+				if health, unshown := bad[c]; health {
+					raise(id, todoHidden)
+				} else if unshown {
+					raise(id, todoUntold)
+				}
+			}
 		}
 	}
 	// Last their runs, each computer asked once: the active runs of the open ones the read did not read, and every run
 	// whose link keeps no directory. One whose link keeps a directory outside the space is told by it when its computer
 	// does not list it; one that keeps none cannot be told then.
-	todos, want := undecided(), map[string]map[string]bool{}
+	todos, want := open(), map[string]map[string]bool{}
 	for _, id := range todos {
 		for _, a := range ev[id].links {
 			if _, seen := read[[2]string{a.MachineID, a.SessionID}]; !seen && (a.Cwd == "" || ev[id].open && a.active()) {
@@ -188,73 +218,54 @@ func (s *Service) todosHiddenOf(ctx context.Context, ids []string, gone map[stri
 		}
 	}
 	for _, id := range todos {
-		own[id] = slices.ContainsFunc(ev[id].links, func(a TodoAgent) bool {
+		for _, a := range ev[id].links {
 			run := [2]string{a.MachineID, a.SessionID}
 			if _, seen := read[run]; seen {
-				return false // told above
+				continue // told above
 			}
-			c, ok := listed[run]
-			return ok && healthRun(c) || !ok && a.Cwd == ""
-		})
+			switch c, ok := listed[run]; {
+			case ok && healthRun(c):
+				raise(id, todoHidden)
+			case !ok && a.Cwd == "":
+				raise(id, todoUntold)
+			}
+		}
 	}
 
-	// A to-do is hidden with its steps and the to-dos on its brief.
-	hidden := maps.Clone(own)
+	// A to-do is hidden with its steps and the to-dos on its brief, as each of them is.
+	verdicts := maps.Clone(own)
 	for changed := true; changed; {
 		changed = false
 		for _, id := range decided {
-			if hidden[id] || ev[id] == nil {
+			if ev[id] == nil {
 				continue
 			}
-			if slices.ContainsFunc(steps[id], func(c string) bool { return hidden[c] }) {
-				hidden[id], changed = true, true
-				continue
+			v := verdicts[id]
+			for _, c := range steps[id] {
+				v = max(v, verdicts[c])
 			}
 			for mate := range briefs.on[briefs.of[id]] {
-				if hidden[mate] {
-					hidden[id], changed = true, true
-					break
-				}
+				v = max(v, verdicts[mate])
+			}
+			if v != verdicts[id] {
+				verdicts[id], changed = v, true
 			}
 		}
 	}
-	return hidden
+	return verdicts
 }
 
 // unshownConversations are those of conversations (a to-do's origin, supervisor or history; "" the assistant's own)
-// that are health conversations or whose space cannot be told (conversationSpace), each told once: the assistant's
-// computer lists the ones it keeps in one call, and only one it does not list is told on its own (its main
-// conversation routed to another computer, the record of its deletion), as is a task leader's agent (leaderSpace).
+// that are health conversations (true) or whose space cannot be told (false), as conversationSpaces tells them all at
+// once; those of the assistant's own space are left out.
 func (s *Service) unshownConversations(ctx context.Context, conversations []string) map[string]bool {
-	bad, plain := map[string]bool{}, map[string]bool{}
-	for _, c := range conversations {
-		if _, ok := bad[c]; ok || c == "" || plain[c] {
-			continue
-		}
-		if machine, sid, ok := parseLeaderRef(c); ok && s.isLeaderSession(machine, sid) {
-			space, known := s.leaderSpace(ctx, s.canonical(machine), sid)
-			bad[c] = !known || space == SpaceHealth
-			continue
-		}
-		plain[c] = true
-	}
-	listed := map[string]proto.Session{}
-	if len(plain) > 0 {
-		if list, err := s.todoRunSessions(ctx, s.settings(ctx).MachineID, plain); err == nil {
-			for _, c := range list {
-				listed[c.SessionID] = c
-			}
+	out := map[string]bool{}
+	for c, t := range s.conversationSpaces(ctx, conversations) {
+		if !t.known || t.space == SpaceHealth {
+			out[c] = t.known
 		}
 	}
-	for c := range plain {
-		if l, ok := listed[c]; ok {
-			bad[c] = spaceOf(l) == SpaceHealth
-			continue
-		}
-		space, known := s.conversationSpace(ctx, c)
-		bad[c] = !known || space == SpaceHealth
-	}
-	return bad
+	return out
 }
 
 // todoFeedConversations are the conversations the feed's items about each of to-dos ids were written in, by to-do
@@ -333,17 +344,29 @@ func (s *Service) todoScoped(fn http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// todoDecisionHidden says whether event n is a todo.decision of a to-do an extension is not shown: it goes only to
-// extensions granted todos.read, so it is not sent at all. The queue's worker asks it, off the write that made the
-// decision; todoChangedFlush judges the todo.changed it tells the same way.
-func (s *Service) todoDecisionHidden(n todoNotice) bool {
+// todoDecisionVerdict is todoVerdicts' of the todo event n is a todo.decision of (todoShown for any other event): it
+// goes only to extensions granted todos.read, so it is not sent of a todo they are not shown, and waits while that
+// cannot be told. The queue's worker asks it, off the write that made the decision, and holds one whose todo has a
+// decision held already, so a todo's decisions keep their order; todoChangedFlush judges the todo.changed it tells the
+// same way.
+func (s *Service) todoDecisionVerdict(n todoNotice) todoVerdict {
 	p, ok := n.params.(assistantwire.TodoDecisionEvent)
 	if !ok {
-		return false
+		return todoShown
+	}
+	e := &s.tevents
+	e.qmu.Lock()
+	behind := slices.ContainsFunc(e.held, func(h todoNotice) bool {
+		d, ok := h.params.(assistantwire.TodoDecisionEvent)
+		return ok && d.ID == p.ID
+	})
+	e.qmu.Unlock()
+	if behind {
+		return todoUntold
 	}
 	ctx, cancel := context.WithTimeout(s.runCtx(), todoNoticeTimeout)
 	defer cancel()
-	return s.todosHidden(ctx, []string{p.ID}, nil)[p.ID]
+	return s.todoVerdicts(ctx, []string{p.ID}, nil, nil)[p.ID]
 }
 
 // todoTakeRefused says whether an extension's token may not take run c of computer mid onto a to-do (PUT
@@ -384,53 +407,46 @@ func (s *Service) spaceTakeRefused(ctx context.Context, id, mid, space string) b
 	})
 }
 
-// keepHealthLinks takes to-do id's links through space key (computer machine) whose directory is in the health space
-// off the space before its unlink, move or void deletes the others: they stay, released and dismissed as a run taken
-// off by hand is (the apps' row leaves them out, as it now has no such run), so what the to-do had stays told
-// (todosHidden). The caller holds todoBook.writing.
-func (s *Service) keepHealthLinks(ctx context.Context, id, machine, key string) error {
-	var sids []string
+// healthLinksOf are the links of to-do id through space key (computer machine) whose directory is in the health space,
+// kept at at: a space's unlink, move or void, which deletes the others, keeps them, in its own write (db.KeptLinks), so
+// what the to-do had stays told (todoVerdicts). The caller holds todoBook.writing.
+func (s *Service) healthLinksOf(id, machine, key string, at time.Time) db.KeptLinks {
+	keep := db.KeptLinks{At: at}
 	s.todos.mu.RLock()
 	if t := s.todos.todos[id]; t != nil {
 		for _, a := range t.Agents {
 			if a.Source == "space" && a.Via == key && a.MachineID == machine && identity.InHealthSpace(a.Cwd) {
-				sids = append(sids, a.SessionID)
+				keep.Sessions = append(keep.Sessions, a.SessionID)
 			}
 		}
 	}
 	s.todos.mu.RUnlock()
-	if len(sids) == 0 {
-		return nil
+	return keep
+}
+
+// keepLinksLocked takes to-do id's links keep names through space key off the space in memory once the store kept
+// them: released and dismissed as a run taken off by hand is (the apps' row leaves them out, as it now has no such
+// run). The caller holds the to-dos' lock.
+func (s *Service) keepLinksLocked(id, machine, key string, keep db.KeptLinks) {
+	t := s.todos.todos[id]
+	if t == nil || len(keep.Sessions) == 0 {
+		return
 	}
-	now := time.Now().UTC()
-	if st := s.todoDB(); st != nil {
-		keep, ok := st.(healthLinkStore)
-		if !ok {
-			return errors.New("this store cannot keep a to-do's links in the health space")
+	at := keep.At
+	for i := range t.Agents {
+		a := &t.Agents[i]
+		if a.Source != "space" || a.Via != key || a.MachineID != machine || !slices.Contains(keep.Sessions, a.SessionID) {
+			continue
 		}
-		if err := keep.KeepTodoAgents(ctx, id, machine, sids, now); err != nil {
-			return err
+		a.Source, a.Via = "manual", ""
+		if a.ReleasedAt == nil {
+			a.ReleasedAt = &at
 		}
-	}
-	s.todos.mu.Lock()
-	if t := s.todos.todos[id]; t != nil {
-		for i := range t.Agents {
-			a := &t.Agents[i]
-			if a.Source != "space" || a.Via != key || a.MachineID != machine || !slices.Contains(sids, a.SessionID) {
-				continue
-			}
-			a.Source, a.Via = "manual", ""
-			if a.ReleasedAt == nil {
-				a.ReleasedAt = &now
-			}
-			if a.DismissedAt == nil {
-				a.DismissedAt = &now
-			}
-			if run := [2]string{machine, a.SessionID}; s.todos.activeBySession[run] == id {
-				delete(s.todos.activeBySession, run)
-			}
+		if a.DismissedAt == nil {
+			a.DismissedAt = &at
+		}
+		if run := [2]string{machine, a.SessionID}; s.todos.activeBySession[run] == id {
+			delete(s.todos.activeBySession, run)
 		}
 	}
-	s.todos.mu.Unlock()
-	return nil
 }

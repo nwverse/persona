@@ -215,7 +215,8 @@ func TestTodoRowsToAnExtension(t *testing.T) {
 
 // An extension's list reads each computer at most once for the runs it decides by (their links keep no directory and
 // no view read them), whatever the number of to-dos, and nothing more than a device's does when every run is read
-// already or keeps its directory; the conversations the to-dos came from are told by one read of the assistant's
+// already or keeps its directory; the conversations the to-dos came from are told by the spaces the manager noted of
+// them (conversation_space.go) without reading the computer, and those it never noted by one read of the assistant's
 // computer, not one a conversation.
 func TestTodoListToAnExtensionReadsEachComputerOnce(t *testing.T) {
 	calls := func(e *todoEnv, from int) (lists, gets int) {
@@ -290,22 +291,38 @@ func TestTodoListToAnExtensionReadsEachComputerOnce(t *testing.T) {
 	t.Run("conversations", func(t *testing.T) {
 		e := newTodoEnv(t, nil)
 		var listed []proto.Session
-		for i := range 6 {
-			c := scopeSession(fmt.Sprint("chat", i), fmt.Sprint("Chat ", i), "")
-			c.Assistant = true
-			listed = append(listed, c, scopeSession(fmt.Sprint("s", i), fmt.Sprint("Letters ", i), "/home/owner/letters"))
-		}
-		e.sessions("server", listed...)
-		for i := range 6 {
-			task, err := e.s.createTaskTodo(context.Background(), fmt.Sprint("Answer the letters ", i), "", fmt.Sprint("chat", i), "", "")
-			if err != nil {
-				t.Fatal(err)
+		chats := func(from, to int) {
+			t.Helper()
+			for i := from; i < to; i++ {
+				c := scopeSession(fmt.Sprint("chat", i), fmt.Sprint("Chat ", i), "")
+				c.Assistant = true
+				listed = append(listed, c, scopeSession(fmt.Sprint("s", i), fmt.Sprint("Letters ", i), "/home/owner/letters"))
 			}
-			e.must("PUT", fmt.Sprintf("/api/v1/todos/%s/agents/server/s%d", task.ID, i), "")
-			e.must("PATCH", "/api/v1/todos/"+task.ID, `{"done":true}`)
 		}
+		tasks := func(from, to int) {
+			t.Helper()
+			for i := from; i < to; i++ {
+				task, err := e.s.createTaskTodo(context.Background(), fmt.Sprint("Answer the letters ", i), "", fmt.Sprint("chat", i), "", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				e.must("PUT", fmt.Sprintf("/api/v1/todos/%s/agents/server/s%d", task.ID, i), "")
+				e.must("PATCH", "/api/v1/todos/"+task.ID, `{"done":true}`)
+			}
+		}
+		chats(0, 6)
+		e.sessions("server", listed...) // noted from the list
+		tasks(0, 6)
 		device, _ := read(t, e, "", 6)
-		if ext, gets := read(t, e, roleExtension, 6); ext != device+1 || gets != 0 {
+		if ext, gets := read(t, e, roleExtension, 6); ext != device || gets != 0 {
+			t.Fatalf("an extension's list: %d sessions.list (a device's %d) and %d session.get, want as many lists and no get", ext, device, gets)
+		}
+		// Six more the computer lists that the manager never noted (no list of them came to it).
+		chats(6, 12)
+		e.f.setSessions("server", listed...)
+		tasks(6, 12)
+		device, _ = read(t, e, "", 12)
+		if ext, gets := read(t, e, roleExtension, 12); ext != device+1 || gets != 0 {
 			t.Fatalf("an extension's list: %d sessions.list (a device's %d) and %d session.get, want one more list and no get", ext, device, gets)
 		}
 	})
@@ -362,12 +379,17 @@ func TestTodoWritesOfAnExtensionToAHiddenTodo(t *testing.T) {
 		if err := json.Unmarshal(e.doAs(roleExtension, "POST", "/api/v1/todos", `{"title":"Sync"}`).Body.Bytes(), &own); err != nil || own.Todo.ID == "" {
 			t.Fatalf("an extension's to-do: %v", err)
 		}
-		for _, path := range []string{"/agents/server/h1", "/agents/server/h3", "/agents/server/s1", "/agents/server/gone", "/spaces/server/Journal"} {
+		for _, path := range []string{"/agents/server/h1", "/agents/server/h3", "/agents/server/s1", "/spaces/server/Journal"} {
 			w := e.doAs(roleExtension, "PUT", "/api/v1/todos/"+own.Todo.ID+path, "")
 			noneOf(t, "an extension's PUT "+path, w.Body.Bytes(), words...)
 			if w.Code != http.StatusNotFound {
 				t.Errorf("an extension takes %s onto its own to-do: %d %s", path, w.Code, w.Body)
 			}
+		}
+		// A run its computer does not list (yet: one just started is answered before it is listed): tried again later.
+		if w := e.doAs(roleExtension, "PUT", "/api/v1/todos/"+own.Todo.ID+"/agents/server/gone", ""); w.Code != http.StatusConflict ||
+			!strings.Contains(w.Body.String(), `"agent_not_listed"`) || w.Header().Get("Retry-After") == "" {
+			t.Errorf("an extension takes a run its computer does not list: %d %s %v", w.Code, w.Body, w.Header())
 		}
 		for _, id := range []string{hidden, spaced, handed.ID} {
 			if raw, _ := json.Marshal(todoNow(e.s, id)); !bytes.Equal(raw, before[id]) {

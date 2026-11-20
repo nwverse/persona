@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -275,7 +277,7 @@ func TestTodoSpaces(t *testing.T) {
 	_ = d.CreateTodo(ctx, TodoRow{ID: "td2", Title: "Todo 2", CreatedAt: now, UpdatedAt: now})
 
 	// 1. Link td1 to space "proj1"
-	oldID, err := d.LinkTodoSpace(ctx, "td1", "macbook", "proj1", now)
+	oldID, err := d.LinkTodoSpace(ctx, "td1", "macbook", "proj1", now, KeptLinks{})
 	if err != nil {
 		t.Fatalf("LinkTodoSpace: %v", err)
 	}
@@ -292,7 +294,7 @@ func TestTodoSpaces(t *testing.T) {
 	_, _ = d.LinkTodoAgentWithSource(ctx, "td1", "macbook", "s_manual", "S2", "/cwd", "claude", "", "manual", "", now)
 
 	// 2. Transfer "proj1" to td2
-	oldID, err = d.LinkTodoSpace(ctx, "td2", "macbook", "proj1", now.Add(time.Minute))
+	oldID, err = d.LinkTodoSpace(ctx, "td2", "macbook", "proj1", now.Add(time.Minute), KeptLinks{})
 	if err != nil {
 		t.Fatalf("LinkTodoSpace transfer: %v", err)
 	}
@@ -311,7 +313,7 @@ func TestTodoSpaces(t *testing.T) {
 	}
 
 	// 3. Rename space via hub
-	voided, err := d.RenameTodoSpace(ctx, "macbook", "proj1", "proj_renamed")
+	voided, err := d.RenameTodoSpace(ctx, "macbook", "proj1", "proj_renamed", KeptLinks{})
 	if err != nil || voided {
 		t.Fatalf("RenameTodoSpace: voided=%v, err=%v", voided, err)
 	}
@@ -321,7 +323,7 @@ func TestTodoSpaces(t *testing.T) {
 	}
 
 	// 4. Unlink space
-	if err := d.UnlinkTodoSpace(ctx, "td2", "macbook", "proj_renamed"); err != nil {
+	if err := d.UnlinkTodoSpace(ctx, "td2", "macbook", "proj_renamed", KeptLinks{}); err != nil {
 		t.Fatalf("UnlinkTodoSpace: %v", err)
 	}
 	spaces, _ = d.ListAllTodoSpaces(ctx)
@@ -380,14 +382,14 @@ func TestRenameTodoSpaceConflictVoidsOldLink(t *testing.T) {
 	_ = d.CreateTodo(ctx, TodoRow{ID: "t2", Title: "Todo 2", CreatedAt: now, UpdatedAt: now})
 
 	// Link t1 to space "alpha", t2 to space "beta"
-	_, _ = d.LinkTodoSpace(ctx, "t1", "macbook", "alpha", now)
-	_, _ = d.LinkTodoSpace(ctx, "t2", "macbook", "beta", now)
+	_, _ = d.LinkTodoSpace(ctx, "t1", "macbook", "alpha", now, KeptLinks{})
+	_, _ = d.LinkTodoSpace(ctx, "t2", "macbook", "beta", now, KeptLinks{})
 
 	// Add space-sourced agent to t1 for "alpha"
 	_, _ = d.LinkTodoAgentWithSource(ctx, "t1", "macbook", "s_alpha", "Alpha Agent", "/cwd", "claude", "", "space", "macbook/alpha", now)
 
 	// Rename "alpha" to "beta", which conflicts with t2's existing link on "beta"
-	voided, err := d.RenameTodoSpace(ctx, "macbook", "alpha", "beta")
+	voided, err := d.RenameTodoSpace(ctx, "macbook", "alpha", "beta", KeptLinks{})
 	if err != nil {
 		t.Fatalf("RenameTodoSpace: %v", err)
 	}
@@ -410,18 +412,18 @@ func TestRenameTodoSpaceConflictVoidsOldLink(t *testing.T) {
 	}
 }
 
-// KeepTodoAgents takes a todo's links off the space they came through, released and dismissed (#10941): the space's
-// unlink, which deletes the links through it, leaves them, and so do a move of the space to another todo and a rename
-// that voids it; another link through the space is deleted as before, and another todo's link is not touched.
-func TestKeepTodoAgents(t *testing.T) {
+// A space's unlink, a move of it to another todo and a rename that voids it keep the links KeptLinks names, in the same
+// transaction (#10941): taken off the space, released and dismissed at its time; another link through the space is
+// deleted as before, and so is a link KeptLinks names through another space. A write that fails keeps nothing.
+func TestSpaceWritesKeepLinks(t *testing.T) {
 	d, ctx := open(t), context.Background()
 	now := time.Now().Truncate(time.Millisecond)
-	for _, id := range []string{"t1", "t2", "t3"} {
+	for _, id := range []string{"t1", "t2", "t3", "t4"} {
 		_ = d.CreateTodo(ctx, TodoRow{ID: id, Title: id, CreatedAt: now, UpdatedAt: now})
 	}
 	link := func(todo, space, sid string) {
 		t.Helper()
-		if _, err := d.LinkTodoSpace(ctx, todo, "macbook", space, now); err != nil {
+		if _, err := d.LinkTodoSpace(ctx, todo, "macbook", space, now, KeptLinks{}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := d.LinkTodoAgentWithSource(ctx, todo, "macbook", sid, sid, "/cwd", "claude", "", "space", "macbook/"+space, now); err != nil {
@@ -434,20 +436,28 @@ func TestKeepTodoAgents(t *testing.T) {
 	}
 	link("t2", "diary", "moved")
 	link("t3", "notes", "voided")
-	_, _ = d.LinkTodoSpace(ctx, "t1", "macbook", "beta", now)
+	_, _ = d.LinkTodoSpace(ctx, "t1", "macbook", "beta", now, KeptLinks{})
 	at := now.Add(time.Minute)
-	for todo, sid := range map[string]string{"t1": "kept", "t2": "moved", "t3": "voided"} {
-		if err := d.KeepTodoAgents(ctx, todo, "macbook", []string{sid}, at); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := d.UnlinkTodoSpace(ctx, "t1", "macbook", "journal"); err != nil {
+	// A move onto a todo that is done fails, and keeps nothing.
+	done := true
+	if _, err := d.UpdateTodo(ctx, "t4", nil, nil, &done, at); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.LinkTodoSpace(ctx, "t1", "macbook", "diary", at); err != nil {
+	if _, err := d.LinkTodoSpace(ctx, "t4", "macbook", "diary", at, KeptLinks{Sessions: []string{"moved"}, At: at}); !errors.Is(err, ErrTodoCompleted) {
+		t.Fatalf("a move onto a done todo: %v", err)
+	}
+	if rows, err := d.ListAllTodoAgents(ctx); err != nil || !slices.ContainsFunc(rows, func(a TodoAgentRow) bool {
+		return a.TodoID == "t2" && a.SessionID == "moved" && a.Source == "space" && a.ReleasedAt == nil
+	}) {
+		t.Fatalf("a failed move kept a link: %+v %v", rows, err)
+	}
+	if err := d.UnlinkTodoSpace(ctx, "t1", "macbook", "journal", KeptLinks{Sessions: []string{"kept", "moved"}, At: at}); err != nil {
 		t.Fatal(err)
 	}
-	if voided, err := d.RenameTodoSpace(ctx, "macbook", "notes", "beta"); err != nil || !voided {
+	if _, err := d.LinkTodoSpace(ctx, "t1", "macbook", "diary", at, KeptLinks{Sessions: []string{"moved"}, At: at}); err != nil {
+		t.Fatal(err)
+	}
+	if voided, err := d.RenameTodoSpace(ctx, "macbook", "notes", "beta", KeptLinks{Sessions: []string{"voided"}, At: at}); err != nil || !voided {
 		t.Fatalf("rename: voided %v, %v", voided, err)
 	}
 	agents, err := d.ListAllTodoAgents(ctx)

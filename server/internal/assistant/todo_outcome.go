@@ -305,11 +305,12 @@ func (s *Service) outcomeDecisions(ctx context.Context, t Todo, key string, by o
 
 // outcomeLog appends "Outcome: …" (in Chinese) to the timeline of the project t was put in (todo_project.go), or, when it has
 // none (or it is gone), of each project an agent of t worked in (kb.ProjectsForWork), once a project: «to-do · <title>», not
-// bounded like an agent's turns (kb_bus.go). Nothing of a to-do whose history may hold the health space's words
-// (todosHidden, #10941): its outcome is read off its runs' last replies, and a project's timeline is outside the space,
-// where kb.read reads it.
+// bounded like an agent's turns (kb_bus.go). Nothing of a to-do whose history holds the health space's words
+// (todoVerdicts' todoHidden, #10941): its outcome is read off its runs' last replies, and a project's timeline is
+// outside the space, where kb.read reads it. A to-do only untold (a conversation of it cannot be told now) is written:
+// the timeline is the owner's own record, which the rule must not cost them.
 func (s *Service) outcomeLog(ctx context.Context, t Todo, agents []outcomeAgent, o taskOutcome) {
-	if !s.kbWritable(ctx) || s.todosHiddenOf(ctx, []string{t.ID}, map[string]Todo{t.ID: t}, nil)[t.ID] {
+	if !s.kbWritable(ctx) || s.todoVerdicts(ctx, []string{t.ID}, map[string]Todo{t.ID: t}, nil)[t.ID] == todoHidden {
 		return
 	}
 	e, err := s.kbGet(ctx)
