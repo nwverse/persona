@@ -443,7 +443,7 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			}
 		}
 		return json.Marshal(map[string]any{"items": items})
-	case DeviceSessionRename:
+	case DeviceSessionRename, assistantwire.DeviceSessionRenameTabIfCurrent:
 		f.sends = append(f.sends, map[string]any{"rename": a})
 		return json.RawMessage(`{"ok":true}`), nil
 	case assistantwire.DeviceLaunchersCheck:

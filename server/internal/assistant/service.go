@@ -146,8 +146,9 @@ type Service struct {
 
 	// prepared is what this hub last gave a machine's node for a directory (key: machine id NUL directory), the
 	// CLAUDE.md and the plugin skills, by prepareSpaceIf; refreshInstructions gives again what differs.
-	preparedMu sync.Mutex
-	prepared   map[string]preparedState
+	prepareLocks cardLocks
+	preparedMu   sync.Mutex
+	prepared     map[string]preparedState
 
 	epoch string
 	// born is when this manager started: a background supervisor started before it may be in a profile with no login
@@ -604,8 +605,8 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if !ok {
 		res, err = s.hub.DeviceCall(ctx, p)
 	}
-	// Not taken: refused before anything was typed, or for a computer that is offline or not one of the hub's.
-	taken = err == nil || nodeDelivered(err) != "none" && !errors.Is(err, apierr.ErrOffline) && !errors.Is(err, ErrNoDevice)
+	// Not taken: refused before anything was typed, or it never reached the computer (relay_refusal.go).
+	taken = err == nil || !sendNotTaken(err)
 	if taskRoot != "" && (method == DeviceSessionSend || method == deviceTaskStart) {
 		s.noteTaskSpaceResult(ctx, taskRoot, device, res)
 	}
