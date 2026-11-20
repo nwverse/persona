@@ -6,7 +6,7 @@ import {
   type ModelBinding, type ModelConfigurationBody, type ModelDraft, type ModelProvider, type ModelPurpose, type ModelPurposeBody,
 } from "../../lib/model-config";
 import {
-  agentsOverride, catalogLists, chooseProvider, claudeCodeOnly, configDirChoices, configDirLabel, draftFor, effortOffered, executionForm, followedCategory, modelConfiguration, modelPatch, overridden,
+  agentsOverride, catalogLists, chooseProvider, claudeCodeOnly, configDirChoices, configDirLabel, draftFor, effortOffered, executionForm, followedCategory, isModelRunLauncher, modelConfiguration, modelPatch, overridden,
   ownRecord, parentCategory, permissionModesForProvider, providersFor, purposeDescription, purposeGroups, purposeLaunch, resetPatch, runtimeChoices, saveModelPurpose, supportsField, withPurposeAfter,
   withUsesAfterCategories,
 } from "../../lib/model-config-execution";
@@ -294,8 +294,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const inheritedPermissionMode = following
     ? sameParentProvider ? parent?.effective?.permission_mode : undefined
     : sameEffectiveProvider && !p?.override?.permission_mode ? p?.effective?.permission_mode : undefined;
-  const codexRunLauncher = p?.kind === "api" && chosen?.kind === "launcher" && chosenAgent === "codex"
-    && chosen.api !== "messages" && (!!chosen.api || !chosen.has_key);
+  const codexRunLauncher = p?.kind === "api" && isModelRunLauncher(chosen) && chosenAgent === "codex";
   const listedEfforts = launcherList.status === "ready" && launcherList.list && takesEffort(launcherList.list.agent)
     ? effortChoices(launcherList.list, draft.model, inherited)
     : (codexRunLauncher

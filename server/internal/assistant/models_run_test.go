@@ -521,4 +521,65 @@ func TestAPIPurposeCodexEffortsValidationAndRun(t *testing.T) {
 			t.Fatalf("model.run forwarded Codex-only effort %q to non-Codex launcher %q: %+v", tc.effort, tc.launcher, got)
 		}
 	}
+
+	// ModelProvider exposes Source so Web/clients can distinguish Persona-managed empty-API Messages launchers from
+	// shell/PATH launchers without inferring from HasKey (#12120 P2).
+	providers := s.modelProviders(ctx)
+	checkSource := func(id, want string) {
+		t.Helper()
+		i := slices.IndexFunc(providers, func(p ModelProvider) bool { return p.ID == id })
+		if i < 0 || providers[i].Source != want {
+			t.Fatalf("provider %s source = %q (idx=%d), want %q", id, func() string {
+				if i < 0 {
+					return ""
+				}
+				return providers[i].Source
+			}(), i, want)
+		}
+	}
+	checkSource("launcher.cx-msg-unkeyed", "persona")
+	checkSource("launcher.codex", "zshrc")
+
+	// Machine-specific agent resolution (#12120 P2 comment 4647228894): when equally named shell launchers back
+	// different agents on different machines, effort validation must follow the actual run machine (main chat machine),
+	// not the cross-machine first-merged ModelProvider.Agent.
+	t.Run("multi-machine same launcher name different agents", func(t *testing.T) {
+		ms, mf, _ := modelService(t)
+		mDevs := &runDevs{}
+		ms.devs = mDevs
+		byMachine := map[string][]proto.Launcher{
+			"a-box": {
+				{Name: "dual", Source: "zshrc", Agent: "claude"},
+				{Name: "dual-rev", Source: "zshrc", Agent: "codex"},
+			},
+			"server": {
+				{Name: "dual", Source: "zshrc", Agent: "codex"},
+				{Name: "dual-rev", Source: "zshrc", Agent: "claude"},
+			},
+		}
+		mf.devices = []Device{{ID: "a-box", Name: "a-box", Online: true}, {ID: "server", Name: "server", Online: true}}
+		mf.sessions["a-box"] = nil
+		mf.hello.Assistant.Machines = []string{"a-box", "server"}
+		mf.hello.Assistant.MachineID = "server"
+		mf.answerNode(DeviceLaunchersList, func(device string, _ json.RawMessage) (any, error) {
+			return map[string]any{"launchers": byMachine[device]}, nil
+		})
+
+		// "dual" is Claude on earlier machine a-box, but Codex on main chat machine server -> minimal & ultra accepted.
+		for _, effort := range []string{"minimal", "ultra"} {
+			cur := purposeOf(t, ms, "kb")
+			body := fmt.Sprintf(`{"revision":%d,"provider":"launcher.dual","effort":%q}`, cur.Revision, effort)
+			if r := modelRequest(ms, http.MethodPatch, "kb", body); r.Code != http.StatusOK {
+				t.Fatalf("PATCH dual (Codex on main machine server) effort=%s: %d %s", effort, r.Code, r.Body.String())
+			}
+		}
+		// "dual-rev" is Codex on earlier machine a-box, but Claude on main chat machine server -> minimal & ultra rejected.
+		for _, effort := range []string{"minimal", "ultra"} {
+			cur := purposeOf(t, ms, "kb")
+			body := fmt.Sprintf(`{"revision":%d,"provider":"launcher.dual-rev","effort":%q}`, cur.Revision, effort)
+			if r := modelRequest(ms, http.MethodPatch, "kb", body); r.Code != http.StatusBadRequest {
+				t.Fatalf("PATCH dual-rev (Claude on main machine server) effort=%s unexpectedly succeeded: %d %s", effort, r.Code, r.Body.String())
+			}
+		}
+	})
 }

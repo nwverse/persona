@@ -44,6 +44,7 @@ type ModelProvider struct {
 	ID              string                  `json:"id"`
 	Name            string                  `json:"name"`
 	Kind            string                  `json:"kind"`
+	Source          string                  `json:"source,omitempty"`
 	Agent           string                  `json:"agent,omitempty"`
 	API             string                  `json:"api,omitempty"`
 	ChatEffort      bool                    `json:"chat_effort,omitempty"`
@@ -57,7 +58,6 @@ type ModelProvider struct {
 	ModelAliases    map[string]string       `json:"model_aliases,omitempty"`
 	Status          string                  `json:"status,omitempty"`
 	// Internal provenance for model.run compatibility checks (never serialized).
-	source           string
 	builtinCompanion bool
 	modelRunMachines []string
 }
@@ -493,10 +493,10 @@ func (s *Service) modelProviders(ctx context.Context) []ModelProvider {
 				}
 			}
 		}
-		out = append(out, ModelProvider{ID: "launcher." + v.Name, Name: cmp.Or(v.DisplayName, v.Name), Kind: kind, Agent: agent, API: apiName, ChatEffort: kind == "api" && apiName == "chat", Effort: v.Effort, Model: v.Model, Machines: v.Machines, Hidden: v.Hidden, HasKey: v.HasKey, PermissionModes: v.PermissionModes, Models: v.Models, ModelAliases: aliases, source: v.Source, builtinCompanion: v.builtinCompanion, modelRunMachines: v.modelRunMachines})
+		out = append(out, ModelProvider{ID: "launcher." + v.Name, Name: cmp.Or(v.DisplayName, v.Name), Kind: kind, Source: v.Source, Agent: agent, API: apiName, ChatEffort: kind == "api" && apiName == "chat", Effort: v.Effort, Model: v.Model, Machines: v.Machines, Hidden: v.Hidden, HasKey: v.HasKey, PermissionModes: v.PermissionModes, Models: v.Models, ModelAliases: aliases, builtinCompanion: v.builtinCompanion, modelRunMachines: v.modelRunMachines})
 	}
 	if !slices.ContainsFunc(out, func(p ModelProvider) bool { return p.ID == "launcher.claude" }) {
-		p := ModelProvider{ID: "launcher.claude", Name: mc(l, "provider_claude_default"), Kind: "launcher", Agent: "claude", source: "builtin"}
+		p := ModelProvider{ID: "launcher.claude", Name: mc(l, "provider_claude_default"), Kind: "launcher", Source: "builtin", Agent: "claude"}
 		if b, ok := s.builtinClaude(ctx, s.zshrcLaunchers(ctx, false)); ok {
 			p.Machines = b.Machines // where plain claude is: Settings › Model Providers lists it by machine
 		}

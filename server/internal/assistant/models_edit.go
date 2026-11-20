@@ -104,7 +104,7 @@ func (s *Service) modelProviderCompatible(p ModelPurpose, v ModelProvider, store
 					compatible = slices.Contains(v.modelRunMachines, p.MachineID)
 				}
 			} else {
-				compatible = modelRunSourceSupported(v.source, v.Agent, v.builtinCompanion) &&
+				compatible = modelRunSourceSupported(v.Source, v.Agent, v.builtinCompanion) &&
 					(p.MachineID == "" || len(v.Machines) == 0 || slices.Contains(v.Machines, p.MachineID))
 			}
 		}
@@ -144,7 +144,7 @@ func (s *Service) modelLauncherCompatible(p ModelPurpose, l ConfiguredLauncher, 
 	if proto.IsExternalLauncher(l.Name) || l.Source == proto.ExternalLauncherSource {
 		return p.ID == "assistant" && p.MachineID != "" && externalLauncherError(l.Launcher) == nil
 	}
-	v := ModelProvider{ID: "launcher." + l.Name, Kind: "launcher", Agent: cmp.Or(l.AgentType, l.Agent), Model: l.Model, source: l.Source, builtinCompanion: l.BuiltinCompanion}
+	v := ModelProvider{ID: "launcher." + l.Name, Kind: "launcher", Source: l.Source, Agent: cmp.Or(l.AgentType, l.Agent), Model: l.Model, builtinCompanion: l.BuiltinCompanion}
 	for _, managed := range stored {
 		if managed.Name == l.Name {
 			v.Kind, v.API = managed.Kind, managed.API
@@ -175,12 +175,13 @@ func effortLevelsForKind(kind string) []string {
 	return proto.EffortLevels
 }
 
-// effortLevelsForPurpose returns the effort levels valid for a purpose of kind running on provider. An API-kind
-// purpose backed by a Codex launcher running via model.run (a shell/PATH launcher or a non-Messages managed launcher)
-// accepts Codex's reasoning effort levels (including minimal and ultra) alongside the API off/none sentinel, without
-// enabling minimal or ultra for Messages-backed HTTP launchers, Claude, Antigravity, or direct HTTP API providers.
-func effortLevelsForPurpose(kind string, provider *ModelProvider) []string {
-	if kind == "api" && provider != nil && provider.Kind == "launcher" && provider.Agent == "codex" && (provider.source != "persona" || !messagesAPI(provider.API)) {
+// effortLevelsForPurpose returns the effort levels valid for a purpose of kind running on provider with resolved agent.
+// An API-kind purpose backed by a Codex launcher running via model.run (a shell/PATH launcher or a non-Messages
+// managed launcher) accepts Codex's reasoning effort levels (including minimal and ultra) alongside the API off/none
+// sentinel, without enabling minimal or ultra for Messages-backed HTTP launchers, Claude, Antigravity, or direct HTTP
+// API providers.
+func effortLevelsForPurpose(kind string, provider *ModelProvider, agent string) []string {
+	if kind == "api" && provider != nil && provider.Kind == "launcher" && cmp.Or(agent, provider.Agent) == "codex" && (provider.Source != "persona" || !messagesAPI(provider.API)) {
 		return append(slices.Clone(proto.CodexEffortLevels), "off", "none")
 	}
 	return effortLevelsForKind(kind)
@@ -359,8 +360,16 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 			return i18n.Err("assistant-models.err_provider_unsupported")
 		}
 	}
-	if b.Effort != "" && !slices.Contains(effortLevelsForPurpose(p.Kind, provider), b.Effort) {
-		return i18n.Err("assistant-models.err_effort_unsupported")
+	if b.Effort != "" {
+		agent := ""
+		if p.Kind == "api" && provider != nil && provider.Kind == "launcher" {
+			if name, ok := strings.CutPrefix(b.Provider, "launcher."); ok {
+				agent = s.runLauncherAgent(ctx, cmp.Or(p.MachineID, s.settings(ctx).MachineID), name)
+			}
+		}
+		if !slices.Contains(effortLevelsForPurpose(p.Kind, provider, agent), b.Effort) {
+			return i18n.Err("assistant-models.err_effort_unsupported")
+		}
 	}
 	if b.PermissionMode != "" {
 		if p.Kind != "launcher" {
