@@ -11822,7 +11822,7 @@ def phone_primary_put(h, body):
         return h.send_json({"error": "credential_id is required"}, 400)
     want = body["credential_id"]
     if MOCK_PHONE == "refuse" or (want and want not in phone_candidates()):
-        return h.send_json({"code": "not_a_phone", "error": "这台设备不提供手机数据，不能作为主设备"}, 409)
+        return h.send_json({"code": "not_a_phone", "error": "这台设备现在不能处理手机请求。在它上面打开 Persona，至少开启一项手机数据后再试。"}, 409)  # the hub's zh-Hans text (hub-phone_primary.not_candidate)
     PHONE_PRIMARY[0] = want
     return h.send_json(phone_view())
 
