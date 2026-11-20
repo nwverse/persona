@@ -82,6 +82,11 @@ func (e *Engine) AppendProjectMemoryBatch(slug string, records []ProjectMemoryRe
 		}
 		raw[i] = encoded
 	}
+	s.metaMu.Lock()
+	defer s.metaMu.Unlock()
+	if err := s.checkProjectDetailWrite(slug, "project memory"); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	existing, err := s.projectMemoryIDsLocked(slug)

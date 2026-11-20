@@ -5,12 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/nwverse/persona/server/internal/compat"
 	"io"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -26,11 +26,11 @@ const assistantCompactTimeout = 10 * time.Minute
 // (the hub compacting a meeting's room, #8253) it refuses not_running instead: a process that exited since the hub saw it
 // running is never started only to be compacted.
 func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool) (compactErr error) {
-	if id == "" || !validID(id) {
-		return errors.New("invalid session id")
-	}
 	if n.runtimeAssistant(id) {
-		return refusal("unsupported", "这个对话由 runtime 运行，不能在这里压缩", nil)
+		return n.assistantCompactRuntime(ctx, id, onlyRunning)
+	}
+	if !validID(id) {
+		return errors.New("invalid session id")
 	}
 	if saved, ok := n.state.get(id); ok && proto.IsExternalLauncher(saved.Launcher) {
 		var finish func()
@@ -249,6 +249,7 @@ const (
 	handoffTurnMax    = 800   // characters of each recent message
 	handoffRecentMax  = 6000  // characters of the recent messages together
 	handoffTurns      = 12
+	handoffPageLimit  = 400
 )
 
 // HandoffTurn is one recent message of a conversation handed off: role user or assistant.
@@ -266,8 +267,11 @@ type Handoff struct {
 
 // assistantHandoff reads what a new main conversation should know of conversation id (docs/assistant/assistant.md
 // "New main chat").
-func (n *Node) assistantHandoff(id string) (Handoff, error) {
-	if id == "" || !validID(id) {
+func (n *Node) assistantHandoff(ctx context.Context, id string) (Handoff, error) {
+	if n.runtimeAssistant(id) {
+		return n.assistantHandoffRuntime(ctx, id)
+	}
+	if !validID(id) {
 		return Handoff{}, errors.New("invalid session id")
 	}
 	path := n.transcriptPath(id)
@@ -285,7 +289,7 @@ func (n *Node) assistantHandoff(id string) (Handoff, error) {
 		return Handoff{}, err
 	}
 	n.refresh(id, f)
-	page, _, _ := f.Page(0, 400)
+	page, _, _ := f.Page(0, handoffPageLimit)
 	return Handoff{Summary: clipHandoff(summary, handoffSummaryMax), Recent: recentTurns(page, at)}, nil
 }
 
