@@ -91,7 +91,7 @@ func TestBackgroundSupervisorFollowsUpTheMainConversationsTasks(t *testing.T) {
 	if slices.Contains(cfg.Leaders, bg) || s.isLeader(ctx, bg) || s.supervises(ctx, bg) {
 		t.Fatal("the background supervisor is a leader")
 	}
-	if !slices.Contains(keptSessions(cfg, nil, nil), SessionRef{MachineID: "server", SessionID: bg}) {
+	if !slices.Contains(keptSessions(cfg, nil, nil, nil, nil), SessionRef{MachineID: "server", SessionID: bg}) {
 		t.Fatal("the background supervisor is not kept listed")
 	}
 	if !s.supervising(bg) {
@@ -505,10 +505,10 @@ func TestAsksOfUnledTasksGoToTheBackgroundSupervisor(t *testing.T) {
 	if _, _, err := e.s.updateSupervision(ctx, e.todo.ID, func(v *Supervision) bool { v.Supervisor = "conv1"; return true }); err != nil {
 		t.Fatal(err)
 	}
-	if ladder, _, _, ok := e.s.askLadder(ctx, "mac", "worker-1"); !ok || !slices.Equal(ladder, []string{"bg1"}) {
+	if ladder, _, _, ok := e.s.askLadder(ctx, proto.Interaction{MachineID: "mac", SessionID: "worker-1", Kind: proto.IxQuestion}); !ok || !slices.Equal(ladder, []string{"bg1"}) {
 		t.Fatalf("ladder = %v %v", ladder, ok)
 	}
-	if _, _, _, ok := e.s.askLadder(ctx, "server", "bg1"); ok {
+	if _, _, _, ok := e.s.askLadder(ctx, proto.Interaction{MachineID: "server", SessionID: "bg1", Kind: proto.IxQuestion}); ok {
 		t.Fatal("the background supervisor's own cards are routed")
 	}
 
@@ -556,7 +556,7 @@ func TestAsksOfUnledTasksGoToTheBackgroundSupervisor(t *testing.T) {
 
 	on := true
 	setSettings(t, e.s, func(v *Settings) { v.MainSupervisesOwnTasks = &on })
-	if ladder, _, _, ok := e.s.askLadder(ctx, "mac", "worker-1"); !ok || !slices.Equal(ladder, []string{"conv1"}) {
+	if ladder, _, _, ok := e.s.askLadder(ctx, proto.Interaction{MachineID: "mac", SessionID: "worker-1", Kind: proto.IxQuestion}); !ok || !slices.Equal(ladder, []string{"conv1"}) {
 		t.Fatalf("with the setting off the ladder = %v %v", ladder, ok)
 	}
 }
@@ -566,7 +566,7 @@ func TestBackgroundSupervisorAloneDoesNotRouteAsks(t *testing.T) {
 	e := newRouteEnv(t, nil, false)
 	e.s.noBackground = false
 	setSettings(t, e.s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg1", "server" })
-	if _, _, _, ok := e.s.askLadder(context.Background(), "mac", "worker-1"); ok {
+	if _, _, _, ok := e.s.askLadder(context.Background(), proto.Interaction{MachineID: "mac", SessionID: "worker-1", Kind: proto.IxQuestion}); ok {
 		t.Fatal("a card is routed with no leader conversation")
 	}
 	e.raise(askPermission("ix1", "worker-1"))

@@ -55,11 +55,13 @@ Optional (for each one present, the SDK declares the capability in `runtime.hell
 | `unlistedTranscripts()` | The Claude session ids of sessions of its own that `listSessions()` no longer lists (archived in the runtime), or nothing while it cannot say yet; no capability is declared. See "Runtimes that run Claude Code" below |
 | `modes({session_id, permission_mode, effort, model})` | Switching permission mode / reasoning effort from the phone (`caps.modes`; optional model changes require `createRuntime` option `modelSwitch: true`, advertised as `caps.model`; values are Persona's: `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`, `low` … `max`). The apps show the mode chips on its rows whose agent is `claude` or the runtime's own, never Paseo's catch-all `paseo` (`capabilities.modes`, `docs/protocol/protocol.md` "Codex sources and capabilities"). A row may take modes and model away from its own session in its `capabilities` (`modes: false`, `model: false`: Paseo's archived agents, #8133), and a row whose agent is not `claude` may list the levels `effort` takes for it (`efforts`, weakest first), which the apps offer alone on it, and the permission modes it takes (`capabilities.permission_modes`, #8261: `default`, its own approval, and `bypassPermissions` where it has an Allow all), between which the apps offer a two-state switch, "Launcher default" and Allow all; node drops both where the runtime declared no `caps.modes` or the row took modes away, and `permission_modes` where the Claude Code chips stand |
 | `rewind({session_id, prompt, occurrence, prompts_after, restore})` | Rewinding a conversation to before one of the user's messages (`caps.rewind`): find the message by its text, its occurrence counting from the end and how many of the user's came after it, and refuse (`rewind_mismatch`) rather than cut elsewhere. Its rows may narrow it per session in their own `capabilities` (`rewind: false`), and only a row's `rewind_code: true` lets `restore: "code_and_conversation"` through (`docs/protocol/protocol.md` "Codex sources and capabilities") |
+| `fork({session_id, at_item_id})` | Branch an Agent or Assistant conversation (`caps.fork`) through the selected reply's turn, or copy all history when `at_item_id` is empty. Return `{session_id}` and publish the branch; an optional `session` row lists it before the next push. Refuse active turns (`fork_turn_running`) or stale replies (`fork_mismatch`). |
 | `models({launcher, refresh})` / `check({launcher, cwd, prompt})` | The launcher's models as the runtime has them now (`caps.models`, the pickers' refresh) / Settings › Models "Test" run through the runtime with its own login (`caps.check`): one real prompt in the node's empty check directory, answered as `{ok, model, answer, error}` |
 | `seen({session_id})` | The user saw the session in Persona (`caps.seen`, #6299): a runtime that keeps an unread mark of its own clears it, so the session is not unread in its own app too. The manager tells the node only while the runtime lists the session as `done` (unread), best effort |
 | `archive({session_id})` / `unarchive({session_id})` | The runtime's own reversible archive (`caps.archive`, declared only when both exist): when the user archives a session in Persona, it is archived in the runtime too, and restored with it. Archive an idle session without stopping or closing anything (Persona refuses busy sessions first) and keep it restorable; both must be idempotent (already archived / restored is success). A runtime whose archive also stops the session, or that has no way back, leaves them out: the archive is then Persona's alone (`docs/protocol/protocol.md`, "Agent session archives") |
 | `createWorkspace({cwd, workspace_id, branch, create_branch, base, name, key})` / `prepareWorkspace({cwd, repo_root})` | Workspaces of its own (`caps.workspaces`, declared only when both exist: the node asks where the worktrees go before each one it has made): a worktree it makes as a workspace of its own / the folder it puts a repository's worktrees in. With them it lists its workspaces through `rt.workspacesChanged(list)`. Only an engine's are used; see "Workspaces" below |
 | `renameWorkspace({workspace_id, title})` / `renameWorkspace({space_id, title})`, `archiveWorkspace({workspace_id})` | With `caps.workspaces`: a workspace's title (resolves to `{workspace}`, its row now) or a space's name (resolves to `{space_name}`, the name it shows now) / the workspace archived, a worktree it made removed from the disk (its branch kept). Without them those requests are `unsupported`; see "Workspaces" below |
+| `listHistory({since, until, cursor, limit})` | Sessions active in a time window, archived, finished and offline ones too (`caps.history`); returns `{rows, next_cursor, complete}`. See "History" below |
 | `watchChanged(id, watching, {transcript})` | The phone starts / stops watching a session (when a new node connects or the runtime stops, all stop): for runtimes that only follow a session while someone is watching (Paseo subscribes to the timeline per session). A watch is the one sign that someone has the chat open: every App watches a chat it opens, the manager watches only the turn of a message a channel delivered there, and background reads never watch. A runtime whose engine would start a stopped agent just to read it (Paseo loads an agent it let go, relaunching its provider, #8132) reads such a session only while it is watched, and answers other reads from what it already has or refuses them with `RpcError(…, 'not_loaded')` (`items`, `item`) |
 
 In `createRuntime`'s options, a runtime that runs several Agents can also pass `launchers: [{name, model, agent, models, auto_accept}]`: besides `launcher`, the new-session form then has these entries, one per provider,
@@ -95,7 +97,7 @@ Call the SDK when things happen:
 | --- | --- |
 | (no call needed) | The list only needs recent sessions: node still recognizes older unlisted sessions as yours (ones listed before are remembered; ones never listed get one `items` query), and calls are still routed to you, so `send` / `items` must handle sessions not in the list |
 | `rt.sessionsChanged()` | Sessions added or removed, a turn started / ended, a rename |
-| `rt.append(id, {items, fromSeq, toSeq, history})` | New content was persisted (when no one is watching, the SDK just has the list refresh `rev`). `items` can be empty: content not shown in the chat must still advance seq |
+| `rt.append(id, {items, fromSeq, toSeq, history, update})` | New content was persisted (when no one is watching, the SDK just has the list refresh `rev`). `items` can be empty: content not shown in the chat must still advance seq. Set `update: true` to replace existing items by id without advancing seq; a batch keeps the flag if any append sets it. This flag stays inside the runtime-to-node protocol: App `items` events omit it because clients already merge by id and reserve `update` for the hub-update object |
 | `rt.stream(id, text)` / `rt.streamEnd(id)` | The full text being generated / that segment ended (the SDK throttles to at most once every 120 ms) |
 | `rt.workspacesChanged(list)` | Its workspaces changed (one made, renamed or archived, a branch moved): the whole list, which the SDK also tells every node it connects to later. Only with `createWorkspace` and `prepareWorkspace` ("Workspaces" below) |
 | `rt.ask(interaction, {signal})` | A person must decide: the card goes to the phone and waits for an answer. Returns a `Resolution`; `{dismiss: true}` = handed back to the computer (tapped on the phone, expired, no hub), for the runtime's own UI. Meanwhile the session shows "Needs you" automatically |
@@ -116,6 +118,7 @@ Things shared across runtimes but not part of the protocol are in the SDK too, f
 | What | Does what |
 | --- | --- |
 | `rt.recent(rows, {days, max, pinned})`, `rt.touched(id)` | Picks the sessions to list: running / waiting for an answer (`pinned`) and ones the phone touched (last 50) are always listed; the rest within `days` days fill up to `max`, newest first. A session open on the phone must stay listed |
+| `rt.history(rows, {since, until, cursor, limit}, {complete})` (also `historyPage`) | Answers `listHistory` from all the runtime's session rows (or what it read from storage): window, order, paging and cursor. See "History" below |
 | `page(items, params, {history, toSeq})` | Paging for `session.items` (from the end by turns / count, backwards, catch-up, by range) |
 | `appToolName(name, own)` | Maps tool names to the set the App draws (`bash`→`Bash`, `read`→`Read`…); the runtime adds its own (DSH's `ask_user_question`, pi's `find`); parameter names are converted by each runtime |
 | `scriptedModel()` in `testing/model.mjs` | A scriptable fake model for end-to-end tests (DSH's llm-mock-server, switching scripts by phase) |
@@ -123,12 +126,25 @@ Things shared across runtimes but not part of the protocol are in the SDK too, f
 
 Not in the SDK (used by only one runtime, or the two read different things): each one's way of reading its session storage, and keeping companion processes alive.
 
+## History
+
+The list carries only recent sessions (`rt.recent`). A caller reading an older period (an extension looking back 90 days) asks for sessions by a time window instead (`docs/protocol/protocol.md`, "Session history"). A runtime that keeps older sessions implements `listHistory({since, until, cursor, limit})` → `{rows, next_cursor, complete}`:
+
+- `since` / `until`: RFC 3339 (the SDK passes `until` as now when the caller left it out). A session is in the window when its time is in `[since, until)`; its time is `active_at`, else `updated_at`, else `started_at`.
+- Archived, finished and offline sessions are listed too; archived ones with `archived: true`. Deleted ones never are (the SDK drops rows with `status: "deleted"` or `deleted: true`).
+- Rows are `listSessions` rows, plus these optional fields when the runtime knows them: `active_at` (when it was last active, e.g. its last message; give it when archiving moves `updated_at`), `started_at`, `origin` (`user`, or `automation` for a session a scheduled job started) and `user_messages` (how many messages the user wrote in it).
+- Newest first, ties by `session_id`; `limit` defaults to 200, at most 500; `next_cursor` is an opaque string, empty on the last page.
+- `complete`: whether it can vouch that the window is fully listed (false when its storage was pruned).
+
+`rt.history(rows, params)` does all of that from the rows it is given, so most runtimes write `listHistory: (p) => rt.history(allRows(), p)`. A session listed only here is still read with `items` (node asks the runtimes about a session it does not know); `send` and `watch` may refuse it with `not_found`.
+
 ## Content
 
 - **seq**: each session has one monotonically increasing sequence number, starting at 1 (0 means "nothing yet"). An item's seq is the number of the record that produced it; one record can yield several items,
   with ids `<seq>#<index>`. DSH's event seq starts at 0, so it maps to seq + 1. **Ids are unique only within a session**: across sessions, and especially across two branches split from the same session,
   the same id is different content. Anything a client caches by id (render results, parse results) must key on the session too (#372).
 - **history**: the identity of the session's content (`docs/protocol/protocol.md` ("Continuity of items")). It changes when content is rewritten (branch, reset), and the App refetches the whole page; it stays the same on pure appends. A batch with a new history doesn't need a larger seq (switching back to a branch with the same count, shorter after a rollback); the SDK pushes it anyway and continues from its `toSeq`.
+  An explicit `fromSeq: 0` also resets the cursor, even with the same history; it promises that the batch contains the complete range through `toSeq`. Node and Hub retain the new cursor for reconnects. Catch-up pages report the actual cursor even below `after_seq`. An empty rewind notification retains its positive `from_seq` so clients reload the missing history. Node and Hub pass the known history in internal `session.watch` requests, so a same-length rewrite is reported after reconnect too. An unchanged idle watch sends no empty batch.
 - **Item kinds** follow what the App already has: `text` (user / assistant), `thinking`, `tool_use` (`tool_name`, `tool_input`, `tool_use_id`), `tool_result`
   (`tool_use_id`, `is_error`), `image` (`lazy: true` placeholder, data via `image`), `notice` (system: interrupt, error, compaction).
 - **Tool names match Claude's**: the App draws commands, diffs and files for `Bash`, `Read`, `Edit`, `Write`, `Grep`, `Glob`, `WebFetch`, `WebSearch`, `TodoWrite`,
@@ -184,9 +200,10 @@ Not in the SDK (used by only one runtime, or the two read different things): eac
   node rejects a second process with the same id (`runtime_conflict`). If a runtime changes its id but still runs the same kind of Agent, set `agent` to that Agent (a renamed DSH sets `dsh`), and session rows carry `agent_label`.
 - Session ids are unique on the machine, at most 128 characters, and can't be paths. `launcher` names shouldn't clash with launchers in `~/.zshrc` (on a clash the shell's wins and the runtime's isn't listed, except where every start goes to the runtime as an engine with `caps.same_kind`: there its own wins);
   if two runtimes' launchers clash, only the one that connected first provides it.
-  The ordinary `agy` executable discovered on PATH is a terminal fallback, not an explicit shell override: its connected
-  companion supplies the launcher, models and assistant support. An actual alias, function or helper definition of that
-  name keeps shell precedence. Discovery provenance stays inside the node and adds no wire field (#9181).
+  A local `agy` launcher supplies the model catalog and starts in a pane when the selected host is herdr (#10237),
+  including when herdr is the default and the node detects the local CLI. The connected companion serves Assistant
+  and terminal-less Agent requests (the node RPC can target `host: "agy"`). A shell alias, function or helper definition
+  named `agy` still has precedence over automatic companion selection (#9181).
 
 ## Minimal example
 
@@ -395,8 +412,8 @@ Lark tokens and gates. node drives it with calls the protocol already has:
 
 | node sends | With (all optional fields; runtimes that don't declare `caps.assistant` never receive them) |
 | --- | --- |
-| `session.start {cwd, assistant: true}` | `cwd` is the assistant directory (`~/.persona/assistant`, containing `AGENTS.md` / `CLAUDE.md` and `.agents/skills/`); no `prompt`. The runtime reports this `cwd` for the chat's whole life (`runtime.sessions`, its cards), not where a tool's `cd` left the shell: the hub places assistant and health chats by that directory exactly (#2368) |
-| `session.send {session_id, text, images, client_msg_id, assistant: true, context, mode, memory_dir}` | `context`: a `<persona-context>` block given to the model before the user's text (the live snapshot; the first message of a new chat also has memory and Lark notes), not shown in the chat; `mode`: Persona's permission mode (`default` / `acceptEdits` / `auto` / `plan` / `bypassPermissions`); `memory_dir`: the memory directory; `client_msg_id`: the id the message came with (the App's, a channel's), absent when it came without one: put it on the message's item, or leave the item without one, never another (`docs/protocol/protocol.md` "Matching pending messages") |
+| `session.start {cwd, assistant: true, supervision_instructions?}` | `cwd` is the assistant directory (`~/.persona/assistant`, containing `AGENTS.md` / `CLAUDE.md` and `.agents/skills/`); no `prompt`. The runtime reports this `cwd` for the chat's whole life (`runtime.sessions`, its cards), not where a tool's `cd` left the shell: the hub places assistant and health chats by that directory exactly (#2368). `supervision_instructions` is sent only when nonempty and the runtime also declared `caps.supervision_policy` (#11173) |
+| `session.send {session_id, text, images, client_msg_id, assistant: true, context, mode, memory_dir, supervision_instructions?}` | `context`: a `<persona-context>` block given to the model before the user's text (the live snapshot; the first message of a new chat also has memory and Lark notes), not shown in the chat, and left out of a message that is only a slash command (`/compact`, one line, no picture) so the runtime can run it: the snapshot goes with the next message, and after `/compact` in full; `mode`: Persona's permission mode (`default` / `acceptEdits` / `auto` / `plan` / `bypassPermissions`); `memory_dir`: the memory directory; `client_msg_id`: the id the message came with (the App's, a channel's), absent when it came without one: put it on the message's item, or leave the item without one, never another (`docs/protocol/protocol.md` "Matching pending messages"); `supervision_instructions`: sent only when the runtime declared `caps.supervision_policy` (always present, including explicit `""` to clear a prior role on demotion) |
 | `session.interrupt` | Stop on the phone; closing the assistant chat = stopping the running turn, the chat stays in the runtime |
 
 For sessions it starts, the node restores persisted ownership and launcher metadata before publishing runtime rows.
@@ -417,6 +434,7 @@ A runtime that declares `caps.assistant` must:
    it blocks them and says which tool to use (DSH's `onPreExecute`).
 4. Give `context` to the model before the user's text and don't show it in the chat (a `<persona-context>` block without attributes; context quoted from the phone has attributes and is shown as usual).
 5. Set its own permissions per `mode` (plan = read-only); changes inside `memory_dir` aren't asked about outside plan mode.
+6. **Optional supervision policy channel (`supervisionPolicy: true` → `caps.supervision_policy`)** (#11173): only declare this if the runtime can apply `supervision_instructions` on an authoritative channel separate from user message text, persisting across compaction and isolated per session (never rewriting shared `~/.persona/assistant/AGENTS.md` and never leaking policy into concurrent ordinary chats). The runtime must refuse a policy change while the session is busy with `code: "busy"`, clear its per-session policy when `supervision_instructions` is `""` or the session closes, and fail closed with `code: "assistant_supervision_runtime"` (never sending the prompt) if the policy cannot be applied. Runtimes that do not declare `caps.supervision_policy` never receive `supervision_instructions` and keep the existing refusal boundary for supervision deliveries (`docs/assistant/assistant.md` "Role-scoped supervision instructions (#8251)").
 
 The assistant launcher's entry in `launchers` may also carry `assistant_for`: the name of an Agent launcher on the same computer that runs the same agent with the same
 account but can't run the assistant itself (a Paseo provider; the Grok companion's `--assistant-for grok`, `integrations/grok/README.md`). The person setting the runtime up
@@ -438,6 +456,20 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
 | echo (example) | `integrations/runtime-sdk/examples/echo-runtime.mjs` (with `--listen <port>` it's a daemon) | "Minimal example" in this doc, `docs/integrations/daemons.md` |
 
+### Antigravity Desktop (macOS, experimental)
+
+With Antigravity Desktop open and the Persona node running, start the desktop companion from the checkout:
+
+```sh
+node integrations/antigravity/desktop.mjs
+```
+
+It discovers the local desktop hub through the current user's private descriptor under
+`~/.gemini/antigravity/daemon/`, lists existing conversations, watches exported transcript items,
+and forwards text replies and interrupts to the selected Cascade. Start each conversation with a message in the desktop app so replies can reuse its model and tool configuration.
+Handle approvals there as well. The desktop and CLI companions can run together. Override the desktop data directory
+with `--desktop-dir` or the Persona runtime socket with `--socket`. The desktop RPC is private and version dependent.
+
 ### Antigravity CLI
 
 The session's `last_text` preview contains assistant response text after the latest explicit user input. A new user
@@ -454,7 +486,7 @@ fields, including a subscription reset timestamp supplied in native quota metada
 that result. Rejected ACP prompts also publish their failure through the session's error state.
 The history token includes the error format so connected clients refresh items cached before this representation.
 
-The implemented integration is for the **Antigravity CLI (`agy`)**, not the Antigravity desktop app. When `personad node`
+The CLI companion runs the **Antigravity CLI (`agy`)**. When `personad node`
 runs (`--attach` or `--stdio`), `agy` is installed, Node.js 22.5+ (`node:sqlite`) is available, and no external `agy`
 runtime is connected on `runtime.sock`, the node automatically writes out the embedded `persona-antigravity-runtime`
 package and supervises `antigravity/companion.mjs` (passing `--no-update --parent-stdin`), yielding whenever an external
@@ -476,6 +508,12 @@ five minutes, and the picker's refresh requests a fresh catalog through optional
 default. New sessions and availability checks explicitly apply that model through ACP, since ACP may ignore the
 settings file when choosing its initial model. An explicit caller model takes precedence, and resumed sessions retain
 their native selection. An unavailable catalog returns the native error instead of advertising a built-in model list.
+A CLI whose stored sign-in expired long ago does not fail `agy models`: it hangs. The companion kills it after 25 seconds
+and reports that the sign-in may have expired and that running `agy` once on the computer signs in again; each
+discovery in a row that times out doubles the wait before the next one, up to an hour, and one that answers restores
+the five-minute pace (#11106). Whether a call that sends no prompt can refresh such a sign-in is not established: a
+`agy models` run refreshed a token close to its expiry, but one expired for months stayed hung until a prompt in print
+mode signed in silently.
 One `agy acp` process can keep the model list it had when the account's plan lapsed or the CLI signed out (#10368), so
 a session's model list replaces the catalog only when its ACP process started after the latest successful discovery
 began. When ACP rejects a model as unknown and a fresh discovery lists it, the companion replaces the ACP process and
@@ -489,8 +527,12 @@ model change or check that finds it idle.
 
 Idle sessions can switch model, thinking level and permission mode through ACP. Native configuration updates determine
 the displayed model and effort. Each accepted field is published even if another field fails, and failures reach the caller.
-`auto` keeps native safe-operation approval, while Persona's explicit full bypass answers permission requests automatically.
-External session models stay unspecified until native metadata is available. Session discovery does not resume them.
+`auto` keeps native safe-operation approval when agy accepts it. If agy applies `default` instead, the companion changes
+to `bypassPermissions` through agy's `accept-edits`, answers later permission requests automatically, publishes that final
+mode and adds one reloadable notice through the existing localized runtime-notice path. A session's explicit mode remains
+authoritative over later settings-file changes. A mode taken from agy's settings is read again on each session projection
+and applied again before the next prompt, so changing `agentMode` needs no companion restart. External session models stay
+unspecified until native metadata is available. Session discovery does not resume them.
 
 Availability checks use optional `check({launcher, cwd, prompt})` (`caps.check`) through the companion's authenticated
 ACP client. They run the existing one-word probe, cancel tool permission requests, and close their temporary session
@@ -501,9 +543,14 @@ node's shell check. Shell and managed launchers keep their own execution context
 A chat gets Persona's MCP server once, named `persona`, through ACP `mcpServers`. `agy` defers the tools over its
 declaration budget, largest first, and has no `call_mcp_tool` for servers passed through ACP, so an assistant chat's
 server runs behind `integrations/antigravity/mcp-proxy.mjs`, which adds a small `persona_call` tool that calls any
-Persona tool by name (#7333).
+Persona tool by name (#7333). The proxy declares only the tools larger than `persona_call`, so it is always the smallest
+declared and never the one deferred, however many small tools connectors add (sizes are what agy declares of a tool: its
+name, description and input schema). The others stay callable through it: `persona_call` with no name lists every tool,
+and those left out with their description and arguments (#10756).
 
-Implementation: `integrations/antigravity/lib/runtime.js` and `integrations/antigravity/lib/acp.js`.
+Implementation: `integrations/antigravity/lib/runtime.js`, `integrations/antigravity/lib/acp.js` and `integrations/antigravity/lib/policy.js`.
+
+For assistant supervision (`caps.supervision_policy`, #11173), the companion stores each supervised session's policy in an isolated directory `<agyDir>/persona-supervision/<rawId>` outside `~/.persona/assistant` and attaches it to that session alone through ACP `additionalDirectories` (verified against `initialize`'s `agentCapabilities.sessionCapabilities.additionalDirectories`). `agy` loads both `AGENTS.md` and `GEMINI.md` from `additionalDirectories` directly into `<user_rules>` on every turn (24,000-byte per-file cap), so policies above 24,000 bytes split cleanly across `AGENTS.md` and `GEMINI.md` up to 48,000 bytes, while shared `~/.persona/assistant/AGENTS.md` and concurrent ordinary chats stay untouched. Policy updates and demotions (`""`) synchronize atomically and reload the session via `session/resume`; busy role changes are refused with `busy`; missing ACP `additionalDirectories` support, unwritable directories or oversized policies fail closed with `assistant_supervision_runtime` before any prompt runs; and `session.close` removes the session's policy directory.
 
 Live text belongs to the ACP prompt currently executing. Queued prompts acquire the stream when they start, with an
 empty boundary. A tool call ends the current text message, so the next message replaces its words in the live slot.
@@ -521,6 +568,11 @@ identifies its loopback native service. `RevertToCascadeStep` receives `conversa
 index, including `-1` for an empty conversation. Native refusal propagates to the caller. The bridge uses the current
 native summary and replacement step indices to discard the abandoned export tail, then publishes a changed history
 token. This survives companion restarts without modifying native transcript files.
+
+Antigravity declares `caps.fork` for Agent and Assistant chats. `ForkConversation` keeps the existing workspace and
+copies through an inclusive native step index. The bridge resolves a reply from the exported transcript and stops
+before the next user turn so tool calls keep their results. A whole-chat fork sends `-1`; omitting the native index
+would select step zero. A fork of the main Assistant chat opens as a separate chat.
 
 The compact `transcript.jsonl` export can contain native `<truncated N bytes>` placeholders and can be ahead of
 the complete export. Use one source for sequences and content so a watch cannot advance past unread complete items.

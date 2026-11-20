@@ -18,7 +18,7 @@
    - 选项「{{.Label}}」：{{.LeadsTo}}{{end}}{{with .Recommend}}
    - 推荐：{{.}}{{end}}{{with .Cost}}
    - 等待的代价：{{.}}{{end}}{{end}}{{range $e.Asks}}
-   - 卡片 interaction_id={{.ID}}（machine={{.Machine}}，{{if eq .Kind "permission"}}权限{{else if eq .Kind "plan"}}计划{{else}}问题{{end}}，session_id={{.Session}}{{if .Reminded}}，到时间没处理；用户开了低打扰模式，没有发给用户，再交给你处理一次{{else if .Raised}}，下一层没有及时处理，上交到你这里{{end}}）：
+   - 卡片 interaction_id={{.ID}}（machine={{.Machine}}，{{if eq .Kind "permission"}}权限{{else if eq .Kind "plan"}}计划{{else if eq .Kind "screen"}}终端选项，仅用户能操作；需要用户选择时用 ask_escalate{{else}}问题{{end}}，session_id={{.Session}}{{if .Reminded}}，到时间没处理；用户开了低打扰模式，没有发给用户，再交给你处理一次{{else if .Raised}}，下一层没有及时处理，上交到你这里{{end}}）：
 {{chomp (indent "     " .Text)}}{{end}}{{with $e.Decisions}}
    这个任务已经定下的事：
 {{chomp (indent "   " .)}}{{end}}{{with $e.Ask}}
@@ -31,7 +31,7 @@
    它交回的文件（已经放到你这台电脑上，直接读；不要让它贴内容）：{{range .}}
    - {{.Name}}{{if .Error}}（没取回：{{.Error}}；在原电脑 {{.Path}}）{{else}}：{{.Path}}{{end}}{{end}}{{end}}{{with $e.Closeout}}
    它自己填的收尾记录（它的说法，没人核对过）：{{if eq .Status "done"}}做完了{{else if eq .Status "blocked"}}卡住了{{with .Waiting}}，在等{{.}}{{end}}{{else}}没做完{{end}}；合并：{{if eq .Merged "yes"}}是{{else if eq .Merged "no"}}否{{else}}没说或不适用{{end}}；部署：{{if eq .Deployed "yes"}}是{{else if eq .Deployed "no"}}否{{else}}没说或不适用{{end}}{{if or .CheckedMerged .CheckedDeployed}}
-   - hub 自己查了它的 PR：{{if eq .CheckedMerged "yes"}}已合并{{else if eq .CheckedMerged "no"}}没合并{{else}}合没合查不出{{end}}，{{if eq .CheckedDeployed "yes"}}线上正在跑的版本里有它{{else if eq .CheckedDeployed "no"}}线上正在跑的版本里没有它{{else}}上没上线查不出{{end}}{{end}}{{range .Did}}
+   - hub 自己查了它的 PR：{{if eq .CheckedMerged "yes"}}已合并{{else if eq .CheckedMerged "no"}}没合并{{else}}合没合查不出{{end}}，{{if .LocalDeployment}}本机部署包含该 PR 的改动{{else if eq .CheckedDeployed "yes"}}线上正在跑的版本里有它{{else if eq .CheckedDeployed "no"}}线上正在跑的版本里没有它{{else}}上没上线查不出{{end}}{{end}}{{range .Did}}
    - 做了：{{.}}{{end}}{{range .Artifacts}}
    - 产物：{{.}}{{end}}{{with .Verified}}
    - 验证：{{.}}{{end}}{{with .Missing}}

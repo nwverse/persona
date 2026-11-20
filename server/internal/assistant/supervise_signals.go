@@ -43,8 +43,9 @@ var (
 	// superviseEvery is the least time between two supervision messages; superviseUrgentEvery when one waits on a decision.
 	superviseEvery       = 10 * time.Minute
 	superviseUrgentEvery = 2 * time.Minute
-	// superviseNoMainLogEvery is how often a digest that still finds no main conversation says so in the log: the
-	// watch's every pass (superviseTick) tries again, and each said it once before.
+	// superviseNoMainLogEvery is how often a digest that still leaves signals waiting for a main conversation (none is
+	// set and no conversation that dispatched them can be told, or no machine) says so in the log: the watch's every
+	// pass (superviseTick) tries again, and each said it once before.
 	superviseNoMainLogEvery = time.Hour
 	// superviseNeedsAfter is how long an agent waits for an answer before the supervisor hears of it (the user was
 	// pushed; a quiet task's at once: the user was not).
@@ -72,9 +73,10 @@ type superviseSignal struct {
 	Detail, Ask      string
 	Minutes          int
 	// A report's (sigReport): its kind (progress, question, blocked, done), evidence and the step it is on.
-	Report      string
-	Evidence    []string
-	Step, Steps int
+	SourcePermission proto.SourcePermission
+	Report           string
+	Evidence         []string
+	Step, Steps      int
 	// no_progress: the tool calls the hub saw in the stretch, and how many were waits or repeats (supervise_progress.go).
 	Calls, Waits int
 	// Orphan: why nobody works on it (sigOrphaned): orphanError, orphanClosed or orphanOffline.
@@ -89,6 +91,10 @@ type superviseSignal struct {
 	Decision *prompts.SuperviseDecision
 	// Inbox: the Inbox item an inbox signal names, and how many new messages it tells (supervise_inbox.go).
 	Inbox *prompts.SuperviseInbox
+	// Optional routine batching keeps these in memory only, after routing and before delivery. They are never part of
+	// a persisted relay payload: once admitted, the existing queue owns delivery.
+	batchTo    string
+	batchUntil time.Time
 }
 
 const (
@@ -156,13 +162,14 @@ type superviseBook struct {
 	asks    map[string]string            // todo → what its agent last asked (InteractionRaised)
 	last    time.Time                    // when the last supervision message went out
 	queued  map[string][]superviseSignal // conversation → the signals of the message still waiting in its queue
+	batch   map[string]time.Time         // conversation → its routine batch's first-signal deadline
 	timer   *time.Timer
 	timerAt time.Time
 
 	resuming map[[2]string]struct{} // fingerprints of offline leader sends in flight, under dedupMu
 
-	// noMainSince is when digests started finding no main conversation (zero: the last one found it), noMainLogged
-	// when that was last logged (sendDigest).
+	// noMainSince is when digests started leaving signals waiting for a main conversation (zero: the last one left none
+	// waiting), noMainLogged when that was last logged (sendDigest).
 	noMainSince, noMainLogged time.Time
 	hold                      map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed
 	visible                   map[string]bool      // an explicit user action makes the current triage turn visible
@@ -180,6 +187,9 @@ func (b *superviseBook) init() {
 	}
 	if b.failSeen == nil {
 		b.failSeen = map[string]failSeen{}
+	}
+	if b.batch == nil {
+		b.batch = map[string]time.Time{}
 	}
 }
 
@@ -248,6 +258,15 @@ func (s *Service) signal(g superviseSignal) {
 		b.mu.Unlock()
 		return
 	}
+	s.queueSignal(g)
+}
+
+// queueSignal only adds a validated signal to the in-memory digest. It does not change the turn ledger.
+func (s *Service) queueSignal(g superviseSignal) {
+	if g.At.IsZero() {
+		g.At = time.Now()
+	}
+	b := &s.supervise
 	b.mu.Lock()
 	b.init()
 	// This early cache is not an unhandled source's delivery receipt: an owner wait
@@ -275,6 +294,7 @@ func (s *Service) signal(g superviseSignal) {
 				g.Inbox = cur.Inbox // the same message again: counted once
 			}
 		}
+		g.batchTo, g.batchUntil = cur.batchTo, cur.batchUntil
 	}
 	b.pending[g.id()] = g
 	s.scheduleDigestLocked(time.Now())
@@ -288,7 +308,7 @@ func (s *Service) scheduleDigestLocked(now time.Time) {
 	for _, g := range b.pending {
 		list = append(list, g)
 	}
-	wait, ok := digestWait(now, b.last, list, s.superviseTimings())
+	wait, ok := digestWaitWithBatch(now, b.last, list, s.superviseTimings(), s.supervisionBatchInterval(context.Background()))
 	if !ok {
 		return
 	}
@@ -423,6 +443,7 @@ func (s *Service) superviseLoop(ctx context.Context) {
 // main conversation's pushes that outlived superviseHoldMax.
 func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.autoReviewTick(ctx, now)
+	s.sessionReviewTick(ctx, now)
 	s.askTick(now)                 // cards held past their time go up a rung (ask_route.go)
 	s.handOverUnreviewed(ctx, now) // a review a side conversation left waiting goes to the main one's follow-up (side_handover.go)
 	routed := s.routedSessions()

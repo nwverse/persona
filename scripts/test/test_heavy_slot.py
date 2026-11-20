@@ -34,14 +34,19 @@ while release != "-" and not os.path.exists(release) and time.monotonic() < dead
 with open(log, "a") as f:
     f.write(f"{name} end\\n")
 """
-# A command that writes <ready> once its SIGTERM handler is in place and exits 42 when the TERM comes.
-TERM_CATCHER = """import signal, sys, time
+# How long the signal tests wait for a step that takes well under a second on an idle machine, and how long their
+# command sleeps when no signal comes: ten times the wait, so a TERM that never arrived cannot pass for a slow machine.
+SIGNAL_WAIT = 60
+UNSIGNALLED_SLEEP = 10 * SIGNAL_WAIT
+# A command that writes <ready> once its SIGTERM handler is in place and exits 42 when the TERM comes; without one it
+# sleeps UNSIGNALLED_SLEEP seconds and exits 3.
+TERM_CATCHER = f"""import signal, sys, time
 def caught(signum, frame):
     open(sys.argv[2], "w").write("TERM")
     sys.exit(42)
 signal.signal(signal.SIGTERM, caught)
 open(sys.argv[1], "w").write("ready")
-time.sleep(20)
+time.sleep({UNSIGNALLED_SLEEP})
 sys.exit(3)
 """
 # The same, for a caller that ignores SIGTERM: the command inherits the ignore and only reports what it got.
@@ -243,9 +248,15 @@ class HeavySlotTests(unittest.TestCase):
         (self.tmp / "catcher.py").write_text(TERM_CATCHER)
         ready, caught = self.tmp / "ready", self.tmp / "caught"
         proc = self.spawn("go", sys.executable, str(self.tmp / "catcher.py"), str(ready), str(caught))
-        self.wait_for(ready.exists, "the command never installed its handler")
+        self.wait_for(ready.exists, "the command never installed its handler", seconds=SIGNAL_WAIT)
         proc.send_signal(signal.SIGTERM)
-        proc.communicate(timeout=20)
+        try:
+            proc.communicate(timeout=SIGNAL_WAIT)
+        except subprocess.TimeoutExpired:
+            # The command sleeps ten times as long as this wait unless the TERM reaches it: say which side stalled.
+            if caught.exists():
+                self.fail(f"the command caught the TERM, but the helper had not exited {SIGNAL_WAIT}s later")
+            self.fail(f"the TERM never reached the command: it was still sleeping {SIGNAL_WAIT}s later")
         self.assertEqual("TERM", caught.read_text())
         self.assertEqual(42, proc.returncode)  # the command's own exit status after it handled the TERM
         self.assertEqual(0, self.run_helper("go", "true", env={"PERSONA_HEAVY_SLOT_TIMEOUT": "0"})[0])
@@ -257,7 +268,7 @@ class HeavySlotTests(unittest.TestCase):
         ready, caught = self.tmp / "ready", self.tmp / "caught"
         proc = self.spawn("go", sys.executable, str(self.tmp / "ignorer.py"), str(ready), str(caught),
                           preexec_fn=ignore_term)
-        self.wait_for(ready.exists, "the command never started")
+        self.wait_for(ready.exists, "the command never started", seconds=SIGNAL_WAIT)
         proc.send_signal(signal.SIGTERM)
         time.sleep(0.3)
         self.assertIsNone(proc.poll())
@@ -310,24 +321,73 @@ class HeavySlotDefaultsTests(unittest.TestCase):
         self.assertEqual("heavy_slot: this platform has no fcntl (Windows): running without a slot\n", err.getvalue())
 
 
+# The scripts whose run takes a slot, as a CI lane or a watcher step would name them.
+WRAPPED = ("heavy_slot.py", "app/sim.sh", "app/android.sh", "check-fast.sh", "scripts/sim.sh", "scripts/android.sh")
+# The files where a CI lane's or a watcher's steps live: CI, the watchers' scripts and example configs, and the skills
+# that run them (their scripts and the SKILL.md an Agent follows); the lanes they call are the CI scripts. Patterns as
+# Path.glob reads them: * stays in one directory, **/ crosses any number.
+CALLER_GROUPS = {
+    "CI": (".github/workflows/*.yml", "scripts/ci/*.sh", "scripts/ci/*.py"),
+    "the operations scripts, the PR and main watchers among them": (
+        "scripts/operations/*.py", "scripts/operations/*watch*.json", "scripts/operations/*watch*.service"),
+    "the PR watcher's skill": (".claude/skills/pr-review-merge-loop/**/*",),
+    "the main watcher's skill": (".claude/skills/main-verify-fix-loop/**/*",),
+}
+
+
+def tracked_text(root, patterns):
+    """([(path, text)], [path]): each file git tracks under root that matches one of the patterns, test_* files left
+    out, read as UTF-8, and the ones that are not UTF-8 text. A file git does not track (a build output, a local note
+    in a skill folder) is not read (#11250). Outside a git checkout (an exported tree), every matching file is."""
+    try:
+        listed = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--", *(":(glob)" + p for p in patterns)],
+                                capture_output=True, check=True, timeout=60).stdout
+        names = sorted({os.fsdecode(name) for name in listed.split(b"\0") if name})
+    except (OSError, subprocess.SubprocessError):
+        names = sorted({path.relative_to(root).as_posix() for pattern in patterns for path in root.glob(pattern)})
+    texts, skipped = [], []
+    for name in names:
+        path = root / name
+        if path.name.startswith("test_") or not path.is_file():
+            continue
+        try:
+            texts.append((name, path.read_text(encoding="utf-8")))
+        except UnicodeDecodeError:
+            skipped.append(name)
+    return texts, skipped
+
+
 class HeavySlotCallersTests(unittest.TestCase):
     def test_ci_and_the_pr_watcher_take_no_slot(self):
         # A hosted runner runs one job, so a slot there would only make that job's own steps wait for each other, and
-        # the PR watcher's checks must not queue behind local builds. Neither runs a script that takes a slot today,
-        # which is why CI does not set PERSONA_HEAVY_SLOTS=0 (docs/operations/testing.md "Heavy build slots"); a lane
-        # or a watcher step that starts to run one sets it there.
-        wrapped = ("heavy_slot.py", "app/sim.sh", "app/android.sh", "check-fast.sh", "scripts/sim.sh",
-                   "scripts/android.sh")
-        patterns = (".github/workflows/*.yml", "scripts/ci/*.sh", "scripts/ci/*.py", "scripts/operations/*.py")
-        files = [path for pattern in patterns for path in sorted(ROOT.glob(pattern))
-                 if not path.name.startswith("test_")]
-        self.assertTrue(files)
+        # the PR and main watchers' checks must not queue behind local builds: a lane or a watcher step that runs a
+        # script that takes a slot sets PERSONA_HEAVY_SLOTS=0 (docs/operations/testing.md "Heavy build slots").
         callers = []
-        for path in files:
-            text = path.read_text(encoding="utf-8")
-            if any(name in text for name in wrapped) and "PERSONA_HEAVY_SLOTS" not in text:
-                callers.append(str(path.relative_to(ROOT)))
+        for group, patterns in CALLER_GROUPS.items():
+            texts, skipped = tracked_text(ROOT, patterns)
+            # A moved directory must not leave its group scanning nothing.
+            self.assertTrue(texts or skipped, f"no files for {group}: {patterns}")
+            for name in skipped:
+                print(f"test_heavy_slot: {name} is not UTF-8 text, not read", file=sys.stderr)
+            callers += [name for name, text in texts
+                        if any(script in text for script in WRAPPED) and "PERSONA_HEAVY_SLOTS" not in text]
         self.assertEqual([], callers)
+
+    def test_only_tracked_text_files_are_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True, timeout=60)
+            (root / "scripts/ci/nested").mkdir(parents=True)
+            (root / "scripts/ci/lane.sh").write_text("scripts/app/android.sh test\n")
+            (root / "scripts/ci/picture.sh").write_bytes(b"\xff\xd8\xff not text")
+            (root / "scripts/ci/test_lane.sh").write_text("scripts/app/android.sh test\n")
+            (root / "scripts/ci/nested/deeper.sh").write_text("scripts/app/android.sh test\n")
+            subprocess.run(["git", "-C", str(root), "add", "-A"], check=True, timeout=60)
+            (root / "scripts/ci/stray.sh").write_bytes(b"\xff untracked")
+            texts, skipped = tracked_text(root, ("scripts/ci/*.sh",))
+        self.assertEqual([("scripts/ci/lane.sh", "scripts/app/android.sh test\n")], texts)
+        self.assertEqual(["scripts/ci/picture.sh"], skipped)
+
 
 if __name__ == "__main__":
     unittest.main()

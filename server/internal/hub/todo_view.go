@@ -28,6 +28,12 @@ const (
 	// featureTodoAsks: POST /api/v1/todos/{id}/asks/{ask}/answer answers a to-do's own asks by their view's ids
 	// (#10465), with a receipt under X-Persona-Op-Id (todo_receipts.go).
 	featureTodoAsks = assistantwire.CapabilityTodoAsks
+	// featureTodoTimeline: GET /api/v1/todos/{id}/timeline answers a to-do's conversation, and GET /api/v1/todos/{id}
+	// carries the rounds the paper shows, its results and what changed since the owner looked (#10465).
+	featureTodoTimeline = assistantwire.CapabilityTodoTimeline
+	// featureTodoImages: POST /api/v1/todos persists images and serves their private bytes (#11084). A hub-wide flag
+	// cannot promise image creation for only some managers, so an older or offline one hides the picker.
+	featureTodoImages = assistantwire.CapabilityTodoImages
 	// todoPlacesRoute is answered by every manager the to-dos list merges, joined (mergeTodoPlaces).
 	todoPlacesRoute = "GET /api/v1/todos/places"
 )
@@ -66,6 +72,34 @@ func (h *Hub) todoAsksFeatures() []string {
 		}
 	}
 	return []string{featureTodoAsks}
+}
+
+// todoTimelineFeatures is todo_timeline while every manager whose to-dos the list merges is connected and names it, as
+// todoViewFeatures has todo_view: a hub-wide feature cannot promise a to-do's history for part of the list, so an older
+// or offline manager hides it until it is ready, and clients draw no conversation, results or recap until then.
+func (h *Hub) todoTimelineFeatures() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	for _, id := range h.listManagers(ctx) {
+		if h.archiveManagerHas(id, assistantwire.CapabilityTodoTimeline) != http.StatusOK {
+			return nil
+		}
+	}
+	return []string{featureTodoTimeline}
+}
+
+// todoImageFeatures is todo_images only while every manager whose to-dos the list merges is connected and names it.
+// An older manager would ignore the additive images field and create an image-less to-do, so the Web offers no picker
+// in that case. It does not gate reading metadata or bytes that a capable manager already stored.
+func (h *Hub) todoImageFeatures() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	for _, id := range h.listManagers(ctx) {
+		if h.archiveManagerHas(id, assistantwire.CapabilityTodoImages) != http.StatusOK {
+			return nil
+		}
+	}
+	return []string{featureTodoImages}
 }
 
 // todoListSums are the members of a merged to-dos list the hub adds up over its answers (mergeList, before the list's
