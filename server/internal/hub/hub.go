@@ -47,14 +47,22 @@ type Hub struct {
 	// tests: replaces os.Hostname
 	hostname func() (string, error)
 
-	cfg      *Config
-	version  string
-	build    update.Build // channel, build number, where updates come from (docs/operations/hub-update.md)
-	upd      *updater     // updating itself to the publisher's release (selfupdate.go)
-	logger   *log.Logger
-	traffic  trafficLog // privacy-safe minute counters, flushed to the journal
-	machines []*Machine
-	byID     map[string]*Machine
+	cfg     *Config
+	version string
+	build   update.Build // channel, build number, where updates come from (docs/operations/hub-update.md)
+	upd     *updater     // updating itself to the publisher's release (selfupdate.go)
+	// quiesce and assistantProc pause the hub's own writers for a Web
+	// development snapshot (quiesce.go).
+	quiesce       writeQuiescer
+	assistantProc assistantGate
+	// deviceFinishes: device sessions that ended while a snapshot paused
+	// writes, written on resume (devicesessions.go).
+	deviceFinishesMu sync.Mutex
+	deviceFinishes   []deviceSessionFinish
+	logger           *log.Logger
+	traffic          trafficLog // privacy-safe minute counters, flushed to the journal
+	machines         []*Machine
+	byID             map[string]*Machine
 	// fs.watch: generation fences stale node writes, and forced replays survive machine-ID recreation.
 	fsWatchGenMu     sync.Mutex
 	fsWatchGen       map[string]uint64

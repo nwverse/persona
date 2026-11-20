@@ -489,6 +489,16 @@ input clears the previous reply preview, including input with no visible text. T
 until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while
 preserving genuine assistant questions. User messages and tool records remain available in the conversation items.
 
+A session is listed `unknown` when the evidence cannot say working, idle or done (`transcriptState` in
+`integrations/antigravity/lib/map.js`). It is never guessed as idle: an idle native summary closes a turn only when its
+step count covers the last exported step. The companion logs why, as reason counts, each time the tally across listed
+sessions changes (`agy unknown status: no_summary 1, summary_behind 2`, then `none` once it clears, #12003):
+`read_failed` (the native summary database could not be read), `no_summary`, `summary_not_idle`, `summary_behind` (the
+summary's step count does not cover the last exported step), `no_step_index`, and `no_relevant_step` (no user input,
+response, tool result or error has been exported). A failed summary read is logged when it starts or its cause changes,
+with SQLite's result-code text only, and once more when reads recover, with the number of failures. The lines carry no
+session IDs, message text or paths; under `personad node` they appear in the node log after `agy runtime:`.
+
 CLI companion sessions and herdr panes show images from exported tool results. Conversation pages carry only image
 references; Persona loads the bytes when an image is shown. It accepts PNG, JPEG, GIF and WebP up to 1,152 KiB from
 the result's inline data or local file. The Desktop companion still omits these images.

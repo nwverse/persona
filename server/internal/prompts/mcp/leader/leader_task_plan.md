@@ -90,7 +90,7 @@ Hand part of your own task to workers: each task you give this starts a new codi
           "expect_minutes": {
             "type": "integer",
             "minimum": 0,
-            "description": "optional minutes override; omit/0 for 60 (system_default). Review at 1×; stuck at 1.5× (min 20m); overdue at 3× (min 24h)"
+            "description": "optional minutes override; omit/0 for comparable history or the 60-minute system_default. Review at 1×; stuck at 1.5× (min 20m); overdue at 3× (min 24h)"
           },
           "why": {
             "type": "string",

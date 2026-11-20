@@ -206,17 +206,21 @@ Ledger for tasks supervised by the main chat (#3124, `docs/assistant/unified-ent
 ### 6. task_briefs and task_brief_todos tables
 A task's brief (#3822, `docs/assistant/unified-entry.md`, "Briefs"): what was asked when the work was handed out.
 - `task_briefs`: `id` (text, PK), `brief` (jsonb, written once: the owner's message, who started it, goal, `done_when`,
-  `expect_minutes`, `estimate_source`, `out_of_bounds`), `state` (jsonb: the log of dispatches, scope changes,
+  `expect_minutes`, `estimate_source`, `estimate_evidence`, `out_of_bounds`), `state` (jsonb: the log of dispatches, scope changes,
   completions, estimate_due and overdue marks, the result), `created_at`, `updated_at`. Nothing rewrites `brief`;
   `done_when` in effect is the brief's as its logged scope changes left it, and a supervised task's
-  `todo_supervision.done_when` carries the same list. These are JSON additions, so automatic estimates need no SQL migration;
-  pre-feature records with no estimate source stay outside the automatic clock.
+  `todo_supervision.done_when` carries the same list. Pre-feature records with no estimate source stay outside the automatic clock.
 - `task_brief_todos`: `todo_id` (text, PK, FK → `todos(id)` ON DELETE CASCADE), `brief_id` (FK → `task_briefs(id)`),
   `continues` (the to-do it took the work over from), `reason`, `linked_at`. A brief's rows in `linked_at` order are its
   lineage.
+- `task_estimate_rounds`: one row per new supervised plan dispatch, keyed by `round_id` with to-do and brief links.
+  Its machine, repository, task kind, mode, role and tier are immutable. A durable Agent link that matches that
+  cohort marks admission. The accepted review stores the first recorded completion's elapsed minutes, once. Rows
+  count only while their exact accepted closure still stands. The estimator reconciles a bounded batch of recent
+  completed rounds after an interrupted sample write. The manager keeps this table private.
 
 `GET /api/v1/todos` carries both on a to-do that has a brief: `brief` (the record, its `log`, `criteria` and
-`expect_minutes_now` in effect, `estimate_source_now`, `estimate_clock_at`, `estimate_due_at`,
+`expect_minutes_now` in effect, `estimate_source_now`, `estimate_evidence_now`, `estimate_clock_at`, `estimate_due_at`,
 `estimate_due_told_at`, the latest `actual_minutes` and `completion_reported_at`, `clock_at`, `due_at`, `overdue_at`,
 `result`) and `lineage`. A task from before briefs gets a reconstructed one lazily.
 

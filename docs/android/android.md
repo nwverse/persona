@@ -664,6 +664,27 @@ Ported 2026-11-02 from the old App on the main line (inventory items C5–C7, C9
 - Mock hub: `MOCK_SOURCES=1` adds three sessions: "整理部署脚本" ("tidy deploy scripts"; Codex live, can send, can join live, can't approve before joining, with a Codex permission card that has `always_label`), "迁移日志采集" ("migrate log collection"; Codex history, read-only, with `read_only_reason`) and "生成季度报表" ("generate quarterly report"; DSH runtime, `agent_label: DSH`, no terminal, with a permission card without `always_label`). `POST …/attach` sets `attached` to true and enables approval, and returns 403 `codex_read_only` for sessions that can't attach. `/info` returns Codex's model and version for Codex sessions. `MOCK_SCREEN_CHAT=1` adds a terminal dialog with a header ("计划模式", "plan mode") and a back-to-chat option ("照片同步脚本支持 HEIC", "photo sync script supports HEIC"), to look at the interaction panel's tags, numbering and **Say it in the chat**. To see the Mode button under **Allow all**, `POST /api/v1/sessions/{mid}/{sid}/modes {"permission_mode":"bypassPermissions"}` to the mock hub directly.
 - Unit tests: `SessionSourceTest` in `core:domain` (cases from the old `SessionSourcesTest` + runtime, resume commands), `AgentCloseTest`, `AlwaysOfferTest` and the answer / approval fixtures; `ModelsTest` in `core:contracts` (new fields, `agentLabel`, `SessionInfo`); `HttpChatActionsTest` (attach, queue, info) and `HttpAgentOperationsTest` (attach) in `core:hub`; `SessionModesTest` (old `SessionModesTest`, `ModelPickerTest`), `ChatSessionInfoTest` (old `SessionInfoTest`) and `InteractionOptionsTest` in `feature:chat`; `AgentsListInfoTest` in `feature:agents`; `NotificationExecutionTest` in `platform:notify` (sessions that can't approve send nothing back).
 
+### Background tasks in Agent chat
+
+**Background tasks** in the Agent chat menu opens the native panel. Glass also has the activity pill when the
+Agent is running background work or has a loop. Picking or sending the bare `/workflows` command opens the
+latest workflow locally. A workflow card opens its own run, including in read-only Agent chats. Subagent and
+workflow-agent chats do not offer that action. When the draft includes an attachment, quoted context, or a
+selected saved prompt, the local command suggestion stays hidden and the draft can be sent as a message.
+
+The panel groups work into **Running** and **Completed**. A loop keeps its confirmed **Stop Loop** action.
+Workflow details show phases and their Agents. Shell commands and Monitors have details even when the output
+path has not arrived. When the hub reports a retained terminal result, that result takes precedence over a
+running entry. An older hub dropping a command from its running list leaves its outcome unknown and stops the
+elapsed clock. The selected row stays open while a running command becomes completed. Back returns to the list
+and its originating row.
+
+The output preview uses one authenticated file suffix request of at most 64 KiB per read, scoped to the
+session's computer and manager. Live reads run only while the detail is shown. Ending a task takes a final read.
+Leaving the detail cancels any request that is still waiting on data. A failure keeps the last good log and offers
+Retry. **Open as file** uses the normal file viewer. A summary that may omit background details is refreshed
+through the existing exact session lookup when an open panel receives a list hint or reconnects.
+
 ### Switching between Claude Code and Codex
 
 On a hub that advertises `engine_switch`, the Glass Agent model picker offers both engines for a running,

@@ -312,6 +312,7 @@ func (s *Service) recordBriefCompletion(ctx context.Context, t Todo, source stri
 	if changed {
 		s.clearEstimateDue(t.ID) // a queued deadline must not arrive after the active done report
 		s.todosChanged(ctx)
+		s.learnAcceptedEstimate(ctx, t.ID)
 	}
 }
 

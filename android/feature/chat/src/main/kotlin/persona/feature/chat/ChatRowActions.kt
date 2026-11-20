@@ -81,6 +81,7 @@ internal data class ChatWorkflows(
     val runs: Map<String, Workflow>,
     val folds: WorkflowFolds,
     val open: ((WorkflowAgent) -> Unit)?,
+    val openBackground: ((Workflow) -> Unit)? = null,
 )
 
 internal val LocalChatWorkflows = compositionLocalOf<ChatWorkflows?> { null }

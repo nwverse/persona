@@ -102,7 +102,7 @@ func (t *PlanTask) noteWhy(note string) {
 // launcher list rather than another probe. A read-only task whose launcher has no read-only mode is refused here
 // (readonlyLauncherRefusal), when it is planned and again before it starts.
 func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, own startPick, params map[string]any) (startAgent, error) {
-	note, agent, err := s.fitLauncher(ctx, m, own, params)
+	note, agent, err := s.fitNewLauncher(ctx, m, own, params)
 	if err != nil {
 		return agent, err
 	}
@@ -284,6 +284,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err != nil {
 		return "", "", err
 	}
+	t.Model, _ = params["model"].(string)
 	if err := checkStartSpeed(params, fit, ""); err != nil {
 		return "", "", err
 	}
