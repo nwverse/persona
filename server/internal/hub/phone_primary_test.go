@@ -245,6 +245,26 @@ func TestAnotherDeviceStandsInWhenThePrimaryDeviceDoesNotWake(t *testing.T) {
 	}
 }
 
+// A caller that goes away while the hub waits for the primary device leaves nothing on another device.
+func TestNoStandInForACallerThatLeftDuringTheWake(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h, _, _ := primaryPhoneHub(t, "phone_reminders_create")
+		ipad := connectPhone(t, h, "ipad", "Test iPad", "ios", "phone_reminders_create")
+		choosePrimary(h, "dev_iphone", "Test iPhone")
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan proto.ToolResult, 1)
+		go func() { done <- h.callPhone(ctx, "phone_reminders_create", json.RawMessage(`{"title":"x"}`)) }()
+		time.Sleep(5 * time.Second) // waiting for the iPhone
+		cancel()
+		got := <-done
+		synctest.Wait()
+		if !got.IsError {
+			t.Fatalf("result = %+v, want an error for the gone caller", got)
+		}
+		noCallTo(t, ipad)
+	})
+}
+
 func TestPhoneCallsNameThePrimaryDeviceWhenNothingCanAnswer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h, _, sink := primaryPhoneHub(t, "phone_reminders_list")

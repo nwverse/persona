@@ -587,10 +587,13 @@ func (h *Hub) callPhoneWithWait(ctx context.Context, name string, args json.RawM
 				return proto.TextResult(phoneNotOnScreen, true)
 			}
 		default:
+			c = nil
 			if woken := h.wakePhone(ctx, name, wakeFor); woken != nil {
 				c = woken
-			} else if offers {
-				c = h.phoneClient(name) // the primary device did not come: another connected device answers
+			} else if offers && ctx.Err() == nil {
+				// The primary device did not come: another connected device answers, unless the caller has gone
+				// meanwhile (a write would ask on that device for a call nobody waits for).
+				c = h.phoneClient(name)
 			}
 		}
 	}
