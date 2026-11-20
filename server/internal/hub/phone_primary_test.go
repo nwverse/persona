@@ -29,12 +29,58 @@ type primaryQueueStore struct {
 
 func (s *primaryQueueStore) EnqueuePhoneWrite(_ context.Context, id, tool string, args json.RawMessage) (*db.PhoneWrite, error) {
 	w := db.PhoneWrite{ID: id, Tool: tool, Args: args, State: "queued"}
+	s.mu.Lock()
 	s.queued = append(s.queued, w)
+	s.mu.Unlock()
 	return &w, nil
 }
 
 func (s *primaryQueueStore) FindQueuedPhoneWrite(context.Context, string, json.RawMessage) (*db.PhoneWrite, error) {
 	return nil, nil
+}
+
+func (s *primaryQueueStore) QueuedPhoneWrites(context.Context) ([]db.PhoneWrite, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []db.PhoneWrite
+	for _, w := range s.queued {
+		if w.State == "queued" {
+			out = append(out, w)
+		}
+	}
+	return out, nil
+}
+
+func (s *primaryQueueStore) ClaimPhoneWrite(_ context.Context, id string) (bool, error) {
+	return s.move(id, "queued", "delivering", nil), nil
+}
+
+func (s *primaryQueueStore) FinishPhoneWrite(_ context.Context, id, state string, result json.RawMessage) error {
+	s.move(id, "delivering", state, result)
+	return nil
+}
+
+func (s *primaryQueueStore) move(id, from, to string, result json.RawMessage) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queued {
+		if s.queued[i].ID == id && s.queued[i].State == from {
+			s.queued[i].State, s.queued[i].Result = to, result
+			return true
+		}
+	}
+	return false
+}
+
+func (s *primaryQueueStore) state(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, w := range s.queued {
+		if w.ID == id {
+			return w.State
+		}
+	}
+	return ""
 }
 
 // DeviceTokens marks revoked credentials as the database does (revoked_at); meshStore only stops their logins.
@@ -288,21 +334,44 @@ func TestQueuedWritesWaitForThePrimaryDevice(t *testing.T) {
 	choosePrimary(h, "dev_iphone", "Test iPhone")
 	got := h.callPhone(context.Background(), "phone_reminders_create", json.RawMessage(`{"title":"call back","queue_if_offline":true}`))
 	var receipt db.PhoneWrite
-	if got.IsError || json.Unmarshal([]byte(textOf(got)), &receipt) != nil || receipt.State != "queued" || len(store.queued) != 1 {
+	if got.IsError || json.Unmarshal([]byte(textOf(got)), &receipt) != nil || receipt.State != "queued" || store.state(receipt.ID) != "queued" {
 		t.Fatalf("result = %+v, want a queue receipt while the primary device is away", got)
 	}
 	noCallTo(t, ipad)
-	if c := h.queuedWriteClient("phone_reminders_create"); c != nil {
-		t.Fatalf("a queued write would go to %s while the primary device is away", c.device)
+	// The delivery loop leaves it queued while only the iPad is connected...
+	h.deliverPhoneWrites(context.Background())
+	noCallTo(t, ipad)
+	if state := store.state(receipt.ID); state != "queued" {
+		t.Fatalf("with only the iPad connected the write is %s", state)
 	}
+	// ...and delivers it to the primary device once it connects.
 	iphone := connectPhone(t, h, "iphone", "Test iPhone", "ios", "phone_reminders_create")
-	if c := h.queuedWriteClient("phone_reminders_create"); c != iphone {
-		t.Fatal("a queued write does not go to the primary device once it connects")
+	delivered := make(chan struct{})
+	go func() { h.deliverPhoneWrites(context.Background()); close(delivered) }()
+	answerPhoneCall(t, h, iphone, "phone_reminders_create", `{"id":"r1"}`)
+	<-delivered
+	if state := store.state(receipt.ID); state != "succeeded" {
+		t.Fatalf("after the iPhone answered the write is %s", state)
 	}
-	choosePrimary(h, "", "") // Automatic: any connected phone takes it, as before
-	if c := h.queuedWriteClient("phone_reminders_create"); c == nil {
-		t.Fatal("without a primary device a queued write found no phone")
+	noCallTo(t, ipad)
+}
+
+// With the primary device connected a queued write is not queued: it goes to the primary device at once.
+func TestQueueIfOfflineCallsAConnectedPrimaryDevice(t *testing.T) {
+	h, store, _ := primaryPhoneHub(t, "phone_reminders_create")
+	iphone := connectPhone(t, h, "iphone", "Test iPhone", "ios", "phone_reminders_create")
+	ipad := connectPhone(t, h, "ipad", "Test iPad", "ios", "phone_reminders_create")
+	h.onClientMessage(context.Background(), ipad, []byte(`{"type":"ping"}`))
+	choosePrimary(h, "dev_iphone", "Test iPhone")
+	done := callPhoneAsync(h, "phone_reminders_create", `{"title":"now","queue_if_offline":true}`)
+	answerPhoneCall(t, h, iphone, "phone_reminders_create", `{"id":"r2"}`)
+	if got := <-done; got.IsError || textOf(got) != `{"id":"r2"}` {
+		t.Fatalf("result = %+v, want the iPhone's answer", got)
 	}
+	if n := len(store.queued); n != 0 {
+		t.Fatalf("%d writes queued with the primary device connected", n)
+	}
+	noCallTo(t, ipad)
 }
 
 func TestOnScreenToolsGoToAConnectedDeviceWhileThePrimaryDeviceIsAway(t *testing.T) {
@@ -322,9 +391,96 @@ func TestOnScreenToolsGoToAConnectedDeviceWhileThePrimaryDeviceIsAway(t *testing
 			t.Fatalf("a clipboard call woke the iPhone (%d pushes)", n)
 		}
 		var object map[string]any
-		if json.Unmarshal([]byte(textOf(got)), &object) != nil || object["device_note"] == nil {
-			t.Fatalf("result = %+v, want the note on it", got)
+		note := prompts.RenderPhoneStandIn(prompts.PhoneStandIn{Device: "Test iPad", Primary: "Test iPhone"})
+		if json.Unmarshal([]byte(textOf(got)), &object) != nil || object["device_note"] != note || object["ok"] != true {
+			t.Fatalf("result = %+v, want the answer with the note", got)
 		}
+	})
+}
+
+func TestOnScreenToolsGoToAConnectedPrimaryDevice(t *testing.T) {
+	h, _, _ := primaryPhoneHub(t, "phone_clipboard_set")
+	iphone := connectPhone(t, h, "iphone", "Test iPhone", "ios", "phone_clipboard_set")
+	ipad := connectPhone(t, h, "ipad", "Test iPad", "ios", "phone_clipboard_set")
+	h.onClientMessage(context.Background(), ipad, []byte(`{"type":"ping"}`))
+	choosePrimary(h, "dev_iphone", "Test iPhone")
+	done := callPhoneAsync(h, "phone_clipboard_set", `{"text":"hello"}`)
+	answerPhoneCall(t, h, iphone, "phone_clipboard_set", `{"ok":true}`)
+	if got := <-done; got.IsError || textOf(got) != `{"ok":true}` {
+		t.Fatalf("result = %+v, want the iPhone's answer untouched", got)
+	}
+	noCallTo(t, ipad)
+}
+
+func TestOnScreenToolsWithNothingConnectedAnswerAtOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h, _, sink := primaryPhoneHub(t, "phone_clipboard_get")
+		choosePrimary(h, "dev_iphone", "Test iPhone")
+		start := time.Now()
+		got := h.callPhone(context.Background(), "phone_clipboard_get", json.RawMessage(`{}`))
+		if !got.IsError || textOf(got) != phoneNotOnScreen || time.Since(start) != 0 {
+			t.Fatalf("result = %+v after %v, want the open-Persona answer at once", got, time.Since(start))
+		}
+		synctest.Wait()
+		if n := sink.count("iphone", "background", "") + sink.count("ipad", "background", ""); n != 0 {
+			t.Fatalf("a clipboard call woke a device (%d pushes)", n)
+		}
+	})
+}
+
+// What the primary device offers is judged by what its app offers now while it is connected, and by its latest
+// registration while it is away: a stale record never sends a call into a 20-second wait.
+func TestPrimaryDeviceOffersWhatItOffersNow(t *testing.T) {
+	t.Run("connected", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			h, _, sink := primaryPhoneHub(t, "phone_health_summary")
+			connectPhone(t, h, "iphone", "Test iPhone", "ios") // Health turned off: the app offers nothing now
+			ipad := connectPhone(t, h, "ipad", "Test iPad", "ios", "phone_health_summary")
+			h.mu.Lock() // the registration still lists the tool, as when its write is late or failed
+			h.phoneTools["iphone"] = db.PhoneToolRegistration{DeviceID: "iphone", Platform: "ios", CredentialID: "dev_iphone",
+				Tools: phoneToolsNamed("phone_health_summary"), UpdatedAt: time.Now()}
+			h.mu.Unlock()
+			choosePrimary(h, "dev_iphone", "Test iPhone")
+			start := time.Now()
+			done := callPhoneAsync(h, "phone_health_summary", `{}`)
+			answerPhoneCall(t, h, ipad, "phone_health_summary", `{"days":[]}`)
+			got := <-done
+			if time.Since(start) != 0 {
+				t.Fatalf("waited %v for a connected primary device that does not offer the tool", time.Since(start))
+			}
+			synctest.Wait()
+			if n := sink.count("iphone", "background", ""); n != 0 {
+				t.Fatalf("a connected iPhone was pushed %d times", n)
+			}
+			var object map[string]any
+			if json.Unmarshal([]byte(textOf(got)), &object) != nil || object["device_note"] == nil {
+				t.Fatalf("result = %+v, want the note on the iPad's answer", got)
+			}
+		})
+	})
+	t.Run("away", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			h, _, sink := primaryPhoneHub(t, "phone_health_summary")
+			ipad := connectPhone(t, h, "ipad", "Test iPad", "ios", "phone_health_summary")
+			h.mu.Lock() // an older app's registration under the credential, and the newer one without the tool
+			h.phoneTools["dev_iphone"] = db.PhoneToolRegistration{DeviceID: "dev_iphone", CredentialID: "dev_iphone",
+				Tools: phoneToolsNamed("phone_health_summary"), UpdatedAt: time.Now().Add(-time.Hour)}
+			h.phoneTools["iphone"] = db.PhoneToolRegistration{DeviceID: "iphone", Platform: "ios", CredentialID: "dev_iphone",
+				Tools: phoneToolsNamed("phone_location_current"), UpdatedAt: time.Now()}
+			h.mu.Unlock()
+			choosePrimary(h, "dev_iphone", "Test iPhone")
+			start := time.Now()
+			done := callPhoneAsync(h, "phone_health_summary", `{}`)
+			answerPhoneCall(t, h, ipad, "phone_health_summary", `{"days":[]}`)
+			<-done
+			if time.Since(start) != 0 {
+				t.Fatalf("waited %v on a stale registration", time.Since(start))
+			}
+			synctest.Wait()
+			if n := sink.count("iphone", "background", ""); n != 0 {
+				t.Fatalf("the iPhone was woken for a tool its latest registration does not offer (%d pushes)", n)
+			}
+		})
 	})
 }
 
@@ -424,12 +580,16 @@ func TestPrimaryPhoneSetting(t *testing.T) {
 		t.Fatalf("calls still go first to the revoked %q", credential)
 	}
 
-	// Automatic again.
+	if code, out = call(t, mux, "PUT", "/api/v1/phone/primary", master, `{"credential_id":"dev_iphone"}`); code != http.StatusConflict || out["code"] != "not_a_phone" {
+		t.Fatalf("choosing a revoked credential = %d %v", code, out)
+	}
+
+	// Automatic again, an id of only spaces included.
 	code, out = call(t, mux, "PUT", "/api/v1/phone/primary", master, `{"credential_id":"dev_ipad"}`)
 	if primary, _ := phone(out); code != 200 || primary != "dev_ipad" {
 		t.Fatalf("PUT the iPad = %d %v", code, out)
 	}
-	code, out = call(t, mux, "PUT", "/api/v1/phone/primary", master, `{"credential_id":""}`)
+	code, out = call(t, mux, "PUT", "/api/v1/phone/primary", master, `{"credential_id":"  "}`)
 	if primary, _ := phone(out); code != 200 || primary != "" {
 		t.Fatalf("PUT Automatic = %d %v", code, out)
 	}

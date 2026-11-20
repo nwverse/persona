@@ -571,6 +571,7 @@ func (h *Hub) revoked(id string) {
 		}
 	}
 	h.mu.Unlock()
+	h.wakePhoneWrites() // writes queued for a primary device that was this one may go to another now (phone_primary.go)
 	for _, c := range gone {
 		c.conn.CloseNow()
 	}

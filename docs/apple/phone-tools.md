@@ -22,12 +22,16 @@ Each call goes to one of them (`callPhoneWithWait` in `server/internal/hub/hub.g
   for a phone that offers it.
 - **A primary device** (#12019): the owner picks one in Settings › Devices on iPhone or iPad (`PUT /api/v1/phone/primary`,
   `docs/protocol/protocol.md` "Authentication"). The hub keeps it in its own settings (`phone.primary`), one value for
-  every client. While the primary device's registration offers the tool:
+  every client. While the primary device offers the tool (connected: what its app offers now; away: its latest
+  registration):
   1. connected, it takes the call, even when another device was active more recently;
   2. not connected, the hub wakes it (iOS only; an Android phone is never woken) and waits up to 20 seconds for it
      alone: another device connecting meanwhile does not end the wait;
   3. still away, another connected device that offers the tool answers, in the automatic order. With none, the call
      fails naming the primary device (`tools/phone_primary_offline.md`).
+
+  A primary device that cannot be reached (switched off, or Persona force-quit so the silent push never wakes it)
+  costs every call that wait before another device answers; choosing Automatic while it is away avoids it.
 
   The clipboard tools (`phoneOnScreenTools`) are never woken for: a connected primary device takes them, otherwise
   another connected device, otherwise the usual "open Persona" answer. Queued writes ("Offline write queue" below) wait

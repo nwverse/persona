@@ -53,29 +53,33 @@ func (h *Hub) loadPhonePrimary(ctx context.Context) {
 	h.mu.Unlock()
 }
 
-// primaryPhoneLocked is the chosen primary device's credential while the hub knows a registration of it (revoking a
-// credential drops its registrations, revoked()), and whether that registration offers tool ("" any tool). A primary
-// device that does not offer the tool (that data source is off there, or the tool is another platform's) leaves the
-// call to the automatic order. The caller holds h.mu.
+// primaryPhoneLocked is the chosen primary device's credential while the hub knows the device (connected, or with a
+// registration; revoking a credential drops both, revoked()), and whether it offers tool ("" any tool). Connected, that
+// is what its app offers now: a registration is written after the connection learns the tools, and a failed write
+// leaves it behind. Away, it is its latest registration (an older app's, kept under the credential itself, may be left
+// beside it). A primary device that does not offer the tool (that data source is off there, or the tool is another
+// platform's) leaves the call to the automatic order. The caller holds h.mu.
 func (h *Hub) primaryPhoneLocked(tool string) (credential string, offers bool) {
 	id := h.primaryPhone.CredentialID
 	if id == "" {
 		return "", false
 	}
-	known := false
+	if c := h.phoneClientLocked("", id); c != nil {
+		return id, tool == "" || c.phoneToolNames[tool]
+	}
+	var latest *db.PhoneToolRegistration
 	for _, r := range h.phoneTools {
-		if r.CredentialID != id {
-			continue
-		}
-		known = true
-		for _, t := range r.Tools {
-			if tool == "" || t.Name == tool {
-				return id, true
-			}
+		if r.CredentialID == id && (latest == nil || r.UpdatedAt.After(latest.UpdatedAt)) {
+			latest = &r
 		}
 	}
-	if !known {
+	if latest == nil {
 		return "", false
+	}
+	for _, t := range latest.Tools {
+		if tool == "" || t.Name == tool {
+			return id, true
+		}
 	}
 	return id, false
 }
@@ -114,6 +118,19 @@ func (h *Hub) phoneClientOf(tool, credential string) *client {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.phoneClientLocked(tool, credential)
+}
+
+// phoneClientPreferring is the connected phone that takes tool: primary's connection while it has one, else the
+// automatic order. Unlike phoneClient it does not read the setting again, so one call keeps the primary it started with.
+func (h *Hub) phoneClientPreferring(tool, primary string) *client {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if primary != "" {
+		if c := h.phoneClientLocked(tool, primary); c != nil {
+			return c
+		}
+	}
+	return h.phoneClientLocked(tool, "")
 }
 
 // queuedWriteClient is where a queued write is delivered: the primary device when one is chosen and offers the tool
@@ -192,6 +209,7 @@ func (h *Hub) phonePrimaryRoutes(api *http.ServeMux) {
 		h.mu.Lock()
 		h.primaryPhone = next
 		h.mu.Unlock()
+		h.wakePhoneWrites() // writes queued for the previous choice may go now
 		writeJSON(w, h.phonePrimaryView(tokens))
 	})
 }
