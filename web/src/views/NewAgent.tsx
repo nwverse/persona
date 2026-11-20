@@ -24,7 +24,7 @@ import { WorkspaceChoices } from "./NewAgentWorkspaces";
 import { AttachmentTray } from "../ui/AttachmentTray";
 import { modelPurpose, modelSummary, type ModelBinding } from "../lib/model-config";
 import {
-  effortChoices, effortRule, fitEffort, followedBinding, inlineTextStart, launcherAgent, listedModes, machineLaunchers, pickerLauncher, startPicks, takesEffort, tierLeftOut, type LauncherDefault, type PickerTier,
+  effortChoices, effortRule, fitEffort, followedBinding, inlineTextStart, launcherAgent, listedModes, machineLaunchers, nativeOmpStart, pickerLauncher, startCatalogHost, startPicks, takesEffort, tierLeftOut, type LauncherDefault, type PickerTier,
   type UnavailableLauncher,
 } from "../lib/launcher-models";
 import { choiceCarries, modelTitle, type ModelChoice } from "../lib/new-agent-panel";
@@ -501,13 +501,18 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const listEntry = launchers.find((l) => l.name === listLauncher);
   const desktopStart = startsInDesktopApp(listEntry);
   const opensIn = workspace?.host ?? (desktopStart ? undefined : host || undefined);
+  const picked = online.find((m) => m.id === mid);
+  const hosts = picked ? startHosts(picked) : [];
+  const hostDefault = picked ? currentHosts(picked).default : "";
+  const startHost = workspace?.host ?? (host || hostDefault);
+  const catalogHost = startCatalogHost(listEntry, opensIn, startHost);
   useEffect(() => {
     if (!open || !mid || !listLauncher) return;
-    const key = JSON.stringify([mid, listLauncher, opensIn]);
-    void readModels(mid, listLauncher, { again: !readThisTime.current.has(key), first: true, host: opensIn });
+    const key = JSON.stringify([mid, listLauncher, catalogHost]);
+    void readModels(mid, listLauncher, { again: !readThisTime.current.has(key), first: true, host: catalogHost });
     readThisTime.current.add(key);
-  }, [open, mid, listLauncher, opensIn]);
-  const models = useModelList(open ? mid : "", listLauncher, opensIn);
+  }, [open, mid, listLauncher, catalogHost]);
+  const models = useModelList(open ? mid : "", listLauncher, catalogHost);
   // an older hub has no list (null): no model is picked
   useEffect(() => {
     if (models.list === null) setModel("");
@@ -524,31 +529,39 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setModel(c.model);
     setEffort(c.effort);
   };
-  // a preset: the launcher, model and effort it fills in (the model is checked once the list is in)
-  const pickTier = (x: PickerTier) => pickModel({ launcher: x.launcher, model: x.model ?? "", effort: x.effort ?? "" }, x);
+  // a preset: the launcher, model, effort and optional permission mode it fills in (the model is checked once the list is in)
+  const pickTier = (x: PickerTier) => {
+    pickModel({ launcher: x.launcher, model: x.model ?? "", effort: x.effort ?? "" }, x);
+    if (x.permission_mode) {
+      const targetLauncher = launchers.find((l) => l.name === x.launcher);
+      const targetListed = listedModes(targetLauncher);
+      if (targetListed) setProviderMode(targetListed.includes(x.permission_mode) ? x.permission_mode : "");
+      else setMode(x.permission_mode);
+    }
+  };
   const followDefault = () => pickModel({ launcher: "", model: "", effort: "" });
 
   // Where it opens, when the machine enables more than one engine (#2576).
-  const picked = online.find((m) => m.id === mid);
-  const hosts = picked ? startHosts(picked) : [];
-  const hostDefault = picked ? currentHosts(picked).default : "";
   useEffect(() => { setHost(""); }, [open, mid]);
   const agent = launcherAgent(listLauncher, launchers, models.list);
-  const previousCatalog = useRef({ host: opensIn, launcher: listLauncher, agent });
+  const nativeOmp = nativeOmpStart(agent, listEntry, startHost);
+  const previousCatalog = useRef({ host: opensIn, nativeOmp, launcher: listLauncher, agent });
   useLayoutEffect(() => {
     const previous = previousCatalog.current;
-    previousCatalog.current = { host: opensIn, launcher: listLauncher, agent };
-    if (open && previous.host !== opensIn && previous.launcher === listLauncher && (agent === "agy" || previous.agent === "agy")) {
-      // A model selected for another AGY host may be absent from this host's catalog.
+    previousCatalog.current = { host: opensIn, nativeOmp, launcher: listLauncher, agent };
+    const changedAgyHost = previous.host !== opensIn && (agent === "agy" || previous.agent === "agy");
+    const leftNativeOmp = previous.nativeOmp && !nativeOmp;
+    if (open && previous.launcher === listLauncher && (changedAgyHost || leftNativeOmp)) {
+      // A model from this host's picker may no longer be available on the next host.
       setModel("");
       setEffort("");
       setTier(null);
     }
-  }, [open, opensIn, listLauncher, agent]);
+  }, [open, opensIn, nativeOmp, listLauncher, agent]);
   // what a start on it takes besides the model (#8261): Claude Code's modes and efforts, or the permission modes a
   // launcher lists (Paseo's other providers) and the efforts its model lists, or neither (Codex keeps its own)
   const claudeModes = takesEffort(agent) && !listedModes(listEntry);
-  const providerModes = claudeModes ? undefined : listedModes(listEntry);
+  const providerModes = claudeModes || nativeOmp ? undefined : listedModes(listEntry);
   // Codex takes its first message with the start (lib/new-agent.ts); a computer that can opens it without one too
   // (prompt_optional, docs/integrations/codex.md "Starting without a first message"), an older one needs it
   const codex = agent === "codex";
@@ -629,7 +642,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   }, [open, mid, listing, nearPath, nearPrefix, workspace, manager, credential]);
   useEffect(() => { if (!desktopStart) setNaming(false); }, [desktopStart]);
   const defaultRuns = unified && launchersOf === mid ? pickerLauncher("", followedBinding("", configured)) : "";
-  const defaultBlock = defaultRuns ? launcherBlock(launchers.find((l) => l.name === defaultRuns)) : null;
+  const defaultEntry = launchers.find((l) => l.name === defaultRuns);
+  const defaultBlock = defaultRuns ? launcherBlock(defaultEntry) : null;
   const helpLauncher = helpFor ? launchers.find((l) => l.name === helpFor) : undefined;
   const helpBlock = helpLauncher ? launcherBlock(helpLauncher) : null;
   // what a launcher ID is called (#5029): this computer's launchers first, then the model configuration's providers
@@ -640,11 +654,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // offered with Claude Code whose effort can be set here; grayed when this computer's Claude Code is known to be too old
   const ultracodeShown = !loadingModels && efforts.length > 0 && ultracodeStartOffered(features, agent);
   // what of the picked preset this launcher can't take, said once its list is in
-  const tierMissed = tier && listLauncher === tier.launcher && models.list !== undefined ? tierLeftOut(tier, { agent, list: models.list, followed, launcher: listEntry }) : [];
+  const startModelOptions = { agent, list: models.list, followed, launcher: listEntry, nativeOmp };
+  const tierMissed = tier && listLauncher === tier.launcher && (models.list !== undefined || (agent === "omp" && models.error)) ? tierLeftOut(tier, startModelOptions) : [];
   // the follow row's second line: what Model settings › New agent runs (the hub's default, by display names)
-  const defaultList = useModelList(open ? mid : "", defaultRuns, opensIn).list;
+  const defaultList = useModelList(open ? mid : "", defaultRuns, startCatalogHost(defaultEntry, opensIn, startHost)).list;
   const followDetail = hubDefault
-    ? [hubDefault.provider && launcherTitle(hubDefault.provider, names), hubDefault.model && modelTitle(defaultList, hubDefault.model), hubDefault.effort && effortTitle(hubDefault.effort)].filter(Boolean).join(" · ")
+    ? [hubDefault.provider && launcherTitle(hubDefault.provider, names), hubDefault.model && modelTitle(defaultList, hubDefault.model), hubDefault.effort && effortTitle(hubDefault.effort), hubDefault.permission_mode && modeTitle(hubDefault.permission_mode)].filter(Boolean).join(" · ")
     : modelDefault;
   const ultracodeBlocked = ultracodeShown ? startBlocked(picked?.claude_version) : "";
 
@@ -706,10 +721,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const dir = desktopScratch ? "" : cwd.trim();
     if (dir) localStorage.setItem(`new.cwd.${mid}`, dir);
     if (launcher && !unified) localStorage.setItem(`new.launcher.${mid}`, launcher);
-    const picks = startPicks({ agent, list: models.list, model, effort, followed, launcher: listEntry });
+    const picks = startPicks({ ...startModelOptions, model, effort });
     // a Codex keeps its own modes; the choice stays for this computer's next Claude Code. A launcher that lists its own
     // takes one of those alone, never the remembered one (its own goes as no mode).
-    const permissionMode = claudeModes ? mode : providerModes?.includes(providerMode) && providerMode !== "default" ? providerMode : "";
+    const permissionMode = claudeModes ? mode
+      : providerModes?.includes(providerMode) && providerMode !== "default" ? providerMode
+      : tier && listLauncher === tier.launcher && tier.permission_mode ? tier.permission_mode : "";
     if (claudeModes) {
       if (mode) localStorage.setItem(`new.mode.${mid}`, mode);
       else localStorage.removeItem(`new.mode.${mid}`);
@@ -1079,6 +1096,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
                   <NewAgentModel
                     mid={mid}
                     host={opensIn}
+                    startHost={startHost}
                     launchers={launchers}
                     ready={settled}
                     onRetry={launchersFailed ? retryLaunchers : undefined}
@@ -1279,7 +1297,7 @@ function RecentSetups({ cards, machines, names, picked, onPick, onForget, onClea
 
 /** What a preset runs on, in a line: its launcher ("Title (id)", #5029), model and effort (its name). */
 function tierRuns(x: PickerTier, names: Named[]): string {
-  return [providerLabel(namedLauncher(x.launcher, names)), x.model, x.effort && effortTitle(x.effort)].filter(Boolean).join(" · ");
+  return [providerLabel(namedLauncher(x.launcher, names)), x.model, x.effort && effortTitle(x.effort), x.permission_mode && modeTitle(x.permission_mode)].filter(Boolean).join(" · ");
 }
 
 function Choice({ selected, onClick, title, radio, children }: { selected: boolean; onClick: () => void; title?: string; /** One of a radiogroup. */ radio?: boolean; children: React.ReactNode }) {

@@ -175,11 +175,15 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 		}
 		s := proto.Session{
 			SessionID: id, Cwd: c.Cwd, Status: status, Agent: "claude", Title: m.title, SourceKind: source,
-			Model: m.model, LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, st), Rev: st.Size(), AgentSurface: m.surface,
+			Model: n.shownModel(id, m.model), LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, st), Rev: st.Size(), AgentSurface: m.surface,
 		}
 		s.Capabilities, s.ReadOnlyReason = outsideCapabilities(c)
 		if s.Capabilities != nil && s.Capabilities.Send && n.ccPluginInput(id, c.pid) {
 			s.Capabilities.PluginInput = true // the owner's messages go in as their input while it rests (ccplugin.go)
+			if n.ccPluginSettingsCapable(id, c.pid) {
+				s.Capabilities.Model = proto.Bool(true)
+				s.Efforts = slices.Clone(proto.EffortLevels)
+			}
 		}
 		// A claude in a tmux pane says where it runs ("tmux":"orc:@11.%11") and no hooks of Persona's run there: the
 		// pane's screen is what its approval shows on, so it gets that screen and the keys into it (#2562).
@@ -191,6 +195,9 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 			s.Capabilities.Terminal = true
 			s.Capabilities.Send = true         // the owner's message can be typed here even with no inbox (#5965)
 			s.Capabilities.PluginInput = false // this pane, not the plugin, carries the owner's input
+			s.Capabilities.Model = proto.Bool(true)
+			s.Capabilities.Modes = proto.CanModes(true)
+			s.Efforts = slices.Clone(proto.EffortLevels)
 			s.ReadOnlyReason = ""
 			livePanes[pane] = true // its dialog read is kept while the claude lives (forgetDialogs)
 			// Its own status file says waiting when a dialog has the keyboard, but a build that does not: a resting
@@ -428,19 +435,26 @@ func peerSessionClass(n *Node, c claudeProc, id string) string {
 	return peerSessionClassAt(context.Background(), n, c, id)
 }
 
-// peerSessionClassAt is the from-mode class session id runs in. A readable external tmux footer is the freshest mode:
+// peerSessionClassAt also accepts plan mode for owner delivery if the destination can switch to bypass.
+func peerSessionClassAt(ctx context.Context, n *Node, c claudeProc, id string) string {
+	mode := peerSessionModeAt(ctx, n, c, id)
+	if mode == "plan" && claudeCanBypass(c.pid) {
+		return peerModeBypass
+	}
+	return permissionClass(mode)
+}
+
+// peerSessionModeAt reads the current permission mode. A readable external tmux footer is the freshest mode:
 // shift+tab changes it before Claude writes the transcript. A visible composer without a recognized mode is prompting:
 // bypass and plan keep their indicators when a draft or dialog hides default's hint. Without live evidence, read the newest
-// transcript copy in claude c's own config directory (not another profile's copy), bypassing the ordinary metadata cache.
-// Plan needs one more fact: process arguments say whether bypass is available to that session. No mode, or plan without
-// that evidence, is "".
-func peerSessionClassAt(ctx context.Context, n *Node, c claudeProc, id string) string {
+// transcript copy in claude c's own config directory, bypassing the ordinary metadata cache.
+func peerSessionModeAt(ctx context.Context, n *Node, c claudeProc, id string) string {
 	mode := ""
 	if pane := outsidePane(c); pane != "" {
 		if text, err := n.readPane(ctx, pane, "visible", 60); err == nil {
 			mode = tuiMode(text)
 			if mode == "" && tuiPromptingScreen(text) {
-				return peerModePrompting
+				return "default"
 			}
 		}
 	}
@@ -457,17 +471,7 @@ func peerSessionClassAt(ctx context.Context, n *Node, c claudeProc, id string) s
 			mode = n.metaNow(path, newest).mode
 		}
 	}
-	switch mode {
-	case "bypassPermissions":
-		return peerModeBypass
-	case "default", "acceptEdits", "auto", "dontAsk":
-		return peerModePrompting
-	case "plan":
-		if claudeCanBypass(c.pid) {
-			return peerModeBypass
-		}
-	}
-	return ""
+	return mode
 }
 
 // computerWaitKey is where sendOutside leaves, for session.send's answer, that the session took the message while

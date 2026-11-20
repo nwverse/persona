@@ -125,14 +125,19 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			}
 		}()
 	}
-	if kind == ompAgent { // start_agent.go: omp's own command, and none of a Claude start's options
+	if kind == ompAgent {
 		if launcher != ompAgent {
 			// Only the launcher named omp is known to run omp: another one (a Codex launcher, a provider of no omp
 			// command) would type something else into the pane and get the first message.
 			return nil, fmt.Errorf("omp starts only with the launcher named omp, not %q", launcher)
 		}
-		if execution.Model != "" || mode != "" || effort != "" || wantsUltracode(execution.Ultracode) {
-			return nil, refusal("omp_options", ompOptionsRefusal, nil)
+		if (resume != "" && execution.Model != "") || mode != "" || effort != "" || wantsUltracode(execution.Ultracode) {
+			return nil, ompOptionsRefusal(ctx)
+		}
+		if execution.Model != "" {
+			if err := n.checkOmpStartModel(ctx, launcher, execution.Model); err != nil {
+				return nil, err
+			}
 		}
 		if resume != "" {
 			if a, ok := n.agent(resume); ok {
@@ -165,6 +170,17 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	if !proto.FasterSpeed(execution.Speed) {
 		argv, codex = n.codexLauncher(ctx, launcher)
 	}
+	var launch host.Launcher
+	if codex && kind == "codex" && resume == "" && mode == "" && stockOrcaCodexArgv(launcher, argv) && n.startKind(ctx) == proto.EngineOrca {
+		launch, err = n.launcherFor(n.startKind(ctx))
+		if err != nil {
+			return nil, err
+		}
+		argv, err = codexOrcaLaunchDefaults(ctx, launch, argv)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if backend := backendLaunchFrom(ctx); backend != nil && codex && mode != "plan" {
 		for _, repo := range backend.executor.journal.Repositories {
 			argv = append(argv, "--add-dir", repo.CommonDir)
@@ -186,7 +202,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	if err := n.checkUltracodeStart(ctx, execution.Ultracode, kind); err != nil {
 		return nil, err
 	}
-	if execution.Model != "" && workAgentKind(launcher, kind) == "" {
+	if execution.Model != "" && kind != ompAgent && workAgentKind(launcher, kind) == "" {
 		agent, err := n.launcherModelCheck(ctx, launcher, execution.Model)
 		if err != nil {
 			return nil, err
@@ -240,9 +256,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	prompt = taskFallback(prompt, execution.TaskAttachments)
 
 	// New sessions start in the host the start named, else the default host.
-	launch, err := n.launcherFor(n.startKind(ctx))
-	if err != nil {
-		return nil, err
+	if launch == nil {
+		launch, err = n.launcherFor(n.startKind(ctx))
+		if err != nil {
+			return nil, err
+		}
 	}
 	ws, err := n.tabSpace(ctx, launch, cwd, workspaceID)
 	if err != nil {
@@ -270,7 +288,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		if mode != "" || effort != "" {
 			return nil, fmt.Errorf("permission mode and effort are only supported for Claude starts")
 		}
-		return n.startOtherAgent(ctx, launch, cwd, launcher, kind, prompt, resume, ws, tabName)
+		return n.startOtherAgent(ctx, launch, cwd, launcher, kind, prompt, resume, ws, tabName, execution)
 	}
 	if err := n.codexFunctionLauncher(ctx, launcher, true); err != nil {
 		return nil, err

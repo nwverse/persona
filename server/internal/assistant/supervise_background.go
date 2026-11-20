@@ -164,7 +164,7 @@ func (s *Service) backgroundLost(ctx context.Context, old, to, web string) []sup
 	b.mu.Unlock()
 	moved := 0
 	title := "" // the name of to, for a hand-over of the owner's words that moves there (relay_handover.go)
-	if to != "" && s.queuedHandover(old) {
+	if to != "" {
 		title = short(to)
 		if cfg := s.settings(ctx); cfg.MachineID != "" {
 			if c, ok := s.session(ctx, cfg.MachineID, to); ok {
@@ -349,10 +349,16 @@ func (s *Service) backgroundNeeded(ctx context.Context, cfg Settings, list []sup
 // of that purpose's model applies from its next message, as the main chat's does. params are left as they are when
 // the purpose cannot be resolved: the conversation then goes on with what it ran last.
 func (s *Service) backgroundModel(ctx context.Context, params map[string]any) {
+	prevMode, hadMode := params["permission_mode"]
 	p := maps.Clone(params)
 	if err := s.applyModel(ctx, purposeSupervise, p); err != nil {
 		s.logf("supervise: the background supervisor's model: %v; it keeps what it ran last", err)
 		return
+	}
+	if hadMode {
+		p["permission_mode"] = prevMode
+	} else {
+		delete(p, "permission_mode")
 	}
 	maps.Copy(params, p)
 }

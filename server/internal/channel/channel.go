@@ -95,7 +95,8 @@ type Capabilities struct {
 	Typing bool `json:"typing,omitempty"`
 	// Progress: it can post a message and change it (a progress card the answer goes into).
 	Progress bool `json:"progress,omitempty"`
-	// Threads: a reply to one of the bot's messages goes to that message's conversation.
+	// Threads: a reply to one of the bot's messages goes to that message's conversation (the Feishu bot); an
+	// extension channel's message carrying Thread goes to that thread's own conversation.
 	Threads bool `json:"threads,omitempty"`
 }
 
@@ -354,6 +355,7 @@ type Message struct {
 	Quote       string   `json:"quote,omitempty"`
 	Forward     string   `json:"forward,omitempty"`
 	ReplyTo     string   `json:"reply_to,omitempty"`
+	Thread      string   `json:"thread,omitempty"` // the chat app's thread, an opaque key (Capabilities.Threads)
 	Unsupported []string `json:"unsupported,omitempty"`
 }
 

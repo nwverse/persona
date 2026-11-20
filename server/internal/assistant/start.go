@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -281,15 +282,13 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if p.Space != "" && p.Space != SpaceHealth {
 		return proto.Session{}, badRequest(fmt.Errorf("space %q: health or none", p.Space))
 	}
+	explicitPermission := strings.TrimSpace(p.PermissionMode)
 	if p.Origin == OriginInbox {
 		// Default keeps the explicit Persona MCP allowlist effective: Plan rejects MCP before consulting it. The
 		// manager/node origin policy, not the launcher's permission mode, prevents externally visible work.
 		p.PermissionMode = "default"
-	} else if p.PermissionMode == "" && p.GuestTools == nil {
-		p.PermissionMode = s.settings(ctx).DefaultPermissionMode
-		if p.PermissionMode == "" {
-			p.PermissionMode = proto.ModeBypass
-		}
+	} else {
+		p.PermissionMode = explicitPermission
 	}
 	var cwd string
 	var err error
@@ -374,6 +373,25 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	// in Persona's profile (#10859).
 	fromSetting := p.GuestTools == nil && purpose != purposeAgent && s.withNewConversationProfile(ctx, machine, params)
 	used, _ := params["launcher"].(string)
+	// Settle permission_mode after model resolution so Model Configuration's permission_mode applies before falling
+	// back to the assistant default / bypassPermissions, while preserving Inbox and guest safety boundaries.
+	switch {
+	case p.Origin == OriginInbox:
+		params["permission_mode"] = "default"
+	case p.GuestTools != nil:
+		params["permission_mode"] = ""
+	default:
+		mode, _ := params["permission_mode"].(string)
+		if mode == "" {
+			mode = cmp.Or(s.settings(ctx).DefaultPermissionMode, proto.ModeBypass)
+			params["permission_mode"] = mode
+		}
+		if explicitPermission == "" && used != "" && used != "claude" {
+			if agent := s.launcherAgent(withUnhidden(ctx, used), machine, used); agent != "" && !permissionModeSupported(agent, 0, mode) {
+				delete(params, "permission_mode")
+			}
+		}
+	}
 	// A profile is Claude Code's: the node refuses a config_dir for any other agent before starting it (#6467). Judged
 	// here, by the launcher the start finally runs on, not the one asked for: the model configuration and a fallback
 	// can both change it. One hidden from the pickers still runs what it runs (withUnhidden, as finishMainChatModel
@@ -414,7 +432,8 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		}
 		return proto.Session{}, err
 	}
-	sess := proto.Session{SessionID: res.SessionID, Cwd: cwd, Status: proto.StatusWorking, Launcher: used, PermissionMode: p.PermissionMode,
+	finalMode, _ := params["permission_mode"].(string)
+	sess := proto.Session{SessionID: res.SessionID, Cwd: cwd, Status: proto.StatusWorking, Launcher: used, PermissionMode: finalMode,
 		Effort: p.Effort, StartedByPersona: true, UpdatedAt: time.Now().UTC()}
 	sess.MachineID, sess.Assistant, sess.State, sess.Space = machine, true, proto.StateWorking, p.Space
 	if strings.TrimSpace(p.Text) == "" && len(p.Images) == 0 {
@@ -1254,9 +1273,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine
 	delete(p, "idle_compaction")
 	if p["is_main"] == true {
-		p["idle_compaction"] = assistantwire.IdleCompaction{
-			Enabled: s.idleAutoCompact(ctx), IdleMinutes: s.idleAutoCompactMinutes(ctx), ContextTokens: s.idleAutoCompactTokens(ctx),
-		}
+		p["idle_compaction"] = s.idleCompactionPolicy(ctx)
 	}
 	putMainCompactWindow(cfg, p)
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
@@ -1373,8 +1390,16 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		if err := s.applyPickedModel(ctx, p); err != nil {
 			return err
 		}
-	} else if err := s.applyModel(ctx, purpose, p); err != nil {
-		return err
+	} else {
+		prevMode, hadMode := p["permission_mode"]
+		if err := s.applyModel(ctx, purpose, p); err != nil {
+			return err
+		}
+		if hadMode {
+			p["permission_mode"] = prevMode
+		} else {
+			delete(p, "permission_mode")
+		}
 	}
 	_, err := s.finishMainChatModel(ctx, machine, purpose, p, pickedLauncher)
 	return err

@@ -619,6 +619,11 @@ on-demand model panel, not the everyday Assistant home (#6887).
   image route (`remote_images`, docs/protocol/protocol.md "Remote images (#9473)") at the size drawn; what other
   people wrote (the Inbox's Lark, GitHub and connector threads, `asksBeforePictures()`) keeps each run its size with
   Load Image over it until tapped, since a picture there may be a tracking pixel.
+  A machine-local Markdown image uses the session's machine and cwd and the same layout. A local image inside a line
+  of text is lifted into its own block so the machine-file loader and any failure are visible. A failed local image
+  keeps Retry on its tile and shows the complete reason below the tile or run, including at accessibility text sizes;
+  recreating the tile does not retry, and Retry runs only after a tap. The full-screen viewer shows the same reason
+  and offers Retry. Local file links open the same file viewer as bare paths, including missing or denied files.
   The web (#9475) draws the same rules: `ui/ReplyImages.tsx` (a chunk of its own with the step that lifts a run out of
   its paragraph, `ui/reply-images-plugin.ts`, loaded with a reply's first picture), rules in `lib/reply-image-layout.ts`;
   a lone picture is 300 px tall (240 px in a narrow window), a run at most 480 px wide, the turn images' 10 px radius
@@ -768,13 +773,22 @@ The brief box (web, #3822; `web/src/views/assistant/TaskBrief.tsx`) shows what a
 
 The status words are the task cards' (`taskStatusWord`), and the count on the top bar's button is the running background tasks and runs (`backgroundCount`), the same number the panel's Running section shows without the loop.
 
+**Android Background Tasks** (#5432). The Agent chat menu and Glass activity pill lead to the same native
+full-screen overlay. The root uses a leading Close action. A detail uses Back and returns focus to its row.
+The composer offers a local `/workflows` command, and an inline workflow card can open its run. Running and
+Completed stay separate in the same list. The loop keeps its existing confirmation. The workflow detail uses
+`JWorkflowCard`, and command details use the existing typography, copy action, notice, and file viewer.
+An outcome that an older hub did not retain says **Not listed as running**. The output preview follows the tail
+when the reader stays at the end and retains the last good result on an error. The requirements and file scope
+are in `docs/android/android.md` ("Background tasks in Agent chat").
+
 **Hand-off cards** (web, #5096; the owner asked that this part of the main chat follow cindy's `SessionHandoffCard` exactly, which replaces the "Dispatched: <title> · Open" line). iOS draws the same shape (`DispatchHandoffCard`): a well with ↳, title and badge, "3 min. ago · state", ↗, the failure line in `Theme.danger`. Each Agent a dispatch started or a task took over is one full-width card in the chat (`views/assistant/Handoff.tsx`; iOS and Android, #5110):
 - **Frame:** a bordered `rounded-xl` surface, 16 px padding and 14 px gaps (12 / 12 at phone width), whose border turns `--ink` on hover.
 - **Mark:** a 36 px round `--field` well with the ↳ mark (`cornerDownRight`), which inverts on hover.
-- **Title line:** the title (14 px semibold, one line) and a 10 px uppercase pill badge: New and Resumed are filled `--ink`, Already active is outlined.
+- **Title line:** the title (14 px semibold, one line) and a 10 px uppercase pill badge: New, Resumed and Continuation are filled `--ink`, Already active is outlined. On iOS and web, a plan that carries on an existing to-do says Continuation, including when its Agent fails to start. Resumed means the same Agent was reopened.
 - **Second line** (12 px): the history mark, "last active …" (the time alone at phone width), then ` · ` and the Agent's state from `StatusMark` and `lib/state-labels.ts`, in the attention color when it needs the user.
 - **End:** ↗ (`arrowUpRight`).
-- **Open:** the card opens the Agent where Settings › Agent preferences › "How Agents open" says (#5424): the side panel beside the chat (the default; over the chat on a phone-sized window), or the Agent's page. The card looks the same either way. Before an Agent is up, the card has no ↗ unless the task can be opened, and its second line says the Agent is starting, why it did not start (`--red`), or that the task closed or is gone.
+- **Open:** the card opens the Agent where Settings › Agent preferences › "How Agents open" says (#5424): the side panel beside the chat (the default; over the chat on a phone-sized window), or the Agent's page. The card looks the same either way. Before an Agent is up, the card has no ↗ unless the task can be opened, and its second line says the Agent is starting, why it did not start (`--red`), or that the task closed or is gone. On iOS and web, a failure with no readable cause says "Didn't start." and offers details only when the card can open them. If the card cannot open, its failure line wraps so the explanation can be read on the card.
 
 Two departures from cindy, both from Persona's rules:
 - cindy shows a short session id on the card. The Assistant's chat keeps ids out of sight (super rule 4, section 5.6), so here it is only in the card's tooltip.
@@ -978,7 +992,7 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 
 - Shell (compact width): Assistant and Agents as pages on a strip, a drawer sidebar, no tab bar. Top bar: persona button, `ShellSwitch`, circle button (`apple/Persona/DesignSystem/ShellComponents.swift:19,258,294`). Re-tapping Assistant opens its menu. Explicitly selecting Agents opens its list, clearing any retained detail navigation; re-tapping Agents from a detail returns to the list. Re-tapping Agents while already at the list opens the existing list-options menu. A card, notification or session link remains a targeted open and goes directly to that Agent, not through the list. This list-first rule serves people moving between their everyday Assistant conversation and Agent work, without a setting or a new visual style.
 - Sidebar places and tasks (#6599, one-button amendment #7799, `docs/design/sidebar-navigation.md`): a place chosen in the drawer (a conversation, Inbox, To-dos, Scheduled Tasks, Knowledge, Machines, Recordings, extension pages, Profile) switches the page under the open drawer without animation, then the drawer closes; each place keeps its stack while the user is elsewhere, and choosing the place in front returns it to its root. On iPhone a place's root shows ☰ (`ShellPlaceRoot`) in place of Back; its sub-pages show Back and no ☰. Return to the conversation by choosing one in the drawer, or with the root's system edge-swipe (Back is hidden but the existing pop-gesture delegate remains enabled). A sub-page's edge-swipe goes back to its root. The drawer's sideways pan still yields every pushed page to that system gesture, so the two never compete. A place has at most one top-trailing action on iPhone: Inbox's Select, Knowledge's filter and map, an Inbox item's Done, a Lark chat's Pins and summary, and Browser Sign-ins' Select join their existing ⋯ menus. The multi-hub Inbox's picker joins that menu, and only on iPhone does selection's Select All join the bottom action bar; outside the iPhone shell it remains at the original top leading, verified by `IPadInboxSelectionTests`. These consolidations do not change iPad or Mac layouts. A task (Settings, Archived, Auto conversations, Search) opens over the open drawer and returns to it; a conversation picked in one opens after its sheet has gone. The drawer's closing never runs with a push, a slide or a sheet.
-- A page's top-leading button follows how the page was reached, not what it is (#8603, `docs/design/sidebar-navigation.md` section 6): a page picked in a sidebar or list is a root and shows the button that opens the sidebar (the main conversation's `Theme.Icon.sidebar`, "Show Sidebar"; the persona's face in a phone's drawer; the system's Show Sidebar under side bars), never a ‹; a page opened from inside another shows ‹, which goes back to it. The same Agent's chat is a root picked in the sidebar and a drill-down opened from a waiting Agent on the main conversation or in Inbox.
+- A page's top-leading button follows how the page was reached, not what it is (#8603, `docs/design/sidebar-navigation.md` section 6): a page picked in a sidebar or list is a root and shows the button that opens the sidebar (the main conversation's `Theme.Icon.sidebar`, "Show Sidebar"; the persona's face in a phone's drawer; under side bars the side column's first item, where a sub-page has Back, #11636), never a ‹; a page opened from inside another shows ‹, which goes back to it. The same Agent's chat is a root picked in the sidebar and a drill-down opened from a waiting Agent on the main conversation or in Inbox.
 - **A presented page leaves at its top-leading corner** (#9653, the owner 11-17): a sheet, a full-screen cover or a self-drawn layer over a page puts its way out at the top leading edge, an ✕ (`SheetClose`, 3.6); a pushed page keeps its ‹ there. The trailing edge holds only the page's own actions: its ⋯ menu and its confirming action. An edit sheet's ✕ leaves without saving and its ✓ saves, as iOS 26's Calendar and Reminders lay it out; Save, a Done that saves and Add become that ✓, and a verb that says more (Send, Connect, Install, Commit) stays a word in the same place. A page that only shows things has no Done: its ✕ closes it. Not covered: a question sheet whose Cancel sits under its answer in the content (Close and Delete Agent, consent sheets), the system's own sheets (share, camera, document scanner), and a medium-detent peek with a drag indicator and no bar. Web and desktop dialogs keep their ✕ at the top trailing corner, the convention there; Android follows in #9661.
 - Regular width: system tab view and split navigation; the same sidebar in a column. On iOS in the Separate layout (#4206) each tab shows its part of the one sidebar's column (Persona's: the main conversation, the pages, its chats; the Agents tab's: the Agents list), with the same head (its fold at the trailing end), foot, width and color, and the system's tab bar on the iPad; on the open iPhone Duo the upright switch stands in its place (below, #4231). On iOS (#4206) the column has one width (400 pt on the iPad, 320 pt on the open Duo) and lies beside the page where the page keeps at least `Theme.Size.splitPageMin` (400 pt, a large phone's screen), over it elsewhere (the open Duo and an iPad mini, upright); turned to over, a column that was out goes away, and turned back it comes back as it was left beside the page. On iOS, selecting or reselecting Agents follows the same list-first rule, leaving the split's detail empty until an Agent is explicitly opened. Agent sidebar links use the bound detail path, not a separate implicit split selection, so clearing navigation also clears a row-opened detail without rebuilding the list. Cold-launch and width-change restoration remain separate from explicit tab selection.
 - Assistant switcher on Apple (sidebar header, `apple/Persona/Views/Assistant/AssistantSwitcher.swift`, once a roster is known (read in this run, or kept from the last launch) and the current assistant can be shown, including with one installed assistant; the rules every client shares are in the "Assistant switcher" bullet below): the persona face with a state dot at its foot, the current assistant's name with a down arrow and its state line; a tap opens a popover list of the hub's assistants on a solid panel (`Theme.card`: through glass the badges behind it showed beside the rows), each row the first letter on a solid disc in its color with a state dot at its foot (green online, gray offline, orange installing, ringed in the panel's color), name, Default chip (only beside another assistant), state line (up to three lines at the accessibility sizes) and a check on the current one or, on any other with something waiting, its count (`CountBadge`'s `.needs` look; VoiceOver says "n things waiting for you"); an offline row is dimmed as a whole (`Theme.Fade.offline`) and still pickable. While another assistant has something waiting the face carries a mark at its head (`AssistantWaitingDot`, the needs-you color, ringed like the state dot; beside the name where the face is not drawn), and the header's spoken name says so. A page of an offline assistant's merged things (the inbox, to-dos) shows `AssistantOfflineNotice` in place of its empty state: laid out as `EmptyStateView`, with the assistant's avatar and its offline mark (`AssistantMonogram`, faded as an offline row) where that has its symbol, then "<name> Is Offline" and when it last synced. Then New Assistant and Manage Assistants…, which stay whole and tappable at the largest text size while the rows scroll above them. Rows are at least 44 pt and one line each. Why a popover and not a `Menu`: a row carries a colored avatar, a status dot, a chip and a second line, which a system menu item cannot draw, and the same list is drawn on web and Android. The sidebar and Settings reuse this same popover/list; pages do not add another switcher implementation.
@@ -1004,6 +1018,15 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
   one home of those requests, not a second home, and counts what the switch and tabs count (`agentsWaiting`). **The usage
   strip** (`SidebarUsageStrip`): the two fullest subscription accounts as name, percent and `UsageMeter`, the web
   sidebar's foot (#2432); a tap opens Machines. Separate stays the default and pixel-identical.
+- Android (#6378) offers the same **Separate** and **Merged** values under **Settings › Appearance › Sidebar**.
+  Separate is the Android default at every width. Merged uses the current left drawer and the regular window's
+  existing beside or overlay policy. Main conversation stays above the scrollable Pages, Persona Chats and Agents.
+  The first two sections keep their folds on the device. `JSidebarSectionHeading` gives all three headings one
+  sidebar row's height and `Space.s` above. The Agents list supplies its rows, filters, grouping and actions, with one
+  selected row for the visible root. The fixed Needs You jump uses the shell count. The two fullest subscription
+  accounts share their data with Computers. One New chat control and the Search and Settings capsule sit below them.
+  `JSidebarFooterActions` stacks the capsule under New chat when the full label needs the row's width.
+  Search opens over the whole window in Chats or Agents. The Android guide lists the pages its capabilities expose.
 - One selected row in the Sidebar layout's column (#11032; `SidebarRootsUITests.testOneRowIsSelectedAndItFollowsTheRoot`):
   the whole column (Main Chat, the Pages rows, Persona Chats, the Agents list with Pinned) has at most one selected row, and
   it is the root of the page beside it (`UnifiedSidebar`: `atRoot`, `shownPlace`, `shownAgent`, all read from its roots). A
@@ -1286,6 +1309,13 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   phones; Escape, the backdrop and Back keep things as they were. The model panel stays open under it (held below the
   backdrop) and closes once the switch is recorded. The pending pill names the engine and the target model with that
   model's own effort.
+- Android engine handoff (#5302, `docs/android/android.md` “Switching between Claude Code and Codex”): Glass
+  uses the existing model pill and panel. Entering the other engine asks with `JDialog`. While a switch waits, the
+  pill names the upcoming engine to assistive technology and keeps its mark in the compact composer. The panel offers
+  a direct cancellation above its search. In every style, the recorded handoff uses `JModelChangeDivider` and opens
+  the handoff context with the existing full-text reader. Older transcript runs join the same list as read-only rows
+  above the current run. Their pagination, full text and image requests retain the original conversation scope.
+
 - Panel (`web/src/ui/model-panel/`): opens above the pill, right edges aligned, 6 px gap, 8 px from the window's edges;
   300–460 px wide with a 428 px scrollable body, search on top and "Configure models" at the bottom.
   One shared column in Agent, handover, Assistant and New Agent pickers (#10249): Follow model configuration where
@@ -1550,6 +1580,10 @@ Real folding-feature evidence and fake-posture layout evidence are reported sepa
 ### 4.1 Navigation hierarchy (super rule 3)
 
 `docs/SUPER_RULES.md` rule 3: Assistant and Agents are the only primary home destinations on iOS, Android and web. Settings opens from the sidebar. Everything else (Recordings, Inbox, To-dos, Scheduled Tasks, Knowledge, Machines, Health, extension pages) is pushed from the drawer. Push by value for new pages; mixing view-based and value-based pushes in one stack is a known trap. An optional Messages page can be switched on and becomes a third primary destination; whether that fits rule 3 needs the rule owner (DS-26).
+
+On Android, a Merged sidebar pick replaces the visible root and closes the compact drawer or regular overlay.
+A beside column stays open. Navigation inside the visible root keeps its Back path, and external entries retain their
+route and session identities. The sidebar setting changes the presentation of Assistant and Agents.
 
 A dispatched task's Open link (#3711) is a compact row using existing typography, fill, radius and 44 pt touch-target
  tokens, not a filter or a link to the whole In Progress list. One task shows its title and Open; a plan lists only its
@@ -1876,6 +1910,10 @@ states visibly that the next message is saved as the answer; its existing cancel
 discussion. The original decision round travels with the answer. Only a delivered and recorded answer removes the
 pending card; neither navigation, an unrelated chat message, nor an answer to a different Agent question does.
 
+Expired assistant questions (#9731) keep one home on their question to-do. The shared `ask` payload puts them in **Needs you**, not **In progress**, without inventing an Agent or supervisor. On the web, the existing question card displays the original choices and descriptions inside that row: a single choice sends on one tap, while several questions or multiple selections keep the existing complete-form submission. Its answer goes through the to-do's late-answer route, not the expired interaction. **Later** defers only this browser's current question round; opening the to-do preserves its existing explicit close/drop controls. A failed answer keeps the original form usable. This adds no style, typography token or pending-request list.
+
+An irreversible deadline only reminds the owner: the question stays in **Needs you**. A reversible default reserves its answer while being delivered or recovered, so it never offers a second decision; a failed default returns that decision to the owner. A rejected inline answer retains the same selections for retry and never shows **Answer recorded**.
+
 Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and waiting for a reply.
 
 - **Home**: the bottom of the session page, a stack of cards above the composer, which stays usable (iOS `PendingCards`;
@@ -1906,6 +1944,10 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   composer, under the Needs you / In progress entries and the route chip, on every client (#4883: on the web and Android
   they sat only in the closed Needs you tray, and an owner waited minutes on an approval no screen in the chat showed).
   Needs you still counts them, and its row for one closes the tray onto the card instead of drawing it a second time.
+  On the web, a card the conversation's own turn waits on (its own session's request, not one of a worker or side
+  session folded under it: `lib/turn-asks.ts`, #11794) is never folded: each stands open above the Needs you / In
+  progress capsules, all of them at once, and Needs you neither counts nor lists it again. The cards of sessions folded
+  under the conversation keep the stack and the tray as above. iOS and Android keep the stack for both until they follow.
   The stack holds the conversation's own cards alone, as one slot on the web: its first card with "2 / 6" (where it stands in the run), the next taking its place when it is answered, and what was just answered one line over it that goes 3 seconds after the last answer (details with the interaction cards in `docs/web/web.md`).
   What the conversation's tasks ask is a card of its own above the entries (iOS `TaskQuestions`, #4339 C10): the oldest
   question of their Agents, under its task's name with the ask mark in the needs-you tone and, at the end of that line,
@@ -2148,6 +2190,18 @@ follows these; the To-dos page is the reference (`web/src/views/Todos.tsx`, chec
 - Tab stays inside a modal and reaches every control in it, including the ones after a scrolling body the browser lets the keyboard focus (`trapTabIn` in `web/src/ui/overlay.ts`).
 - A menu is as tall as the window allows and shows whole when the window can hold it, over its button if need be; only one taller than the window is cut, opening beside its button on a wide screen. A fade at a cut edge says there is more (`Menu`, `data-menu-more`), as the team panel's list does, and a row the keys move to past the cut scrolls into view.
 - A choice kept in the browser (appearance, theme color, text size, language) reaches every open tab: the others follow through the `storage` event. A language needs a reload, as in the tab that chose it, and that reload never lands on a draft or an open dialog or menu: it waits for a calm moment, as a new build's does, with a toast that offers it meanwhile.
+
+### 4.14 Starred messages (web, #7524)
+
+People who want to keep a useful message choose **Star** in the existing message menu. A small accent star at the
+message edge shows that it was saved without moving the row. While the save or removal is pending, the same position
+shows a spinner. Failed actions keep the prior state. **Unstar** removes the snapshot and offers the shared Undo toast.
+
+**Starred** is a secondary page under **Pages**. Its badge counts every saved snapshot for the selected assistant.
+The page uses the existing search field, neutral cards, Markdown, and action buttons, with the sidebar button on small
+screens. One card contains a title, speaker, timestamp, saved text, and **Open original**, **Copy**, and **Unstar**
+actions. Long saved text folds in the card. The original uses the existing transcript jump. The saved text stays usable
+when the original cannot be opened.
 
 ## 5. Content
 
