@@ -130,8 +130,9 @@ def crowded(page, what, min_chat=0.25, fold="还有 2 件"):
 
 
 def card_field_keyboard(browser, base, hub, shots):
-    """The Assistant's question card (#11442): its own field, typed into with the iOS keyboard up, stays in sight and
-    takes a finger over the composer at 390 and 360; with the keyboard down or the focus gone the dock keeps its cap."""
+    """The Assistant's question card (#11442): its own field, typed into with the keyboard up, stays in sight and takes a
+    finger over the composer at 390 and 360, with iOS's keyboard (the visual viewport shrinks) and Android's (Chrome
+    resizes the page); with the keyboard down or the focus gone the dock keeps its cap."""
     import urllib.request
     if not hub:
         fail("card field: pass --hub <the fake hub's URL> (the card comes from its /mock/assistant_ask)")
@@ -140,37 +141,45 @@ def card_field_keyboard(browser, base, hub, shots):
       const fr = f.getBoundingClientRect(), cr = c.getBoundingClientRect();
       return { field: Boolean(f.closest('[data-pending-card]')) && at(f) === f, top: fr.top, bottom: fr.bottom, composer: at(c) === c,
         composerBottom: cr.bottom, dock: document.querySelector('[data-chat-dock]').getBoundingClientRect().toJSON() }; }"""
-    for w, h, kb in ((390, 844, 508), (360, 740, 440)):
+    def keyboard(page, ios, w, vh):
+        if ios:
+            page.evaluate(f"window.__kb({vh})")
+        else:
+            page.set_viewport_size({"width": w, "height": vh})
+
+    for ios, w, h, kb in ((True, 390, 844, 508), (True, 360, 740, 440), (False, 390, 844, 508), (False, 360, 740, 440)):
+        what = f"{'iOS' if ios else 'Android'} {w}"
         # Persona's main conversation asks; the card is answered at the end whatever happens (/mock/reset keeps it)
         ix = json.load(urllib.request.urlopen(hub + "/mock/assistant_ask?session=b2e4d6f8-0000-4000-8000-000000000001"))["id"]
-        ctx, page = phone(browser, w, h, ios=True)
+        ctx, page = phone(browser, w, h, ios=ios)
         try:
             login(page, base)
             go(page, "/")
             field = page.locator("[data-pending-card]").get_by_role("textbox", name="自定义回答").first
             field.tap()
             for vh in (h - 100, h - 200, kb):  # the keyboard slides up
-                page.evaluate(f"window.__kb({vh})")
+                keyboard(page, ios, w, vh)
                 page.wait_for_timeout(120)
             page.keyboard.type("Next Monday, after the review")
             page.wait_for_timeout(500)
             at = page.evaluate(hit)
             if not at["field"] or at["top"] < 0 or at["bottom"] > kb + 0.5:
-                fail(f"{w}: the card's field is not in sight over the keyboard ({at})")
+                fail(f"{what}: the card's field is not in sight over the keyboard ({at})")
             if not at["composer"] or at["composerBottom"] > kb + 0.5 or at["dock"]["bottom"] > kb + 0.5:
-                fail(f"{w}: the composer left the screen while typing in the card ({at})")
+                fail(f"{what}: the composer left the screen while typing in the card ({at})")
             if shots:
-                page.screenshot(path=os.path.join(shots, f"card-field-{w}.png"), clip={"x": 0, "y": 0, "width": w, "height": kb})
-            page.evaluate(f"window.__kb({h})")  # the keyboard down, the field still focused
+                page.screenshot(path=os.path.join(shots, f"card-field-{'ios' if ios else 'android'}-{w}.png"),
+                                clip={"x": 0, "y": 0, "width": w, "height": kb})
+            keyboard(page, ios, w, h)  # the keyboard down, the field still focused
             page.wait_for_timeout(400)
             if page.evaluate(hit)["dock"]["height"] > h * 0.55 + 1:
-                fail(f"{w}: with the keyboard down the dock is over its cap")
-            page.evaluate(f"window.__kb({kb})")
+                fail(f"{what}: with the keyboard down the dock is over its cap")
+            keyboard(page, ios, w, kb)
             page.evaluate("document.activeElement.blur()")
             page.wait_for_timeout(400)
             if box(page, "[data-chat-dock]")["height"] > kb * 0.55 + 1:
-                fail(f"{w}: the focus gone, the dock is over its cap")
-            ok(f"{w}: the card's own field stays in sight and takes a tap over the keyboard, the composer on screen; "
+                fail(f"{what}: the focus gone, the dock is over its cap")
+            ok(f"{what}: the card's own field stays in sight and takes a tap over the keyboard, the composer on screen; "
                "the cap again with the keyboard down or the focus gone")
         finally:
             ctx.close()

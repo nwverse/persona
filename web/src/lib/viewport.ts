@@ -28,6 +28,8 @@ export function keyboardVars(f: ViewportFrame | undefined): Record<(typeof KB_VA
   return f ? { "--kb-top": `${f.top}px`, "--kb-h": `${f.height}px` } : null;
 }
 
+const typesInto = (el: Element | null) => Boolean(el?.matches('input, textarea, [contenteditable]:not([contenteditable="false"])'));
+
 /** Keeps `ref`'s element over the visible part while the keyboard is up, and `--kb-top` / `--kb-h` on the root element
  *  for the other fixed things (the side panel, sheets), with `data-kb` on it meanwhile for the stylesheet (a waiting
  *  card's own field, styles.css). It sets the styles itself: the keyboard sends a stream of frames as it slides, and a
@@ -39,8 +41,18 @@ export function useKeyboardFrame(ref: RefObject<HTMLElement | null>) {
     const html = document.documentElement;
     const root = html.style;
     let last = "";
+    // Chrome on Android shrinks the page itself (no frame, 100dvh is right): its keyboard is the page standing well
+    // short of the tallest it was at this width while something takes typing. Turning the phone starts over.
+    let width = 0;
+    let tallest = 0;
     const update = () => {
+      if (window.innerWidth !== width) {
+        width = window.innerWidth;
+        tallest = 0;
+      }
+      tallest = Math.max(tallest, window.innerHeight);
       const f = keyboardFrame(window.innerHeight, vv);
+      html.toggleAttribute("data-kb", Boolean(f) || (tallest - window.innerHeight >= KEYBOARD_MIN && typesInto(document.activeElement)));
       // the visual viewport scrolls while the keyboard stands still: a root variable restyles the whole page, so only
       // a frame that moved is written
       const key = f ? `${f.top}/${f.height}` : "";
@@ -48,7 +60,6 @@ export function useKeyboardFrame(ref: RefObject<HTMLElement | null>) {
       last = key;
       const vars = keyboardVars(f);
       KB_VARS.forEach((k) => (vars ? root.setProperty(k, vars[k]) : root.removeProperty(k)));
-      html.toggleAttribute("data-kb", Boolean(f));
       const el = ref.current;
       if (!el) return;
       el.style.position = f ? "fixed" : "";
@@ -59,9 +70,11 @@ export function useKeyboardFrame(ref: RefObject<HTMLElement | null>) {
     update();
     vv.addEventListener("resize", update);
     vv.addEventListener("scroll", update);
+    window.addEventListener("resize", update);
     return () => {
       vv.removeEventListener("resize", update);
       vv.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
       KB_VARS.forEach((k) => root.removeProperty(k));
       html.removeAttribute("data-kb");
     };
