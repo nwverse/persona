@@ -216,11 +216,15 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	}
 	cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
 	defer cancel()
-	if err := h.peer.Call(cctx, "session.send", params, nil); err != nil {
+	var said json.RawMessage
+	if err := h.peer.Call(cctx, "session.send", params, &said); err != nil {
 		if isRPCError(err) {
 			return "", err
 		}
 		return "", fmt.Errorf("%s: %w", h.label(), err)
+	}
+	if runtimeAnswerFlag(said, "queued") {
+		markSendQueued(ctx)
 	}
 	if st.AwaitingFirstMessage || beforeSend != nil {
 		n.noteRuntimeWorking(h, id, beforeSend)

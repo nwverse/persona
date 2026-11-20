@@ -109,6 +109,8 @@ input.on('line', (line) => {
       }
       if (plan.export) {
         append('USER_INPUT', (plan.planMode ? '/plan ' : '') + req.params.prompt[0].text)
+        if (plan.undatedStep) appendFileSync(transcript,
+          JSON.stringify({ type: 'SYSTEM_MESSAGE', content: 'System notice.', step_index: index++, status: 'DONE' }) + '\n')
         if (plan.error) append('ERROR_MESSAGE', plan.error)
         if (plan.reply) append('PLANNER_RESPONSE', plan.reply)
       }
