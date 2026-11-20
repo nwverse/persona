@@ -20,13 +20,13 @@ export const JUST_DONE_MS = 24 * 3600_000;
 
 /** A fresh accepted, owner-ticked or cancelled outcome remains observable in its own section; older history and plain
  *  legacy review-done groups keep the folded default (#11677, #3713). Shelved always starts folded. */
-export function sectionStartsFolded(section: TriageSection, groups: readonly { last: number; lead: Pick<Todo, "done_by" | "supervision"> }[], now: number): boolean {
+export function sectionStartsFolded(section: TriageSection, groups: readonly { last: number; lead: Pick<Todo, "cancelled_at" | "done_at" | "done_by" | "supervision"> }[], now: number): boolean {
   if (!FOLDED_SECTIONS.has(section)) return false;
   if (section !== "done" && section !== "cancelled") return true;
   return !groups.some((group) => {
     if (group.last > now || now - group.last >= JUST_DONE_MS) return false;
     const outcome = group.lead.supervision?.state;
-    return (group.lead.done_by !== "review" && group.lead.done_by !== "auto") || outcome === "accepted" || outcome === "cancelled";
+    return isCancelled(group.lead) || (group.lead.done_by !== "review" && group.lead.done_by !== "auto") || outcome === "accepted" || outcome === "cancelled";
   });
 }
 

@@ -251,8 +251,10 @@ nonisolated enum TodoTriageLogic {
             return concern ? at(.other, .rest) : at(.done, .failedStart)
         }
         if status == .needsYou || status == .interrupted { return at(.waiting, .agentAsks) }
-        if todo.doneAt == nil, !todo.decisionDismissed,
-           todo.delivery?.waitsForOwner == true || review == .needsUser || ask?.outcome == "decide" || ask?.outcome == "cannot" {
+        let ownerDelivery = todo.delivery?.waitsForOwner == true
+        let ownerReview = !todo.decisionDismissed &&
+            (review == .needsUser || ask?.outcome == "decide" || ask?.outcome == "cannot")
+        if todo.doneAt == nil, ownerDelivery || ownerReview {
             return at(.waiting, .ownerDecides)
         }
         if status == .working || status == .waiting { return at(.working, .agentRunning) }

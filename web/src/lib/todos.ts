@@ -371,16 +371,12 @@ export function isReviewDone(todo: Todo): boolean {
   return Boolean(todo.done_at) && todo.done_by === "review";
 }
 
-/** A supervisor cancelled a reviewed task without accepting it; only this outcome is struck through (#11677). */
-function isReviewCancelled(todo: Todo): boolean {
-  return isReviewDone(todo) && todo.supervision?.state === "cancelled";
-}
-
-/** Whether a finished row strikes its title through: only a cancelled to-do (#11677). A task that succeeded — accepted,
- *  deployed, ticked by the owner or auto-completed — keeps a plain muted title; the filled check and the muted tone
- *  already say it is closed. A row still open (a failed start waiting on the owner) is never struck (#3713). */
+/** Whether a finished row strikes its title through: every cancellation representation used for Cancelled filing
+ *  (#11677). A task that succeeded — accepted, deployed, ticked by the owner or auto-completed — keeps a plain muted
+ *  title; the filled check and the muted tone already say it is closed. A row still open (a failed start waiting on
+ *  the owner) is never struck (#3713). */
 export function strikesThrough(todo: Todo, open: boolean): boolean {
-  return !open && isReviewCancelled(todo);
+  return !open && isCancelled(todo);
 }
 
 /** An open task its supervisor accepted, reopened by the hub when its agent got more work, with nothing of it running

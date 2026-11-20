@@ -185,7 +185,9 @@ fun Todo.triage(
         return at(TriageSection.Done, TriageRule.FailedStart)
     }
     if (status == TriageStatus.NeedsYou || status == TriageStatus.Interrupted) return at(TriageSection.Waiting, TriageRule.AgentAsks)
-    if (!decisionDismissed() && !isDone && (hold?.unblock == HoldUnblock.User || review == "needs_user" || ask?.outcome == "decide" || ask?.outcome == "cannot")) {
+    val ownerDelivery = hold?.unblock == HoldUnblock.User
+    val ownerReview = !decisionDismissed() && (review == "needs_user" || ask?.outcome == "decide" || ask?.outcome == "cannot")
+    if (!isDone && (ownerDelivery || ownerReview)) {
         return at(TriageSection.Waiting, TriageRule.OwnerDecides)
     }
     if (status == TriageStatus.Working || status == TriageStatus.Waiting) return at(TriageSection.Working, TriageRule.AgentRunning)
