@@ -130,6 +130,22 @@ func TestRoutineCooldownDefault(t *testing.T) {
 	}
 }
 
+func TestDisablingOptionalBatchReleasesPendingRoutineSignals(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	shortSupervise(t, s)
+	setSettings(t, s, func(v *Settings) { v.SupervisionBatchMinutes = ptr(60) })
+	g := superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "optional", Detail: "routine detail", Minutes: 50}
+	s.queueSignal(g)
+	waitFor(t, "the optional batch", func() bool {
+		s.supervise.mu.Lock()
+		defer s.supervise.mu.Unlock()
+		return !s.supervise.pending[g.id()].batchUntil.IsZero()
+	})
+	setSettings(t, s, func(v *Settings) { v.SupervisionBatchMinutes = ptr(0) })
+	s.rescheduleSupervision()
+	waitFor(t, "the disabled batch to be released", func() bool { return len(assistantSendsTo(f, "conv1")) == 1 })
+}
+
 // End to end: two routine signals in a row make one wake; a decision-bearing one goes at once and takes the held one.
 func TestRoutineSignalsMergeIntoOneWakeEndToEnd(t *testing.T) {
 	s, f, todo := newSupervisedService(t)

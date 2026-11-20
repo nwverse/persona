@@ -192,6 +192,7 @@ type superviseBook struct {
 	last                time.Time                    // when the last supervision message went out
 	queued              map[string][]superviseSignal // conversation → the signals of the message still waiting in its queue
 	batch               map[string]time.Time         // conversation → its routine batch's first-signal deadline
+	batchInterval       time.Duration                // last scheduled optional interval, to release it when disabled
 	told                map[string]time.Time         // conversation → last accepted supervision message
 	timer               *time.Timer
 	timerAt             time.Time
@@ -359,11 +360,13 @@ func (s *Service) queueSignal(g superviseSignal) {
 // scheduleDigestLocked sets the timer for when the pending signals are due; s.supervise.mu is held.
 func (s *Service) scheduleDigestLocked(now time.Time) {
 	b := &s.supervise
+	batch := s.supervisionBatchInterval(context.Background())
+	b.syncBatchInterval(batch)
 	list := make([]superviseSignal, 0, len(b.pending))
 	for _, g := range b.pending {
 		list = append(list, g)
 	}
-	wait, ok := digestWaitWithBatch(now, b.last, list, s.superviseTimings(), s.supervisionBatchInterval(context.Background()))
+	wait, ok := digestWaitWithBatch(now, b.last, list, s.superviseTimings(), batch)
 	if !ok {
 		return
 	}

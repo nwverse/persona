@@ -12,6 +12,19 @@ import (
 
 const maxSupervisionBatchMinutes = 1440
 
+// syncBatchInterval releases optional deadlines when batching is switched off. The next routing pass applies the
+// ordinary recipient cooldown instead; a disabled hour-long batch must not survive as a routine cooldown. b.mu is held.
+func (b *superviseBook) syncBatchInterval(interval time.Duration) {
+	if b.batchInterval > 0 && interval <= 0 {
+		clear(b.batch)
+		for id, g := range b.pending {
+			g.batchTo, g.batchUntil = "", time.Time{}
+			b.pending[id] = g
+		}
+	}
+	b.batchInterval = interval
+}
+
 // superviseRoutineCooldown is how long routine signals for a conversation wait after a supervision message went to it,
 // so that several tasks' idle, report and all_stopped signals arriving one after another make one wake, not one every
 // superviseUrgentEvery (#11614). Every wake re-reads the supervisor's whole context, which is what costs. Signals that

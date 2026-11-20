@@ -39,6 +39,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 	defer b.dedupMu.Unlock()
 	b.mu.Lock()
 	b.timer, b.timerAt = nil, time.Time{}
+	b.syncBatchInterval(batch)
 	list := make([]superviseSignal, 0, len(b.pending))
 	for _, g := range b.pending {
 		list = append(list, g)
