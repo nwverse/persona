@@ -89,6 +89,10 @@ func launcherOutput(out string) string {
 	return out
 }
 
+// launcherFetchObserverKey carries a test-only entered signal. It runs after the caller snapshots the cache generation
+// and before it queues for the shell lock, so a concurrency test does not need a fixed sleep to establish that order.
+type launcherFetchObserverKey struct{}
+
 // launchers lists the launchers of this machine's login shell: the `_claude_launchers` helper's (claude wrapper
 // functions), then every alias that runs claude (`alias dmcc="ANTHROPIC_BASE_URL=… claude …"`), by name. A name
 // the helper lists is not repeated; none at all: plain claude. refresh true bypasses and replaces the one-minute
@@ -98,6 +102,9 @@ func (n *Node) launchers(ctx context.Context, refresh ...bool) ([]proto.Launcher
 	launcherCache.Lock()
 	observed := launcherCache.generation
 	launcherCache.Unlock()
+	if entered, _ := ctx.Value(launcherFetchObserverKey{}).(func()); entered != nil {
+		entered()
+	}
 	launcherCache.fetch.Lock()
 	defer launcherCache.fetch.Unlock()
 	launcherCache.Lock()

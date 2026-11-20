@@ -53,6 +53,8 @@ var RouteScopes = map[string]string{
 	"GET /api/v1/assistant/leaders":                              ScopeLeadersRead,
 	"GET /api/v1/assistant/dispatch-policy":                      ScopeAssistantDispatchPolicy,
 	"PUT /api/v1/assistant/dispatch-policy":                      ScopeAssistantDispatchPolicy,
+	"GET /api/v1/assistant/dispatch-guard":                       ScopeDispatchGuard,
+	"PUT /api/v1/assistant/dispatch-guard":                       ScopeDispatchGuard,
 	"GET /api/v1/assistant/worker-presets":                       ScopeAssistantStartDefaults,
 	"GET /api/v1/assistant/start-defaults":                       ScopeAssistantStartDefaults,
 	"PUT /api/v1/assistant/start-defaults":                       ScopeAssistantStartDefaults,
@@ -128,6 +130,8 @@ var RouteScopes = map[string]string{
 	"DELETE /api/v1/todos/{id}/agents/{mid}/{sid}":                 ScopeTodosWrite,
 	"PUT /api/v1/todos/{id}/spaces/{mid}/{space...}":               ScopeTodosWrite,
 	"DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}":            ScopeTodosWrite,
+	// The only market route an extension token may call: its own install record chooses the market, never the request.
+	"POST /api/v1/extensions/-/self/market/refresh": ScopeMarketRefreshOwn,
 	// Another extension's own HTTP: the scope names which (ExtensionCallScope).
 	"/api/v1/extensions/{id}/": ScopeCallPrefix,
 }
