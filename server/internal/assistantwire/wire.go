@@ -91,6 +91,9 @@ type Placement struct {
 	MemoryDreaming bool `json:"memory_dreaming,omitempty"`
 	// CompleteAgentlessTodos lets a supervising conversation complete its own agentless memo without another card.
 	CompleteAgentlessTodos bool `json:"complete_agentless_todos,omitempty"`
+	// SupervisionBatchMinutes is manager.json's administrator-pinned routine supervision interval. Nil leaves the
+	// assistant's saved setting in effect; an explicit zero pins immediate delivery through the legacy cadence.
+	SupervisionBatchMinutes *int `json:"supervision_batch_minutes,omitempty"`
 }
 
 // DeviceCall is device.call's params. Device is a machine id, or DeviceAll for DeviceDevicesList.
