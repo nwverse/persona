@@ -306,8 +306,8 @@
     <string name="settings_src_provider_preset_note">The address, connection method and models come from the extension %1$s; once added, you can edit it like one you filled in yourself.</string>
     <string name="settings_src_provider_extension_default">Extension default</string>
     <string name="settings_src_provider_model_note">Each use\'s specific choice is managed in Model configuration; uses without one use this default.</string>
-    <string name="settings_src_provider_api_note">The hub calls the model directly, for uses like triage, translation and knowledge processing.</string>
-    <string name="settings_src_provider_launcher_note">Starts Claude Code on your computer, for uses like chats and agents.</string>
+    <string name="settings_src_provider_api_note">The hub calls this API directly to draft replies, triage, translate or process knowledge, without starting an Agent.</string>
+    <string name="settings_src_provider_launcher_note">Runs Claude Code on your computer for chats and Agents. Without an available Direct API provider, the hub can use this launcher’s Messages API address, key and default model to draft replies or triage without starting an Agent.</string>
     <string name="settings_src_provider_base_url_hint">An address compatible with the chosen protocol.</string>
     <string name="settings_src_provider_small_model">Small model (optional)</string>
     <string name="settings_src_provider_same_as_above">Same as above by default</string>
