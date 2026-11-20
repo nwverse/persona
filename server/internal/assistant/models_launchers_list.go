@@ -496,6 +496,27 @@ func (s *Service) launcherModelResolution(ctx context.Context, machine, launcher
 // askLauncherModels is machine's node's /model list of launcher name (node/launcher_models.go), with the models of
 // the plugin gateway behind it, one row per model (oneRowPerModel).
 func (s *Service) askLauncherModels(ctx context.Context, machine, name string, refresh bool) (proto.LauncherModels, error) {
+	res, err := s.launcherModelRows(ctx, machine, name, refresh)
+	if err != nil {
+		return res, err
+	}
+	res = s.oneRowPerModel(ctx, name, s.presetModels(ctx, machine, name, res))
+	for i, m := range res.Models {
+		res.Models[i].ResolvedOffered = false // only used with the node's original rows for legacy sessions
+		id := m.ID
+		if m.Resolved != "" {
+			id = m.Resolved
+		}
+		res.Models[i].Price = nil
+		if c, ok := catalogModel(id); ok && c.InheritedFrom == "" {
+			res.Models[i].Price = c.Price
+		}
+	}
+	return res, nil
+}
+
+// launcherModelRows reads the target node's rows before the picker merges gateway models, routes and aliases.
+func (s *Service) launcherModelRows(ctx context.Context, machine, name string, refresh bool) (proto.LauncherModels, error) {
 	var res proto.LauncherModels
 	params := map[string]any{"refresh": refresh}
 	if purpose := launcherPurpose(ctx); purpose != "" {
@@ -509,17 +530,6 @@ func (s *Service) askLauncherModels(ctx context.Context, machine, name string, r
 	}
 	if res.Models == nil {
 		res.Models = []proto.AgentModel{}
-	}
-	res = s.oneRowPerModel(ctx, name, s.presetModels(ctx, machine, name, res))
-	for i, m := range res.Models {
-		id := m.ID
-		if m.Resolved != "" {
-			id = m.Resolved
-		}
-		res.Models[i].Price = nil
-		if c, ok := catalogModel(id); ok && c.InheritedFrom == "" {
-			res.Models[i].Price = c.Price
-		}
 	}
 	return res, nil
 }

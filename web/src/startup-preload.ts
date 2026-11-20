@@ -470,6 +470,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // scrolling to it, its heading counting the cards shown (views/extensions/ExtensionSlots.tsx). 63 B in ja, measured in
 // one environment against main cacd8d75a6 (ja 480,670 B to 480,733 B; en 477,744 B to 477,807 B, zh-Hans 478,482 B to
 // 478,545 B). Main had 2,810 B of room, so the budget is this ja size plus those 2,810 B.
+// #10822: Colored sidebar icons, an Appearance choice off by default: the choice's store and the built-in pages' colors
+// (lib/sidebar-icons.ts), read where the sidebar draws its pages, and the style a colored icon takes. 356 B in each
+// language, measured in one environment against main baacfe89c6 (ja 480,552 B to 480,908 B; en 477,626 B to 477,982 B,
+// zh-Hans 478,364 B to 478,720 B); the setting's row and words load with Settings. Main had 2,928 B of room (a budget of
+// 483,480 B), which is kept, so the budget moves by these 356 B, to this ja size plus those 2,928 B.
+// Merged with #9778, the budget adds both feature deltas (63 B + 356 B) to the previous 483,480 B limit.
 // #10905: Overview's own sections arranged with the extensions' cards add 323 B in ja, measured in one environment
 // against main 1e34873c71 (ja 483,878 B to 484,201 B; en 480,952 B to 481,265 B, zh-Hans 481,673 B to 482,012 B): the
 // sections' ids and their place in the arrangement, Needs you and Stuck never hidden (lib/overview-cards.ts),
@@ -488,7 +494,18 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // keyboard-aware palette and dock, the attachment ✕'s corner reach and Overview's task-card overlay (styles.css).
 // Where the toasts sit on a phone is a chunk of its own (ui/toast-lift.tsx) a narrow screen loads after the shell.
 // Main had 221 B of room, so the budget is this ja size plus those 221 B.
-export const FIRST_SCREEN_BUDGET = 483_265;
+// Preserve the backend workspace branch ceiling.
+// #11511: phone fixes add 272 B in ja, measured in one environment against main bb39eb7e10 (ja 482,369 B to 482,641 B;
+// en 479,515 B to 479,787 B, zh-Hans 480,246 B to 480,518 B): Conversation tasks in ⋯ on a phone and the chat's pills'
+// touch targets, with the Loading earlier row drawn over the top padding (views/chat/ChatView.tsx), and the Agents
+// page's scroll kept on Back with its title row's and By to-do rows' touch boxes (views/Sidebar.tsx,
+// views/SidebarTree.tsx). Main had 157 B of room, so the budget is this ja size plus those 157 B (482,798 B).
+// #10822: Colored sidebar icons, an Appearance choice off by default: the choice's store and the built-in pages' colors
+// (lib/sidebar-icons.ts), read where the sidebar draws its pages, and the style a colored icon takes. 172 B in each
+// language, measured in one environment against main 8df9e781b0 (ja 482,711 B to 482,883 B; en 479,826 B to 479,998 B,
+// zh-Hans 480,595 B to 480,767 B); the setting's row and words load with Settings. The budget is main's 482,798 B
+// ceiling plus those 172 B.
+export const FIRST_SCREEN_BUDGET = 482_970;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

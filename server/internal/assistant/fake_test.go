@@ -177,6 +177,8 @@ type fakeHub struct {
 	checks  map[string]proto.LauncherCheck
 	checked []string
 	onCheck func(f *fakeHub) // runs (under the fake's lock) inside each launchers.check
+	// onRename runs (under the fake's lock) inside each session rename, where a node's reader loop would be waiting.
+	onRename func()
 	// checkWait, when set, runs before each launchers.check is answered, outside the fake's lock, with the call's
 	// context: a check that takes its time; its error is the call's.
 	checkWait func(ctx context.Context) error
@@ -443,8 +445,11 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			}
 		}
 		return json.Marshal(map[string]any{"items": items})
-	case DeviceSessionRename:
+	case DeviceSessionRename, assistantwire.DeviceSessionRenameTabIfCurrent:
 		f.sends = append(f.sends, map[string]any{"rename": a})
+		if f.onRename != nil {
+			f.onRename()
+		}
 		return json.RawMessage(`{"ok":true}`), nil
 	case assistantwire.DeviceLaunchersCheck:
 		name, _ := a["name"].(string)
