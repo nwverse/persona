@@ -176,6 +176,11 @@ func (h *Hub) machineHistory(ctx context.Context, m *Machine, q sessionhistory.Q
 			sources = ans.Sources
 		}
 		page := sessionhistory.Page[sessionhistory.Row]{NextCursor: ans.NextCursor, Complete: ans.Complete}
+		if k, err := sessionhistory.DecodeCursor(ans.NextCursor); err == nil && k != nil {
+			// The node read up to its cursor, rows it left out included (a blocked folder's): an empty page of it
+			// still moves the merge on (sessionhistory.Merge).
+			page.Reached = &sessionhistory.Key{T: k.T, K: id + "\x00" + k.K}
+		}
 		for _, r := range ans.Rows {
 			if r.Session.IsDeleted() || sessionHiddenByDeletion(r.Session, deleted) || noHealth && healthSession(&r.Session) {
 				continue

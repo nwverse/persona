@@ -1,6 +1,144 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "agentDirs.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Action"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "動作"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "操作"
+          }
+        }
+      }
+    },
+    "agentDirs.action.block" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Block"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ブロック"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "屏蔽"
+          }
+        }
+      }
+    },
+    "agentDirs.action.hide" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hide"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "非表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐藏"
+          }
+        }
+      }
+    },
+    "agentDirs.add" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Folder Rule"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォルダのルールを追加"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加文件夹规则"
+          }
+        }
+      }
+    },
+    "agentDirs.footer" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sessions working in these folders, with any Agent. Block: this computer stops collecting them, so nothing in Persona shows or counts them, and their permission requests are left to the agent's own interface. Hide: they stay recorded but leave Agents and the assistant's view; active supervised tasks stay visible, and the Agents menu can show them for a moment. A path covers that folder and everything in it; ~ is this computer's home; *name* matches a folder name anywhere. Turn a rule off to show its sessions again. To stop collecting a Claude Code config folder altogether, use Blocked Config Folders in Claude Code Settings."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "これらのフォルダ内で作業するセッション（どの Agent でも）が対象です。ブロック：このコンピュータはセッションを収集しなくなり、Persona のどこにも表示・集計されません。許可の確認はエージェント自身の画面に任されます。非表示：記録は続きますが、Agents とアシスタントのビューには表示されません。監督中のタスクは表示されたままで、Agents メニューから一時的に表示できます。パスはそのフォルダと中身すべてを対象にします。~ はこのコンピュータのホーム、*name* は任意の場所のフォルダ名に一致します。ルールをオフにするとセッションが再び表示されます。Claude Code の設定フォルダ自体を収集しない場合は、Claude Code の設定の「ブロックした設定フォルダ」を使ってください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在这些文件夹中工作的会话（任何 Agent）。屏蔽：这台电脑不再收集它们，Persona 中任何地方都不显示、不计数，它们的授权请求留在 Agent 自己的界面处理。隐藏：会话继续记录，但不出现在 Agents 和助手的视图中；正在督办的任务仍然可见，也可以在 Agents 菜单里临时显示。路径包含该文件夹及其所有子文件夹；~ 表示这台电脑的主目录；*name* 匹配任意位置的文件夹名。关闭规则即可重新显示其中的会话。若要完全不收集某个 Claude Code 配置文件夹，请使用 Claude Code 设置中的“屏蔽的配置文件夹”。"
+          }
+        }
+      }
+    },
+    "agentDirs.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent Folders"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent フォルダ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 文件夹"
+          }
+        }
+      }
+    },
     "This doesn't look like a provider's settings. Paste an alias, export lines, a settings.json, a curl command or a provider's JSON." : {
       "localizations" : {
         "en" : {
@@ -217486,6 +217624,30 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "列表在另一台设备上改过了，这里显示的是最新的。"
+          }
+        }
+      }
+    },
+    "Done [Todo Stage Bar]" : {
+      "comment" : "The step that ends a to-do's stage bar when its work closed with nothing left to deploy.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完成"
           }
         }
       }
