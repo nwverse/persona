@@ -854,6 +854,20 @@ originating to-do end the old wait. Owner decisions and acceptance keep their ex
 
 ## Parked tasks
 
+**External PR events (#9775).** On an `external_event` park, set `evidence.pr_event` to `terminal` when merge or
+closure ends the wait, or to `terminal_or_review` when a new submitted review also ends it. Set `evidence.url`
+to that GitHub PR. A PR link used as context for another dependency keeps its timed recheck. Existing records
+without `pr_event` can opt in when the supervisor confirms the condition and records a new park.
+
+The existing minute PR pass can add this exact source to its bounded sample even for a task with no stage PR.
+It uses the ten-minute attempt/fact throttle. Terminal state can be confirmed on the first fresh read.
+A review must name the current head and have a provider ID and submission time after the current park.
+Approvals, requests for changes and comments submitted as reviews are read from the existing bounded review page.
+The manager rechecks the task, captured park and latest observation before committing `external_pr` and
+`pending_review` together. The review signal goes to the current supervisor, who still checks the task criteria.
+Failed writes can be retried. The watch recovers a committed wake after a restart, with one delivery per park.
+The existing ready `merge_review` path still gates terminal wakes on the task's sampled PRs.
+
 (#3804, `assistant/parked.go`, `assistant/park_evidence.go`.) Parking is for an evidenced external wait, not a way to defer work or ask the owner a question. A new park must say what is awaited and include source-backed evidence.
 
 - **New parks**: `task_review` with `parked` requires a one-sentence `reason`, `waiting_on` (`someone_else`, `external_event` or `date`), and typed `evidence` with nonblank `kind`, `target` and `wake`. A new owner decision is `needs_user` with its complete decision fields; `owner_priority` is refused for new parks. Legacy `owner_priority` reviews remain readable; the existing supervision watch reconciles their open, current parks into `needs_user` rather than leaving an owner choice hidden in the waiting-only digest.
