@@ -189,16 +189,16 @@ struct TodoCountsSourceTests {
         for counts in [hubCounts, nil] {
             pending.value = [:]
             source.update(.init(rows: rows, views: views, counts: counts, now: Date()))
-            try await waitForOutboxTest { source.counts.open == 3 }
+            try await waitForCount { source.counts.open == 3 }
             #expect(source.needsYou == 1 && source.counts.inProgress == 1)
             pending.value = ["n": .someday, "w": .gone, "x": .added(TodoItem(id: "x", title: "X", createdAt: Date()))]
-            try await waitForOutboxTest { source.needsYou == 0 }
+            try await waitForCount { source.needsYou == 0 }
             #expect(source.counts.inProgress == 0, "the deleted one is out of every number")
             #expect(source.counts.sections[TodoListSection.someday] == 1 && source.counts.sections[TodoListSection.todo] == 2)
             #expect(source.counts.open == 2, "Someday is not open; the new one is")
             #expect(source.filed.map(\.id) == ["x", "a", "n"], "the new one first in To do, then Someday")
             pending.value = [:]
-            try await waitForOutboxTest { source.needsYou == 1 && source.counts.open == 3 }
+            try await waitForCount { source.needsYou == 1 && source.counts.open == 3 }
         }
     }
 }

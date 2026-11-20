@@ -319,7 +319,7 @@ object PersonaIcons {
     /** SF Symbol `puzzlepiece.extension`. */
     val skills: PhIcon get() = PhIcons.PuzzlePiece
     /** SF Symbol `moon.stars.fill`. */
-    val someday: PhIcon get() = PhIcons.MoonStars
+    val someday: PhIcon get() = PhIcons.Couch
     /** SF Symbol `square.stack.3d.up`. */
     val space: PhIcon get() = PhIcons.Stack
     /** SF Symbol `square.stack.3d.up.fill`. */

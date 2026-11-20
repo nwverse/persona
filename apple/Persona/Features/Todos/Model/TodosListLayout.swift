@@ -34,10 +34,17 @@ nonisolated struct TodoRowContent: Equatable, Sendable {
     var inactive = false
     /// Ticked a moment ago (`TodoOutbox`): struck through, the tick drawn ticked, until the hub has it closed.
     var struck = false
-    /// Made on this device and not on the hub yet: "Saving…" on line 2.
+    /// Made on this device and not on the hub yet: line 2 says so, and the row neither opens nor has actions but Try
+    /// Again and Remove when `unsure`.
     var saving = false
+    /// A new to-do nobody knows the hub made: "Not sure it was saved", with Try Again and Remove.
+    var unsure = false
+    /// Line 2 is this device's own word on the owner's write ("Saving…", "Not on your hub yet"), in the tertiary color.
+    var unsaved = false
     /// Persona or an Agent works on it: the tick asks first ("Mark it done and stop?").
     var working = false
+    /// An Agent's question, plan or tool waits for the owner on it: the tick asks first too.
+    var agentWaits = false
     /// In Someday: its swipe and menu take it out again.
     var someday = false
     /// Finished and seen, still open ("Finished Tue"): line 2 ends in Mark Done.
@@ -45,9 +52,54 @@ nonisolated struct TodoRowContent: Equatable, Sendable {
     /// The row in words, for VoiceOver: the title, the state its mark draws, its line, the door and how many asks, line
     /// 3, then its time said in full ("Due Saturday", "16 minutes ago").
     var spoken = ""
-    /// The tick in words: "Complete, ‹title›", and Done or Not done.
-    var tickLabel = ""
+    /// The tick's value: Done or Not done (its label is the title).
     var tickValue = ""
+}
+
+/// What a To-dos row offers besides opening it (#10465): its swipe, its long press and VoiceOver's actions.
+nonisolated enum TodoRowAction: String, Equatable, Sendable {
+    case done, someday, outOfSomeday, undo, reopen, tryAgain, remove
+    case today, date, project, copyLink, delete
+}
+
+/// Which of them a row offers, from its content, so the swipe, the menu and VoiceOver's actions agree.
+nonisolated enum TodoRowActionList {
+    /// The trailing swipe, the full swipe first: Done and Someday (Remove from Someday in Someday); Undo on a row ticked a
+    /// moment ago; Reopen on a closed one; Try Again and Remove on a new one nobody knows the hub made; none while a new
+    /// one is being saved.
+    static func swipe(_ c: TodoRowContent) -> [TodoRowAction] {
+        if c.unsure { return [.tryAgain, .remove] }
+        if c.saving { return [] }
+        if c.struck { return [.undo] }
+        if c.closed { return [.reopen] }
+        return [.done, c.someday ? .outOfSomeday : .someday]
+    }
+
+    /// The long press: Undo or Reopen first where the swipe has it, else Today, Date…, Project and Someday; then Copy
+    /// Link and Delete….
+    static func menu(_ c: TodoRowContent) -> [TodoRowAction] {
+        if c.unsure { return [.tryAgain, .remove] }
+        if c.saving { return [] }
+        if c.struck { return [.undo, .copyLink, .delete] }
+        if c.closed { return [.reopen, .copyLink, .delete] }
+        return [.today, .date, .project, c.someday ? .outOfSomeday : .someday, .copyLink, .delete]
+    }
+
+    /// VoiceOver's and Switch Control's actions on the row: the swipe's, then Delete…; the menu's other items are its
+    /// "Show menu" on the same element.
+    static func spoken(_ c: TodoRowContent) -> [TodoRowAction] {
+        let swipe = swipe(c)
+        return swipe.isEmpty || c.saving ? swipe : swipe + [.delete]
+    }
+}
+
+/// The owner's write on a row still on this device (`TodoOutbox`), as the row says it.
+nonisolated struct TodoRowWrite: Equatable, Sendable {
+    var write: TodoOutbox.Write
+    /// It could not reach the hub yet, or nobody knows whether it did: it goes again when the hub next answers.
+    var waits = false
+    /// A new to-do nobody knows the hub made.
+    var unsure = false
 }
 
 /// How the list groups its rows (the bar's trailing menu): by phase, the sections; by project; by due date. In every
@@ -325,11 +377,11 @@ nonisolated enum TodosListLayout {
 /// A row's content from its facts and its view (#10465): the trailing time, the mark, the line in words, the door,
 /// line 3 and the row in words. Pure.
 nonisolated enum TodoRowContentLogic {
-    /// `pending`: the owner's write on it still on the device (`TodoOutbox`): a tick is drawn at once, struck through, and
-    /// a new to-do says it is being saved.
+    /// `pending`: the owner's write on it still on the device (`TodoOutbox`): a tick is drawn at once, struck through; a
+    /// new to-do says it is being saved; one that could not reach the hub says so.
     static func content(_ filed: TodoFiled, item: TodoItem, view: TodoSummary?, grouping: TodosListGrouping, now: Date,
                         words: TodoWords = TodoWords(), calendar: Calendar = .current,
-                        projectName: (String) -> String = { $0 }, pending: TodoOutbox.Write? = nil) -> TodoRowContent {
+                        projectName: (String) -> String = { $0 }, pending: TodoRowWrite? = nil) -> TodoRowContent {
         var c = TodoRowContent(id: filed.id, title: item.title, closed: filed.closed, inactive: filed.inactive)
         let since = view?.since.flatMap(JSON.parseDate)
         // The time as drawn at the title's end, and as VoiceOver says it.
@@ -376,20 +428,27 @@ nonisolated enum TodoRowContentLogic {
         }
         c.caption = facts.isEmpty ? nil : facts.joined(separator: TodoTimeWords.separator)
         c.working = filed.section == TodoListSection.working && !filed.closed
+        c.agentWaits = !filed.closed && (view?.asks ?? []).contains { $0.run != nil }
         c.someday = filed.section == TodoListSection.someday
-        c.markDone = view?.line?.key == "finished_seen" && !filed.closed
-        switch pending {
+        c.markDone = view?.line?.key == TodoLineKey.finishedSeen && !filed.closed
+        switch pending?.write {
         case .done(true)?:
             (c.closed, c.struck, c.markDone, c.mark) = (true, true, false, nil)
         case .done(false)?:
             c.closed = false
         case .create?:
-            (c.saving, c.said, c.mark, c.caption) = (true, TodoLineText.Said(rest: words("Saving… [To-dos List]")), nil, nil)
+            let said = pending?.unsure == true ? words("Not sure it was saved [To-dos List]")
+                : pending?.waits == true ? words("Not on your hub yet [To-dos List]") : words("Saving… [To-dos List]")
+            (c.saving, c.unsure, c.said, c.mark, c.caption) = (true, pending?.unsure == true, TodoLineText.Said(rest: said), nil, nil)
+            c.unsaved = true
         default:
             break
         }
+        // A change that could not reach the hub yet says so where the hub's line was, until it does.
+        if let pending, pending.waits, pending.write.edits {
+            (c.said, c.mark, c.markDone, c.unsaved) = (TodoLineText.Said(rest: words("Not on your hub yet [To-dos List]")), nil, false, true)
+        }
         c.spoken = spoken(c, heard: heard, words: words)
-        c.tickLabel = words("Complete, \(c.title) [To-dos Actions]")
         c.tickValue = c.closed ? StateName.done.text : words("Not done [To-dos Actions]")
         return c
     }
@@ -412,7 +471,6 @@ nonisolated enum TodoRowContentLogic {
             parts.append(door == .reviewPlan ? words("Review Plan [To-dos Door]") : words("Review [To-dos Door]"))
             if c.asks > 1 { parts.append(words("\(c.asks) asks [To-dos Door]")) }
         }
-        if c.markDone { parts.append(words("Mark Done [To-dos Actions]")) }
         if let caption = c.caption { parts.append(caption) }
         return (parts + heard).joined(separator: separator)
     }

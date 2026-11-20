@@ -4,83 +4,179 @@ import PersonaWire
 import SwiftUI
 import UIKit
 
+/// One row of the V1 list and what it does: drawn from its own cell and the list's model, two references that stay the
+/// same, so a list update that leaves the row alone does not draw it again (P6). The link under it opens the to-do (no
+/// chevron on every row, as the Inbox's rows; iOS 18 draws the chevron of a link that is the row whatever it is told);
+/// a new to-do opens once the hub has it. The row's confirmations are presented from the row they ask about.
+struct TodoListCell: View {
+    var cell: TodosListModel.Row
+    var model: TodosListModel
+
+    var body: some View {
+        let c = cell.content
+        TodoListRow(row: cell, model: model)
+            .background {
+                if !c.saving {
+                    NavigationLink(value: TodoDetailRoute(id: cell.todoID)) { EmptyView() }.opacity(0)
+                }
+                TodoRowDialogs(model: model, key: cell.id)
+            }
+            .themedRow()
+            .modifier(TodoRowActions(model: model, key: cell.id, row: c))
+    }
+}
+
+/// "Mark it done and stop?" and "Delete …?", presented from the row they ask about (iOS 26 points its popover at it),
+/// and drawn only while they ask: no row pays for an idle dialog.
+private struct TodoRowDialogs: View {
+    var model: TodosListModel
+    var key: String
+
+    var body: some View {
+        if model.stopping == key {
+            Color.clear
+                .accessibleConfirmationDialog(model.stopTitle(key), isPresented: Binding(get: { model.stopping == key }, set: { shown in
+                    if !shown, model.stopping == key { model.stopping = nil }
+                }), titleVisibility: .visible, hasCancel: true) {
+                    // It interrupts work: drawn as 4.4's busy-Agent close is.
+                    Button(String(localized: "Done and Stop [To-dos Actions]"), role: .destructive) { model.close(key) }
+                        .accessibilityIdentifier("todos.stop.confirm")
+                    Button(String(localized: "Cancel"), role: .cancel) {}
+                } message: {
+                    Text(verbatim: model.item(key)?.title ?? "")
+                }
+        } else if model.deleting == key {
+            Color.clear
+                .accessibleConfirmationDialog(String(localized: "Delete “\(model.item(key)?.title ?? "")”? [To-dos Actions]"),
+                                              isPresented: Binding(get: { model.deleting == key }, set: { shown in
+                                                  if !shown, model.deleting == key { model.deleting = nil }
+                                              }), titleVisibility: .visible, hasCancel: true) {
+                    Button(String(localized: "Delete To-Do [To-dos Actions]"), role: .destructive) { model.delete(key) }
+                        .accessibilityIdentifier("todos.delete.confirm")
+                    Button(String(localized: "Cancel"), role: .cancel) {}
+                } message: {
+                    Text("It's removed from your to-dos on every device. Work already under way on it keeps going. [To-dos Actions]")
+                }
+        }
+    }
+}
+
 /// What a To-dos row offers besides opening it (#10465; docs/design/proposals/todos-redesign.md 3.4, "Swipe"; DESIGN_SYSTEM
 /// 3.4 "To-dos list"): one trailing swipe, Done (the full swipe) and Someday, as the Inbox swipes; and the long-press
-/// menu: Today, Date…, Project, Someday, Copy Link and Delete…. A closed to-do swipes to Reopen; one ticked a moment ago
-/// to Undo; one still being saved offers nothing yet.
+/// menu: Today, Date…, Project, Someday, Copy Link and Delete…. Which of them a row has is `TodoRowActionList`'s.
 struct TodoRowActions: ViewModifier {
     var model: TodosListModel
     var key: String
     var row: TodoRowContent
-    /// The tick's own action (`TodoListView.tick`): it may ask first.
-    var tick: () -> Void
-    var pickDate: () -> Void
-    var askDelete: () -> Void
-    var copyLink: () -> Void
 
     func body(content: Content) -> some View {
         content
-            .swipeActions(edge: .trailing, allowsFullSwipe: true) { swipe }
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                ForEach(TodoRowActionList.swipe(row), id: \.self) { action in
+                    button(action).tint(Self.tint(action)).accessibilityIdentifier("todos.swipe." + action.rawValue)
+                }
+            }
             .contextMenu { menu }
     }
 
-    @ViewBuilder private var swipe: some View {
-        if row.saving {
-            EmptyView()
-        } else if row.struck {
-            Button(action: tick) { Label(String(localized: "Undo [To-dos Actions]"), systemImage: Theme.Icon.undo) }
-                .tint(Theme.accent)
-                .accessibilityIdentifier("todos.swipe.undo")
-        } else if row.closed {
-            Button(action: tick) { Label(String(localized: "Reopen [To-dos Actions]"), systemImage: Theme.Icon.undo) }
-                .tint(Theme.accent)
-                .accessibilityIdentifier("todos.swipe.reopen")
-        } else {
-            Button(action: tick) { Label(String(localized: "Done [To-dos Actions]"), systemImage: Theme.Icon.done) }
-                .tint(Theme.positive)
-                .accessibilityIdentifier("todos.swipe.done")
-            somedayButton.tint(Theme.somedayTint).accessibilityIdentifier("todos.swipe.someday")
-        }
-    }
-
-    @ViewBuilder private var somedayButton: some View {
-        if row.someday {
-            Button { model.outOfSomeday(key) } label: {
-                Label(String(localized: "Remove from Someday [To-dos Actions]"), systemImage: Theme.Icon.someday)
-            }
-        } else {
-            Button { model.someday(key) } label: { Label(StateName.todoSomeday, systemImage: Theme.Icon.someday) }
-        }
-    }
-
     @ViewBuilder private var menu: some View {
-        if !row.saving {
-            if row.closed && !row.struck {
-                Button(action: tick) { Label(String(localized: "Reopen [To-dos Actions]"), systemImage: Theme.Icon.undo) }
-                    .accessibilityIdentifier("todos.menu.reopen")
-            } else if !row.struck {
-                Section {
-                    Button { model.setDue(key, day: Date()) } label: {
-                        Label(String(localized: "Today [To-dos Actions]"), systemImage: Theme.Icon.today)
-                    }
-                    .accessibilityIdentifier("todos.menu.today")
-                    Button(action: pickDate) { Label(String(localized: "Date… [To-dos Actions]"), systemImage: Theme.Icon.dueDate) }
-                        .accessibilityIdentifier("todos.menu.date")
-                    TodoProjectMenu(model: model, key: key, current: model.item(key)?.project ?? "")
-                    somedayButton.accessibilityIdentifier("todos.menu.someday")
-                }
-            }
+        let actions = TodoRowActionList.menu(row)
+        let first = actions.filter { [.undo, .reopen, .tryAgain, .remove].contains($0) }
+        let plan = actions.filter { [.today, .date, .project, .someday, .outOfSomeday].contains($0) }
+        if !first.isEmpty {
             Section {
-                Button(action: copyLink) { Label(String(localized: "Copy Link [To-dos Actions]"), systemImage: Theme.Icon.link) }
-                    .accessibilityIdentifier("todos.menu.copyLink")
-            }
-            Section {
-                Button(role: .destructive, action: askDelete) {
-                    Label(String(localized: "Delete… [To-dos Actions]"), systemImage: Theme.Icon.delete)
+                ForEach(first, id: \.self) { action in
+                    button(action).accessibilityIdentifier("todos.menu." + action.rawValue)
                 }
-                .accessibilityIdentifier("todos.menu.delete")
             }
         }
+        if !plan.isEmpty {
+            Section {
+                ForEach(plan, id: \.self) { action in
+                    if action == .project {
+                        TodoProjectMenu(model: model, key: key, current: model.item(key)?.project ?? "")
+                    } else {
+                        button(action).accessibilityIdentifier("todos.menu." + action.rawValue)
+                    }
+                }
+            }
+        }
+        if actions.contains(.copyLink) {
+            Section { button(.copyLink).accessibilityIdentifier("todos.menu.copyLink") }
+        }
+        if actions.contains(.delete) {
+            Section { button(.delete).accessibilityIdentifier("todos.menu.delete") }
+        }
+    }
+
+    private func button(_ action: TodoRowAction) -> some View {
+        Button(role: action == .delete ? .destructive : nil) { Self.run(action, key, model) } label: {
+            Label(Self.title(action), systemImage: Self.icon(action))
+        }
+    }
+
+    static func run(_ action: TodoRowAction, _ key: String, _ model: TodosListModel) {
+        switch action {
+        case .done, .undo, .reopen: model.tapTick(key)
+        case .someday: model.someday(key)
+        case .outOfSomeday: model.outOfSomeday(key)
+        case .tryAgain: model.retry(key)
+        case .remove: model.removeUnsure(key)
+        case .today: model.setToday(key)
+        case .date: model.pickDate(key)
+        case .project: break // a submenu of its own
+        case .copyLink: copyLink(model.item(key)?.id)
+        case .delete: model.askDelete(key)
+        }
+    }
+
+    static func title(_ action: TodoRowAction) -> String {
+        switch action {
+        case .done: String(localized: "Done [To-dos Actions]")
+        case .someday: StateName.todoSomeday
+        case .outOfSomeday: String(localized: "Remove from Someday [To-dos Actions]")
+        case .undo: String(localized: "Undo")
+        case .reopen: String(localized: "Reopen [To-dos Actions]")
+        case .tryAgain: String(localized: "Try Again")
+        case .remove: String(localized: "Remove [To-dos Actions]")
+        case .today: String(localized: "Today [To-dos Actions]")
+        case .date: String(localized: "Date… [To-dos Actions]")
+        case .project: String(localized: "Project [To-dos Actions]")
+        case .copyLink: String(localized: "Copy Link [To-dos Actions]")
+        case .delete: String(localized: "Delete… [To-dos Actions]")
+        }
+    }
+
+    private static func icon(_ action: TodoRowAction) -> String {
+        switch action {
+        case .done: Theme.Icon.done
+        case .someday: Theme.Icon.someday
+        case .outOfSomeday, .undo, .reopen: Theme.Icon.undo
+        case .tryAgain: Theme.Icon.retry
+        case .remove, .delete: Theme.Icon.delete
+        case .today: Theme.Icon.today
+        case .date: Theme.Icon.dueDate
+        case .project: Theme.Icon.space
+        case .copyLink: Theme.Icon.link
+        }
+    }
+
+    private static func tint(_ action: TodoRowAction) -> Color {
+        switch action {
+        case .done: Theme.positive
+        case .someday: Theme.somedayTint
+        case .remove, .delete: Theme.danger
+        default: Theme.accent
+        }
+    }
+
+    /// The to-do's web link on the hub-level group's address its links are written with, else the one this device uses.
+    private static func copyLink(_ id: String?) {
+        let app = AppModel.shared
+        guard let id, let link = app.hub, let url = TodoLink.web(id, on: link.hello.publicURL ?? link.config.url) else { return }
+        UIPasteboard.general.url = url
+        Haptics.success()
+        app.toast = Toast(String(localized: "Copied [To-dos Toast]"), style: .success)
     }
 }
 
@@ -105,6 +201,7 @@ private struct TodoProjectMenu: View {
         } label: {
             Label(String(localized: "Project [To-dos Actions]"), systemImage: Theme.Icon.space)
         }
+        .accessibilityIdentifier("todos.menu.project")
     }
 }
 
@@ -130,15 +227,21 @@ struct TodoNewPill: View {
 }
 
 /// The New To-Do sheet: a title and notes, and Add. It closes at once: the to-do is listed while it is saved, and goes
-/// to the hub with its op id when it can (`TodosListModel.create`).
+/// to the hub with its op id when it can (`TodosListModel.create`). `draft`: what a new to-do the hub turned down said.
 struct TodoNewSheet: View {
     var add: (_ title: String, _ notes: String?) -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var title = ""
-    @State private var notes = ""
+    @State private var title: String
+    @State private var notes: String
     /// The notes' mic, made as the sheet appears (P3: a `@State` initial value does nothing).
     @State private var dictation: Dictation?
     @FocusState private var focused: Bool
+
+    init(draft: TodoOutbox.Draft? = nil, add: @escaping (_ title: String, _ notes: String?) -> Void) {
+        self.add = add
+        _title = State(initialValue: draft?.title ?? "")
+        _notes = State(initialValue: draft?.notes ?? "")
+    }
 
     private var ready: Bool { !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
@@ -188,60 +291,70 @@ struct TodoNewSheet: View {
     }
 }
 
-/// Date… on a row: a day for it to be due, or none.
+/// Date… on a row: when it is due, as the calendar's Change Due Date sets it (`TodoRescheduleSheet`: a day, or a day
+/// and a time with All Day off), or no date.
 struct TodoDueSheet: View {
-    struct Target: Identifiable {
-        var key: String
-        var day: Date?
-        var id: String { key }
-    }
-
-    var target: Target
-    var save: (_ day: Date?) -> Void
+    var item: TodoItem
+    var save: (_ due: APIClient.TodoPlanChange.Due) -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var day: Date
+    @State private var allDay: Bool
+    @State private var due: Date
 
-    init(target: Target, save: @escaping (_ day: Date?) -> Void) {
-        self.target = target
+    init(item: TodoItem, save: @escaping (_ due: APIClient.TodoPlanChange.Due) -> Void) {
+        self.item = item
         self.save = save
-        _day = State(initialValue: target.day ?? Date())
+        // As the to-do's page starts its due date: an all-day one at 18:00 should it become a moment.
+        let draft = TodoPlanDraft(item)
+        _allDay = State(initialValue: draft.allDay)
+        _due = State(initialValue: draft.due)
     }
+
+    private var dated: Bool { item.dueAt != nil || item.dueDate != nil }
 
     var body: some View {
         NavigationStack {
             Form {
-                DatePicker(String(localized: "Due Date [To-dos Due Sheet]"), selection: $day, displayedComponents: .date)
-                    .datePickerStyle(.graphical)
-                    .accessibilityIdentifier("todos.due.day")
-                if target.day != nil {
-                    Button(role: .destructive) {
-                        save(nil)
-                        dismiss()
-                    } label: {
-                        Text("Remove Date [To-dos Due Sheet]")
+                Section {
+                    FormDatePicker("Due", selection: $due, displayedComponents: allDay ? [.date] : [.date, .hourAndMinute],
+                                   identifier: "todos.due.day")
+                    Toggle(String(localized: "All Day"), isOn: $allDay)
+                        .accessibilityIdentifier("todos.due.allDay")
+                } header: {
+                    Text(verbatim: item.title)
+                        .lineLimit(1)
+                }
+                if dated {
+                    Section {
+                        Button(role: .destructive) {
+                            save(.none)
+                            dismiss()
+                        } label: {
+                            Text("Remove Date [To-dos Due Sheet]")
+                        }
+                        .accessibilityIdentifier("todos.due.remove")
                     }
-                    .accessibilityIdentifier("todos.due.remove")
                 }
             }
             .themedPage()
-            .navigationTitle(String(localized: "Due Date [To-dos Due Sheet]"))
+            .navigationTitle(String(localized: "Change Due Date"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 SheetClose { dismiss() }
-                SheetConfirm(id: "todos.due.save", name: String(localized: "Save [To-dos Due Sheet]")) {
-                    save(day)
+                SheetConfirm(id: "todos.due.save", name: String(localized: "Save")) {
+                    save(allDay ? .day(TodoPlanText.day(due)) : .at(due))
                     dismiss()
                 }
             }
         }
+        .formSheetDetents([.medium])
     }
 }
 #endif
 
 // The pure parts, on every platform: the list's model says the offline line.
 
-/// A to-do's web link (docs/protocol/deep-links.md, "A to-do": `/todos/<id>`) on the hub's address its links are written
-/// with (its `public_url`, else the one this device uses), so it opens in a browser too.
+/// A to-do's web link (docs/protocol/deep-links.md "Route table": `/todos/<id>`) on the hub's address its links are
+/// written with (its `public_url`, else the one this device uses), so it opens in a browser too.
 nonisolated enum TodoLink {
     static func web(_ id: String, on hub: URL) -> URL? {
         var base = hub.absoluteString

@@ -8,7 +8,8 @@ extension TodosListDeps {
         let app = AppModel.shared
         return TodosListDeps(store: TodoStore.shared, outbox: TodoOutbox.shared, api: { app.api }, now: { Date() },
                              calendar: { TodoCalendar.userCalendar }, projects: { TodoProjects.shared.list },
-                             toast: { app.toast = $0 }, show: { app.show($0) })
+                             toast: { app.toast = $0 }, show: { app.show($0) },
+                             assistive: { UIAccessibility.isVoiceOverRunning || UIAccessibility.isSwitchControlRunning })
     }
 }
 
@@ -31,10 +32,7 @@ struct TodoListView: View {
     /// Whether this page has put its list back where the place was left: once, as the page is made. A list kept in its
     /// navigation stack keeps its own place when a to-do pushed over it pops.
     @State private var placed = false
-    /// The row whose tick asks first ("Mark it done and stop?"), the row Delete… asks about, Date…'s row, New To-Do.
-    @State private var stopping: String?
-    @State private var deleting: String?
-    @State private var dating: TodoDueSheet.Target?
+    /// New To-Do's sheet (the row's confirmations and Date… are the model's, presented from their row).
     @State private var creating = false
     private let workspace = TodoWorkspace.shared
 
@@ -50,14 +48,6 @@ struct TodoListView: View {
 
     private var drawsBar: Bool { model.ready && !model.calm && model.hasRows }
 
-    /// The hub is out of reach, as the titles say it (`ConnectionStatus`, after its delay): the list is the one last read.
-    private var offline: Bool {
-        switch app.connection.shown {
-        case .waitingForNetwork, .connecting, .rejected: true
-        case .online, .updating: false
-        }
-    }
-
     var body: some View {
         ScrollViewReader { proxy in
             List {
@@ -68,11 +58,7 @@ struct TodoListView: View {
                             .listRowSeparator(.hidden)
                             .themedRow()
                     }
-                    if offline && model.hasRows {
-                        TodosOfflineLine(model: model)
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                    }
+                    TodosOfflineLine(model: model)
                     content
                 }
             }
@@ -130,30 +116,16 @@ struct TodoListView: View {
         .pageToolbar {
             ToolbarItem(placement: .primaryAction) { moreMenu }
         }
-        .accessibleConfirmationDialog(String(localized: "Persona is still working on this. Mark it done and stop? [To-dos Actions]"),
-                                      isPresented: Binding(get: { stopping != nil }, set: { if !$0 { stopping = nil } }),
-                                      titleVisibility: .visible, hasCancel: true, presenting: stopping) { key in
-            Button(String(localized: "Done and Stop [To-dos Actions]")) { model.close(key) }
-                .accessibilityIdentifier("todos.stop.confirm")
-            Button(String(localized: "Cancel"), role: .cancel) {}
-        } message: { key in
-            // Which to-do: the dialog is the page's, so it may point away from the row.
-            Text(verbatim: model.item(key)?.title ?? "")
-        }
-        .accessibleConfirmationDialog(deleteTitle, isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
-                                      titleVisibility: .visible, hasCancel: true, presenting: deleting) { key in
-            Button(String(localized: "Delete To-Do [To-dos Actions]"), role: .destructive) { model.delete(key) }
-                .accessibilityIdentifier("todos.delete.confirm")
-            Button(String(localized: "Cancel"), role: .cancel) {}
-        } message: { _ in
-            Text("It's removed from your to-dos on every device. Work already under way on it keeps going. [To-dos Actions]")
-        }
-        .sheet(item: $dating) { target in
-            TodoDueSheet(target: target) { day in model.setDue(target.key, day: day) }
+        .sheet(item: Binding(get: { model.dating.flatMap { key in model.item(key).map { DueTarget(key: key, item: $0) } } },
+                             set: { model.dating = $0?.key })) { target in
+            TodoDueSheet(item: target.item) { due in model.setDue(target.key, to: due) }
         }
         .sheet(isPresented: $creating) {
-            TodoNewSheet { title, notes in model.create(title: title, notes: notes) }
+            // A new to-do the hub turned down comes back with what it said (its toast's Edit).
+            TodoNewSheet(draft: model.draft) { title, notes in model.create(title: title, notes: notes) }
+                .onAppear { model.tookDraft() }
         }
+        .onChange(of: model.draft) { _, draft in if draft != nil { creating = true } }
         .onChange(of: grouping) { _, g in model.grouping = g }
         .onChange(of: sort) { _, s in model.sort = s }
         // Each minute while the page is in front, and as it comes back to the front: the rows' times, and what the clock
@@ -194,18 +166,8 @@ struct TodoListView: View {
 
     @ViewBuilder private func row(_ key: String) -> some View {
         if let cell = model.row(key) {
-            // The row is the to-do: the link under it, so no chevron on every row (as the Inbox's rows; iOS 18 draws the
-            // chevron of a link that is the row whatever it is told). A new to-do opens once the hub has it.
-            TodoListRow(row: cell, tick: { tick(key) }, markDone: { tick(key) })
-                .background {
-                    if !cell.content.saving {
-                        NavigationLink(value: TodoDetailRoute(id: cell.todoID)) { EmptyView() }.opacity(0)
-                    }
-                }
-                .themedRow()
-                .modifier(TodoRowActions(model: model, key: key, row: cell.content, tick: { tick(key) },
-                                         pickDate: { dating = TodoDueSheet.Target(key: key, day: model.dueDay(key)) },
-                                         askDelete: { deleting = key }, copyLink: { copyLink(key) }))
+            // Its cell and the model, never closures or its content: a list update that leaves it alone skips it (P6).
+            TodoListCell(cell: cell, model: model)
             .onAppear { sight.visible.insert(key) }
             .onDisappear {
                 sight.visible.remove(key)
@@ -269,32 +231,11 @@ struct TodoListView: View {
         }
     }
 
-    // MARK: Writes
-
-    /// The tick, the full swipe and Mark Done: a to-do someone works on asks first.
-    private func tick(_ key: String) {
-        switch model.tick(of: key) {
-        case .close?: model.close(key)
-        case .askFirst?: stopping = key
-        case .takeBack(let id)?: model.undo(id)
-        case .reopen?: model.reopen(key)
-        case nil: break
-        }
-    }
-
-    /// Delete…'s confirmation names the to-do.
-    private var deleteTitle: String {
-        let title = deleting.flatMap { model.item($0)?.title } ?? ""
-        return String(localized: "Delete “\(title)”? [To-dos Actions]")
-    }
-
-    private func copyLink(_ key: String) {
-        // The hub-level group's address its links are written with, else the one this device uses.
-        guard let id = model.item(key)?.id, let link = app.hub,
-              let url = TodoLink.web(id, on: link.hello.publicURL ?? link.config.url) else { return }
-        UIPasteboard.general.url = url
-        Haptics.success()
-        app.toast = Toast(String(localized: "Copied [To-dos Toast]"), style: .success)
+    /// Date…'s row and its to-do.
+    private struct DueTarget: Identifiable {
+        var key: String
+        var item: TodoItem
+        var id: String { key }
     }
 
     // MARK: Menus
@@ -392,12 +333,23 @@ private struct TodosSectionHeader: View {
     var group: TodosListGroup
     var title: String
 
+    private static var backed: Bool {
+        if #available(iOS 26.0, *) { true } else { false }
+    }
+
     var body: some View {
         let count = group.needs ? model.needsYou : group.count
         SectionHeader(title: title, count: count, tone: group.needs ? StatusPalette.needsYou : StatusPalette.idle)
             .font(Theme.Font.sectionHeader)
             .textCase(nil)
             .lineLimit(1)
+            // Pinned over the rows it heads, where iOS 26 gives a plain list's header no backing: the page's own color
+            // behind it across the list's width, so a row scrolling under it never reads as run into its words (as the
+            // web's pinned headings, DESIGN_SYSTEM 3.4). On the page it is the page; iOS 18 draws its own strip.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                if Self.backed { Theme.pageBackground.padding(.horizontal, -Theme.Space.xl).padding(.vertical, -Theme.Space.xs) }
+            }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(title)
             .accessibilityValue(String(count))
@@ -406,14 +358,29 @@ private struct TodosSectionHeader: View {
     }
 }
 
-/// "Can't reach your hub · showing what was saved 10:14": the list's one line while the hub is out of reach. A view of its
-/// own, so only it follows when the list was last read.
+/// "Can't reach your hub · showing what was saved 10:14": the list's one line, its first row, while the hub is out of
+/// reach as the titles say it (`ConnectionStatus`, after its delay). A view of its own, so only it follows the hub's link
+/// and when the list was last read (P5). It says the link itself: the shell's pill stays away while it is in sight, so
+/// the link is said once and the bar's counts stay clear (`titleSaysLink`, docs/apple/shell.md "Said once").
 private struct TodosOfflineLine: View {
+    @Environment(AppModel.self) private var app
     var model: TodosListModel
 
+    private var offline: Bool {
+        switch app.connection.shown {
+        case .waitingForNetwork, .connecting, .rejected: true
+        case .online, .updating: false
+        }
+    }
+
     var body: some View {
-        NoticeBanner(text: model.offlineLine, tone: .caution, symbol: Theme.Icon.offline)
-            .accessibilityIdentifier("todos.offline")
+        if offline && model.hasRows {
+            NoticeBanner(text: model.offlineLine, tone: .caution, symbol: Theme.Icon.offline)
+                .titleSaysLink()
+                .accessibilityIdentifier("todos.offline")
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+        }
     }
 }
 

@@ -4,15 +4,16 @@ import SwiftUI
 /// One to-do on the V1 list (#10465; docs/design/proposals/todos-redesign.md 3.4, "Row anatomy"; DESIGN_SYSTEM 3.4
 /// "The work-item row" with the tick in the source mark's slot): the tick; the title with its due day or age; line 2,
 /// the mark and the hub's line in words; the door to what it asks; line 3, what the grouping does not already say.
-/// It reads its own cell only (`TodosListModel.Row`), so a run's new line draws this row alone (P5). The tick is a
-/// button of its own (a 24-pt glyph hit as a finger's square, spoken "Complete, ‹title›" with its value, HIG-006 and
-/// HIG-007); the rest of the row opens the to-do and is spoken as one element.
+/// It reads its own cell only (`TodosListModel.Row`), so a run's new line draws this row alone (P5), and takes the list's
+/// model, not closures, so a list update that leaves it alone does not draw it again (P6). The tick is a button of its
+/// own (a 24-pt glyph hit as a finger's square, spoken as the title with Done or Not done, HIG-006 and HIG-007); the rest
+/// of the row opens the to-do and is spoken as one element, with the swipe's actions and Delete… as its own.
 struct TodoListRow: View {
     var row: TodosListModel.Row
-    /// The tick: closes, takes back a tick of a moment ago, or reopens (`TodosListModel.tick(of:)`).
-    var tick: () -> Void = {}
-    /// Mark Done at the end of a finished, seen to-do's line.
-    var markDone: () -> Void = {}
+    /// What the tick, Mark Done and the row's actions do (`TodosListModel.tapTick`).
+    var model: TodosListModel
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.accessibilitySwitchControlEnabled) private var switchControl
 
     var body: some View {
         let c = row.content
@@ -20,7 +21,7 @@ struct TodoListRow: View {
             tickButton(c)
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 titleLine(c)
-                if let said = c.said { lineTwo(said, mark: c.mark, saving: c.saving, markDone: c.markDone) }
+                if let said = c.said { lineTwo(said, mark: c.mark, unsaved: c.unsaved, markDone: c.markDone) }
                 if let door = c.door { doorLine(door, asks: c.asks) }
                 if let caption = c.caption {
                     Text(caption)
@@ -33,9 +34,7 @@ struct TodoListRow: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(c.spoken)
             .accessibilityAddTraits(.isButton)
-            .accessibilityActions {
-                if c.markDone { Button(String(localized: "Mark Done [To-dos Actions]"), action: markDone) }
-            }
+            .accessibilityActions { spokenActions(c) }
             .accessibilityIdentifier("todos.row." + row.todoID)
         }
         // A re-filing put it in another group or fold (proposal 3.9): a new view there, drawn hidden from its first
@@ -46,15 +45,27 @@ struct TodoListRow: View {
         .accessibilityElement(children: .contain)
     }
 
+    /// The swipe's actions and Delete… (`TodoRowActionList.spoken`), and, while VoiceOver or Switch Control runs, the
+    /// Undo of the list's latest held write, whose toast they cannot reach (HIG-005): read only then, so no other row
+    /// follows it.
+    @ViewBuilder private func spokenActions(_ c: TodoRowContent) -> some View {
+        ForEach(TodoRowActionList.spoken(c), id: \.self) { action in
+            Button(TodoRowActions.title(action)) { TodoRowActions.run(action, row.id, model) }
+        }
+        if voiceOver || switchControl, let held = model.undoable, !c.struck {
+            Button(String(localized: "Undo “\(held.title)” [To-dos Actions]")) { model.undo(held.id) }
+        }
+    }
+
     /// The tick, hit well past its glyph without moving the row (`tapTargetOutset`); not on a row still being saved.
     private func tickButton(_ c: TodoRowContent) -> some View {
-        Button(action: tick) {
+        Button { model.tapTick(row.id) } label: {
             TodoTickGlyph(closed: c.closed)
                 .tapTargetOutset(.all)
         }
         .buttonStyle(.plain)
         .disabled(c.saving)
-        .accessibilityLabel(c.tickLabel)
+        .accessibilityLabel(c.title)
         .accessibilityValue(c.tickValue)
         .accessibilityAddTraits(c.closed ? .isSelected : [])
         .accessibilityIdentifier("todos.tick." + row.todoID)
@@ -86,17 +97,18 @@ struct TodoListRow: View {
         }
     }
 
-    /// Line 2: the mark and the line; "Saving…" in the tertiary color while a new to-do is not on the hub yet; "· Mark Done"
-    /// at the end of a finished one the owner has seen (proposal 3.4, `finished_seen`).
-    private func lineTwo(_ said: TodoLineText.Said, mark: TodoMark?, saving: Bool, markDone: Bool) -> some View {
+    /// Line 2: the mark and the line; this device's own word on the owner's write in the tertiary color ("Saving…" while a
+    /// new to-do is not on the hub yet, "Not on your hub yet" for a change that could not reach it); "· Mark Done" at the
+    /// end of a finished one the owner has seen (proposal 3.4, `finished_seen`).
+    private func lineTwo(_ said: TodoLineText.Said, mark: TodoMark?, unsaved: Bool, markDone: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
             if let mark { TodoMarkView(mark: mark) }
-            if saving {
+            if unsaved {
                 Text(said.rest ?? "").foregroundStyle(.tertiary).lineLimit(1)
             } else if markDone {
                 HStack(alignment: .firstTextBaseline, spacing: Theme.Space.flush) {
                     Text(Self.attributed(said, then: TodoTimeWords.separator)).lineLimit(1)
-                    Button(action: self.markDone) {
+                    Button { model.tapTick(row.id) } label: {
                         Text("Mark Done [To-dos Actions]")
                             .foregroundStyle(Theme.accent)
                             .lineLimit(1)

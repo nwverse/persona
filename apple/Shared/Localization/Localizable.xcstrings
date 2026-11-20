@@ -25980,6 +25980,29 @@
         }
       }
     },
+    "An Agent is waiting for your answer on this. Mark it done and stop it? [To-dos Actions]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "An Agent is waiting for your answer on this. Mark it done and stop it?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agentがあなたの回答を待っています。完了にして止めますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 Agent 在等你回答。标为完成并让它停下吗？"
+          }
+        }
+      }
+    },
     "An Agent on %@ gets these for this run only:" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -45940,29 +45963,6 @@
         }
       }
     },
-    "Complete, %@ [To-dos Actions]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Complete, %@"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "完了、%@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "完成，%@"
-          }
-        }
-      }
-    },
     "Completed [Child Session]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -55218,6 +55218,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没能保存你的选择：%1$@"
+          }
+        }
+      }
+    },
+    "Couldn't save your change to “%@”. [To-dos Toast]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't save your change to “%@”."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」への変更を保存できませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能保存你对“%@”的改动。"
           }
         }
       }
@@ -65598,29 +65621,6 @@
         }
       }
     },
-    "Due Date [To-dos Due Sheet]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Due Date"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "期限"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "截止日期"
-          }
-        }
-      }
-    },
     "Due Date [To-dos Grouping]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -74265,6 +74265,52 @@
         }
       }
     },
+    "Not on your hub yet [To-dos List]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not on your hub yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まだハブに保存されていません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没存到你的 hub"
+          }
+        }
+      }
+    },
+    "Not sure it was saved [To-dos List]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not sure it was saved"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存されたかわかりません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不确定是否已保存"
+          }
+        }
+      }
+    },
     "Notes [To-dos New]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -74905,6 +74951,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "移除日期"
+          }
+        }
+      }
+    },
+    "Remove [To-dos Actions]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り除く"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除"
           }
         }
       }
@@ -146650,29 +146719,6 @@
       },
       "extractionState" : "manual"
     },
-    "Save [To-dos Due Sheet]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Save"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "保存"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "保存"
-          }
-        }
-      }
-    },
     "Save as Copy" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -192510,25 +192556,25 @@
         }
       }
     },
-    "Undo [To-dos Actions]" : {
+    "Undo “%@” [To-dos Actions]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Undo"
+            "value" : "Undo “%@”"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "取り消す"
+            "value" : "「%@」を取り消す"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "撤销"
+            "value" : "撤销“%@”"
           }
         }
       }
@@ -215402,6 +215448,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "模型 ID 里不能有「%1$@」，只能用字母、数字和 . _ - / : @ [ ]"
+          }
+        }
+      }
+    },
+    "“%@” changed in the meantime, so your change wasn't saved. [To-dos Toast]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@” changed in the meantime, so your change wasn't saved."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "その間に「%@」が変更されたため、変更は保存されませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”在这期间有了变化，所以你的改动没有保存。"
           }
         }
       }

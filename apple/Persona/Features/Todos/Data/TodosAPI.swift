@@ -17,6 +17,17 @@ nonisolated enum TodoNotThere {
         guard let e = error as? APIError else { return false }
         return e.status == 404 && e.code == goneCode
     }
+
+    /// The hub's own 404 for an assistant it does not know: about the request's assistant, not the to-do.
+    static let noManager = "no_manager"
+
+    /// A 404 from a write on a to-do's own route (`PATCH` or `DELETE …/todos/{id}`, `…/someday`): the to-do is gone,
+    /// deleted here or on another device. The manager answers those routes `not_found`, the item route `todo_not_found`;
+    /// only the hub's `no_manager` is about something else.
+    static func deleted(_ error: Error) -> Bool {
+        guard let e = error as? APIError else { return false }
+        return e.status == 404 && e.code != noManager
+    }
 }
 
 /// One to-do as `GET /api/v1/todos/{id}` answers it: the row and its view, worked out over the whole list.
@@ -79,8 +90,9 @@ nonisolated extension APIClient {
         return try JSON.decoder.decode(TodoAnswer.self, from: data).todo
     }
 
-    // The list's held writes (`TodoOutbox`), each with its op id: the hub does a new to-do once however often it comes
-    // (its receipt); a tick or a delete sent again is the same write again.
+    // The list's held writes (`TodoOutbox`), each with its op id. A tick, Someday or a delete sent again is the same
+    // write again. A new to-do is not: the hub keeps no receipt for one without images, so the outbox never sends one
+    // again on its own once it may have reached the hub.
 
     /// The tick (`PATCH …/todos/{id}` with `done`), which also stops the follow-ups of its Agents, or a reopen.
     func setTodoDone(id: String, done: Bool, opID: UUID) async throws -> TodoItem {

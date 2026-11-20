@@ -11,10 +11,11 @@ private final class TodoListPick {
     var scope: AssistantScope { AssistantScope(group: "", current: current, defaultID: "home", installed: ["home", "work"]) }
 }
 
-/// What the list said in its toasts and errors.
+/// What the list said in its toasts and errors, and what its outbox said was turned down.
 @MainActor private final class TodoListToasts {
     var shown: [Toast] = []
     var errors: [String] = []
+    var refusals: [String] = []
 }
 
 /// The outbox the store's numbers follow (`TodoStore.V1.pending`), made after the store it writes through.
@@ -44,10 +45,14 @@ struct TodosListModelTests {
     }
 
     /// An outbox of the test's own, writing through `store` to `hub` (one hub-level group, "g"), kept in memory.
-    static func outbox(_ store: TodoStore, hub: FakeHub) -> TodoOutbox {
-        TodoOutbox(deps: .init(load: { [] }, save: { _ in }, hub: { "g" },
-                               send: { entry, landed in await store.send(entry, landed: landed, api: hub.client) },
-                               refused: { _, _ in }))
+    static func outbox(_ store: TodoStore, hub: FakeHub, refused: @escaping @MainActor (String) -> Void = { _ in }) -> TodoOutbox {
+        TodoOutbox(deps: .init(load: { [] }, save: { _, _ in Task {} }, hub: { "g" },
+                               send: { entry, answered in await store.send(entry, answered: answered, api: hub.client) },
+                               refused: { _, message in refused(message) },
+                               standing: { id in
+                                   store.byID[id].map { .init(title: $0.title, updatedAt: $0.updatedAt, done: $0.isDone, someday: false) }
+                               },
+                               listed: { store.todos }))
     }
 
     private static func list(_ rows: [String], needsYou: Int = 1, inProgress: Int = 1) -> String {
@@ -311,11 +316,13 @@ struct TodosListWritesTests {
         let box = TodoListOutboxBox()
         var v1 = TodoStore.V1.on()
         v1.pending = { box.outbox?.pending ?? [:] }
-        v1.answered = { box.outbox?.hubAnswered() }
+        v1.answered = { box.outbox?.hubAnswered(read: $0) }
         let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: v1)
-        let outbox = TodosListModelTests.outbox(store, hub: hub)
+        let toasts = toasts
+        let outbox = TodosListModelTests.outbox(store, hub: hub) { toasts.refusals.append($0) }
+        await outbox.ready()
         box.outbox = outbox
-        let clock = clock, toasts = toasts
+        let clock = clock
         let list = TodosListModel(deps: TodosListDeps(store: store, outbox: outbox, api: { hub.client }, now: { clock.now },
                                                       calendar: { Calendar(identifier: .gregorian) }, projects: { [] },
                                                       toast: { toasts.shown.append($0) },
@@ -397,6 +404,101 @@ struct TodosListWritesTests {
         #expect(list.tick(of: "/a") == .close)
     }
 
+    /// An Agent's question on a to-do waits for the owner: its tick asks first too, in words saying so.
+    @Test func aToDoAnAgentWaitsOnAsksFirst() async throws {
+        let asks = #"{"phase":"needs_you","section":"needs_you","reason":"agent_asks","line":{"key":"agent_asks"},"rank":0,"#
+            + #""asks":[{"id":"run:m/s","kind":"question","home":"run","run":{"machine_id":"m","session_id":"s"}}]}"#
+        let hub = Self.hub([TodoViewJSON.row("q", title: "Release the app", view: asks), Self.plain])
+        let (store, _, list) = try await list(hub)
+        defer { store.forget() }
+        #expect(list.tick(of: "/q") == .askFirst)
+        #expect(list.stopTitle("/q") != list.stopTitle("/a"), "said as an Agent waiting, not Persona working")
+        list.tapTick("/q")
+        #expect(list.stopping == "/q", "asked from its row")
+        #expect(list.tick(of: "/a") == .close)
+    }
+
+    /// Someday, then Remove from Someday inside its window: the row is back where it was and nothing reaches the hub.
+    @Test func somedayTakenBackWithinItsWindowSendsNothing() async throws {
+        let hub = Self.hub([Self.needs, Self.plain])
+        let (store, outbox, list) = try await list(hub)
+        defer { store.forget() }
+        list.someday("/a")
+        try await waitForListTest { list.row("/a")?.content.someday == true }
+        list.outOfSomeday("/a")
+        try await waitForListTest { list.groups.first { $0.id == TodoListSection.todo }?.keys == ["/a"] }
+        try await Task.sleep(for: .milliseconds(500)) // past the window: nothing may have gone
+        #expect(hub.sent("PUT", "/api/v1/todos/a/someday").isEmpty && hub.sent("DELETE", "/api/v1/todos/a/someday").isEmpty)
+        #expect(outbox.entries.isEmpty)
+    }
+
+    /// A delete of a to-do already gone (deleted on another device, or a repeat whose answer was lost) is what it asked
+    /// for: the manager's 404 says no error.
+    @Test func aDeleteOfAToDoAlreadyGoneSaysNoError() async throws {
+        let hub = Self.hub([Self.needs, Self.plain])
+        let (store, outbox, list) = try await list(hub)
+        defer { store.forget() }
+        hub.on("DELETE", "/api/v1/todos/a") { _ in
+            hub.on("GET", "/api/v1/todos", json: Self.list([Self.needs], todo: 0))
+            throw APIError(status: 404, message: "todo not found", fields: ["code": "not_found"])
+        }
+        list.delete("/a")
+        try await waitForListTest { !hub.sent("DELETE", "/api/v1/todos/a").isEmpty }
+        try await waitForListTest { outbox.entries.isEmpty }
+        #expect(toasts.refusals.isEmpty && toasts.errors.isEmpty, "no error: \(toasts.refusals)")
+        #expect(!list.groups.contains { $0.keys.contains("/a") })
+    }
+
+    /// Today and Date… keep a timed due's time of day; a day-only due stays a day.
+    @Test func movingADueKeepsItsTimeOfDay() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let at = Date(timeIntervalSince1970: 1_800_000_000) // 2027-01-15 08:00 UTC
+        let day = calendar.date(byAdding: .day, value: 3, to: calendar.startOfDay(for: at))!
+        let timed = TodoItem(id: "a", title: "Call", dueAt: at)
+        #expect(TodosListModel.due(timed, on: day, calendar: calendar) == .at(day.addingTimeInterval(8 * 3600)))
+        let allDay = TodoItem(id: "b", title: "Pay", dueDate: "2027-01-15")
+        #expect(TodosListModel.due(allDay, on: day, calendar: calendar) == .day("2027-01-18"))
+    }
+
+    /// With V1 off (an old hub's pages, and Release until the switch-on) the store never tells the outbox a read landed,
+    /// so it is never made there.
+    @Test func aStoreWithV1OffLeavesTheOutboxAlone() async throws {
+        let hub = Self.hub([Self.plain], needsYou: 0)
+        let told = TodoListTold()
+        var v1 = TodoStore.V1.on()
+        v1.isOn = { false }
+        v1.answered = { _ in told.n += 1 }
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: v1)
+        defer { store.forget() }
+        await store.refresh(api: hub.client)
+        #expect(store.byID["a"] != nil && told.n == 0)
+        v1.isOn = { true }
+        let on = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: v1)
+        defer { on.forget() }
+        await on.refresh(api: hub.client)
+        #expect(told.n == 1, "told with V1 on")
+    }
+
+    /// The rows' swipe, menu and VoiceOver offer the same actions for each state.
+    @Test func theRowsActionsAgree() {
+        var open = TodoRowContent(id: "a", title: "A")
+        #expect(TodoRowActionList.swipe(open) == [.done, .someday])
+        #expect(TodoRowActionList.spoken(open) == [.done, .someday, .delete])
+        #expect(TodoRowActionList.menu(open) == [.today, .date, .project, .someday, .copyLink, .delete])
+        open.someday = true
+        #expect(TodoRowActionList.swipe(open) == [.done, .outOfSomeday])
+        var struck = TodoRowContent(id: "a", title: "A", closed: true)
+        struck.struck = true
+        #expect(TodoRowActionList.swipe(struck) == [.undo] && TodoRowActionList.menu(struck).first == .undo)
+        #expect(TodoRowActionList.swipe(TodoRowContent(id: "a", title: "A", closed: true)) == [.reopen])
+        var saving = TodoRowContent(id: "a", title: "A")
+        saving.saving = true
+        #expect(TodoRowActionList.swipe(saving).isEmpty && TodoRowActionList.menu(saving).isEmpty && TodoRowActionList.spoken(saving).isEmpty)
+        saving.unsure = true
+        #expect(TodoRowActionList.swipe(saving) == [.tryAgain, .remove] && TodoRowActionList.spoken(saving) == [.tryAgain, .remove])
+    }
+
     /// Someday: the row moves there at once and every number with it; the hub is told once the window ends.
     @Test func somedayMovesTheRowAndTheNumbersAtOnce() async throws {
         let hub = Self.hub([Self.needs, Self.plain])
@@ -431,7 +533,7 @@ struct TodosListWritesTests {
         undo.run()
         try await waitForListTest { list.groups.contains { $0.keys.contains("/a") } }
         #expect(store.countsSource.counts.sections[TodoListSection.todo] == 1)
-        try await Task.sleep(for: .milliseconds(500))
+        try await Task.sleep(for: .milliseconds(500)) // past the window: nothing may have gone
         #expect(hub.sent("DELETE", "/api/v1/todos/a").isEmpty, "Undo sent nothing")
         hub.on("GET", "/api/v1/todos", json: Self.list([Self.needs], todo: 0))
         list.delete("/a")
@@ -496,6 +598,11 @@ struct TodosListWritesTests {
         #expect(TodoLink.web("a/b", on: URL(string: "https://hub.example.com/persona")!)?.absoluteString
             == "https://hub.example.com/persona/todos/a%2Fb")
     }
+}
+
+/// How many times the store told the outbox.
+@MainActor private final class TodoListTold {
+    var n = 0
 }
 
 /// Holds a fake hub's answer until the test lets it go.
