@@ -513,7 +513,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // #11804 + #11820: Antigravity queue/send-now runtime copy and launcher-scoped Assistant sign-in guidance add
 // 85 B to the ja first screen (ja 483,143 B, en 480,233 B, zh-Hans 480,987 B). The budget is main's 483,058 B
 // ceiling plus those 85 B.
-export const FIRST_SCREEN_BUDGET = 483_143;
+// #8236: a conversationless direction stays visible and opens only its actual outside Agent, while a targetless one is
+// a non-link (lib/direction-names.ts, lib/direction-tree.ts, views/Sidebar.tsx and views/SidebarRows.tsx). This adds
+// 224 B in each language, measured in one environment against main ac667beba0 after merging it (ja 483,122 B to
+// 483,346 B; en 480,212 B to 480,436 B, zh-Hans 480,966 B to 481,190 B). The budget is main's 483,143 B ceiling plus
+// those 224 B.
+export const FIRST_SCREEN_BUDGET = 483_367;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
