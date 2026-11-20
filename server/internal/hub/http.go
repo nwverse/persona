@@ -860,6 +860,14 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// An extension's token resumes only a conversation its computer lists outside the health space, as a scoped token
+	// does (above) and as it reads one (extensionReadable): a computer with no transcript of the id would start a new
+	// conversation under it, which the manager would then take for the one the id names, a health chat's included
+	// (#10941, docs/extensions/extensions.md "Never shown to extensions").
+	if pr.Role == roleExtension && p.ResumeSessionID != "" && !h.scopedPublicSession(p.MachineID, p.ResumeSessionID) {
+		writeErr(w, http.StatusNotFound, errDeleteUnknown)
+		return
+	}
 	m := h.localMachine(p.MachineID)
 	if m == nil {
 		writeErr(w, http.StatusNotFound, i18n.Err("devices-api.unknown_machine"))

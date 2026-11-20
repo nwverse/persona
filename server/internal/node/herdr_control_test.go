@@ -240,6 +240,46 @@ func TestHerdrResumeWithoutTranscriptStartsUnderItsID(t *testing.T) {
 	t.Fatalf("no --session-id start in %v", f.trace())
 }
 
+// The regression check of #10941, a forged session: a resume of an id this computer never had (no transcript, no start,
+// no record: another computer's conversation, a health chat's whose transcript is gone) started Claude Code under that
+// id in the folder the caller named, and the computer listed a new conversation under the id the manager tells the
+// other one by. It is refused now, as `claude --resume` would refuse it, before any tab opens; one with a record and no
+// transcript still starts under its id.
+func TestHerdrResumeOfAnIDTheComputerNeverHadIsRefused(t *testing.T) {
+	const forged = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b"
+	n, f, home := herdrNode(t)
+	cwd := mkdir(t, filepath.Join(home, "errands"))
+	f.reply("workspace.list", map[string]any{"workspaces": []any{}})
+	f.reply("workspace.create", map[string]any{"workspace": map[string]any{"workspace_id": "w7"},
+		"tab": map[string]any{"tab_id": "w7:t1"}, "root_pane": map[string]any{"pane_id": "w7:p1"}})
+	startHerdr(f, "w7:p1", proto.StatusDone)
+	f.setScreen("w7:p1", screenFixture(t, "claude-2.1.312-empty-162.txt"))
+	for range 2 { // and again: the refused one left nothing it would count
+		_, err := request(t, n, "session.start", map[string]any{"cwd": cwd, "launcher": "claude", "resume_session_id": forged, "prompt": "hi"})
+		if code := rpcCode(err); code != codeResumeUnknown {
+			t.Fatalf("a resume of an id the computer never had: %v (code %q)", err, code)
+		}
+	}
+	for _, c := range f.trace() {
+		if strings.Contains(c, forged) || strings.HasPrefix(c, "workspace.create") || strings.HasPrefix(c, "tab.create") {
+			t.Fatalf("the refused resume reached herdr: %s", c)
+		}
+	}
+	if _, ok := n.state.get(forged); ok {
+		t.Fatal("the refused resume left a record")
+	}
+
+	n.state.put(forged, sessionState{Launcher: "claude", Cwd: cwd}) // Persona started it once; its transcript is gone
+	if _, err := request(t, n, "session.start", map[string]any{"cwd": cwd, "launcher": "claude", "resume_session_id": forged}); err != nil {
+		t.Fatalf("a resume of an id with a record: %v", err)
+	}
+	want := call("pane.send_input", map[string]any{"pane_id": "w7:p1", "keys": []string{"Enter"},
+		"text": startCmd("claude", "--session-id "+forged, personaDir(home))})
+	if !slices.Contains(f.trace(), want) {
+		t.Fatalf("no --session-id start in %v", f.trace())
+	}
+}
+
 // A workspace given (a tab next to another agent): no workspace lookup. A claude that comes up blocked (a dialog of
 // its own) counts as ready at once; the first message is not typed into the dialog, and the session is listed as
 // needing the user, saying so (firstprompt.go). A managed launcher (kept by the hub) runs as `personad launch <name>`.

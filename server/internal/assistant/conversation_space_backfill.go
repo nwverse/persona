@@ -18,14 +18,16 @@ import (
 // only for a week and only its 100 newest. A conversation quiet since before the manager noted spaces (an upgrade) is
 // listed by no computer any more, so the to-dos it opened, supervised or wrote to could never be told (todoUntold): an
 // extension was never shown them, and what would tell it of them waited for good. The backfill asks the computers the
-// assistant ran on to list such conversations however quiet (the profile's keep, spaceKeep), a batch at a time, so
-// each is noted as any listed one is. One no computer listed after spaceBackfillWait while every computer it is kept
-// on was on (or is no longer the hub's) is given up (its transcript is gone) and stays untold, the rule failing closed
-// for it; it is not kept again for spaceBackfillRetry, though the manager starts again. One a computer listed is never
-// given up: it is kept until its note is written. One kept the wait while another of those computers was off waits for
-// that one (parked, not kept), and is kept again once every one is on. The conversations are those of every to-do,
-// open or done (its origin, its supervisor and those its history was written in, read once a run of the manager, off
-// the profile's way: spaceBackfillScanSoon), and any a verdict could not tell since (spaceBackfillWant).
+// assistant ran on, and the one the origins book places each on (originSet: the Lark agent's computer, the Inbox AI
+// twin's, any start that named one), to list such conversations however quiet (the profile's keep, spaceKeep), a batch
+// at a time, so each is noted as any listed one is. One no computer listed after spaceBackfillWait while every computer
+// it is kept on was on (or is no longer the hub's) is given up (its transcript is gone) and stays untold, the rule
+// failing closed for it; it is not kept again for spaceBackfillRetry, though the manager starts again. One a computer
+// listed is never given up: it is kept until its note is written. One kept the wait while another of those computers
+// was off waits for that one (parked, not kept), and is kept again once every one is on. The conversations are those
+// of every to-do, open or done (its origin, its supervisor and those its history was written in, read once a run of
+// the manager, off the profile's way: spaceBackfillScanSoon), and any a verdict could not tell since
+// (spaceBackfillWant).
 
 // spaceBackfillBatch is how many never noted conversations the computers are asked to list at once.
 const spaceBackfillBatch = 50
@@ -70,8 +72,9 @@ type spaceBackfill struct {
 	queue    []string             // waiting for the batch, in order; one no longer waiting is skipped
 	state    map[string]fillState // every conversation taken up
 	batch    map[string]time.Time // the kept ones, since when (since the assistant's computer was last seen off)
+	far      map[string]string    // the computer each one's origin record names (originMachines): kept on it too
 	parked   []string             // waiting for every computer to be on; one no longer parked is skipped
-	offAt    time.Time            // when a computer the batch is kept on was last seen off
+	offAt    map[string]time.Time // when each computer one is kept on was last seen off
 	armed    bool                 // a check of the batch is scheduled
 	// active: the batch holds any (fillLocked keeps it), read without the lock on a list's way.
 	active atomic.Bool
@@ -121,8 +124,9 @@ func (b *spaceBackfill) fillLocked(now time.Time) bool {
 	return added
 }
 
-// takeLocked queues those of ids not taken up yet, in order; it says whether one was. b.mu is held.
-func (b *spaceBackfill) takeLocked(ids []string) bool {
+// takeLocked queues those of ids not taken up yet, in order, each with the computer its origin record names (far); it
+// says whether one was. b.mu is held.
+func (b *spaceBackfill) takeLocked(ids []string, far map[string]string) bool {
 	took := false
 	for _, id := range ids {
 		if id == "" || b.state[id] != 0 || len(b.state) >= spaceBackfillMost {
@@ -136,16 +140,52 @@ func (b *spaceBackfill) takeLocked(ids []string) bool {
 		}
 		b.state[id] = fillWaiting
 		b.queue = append(b.queue, id)
+		if m := far[id]; m != "" {
+			if b.far == nil {
+				b.far = map[string]string{}
+			}
+			b.far[id] = m
+		}
 		took = true
 	}
 	return took
 }
 
+// machinesLocked are the computers conversation id is kept on: base (spaceBackfillMachines) and the one its origin
+// record names. b.mu is held.
+func (b *spaceBackfill) machinesLocked(base []string, id string) []string {
+	if m := b.far[id]; m != "" && !slices.Contains(base, m) {
+		return append(slices.Clip(base), m)
+	}
+	return base
+}
+
+// originMachines are the computers the origins book places conversations ids on (originSet: the one it was started on;
+// backfillOrigins: the one that listed it), by id: none for one it has no record of, or while it cannot be read.
+func (s *Service) originMachines(ctx context.Context, ids []string) map[string]string {
+	out := map[string]string{}
+	b := &s.origins
+	b.mu.Lock()
+	if s.originsLocked(ctx) {
+		for _, id := range ids {
+			if o := b.m[id]; o != nil && o.MachineID != "" {
+				out[id] = o.MachineID
+			}
+		}
+	}
+	b.mu.Unlock()
+	for id, m := range out {
+		out[id] = s.canonical(m)
+	}
+	return out
+}
+
 // spaceKeep are the sessions their computers are to list however quiet for the spaces to be told, sorted: the task
 // leaders' agents that opened or supervise an open task, on their own computer (leaderSpace reads one whose links keep
 // no directory from its list), and the backfill's batch on every computer the assistant ran on
-// (spaceBackfillMachines). It reads nothing of the store: the to-dos are read for the backfill on their own the first
-// time (spaceBackfillScanSoon), and the batch that fills goes in the next profile.
+// (spaceBackfillMachines) and the one each one's origin record names. It reads nothing of the store: the to-dos are
+// read for the backfill on their own the first time (spaceBackfillScanSoon), and the batch that fills goes in the next
+// profile.
 func (s *Service) spaceKeep(ctx context.Context, v Settings) []SessionRef {
 	s.spaceBackfillScanSoon(v)
 	seen := map[SessionRef]bool{}
@@ -169,7 +209,7 @@ func (s *Service) spaceKeep(ctx context.Context, v Settings) []SessionRef {
 	b := &s.spaceFill
 	b.mu.Lock()
 	for id := range b.batch {
-		for _, m := range machines {
+		for _, m := range b.machinesLocked(machines, id) {
 			seen[SessionRef{MachineID: m, SessionID: id}] = true
 		}
 	}
@@ -295,9 +335,10 @@ func (s *Service) spaceBackfillScan(ctx context.Context, v Settings) bool {
 	deleted := s.deletedConversationsOf(ctx, v.MachineID, cands)
 	cands = slices.DeleteFunc(cands, func(c string) bool { _, ok := deleted[c]; return ok })
 	s.spaceBackfillReadGone(ctx)
+	far := s.originMachines(ctx, cands)
 	b.mu.Lock()
 	b.scanned = true
-	b.takeLocked(cands)
+	b.takeLocked(cands, far)
 	filled := b.fillLocked(b.now())
 	arm := len(b.batch) > 0 && !b.armed
 	b.armed = b.armed || arm
@@ -317,14 +358,19 @@ func (s *Service) spaceBackfillWant(ids []string) {
 	b := &s.spaceFill
 	b.mu.Lock()
 	read := b.goneRead
+	fresh := slices.ContainsFunc(ids, func(id string) bool { return id != "" && b.state[id] == 0 })
 	b.mu.Unlock()
-	if !read { // those given up before are not taken up again (once a run of the manager)
-		ctx, cancel := context.WithTimeout(s.runCtx(), conversationSpaceTimeout)
-		s.spaceBackfillReadGone(ctx)
-		cancel()
+	if !fresh {
+		return // each taken up already
 	}
+	ctx, cancel := context.WithTimeout(s.runCtx(), conversationSpaceTimeout)
+	defer cancel()
+	if !read { // those given up before are not taken up again (once a run of the manager)
+		s.spaceBackfillReadGone(ctx)
+	}
+	far := s.originMachines(ctx, ids)
 	b.mu.Lock()
-	if !b.takeLocked(ids) {
+	if !b.takeLocked(ids, far) {
 		b.mu.Unlock()
 		return
 	}
@@ -380,38 +426,33 @@ func (s *Service) spaceBackfillNoted(ids []string) {
 	}
 }
 
-// spaceBackfillComputers says whether the assistant's own computer is on, and whether every computer the batch is kept
-// on (spaceBackfillMachines) is: on, or no longer the hub's (its list complete without it, as machineRemoved reads it;
-// one the hub has moved out of the manager's list, or a list that is not complete, counts as off). A list that cannot
-// be read says neither.
-func (s *Service) spaceBackfillComputers(ctx context.Context, v Settings) (own, all bool) {
+// spaceBackfillComputers says which computers are on (on), as the hub's list of them says: one it lists, when online;
+// one it does not, when it is not the assistant's own and is no longer the hub's (the list complete without it, as
+// machineRemoved reads it; one the hub has moved out of the manager's list, or a list that is not complete, counts as
+// off). false when the list cannot be read.
+func (s *Service) spaceBackfillComputers(ctx context.Context, v Settings) (on func(string) bool, read bool) {
 	var res struct {
 		Devices  []Device `json:"devices"`
 		Complete bool     `json:"complete"`
 		Others   []string `json:"others"`
 	}
 	if err := s.call(ctx, DeviceAll, DeviceDevicesList, map[string]any{}, &res); err != nil {
-		return false, false
+		return nil, false
 	}
-	all = true
-	for _, m := range spaceBackfillMachines(v) {
-		i := slices.IndexFunc(res.Devices, func(d Device) bool { return d.ID == m })
-		switch {
-		case i >= 0:
-			own = own || m == v.MachineID && res.Devices[i].Online
-			all = all && res.Devices[i].Online
-		case m == v.MachineID || !res.Complete || slices.Contains(res.Others, m):
-			all = false
+	return func(m string) bool {
+		if i := slices.IndexFunc(res.Devices, func(d Device) bool { return d.ID == m }); i >= 0 {
+			return res.Devices[i].Online
 		}
-	}
-	return own, own && all
+		return m != v.MachineID && res.Complete && !slices.Contains(res.Others, m)
+	}, true
 }
 
 // spaceBackfillCheck goes through the batch. A conversation a computer listed stays until its note is written. While
 // the assistant's computer is off, the others' waits start again. One kept spaceBackfillWait and still not listed is
-// given up once every computer it is kept on has been on for the whole wait, and parked while one of them is off (those
-// on do not have it); what is parked is kept again, first, once every one is on. It fills the batch again, tells the
-// computers, and checks again while the batch or what is parked holds any.
+// given up once every computer it is kept on (spaceBackfillMachines and its origin's) has been on for the whole wait,
+// and parked while one of them is off (those on do not have it); what is parked is kept again, first, once every one
+// it is kept on is. It fills the batch again, tells the computers, and checks again while the batch or what is parked
+// holds any.
 func (s *Service) spaceBackfillCheck() {
 	b := &s.spaceFill
 	b.mu.Lock()
@@ -422,15 +463,40 @@ func (s *Service) spaceBackfillCheck() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(s.runCtx(), conversationSpaceTimeout)
-	own, all := s.spaceBackfillComputers(ctx, s.settings(ctx))
+	v := s.settings(ctx)
+	on, read := s.spaceBackfillComputers(ctx, v)
 	cancel()
+	isOn := func(m string) bool { return read && on(m) }
+	base := spaceBackfillMachines(v)
 	changed := false
 	var gaveUp []string
 	b.mu.Lock()
 	now := b.now()
-	if !all {
-		b.offAt = now
+	if b.offAt == nil {
+		b.offAt = map[string]time.Time{}
 	}
+	machines := slices.Clone(base)
+	for _, ids := range [][]string{slices.Collect(maps.Keys(b.batch)), b.parked} {
+		for _, id := range ids {
+			if m := b.far[id]; m != "" && !slices.Contains(machines, m) {
+				machines = append(machines, m)
+			}
+		}
+	}
+	for _, m := range machines {
+		if !isOn(m) {
+			b.offAt[m] = now
+		}
+	}
+	allOn := func(id string) bool { // every computer id is kept on is on now
+		return !slices.ContainsFunc(b.machinesLocked(base, id), func(m string) bool { return !isOn(m) })
+	}
+	onFor := func(id string) bool { // and was for the whole wait
+		return !slices.ContainsFunc(b.machinesLocked(base, id), func(m string) bool {
+			return now.Sub(b.offAt[m]) < spaceBackfillWait
+		})
+	}
+	own := isOn(v.MachineID)
 	for id, since := range b.batch {
 		if b.state[id] == fillListed {
 			continue
@@ -439,27 +505,31 @@ func (s *Service) spaceBackfillCheck() {
 		case !own:
 			b.batch[id] = now
 		case now.Sub(since) < spaceBackfillWait:
-		case !all:
+		case !allOn(id):
 			b.state[id] = fillParked
 			delete(b.batch, id)
 			b.parked = append(b.parked, id)
 			changed = true
-		case now.Sub(b.offAt) >= spaceBackfillWait:
+		case onFor(id):
 			b.state[id] = fillOver
 			delete(b.batch, id)
 			changed = true
 			gaveUp = append(gaveUp, id)
 		}
 	}
-	if all && len(b.parked) > 0 {
-		var back []string
+	if len(b.parked) > 0 {
+		var back, still []string
 		for _, id := range b.parked {
-			if b.state[id] == fillParked {
+			switch {
+			case b.state[id] != fillParked:
+			case allOn(id):
 				b.state[id] = fillWaiting
 				back = append(back, id)
+			default:
+				still = append(still, id)
 			}
 		}
-		b.parked = nil
+		b.parked = still
 		b.queue = append(back, b.queue...)
 		changed = changed || len(back) > 0
 	}

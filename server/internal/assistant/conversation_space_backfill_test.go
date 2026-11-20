@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The backfill of the spaces of conversations never noted (conversation_space_backfill.go, #10941) as the owner meets
@@ -331,4 +334,125 @@ func TestSpaceBackfillNeverGivesUpAListedChat(t *testing.T) {
 	if givenUp(t, database, "conv_trip") || slices.Contains(again.s.spaceBackfillKept(), "conv_trip") {
 		t.Fatal("conv_trip given up, or kept again, after a restart")
 	}
+}
+
+// The regression check of the backfill, a chat on another computer: the Lark agent's chats run on the computer its
+// settings name, the Inbox AI twin's on its own, and any start may name one. Such a chat quiet since before the upgrade
+// was kept only on the computers the assistant ran on, none of which has its transcript, and a verdict read only the
+// assistant's computer's list: it was given up though its computer was on, its to-do hidden from extensions for good,
+// and, with no extension at all, the outcome line of a task it opened held and lost at the next restart. It is kept on
+// the computer the origins book places it on too now, told by that computer's list while its note cannot be written,
+// and given up only once that computer too was on for the whole wait.
+func TestSpaceBackfillKeepsAChatOnTheComputerItStartedOn(t *testing.T) {
+	database := todoTestDB(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+	main := scopeSession("conv1", "Persona", "")
+	main.Assistant = true
+	start := func() (*todoEnv, *noteFailingStore, *backfillTimers) {
+		f := newFakeHub().withMachine()
+		f.setSessions("box", proto.Session{SessionID: "s1", Title: "Fix login", Cwd: "/code/weather/ios"})
+		f.setSessions("studio") // on: its chats are quiet
+		f.setItems(proto.Item{Kind: proto.KindText, Role: "assistant", Text: outcomeReply})
+		f.mu.Lock()
+		f.hello.KB = &KBSettings{}
+		f.mu.Unlock()
+		st := &noteFailingStore{Store: repositorystore.New(database)}
+		s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), KB: &KBOptions{Dir: dir}}))
+		t.Cleanup(s.kbEnd)
+		clock := fakeBackfill(s)
+		setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
+		e := &todoEnv{t: t, s: s, f: f}
+		e.sessions("server", main)
+		return e, st, clock
+	}
+	e, _, _ := start()
+	if _, err := kbEng(t, e.s).Apply(kb.KindProject, "Weather App", kb.Update{Dirs: []string{"box:/code/weather"}}); err != nil {
+		t.Fatal(err)
+	}
+	// The Lark agent's chats on studio, quiet since before the manager noted spaces: one's transcript is there, the
+	// other's is gone.
+	e.s.originSet(ctx, "studio", "conv_far", OriginLarkAgent, "", "")
+	e.s.originSet(ctx, "studio", "conv_far_gone", OriginLarkAgent, "", "")
+	crash, err := e.s.createTodo(ctx, "Fix the landscape crash", "", "conv_far", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.s.linkTodoAgent(ctx, crash.ID, "box", "s1", "Fix login", "/code/weather/ios", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	prints, err := e.s.createTodo(ctx, "Order the prints", "", "conv_far_gone", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := []Todo{crash, prints}
+	e.s.kbEnd()
+
+	e, st, clock := start() // the upgrade's first start
+	timers := fakeOutcomeTimers(e.s)
+	wantShown(t, e, "never noted", all)
+	for _, id := range []string{"conv_far", "conv_far_gone"} {
+		if !keptOn(t, e.s, "studio", id) || !keptOn(t, e.s, "server", id) {
+			t.Fatalf("%s not kept on the computer it started on and the assistant's", id)
+		}
+	}
+
+	// The task closes; studio lists its chat as it is kept to while the note cannot be written: told by studio's list,
+	// the outcome line held at the close is written.
+	e.f.outcome = `{"outcome":"fixed the landscape crash, PR merged"}`
+	timeline := func() []string { return kbEng(t, e.s).Store.Log("weather-app", 20) }
+	e.s.recordTaskOutcome(todoNow(e.s, crash.ID), time.Now().UTC())
+	if log := timeline(); len(log) != 0 {
+		t.Fatalf("the timeline while conv_far cannot be told: %q", log)
+	}
+	far := scopeSession("conv_far", "Prints", "")
+	far.Assistant = true
+	st.fail.Store(true)
+	e.sessions("studio", far)
+	waitFor(t, "the note tried", e.s.listedSpacesWritten)
+	timers.fire()
+	if log := timeline(); len(log) != 1 || !strings.Contains(log[0], "fixed the landscape crash") {
+		t.Fatalf("the timeline once studio lists conv_far: %q", log)
+	}
+	wantShown(t, e, "conv_far listed by studio", all, crash)
+	st.fail.Store(false)
+	e.sessions("studio", far) // its note written
+	waitFor(t, "the note written", e.s.listedSpacesWritten)
+	e.sessions("studio") // quiet again
+	if keptOn(t, e.s, "studio", "conv_far") {
+		t.Fatal("conv_far still kept once noted")
+	}
+	wantShown(t, e, "conv_far noted", all, crash)
+
+	// conv_far_gone: not given up while studio is off, however long; given up once studio was on for the whole wait.
+	e.f.mu.Lock()
+	e.f.down = map[string]bool{"studio": true}
+	e.f.mu.Unlock()
+	for range 10 {
+		clock.advance(spaceBackfillWait)
+		clock.fire()
+	}
+	if givenUp(t, database, "conv_far_gone") || keptOn(t, e.s, "studio", "conv_far_gone") {
+		t.Fatal("conv_far_gone given up, or still kept, while studio is off")
+	}
+	e.f.mu.Lock()
+	e.f.down = nil
+	e.f.mu.Unlock()
+	clock.advance(spaceBackfillTick)
+	clock.fire()
+	if !keptOn(t, e.s, "studio", "conv_far_gone") {
+		t.Fatal("conv_far_gone not kept on studio again once it is on")
+	}
+	clock.advance(spaceBackfillWait)
+	clock.fire()
+	if !givenUp(t, database, "conv_far_gone") {
+		t.Fatal("conv_far_gone not given up once studio was on for the whole wait")
+	}
+	if givenUp(t, database, "conv_far") {
+		t.Fatal("conv_far given up")
+	}
+	e.s.kbEnd()
+
+	again, _, _ := start()
+	wantShown(t, again, "after a restart", all, crash)
 }

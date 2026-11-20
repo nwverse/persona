@@ -165,3 +165,44 @@ func TestConversationFeedToAnExtension(t *testing.T) {
 		}
 	})
 }
+
+// The regression check of #10941, a forged session: an extension read a health chat's feed (its notices, views and
+// view actions) once a session started under the chat's id was listed outside the space, though the chat was noted in
+// the space, and a never-noted one's likewise. The note is read first now, and a listed row counts only as the
+// assistant's conversation or as one in the space; the main conversation's feed is still shown.
+func TestFeedOfAHealthChatUnderASessionStartedUnderItsID(t *testing.T) {
+	const notice = "Switched to the sleep-clinic model for the follow-up"
+	todoStores(t, func(t *testing.T, e *todoEnv, database *db.DB) {
+		ctx := context.Background()
+		setSettings(t, e.s, func(v *Settings) { v.Main = "conv1" })
+		main, h0 := scopeSession("conv1", "Persona", ""), scopeSession("h0", "Sleep", identity.HealthDir("/home/owner"))
+		main.Assistant, h0.Assistant = true, true
+		e.sessions("server", main, h0) // h0 noted in the space; h1 never noted
+		waitFor(t, "the notes written", e.s.listedSpacesWritten)
+		for _, id := range []string{"h0", "h1", "conv1"} {
+			if _, err := e.s.appendFeedAt(ctx, id, feedNotice, "", map[string]string{"text": notice}, time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if database != nil { // the manager starts again: what it noted is read from the store
+			e = newTodoEnv(t, database)
+			setSettings(t, e.s, func(v *Settings) { v.Main = "conv1" })
+		}
+		forged := func(id string) proto.Session {
+			c := scopeSession(id, "hi", "/home/owner/errands")
+			c.PaneID, c.Launcher = "w7:p1", "claude"
+			return c
+		}
+		e.sessions("server", main, forged("h0"), forged("h1")) // h0 quiet, its transcript gone
+		for _, id := range []string{"h0", "h1"} {
+			got := extensionDo(e, "GET", "/api/v1/assistant/conversations/"+id+"/feed", "")
+			if got.Code != http.StatusNotFound || bytes.Contains(got.Body.Bytes(), []byte(notice)) {
+				t.Errorf("an extension's feed of %s under a forged session: %d %s", id, got.Code, got.Body)
+			}
+		}
+		if got := extensionDo(e, "GET", "/api/v1/assistant/conversations/conv1/feed", ""); got.Code != http.StatusOK ||
+			!bytes.Contains(got.Body.Bytes(), []byte(notice)) {
+			t.Fatalf("an extension's feed of the main conversation: %d %s", got.Code, got.Body)
+		}
+	})
+}

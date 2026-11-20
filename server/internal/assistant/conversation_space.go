@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -260,10 +261,13 @@ type spaceTold struct {
 // supervises) as its run's (leaderSpace); an assistant conversation as the manager noted it (from its book, and one
 // read of the store for those it has not seen), which is what its computer listed or what it was started in, so the
 // computer is not asked; one never noted as the assistant's computer lists it (one call for all those), or, when that
-// list cannot be read, as the computer answers for each; the main conversation as the computer it is routed to lists
+// list cannot be read, as the computer answers for each, else as the computer its origin record names lists it (one
+// call a computer: the Lark agent's, the Inbox AI twin's); the main conversation as the computer it is routed to lists
 // it (Settings.mainRouteMachine: one kept on the assistant's former computer); else as the record of its deletion
-// keeps it (one read for all). One none of them tells (quiet since before its space was noted, the store unreadable)
-// is not told.
+// keeps it (one read for all). A row listed under the id tells it only as the assistant's conversation (isAssistantRow,
+// as a note is taken: listedSpace) or as one in the health space (which only hides): a session started under the id
+// in a terminal is not the chat the id names. One none of them tells (quiet since before its space was noted, the
+// store unreadable) is not told.
 func (s *Service) conversationSpaces(ctx context.Context, ids []string) map[string]spaceTold {
 	out := make(map[string]spaceTold, len(ids))
 	plain := map[string]bool{}
@@ -302,36 +306,57 @@ func (s *Service) conversationSpaces(ctx context.Context, ids []string) map[stri
 		return out
 	}
 	set := s.settings(ctx)
-	told := func(l proto.Session) spaceTold {
-		if healthRun(l) {
-			return spaceTold{SpaceHealth, true}
+	told := func(id string, l proto.Session) bool {
+		switch {
+		case out[id].known && out[id].space == SpaceHealth: // a row of the space under the id: whatever else is listed
+		case healthRun(l):
+			out[id] = spaceTold{SpaceHealth, true}
+		case s.isAssistantRow(l):
+			out[id] = spaceTold{spaceOf(l), true}
+		default:
+			return false
 		}
-		return spaceTold{spaceOf(l), true}
+		return true
 	}
-	want := make(map[string]bool, len(rest))
-	for _, c := range rest {
-		want[c] = true
-	}
-	list, listErr := s.todoRunSessions(ctx, set.MachineID, want)
-	for _, l := range list {
-		if want[l.SessionID] {
-			out[l.SessionID] = told(l)
+	listed := func(machine string, want map[string]bool) error {
+		list, err := s.todoRunSessions(ctx, machine, want)
+		for _, l := range list {
+			if want[l.SessionID] {
+				told(l.SessionID, l)
+			}
 		}
+		return err
 	}
+	wanted := func(ids []string) map[string]bool {
+		want := make(map[string]bool, len(ids))
+		for _, c := range ids {
+			want[c] = true
+		}
+		return want
+	}
+	listErr := listed(set.MachineID, wanted(rest))
 	rest = slices.DeleteFunc(rest, func(c string) bool { return out[c].known })
 	// The list could not be read: each on its own, as the computer lists it (selfSpace).
 	if listErr != nil {
 		rest = slices.DeleteFunc(rest, func(c string) bool {
 			l, ok := s.session(ctx, set.MachineID, c)
-			if ok {
-				out[c] = told(l)
-			}
-			return ok
+			return ok && told(c, l)
 		})
 	}
+	if len(rest) > 0 {
+		far := map[string][]string{}
+		for c, m := range s.originMachines(ctx, rest) {
+			if m != set.MachineID {
+				far[m] = append(far[m], c)
+			}
+		}
+		for _, m := range slices.Sorted(maps.Keys(far)) {
+			_ = listed(m, wanted(far[m])) // one that cannot be read tells none
+		}
+		rest = slices.DeleteFunc(rest, func(c string) bool { return out[c].known })
+	}
 	if routed := set.mainRouteMachine(); routed != set.MachineID && slices.Contains(rest, set.Main) {
-		if c, ok := s.session(ctx, routed, set.Main); ok {
-			out[set.Main] = told(c)
+		if c, ok := s.session(ctx, routed, set.Main); ok && told(set.Main, c) {
 			rest = slices.DeleteFunc(rest, func(c string) bool { return c == set.Main })
 		}
 	}

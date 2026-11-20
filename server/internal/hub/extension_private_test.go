@@ -121,3 +121,43 @@ func TestExtensionsAreNotToldWhatTheyAreNotShown(t *testing.T) {
 		}
 	}
 }
+
+// The regression check of #10941, a forged session: an extension's token resumed any id it named, and a computer with
+// no transcript of it started a new conversation under that id in the folder the extension chose, which the manager
+// took for the health chat the id names (its to-dos, feed and held outcome lines shown). It resumes only a
+// conversation its computer lists outside the space now, as a scoped token does; nothing of the other two reaches the
+// computer.
+func TestAnExtensionResumesOnlyAListedChatOutsideTheHealthSpace(t *testing.T) {
+	h, url, _, b := reachHub(t)
+	h.takeFleetSessions(assistantwire.FleetSessions{MachineID: "mb", Sessions: []proto.Session{
+		{MachineID: "mb", SessionID: "b1", Title: "B-SESSION", Cwd: "/work/project"},
+		{MachineID: "mb", SessionID: "bh", Title: "HEALTH-SESSION", Cwd: "/home/me/.persona/health", Assistant: true, Space: "health"},
+	}})
+	eventually(t, 5*time.Second, "mb's sessions", func() bool { _, ok := h.localMachine("mb").session("bh"); return ok })
+	starts := func(id string) int {
+		n := 0
+		for _, l := range reached(b) {
+			if strings.Contains(l, `"method":"session.start"`) && strings.Contains(l, `"resume_session_id":"`+id+`"`) {
+				n++
+			}
+		}
+		return n
+	}
+	for _, id := range []string{"6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b", "bh"} {
+		code, body := extDo(t, url, http.MethodPost, "/api/v1/sessions",
+			`{"machine_id":"mb","launcher":"claude","cwd":"/tmp","resume_session_id":"`+id+`","prompt":"hi"}`, nil)
+		if code != http.StatusNotFound {
+			t.Errorf("resume of %s: %d %s", id, code, body)
+		}
+		if n := starts(id); n != 0 {
+			t.Errorf("resume of %s reached the computer %d times", id, n)
+		}
+	}
+	if code, body := extDo(t, url, http.MethodPost, "/api/v1/sessions",
+		`{"machine_id":"mb","launcher":"claude","cwd":"/work/project","resume_session_id":"b1","prompt":"go on"}`, nil); code != http.StatusOK {
+		t.Fatalf("resume of its own chat: %d %s", code, body)
+	}
+	if starts("b1") != 1 {
+		t.Fatalf("the resume of b1 did not reach the computer: %v", reached(b))
+	}
+}

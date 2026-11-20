@@ -829,10 +829,15 @@ Whatever scopes it was granted, an extension's token never sees:
   only from what is live, so a chat its computer no longer lists (a quiet chat is listed for a week, and only the 100
   newest) or has not listed since a restart is told by its noted space. A chat a to-do names (open or done: its
   origin, its supervisor, a chat its history was written in) that was quiet since before a manager noted spaces is
-  listed again by the computers the assistant ran on (the assistant's profile `keep`), 50 at a time, until it is noted.
-  One a computer listed is kept until its note is written. One none listed after 3 minutes with every one of those
-  computers on (or removed from the hub) is given up for a week (its transcript is gone); while one of them is off,
-  it waits for that computer and is listed again once all are on. It fails closed: a conversation no computer lists,
+  listed again by the computers the assistant ran on and the one it was started on (the assistant's profile `keep`; a
+  chat the Lark agent or the Inbox AI twin ran elsewhere), 50 at a time, until it is noted. One a computer listed is
+  kept until its note is written. One none listed after 3 minutes with every one of those computers on (or removed
+  from the hub) is given up for a week (its transcript is gone); while one of them is off, it waits for that computer
+  and is listed again once all are on. A row a computer lists under a chat's id tells the chat only as an assistant
+  conversation or as one in the space, and a chat noted in the space stays there whatever a computer lists under its
+  id. Nor does a token start a conversation under such an id: `POST /api/v1/sessions` resumes only a chat its
+  computer lists outside the space (404 otherwise, as for a scoped token), and a computer refuses a resume of an id
+  it has no transcript, start or record of (`resume_unknown`). It fails closed: a conversation no computer lists,
   never noted and with no deletion record, a history whose conversations cannot be read, or a run whose link keeps no
   directory and whose session cannot be read, counts too. The one rule decides every way a to-do leaves its manager:
   such a to-do is not on `GET /api/v1/todos`, every route of it answers 404 `todo_not_found` as for a to-do that does

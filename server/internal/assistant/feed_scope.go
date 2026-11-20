@@ -33,12 +33,17 @@ func extensionConversations(list []proto.Session) []proto.Session {
 }
 
 // feedHiddenFromExtension: an extension's token is not shown conversation id's feed: a health conversation, or one
-// whose space cannot be told. One a computer lists (the assistant's, the one the main conversation is routed to, the
-// one it was opened on) by its space or its directory, else as conversationSpace tells it (a task leader's agent, the
-// record of its deletion).
+// whose space cannot be told. One noted in the health space is one whatever a computer lists under its id now; else
+// one a computer lists (the assistant's, the one the main conversation is routed to, the one it was opened on) as the
+// assistant's conversation or in the space, by its space or its directory; else as conversationSpace tells it (its
+// note, a task leader's agent, the record of its deletion). A session started under the id in a terminal (a resume
+// of an id its computer has no transcript of) is not the conversation the feed is of (#10941).
 func (s *Service) feedHiddenFromExtension(ctx context.Context, id string) bool {
 	if _, _, leader := parseLeaderRef(id); !leader {
-		if c, ok := s.session(ctx, s.conversationMachine(ctx, id, ""), id); ok {
+		if s.notedSpaces(ctx, []string{id})[id] == SpaceHealth {
+			return true
+		}
+		if c, ok := s.session(ctx, s.conversationMachine(ctx, id, ""), id); ok && (healthRun(c) || s.isAssistantRow(c)) {
 			return healthRun(c)
 		}
 	}

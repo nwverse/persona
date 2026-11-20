@@ -209,7 +209,9 @@ func TestQuietConversationsEventsAreTold(t *testing.T) {
 		told("never listed, judged again", e.told())
 		// Its conversation is listed now, outside the space: what waited is told, its creation as it is now and its
 		// decision; the health conversation's still is not.
-		e.sessions("server", scopeSession("ghost", "Papers", ""))
+		ghost := scopeSession("ghost", "Papers", "")
+		ghost.Assistant = true
+		e.sessions("server", ghost)
 		e.clock.advance(todoRetryDelay(1))
 		got := e.told()
 		told("listed at last", got, append(decided(q.ghost), changed(q.ghost))...)
@@ -597,4 +599,57 @@ func TestSpaceBackfillBatches(t *testing.T) {
 	if len(rest) != 5 || slices.ContainsFunc(rest, func(id string) bool { return slices.Contains(kept, id) }) {
 		t.Fatalf("kept once the first batch is noted: %v", rest)
 	}
+}
+
+// The regression check of #10941, a forged session: a computer with no transcript of a conversation's id starts a new
+// one under it when asked to resume it (an extension's resume, refused at the hub and the node now). A to-do whose
+// health chat was never noted was then told by that session's row, a terminal's outside the space: shown to
+// extensions, its held outcome line written to the project's timeline (kb.read). A row tells a conversation only as the
+// assistant's or as one in the space now, as a note is taken; the chat's real row in the space still hides it.
+func TestNeverNotedChatIsNotToldByASessionUnderItsID(t *testing.T) {
+	const title, reply = "Book the sleep clinic", "Booked the sleep clinic for Tuesday 9:00 after the new dose"
+	projectStores(t, func(t *testing.T, e *todoEnv) {
+		ctx := context.Background()
+		timers := fakeOutcomeTimers(e.s)
+		setSettings(t, e.s, func(v *Settings) { v.Main = "conv1" })
+		main := scopeSession("conv1", "Persona", "")
+		main.Assistant = true
+		run := scopeSession("s2", "Clinic booking", "/home/owner/errands")
+		run.LastText = reply
+		e.sessions("server", main) // h0, the health chat that opened the task, is quiet since before the notes
+		e.sessions("box", run)
+		task, err := e.s.createTaskTodo(ctx, title, "", "h0", "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.must("PUT", "/api/v1/todos/"+task.ID+"/agents/box/s2", "")
+		e.must("PATCH", "/api/v1/todos/"+task.ID, `{"project":"诊断能力"}`)
+		forged := scopeSession("h0", "hi", "/home/owner/errands")
+		forged.PaneID, forged.Launcher = "w7:p1", "claude"
+		e.sessions("server", main, forged)
+		hidden := func(when string) {
+			t.Helper()
+			for _, path := range []string{"/api/v1/todos/" + task.ID, "/api/v1/todos/" + task.ID + "/timeline"} {
+				if got := extensionDo(e, "GET", path, ""); got.Code != http.StatusNotFound {
+					t.Errorf("%s: an extension's GET %s: %d %s", when, path, got.Code, got.Body)
+				}
+			}
+			noneOf(t, when+": an extension's GET /api/v1/todos", extensionDo(e, "GET", "/api/v1/todos", "").Body.Bytes(), title)
+			noneOf(t, when+": the project's timeline", []byte(strings.Join(kbEng(t, e.s).Store.Log("诊断能力", 20), "\n")), title, reply)
+		}
+		hidden("a terminal's session under h0's id")
+		e.must("PATCH", "/api/v1/todos/"+task.ID, `{"done":true}`)
+		e.s.tasks.outcomeRuns.Wait()
+		timers.fire()
+		hidden("closed, its outcome line judged again")
+		h0 := scopeSession("h0", "Sleep", identity.HealthDir("/home/owner"))
+		h0.Assistant = true
+		e.sessions("server", main, forged, h0) // the chat's own row, in the space, as the backfill asks
+		waitFor(t, "the note written", e.s.listedSpacesWritten)
+		timers.fire()
+		hidden("h0 listed in the space")
+		if v := e.s.todoVerdicts(ctx, []string{task.ID}, nil, nil)[task.ID]; v != todoHidden {
+			t.Fatalf("the task's verdict: %d, want hidden", v)
+		}
+	})
 }

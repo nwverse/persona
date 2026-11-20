@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/screen"
 	"github.com/nwverse/persona/server/internal/shellcmd"
@@ -209,6 +210,13 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		if n.startKind(ctx) == proto.EngineOrca && kind != "claude" { // the start's host
 			return nil, refusal("orca_resume", "Orca 上只能从手机继续 Claude 会话：其它 Agent 请在电脑上恢复，这次没有启动。", nil)
 		}
+		// An id this computer has no transcript, record or start of is not one to resume, as `claude --resume` would
+		// say: started under it, a new conversation would be listed under the id of another, which the manager tells
+		// conversations by (a health chat's: #10941). A first start that failed keeps its start or its record (#861)
+		// and starts under its id below.
+		if kind == "claude" && !codex && !n.resumeKnown(ctx, resume) {
+			return nil, refusal(codeResumeUnknown, i18n.T(i18n.Default, "node-start.resume_unknown"), nil)
+		}
 	}
 
 	var instructionFile, instructionChannel string
@@ -402,6 +410,27 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		}
 	}
 	return n.sessionFor(id, *a), nil
+}
+
+// codeResumeUnknown refuses a resume of an id the computer never had (resumeKnown).
+const codeResumeUnknown = "resume_unknown"
+
+// resumeKnown: this computer has something of conversation id to resume: its transcript, a start of it (one that
+// failed included), a Claude process of it that it saw (a hook's SessionStart before a first message wrote the
+// transcript, ultracode.go), or its record (once the hub's copy of the records has come, or the start's time is up).
+func (n *Node) resumeKnown(ctx context.Context, id string) bool {
+	if n.transcriptPath(id) != "" || n.starts.get(id) != nil {
+		return true
+	}
+	n.mu.Lock()
+	m, seen := n.modes[id]
+	n.mu.Unlock()
+	if seen && m.Ultracode != nil {
+		return true
+	}
+	_ = n.state.loaded(ctx)
+	_, ok := n.state.get(id)
+	return ok
 }
 
 // retypeStart types a start's line again into pane once its shell is at rest (settleShell), after leaving the
