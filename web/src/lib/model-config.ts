@@ -21,6 +21,8 @@ export interface ModelProvider {
   id: string;
   name: string;
   kind: "api" | "launcher" | "plugin";
+  /** Launcher provenance: "persona" for managed providers, else "zshrc" / "path" / "builtin" / runtime name. */
+  source?: string;
   agent?: string;
   api?: ProviderAPI;
   /** A current hub accepts purpose effort on this Chat connection; absent on older hubs. */
