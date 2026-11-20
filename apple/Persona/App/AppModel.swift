@@ -3750,18 +3750,27 @@ final class AppModel {
 
     func retry(_ key: SessionKey, _ msg: PendingMessage, clearDraft: String? = nil) {
         guard allowSend(key, forMessage: true) else { return }
-        guard let i = chat(key).pending.firstIndex(where: { $0.id == msg.id }) else { return }
-        guard chat(key).pending[i].mayHaveArrived == true else {
-            chat(key).pending[i].state = .sending
-            if chat(key).pending[i].refused == true {
+        let store = chat(key)
+        guard let i = store.pending.firstIndex(where: { $0.id == msg.id }) else { return }
+        guard store.pending[i].mayHaveArrived == true else {
+            let retryingEffort = store.pending[i].state == .failed && store.pending[i].requiredEffort != nil
+            if retryingEffort {
+                // An explicit resend follows the current effort. sendPending still waits if a new change is pending.
+                store.pending[i].requiredEffort = nil
+                store.pending[i].failure = nil
+                store.pending[i].stalledSince = nil
+            }
+            store.pending[i].state = .sending
+            let refused = store.pending[i].refused == true
+            if refused {
                 // Refused with nothing typed: under its old id the hub would answer that refusal again without asking
                 // the computer, and Clear and Send's clear_draft would be another op on a used id (op_id_reused).
                 // Saved before it goes: an app killed meanwhile sends it again under the id it went with.
-                chat(key).pending[i].id = UUID()
-                chat(key).pending[i].refused = nil
-                saveOutbox()
+                store.pending[i].id = UUID()
+                store.pending[i].refused = nil
             }
-            deliver(key, chat(key).pending[i], clearDraft: clearDraft)
+            if refused || retryingEffort { saveOutbox() }
+            deliver(key, store.pending[i], clearDraft: clearDraft)
             return
         }
         chat(key).pending[i].state = .sending

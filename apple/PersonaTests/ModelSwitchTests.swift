@@ -197,27 +197,80 @@ struct ModelSwitchTests {
         #expect(app.chat(key).pending.first?.id != originalID)
     }
 
-    @MainActor @Test func keepingCurrentEffortAfterALostChangeLetsTheUserRetry() async throws {
+    @MainActor @Test func keepingCurrentEffortAfterALostChangeRequeuesFailedFollowUpsInOrder() async throws {
+        let hub = FakeHub()
+        let path = "/api/v1/sessions/box/s1/messages"
+        hub.on("POST", path, json: #"{"ok":true}"#)
         let app = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString))
         app.forgetRestoredForTests()
+        app.apiForTests = hub.client
+        app.linksUpForTests = true
+        let row = try session(#","effort":"low","agent":"claude""#)
+        let key = row.key
+        app.applySessions([key.machineRef: [row]])
+
+        var first = PendingMessage(text: "first", images: [], state: .failed)
+        first.requiredEffort = "high"
+        first.failure = "missing confirmation"
+        first.stalledSince = .distantPast
+        first.refused = true
+        var second = PendingMessage(text: "second", images: [], state: .failed)
+        second.requiredEffort = "low"
+        var uncertain = PendingMessage(text: "check the receipt", images: [], state: .failed)
+        uncertain.requiredEffort = "high"
+        uncertain.mayHaveArrived = true
+        let store = app.chat(key)
+        store.pending = [first, second, uncertain]
+
+        #expect(app.canKeepOutboxEffort(key, effort: "low"))
+        await app.keepCurrentEffort(key, effort: "low")
+        #expect(store.pending.map(\.requiredEffort) == ["low", "low", "high"])
+        #expect(store.pending.map(\.state) == [.waiting, .waiting, .failed])
+        #expect(store.pending.map(\.id) == [first.id, second.id, uncertain.id])
+        #expect(store.pending[0].failure == nil)
+        #expect(store.pending[0].stalledSince == nil)
+        #expect(!app.canKeepOutboxEffort(key, effort: "low"))
+
+        for _ in 0..<300 where store.pending.prefix(2).contains(where: { $0.state != .sent }) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let texts = try hub.sent("POST", path).map { request in
+            let body = try #require(request.body)
+            return (try JSONSerialization.jsonObject(with: body) as? [String: Any])?["text"] as? String
+        }
+        #expect(texts == ["first", "second"])
+        #expect(store.pending.map(\.state) == [.sent, .sent, .failed])
+        #expect(store.pending[0].id != first.id)
+        #expect(store.pending[1].id == second.id)
+        #expect(store.pending[2] == uncertain)
+    }
+
+    @MainActor @Test func retryAfterALostChangeUsesTheCurrentEffort() async throws {
+        let hub = FakeHub()
+        let path = "/api/v1/sessions/box/s1/messages"
+        hub.on("POST", path, json: #"{"ok":true}"#)
+        let app = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString))
+        app.forgetRestoredForTests()
+        app.apiForTests = hub.client
+        app.linksUpForTests = true
         let row = try session(#","effort":"low","agent":"claude""#)
         let key = row.key
         app.applySessions([key.machineRef: [row]])
 
         var failed = PendingMessage(text: "follow-up", images: [], state: .failed)
         failed.requiredEffort = "high"
-        var uncertain = PendingMessage(text: "check the receipt", images: [], state: .failed)
-        uncertain.requiredEffort = "high"
-        uncertain.mayHaveArrived = true
+        failed.refused = true
         let store = app.chat(key)
-        store.pending = [failed, uncertain]
+        store.pending = [failed]
+        app.retry(key, failed)
 
-        #expect(app.canKeepOutboxEffort(key, effort: "low"))
-        await app.keepCurrentEffort(key, effort: "low")
-        #expect(store.pending.map(\.requiredEffort) == ["low", "high"])
-        #expect(store.pending.map(\.state) == [.failed, .failed])
-        #expect(store.pending.map(\.id) == [failed.id, uncertain.id])
-        #expect(!app.canKeepOutboxEffort(key, effort: "low"))
+        for _ in 0..<300 where store.pending.first?.state == .sending {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(hub.sent("POST", path).count == 1)
+        #expect(store.pending.first?.state == .sent)
+        #expect(store.pending.first?.requiredEffort == nil)
+        #expect(store.pending.first?.id != failed.id)
     }
 
     /// "Other Model…" (#1644): a typed ID goes through …/modes like a listed one; the list it comes with is the
