@@ -7,11 +7,13 @@ import (
 
 // TestDistBudget bounds what personad, persona-node and persona-manager embed of the runtime packages: every file
 // Generate writes from integrations/. The complete Antigravity package, including the image guard (#11790),
-// measured 192,060 B. Preserving delivered replies through a background wake (#11756) adds 1,822 B, and Claude plugin
-// 0.2.0 busy owner input queueing + turn interrupts add 2,129 B (196,011 B total).
+// measured 192,060 B; preserving delivered replies through a background wake (#11756) added 1,822 B. Claude Code
+// plugin 0.2.0 session settings overrides brought the total to 196,211 B; busy owner input queueing + turn interrupts
+// add 2,129 B on their branch. The independent compressed-size deltas sum to 198,340 B; the combined integration is
+// covered by a 198,450 B ceiling.
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 197_000
+	const budget = 198_450
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

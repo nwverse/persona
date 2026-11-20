@@ -1473,6 +1473,38 @@ or writes them: the main chat's fixed payload stays as it was.
   `views/chat/MessageActions.save-prompt.test.tsx`; end to end against the mock hub (`MOCK_SAVED_PROMPTS=1`), wide and phone,
   light and dark: `node web/e2e/saved-prompts.mjs <web URL> --hub <mock hub URL> [--shots <dir>]`.
 
+### Starred messages (#7524)
+
+Use **Star** from a text message's menu in an Assistant or Agent chat. The menu opens with its More
+button, a right click, or a long press. A small star marks the saved message. **Unstar** is available in
+the same menu and on the **Starred** page. Removing a star offers **Undo** in the notification. It saves
+the same snapshot again with a new star ID, even if the original message has gone away.
+
+**Pages › Starred** shows the current assistant's saves, newest first. Its count is the number of saved
+messages for that assistant. Search matches words in the saved text, conversation title, and speaker.
+**Copy** copies the saved text. **Open original** opens the conversation at the saved message with the
+existing message-link behavior. Workers and side chats open in their panels at the message. A link into a
+compact child card or an earlier engine opens the original transcript so the message can be shown. When the
+runtime supplies only a line position, it checks a fingerprint of the
+original transcript record before opening and reads it again at the final jump, even when the visible page
+has not detected a same-size rewrite. If a rewrite reuses that line, the replacement can be starred separately. The old snapshot stays available for Copy and Unstar and shows that its original is
+unavailable. Older snapshots without a fingerprint for a line position also stay readable. Star is offered for
+positional messages only when their node supplies the fingerprint.
+
+The manager keeps up to 300 text snapshots, at most 4,000 Unicode characters each, with a count of text
+left out. New saves retain the visible message text, title, author, and original time when available.
+If a user message was shortened for the chat page, Star fetches the full text blocks and applies the same
+user-message formatting before deciding which characters to save and how many were left out.
+Edits and deletion of the original do not change the snapshot. The browser asks for identifiers alone
+to mark the chats and show the sidebar count. It reads snapshot text while the Starred page is open,
+refreshing on reconnect, after a write, and on notifications from the selected assistant. An older hub
+or assistant hides Star from the menus and explains the missing capability if someone opens `/starred`
+directly. The protocol is in `docs/protocol/protocol.md` ("REST (App → hub)").
+
+To verify the web flow, run the mock hub with `MOCK_STARRED=1` and follow the commands in
+`web/e2e/starred-messages.mjs`. It drives two isolated browser contexts and verifies cross-device changes,
+search, copy, Undo, exact links, and a snapshot whose original is absent.
+
 ### Exporting a conversation (#7375)
 
 **Export Conversation…** in every chat's ⋯ (Agent chats and Persona conversations) saves the whole conversation as one
@@ -2264,6 +2296,7 @@ with the sample time to the right of the title. **With no data the whole block i
 refreshed once a minute, with no requests while the page is in the background. The pace and countdown algorithms, and how Claude's usage is hooked up, are in [usage-windows.md](../server/usage-windows.md).
 Accounts come from files read on the computers and from the account-pool gateways the hub queries (#2595): in the popover, the line under each account's title gives the plan and the source ("MacBook · Relay": the computers that read it by name, then the gateways; with only one source it names that one).
 Single-model windows put the model name next to the length (not used for sorting); when a gateway can't be read it says "these are its last numbers". The sidebar bar's tooltip also gives the source. Gateways are configured under "Usage sources" in the admin interface (`docs/operations/admin.md`).
+A prepaid account with no rate-limit window (the official DeepSeek launcher, #11825) is a row of its own: the collapsed strip shows its name and the provider's amount and currency ("CNY 12.34"), without taking a bar from the two fullest window accounts, and the popover lists it beside them. A genuine zero is shown as `CNY 0.00`; an unreadable balance shows `—` in the strip, and the popover says "Balance unavailable" and why, so it never becomes a zero; a failure after a successful read keeps the last amount and says so.
 Code: `lib/usage-windows.ts` (pure functions, with unit tests), `views/UsageBars.tsx`; the mock hub has `MOCK_USAGE=none` to simulate no data and `MOCK_USAGE=gateways` to simulate a mix of computer and gateway accounts.
 
 ## Model pill and model panel (#5032)
@@ -2740,7 +2773,7 @@ When you aren't watching the web app, you still need to know an Agent is waiting
   The device id is `web-<uuid>`, generated the first time this browser opens it (stored as `persona.notifyDevice`; if it can't be stored, the page uses an id of its own and neither reads nor writes the hub). Each PUT carries only the changed `input`, `done` or `quiet` fields; the hub decodes it on top of the device's existing preferences and leaves other fields alone. The long-task threshold is the `long_turn_seconds` the hub returns (default 60 seconds);
   with "Long tasks only", a turn of unknown length doesn't count as long (same as the Mac's `MacAttention`). Saving is optimistic. Notification and manager-push edits share one queue per page, so PUTs reach the hub in edit order (#1285). Pending edits stay visible over confirmed responses; a rejected edit rolls back without discarding later edits or being retried through an unrelated save. The caller shows the error and the user can retry. Reads that overlap edits cannot replace the pending or confirmed result. Pairing or sign-out retires the previous credential generation's queue, aborts its reads/writes and clears its preference cache; late responses cannot publish into the next login, and cancelled work shows no failure toast. Mounted notification and manager controls automatically reread on generation changes, including another tab replacing the token; notification controls show loading until the new read completes.
   **Quiet hours** (#5806, the hub's `quiet` pref): a switch and, when on, "From" / "Until" times (23:00–07:00 until changed), saved with this browser's IANA time zone so the hub reads the window the same way. Inside the window (`inQuietHours` in `notify.ts`, the same rules as the hub's `quiethours.go`) a finished Agent gives no sound and no notification (`wants`), and needs you still posts its notification but with `silent` and no alert sound. The row's hint writes the times as the UI language does ("11:00 PM – 7:00 AM"). For screenshots use the mock hub with `MOCK_QUIET_HOURS=1` (starts with 23:00–07:00 on).
-  **Push grading** (#8157, `settings/LowDistractionSettings.tsx`): the page's last group, after the note that the rows above are this browser's, is the hub's push grading switch (`GET` / `PUT /api/v1/push/ln-mode`, the legacy wire route) for every device, with a footer that says what still notifies and what waits for the briefing and Held pushes. The group is always there, so the settings search lands on it: no value until the hub answers, and a hub without the route says to update it. A change shows at once and a refusal puts it back with a toast; a new pairing or sign-in reads it again from nothing, and an answer to the old credential's read or write is dropped. `docs/server/server.md` "Push grading (push urgency filtering, `hub/lnmode.go`)".
+  **Push grading** (#8157, `settings/LowDistractionSettings.tsx`): the page's last group, after the note that the rows above are this browser's, is the hub's push grading switch (`GET` / `PUT /api/v1/push/ln-mode`, the legacy wire route) for every device, with a footer that says what still notifies and what waits for the briefing and Held pushes. The group is always there, so the settings search lands on it: no value until the hub answers, and a hub without the route says to update it. A change shows at once and a refusal puts it back with a toast; a new pairing or sign-in reads it again from nothing, and an answer to the old credential's read or write is dropped. `docs/server/server.md` "Push grading (push urgency filtering, `hub/push_grading.go`)".
   If it can't load, it shows "Couldn't load notification settings" and "Retry". The alert sound and system notifications both follow these two settings; when another tab changes them, this page follows immediately via the `storage` event.
   A browser has no APNs token, so this row in the hub's device table is only a set of preferences: the device credential that wrote it is recorded on the row (`Pusher.setPrefsBy`, only when the row had no credential yet), and it is deleted along with signing this browser out in **Settings › Devices**, same as a phone. The hub pushes to a browser only through its Web Push subscription ("Web Push" below), by these same preferences.
 - **System notifications** ("Show system notifications" on the same page, off by default, stored as `persona.systemNotify`): turning it on calls `Notification.requestPermission()`. If the browser denies it the switch can't be turned on; the row is marked "Blocked" and explains how to change it in the site settings. Browsers without the Notification API say it isn't supported.

@@ -1,6 +1,6 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
-import { homeDir, nextBackoff, readPoll, socketPath, verdict } from '../hooks/bridge.ts'
+import { applyStepOverride, homeDir, mergeOverride, nextBackoff, readPoll, socketPath, verdict } from '../hooks/bridge'
 
 const SESSION = '11111111-2222-3333-4444-555555555555'
 
@@ -12,12 +12,15 @@ function world(on: On, polls: Answer[], env: Record<string, string> = { HOME: '/
   const requests: { url: string; socketPath?: string; body: Record<string, unknown> }[] = []
   const submitted: { text: string; origin: unknown }[] = []
   const aborted: string[] = []
+  const steps: { model: string; effort?: string | number; agentId?: string }[] = []
   let holdSubmit = false
   let abortError: string | undefined
+  let sessionModel = 'claude-sonnet-5-5'
   mock.env(on, env)
   const clock = mock.clock(on, { now: 1_000 })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: SESSION }))
+  on('session.model', () => ({ value: sessionModel }))
   on('session.version', () => ({ value: { version: '2.1.326', base: '2.1.326' } }))
   on('fs.read', () => ({ value: '{"name":"persona","version":"0.2.0"}' }))
   on('ui.log', () => ({ value: undefined }))
@@ -33,11 +36,13 @@ function world(on: On, polls: Answer[], env: Record<string, string> = { HOME: '/
     if (holdSubmit) return new Promise(() => {})
     return { text: e.text }
   })
-  on('turn.step', async function* (_$, _e) {
-    yield { type: 'complete', stopReason: 'end_turn', usage: { inputTokens: 1, outputTokens: 1 } }
+  on('turn.step', async function* (_$, e) {
+    steps.push({ model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}), ...(e.agentId !== undefined ? { agentId: e.agentId } : {}) })
+    return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn' as const, usage: null }
   })
   on('http.fetch', (_$, e) => {
-    requests.push({ url: e.url, socketPath: e.init?.socketPath, body: JSON.parse(e.init?.body ?? '{}') })
+    const rawBody = typeof e.init?.body === 'string' ? e.init.body : '{}'
+    requests.push({ url: e.url, socketPath: e.init?.socketPath, body: JSON.parse(rawBody) })
     if (e.url.endsWith('/ack')) return { value: { status: 200, ok: true, headers: {}, text: '{"ok":true}' } }
     const next = polls.shift() ?? { fail: true }
     if ('fail' in next) throw new Error('connection refused')
@@ -47,12 +52,16 @@ function world(on: On, polls: Answer[], env: Record<string, string> = { HOME: '/
     requests,
     submitted,
     aborted,
+    steps,
     clock,
     setHoldSubmit(v: boolean) {
       holdSubmit = v
     },
     setAbortError(err: string | undefined) {
       abortError = err
+    },
+    setSessionModel(m: string) {
+      sessionModel = m
     },
   }
 }
@@ -73,7 +82,7 @@ describe('persona plugin', () => {
       session_id: SESSION,
       plugin_version: '0.2.0',
       engine_version: '2.1.326',
-      capabilities: ['busy_input', 'interrupt'],
+      capabilities: ['busy_input', 'interrupt', 'settings'],
       wait_ms: 25_000,
     })
     expect(ack?.url).toBe('http://persona/claude-plugin/v1/ack')
@@ -103,6 +112,38 @@ describe('persona plugin', () => {
       { session_id: SESSION, id: 'int-1', submitted: true },
       { session_id: SESSION, id: 'int-2', submitted: false, reason: 'no_turn' },
     ])
+  })
+
+  test('applies session-only model and effort switches on main-loop turn.step and yields when desktop changes model', async ($, on) => {
+    const w = world(on, [
+      { status: 200, body: { messages: [], settings: { id: 's1', model: 'gateway-opus-5-5[1m]', effort: 'xhigh' } } },
+    ])
+    await $.session.start(start)
+    await w.clock.settle()
+
+    expect(w.requests.filter(r => r.url.endsWith('/ack')).map(r => r.body)).toEqual([
+      { session_id: SESSION, id: 's1', submitted: true },
+    ])
+
+    const runStep = async (input: Parameters<typeof $.turn.step>[0]) => {
+      const gen = $.turn.step(input)
+      while (!(await gen.next()).done) {
+        // drain chunks
+      }
+    }
+
+    // Main loop step gets the picked model and effort; subagent step keeps its own model.
+    await runStep({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 1 })
+    await runStep({ turnId: 't1', index: 0, model: 'claude-haiku-5-5', messageCount: 1, agentId: 'sub-1' })
+    expect(w.steps).toEqual([
+      { model: 'gateway-opus-5-5[1m]', effort: 'xhigh' },
+      { model: 'claude-haiku-5-5', agentId: 'sub-1' },
+    ])
+
+    // Changing model in Claude Desktop UI supersedes Persona's earlier pick.
+    w.setSessionModel('claude-opus-5-5')
+    await runStep({ turnId: 't2', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 2 })
+    expect(w.steps.at(-1)).toEqual({ model: 'claude-opus-5-5', effort: 'high' })
   })
 
   test('submits nothing late, empty or a slash command, and tells the node why', async ($, on) => {
@@ -175,12 +216,22 @@ describe('protocol helpers', () => {
     expect(homeDir(undefined, '/Users/me')).toBe('/Users/me')
   })
 
-  test('poll answers', () => {
-    expect(readPoll(200, '{"messages":[{"id":"a","text":"hi","deadline_ms":5}],"interrupt":{"id":"i1","deadline_ms":9},"retry_ms":10}')).toEqual({
+  test('poll answers and override helpers', () => {
+    expect(readPoll(200, '{"messages":[{"id":"a","text":"hi","deadline_ms":5}],"interrupt":{"id":"i1","deadline_ms":9},"settings":{"id":"s1","model":"opus","effort":"high"},"retry_ms":10}')).toEqual({
       kind: 'messages',
       messages: [{ id: 'a', text: 'hi', deadlineMs: 5 }],
       interrupt: { id: 'i1', deadlineMs: 9 },
+      settings: { id: 's1', model: 'opus', effort: 'high' },
       retryMs: 10,
+    })
+    expect(readPoll(200, '{"messages":[],"settings":{"id":"s2","model":"-bad"}}')).toEqual({
+      kind: 'messages',
+      messages: [],
+      retryMs: 0,
+    })
+    const ov = mergeOverride(undefined, SESSION, { id: 's1', model: 'opus', effort: 'auto' }, 'claude-sonnet-5-5')
+    expect(applyStepOverride({ model: 'claude-sonnet-5-5', effort: 'medium' }, ov, SESSION, 'claude-sonnet-5-5').step).toEqual({
+      model: 'opus',
     })
     expect(readPoll(200, 'not json')).toEqual({ kind: 'unavailable' })
     expect(readPoll(404, '')).toEqual({ kind: 'unavailable' })

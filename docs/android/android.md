@@ -24,12 +24,12 @@ The follow-up branding / input compatibility work for #277 landed in batches: #7
 | Inbox | One list for Lark and mail items, persisted filters, AI actions, reply log; Lark has a window cache, event refresh, visible-read marking and basic message rendering; the mail body page and mail read/write are wired to the hub by the App's `InboxModule` (`HttpMailTransport`) |
 | Settings | Pairing, setup checklist, background guide, About and updates; in connection diagnostics you can add / edit / delete hub addresses by hand, disable candidates, drag to reorder (list order is the order they are tried) and test each one (see "Connection addresses"); device management and notification preferences are wired to the hub by the App's `DeviceSettingsModule` |
 | Extension modules | Terminal, files, machine monitoring, knowledge base, phone tools, voice chat (see "Voice chat"), the cross-app floating capsule (see "Cross-app floating capsule") and demo mode are wired into the App; entries are in the "Shell" section. In demo mode, pages without sample data show an explanation and do not connect to a real hub |
-| UI | Three interface styles: Glass (default), Brief and Board, switched in Settings › Interface style; the change applies immediately and is stored on the device. The same page has the theme color (Match interface style (default) / Match avatar / five built-in palettes) and light / dark (Match system (default) / Light / Dark); see "Appearance: theme color and light / dark". Design rules, components and the rules for writing pages are in [Android interface styles and design system](android-design.md) |
+| UI | Three interface styles: Glass (default), Brief and Board, switched in Settings › Appearance; the change applies immediately and is stored on the device. The same page has the theme color (Match interface style (default) / Match avatar / five built-in palettes) and light / dark (Match system (default) / Light / Dark); see "Appearance: theme color and light / dark". Design rules, components and the rules for writing pages are in [Android interface styles and design system](android-design.md) |
 
 ## Unified home navigation
 
-The home has only **Assistant** and **Agents**, selected at the top, on phones, tablets and foldables (#2589).
-Selecting **Agents from Assistant** opens its list, not an earlier session or secondary page (#5638). Its root entry stays,
+The home has only **Assistant** and **Agents** on phones, tablets and foldables (#2589).
+In the default **Separate** presentation, they are selected at the top. Selecting **Agents from Assistant** opens its list, not an earlier session or secondary page (#5638). Its root entry stays,
 so list state is retained; selecting Assistant keeps the current conversation. Task/session entries, `/s/…` links and
 notifications still open their requested detail directly. Back from an Agent opened in Assistant returns to its origin.
 A conversation opened from an inbox item carries `RouteSource.InboxItem(itemId)`. An assistant conversation is a complete
@@ -77,8 +77,8 @@ chat does; any other failure is a toast with the reason ("Couldn't clear the con
 "/" list and "+" sheet offer `/clear` too, which clears the same way (`LocalMainChatClear`); `/clear` sent alone does it,
 anything more is a message, a failure puts `/clear` back in the box, and on the cleared page it does nothing. Tests
 `ClearContextTest`, `MainChatClearTest`.
-It has no native Health destination or archived-chat browser; this change does not invent either feature.
-Recent, pinned and automatic conversation history, pinning, archive actions and New conversation are retained.
+The Android sidebar reuses its existing Health conversations and conversation history. Recent, pinned and automatic
+conversations, pinning, archive actions and New chat use their existing data and routes.
 
 There is no old-layout selector or migration. Android previously had a fixed four-destination shell, not an equivalent
 of the retired Apple layout preference. The old Inbox/Settings tab enum values, their separate stacks, bottom dock,
@@ -88,6 +88,33 @@ chat-rendering preferences are independent of home navigation and remain availab
 
 Apple PR #1696 removed the old root-navigation switch; PR #2539 separately removed conversation-presentation settings.
 The latter is not a home-layout toggle and is not a reason to remove Android's Inbox rendering preference.
+
+### Sidebar presentation (#6378)
+
+**Settings › Appearance › Sidebar** shows the current device choice and applies **Separate** or **Merged** immediately.
+Separate is the Android default at every window size. The device preference survives process restart and re-pairing.
+Changing it keeps the Settings page, the conversation or detail open behind it, and its draft.
+
+Merged pins the assistant switcher and **Main conversation** at the head. One list contains **Pages**, **Persona Chats**
+and the same Agents rows, quick filters, groupings, list options and New Session action as the Separate Agents page.
+The Pages and Persona Chats headings remember their folds on this device. The lists share the current assistant and hub scope. Android offers its existing Inbox, supported To-dos, Scheduled Tasks when assistant management is
+available, Knowledge and Computers when their services are available, and the hub's available extension pages.
+Health uses Android's existing Health conversation flow, gated to paired assistants. Android has no native standalone
+Health page, Personal Agents destination or sidebar Recordings page.
+
+The foot has one **New chat** control and a shared **Search** and **Settings** capsule. Search opens over the whole window
+with Chats and Agents scopes, initially matching the page in front. Chats use the existing local and manager search.
+Agents search top-level sessions already on the device with the Agents list's matcher, up to 50 results sorted by recency.
+**Needs You** uses the shell's waiting-session count, excluding quiet and muted sessions. Its fixed jump scrolls to the
+Agents list's request section. The subscription strip below it shows the two fullest current accounts from the same
+usage snapshot as Computers. A tap opens Computers.
+
+On a compact window a pick replaces the visible root and closes the left drawer. A regular window uses the same
+side-by-side or overlay placement and fold gestures as the Separate sidebar. A pick closes an overlaid column and
+keeps a beside column open. The selected row follows the visible root while drill-down pages push and keep Back.
+Back closes the drawer or overlay first, pops drill-downs, returns from a Persona place root to the conversation,
+and returns from a directly opened Agent to the Agents list. Deep links, shortcuts, widgets and notifications use the
+existing route and session identities and their return paths. Assistant and Agents remain the two logical home destinations.
 
 ### Assistant token calendar (#9507)
 
@@ -636,6 +663,27 @@ Ported 2026-11-02 from the old App on the main line (inventory items C5–C7, C9
 - An answer the hub refused (#1881, `InteractionSubmission.Refused`): a 4xx (the node could not type it into the terminal, a device paired to answer only sending something else) or a 503 `assistant_offline` once the transport's retries end means nothing was done, so the card stays answerable and the line under the panel gives the hub's reason ("The hub didn't take this answer: …"). Only a lost receipt (no answer, a 5xx without that code) keeps the card **Result unconfirmed** until the hub says more. Shots: `RefusedAnswerShotsTest` (`build/refused-answer-shots/`, before / after, three styles × light / dark).
 - Mock hub: `MOCK_SOURCES=1` adds three sessions: "整理部署脚本" ("tidy deploy scripts"; Codex live, can send, can join live, can't approve before joining, with a Codex permission card that has `always_label`), "迁移日志采集" ("migrate log collection"; Codex history, read-only, with `read_only_reason`) and "生成季度报表" ("generate quarterly report"; DSH runtime, `agent_label: DSH`, no terminal, with a permission card without `always_label`). `POST …/attach` sets `attached` to true and enables approval, and returns 403 `codex_read_only` for sessions that can't attach. `/info` returns Codex's model and version for Codex sessions. `MOCK_SCREEN_CHAT=1` adds a terminal dialog with a header ("计划模式", "plan mode") and a back-to-chat option ("照片同步脚本支持 HEIC", "photo sync script supports HEIC"), to look at the interaction panel's tags, numbering and **Say it in the chat**. To see the Mode button under **Allow all**, `POST /api/v1/sessions/{mid}/{sid}/modes {"permission_mode":"bypassPermissions"}` to the mock hub directly.
 - Unit tests: `SessionSourceTest` in `core:domain` (cases from the old `SessionSourcesTest` + runtime, resume commands), `AgentCloseTest`, `AlwaysOfferTest` and the answer / approval fixtures; `ModelsTest` in `core:contracts` (new fields, `agentLabel`, `SessionInfo`); `HttpChatActionsTest` (attach, queue, info) and `HttpAgentOperationsTest` (attach) in `core:hub`; `SessionModesTest` (old `SessionModesTest`, `ModelPickerTest`), `ChatSessionInfoTest` (old `SessionInfoTest`) and `InteractionOptionsTest` in `feature:chat`; `AgentsListInfoTest` in `feature:agents`; `NotificationExecutionTest` in `platform:notify` (sessions that can't approve send nothing back).
+
+### Background tasks in Agent chat
+
+**Background tasks** in the Agent chat menu opens the native panel. Glass also has the activity pill when the
+Agent is running background work or has a loop. Picking or sending the bare `/workflows` command opens the
+latest workflow locally. A workflow card opens its own run, including in read-only Agent chats. Subagent and
+workflow-agent chats do not offer that action. When the draft includes an attachment, quoted context, or a
+selected saved prompt, the local command suggestion stays hidden and the draft can be sent as a message.
+
+The panel groups work into **Running** and **Completed**. A loop keeps its confirmed **Stop Loop** action.
+Workflow details show phases and their Agents. Shell commands and Monitors have details even when the output
+path has not arrived. When the hub reports a retained terminal result, that result takes precedence over a
+running entry. An older hub dropping a command from its running list leaves its outcome unknown and stops the
+elapsed clock. The selected row stays open while a running command becomes completed. Back returns to the list
+and its originating row.
+
+The output preview uses one authenticated file suffix request of at most 64 KiB per read, scoped to the
+session's computer and manager. Live reads run only while the detail is shown. Ending a task takes a final read.
+Leaving the detail cancels any request that is still waiting on data. A failure keeps the last good log and offers
+Retry. **Open as file** uses the normal file viewer. A summary that may omit background details is refreshed
+through the existing exact session lookup when an open panel receives a list hint or reconnects.
 
 ### Switching between Claude Code and Codex
 
@@ -1502,7 +1550,7 @@ Regression coverage: `AppUpdateStateTest`, `AppUpdateNoticeShotsTest` (including
 - Storage (Settings › This device › Storage, `StorageScreen.kt`, aligned with iOS `StorageView`): measures `cacheDir` and the App's directories as **Pictures in conversations / Lark pictures and files / Web pages / Other caches / App data**, with per-category or clear-all actions. The active `items.db`, unsent attachments (`chat-uploads`, `chat-captures`) and files open elsewhere (update APK being installed, `persona-update-*.apk`; open PDFs, `files-pdf`; shared files, `shared` / `files-share`) count as App data and are not deleted. Files are removed through data-layer `CacheClearing`, holding the cache lock, skipping active readers (`readPinned`) and in-progress `.part` / `.tmp` downloads, so deletion does not race `BudgetFileCache` writes. Web cache is cleared only through `WebView.clearCache`, not direct file deletion.
 - Signed-in Macs and muting the phone (aligned with iOS `DesktopPresenceRow` / `DesktopPresenceSheet`): the hub's `desktops` event (`DesktopsEvent`) is stored separately per hub group (`GroupDesktops`; the event itself carries no group); Settings shows only the current group's, clears it when that group disconnects, and sends sign-out to the current group's hub (`GroupDesktopsTest`). When a desktop is online, the Settings home's **This device** group gains **Persona is signed in on a Mac** (iOS places it above the Agents list; Android's Agents page is unchanged here). Notifications gains **When a computer is online › Mute phone** (`NotifyPrefs.mute_while_desktop`, hidden if an old hub lacks the field). **Signed-in Macs** lists login time and sign-out per Mac (revoking that device's credentials).
 - Quiet hours (#1863, aligned with iOS `NotificationSettingsView`): Settings › Notifications has **Quiet hours** after **When an agent finishes** (a switch, then **From** / **Until** on a 24-hour time picker), only when the prefs answer has `quiet`. Each change sends `quiet` alone with this phone's time zone (`DeviceSettings.saveQuietHours`, optimistic, put back if the hub says no); hours set in another zone: the footer names that zone until they are changed here. Inside the window the hub sends no "agent finished" and marks cards and reply reminders `quiet: true`; the phone posts those without a sound (`NotifyEvent.quiet`, `setSilent`).
-- Push grading (#8157, aligned with iOS `NotificationSettingsView`): the last row of Settings › Notifications, after this phone's own rows, is the hub's push grading switch (`DeviceSettings.lowDistraction` / `saveLowDistraction`, `GET` / `PUT /api/v1/push/ln-mode`, the legacy wire route), with a caption that it holds for every device and says what still notifies and what waits for the briefing. It is read after the prefs; a hub without the route shows no row. A change shows at once and goes back with a message when the hub refuses it (`DeviceSettingsState.saveLowDistraction`). `docs/server/server.md` "Push grading (push urgency filtering, `hub/lnmode.go`)".
+- Push grading (#8157, aligned with iOS `NotificationSettingsView`): the last row of Settings › Notifications, after this phone's own rows, is the hub's push grading switch (`DeviceSettings.lowDistraction` / `saveLowDistraction`, `GET` / `PUT /api/v1/push/ln-mode`, the legacy wire route), with a caption that it holds for every device and says what still notifies and what waits for the briefing. It is read after the prefs; a hub without the route shows no row. A change shows at once and goes back with a message when the hub refuses it (`DeviceSettingsState.saveLowDistraction`). `docs/server/server.md` "Push grading (push urgency filtering, `hub/push_grading.go`)".
 - Notification page details (aligned with iOS `NotificationSettingsView`): if the system disables notifications, the page starts with **Notifications are off** and **System notification settings**; **When you are needed** has a subtitle and explains that notifications allow direct allow / deny; the footer says "Change sound, lock-screen display and Do Not Disturb in system settings".
 - Claude Code settings › Blocked config directories (`ClaudeDirs.kt`, aligned with iOS `ClaudeDirsSection`): `GET /api/v1/machines/{id}/claude-dirs` lists the current computer's configuration directories, block / unblock (unblocking removes the rule that blocks it); rules matching no directory are listed separately and can be deleted; manual paths or wildcards use iOS's validation; `PUT …/claude-dirs/blocked` sends the complete rules.
 - Assistant settings › Task notifications › Notify only in the main chat (`main_tasks_quiet`, hidden if the old hub lacks it).
@@ -1946,7 +1994,13 @@ Imported when merging main line 2026-11-02: pitfalls from the old single-module 
 
 ## App shell and direct page entry
 
-The composition root uses `PersonaTheme` from `:core:designsystem`, style from `AppStyleStore` (Settings › Interface style). Four fixed bottom tabs: Persona / Agents / Inbox / Settings, identical order and text in all styles, styled independently (Glass floating dock, Brief/Board bottom bar). Dock belongs to each tab's first page; pushed pages (chat, documents, nested settings) cover it. Visited tabs retain composition and do not rebuild on return (`docs/android/android-design.md` section 3). Tablet/foldable layout follows the window: a regular window (at least 600dp wide and 480dp tall) has the shared sidebar beside the Assistant stack, two-pane list/detail for Agents and Settings, and a single right-hand Inbox stack; tabletop puts chat above and composer below (`docs/android/android-design.md` section 3.1). Each tab retains its back stack. Agents badge counts the waiting agents, one per session however many cards it has (`ShellCounts.agentRows`: ordinary-Agent cards and Needs-you sessions, less quiet tasks' agents and muted agents and spaces, `needsYouBadgeRows`); Persona badge counts assistant interactions, each request counted separately even in one session. Inbox badge counts unread Needs-you items, one per item, taking the conversation list's reads before the hub's item list catches up (`inboxUnreadCount`). Current tab, Agents machine filter and each tab's open chat are stored in pairing directory and restored on normal cold start; sign-out, revoke and re-pair delete together, and retired writers cannot recreate position files. Legacy global shell preferences/checklist records are cleared on unpairing.
+The composition root uses `PersonaTheme` from `:core:designsystem` and the device's `AppStyleStore` (Settings › Appearance).
+The Assistant and Agents roots retain their stacks while the sidebar's Separate or Merged presentation changes
+(see "Sidebar presentation"). The current destination, Agents machine filter and each tab's open chat are stored in
+the pairing directory and restored on a normal cold start. Sign-out, revoke and re-pair remove that saved position,
+and retired writers cannot recreate the position file. The sidebar choice is device-wide.
+
+Agents badge counts the waiting agents, one per session however many cards it has (`ShellCounts.agentRows`: ordinary-Agent cards and Needs-you sessions, less quiet tasks' agents and muted agents and spaces, `needsYouBadgeRows`); Persona badge counts assistant interactions, each request counted separately even in one session. Inbox badge counts unread Needs-you items, one per item, taking the conversation list's reads before the hub's item list catches up (`inboxUnreadCount`).
 
 Connection state occupies each page's title (Agents, Inbox, Persona, chat); shell no longer adds a separate banner, avoiding duplication and top whitespace. Lightweight refresh failures show no extra notice; user-action failures go through one outlet, with a shared 4-second dedupe window for offline notices. This is notice-policy configuration, not measured performance. Unclear results retain in-chat checking.
 

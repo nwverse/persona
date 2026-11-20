@@ -289,6 +289,8 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun launchers(machineId: String) = source.launchers(names.rawMachine(machineId))
         override suspend fun assistantLaunchers(machineId: String) = source.assistantLaunchers(names.rawMachine(machineId))
         override suspend fun assistantLauncherList(machineId: String) = source.assistantLauncherList(names.rawMachine(machineId))
+        override suspend fun assistantLauncherList(machineId: String, refresh: Boolean) =
+            source.assistantLauncherList(names.rawMachine(machineId), refresh)
         override suspend fun launcherModels(machineId: String, launcher: String) = source.launcherModels(names.rawMachine(machineId), launcher)
         override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick) = source.setModelPick(names.raw(session), pick)
         override suspend fun clearModelPick(session: SessionKey) = source.clearModelPick(names.raw(session))
@@ -410,6 +412,8 @@ internal fun AgentCreationService.inGroup(names: GroupNames): AgentCreationServi
         override suspend fun newAgentModel() = source.newAgentModel()
         override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean) =
             source.launcherModels(names.rawMachine(machineId), launcher, refresh)
+        override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean, host: String?) =
+            source.launcherModels(names.rawMachine(machineId), launcher, refresh, host)
         override suspend fun worktreeStatus(machineId: String, cwd: String, kind: String?) = source.worktreeStatus(names.rawMachine(machineId), cwd, kind)
         override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String, kind: String?) =
             source.addWorktree(names.rawMachine(machineId), cwd, nameHint, branch, kind)
@@ -468,6 +472,8 @@ internal fun SessionFiles.inGroup(names: GroupNames): SessionFiles {
         override suspend fun stat(machineId: String, cwd: String, paths: List<String>) = source.stat(names.rawMachine(machineId), cwd, paths)
         override suspend fun download(machineId: String, cwd: String, path: String, into: java.io.File) =
             source.download(names.rawMachine(machineId), cwd, path, into)
+        override suspend fun readLogTail(machineId: String, cwd: String, path: String, manager: String?) =
+            source.readLogTail(names.rawMachine(machineId), cwd, path, manager)
         override fun comparesVersions(machineId: String) = source.comparesVersions(names.rawMachine(machineId))
         override suspend fun blob(machineId: String, cwd: String, path: String, rev: String) =
             source.blob(names.rawMachine(machineId), cwd, path, rev)

@@ -4,7 +4,9 @@ import {
   CAPABILITIES,
   POLL_WAIT_MS,
   SUBMIT_QUEUE_SETTLE_MS,
+  applyStepOverride,
   homeDir,
+  mergeOverride,
   nextBackoff,
   readPoll,
   socketPath,
@@ -13,12 +15,16 @@ import {
   type InterruptRequest,
   type Message,
   type PollAnswer,
-} from './bridge.ts'
+  type SessionOverride,
+  type SettingsUpdate,
+} from './bridge'
 
 // Persona's plugin (README.md): while this session lives it asks the local Persona node for the owner's own messages
-// and owner turn interrupts from the Persona apps. Messages go in as the person's words (`asUser`, immediately when
-// idle or queued natively while a turn runs), and interrupts cancel the active main-loop turn (`$.turn.abort`). It runs
-// no command, reads no file but its own manifest, and keeps quiet (the debug log only) when no node answers.
+// and owner turn interrupts plus session-scoped model / effort picks from the Persona apps. Messages go in as the
+// person's words (`asUser`, immediately when idle or queued natively while a turn runs), interrupts cancel the active
+// main-loop turn (`$.turn.abort`), and model / effort overrides apply to main-loop `turn.step` requests without touching
+// global settings files. The plugin runs no command, reads no file but its own manifest, and keeps quiet (the debug log
+// only) when no node answers.
 
 type Engine = EngineInterface
 
@@ -27,6 +33,7 @@ export const register: Register = on => {
   // its environment. A /clear keeps the loop: each poll names the session open now.
   let loop = 0
   let activeTurn: ActiveTurn | undefined
+  let override: SessionOverride | undefined
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
@@ -48,7 +55,12 @@ export const register: Register = on => {
       const session = await $.session.id().catch(() => '')
       activeTurn = { session, turnId: e.turnId }
     }
-    return yield* next(e)
+    if (e.agentId !== undefined || override === undefined) return yield* next(e)
+    const session = await $.session.id().catch(() => '')
+    const sessionModel = override.model !== undefined ? await $.session.model().catch(() => undefined) : undefined
+    const applied = applyStepOverride(e, override, session, sessionModel)
+    override = applied.nextOverride
+    return yield* next(applied.step)
   })
 
   on('session.start', async ($, e, next) => {
@@ -61,6 +73,10 @@ export const register: Register = on => {
       turnId => {
         if (activeTurn?.turnId === turnId) activeTurn = undefined
       },
+      async (session, update) => {
+        const sessionModel = update.model !== undefined ? await $.session.model().catch(() => undefined) : undefined
+        override = mergeOverride(override, session, update, sessionModel)
+      },
     )
     return started
   })
@@ -71,6 +87,7 @@ async function run(
   current: () => boolean,
   getActiveTurn: () => ActiveTurn | undefined,
   clearActiveTurn: (turnId: string) => void,
+  onSettings: (session: string, update: SettingsUpdate) => Promise<void>,
 ): Promise<void> {
   const home = homeDir(await $.env.get('USERPROFILE'), await $.env.get('HOME'))
   const sock = socketPath(home, await $.env.get('PERSONA_HOME'))
@@ -112,6 +129,7 @@ async function run(
     if (answer.interrupt !== undefined) {
       await applyInterrupt($, sock, session, answer.interrupt, getActiveTurn, clearActiveTurn)
     }
+    if (answer.settings !== undefined) await applySettings($, sock, session, answer.settings, onSettings)
     for (const m of answer.messages) await deliver($, sock, session, m)
     if (answer.retryMs > 0) await sleep($, answer.retryMs)
   }
@@ -150,6 +168,27 @@ async function applyInterrupt(
   }
   try {
     await $.http.fetch(`${BASE}/ack`, post(sock, { session_id: session, id: req.id, ...ack }))
+  } catch {
+    // The node went away before receiving the ack.
+  }
+}
+
+async function applySettings(
+  $: Engine,
+  sock: string,
+  session: string,
+  update: SettingsUpdate,
+  onSettings: (session: string, update: SettingsUpdate) => Promise<void>,
+): Promise<void> {
+  let ok = true
+  try {
+    await onSettings(session, update)
+  } catch {
+    ok = false
+  }
+  const ack = ok ? { submitted: true } : { submitted: false, reason: 'failed' }
+  try {
+    await $.http.fetch(`${BASE}/ack`, post(sock, { session_id: session, id: update.id, ...ack }))
   } catch {
     // The node went away before receiving the ack.
   }

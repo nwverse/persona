@@ -110,6 +110,8 @@ type superviseSignal struct {
 	// Decision: the decision a recheck or an owner_cannot_answer signal is about, as it was asked (decision.go); for
 	// owner_cannot_answer Detail is the owner's answer (decide_yourself, not_what_i_asked, explain_first).
 	Decision *prompts.SuperviseDecision
+	// Told: a check's decided signal whose answer is already in the task Agent's chat (decisionTold, checkDecided).
+	Told bool
 	// Inbox: the Inbox item an inbox signal names, and how many new messages it tells (supervise_inbox.go).
 	Inbox *prompts.SuperviseInbox
 	// Optional routine batching keeps these in memory only, after routing and before delivery. They are never part of

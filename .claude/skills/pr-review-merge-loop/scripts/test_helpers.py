@@ -99,6 +99,32 @@ class HelperTests(unittest.TestCase):
                 module["wait_transcript"](Path("/no/result"), "marker", "schema", "w3:p1", "unit", 1,
                                           accepted_stall=True)
 
+    def test_interactive_stall_blocked_only_tolerates_initial_observation(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        responses = iter([
+            {"agents": [{"pane_id": "w3:p1", "agent_status": "blocked"}]},
+            {"agents": [{"pane_id": "w3:p1", "agent_status": "working"}]},
+            {"agents": [{"pane_id": "w3:p1", "agent_status": "blocked"}]},
+        ])
+        with patch.dict(module["wait_transcript"].__globals__, {
+                "command": unittest.mock.Mock(side_effect=lambda *args, **kwargs: next(responses)),
+                "scope_running": unittest.mock.Mock(return_value=True)}), \
+                patch.object(module["time"], "sleep", return_value=None), \
+                patch.object(module["time"], "monotonic", side_effect=[0, 0, 1, 1.1]):
+            with self.assertRaisesRegex(RuntimeError, "unexpected interaction"):
+                module["wait_transcript"](Path("/no/result"), "marker", "schema", "w3:p1", "unit", 2,
+                                          accepted_stall=True)
+
+    def test_interactive_working_stall_does_not_suppress_later_block(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        with patch.dict(module["wait_transcript"].__globals__, {
+                "command": unittest.mock.Mock(return_value={
+                    "agents": [{"pane_id": "w3:p1", "agent_status": "blocked"}]}),
+                "scope_running": unittest.mock.Mock(return_value=True)}):
+            with self.assertRaisesRegex(RuntimeError, "unexpected interaction"):
+                module["wait_transcript"](Path("/no/result"), "marker", "schema", "w3:p1", "unit", 2,
+                                          accepted_stall=False)
+
     def test_interactive_reviewer_forwards_prompt_json_and_read_boundary(self):
         module = runpy.run_path(str(HERE / "herdr_review.py"))
         flags = module["forwarded_flags"](

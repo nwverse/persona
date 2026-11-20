@@ -19,6 +19,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -46,6 +48,7 @@ import persona.core.domain.models.PanelScope
 import persona.core.domain.models.PersonaModelPanel
 import persona.core.domain.models.PillSetup
 import persona.core.domain.models.PillView
+import java.io.IOException
 
 /**
  * What a chat's model pill and panel read (#5055, the web's `lib/session-models.ts`): the computers' launchers and each
@@ -59,7 +62,38 @@ internal class ModelLists(private val scope: CoroutineScope, private val errorTe
     /** A computer's launchers (`agent.new`), by machine; absent until read. */
     val launchers: SnapshotStateMap<String, List<AgentLauncher>> = mutableStateMapOf()
     /** What a computer runs Persona chats on (`?purpose=assistant`), by machine; absent until read. */
-    val assistant: SnapshotStateMap<String, AssistantLaunchers> = mutableStateMapOf()
+    private val assistantCatalogs = mutableStateMapOf<String, JLoadable<AssistantLaunchers>>()
+
+    fun assistantCatalog(machine: String): JLoadable<AssistantLaunchers> = assistantCatalogs[machine] ?: JLoadable.Loading
+
+    fun readAssistantCatalog(machine: String, fetch: suspend () -> AssistantLaunchers) {
+        val cached = assistantCatalogs[machine]
+        if (cached == JLoadable.Loading || cached?.isRefreshing == true) return
+        assistantCatalogs[machine] = (cached as? JLoadable.Loaded)?.copy(refreshing = true, failure = null) ?: JLoadable.Loading
+        scope.launch {
+            try {
+                assistantCatalogs[machine] = JLoadable.Loaded(readAssistantRoute(fetch))
+            } catch (cancelled: CancellationException) {
+                if (cached == null) assistantCatalogs.remove(machine) else assistantCatalogs[machine] = cached
+                throw cancelled
+            } catch (error: Exception) {
+                val message = errorText(error)
+                assistantCatalogs[machine] = if (cached is JLoadable.Loaded) cached.copy(failure = message) else JLoadable.Failed(message)
+            }
+        }
+    }
+
+    fun readAssistantModels(machine: String, launcher: String, again: Boolean, fetch: suspend () -> LauncherModels?) {
+        read(machine, launcher, again) { readAssistantRoute(fetch) }
+    }
+
+    private suspend fun <T> readAssistantRoute(fetch: suspend () -> T): T = try {
+        fetch()
+    } catch (cancelled: CancellationException) {
+        if (!currentCoroutineContext().isActive) throw cancelled
+        // The Assistant API also rejects a response from an old route without cancelling the caller's coroutine.
+        throw IOException(cancelled)
+    }
 
     fun list(machine: String, launcher: String): ModelList = lists["$machine/$launcher"] ?: ModelList()
 
@@ -447,14 +481,23 @@ fun PersonaModelPill(
     LaunchedEffect(management) {
         try { config = management?.config() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
     }
-    LaunchedEffect(management, machineId, open, session?.rev) {
-        val api = management ?: return@LaunchedEffect
-        if (machineId.isEmpty()) return@LaunchedEffect
-        // A hub push that bumps the conversation (rev) re-reads even while the panel is closed, so the pill keeps
-        // matching the effective Main chat model after a hub-side change (#6542). With no rev to watch, read once and
-        // let opening the panel refresh it; the in-flight guard in readMachine drops a duplicate read.
-        if (!open && session?.rev == null && lists.assistant[machineId] != null) return@LaunchedEffect
-        lists.readMachine(lists.assistant, machineId, { api.assistantLauncherList(machineId) })
+    fun readCatalog(refresh: Boolean = false) {
+        val api = management ?: return
+        if (machineId.isNotBlank()) lists.readAssistantCatalog(machineId) { api.assistantLauncherList(machineId, refresh) }
+    }
+    fun readModels(provider: String, again: Boolean = false) {
+        val api = management ?: return
+        if (machineId.isNotBlank()) lists.readAssistantModels(machineId, provider, again) { api.launcherModels(machineId, provider) }
+    }
+    LaunchedEffect(management, machineId, session?.rev) {
+        // Hub pushes can change the effective Main chat model even while the panel is closed (#6542).
+        readCatalog()
+    }
+    LaunchedEffect(management, machineId, open) {
+        if (open) {
+            val previous = lists.assistantCatalog(machineId)
+            readCatalog(refresh = previous is JLoadable.Failed || previous is JLoadable.Loaded && previous.failure != null)
+        }
     }
     val kept = PersonaModelPanel.MODEL_PICK in features
     val shownSession = session?.let { s -> drawn?.takeIf { it.rev == s.rev }?.let { s.copy(modelPick = it.pick) } ?: s }
@@ -464,16 +507,14 @@ fun PersonaModelPill(
     // another assistant conversation draws no pill and follows the default or what it started with. The new-chat page
     // (session null) keeps its starter pick, which goes with the main conversation's start.
     if (session != null && !chat.isMain) return
-    val info = lists.assistant[machineId]
+    val catalog = lists.assistantCatalog(machineId)
+    val info = (catalog as? JLoadable.Loaded)?.value
     val setup = PersonaModelPanel.setup(chat, info)
     LaunchedEffect(management, machineId, setup.provider) {
-        val api = management ?: return@LaunchedEffect
-        if (machineId.isNotEmpty()) lists.read(machineId, setup.provider) { api.launcherModels(machineId, setup.provider) }
+        readModels(setup.provider)
     }
     LaunchedEffect(open, management, machineId, info) {
-        val api = management ?: return@LaunchedEffect
-        if (!open) return@LaunchedEffect
-        info?.launchers.orEmpty().forEach { l -> lists.read(machineId, l.name, again = true) { api.launcherModels(machineId, l.name) } }
+        if (open) info?.launchers.orEmpty().forEach { readModels(it.name, again = true) }
     }
     val view = PersonaModelPanel.pill(chat, setup, info, lists.list(machineId, setup.provider))
     val (content, spoken) = pillContent(view, null, false, res)
@@ -517,8 +558,14 @@ fun PersonaModelPill(
             }
             Unit
         } },
-        onReload = { provider -> management?.let { api -> lists.read(machineId, provider, again = true) { api.launcherModels(machineId, provider) } } },
-        onConfigure = onConfigure)
+        onReload = { readModels(it, again = true) },
+        onConfigure = onConfigure,
+        catalog = when {
+            machineId.isBlank() -> JLoadable.Loaded(Unit)
+            catalog is JLoadable.Failed -> catalog.copy(title = stringResource(R.string.chat_conversation_models_failed))
+            else -> catalog
+        },
+        onRetryCatalog = if (machineId.isNotBlank()) ({ readCatalog(refresh = true) }) else null)
 }
 
 /** The strip on top of a Persona chat's panel (the web's `PickStrip`): where the setup comes from and, for a pick, the way back. */

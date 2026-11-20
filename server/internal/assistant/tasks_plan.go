@@ -125,8 +125,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.Goal, t.OutOfBounds = clip(oneLine(t.Goal), 300), cleanDoneWhen(t.OutOfBounds)
 		t.Continues, t.ContinuesWhy = strings.TrimSpace(t.Continues), clip(oneLine(t.ContinuesWhy), 300)
 		t.StartedWhy = clip(oneLine(t.StartedWhy), 300)
-		t.EstimateSource = ""
-		if t.Continues == "" {
+		t.EstimateSource, t.EstimateEvidence = "", nil
+		t.EstimateCalibration = true // hub-owned provenance of this tool's dispatch
+		if t.Continues == "" || t.ExpectMinutes > 0 {
 			t.ExpectMinutes, t.EstimateSource = automaticEstimate(t.ExpectMinutes, "")
 		}
 		if err := briefRequired(t); err != nil && !(s.briefsOptional && t.Continues == "") {
@@ -239,6 +240,13 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			a.Tasks[i].UserRequested = false
 		}
 	}
+	// A direction's lead that a hand-over of the owner's quoted words went into (#11699): the words may have reached the
+	// wrong lead, so until the owner writes there, "the user asked for this" is no Start for writable work it plans.
+	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.handedOver(sessionID) {
+		for i := range a.Tasks {
+			a.Tasks[i].UserRequested = false
+		}
+	}
 	var round Task
 	var inRound bool
 	if scope == nil && !s.inHealth(ctx, sessionID) {
@@ -253,7 +261,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	}
 	dups := s.planDuplicates(ctx, a.Tasks) // before the plan's own todos exist
 	now := time.Now().UTC()
-	p := &TaskPlan{ID: "plan_" + randomHex(6), Conversation: sessionID, Tasks: a.Tasks, State: planOpen, CreatedAt: now, UpdatedAt: now}
+	p := &TaskPlan{ID: "plan_" + randomHex(6), Conversation: sessionID, Tasks: a.Tasks, State: planOpen,
+		CreatedAt: now, UpdatedAt: now}
 	if err := s.savePlan(ctx, p); err != nil {
 		return "", err
 	}
@@ -284,6 +293,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		b.WriteString("This is not confirmation that any agent started: you are told when one fails to start. A worker that has " +
 			"report_to_supervisor reports to you in a message, and they cannot hand work on.")
 		b.WriteString(dups)
+		b.WriteString(taskPlanEstimateNotes(started.Tasks))
 		return b.String(), nil
 	}
 	var granted func() func(PlanTask) bool
@@ -317,7 +327,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			s.directionsSoon() // a leader's plan waiting for Start is a decision for the owner (leader_reports.go)
 		}
 		return fmt.Sprintf("Plan %s is on the user's screen as a card and pushed to their phone; nothing has started. "+
-			"Don't wait for it: carry on. When they start it, the tasks show up in the context snapshot.", p.ID) + dups, nil
+			"Don't wait for it: carry on. When they start it, the tasks show up in the context snapshot.", p.ID) + dups + taskPlanEstimateNotes(p.Tasks), nil
 	}
 	started, err := s.startPlan(ctx, p.ID, nil, false)
 	if err != nil {
@@ -360,6 +370,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			"gets a one-line notice with the task's link when each one ends.")
 	}
 	b.WriteString(dups)
+	b.WriteString(taskPlanEstimateNotes(started.Tasks))
 	if wait > 0 && len(started.Tasks) == 1 && scope == nil && started.Tasks[0].Error == "" {
 		t := started.Tasks[0]
 		return s.waitAgentReply(ctx, b.String(), t.WaitInputID, wait, func(ctx context.Context) (string, string, error) {

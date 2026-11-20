@@ -67,7 +67,7 @@ private fun MachinesRouteContent(
         LaunchedEffect(actions, feedback, resources) { actions?.notices?.collect { feedback?.notice(it.text(resources)) } }
         LaunchedEffect(health, feedback, resources) { health?.notices?.collect { feedback?.notice(it.text(resources)) } }
         // "Subscription limits" on the overview, once a minute while it is in front.
-        if (id == null && health != null) LaunchedEffect(health, lifecycle) { lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { health.pollUsage() } }
+        if (id == null && health != null && LocalSidebarUsage.current == null) LaunchedEffect(health, lifecycle) { lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { health.pollUsage() } }
         val extensions = if (id != null && extensionSections != null) extensionSections(id) else null
         MachinesScreen(id, model, navigator, actions, launcherPages = launchers, extensionSections = extensions, health = health, adds = computers != null, canAdd = canAdd)
     }

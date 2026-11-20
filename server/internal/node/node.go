@@ -886,6 +886,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		Turns                   int           `json:"turns"`
 		LazyImages              bool          `json:"lazy_images"`
 		UserInputs              bool          `json:"user_inputs"`
+		StrictRead              bool          `json:"strict_read"`
 		FoldWork                bool          `json:"fold_work"`
 		FromSeq                 int           `json:"from_seq"`
 		ThroughSeq              int           `json:"through_seq"`
@@ -929,6 +930,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		ClientMsgID      string                        `json:"client_msg_id"`
 		AtItemID         string                        `json:"at_item_id"`     // session.fork: the reply to branch off at
 		Refresh          bool                          `json:"refresh"`        // launchers.models/list: ask again, not the kept list
+		CacheOnly        bool                          `json:"cache_only"`     // launchers.list: read the last completed shell discovery without waiting
 		Purpose          string                        `json:"purpose"`        // launchers.models/check: assistant runs outside the Agent engine
 		AssistantTurn    bool                          `json:"assistant_turn"` // launchers.check: shaped as an assistant turn (launchercheck_assistant.go)
 		Conversation     string                        `json:"conversation"`   // launchers.check with assistant_turn: the conversation whose profile it runs in
@@ -1067,18 +1069,18 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		case "session.keys", "session.screen", "session.screen.before", "terminal.watch", "session.close", "session.queue.edit", "session.queue.send_now", "session.rename", "assistant.send":
 			return nil, refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)
 		case "session.modes":
-			// Its effort, on the app-server running it (codex_effort.go), or in the Codex App window that has it
-			// (codex_desktop_effort.go); nothing else.
-			if _, _, driven := n.codexEffortThread(p.SessionID); !driven {
-				if src, found := n.codexSource(p.SessionID); found && codexDesktopChat(src) {
-					return ok(n.codexDesktopModes(ctx, p.SessionID, src, p.Model, p.PermissionMode, p.Effort))
+			// Model and effort, on the app-server running it (codex_effort.go), or in the Codex App window that has it
+			// (codex_desktop_effort.go); permission modes remain on the computer.
+			if c, t, driven := n.codexEffortThread(p.SessionID); driven {
+				if p.PermissionMode != "" {
+					return nil, fmt.Errorf("Codex 的会话在手机上只能改思考强度和模型，权限模式要在电脑上改")
 				}
-				return nil, refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)
+				return ok(n.setCodexSettings(ctx, p.SessionID, c, t, p.Model, p.Effort))
 			}
-			if p.Model != "" {
-				return nil, fmt.Errorf("Codex 的会话不支持在手机上切换模型")
+			if src, found := n.codexSource(p.SessionID); found && codexDesktopChat(src) {
+				return ok(n.codexDesktopModes(ctx, p.SessionID, src, p.Model, p.PermissionMode, p.Effort))
 			}
-			return ok(n.setModes(ctx, p.SessionID, p.PermissionMode, p.Effort))
+			return nil, refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)
 		case "session.interrupt":
 			return ok(n.interruptCodex(ctx, p.SessionID))
 		}
@@ -1337,8 +1339,17 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 				return map[string]any{"launchers": typedLaunchers(ls), "host": p.Host, "host_runtime": true}, nil
 			}
 		}
-		ls, err := n.launchers(ctx, p.Refresh)
 		forced := p.Refresh
+		cacheOnly := p.CacheOnly && !forced && p.Host == "" && p.Source == ""
+		var ls []proto.Launcher
+		var err error
+		if cacheOnly {
+			launcherCache.Lock()
+			ls = launcherCache.list
+			launcherCache.Unlock()
+		} else {
+			ls, err = n.launchers(ctx, forced)
+		}
 		bl := n.runtimes.launchers()
 		if len(bl) > 0 {
 			// Explicit shell launchers keep their names; a discovered CLI fallback yields to its connected runtime.
@@ -1349,16 +1360,18 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 				err = nil
 			}
 		}
-		if withDesktop, added := n.withDesktopLauncher(ls); added { // Claude's desktop app (claudedesktop_new.go)
-			ls = withDesktop
-			if !forced {
-				err = nil
+		if !cacheOnly { // Desktop executable discovery can run through the login shell.
+			if withDesktop, added := n.withDesktopLauncher(ls); added { // Claude's desktop app (claudedesktop_new.go)
+				ls = withDesktop
+				if !forced {
+					err = nil
+				}
 			}
-		}
-		if withApp, added := n.withCodexAppLauncher(ls); added { // the Codex App (codexapp_new.go)
-			ls = withApp
-			if !forced {
-				err = nil
+			if withApp, added := n.withCodexAppLauncher(ls); added { // the Codex App (codexapp_new.go)
+				ls = withApp
+				if !forced {
+					err = nil
+				}
 			}
 		}
 		shell, rcFile := launcherShell()
@@ -1557,8 +1570,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			if kind == "" {
 				kind = launcherAgentType(p.Launcher)
 			}
-			if kind == ompAgent { // omp's own config decides, not a start's arguments (start_agent.go)
-				return nil, refusal("omp_options", ompOptionsRefusal, nil)
+			if kind == ompAgent {
+				return nil, ompOptionsRefusal(ctx)
 			}
 			if _, runtime := engineRuntimes[cmp.Or(p.Host, n.defaultKind())]; runtime { // the start's host is a runtime (Paseo)
 				kind = "runtime"
@@ -1654,6 +1667,10 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			// (launcher_switch.go): the Resume waits for it, then finds the agent running, or resumes it as it is.
 			defer n.resumeTurn(ctx, p.ResumeSessionID)() // and a switch to the other engine does not resume it beside this
 			r = n.fillResume(p.ResumeSessionID, r)       // what it ran with, for what the start leaves out (retire.go)
+			if n.startAgentType(r.launcher, p.AgentType) == ompAgent {
+				// omp restores the model from its session file. Only an explicit override should reach the refusal.
+				r.execution.Model = p.Model
+			}
 			ctx, taskSpace = withTaskSpace(ctx, r.taskID, r.workspaceID, r.workspaceLabel)
 			// The user's Resume (the only way a stopped agent runs again, #4754): in the shell it left when that is
 			// still there (stopped.go).
@@ -2180,27 +2197,55 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			ItemID string `json:"item_id"`
 		}
 		_ = json.Unmarshal(params, &a)
-		f, err := n.file(p.SessionID)
+		read := n.file
+		if p.StrictRead {
+			read = n.exportFile
+		}
+		f, err := read(p.SessionID)
 		if err != nil {
 			return nil, n.readErr(p.SessionID, err)
 		}
-		n.refresh(p.SessionID, f)
+		if p.StrictRead {
+			if err := n.refreshExport(p.SessionID, f); err != nil {
+				return nil, err
+			}
+		} else if err := n.refresh(p.SessionID, f); err != nil && proto.PositionalItemID(a.ItemID) {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, n.readErr(p.SessionID, noTranscript{p.SessionID})
+			}
+			return nil, err
+		}
 		it, err := f.Full(a.ItemID)
+		if errors.Is(err, transcript.ErrSourceChanged) {
+			return nil, &rpc.Error{Code: codeNotFound, Message: err.Error()}
+		}
 		if err != nil {
 			return nil, fmt.Errorf("session %s: %w", p.SessionID, err)
 		}
 		it.Image = nil // images come from session.image
-		return n.echoed(p.SessionID, f, []proto.Item{it})[0], nil
+		it = n.echoed(p.SessionID, f, []proto.Item{it})[0]
+		if p.StrictRead {
+			return struct {
+				proto.Item
+				StrictRead      bool `json:"strict_read"`
+				SourceTextBytes int  `json:"source_text_bytes"`
+			}{it, true, len(it.Text)}, nil
+		}
+		return it, nil
 	case "session.items":
-		f, err := n.file(p.SessionID)
+		read := n.file
+		if p.StrictRead {
+			read = n.exportFile
+		}
+		f, err := read(p.SessionID)
 		if err != nil {
-			if n.startingSession(p.SessionID) { // nothing written yet: an empty chat; else not_found with its reason
+			if !p.StrictRead && n.startingSession(p.SessionID) { // nothing written yet: an empty chat; else not_found with its reason
 				if p.UserInputs {
 					return proto.UserInputIndex{Inputs: []proto.UserInputPosition{}}, nil
 				}
 				return map[string]any{"items": []proto.Item{}, "has_more": false}, nil
 			}
-			if session, _, _ := strings.Cut(p.SessionID, subagentSep); p.BeforeSeq > 0 && !p.UserInputs && n.knownSession(session) {
+			if session, _, _ := strings.Cut(p.SessionID, subagentSep); p.BeforeSeq > 0 && !p.UserInputs && !p.StrictRead && n.knownSession(session) {
 				// An older page of a session the node knows (or of its subagent): the end of its history, as before
 				// #11388. Only the latest page says why there is none; released apps ask an older page again on an
 				// error (#11450).
@@ -2208,7 +2253,11 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			}
 			return nil, n.readErr(p.SessionID, err)
 		}
-		if err := n.refresh(p.SessionID, f); err != nil && p.UserInputs {
+		if p.StrictRead {
+			if err := n.refreshExport(p.SessionID, f); err != nil {
+				return nil, err
+			}
+		} else if err := n.refresh(p.SessionID, f); err != nil && p.UserInputs {
 			return nil, err
 		}
 		if p.UserInputs {
@@ -2251,7 +2300,11 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return withSpan(map[string]any{"items": items(fold(page)), "has_more": more}, span, false), nil
 		}
 		page, more, span := f.Page(p.BeforeSeq, limit)
-		return withSpan(map[string]any{"items": items(fold(page)), "has_more": more}, span, false), nil
+		result := withSpan(map[string]any{"items": items(fold(page)), "has_more": more}, span, p.StrictRead)
+		if p.StrictRead {
+			result["strict_read"] = true
+		}
+		return result, nil
 	case "session.watch":
 		// The stream outlives this request: it follows the connection (rpc.ConnContext), not the reply.
 		return ok(n.watchFor(rpc.ConnContext(ctx), p.SessionID, p.SinceSeq))
@@ -2651,11 +2704,17 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 	f, err := n.file(id)
 	if err != nil {
 		if src, ok := n.codexSource(id); ok {
-			effort := ""
+			model, effort := "", ""
 			if c, t, driven := n.codexEffortThread(id); driven {
+				model = n.codexModelNow(id, c, t, "")
 				effort = n.codexEffortNow(id, c, t, "")
+			} else if codexDesktopChat(src) {
+				var row proto.Session
+				row.SessionID = id
+				n.codexDesktopEffortRow(&row, src, quickMeta{})
+				model, effort = row.Model, row.Effort
 			}
-			return map[string]any{"session_id": id, "source_kind": "codex_app_server", "source_thread_id": src.thread, "transcript_path": "", "cwd": "", "model": "", "launcher": "", "git_branch": "", "version": "", "permission_mode": "", "effort": effort, "context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0, "history_unavailable": true, "stop_cause": n.stopCause(id)}, nil
+			return map[string]any{"session_id": id, "source_kind": "codex_app_server", "source_thread_id": src.thread, "transcript_path": "", "cwd": "", "model": model, "launcher": "", "git_branch": "", "version": "", "permission_mode": "", "effort": effort, "context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0, "history_unavailable": true, "stop_cause": n.stopCause(id)}, nil
 		}
 		return nil, err
 	}
@@ -2665,9 +2724,16 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 	if st.Launcher == "" {
 		st.Launcher = n.inferLauncher(id)
 	}
+	model := n.shownModel(id, m.Model)
 	mode, effort := n.modesOf(id)
 	if c, t, driven := n.codexEffortThread(id); driven {
+		model = n.codexModelNow(id, c, t, m.Model)
 		effort = n.codexEffortNow(id, c, t, m.Effort) // what the app-server runs it with (codex_effort.go)
+	} else if src, ok := n.codexSource(id); ok && codexDesktopChat(src) {
+		var row proto.Session
+		row.SessionID, row.Model = id, m.Model
+		n.codexDesktopEffortRow(&row, src, n.metaOf(id))
+		model, effort = row.Model, row.Effort
 	}
 	if pane, err := n.paneFor(ctx, id); err == nil && !n.isAssistantSession(id) {
 		if screen, err := n.readPane(ctx, pane, "visible", 60); err == nil && tuiMode(screen) != "" {
@@ -2679,7 +2745,7 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 		cwd = n.assistantCwd(id, f.Path, cwd) // a conversation's own, where it started (#2368)
 	}
 	return map[string]any{
-		"session_id": id, "transcript_path": f.Path, "cwd": cwd, "model": m.Model, "launcher": st.Launcher,
+		"session_id": id, "transcript_path": f.Path, "cwd": cwd, "model": model, "launcher": st.Launcher,
 		"git_branch": m.GitBranch, "version": m.Version, "permission_mode": mode, "effort": effort,
 		"context_tokens": m.ContextTokens, "output_tokens": m.OutputTokens, "compactions": m.Compactions,
 		"turns": m.Turns, "started_at": m.StartedAt, "last_activity": m.LastActivity,

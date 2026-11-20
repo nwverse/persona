@@ -7,9 +7,10 @@ words come from another session and that they are not the person's approval (`do
 "Owner input through the Persona plugin").
 
 The plugin polls the local Persona node while its session lives: it submits the owner's messages with
-`$.prompt.submit({ text, asUser: true })` (immediately when idle, or into Claude Code's prompt queue while a turn runs)
-and cancels the active main-loop turn via `$.turn.abort({ turnId })` when the owner presses Stop. It reads no file but
-its own manifest and stays quiet when no node is running.
+`$.prompt.submit({ text, asUser: true })` (immediately when idle, or into Claude Code's prompt queue while a turn runs),
+cancels the active main-loop turn via `$.turn.abort({ turnId })` when the owner presses Stop, and applies session-scoped
+model / effort picks on main-loop `turn.step` calls when `settings` is advertised. It reads no file but its own manifest
+and stays quiet when no node is running.
 
 ## Packaging
 
@@ -49,17 +50,18 @@ another session, gets `403`.
 `POST /claude-plugin/v1/poll`
 
 ```json
-{"session_id": "<uuid>", "plugin_version": "0.2.0", "engine_version": "2.1.326", "capabilities": ["busy_input", "interrupt"], "wait_ms": 25000}
+{"session_id": "<uuid>", "plugin_version": "0.2.0", "engine_version": "2.1.326", "capabilities": ["busy_input", "interrupt", "settings"], "wait_ms": 25000}
 ```
 
 - Held until work comes or `wait_ms` passes (at most 25 s; Claude Code's fetch gives up at 30 s), then asked
   again at once. A newer poll for the same session answers the older one at once, empty. The plugin polls whether the
   session works or rests; when `busy_input` is advertised, owner prompts are also handed over while a turn runs so
   Claude Code queues them natively without holding them at the computer in `bypassPermissions` or `auto` mode.
-- `200`: `{"messages": [{"id": "<id>", "text": "...", "deadline_ms": <epoch ms>}], "interrupt": {"id": "<id>", "deadline_ms": <epoch ms>}, "retry_ms": <ms>}`.
-  `messages` is empty when nothing came; `interrupt` is omitted when none is pending. `retry_ms`, when present, is how
-  long to wait before the next poll: a session the node does not deliver to this way (one in a Persona terminal, the
-  assistant's own) is told to come back much later.
+  `settings` overrides can be delivered to any active poll.
+- `200`: `{"messages": [{"id": "<id>", "text": "...", "deadline_ms": <epoch ms>}], "interrupt": {"id": "<id>", "deadline_ms": <epoch ms>}, "settings": {"id": "<id>", "model": "...", "effort": "..."}, "retry_ms": <ms>}`.
+  `messages` is empty when nothing came; `interrupt` and `settings` are omitted when none are pending. `retry_ms`, when
+  present, is how long to wait before the next poll: a session the node does not deliver to this way (one in a Persona
+  terminal, the assistant's own) is told to come back much later.
 - `403 {"error": "not_this_session"}`: the caller is not the claude that has this session open. `404`, or an answer
   that is not HTTP: a node without this protocol. The plugin backs off (up to a minute) and tries again.
 
@@ -84,8 +86,9 @@ session has loaded the plugin, or none has polled yet (a session polls as it sta
 
 ## What goes this way
 
-Text the owner typed in a Persona app (`owner_input` on `session.send`, idle or busy when `busy_input` is advertised)
-and owner-attested turn interrupts (`interrupt`, `$.turn.abort`). Everything else keeps the peer inbox: messages from
-the Persona assistant, extensions and channels (Lark, WeChat), relays between conversations, slash commands, the answer
-to a question the session asked, and non-owner interrupts. Details and fallback rules:
+Text the owner typed in a Persona app (`owner_input` on `session.send`, idle or busy when `busy_input` is advertised),
+owner-attested turn interrupts (`interrupt`, `$.turn.abort`), and session-scoped model / effort overrides (`settings`).
+Everything else keeps the peer inbox: messages from the Persona assistant, extensions and channels (Lark, WeChat),
+relays between conversations, slash commands, the answer to a question the session asked, and non-owner interrupts.
+Details and fallback rules:
 `docs/integrations/claude-integration.md`.

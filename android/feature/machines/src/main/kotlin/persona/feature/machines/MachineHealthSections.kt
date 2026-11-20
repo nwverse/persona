@@ -267,7 +267,7 @@ private fun BrowserSteps(steps: List<Pair<Boolean, String>>) {
 
 // ───────────────────────────── Subscription limits
 
-private fun shown(percent: Double) = "${percent.coerceIn(0.0, 100.0).toInt()}%"
+internal fun usagePercent(percent: Double) = "${percent.coerceIn(0.0, 100.0).toInt()}%"
 
 @Composable
 private fun resetText(resetsAt: String?, now: Instant): String? = when (val r = resetIn(resetsAt, now)) {
@@ -334,7 +334,7 @@ private fun WindowRow(w: UsageWindow, now: Instant) {
         w.model?.takeIf { it.isNotBlank() }?.let { Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             Text(w.label, style = PersonaTheme.type.caption, color = palette.ink2)
-            Text(shown(w.usedPercent), style = PersonaTheme.type.label, color = if (isWarn(w.usedPercent)) palette.cautionText else palette.ink)
+            Text(usagePercent(w.usedPercent), style = PersonaTheme.type.label, color = if (isWarn(w.usedPercent)) palette.cautionText else palette.ink)
             if (p != null && p.state != PaceState.On) Text(stringResource(if (p.state == PaceState.Over) R.string.machines_usage_pace_over
                 else R.string.machines_usage_pace_under), style = PersonaTheme.type.caption,
                 color = if (p.state == PaceState.Over) palette.cautionText else palette.tone(Tone.Positive).text, maxLines = 1)

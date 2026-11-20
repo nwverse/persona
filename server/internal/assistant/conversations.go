@@ -289,6 +289,10 @@ type relayState struct {
 	Spawned map[string]spawnedConv `json:"spawned,omitempty"`
 	// Spoke: when the owner last sent each conversation a message, kept for ownerPresentFor (relay_presence.go).
 	Spoke map[string]time.Time `json:"spoke,omitempty"`
+	// Handed: by direction's lead conversation, when a hand-over of the owner's quoted words last went into it
+	// (relay_lead_hold.go, #11699): until the owner next writes there (userSpoke), what it plans that writes waits for
+	// their Start. A version that does not know it drops it on its next save: those plans then start as before.
+	Handed map[string]time.Time `json:"handed,omitempty"`
 }
 
 type relayBook struct {
@@ -423,6 +427,7 @@ func (s *Service) userSpoke(id string) {
 	}
 	b.ownerSpokeLocked(id, time.Now())
 	delete(b.st.Hops, id)
+	delete(b.st.Handed, id)       // the owner is in it again: what they ask for there starts as they ask (relay_lead_hold.go)
 	b.roundsFrom[id] = time.Now() // the owner is in it again: its round trips count from here (#10400)
 	s.saveRelayLocked()
 }
@@ -813,11 +818,14 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 		// deliveries retain the same protection as immediate ones.
 		s.justMeSent(machine, to)
 	}
+	// A hand-over of the owner's words into a lead holds its writable plans from before the send (relay_lead_hold.go).
+	handed := s.holdForHandover(to, msg)
 	var res superviseRoundReply
 	if err := s.call(ctx, machine, DeviceAssistantSend, params, &res); err != nil {
 		if msg.Tool == superviseTool && !relayInDoubt(err) { // in doubt, drainRelays lets go once it knows it did not go in
 			s.releasePushes(ctx, to)
 		}
+		handed(err)
 		return err
 	}
 	if round {
@@ -855,6 +863,7 @@ func (s *Service) relayDelivered(ctx context.Context, to string, msg relayMsg) {
 		return
 	}
 	s.handoverWentIn(to, msg) // the hand-over of the owner's words it is, or answers (relay_handover.go)
+	s.noteHandedOver(to, msg) // and a lead it went into waits for the owner before writable work (relay_lead_hold.go)
 	now := time.Now().UTC()
 	b := &s.relays
 	b.mu.Lock()

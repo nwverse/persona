@@ -288,7 +288,7 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 		// A Codex thread on its app-server takes Codex's efforts, checked against its model (codex_effort.go).
 		if c, t, ok := n.codexEffortThread(id); ok {
 			if mode != "" {
-				return fmt.Errorf("Codex 的会话在手机上只能改思考强度，权限模式要在电脑上改")
+				return fmt.Errorf("Codex 的会话在手机上只能改思考强度和模型，权限模式要在电脑上改")
 			}
 			if effort == "" {
 				return nil
@@ -373,6 +373,16 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 	if n.codexPath(id) != "" || n.traexPath(id) != "" { // not driven through an app-server: no way to set either
 		return fmt.Errorf("Codex / TRAEX 的会话不支持在手机上改权限模式和思考强度")
 	}
+	if mode == "" && effort != "" {
+		if handled, err := n.ccPluginSetSettings(ctx, id, "", effort); handled {
+			if err != nil {
+				return err
+			}
+			n.noteModes(id, "", effort)
+			n.notifySessions()
+			return nil
+		}
+	}
 	if mode != "" {
 		// Allow All for a claude that has no bypass flag: no key reaches it, so it is restarted in it once its turn is
 		// over (mode_restart.go, #6476). Any other pick drops such a restart that waits.
@@ -413,6 +423,9 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 		n.noteModes(id, mode, "")
 	}
 	if effort != "" {
+		if c, ok := n.outsideClaude(id); ok && (c.Status == "busy" || c.Status == "waiting") {
+			return fmt.Errorf("Agent 正在工作，这一轮结束后再改思考强度")
+		}
 		if err := n.setTerminalEffort(ctx, id, pane, effort, pending); err != nil {
 			return err
 		}
