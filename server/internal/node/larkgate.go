@@ -132,6 +132,16 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	}
 	safe := len(v.calls) > 0 && classified
 	boundary := slices.ContainsFunc(v.calls, func(c larkCall) bool { return !larkBypassSafe(c) })
+	// This exception is deliberately default-only. Check it before both the mixed-command and ordinary read paths:
+	// plan and bypass retain their normal permission flow even when every filter is already known to classifyLark.
+	if origin == originInbox && safe && len(v.calls) == 1 && launchCwd != "" &&
+		realPath(filepath.Clean(cwd)) == realPath(filepath.Clean(launchCwd)) &&
+		larkDecision(cfg, v.calls[0]) == "allow" && larkReadFormattingPipeline(command, cfg.Gates) {
+		if mode == proto.ModeDefault {
+			return "allow", "读操作", nil
+		}
+		return "", "", nil
+	}
 	if v.other {
 		// A write through a gate whose credentials are at the proxy goes there only as a call read off the command and
 		// let through here: in a command the gate cannot follow it would be refused after the phone said yes.
@@ -172,14 +182,6 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 			}
 			decision, reason, _, err := n.confirmLark(ctx, session, ix, nil, health, title)
 			return decision, reason, err
-		}
-		// Plain Python resolves imports through its working directory. Keep this exception in the assistant's trusted
-		// launch directory; after a cd, the same source text gets the ordinary permission flow. The pipeline helper
-		// also rejects an interpreter named by an arbitrary path, file writes, process execution and extra commands.
-		if origin == originInbox && safe && len(v.calls) == 1 && launchCwd != "" &&
-			realPath(filepath.Clean(cwd)) == realPath(filepath.Clean(launchCwd)) &&
-			larkDecision(cfg, v.calls[0]) == "allow" && larkReadFormattingPipeline(command, cfg.Gates) {
-			return "allow", "读操作", nil
 		}
 		return "", "", nil
 	}
