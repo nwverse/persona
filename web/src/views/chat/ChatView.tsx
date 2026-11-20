@@ -1346,6 +1346,14 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       stopDone();
     }
   }, [mid, sid, stopDone]);
+  // Ctrl/⌘+Enter in the box: the queue panel's Send now (QueuePanel.tsx), after the message is queued
+  const sendQueueNow = useCallback(async () => {
+    try {
+      await api(`${sessionPath(mid, sid)}/queue/send-now`, { method: "POST", json: {} });
+    } catch (e) {
+      toast(t("chat-chatview.send_now_failed", { error: errorText(e) }), "error");
+    }
+  }, [mid, sid]);
   // the turn ended, and not necessarily by this stop
   useEffect(() => {
     if (state !== "working") stopDone();
@@ -2379,6 +2387,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           working={state === "working" || awaiting}
           needsYou={state === "needs_you"}
           onSend={send}
+          onSendNow={session && (assistant || (session.agent === "claude" && session.source_kind !== "runtime")) ? sendQueueNow : undefined}
           disabled={Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"))}
           onEditLastMessage={onEditLastMessage}
           editingLast={editProp}
