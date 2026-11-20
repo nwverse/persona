@@ -625,6 +625,10 @@
       "sf": "puzzlepiece.extension",
       "phosphor": "puzzle-piece"
     },
+    "someday": {
+      "sf": "moon.stars.fill",
+      "phosphor": "moon-stars"
+    },
     "space": {
       "sf": "square.stack.3d.up",
       "phosphor": "stack"

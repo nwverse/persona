@@ -32,9 +32,22 @@ nonisolated struct TodoRowContent: Equatable, Sendable {
     /// Line 3, in caption: what the grouping does not already show, or nil.
     var caption: String?
     var inactive = false
+    /// Ticked a moment ago (`TodoOutbox`): struck through, the tick drawn ticked, until the hub has it closed.
+    var struck = false
+    /// Made on this device and not on the hub yet: "Saving…" on line 2.
+    var saving = false
+    /// Persona or an Agent works on it: the tick asks first ("Mark it done and stop?").
+    var working = false
+    /// In Someday: its swipe and menu take it out again.
+    var someday = false
+    /// Finished and seen, still open ("Finished Tue"): line 2 ends in Mark Done.
+    var markDone = false
     /// The row in words, for VoiceOver: the title, the state its mark draws, its line, the door and how many asks, line
     /// 3, then its time said in full ("Due Saturday", "16 minutes ago").
     var spoken = ""
+    /// The tick in words: "Complete, ‹title›", and Done or Not done.
+    var tickLabel = ""
+    var tickValue = ""
 }
 
 /// How the list groups its rows (the bar's trailing menu): by phase, the sections; by project; by due date. In every
@@ -312,9 +325,11 @@ nonisolated enum TodosListLayout {
 /// A row's content from its facts and its view (#10465): the trailing time, the mark, the line in words, the door,
 /// line 3 and the row in words. Pure.
 nonisolated enum TodoRowContentLogic {
+    /// `pending`: the owner's write on it still on the device (`TodoOutbox`): a tick is drawn at once, struck through, and
+    /// a new to-do says it is being saved.
     static func content(_ filed: TodoFiled, item: TodoItem, view: TodoSummary?, grouping: TodosListGrouping, now: Date,
                         words: TodoWords = TodoWords(), calendar: Calendar = .current,
-                        projectName: (String) -> String = { $0 }) -> TodoRowContent {
+                        projectName: (String) -> String = { $0 }, pending: TodoOutbox.Write? = nil) -> TodoRowContent {
         var c = TodoRowContent(id: filed.id, title: item.title, closed: filed.closed, inactive: filed.inactive)
         let since = view?.since.flatMap(JSON.parseDate)
         // The time as drawn at the title's end, and as VoiceOver says it.
@@ -360,7 +375,22 @@ nonisolated enum TodoRowContentLogic {
             facts.insert(projectName(project), at: 0)
         }
         c.caption = facts.isEmpty ? nil : facts.joined(separator: TodoTimeWords.separator)
+        c.working = filed.section == TodoListSection.working && !filed.closed
+        c.someday = filed.section == TodoListSection.someday
+        c.markDone = view?.line?.key == "finished_seen" && !filed.closed
+        switch pending {
+        case .done(true)?:
+            (c.closed, c.struck, c.markDone, c.mark) = (true, true, false, nil)
+        case .done(false)?:
+            c.closed = false
+        case .create?:
+            (c.saving, c.said, c.mark, c.caption) = (true, TodoLineText.Said(rest: words("Saving… [To-dos List]")), nil, nil)
+        default:
+            break
+        }
         c.spoken = spoken(c, heard: heard, words: words)
+        c.tickLabel = words("Complete, \(c.title) [To-dos Actions]")
+        c.tickValue = c.closed ? StateName.done.text : words("Not done [To-dos Actions]")
         return c
     }
 
@@ -374,7 +404,7 @@ nonisolated enum TodoRowContentLogic {
         case .working: StateName.taskWorking
         case .ready: StateName.justFinished.text
         case .waiting: StateName.taskWaiting.text
-        case nil: c.closed && heard.isEmpty ? StateName.done.text : nil
+        case nil: c.struck || (c.closed && heard.isEmpty) ? StateName.done.text : nil
         }
         if let state, c.said?.lead != state { parts.append(state) }
         if let said = c.said { parts.append(said.spoken(separator: separator)) }
@@ -382,6 +412,7 @@ nonisolated enum TodoRowContentLogic {
             parts.append(door == .reviewPlan ? words("Review Plan [To-dos Door]") : words("Review [To-dos Door]"))
             if c.asks > 1 { parts.append(words("\(c.asks) asks [To-dos Door]")) }
         }
+        if c.markDone { parts.append(words("Mark Done [To-dos Actions]")) }
         if let caption = c.caption { parts.append(caption) }
         return (parts + heard).joined(separator: separator)
     }

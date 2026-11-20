@@ -65,16 +65,41 @@ nonisolated extension APIClient {
     }
 
     /// Someday (`PUT …/someday`): back on `until`, or with none on no set day. The hub answers the to-do; its `view`
-    /// comes with the next read of the list. A closed to-do is refused (409 `todo_closed`).
-    func setSomeday(id: String, until: Date?) async throws -> TodoItem {
+    /// comes with the next read of the list. A closed to-do is refused (409 `todo_closed`). `opID`: the list's held
+    /// write's (`TodoOutbox`), the same on every send of it.
+    func setSomeday(id: String, until: Date?, opID: UUID? = nil) async throws -> TodoItem {
         struct Body: Encodable { var until: Date? }
-        let data = try await request("PUT", "/api/v1/todos/\(Self.todoPath(id))/someday", body: Body(until: until))
+        let data = try await request("PUT", "/api/v1/todos/\(Self.todoPath(id))/someday", body: Body(until: until), opID: opID)
         return try JSON.decoder.decode(TodoAnswer.self, from: data).todo
     }
 
     /// Back from Someday (`DELETE …/someday`).
-    func clearSomeday(id: String) async throws -> TodoItem {
-        let data = try await request("DELETE", "/api/v1/todos/\(Self.todoPath(id))/someday")
+    func clearSomeday(id: String, opID: UUID? = nil) async throws -> TodoItem {
+        let data = try await request("DELETE", "/api/v1/todos/\(Self.todoPath(id))/someday", opID: opID)
+        return try JSON.decoder.decode(TodoAnswer.self, from: data).todo
+    }
+
+    // The list's held writes (`TodoOutbox`), each with its op id: the hub does a new to-do once however often it comes
+    // (its receipt); a tick or a delete sent again is the same write again.
+
+    /// The tick (`PATCH …/todos/{id}` with `done`), which also stops the follow-ups of its Agents, or a reopen.
+    func setTodoDone(id: String, done: Bool, opID: UUID) async throws -> TodoItem {
+        struct Body: Encodable { var done: Bool }
+        let data = try await request("PATCH", "/api/v1/todos/\(Self.todoPath(id))", body: Body(done: done), opID: opID)
+        return try JSON.decoder.decode(TodoAnswer.self, from: data).todo
+    }
+
+    /// `DELETE …/todos/{id}`.
+    func deleteTodo(id: String, opID: UUID) async throws {
+        _ = try await request("DELETE", "/api/v1/todos/\(Self.todoPath(id))", opID: opID)
+    }
+
+    /// `POST /api/v1/todos`: a new to-do with its title and notes, named by the hub.
+    func createTodo(title: String, notes: String?, opID: UUID) async throws -> TodoItem {
+        struct Body: Encodable { var title: String; var notes: String? }
+        let body = Body(title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+                        notes: notes?.trimmingCharacters(in: .whitespacesAndNewlines))
+        let data = try await request("POST", "/api/v1/todos", body: body, opID: opID)
         return try JSON.decoder.decode(TodoAnswer.self, from: data).todo
     }
 

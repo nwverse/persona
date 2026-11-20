@@ -2034,7 +2034,8 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   does not refresh the watch or the widgets. A 304 applies the views and counts read with that tag again. Views and
   counts are read whether V1 is on or not (V1 coming on in a run has them); everything else is done only while it is on:
   - the `todo-view` StateCache entry beside `todo-items`: the views, counts and places, with the numbers the pages
-    showed, so the first frame draws them. It is written at most every 15 s while a run's line moves (`Throttle`) and
+    showed, so the first frame draws them, and when the hub last answered a read of the list (`readAt`, said while it
+    is out of reach). It is written at most every 15 s while a run's line moves (`Throttle`) and
     at once when the scene leaves the front; forgetting the hub removes it whether V1 is on or not, and an entry none
     of whose views is for the kept rows is not used at all;
   - the first V1 launch without it: `viewsRead` stays false until the first read ends, so the list does not file its
@@ -2102,6 +2103,24 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   place's list came to rest, written only while the scene is active and only from the tree the window shows; a page
   made anew puts its list back there once, and a page a to-do popped back to keeps its own place. The grouping and the
   sort are kept on the device (`todos.v1.grouping`, `todos.v1.sort`); the bar's choice is not.
+- **The rows' writes** (`TodoListActions.swift`, `TodoOutbox`; DESIGN_SYSTEM 3.4 "To-dos list"). The tick, the trailing
+  swipe (Done, Someday; Reopen on a closed row), the long-press menu (Today, Date…, Project, Someday, Copy Link,
+  Delete…) and New To-Do. A tick, Someday and a delete are held in `TodoOutbox` (`apple/Persona/App/TodoOutbox.swift`)
+  for `Theme.Motion.todoUndo` and only then sent, so Undo sends nothing; a reopen, Remove from Someday and a new to-do go
+  at once. Each write keeps its op id (`X-Persona-Op-Id`) from the tap: the hub does a new to-do once however often it
+  comes (its receipt), and a tick or a delete sent again is the same write. The outbox is a StateCache entry
+  (`todo-outbox`): every write goes at once when the app leaves the foreground (under a background task), one that
+  could not reach the hub goes again after the hub next answers a read of the list (`TodoStore.V1.answered`), so one the
+  app was ended with goes at the next launch, and one the hub turns down (a 4xx; a to-do already gone is no refusal of
+  a delete) is dropped and said. A write goes to the hub-level group it was made on and is drawn only while that hub is
+  shown; one older than a week is let go. It stays until the list read after it has landed (`TodoStore.write`): until
+  then the list draws it (the tick struck through, a new to-do "Saving…", first in To do) and `TodoCountsSource` counts
+  it (`TodoStore.V1.pending`: a deleted to-do out of every number, one put in Someday counted there, a new one in To
+  do), so the numbers and the rows never disagree. A new to-do's own row takes the place of the one drawn for it in the
+  same step (`landed`). Today, Date… and Project are the to-do's plan, saved as its page saves it (`reschedule`,
+  `updatePlan`). While the titles say the hub is out of reach (`ConnectionStatus.shown`) the list keeps the last read,
+  under "Can't reach your hub · showing what was saved ‹time›". Tests: `TodoOutboxTests`, `TodosListWritesTests`, the
+  UI suite's `testTickAndUndo`, `testSwipeSomeday` and `testDeleteAndUndo` against `MOCK_TODO_VIEW=1`.
 - **Which page.** `TodosPlacePage` draws the V1 list while the gate is on, else today's `TodosView` (frozen), deciding
   once, when the page is made (`TodosPageChoice`): a hello that turns the gate on while To-dos is up (a manager that
   connects late), or while a to-do is pushed over it, never swaps it; the next time To-dos opens it is the V1 list. The

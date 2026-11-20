@@ -11,7 +11,9 @@ import XCTest
 /// - `PERSONA_TODOS_FRAMES=1` with `PERSONA_SHOTS=<dir>` (and `PERSONA_TODOS_HUB`): the V1 frames this list draws, saved
 ///   for review (`PERSONA_TODOS_SCHEME` light or dark, `PERSONA_TODOS_LANGUAGE`, `PERSONA_TODOS_COLOR`); with
 ///   `PERSONA_TODOS_TODAY=1` instead, today's list, drawer and folded Pages heading with the gate off, the same on a build
-///   of `main` and of this branch (before = after).
+///   of `main` and of this branch (before = after). `testActionFrames` draws the rows' actions the same way.
+/// - The rows' writes against `PERSONA_TODOS_HUB`: a tick and its Undo, the Someday swipe, Delete… and its Undo, each
+///   checked on the mock after the Undo window (the mock is put back after each).
 final class TodosV1ListTests: XCTestCase {
     private var app: XCUIApplication!
     private let env = ProcessInfo.processInfo.environment
@@ -334,6 +336,241 @@ final class TodosV1ListTests: XCTestCase {
         XCTAssertTrue(rowsInSight().prefix(2).map(\.identifier).contains(id), "not put back to \(id): \(rowsInSight().map(\.identifier))")
     }
 
+    // MARK: The rows' writes (the tick, the swipe, the menu)
+
+    /// A to-do as the mock hub has it now: whether it is closed and whether it is in Someday; nil once it is gone.
+    private struct MockTodo: Decodable {
+        struct Row: Decodable {
+            var done_at: String?
+            var someday_until: String?
+        }
+        var todo: Row
+    }
+
+    private func mockTodo(_ base: URL, _ id: String) throws -> MockTodo.Row? {
+        try? JSONDecoder().decode(MockTodo.self, from: mock(base, "GET", "api/v1/todos/" + id)).todo
+    }
+
+    /// The list, opened in the iPhone's own layout and scrolled to its end, where `id`'s row is in sight clear of the bars
+    /// and of New To-Do at the foot.
+    @MainActor private func openList(_ hub: String, showing id: String) {
+        launch(hub, ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"], layout: "separate")
+        XCTAssertTrue(element("todos.v1").waitForExistence(timeout: 60), "no V1 list:\n\(app.debugDescription)")
+        _ = element("todos.bar.all").waitForExistence(timeout: 10)
+        toEnd()
+        bring(id)
+        let row = element("todos.row." + id)
+        XCTAssertTrue(row.exists && clear(row), "no row \(id) in sight:\n\(app.debugDescription)")
+    }
+
+    /// The list scrolled to its end, at rest.
+    @MainActor private func toEnd() {
+        app.collectionViews.firstMatch.swipeUp(velocity: .fast)
+        app.collectionViews.firstMatch.swipeUp(velocity: .fast)
+        sleep(2)
+    }
+
+    /// The list moved a little at a time until `id`'s row is clear (`clear`).
+    @MainActor private func bring(_ id: String) {
+        let row = element("todos.row." + id), window = app.windows.firstMatch
+        for _ in 0..<8 where !(row.exists && clear(row)) {
+            let up = row.exists && row.frame.minY > window.frame.height / 2
+            let from = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
+            from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: up ? -140 : 140)), withVelocity: .slow,
+                       thenHoldForDuration: 0.3)
+            sleep(1)
+        }
+    }
+
+    /// Whether `row` is in sight between the bars and New To-Do, where a finger reaches it.
+    @MainActor private func clear(_ row: XCUIElement) -> Bool {
+        let pill = element("todos.new")
+        let floor = pill.exists ? pill.frame.minY : app.windows.firstMatch.frame.height
+        // iOS 26 pins the bar over the list; on iOS 18 it is the list's first row and scrolls away.
+        let bar = element("todos.bar.all")
+        let top = max(bar.exists ? bar.frame.maxY : 0, app.navigationBars.firstMatch.frame.maxY)
+        return row.isHittable && row.frame.minY > top && row.frame.maxY < floor
+    }
+
+    /// The row's trailing swipe, drawn open (not the full swipe, which is Done).
+    @MainActor private func revealSwipe(_ id: String) {
+        let row = element("todos.row." + id)
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: row.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.5)),
+                   withVelocity: .slow, thenHoldForDuration: 0.2)
+    }
+
+    /// A menu's or a swipe's button by its identifier, else by its words in English or Chinese.
+    @MainActor private func button(_ id: String, _ words: String...) -> XCUIElement {
+        // A confirmation dialog lists its buttons twice (the sheet and its accessibility copy): the one a finger reaches.
+        let byID = app.buttons.matching(identifier: id)
+        if byID.firstMatch.waitForExistence(timeout: 2) {
+            return byID.allElementsBoundByIndex.first(where: \.isHittable) ?? byID.firstMatch
+        }
+        return app.buttons.matching(NSPredicate(format: "label IN %@", words)).firstMatch
+    }
+
+    /// The tick is drawn at once and Undo sends nothing; left alone, the to-do closes on the hub after the window.
+    @MainActor func testTickAndUndo() throws {
+        guard let hub = env["PERSONA_TODOS_HUB"] else { throw XCTSkip("needs MOCK_TODO_VIEW=1 (PERSONA_TODOS_HUB)") }
+        let base = try XCTUnwrap(URL(string: hub))
+        defer { _ = try? mock(base, "GET", "mock/reset") }
+        openList(hub, showing: "t11")
+        let tick = element("todos.tick.t11")
+        XCTAssertFalse(tick.isSelected)
+        tick.tap()
+        XCTAssertTrue(tick.waitForSelected(true), "ticked at once")
+        let undo = app.buttons["toast-action"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 3), "Done · Undo:\n\(app.debugDescription)")
+        undo.tap()
+        XCTAssertTrue(tick.waitForSelected(false), "Undo unticks it")
+        sleep(6) // past the Undo window: nothing may have gone
+        XCTAssertNil(try mockTodo(base, "t11")?.done_at, "Undo sent nothing")
+        tick.tap()
+        XCTAssertTrue(tick.waitForSelected(true))
+        let until = Date().addingTimeInterval(20)
+        while Date() < until, try mockTodo(base, "t11")?.done_at == nil { sleep(1) }
+        XCTAssertNotNil(try mockTodo(base, "t11")?.done_at, "closed on the hub once the window ended")
+    }
+
+    /// Someday from the trailing swipe: the row leaves for the Someday fold at once, and the hub has it after the window.
+    @MainActor func testSwipeSomeday() throws {
+        guard let hub = env["PERSONA_TODOS_HUB"] else { throw XCTSkip("needs MOCK_TODO_VIEW=1 (PERSONA_TODOS_HUB)") }
+        let base = try XCTUnwrap(URL(string: hub))
+        defer { _ = try? mock(base, "GET", "mock/reset") }
+        openList(hub, showing: "t11")
+        revealSwipe("t11")
+        let someday = button("todos.swipe.someday", "Someday", "以后再做")
+        XCTAssertTrue(someday.waitForExistence(timeout: 5), "no Someday in the swipe:\n\(app.debugDescription)")
+        someday.tap()
+        XCTAssertTrue(element("todos.row.t11").waitForNonExistence(timeout: 5), "folded under Someday at once")
+        let until = Date().addingTimeInterval(20)
+        while Date() < until, try mockTodo(base, "t11")?.someday_until == nil { sleep(1) }
+        XCTAssertNotNil(try mockTodo(base, "t11")?.someday_until, "in Someday on the hub once the window ended")
+    }
+
+    /// Delete… asks first, naming the to-do; the row goes at once, Undo brings it back and nothing is deleted; left
+    /// alone, the hub deletes it after the window.
+    @MainActor func testDeleteAndUndo() throws {
+        guard let hub = env["PERSONA_TODOS_HUB"] else { throw XCTSkip("needs MOCK_TODO_VIEW=1 (PERSONA_TODOS_HUB)") }
+        let base = try XCTUnwrap(URL(string: hub))
+        defer { _ = try? mock(base, "GET", "mock/reset") }
+        openList(hub, showing: "t11")
+        let delete = {
+            self.element("todos.row.t11").press(forDuration: 1.2)
+            let item = self.button("todos.menu.delete", "Delete…", "删除…")
+            if !item.waitForExistence(timeout: 5) { XCTFail("no Delete… in the menu:\n\(self.app.debugDescription)") }
+            item.tap()
+            let confirm = self.button("todos.delete.confirm", "Delete To-Do", "删除待办")
+            if !confirm.waitForExistence(timeout: 5) { XCTFail("Delete… asks first:\n\(self.app.debugDescription)") }
+            confirm.tap()
+        }
+        delete()
+        XCTAssertTrue(element("todos.row.t11").waitForNonExistence(timeout: 5), "gone at once")
+        let undo = app.buttons["toast-action"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 3))
+        undo.tap()
+        XCTAssertTrue(element("todos.row.t11").waitForExistence(timeout: 5), "Undo brings it back")
+        sleep(6)
+        XCTAssertNotNil(try mockTodo(base, "t11"), "Undo deleted nothing")
+        delete()
+        let until = Date().addingTimeInterval(20)
+        while Date() < until, try mockTodo(base, "t11") != nil { sleep(1) }
+        XCTAssertNil(try mockTodo(base, "t11"), "deleted on the hub once the window ended")
+    }
+
+    /// The rows' actions as the frames draw them, for the review: the swipe, a tick with its Undo, the long-press menu,
+    /// Delete…'s and the working tick's confirmations, New To-Do and a new row being saved, and the offline line. The
+    /// mock is put back before each.
+    @MainActor func testActionFrames() throws {
+        guard env["PERSONA_TODOS_FRAMES"] == "1", let hub = env["PERSONA_TODOS_HUB"], let dir = env["PERSONA_SHOTS"] else {
+            throw XCTSkip("PERSONA_TODOS_FRAMES=1 with PERSONA_TODOS_HUB and PERSONA_SHOTS")
+        }
+        let base = try XCTUnwrap(URL(string: hub))
+        defer { _ = try? mock(base, "GET", "mock/reset") }
+        let scheme = env["PERSONA_TODOS_SCHEME"] ?? "light"
+        let language = env["PERSONA_TODOS_LANGUAGE"] ?? "en"
+        let locale = ["en": "en_US", "zh-Hans": "zh_CN", "ja": "ja_JP"][language] ?? "en_US"
+        var extra = ["-ui.scheme", scheme, "-AppleLanguages", "(\(language))", "-AppleLocale", locale]
+        if let color = env["PERSONA_TODOS_COLOR"] { extra += ["-ui.color", color] }
+        if let size = env["PERSONA_TODOS_SIZE"] { extra += ["-UIPreferredContentSizeCategoryName", size] }
+        let frames = Set((env["PERSONA_TODOS_FRAMES_ONLY"] ?? "").split(separator: ",").map(String.init))
+        let wants = { (frame: String) in frames.isEmpty || frames.contains(frame) }
+        let shot = { (frame: String, wait: UInt32) in
+            sleep(wait)
+            let png = XCUIScreen.main.screenshot().pngRepresentation
+            try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("iphone-list\(frame)-\(scheme).png"))
+        }
+        // Each from a fresh mock and launch, the list scrolled to its end as the frames draw it.
+        let fresh = { (more: [String]) in
+            _ = try? self.mock(base, "GET", "mock/reset")
+            self.app?.terminate()
+            self.launch(hub, extra + more, layout: "separate")
+            if !self.element("todos.v1").waitForExistence(timeout: 60) { XCTFail("no V1 list:\n\(self.app.debugDescription)") }
+            _ = self.element("todos.bar.all").waitForExistence(timeout: 10)
+            sleep(1)
+        }
+        if wants("~swiped") {
+            fresh([])
+            toEnd()
+            bring("t09")
+            revealSwipe("t09")
+            shot("~swiped", 1)
+        }
+        if wants("~ticked") {
+            fresh([])
+            toEnd()
+            bring("t11")
+            element("todos.tick.t11").tap()
+            shot("~ticked", 1) // within the toast's 4 s
+            element("todos.tick.t11").tap() // taken back: nothing goes, and the next launch has nothing to send
+        }
+        if wants("~row-menu") {
+            fresh([])
+            toEnd()
+            bring("t11")
+            element("todos.row.t11").press(forDuration: 1.2)
+            shot("~row-menu", 2)
+        }
+        if wants("~confirm-delete") {
+            fresh([])
+            toEnd()
+            bring("t11")
+            element("todos.row.t11").press(forDuration: 1.2)
+            button("todos.menu.delete", "Delete…", "删除…", "削除…").tap()
+            shot("~confirm-delete", 2)
+        }
+        if wants("~confirm-stop") {
+            fresh([])
+            bring("t05")
+            element("todos.tick.t05").tap()
+            shot("~confirm-stop", 2)
+        }
+        if wants("~new") || wants("~added") {
+            fresh([])
+            toEnd()
+            bring("t11")
+            element("todos.new").tap()
+            let title = element("todos.new.title")
+            XCTAssertTrue(title.waitForExistence(timeout: 10), "no New To-Do sheet:\n\(app.debugDescription)")
+            title.typeText("Buy stamps")
+            // A fresh simulator's keyboard first shows its own tip.
+            let tip = app.buttons["Continue"]
+            if tip.waitForExistence(timeout: 2) { tip.tap() }
+            if wants("~new") { shot("~new", 1) }
+            if wants("~added") {
+                // The list was left at To do: the new row comes first in it, with "Added · Undo" over the list.
+                element("todos.new.add").tap()
+                shot("~added", 1)
+            }
+        }
+        if wants("~offline") {
+            fresh(["-simulateOffline", "YES"])
+            XCTAssertTrue(element("todos.offline").waitForExistence(timeout: 15), "no offline line:\n\(app.debugDescription)")
+            shot("~offline", 1)
+        }
+    }
+
     /// A call to the mock hub.
     private func mock(_ base: URL, _ method: String, _ path: String) throws -> Data {
         var request = URLRequest(url: base.appending(path: path))
@@ -344,5 +581,16 @@ final class TodosV1ListTests: XCTestCase {
         URLSession.shared.dataTask(with: request) { data, _, _ in out = data; done.fulfill() }.resume()
         wait(for: [done], timeout: 20)
         return try XCTUnwrap(out)
+    }
+}
+
+private extension XCUIElement {
+    /// Waits (up to 5 s) for a toggle-like element to say it is selected, or not.
+    func waitForSelected(_ selected: Bool) -> Bool {
+        for _ in 0..<25 {
+            if isSelected == selected { return true }
+            usleep(200_000)
+        }
+        return isSelected == selected
     }
 }

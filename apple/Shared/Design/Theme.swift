@@ -155,6 +155,9 @@ nonisolated enum Theme {
     /// The AI color at half strength: a mark of the AI's that is at work but not the lit one (a workflow phase with
     /// agents running that the run has moved past), apart from a ring (not started) and the full dot (lit).
     static var aiMuted: Color { ai.opacity(0.5) }
+    /// Someday on a to-do's trailing swipe (#10465), beside Done's `positive`: the owner's "not now", neither a state's
+    /// color nor the accent's tap. White words on it read at 4.5:1 or better in both appearances.
+    static let somedayTint = Hue.indigo
 
     enum Role {
         static let danger = PersonaPalette.Pair(light: 0xD93A3A, dark: 0xFF5F57)
@@ -775,6 +778,9 @@ nonisolated enum Theme {
         static let standard = state
         /// Task-draft dismissal uses the same six-second Undo window as the web.
         static let draftUndo: Duration = .seconds(6)
+        /// A to-do ticked, put in Someday or deleted from the list (#10465): its "Done · Undo" toast stays this long, and
+        /// the write waits as long on the device before it goes, so Undo sends nothing (`TodoOutbox`).
+        static let todoUndo: Duration = .seconds(4)
         /// How long an alert that follows another waits before asking: UIKit drops a presentation made while another is
         /// still going away, and SwiftUI took up to about 0.8 s to close one answered elsewhere (queued "already exists"
         /// questions, #6113).
