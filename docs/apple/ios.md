@@ -2157,8 +2157,10 @@ a follow-up's prompt (`injected.detail`, or the raw input) is never shown while 
 visible one; its block shows only the one-line `injected.line` (`ChatLine.hidesPrompt`). A round stays shown by exactly
 the supervision rule (`Supervision.visible`): a successful `ask_user` / `notify_user`, a pending live `ask_user`, an
 accepted / needs-user `task_review`, a `supervision_finish` receipt with user visibility, or `fold.supervision_user`.
-A completed round with a nonblank final reply also stays visible unless it successfully finished silent. The reply
-uses the usual bubble and the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
+A completed round with a nonblank final reply also stays visible unless it successfully finished silent, except for a
+routine cross-conversation report to the main conversation: that reply stays inside the expandable background record,
+just as on the web. Explicit owner-visibility actions above still open and notify. The reply uses the usual bubble and
+the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
 
 While folding is on, the main chat's Needs You tray groups task rows by the conversation that supervises them (the
 to-do's `origin`) when they come from more than one: the conversation's own group first without a header, then each
@@ -2745,8 +2747,8 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
   (`ManagersText.switcherLocked`, `switcherNote`); turned off while it is in use, the footer says it is listed for now and why.
   An older hub answers yes and keeps nothing: the list read after it still says shown, the switch goes back and a toast says to
   update the hub. While the hub marks it `hidden` its row in the list carries a Hidden chip. Tests `ManagersModelTests`.
-- **Low-distraction mode** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
-  push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`); its footer says it holds
+- **Push grading** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
+  push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`, the legacy wire route); its footer says it holds
   for every device and what still notifies. A hub without the route, or one that does not answer, shows no section; a change
   shows at once, and a refusal puts it back and says why. `docs/server/server.md` "Push grading (push urgency filtering, `hub/lnmode.go`)".
 - **Quiet hours**: Settings › Notifications has this device's quiet hours (a switch, then From / Until), only when the prefs answer
@@ -2852,7 +2854,7 @@ is listed), and a hub that answers it has no roster filters nothing (`AppModel.m
   default's conversations name none, and with one installed manager or no roster nothing is named.
 - **Counts**: the tab badges, the app icon's number (their sum), the sidebar's Inbox and To-dos counts, the home page's
   Needs You and the main conversation's dock count the current assistant's (`AppModel.countBadges`,
-  `InboxStore.actionCount`, `TodoStore.badgeCount`). The
+  `InboxStore.unreadCount` for the Inbox's badge and row, `TodoStore.badgeCount`). The
   switcher shows beside every other assistant what waits there (`AssistantBadges`, `AppModel.assistantBadges`): its agents
   waiting (a session with a pending card or in Needs You once, quiet and muted ones left out, a card on no session by
   itself; Persona's own conversations by their cards only) plus `inbox_needs_you`. The header's face carries a mark while

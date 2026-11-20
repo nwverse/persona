@@ -667,6 +667,10 @@ contains several candidates, the tool lists their ids and first words so the sen
 none, or its start is outside the transcript page, the sender can give the exact words of an earlier request or omit
 `quote`.
 
+A Codex transcript page can show a message steered into a running turn with the same shape as the turn's first
+message. On Codex, or when the manager cannot identify the session, select the message by id or exact words. In
+the list of choices, copy the displayed id to select the whole entry; the text next to it is a preview.
+
 A message id or the owner's exact words can select from the last ten turns. An id takes precedence. Text matches
 the newest owner message or verified incoming quote that contains it, with at least four characters and runs of
 whitespace compared as a single space. The receiver gets the original spacing. A selected passage sets
@@ -676,10 +680,47 @@ Just me question remains ineligible afterwards. A refusal uses no relay allowanc
 The hub keeps the verified words for 14 days, up to 64 entries in `assistant.quotes`, keyed by sender and the id
 in the receiver's `<persona-context kind="owner-request" message_id="…">` block. A whole message keeps its id.
 Each passage has its own stable reference so different receivers can pass on their own passage using the id in
-their block. The receiver's brief takes the stored words by that reference and the relay item's source. Only a
+their block. A source message's id selects the whole message when the receiver has it. The receiver's brief takes
+the stored words by that reference and the relay item's source. On upgrade, the manager discards retained quote
+records whose source predates the shareability check. The owner can select an eligible original message again. Only a
 block directly following the canonical relay context counts (`prompts.ParseRelayQuoteID`). The brief keeps
 `started_by` as `leader` or `assistant`, trigger `conversation`, and the conversation ids in `request.via`.
 A scope change requiring the owner's approval still needs a message they wrote in the conversation making it.
+
+**Hand-overs** (#11699, `server/internal/assistant/relay_handover.go`). A `conversation_send` that carries a verified
+quote and has a direction's lead conversation (`assistant.leaders`, not a task leader Agent) on either end is one
+hand-over: from the main conversation to a lead, from a lead back to it, or between a lead and any other conversation.
+The hub records it once the send is accepted, sent at once or queued (setting `assistant.handovers`, by id, kept like
+the quotes: 14 days, at most 64, the oldest dropped first): the sending and receiving conversation, the receiver's
+title, where the owner wrote the words (conversation and message id), its state and code, and when it was made and
+last changed. A send refused at once (the sending model has the error), one without a quote and one between two
+conversations neither of which is a lead are none. Its state follows what the relay does with the message, is written
+only once it is true and never goes back, and each change is one log line:
+
+- `queued`: the message waits in the receiver's queue.
+- `delivered`: the message went in: sent at once, from the queue, or a try in doubt later found in the receiver's
+  transcript. A try in doubt is never `delivered` on its own.
+- `answered`: the receiver's first `conversation_send` back to the sender since the hand-over was delivered went into
+  the sender, however much later, while the hand-over is kept.
+- `not_delivered`: the message will not be tried again; its code is the refusal's when it was refused for good after
+  it was queued, `gone` when it was dropped because the receiver is gone. The sender still gets the line that says so
+  (`docs/assistant/assistant.md`, "Between conversations").
+
+A try in doubt that did go in starts the receiver's turn before any look finds it, so an answer sent in that turn
+goes in while the hand-over is still `queued`: it counts once the look finds the try, which makes the hand-over
+`delivered` and then `answered`. If the looks never find it and the message is sent again, that answer does not count.
+A hand-over past its 14 days is no longer answered or changed. One queued for a background supervisor that is gone
+follows its message to where it waits now (the new background supervisor or the main conversation), receiver and title
+included; with nowhere to move it is `not_delivered` with `gone`. An end or a move is saved before the queue without
+the message is.
+
+An answer is matched on the hand-overs, not on the relay's hop record, which forgets after an hour, when the owner
+speaks in the receiver, or when a third conversation's request reaches it. The reply names the hand-over it answers
+(`answers` on the queued message): of the pair's hand-overs that are delivered or still in doubt, the oldest that no
+other reply on its way names.
+A reply that is refused or dropped leaves its hand-over `delivered` for the next one. In a lead's queue a hand-over goes
+after the outcomes to report and before the rest (`docs/assistant/assistant.md`, "Messages from the system wait for the
+owner"). Nothing reads the hand-overs yet but the log: no route, event or client shows them.
 
 **Required.** `task_plan` refuses a writable task (`readonly` false) without `done_when` (at least one criterion) and
 `expect_minutes`, and a read-only task without `goal` and `expect_minutes`; the refusal names what is missing and
@@ -998,7 +1039,7 @@ to its supervising conversation in either configuration (#11195). Code: `server/
   it, and at the deadline it goes straight to the user even while its current supervisor is busy. If that supervisor
   itself is `needs_you`, an owner-only card moves to the next rung (or to the user) on the existing 30-second routing
   tick instead of staying behind another decision. Neither path answers the card for the user. With the hub's push
-  tiering on (the low-distraction switch, `docs/server/server.md`), a card that runs past its last rung before any
+  tiering on (the push grading switch, `docs/server/server.md`), a card that runs past its last rung before any
   absolute deadline goes back to the task's supervisor once (the entry says so; the owner gets a held P1 notice for
   the briefing), then stays with that supervisor until it is answered or escalated. This quiet hold can keep an
   ordinary question from ever reaching the user on a timeout, and also applies to a permission or plan before its
@@ -1375,7 +1416,7 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 | Task details (embedded Agent chat), task board | `apple/Persona/Views/Assistant/Tasks/TaskSheets.swift` |
 | Feed inserted into chat at the end of its turn (before the next message) | `ChatLines.mergeFeed`, `ChatLine.Content.feed` |
 | Above the input: question card (earliest only, with "N more"), `@` list, dock, routing label; routed messages go directly to the task | `ChatView.taskFooter`, `Composer.sendText` |
-| Action bar on iPhone, iPad and Mac: Needs You and In Progress in place of the dock, each opening its tray, each thing in one of them (#3393, the Apple side of #3387); in the main conversation with low-distraction mode on, Held Pushes after them, its tray in the same place (#7782, #8223) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`), `apple/Persona/Views/Assistant/Tasks/PushInterceptsView.swift` |
+| Action bar on iPhone, iPad and Mac: Needs You and In Progress in place of the dock, each opening its tray, each thing in one of them (#3393, the Apple side of #3387); in the main conversation with push grading on, Held Pushes after them, its tray in the same place (#7782, #8223) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`), `apple/Persona/Views/Assistant/Tasks/PushInterceptsView.swift` |
 
 - Reuse Agent state colors (`AgentState.tone`: Needs you red, Working amber, Unread green), not the prototype's orange waiting state, to match Agents.
 - If dock pills do not fit, truncate the title but never "Waiting for you."
@@ -1398,7 +1439,7 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
   Dynamic Type), 12 pt horizontal and 6 pt vertical padding, a full capsule radius, `Theme.Fill.chip` behind secondary
   text, 28 pt tall at the default size, 8 pt apart. Open is the filter chip's on look in the same size (accent fill, white
   semibold); Needs You with rows takes the waiting pill's tint, empty it is the plain grey capsule and opens "All Caught Up".
-  In the main conversation with low-distraction mode on, Held Pushes (#7782) is an entry in the same capsule after
+  In the main conversation with push grading on, Held Pushes (#7782) is an entry in the same capsule after
   them; its tray of today's held pushes opens in the trays' place, above the row at the bar's width, and one tray is open
   at a time (#8223; Android's `AssistantTray.HeldPushes` shares the slot the same way, the web opens a dialog).
   The entries (and Held Pushes and the computer pill after them) are one row, Needs You first. When they do not fit the
