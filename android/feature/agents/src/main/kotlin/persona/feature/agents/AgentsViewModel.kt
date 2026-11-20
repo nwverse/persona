@@ -293,7 +293,8 @@ internal class AgentsViewModel(
         val knownMachines = machines + sessions.map { it.machineId }.distinct().filter { id -> machines.none { it.id == id } }
             .map { Machine(it) } // named by the list as not updated yet (AgentsScreen.kt)
         val admittedMachines = machines.mapTo(mutableSetOf()) { it.id }
-        val initialFolded = if (foldsGrouping == prefs.grouping || settings.query.isNotEmpty() || settings.folded.isNotEmpty())
+        val rawGrouping = settings.pendingGrouping ?: localPrefs.grouping
+        val initialFolded = if (foldsAuthority == rawGrouping || settings.query.isNotEmpty())
             settings.folded else localPrefs.folds[prefs.grouping].orEmpty()
         val requested = settings.copy(grouping = prefs.grouping, sort = prefs.sort, folded = initialFolded,
             workspaces = workspaces.filter { it.machineId in admittedMachines })
@@ -588,7 +589,14 @@ internal class AgentsViewModel(
         // (PinsStore.swift:131, :139, :163). A later tap, or a grouping saved by someone else, stays.
         val epoch = stamp(ListTapMotionKind.Layout)
         previous = null
-        settings.update { it.copy(kept = emptySet(), tapEpoch = epoch, pendingGrouping = group) }
+        val previousAuthority = foldsAuthority
+        val previousFolded = settings.value.folded
+        val targetFolds = page.value.preferences.folds[group].orEmpty()
+        foldsAuthority = group
+        settings.update { current ->
+            if (current.query.isEmpty()) current.copy(kept = emptySet(), tapEpoch = epoch, pendingGrouping = group, folded = targetFolds)
+            else { stashedFolds = targetFolds; current.copy(kept = emptySet(), tapEpoch = epoch, pendingGrouping = group) }
+        }
         localChange {
             try {
                 preferences.grouping(group)
@@ -597,9 +605,11 @@ internal class AgentsViewModel(
             catch (e: Exception) {
                 if (settings.value.pendingGrouping == group) {
                     val back = stamp(ListTapMotionKind.Layout)
+                    foldsAuthority = previousAuthority
                     settings.update { current ->
                         if (current.pendingGrouping != group) current
-                        else current.copy(kept = emptySet(), tapEpoch = back, pendingGrouping = null)
+                        else if (current.query.isEmpty()) current.copy(kept = emptySet(), tapEpoch = back, pendingGrouping = null, folded = previousFolded)
+                        else { stashedFolds = previousFolded; current.copy(kept = emptySet(), tapEpoch = back, pendingGrouping = null) }
                     }
                 }
                 throw e
@@ -753,7 +763,9 @@ internal class AgentsViewModel(
         preferences.markSeen(rows.map { it.session })
     }
     /** The grouping whose stored folds [settings] holds; folds are read again only when it changes (#4338 A6). */
-    @Volatile private var foldsGrouping: AgentGrouping? = null
+    private var foldsGrouping: AgentGrouping? = null
+    /** The raw grouping ([AgentListSettings.pendingGrouping] or stored grouping) that [settings]'s fold set is authoritative for. */
+    @Volatile private var foldsAuthority: AgentGrouping? = null
     /** The list's folds while a search opens them ([query]). */
     private var stashedFolds: Set<String>? = null
 
@@ -763,21 +775,29 @@ internal class AgentsViewModel(
             preferences.snapshots(pairingScope).collect { prefs ->
                 if (prefs.grouping == foldsGrouping) return@collect
                 foldsGrouping = prefs.grouping
+                val pending = settings.value.pendingGrouping
+                if (pending != null && pending != prefs.grouping) return@collect
                 val stored = prefs.folds[prefs.grouping].orEmpty()
                 if (settings.value.query.isEmpty()) settings.update { it.copy(folded = stored) } else stashedFolds = stored
+                foldsAuthority = prefs.grouping
             }
         }
     }
 
+    private fun markFoldsAuthoritative() {
+        foldsAuthority = settings.value.pendingGrouping ?: foldsGrouping ?: page.value.preferences.grouping
+    }
+
     /** Keeps the current grouping's folds on this phone; a search's are not kept. */
     private fun saveFolds() {
-        val grouping = foldsGrouping ?: return
+        val grouping = settings.value.pendingGrouping ?: foldsGrouping ?: return
         if (settings.value.query.isNotEmpty()) return
         val folded = settings.value.folded
         localChange { preferences.folds(grouping, folded) }
     }
 
     fun fold(group: AgentListGroup) {
+        markFoldsAuthoritative()
         // Section fold and a quiet space (ChatsView.swift:1168, :2595, :3114, :3214, :3237).
         writeTap(ListTapMotionKind.State) { current ->
             if (group.parent == "quiet") current.copy(
@@ -798,11 +818,13 @@ internal class AgentsViewModel(
         saveFolds()
     }
     fun fold(machine: AgentMachineGroup) {
+        markFoldsAuthoritative()
         // ChatsView.swift:1168, the computer's section
         writeTap(ListTapMotionKind.State) { it.copy(folded = if (machine.folded) it.folded - machine.id else it.folded + machine.id) }
         saveFolds()
     }
     fun foldAll(fold: Boolean) {
+        markFoldsAuthoritative()
         // Collapse All / Expand All (AgentsMenus.swift:125, :128), Theme.Motion.standard.
         previous = null
         writeTap(ListTapMotionKind.State) { it.copy(

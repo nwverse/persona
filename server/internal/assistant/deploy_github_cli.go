@@ -41,8 +41,12 @@ func githubCLIGet(ctx context.Context, path string, out any) error {
 	resp, err := githubCLIResponse(stdout.Bytes())
 	if err != nil {
 		if runErr != nil {
-			return fmt.Errorf("authenticated GitHub CLI unavailable (no anonymous fallback) (%w): %s; %s",
-				errGitHubUnconfigured, githubDiagnostic(runErr.Error()), githubDiagnostic(stderr.String()))
+			if isGitHubCLIUnconfigured(runErr, stderr.String()) {
+				return fmt.Errorf("authenticated GitHub CLI unavailable (no anonymous fallback) (%w): %s; %s",
+					errGitHubUnconfigured, githubDiagnostic(runErr.Error()), githubDiagnostic(stderr.String()))
+			}
+			return fmt.Errorf("authenticated GitHub CLI unavailable (no anonymous fallback): %s; %s",
+				githubDiagnostic(runErr.Error()), githubDiagnostic(stderr.String()))
 		}
 		return fmt.Errorf("authenticated GitHub CLI returned an invalid response")
 	}
@@ -101,4 +105,45 @@ func (b *githubCLIBuffer) Write(p []byte) (int, error) {
 	}
 	_, _ = b.Buffer.Write(p)
 	return n, nil
+}
+
+// isGitHubCLIUnconfigured reports whether a gh execution failure without an HTTP response was positively caused by
+// missing/unauthenticated GitHub CLI configuration rather than a transient network, DNS, TLS, or proxy error.
+func isGitHubCLIUnconfigured(runErr error, stderr string) bool {
+	if errors.Is(runErr, exec.ErrNotFound) {
+		return true
+	}
+	lower := strings.ToLower(stderr)
+	for _, networkErr := range []string{
+		"proxyconnect",
+		"proxy authentication",
+		"407 proxy",
+		"http 407",
+		"dial tcp",
+		"no such host",
+		"tls:",
+		"x509:",
+		"connection refused",
+		"i/o timeout",
+	} {
+		if strings.Contains(lower, networkErr) {
+			return false
+		}
+	}
+	for _, needle := range []string{
+		"gh auth login",
+		"not logged into",
+		"no github authentication",
+		"to authenticate, please run",
+		"no oauth token",
+		"failed to log in",
+		"populate the gh_token",
+		"gh_token environment variable",
+		"github_token environment variable",
+	} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
 }
