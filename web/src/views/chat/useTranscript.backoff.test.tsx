@@ -4,6 +4,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../../lib/api";
 import type { ItemsPage } from "../../lib/types";
 import { useTranscript, type Transcript } from "./useTranscript";
 
@@ -134,5 +135,24 @@ describe("loading an older page that fails", () => {
     expect(tr.current.items).toHaveLength(1);
     await loadEarlier();
     expect(older()).toBe(2);
+  });
+});
+
+// #11450: once the latest page said its computer can't find this history, no older page is read. The node answers an
+// older page of such a session with an empty one (released apps ask again on an error), which would end paging, draw
+// the chat's start above what is cached and take the error away.
+describe("a history its computer can't find", () => {
+  it("reads no older page and keeps the error", async () => {
+    api.mockImplementation(async (path: string) => {
+      if (path.includes("before_seq=")) return { items: [], has_more: false };
+      throw new ApiError(404, "Persona can't find its history", { error: "Persona can't find its history", code: "not_found",
+        reason: "no_transcript", detail: "transcript for session s1 not found" });
+    });
+    await act(async () => { tr.current.reload(); });
+    expect(tr.current.error).not.toBe("");
+    await loadEarlier();
+    expect(older()).toBe(0);
+    expect(tr.current.error).not.toBe("");
+    expect(tr.current.hasMore).toBe(true);
   });
 });

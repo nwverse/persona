@@ -599,6 +599,12 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if !ok {
 		res, err = s.hub.DeviceCall(ctx, p)
 	}
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
+		if id, _ := p["session_id"].(string); id != "" {
+			// A direction's notes block counts as given only once the node took the send (direction_notes.go).
+			s.notesSendOutcome(ctx, id, err == nil || nodeDelivered(err) != "none")
+		}
+	}
 	if taskRoot != "" && (method == DeviceSessionSend || method == deviceTaskStart) {
 		s.noteTaskSpaceResult(ctx, taskRoot, device, res)
 	}

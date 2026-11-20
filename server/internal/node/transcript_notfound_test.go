@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -97,4 +98,61 @@ func TestReadsOfAGoneTranscriptAreNotFound(t *testing.T) {
 		t.Errorf("watch: %v", err)
 	}
 	n.unwatch(agent)
+}
+
+// Reasons a read gives no more (#11450): a conversation an Agent runtime runs, whose history is the runtime's and comes
+// back with it, while the runtime is not connected (a node that restarted with the runtime's app closed knows nothing of
+// it but its record); and unknown_session after a load of the node's records failed and is tried again, with none of
+// them. Once they have come, an unknown id is unknown_session.
+func TestReadsGiveNoReasonTheyCannotKnow(t *testing.T) {
+	n, home := testNode(t)
+	const words = "transcript for session %s not found"
+	read := func(id string) error {
+		_, err := n.handle(context.Background(), "session.items", json.RawMessage(`{"session_id":"`+id+`","turns":2}`))
+		return err
+	}
+	const runtime = "session-11111111-2222-3333-4444-555555555555" // a runtime's own id (DSH)
+	n.state.put(runtime, sessionState{Launcher: "dsh", Cwd: home + "/.persona/assistant", StartedAt: time.Now().Add(-time.Hour).UTC()})
+	if err := read(runtime); rpcCode(err) != codeNotFound || err.Error() != fmt.Sprintf(words, runtime) || notFoundReason(err) != "" {
+		t.Errorf("a runtime's conversation while it is away: want not_found without a reason, got %q %v", notFoundReason(err), err)
+	}
+	if err := read(runtime + subagentSep + "a1"); rpcCode(err) != codeNotFound || notFoundReason(err) != "" {
+		t.Errorf("a runtime's subagent: want not_found without a reason, got %q %v", notFoundReason(err), err)
+	}
+
+	const unknown = "99999999-2222-3333-4444-555555555555"
+	n.stateReady = make(chan struct{}) // the first load failed (loading is over) and is tried again
+	if err := read(unknown); rpcCode(err) != codeNotFound || notFoundReason(err) != "" {
+		t.Errorf("while the records are tried again: want not_found without a reason, got %q %v", notFoundReason(err), err)
+	}
+	close(n.stateReady)
+	if err := read(unknown); notFoundReason(err) != proto.NotFoundUnknownSession {
+		t.Errorf("once the records came: want unknown_session, got %q %v", notFoundReason(err), err)
+	}
+}
+
+// An older page (before_seq) of a session the node knows (or of its subagent), with no transcript, ends paging with an
+// empty page and has_more false, as before #11388: released apps ask an older page again on an error. The latest page
+// says why there is none, and an unknown id is not_found either way (#11450).
+func TestAnOlderPageOfAGoneTranscriptEndsPaging(t *testing.T) {
+	n, home := testNode(t)
+	const known, unknown = "11111111-2222-3333-4444-555555555555", "99999999-2222-3333-4444-555555555555"
+	n.state.put(known, sessionState{Launcher: "claude", Cwd: home, StartedAt: time.Now().Add(-time.Hour).UTC()})
+	page := func(id, params string) (any, error) {
+		return n.handle(context.Background(), "session.items", json.RawMessage(`{"session_id":"`+id+`",`+params+`}`))
+	}
+	for _, params := range []string{`"before_seq":40,"turns":2`, `"before_seq":40,"limit":80`} {
+		for _, id := range []string{known, known + subagentSep + "a1"} { // the session's chat and its subagent's
+			res, err := page(id, params)
+			if b, _ := json.Marshal(res); err != nil || string(b) != `{"has_more":false,"items":[]}` {
+				t.Errorf("%s of %s: want an empty last page, got %s %v", params, id, b, err)
+			}
+		}
+		if _, err := page(unknown, params); notFoundReason(err) != proto.NotFoundUnknownSession {
+			t.Errorf("%s of an unknown id: want unknown_session, got %v", params, err)
+		}
+	}
+	if _, err := page(known, `"turns":2`); notFoundReason(err) != proto.NotFoundNoTranscript {
+		t.Errorf("the latest page: want no_transcript, got %v", err)
+	}
 }

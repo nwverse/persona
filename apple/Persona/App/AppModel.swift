@@ -708,8 +708,20 @@ final class AppModel {
     /// Kept messages (#10194) a Retry or Delete is on its way for: a second tap does nothing.
     @ObservationIgnored var undeliveredActions: [SessionKey: Set<String>] = [:]
     var heldActionRequests: Set<HeldActionTarget> = []
+    /// The startup read and the changes to replay over it; nil once the persisted receipts have been published.
+    @ObservationIgnored var heldRetryRestoration: HeldRetryRestoration?
     var heldRetryReceipts: Set<HeldRetryOffer> = [] {
-        didSet { if heldRetryReceipts != oldValue { HeldRetryOffer.save(heldRetryReceipts, in: stateFolder) } }
+        didSet {
+            guard heldRetryReceipts != oldValue else { return }
+            if let restoration = heldRetryRestoration {
+                if restoration.recordsChanges {
+                    let old = oldValue, new = heldRetryReceipts
+                    restoration.changes.append { $0.subtracting(old).union(new) }
+                }
+            } else {
+                HeldRetryOffer.save(heldRetryReceipts, in: stateFolder)
+            }
+        }
     }
     /// Per group: the one retry of its waiting messages due in a few seconds (`retryOutboxSoon`).
     @ObservationIgnored var outboxRetry: [String: Task<Void, Never>] = [:]
@@ -777,7 +789,6 @@ final class AppModel {
         Task.detached(priority: .utility) { LarkAttachment.staging.sweep() }
         connection = ConnectionStatus()
         assistantPicks = AssistantPickStore.load(folder: stateFolder)
-        heldRetryReceipts = HeldRetryOffer.read(in: stateFolder)
         DemoHub.install()
         #if DEBUG
         // `-openWelcome YES`: start unpaired and out of Demo Mode, on the pairing page (DemoModeTests); with `-demo.on YES`
@@ -885,6 +896,7 @@ final class AppModel {
         #endif
         DemoHub.shared.onNotSent = { [weak self] in self?.toast = Toast(DemoText.notSent) }
         countBadges()
+        startHeldRetryRestoration()
     }
 
     /// Feishu conversations changed (the old API's `lark` event, or the messaging source's): the chats and lists
@@ -1204,7 +1216,7 @@ final class AppModel {
     /// Sign Out of everything: every group, every hub (Settings › Disconnect with one group, a revoked credential of this device).
     func unpair() {
         forgetSeen()
-        heldRetryReceipts.removeAll()
+        updateHeldRetryReceipts { _ in [] }
         LarkChatOutbox.forget()
         // No hub left to answer: the open questions are denied, their results have nowhere to go.
         phoneConfirmations.denyAll()
@@ -4601,7 +4613,7 @@ final class AppModel {
     func forgetGroups(_ gone: Set<String>, keepingPushKeys: Bool = false) {
         guard !gone.isEmpty else { return }
         forgetSeen(in: gone)
-        heldRetryReceipts = heldRetryReceipts.filter { !gone.contains($0.target.session.group) }
+        updateHeldRetryReceipts { receipts in receipts.filter { !gone.contains($0.target.session.group) } }
         if !keepingPushKeys { LarkChatOutbox.forget(groups: gone) }
         toolResults.forget(groups: gone)
         PortForwarder.shared.close(groups: gone)

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, sessionPath } from "../../lib/api";
+import { api, sessionHistoryNotFound, sessionPath } from "../../lib/api";
 import { validUserInputIndex, type UserInputIndex } from "../../lib/user-input-index";
 
 export function useRevealedInputSeq(scope: string, oldestSeq: number | undefined): { seq: number | undefined; reveal: () => void } {
@@ -42,8 +42,10 @@ export function useUserInputs(mid: string, sid: string, history: string | undefi
         return;
       }
       setState({ scope, index });
-    }).catch(() => {
+    }).catch((e: unknown) => {
       if (!alive) return;
+      // Its computer can't find this conversation's history: the loaded-only rail, and no asking again (#11450).
+      if (sessionHistoryNotFound(e)) return;
       // Keep the loaded-only compatibility rail while an older/offline node catches up; failures remain retryable.
       timer = window.setTimeout(load, delay);
       delay = Math.min(delay * 2, 30_000);
