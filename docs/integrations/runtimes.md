@@ -573,6 +573,16 @@ Live text belongs to the ACP prompt currently executing. Queued prompts acquire 
 empty boundary. A tool call ends the current text message, so the next message replaces its words in the live slot.
 Each prompt clears its live text on completion, including when another prompt is queued.
 
+An unsolicited ACP update after a delivered reply opens its own exchange before streaming text. In an exported
+Antigravity transcript, a `SYSTEM_MESSAGE` after a completed answer marks the same boundary once the model
+resumes before the next owner input. Multiple notifications for that resumption share one generic `wake` notice.
+The notice shares the first resumed activity's sequence, ahead of its content. Its ID derives from the preceding
+delivered native answer. Private scheduling text stays in the export. If ACP observed the wake and its matching
+reply lands without a scheduling record, the companion records the two native step fingerprints in the conversation's
+`.persona-observed-wakes` file. The companion and terminal pane can then reconstruct the same exchange on
+reconnect or restart. A read-only conversation keeps this evidence for the life of the companion. An older export
+with neither a scheduling record nor an observed boundary retains its original grouping.
+
 While a conversation is watched, the companion polls its native export every 400 ms. Persona-owned ACP turns reuse
 their existing poll. Unwatch, disconnection and shutdown release the watched poll. Native records that update an
 existing step carry a stable content revision in the history token, so a response completed at the same sequence
