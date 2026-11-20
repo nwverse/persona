@@ -2005,7 +2005,7 @@ const TaskBriefHistory = lazy(() => import("./assistant/TaskBrief").then((m) => 
 const BriefResultExtras = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.BriefResultExtras })));
 // the question a failed start's tab stopped on, answered on its page (#10365): only for such a failure
 const ShellQuestion = lazy(() => import("./ShellQuestionCard"));
-const TodoImageViewer = lazy(() => import("./chat/ImageViewer").then((m) => ({ default: m.ImageViewer })));
+const TodoImageViewer = lazyPage(() => import("./chat/ImageViewer").then((m) => m.ImageViewer));
 
 // The existing review UI lives with this lazy page, not the first screen's card badges.
 const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; className: string; label: () => string }> = {
