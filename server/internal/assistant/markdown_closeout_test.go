@@ -34,7 +34,7 @@ func TestWorkReportNegotiatedForEachRecipient(t *testing.T) {
 	} {
 		setAgentLanguage(f, tc.locale)
 		prompt := s.closeoutStart(t.Context(), "box", assistantwire.CloseoutBriefRequest{SessionID: "sample", Cwd: "/work"}).Context
-		if !strings.Contains(prompt, "### "+tc.heading) || !strings.Contains(prompt, tc.instruction) {
+		if !strings.Contains(prompt, "### "+tc.heading) || !strings.Contains(prompt, tc.instruction) || !strings.Contains(prompt, "- Next:") {
 			t.Errorf("%s instructions: %q", tc.locale, prompt)
 		}
 	}

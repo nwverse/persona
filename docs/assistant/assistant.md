@@ -640,8 +640,9 @@ anthropics/claude-code#97074). Anthropic documents no such weighting, so this is
 
 ## Next-message suggestions (#4644)
 
-The strip over an empty composer (#2978: click or Tab fills it in, the arrow sends it) reads one field, `Session.suggestion`, which has
-two sources (`server/internal/assistant/suggest_next.go`):
+The strip over an empty composer (#2978) reads `Session.suggestion`. Click or Tab fills the composer. The arrow sends a suggestion eligible for direct send. The manager considers these sources in order (`server/internal/assistant/suggest_next.go`).
+
+- **An Agent's explicit offer** (#11874). A completed final work report can supply one optional `next` reply. It is available even if the owner opens the chat after the turn ends. The turn stays done and the owner decides whether to answer. A new message or turn spends the offer. Blocked or unfinished reports, pending decisions, quoted examples and free-form questions do not produce this suggestion.
 
 - **Claude Code in a terminal** keeps the suggestion Claude Code draws in its own input box, read off the screen by the node
   (`server/internal/node/suggestion.go`). The manager never calls a model for such a session.
@@ -663,7 +664,7 @@ Rules for the hub-made one:
   call is a plain completion with no tools, MCP or memory.
 - **Nothing sensible, nothing shown**: `NONE`, an empty answer, more than one line or more than 200 characters shows nothing; there is no
   stand-in and no retry.
-- **Risky suggestions** (either source): one that names a command, a path, a link, a secret-looking string or one of the risky actions
+- **Risky suggestions** (all sources): one that names a command, a path, a link, a secret-looking string or one of the risky actions
   of the Agents' safety boundary (`riskyWords`: delete, push, deploy, send…) carries `suggestion_risky: true`. The apps fill it in but
   show no one-tap send.
 - **Clients**: the web, iOS/iPadOS and Android show the strip in Agent and assistant conversations, the main Persona conversation included,
