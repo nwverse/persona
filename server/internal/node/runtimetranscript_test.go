@@ -634,7 +634,7 @@ func TestRuntimeNativeForkListsAgentAndAssistantBranches(t *testing.T) {
 	const agent, assistant = "agy-agent", "agy-assistant"
 	const reply = "4@identity#1"
 	work := t.TempDir()
-	assistantDir := filepath.Join(work, ".persona", "assistant")
+	assistantDir := filepath.Join(work, ".persona", "health")
 	n.state.put(assistant, sessionState{Cwd: assistantDir, Launcher: "agy", Model: "test-model", AppMode: "plan", IsMain: true, TaskID: "source-task"})
 	rt.mu.Lock()
 	rt.answer = func(method string, params json.RawMessage) (any, error) {
@@ -650,6 +650,9 @@ func TestRuntimeNativeForkListsAgentAndAssistantBranches(t *testing.T) {
 		case "session.fork":
 			if input.At != reply || (id != agent && id != assistant) {
 				return nil, &rpc.Error{Code: "fork_mismatch", Message: "Reply not found"}
+			}
+			if input.Assistant != (id == assistant) {
+				return nil, fmt.Errorf("unexpected assistant flag for %s: %t", id, input.Assistant)
 			}
 			cwd := work
 			if id == assistant {

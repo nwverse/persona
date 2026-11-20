@@ -164,14 +164,15 @@ func (n *Node) forkOnRuntime(ctx context.Context, h *runtimeConn, source proto.S
 		ID      string         `json:"session_id"`
 		Session *proto.Session `json:"session"`
 	}
-	if err := h.peer.Call(ctx, "session.fork", map[string]string{"session_id": source.SessionID, "at_item_id": at}, &out); err != nil {
+	assistant := n.runtimeAssistant(source.SessionID)
+	if err := h.peer.Call(ctx, "session.fork", map[string]any{"session_id": source.SessionID, "at_item_id": at, "assistant": assistant}, &out); err != nil {
 		return "", err
 	}
 	if !runtimeIDRe.MatchString(out.ID) || out.ID == source.SessionID || out.Session != nil && out.Session.SessionID != out.ID {
 		return "", errors.New("runtime returned an invalid forked session")
 	}
 	n.runtimes.claim(h, out.ID)
-	if n.runtimeAssistant(source.SessionID) || out.Session != nil && identity.IsAssistantDir(out.Session.Cwd) {
+	if assistant || out.Session != nil && identity.IsAssistantDir(out.Session.Cwd) {
 		st, _ := n.state.get(source.SessionID)
 		st.Cwd = firstNonEmpty(st.Cwd, source.Cwd)
 		st.Launcher = firstNonEmpty(st.Launcher, source.Launcher)

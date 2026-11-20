@@ -15,6 +15,7 @@ import { isPolicyDir, POLICY_DIR_NAME, policyDirOf, readPolicy, removePolicy, sp
 import {
   agyModeToPersona,
   cleanUserText,
+  forkReplyPosition,
   forkStepIndex,
   LABEL,
   LIVE_TOOL_USE_ID,
@@ -680,15 +681,19 @@ export function createAgyRuntime(options = {}) {
     return steps.reduce((max, step, index) => Math.max(max, typeof step?.step_index === 'number' ? step.step_index : index), -1)
   }
 
+  function explicitInput(step) {
+    return step.type === 'USER_INPUT' && (!step.source || step.source === 'USER_EXPLICIT')
+  }
+
   function explicitInputs(steps) {
-    return steps.filter((step) => step.type === 'USER_INPUT' && (!step.source || step.source === 'USER_EXPLICIT')).length
+    return steps.filter(explicitInput).length
   }
 
   function exportedHasReply(steps, baseMaxIndex, replyText, inputCount = 0, allowTruncated = false) {
     let inputs = 0
     let last
     for (const [index, step] of steps.entries()) {
-      if (step.type === 'USER_INPUT' && (!step.source || step.source === 'USER_EXPLICIT')) inputs++
+      if (explicitInput(step)) inputs++
       if (inputCount > 0 && inputs > inputCount) break
       if (inputCount > 0 && inputs !== inputCount) continue
       if ((step.step_index ?? index) > baseMaxIndex &&
@@ -1809,33 +1814,48 @@ export function createAgyRuntime(options = {}) {
     return busyCall(() => rewindConversation(params))
   }
 
-  async function fork({ session_id, at_item_id = '' }) {
+  async function fork({ session_id, at_item_id = '', assistant }) {
     const rawId = ownedId(session_id)
     const pid = toPersonaId(rawId)
     const missing = () => new RpcError('Antigravity conversation not found', 'not_found')
     const busy = () => new RpcError('Wait for the current turn to finish before branching', 'fork_turn_running')
     const mismatch = () => new RpcError('The selected reply changed. Reload the conversation before branching', 'fork_mismatch')
     const native = readConversationStates().get(rawId)
+    const pending = unexportedTurns.get(rawId)
     if (archived.has(rawId) || !/^[\da-f-]{36}$/i.test(rawId) ||
         (!native && !createdAt.has(rawId) && !existsSync(brainDirOf(rawId)))) throw missing()
     if (forking.has(pid) || rewinding.has(pid) || hasLiveWork(pid) || cancelling.has(rawId) ||
-        permissionAsks.get(rawId)?.size || nativeWorking(native)) throw busy()
+        permissionAsks.get(rawId)?.size || (!pending && nativeWorking(native))) throw busy()
     if (typeof at_item_id !== 'string') throw mismatch()
+
+    const deadline = Date.now() + exportSettleTimeoutMs
+    const { convs, cwdByConv } = readCacheMetadata()
+    const summary = convs[rawId]?.summary
+    const cwd = sessionCwds.get(rawId) || workspacePathOf(native, workspacePathOf(summary, cwdByConv[rawId] || home, skipPolicyDir), skipPolicyDir)
+    const isAsst = assistant === true || assistants.has(pid) || isAssistantDir(cwd)
+    const projected = pending && at_item_id && withModeNotice(rawId, { steps: [...pending.base.steps, ...pending.steps] }).steps
 
     forking.add(pid)
     try {
       return await busyCall(async () => {
+        await loadSession(rawId, cwd, mcpServersFor(pid, isAsst), extraDirsFor(rawId))
+        let transcript = exportedTranscriptOf(rawId)
+        while (pending && !pendingReplaced(pending, transcript.steps)) {
+          const remaining = deadline - Date.now()
+          if (stopped || remaining <= 0) throw busy()
+          await new Promise((resolve) => setTimeout(resolve, Math.min(exportPollMs, remaining)))
+          transcript = exportedTranscriptOf(rawId)
+        }
         const snapshot = await acp.nativeRequest('GetCascadeTrajectory', { cascadeId: rawId,
           trajectoryVerbosity: 'CLIENT_TRAJECTORY_VERBOSITY_PROD_UI', disableRehydration: true })
         if (snapshot.trajectory?.cascadeId !== rawId) throw missing()
         if (snapshot.status !== 'CASCADE_RUN_STATUS_IDLE') throw busy()
         const trajectory = snapshot.trajectory.steps || []
-        const transcript = exportedTranscriptOf(rawId)
-        const index = at_item_id ? forkStepIndex(at_item_id, withModeNotice(rawId, transcript).steps, trajectory) : -1
-        if (index === undefined) throw mismatch()
-        const { convs, cwdByConv } = readCacheMetadata()
-        const summary = convs[rawId]?.summary
-        const cwd = sessionCwds.get(rawId) || workspacePathOf(native, workspacePathOf(summary, cwdByConv[rawId] || home, skipPolicyDir), skipPolicyDir)
+        let index = -1
+        if (at_item_id) {
+          index = forkStepIndex(forkReplyIndex(rawId, at_item_id, transcript, projected, pending), trajectory)
+          if (index === undefined) throw mismatch()
+        }
         const result = await acp.nativeRequest('ForkConversation', { sourceCascadeId: rawId, forkAtStepIndex: index,
           targetForkWorkspace: 'FORK_TARGET_CURRENT_WORKSPACE', sourceWorkspaceUris: [pathToFileURL(cwd).href] })
         const newId = result.newCascadeId
@@ -1852,7 +1872,7 @@ export function createAgyRuntime(options = {}) {
           forkSeeds.set(newId, prefix)
           if (forkSeeds.size > maxSessions) forkSeeds.delete(forkSeeds.keys().next().value)
         }
-        if (assistants.has(pid) || isAssistantDir(cwd)) assistants.add(sessionId)
+        if (isAsst) assistants.add(sessionId)
         const title = readConversationStates().get(newId)?.title || sessionTitles.get(rawId) || native?.title || summary?.Title || basename(cwd)
         sessionTitles.set(newId, title)
         rt.sessionsChanged(0)
@@ -1866,6 +1886,41 @@ export function createAgyRuntime(options = {}) {
       forking.delete(pid)
       if (want) void maybeExit()
     }
+  }
+
+  function forkReplyIndex(rawId, itemId, transcript, projected, pending) {
+    if (projected) {
+      const position = forkReplyPosition(itemId, projected)
+      const reply = projected[position]
+      if (reply && (reply.native_step_index ?? reply.step_index ?? position) > maxStepIndex(pending.base.steps)) {
+        return exportedReplyIndex(projected.slice(0, position), reply.content.trim(), transcript.steps)
+      }
+    }
+    const steps = withModeNotice(rawId, transcript).steps
+    const position = forkReplyPosition(itemId, steps)
+    const step = steps[position]
+    return step ? step.native_step_index ?? step.step_index ?? position : undefined
+  }
+
+  function exportedReplyIndex(beforeReply, replyText, exported) {
+    const turn = explicitInputs(beforeReply)
+    const prompt = beforeReply.findLast(explicitInput)
+    if (!prompt) return undefined
+    const promptText = cleanUserText(prompt.content)
+    let inputs = 0
+    let index
+    for (const [offset, step] of exported.entries()) {
+      if (explicitInput(step) && ++inputs === turn) {
+        const shown = cleanUserText(step.content)
+        if (shown !== promptText && shown.replace(/^\/plan\s+/, '') !== promptText) return undefined
+      }
+      if (inputs > turn) break
+      if (inputs === turn && step.type === 'PLANNER_RESPONSE' && typeof step.content === 'string' && step.content.trim() === replyText) {
+        if (index !== undefined) return undefined
+        index = step.step_index ?? offset
+      }
+    }
+    return index
   }
 
   async function rewindConversation(params) {
@@ -1939,13 +1994,14 @@ export function createAgyRuntime(options = {}) {
   async function modes(params) {
     return busyCall(async () => {
       const rawId = ownedId(params.session_id)
+      const pid = toPersonaId(rawId)
       if (archived.has(rawId)) throw new Error('Antigravity session is closed')
-      if (params.model && (hasLiveWork(toPersonaId(rawId)) || nativeWorking(readConversationStates().get(rawId)))) {
+      if (forking.has(pid) || (params.model && (hasLiveWork(pid) || nativeWorking(readConversationStates().get(rawId))))) {
         throw new Error('Antigravity session is busy')
       }
       const cwd = sessionCwds.get(rawId) || home
       await retryStaleModels(async () => {
-        await loadSession(rawId, cwd, mcpServersFor(toPersonaId(rawId), assistants.has(toPersonaId(rawId))), extraDirsFor(rawId))
+        await loadSession(rawId, cwd, mcpServersFor(pid, assistants.has(pid)), extraDirsFor(rawId))
         await applySessionOptions(rawId, {
           model: params.model,
           permission_mode: params.permission_mode,

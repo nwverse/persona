@@ -287,13 +287,14 @@ const MAX_TRANSCRIPT_REVISIONS = 256
 const MAX_TRANSCRIPT_CACHE_BYTES = 64 * 1024 * 1024
 let transcriptCacheBytes = 0
 
-export function forkStepIndex(itemId, steps, trajectory) {
+export function forkReplyPosition(itemId, steps) {
   const legacy = !itemId.includes('@')
   const item = stepsToItems(steps).items.find((entry) => entry.role === 'assistant' && entry.kind === 'text' &&
     (entry.id === itemId || (legacy && entry.id.replace(/@[^#]+/, '') === itemId)))
-  if (!item) return undefined
-  const step = steps.find((entry, index) => (entry?.step_index ?? index) + 1 === item.seq)
-  const index = step?.native_step_index ?? item.seq - 1
+  return item ? steps.findIndex((entry, index) => entry?.type === 'PLANNER_RESPONSE' && (entry.step_index ?? index) + 1 === item.seq) : -1
+}
+
+export function forkStepIndex(index, trajectory) {
   if (trajectory[index]?.type !== 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') return undefined
   const nextInput = trajectory.findIndex((entry, position) => position > index && entry?.type === 'CORTEX_STEP_TYPE_USER_INPUT' &&
     (!entry.metadata?.source || entry.metadata.source === 'CORTEX_STEP_SOURCE_USER_EXPLICIT'))

@@ -8,6 +8,7 @@ if (process.argv.includes('models')) { console.log('test-model\tTest Model'); pr
 const directory = process.argv[2]
 const log = process.argv[process.argv.indexOf('--log-file') + 1]
 const calls = `${directory}/calls.jsonl`
+const loaded = new Set()
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n')
 const server = createServer(async (req, res) => {
   const chunks = []
@@ -21,6 +22,10 @@ const server = createServer(async (req, res) => {
     return
   }
   if (method === 'GetCascadeTrajectory') {
+    if (snapshot.requireLoad && params.disableRehydration && !loaded.has(params.cascadeId)) {
+      res.writeHead(404).end('{"code":"not_found","message":"Cascade is not loaded"}')
+      return
+    }
     if (!snapshot.trajectory.steps?.length) delete snapshot.trajectory.steps
     res.end(JSON.stringify(snapshot))
     return
@@ -33,6 +38,9 @@ const server = createServer(async (req, res) => {
     return
   }
   if (method === 'ForkConversation' && snapshot.forkId) {
+    while (snapshot.holdFork && !existsSync(`${directory}/release-fork`)) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
     const newCascadeId = snapshot.forkId
     const forkedAtStepIndex = params.forkAtStepIndex === -1 ? snapshot.trajectory.steps.length - 1 : params.forkAtStepIndex
     const brain = `${directory}/config/brain`
@@ -78,9 +86,14 @@ input.on('line', (line) => {
   if (req.id === undefined) return
   if (req.method === 'session/list') openService()
   const snapshot = JSON.parse(readFileSync(`${directory}/trajectory.json`, 'utf8'))
+  if (req.method === 'session/resume' || req.method === 'session/load') loaded.add(req.params.sessionId)
   if (req.method === 'session/prompt' && snapshot.promptError) {
     process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, error: { code: -32000, message: snapshot.promptError } }) + '\n')
     return
+  }
+  if (req.method === 'session/prompt' && snapshot.promptReply) {
+    send({ method: 'session/update', params: { sessionId: req.params.sessionId,
+      update: { sessionUpdate: 'agent_message_chunk', content: { text: snapshot.promptReply } } } })
   }
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: {} }) + '\n')
 })
