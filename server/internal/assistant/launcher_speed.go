@@ -66,18 +66,27 @@ func checkStartSpeed(params map[string]any, agent startAgent, resume string) err
 // fitPlanTaskSpeed resolves a plan task's current tier and launcher before its
 // card or Start edit is accepted, and validates the resulting speed.
 func (s *Service) fitPlanTaskSpeed(ctx context.Context, t *PlanTask) (startAgent, error) {
+	fit, _, err := s.fitPlanTask(ctx, t)
+	return fit, err
+}
+
+// fitPlanTask resolves a plan task's tier, launcher and configured permission mode (from tier or agent.new)
+// and validates its resulting speed.
+func (s *Service) fitPlanTask(ctx context.Context, t *PlanTask) (startAgent, string, error) {
 	params := map[string]any{"launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "speed": t.Speed, "tier": t.Tier}
 	own, err := s.resolveStart(ctx, params, false)
 	if err != nil {
-		return startAgent{}, err
+		return startAgent{}, "", err
 	}
 	m, ok := s.machineByName(ctx, t.Machine)
 	if !ok {
-		return startAgent{}, nil // the ordinary machine check reports this
+		configuredMode, _ := params["permission_mode"].(string)
+		return startAgent{}, configuredMode, nil // the ordinary machine check reports this
 	}
 	fit, err := s.fitTaskLauncher(ctx, t, m, own, params)
 	if err != nil {
-		return startAgent{}, err
+		return startAgent{}, "", err
 	}
-	return fit, checkStartSpeed(params, fit, "")
+	configuredMode, _ := params["permission_mode"].(string)
+	return fit, configuredMode, checkStartSpeed(params, fit, "")
 }

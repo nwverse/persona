@@ -82,9 +82,10 @@ func pickOf(params map[string]any) startPick {
 	m, _ := params["model"].(string)
 	t, _ := params["tier"].(string)
 	v, _ := params["speed"].(string)
+	pm, _ := params["permission_mode"].(string)
 	u, _ := params["ultracode"].(*bool)
 	return startPick{launcher: strings.TrimSpace(l), effort: strings.TrimSpace(e),
-		model: strings.TrimSpace(m), speed: strings.TrimSpace(v), tier: strings.TrimSpace(t), ultracode: u}
+		model: strings.TrimSpace(m), speed: strings.TrimSpace(v), tier: strings.TrimSpace(t), permission: strings.TrimSpace(pm), ultracode: u}
 }
 
 // resolveStart fills params (a session.start's, with the caller's own launcher, model, effort and tier, if any) with
@@ -105,15 +106,20 @@ func (s *Service) resolveStart(ctx context.Context, params map[string]any, launc
 // unless its runtime's switch is on, which a start in bypassPermissions turns on (proto.Launcher.AutoAccept: Paseo's
 // Auto Accept).
 type startAgent struct {
-	agent      string
-	snapshot   string // the explicitly known kind for a to-do link; agent's compatibility defaults are not evidence
-	source     string // the selected launcher's provenance, retained through fitting and health detours
-	autoAccept bool
+	agent           string
+	snapshot        string // the explicitly known kind for a to-do link; agent's compatibility defaults are not evidence
+	source          string // the selected launcher's provenance, retained through fitting and health detours
+	autoAccept      bool
+	permissionModes proto.PermissionModeSet
 }
 
 // launcherStartAgent is what launcher l runs.
 func launcherStartAgent(l ConfiguredLauncher) startAgent {
-	return startAgent{agent: l.AgentType, source: l.Source, autoAccept: l.AutoAccept}
+	return startAgent{agent: l.AgentType, source: l.Source, autoAccept: l.AutoAccept, permissionModes: l.PermissionModes}
+}
+
+func (a startAgent) supportsPermissionMode(mode string) bool {
+	return permissionModeSupported(a.agent, a.permissionModes, mode)
 }
 
 // fitNewLauncher applies a new Agent's defaults using the launcher actually available on its destination.
@@ -136,10 +142,11 @@ func (s *Service) applyOmpStartDefaults(ctx context.Context, m Device, own start
 	}
 	model, _ := params["model"].(string)
 	effort, _ := params["effort"].(string)
+	mode, _ := params["permission_mode"].(string)
 	// An explicit launcher default uses omp's local model. Following Model Settings keeps its model.
-	// Only an effort the caller named reaches the node, which refuses it before opening the tab.
-	dropModel, dropEffort := own.ompModelDefault && model != "", own.effort == "" && effort != ""
-	if !dropModel && !dropEffort {
+	// Only an effort or permission mode the caller named reaches the node, which refuses it before opening the tab.
+	dropModel, dropEffort, dropMode := own.ompModelDefault && model != "", own.effort == "" && effort != "", own.permission == "" && mode != ""
+	if !dropModel && !dropEffort && !dropMode {
 		return nil
 	}
 	if dropModel {
@@ -150,7 +157,11 @@ func (s *Service) applyOmpStartDefaults(ctx context.Context, m Device, own start
 		effort = ""
 		delete(params, "effort")
 	}
-	return s.finishModel(ctx, "agent.new", params, ModelBinding{Provider: launcherProvider("omp"), Model: model, Effort: effort})
+	if dropMode {
+		mode = ""
+		delete(params, "permission_mode")
+	}
+	return s.finishModel(ctx, "agent.new", params, ModelBinding{Provider: launcherProvider("omp"), Model: model, Effort: effort, PermissionMode: mode})
 }
 
 // launcherKindSnapshot is the kind the launcher metadata actually names, before sessionLaunchers applies its Claude
@@ -243,7 +254,7 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 		})
 	}
 	to := launcherInstead(m, list)
-	for _, k := range []string{"model", "effort", "model_fingerprint", "speed"} {
+	for _, k := range []string{"model", "effort", "model_fingerprint", "speed", "permission_mode"} {
 		delete(params, k)
 	}
 	params["launcher"] = to
@@ -252,6 +263,9 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 	}
 	if own.speed != "" {
 		params["speed"] = own.speed
+	}
+	if own.permission != "" {
+		params["permission_mode"] = own.permission
 	}
 	if err := s.applyModel(ctx, "agent.new", params); err != nil {
 		return "", startAgent{}, err
