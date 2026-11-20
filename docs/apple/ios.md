@@ -842,9 +842,11 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
     With the list folded, the chat's leading button brings it back (#963): the sidebar's button (`Theme.Icon.sidebar`, "Show Sidebar", with how many Agents need the user), as on the
     main conversation, not a ‹ (#8603). What the button shows follows how the page was reached, not what it is: a chat picked in the list is a root and has the sidebar's button; the
     same chat pushed from inside another page (a waiting Agent on the main conversation, Inbox's) has ‹, which goes back to that page. On iPhone Duo open on its side the chat has
-    neither (#3680): its actions are in the system's side bars, whose Show Sidebar at the top left brings the list back, and the side column has no second one
-    (`ChatView.systemShowsList`). That button sits in a row of the bar of its own, so the chat's page starts `Theme.Space.xl` from the top whatever the bar holds
-    (`ChatView.pinsSideTop`): folded or out, the header and the chat stay where they are, and the button lies on the title's line, as on a place.
+    neither (#3680): its actions are in the system's side bars, and the side column's first item, where Back is on a sub-page, is the sidebar's button
+    (`ChatView.sideBarItems`, #11636), as on a place (`ListButtonItem`). Not the system's Show Sidebar, removed on the roots' column there too: iOS draws it in the bar's
+    title row, which the chat removes while its header shows its own title, so an Agent's chat picked in the sidebar had no way back to it, and on a place it was not
+    drawn again after a drill-down was popped. The chat's page starts `Theme.Space.xl` from the top whatever the bar holds (`ChatView.pinsSideTop`): folded or out, the
+    header and the chat stay where they are.
   - The Separate layout's tabs at regular width (#8596): the split makes the floating tab bar's room in its columns, and UIKit held it a second time in the tab's own top safe
     area for a tab first shown after a switch (the Agents tab's column head 64 pt lower). `TabBarRoomOnce` (ChatsView) takes the tab's top beyond the window's own back off.
   - Split chat pages do not hide the tab bar (single-column pages do, to fill the screen).
@@ -2157,8 +2159,10 @@ a follow-up's prompt (`injected.detail`, or the raw input) is never shown while 
 visible one; its block shows only the one-line `injected.line` (`ChatLine.hidesPrompt`). A round stays shown by exactly
 the supervision rule (`Supervision.visible`): a successful `ask_user` / `notify_user`, a pending live `ask_user`, an
 accepted / needs-user `task_review`, a `supervision_finish` receipt with user visibility, or `fold.supervision_user`.
-A completed round with a nonblank final reply also stays visible unless it successfully finished silent. The reply
-uses the usual bubble and the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
+A completed round with a nonblank final reply also stays visible unless it successfully finished silent, except for a
+routine cross-conversation report to the main conversation: that reply stays inside the expandable background record,
+just as on the web. Explicit owner-visibility actions above still open and notify. The reply uses the usual bubble and
+the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
 
 While folding is on, the main chat's Needs You tray groups task rows by the conversation that supervises them (the
 to-do's `origin`) when they come from more than one: the conversation's own group first without a header, then each
@@ -2457,12 +2461,12 @@ When a device cannot reach the hub address, connect through an SSH server. For t
   `ServerConfig`, the pairing registry, `currentConfig` and all comparisons still use the hub's own address, so multi-hub grouping, routing and credential upgrades need no tunnel awareness.
   `HubRoute.healthProbe` uses `direct: true`, always probing the direct route.
 - **Routing**: with usable SSH settings in a group (host, user, confirmed fingerprint), `routePicker` always has a value: before every connection, `HubRoute.answering` probes direct routes (even a single address),
-  and only if none answer calls `SSHTunnels.open`; "Always use SSH" opens the tunnel first. While tunneled, `watchDirect` probes direct routes every 2 minutes and calls `reroute()` when they work again.
+  and only if none answer calls `SSHTunnels.open`; "Always use SSH" opens the tunnel first. When restoring a closed SSH tunnel used last time, that tunnel races the direct probes and the first success is used (#11671); an already-routed tunnel keeps direct-first selection so `watchDirect` can still move back. While tunneled, `watchDirect` probes direct routes every 2 minutes and calls `reroute()` when they work again.
 - **Configuration** lives in `PairedHub.ssh` (per-hub pairing registry in Keychain); private keys are separate in Keychain (`ssh.identity`, `AfterFirstUnlockThisDeviceOnly`).
   SSH settings entered on the pairing page are saved with the newly paired hub; the tunnel opened for pairing is handed directly to it (`SSHTunnels.adopt`), and device-credential upgrading continues through it.
 - **Status** (consistent with existing wording): connection details add "Route: Direct / Via SSH tunnel (user@host)"; tunnel startup failures show "SSH tunnel: <reason>";
   Settings top says "Hub connected · Via SSH tunnel"; the active hub in Settings › hub has an "SSH" tag and footer "Connected (via SSH tunnel)", with the SSH tunnel row showing Not configured / Fallback / Always / In use.
-- **Background**: `suspendLinks` closes every tunnel (`SSHTunnels.closeAll`); foregrounding reroutes and rebuilds each group (about 1 second measured in the simulator).
+- **Background**: `suspendLinks` closes tunnels unless a call or an outside action still owns them (`closeTunnelsForBackground`). Closing SSH also cancels pending authentication and removes its start immediately; late completion cannot affect a newer start or relay lease. Foregrounding reroutes and rebuilds each group. `HubLink.api` requests await `LiveConnection.waitForRoute` before resolving their outgoing address, independently per group and without waiting for the socket hello. Cancelled route attempts cancel their waiting requests. Actual recovery latency is network-dependent; the old approximately one-second observation was simulator-only.
 - **Debugging**: `-seedSSHTunnel <base64 SSHRoute JSON>` seeds SSH settings for the first hub; `-seedSSHKey <base64 32-byte seed>` uses a supplied test key (DEBUG only),
   `-tab settings -openSSHTunnel YES` opens the first hub's SSH tunnel page. End-to-end test setup is in `docs/operations/testing.md` ("SSH tunnels").
 
@@ -2748,7 +2752,7 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
 - **Push grading** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
   push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`, the legacy wire route); its footer says it holds
   for every device and what still notifies. A hub without the route, or one that does not answer, shows no section; a change
-  shows at once, and a refusal puts it back and says why. `docs/server/server.md` "Push grading (push urgency filtering, `hub/lnmode.go`)".
+  shows at once, and a refusal puts it back and says why. `docs/server/server.md` "Push grading (push urgency filtering, `hub/push_grading.go`)".
 - **Quiet hours**: Settings › Notifications has this device's quiet hours (a switch, then From / Until), only when the prefs answer
   has `quiet`; each change sends `quiet` alone with this device's time zone (`APIClient.setQuietHours`), as the web does. Hours set
   in another zone: the section's footer names that zone instead of this device's (`QuietHours.elsewhere`) until they are changed here.
@@ -2763,6 +2767,17 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
 - **Tests**: `InboxManagersTests`, `ManagerPushTests`, `ManagerGroupsTests.aComputerIsOfflineWithItsManager` and
   `.aPushIsThePagesOwnUnlessAnotherManagerSentIt`,
   `ExtensionOperationsTests.anotherManagersOperationIsKeptApart`, `MacAttentionTests.aManagerSwitchedOffHereRingsNoBanner`.
+
+## Starred messages (#11993)
+
+On iPhone and iPad, touch and hold a user message or reply in an Assistant or Agent conversation and choose **Star**.
+The same row shows the saved mark, and **Unstar** offers Undo. **Pages › Starred** searches the current assistant's
+snapshots by words, conversation title and speaker. The list is shared with the Web app through the existing Assistant
+manager API. Chats use compact references. The saved text is read while the Starred page is open.
+
+**Open Original** checks the exact transcript and highlights the saved message when it is still present. Positional
+messages also need a matching record fingerprint. A deleted conversation or original leaves the words available for
+Copy. A failed connection offers a retry. Older assistants that do not offer the API have no Starred entry or menu action.
 
 ## Saved prompts (#9436)
 
@@ -2852,7 +2867,7 @@ is listed), and a hub that answers it has no roster filters nothing (`AppModel.m
   default's conversations name none, and with one installed manager or no roster nothing is named.
 - **Counts**: the tab badges, the app icon's number (their sum), the sidebar's Inbox and To-dos counts, the home page's
   Needs You and the main conversation's dock count the current assistant's (`AppModel.countBadges`,
-  `InboxStore.actionCount`, `TodoStore.badgeCount`). The
+  `InboxStore.unreadCount` for the Inbox's badge and row, `TodoStore.badgeCount`). The
   switcher shows beside every other assistant what waits there (`AssistantBadges`, `AppModel.assistantBadges`): its agents
   waiting (a session with a pending card or in Needs You once, quiet and muted ones left out, a card on no session by
   itself; Persona's own conversations by their cards only) plus `inbox_needs_you`. The header's face carries a mark while

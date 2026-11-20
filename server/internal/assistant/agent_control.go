@@ -714,13 +714,14 @@ func (s *Service) agentTool(ctx context.Context, machine, session, name string, 
 // false is no signal: it goes into the queue of questions that can wait (later.go) when a briefing will list it.
 func (s *Service) reportToSupervisor(ctx context.Context, machine, session string, args json.RawMessage, now time.Time) (string, error) {
 	var a struct {
-		Kind     string            `json:"kind"`
-		Text     string            `json:"text"`
-		Evidence []string          `json:"evidence"`
-		Step     int               `json:"step"`
-		Steps    int               `json:"steps"`
-		Urgent   *bool             `json:"urgent"`
-		Criteria []criterionReport `json:"criteria"`
+		Kind     string              `json:"kind"`
+		Text     string              `json:"text"`
+		Evidence []string            `json:"evidence"`
+		Step     int                 `json:"step"`
+		Steps    int                 `json:"steps"`
+		Urgent   *bool               `json:"urgent"`
+		Criteria []criterionReport   `json:"criteria"`
+		Handoff  *taskHandoffReceipt `json:"handoff_receipt"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
@@ -736,6 +737,9 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	}
 	if session == "" {
 		return "Nobody receives this: the call came from outside an agent session.", errNoSupervisor
+	}
+	if a.Handoff != nil {
+		return s.reportTaskHandoff(ctx, machine, session, *a.Handoff, a.Kind, text, a.Evidence, now)
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return "", err
@@ -824,6 +828,9 @@ func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, tex
 
 // reportNow sends a report to the supervisor of task t as a signal, and shows it in its conversation.
 func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind, text string, evidence []string, step, steps int, now time.Time) (string, error) {
+	if kind == upReportDone {
+		s.recordBriefCompletion(ctx, t, briefCompletionReport, now)
+	}
 	s.progressReported(machine, session, len(evidence), step, now) // evidence or a later step is progress (supervise_progress.go)
 	s.signal(superviseSignal{Todo: t.ID, Kind: sigReport, Key: now.UTC().Format(time.RFC3339Nano), At: now, Machine: machine,
 		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps, SourcePermission: devicewire.SourcePermissionFrom(ctx)})

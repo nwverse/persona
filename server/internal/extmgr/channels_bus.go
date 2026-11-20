@@ -172,6 +172,18 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		if a.Card == "" {
 			return nil, errors.New("feishu.post needs a card")
 		}
+		// The answer to the owner's "/read" goes under that message, in a group the bot may not otherwise write in
+		// (#11803, bots_read.go): a bounded number of replies, never a detour into the group.
+		if chatID, found, err := readSourceReply(set, a.ChatID, a.ReplyTo, h.bots.clock().UTC()); found {
+			if err != nil {
+				return nil, err
+			}
+			if !h.useAISourceReply(a.ReplyTo, false) {
+				return nil, errBotSourceReply
+			}
+			id, err := h.botPostJSONKeyedOpt(ctx, api, chatID, a.ReplyTo, a.Card, a.Fallback, callerKey(a.UUID, feishuMaxUUID-4), a.InThread, true)
+			return map[string]any{"message_id": id}, err
+		}
 		chatID, err := botSendChat(set, a.ChatID)
 		if err != nil {
 			return nil, err

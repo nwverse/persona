@@ -110,6 +110,8 @@ type superviseSignal struct {
 	// Decision: the decision a recheck or an owner_cannot_answer signal is about, as it was asked (decision.go); for
 	// owner_cannot_answer Detail is the owner's answer (decide_yourself, not_what_i_asked, explain_first).
 	Decision *prompts.SuperviseDecision
+	// Told: a check's decided signal whose answer is already in the task Agent's chat (decisionTold, checkDecided).
+	Told bool
 	// Inbox: the Inbox item an inbox signal names, and how many new messages it tells (supervise_inbox.go).
 	Inbox *prompts.SuperviseInbox
 	// Optional routine batching keeps these in memory only, after routing and before delivery. They are never part of
@@ -159,8 +161,8 @@ func (g superviseSignal) id() string {
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
 	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
-		sigRecheck, sigUndecidable, sigOwnerCannot, // the owner waits on a decision they cannot answer as it is
-		sigParkDecided, sigDecisionReply: // the owner answered: what they said is acted on soon
+		sigRecheck, sigUndecidable, sigOwnerCannot, sigEstimateDue, // the owner or an automatic review deadline waits
+		sigParkDecided, sigDecisionReply, sigHandoffResult:
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -281,7 +283,7 @@ func (s *Service) signal(g superviseSignal) {
 		g.At = time.Now()
 	}
 	b := &s.supervise
-	if turnSignalKind(g.Kind) && s.turnSignalled(g) {
+	if turnSignalKind(g) && s.turnSignalled(g) {
 		// How its turn ended was told already, by this manager or by the one before a restart (task_turns.go).
 		b.mu.Lock()
 		b.init()
@@ -399,6 +401,12 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 	}
 	switch v.state(t) {
 	case reviewPending:
+		if h := v.handoffResult(); h != nil {
+			if h.ToldAt.IsZero() {
+				return []superviseSignal{handoffResultSignal(t.ID, h)}
+			}
+			return nil
+		}
 		return []superviseSignal{{Todo: t.ID, Kind: sigReview, Key: reviewKey(v)}}
 	case reviewParked: // nothing until its time, then that it came (parked.go)
 		if g, ok := parkedDueSignal(t, now); ok {
@@ -453,7 +461,12 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 }
 
 // reviewKey names one review a task waits for: when it began to wait.
-func reviewKey(v *Supervision) string { return "review@" + v.UpdatedAt.UTC().Format(time.RFC3339Nano) }
+func reviewKey(v *Supervision) string {
+	if r := v.externalPRWake(); r != nil {
+		return externalPRReviewPrefix + r.At.UTC().Format(time.RFC3339Nano)
+	}
+	return "review@" + v.UpdatedAt.UTC().Format(time.RFC3339Nano)
+}
 
 // stallAfter is how long without progress counts as stuck for a task that should take expect minutes.
 func stallAfter(expect int) time.Duration {
@@ -508,6 +521,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 			continue
 		}
 		s.remedyWatch(ctx, t, now, history) // a failed start's kept tab expired (start_remedy.go)
+		t = s.checkTaskHandoff(ctx, t, now)
 		agents := s.taskAgentsIn(ctx, t, lists)
 		group := s.allStoppedGroup(ctx, t, groups[t.ID], lists)
 		allStopped := false

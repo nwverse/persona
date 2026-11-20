@@ -188,6 +188,12 @@ internal class ChatInteractionController(
         if (readOnly.value || !canSend.value) return false
         if (sending.value || submittedDraft.value != null) return false
         if (command == null && ((!hasContent && contexts.isEmpty()) || !ready)) return false
+        val applyingSwitch = command == null && switchesNext(switchSession, glassAgent)
+        if (applyingSwitch && draft.attachments.isNotEmpty() &&
+            switchSession?.let(persona.core.domain.models.AgentModelPanel::pendingEngine) != null) {
+            notify(resources.getString(R.string.chat_engine_switch_text_only))
+            return false
+        }
         val refs = if (command == null) contexts else emptyList()
         val id = java.util.UUID.randomUUID().toString()
         if (command == null) {
@@ -205,7 +211,7 @@ internal class ChatInteractionController(
                     tasks.sendRouted(key.sessionId, draft.text.trim())
                 if (!routed) {
                     // The user's own message carries a launcher switch waiting on Glass.
-                    if (command == null && switchesNext(switchSession, glassAgent)) {
+                    if (applyingSwitch) {
                         sender.sendApplyingSwitch(key, wireText, id)
                         drawerSwitch.value = null
                     } else {

@@ -141,14 +141,17 @@ describe("opening the app", () => {
 describe("startPageGone", () => {
   it("says gone only once it can be told", async () => {
     const { startPageGone } = await load();
-    const none = { extensions: false, board: false };
-    const all = { extensions: true, board: true };
+    const none = { extensions: false, board: false, starred: false };
+    const all = { extensions: true, board: true, starred: true };
     expect(startPageGone(TODAY, true, none)).toBe(false);
     expect(startPageGone(TODAY, false, none)).toBeUndefined();
     expect(startPageGone(TODAY, false, all)).toBe(true);
-    expect(startPageGone("workspace-board", false, { extensions: true, board: false })).toBeUndefined();
+    expect(startPageGone("workspace-board", false, { ...all, board: false })).toBeUndefined();
     expect(startPageGone("workspace-board", false, all)).toBe(true);
     expect(startPageGone("messages", false, none)).toBe(true);
+    expect(startPageGone("starred", false, none)).toBeUndefined();
+    expect(startPageGone("starred", false, all)).toBe(true);
+    expect(startPageGone("starred", true, all)).toBe(false);
   });
 });
 

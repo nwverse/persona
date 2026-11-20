@@ -80,6 +80,10 @@ func TestTaskOwnConversationUncertainFailureNotifies(t *testing.T) {
 		sends.Add(1)
 		return nil, rpc.ErrClosed
 	})
+	// The first run's send records its outcome in the background, outside the bubble below (recordSendAsync). The
+	// bubble's run adds to the same WaitGroup, which must not still count a write from outside it, or the runtime
+	// stops the whole test binary ("WaitGroup.Add called from inside and outside synctest bubble").
+	s.waitWorkEvents()
 	synctest.Test(t, func(t *testing.T) {
 		task, _ := taskByID(s, "job")
 		if _, err := s.runTask(task, task.At, time.Now(), false, false); err == nil {

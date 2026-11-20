@@ -228,6 +228,7 @@
     <string name="chat_link_unsupported_text">这个链接不能在 Persona 里打开。</string>
     <string name="chat_link_ok">知道了</string>
     <string name="chat_link_open">打开</string>
+    <string name="chat_link_open_in_app">在 Persona 中打开</string>
     <string name="chat_link_no_app">没有能打开这个链接的 App</string>
     <string name="chat_links_mail_title">写邮件？</string>
     <string name="chat_links_mail_text">打开邮件 App 写一封邮件。</string>

@@ -237,4 +237,12 @@
     <string name="assistant_usage_unavailable">Token usage isn\'t available</string>
     <string name="assistant_usage_unavailable_detail">This hub does not provide token usage history.</string>
     <string name="assistant_usage_unknown_machine">Earlier computer</string>
+    <string name="assistant_sidebar_pages">Pages</string>
+    <string name="assistant_sidebar_chats">Persona Chats</string>
+    <string name="assistant_sidebar_search">Search</string>
+    <string name="assistant_sidebar_search_chats">Chats</string>
+    <string name="assistant_sidebar_search_agents">Agents</string>
+    <string name="assistant_sidebar_search_no_agents">No matching Agents</string>
+    <string name="assistant_sidebar_search_no_agents_detail">Try another search.</string>
+    <string name="assistant_sidebar_search_agent_field">Search Agents</string>
 </resources>

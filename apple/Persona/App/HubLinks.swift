@@ -47,6 +47,7 @@ final class HubLink: Identifiable {
     var config: ServerConfig { live.currentConfig ?? fallback }
     var api: APIClient {
         var c = APIClient(config: config, group: group)
+        c.requestRoute = { [weak live] in try await live?.waitForRoute() }
         c.extensionsAPI = hello.features.isEmpty ? Self.remembersExtensions(group) : features.contains("extensions")
         c.personaNaming = live.personaContracts
         c.sessionLookup = features.contains("sessions_lookup")

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -101,7 +102,7 @@ func (t *PlanTask) noteWhy(note string) {
 // launcher list rather than another probe. A read-only task whose launcher has no read-only mode is refused here
 // (readonlyLauncherRefusal), when it is planned and again before it starts.
 func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, own startPick, params map[string]any) (startAgent, error) {
-	note, agent, err := s.fitLauncher(ctx, m, own, params)
+	note, agent, err := s.fitNewLauncher(ctx, m, own, params)
 	if err != nil {
 		return agent, err
 	}
@@ -186,6 +187,9 @@ func (s *Service) taskDirectoryExists(ctx context.Context, machine, dir string) 
 // up again after the start could find another, or none). A failed start counts against the launcher there.
 func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (mid, sid string, err error) {
 	t.startedAgent = ""
+	if err := s.checkClaimedGatewayStart(ctx, *t); err != nil {
+		return "", "", err
+	}
 	if err := s.checkRequestStart(ctx, *t); err != nil {
 		return "", "", err
 	}
@@ -242,6 +246,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if !m.Reachable {
 		return "", "", machineOffline(m.Name)
 	}
+	if err := s.deferGatewayStart(ctx, t, m, own, params, retry); err != nil {
+		return "", "", err
+	}
 	// The resource/direction admission gate (admission.go): fixed tasks are refused here, flexible tasks may have
 	// been moved to a less loaded machine. The claim is stored on the task and held until its agent is linked or the
 	// start fails for good (runPlanTaskStart), so it still counts while metrics and the ledger catch up.
@@ -277,6 +284,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err != nil {
 		return "", "", err
 	}
+	t.Model, _ = params["model"].(string)
 	if err := checkStartSpeed(params, fit, ""); err != nil {
 		return "", "", err
 	}
@@ -366,7 +374,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	rules = append(rules, prompts.RenderTaskFiles(answerLanguage(s.hello(ctx).Locale)))
 	// One structured closeout carries delivery too when both switches are on.
 	delivery := !t.Readonly && s.doneNeedsDelivery(ctx)
-	brief := s.closeoutBrief(ctx, delivery)
+	brief := s.closeoutBrief(ctx, m.ID, delivery)
 	if delivery { // what done means: live and checked (delivery.go)
 		rules = append(rules, prompts.RenderTaskDelivery(brief != ""))
 	}
@@ -492,6 +500,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		return "", "", err
 	}
 	start := func() error {
+		if err := s.checkClaimedGatewayStart(ctx, *t); err != nil {
+			return err
+		}
 		if !t.backendWorkspace() {
 			return s.call(ctx, m.ID, DeviceSessionStart, params, &res)
 		}
@@ -535,9 +546,13 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		break
 	}
 	if err != nil {
+		var stateErr *gatewayQueueStateError
+		if err == errGatewayTaskHandled || errors.As(err, &stateErr) {
+			return "", "", err
+		}
 		s.recordStartFailure(ctx, m.ID, s.startLauncher(ctx, picked), err)
 		if !t.backendWorkspace() && startResultUnknown(err) {
-			if t.RequestGate != "" {
+			if t.startWithoutReplay() {
 				if expectID != "" {
 					lookup, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartListTimeout)
 					session, found := s.adoptStartedSession(lookup, m, s.startLauncher(ctx, picked), t.Cwd, expectID, nil)

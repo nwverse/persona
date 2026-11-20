@@ -7,14 +7,16 @@ rename, start a new omp with a first message, answer its `ask_user` questions an
 
 Verified with omp 18.18.x and herdr 0.9.5. Everything here needs a herdr engine.
 
-Being added in steps (issue #4148). Not here yet: resuming a stopped omp session from the phone, and starting omp from the iOS New
-Agent sheet with its first message.
+In New Agent on web, iOS or Android, select the computer's `omp` launcher in herdr. Enter a model ID such as
+`opus` or `openai/gpt-5.2` to use it for this session. You can enter an ID even when the model list is empty.
+Leaving the model at Default lets omp read `modelRoles.default` from its own configuration.
+An older Persona node offers the launcher default. Upgrade the node on that computer to enter a model ID.
 
 ## Scope
 
 | Works from the phone | Not supported |
 | --- | --- |
-| Start `omp` in a new herdr tab, with the first message | Choosing its model, thinking effort, permission mode or ultracode (omp's own `config.yml` decides; `omp_options`) |
+| Start `omp` in a new herdr tab with a first message and an optional model | Setting thinking effort, permission mode or ultracode on that start |
 | List running omp sessions and their state, and the stopped ones of the last 7 days | Engines other than herdr, and Windows |
 | Read the chat, including live text | A web client for omp (the equivalent of pi-web) |
 | Send messages, interrupt, rename | Sessions under an `omp --profile` directory |
@@ -146,7 +148,8 @@ entries (calls outside the conversation), orchestration tokens included, under t
 - Only omp's default agent directory is read. Sessions started with `omp --profile <name>` live elsewhere.
 - A stopped session is resumed only in herdr: an Orca default engine refuses it.
 - Only the launcher named exactly `omp` starts omp. A wrapper script or alias around omp is refused as an omp start.
-- A start with a model, permission mode, thinking effort or ultracode is refused with `omp_options` before anything runs.
+- A new `session.start` with a model passes `--model` and the selected ID to omp. The same choice is available to `agent_start`, `task_plan` and Agent presets. The override lasts for one session and leaves `~/.omp/agent/config.yml` untouched.
+- A resume uses the saved session. Asking for a model override on resume, or for a permission mode, thinking effort or ultracode on an omp start, is refused before a tab opens.
 - `omp -p`, `--print` and `--mode json` do not register with Persona: a one-shot run has nothing to drive from the phone.
 
 ## Validation
@@ -162,4 +165,4 @@ entries (calls outside the conversation), orchestration tokens included, under t
   resume from disk, two sends or two starts at once, a start racing a send, a send or start after the extension left, a
   start's images and `client_msg_id`, the refusals, a resume that never comes up and herdr's restore command; `server/internal/node/omp_guards_test.go`
   covers a live pane's file, a start for a runtime's session, the fallback row moving to its session, and the calls a stopped
-  session refuses.
+  session refuses. `server/internal/node/omp_start_model_test.go` checks the new session's recorded model and the arguments the terminal receives for default, short and provider-qualified model IDs.
