@@ -2204,7 +2204,7 @@
   },
   {
     "name": "conversation_send",
-    "description": "Message another conversation. It waits for a running turn or 2 min of user quiet. Marked as from this one; replies use conversation_send. Few hops per user message (main: no cap; a wake-up resets; a first reply adds none); long back-and-forth is cut. Past the rate it queues: the result says when, no resend. Don't reply just to acknowledge. Follow policy refusals; don't retry. Owner-verbatim words to main stay allowed: start with them. Handing on a user request: set quote (free once).\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Message another conversation; it waits for a running turn or 2 min of user quiet. Replies use conversation_send. Few hops per user message (main: no cap; a wake-up resets; a first reply adds none). Past the rate it queues: the result says when. Ack or FYI only: wake false. Follow policy refusals; don't retry. Owner-verbatim words to main: start with them. Handing on a user request: set quote (free once).\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2222,6 +2222,10 @@
         "quote": {
           "type": "string",
           "description": "\"latest\" (this turn), a message id or the user's exact words"
+        },
+        "wake": {
+          "type": "boolean",
+          "description": "false: no turn; read with the next one"
         }
       }
     }
