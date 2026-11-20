@@ -2517,7 +2517,9 @@ final class AppModel {
             let res = try await api.items(key, beforeSeq: nil)
             settle(key, applyBatch(chat(key), kind: .latest, items: res.items, span: res.span, backlog: true, hasMore: res.hasMore))
         } catch {
-            chat(key).error = error.shown
+            let store = chat(key)
+            store.error = error.shown
+            store.historyNotFound = error.isHistoryNotFound
         }
     }
 
@@ -2585,6 +2587,11 @@ final class AppModel {
             ChatTrace.shared.note(key, "reload n=\(page.items.count) to=\(page.span.to.map(String.init) ?? "?") kept=\(chat(key).items.count - page.items.count)")
         } catch {
             // The defer reports one failed completion for both transport errors and fence cancellation.
+            if error.isHistoryNotFound, shouldApply?() ?? true {
+                let store = chat(key)
+                store.error = error.shown
+                store.historyNotFound = true
+            }
         }
     }
 
@@ -2622,6 +2629,7 @@ final class AppModel {
     func loadOlder(_ key: SessionKey, turns: Int = 2) async -> Bool {
         let store = chat(key)
         guard let api = api(key.group), store.hasMore, !store.isLoadingOlder, let first = store.items.first else { return false }
+        let requestedHistory = store.history
         store.isLoadingOlder = true
         #if DEBUG && os(iOS)
         ProductionContinuityShadow.shared.loadOlder(store)
@@ -2632,9 +2640,11 @@ final class AppModel {
             prependBatch(store, items: res.items, hasMore: res.hasMore)
             return true
         } catch {
+            let missing = error.isHistoryNotFound
             #if DEBUG && os(iOS)
-            ProductionContinuityShadow.shared.failed(.olderFailed, in: store)
+            if !missing { ProductionContinuityShadow.shared.failed(.olderFailed, in: store) }
             #endif
+            if missing, store.history == requestedHistory { prependBatch(store, items: [], hasMore: false) }
             if !error.isOffline { show(error) } // scrolling up while offline: the title says why nothing comes
             return false
         }
