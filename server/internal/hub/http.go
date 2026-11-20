@@ -598,6 +598,7 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		MoreAfter  bool         `json:"more_after,omitempty"`
 		More       bool         `json:"more,omitempty"` // a fold's lines go on after these
 		StrictRead bool         `json:"strict_read,omitempty"`
+		Partial    bool         `json:"partial,omitempty"`
 		itemSpan
 	}
 	if err := m.call(ctx, "session.items", params, &res); err != nil {
@@ -1736,6 +1737,7 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			Items     []proto.Item `json:"items"`
 			HasMore   bool         `json:"has_more"`
 			MoreAfter bool         `json:"more_after"`
+			Partial   bool         `json:"partial,omitempty"`
 			itemSpan
 		}
 		if err := m.call(ctx, "session.items", params, &res); err != nil {
@@ -1751,6 +1753,9 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			res.Items = proto.WithoutImageData(res.Items)
 		}
 		out := res.itemSpan.into(map[string]any{"type": "items", "machine_id": m.cfg.ID, "session_id": sid, "items": res.Items, "backlog": true})
+		if res.Partial {
+			out["partial"] = true
+		}
 		if since == 0 {
 			// Only a page counted back from the end knows whether older items exist. A catch-up after since_seq does
 			// not: sending false there told the app the history was complete, and scrolling up stopped at its oldest.
