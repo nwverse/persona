@@ -209,16 +209,23 @@ def verify_merged_pr(pr, repository, channel, commit, actor):
     return version
 
 
+def sha256_stream(stream):
+    digest = hashlib.sha256()
+    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
 def check_manifest_bytes(directory, item):
     path = directory / item["name"]
     if not path.is_file() or path.stat().st_size != item.get("size"):
         raise ReleaseError("a release download's size differs from its manifest")
     with path.open("rb") as stream:
-        if hashlib.file_digest(stream, "sha256").hexdigest() != item.get("sha256"):
+        if sha256_stream(stream) != item.get("sha256"):
             raise ReleaseError("a release download's archive digest differs from its manifest")
     with path.open("rb") as stream:
         with gzip.open(stream, "rb") as unpacked:
-            if hashlib.file_digest(unpacked, "sha256").hexdigest() != item.get("binary_sha256"):
+            if sha256_stream(unpacked) != item.get("binary_sha256"):
                 raise ReleaseError("a release download's executable digest differs from its manifest")
 
 

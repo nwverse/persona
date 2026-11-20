@@ -3305,6 +3305,18 @@ if os.environ.get("MOCK_TODO_PROJECTS") == "1":
         _p = {"todo_weather": "weather-app", "todo_review": "weather-app", "todo_photos": "photo-sync", "todo_nas": "photo-sync",
               "todo_blog": "blog"}.get(_t["id"])
         if _p: _t["project"] = _p
+# MOCK_STAGE_DONE=1: the stage strip's endings (#11590, docs/assistant/todos.md "Data model"): a code task accepted with
+# nothing left to deploy, whose strip ends with Done after Develop (stage_done), and a check of real data still running,
+# general work that draws no strip at all.
+if os.environ.get("MOCK_STAGE_DONE") == "1":
+    TODOS_INIT.extend([
+        {"id": "todo_stage_done", "title": "Upgrade the command-line tool", "notes": "Upgraded and checked on the laptop.",
+         "done_at": ago(minutes=40), "done_by": "review", "created_at": ago(hours=3), "updated_at": ago(minutes=40),
+         "stage": "develop", "stage_kind": "code", "stage_done": True, "spaces": [], "agents": []},
+        {"id": "todo_stage_general", "title": "Check the new rule against real data", "notes": "", "done_at": None,
+         "created_at": ago(hours=1), "updated_at": ago(minutes=5), "stage": "develop", "stage_kind": "general",
+         "spaces": [], "agents": []},
+    ])
 TODOS = copy.deepcopy(TODOS_INIT)
 
 _DIRECTION_STATE_ORDER = {"needs_you": 0, "review": 1, "stuck": 2, "working": 3, "planned": 4}

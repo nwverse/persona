@@ -217143,6 +217143,30 @@
           }
         }
       }
+    },
+    "Done [Todo Stage Bar]" : {
+      "comment" : "The step that ends a to-do's stage bar when its work closed with nothing left to deploy.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完成"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
