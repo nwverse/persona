@@ -64,13 +64,15 @@ type runtimeHello struct {
 		Hash string `json:"hash"`
 	} `json:"package,omitempty"`
 	Caps struct {
-		Start     bool `json:"start"`
-		Send      bool `json:"send"`
-		Interrupt bool `json:"interrupt"`
-		Rename    bool `json:"rename"`
-		Close     bool `json:"close"`
-		Rewind    bool `json:"rewind"`
-		Fork      bool `json:"fork"`
+		Start        bool `json:"start"`
+		Send         bool `json:"send"`
+		Interrupt    bool `json:"interrupt"`
+		Rename       bool `json:"rename"`
+		Close        bool `json:"close"`
+		Rewind       bool `json:"rewind"`
+		Fork         bool `json:"fork"`
+		QueueEdit    bool `json:"queue_edit"`
+		QueueSendNow bool `json:"queue_send_now"`
 		// Assistant: its launcher may run the Persona assistant (assistant_runtime.go; docs/integrations/runtimes.md "Assistant").
 		Assistant bool `json:"assistant"`
 		// SupervisionPolicy: the runtime carries manager-owned supervision_instructions on its own authoritative
