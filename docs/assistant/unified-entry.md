@@ -1239,8 +1239,10 @@ conversation may `set` one. A string replaces the whole notes; `{"old":"one exac
 changes one fragment without resending the rest (an empty `new` deletes it). An empty, missing or repeated `old` and a
 malformed object are explicit errors before any card or write; unchanged text needs no card. A change uses
 the existing phone permission card with the direction's name and before → after text, and only the owner's approval
-applies it. The proposal captures `notes_at`; approval calls `setDirectionNotes` against that baseline, so an app or tool
-edit made meanwhile refuses the stale proposal instead of overwriting the newer notes. No second storage or assistant
+applies it. The proposal captures `notes_at`; approval calls `setCurrentDirectionNotes` against that baseline while
+holding the settings change lock and, for the membership/conflict check and write, the direction lock. A newer app or
+tool edit, or a direction end that commits first, refuses the stale proposal instead of overwriting newer state or
+reporting a change no current lead can receive. No second storage or assistant
 HTTP route exists: the app route and the tool share persistence, sanitation, conflict checks and the delivery below.
 
 - **The leader** gets them in its own system prompt: they are appended, with the name and goal of the kb project the

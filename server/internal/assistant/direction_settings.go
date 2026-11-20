@@ -133,7 +133,8 @@ func directionPromptChanged(before, after string) (string, string) {
 }
 
 // setDirectionPromptSetting prepares a card against the exact notes_at read. Approval applies that same computed edit,
-// not a fresh edit against newer text, and setDirectionNotes checks the baseline under the direction lock.
+// not a fresh edit against newer text, and setCurrentDirectionNotes serializes Leaders changes and checks the baseline
+// under the direction lock.
 func (s *Service) setDirectionPromptSetting(ctx context.Context, id, name string, raw json.RawMessage) (*ownChange, error) {
 	d := s.directionOf(id)
 	if d == nil || !slices.Contains(s.settings(ctx).Leaders, id) {
