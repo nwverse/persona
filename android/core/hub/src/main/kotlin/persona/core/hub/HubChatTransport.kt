@@ -156,10 +156,14 @@ class HubChatTransport internal constructor(
      * A card that is over answers 200 `already` with the answer that took effect, or 410 with how it ended
      * (docs/protocol/protocol.md, #1673): the first is an outcome, the second an [InteractionGoneException] carrying `status`.
      */
-    override suspend fun resolveOutcome(id: String, resolution: Resolution): ResolveOutcome {
+    override suspend fun resolveOutcome(id: String, resolution: Resolution): ResolveOutcome =
+        resolveOutcome(id, resolution, handoffCard = false)
+
+    override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean): ResolveOutcome {
         val path = api("interactions", id, "resolve")
         val body = JsonCodec.encodeToString(resolution)
-        val headers = ProtocolCompatibility.operationHeaders(newOpId())
+        val headers = ProtocolCompatibility.operationHeaders(newOpId()) +
+            if (handoffCard && resolution.allow == true) mapOf("X-Persona-Features" to "secret_handoff") else emptyMap()
         val deadline = clockMillis() + resolveRetryMillis
         while (true) {
             try {

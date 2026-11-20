@@ -221,8 +221,10 @@ class HttpInboxAssistantTransport private constructor(
     override suspend fun directionsTreeOf(manager: String?) =
         json(url("api", "v1", "assistant", "directions", "tree").pinned(manager))
     override suspend fun createConversationOf(manager: String?, main: Boolean, launcher: String?) =
+        createConversationOf(manager, main, launcher, null)
+    override suspend fun createConversationOf(manager: String?, main: Boolean, launcher: String?, via: String?) =
         json(url("api", "v1", "assistant", "conversations").pinned(manager), buildJsonObject {
-            put("prompt", ""); put("main", main); launcher?.let { put("launcher", it) }
+            put("prompt", ""); put("main", main); launcher?.let { put("launcher", it) }; via?.let { put("via", it) }
         })
     override suspend fun createConversationOf(manager: String?, main: Boolean, pick: persona.core.contracts.ModelPick) =
         json(url("api", "v1", "assistant", "conversations").pinned(manager), buildJsonObject {

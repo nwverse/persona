@@ -27,6 +27,9 @@ interface InteractionCenter {
         resolve(id, resolution)
         return ResolveOutcome()
     }
+    /** A full-card hand-off approval declares itself on this request alone; all other calls keep the old path. */
+    suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean): ResolveOutcome =
+        resolveOutcome(id, resolution)
 
     /**
      * Questions the assistant answered for the user, oldest first (iOS `AppModel.delegatedAnswers`): from

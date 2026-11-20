@@ -26,6 +26,9 @@ interface ChatTransport {
         resolve(id, resolution)
         return ResolveOutcome()
     }
+    /** The transport adds the hand-off feature header only for this explicit full-card approval. */
+    suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean): ResolveOutcome =
+        resolveOutcome(id, resolution)
     suspend fun image(session: SessionKey, itemId: String): ByteArray
     suspend fun fullItem(session: SessionKey, itemId: String): Item
     /**

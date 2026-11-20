@@ -94,7 +94,8 @@ internal class ChatInteractionController(
         taps.value = taps.value.tapped(interaction.id)
         scope.launch {
             try {
-                val result = submitInteraction { interactions.resolveOutcome(interaction.id, resolution) }
+                val result = submitInteraction { interactions.resolveOutcome(interaction.id, resolution,
+                    handoffCard = interaction.isSecretHandoff && resolution.allow == true) }
                 result.submission.haptic?.let(haptics)
                 taps.value = taps.value.answered(interaction.id, result.card)
                 if (result.withdraw) {

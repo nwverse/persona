@@ -115,14 +115,21 @@ class HubInteractionCenter(
         }
     }
 
-    override suspend fun resolveOutcome(id: String, resolution: Resolution): ResolveOutcome {
+    override suspend fun resolveOutcome(id: String, resolution: Resolution): ResolveOutcome =
+        resolveOutcome(id, resolution, handoffCard = false)
+
+    override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean): ResolveOutcome {
         restored.await()
         // Whose card it is and the hub's state for them now, before an interaction_resolved can take the card away.
         val card = pending.value.firstOrNull { it.id == id }
         val asked = card?.sessionKey
         val since = asked?.let { key -> sessions?.value?.firstOrNull { it.key == key }?.stateSince }
-        val outcome = try { transport.resolveOutcome(id, resolution) }
-        catch (gone: InteractionGoneException) {
+        val marked = handoffCard && resolution.allow == true && card?.isSecretHandoff == true
+        val outcome = try {
+            // Every ordinary answer keeps the old overload: delegated transports must not bypass their existing path.
+            if (marked) transport.resolveOutcome(id, resolution, handoffCard = true)
+            else transport.resolveOutcome(id, resolution)
+        } catch (gone: InteractionGoneException) {
             lock.withLock { end(id, here = true) }
             throw gone
         }

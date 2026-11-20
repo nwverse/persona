@@ -341,7 +341,9 @@ internal fun MainConversationSender.inGroup(names: GroupNames, scope: CoroutineS
         override val outbox = source.outbox.mapIn(scope) { list -> list.map(names::outbox) }
         override val sendReceipts = source.sendReceipts.mapIn(scope) { list -> list.map(names::receipt) }
         override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) =
-            source.sendToMain(text, clientMessageId, draft?.let(names::rawDraft))
+            sendToMain(text, clientMessageId, draft, null)
+        override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?, via: String?) =
+            source.sendToMain(text, clientMessageId, draft?.let(names::rawDraft), via)
         override suspend fun mainReplaced(previous: SessionKey) = source.mainReplaced(names.raw(previous))
         override suspend fun mainChanged() = source.mainChanged()
     }
