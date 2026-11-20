@@ -209,31 +209,31 @@ var credentialKeys = []string{"token", "access_token", "private_token", "auth", 
 func CheckProviderRemote(info ProviderInfo, remote string) error {
 	host, ok := RemoteHost(remote)
 	if !ok || !slices.Contains(info.Hosts, host) || strings.ContainsFunc(remote, unicode.IsControl) {
-		return &AnswerError{"the address is not on the provider's hosts"}
+		return &AnswerError{Why: "the address is not on the provider's hosts"}
 	}
 	if strings.HasPrefix(remote, "git@") && !strings.Contains(remote, "://") {
 		return nil
 	}
 	u, err := url.Parse(remote)
 	if err != nil {
-		return &AnswerError{"not an address"}
+		return &AnswerError{Why: "not an address"}
 	}
 	if u.Scheme == "ssh" {
 		if u.User == nil || u.User.String() != "git" {
-			return &AnswerError{"an ssh address names the git user only"}
+			return &AnswerError{Why: "an ssh address names the git user only"}
 		}
 		return nil
 	}
 	if u.User != nil {
-		return &AnswerError{"credentials in the address"}
+		return &AnswerError{Why: "credentials in the address"}
 	}
 	query, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
-		return &AnswerError{"not an address"}
+		return &AnswerError{Why: "not an address"}
 	}
 	for key := range query {
 		if slices.Contains(credentialKeys, strings.ToLower(key)) {
-			return &AnswerError{"credentials in the address"}
+			return &AnswerError{Why: "credentials in the address"}
 		}
 	}
 	return nil
@@ -276,16 +276,16 @@ type LinkAnswer struct {
 // under the repository's own, with no query or fragment. The title is kept on one line, at most 1024 bytes.
 func CheckLinkAnswer(repo Identity, in LinkInput, a LinkAnswer) (TaskLink, error) {
 	if a.Kind != "issue" && a.Kind != "pull_request" {
-		return TaskLink{}, &AnswerError{"kind is not issue or pull_request"}
+		return TaskLink{}, &AnswerError{Why: "kind is not issue or pull_request"}
 	}
 	if !linkNumber(a.Number) {
-		return TaskLink{}, &AnswerError{"number is not 1 to 20 digits without a leading zero"}
+		return TaskLink{}, &AnswerError{Why: "number is not 1 to 20 digits without a leading zero"}
 	}
 	if in.Kind != "" && (in.Kind != a.Kind || in.Number != a.Number) {
-		return TaskLink{}, &AnswerError{"the link is not the one asked about"}
+		return TaskLink{}, &AnswerError{Why: "the link is not the one asked about"}
 	}
 	if !underRepository(repo, a.CanonicalURL) {
-		return TaskLink{}, &AnswerError{"canonical_url is not an https address under the repository's"}
+		return TaskLink{}, &AnswerError{Why: "canonical_url is not an https address under the repository's"}
 	}
 	return TaskLink{Kind: a.Kind, Number: a.Number, CanonicalURL: a.CanonicalURL, Title: clipBytes(oneLine(a.Title, 1024), 1024)}, nil
 }

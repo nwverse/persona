@@ -4,7 +4,7 @@ A dialog holding its terminal refuses the send (dialog_open) with its first line
 
 To hand new work to a running agent (one the user opened, a long-lived one that passes work on), give task from the main conversation: once sent, the agent is your supervised task as agent_supervise makes one (a todo with the text as notes, done_when, a card; 督办 messages, task_review). Put the criteria in the text too: the agent reads only the text. An agent on one of your tasks takes more under the same title (done_when updated); another title, the user's own todo or another conversation's task is refused, with nothing sent. A failed send makes no task. Leave task out or null for a reply, nudge or decision; a task with only blank fields counts as left out.
 
-The receipt comes first. With wait_seconds, Inline observation then reports input/session references and completed (reply), question (interaction_id), timeout, cancelled, unavailable, interrupted or failed. Older nodes may time out without input echo. Waiting never resends, cancels, answers or accepts work. Supervise and task_review as usual.
+`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.
 
 ```json
 {
@@ -14,7 +14,7 @@ The receipt comes first. With wait_seconds, Inline observation then reports inpu
     "wait_seconds": {
       "type": "integer",
       "minimum": 0,
-      "description": "Observe after dispatch for up to 50 seconds. Omit or use 0 for receipt only."
+      "description": "0/omitted: normal receipt"
     },
     "machine": {
       "type": "string"
@@ -31,7 +31,7 @@ The receipt comes first. With wait_seconds, Inline observation then reports inpu
     },
     "resume_why": {
       "type": "string",
-      "description": "why its context is needed (shown to the user)"
+      "description": "shown to the user"
     },
     "dismiss_notice": {
       "type": "boolean",
@@ -41,7 +41,7 @@ The receipt comes first. With wait_seconds, Inline observation then reports inpu
       "type": "array",
       "maxItems": 8,
       "items": { "type": "string" },
-      "description": "pictures and files the user gave you for it, by their absolute paths on your computer: a picture they sent (the path Claude Code gives it), a file the app put in their message. They are copied to the agent's computer and listed at the end of its message, and the text's mentions of them name the copies. Only those the user gave you in this conversation are accepted"
+      "description": "absolute paths of pictures/files the user gave in this conversation (Claude Code path or app attachment); copied to the agent, appended to its message with mentions updated; others refused"
     },
     "task": {
       "type": ["object", "null"],

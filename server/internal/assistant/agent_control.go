@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -511,16 +512,18 @@ func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
 }
 
 // sendFailed: the send did not go, so a task made for it is taken back (deleted, its link with it: a closed task's
-// agent would be closed after a while, tasks_close.go); err as the tool's error. When the machine only did not answer
-// in time (startResultUnknown: a resume can go on after the wait), the text may still arrive, so the task stays and
-// gets its card.
+// agent would be closed after a while, tasks_close.go). When it may have gone through, keep its task and tell the
+// caller to check the agent before sending the same words again.
 func (h *handedTask) sendFailed(ctx context.Context, s *Service, err error) error {
+	if sendUnknown(err) {
+		if h != nil && h.made {
+			s.taskCard(ctx, h.self, h.todo.ID, h.wake)
+			return fmt.Errorf("%w (task %s stays: the message may have arrived or may still arrive; check with agent_read before sending again)", err, h.todo.ID)
+		}
+		return fmt.Errorf("%w (the message may have arrived or may still arrive; check with agent_read before sending again)", err)
+	}
 	if h == nil || !h.made {
 		return err
-	}
-	if startResultUnknown(err) {
-		s.taskCard(ctx, h.self, h.todo.ID, h.wake)
-		return fmt.Errorf("%w (it may still arrive: task %s stays; check with agent_read before sending again)", err, h.todo.ID)
 	}
 	if rerr := s.removeTodo(context.WithoutCancel(ctx), h.todo.ID); rerr != nil {
 		s.logf("agent_send: take back task %s: %v", h.todo.ID, rerr)
@@ -652,6 +655,8 @@ func (r *reportRate) allow(mid, sid string, now time.Time) bool {
 // a second question does not push the first one out.
 func joinReports(cur, g superviseSignal) superviseSignal {
 	g.At = cur.At
+	// A call's permission observation cannot vouch for a report made by another call.
+	g.SourcePermission = proto.SourcePermission{}
 	if cur.Detail != "" && cur.Detail != g.Detail {
 		g.Detail = clipMiddle(cur.Detail+"\n—\n"+g.Detail, 3000)
 	}
@@ -821,7 +826,7 @@ func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, tex
 func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind, text string, evidence []string, step, steps int, now time.Time) (string, error) {
 	s.progressReported(machine, session, len(evidence), step, now) // evidence or a later step is progress (supervise_progress.go)
 	s.signal(superviseSignal{Todo: t.ID, Kind: sigReport, Key: now.UTC().Format(time.RFC3339Nano), At: now, Machine: machine,
-		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps})
+		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps, SourcePermission: devicewire.SourcePermissionFrom(ctx)})
 	progress := TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()}
 	if text != progress.Text {
 		progress.Detail = text

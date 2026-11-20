@@ -24,6 +24,7 @@ func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 	var physical *taskworkspace.Record
 	created, starts := 0, 0
 	lose := true
+	dropCancel := false
 	f.nodes = map[string]nodeAnswer{
 		"workspace.naming.resolve": func(_ string, raw json.RawMessage) (any, error) {
 			var src workspacenaming.Source
@@ -36,6 +37,9 @@ func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 		"task.workspace.prepare": func(_ string, raw json.RawMessage) (any, error) {
 			var req taskworkspace.Request
 			json.Unmarshal(raw, &req)
+			if physical != nil && physical.OperationID != req.OperationID && (physical.OperationID != req.PreviousOperationID || physical.State != "cancelled") {
+				return nil, errors.New("Node still owns an uncancelled operation")
+			}
 			if physical == nil || physical.OperationID != req.OperationID {
 				created++
 				r := taskworkspace.Record{SchemaVersion: 1, WorkspaceID: req.WorkspaceID, OperationID: req.OperationID, NodeOperationID: req.OperationID, Plan: req.Plan, InputDigest: taskworkspace.InputKey(req.Plan), State: "ready", Uses: []string{}}
@@ -50,9 +54,17 @@ func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 			}
 			return *physical, nil
 		},
-		"task.workspace.inspect": func(string, json.RawMessage) (any, error) {
+		"task.workspace.inspect": func(_ string, raw json.RawMessage) (any, error) {
 			if physical == nil {
 				return taskworkspace.Record{Error: taskworkspace.Failure("not_found", "inspect", "", "", "")}, nil
+			}
+			var req taskworkspace.Request
+			if err := json.Unmarshal(raw, &req); err != nil {
+				return nil, err
+			}
+			if req.OperationID != physical.OperationID {
+				return taskworkspace.Record{WorkspaceID: req.WorkspaceID, OperationID: req.OperationID, NodeOperationID: physical.OperationID,
+					InputDigest: taskworkspace.InputKey(req.Plan), Error: taskworkspace.Failure("operation_conflict", "inspect", req.OperationID, "", "")}, nil
 			}
 			return *physical, nil
 		},
@@ -60,9 +72,12 @@ func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 			if physical == nil {
 				return taskworkspace.Record{Error: taskworkspace.Failure("not_found", "cancel", "", "", "")}, nil
 			}
-			r := *physical
-			r.State = "cancelled"
-			return r, nil
+			if dropCancel {
+				dropCancel = false
+				return nil, errors.New("Node disconnected before receiving cancellation")
+			}
+			physical.State = "cancelled"
+			return *physical, nil
 		},
 		"task.workspace.cleanup": func(string, json.RawMessage) (any, error) {
 			r := *physical
@@ -121,6 +136,18 @@ func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &ready) != nil || ready.State != "ready" || created != 1 || starts != 0 {
 		t.Fatal(w.Code, w.Body, created, starts)
 	}
+	// Manager has saved the cancellation, but the Node never received it. A
+	// correction must cancel the old owner before asking the Node to adopt it.
+	dropCancel = true
+	old, err := restarted.CancelBackendWorkspace(t.Context(), id, ready.OperationID)
+	if err != nil || old.State != "cancelled" || old.Error == nil || old.Error.Code != "operation_unknown" || physical.State != "ready" {
+		t.Fatal("lost cancellation", old, physical, err)
+	}
+	w = placeDo(restarted, "", "POST", base+"/prepare", strings.Replace(input, "op_example", "op_correction", 1))
+	var corrected taskworkspace.Record
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &corrected) != nil || corrected.OperationID != "op_correction" || corrected.NodeOperationID != corrected.OperationID || corrected.WorkspaceID != ready.WorkspaceID || corrected.State != "ready" || corrected.Error != nil {
+		t.Fatal("unsettled correction", w.Code, w.Body)
+	}
 	// Metadata edits do not invalidate the physical workspace or change task stage.
 	todo, _ := restarted.todoNow(id)
 	stage := todo.Stage
@@ -133,22 +160,22 @@ func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 	if got, _ := restarted.todoNow(id); got.Stage != stage {
 		t.Fatal("preparation changed task stage", got)
 	}
-	use, err := restarted.AcquireBackendWorkspace(t.Context(), id, "op_example", "session_example")
+	use, err := restarted.AcquireBackendWorkspace(t.Context(), id, corrected.OperationID, "session_example")
 	if err != nil || use.State != "ready" {
 		t.Fatal(use, err)
 	}
-	if _, err = restarted.CleanupBackendWorkspace(t.Context(), id, "op_example", false, false); err == nil {
+	if _, err = restarted.CleanupBackendWorkspace(t.Context(), id, corrected.OperationID, false, false); err == nil {
 		t.Fatal("cleanup ignored use")
 	}
-	if _, err = restarted.ReleaseBackendWorkspace(t.Context(), id, "op_example", "session_example"); err != nil {
+	if _, err = restarted.ReleaseBackendWorkspace(t.Context(), id, corrected.OperationID, "session_example"); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := restarted.CleanupBackendWorkspace(t.Context(), id, "op_example", false, false)
+	removed, err := restarted.CleanupBackendWorkspace(t.Context(), id, corrected.OperationID, false, false)
 	if err != nil || removed.State != "removed" || !removed.Cleanup.Removed {
 		t.Fatal(removed, err)
 	}
-	late, err := restarted.PrepareBackendWorkspace(t.Context(), id, "op_example")
-	if err != nil || late.State != "removed" || created != 1 {
+	late, err := restarted.PrepareBackendWorkspace(t.Context(), id, corrected.OperationID)
+	if err != nil || late.State != "removed" || created != 2 {
 		t.Fatal("removed operation revived", late, err)
 	}
 	// The assistant has the same recovery actions without requiring UI steps.

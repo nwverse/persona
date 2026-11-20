@@ -151,7 +151,8 @@ class HeaderModeShotsTest {
                 save("modes", style, dark)
             }
             "menu", "menu-bypass" -> {
-                val s = agent("default", bypass = scene == "menu-bypass")
+                // not in a terminal pane: the node can't restart it into Allow Everything either (#6513, PermissionsCommandShotsTest)
+                val s = agent("default", bypass = scene == "menu-bypass").let { if (scene == "menu") it.copy(paneId = null) else it }
                 show(style, dark, 640) { chrome -> Column { Moded(s, chrome) } }
                 rule.onNodeWithTag("chat-mode").performClick()
                 rule.waitForIdle()

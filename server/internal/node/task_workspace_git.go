@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unicode"
 
 	repository "github.com/nwverse/persona/server/internal/repositorywire"
@@ -32,12 +33,34 @@ func (e *workspaceExecutor) source(ctx context.Context, r *taskworkspace.Instanc
 	if err != nil {
 		return "ref_invalid"
 	}
-	listing, err := e.git(ctx, e.journal.Plan.RootPath, "ls-remote", "--symref", "--", transport, "HEAD")
+	// Resolve against what the source advertises now. An earlier failed
+	// preparation can leave tracking branches and tags in this private store.
+	requested := ref.Value
+	switch ref.Kind {
+	case "default", "commit":
+		requested = "HEAD"
+	case "branch":
+		requested = "refs/heads/" + strings.TrimPrefix(requested, "refs/heads/")
+	case "tag":
+		requested = "refs/tags/" + strings.TrimPrefix(requested, "refs/tags/")
+	}
+	listing, err := e.git(ctx, e.journal.Plan.RootPath, "ls-remote", "--symref", "--", transport, requested)
 	if err != nil {
 		return "source_unavailable"
 	}
-	if listing == "" {
-		if ref.Kind == "default" {
+	resolvedRef := requested
+	var advertised string
+	for _, line := range strings.Split(listing, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[1] == requested {
+			advertised = fields[0]
+		}
+		if ref.Kind == "default" && len(fields) == 3 && fields[0] == "ref:" && fields[2] == "HEAD" && strings.HasPrefix(fields[1], "refs/heads/") {
+			resolvedRef = fields[1]
+		}
+	}
+	if ref.Kind == "default" && resolvedRef == "HEAD" {
+		if listing == "" {
 			heads, err := e.git(ctx, e.journal.Plan.RootPath, "ls-remote", "--heads", "--", transport)
 			if err != nil {
 				return "source_unavailable"
@@ -45,33 +68,18 @@ func (e *workspaceExecutor) source(ctx context.Context, r *taskworkspace.Instanc
 			if heads == "" {
 				return "no_commits"
 			}
-			return "default_branch_unresolved"
 		}
-		requested := ref.Value
-		if ref.Kind == "branch" {
-			requested = "refs/heads/" + strings.TrimPrefix(requested, "refs/heads/")
-		}
-		if ref.Kind == "tag" {
-			requested = "refs/tags/" + strings.TrimPrefix(requested, "refs/tags/")
-		}
-		if ref.Kind == "commit" {
-			listing = ref.Value + "\t" + ref.Value
-		} else {
-			listing, err = e.git(ctx, e.journal.Plan.RootPath, "ls-remote", "--", transport, requested)
-			if err != nil {
-				return "source_unavailable"
-			}
-			if listing == "" {
-				return "ref_not_found"
-			}
-		}
+		return "default_branch_unresolved"
+	}
+	if ref.Kind == "commit" {
+		resolvedRef, advertised = ref.Value, ref.Value
+	}
+	if advertised == "" {
+		return "ref_not_found"
 	}
 	objectFormat := "sha1"
-	for _, line := range strings.Split(listing, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && len(fields[0]) == 64 {
-			objectFormat = "sha256"
-		}
+	if len(advertised) == 64 {
+		objectFormat = "sha256"
 	}
 	if !e.owned(r.CommonDir) {
 		if err = e.claimDir(r.CommonDir); err != nil {
@@ -89,37 +97,16 @@ func (e *workspaceExecutor) source(ctx context.Context, r *taskworkspace.Instanc
 	if _, err = e.git(ctx, r.CommonDir, "config", "remote.origin.url", transport); err != nil {
 		return "source_failed"
 	}
-	if _, err = e.git(ctx, r.CommonDir, "fetch", "--no-recurse-submodules", "--tags", "origin", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
-		return "source_fetch_failed"
-	}
-	var resolve string
-	switch ref.Kind {
-	case "default":
-		for _, line := range strings.Split(listing, "\n") {
-			fields := strings.Fields(line)
-			if len(fields) == 3 && fields[0] == "ref:" && fields[2] == "HEAD" && strings.HasPrefix(fields[1], "refs/heads/") {
-				r.ResolvedRef = fields[1]
-				resolve = "refs/remotes/origin/" + strings.TrimPrefix(fields[1], "refs/heads/")
-				break
-			}
-		}
-		if resolve == "" {
-			return "default_branch_unresolved"
-		}
-	case "branch":
-		r.ResolvedRef = "refs/heads/" + strings.TrimPrefix(ref.Value, "refs/heads/")
-		resolve = "refs/remotes/origin/" + strings.TrimPrefix(r.ResolvedRef, "refs/heads/")
-	case "tag":
-		r.ResolvedRef = "refs/tags/" + strings.TrimPrefix(ref.Value, "refs/tags/")
-		resolve = r.ResolvedRef
-	case "commit", "ref":
-		r.ResolvedRef = ref.Value
-		if _, err = e.git(ctx, r.CommonDir, "fetch", "--no-recurse-submodules", "origin", ref.Value); err != nil {
+	// Fetch the selected ref explicitly; FETCH_HEAD then identifies its actual
+	// remote object even if other refs in this store are stale.
+	if _, err = e.git(ctx, r.CommonDir, "fetch", "--no-recurse-submodules", "--tags", "origin", resolvedRef, "+refs/heads/*:refs/remotes/origin/*"); err != nil {
+		if ref.Kind == "commit" {
 			return "ref_not_found"
 		}
-		resolve = "FETCH_HEAD"
+		return "source_fetch_failed"
 	}
-	commit, err := workspaceReadGit(ctx, r.CommonDir, "rev-parse", "--verify", resolve+"^{commit}")
+	r.ResolvedRef = resolvedRef
+	commit, err := workspaceReadGit(ctx, r.CommonDir, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
 	if err != nil {
 		return "ref_not_found"
 	}
@@ -277,6 +264,60 @@ func (e *workspaceExecutor) inspect(ctx context.Context, r *taskworkspace.Instan
 	r.Error = nil
 	return ""
 }
+
+// A quiet lookup returns status 1 for a missing ref. A command failure must
+// never be reported as a completed deletion when resuming a partial cleanup.
+func workspaceBranchTip(ctx context.Context, dir, ref string) (string, error) {
+	tip, err := workspaceReadGit(ctx, dir, "rev-parse", "--verify", "--quiet", ref)
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return "", nil
+	}
+	return tip, err
+}
+
+// A detached worktree may still reserve a branch while rebasing or bisecting.
+// Git keeps these names in the linked worktree's private administration directory.
+func workspaceBranchInUse(ctx context.Context, common, ref string) (bool, error) {
+	listing, err := workspaceReadGit(ctx, common, "worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		return false, err
+	}
+	if strings.Contains("\x00"+listing+"\x00", "\x00branch "+ref+"\x00") {
+		return true, nil
+	}
+	admin := filepath.Join(common, "worktrees")
+	dirs, err := os.ReadDir(admin)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, dir := range dirs {
+		for _, name := range []string{"rebase-merge/head-name", "rebase-apply/head-name", "rebase-merge/update-refs", "BISECT_START"} {
+			path := filepath.Join(admin, dir.Name(), name)
+			if err := workspaceNoLinks(path); err != nil {
+				return false, err
+			}
+			data, err := os.ReadFile(path)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return false, err
+			}
+			for line := range strings.SplitSeq(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if line == ref || name == "BISECT_START" && "refs/heads/"+line == ref {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
 func (e *workspaceExecutor) cleanup(ctx context.Context, req taskworkspace.Request) taskworkspace.Record {
 	j := &e.journal
 	if j.State == "removed" {
@@ -316,6 +357,7 @@ func (e *workspaceExecutor) cleanup(ctx context.Context, req taskworkspace.Reque
 	}
 	// Inspect all selected instances before removing any. Additional worktrees
 	// remain registered and are never recursively removed with their object store.
+	branchTips := make(map[string]string)
 	for i := range j.Repositories {
 		r := &j.Repositories[i]
 		if !r.Removed && r.State != "ready" {
@@ -329,21 +371,21 @@ func (e *workspaceExecutor) cleanup(ctx context.Context, req taskworkspace.Reque
 				return e.fail("worktree_dirty", "cleanup", r.RepoID, r.Path)
 			}
 		}
-		if req.DeleteBranch && !req.Force && !r.BranchDeleted {
+		if req.DeleteBranch && !r.BranchDeleted {
 			// A partial cleanup may have removed the worktree already. Its branch
 			// still needs the same non-force protection on every retry/recovery.
 			if !e.owned(r.CommonDir) {
 				return e.fail("identity_mismatch", "cleanup", r.RepoID, r.CommonDir)
 			}
-			if _, err := workspaceReadGit(ctx, r.CommonDir, "show-ref", "--verify", "--quiet", "refs/heads/"+r.TaskBranch); err != nil {
-				var exit *exec.ExitError
-				if errors.As(err, &exit) && exit.ExitCode() == 1 {
-					continue // Deletion completed before its receipt; no branch remains to protect.
-				}
+			tip, err := workspaceBranchTip(ctx, r.CommonDir, "refs/heads/"+r.TaskBranch)
+			if err != nil {
 				return e.fail("inspection_failed", "cleanup", r.RepoID, r.Path)
 			}
-			if _, err := workspaceReadGit(ctx, r.CommonDir, "merge-base", "--is-ancestor", "refs/heads/"+r.TaskBranch, "refs/persona/base"); err != nil {
-				return e.fail("worktree_unmerged", "cleanup", r.RepoID, r.Path)
+			branchTips[r.RepoID] = tip
+			if !req.Force && tip != "" {
+				if _, err := workspaceReadGit(ctx, r.CommonDir, "merge-base", "--is-ancestor", tip, r.ResolvedCommit); err != nil {
+					return e.fail("worktree_unmerged", "cleanup", r.RepoID, r.Path)
+				}
 			}
 		}
 	}
@@ -373,11 +415,29 @@ func (e *workspaceExecutor) cleanup(ctx context.Context, req taskworkspace.Reque
 			}
 		}
 		if req.DeleteBranch && r.Removed && !r.BranchDeleted {
-			if _, exists := workspaceReadGit(ctx, r.CommonDir, "show-ref", "--verify", "refs/heads/"+r.TaskBranch); exists == nil {
-				// The non-force preflight checks ancestry against the frozen source,
-				// equivalent to the old main-checkout check. A bare HEAD has no
-				// checked-out main branch, so the checked deletion uses -D here.
-				if _, err := e.git(ctx, r.CommonDir, "branch", "-D", "--", r.TaskBranch); err != nil {
+			ref := "refs/heads/" + r.TaskBranch
+			tip, err := workspaceBranchTip(ctx, r.CommonDir, ref)
+			if err != nil {
+				return e.fail("inspection_failed", "branch", r.RepoID, r.Path)
+			}
+			if tip != "" {
+				args := []string{"branch", "-D", "--", r.TaskBranch}
+				if !req.Force {
+					if tip != branchTips[r.RepoID] {
+						return e.fail("worktree_unmerged", "branch", r.RepoID, r.Path)
+					}
+					// update-ref checks the inspected tip atomically. Unlike branch
+					// -D it does not check worktree occupancy itself.
+					busy, err := workspaceBranchInUse(ctx, r.CommonDir, ref)
+					if err != nil {
+						return e.fail("inspection_failed", "branch", r.RepoID, r.Path)
+					}
+					if busy {
+						return e.fail("worktree_in_use", "branch", r.RepoID, r.Path)
+					}
+					args = []string{"update-ref", "--no-deref", "-d", ref, tip}
+				}
+				if _, err := e.git(ctx, r.CommonDir, args...); err != nil {
 					return e.fail("cleanup_failed", "branch", r.RepoID, r.Path)
 				}
 			}
@@ -388,7 +448,15 @@ func (e *workspaceExecutor) cleanup(ctx context.Context, req taskworkspace.Reque
 	// Only remove an empty container. Unknown files survive even with force,
 	// which has the same worktree/branch scope as the existing product command.
 	if _, err := os.Lstat(j.Plan.RootPath); err == nil {
-		if err = os.Remove(j.Plan.RootPath); err != nil {
+		for _, r := range j.Repositories {
+			if r.Path == j.Plan.RootPath && r.Removed {
+				return e.fail("cleanup_retained", "cleanup", "", j.Plan.RootPath)
+			}
+		}
+		if !e.owned(j.Plan.RootPath) {
+			return e.fail("identity_mismatch", "cleanup", "", j.Plan.RootPath)
+		}
+		if err = syscall.Rmdir(j.Plan.RootPath); err != nil {
 			return e.fail("cleanup_retained", "cleanup", "", j.Plan.RootPath)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {

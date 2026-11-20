@@ -210,7 +210,7 @@ type supervisionStore interface {
 	ListTodoSupervision(ctx context.Context) ([]db.TodoSupervisionRow, error)
 	PutTodoSupervision(ctx context.Context, r db.TodoSupervisionRow) error
 	ReviewDoneTodo(ctx context.Context, id, reason string, accepted bool, at time.Time) (*db.TodoRow, bool, error)
-	LinkTodoReviewer(ctx context.Context, todoID, machineID, sessionID, title, cwd, via string, at time.Time) error
+	LinkTodoReviewer(ctx context.Context, todoID, machineID, sessionID, title, cwd, agent, via string, at time.Time) error
 }
 
 var _ supervisionStore = (*db.DB)(nil)

@@ -1,18 +1,16 @@
-Plan code, repository research or work needing several tools as one task per independent piece. Check machines_list. Fill the editable choices from the knowledge base, agents_list and user preferences; give a one-line reason. Read-only, user_requested and preauthorized task kinds start immediately; other plans wait for the owner's 开始. Dispatch returns queued, not started. Check outcomes and possible duplicate work listed in the receipt. Each task appears as a todo in your context snapshot; reach its Agent with agent_send. Reminders and events are tool actions, not Agent tasks.
+Use task_plan for code, repository research and work beyond a few tool calls. Make one task per independent piece. Check machines_list, then use the knowledge base, agents_list and user preferences to fill the editable choices and their one-line reasons. Read-only, user_requested and preapproved kinds start at once; other tasks wait for the owner’s 开始. A queued receipt is dispatch, so check the to-do outcome and reach its Agent via agent_send. Tool-owned reminders and events are separate.
 
-Machines are fixed by default, including retries. An unavailable launcher fails there. Select machine_policy=flexible only for portable work: a failed health check can move it and the receipt explains why. Use todo_id to adopt this conversation's existing Agent-less todo (Lark topic, todo_create part_of or failed start). For retries of a failed start, including on a different launcher, use task_retry.
+Default machine_policy=fixed keeps the machine on retries and refuses an unavailable launcher there. Use flexible only for portable work: a failed health check can move it and the reply explains why. A side conversation supervises its work, receives 督办 and closes with task_review. Main delegates a whole plan with supervisor (one of assistant.leaders) or leaves it out. With no leader, the background supervisor handles 督办 and task_review unless assistant.main_supervises_own_tasks puts main in charge. If the caller cannot receive 督办, the same follow-up handles it and sends the caller a short notice and link at the end. Check the returned supervisor and similar running work. Pass todo_id for the caller’s existing unassigned to-do, including a Lark topic, task split or failed start.
 
-Leaders and side conversations supervise their dispatched tasks via 督办 and task_review. Verify the work before accepting. Main-chat tasks without a leader go to the background supervisor; the main chat may review too and follows up directly when assistant.main_supervises_own_tasks is on. Conversations unable to receive 督办 use background supervision and receive a linked completion notice. The receipt names the supervisor. From main, supervisor delegates the whole plan to an assistant.leaders conversation for its own supervision and review.
+Every started task keeps its original brief. The hub records the owner’s source message or records autonomous work as the caller’s with started_why. Give goal, done_when, expect_minutes and out_of_bounds. Writable work requires a checkable done_when and expect_minutes. Read-only work requires goal and expect_minutes. The card shows the brief for the owner’s confirmation. For rework, replacement or another computer give continues and continues_why. Use task_retry for a failed start, including another launcher. Apply owner-approved scope changes with task_scope and pass scope_revision. Give the goal, authorization bounds and new facts. The manager appends effective criteria.
 
-Every task keeps its original brief. The hub records the owner's triggering message, or attributes self-initiated work to you with started_why. Supply goal, done_when, expect_minutes and out_of_bounds. Writable tasks need checkable done_when and expect_minutes; read-only tasks need goal and expect_minutes. The owner confirms the displayed brief with 开始. For rework, replacement or another machine, use continues and continues_why. Apply owner-authorized changes through task_scope, giving goal, authorization bounds and new information. The manager appends effective criteria; pass scope_revision to reject stale plans.
-
-For authorized file changes set readonly=false with explicit writable permission, including replacements on the same todo. A read-only Codex sandbox needs a fresh process for writable work; use agent_send with a live Agent when permissions stay the same. Read-only tasks set readonly=true and receive the constraint in their first message. Claude-family launchers always use bypassPermissions. Codex read-only uses plan unless assistant.readonly_mode=prompt (normal permissions, no sandbox guarantee). pi, cursor and agy cannot run read-only in either setting. Use role leader only to split a task: its Agent plans and reviews direct workers through restricted task_plan/task_review and receives their supervision messages. Workers cannot delegate.
+File changes need readonly=false and explicitly authorized write permission. Replace a read-only Codex process with a writable one for fixes. Use agent_send for live follow-up when permissions stay the same. readonly=true adds the read-only constraint to the assignment. Claude-family uses bypassPermissions for both. Codex uses plan unless assistant.readonly_mode=prompt (normal runtime permissions). pi, cursor and agy refuse readonly in either setting. Set role=leader only for a task that splits into direct workers, which it starts and reviews through restricted task_plan/task_review. Workers cannot delegate.
 
 When repository identity needs resolving, consult repositories_list, and repository_get only when useful. The user's explicit repository URL or path takes precedence. A saved binding is a reference, not authorization or an allowlist; never infer a machine or checkout path from it. Non-repository tasks need no lookup; retrieval is not a mandatory dispatch preflight. Closing the terminal on acceptance is the owner's Start choice; this tool cannot set it.
 
 Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-change"}} names its branch; {"existing":"<cwd or workspace_id>"} selects one; "none" creates nothing. Omitted: readonly uses none; writable Git follows assistant.task_workspace_preference (prefer-existing by default, prefer-new for isolation), and an occupied cwd uses new. Explicit existing never switches silently; refusal names its task owner. For an explicit new branch already checked out, reuse requires a clean checkout, no live Agent and no unfinished-task owner; otherwise refuse with its path and known owner. The machine's engine owns creation, location and registration; never run git worktree add. The card previews the path and is editable before Start. Default branch: task/<todo id>. Creation failure starts no Agent. Workspaces remain after acceptance. Organization read-only policy refusals include their reason: follow it, never retry unchanged.
 
-The receipt comes first. With wait_seconds, Inline observation then reports input/session references and completed (reply), question (interaction_id), timeout, cancelled, unavailable, interrupted or failed. Older nodes may time out without input echo. Waiting never resends, cancels, answers or accepts work. Supervise and task_review as usual. Only immediately dispatchable single-task plans wait.
+`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.
 
 ```json
 {
@@ -24,11 +22,11 @@ The receipt comes first. With wait_seconds, Inline observation then reports inpu
     "wait_seconds": {
       "type": "integer",
       "minimum": 0,
-      "description": "Observe after dispatch for up to 50 seconds. Omit or use 0 for receipt only."
+      "description": "0/omitted: normal receipt"
     },
     "supervisor": {
       "type": "string",
-      "description": "Main chat only: direction's supervisor (assistant.leaders id). Omit for no direction/your own."
+      "description": "main only: leader conversation id (assistant.leaders); it supervises; omit for no direction or your own work"
     },
     "tasks": {
       "type": "array",
@@ -50,9 +48,10 @@ The receipt comes first. With wait_seconds, Inline observation then reports inpu
             "type": "string",
             "description": "Card title in Chinese, under 20 characters."
           },
+          "context": {"type": "string", "description": "facts the manager cannot resolve; omit project background"},
           "prompt": {
             "type": "string",
-            "description": "Agent's first message: all it needs to work without asking you."
+            "description": "goal, bounds and new facts; the manager adds project context, criteria and framework rules once"
           },
           "machine": {
             "type": "string",
@@ -60,70 +59,29 @@ The receipt comes first. With wait_seconds, Inline observation then reports inpu
           },
           "machine_policy": {
             "type": "string",
-            "enum": [
-              "fixed",
-              "flexible"
-            ],
-            "description": "fixed (default): same machine through preview/dispatch/retries; unavailable fails here. flexible: explicit health-based move for portable work only."
+            "enum": ["fixed", "flexible"],
+            "description": "fixed (default): keep this machine; flexible: permit health-based moves only for portable work"
           },
           "cwd": {
             "type": "string",
             "description": "Absolute or ~/ project directory."
           },
           "workspace": {
-            "type": [
-              "string",
-              "object"
-            ],
-            "description": "Task workspace policy, as the description says; omit for the default. existing takes an absolute/~/ path or a workspace id on that machine. No custom worktree root.",
+            "type": ["string", "object"],
+            "description": "workspace policy; omit for default; existing: absolute/~/path or workspace id on that machine; no custom root",
             "oneOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "new",
-                  "none"
-                ]
-              },
-              {
-                "type": "object",
-                "required": [
-                  "existing"
-                ],
-                "additionalProperties": false,
-                "properties": {
-                  "existing": {
-                    "type": "string",
-                    "minLength": 1
-                  }
-                }
-              },
-              {
-                "type": "object",
-                "required": [
-                  "new"
-                ],
-                "additionalProperties": false,
-                "properties": {
-                  "new": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                      "branch": {
-                        "type": "string"
-                      }
-                    }
-                  }
-                }
-              }
+              { "type": "string", "enum": ["new", "none"] },
+              { "type": "object", "required": ["existing"], "additionalProperties": false, "properties": { "existing": { "type": "string", "minLength": 1 } } },
+              { "type": "object", "required": ["new"], "additionalProperties": false, "properties": { "new": { "type": "object", "additionalProperties": false, "properties": { "branch": { "type": "string" } } } } }
             ]
           },
           "launcher": {
             "type": "string",
-            "description": "Installed launcher: Claude Code, or pi/cursor/agy in herdr. Unknown: refuse/list choices. Empty: default; if absent, installed fallback (claude first), explained in why."
+            "description": "listed launcher (Claude Code, pi, cursor or agy in herdr); unknown names refused with choices; empty: default/fallback, claude first, why says which"
           },
           "model": {
             "type": "string",
-            "description": "Model alias/gateway id or pi provider/model (ag-chat/cursor/grok-4.7). Allowed: letters/digits . _ - / : @ [ ]; leading ~ allowed (~vendor/model-latest). Empty: launcher default."
+            "description": "model id or alias the agent takes; empty: the launcher's default"
           },
           "permission": {
             "type": "string",
@@ -134,18 +92,16 @@ The receipt comes first. With wait_seconds, Inline observation then reports inpu
               "auto",
               "bypassPermissions"
             ],
-            "description": "Empty: writable default. Replacement fixes: readonly=false plus explicit writable mode (e.g. bypassPermissions). Read-only: see tool policy. traex/omp take none."
+            "description": "mode; empty: writable default; readonly/replacement/Codex rules: see description; traex and omp take none"
           },
           "role": {
             "type": "string",
-            "enum": [
-              "leader"
-            ],
-            "description": "Any chat may set leader for direct workers on this task; omit for an ordinary worker."
+            "enum": ["leader"],
+            "description": "leader (any conversation): may hand direct workers to its own task; omit for an ordinary worker"
           },
           "ultracode": {
             "type": "boolean",
-            "description": "Large tasks: every substantial step uses slower, costlier multi-agent work (Claude Code >=2.1.284 + supporting node only; otherwise ignored). False for quick work. Use flag, never prompt/title word."
+            "description": "large tasks (many files, multi-angle checks): Claude Code multi-agent workflows for substantial steps, slower/costlier; small tasks: false; Claude Code 2.1.284+ only, otherwise starts without it; never put it in prompt/title"
           },
           "readonly": {
             "type": "boolean",
@@ -201,7 +157,7 @@ The receipt comes first. With wait_seconds, Inline observation then reports inpu
             "items": {
               "type": "string"
             },
-            "description": "This conversation's user-supplied task pictures/files: absolute paths here. Copy to Agent's computer; list copies at message end and use for mentions."
+            "description": "absolute paths of pictures/files the user gave in this conversation (Claude Code path or app attachment); copied to the agent, appended to its message with mentions updated; others refused"
           },
           "expect_minutes": {
             "type": "integer",
@@ -233,7 +189,12 @@ The receipt comes first. With wait_seconds, Inline observation then reports inpu
           },
           "tier": {
             "type": "string",
-            "description": "Preset from active profile's 模型档位; choose by description. Resolve with profile active at Start; explicit launcher/model/effort override."
+            "description": "Agent preset from the snapshot's 模型档位 line; choose by purpose; resolved at task start with its profile; explicit launcher/model/effort/speed overrides"
+          },
+          "speed": {
+            "type": "string",
+            "enum": ["standard", "fast", "ultrafast"],
+            "description": "new-start speed; explicit choice overrides the tier. standard/omitted: launcher default. Codex: fast, ultrafast; Claude Code: fast only"
           },
           "effort": {
             "type": "string",

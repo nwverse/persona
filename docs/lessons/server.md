@@ -14,6 +14,10 @@ such an interface.
 
 A local context cancellation only starts delivery of `rpc.cancel`; it does not prove the node has processed it. A test that releases a held file write immediately can let the operation finish as `done`, after which polling for `cancelled` times out and the original destination is not restored. Keep the write held until a following `file.operation` request on the same ordered connection has been answered, then release it. Exercise cancellation and normal completion in the same command, and keep the existing deadline, cleanup and restoration assertions.
 
+## Connected Link status does not acknowledge the hub's initial writes (#10409)
+
+The active Link client reports `connected` immediately after writing `hello`; the hub may still be writing its initial `endpoints` and `node` messages. A lifecycle test that kills SSH, switches mode or unpairs on that status can make the hub write to a closed socket. Wait for the same connection to report the hub name and online node, in that order, before the destructive step. To reproduce the early close deterministically, hold the hub at that write boundary, use an abortive tunnel close and wait for the SSH process to die: a graceful FIN alone can still let the first writes succeed (`server/internal/link/ssh_readiness_test.go`).
+
 ## Queue admission decides notification replay (#10394)
 
 A connected WebSocket is not evidence that its outbound queue accepted a notification. Record admission per device
@@ -38,6 +42,14 @@ UI routes and switches identify a contribution by extension plus local ID. A glo
 make an unrelated disabled built-in block installation. Check both registry preview and plan commit: fixing only
 preview leaves the install broken. Exercise real installs, batched plans, upgrades, rollback and reload, while keeping
 non-UI contribution conflicts and within-manifest duplicate checks intact.
+
+## Queue admission decides notification replay (#10394)
+
+A connected WebSocket is not evidence that its outbound queue accepted a notification. Record admission per device
+and retain the event in the existing reconnect ring when every eligible socket rejects it. If another socket for the
+same credential accepts it, do not retain a duplicate. Keep recipient-selection counts separate from queue admission
+and delivery. Exercise the real notification bus handler with a full queue, same-ID outbox retry and reconnect;
+keep push-route, capability and preference exclusions intact.
 
 ## Empty assistant creation must not become a model turn
 
@@ -3007,6 +3019,15 @@ those inputs. Compare those callers' rendered input bytes, not just triage's gol
 The tier criteria are shared with event grouping. Describe each event's assigned new activity and unresolved
 requests, not one "current new message" for an entire batch. A mixed-event regression should keep a new request
 and screenshot separate from another event's final acknowledgement, while retaining each event's overall tier.
+
+## Sparse visibility metadata and single-session allocation budgets
+
+Directory visibility (#8578) needs a wire flag without making every `Session` larger. Keep optional flags in
+existing sparse metadata and update the handwritten encoder and its layout hash together. Check both the
+row size and single-session allocation guards: invoking visibility callbacks from a lower-level list decorator
+made its one-row slice escape even after the row size was restored. Apply the annotation at the final list or
+single-row boundary, before folding/counting, and test archive-only rows too. Read persisted supervision before
+hiding; an unavailable task inventory must preserve possible supervision notifications.
 
 ## Doing the owner's call later (#10661)
 

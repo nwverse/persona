@@ -83,8 +83,14 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 		}
 		by := h.byRequest
 		switch {
+		case pattern == directionSessionFilingRoute:
+			// The selected/default manager owns the direction book. Its 404 for a session on another
+			// manager's computer is the route's contract, not a reason to relay to that computer's manager.
+			by = h.byRequest
 		case strings.Contains(pattern, "/machines/{mid}/"):
 			by = h.byMachine
+		case strings.Contains(pattern, "/sessions/{mid}/{sid}/"):
+			by = h.bySession
 		case strings.Contains(pattern, "/assistant/conversations/{id}"):
 			by = h.byConversation
 		case strings.Contains(pattern, "/todos/{id}"):
@@ -145,6 +151,9 @@ func (h *Hub) startConversationOnce() http.HandlerFunc {
 			return
 		}
 		r = withManager(withHumanStart(r), id) // a person's own app: its first message is theirs (secret_handoff.go)
+		if legacyAppOwner(r.Context()) {
+			r = r.WithContext(assistantwire.WithReplyInput(r.Context()))
+		}
 		if h.busConnOf(id) == nil {
 			writeErrCode(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, errAssistantOffline)
 			return
@@ -213,6 +222,7 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 				list = append(list, assistantwire.Device{ID: m.cfg.ID, Name: m.name(), Kind: m.kind(), SSHHost: m.cfg.SSHHost, Home: info.Home,
 					HomeReal: info.HomeReal, DataDir: info.DataDir, Online: online, Reachable: m.reachable(), Version: info.Version,
 					ModelConfiguration: info.ModelConfiguration, ClaudeVersion: info.ClaudeVersion, Engine: startEngine(info),
+					TaskInstructions:  info.Protocol > 0 && slices.Contains(info.Capabilities, nodeproto.TaskInstructions),
 					ExternalInventory: info.Protocol > 0 && slices.Contains(info.Capabilities, nodeproto.ExternalLauncherInventory)})
 			}
 			d := &h.devices

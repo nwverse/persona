@@ -129,7 +129,9 @@ func (s *Service) PrepareBackendWorkspace(ctx context.Context, id, op string) (*
 	}
 	if r.PreviousOperationID != "" {
 		observed, inspectErr := s.backendWorkspaceCall(ctx, "inspect", r.Request())
-		adopted := inspectErr == nil && observed.OperationID == r.OperationID && observed.InputDigest == r.InputDigest
+		// A conflict echoes the requested operation and digest. Only the Node's
+		// recorded owner identifies a correction it has already adopted.
+		adopted := inspectErr == nil && observed.NodeOperationID == r.OperationID && observed.OperationID == r.OperationID && observed.InputDigest == r.InputDigest
 		if !adopted {
 			prior, err := st.TaskWorkspace(ctx, id, r.PreviousOperationID)
 			if err != nil {

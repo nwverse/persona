@@ -273,6 +273,7 @@ type modelsState struct {
 	cacheMu  sync.Mutex
 	cacheAt  map[string]time.Time
 	have     map[string]map[string]bool   // machine \x00 launcher → its models (ids and what aliases resolve to)
+	declared map[string][]string          // machine \x00 launcher → every id the launcher declared (ids, resolved, aliases)
 	aliases  map[string]map[string]string // machine \x00 launcher → alias id → its resolved id
 	defaults map[string]string            // machine \x00 launcher → its default model's resolved or own id
 
@@ -385,7 +386,7 @@ func (s *Service) modelPurposeDef(ctx context.Context, id string) (ModelPurpose,
 				// A task's own conversation starts on the assistant's machine (schedule.go runTask), so its override
 				// is held to that machine's launchers. A conversation it came from keeps its own launcher and does not
 				// use this purpose.
-				machine := cmp.Or(s.settings(ctx).MachineID, t.MachineID)
+				machine := cmp.Or(t.ExecutionMachineID, s.settings(ctx).MachineID, t.MachineID)
 				return ModelPurpose{ID: id, CategoryID: "assistant", Name: t.Label, Group: mc(l, "group_assistant"), Kind: "launcher", Parent: "assistant", MachineID: machine}, nil
 			}
 		}
