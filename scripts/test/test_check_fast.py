@@ -529,6 +529,16 @@ class CheckFastScriptsTests(ScriptsRepoTestCase):
         self.assertEqual(0, code, out)
         self.assertIn("queued: scripts unittest suites", out)
 
+    def test_a_diff_without_python3_stops_before_planning(self):
+        # The toolchain_without_node_and_go tools, python3 left out too.
+        bin_dir = Path(self.toolchain_without_node_and_go())
+        (bin_dir / "python3").unlink(missing_ok=True)
+        self.write("scripts/tools/test_new.py", PASSING)
+        code, out = self.check_fast(path=str(bin_dir))
+        self.assertEqual(2, code, out)
+        self.assertIn("check-fast: picking the checks for a change needs python3 and scripts/ci/check_fast_map.py; "
+                      "no plan made", out)
+
     def test_a_table_that_fails_or_answers_wrong_stops_before_planning(self):
         cases = {
             "raise SystemExit('broken on purpose')\n":
