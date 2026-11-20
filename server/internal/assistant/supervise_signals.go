@@ -35,6 +35,17 @@ const (
 	// sigLeaderStuck: a leader's task is stuck (leader_reports.go): the main conversation says so in one line, no push
 	// (the owner's ruling after H1, #3609). Detail is the direction's name and where it is stuck.
 	sigLeaderStuck = "leader_stuck"
+	// sigCheck: a recurring schedule linked to the task (schedule_todo.go) has news of it, the hub's and never its
+	// Agent's (#11587). Report says which: its check saw no progress, could not save what it saw, or the owner
+	// answered the decision it raised (checkDecided), which did not go to the Agent.
+	sigCheck = "check"
+)
+
+// sigCheck's kinds of news (superviseSignal.Report).
+const (
+	checkNoProgressReport = "no_progress"
+	checkErrorReport      = "error"
+	checkDecidedReport    = "decided"
 )
 
 var (
@@ -116,7 +127,7 @@ func (g superviseSignal) id() string {
 	if g.Kind == sigDraftPR {
 		return g.Todo + "|" + g.Kind + "@" + g.PRURL
 	}
-	if g.Kind == sigReport {
+	if g.Kind == sigReport || g.Kind == sigCheck {
 		return g.Todo + "|" + g.Kind + ":" + g.Report
 	}
 	if g.Kind == sigAsk { // its cards with each rung are an entry of their own
@@ -143,6 +154,8 @@ func (g superviseSignal) urgent() bool {
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
+	case sigCheck: // the owner answered: what they chose is acted on soon
+		return g.Report == checkDecidedReport
 	}
 	return false
 }
