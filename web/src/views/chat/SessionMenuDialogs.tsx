@@ -2,6 +2,7 @@
 // chunk of their own (SessionDialogs.tsx loads them with lazyDialog), so the first screen does not carry them (#10382).
 // The menu that offers one starts the chunk when it opens (preloadSessionDialogs), so the click draws the dialog at once.
 import { useEffect, useState } from "react";
+import { isUntouchedStart } from "../../lib/agent-archives";
 import { api, enc, errorText, sessionPath } from "../../lib/api";
 import { sessionCan, sessionTitle } from "../../lib/format";
 import { renameBody } from "../../lib/session-actions";
@@ -150,7 +151,7 @@ function Field({ label, value, onChange, autoFocus }: { label: string; value: st
 // conversation comes back once it is used again (claude --resume).
 export function DeleteSessionDialog({ session, machineName, open, onClose }: { session: Session; machineName: string; open: boolean; onClose: () => void }) {
   const [busy, setBusy] = useState(false);
-  const wt = useAgentWorktree(session, open);
+  const wt = useAgentWorktree(session, open && !isUntouchedStart(session));
   const [cleanup, setCleanup] = useState<Cleanup>(KEEP);
   useEffect(() => {
     if (open) setCleanup(KEEP); // each time: keeping is the default

@@ -334,6 +334,19 @@ type Kernel interface {
   (495-530) wait for #4512, whose hunk touches them.
 - **Done when:** npm test and the build pass, with the first-screen room unchanged or its difference reported; tsc and
   eslint are clean; `git diff --stat` shows no importer changed.
+- **Landed (#11538):** `withToken` moved to `web/src/lib/media-url.ts`, a new module (in `web/src/lib/api.ts` its
+  default token would come from that module's own `getToken`, which the tests that mock `lib/api` cannot replace);
+  `shortTime` to `web/src/lib/format.ts`, after `clock`; `conversationRoute` to `web/src/lib/conversation-page.ts`; the
+  Lark message types with `mergeMessages`, `comparePosition` and `LarkMention` (a sent message's @s, from the file's
+  end) to `web/src/lib/lark-messages.ts`, a new module; and `MailAccount` to `web/src/lib/mail.ts`, its one importer
+  outside the Inbox, which no longer imports `lib/inbox.ts`. Each block moved verbatim, and `lib/inbox.ts` re-exports
+  every name, so no other importer changed. Each language's first screen is 129 B smaller (40 B left under
+  `FIRST_SCREEN_BUDGET` before, 169 B after, ja): the build follows the re-export, so `mergeMessages` and
+  `comparePosition` now ship only in the Lark chat's lazy chunk.
+- **Deferred:** `interactionMuted`, `interactionTitle` and `interactionAsk`. Re-checked on 2026-11-20, it is #1995 (a
+  draft) whose hunk edits `interactionTitle` and reaches `interactionAsk`'s comment; #4512's hunks do not touch them.
+  They move once #1995 lands or closes. The rest stays: the Inbox's own (`waitingAgents` among them), or imported by no
+  source outside the Inbox (`tightCJK`, the Inbox's `contextXML`).
 
 ### A1. Android contracts slice and a module-edge ratchet
 - **Change:** the package persona.core.contracts.inbox with one KDoc file saying what belongs there, and a plain JUnit
