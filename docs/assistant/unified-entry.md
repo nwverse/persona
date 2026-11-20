@@ -479,7 +479,8 @@ lines, and in the user's own color and alignment they read as something the user
   to-do and its `wake` (`created`, `active`, `resumed`) is the badge; a started plan's `tasks[].todo_id` identify its tasks
   (a plan's tasks are New). Live to-do titles override plan titles. A plan task without a to-do keeps its title as a card
   with no link, red "Didn't start: <reason>" from the plan task's `error`, and its per-task feed items do not add
-  duplicate cards. Agents linked within 120 s of the first are each a card; a later Agent is not on this hand-off.
+  duplicate cards. Agents linked within 120 s of the first are each a card; a later Agent is not on this hand-off. The web
+  anchors "the first" at the card's feed line (#11854, below); iOS and Android still take the to-do's earliest Agents.
   The title is the session's, then the Agent row's, then the task's. The second line is that Agent's `activity_at` (else `updated_at`) as a relative time and
   its state; before there is an Agent it says "Starting the agent", a task closed without one "Closed
   before an Agent started", a task the list no longer has "This task no longer exists".
@@ -504,7 +505,9 @@ are drawn the same whichever way they open; the owner then asked for the side pa
 page one setting away (#5424):
 
 - **One card per Agent.** Each Agent a dispatch started or a task took over is one full-width card where the dispatch is in the chat, stacked by plan order, with no heading over them. This covers a started plan, a standalone `task` item, and a message that started a new Agent for its task (`routed` with `new_agent`).
-  - A task's line shows the Agents the hand-off went to: its first Agents, linked within two minutes of each other. That covers the plan's several Agents and a retry. An Agent linked later has its own card where that happened.
+  - A task's line shows the Agents the hand-off went to: the first Agents linked from its feed line's time on (for a standalone `task` line an Agent linked up to 30 s before still counts, since that line is written just after its link; a plan line has no look-behind, since its Agents start after it, so a previous continuation's Agent linked just before never stands in for the plan's own), within two minutes of each other. That covers the plan's several Agents and a retry. An Agent linked later has its own card where that happened (#11854, `handoffAgents` in `web/src/views/assistant/Handoff.tsx`).
+  - After a plan continues a to-do (task_plan's `continues`), the card under that plan is the Agent it started; until that Agent is linked the card says it is starting, never an older Agent. Cards under earlier plans keep the Agents those plans started: a plan whose `todo_id` the continuation cleared finds its to-do again through its `continues` / `reuse_todo`, or as the one to-do whose `plan_id` is that plan.
+  - A line with nothing linked since (a task that took over an Agent already running, an earlier plan with no Agent of its own) or with no usable time shows the newest Agents still linked, else the one released last.
   - **Head:** a round ↳ mark, the Agent session's title (the task's until it has one) and a badge: **New**, **Already active** when the task took over an Agent that was running already, or **Resumed** when the hand-off's message resumed a closed one.
   - **Second line:** "last active …" and the Agent's state word. The state shows that an Agent needs you without opening anything.
   - **End:** ↗.
