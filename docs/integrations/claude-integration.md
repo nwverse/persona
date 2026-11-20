@@ -335,7 +335,9 @@ the Agent's own bookkeeping.
 - **Task handoff notes** (#9846): the first message follows the final selected machine, Agent family and launcher
   source, including a health detour. Known Persona MCP integrations retain their tool guidance, including the
   Paseo Codex bridge. Known terminal Agents without that integration are given a verified node executable location
-  and the existing `tool task_spawn` arguments when available, without the MCP-only repository tools. Unknown
+  and the existing `tool task_spawn` arguments when available, without the MCP-only repository tools; that entry's
+  text also names the Agent's own tools it runs (`todo_decisions`, `todo_decision_add`, `report_to_supervisor`, and a
+  task leader's `task_plan` / `task_review` in the leader's note) with their arguments' shape (#12136). Unknown
   capabilities or missing metadata omit unverified entries and do not block assigned work.
   This changes guidance only, not scoped CLI authority or the rules protecting hub credentials.
 - **The card's title**: whenever a card is shown for one of Persona's own MCP tools (the ones still asked, or any in a
