@@ -871,3 +871,18 @@ A relay refusal was classified with `errors.As(err, &rpc.Error{})` alone. That m
 `apierr.ErrOffline` with no code at all. Read from the code, `conversation_send` to a computer that was away returned
 the error instead of queueing the message as #10194 meant it to. Read a code from either shape (`relayErrCode`) and
 test each failure in the shape production delivers it (`busError(&rpc.Error{…})`), not only as a bare `*rpc.Error`.
+
+## A plan's new Agent is a new round, and a shared conversation's latest turn is nobody's reply (#11553)
+
+A continuation (`task_plan` `continues`) reopened an accepted to-do and refreshed its ledger's criteria, but left
+`state: accepted` with the earlier round's acceptance as the latest review. Every client and the hub's triage read
+"open + accepted + latest review accepted" as an acceptance that stands, a rule made for more work sent to an accepted
+task's Agent (#3156). So the continued to-do showed **Accepted** in Working, went to Just finished whenever its new
+Agent stopped, and `superviseJudged` dropped its stops. Reset the terminal verdict where the new round starts
+(`takeTodoForTask`) and keep the history. Leave the send-after-acceptance path alone, and pin both directions in tests.
+
+A linked scheduled run read its explanation from the latest turn of the conversation it went to. In a source
+conversation shared with other work, two runs due in the same minute both read the second run's answer, and the first
+to-do's no-progress decision quoted another task. Find the run's own prompt by its run key (`runKeyIn`) and take the
+reply after it, up to the next message that opened a turn. Refuse turns that a queued message mixed. Test with real
+transcript pages (`runChat`), not bare item lists.

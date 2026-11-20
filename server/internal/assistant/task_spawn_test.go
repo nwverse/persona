@@ -11,6 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extwire"
+	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -71,6 +72,114 @@ func TestTaskSpawnStaysOnCallersSupervisedTodo(t *testing.T) {
 		if !strings.Contains(prompt, guard) {
 			t.Errorf("assignment lacks %q: %s", guard, prompt)
 		}
+	}
+}
+
+func spawnKBFixture(t *testing.T) (*Service, *fakeHub, Todo) {
+	t.Helper()
+	f := newFakeHub()
+	f.sessions["box"] = nil
+	f.settings = &Settings{Timezone: "Asia/Shanghai"}
+	f.hello.KB = &KBSettings{}
+	s := withSettings(t, f, New(Options{Hub: f, Logf: testLogf(t), KB: &KBOptions{Dir: t.TempDir()}}))
+	t.Cleanup(s.kbEnd)
+	shortSupervise(t, s)
+	f.hello.Assistant.MachineID = "server"
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
+	f.known["conv1"] = true
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	s.hub = &taskHandoffTestHub{fakeHub: f, info: map[string]proto.NodeInfo{"box": {Executable: "/test/persona-node"}}}
+	todo := startTaskLeader(t, s, f)
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].Agents[0].Source = "manual"
+	s.todos.mu.Unlock()
+	f.launcherList = []proto.Launcher{{Name: "codex", Agent: "codex"}}
+	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Agent: "codex", Launcher: "codex",
+		Cwd: "/code/app", PermissionMode: "plan", Status: proto.StatusWorking})
+	return s, f, todo
+}
+
+func TestTaskSpawnExplicitProjectAndDirectionBeatForeignCwd(t *testing.T) {
+	for _, ownership := range []string{"todo", "direction"} {
+		t.Run(ownership, func(t *testing.T) {
+			s, f, todo := spawnKBFixture(t)
+			ctx := context.Background()
+			e := kbEng(t, s)
+			if _, err := e.Apply(kb.KindProject, "explicit", kb.Update{Kind: "long"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.Apply(kb.KindProject, "cwd-project", kb.Update{Dirs: []string{"box:/code/app"}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.Store.PutSummary(kb.KindProject, "explicit", "Explicit direction summary"); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.AppendProjectMemory("explicit", kb.ProjectMemoryRecord{ID: "before/outcome", Type: kb.ProjectMemoryOutcome,
+				Conclusion: "Explicit direction outcome", Verification: kb.ProjectMemoryAgentReported, RecordedAt: "2026-11-20T01:00:00Z"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.AppendProjectMemory("explicit", kb.ProjectMemoryRecord{ID: "before/decision", Type: kb.ProjectMemoryDecision,
+				Question: "Which project?", Decision: "Use the explicit direction", Reason: "Ownership is explicit",
+				Verification: kb.ProjectMemoryAgentReported, RecordedAt: "2026-11-20T01:01:00Z"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.AppendProjectMemory("explicit", kb.ProjectMemoryRecord{ID: "before/pitfall", Type: kb.ProjectMemoryPitfall,
+				Conclusion: "Do not infer ownership from cwd", Verification: kb.ProjectMemoryAgentReported}); err != nil {
+				t.Fatal(err)
+			}
+			p, _ := e.Store.Project("cwd-project")
+			p.OneLine = "Wrong cwd-only project"
+			if err := e.Store.PutProject(p); err != nil {
+				t.Fatal(err)
+			}
+			if ownership == "todo" {
+				s.todos.mu.Lock()
+				s.todos.todos[todo.ID].Project = "explicit"
+				s.todos.mu.Unlock()
+			} else {
+				setSettings(t, s, func(v *Settings) { v.Main = "main"; v.Leaders = []string{"conv1"} })
+				s.directions.mu.Lock()
+				if !s.directionsLocked(ctx) {
+					t.Fatal("directions unreadable")
+				}
+				s.directions.m["conv1"] = &direction{Project: "explicit", By: directionByUser}
+				s.directions.mu.Unlock()
+			}
+			f.hello.Locale = "en"
+			res := s.mcpCall(ctx, "box", "s1", "task_spawn", json.RawMessage(spawnArgs), false)
+			if res.IsError {
+				t.Fatal(res.Content)
+			}
+			start := f.starts[len(f.starts)-1]
+			prompt, _ := start["prompt"].(string)
+			for _, want := range []string{"Explicit direction summary", "Explicit direction outcome", "Use the explicit direction",
+				"Ownership is explicit", "Do not infer ownership from cwd", "agent_reported", "not supervisor-accepted"} {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("first prompt lacks %q: %s", want, prompt)
+				}
+			}
+			if strings.Contains(prompt, "Wrong cwd-only project") || start["cwd"] != "/code/app" {
+				t.Fatalf("cwd overrode explicit ownership or was changed: %+v", start)
+			}
+
+			after := onlyTodo(s)
+			child := after.Agents[1]
+			f.outcome = `{"outcome":"child finished","decisions":[{"question":"Where does this belong?","choice":"Still the explicit project","reason":"The child inherited it"}],"pitfalls":["Foreign cwd must not win"]}`
+			s.recordWorkerOutcome(ctx, after, "box", child.SessionID, "/code/app", 9, 1, "child finished", nil)
+			records := e.ProjectMemory("explicit", 30)
+			found := false
+			for _, record := range records {
+				if record.Conclusion == "child finished" && record.Agent == child.SessionID {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("child outcome did not reach the explicit project: %+v", records)
+			}
+			if got := e.ProjectMemory("cwd-project", 30); len(got) != 0 {
+				t.Fatalf("foreign cwd project received the child outcome: %+v", got)
+			}
+		})
 	}
 }
 
