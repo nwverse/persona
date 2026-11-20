@@ -2,7 +2,7 @@ Send a message to an agent as the user would type it; queued while it works. Onl
 
 A dialog holding its terminal refuses the send (dialog_open) with its first line and whether Enter alone closes it; then send with dismiss_notice true. Confirmations, permissions and pickers are never closed for you: tell the user or use interaction_answer.
 
-To hand new work to a running agent (one the user opened, a long-lived one that passes work on), give task from the main conversation: once sent, the agent is your supervised task as agent_supervise makes one (a todo with the text as notes, done_when, a card; 督办 messages, task_review). Put the criteria in the text too: the agent reads only the text. An agent on one of your tasks takes more under the same title (done_when updated); another title, the user's own todo or another conversation's task is refused, with nothing sent. A failed send makes no task. Leave task out or null for a reply, nudge or decision; a task with only blank fields counts as left out.
+To hand new work to a running agent (one the user opened, a long-lived one that passes work on), give task from the main conversation: once sent, the agent is your supervised task as agent_supervise makes one (a todo with the text as notes, done_when, a card; 督办 messages, task_review). Put the criteria in the text too: the agent reads only the text. An agent on one of your tasks takes more under the same title (done_when updated); another title, the user's own todo or another conversation's task is refused, with nothing sent. A failed send makes no task. Leave task out or null for a reply, nudge or decision; a task with only blank fields counts as left out.{{template "shared/mcp_language" .}}
 
 `wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.
 
@@ -50,7 +50,7 @@ To hand new work to a running agent (one the user opened, a long-lived one that 
       "properties": {
         "title": {
           "type": "string",
-          "description": "the task in a short line (Chinese, under 20 characters)"
+          "description": "{{if eq .Lang "en"}}the task in a short line (English, under 20 characters){{else if eq .Lang "ja"}}短いタスク名（日本語、20文字未満）{{else}}the task in a short line (Chinese, under 20 characters){{end}}"
         },
         "done_when": {
           "type": "array",
