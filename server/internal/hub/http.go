@@ -500,6 +500,14 @@ func callErr(w http.ResponseWriter, err error) {
 func (h *Hub) callNode(w http.ResponseWriter, r *http.Request, m *Machine, method string, params any, timeout time.Duration, outdated string, args i18n.Args, handle ...func(error) bool) (json.RawMessage, bool) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
+	if strings.HasPrefix(method, "git.") {
+		var err error
+		method, params, err = backendGitTarget(r, method, params)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return nil, false
+		}
+	}
 	var out json.RawMessage
 	if err := m.call(ctx, method, params, &out); err != nil {
 		if h.nodeOutdated(w, r, err, outdated, args) {

@@ -99,6 +99,18 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 		Session json.RawMessage     `json:"session"`
 		Instead *proto.StartInstead `json:"instead"`
 	}
+	if b := backendLaunchFrom(ctx); b != nil {
+		h.mu.Lock()
+		supported := h.hello.Caps.BackendWorkspaceRoot
+		h.mu.Unlock()
+		if !supported {
+			return nil, nil, refusal("backend_workspace_unsupported", "This runtime cannot start in a prepared task directory.", nil)
+		}
+		params["backend_workspace_root"] = true
+		if err := b.beforeDispatch(p.SessionID); err != nil {
+			return nil, nil, err
+		}
+	}
 	if err := h.peer.Call(ctx, "session.start", params, &res); err != nil {
 		return nil, nil, err
 	}

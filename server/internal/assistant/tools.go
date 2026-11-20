@@ -19,6 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
@@ -868,6 +869,9 @@ var agentStartAdoptRetry = 200 * time.Millisecond
 // missing one or a request the node refused is definite and stays an error; rpc.ErrDropped answers the same words
 // as rpc.ErrClosed (a relay passes them through), so the rpc.Error message form counts too.
 func startResultUnknown(err error) bool {
+	if p, ok := errors.AsType[*taskworkspace.Problem](err); ok {
+		return p.Code == "operation_unknown"
+	}
 	var re *rpc.Error
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
 		errors.Is(err, rpc.ErrClosed) || errors.As(err, &re) && re.Message == rpc.ErrClosed.Error()
