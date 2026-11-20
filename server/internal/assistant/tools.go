@@ -68,6 +68,9 @@ func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
 		return proto.TextResult(err.Error(), true)
 	}
 	call.Name = compat.Tool(call.Name)
+	if err := s.guardRefusal(ctx, call.MachineID, call.SessionID, call.Name); err != nil {
+		return proto.TextResult(err.Error(), true)
+	}
 	if res, refused := s.inboxModelRefusal(ctx, call.MachineID, call.SessionID, "", call.Name); refused {
 		return res
 	}
