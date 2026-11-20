@@ -175,6 +175,13 @@ func (s *Service) relayRefused(machine, to string, msg relayMsg, err error) (sta
 	case msg.Tool == noticeTool && (msg.State == "needs" || msg.State == "failed"):
 		what = "the push it stood for goes out"
 		return false, func(ctx context.Context) { s.quietNoticeRefused(ctx, msg) }
+	case msg.Tool == chatReplyTool:
+		// The chat's later batches wait the gap as after one that went in, and the owner is pushed once for this
+		// conversation until a chat reply goes into it again (chatReplyRefused).
+		if !s.chatReplyRefused(to, msg) {
+			what = "it leaves the queue; the owner was told of an earlier chat reply"
+			return false, nil
+		}
 	}
 	// Persona's own notices: a quiet task's other notices, a task's end, a spawned conversation's notice, a chat's
 	// reply, the line to a sender. Nothing else records the refusal yet, so the owner is pushed once.

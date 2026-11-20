@@ -126,10 +126,20 @@ type directionBook struct {
 	m      map[string]*direction // by leader conversation id
 	armed  bool                  // a compare is scheduled
 	after  func(d time.Duration, f func())
-	now    func() time.Time // tests: the clock notes are saved by (nil: time.Now)
-	// pending: by conversation, the block in effect a send moved and the node has not yet been seen to take
-	// (notesSendOutcome); in memory only.
-	pending map[string]notesPending
+	now    func() time.Time // tests: the clock notes are saved and the owner's messages are aged by (nil: time.Now)
+	// inflight: by conversation, the moves of its notes block in effect and the owner's messages whose outcomes are
+	// not yet known (direction_notes.go notesSendOutcome); ownerSeen: the owner's latest message ids it gave parameters
+	// for (notesOwnerSeen). In memory only.
+	inflight  map[string]*notesFlight
+	ownerSeen map[string][]string
+}
+
+// clock is now on b's clock; b.mu is held.
+func (b *directionBook) clock() time.Time {
+	if b.now != nil {
+		return b.now()
+	}
+	return time.Now()
 }
 
 // directionsLocked reads the book once; b.mu is held. A failed read leaves it unloaded: nothing is told or saved over it.
