@@ -4,14 +4,19 @@ shows and the composer stays on screen (the first card open, "N more" for the ot
 viewport (a keyboard on Android) and a twenty-line draft keep the send button on screen; the iOS keyboard moves the
 side panel with it (--kb-top / --kb-h); Back closes a full-screen side panel and stays on the conversation; switching
 panes writes no history; the header leaves the title room at 360; on a phone on its side the run's status and the
-queue share a line.
+queue share a line. Since #11442 also: a waiting card's own field typed into with the keyboard up stays in sight (it
+needs --hub: the card comes from the fake hub's /mock routes, which Vite does not proxy); a Feishu chat keeps its newest
+message in view as the keyboard and a long draft shorten it; a tap on an attached picture's middle opens it and its ✕
+answers only at its corner; toasts stay in the visible frame, clear of the composer and a sheet's footer, and a sheet's
+focused field stays in view.
 
 Needs a running web page against the fake hub with the crowded conversation, and Playwright for Python (it drives the
 installed Chrome):
 
     MOCK_SPLIT_TABS=1 MOCK_CHAT_CARDS=1 MOCK_FILES=1 PORT=18961 python3 scripts/mock/mock_hub.py &
     (cd web && PERSONA_HUB_URL=http://127.0.0.1:18961 npx vite --port 5961 --strictPort &)
-    uv run --no-project --with playwright==1.58.0 python3 scripts/test/web_mobile_input_e2e.py http://127.0.0.1:5961 [--shots <dir>]
+    uv run --no-project --with playwright==1.58.0 python3 scripts/test/web_mobile_input_e2e.py http://127.0.0.1:5961 \
+        --hub http://127.0.0.1:18961 [--shots <dir>]
 
 Prints one line per check and a verdict; exits 1 on the first failure. --shots saves 390, 360 and 844×390 screenshots,
 light and dark.
@@ -124,7 +129,324 @@ def crowded(page, what, min_chat=0.25, fold="还有 2 件"):
     ok(f"{what}: three cards, {fold}; the chat keeps {chat} px, the composer on screen")
 
 
-def run(base, shots):
+def card_field_keyboard(browser, base, hub, shots):
+    """The Assistant's question card (#11442): its own field, typed into with the keyboard up, stays in sight and takes a
+    finger over the composer at 390 and 360, with iOS's keyboard (the visual viewport shrinks) and Android's (Chrome
+    resizes the page); with the keyboard down or the focus gone the dock keeps its cap."""
+    import urllib.request
+    if not hub:
+        fail("card field: pass --hub <the fake hub's URL> (the card comes from its /mock/assistant_ask)")
+    hit = """() => { const f = document.activeElement, c = document.querySelector('main textarea[aria-label=消息]');
+      const at = (e) => { const r = e.getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); };
+      const fr = f.getBoundingClientRect(), cr = c.getBoundingClientRect();
+      return { field: Boolean(f.closest('[data-pending-card]')) && at(f) === f, top: fr.top, bottom: fr.bottom, composer: at(c) === c,
+        composerBottom: cr.bottom, dock: document.querySelector('[data-chat-dock]').getBoundingClientRect().toJSON() }; }"""
+    def keyboard(page, ios, w, vh):
+        if ios:
+            page.evaluate(f"window.__kb({vh})")
+        else:
+            page.set_viewport_size({"width": w, "height": vh})
+
+    for ios, w, h, kb in ((True, 390, 844, 508), (True, 360, 740, 440), (False, 390, 844, 508), (False, 360, 740, 440)):
+        what = f"{'iOS' if ios else 'Android'} {w}"
+        # Persona's main conversation asks; the card is answered at the end whatever happens (/mock/reset keeps it)
+        ix = json.load(urllib.request.urlopen(hub + "/mock/assistant_ask?session=b2e4d6f8-0000-4000-8000-000000000001"))["id"]
+        ctx, page = phone(browser, w, h, ios=ios)
+        try:
+            login(page, base)
+            go(page, "/")
+            field = page.locator("[data-pending-card]").get_by_role("textbox", name="自定义回答").first
+            field.tap()
+            for vh in (h - 100, h - 200, kb):  # the keyboard slides up
+                keyboard(page, ios, w, vh)
+                page.wait_for_timeout(120)
+            page.keyboard.type("Next Monday, after the review")
+            page.wait_for_timeout(500)
+            at = page.evaluate(hit)
+            if not at["field"] or at["top"] < 0 or at["bottom"] > kb + 0.5:
+                fail(f"{what}: the card's field is not in sight over the keyboard ({at})")
+            if not at["composer"] or at["composerBottom"] > kb + 0.5 or at["dock"]["bottom"] > kb + 0.5:
+                fail(f"{what}: the composer left the screen while typing in the card ({at})")
+            if shots:
+                page.screenshot(path=os.path.join(shots, f"card-field-{'ios' if ios else 'android'}-{w}.png"),
+                                clip={"x": 0, "y": 0, "width": w, "height": kb})
+            keyboard(page, ios, w, h)  # the keyboard down, the field still focused
+            page.wait_for_timeout(400)
+            if page.evaluate(hit)["dock"]["height"] > h * 0.55 + 1:
+                fail(f"{what}: with the keyboard down the dock is over its cap")
+            keyboard(page, ios, w, kb)
+            page.evaluate("document.activeElement.blur()")
+            page.wait_for_timeout(400)
+            if box(page, "[data-chat-dock]")["height"] > kb * 0.55 + 1:
+                fail(f"{what}: the focus gone, the dock is over its cap")
+            # answered from the card with the keyboard up: its arrow takes the focus on the tap, and the card (on a page
+            # the keyboard made short, Android at 360) must still be there for the click
+            keyboard(page, ios, w, h)
+            page.wait_for_timeout(400)
+            field.tap()
+            for vh in (h - 100, h - 200, kb):
+                keyboard(page, ios, w, vh)
+                page.wait_for_timeout(120)
+            page.wait_for_timeout(400)
+            page.locator("[data-pending-card]").get_by_role("button", name="发送回答").first.tap()
+            for _ in range(25):
+                if any(r["id"] == ix for r in json.load(urllib.request.urlopen(hub + "/mock/resolved"))["resolved"]):
+                    break
+                page.wait_for_timeout(200)
+            else:
+                fail(f"{what}: tapping the card's arrow with the keyboard up sent no answer")
+            ok(f"{what}: the card's own field stays in sight and takes a tap over the keyboard, the composer on screen; "
+               "the cap again with the keyboard down or the focus gone; its arrow answers it")
+        finally:
+            ctx.close()
+            urllib.request.urlopen(urllib.request.Request(
+                f"{hub}/api/v1/interactions/{ix}/resolve", data=b"{}", method="POST",
+                headers={"Authorization": "Bearer mock", "Content-Type": "application/json"})).read()
+
+
+LARK_END = """() => { const el = [...document.querySelectorAll('.overflow-y-auto')].find((e) => e.querySelector('[data-mid]'));
+  const last = [...el.querySelectorAll('[data-mid]')].pop().getBoundingClientRect(); const box = el.getBoundingClientRect();
+  return { top: el.scrollTop, fromEnd: el.scrollHeight - el.clientHeight - el.scrollTop, last: last.bottom, bottom: box.bottom, boxTop: box.top }; }"""
+
+
+def lark_keyboard(browser, base, shots):
+    """A Feishu chat at its newest message keeps it in view as the iOS keyboard comes up and a five-line draft grows the
+    box; scrolled up, the same changes leave the list where the reader put it."""
+    lark = "main textarea[aria-label=飞书消息]"
+    draft = "\n".join(f"第 {i} 行" for i in range(1, 6))
+    for w, h in ((390, 844), (360, 740)):
+        ctx, page = phone(browser, w, h, ios=True)
+        login(page, base)
+        go(page, "/inbox/lark%3Af1%3A100")
+        page.wait_for_selector("[data-mid]")
+        page.wait_for_timeout(700)
+
+        def at_end(what):
+            s = page.evaluate(LARK_END)
+            if s["last"] > s["bottom"] + 1 or s["last"] <= s["boxTop"]:
+                fail(f"{w}: {what}: the newest message is out of view ({s})")
+            return s
+
+        page.locator(lark).tap()
+        page.evaluate("__kb(450, 0)")
+        page.wait_for_timeout(400)
+        at_end("the keyboard up")
+        if shots:
+            page.screenshot(path=os.path.join(shots, f"lark-kb-{w}.png"), clip={"x": 0, "y": 0, "width": w, "height": 450})
+        page.locator(lark).fill(draft)
+        page.wait_for_timeout(400)
+        at_end("a five-line draft")
+        # scrolled up, a longer draft does not pull the list back to its end
+        page.locator(lark).fill("")
+        page.wait_for_timeout(300)
+        page.evaluate("(() => { const el = [...document.querySelectorAll('.overflow-y-auto')].find((e) => e.querySelector('[data-mid]')); el.scrollTop -= 150; })()")
+        page.wait_for_timeout(300)
+        up = page.evaluate(LARK_END)
+        page.locator(lark).fill(draft)
+        page.wait_for_timeout(400)
+        moved = page.evaluate(LARK_END)
+        if abs(moved["top"] - up["top"]) > 1 or moved["fromEnd"] < 150:
+            fail(f"{w}: scrolled up, the draft moved the list ({up} -> {moved})")
+        ctx.close()
+        ok(f"{w}: the Feishu chat keeps its newest message in view with the keyboard up and a five-line draft; scrolled up, it stays")
+
+
+# What a finger finds on an attachment tile: at its middle, at its top-right corner and 7 px above it (past the ✕'s reach
+# into the 6 px gap over a row of tiles), and how far the ✕ answers along the lines through its middle.
+TILE_HITS = """(tile) => {
+  const x = tile.querySelector('[aria-label^="移除"], [data-remove]'), edit = tile.querySelector('button:has(img)');
+  const at = (px, py) => { const e = document.elementFromPoint(px, py); return !e ? '-' : x.contains(e) ? 'remove' : edit?.contains(e) ? 'edit' : e.tagName.toLowerCase(); };
+  const r = tile.getBoundingClientRect(), b = x.getBoundingClientRect(), cx = b.left + b.width / 2, cy = b.top + b.height / 2;
+  const run = (dx, dy) => { let n = 0; while (n < 60 && at(cx + dx * (n + 1), cy + dy * (n + 1)) === 'remove') n++; return n; };
+  return { centre: at(r.left + r.width / 2, r.top + r.height / 2), corner: at(r.right - 3, r.top + 3), above: at(cx, r.top - 7),
+    w: run(-1, 0) + run(1, 0) + 1, h: run(0, -1) + run(0, 1) + 1, mid: [r.left + r.width / 2, r.top + r.height / 2] };
+}"""
+
+
+def tile_hits(browser, base, shots):
+    """An attachment's ✕ (#11442): a tap on a picture's middle opens the editor, not remove; the ✕ answers out of its
+    corner but not over what sits above the tray (the composer, the New Agent sheet); a file's ✕ answers down its column
+    and the file row scrolls no further for it."""
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    def png(rgb):
+        """A 64 px square of one colour."""
+        raw = b"".join(b"\0" + bytes(rgb) * 64 for _ in range(64))
+        data = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 64, 64, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+        return {"name": "picture.png", "mimeType": "image/png", "buffer": data}
+
+    def text(name):
+        return {"name": name, "mimeType": "text/plain", "buffer": b"hello\n"}
+
+    ctx, page = phone(browser, 390, 844)
+    open_pane(page, base, cards=False)
+    page.locator("main input[type=file]").first.set_input_files([png((220, 60, 60))])
+    pic = page.locator("main [data-chat-dock] .group\\/att:has(img)")
+    expect(pic).to_have_count(1)
+    page.wait_for_timeout(400)  # its pop-in
+    h = pic.evaluate(TILE_HITS)
+    if h["centre"] != "edit" or h["corner"] != "remove":
+        fail(f"a picture's middle should open it and its corner remove it: {h}")
+    if h["above"] == "remove":
+        fail(f"the picture's ✕ answers 7 px above the tray, over what sits there: {h}")
+    if h["w"] < 36 or h["h"] < 32:
+        fail(f"the picture's ✕ answers only {h['w']}×{h['h']} px")
+    page.touchscreen.tap(*h["mid"])
+    editor = page.get_by_role("dialog", name="编辑图片")
+    expect(editor).to_be_visible()
+    expect(pic).to_have_count(1)
+    ok(f"a tap on a picture's middle opens the editor; its ✕ answers {h['w']}×{h['h']} px out of the corner, not above the tray")
+    editor.get_by_role("button", name="取消").click()
+    expect(editor).to_have_count(0)
+    page.wait_for_timeout(500)
+
+    # files: two overflow the row at 390, which must scroll no further for the ✕
+    page.locator("main input[type=file]").first.set_input_files([text("a.txt"), text("b.txt")])
+    tiles = page.locator("[data-testid=composer-files] > span")
+    expect(tiles).to_have_count(2)
+    page.wait_for_timeout(400)
+    f = tiles.first.evaluate(TILE_HITS)
+    if f["corner"] != "remove" or f["centre"] == "remove":
+        fail(f"a file's ✕ should answer at its corner and leave its middle: {f}")
+    if f["w"] < 28 or f["h"] < 44:
+        fail(f"a file's ✕ answers only {f['w']}×{f['h']} px")
+    row = page.locator("[data-testid=composer-files]").evaluate("""(e) => { const t = [...e.children].map((c) => c.getBoundingClientRect());
+      return [e.scrollWidth, t[t.length - 1].right - t[0].left]; }""")
+    if row[0] > row[1] + 0.5:
+        fail(f"the file row scrolls {row[0]} px for {row[1]:.0f} px of tiles")
+    if shots:
+        card = page.locator(COMPOSER).evaluate("(e) => { const r = e.closest('.rounded-\\\\[14px\\\\]').getBoundingClientRect(); return [r.top, r.height]; }")
+        page.screenshot(path=os.path.join(shots, "390-attachments.png"), clip={"x": 0, "y": max(0, card[0] - 20), "width": 390, "height": card[1] + 40})
+    ok(f"a file's ✕ answers {f['w']}×{f['h']} px down its column; the row scrolls {row[0]} px, its tiles' width")
+
+    # the New Agent sheet: no editor, the middle still is not remove, nor is the sheet above the tray
+    page.evaluate("import('/src/lib/new-agent.ts').then((m) => m.openNewAgent())")
+    sheet = page.get_by_role("dialog", name="新建 Agent", exact=True)
+    expect(sheet).to_be_visible()
+    sheet.locator("input[type=file]").first.set_input_files([png((60, 90, 220))])
+    pic = sheet.locator(".group\\/att:has(img)")
+    expect(pic).to_have_count(1)
+    pic.scroll_into_view_if_needed()
+    page.wait_for_timeout(400)
+    n = pic.evaluate(TILE_HITS)
+    if n["centre"] == "remove" or n["corner"] != "remove" or n["above"] == "remove":
+        fail(f"New Agent: the picture's ✕ should answer at its corner only: {n}")
+    ok(f"New Agent: the picture's ✕ answers {n['w']}×{n['h']} px at its corner, not its middle or above the tray")
+    ctx.close()
+
+
+# toast() from the page's own module (a fresh dev server: one edited since serves the app another copy of it)
+TOAST = "async (tone) => { const m = await import('/src/ui/atoms.tsx'); m.toast(tone === 'error' ? '没复制上' : '已复制', tone); }"
+TOAST_ROWS = """() => [...document.querySelectorAll('[aria-live=polite] > div:not([data-closing])')].map((e) => {
+  const r = e.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left }; })"""
+# whether a finger on the middle of each control lands on it (not on a toast drawn over it)
+HITS_SELF = """(sels) => sels.filter((s) => { const b = document.querySelector(s); if (!b) return true; const r = b.getBoundingClientRect();
+  const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !(e && (b === e || b.contains(e))); })"""
+CONTROLS = [SEND, "main [aria-label=添加文件、图片等]", "main [aria-label^=权限模式]", "main [aria-label^=选择模型]"]
+
+
+def toasts_phone(browser, base):
+    """Toasts on a phone (#11442): in the visible frame, clear of the composer's controls and of a sheet's Cancel and
+    Start; one a finger tapped still goes; the New Agent sheet's message box stays in sight with the keyboard up;
+    a wide screen keeps them at the bottom as before."""
+    ctx, page = phone(browser, 390, 844, ios=True)
+    open_pane(page, base)
+    page.evaluate(TOAST, "error")
+    page.wait_for_timeout(400)
+    dock = box(page, "[data-chat-dock]")
+    rows = page.evaluate(TOAST_ROWS)
+    if not rows or rows[-1]["bottom"] > dock["top"] + 0.5:
+        fail(f"390: the toast {rows} is not above the dock (top {dock['top']:.0f})")
+    covered = page.evaluate(HITS_SELF, CONTROLS)
+    if covered:
+        fail(f"390: a toast covers {covered}")
+    ok(f"390: the toast sits at {rows[-1]['top']:.0f}-{rows[-1]['bottom']:.0f}, over the dock; send, +, permissions and the model hit themselves")
+    page.locator(COMPOSER).tap()
+    page.evaluate("__kb(470)")
+    page.wait_for_timeout(300)
+    page.evaluate(TOAST, "info")
+    page.wait_for_timeout(400)
+    rows, top = page.evaluate(TOAST_ROWS), box(page, COMPOSER)["top"]
+    if any(r["top"] < 0 or r["bottom"] > 470.5 or r["bottom"] > top for r in rows):
+        fail(f"keyboard at 470: the toasts {rows} are not in [0, 470] above the composer (top {top:.0f})")
+    covered = page.evaluate(HITS_SELF, CONTROLS)
+    if covered:
+        fail(f"keyboard at 470: a toast covers {covered}")
+    ok(f"keyboard at 470: {len(rows)} toasts in the visible frame above the composer, the controls hit themselves")
+    page.evaluate("__kb(844)")
+    page.locator(COMPOSER).blur()
+    page.wait_for_function("!document.querySelector('[aria-live=polite] > div')", timeout=9000)
+    # a finger's tap on a toast does not hold it: the tap's compatibility mouseover gets no mouseout. On its icon, far
+    # from the close button (the browser's tap adjustment would snap a tap near it onto it, closing the toast).
+    go(page, "/overview")
+    page.wait_for_timeout(500)
+    page.evaluate(TOAST, "error")
+    page.wait_for_timeout(400)
+    r = page.evaluate(TOAST_ROWS)[-1]
+    page.touchscreen.tap(r["left"] + 16, (r["top"] + r["bottom"]) / 2)
+    page.wait_for_timeout(1000)
+    if not page.evaluate(TOAST_ROWS):
+        fail("tapping a toast's icon closed it")
+    try:
+        page.wait_for_function("!document.querySelector('[aria-live=polite] > div')", timeout=6000)
+    except Exception:
+        fail("a toast a finger tapped is still there 7 s later")
+    ok("a toast a finger tapped still goes after its time")
+
+    # the New Agent sheet: Cancel and Start stay reachable under a toast; its message box in sight with the keyboard up
+    page.get_by_role("button", name="新建 Agent").last.tap()
+    page.wait_for_selector("[role=dialog]")
+    page.wait_for_timeout(600)  # the sheet's slide
+    page.evaluate(TOAST, "error")
+    page.wait_for_timeout(400)
+    foot = box(page, "[role=dialog] [data-dialog-footer]")
+    rows = page.evaluate(TOAST_ROWS)
+    if rows[-1]["bottom"] > foot["top"] + 0.5:
+        fail(f"New Agent: the toast {rows} is not above the sheet's footer (top {foot['top']:.0f})")
+    covered = page.evaluate("""() => [...document.querySelectorAll('[role=dialog] [data-dialog-footer] button')].filter((b) => {
+      const r = b.getBoundingClientRect(); const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return !(e && (b === e || b.contains(e))); }).map((b) => b.textContent.trim())""")
+    if covered:
+        fail(f"New Agent: a toast covers {covered}")
+    ok("New Agent: the toast sits over the footer; 取消 and 启动 hit themselves")
+    inside = """() => { const d = document.querySelector('[role=dialog]').getBoundingClientRect(); const f = document.activeElement;
+      const r = f.getBoundingClientRect(); return { tag: f.tagName, field: [r.top, r.bottom], sheet: [d.top, d.bottom],
+      inside: r.top >= d.top - 0.5 && r.bottom <= d.bottom + 0.5 }; }"""
+    page.locator("[role=dialog] textarea").first.tap()
+    page.wait_for_timeout(300)
+    for kb in ("500", "500, 300"):
+        page.evaluate("document.querySelector('[role=dialog] .overflow-y-auto').scrollTop = 0")
+        page.evaluate(f"__kb({kb})")
+        page.wait_for_timeout(400)
+        res = page.evaluate(inside)
+        if res["tag"] != "TEXTAREA" or not res["inside"]:
+            fail(f"New Agent with __kb({kb}): the message box is out of the sheet ({res})")
+        page.evaluate("__kb(844)")
+        page.wait_for_timeout(300)
+    ok("New Agent: with the keyboard up (__kb(500), __kb(500, 300)) the focused message box stays inside the sheet")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("[role=dialog]", state="detached")
+    page.wait_for_timeout(500)
+    ctx.close()
+
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = ctx.new_page()
+    page.on("pageerror", lambda e: ERRORS.append(str(e)))
+    open_pane(page, base, cards=False)
+    page.evaluate(TOAST, "error")
+    page.wait_for_timeout(400)
+    r = page.evaluate(TOAST_ROWS)[-1]
+    if abs(r["bottom"] - (900 - 20)) > 0.5:
+        fail(f"1280: the toast should stay 20 px over the bottom ({r})")
+    ok("1280: the toast stays at the bottom, as before")
+    ctx.close()
+
+
+def run(base, shots, hub=None):
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="chrome")
 
@@ -350,6 +672,10 @@ def run(base, shots):
         if shots:
             page.screenshot(path=os.path.join(shots, "1280.png"))
         ctx.close()
+        card_field_keyboard(browser, base, hub, shots)
+        lark_keyboard(browser, base, shots)
+        tile_hits(browser, base, shots)
+        toasts_phone(browser, base)
         browser.close()
     if ERRORS:
         fail(f"uncaught page errors: {ERRORS[:3]}")
@@ -360,7 +686,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("base")
     ap.add_argument("--shots")
+    ap.add_argument("--hub")
     a = ap.parse_args()
     if a.shots:
         os.makedirs(a.shots, exist_ok=True)
-    run(a.base.rstrip("/"), a.shots)
+    run(a.base.rstrip("/"), a.shots, a.hub)
