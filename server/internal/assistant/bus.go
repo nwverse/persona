@@ -546,7 +546,11 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		defer memtrim.AfterLarge(len(p.Body))
 		return serveHTTP(ctx, b.httpHandler(s), p, s.lang)
 	case assistantwire.MethodTools:
-		return map[string]any{"tools": s.Tools(ctx)}, nil
+		var target SessionRef
+		if err := decode(&target); err != nil {
+			return nil, err
+		}
+		return map[string]any{"tools": s.ToolsFor(ctx, target.MachineID, target.SessionID)}, nil
 	case assistantwire.MethodTool:
 		var p ToolCall
 		if err := decode(&p); err != nil {
