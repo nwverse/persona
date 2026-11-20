@@ -110,6 +110,10 @@ function ModelProfilesForOwner({ manager, owner, context, providers, onChanged }
   const error = actionError || readError;
   const profile = data?.profiles.find((p) => p.id === selected);
   const tiers = Object.entries(profile?.tiers ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  const standard = profile?.tiers?.standard, strong = profile?.tiers?.strong;
+  const sameStarters = standard && strong && standard.launcher === strong.launcher
+    && (standard.model || "") === (strong.model || "") && (standard.effort || "") === (strong.effort || "")
+    && (standard.speed || "standard") === (strong.speed || "standard");
   const names = namesFromProviders(providers);
   if (!data && !error) return null; // old hubs do not expose profiles
   return <>
@@ -130,6 +134,7 @@ function ModelProfilesForOwner({ manager, owner, context, providers, onChanged }
       <p className="mb-4 text-[12px] text-ink-3">{profile?.description}</p>
       <p className="mb-4 text-[12px] text-ink-3">{t("settings-modelprofiles.changes", { count: profile?.changes.length ?? 0 })}</p>
       <p className="mb-1.5 text-[12px] font-semibold text-ink-2">{t("settings-modelprofiles.tiers")}</p>
+      {profile && (profile.active || data?.active === profile.id) && sameStarters && <p className="mb-2 text-[12px] text-ink-2">{t("settings-modelprofiles.same_tiers")}</p>}
       {tiers.length ? (
         <ul data-testid="model-profile-tiers" className="mb-4 flex flex-col gap-1.5">
           {tiers.map(([name, x]) => {

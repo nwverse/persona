@@ -27,6 +27,7 @@ vi.mock("../lib/new-agent", async (original) => ({ ...(await original<typeof imp
 import { NewAgent } from "./NewAgent";
 import { Toasts } from "../ui/atoms";
 import { resetModelListsForTests } from "../lib/session-models";
+import { panelStoreKey } from "../ui/model-panel/store";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -92,6 +93,7 @@ async function openPanel() {
   await act(async () => vi.dynamicImportSettled());
   await flush();
   // These caller tests inspect model actions; disclose the catalog first.
+  act(() => document.body.querySelector<HTMLButtonElement>('[data-panel-unavailable][aria-expanded="false"]')?.click());
   for (const header of document.body.querySelectorAll<HTMLButtonElement>('[data-panel-launcher][aria-expanded="false"]')) act(() => header.click());
   await flush();
 }
@@ -104,12 +106,32 @@ async function pick(key: string) {
 }
 
 describe("New agent: presets (#2225)", () => {
+  it("shows one Follow action for the saved default and seeded tiers, preserving a different effort and its Start payload", async () => {
+    purpose = { purpose: { id: "agent.new", effective: { provider: "launcher.fast", model: "m-review", effort: "high" } }, providers: [] };
+    tiers = ["standard", "strong", "quick"].map((name) => ({ name, launcher: "fast", model: "m-review", effort: name === "quick" ? "low" : "high" }));
+    localStorage.setItem(panelStoreKey("agent", "recent"), JSON.stringify([{ provider: "fast", model: "default" }, { provider: "claude", model: "default" }]));
+    await open();
+    await openPanel();
+    const follow = row("follow")!;
+    expect(follow.textContent).toContain("standard · strong");
+    expect(follow.textContent).toContain("最近使用");
+    expect(row("recent:0")).toBeUndefined();
+    expect(preset("standard")).toBeUndefined();
+    expect(preset("strong")).toBeUndefined();
+    expect([...panel()!.querySelectorAll("h3")].map((el) => el.textContent)).toEqual(["最近使用", "预设 · 性能", "启动器"]);
+    expect(follow.getAttribute("aria-pressed")).toBe("true");
+    act(() => preset("quick")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await flush();
+    act(() => button("启动").click());
+    expect(launched).toHaveLength(1);
+    expect(launched[0]).toMatchObject({ launcher: "fast", model: "m-review", effort: "low" });
+  });
   it("lists the presets as a group, fills launcher, model and effort from one and starts with them", async () => {
     await open();
     expect(hint()).toBeNull();
     await openPanel();
     const group = document.body.querySelector<HTMLElement>('[data-panel-section="presets"]')!;
-    expect(group.getAttribute("aria-label")).toBe("预设");
+    expect(group.getAttribute("aria-label")).toBe("预设 · 性能");
     expect([...group.querySelectorAll<HTMLElement>("[data-panel-row]")].map((r) => r.dataset.panelRow)).toEqual(["preset:quick", "preset:review"]);
     expect(preset("review")!.textContent).toContain("代码审查和设计");
     act(() => preset("review")!.click());
@@ -119,7 +141,8 @@ describe("New agent: presets (#2225)", () => {
     // the model it runs is lit in its launcher's group (a preset row itself never is)
     await openPanel();
     expect(row("model:fast\nm-review")!.getAttribute("aria-pressed")).toBe("true");
-    expect(preset("review")!.getAttribute("aria-pressed")).toBe("false");
+    expect(preset("review")).toBeUndefined();
+    expect(row("recent:0")!.textContent).toContain("review");
     act(() => pill().click());
     act(() => button("启动").click());
     expect(launched[0]).toMatchObject({ machineId: "mac", launcher: "fast", model: "m-review", effort: "high" });
@@ -184,7 +207,10 @@ describe("New agent: presets (#2225)", () => {
     purpose = { purpose: { id: "agent.new", effective: { provider: "launcher.claude" } }, providers: [] };
     await open();
     await pick("preset:review");
-    await pick("preset:review");
+    await openPanel();
+    const recent = rows().find((r) => r.dataset.panelRow?.startsWith("recent:") && r.textContent?.includes("review"))!;
+    expect(preset("review")).toBeUndefined();
+    act(() => recent.click()); await flush();
     expect(hint()?.textContent).toBe("预设 review · 代码审查和设计");
     await openPanel();
     expect(document.body.querySelector("[data-follow-row]")!.getAttribute("aria-pressed")).toBe("false");

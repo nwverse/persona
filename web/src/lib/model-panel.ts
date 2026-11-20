@@ -68,6 +68,8 @@ export interface PanelProvider {
   /** null: not read yet. */
   models: PanelModel[] | null;
   loading?: boolean;
+  /** Choices reported by a New Agent catalog, excluding its extra manual Default. Absent on older hubs. */
+  catalogCount?: number;
   /** Reading the list failed: the group says why and offers Retry (onReload). */
   error?: string;
   /** The launcher fixes its own --model: its rows can't be picked, and this says why. */

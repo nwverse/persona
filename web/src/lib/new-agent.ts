@@ -25,7 +25,7 @@ export interface AgentLaunch {
   workSession?: boolean;
   /** Start with the first message when this harness takes it as part of creation. */
   inlinePrompt?: boolean;
-  /** Picked in "New agent" for this start only (launcher-models.ts startPicks); none: the launcher's own. */
+  /** Picked in "New agent" for this start only (new-agent-panel.ts startPicks); none: the launcher's own. */
   model?: string;
   effort?: string;
   /** Keep the launcher's native effort even when Model settings configures this launcher. */

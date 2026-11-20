@@ -162,14 +162,14 @@ function slot(first: boolean): Promise<() => void> {
 }
 
 /** Reads a launcher's list: once (the pill), or `again` behind the one shown (an opening, Retry). */
-export function readModels(mid: string, launcher: string, o: { again?: boolean; first?: boolean; purpose?: "assistant"; host?: string } = {}): Promise<void> {
+export function readModels(mid: string, launcher: string, o: { again?: boolean; first?: boolean; keepError?: boolean; purpose?: "assistant"; host?: string } = {}): Promise<void> {
   const scope = catalogScope(o.purpose);
   const key = listKey(mid, launcher, o.purpose, scope, o.host);
   const reading = reads.get(key);
   if (reading) return reading.promise;
   const had = lists.get(key);
   if (had?.list !== undefined && !o.again) return Promise.resolve();
-  lists.set(key, { list: had?.list, loading: true });
+  lists.set(key, { list: had?.list, loading: true, ...(o.keepError && had?.error ? { error: had.error } : {}) });
   changed();
   const sharedKey = JSON.stringify(launcherKeyParts(mid, launcher, scope));
   const hidden = new Set(forgetting.get(sharedKey)?.keys());

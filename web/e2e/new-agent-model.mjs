@@ -15,7 +15,7 @@
 //   (cd web && PERSONA_HUB_URL=http://127.0.0.1:18741 npx vite --port 5201 --strictPort &)
 //   node web/e2e/new-agent-model.mjs http://127.0.0.1:5201 --hub http://127.0.0.1:18741 [--shots <dir>] [--channel msedge]
 //
-// Runs wide (1280) and phone width (390), light and dark, in Chinese, then once in English (1280, light); --shots saves
+// Runs wide (1280) and phone width (390), light and dark, then in English at standard and large text size; --shots saves
 // each state as web-new-agent-model-<state>-<width>-<theme>.png (the English pass adds -en). Prints one line per check
 // and a verdict; exits 1 on a failure.
 import { mkdirSync } from "node:fs";
@@ -81,33 +81,38 @@ async function until(check, what, tries = 60) {
 // a model row of the panel: its key is "model:<launcher>\n<model id>" (\a is the line break in a CSS string)
 const rowSel = (launcher, model) => `[data-panel-row="model:${launcher}\\a ${model}"]`;
 
-async function open(browser, { theme, width, lang }) {
+async function open(browser, { theme, width, lang, textSize = "standard" }) {
   const ctx = await browser.newContext({
     viewport: { width, height: width > 600 ? 1000 : 844 }, deviceScaleFactor: 2, colorScheme: theme, locale: WORDS[lang].locale, hasTouch: width <= 600,
   });
   const page = await ctx.newPage();
   await page.goto(`${base}/?token=mock`);
   await page.waitForFunction(() => localStorage.getItem("persona.token"), null, { timeout: 15000 });
-  await page.evaluate(({ theme, lang }) => {
+  await page.evaluate(({ theme, lang, textSize }) => {
     localStorage.setItem("persona.theme", theme);
     localStorage.setItem("persona.language", lang);
+    localStorage.setItem("persona.text-size", textSize);
     localStorage.setItem("new.machine", "server");
-  }, { theme, lang });
+    localStorage.setItem("persona.modelPanel..agent.recent", JSON.stringify([{ provider: "claude", model: "default" }]));
+  }, { theme, lang, textSize });
   await page.reload();
   await page.waitForSelector("main", { timeout: 15000 });
   return { ctx, page };
 }
 
-function shooter(page, { theme, width, lang }) {
+function shooter(page, { theme, width, lang, textSize }) {
   return async (state) => {
     if (!shots) return;
     await page.waitForTimeout(400); // the sheet's slide-up, the panel's growing out of the pill
-    await page.screenshot({ path: join(shots, `web-new-agent-model-${state}-${width}-${theme}${lang === "en" ? "-en" : ""}.png`) });
+    await page.screenshot({ path: join(shots, `web-new-agent-model-${state}-${width}-${theme}${lang === "en" ? "-en" : ""}${textSize === "large" ? "-large" : ""}.png`) });
   };
 }
 
 async function newAgent(page, w) {
-  await page.evaluate(() => import("/src/lib/new-agent.ts").then((m) => m.openNewAgent()));
+  await page.goto(base + "/a");
+  if (page.viewportSize().width <= 600) await page.locator("main header button").first().click();
+  await page.getByRole("button", { name: w.title, exact: true }).and(page.locator("button:not([inert] *)")).filter({ visible: true }).last().click();
+  await page.getByRole("menuitem", { name: w.title, exact: true }).click();
   // the panel and its flyout are dialogs too: New agent is the one with its title
   const dialog = page.getByRole("dialog", { name: w.title, exact: true });
   await expectVisible(dialog.getByRole("button", { name: w.start, exact: true }), "New agent's Start");
@@ -149,6 +154,8 @@ async function openPanel(page, tag) {
   // every launcher's list is read on opening (three at a time): the groups' spinners go
   await until(async () => (await panel.locator('[role="status"]').count()) === 0, `${tag}: the panel's lists did not load`);
   // The catalog is one disclosure per launcher; these existing checks exercise the model actions below them.
+  const unavailable = panel.locator('[data-panel-unavailable][aria-expanded="false"]');
+  if (await unavailable.count()) await unavailable.click();
   while (await panel.locator('[data-panel-launcher][aria-expanded="false"]').count()) await panel.locator('[data-panel-launcher][aria-expanded="false"]').first().click();
   return panel;
 }
@@ -210,7 +217,7 @@ async function startNow(page, dialog, tag, w) {
 async function run(browser, pass) {
   const { theme, width, lang } = pass;
   const w = WORDS[lang];
-  const tag = `${width}/${theme}/${lang}`;
+  const tag = `${width}/${theme}/${lang}/${pass.textSize ?? "standard"}`;
   const { ctx, page } = await open(browser, pass);
   const shot = shooter(page, pass);
 
@@ -228,11 +235,28 @@ async function run(browser, pass) {
   if ((await follow.getAttribute("aria-pressed")) !== "true") fail(`${tag}: the follow row isn't checked`);
   const followText = (await follow.textContent()) ?? "";
   if (!followText.includes(w.follow) || !followText.includes(FOLLOWED)) fail(`${tag}: the follow row says ${followText}`);
-  if (!(await panel.locator(`${rowSel("claude", "default")}[data-current]`).count())) fail(`${tag}: claude's Default row isn't the one that runs`);
-  ok(`${tag}: "${w.follow}" is checked, says ${FOLLOWED}, and claude's Default row is lit`);
+  const labelFits = await follow.evaluate((row) => {
+    const bounds = row.getBoundingClientRect();
+    const text = row.firstElementChild.getBoundingClientRect();
+    return text.top >= bounds.top && text.bottom <= bounds.bottom;
+  });
+  if (!labelFits) fail(`${tag}: the Follow label, its setup and its recent alias overflow their clickable row`);
+  if (await panel.locator(`${rowSel("claude", "default")}[data-current]`).count()) fail(`${tag}: explicit Default is checked along with Follow`);
+  const next = panel.locator(rowSel("claude", "opus"));
+  await next.hover({ position: { x: 35, y: 12 } });
+  const paint = (el) => getComputedStyle(el).backgroundColor;
+  if (await next.evaluate(paint) === "rgba(0, 0, 0, 0)" || await follow.evaluate(paint) !== "rgba(0, 0, 0, 0)")
+    fail(`${tag}: the hovered nested model and its background disagree`);
+  await panel.locator("input").focus();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  const focused = panel.locator("[data-panel-row]:focus, [data-panel-launcher]:focus");
+  if (await focused.count() !== 1 || await focused.evaluate(paint) === "rgba(0, 0, 0, 0)" || await follow.getAttribute("aria-pressed") !== "true")
+    fail(`${tag}: the keyboard highlight or Follow check is on the wrong row`);
+  ok(`${tag}: "${w.follow}" is checked, says ${FOLLOWED}, and keyboard and pointer paint the hit row`);
 
   const presets = panel.locator('[data-panel-section="presets"]');
-  if ((await presets.getAttribute("aria-label")) !== w.presets) fail(`${tag}: no Presets group`);
+  if (!(await presets.getAttribute("aria-label"))?.startsWith(w.presets)) fail(`${tag}: no Presets group`);
   const presetRows = await presets.locator("[data-panel-row]").evaluateAll((els) => els.map((e) => e.dataset.panelRow));
   if (JSON.stringify(presetRows) !== JSON.stringify(["preset:quick", "preset:review"])) fail(`${tag}: presets ${JSON.stringify(presetRows)}`);
   const groups = await panel.locator('[data-panel-section="provider"]').evaluateAll((els) => els.map((e) => e.getAttribute("aria-label")));
@@ -389,6 +413,7 @@ async function run(browser, pass) {
 const PASSES = [
   ...[1280, 390].flatMap((width) => ["light", "dark"].map((theme) => ({ width, theme, lang: "zh-Hans" }))),
   { width: 1280, theme: "light", lang: "en" },
+  { width: 390, theme: "dark", lang: "en", textSize: "large" },
 ];
 const browser = await chromium.launch({ channel });
 try {

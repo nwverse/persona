@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   customModel, defaultDetail, defaultLabel, effortChoices, effortRule, fitEffort, followedBinding, forgetCustomModel, launcherAgent, launcherModels, listedModel, listedModes, modelDetail,
-  modelName, modelRows, pickerLauncher, machineLaunchers, providerModels, startPicks, takesEffort, takesTypedModel, tierLeftOut, typedModelOffered, withoutCustom,
+  modelName, modelRows, pickerLauncher, machineLaunchers, providerModels, takesEffort, takesTypedModel, typedModelOffered, withoutCustom,
   type AgentModel, type LauncherModels,
 } from "./launcher-models";
+import { startPicks, tierLeftOut } from "./new-agent-panel";
 
 const all = ["low", "medium", "high", "xhigh", "max"];
 const claude: LauncherModels = { agent: "claude", models: [

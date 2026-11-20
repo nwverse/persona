@@ -24,10 +24,10 @@ import { WorkspaceChoices } from "./NewAgentWorkspaces";
 import { AttachmentTray } from "../ui/AttachmentTray";
 import { modelPurpose, modelSummary, type ModelBinding } from "../lib/model-config";
 import {
-  effortChoices, effortRule, fitEffort, followedBinding, inlineTextStart, launcherAgent, listedModes, machineLaunchers, pickerLauncher, startPicks, takesEffort, tierLeftOut, type LauncherDefault, type PickerTier,
+  effortChoices, effortRule, fitEffort, followedBinding, inlineTextStart, launcherAgent, listedModes, machineLaunchers, pickerLauncher, takesEffort, type LauncherDefault, type PickerTier,
   type UnavailableLauncher,
 } from "../lib/launcher-models";
-import { choiceCarries, modelTitle, type ModelChoice } from "../lib/new-agent-panel";
+import { choiceCarries, modelTitle, startPicks, tierLeftOut, type ModelChoice } from "../lib/new-agent-panel";
 import { readModels } from "../lib/session-models";
 import { BYPASS_MODE, BYPASS_WARNING, effortTitle, listedModeOption, modeTitle, PERMISSION_MODES } from "../lib/session-actions";
 import {
@@ -140,6 +140,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // the presets this computer offers (tiers of the profile in use), and the one picked: it fills the launcher, model and
   // effort as picking them by hand would; a pick by hand after it unmarks it. Never saved.
   const [tiers, setTiers] = useState<PickerTier[]>([]);
+  const [tierProfile, setTierProfile] = useState("");
   const [tier, setTier] = useState<PickerTier | null>(null);
   // a launcher picked on the computer chosen before that this one can't run (#5104): the form went back to the default
   const [dropped, setDropped] = useState<{ name: string; computer: string } | null>(null);
@@ -423,6 +424,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setLauncher("");
     setModel("");
     setTiers([]);
+    setTierProfile("");
     setTier(null);
     setModelDefault("");
     setHubDefault(undefined);
@@ -447,6 +449,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           setSkipped(r.unavailable ?? []);
           setHubDefault(r.default);
           setTiers(r.tiers ?? []);
+          setTierProfile(r.tiers_profile?.name || r.tiers_profile?.id || "");
           setLaunchersOf(mid);
           setUnified(config !== null);
           if (config) {
@@ -1086,6 +1089,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
                     runs={runs}
                     configured={unified ? configured : null}
                     tiers={tiers}
+                    tierProfile={tierProfile}
                     unavailable={skipped}
                     follow={unified ? { label: t("newagent.follow_row"), active: launcher === "", detail: followDetail, warning: defaultBlock?.reason } : undefined}
                     fallback={modelDefault || t("chat-modelpill.default_model")}

@@ -299,33 +299,3 @@ export function effortChoices(list: LauncherModels | null | undefined, model: st
 export function fitEffort(effort: string, choices: string[]): string {
   return choices.includes(effort) ? effort : "";
 }
-
-/** What a start sends: the model only when it is not the default and the launcher lets it through, the effort only where
- *  the start takes one (`effortRule`, by the agent and the launcher that runs) and only one the model takes. An ID the
- *  list lacks (typed, #1644) goes as it is to Claude Code and Codex, also when the list couldn't be read (`undefined`); an
- *  older hub's `null` (no picker) sends none. */
-export function startPicks(o: { agent: string; list: LauncherModels | null | undefined; model: string; effort: string; followed?: ModelBinding; launcher?: Pick<Launcher, "permission_modes"> }): { model?: string; effort?: string } {
-  const out: { model?: string; effort?: string } = {};
-  const m = o.list?.models.find((x) => x.id === o.model);
-  if (m) {
-    // the default entry goes too when the model settings' own model would run instead (a preset picked it, #2225; the
-    // picker's "Default" row picks "")
-    if ((!m.default || (o.followed?.model && o.followed.model !== m.id)) && !o.list?.locked) out.model = m.id;
-  } else if (o.model && o.list !== null && typedModelOffered(o.agent, o.list) && validModelId(o.model)) {
-    out.model = o.model;
-  }
-  const rule = effortRule(o.agent, o.launcher);
-  if (o.effort && rule !== "none" && effortChoices(o.list, out.model ?? "", o.followed, rule).includes(o.effort)) out.effort = o.effort;
-  return out;
-}
-
-/** What of a preset a start with this launcher's list would not pass on: its model when the launcher fixes its own --model
- *  or takes no typed ID, its effort when the model doesn't take it. Empty: all of it (or the list is not in yet). */
-export function tierLeftOut(tier: PickerTier, o: { agent: string; list: LauncherModels | null | undefined; followed?: ModelBinding; launcher?: Pick<Launcher, "permission_modes"> }): string[] {
-  const picks = startPicks({ agent: o.agent, list: o.list, model: tier.model ?? "", effort: tier.effort ?? "", followed: o.followed, launcher: o.launcher });
-  const out: string[] = [];
-  // the list's default is what runs with no model sent (startPicks sends it when the model settings would run another)
-  if (tier.model && picks.model !== tier.model && !(o.list?.models.some((m) => m.id === tier.model && m.default) && !o.list?.locked)) out.push(tier.model);
-  if (tier.effort && picks.effort !== tier.effort) out.push(tier.effort);
-  return out;
-}

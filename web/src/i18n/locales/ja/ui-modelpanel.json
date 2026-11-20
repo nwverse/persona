@@ -40,8 +40,14 @@
   "hide_older_of": "{family}：以前のバージョンを隠す",
   "latest": "最新",
   "model_count": "{count} モデル",
+  "one_model": "1 モデル",
   "current_launcher": "現在",
   "default_launcher": "デフォルト",
   "quick_picks": "最近とお気に入り",
-  "recommended": "おすすめ"
+  "recommended": "おすすめ",
+  "recent": "最近使用",
+  "profile_presets": "プリセット · {name}",
+  "launchers": "ランチャー",
+  "unavailable_count": "利用不可（{count}）",
+  "empty_catalog": "このランチャーからモデルが返されませんでした。"
 }

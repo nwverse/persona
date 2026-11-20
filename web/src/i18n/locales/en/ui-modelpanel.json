@@ -40,8 +40,14 @@
   "hide_older_of": "{family}: hide earlier versions",
   "latest": "Latest",
   "model_count": "{count} models",
+  "one_model": "1 model",
   "current_launcher": "Current",
   "default_launcher": "Default",
   "quick_picks": "Recent and favorites",
-  "recommended": "Recommended"
+  "recommended": "Recommended",
+  "recent": "Recent",
+  "profile_presets": "Presets · {name}",
+  "launchers": "Launchers",
+  "unavailable_count": "Unavailable ({count})",
+  "empty_catalog": "This launcher reported no models."
 }

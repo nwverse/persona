@@ -44,7 +44,9 @@ async function open(key: string) {
   act(() => pill().click());
   await act(async () => vi.dynamicImportSettled());
   await flush();
-  act(() => document.body.querySelector<HTMLButtonElement>("[data-panel-row][data-current] [data-row-customize]")!.click());
+  act(() => document.body.querySelector<HTMLButtonElement>('[data-panel-unavailable][aria-expanded="false"]')?.click());
+  act(() => document.body.querySelector<HTMLButtonElement>('[data-panel-launcher][aria-expanded="false"]')!.click());
+  act(() => document.body.querySelector<HTMLButtonElement>('[data-panel-row^="model:"] [data-row-customize]')!.click());
   await flush();
   expect(flyout()).not.toBeNull();
 }

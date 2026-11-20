@@ -132,12 +132,14 @@ async function open() {
   await flush();
 }
 
-async function openPanel() {
+async function openPanel(expandCatalogs = true) {
   act(() => pill().click());
   await act(async () => vi.dynamicImportSettled());
   await flush();
   expect(panel()).not.toBeNull();
+  if (!expandCatalogs) return;
   // These caller tests inspect model actions; disclose the catalog first.
+  act(() => document.body.querySelector<HTMLButtonElement>('[data-panel-unavailable][aria-expanded="false"]')?.click());
   for (const header of document.body.querySelectorAll<HTMLButtonElement>('[data-panel-launcher][aria-expanded="false"]')) act(() => header.click());
   await flush();
 }
@@ -165,6 +167,35 @@ async function slide(k: string) {
 const start = () => act(() => button("启动").click());
 
 describe("New agent's model panel (#5104)", () => {
+  it("opens with failed and empty launchers folded, and moves a recovered launcher back after Retry", async () => {
+    const original = LAUNCHERS.mac;
+    LAUNCHERS.mac = [...original, { name: "unread", agent: "claude" }, { name: "empty", agent: "claude" }];
+    failList = "unread";
+    try {
+      await open();
+      await openPanel(false);
+      const group = q<HTMLElement>("[data-panel-unavailable-group]")!;
+      const disclosure = group.querySelector("button")!;
+      expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+      expect(disclosure.textContent).toContain("2");
+      expect(q('[data-panel-launcher="unread"], [data-panel-launcher="empty"]')).toBeNull();
+      act(() => disclosure.click());
+      expect(group.textContent).toContain("节点没有回应");
+      expect(group.textContent).toContain(t("ui-modelpanel.empty_catalog"));
+      failList = "";
+      LISTS.unread = LISTS.claude;
+      act(() => group.querySelector<HTMLButtonElement>('[role="alert"] button')!.click());
+      await flush();
+      expect(disclosure.textContent).toContain("1");
+      expect(group.querySelector('[data-panel-launcher="empty"]')).not.toBeNull();
+      expect(q('[data-panel-launcher="unread"]')?.closest("[data-panel-unavailable-group]")).toBeNull();
+      expect(q('[data-panel-launcher="unread"]')).not.toBeNull();
+    } finally {
+      LAUNCHERS.mac = original;
+      delete LISTS.unread;
+    }
+  });
+
   it("left alone, follows Model settings: nothing of the model is sent, the pill names what they run with the engine's mark", async () => {
     await open();
     expect(pill().title).toBe("Claude Code · Opus 5.5 · claude · 高");
@@ -172,9 +203,10 @@ describe("New agent's model panel (#5104)", () => {
     await openPanel();
     expect(follow().getAttribute("aria-pressed")).toBe("true");
     expect(follow().textContent).toBe("跟随模型配置claude · Opus 5.5 · 高");
-    // the row lit is the launcher's Default row, named after the model the settings run
+    // Follow owns the check; the launcher's explicit Default still names what the settings run
     const lit = row("model:claude\ndefault");
-    expect(lit.getAttribute("aria-pressed")).toBe("true");
+    expect(lit.getAttribute("aria-pressed")).toBe("false");
+    expect(panel()!.querySelectorAll('[aria-pressed="true"]')).toHaveLength(1);
     expect(lit.textContent).toContain("默认：Opus 5.5");
     act(() => pill().click());
     start();

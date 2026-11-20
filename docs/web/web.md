@@ -2617,16 +2617,15 @@ and Android follow in #5117.
   without lists: each launcher's Default row. A preset whose model its launcher's group doesn't have (a launcher that fixes
   its own `--model`, one that takes no typed ID) stands on that launcher's Default row; the line under the box says what of
   it can't be applied.
-- **Defaults and presets**: **Follow Model settings** is on top of the list, in no group (Cindy's follow row), with what
-  Model settings › New agent runs under it, a warning when that can't start here, and a check while it is followed; a
-  click goes back to it. The profile's Agent presets (#2225) are a **Presets** group after Favorites, in the place Cindy
-  keeps for Recommended (Cindy's new task has no Recommended group, so New Agent has none): a row per preset, named by
-  it, its description (or launcher · model · effort) under it, no star or flyout; one whose launcher can't start here is
-  off, like that launcher's rows. A preset fills launcher, model and
-  effort, and a line under the box names it, or says what of it this launcher can't take.
-- **The row lit**: the model picked, else the Default row of the launcher that runs. Following Model settings lights that
-  Default row as well as the follow row: the follow row says where the choice comes from, the lit row what runs, and its
-  flyout is where this start's effort and ultracode are set.
+- **Defaults and presets.** **Follow Model settings** shows what Model settings › New agent runs and carries the check
+  while followed. Below it are up to three recent or favorite setups, the active profile's presets, then expandable
+  launchers. When a recent setup or named preset runs the same launcher, model and effort as an earlier shortcut,
+  its name appears under that shortcut. A distinct effort keeps its own row when the launcher can apply it.
+  Saved favorites retain their editing controls. Settings explains how to distinguish matching standard and strong presets.
+- **Unavailable launchers.** A collapsed group counts launchers that cannot start or whose catalog failed or returned
+  no models. Expand it to see each reason, retry a catalog or use its supported manual choices.
+- **Selection and navigation.** A check marks Follow or the explicitly chosen model. The row under the pointer or
+  keyboard focus owns its background. The running launcher's Default row still offers effort and ultracode controls.
 - **Flyout**: the effort slider (with no effort set it says "Model default", with no fill, rather than sitting on the
   lowest level; **Reset to recommended** goes back to none), Claude Code's ultracode switch on the model picked (#3428),
   and the engines this model runs with here: the row's own, and each other engine whose launcher on this computer lists

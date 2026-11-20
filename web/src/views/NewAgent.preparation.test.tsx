@@ -293,6 +293,7 @@ describe("New Agent preparation ownership", () => {
     await act(async () => document.querySelector<HTMLButtonElement>("[data-testid=new-agent-model] [data-model-pill]")!.click());
     await act(async () => vi.dynamicImportSettled());
     await flush();
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-panel-launcher="claude"][aria-expanded="false"]')!.click());
     await act(async () => [...document.querySelectorAll<HTMLElement>("[data-panel-row]")].find((r) => r.dataset.panelRow === "model:claude\nsynthetic-model")!.click());
     await flush();
     expect(document.querySelector("[data-model-panel]")).toBeNull();

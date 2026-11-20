@@ -258,6 +258,21 @@ describe("reading the lists", () => {
     expect(modelList("m-fail", "gateway").list).toBeUndefined();
   });
 
+  it("keeps New Agent's failed catalog in place until its single Retry completes", async () => {
+    const path = "/machines/m-retry/launchers/gateway/models";
+    void readModels("m-retry", "gateway");
+    await flush();
+    await answer(path, json({ error: "Catalog offline" }, 502));
+    const retry = readModels("m-retry", "gateway", { again: true, keepError: true });
+    expect(readModels("m-retry", "gateway", { again: true, keepError: true })).toBe(retry);
+    expect(modelList("m-retry", "gateway")).toMatchObject({ loading: true, error: expect.stringContaining("Catalog offline") });
+    await flush();
+    await answer(path, json(claudeList));
+    await retry;
+    expect(modelList("m-retry", "gateway")).toEqual({ list: expect.objectContaining({ agent: "claude" }) });
+    expect(calls).toHaveLength(2);
+  });
+
   it("keeps an assistant's shell models separate from the same named Agent provider", async () => {
     const agent = readModels("m-purpose", "shared");
     const assistant = readModels("m-purpose", "shared", { purpose: "assistant" });

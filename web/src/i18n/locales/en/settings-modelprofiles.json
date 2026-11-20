@@ -9,5 +9,6 @@
   "none_active": "No profile is in use, so Agent presets are off until you apply one.",
   "tiers": "Agent presets",
   "no_tiers": "No Agent presets in this profile. Ask Persona to add one.",
-  "details": "Model settings it applies"
+  "details": "Model settings it applies",
+  "same_tiers": "The standard and strong presets start as copies of Model settings. They currently use the same launcher, model and effort. Ask Persona to give one a different setup."
 }

@@ -44,6 +44,9 @@ interface RowProps {
   keepSecond?: boolean;
   /** A mixed disclosure list uses buttons rather than listbox options. */
   asButton?: boolean;
+  /** New Agent marks the selected row with a check, independently of pointer or keyboard focus. */
+  currentCheck?: boolean;
+  aliases?: string;
   /** Why it can't be picked (its tooltip); undefined while it can. */
   blocked?: { reason: string };
   customizable: boolean;
@@ -62,7 +65,7 @@ interface RowProps {
   onForget?: () => void;
 }
 
-export function Row({ row, second, describes, keepSecond, asButton, blocked, customizable, flyoutOpen, starred, starRemoves, frozen, onPick, onStar, onCustomize, onCustomizeKey, onForget }: RowProps) {
+export function Row({ row, second, describes, keepSecond, asButton, currentCheck, aliases, blocked, customizable, flyoutOpen, starred, starRemoves, frozen, onPick, onStar, onCustomize, onCustomizeKey, onForget }: RowProps) {
   const { model, provider } = row;
   const saved = row.kind === "favorite" || row.kind === "recent";
   const name = row.kind === "typed" ? t("ui-modelpanel.use_typed", { id: model.id }) : row.preset ? row.preset.name : row.kind === "favorite" || row.kind === "recent" ? `${provider.name} · ${model.name}` : model.name;
@@ -114,14 +117,14 @@ export function Row({ row, second, describes, keepSecond, asButton, blocked, cus
     <div
       role={asButton ? "button" : "option"}
       aria-selected={asButton ? undefined : row.current}
-      aria-pressed={asButton ? row.current : undefined}
+      aria-pressed={asButton ? (currentCheck ?? row.current) : undefined}
       aria-disabled={ariaOff || undefined}
       aria-keyshortcuts={customizable ? "ArrowLeft" : undefined}
       tabIndex={ariaOff ? -1 : 0}
       title={blocked?.reason || undefined}
       aria-description={blocked?.reason || undefined}
       data-panel-row={row.key}
-      data-current={row.current || undefined}
+      data-current={(currentCheck ?? row.current) || undefined}
       data-open={flyoutOpen || undefined}
       onClick={(e) => {
         if (off && row.current && customizable && !frozen) onCustomize(e.currentTarget, true);
@@ -136,8 +139,8 @@ export function Row({ row, second, describes, keepSecond, asButton, blocked, cus
       className={cx(
         "group/row relative z-[1] flex w-full flex-col rounded-control px-3 py-2 text-[14px] leading-[1.43] text-ink outline-none select-none [&+[data-panel-row]]:mt-1",
         "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
-        row.current && "bg-hover-2 data-[glide]:bg-transparent",
-        saved && "min-h-11 justify-center",
+        currentCheck === undefined && row.current && "bg-hover-2",
+        (saved || currentCheck !== undefined) && "min-h-11 justify-center",
         ariaOff || frozen ? "cursor-not-allowed" : "cursor-pointer",
         ariaOff && "opacity-50",
       )}
@@ -186,8 +189,10 @@ export function Row({ row, second, describes, keepSecond, asButton, blocked, cus
             {effort && <span className="truncate">{effortTitle(effort)}</span>}
             {row.setup.fast && <Icon name="bolt" size={11} className="shrink-0 fill-current" />}
           </span>
+          {currentCheck && <Icon name="check" size={14} stroke={2.5} className="ml-1 shrink-0 text-ink" />}
         </span>
       </div>
+      {aliases && <div className="pt-0.5 pl-[26px] text-submeta text-ink-2">{aliases}</div>}
       {!saved && second && (keepSecond || idLine !== "always") && (
         <div title={second} className={cx("min-w-0 truncate pt-px pl-[26px] text-[12px] leading-[1.4] text-ink-2", describes && "max-w-[30ch]", !keepSecond && idLine === "touch" && "[@media(hover:none)]:hidden")}>
           {second}

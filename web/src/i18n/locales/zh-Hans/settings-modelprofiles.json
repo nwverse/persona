@@ -9,5 +9,6 @@
   "none_active": "当前没有使用中的档位，应用一个之后 Agent 预设才生效。",
   "tiers": "Agent 预设",
   "no_tiers": "这个档位还没有 Agent 预设，可以让 Persona 添加。",
-  "details": "它会应用的模型设置"
+  "details": "它会应用的模型设置",
+  "same_tiers": "standard 和 strong 预设最初复制自模型配置。目前两者的启动器、模型和推理力度都相同，可以让 Persona 修改其中一个。"
 }

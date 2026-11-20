@@ -3,15 +3,19 @@
  * (lib/model-panel.ts effortColor): a model whose top is High ends blue, and purple is only the true top (Codex's Ultra
  * takes Max's). Fast's blue shows only in the setup flyout (rows and the pill draw Fast in their own ink); the star
  * turns gold under the pointer and once saved. The panel opens out of the pill (--model-panel-morph, the design system's
- * ease) and its content fades in after it; its rows' hover glides between them. */
+ * ease) and its content fades in after it. The highlighted row owns its fill in nested and scrolled groups. */
 :root {
   --effort-minimal: #2aae5b; --effort-low: #2aae5b; --effort-medium: #14b8a6; --effort-high: #3b82f6; --effort-xhigh: #4f46e5; --effort-max: #8b5cf6;
   --fast: #3b9eff; --fast-tint: color-mix(in srgb, var(--fast) 16%, transparent);
   --favorite-star: #d99a06;
-  --model-panel-morph: 220ms; --model-panel-fade: 140ms; --model-panel-fade-delay: 50ms; --model-panel-glide: 80ms; --model-panel-ease: var(--ease-out-strong);
+  --model-panel-morph: 220ms; --model-panel-fade: 140ms; --model-panel-fade-delay: 50ms; --model-panel-ease: var(--ease-out-strong);
   --effort-move: 200ms; --effort-resize: 150ms; --effort-ease: var(--ease-link);
 }
 .dark { --favorite-star: #e8b425; }
+[data-model-panel] [data-highlighted],
+[data-model-panel] [data-pointer] :is([data-panel-row], [data-panel-launcher], [data-panel-unavailable]):hover:not([aria-disabled="true"]):not(:disabled) {
+  background-color: var(--hover-2);
+}
 /* From the pill's shape (--model-panel-from, set where it opens) to the panel; the clip ends past the panel's edges so
    its shadow is whole, and goes when the animation does. */
 @keyframes model-panel-morph{0%{clip-path:var(--model-panel-from);transform:translateY(var(--model-panel-shift,0px))}to{clip-path:inset(-32px round 44px);transform:none}}

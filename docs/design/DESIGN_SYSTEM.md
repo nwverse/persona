@@ -3169,13 +3169,13 @@ engine follow; the engine's mark stays on the pill and on every row. Who it serv
 Agents side). The pill sits at the right of the first message box's bottom row; the Preset, Launcher, Model and Thinking
 effort fields are gone. What the panel gained for it, each part optional and absent from the chat's panel:
 
-- Follow row (`follow`): on top of the list in no group, a 1 px `--line` rule under it; a two-line row (its label, then
-  what the default runs in 12 px `ink-2`, after a 11 px `warning` icon in `--orange` when that can't start here), with
-  the selected fill and a 14 px check while followed. Keys and the hover glide as on a model row.
-- Presets (`presets`, `onPreset`): a group after Favorites, "Presets"; one row per preset named by the preset, its
-  description as the second line, the launcher's tile and the `[engine] effort` setup on the right; no star, no Customize,
-  never lit (a copy of a setup, like a favorite).
-- `state.starting`: no Recommended group, and the row lit shows the form's setup rather than a saved customization.
+- Follow is first, with its effective setup, any launch warning, and a check while followed. An explicit model choice
+  carries the check on its model row. Pointer and keyboard navigation paint the target row with `--hover-2`.
+- Headings distinguish recent or favorite setups, presets named by their active profile, and launchers. A recent setup
+  or preset that runs the same launcher, model and effort as an earlier shortcut appears by name under that shortcut.
+  A distinct preset keeps its description and applies its saved setup. Catalogs open on request. Failed or empty catalogs
+  and launchers that cannot start appear under the counted Unavailable disclosure with their reason and available actions.
+- `state.starting` omits Recommended and reflects what the launch form will run.
 - Engine pills in the flyout (`engines`): when the model runs with more than one engine on this computer, Cindy's engine
   pills replace the static engine block: 26 px tall, no border, a 12 px `AgentMark` and the engine's name at 12 px, the
   row's own on `--hover-2` with a check; another is a quiet pill that picks that launcher's row of the model, at 50 % with

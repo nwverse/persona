@@ -30,13 +30,11 @@ export function LauncherRow({
   const current = state.current?.provider === p.id;
   const why = p.unavailable || p.locked;
   const status = p.status && p.status !== why ? p.status : undefined;
+  const count = p.catalogCount ?? p.models?.filter((m) => !m.providerDefault).length;
   const detail = [
     agentName(p.engine, p.engineLabel),
     p.defaultModel || t("chat-modelpill.default_model"),
-    p.models !== null &&
-      t("ui-modelpanel.model_count", {
-        count: p.models.filter((m) => !m.providerDefault).length,
-      }),
+    count !== undefined && (count === 1 ? t("ui-modelpanel.one_model") : t("ui-modelpanel.model_count", { count })),
   ]
     .filter(Boolean)
     .join(" · ");
@@ -62,7 +60,7 @@ export function LauncherRow({
         disabled={frozen}
         onClick={onToggle}
         className={cx(
-          "relative z-[1] flex min-h-11 w-full items-center gap-2 rounded-control px-3 py-2 text-left outline-none transition-colors duration-150 hover:bg-hover-2 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
+          "relative z-[1] flex min-h-11 w-full items-center gap-2 rounded-control px-3 py-2 text-left outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
           why && "text-ink-3",
           frozen && "cursor-not-allowed opacity-50",
         )}
@@ -89,7 +87,7 @@ export function LauncherRow({
         )}
         <Icon name="chevron" size={12} className={cx("shrink-0 text-ink-3", expanded && "rotate-180")} />
       </button>
-      {(why || status || p.error) && (
+      {(why || status || p.error || p.catalogCount === 0) && (
         <div className="relative z-[1] px-3 pb-1 text-submeta text-ink-3">
           {why && (
             <div className="break-words">
@@ -102,11 +100,11 @@ export function LauncherRow({
             </div>
           )}
           {status && <div className="break-words">{status}</div>}
-          {p.error && (
-            <div role="alert" className="break-words">
-              {p.error}{" "}
+          {(p.error || p.catalogCount === 0) && (
+            <div role={p.error ? "alert" : undefined} className="break-words">
+              {p.error || t("ui-modelpanel.empty_catalog")}{" "}
               {onReload && (
-                <button type="button" disabled={frozen} onClick={() => onReload(p.id)} className="text-accent-ink hover:underline">
+                <button type="button" disabled={frozen || p.loading} aria-busy={p.loading || undefined} onClick={() => onReload(p.id)} className="text-accent-ink hover:underline">
                   {t("ui-modelpanel.retry")}
                 </button>
               )}

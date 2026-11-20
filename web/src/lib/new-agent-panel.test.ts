@@ -4,6 +4,7 @@
 // group, the row lit shows the form's setup, engine choices).
 import { describe, expect, it } from "vitest";
 import type { LauncherModels, PickerTier } from "./launcher-models";
+import { newAgentShortcuts, quickPicks, unavailableCatalog } from "./launcher-column";
 import { engineChoices, engineSetup, panelSections, shownEffort, type PanelProvider, type SectionsInput } from "./model-panel";
 import { choiceCarries, formChoice, newAgentPanel, newAgentPill, type ModelChoice } from "./new-agent-panel";
 import type { ModelList } from "./session-models";
@@ -51,6 +52,57 @@ const tiers: PickerTier[] = [
 const panel = (o: Partial<Parameters<typeof newAgentPanel>[0]> = {}) =>
   newAgentPanel({ launchers, listOf, choice: none, configured, runs: "claude", tiers, ...o });
 const provider = (p: ReturnType<typeof panel>, id: string) => p.providers.find((x) => x.id === id)!;
+
+describe("effective New Agent shortcuts", () => {
+  it("fills the recent group after skipping two aliases of Follow", () => {
+    const p = panel();
+    const recent = [
+      { provider: "claude", model: "default" }, { provider: "claude", model: "sonnet", effort: "high" },
+      { provider: "claude", model: "opus", effort: "low" }, { provider: "claude", model: "opus", effort: "high" },
+      { provider: "codex", model: "gpt-5.5" },
+    ];
+    const saved = quickPicks({ ...p, favorites: [], recent, overrides: {}, query: "" }, Infinity);
+    const shown = newAgentShortcuts(saved, [], p.setupKey, true);
+    expect(shown.quick.map((row) => row.key)).toEqual(["recent:2", "recent:3", "recent:4"]);
+    expect(shown.aliases.get("follow")?.recent).toHaveLength(2);
+  });
+
+  it("follows the configured launcher, even after another launcher is picked; compares IDs, supported effort and model defaults", () => {
+    const { setupKey } = panel({ runs: "codex", choice: { launcher: "codex", model: "gpt-5.5", effort: "" } });
+    const inherited = setupKey(null);
+    expect(inherited).toBeDefined();
+    expect(setupKey({ provider: "claude", model: "default" })).toBe(inherited);
+    expect(setupKey({ provider: "claude", model: "sonnet", effort: "high" })).toBe(inherited);
+    expect(setupKey({ provider: "claude", model: "claude-sonnet-5-5", effort: "low" })).not.toBe(inherited);
+    expect(setupKey({ provider: "claude", model: "opus", effort: "high" })).not.toBe(inherited);
+    expect(setupKey({ provider: "codex", model: "default" })).not.toBe(inherited);
+    expect(setupKey({ provider: "codex", model: "gpt-5.5", effort: "high" })).toBe(setupKey({ provider: "codex", model: "default" }));
+    expect(panel({ listOf: () => ({ loading: true }) }).setupKey(null)).toBeUndefined();
+    expect(panel({ configured: null }).setupKey(null)).toBeUndefined();
+  });
+
+  it("keeps an explicit Antigravity launcher default effort distinct from following the Hub's configured effort", () => {
+    const { setupKey } = panel({ launchers: [{ name: "agy", agent: "agy" }], configured: { provider: "launcher.agy", model: "sample", effort: "high" },
+      listOf: () => ({ list: { agent: "agy", models: [{ id: "sample", name: "Sample", default: true, efforts: ["low", "high"], default_effort: "low" }] } }) });
+    expect(setupKey({ provider: "agy", model: "default" })).not.toBe(setupKey(null));
+    expect(setupKey({ provider: "agy", model: "sample", effort: "high" })).toBe(setupKey(null));
+  });
+});
+
+it("folds a failed or empty catalog but retains manual default and typed choices, an old Hub and a pending read", () => {
+  const forList = (e: ModelList) => provider(panel({ listOf: () => e }), "claude");
+  const empty = forList({ list: { agent: "claude", models: [] } });
+  expect(unavailableCatalog(empty)).toBe(true);
+  expect(empty.typable).toBe(true);
+  expect(empty.models?.[0]?.providerDefault).toBe(true);
+  expect(unavailableCatalog(forList({ error: "Catalog offline" }))).toBe(true);
+  expect(unavailableCatalog(forList({ list: null }))).toBe(false);
+  expect(unavailableCatalog(forList({ loading: true }))).toBe(false);
+  expect(unavailableCatalog(forList({ list: claudeList }))).toBe(false);
+  const one = forList({ list: { agent: "claude", models: [{ id: "default", name: "Default", default: true }] } });
+  expect(one.catalogCount).toBe(1);
+  expect(unavailableCatalog(one)).toBe(false);
+});
 
 describe("the panel's providers", () => {
   it("says which Persona providers pi can use too (#8194)", () => {

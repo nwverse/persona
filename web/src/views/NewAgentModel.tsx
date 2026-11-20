@@ -46,6 +46,7 @@ export interface NewAgentModelProps {
   /** Model settings › New agent as it applies now; null: not followed. */
   configured: ModelBinding | null;
   tiers: PickerTier[];
+  tierProfile?: string;
   /** Persona-managed providers left out on this computer, with why (#8109): listed off in the panel. */
   unavailable?: UnavailableLauncher[];
   /** The "Follow Model settings" row; absent without model settings to follow (an older hub). */
@@ -97,13 +98,13 @@ export function NewAgentModel(props: NewAgentModelProps) {
 /** The panel while it is open: the computer's launchers with their lists, read again behind the ones shown once per
  *  opening (the one that runs first; not the ones that can't start here, whose rows are off anyway; at most three at a
  *  time, as each may start its agent's CLI on the computer). */
-function NewAgentPanel({ mid, host, launchers, choice, runs, configured, tiers, unavailable, follow, ultracode, onChoice, onPreset, onFollow, onHelp, onConfigure, anchor, onClose }: NewAgentModelProps & { anchor: HTMLElement; onClose: () => void }) {
+function NewAgentPanel({ mid, host, launchers, choice, runs, configured, tiers, tierProfile, unavailable, follow, ultracode, onChoice, onPreset, onFollow, onHelp, onConfigure, anchor, onClose }: NewAgentModelProps & { anchor: HTMLElement; onClose: () => void }) {
   const version = useModelLists();
   useEffect(() => {
     for (const l of launchers) if (l.name === runs || !launcherBlock(l)) void readModels(mid, l.name, { again: true, first: l.name === runs, host });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh on opening or when the selected host changes
   }, [host]);
-  const { providers, state, presets } = useMemo(
+  const { providers, state, presets, setupKey } = useMemo(
     () => newAgentPanel({ launchers, listOf: (name) => modelList(mid, name, undefined, host), choice, configured, runs, tiers, unavailable }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `version` stands for what was read
     [launchers, mid, host, choice.launcher, choice.model, choice.effort, configured, runs, tiers, unavailable, version],
@@ -131,11 +132,12 @@ function NewAgentPanel({ mid, host, launchers, choice, runs, configured, tiers, 
       scope="agent"
       onPick={onPick}
       onApplyCurrent={onApplyCurrent}
-      onReload={(provider) => void readModels(mid, provider, { again: true, first: provider === runs, host })}
+      onReload={(provider) => void readModels(mid, provider, { again: true, first: provider === runs, keepError: true, host })}
       onForget={onForget}
       currentExtra={ultracode}
       follow={follow && { ...follow, onFollow: () => (onFollow(), true) }}
       presets={presets}
+      newAgent={{ setupKey, profile: tierProfile }}
       onPreset={(key) => (onPreset(key), true)}
       engines
       onHelp={(launcher) => {

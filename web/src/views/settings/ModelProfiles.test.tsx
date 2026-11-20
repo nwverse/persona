@@ -11,6 +11,26 @@ import { initI18n, t } from "../../i18n";
 import { ModelProfiles } from "./ModelProfiles";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => vi.unstubAllGlobals());
+it.each([
+  [true, {}, true],
+  [false, {}, false],
+  [true, { model: "other" }, false],
+  [true, { effort: "low" }, false],
+  [true, { speed: "fast" }, false],
+] as const)("explains matching starter presets only on the active profile (active=%s, strong=%j)", async (active, patch, shown) => {
+  await initI18n();
+  const standard = { launcher: "lab", model: "sample", effort: "high" };
+  const profile = { id: "daily", name: "Daily", changes: [], tiers: { standard, strong: { ...standard, ...patch }, other: { launcher: "other" } } };
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ active: active ? "daily" : "other", profiles: [profile] }))));
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  try {
+    await act(async () => root.render(<ModelProfiles onChanged={() => {}} />));
+    await act(async () => [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Daily"))!.click());
+    expect(document.querySelector('[role="dialog"]')!.textContent?.includes(t("settings-modelprofiles.same_tiers"))).toBe(shown);
+  } finally {
+    await act(async () => root.unmount()); host.remove();
+  }
+});
 it("switches profiles and exposes rollback", async () => {
  await initI18n();
  const writes: string[] = [];
