@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { createInterface } from 'node:readline'
 import { DatabaseSync } from 'node:sqlite'
@@ -30,6 +30,19 @@ const server = createServer(async (req, res) => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
     res.end(JSON.stringify({ steps: (snapshot.trajectory.steps || []).slice(params.stepOffset) }))
+    return
+  }
+  if (method === 'ForkConversation' && snapshot.forkId) {
+    const newCascadeId = snapshot.forkId
+    const forkedAtStepIndex = params.forkAtStepIndex === -1 ? snapshot.trajectory.steps.length - 1 : params.forkAtStepIndex
+    const brain = `${directory}/config/brain`
+    const from = `${brain}/${params.sourceCascadeId}/.system_generated/logs/transcript_full.jsonl`
+    const to = `${brain}/${newCascadeId}/.system_generated/logs`
+    if (!snapshot.delayForkExport) {
+      mkdirSync(to, { recursive: true })
+      writeFileSync(`${to}/transcript_full.jsonl`, readFileSync(from, 'utf8').trimEnd().split('\n').slice(0, forkedAtStepIndex + 1).join('\n') + '\n')
+    }
+    res.end(JSON.stringify({ newCascadeId, forkedAtStepIndex }))
     return
   }
   if (method === 'RevertToCascadeStep') {
