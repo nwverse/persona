@@ -470,6 +470,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // scrolling to it, its heading counting the cards shown (views/extensions/ExtensionSlots.tsx). 63 B in ja, measured in
 // one environment against main cacd8d75a6 (ja 480,670 B to 480,733 B; en 477,744 B to 477,807 B, zh-Hans 478,482 B to
 // 478,545 B). Main had 2,810 B of room, so the budget is this ja size plus those 2,810 B.
+// #10822: Colored sidebar icons, an Appearance choice off by default: the choice's store and the built-in pages' colors
+// (lib/sidebar-icons.ts), read where the sidebar draws its pages, and the style a colored icon takes. 356 B in each
+// language, measured in one environment against main baacfe89c6 (ja 480,552 B to 480,908 B; en 477,626 B to 477,982 B,
+// zh-Hans 478,364 B to 478,720 B); the setting's row and words load with Settings. Main had 2,928 B of room (a budget of
+// 483,480 B), which is kept, so the budget moves by these 356 B, to this ja size plus those 2,928 B.
+// Merged with #9778, the budget adds both feature deltas (63 B + 356 B) to the previous 483,480 B limit.
 // #10905: Overview's own sections arranged with the extensions' cards add 323 B in ja, measured in one environment
 // against main 1e34873c71 (ja 483,878 B to 484,201 B; en 480,952 B to 481,265 B, zh-Hans 481,673 B to 482,012 B): the
 // sections' ids and their place in the arrangement, Needs you and Stuck never hidden (lib/overview-cards.ts),
