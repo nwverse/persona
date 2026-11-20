@@ -1,5 +1,6 @@
 {
   "extra_images": "その他の画像",
+  "image_link": "画像：{alt} {url}",
   "unnamed": "名前なし",
   "unsupported_file": "ファイル「{name}」",
   "not_sent": "送信できませんでした：{error}",

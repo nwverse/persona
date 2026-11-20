@@ -28,7 +28,8 @@ import (
 // channels.send — and everything else is here: commands, where a message goes, the turn (channels_runs.go), what is
 // asked answered in text, pushes and the sync mirror.
 
-// channelSend sends text to channel id's owner: in pieces its messages hold, each once by its ref.
+// channelSend sends text to channel id's owner: in pieces its messages hold, each once by its ref. To a channel that
+// sends pictures, an answer's or a push's pictures on lines of their own go with the last piece (channels_images.go).
 func (s *Service) channelSend(ctx context.Context, id, ref, text, kind, replyTo string) error {
 	v, ok, err := s.pluginChannelNow(ctx, id)
 	if err != nil {
@@ -38,7 +39,11 @@ func (s *Service) channelSend(ctx context.Context, id, ref, text, kind, replyTo 
 		return fmt.Errorf("%w %s", errNoChannel, id)
 	}
 	text = strings.TrimSpace(text)
-	if text == "" {
+	var images []channel.Blob
+	if v.Capabilities.ImagesOut && (kind == channel.OutAnswer || kind == channel.OutPush) {
+		text, images = s.channelImages(ctx, id, text)
+	}
+	if text == "" && len(images) == 0 {
 		return nil
 	}
 	pieces := channel.Split(text, v.Capabilities.MaxText)
@@ -47,8 +52,11 @@ func (s *Service) channelSend(ctx context.Context, id, ref, text, kind, replyTo 
 		if len(pieces) > 1 {
 			p.Ref = fmt.Sprintf("%s#%d", ref, i)
 		}
-		err := s.appCall(ctx, AppChannels, ChannelsSend, map[string]any{"channel": id, "ref": p.Ref, "text": p.Text, "kind": p.Kind,
-			"reply_to": p.ReplyTo}, nil)
+		params := map[string]any{"channel": id, "ref": p.Ref, "text": p.Text, "kind": p.Kind, "reply_to": p.ReplyTo}
+		if i == len(pieces)-1 && len(images) > 0 {
+			params["images"] = images
+		}
+		err := s.appCall(ctx, AppChannels, ChannelsSend, params, nil)
 		var re *rpc.Error
 		if errors.As(err, &re) && re.Code == CodeCannotSend {
 			return errCannotSend
@@ -310,7 +318,7 @@ func (s *Service) channelForward(ctx context.Context, id string, m channel.Messa
 	hello := s.hello(ctx)
 	lang := i18n.Lang(hello.Locale)
 	in := prompts.ChannelMessage{Persona: true, Name: v.Name, Owner: strings.TrimSpace(hello.Owner), Plain: caps.Format == channel.FormatPlain,
-		Asks: caps.Asks != channel.AsksNone, Public: v.Kind == channel.KindMention, Language: answerLanguage(hello.Locale),
+		Asks: caps.Asks != channel.AsksNone, ImagesOut: caps.ImagesOut, Public: v.Kind == channel.KindMention, Language: answerLanguage(hello.Locale),
 		Chat: m.Chat, Topic: m.Topic, Context: m.Context, Text: strings.TrimSpace(m.Text), Quote: m.Quote, Forward: m.Forward,
 		Unsupported: slices.Clone(m.Unsupported)}
 	var images []proto.Image

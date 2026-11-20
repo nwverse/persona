@@ -800,6 +800,11 @@ export interface ChannelItem {
 
 export interface ChannelCapabilities {
   images_in?: boolean;
+  /**
+   * It can send pictures: the hub puts an answer's pictures in channel.send's images instead of leaving them as
+   * Markdown in the text.
+   */
+  images_out?: boolean;
   files_in?: boolean;
   voice_in?: boolean;
   format?: string;
@@ -4926,6 +4931,11 @@ export interface ChannelSendParams {
   kind: ChannelSendKind;
   /** The owner's message it answers (ChannelMessage.id). */
   reply_to?: string;
+  /**
+   * Pictures to send after text, in order, to a channel with capabilities.images_out only: JPEG or PNG of at most 3
+   * MB each. text may then be empty. They belong to this ref: sent once with it, like the text.
+   */
+  images?: ChannelBlob[];
 }
 
 /**
