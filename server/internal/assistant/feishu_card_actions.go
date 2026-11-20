@@ -65,6 +65,9 @@ func (s *Service) botCardAction(ctx context.Context, a *feishubot.CardAction, ac
 		if errors.Is(err, errAcceptStore) { // the asks could not be read or saved: not accepted, the button works again
 			return toast("error", i18n.T(l, "http-status.unavailable"))
 		}
+		if note := inDoubtNote(l, err); note != "" { // it may be with the agent already: look before pressing again
+			return toast("error", note)
+		}
 		if err != nil { // another delivery failure: not taken, nothing recorded, the button works again
 			return toast("error", i18n.T(l, "assistant-reports.accept_not_taken", i18n.Args{"error": clip(oneLine(i18n.Localize(err, l)), 120)}))
 		}

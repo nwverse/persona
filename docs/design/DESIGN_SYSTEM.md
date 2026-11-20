@@ -566,6 +566,8 @@ on-demand model panel, not the everyday Assistant home (#6887).
   place, a click anywhere on it toggles it and nothing inside it answers (no hover bar or menus), and the bar in the
   composer's place reads Cancel, "N selected" and Forward N; Esc cancels too. The row over the composer is
   `ForwardGroupBar` and the bubble's card `ForwardGroupBlock` (`views/chat/ForwardGroup.tsx`), past three "N more".
+  Android (#5184) opens selection from Forward to. Its Inbox checkmarks take the whole message as a target, and the
+  target composer and conversation use the same three-message group preview as the web and iOS.
   Web (#9469): the message menu ends in "Select messages" (「多选」) under a divider with the `check` icon, as iOS; the
   bar reads Cancel, "N selected", the Include questions chip (a round `CheckMark`, the accent tint when on) and Forward,
   Copy and Export image (Export image the primary button); on a phone the three are a card under that line, an icon over
@@ -3330,7 +3332,7 @@ Who it serves: people working with their computers' files from the phone or the 
 
 ## Starting from what you already have (#5193)
 
-Where a form sets something up that the user may already have working elsewhere (the web provider wizard's first step),
+Where a form sets something up that the user may already have working elsewhere (the web and iPhone provider wizards' first step),
 the usual choices stay first and unchanged, and two more ways in follow them, each a row of the same list style:
 **Paste a configuration**, and, only when there is something to show, a group **Found on your computers** listing what
 the hub can import as it is, each row opening the import that already exists for it. The paste view is one monospace
