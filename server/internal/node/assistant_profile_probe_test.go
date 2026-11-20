@@ -118,8 +118,6 @@ func TestAssistantLauncherProfileProbeAgesOut(t *testing.T) {
 	f := cliTest(t)
 	n := f.n
 	n.home = os.Getenv("HOME")
-	// The fake home also creates .bashrc; every watched startup file must be settled before testing cache age.
-	settleFile(t, filepath.Join(n.home, ".bashrc"))
 	sourced := filepath.Join(n.home, "work.zsh")
 	first, second := t.TempDir(), t.TempDir()
 	writeFile(t, filepath.Join(n.home, ".zshrc"), "source "+shellQuote(sourced)+"\n")

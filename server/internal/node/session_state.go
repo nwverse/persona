@@ -54,6 +54,9 @@ type sessionState struct {
 	StartedAt               time.Time       `json:"started_at"`
 	StopCause               proto.StopCause `json:"stop_cause,omitempty"`
 	StopCauseAt             int64           `json:"stop_cause_at,omitempty"`
+	// RanAt: when a node last saw the Agent run (unix seconds, written at most every ranAtEvery). A session whose agent
+	// ran until shortly before this node started and is gone now was stopped by the restart (interrupted.go, #11441).
+	RanAt int64 `json:"ran_at,omitempty"`
 	// AwaitingFirstMessage: an empty start reserved this conversation without sending
 	// a model input. Runtime instructions and the idle state wait for actual delivery.
 	AwaitingFirstMessage bool `json:"awaiting_first_message,omitempty"`
@@ -414,6 +417,9 @@ func (s *stateFile) put(id string, v sessionState) bool {
 		}
 		if v.StopCauseAt == 0 && old.StopCauseAt != 0 {
 			v.StopCauseAt = max(time.Now().UnixNano(), old.StopCauseAt+1)
+		}
+		if v.RanAt == 0 {
+			v.RanAt = old.RanAt // owned by recordRunning
 		}
 	}
 	s.Sessions[id] = v

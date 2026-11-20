@@ -115,6 +115,9 @@ export interface Todo {
   stage?: string;
   /** "code" uses the six stages; "general" hides them. Unset or unknown kinds keep the existing stage behavior. */
   stage_kind?: string;
+  /** Closed with nothing left to deploy (#11590): the bar ends with Done after `stage` instead of marking it current.
+   *  Unset while open, for work that went out or is held short of live, and from hubs before it. */
+  stage_done?: boolean;
   /** The pull or merge request the work is in, when the hub knows one. */
   pr_url?: string;
   /** Fresh, observational pull request facts; these do not change the task lifecycle. */

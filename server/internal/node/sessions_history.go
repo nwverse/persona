@@ -68,7 +68,7 @@ func (n *Node) sessionsHistory(ctx context.Context, raw json.RawMessage) (sessio
 			if p.Runtime != "" && p.Runtime != id {
 				continue
 			}
-			part, state := runtimeHistory(ctx, h, q, after)
+			part, state := runtimeHistory(ctx, h, q, after, n.listBlocked)
 			parts = append(parts, part)
 			ans.Sources = append(ans.Sources, state)
 		}
@@ -91,8 +91,9 @@ func historyItem(r sessionhistory.Row) sessionhistory.Item[sessionhistory.Row] {
 	return sessionhistory.Item[sessionhistory.Row]{Key: sessionhistory.KeyOf(r.At(), r.NodeKey()), V: r}
 }
 
-// runtimeHistory asks one runtime for the page: not at all when it does not declare caps.history.
-func runtimeHistory(ctx context.Context, h *runtimeConn, q sessionhistory.Query, after *sessionhistory.Key) (sessionhistory.Part[sessionhistory.Row], sessionhistory.SourceState) {
+// runtimeHistory asks one runtime for the page: not at all when it does not declare caps.history. A session the live
+// list leaves out for a blocked folder (blocked) is in no page either; it is dropped before paging, so a page stays full.
+func runtimeHistory(ctx context.Context, h *runtimeConn, q sessionhistory.Query, after *sessionhistory.Key, blocked func(sid, cwd string) bool) (sessionhistory.Part[sessionhistory.Row], sessionhistory.SourceState) {
 	h.mu.Lock()
 	id, supported := h.hello.Runtime, h.hello.Caps.History
 	h.mu.Unlock()
@@ -133,6 +134,12 @@ func runtimeHistory(ctx context.Context, h *runtimeConn, q sessionhistory.Query,
 		for _, s := range normalizeRuntimeSessions(h, sessions) {
 			r := rows[s.SessionID]
 			key := sessionhistory.KeyOf(r.At(), r.NodeKey())
+			if page.Reached == nil || page.Reached.Before(key) {
+				page.Reached = &key // read, left out or not: the page goes on past it (Merge)
+			}
+			if blocked(s.SessionID, s.Cwd) {
+				continue
+			}
 			s.Archived = r.Session.Archived
 			r.Session = s
 			page.Items = append(page.Items, sessionhistory.Item[sessionhistory.Row]{Key: key, V: r})
@@ -183,6 +190,7 @@ func (n *Node) claudeHistory(q sessionhistory.Query) []sessionhistory.Item[sessi
 		}
 		newest[id] = cand{p, st}
 	}
+	keep := n.keptSessions()
 	var out []sessionhistory.Item[sessionhistory.Row]
 	for id, c := range newest {
 		m := n.meta(c.path, c.st)
@@ -190,7 +198,7 @@ func (n *Node) claudeHistory(q sessionhistory.Query) []sessionhistory.Item[sessi
 		if !q.In(updated) || isLauncherCheckRun(c.path, m) {
 			continue
 		}
-		if !n.sessionScopeAllows(m.cwd) || m.cwd != "" && n.cwdBlocked(m.cwd) {
+		if !n.sessionScopeAllows(m.cwd) || n.restBlocked(id, m.cwd, keep) {
 			continue
 		}
 		if m.lastText == "" && m.lastTextAt.IsZero() && m.title == "" && !forked[id] && c.st.Size() <= quickTail {
@@ -251,7 +259,7 @@ func (n *Node) codexHistory(q sessionhistory.Query) []sessionhistory.Item[sessio
 		}
 		m := n.meta(c.path, c.st)
 		updated := lastUsed(m, c.st)
-		if !q.In(updated) || !n.sessionScopeAllows(m.cwd) || m.cwd != "" && n.cwdBlocked(m.cwd) {
+		if !q.In(updated) || !n.sessionScopeAllows(m.cwd) || n.restBlocked(id, m.cwd, keep) {
 			continue
 		}
 		s := proto.Session{

@@ -143,6 +143,7 @@ type resolvedTarget struct {
 	machineName string
 	session     proto.Session
 	label       string
+	secondary   string
 	main        bool
 	isNew       bool // no conversation yet: the message starts one
 }
@@ -161,7 +162,8 @@ func (s *Service) resolveBotTarget(ctx context.Context, t botTarget) (resolvedTa
 		if stoppedAgent(sess) { // read-only (#4754)
 			return resolvedTarget{}, errors.New(i18n.T(l, "assistant-feishu.agent_stopped"))
 		}
-		return resolvedTarget{machine: d.ID, machineName: d.Name, session: sess, label: agentLabel(sess) + " · " + d.Name}, nil
+		label, secondary := feishuSessionNames(sess, s.useHerdrTabName(ctx))
+		return resolvedTarget{machine: d.ID, machineName: d.Name, session: sess, label: label + " · " + d.Name, secondary: secondary}, nil
 	default:
 		cfg := s.settings(ctx)
 		d, ok := s.device(ctx, cfg.MachineID)

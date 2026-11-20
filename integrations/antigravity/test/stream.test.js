@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { packageHash } from '../../runtime-sdk/lib/package.js'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { PACKAGE_NAME } from '../install.mjs'
@@ -15,7 +16,7 @@ const FAKE = fileURLToPath(new URL('./fake-acp-stream.mjs', import.meta.url))
 const RAW = '11111111-2222-4333-8444-555555555555'
 const SESSION = `agy-${RAW}`
 
-async function fixture(t, options = {}) {
+async function fixture(t, options = {}, startParams = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'agy-stream-'))
   writeFileSync(join(directory, 'updates.jsonl'), '')
   writeFileSync(join(directory, 'calls.jsonl'), '')
@@ -28,7 +29,7 @@ async function fixture(t, options = {}) {
   t.after(async () => { await runtime.stop(); rmSync(directory, { recursive: true, force: true }) })
   runtime.start()
   await node.ready
-  await node.peer.call('session.start', { cwd: directory })
+  await node.peer.call('session.start', { cwd: directory, ...startParams })
   await node.peer.call('session.watch', { session_id: SESSION })
   await until('initial session is listed', () => sessionStatus(node))
   const calls = () => readFileSync(join(directory, 'calls.jsonl'), 'utf8').split('\n').filter(Boolean).map(JSON.parse)
@@ -936,8 +937,52 @@ for (const truncated of [false, true]) {
   })
 }
 
-test('runtime session.items refreshes history token and omits broken tool-media image items (#11224)', async (t) => {
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF8sAAAAASUVORK5CYII=', 'base64')
+
+for (const prompt of ['', 'Check the photo.']) {
+  test(`start keeps ${prompt ? 'text and an image' : 'an image-only prompt'} through shifted native export`, async (t) => {
+    const data = PNG.toString('base64')
+    const client_msg_id = 'client-start'
+    const { node, directory, update, promptCount, runtime } = await fixture(t, {}, {
+      prompt, client_msg_id, images: [{ mime: 'image/png', data }],
+    })
+    await promptCount(1)
+    const read = () => node.peer.call('session.items', { session_id: SESSION, turns: 1 })
+    const checkUser = async (page) => {
+      const user = page.items.filter((item) => item.role === 'user')
+      assert.deepEqual(user.map((item) => item.kind), prompt ? ['text', 'image'] : ['image'])
+      assert.ok(user.every((item) => item.client_msg_id === client_msg_id && item.seq === user[0].seq))
+      const { id, tool_use_id, image } = user.at(-1)
+      assert.equal(tool_use_id, undefined)
+      assert.deepEqual(image, { mime: 'image/png', data: '', lazy: true })
+      assert.deepEqual(await node.peer.call('session.image', { session_id: SESSION, item_id: id }), { mime: 'image/png', data })
+      return id
+    }
+    const live = await read()
+    const liveId = await checkUser(live)
+    const steps = [
+      { step_index: 0, type: 'CHECKPOINT' },
+      { ...userStep(1, prompt ? `/plan ${prompt}` : ''), media: [{ mime_type: 'image/png', data }] },
+      replyStep(2, 'Checked.'),
+      { step_index: 3, type: 'CHECKPOINT' },
+    ]
+    transcripts(directory, steps, steps)
+    nativeState(directory, 'IDLE', steps.length)
+    update({ end: true })
+    await until('native export settles', () => runtime.idle() && sessionStatus(node) === 'done')
+    const native = await read()
+    assert.notEqual(await checkUser(native), liveId)
+    assert.notEqual(native.history, live.history)
+    assert.deepEqual(native.items.map((item) => item.kind), [...(prompt ? ['text'] : []), 'image', 'text', 'notice'])
+    assert.equal(native.items.at(-1).text, '上下文已压缩')
+    assert.equal(node.last('runtime.sessions').sessions.find((row) => row.session_id === SESSION).last_text, 'Checked.')
+  })
+}
+
+test('runtime pages and pushes lazy tool media, keeping Read metadata and turn pagination', async (t) => {
   const { node, directory } = await fixture(t)
+  const brain = join(directory, 'config/brain', RAW)
+  const screenshot = join(brain, 'screen.png')
   const steps = [
     { ...userStep(0, 'Check the screenshot.'), created_at: '2026-01-01T00:00:00Z' },
     {
@@ -955,19 +1000,103 @@ test('runtime session.items refreshes history token and omits broken tool-media 
       status: 'DONE',
       created_at: '2026-01-01T00:00:02Z',
       content: 'Read image /work/shots/ui.png',
-      media: [{ mime_type: 'image/png', uri: '/work/shots/ui.png' }],
+      media: [{ mime_type: 'application/pdf', uri: 'not-an-image.pdf' }, { mime_type: 'image/png', uri: 'screen.png' }],
     },
     { ...replyStep(3, 'Looks clean.'), created_at: '2026-01-01T00:00:03Z' },
+    { ...userStep(4, '<USER_REQUEST>\n<attached_images>\n/tmp/only-photo.png\n</attached_images>\n</USER_REQUEST>'),
+      media: [{ mime_type: 'image/png', uri: 'file:///tmp/./only-photo.png' }] },
+    replyStep(5, 'Second reply.'),
   ]
   transcripts(directory, steps, steps)
-  const paged = await node.peer.call('session.items', { session_id: SESSION, turns: 1 })
-  assert.match(paged.history, /:no-tool-media(?:$|:)/)
+  const recent = await node.peer.call('session.items', { session_id: SESSION, turns: 1 })
+  assert.match(recent.history, /:lazy-media:checkpoints(?:$|:)/)
+  assert.equal(recent.has_more, true)
+  assert.deepEqual(recent.items.map((item) => item.text), ['<attached_images>\n/tmp/only-photo.png\n</attached_images>', 'Second reply.'])
+  const paged = await node.peer.call('session.items', { session_id: SESSION, turns: 1, before_seq: recent.items[0].seq })
   assert.equal(paged.has_more, false)
-  assert.equal(paged.items.some((it) => it.kind === 'image'), false)
+  assert.equal(paged.to_seq, 4)
   const readUse = paged.items.find((it) => it.kind === 'tool_use')
   const readResult = paged.items.find((it) => it.kind === 'tool_result')
+  const image = paged.items.find((it) => it.kind === 'image')
   assert.equal(readUse?.tool_name, 'Read')
   assert.deepEqual(readUse?.tool_input, { file_path: '/work/shots/ui.png' })
   assert.equal(readResult?.tool_use_id, readUse?.tool_use_id)
   assert.equal(readResult?.is_error, false)
+  assert.deepEqual(image, { id: readResult.id.replace(/#0$/, '#media1'), seq: readResult.seq, role: 'assistant', kind: 'image',
+    tool_use_id: readUse.tool_use_id, ts: readResult.ts, image: { mime: 'image/png', data: '', lazy: true } })
+  await until('media placeholder pushed', () => node.all('session.items').some((batch) => batch.items.some((item) => item.id === image.id)))
+  assert.deepEqual(node.all('session.items').flatMap((batch) => batch.items).find((item) => item.id === image.id), image)
+  const params = { session_id: SESSION, item_id: image.id }
+  assert.deepEqual(await node.peer.call('session.item', params), image)
+  await assert.rejects(node.peer.call('session.image', params), { code: 'not_found' })
+  writeFileSync(screenshot, PNG)
+  assert.deepEqual(await node.peer.call('session.image', params), { mime: 'image/png', data: PNG.toString('base64') })
+  await assert.rejects(node.peer.call('session.image', { ...params, item_id: recent.items[0].id.replace(/#0$/, '#media0') }), { code: 'not_found' })
+})
+
+test('runtime session.image reads only referenced local images and bounds file and inline data', { timeout: 15_000 }, async (t) => {
+  const { node, directory } = await fixture(t)
+  const brain = join(directory, 'config/brain', RAW)
+  const max = 1152 * 1024
+  const assets = join(brain, 'assets')
+  const outside = join(directory, 'outside assets')
+  const filename = process.platform === 'win32' ? 'capture.png' : 'capture-09:30.png'
+  const absolute = join(outside, filename)
+  mkdirSync(assets)
+  mkdirSync(outside)
+  writeFileSync(absolute, PNG)
+  const atCap = Buffer.concat([PNG, Buffer.alloc(max - PNG.length)])
+  writeFileSync(join(assets, 'at-cap.png'), atCap)
+  writeFileSync(join(assets, 'oversized.png'), Buffer.concat([PNG, Buffer.alloc(max + 1 - PNG.length)]))
+  symlinkSync('assets', join(brain, 'inside-link'), 'dir')
+  symlinkSync(outside, join(brain, 'outside-link'), 'dir')
+  symlinkSync('at-cap.png', join(assets, 'final-link.png'), 'file')
+  const allowed = [
+    { mime_type: 'image/png', uri: absolute },
+    { mime_type: 'image/png', uri: pathToFileURL(absolute).href },
+    { mime_type: 'image/png', uri: 'inside-link/at-cap.png' },
+    { mime_type: 'image/jpeg', data: '/9j/' },
+    { mime_type: 'image/gif', data: Buffer.from('GIF87a').toString('base64') },
+    { mime_type: 'image/gif', data: Buffer.from('GIF89a').toString('base64') },
+    { mime_type: 'image/webp', data: Buffer.from('RIFF\0\0\0\0WEBPVP8').toString('base64') },
+    { mime_type: 'image/png', data: atCap.toString('base64') },
+  ]
+  const invalidURIs = ['missing.png', 'assets', 'assets/oversized.png', 'assets/final-link.png', `outside-link/${filename}`,
+    `../../../outside assets/${filename}`, 'https://example.test/image.png', 'file://remote/image.png',
+    `${pathToFileURL(absolute).href}?download`, `file://${pathToFileURL(absolute).pathname.replace(/capture/, '%2fcapture')}`, 'assets/\0.png']
+  if (process.platform !== 'win32') {
+    execFileSync('mkfifo', [join(assets, 'named-pipe.png')])
+    invalidURIs.push('assets/named-pipe.png')
+  }
+  const denied = [
+    ...invalidURIs.map((uri) => ({ mime_type: 'image/png', uri, data: PNG.toString('base64') })),
+    { mime_type: 'image/jpeg', uri: absolute },
+    { mime_type: 'image/jpeg', data: PNG.toString('base64') },
+    { mime_type: 'image/gif', data: 'R0lGODlhYh==' },
+    { mime_type: 'image/gif', data: 'R0lG\nODlh' },
+    { mime_type: 'image/jpeg', data: '_9j_' },
+    { mime_type: 'image/gif', data: Buffer.from('GIF88a').toString('base64') },
+    { mime_type: 'image/webp', data: Buffer.from('RIFF\0\0\0\0WEBPVP').toString('base64') },
+    { mime_type: 'image/webp', data: Buffer.from('NOPE\0\0\0\0WEBPVP8').toString('base64') },
+    { mime_type: 'image/png', data: Buffer.concat([PNG, Buffer.alloc(max + 1 - PNG.length)]).toString('base64') },
+  ]
+  const steps = [userStep(0, 'Capture images.'), { step_index: 1, type: 'GENERIC', media: [...allowed, ...denied] }]
+  transcripts(directory, steps, steps)
+  const paged = await node.peer.call('session.items', { session_id: SESSION })
+  const imageItems = paged.items.filter((item) => item.kind === 'image')
+  assert.equal(imageItems.length, allowed.length + denied.length)
+  const fetch = (item_id, extra = {}) => node.peer.call('session.image', { session_id: SESSION, item_id, ...extra })
+  for (const [index, entry] of allowed.entries()) {
+    const data = entry.data ?? (entry.uri === 'inside-link/at-cap.png' ? atCap : PNG).toString('base64')
+    assert.deepEqual(await fetch(imageItems[index].id), { mime: entry.mime_type, data }, `reference ${index}`)
+  }
+  for (const [index, entry] of denied.entries()) {
+    await assert.rejects(fetch(imageItems[allowed.length + index].id), { code: 'not_found' }, entry.uri ?? `inline reference ${index}`)
+  }
+  await assert.rejects(fetch(absolute, { uri: absolute }), { code: 'not_found' })
+  await assert.rejects(fetch('2#0', { uri: absolute }), { code: 'not_found' })
+  await assert.rejects(fetch(imageItems[0].id, { session_id: 'agy-22222222-3333-4444-8555-666666666666' }), { code: 'not_found' })
+  const traversal = `agy-${RAW}/../${RAW}`
+  await assert.rejects(fetch(imageItems[0].id, { session_id: traversal }), { code: 'not_found' })
+  await assert.rejects(node.peer.call('session.items', { session_id: traversal }), { code: 'not_found' })
 })
