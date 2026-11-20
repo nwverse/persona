@@ -150,6 +150,11 @@ func Check(ctx context.Context, url string) error {
 	return nil
 }
 
+// BackendPIDs are the server process ids of this pool's open connections. A
+// process that must tell its own sessions from another writer's (the hub,
+// quiescing its own writers for a snapshot) passes them as the ones to ignore.
+func (d *DB) BackendPIDs() []int32 { return d.pids.list() }
+
 // appName is the application_name a part's connections give Postgres, so a part can tell the other's connections
 // (and ones of a build from before, which give none) on a database they share (managerdb.go).
 func appName(sets Sets) string {

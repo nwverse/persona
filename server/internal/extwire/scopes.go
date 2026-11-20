@@ -98,6 +98,7 @@ var RouteScopes = map[string]string{
 	"POST /api/v1/notify":                                        ScopeNotify,
 	"GET /api/v1/push/intercepts":                                ScopeNotify, // read-only: pushes ln mode held back, including an extension's own
 	"GET /api/v1/push/ln-mode":                                   ScopeNotify, // read-only: the switch state; the PUT stays full credentials only
+	"GET /api/v1/push/grading":                                   ScopeNotify, // read-only alias of the switch state; the PUT stays full credentials only
 	"GET /api/v1/push/stats/daily":                               ScopeNotify, // read-only: delivered/held counts per day, an extension sees its own manager only
 	"GET /api/v1/assistant":                                      ScopeAssistantAsk,
 	"GET /api/v1/assistant/capabilities":                         ScopeAssistantAsk,
