@@ -94,9 +94,11 @@ func keyIsNews(kind string) bool {
 // (#11614): before, it woke the supervisor again every superviseDedupWindow although nothing had changed. A new turn
 // with other words, a new card or a new report changes the fingerprint and is told as before. Signals that wait on a
 // decision keep the short window or their own news key (keyIsNews).
-func keptUntilChange(kind string) bool {
-	switch kind {
-	case sigIdle, sigUnjudged, sigStalled, sigNoProgress, sigReview, sigReport, sigOrphaned, sigInterrupted, sigOverdue:
+func keptUntilChange(g superviseSignal) bool {
+	switch g.Kind {
+	case sigReport:
+		return g.Report != upReportQuestion && g.Report != upReportBlocked
+	case sigIdle, sigUnjudged, sigStalled, sigNoProgress, sigReview, sigOrphaned, sigInterrupted, sigOverdue:
 		return true
 	}
 	return false
@@ -157,7 +159,7 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 			pending = append(pending, id)
 		}
 		fingerprint := superviseFingerprint{Hash: hash, At: now.UTC(), Permanent: signals[i].Kind == sigPRConflict || signals[i].Kind == sigDraftPR}
-		if signals[i].Kind == sigAllStopped || keptUntilChange(signals[i].Kind) {
+		if signals[i].Kind == sigAllStopped || keptUntilChange(signals[i]) {
 			fingerprint.Todo = signals[i].Todo
 		}
 		if g := signals[i]; g.externalPRReview() || g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {

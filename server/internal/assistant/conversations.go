@@ -1448,7 +1448,8 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 		if !ok {
 			return "", errors.New("not kept: the relay state could not be read or saved; try again shortly")
 		}
-		s.publish(ctx) // the receiver shows it waiting above its composer
+		s.spawnReported(self, c.SessionID) // a quiet report still answers the conversation that opened this one
+		s.publish(ctx)                     // the receiver shows it waiting above its composer
 		return fmt.Sprintf("Kept for %q without waking it (%d kept there): it goes in with the next message that conversation gets for anything else. No reply will come from it; no need to send it again.",
 			conversationName(c, s.settings(ctx).Main), n), nil
 	}

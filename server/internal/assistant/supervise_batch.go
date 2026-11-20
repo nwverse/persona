@@ -76,6 +76,8 @@ func supervisionBatchImmediate(g superviseSignal) bool {
 		return true
 	case sigCheck: // the owner's answer to a check's decision; the check's own news can wait for the batch
 		return g.Report == checkDecidedReport
+	case sigReport:
+		return g.Report == upReportQuestion || g.Report == upReportBlocked
 	}
 	return false
 }
