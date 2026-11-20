@@ -798,3 +798,37 @@ func TestAssistantOnARuntimeSendsASlashCommandOnItsOwn(t *testing.T) {
 		t.Fatalf("a /status with a picture went without context: %q", ctx)
 	}
 }
+
+func TestAssistantRuntimeStartPropagatesPermissionMode(t *testing.T) {
+	n, hub := runtimeNode(t)
+	assistantHub(hub)
+	host := dialRuntime(t, n, assistantRuntimeHello())
+	cwd := t.TempDir()
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		if method == "session.start" {
+			return map[string]any{"session": map[string]any{"session_id": "session-perm-1", "cwd": cwd, "status": "idle"}}, nil
+		}
+		return map[string]any{"ok": true}, nil
+	}
+	if _, err := nodeCall(t, n, "assistant.send", map[string]any{
+		"cwd":             cwd,
+		"launcher":        "dsh",
+		"text":            "hello",
+		"permission_mode": "acceptEdits",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	starts := host.got("session.start")
+	if len(starts) != 1 {
+		t.Fatalf("starts = %d, want 1", len(starts))
+	}
+	var start struct {
+		PermissionMode string `json:"permission_mode"`
+	}
+	if err := json.Unmarshal(starts[0], &start); err != nil {
+		t.Fatal(err)
+	}
+	if start.PermissionMode != "acceptEdits" {
+		t.Fatalf("session.start permission_mode = %q, want acceptEdits (%s)", start.PermissionMode, starts[0])
+	}
+}

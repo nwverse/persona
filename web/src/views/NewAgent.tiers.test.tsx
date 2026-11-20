@@ -220,4 +220,12 @@ describe("New agent: presets (#2225)", () => {
     expect(launched[0]?.model).toBeUndefined();
     expect(launched[0]?.effort).toBeUndefined();
   });
+
+  it("applies a preset's permission_mode when picked and launches with it", async () => {
+    tiers = [{ name: "guarded", launcher: "fast", model: "m-review", effort: "high", permission_mode: "plan" }];
+    await open();
+    await pick("preset:guarded");
+    act(() => button("启动").click());
+    expect(launched[0]).toMatchObject({ launcher: "fast", model: "m-review", effort: "high", permissionMode: "plan" });
+  });
 });
