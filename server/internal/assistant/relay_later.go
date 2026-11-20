@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -77,7 +78,8 @@ func (s *Service) relayLaterSendFor(ctx context.Context, to, once string) (strin
 		return "", func(bool) {}, errors.New("cannot read quiet-message delivery state")
 	}
 	s.pruneRelayLaterLocked(time.Now())
-	key := to + "\x00" + once
+	identity, _ := json.Marshal([2]string{to, once})
+	key := string(identity) // JSON strings are safe as Postgres jsonb keys, unlike a NUL separator.
 	carry, reserved := b.st.LaterSends[key]
 	if once == "" || !reserved {
 		carry = relayLaterSend{At: time.Now().UTC(), Items: slices.Clone(b.st.Later[to])}
