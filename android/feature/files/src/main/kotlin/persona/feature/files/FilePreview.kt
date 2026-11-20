@@ -5,6 +5,7 @@ import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -13,27 +14,48 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import coil3.compose.AsyncImage
 import coil3.decode.BitmapFactoryDecoder
 import coil3.request.ImageRequest
 import coil3.compose.AsyncImagePainter
 import persona.core.contracts.api.SessionFileContent
+import persona.core.contracts.api.SessionFileFeature
 import persona.core.contracts.api.SessionFiles
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Base64
+
+/** A long path or editing status gets its own measured row at large type, below the fixed-height navigation bar. */
+@Composable
+internal fun FilePage(title: String, subtitle: String?, onBack: () -> Unit, titleBusy: Boolean = false, scrollEdges: Boolean = true,
+    actions: @Composable RowScope.() -> Unit, content: @Composable (PaddingValues) -> Unit) {
+    val separate = subtitle != null && LocalDensity.current.fontScale >= 1.3f
+    JPage(title, subtitle = subtitle, onBack = onBack, titleBusy = titleBusy, actions = actions, edges = scrollEdges,
+        topBar = if (!separate) null else ({
+            Column(Modifier.fillMaxWidth()) {
+                JTopBar(title, onBack = onBack, actions = actions, titleBusy = titleBusy)
+                Text(subtitle.orEmpty(), Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.m, bottom = Tokens.Space.xs),
+                    style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }), content = content)
+}
 
 /**
  * A file or a working-tree diff over the browser: Markdown rendered (or its source), code and text with line numbers,
  * images to zoom, PDFs page by page, anything else described. ⋯ copies, shares and reloads.
  */
 @Composable
-internal fun FilePreview(state: FilesState, controller: FilesController, images: MarkdownImages, insert: (String) -> Unit, back: () -> Unit) {
+internal fun FilePreview(state: FilesState, controller: FilesController, images: MarkdownImages, insert: (String) -> Unit, back: () -> Unit,
+    readOnly: Boolean = false) {
     val selection = state.selection ?: return
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -42,6 +64,27 @@ internal fun FilePreview(state: FilesState, controller: FilesController, images:
     val scope = rememberCoroutineScope()
     var menu by remember(selection) { mutableStateOf(false) }
     val file = state.content
+    val download = rememberFileDownload(controller)
+    val supportsWrite = controller.api.supports(controller.machineId, SessionFileFeature.Write)
+    val editProblem = file?.let(::fileEditProblem)
+    var document by remember(controller, selection) { mutableStateOf<FileEditorDocument?>(null) }
+    var openNew by remember(controller, selection) { mutableStateOf((selection as? FileSelection.File)?.edit == true) }
+    fun edit(file: SessionFileContent) {
+        document = FileEditorDocument(file, controller.api, controller.machineId, controller.cwd)
+    }
+    LaunchedEffect(file, supportsWrite, readOnly) {
+        if (openNew && file != null) {
+            openNew = false
+            if (supportsWrite && !readOnly && editProblem == null) edit(file)
+        }
+    }
+    document?.let { opened ->
+        FileEditor(opened, readOnly || !supportsWrite) { reload ->
+            document = null
+            if (reload) controller.reload()
+        }
+        return
+    }
     val markdown = file?.text != null && FilesPaths.isMarkdown(file.name)
     val table = file != null && isTable(file)
     // A CSV / TSV is text too: ⋯ switches between the grid and its source.
@@ -62,9 +105,10 @@ internal fun FilePreview(state: FilesState, controller: FilesController, images:
         is FileSelection.Diff -> selection.file.name
         else -> file?.name?.ifEmpty { null } ?: path?.let(FilesPaths::name) ?: stringResource(R.string.files_title)
     }
-    JPage(title, subtitle = path, onBack = back, actions = {
-        if (path != null) JTextButton(stringResource(R.string.files_insert_path), { insert(path) })
-        JIconButton(PhIcons.DotsThree, stringResource(R.string.files_preview_options), { menu = true })
+    FilePage(title, subtitle = path, onBack = back, actions = {
+        if (file != null && !file.isDir) JIconButton(PersonaIcons.down, stringResource(R.string.files_editor_download),
+            { download(file.path, file.name, file.mime) })
+        JIconButton(PersonaIcons.moreMenu, stringResource(R.string.files_preview_options), { menu = true })
     }) { padding ->
         val diff = state.diff
         val error = state.previewError
@@ -102,6 +146,12 @@ internal fun FilePreview(state: FilesState, controller: FilesController, images:
         }
     }
     if (menu) JActionSheet(buildList {
+        if (file != null && selection is FileSelection.File) {
+            if (supportsWrite) add(JAction(stringResource(R.string.files_editor_edit), PersonaIcons.editFile,
+                enabled = !readOnly && editProblem == null) { edit(file) })
+            add(JAction(stringResource(R.string.files_editor_show), PersonaIcons.folder) { controller.showInFolder(file.path) })
+        }
+        if (path != null) add(JAction(stringResource(R.string.files_insert_path), PersonaIcons.document) { insert(path) })
         if (markdown) add(JAction(if (source) stringResource(R.string.files_render_markdown) else stringResource(R.string.files_view_source), if (source) PhIcons.FileText else PhIcons.Code) { source = !source })
         if (delimited) add(JAction(if (source) stringResource(R.string.files_view_table) else stringResource(R.string.files_view_source), if (source) PhIcons.SquaresFour else PhIcons.Code) { source = !source })
         if (notebook) add(JAction(if (source) stringResource(R.string.files_view_notebook) else stringResource(R.string.files_view_source), if (source) PhIcons.BookOpen else PhIcons.Code) { source = !source })
@@ -117,12 +167,21 @@ internal fun FilePreview(state: FilesState, controller: FilesController, images:
         state.diff?.diff?.takeIf { it.isNotEmpty() }?.let { text -> add(JAction(stringResource(R.string.files_copy_diff), PhIcons.Copy) { copy(text, resources.getString(R.string.files_diff_copied)) }) }
         if (file != null && FileShare.canShare(file)) add(JAction(stringResource(R.string.files_share), PhIcons.ShareNetwork) {
             scope.launch {
-                val shared = runCatching { FileShare.share(context, file, controller::download) }.getOrDefault(false)
+                val shared = try {
+                    FileShare.share(context, file) { path, destination ->
+                        withContext(Dispatchers.IO) {
+                            downloadComplete(controller, path, destination)
+                            destination.length()
+                        }
+                    }
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { false }
                 if (!shared) feedback?.notice(resources.getString(R.string.files_share_failed))
             }
         })
         add(JAction(stringResource(R.string.files_refresh), PhIcons.ArrowClockwise, separatorBefore = true) { controller.reload() })
-    }, { menu = false }, title)
+    }, { menu = false }, title, note = if (file == null || !supportsWrite) null
+        else if (readOnly) stringResource(R.string.files_edit_read_only) else editProblem?.let { stringResource(it) })
 }
 
 /** CSV / TSV (as text or bytes) and xlsx (bytes) open in the table viewer ([SheetFile]). */

@@ -6,6 +6,10 @@ import kotlinx.serialization.Serializable
 /** Access to the machine hosting a session: reads and file changes where the hub offers them. */
 interface SessionFiles {
     suspend fun directory(machineId: String, cwd: String, path: String): SessionDirectory
+    /** Relative paths beneath the displayed [folder], from one bounded search on the machine. */
+    suspend fun findFiles(machineId: String, folder: String): SessionFileSearch = throw UnsupportedOperationException("find")
+    /** Details of exactly [path]. Older nodes return only the path, kind and size. */
+    suspend fun fileInfo(machineId: String, cwd: String, path: String): SessionPathStat = throw UnsupportedOperationException("info")
     suspend fun file(machineId: String, cwd: String, path: String): SessionFileContent
     /**
      * [file] for the viewer, asked with `stream=1` (hub feature `file_stream`, web `fileURL`, iOS `fetchBytes`): a
@@ -60,6 +64,23 @@ interface SessionFiles {
      * (an older hub's reply) offers them and lets the answer tell, as iOS `FolderEdits.available`.
      */
     fun editsFiles(machineId: String): Boolean = false
+    /** Whether the hub paired with [machineId] offers this operation. */
+    fun supports(machineId: String, feature: SessionFileFeature): Boolean = false
+    suspend fun mkdir(machineId: String, cwd: String, dir: String, name: String): String = throw UnsupportedOperationException("mkdir")
+    /** Create refuses a taken name. A save matches the opened revision or the hash of the opened bytes; force is explicit. */
+    suspend fun writeText(machineId: String, cwd: String, path: String, text: String, create: Boolean = false,
+                          revision: String? = null, sha256: String? = null, force: Boolean = false): SessionWrittenFile =
+        throw UnsupportedOperationException("write")
+    /** Upload into the chosen folder. Without an explicit conflict decision a taken name remains untouched. */
+    suspend fun uploadFile(machineId: String, cwd: String, dir: String, name: String, file: java.io.File,
+                           conflict: SessionFileConflict? = null): SessionUploadedFile = throw UnsupportedOperationException("upload")
+    suspend fun copyFiles(machineId: String, cwd: String, paths: List<String>, dir: String,
+                          conflict: SessionFileConflict? = null): List<SessionFileChange> = throw UnsupportedOperationException("copy")
+    /** Without [dir] the node creates a temporary ZIP for [download]. */
+    suspend fun zipFiles(machineId: String, cwd: String, paths: List<String>, name: String, dir: String? = null): SessionZippedFile =
+        throw UnsupportedOperationException("zip")
+    /** POSIX permission bits (0..0777 in octal). Returns the applied mode. */
+    suspend fun chmod(machineId: String, cwd: String, path: String, mode: Int): Int = throw UnsupportedOperationException("chmod")
     /**
      * `POST …/files/rename` (docs/protocol/protocol.md "Changing files"): [path] (as in a listing) renamed to [name] in its
      * folder; the new path, in the form [path] used. The machine refuses outside the home (409 `read_only`) and a name
@@ -72,6 +93,11 @@ interface SessionFiles {
      */
     suspend fun move(machineId: String, cwd: String, path: String, directory: String, conflict: SessionMoveConflictPolicy? = null): SessionMovedFile =
         throw UnsupportedOperationException("move")
+    /** Moves all selected paths in one request. A single-item transport still serves a single selection. */
+    suspend fun move(machineId: String, cwd: String, paths: List<String>, directory: String,
+                     conflict: SessionMoveConflictPolicy? = null): List<SessionMovedFile> =
+        paths.singleOrNull()?.let { listOf(move(machineId, cwd, it, directory, conflict)) }
+            ?: throw UnsupportedOperationException("move")
     /** `POST …/files/trash`: [paths] to the machine's trash, each with the id [restore] takes to put it back. */
     suspend fun trash(machineId: String, cwd: String, paths: List<String>): List<SessionTrashedFile> =
         throw UnsupportedOperationException("trash")
@@ -82,7 +108,7 @@ interface SessionFiles {
 /** `POST …/files/rename` and each of `…/files/restore`'s answers: where the file is now. */
 @Serializable data class SessionFilePath(val path: String)
 
-enum class SessionMoveConflictPolicy { KeepBoth, Replace }
+enum class SessionMoveConflictPolicy(val wire: String) { KeepBoth("keep"), Replace("replace") }
 
 /** Where the item came from and where it landed, including any numbered name chosen by the node. */
 @Serializable data class SessionMovedFile(val from: String, val to: String)
@@ -108,7 +134,15 @@ enum class SessionMoveConflictPolicy { KeepBoth, Replace }
 /** `GET /api/v1/machines/{id}/stat`: each path as asked, `file`, `dir`, `denied` (macOS keeps it from the node) or `missing`. */
 @Serializable data class SessionPathStats(val stats: List<SessionPathStat> = emptyList())
 
-@Serializable data class SessionPathStat(val path: String, val kind: String = "missing", val size: Long = 0)
+@Serializable data class SessionPathStat(
+    val path: String, val kind: String = "missing", val size: Long = 0,
+    val mode: Int? = null, val owner: String? = null, val group: String? = null,
+    val mtime: String? = null, val ctime: String? = null, val birthtime: String? = null,
+    val items: Int? = null, @SerialName("items_more") val itemsMore: Boolean? = null,
+    val symlink: Boolean? = null, @SerialName("link_target") val linkTarget: String? = null,
+    @SerialName("link_real") val linkReal: String? = null, @SerialName("link_broken") val linkBroken: Boolean? = null,
+    val mime: String? = null,
+)
 
 @Serializable data class SessionDirectory(
     val path: String,
@@ -122,6 +156,8 @@ enum class SessionMoveConflictPolicy { KeepBoth, Replace }
     val symlink: Boolean = false,
     val size: Long = 0,
     val mtime: String? = null,
+    @SerialName("link_target") val linkTarget: String? = null,
+    @SerialName("link_broken") val linkBroken: Boolean = false,
 )
 
 @Serializable data class SessionFileContent(
@@ -138,6 +174,8 @@ enum class SessionMoveConflictPolicy { KeepBoth, Replace }
     val stream: Boolean = false,
     /** The hub's name for this version of the file (size and modification time); null from an older hub. */
     val revision: String? = null,
+    /** Byte offset of the next text page. An older single-page response omits it. */
+    val next: Long = 0,
 )
 
 @Serializable data class SessionGitFile(

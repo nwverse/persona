@@ -1,6 +1,8 @@
 package persona.core.hub
 
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
@@ -35,15 +37,14 @@ class HubSessionFiles internal constructor(
     private val post: suspend (String, String) -> Response = { _, _ -> throw UnsupportedOperationException("post") },
     /** The hub's features from its last hello. */
     private val features: () -> Set<String> = { emptySet() },
-    /** A POST for files/rename, move, trash and restore: the hub gives the machine 2 minutes. */
-    private val editPost: suspend (String, String) -> Response = post,
+    private val editPost: suspend (String, RequestBody, Long) -> Response = { _, _, _ -> throw UnsupportedOperationException("file edit") },
 ) : SessionFiles {
     constructor(connection: OkHttpHubConnection, decoding: CoroutineDispatcher = Dispatchers.Default) :
         this({ path -> connection.request(path, "GET", null) }, decoding, { path -> connection.request(path, "GET", null, buffered = false) },
             { path, seconds -> connection.request(path, "GET", null, readTimeoutSeconds = seconds) },
             { path, body -> connection.request(path, "POST", body.toRequestBody(JSON), readTimeoutSeconds = 100) },
             { connection.serverFeatures.value },
-            { path, body -> connection.request(path, "POST", body.toRequestBody(JSON), readTimeoutSeconds = EDIT_TIMEOUT_SECONDS) })
+            { path, body, seconds -> connection.request(path, "POST", body, readTimeoutSeconds = seconds) })
 
     companion object {
         /** Past the hub's 2 minutes for file/convert (the node gives LibreOffice 90 s), as agent creation waits 130 s. */
@@ -52,10 +53,18 @@ class HubSessionFiles internal constructor(
         const val THUMB_TIMEOUT_SECONDS = 35L
         /** Past the hub's 2 minutes for a file change, as iOS waits 130 s for a trash or a restore. */
         const val EDIT_TIMEOUT_SECONDS = 130L
+        /** Copy and ZIP can process up to 2 GB. The hub waits ten minutes for either. */
+        const val COPY_ZIP_TIMEOUT_SECONDS = 610L
     }
 
     override suspend fun directory(machineId: String, cwd: String, path: String) =
         get<SessionDirectory>(machineId, "fs", cwd, "path" to path)
+    override suspend fun findFiles(machineId: String, folder: String) =
+        get<SessionFileSearch>(machineId, "fs/find", folder)
+
+    override suspend fun fileInfo(machineId: String, cwd: String, path: String): SessionPathStat =
+        get<SessionPathStats>(machineId, "stat", cwd, "path" to path, "detail" to "1").stats.singleOrNull { it.path == path }
+            ?: throw HubFailure(HubError.Protocol, retryable = false)
     override suspend fun file(machineId: String, cwd: String, path: String) =
         get<SessionFileContent>(machineId, "file", cwd, "path" to path)
     override suspend fun filePreview(machineId: String, cwd: String, path: String) =
@@ -79,31 +88,63 @@ class HubSessionFiles internal constructor(
         val path = HttpUrl.Builder().scheme("https").host("example.com")
             .addPathSegments("api/v1/machines").addPathSegment(machineId).addPathSegments("git/pull").build().encodedPath
         val body = buildJsonObject { put("cwd", cwd) }.toString()
-        return post(path, body).use { response ->
-            if (!response.isSuccessful) throw HubFailure.from(response)
-            withContext(decoding) {
-                try { JsonCodec.decodeFromString<SessionGitPull>(requireNotNull(response.body).string()) }
-                catch (error: SerializationException) { throw HubFailure(HubError.Protocol, retryable = false, cause = error) }
-            }
-        }
+        return decode(post(path, body))
     }
 
-    override fun editsFiles(machineId: String) = features().let { it.isEmpty() || "file_edit" in it }
+    override fun supports(machineId: String, feature: SessionFileFeature) = features().let { it.isEmpty() || feature.wire in it }
+    override fun editsFiles(machineId: String) = supports(machineId, SessionFileFeature.Edit)
+
+    override suspend fun mkdir(machineId: String, cwd: String, dir: String, name: String) =
+        edit<SessionFilePath>(machineId, "mkdir", buildJsonObject { put("dir", dir); put("cwd", cwd); put("name", name) }).path
+
+    override suspend fun writeText(machineId: String, cwd: String, path: String, text: String, create: Boolean,
+                                   revision: String?, sha256: String?, force: Boolean): SessionWrittenFile {
+        require(create || force || !revision.isNullOrBlank() || !sha256.isNullOrBlank()) { "A save requires the opened file version" }
+        return edit(machineId, "write", buildJsonObject {
+            put("path", path); put("cwd", cwd); put("text", text)
+            if (create) put("create", true)
+            revision?.let { put("revision", it) }
+            sha256?.let { put("sha256", it) }
+            if (force) put("force", true)
+        })
+    }
+
+    override suspend fun uploadFile(machineId: String, cwd: String, dir: String, name: String, file: File,
+                                    conflict: SessionFileConflict?): SessionUploadedFile {
+        require(machineId.isNotBlank() && dir.isNotBlank() && name.isNotBlank())
+        val path = apiUrl(machineId, "files", cwd, "name" to name, "dest" to "dir", "dir" to dir, "conflict" to conflict?.wire)
+        return decode(editPost(path, file.asRequestBody("application/octet-stream".toMediaType()), EDIT_TIMEOUT_SECONDS))
+    }
+
+    override suspend fun copyFiles(machineId: String, cwd: String, paths: List<String>, dir: String, conflict: SessionFileConflict?) =
+        edit<SessionCopiedFiles>(machineId, "copy", transferBody(cwd, paths, dir, conflict), COPY_ZIP_TIMEOUT_SECONDS).copied
+
+    override suspend fun move(machineId: String, cwd: String, paths: List<String>, directory: String, conflict: SessionMoveConflictPolicy?) =
+        edit<SessionMovedFiles>(machineId, "move", transferBody(cwd, paths, directory, conflict)).moved
+
+    private fun transferBody(cwd: String, paths: List<String>, dir: String, conflict: SessionFileConflict?) = buildJsonObject {
+        putJsonArray("paths") { paths.forEach { add(it) } }
+        put("cwd", cwd); put("dir", dir)
+        conflict?.let { put("conflict", it.wire) }
+    }
+
+    override suspend fun zipFiles(machineId: String, cwd: String, paths: List<String>, name: String, dir: String?) =
+        edit<SessionZippedFile>(machineId, "zip", buildJsonObject {
+            putJsonArray("paths") { paths.forEach { add(it) } }
+            put("cwd", cwd); put("name", name)
+            dir?.let { put("dir", it) }
+        }, COPY_ZIP_TIMEOUT_SECONDS)
+
+    override suspend fun chmod(machineId: String, cwd: String, path: String, mode: Int): Int {
+        require(mode in 0..511)
+        return edit<SessionFileMode>(machineId, "chmod", buildJsonObject { put("path", path); put("cwd", cwd); put("mode", mode) }).mode
+    }
 
     override suspend fun rename(machineId: String, cwd: String, path: String, name: String) =
         edit<SessionFilePath>(machineId, "rename", buildJsonObject { put("path", path); put("cwd", cwd); put("name", name) }).path
 
     override suspend fun move(machineId: String, cwd: String, path: String, directory: String, conflict: SessionMoveConflictPolicy?) =
-        edit<SessionMovedFiles>(machineId, "move", buildJsonObject {
-            putJsonArray("paths") { add(path) }
-            put("cwd", cwd)
-            put("dir", directory)
-            when (conflict) {
-                SessionMoveConflictPolicy.KeepBoth -> put("conflict", "keep")
-                SessionMoveConflictPolicy.Replace -> put("conflict", "replace")
-                null -> Unit
-            }
-        }).moved.singleOrNull() ?: throw HubFailure(HubError.Protocol, retryable = false)
+        move(machineId, cwd, listOf(path), directory, conflict).singleOrNull() ?: throw HubFailure(HubError.Protocol, retryable = false)
 
     override suspend fun trash(machineId: String, cwd: String, paths: List<String>) =
         edit<SessionTrashedFiles>(machineId, "trash", buildJsonObject { putJsonArray("paths") { paths.forEach { add(it) } }; put("cwd", cwd) }).trashed
@@ -112,18 +153,11 @@ class HubSessionFiles internal constructor(
         edit<SessionRestoredFiles>(machineId, "restore", buildJsonObject { putJsonArray("trash_ids") { trashIds.forEach { add(it) } } })
             .restored.map { it.path }
 
-    /** `POST …/files/{rename,move,trash,restore}` with [body]; the hub passes on the node's answer or refusal. */
-    private suspend inline fun <reified T> edit(machineId: String, operation: String, body: JsonObject): T {
+    private suspend inline fun <reified T> edit(machineId: String, operation: String, body: JsonObject, timeout: Long = EDIT_TIMEOUT_SECONDS): T {
         require(machineId.isNotBlank())
         val path = HttpUrl.Builder().scheme("https").host("example.com")
             .addPathSegments("api/v1/machines").addPathSegment(machineId).addPathSegments("files/$operation").build().encodedPath
-        return editPost(path, body.toString()).use { response ->
-            if (!response.isSuccessful) throw HubFailure.from(response)
-            withContext(decoding) {
-                try { JsonCodec.decodeFromString<T>(requireNotNull(response.body).string()) }
-                catch (error: SerializationException) { throw HubFailure(HubError.Protocol, retryable = false, cause = error) }
-            }
-        }
+        return decode(editPost(path, body.toString().toRequestBody(JSON), timeout))
     }
 
     override suspend fun stat(machineId: String, cwd: String, paths: List<String>) =
@@ -187,11 +221,11 @@ class HubSessionFiles internal constructor(
         }
     }
 
-    private fun apiUrl(machineId: String, operation: String, cwd: String, vararg query: Pair<String, String>): String {
+    private fun apiUrl(machineId: String, operation: String, cwd: String, vararg query: Pair<String, String?>): String {
         // The placeholder origin is discarded; only encoded path and query reach the connection.
         val url = HttpUrl.Builder().scheme("https").host("example.com")
             .addPathSegments("api/v1/machines").addPathSegment(machineId).addPathSegments(operation)
-            .addQueryParameter("cwd", cwd).apply { query.forEach { (key, value) -> addQueryParameter(key, value) } }.build()
+            .addQueryParameter("cwd", cwd).apply { query.forEach { (key, value) -> if (value != null) addQueryParameter(key, value) } }.build()
         return url.encodedPath + "?" + url.encodedQuery
     }
 
@@ -200,12 +234,14 @@ class HubSessionFiles internal constructor(
     ): T {
         require(machineId.isNotBlank() && cwd.isNotBlank())
         val url = apiUrl(machineId, operation, cwd, *query)
-        return (if (timeout != null) slow(url, timeout) else request(url)).use { response ->
-            if (!response.isSuccessful) throw HubFailure.from(response)
-            withContext(decoding) {
-                try { JsonCodec.decodeFromString<T>(requireNotNull(response.body).string()) }
-                catch (error: SerializationException) { throw HubFailure(HubError.Protocol, retryable = false, cause = error) }
-            }
+        return decode(if (timeout != null) slow(url, timeout) else request(url))
+    }
+
+    private suspend inline fun <reified T> decode(response: Response): T = response.use {
+        if (!it.isSuccessful) throw HubFailure.from(it)
+        withContext(decoding) {
+            try { JsonCodec.decodeFromString<T>(requireNotNull(response.body).string()) }
+            catch (error: SerializationException) { throw HubFailure(HubError.Protocol, retryable = false, cause = error) }
         }
     }
 }

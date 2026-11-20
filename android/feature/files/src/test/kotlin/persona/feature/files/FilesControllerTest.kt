@@ -100,6 +100,70 @@ private class FakeMachine : SessionFiles {
 class FilesControllerTest {
     private val cwd = "/Users/me/code/weather"
 
+    @Test fun visitingFoldersKeepsBothDirectionsAndRefreshDoesNotRewriteHistory() = runTest {
+        val machine = FakeMachine()
+        val files = controller(machine)
+        files.start()
+        runCurrent()
+        files.open("$cwd/Sources")
+        runCurrent()
+        files.open("$cwd/Sources/App")
+        runCurrent()
+        files.previousFolder()
+        // The cached listing is shown before the test dispatcher runs the new read.
+        assertEquals("$cwd/Sources", files.state.value.directory?.path)
+        files.directory()
+        runCurrent()
+        assertEquals(listOf("$cwd/Sources/App"), files.state.value.forwardFolders)
+        files.nextFolder()
+        runCurrent()
+        assertEquals("$cwd/Sources/App", files.state.value.here)
+        files.previousFolder()
+        files.open("/Users")
+        runCurrent()
+        assertTrue(files.state.value.forwardFolders.isEmpty())
+        files.nextFolder()
+        assertEquals("/Users", files.state.value.here)
+    }
+
+    @Test fun showInFolderLeavesTheDirectPreviewAndHighlightsTheExactRequestedName() = runTest {
+        val files = controller(FakeMachine())
+        files.start("Sources/ notes ")
+        runCurrent()
+        files.showInFolder("$cwd/Sources/ notes ")
+        runCurrent()
+        assertNull(files.state.value.selection)
+        assertFalse(files.state.value.direct)
+        assertEquals("$cwd/Sources", files.state.value.directory?.path)
+        assertEquals("$cwd/Sources/ notes ", files.state.value.highlightedPath)
+        files.directory()
+        assertEquals("$cwd/Sources/ notes ", files.state.value.highlightedPath)
+        files.up()
+        assertNull(files.state.value.highlightedPath)
+    }
+
+    @Test fun directFolderDoesNotInventHistoryAndRevealingATildePathFollowsItsListing() = runTest {
+        val files = controller(FakeMachine())
+        files.start("~/code/")
+        runCurrent()
+        assertTrue(files.state.value.backFolders.isEmpty())
+        files.showInFolder("~/code/weather/.notes")
+        runCurrent()
+        assertEquals("$cwd/.notes", files.state.value.highlightedPath)
+        assertEquals(cwd, files.state.value.here)
+        assertEquals(listOf("/Users/me/code"), files.state.value.backFolders)
+    }
+
+    @Test fun theSessionMarkerRetainsItsResolvedFolderAfterGoingAboveIt() = runTest {
+        val files = FilesController(FakeMachine(), "macbook", "~/code/weather", this)
+        files.start()
+        runCurrent()
+        files.up()
+        runCurrent()
+        assertEquals("/Users/me/code", files.state.value.here)
+        assertEquals(cwd, files.sessionFolder)
+    }
+
     private fun TestScope.controller(machine: FakeMachine) =
         FilesController(machine, "macbook", cwd, this, describe = { it.message ?: "?" })
 

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="files_editor_download">下载</string>
+    <string name="files_editor_show">在文件中显示</string>
+    <string name="files_editor_edit">编辑</string>
+    <string name="files_editor_not_text">只能编辑文本文件</string>
+    <string name="files_editor_too_large">文件超过 1 MB，无法在此编辑</string>
+    <string name="files_editor_partial">打开完整文件后才能编辑</string>
+    <string name="files_editor_editing">正在编辑</string>
+    <string name="files_editor_edited">已编辑</string>
+    <string name="files_editor_save">保存</string>
+    <string name="files_editor_saved">已保存</string>
+    <string name="files_editor_saved_copy">已另存为“%1$s”</string>
+    <string name="files_editor_copy_full">此文件夹中没有可用的副本名称。</string>
+    <string name="files_editor_cancel">取消</string>
+    <string name="files_editor_find">查找</string>
+    <string name="files_editor_replace">替换</string>
+    <string name="files_editor_next">查找下一个</string>
+    <string name="files_editor_replace_all">全部替换</string>
+    <string name="files_editor_no_matches">没有匹配项</string>
+    <string name="files_editor_find_replace">查找和替换</string>
+    <string name="files_editor_keep">继续编辑</string>
+    <string name="files_editor_changed_title">“%1$s”已在电脑上被修改</string>
+    <string name="files_editor_changed_detail">文件在打开后发生了变化。放弃修改会打开新版本，覆盖会用你的更改替换新版本。</string>
+    <string name="files_editor_copy">另存为副本</string>
+    <string name="files_editor_discard_mine">放弃我的修改</string>
+    <string name="files_editor_overwrite_anyway">仍然覆盖</string>
+    <string name="files_editor_overwrite_title">确定覆盖较新的版本？</string>
+    <string name="files_editor_overwrite_detail">文件打开后在电脑上所做的更改将会丢失。</string>
+    <string name="files_editor_overwrite">覆盖</string>
+    <string name="files_editor_discard_title">放弃你的更改？</string>
+    <string name="files_editor_discard_detail">你的更改尚未保存到电脑。</string>
+    <string name="files_editor_discard">放弃更改</string>
+    <string name="files_editor_save_failed">无法保存：%1$s</string>
+    <string name="files_editor_field">文件内容</string>
+    <string name="files_editor_write_limit">更改后的文件超过 4 MB，无法保存。</string>
+</resources>

@@ -212,8 +212,9 @@ class HubSessionFilesTest {
         var status = 200
         var answer = """{"path":"~/proj/b c.txt"}"""
         val api = HubSessionFiles({ error("GET used for a change") }, post = { _, _ -> error("pull's POST used for a change") },
-            editPost = { path, body ->
-                posts += path to body
+            editPost = { path, body, timeout ->
+                posts += path to okio.Buffer().also(body::writeTo).readUtf8()
+                assertEquals(HubSessionFiles.EDIT_TIMEOUT_SECONDS, timeout)
                 val response = Response.Builder().request(Request.Builder().url("https://example.com$path").build()).protocol(Protocol.HTTP_1_1)
                     .code(status).message("response").body(answer.toResponseBody()).build()
                 // As OkHttpHubConnection.request: any status but 2xx arrives as a HubFailure.
@@ -247,7 +248,7 @@ class HubSessionFilesTest {
             }
         }
         // A dropped connection stays the connection's failure.
-        val offline = HubSessionFiles({ error("unused") }, editPost = { _, _ -> throw HubFailure(HubError.Timeout) })
+        val offline = HubSessionFiles({ error("unused") }, editPost = { _, _, _ -> throw HubFailure(HubError.Timeout) })
         try { offline.trash("m", "/w", listOf("a")); fail("Expected a timeout") }
         catch (failure: HubFailure) { assertEquals(HubError.Timeout, failure.kind) }
         assertTrue(HubSessionFiles.EDIT_TIMEOUT_SECONDS > 120)
@@ -266,8 +267,9 @@ class HubSessionFilesTest {
 
     @Test fun movePostsOnePathAndOnlyAnExplicitConflictPolicy(): Unit = runBlocking {
         val posts = mutableListOf<Pair<String, String>>()
-        val api = HubSessionFiles({ error("GET used for a change") }, editPost = { path, body ->
-            posts += path to body
+        val api = HubSessionFiles({ error("GET used for a change") }, editPost = { path, body, timeout ->
+            posts += path to okio.Buffer().also(body::writeTo).readUtf8()
+            assertEquals(HubSessionFiles.EDIT_TIMEOUT_SECONDS, timeout)
             val initial = posts.size == 1
             val answer = if (initial) """{"error":"taken","code":"exists","name":"a.txt"}"""
                 else """{"moved":[{"from":"~/a.txt","to":"~/b c/a 2.txt"}]}"""

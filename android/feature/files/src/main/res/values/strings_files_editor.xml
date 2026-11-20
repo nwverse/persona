@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="files_editor_download">Download</string>
+    <string name="files_editor_show">Show in Files</string>
+    <string name="files_editor_edit">Edit</string>
+    <string name="files_editor_not_text">Only text files can be edited</string>
+    <string name="files_editor_too_large">Too large to edit here (over 1 MB)</string>
+    <string name="files_editor_partial">Open the whole file to edit it</string>
+    <string name="files_editor_editing">Editing</string>
+    <string name="files_editor_edited">Edited</string>
+    <string name="files_editor_save">Save</string>
+    <string name="files_editor_saved">Saved</string>
+    <string name="files_editor_saved_copy">Saved as “%1$s”</string>
+    <string name="files_editor_copy_full">Couldn’t find a free name for a copy in this folder.</string>
+    <string name="files_editor_cancel">Cancel</string>
+    <string name="files_editor_find">Find</string>
+    <string name="files_editor_replace">Replace</string>
+    <string name="files_editor_next">Find next</string>
+    <string name="files_editor_replace_all">Replace all</string>
+    <string name="files_editor_no_matches">No matches</string>
+    <string name="files_editor_find_replace">Find and replace</string>
+    <string name="files_editor_keep">Keep Editing</string>
+    <string name="files_editor_changed_title">“%1$s” changed on the computer</string>
+    <string name="files_editor_changed_detail">The file changed after you opened it. Discard Mine opens the newer version. Overwriting replaces it with your edits.</string>
+    <string name="files_editor_copy">Save as Copy</string>
+    <string name="files_editor_discard_mine">Discard Mine</string>
+    <string name="files_editor_overwrite_anyway">Overwrite Anyway</string>
+    <string name="files_editor_overwrite_title">Overwrite the newer version?</string>
+    <string name="files_editor_overwrite_detail">Changes made on the computer since you opened this file will be lost.</string>
+    <string name="files_editor_overwrite">Overwrite</string>
+    <string name="files_editor_discard_title">Discard your changes?</string>
+    <string name="files_editor_discard_detail">Your changes haven’t been saved to the computer.</string>
+    <string name="files_editor_discard">Discard Changes</string>
+    <string name="files_editor_save_failed">Couldn’t save: %1$s</string>
+    <string name="files_editor_field">File contents</string>
+    <string name="files_editor_write_limit">This change is too large to save (over 4 MB).</string>
+</resources>

@@ -13,9 +13,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -49,10 +52,13 @@ fun SessionFilesScreen(
     initialLine: Int? = null,
     /** The hub connection: the pane reads again what failed once it is back online. */
     connection: StateFlow<ConnectionState>? = null,
+    machineHome: String? = null,
+    machineOs: String? = null,
+    onOpenFolderTerminal: ((String) -> Unit)? = null,
 ) {
     val asked = initialPath?.trim()?.takeIf { it.isNotEmpty() }
     // A path from the conversation that names its machine fully can open before the session's folder is known.
-    val base = cwd.ifBlank { asked?.takeIf { it.startsWith("/") || FilesPaths.isHome(it) }?.let { start ->
+    val base = cwd.ifBlank { asked?.takeIf { it.startsWith("/") || FilesPaths.windowsDrive(it) || FilesPaths.isHome(it) }?.let { start ->
         if (FilesPaths.namesDirectory(start)) FilesPaths.resolve(start, "/") else FilesPaths.parent(FilesPaths.resolve(start, "/")) ?: "/"
     }.orEmpty() }
     key(session, base, api, asked, initialLine, connection) {
@@ -64,8 +70,9 @@ fun SessionFilesScreen(
         } else {
             val scope = rememberCoroutineScope()
             val resources = LocalResources.current
+            val location = rememberUpdatedState(machineHome to machineOs)
             val controller = remember { FilesController(api, session.machineId, base, scope, { filesLoadError(resources, it) },
-                { resources.getString(if (it) R.string.files_git_pulled else R.string.files_git_pull_current) }, connection) }
+                { resources.getString(if (it) R.string.files_git_pulled else R.string.files_git_pull_current) }, connection, { location.value }) }
             val images = remember { MarkdownImages(api, session.machineId, base) }
             val state by controller.state.collectAsStateWithLifecycle()
             var pane by rememberSaveable { mutableStateOf(if (asked != null) FilesPane.Files else initialPane) }
@@ -74,11 +81,13 @@ fun SessionFilesScreen(
             BackHandler(onBack = back)
             Box(modifier.fillMaxSize()) {
                 when (val top = state.selection) {
-                    null -> FilesBrowser(state, controller, pane, { pane = it }, onBackToChat, onInsertPath)
+                    null -> FilesBrowser(state, controller, pane, { pane = it }, onBackToChat, onInsertPath,
+                        machineHome, machineOs, onOpenFolderTerminal)
                     is FileSelection.Commit -> CommitPage(top.hash, state, controller, back)
                     is FileSelection.CommitFile -> CommitFilePage(top, state, controller, back)
                     is FileSelection.Compare -> ComparePage(top, state, controller, back)
-                    else -> FilePreview(state, controller, images, onInsertPath, back)
+                    else -> FilePreview(state, controller, images, onInsertPath, back,
+                        readOnly = !controller.canWrite((top as? FileSelection.File)?.path ?: state.here))
                 }
             }
         }
@@ -93,24 +102,88 @@ private fun FilesBrowser(
     onPane: (FilesPane) -> Unit,
     onBackToChat: () -> Unit,
     onInsertPath: (String) -> Unit,
+    machineHome: String?,
+    machineOs: String?,
+    onOpenFolderTerminal: ((String) -> Unit)?,
 ) {
     val copy = rememberCopy()
     val pathCopied = stringResource(R.string.files_path_copied)
     var hidden by rememberShowHidden()
     var menu by remember { mutableStateOf(false) }
-    var renaming by rememberSaveable { mutableStateOf<String?>(null) }
-    var trashing by rememberSaveable { mutableStateOf<String?>(null) }
-    var moving by remember { mutableStateOf<MoveSource?>(null) }
-    val moveStatus by controller.moveStatus.collectAsStateWithLifecycle()
-    val report = rememberFileEditReport(controller)
-    val edits = controller.editsFiles
     val here = state.here
+    var newMenu by remember(here) { mutableStateOf(false) }
+    var find by rememberSaveable(here) { mutableStateOf(false) }
+    var info by remember(here) { mutableStateOf<FileBrowserTarget?>(null) }
+    var selecting by rememberSaveable(here, pane) { mutableStateOf(false) }
+    var selected by rememberSaveable(here, pane) { mutableStateOf(arrayListOf<String>()) }
+    var renaming by rememberSaveable { mutableStateOf<String?>(null) }
+    var trashing by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    val report = rememberFileEditReport(controller)
+    val readOnly = !controller.canWrite(here)
+    val moveStatus by controller.moveStatus.collectAsStateWithLifecycle()
+    val edits = controller.editsFiles && !readOnly && moveStatus == null
+    val endSelection = { selecting = false; selected = arrayListOf<String>() }
+    val actions = rememberFileBrowserActions(controller, here, readOnly, machineOs, hidden, moveStatus, { result ->
+        if (result is FileEdit.Moved) endSelection()
+        report(result)
+    }, onOpenFolderTerminal)
+    if (find) {
+        FindInFolder(controller, here) { find = false }
+        return
+    }
+    val entries = remember(state.directory, hidden, state.highlightedPath) {
+        state.directory?.entries.orEmpty().filter { hidden || !it.name.startsWith('.') || joinRemotePath(here, it.name) == state.highlightedPath }
+            .sortedWith(compareByDescending<SessionFileEntry> { it.dir }.thenBy { it.name.lowercase() })
+    }
+    val selectedPaths = remember(selected) { selected.toSet() }
+    val targets = remember(entries, here, selectedPaths) { entries.mapNotNull { entry ->
+        val path = joinRemotePath(here, entry.name)
+        if (path in selectedPaths) FileBrowserTarget(path, entry) else null
+    } }
+    val toggle: (String) -> Unit = { path ->
+        selected = ArrayList(if (path in selected) selected - path else selected + path)
+    }
+    BackHandler(enabled = selecting, onBack = endSelection)
+    val filePane = pane == FilesPane.Files || state.git?.isRepo == false
+    val list = rememberLazyListState()
+    val large = PersonaTheme.style != AppStyle.Board
+    LaunchedEffect(state.highlightedPath, state.directory) {
+        val highlight = state.highlightedPath ?: return@LaunchedEffect
+        val index = entries.indexOfFirst { joinRemotePath(here, it.name) == highlight }
+        if (index >= 0) list.scrollToItem(index + 3 + (if (large) 1 else 0) + (if (readOnly) 1 else 0) + (if (state.directoryError != null) 1 else 0))
+    }
     JListPage(
         title = FilesPaths.name(here), subtitle = here, onBack = onBackToChat, largeTitle = true,
-        actions = { JIconButton(PhIcons.ArrowClockwise, stringResource(R.string.files_refresh), { controller.directory(); controller.refreshGit() },
-            enabled = !state.directoryLoading && !state.gitLoading) },
+        state = list, scrollUnderBottom = !selecting,
+        actions = {
+            if (filePane) {
+                if (actions.newItems.isNotEmpty() && !readOnly) JIconButton(PersonaIcons.add, stringResource(R.string.files_new_menu), { newMenu = true })
+                JIconButton(PersonaIcons.search, stringResource(R.string.files_find), { find = true })
+            }
+            JIconButton(PersonaIcons.retry, stringResource(R.string.files_refresh), { controller.directory(); controller.refreshGit() },
+                enabled = !state.directoryLoading && !state.gitLoading)
+        },
         bottomBar = if (moveStatus == FileMove.Pending) ({
             Box(Modifier.semantics { liveRegion = LiveRegionMode.Polite }) { Notice(stringResource(R.string.files_moving)) }
+        }) else if (selecting) ({
+            val batch = actions.selectedItems(targets).toMutableList()
+            if (edits && targets.isNotEmpty() && targets.all { controller.canWrite(it.path) }) batch += JAction(stringResource(R.string.files_trash), PersonaIcons.delete, destructive = true) {
+                trashing = ArrayList(targets.map { it.path })
+            }
+            JBottomBar { Column(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(pluralStringResource(R.plurals.files_selected_count, targets.size, targets.size), style = PersonaTheme.type.caption,
+                        color = PersonaTheme.palette.ink)
+                    JTextButton(stringResource(R.string.files_select_done), endSelection)
+                }
+                if (batch.isNotEmpty()) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    batch.forEach { action ->
+                        val icon = action.icon
+                        if (icon == null) JTextButton(action.label, action.onClick, enabled = action.enabled)
+                        else JIconButton(icon, action.label, action.onClick, enabled = action.enabled)
+                    }
+                }
+            } }
         }) else null,
     ) {
         item("panes") {
@@ -124,66 +197,77 @@ private fun FilesBrowser(
                 { when (it) { 0 -> onBackToChat(); 1 -> onPane(FilesPane.Files); else -> onPane(FilesPane.Git) } },
                 Modifier.padding(vertical = Tokens.Space.s))
         }
-        if (pane == FilesPane.Files || state.git?.isRepo == false) {
+        if (filePane) {
             item("crumbs") {
+                Crumbs(FilesPaths.pathBar(here, machineHome), controller.sessionFolder, controller::open, Modifier.fillMaxWidth())
+            }
+            item("folder-controls") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (state.belowRoot) JIconButton(PhIcons.ArrowUp, stringResource(R.string.files_up), controller::up)
-                    Crumbs(state.crumbs, onPick = { controller.directory(it) }, modifier = Modifier.weight(1f))
-                    JIconButton(PhIcons.DotsThree, stringResource(R.string.files_options), { menu = true })
+                    JIconButton(PersonaIcons.back, stringResource(R.string.files_history_back), controller::previousFolder, enabled = state.backFolders.isNotEmpty())
+                    JIconButton(PersonaIcons.forward, stringResource(R.string.files_history_forward), controller::nextFolder, enabled = state.forwardFolders.isNotEmpty())
+                    JIconButton(PhIcons.ArrowUp, stringResource(R.string.files_up), controller::up, enabled = state.parent != null)
+                    JIconButton(PersonaIcons.home, stringResource(R.string.files_go_home), { controller.open(machineHome ?: "~") })
+                    Spacer(Modifier.weight(1f))
+                    JIconButton(PersonaIcons.moreMenu, stringResource(R.string.files_options), { menu = true })
                 }
             }
-            val canEdit = edits && moveStatus == null
-            filesBrowser(state, controller, hidden, onInsertPath, rename = if (canEdit) ({ renaming = it }) else null,
-                move = if (canEdit) ({ moving = it }) else null,
-                trash = if (canEdit) ({ trashing = it }) else null)
+            if (readOnly) item("read-only") { Notice(stringResource(R.string.files_location_read_only), padded = false) }
+            filesBrowser(state, controller, entries, selecting, selectedPaths, toggle, { path -> selecting = true; selected = arrayListOf(path) },
+                onInsertPath, { info = it }, actions.rowItems, rename = if (edits) ({ renaming = it }) else null,
+                trash = if (edits) ({ trashing = arrayListOf(it) }) else null)
         } else gitBrowser(state, controller)
     }
     if (menu) JActionSheet(buildList {
-        add(JAction(stringResource(R.string.files_show_hidden), PhIcons.Eye, checked = hidden) { hidden = !hidden })
+        if (entries.isNotEmpty()) add(JAction(stringResource(R.string.files_select_items), PersonaIcons.done) { selecting = true })
+        add(JAction(stringResource(R.string.files_browser_info), PersonaIcons.info) { info = FileBrowserTarget(here, SessionFileEntry(FilesPaths.name(here), dir = true)) })
+        add(JAction(stringResource(R.string.files_show_hidden), PersonaIcons.view, checked = hidden) { hidden = !hidden })
         state.parent?.let { add(JAction(stringResource(R.string.files_parent_folder), PhIcons.ArrowUp) { controller.up() }) }
-        add(JAction(stringResource(R.string.files_copy_folder), PhIcons.Copy) { copy(here, pathCopied) })
-        add(JAction(stringResource(R.string.files_insert_folder), PhIcons.CursorText) { onInsertPath(here) })
+        add(JAction(stringResource(R.string.files_copy_folder), PersonaIcons.copy) { copy(here, pathCopied) })
+        add(JAction(stringResource(R.string.files_insert_folder), PersonaIcons.insert) { onInsertPath(here) })
+        addAll(actions.folderItems)
     }, { menu = false }, title = stringResource(R.string.files_folder_actions))
+    if (newMenu) JActionSheet(actions.newItems, { newMenu = false }, title = stringResource(R.string.files_new_menu))
+    info?.let { target -> FileDetails(target, controller, machineOs, if (controller.canWrite(target.path)) actions.permissions(target) else null) { info = null } }
     renaming?.let { path -> RenameFileDialog(FilesPaths.name(path), { controller.rename(path, it, report) }, { renaming = null }) }
-    trashing?.let { path -> TrashFileDialog(FilesPaths.name(path), { controller.trash(listOf(path), report) }, { trashing = null }) }
-    moving?.let { source ->
-        MoveDestinationSheet(source, controller, hidden, onDismiss = { moving = null }) { destination ->
-            moving = null
-            controller.move(source, destination, report)
-        }
-    }
-    (moveStatus as? FileMove.Conflict)?.let { conflict ->
-        MoveConflictDialog(conflict) { policy -> controller.answerMove(conflict, policy, report) }
+    if (trashing.isNotEmpty()) {
+        val paths = trashing
+        val dismiss = { trashing = arrayListOf<String>() }
+        val trash = { controller.trash(paths) { result -> if (result is FileEdit.Trashed) endSelection(); report(result) } }
+        if (paths.size == 1) TrashFileDialog(FilesPaths.name(paths.first()), trash, dismiss)
+        else JDialog(dismiss, title = stringResource(R.string.files_trash_many_title, paths.size), text = stringResource(R.string.files_trash_message),
+            confirm = stringResource(R.string.files_trash) to { dismiss(); trash() }, destructive = true)
     }
 }
 
 /** The folders from the breadcrumb's top down to the one shown, as chips; it follows you to the end as you go in. */
 @Composable
-private fun Crumbs(levels: List<Pair<String, String>>, onPick: (String) -> Unit, modifier: Modifier) {
+private fun Crumbs(levels: List<Pair<String, String>>, sessionFolder: String, onPick: (String) -> Unit, modifier: Modifier) {
     val list = rememberLazyListState()
     LaunchedEffect(levels.size, levels.lastOrNull()) { if (levels.isNotEmpty()) list.animateScrollToItem(levels.lastIndex) }
     LazyRow(modifier, list, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
         itemsIndexed(levels, key = { _, (_, path) -> path }) { index, (name, path) ->
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                if (index > 0) JIcon(PhIcons.CaretRight, null, size = Tokens.Space.m, tint = PersonaTheme.palette.ink3)
+                if (index > 0) JIcon(PersonaIcons.forward, null, size = Tokens.Space.m, tint = PersonaTheme.palette.ink3)
                 val current = index == levels.lastIndex
-                JChip(name, selected = current, onClick = { if (!current) onPick(path) })
+                val session = FilesPaths.displayPath(sessionFolder).trimEnd('/')
+                val title = if (session.equals(path.trimEnd('/'), ignoreCase = FilesPaths.windowsDrive(path))) stringResource(R.string.files_session_segment, name) else name
+                JChip(title, selected = current, onClick = { if (!current) onPick(path) })
             }
         }
     }
 }
 
-/** File changes are offered through each row's menu when the hub supports `file_edit`. */
-private fun LazyListScope.filesBrowser(state: FilesState, controller: FilesController, hidden: Boolean, insert: (String) -> Unit,
-    rename: ((String) -> Unit)? = null, move: ((MoveSource) -> Unit)? = null, trash: ((String) -> Unit)? = null) {
+/** [rename] and [trash] (of an entry's full path): offered in each row's menu when the hub can (`file_edit`). */
+private fun LazyListScope.filesBrowser(state: FilesState, controller: FilesController, entries: List<SessionFileEntry>,
+    selecting: Boolean, selected: Set<String>, toggle: (String) -> Unit, startSelection: (String) -> Unit, insert: (String) -> Unit,
+    info: (FileBrowserTarget) -> Unit, rowActions: (FileBrowserTarget) -> List<JAction>,
+    rename: ((String) -> Unit)? = null, trash: ((String) -> Unit)? = null) {
     val listing = state.directory
     when {
         listing == null && state.directoryError != null -> item { RetryState(stringResource(R.string.files_folder_failed), state.directoryError) { controller.directory() } }
         listing == null -> item { Loading() }
         else -> {
             if (state.directoryError != null) item("stale") { Notice(stringResource(R.string.files_refresh_failed, state.directoryError), padded = false) }
-            val entries = listing.entries.filter { hidden || !it.name.startsWith('.') }
-                .sortedWith(compareByDescending<SessionFileEntry> { it.dir }.thenBy { it.name.lowercase() })
             if (entries.isEmpty()) item {
                 if (listing.entries.isEmpty()) JEmptyState(stringResource(R.string.files_empty_folder), stringResource(R.string.files_empty_folder_message))
                 else JEmptyState(stringResource(R.string.files_only_hidden), stringResource(R.string.files_only_hidden_message))
@@ -193,14 +277,23 @@ private fun LazyListScope.filesBrowser(state: FilesState, controller: FilesContr
                 val copyText = rememberCopy()
                 val pathCopied = stringResource(R.string.files_path_copied)
                 val path = joinRemotePath(listing.path.ifEmpty { state.here }, entry.name)
+                val target = FileBrowserTarget(path, entry)
                 JGroupItem(GroupPosition.of(index, entries.size)) {
                     // Pictures, documents and videos show the machine's thumbnail in place of the icon (iOS FilesPane, #1370).
-                    val thumbnail = if (!entry.dir && FileThumbnails.wanted(entry.name, entry.size)) controller.thumbnail(path, entry.size, entry.mtime) else null
-                    FileRow(entry, gitChange(state.git, path, entry.dir), now, thumbnail = thumbnail,
-                        open = { if (entry.dir) controller.directory(path) else controller.push(FileSelection.File(path)) },
+                    val thumbnail = if (!entry.dir && !entry.linkBroken && FileThumbnails.wanted(entry.name, entry.size)) controller.thumbnail(path, entry.size, entry.mtime) else null
+                    FileRow(entry, gitChange(state.git, path, entry.dir), now, selecting, path in selected,
+                        highlighted = state.highlightedPath == path, thumbnail = thumbnail,
+                        open = {
+                            when {
+                                selecting -> toggle(path)
+                                entry.linkBroken -> info(target)
+                                entry.dir -> controller.open(path)
+                                else -> controller.push(FileSelection.File(path))
+                            }
+                        }, info = { info(target) }, select = { startSelection(path) }, rowActions = { rowActions(target) },
                         copy = { copyText(path, pathCopied) }, insert = { insert(path) },
-                        rename = rename?.let { { it(path) } }, move = move?.let { { it(MoveSource(path, entry.dir)) } },
-                        trash = trash?.let { { it(path) } })
+                        rename = rename?.takeIf { controller.canWrite(path) }?.let { { it(path) } },
+                        trash = trash?.takeIf { controller.canWrite(path) }?.let { { it(path) } })
                 }
             }
             if (listing.truncated) item { Notice(stringResource(R.string.files_too_many, LocalizedFormats.number(MAX_LISTED, currentLocale)), padded = false) }
@@ -213,38 +306,58 @@ private fun LazyListScope.filesBrowser(state: FilesState, controller: FilesContr
  * press) inserts or copies the path and offers the available file changes (iOS `FilesPane.entryRow`).
  */
 @Composable
-private fun FileRow(entry: SessionFileEntry, change: SessionGitFile?, now: Instant, open: () -> Unit, copy: () -> Unit, insert: () -> Unit,
-    thumbnail: Pair<String, suspend (Int) -> ByteArray?>? = null, rename: (() -> Unit)? = null, move: (() -> Unit)? = null,
-    trash: (() -> Unit)? = null) {
+private fun FileRow(entry: SessionFileEntry, change: SessionGitFile?, now: Instant, selecting: Boolean, checked: Boolean, highlighted: Boolean,
+    open: () -> Unit, info: () -> Unit, select: () -> Unit, rowActions: () -> List<JAction>, copy: () -> Unit, insert: () -> Unit,
+    thumbnail: Pair<String, suspend (Int) -> ByteArray?>? = null, rename: (() -> Unit)? = null, trash: (() -> Unit)? = null) {
     var menu by remember { mutableStateOf(false) }
     val palette = PersonaTheme.palette
     val resources = LocalResources.current
     val meta = listOfNotNull(if (entry.dir) stringResource(R.string.files_folder) else fileSize(entry.size, currentLocale),
-        fileDate(resources, entry.mtime, now), if (entry.symlink) stringResource(R.string.files_symlink) else null)
-    JRow(onClick = open, onLongClick = { menu = true }, trailing = {
+        fileDate(resources, entry.mtime, now)).joinToString("  ")
+    val checkedText = if (selecting) stringResource(if (checked) R.string.files_item_selected else R.string.files_item_not_selected) else null
+    JRow(modifier = if (checkedText != null) Modifier.semantics { stateDescription = checkedText } else Modifier,
+        onClick = open, onLongClick = { menu = true }, selected = if (selecting) checked else highlighted,
+        role = if (selecting) Role.Checkbox else Role.Button, trailing = {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (change != null) {
                 if (entry.dir) JTag(stringResource(R.string.files_changed), status = if (change.conflicted) Status.NeedsYou else Status.Unknown) else GitLetter(change)
             }
-            JIconButton(PhIcons.DotsThree, stringResource(R.string.files_entry_actions, entry.name), { menu = true })
+            if (!selecting) JIconButton(PersonaIcons.moreMenu, stringResource(R.string.files_entry_actions, entry.name), { menu = true })
         }
     }) {
-        if (thumbnail != null) FileThumbnailIcon(thumbnail.first, fileIcon(entry.name), thumbnail.second)
-        else JIcon(if (entry.dir) PhIcons.FolderSimple else fileIcon(entry.name), null, tint = palette.ink2, decorative = true)
+        if (selecting) {
+            JCheckbox(checked, null)
+            Spacer(Modifier.width(Tokens.Space.s))
+        }
+        Box {
+            if (thumbnail != null) FileThumbnailIcon(thumbnail.first, fileIcon(entry.name), thumbnail.second)
+            else JIcon(if (entry.dir) PhIcons.FolderSimple else fileIcon(entry.name), null, tint = palette.ink2, decorative = true)
+            if (entry.symlink) JIcon(PersonaIcons.link, null, Modifier.align(Alignment.BottomEnd),
+                size = Tokens.Space.m, tint = if (entry.linkBroken) palette.danger.text else palette.accent, decorative = true)
+        }
         Spacer(Modifier.width(Tokens.Space.l))
         Column(Modifier.weight(1f)) {
             Text(entry.name, style = PersonaTheme.type.body, color = if (entry.name.startsWith('.')) palette.ink2 else palette.ink,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(meta.joinToString("  "), style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2,
+            Text(meta, style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (entry.symlink) {
+                val linkLabel = stringResource(if (entry.linkBroken) R.string.files_broken_link else R.string.files_symlink)
+                val target = entry.linkTarget
+                Text(if (target == null) linkLabel else stringResource(R.string.files_link_to, linkLabel, target),
+                    style = PersonaTheme.type.caption, color = if (entry.linkBroken) palette.danger.text else palette.ink2,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
     if (menu) JActionSheet(buildList {
-        add(JAction(stringResource(R.string.files_insert_path), PhIcons.CursorText, onClick = insert))
-        add(JAction(stringResource(R.string.files_copy_path), PhIcons.Copy, onClick = copy))
+        add(JAction(stringResource(R.string.files_browser_info), PersonaIcons.info, onClick = info))
+        if (!selecting) add(JAction(stringResource(R.string.files_select_item), PersonaIcons.done, onClick = select))
+        add(JAction(stringResource(R.string.files_insert_path), PersonaIcons.insert, onClick = insert))
+        add(JAction(stringResource(R.string.files_copy_path), PersonaIcons.copy, onClick = copy))
         rename?.let { add(JAction(stringResource(R.string.files_rename), PersonaIcons.edit, separatorBefore = true, onClick = it)) }
-        move?.let { add(JAction(stringResource(R.string.files_move), PersonaIcons.folder, separatorBefore = rename == null, onClick = it)) }
-        trash?.let { add(JAction(stringResource(R.string.files_trash), PersonaIcons.delete, destructive = true, separatorBefore = rename == null && move == null, onClick = it)) }
+        addAll(rowActions())
+        trash?.let { add(JAction(stringResource(R.string.files_trash), PersonaIcons.delete, destructive = true, separatorBefore = rename == null, onClick = it)) }
     }, { menu = false }, entry.name)
 }
 

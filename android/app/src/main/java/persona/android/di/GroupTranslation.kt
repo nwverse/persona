@@ -451,37 +451,8 @@ internal fun PortOpener.inGroup(names: GroupNames): PortOpener {
     }
 }
 
-internal fun SessionFiles.inGroup(names: GroupNames): SessionFiles {
-    if (names.plain) return this
-    val source = this
-    return object : SessionFiles {
-        override suspend fun directory(machineId: String, cwd: String, path: String) = source.directory(names.rawMachine(machineId), cwd, path)
-        override suspend fun file(machineId: String, cwd: String, path: String) = source.file(names.rawMachine(machineId), cwd, path)
-        override suspend fun filePreview(machineId: String, cwd: String, path: String) = source.filePreview(names.rawMachine(machineId), cwd, path)
-        override suspend fun status(machineId: String, cwd: String) = source.status(names.rawMachine(machineId), cwd)
-        override suspend fun diff(machineId: String, cwd: String, path: String, staged: Boolean) =
-            source.diff(names.rawMachine(machineId), cwd, path, staged)
-        override suspend fun log(machineId: String, cwd: String, skip: Int, limit: Int) = source.log(names.rawMachine(machineId), cwd, skip, limit)
-        override suspend fun pull(machineId: String, cwd: String) = source.pull(names.rawMachine(machineId), cwd)
-        override suspend fun show(machineId: String, cwd: String, hash: String) = source.show(names.rawMachine(machineId), cwd, hash)
-        override suspend fun stat(machineId: String, cwd: String, paths: List<String>) = source.stat(names.rawMachine(machineId), cwd, paths)
-        override suspend fun download(machineId: String, cwd: String, path: String, into: java.io.File) =
-            source.download(names.rawMachine(machineId), cwd, path, into)
-        override fun comparesVersions(machineId: String) = source.comparesVersions(names.rawMachine(machineId))
-        override suspend fun blob(machineId: String, cwd: String, path: String, rev: String) =
-            source.blob(names.rawMachine(machineId), cwd, path, rev)
-        override suspend fun thumbnail(machineId: String, cwd: String, path: String, size: Int) =
-            source.thumbnail(names.rawMachine(machineId), cwd, path, size)
-        override suspend fun convertToPdf(machineId: String, cwd: String, path: String) = source.convertToPdf(names.rawMachine(machineId), cwd, path)
-        override fun editsFiles(machineId: String) = source.editsFiles(names.rawMachine(machineId))
-        override suspend fun rename(machineId: String, cwd: String, path: String, name: String) =
-            source.rename(names.rawMachine(machineId), cwd, path, name)
-        override suspend fun move(machineId: String, cwd: String, path: String, directory: String, conflict: SessionMoveConflictPolicy?) =
-            source.move(names.rawMachine(machineId), cwd, path, directory, conflict)
-        override suspend fun trash(machineId: String, cwd: String, paths: List<String>) = source.trash(names.rawMachine(machineId), cwd, paths)
-        override suspend fun restore(machineId: String, trashIds: List<String>) = source.restore(names.rawMachine(machineId), trashIds)
-    }
-}
+internal fun SessionFiles.inGroup(names: GroupNames): SessionFiles =
+    if (names.plain) this else routedFiles(names::rawMachine) { machineId -> this.takeIf { names.owns(machineId) } }
 
 /** The inbox items and Persona outbox of the selected group, whose own transports speak plain ids. */
 internal fun InboxSnapshot.inGroup(names: GroupNames) = if (names.plain) this else copy(

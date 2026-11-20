@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="files_action_new_folder">新規フォルダ</string>
+    <string name="files_action_new_text">新規テキストファイル</string>
+    <string name="files_action_create">作成</string>
+    <string name="files_action_upload">ファイルをアップロード</string>
+    <string name="files_action_download">ダウンロード</string>
+    <string name="files_action_duplicate">複製</string>
+    <string name="files_action_copy_to">コピー先…</string>
+    <string name="files_action_copy_here">ここにコピー</string>
+    <string name="files_action_compress">圧縮</string>
+    <string name="files_action_archive_name">アーカイブ.zip</string>
+    <string name="files_action_compressed">%1$s を作成しました</string>
+    <string name="files_action_terminal">ここでターミナルを開く</string>
+    <string name="files_action_permissions">アクセス権</string>
+    <string name="files_action_owner">所有者</string>
+    <string name="files_action_group">グループ</string>
+    <string name="files_action_everyone">その他のユーザー</string>
+    <string name="files_action_read">読み取り</string>
+    <string name="files_action_write">書き込み</string>
+    <string name="files_action_run">実行</string>
+    <string name="files_action_access_0">アクセス不可</string>
+    <string name="files_action_access_1">実行のみ</string>
+    <string name="files_action_access_2">書き込みのみ</string>
+    <string name="files_action_access_3">書き込み・実行</string>
+    <string name="files_action_access_4">読み取りのみ</string>
+    <string name="files_action_access_5">読み取り・実行</string>
+    <string name="files_action_access_6">読み取り・書き込み</string>
+    <string name="files_action_access_7">読み取り・書き込み・実行</string>
+    <string name="files_action_access_for">%1$s：%2$s</string>
+    <string name="files_action_access_change">%1$s：%2$s → %3$s</string>
+    <string name="files_action_confirm_mode">「%1$s」のアクセス権を変更しますか？</string>
+    <string name="files_action_change">変更</string>
+    <string name="files_action_mode_saved">アクセス権を変更しました</string>
+    <string name="files_action_review_permissions">変更を確認</string>
+    <string name="files_action_run_hint">実行を許可すると、スクリプトを実行できます。フォルダの場合は、そのフォルダを開けます。</string>
+    <string name="files_action_before">変更前：%1$s</string>
+    <string name="files_action_permissions_unknown">このコンピュータから編集可能なアクセス権を取得できませんでした。</string>
+    <string name="files_action_conflict">「%1$s」はすでに存在します</string>
+    <string name="files_action_replace">置き換える</string>
+    <string name="files_action_keep">両方とも保持</string>
+    <string name="files_action_save_failed">このデバイスにファイルを保存できませんでした。</string>
+    <string name="files_action_download_old">このコンピュータからファイル全体を取得できませんでした。ハブとノードを更新してから、もう一度お試しください。</string>
+    <string name="files_action_saving">ダウンロードが進行中です。</string>
+    <string name="files_action_saved">ファイルを保存しました</string>
+    <string name="files_action_gallery_saved">ギャラリーに保存しました</string>
+    <string name="files_action_too_large">フォルダにアップロードできるファイルは 2 GB 以下です。</string>
+    <string name="files_action_upload_unreadable">選択した書類を読み込めませんでした。</string>
+    <plurals name="files_action_uploaded">
+        <item quantity="other">%1$d 個のファイルをアップロードしました</item>
+    </plurals>
+    <plurals name="files_action_moved">
+        <item quantity="other">%1$d 項目を移動しました</item>
+    </plurals>
+    <plurals name="files_action_copied">
+        <item quantity="other">%1$d 項目をコピーしました</item>
+    </plurals>
+    <string name="files_action_untitled">名称未設定.txt</string>
+    <string name="files_action_upload_photos">写真・動画をアップロード</string>
+    <string name="files_action_downloading">ファイルをダウンロード中…</string>
+    <string name="files_action_uploading">ファイルをアップロード中…</string>
+    <string name="files_action_copying">コンピュータでコピー中…</string>
+    <string name="files_action_compressing">コンピュータで圧縮中…</string>
+    <string name="files_action_bulk_conflict">選択した %1$d 項目で名前が重複するすべての項目に、この選択が適用されます。</string>
+    <plurals name="files_move_selection">
+        <item quantity="one">%1$d 項目を移動</item>
+        <item quantity="other">%1$d 項目を移動</item>
+    </plurals>
+</resources>

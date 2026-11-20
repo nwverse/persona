@@ -14,6 +14,7 @@ import persona.core.designsystem.AppFeedback
 import persona.core.navigation.*
 import persona.feature.chat.*
 import persona.feature.files.*
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,7 +25,7 @@ import kotlinx.coroutines.flow.flow
 @Composable
 internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navigator, feedback: AppFeedback, requestId: String? = null,
     onSessionClosed: (SessionKey) -> Unit = {}, onOpenCard: (ResolvedRoute) -> Unit, onGroupGone: (ChatRoute, ChatRoute?) -> Unit,
-    terminal: persona.core.contracts.api.TerminalTransport? = session.terminal) {
+    terminal: TerminalTransport? = session.terminal, folderPanes: TerminalPanes? = null) {
     // The services of the session's own hub group, which need not be the selected one (docs/android/android.md "Multiple hubs").
     val source = chatWiringSource()
     val activeWiring by remember(source, route.machineId) { source.bindingsFor(SessionKey(route.machineId, route.sessionId)) }
@@ -165,14 +166,31 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
             if (pane != null && filesAvailable) {
                 BackHandler { pane = null; openedPath = null; openedLine = null }
                 CompositionLocalProvider(persona.core.designsystem.LocalSplitDetail provides null) {
-                    SessionFilesScreen(route.copy(sessionId = key.sessionId), cwd, requireNotNull(session.files), { pane = null; openedPath = null; openedLine = null }, { path ->
+                    val machines by session.sessions.machines.collectAsStateWithLifecycle()
+                    val machine = machines.firstOrNull { it.id == key.machineId }
+                    val folderScope = rememberCoroutineScope()
+                    var creatingPane by remember(key) { mutableStateOf(false) }
+                    val files = requireNotNull(session.files)
+                    val openTerminal: ((String) -> Unit)? = if (folderPanes != null && files.supports(key.machineId, SessionFileFeature.PaneCwd)) { folder ->
+                        if (!creatingPane) {
+                            creatingPane = true
+                            folderScope.launch {
+                                try {
+                                    navigator.navigate(folderTerminalRoute(folderPanes, key.machineId, folder, metadata?.workspaceId))
+                                } catch (cancelled: CancellationException) { throw cancelled }
+                                catch (error: Exception) { feedback.failure(error) }
+                                finally { creatingPane = false }
+                            }
+                        }
+                    } else null
+                    SessionFilesScreen(route.copy(machineId = key.machineId, sessionId = key.sessionId), cwd, requireNotNull(session.files), { pane = null; openedPath = null; openedLine = null }, { path ->
                         composer.value = insertFilePath(composer.value, path, insertionFocused)
                         pane = null
                         openedPath = null
                         openedLine = null
                         composer.focusRequest++
                     }, initialPane = pane!!, initialPath = openedPath, initialLine = openedLine,
-                        connection = connectionState)
+                        connection = connectionState, machineHome = machine?.home, machineOs = machine?.os, onOpenFolderTerminal = openTerminal)
                 }
             }
             if (terminal != null && !assistant) CompositionLocalProvider(persona.core.designsystem.LocalSplitDetail provides null) {
@@ -181,6 +199,12 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
             }
         }
     }
+}
+
+internal suspend fun folderTerminalRoute(panes: TerminalPanes, machineId: String, folder: String, workspaceId: String?): TerminalRoute {
+    val opened = panes.openInFolder(machineId, folder, workspaceId?.takeIf(String::isNotBlank))
+    require(opened.terminal.isNotBlank())
+    return TerminalRoute(machineId, TerminalAddress.key(machineId, opened.terminal).sessionId, title = folder)
 }
 
 /**

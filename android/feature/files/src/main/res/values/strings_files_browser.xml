@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="files_trash_many_title">Move %1$d items to the Trash?</string>
+    <string name="files_trashed_many">Moved %1$d items to the Trash</string>
+    <string name="files_find">Find in this folder</string>
+    <string name="files_find_placeholder">File or folder name</string>
+    <string name="files_find_none">No matching files or folders</string>
+    <string name="files_find_truncated">Only part of this folder was indexed. Open a subfolder to search further.</string>
+    <string name="files_find_failed">Couldn’t search this folder</string>
+    <string name="files_go_home">Home folder</string>
+    <string name="files_history_back">Previous folder</string>
+    <string name="files_history_forward">Next folder</string>
+    <string name="files_session_segment">%1$s · Session</string>
+    <string name="files_location_read_only">Read-only location</string>
+    <string name="files_new_menu">New</string>
+    <string name="files_select_items">Select items</string>
+    <string name="files_select_item">Select</string>
+    <string name="files_select_done">Done</string>
+    <string name="files_item_selected">Selected</string>
+    <string name="files_item_not_selected">Not selected</string>
+    <string name="files_browser_info">Info</string>
+    <string name="files_broken_link">Broken link</string>
+    <string name="files_link_to">%1$s → %2$s</string>
+    <string name="files_info_kind">Kind</string>
+    <string name="files_info_file">File</string>
+    <string name="files_info_link_file">Link to file</string>
+    <string name="files_info_link_folder">Link to folder</string>
+    <string name="files_info_location">Location</string>
+    <string name="files_info_link_target">Link target</string>
+    <string name="files_info_real">Real location</string>
+    <string name="files_info_go_real">Go to real location</string>
+    <string name="files_info_contents">Contents</string>
+    <string name="files_info_size">Size</string>
+    <string name="files_info_bytes">%1$s bytes</string>
+    <string name="files_info_size_bytes">%1$s (%2$s)</string>
+    <string name="files_info_items_more">More than %1$s items</string>
+    <string name="files_info_created">Created</string>
+    <string name="files_info_modified">Modified</string>
+    <string name="files_info_changed">Metadata changed</string>
+    <string name="files_info_permissions">Permissions</string>
+    <string name="files_info_owner">Owner</string>
+    <string name="files_info_group">Group</string>
+    <string name="files_info_update_hub">Update the hub to see more file information.</string>
+    <string name="files_info_update_node">Update Persona on this computer to see more file information.</string>
+    <plurals name="files_info_items">
+        <item quantity="one">%1$s item</item>
+        <item quantity="other">%1$s items</item>
+    </plurals>
+    <plurals name="files_selected_count">
+        <item quantity="one">%1$d selected</item>
+        <item quantity="other">%1$d selected</item>
+    </plurals>
+</resources>

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="files_editor_download">ダウンロード</string>
+    <string name="files_editor_show">ファイルで表示</string>
+    <string name="files_editor_edit">編集</string>
+    <string name="files_editor_not_text">編集できるのはテキストファイルのみです</string>
+    <string name="files_editor_too_large">1 MB を超えるため、ここでは編集できません</string>
+    <string name="files_editor_partial">ファイル全体を開いてから編集してください</string>
+    <string name="files_editor_editing">編集中</string>
+    <string name="files_editor_edited">変更あり</string>
+    <string name="files_editor_save">保存</string>
+    <string name="files_editor_saved">保存しました</string>
+    <string name="files_editor_saved_copy">「%1$s」として保存しました</string>
+    <string name="files_editor_copy_full">このフォルダにはコピーに使える空き名がありません。</string>
+    <string name="files_editor_cancel">キャンセル</string>
+    <string name="files_editor_find">検索</string>
+    <string name="files_editor_replace">置換</string>
+    <string name="files_editor_next">次を検索</string>
+    <string name="files_editor_replace_all">すべて置換</string>
+    <string name="files_editor_no_matches">一致する項目はありません</string>
+    <string name="files_editor_find_replace">検索と置換</string>
+    <string name="files_editor_keep">編集を続ける</string>
+    <string name="files_editor_changed_title">コンピュータ上で「%1$s」が変更されました</string>
+    <string name="files_editor_changed_detail">ファイルを開いた後に変更されました。自分の変更を破棄すると新しい版を開きます。上書きすると自分の編集内容で置き換わります。</string>
+    <string name="files_editor_copy">コピーとして保存</string>
+    <string name="files_editor_discard_mine">自分の変更を破棄</string>
+    <string name="files_editor_overwrite_anyway">上書きする</string>
+    <string name="files_editor_overwrite_title">新しいバージョンを上書きしますか？</string>
+    <string name="files_editor_overwrite_detail">ファイルを開いてからコンピュータ上で行われた変更が失われます。</string>
+    <string name="files_editor_overwrite">上書き</string>
+    <string name="files_editor_discard_title">変更を破棄しますか？</string>
+    <string name="files_editor_discard_detail">変更はまだコンピュータに保存されていません。</string>
+    <string name="files_editor_discard">変更を破棄</string>
+    <string name="files_editor_save_failed">保存できませんでした：%1$s</string>
+    <string name="files_editor_field">ファイルの内容</string>
+    <string name="files_editor_write_limit">変更後のファイルが 4 MB を超えるため保存できません。</string>
+</resources>

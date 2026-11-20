@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="files_action_new_folder">New Folder</string>
+    <string name="files_action_new_text">New Text File</string>
+    <string name="files_action_create">Create</string>
+    <string name="files_action_upload">Upload files</string>
+    <string name="files_action_download">Download</string>
+    <string name="files_action_duplicate">Duplicate</string>
+    <string name="files_action_copy_to">Copy to…</string>
+    <string name="files_action_copy_here">Copy here</string>
+    <string name="files_action_compress">Compress</string>
+    <string name="files_action_archive_name">Archive.zip</string>
+    <string name="files_action_compressed">Created %1$s</string>
+    <string name="files_action_terminal">Open Terminal Here</string>
+    <string name="files_action_permissions">Permissions</string>
+    <string name="files_action_owner">Owner</string>
+    <string name="files_action_group">Group</string>
+    <string name="files_action_everyone">Everyone else</string>
+    <string name="files_action_read">Read</string>
+    <string name="files_action_write">Write</string>
+    <string name="files_action_run">Run</string>
+    <string name="files_action_access_0">No access</string>
+    <string name="files_action_access_1">Run only</string>
+    <string name="files_action_access_2">Write only</string>
+    <string name="files_action_access_3">Write and run</string>
+    <string name="files_action_access_4">Read only</string>
+    <string name="files_action_access_5">Read and run</string>
+    <string name="files_action_access_6">Read and write</string>
+    <string name="files_action_access_7">Read, write and run</string>
+    <string name="files_action_access_for">%1$s: %2$s</string>
+    <string name="files_action_access_change">%1$s: %2$s → %3$s</string>
+    <string name="files_action_confirm_mode">Change permissions for “%1$s”?</string>
+    <string name="files_action_change">Change</string>
+    <string name="files_action_mode_saved">Permissions changed</string>
+    <string name="files_action_review_permissions">Review changes</string>
+    <string name="files_action_run_hint">Run lets a script run. For a folder, it lets people open it.</string>
+    <string name="files_action_before">Before: %1$s</string>
+    <string name="files_action_permissions_unknown">This computer did not provide editable permissions.</string>
+    <string name="files_action_conflict">“%1$s” already exists</string>
+    <string name="files_action_replace">Replace</string>
+    <string name="files_action_keep">Keep both</string>
+    <string name="files_action_save_failed">Couldn’t save the file on this device.</string>
+    <string name="files_action_download_old">This computer could not provide the complete file. Update the hub and node, then try again.</string>
+    <string name="files_action_saving">A download is already in progress.</string>
+    <string name="files_action_saved">File saved</string>
+    <string name="files_action_gallery_saved">Saved to the gallery</string>
+    <string name="files_action_too_large">Files uploaded to a folder must be 2 GB or smaller.</string>
+    <string name="files_action_upload_unreadable">Couldn’t read the selected document.</string>
+    <plurals name="files_action_uploaded">
+        <item quantity="one">Uploaded %1$d file</item>
+        <item quantity="other">Uploaded %1$d files</item>
+    </plurals>
+    <plurals name="files_action_moved">
+        <item quantity="one">Moved %1$d item</item>
+        <item quantity="other">Moved %1$d items</item>
+    </plurals>
+    <plurals name="files_action_copied">
+        <item quantity="one">Copied %1$d item</item>
+        <item quantity="other">Copied %1$d items</item>
+    </plurals>
+    <string name="files_action_untitled">Untitled.txt</string>
+    <string name="files_action_upload_photos">Upload photos or videos</string>
+    <string name="files_action_downloading">Downloading file…</string>
+    <string name="files_action_uploading">Uploading files…</string>
+    <string name="files_action_copying">Copying on the computer…</string>
+    <string name="files_action_compressing">Compressing on the computer…</string>
+    <string name="files_action_bulk_conflict">Your choice applies to all name conflicts among the %1$d selected items.</string>
+    <plurals name="files_move_selection">
+        <item quantity="one">Move %1$d item</item>
+        <item quantity="other">Move %1$d items</item>
+    </plurals>
+</resources>

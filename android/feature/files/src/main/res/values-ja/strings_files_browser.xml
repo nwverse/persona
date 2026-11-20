@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="files_trash_many_title">%1$d 件の項目をゴミ箱に移動しますか？</string>
+    <string name="files_trashed_many">%1$d 件の項目をゴミ箱に移動しました</string>
+    <string name="files_find">このフォルダ内を検索</string>
+    <string name="files_find_placeholder">ファイル名またはフォルダ名</string>
+    <string name="files_find_none">一致するファイルやフォルダがありません</string>
+    <string name="files_find_truncated">このフォルダの一部のみ検索できます。サブフォルダを開くと、さらに検索できます。</string>
+    <string name="files_find_failed">このフォルダを検索できません</string>
+    <string name="files_go_home">ホームフォルダ</string>
+    <string name="files_history_back">前のフォルダ</string>
+    <string name="files_history_forward">次のフォルダ</string>
+    <string name="files_session_segment">%1$s · セッション</string>
+    <string name="files_location_read_only">読み取り専用の場所</string>
+    <string name="files_new_menu">新規</string>
+    <string name="files_select_items">項目を選択</string>
+    <string name="files_select_item">選択</string>
+    <string name="files_select_done">完了</string>
+    <string name="files_item_selected">選択済み</string>
+    <string name="files_item_not_selected">未選択</string>
+    <string name="files_browser_info">情報</string>
+    <string name="files_broken_link">リンク切れ</string>
+    <string name="files_link_to">%1$s → %2$s</string>
+    <string name="files_info_kind">種類</string>
+    <string name="files_info_file">ファイル</string>
+    <string name="files_info_link_file">ファイルへのリンク</string>
+    <string name="files_info_link_folder">フォルダへのリンク</string>
+    <string name="files_info_location">場所</string>
+    <string name="files_info_link_target">リンク先</string>
+    <string name="files_info_real">実際の場所</string>
+    <string name="files_info_go_real">実際の場所を表示</string>
+    <string name="files_info_contents">内容</string>
+    <string name="files_info_size">サイズ</string>
+    <string name="files_info_bytes">%1$s バイト</string>
+    <string name="files_info_size_bytes">%1$s（%2$s）</string>
+    <string name="files_info_items_more">%1$s 件を超える項目</string>
+    <string name="files_info_created">作成日時</string>
+    <string name="files_info_modified">更新日時</string>
+    <string name="files_info_changed">属性の変更日時</string>
+    <string name="files_info_permissions">アクセス権</string>
+    <string name="files_info_owner">所有者</string>
+    <string name="files_info_group">グループ</string>
+    <string name="files_info_update_hub">ハブを更新すると、ファイルの詳細情報を表示できます。</string>
+    <string name="files_info_update_node">このコンピュータの Persona を更新すると、ファイルの詳細情報を表示できます。</string>
+    <plurals name="files_info_items">
+        <item quantity="other">%1$s 件</item>
+    </plurals>
+    <plurals name="files_selected_count">
+        <item quantity="other">%1$d 件選択中</item>
+    </plurals>
+</resources>

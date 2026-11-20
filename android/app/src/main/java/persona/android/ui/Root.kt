@@ -965,10 +965,10 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             machineSpacesEntries(navigator, agents)
             chatEntries(navigator) {
                 ShellChat(it, session, navigator, shell.feedback, onSessionClosed = navigator::sessionClosed, onOpenCard = ::openWithCard,
-                    onGroupGone = navigator::groupGone, terminal = chatTerminal(it))
+                    onGroupGone = navigator::groupGone, terminal = chatTerminal(it), folderPanes = shell.terminalPanes.takeUnless { session.demo != null })
             }
             entry<InteractionRoute> { ShellChat(it.chat, session, navigator, shell.feedback, it.requestId, navigator::sessionClosed,
-                ::openWithCard, navigator::groupGone, chatTerminal(it.chat)) }
+                ::openWithCard, navigator::groupGone, chatTerminal(it.chat), shell.terminalPanes.takeUnless { session.demo != null }) }
             inboxEntries(navigator, session.inbox, pictureMarkdown = { text, source, modifier ->
                 persona.feature.chat.ExternalReplyMarkdown(text, source, modifier)
             }, connectors = services.connectors.takeUnless { services.demo }, onOpenCard = { card ->

@@ -86,7 +86,7 @@ internal fun editRefusal(error: Throwable, name: String?): EditRefusal {
 internal sealed interface FileEdit {
     data class Invalid(val problem: NameProblem) : FileEdit
     data object Renamed : FileEdit
-    data class Moved(val name: String, val folder: String) : FileEdit
+    data class Moved(val name: String, val folder: String, val count: Int = 1) : FileEdit
     /** [trashIds] put them back ([FilesController.restore]); empty when the machine gave none (no Undo then). */
     data class Trashed(val paths: List<String>, val trashIds: List<String>) : FileEdit
     data object Restored : FileEdit
@@ -137,7 +137,11 @@ internal fun rememberFileEditReport(controller: FilesController): (FileEdit) -> 
             when (edit) {
                 is FileEdit.Invalid -> feedback?.notice(nameProblemText(resources, edit.problem), FeedbackStyle.Error)
                 FileEdit.Renamed -> haptics(Haptic.Tap)
-                is FileEdit.Moved -> feedback?.notice(resources.getString(R.string.files_moved, edit.name, edit.folder), FeedbackStyle.Success)
+                is FileEdit.Moved -> {
+                    val message = if (edit.count == 1) resources.getString(R.string.files_moved, edit.name, edit.folder)
+                    else resources.getQuantityString(R.plurals.files_action_moved, edit.count, edit.count)
+                    feedback?.notice(message, FeedbackStyle.Success)
+                }
                 FileEdit.Restored -> Unit
                 is FileEdit.Failed -> {
                     val text = editRefusalText(resources, edit.refusal)
@@ -145,7 +149,9 @@ internal fun rememberFileEditReport(controller: FilesController): (FileEdit) -> 
                 }
                 is FileEdit.Trashed -> {
                     val name = FilesPaths.name(edit.paths.first())
-                    val message = resources.getString(R.string.files_trashed, name)
+                    val count = edit.paths.size
+                    val message = if (count == 1) resources.getString(R.string.files_trashed, name)
+                        else resources.getString(R.string.files_trashed_many, count)
                     if (edit.trashIds.isEmpty()) feedback?.notice(message, FeedbackStyle.Success)
                     else {
                         // A toast with a button plays no haptic of its own: the success one plays here, as iOS's does.

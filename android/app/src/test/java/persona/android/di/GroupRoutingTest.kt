@@ -134,6 +134,9 @@ class GroupRoutingTest {
         override suspend fun rename(machineId: String, cwd: String, path: String, name: String) = "~/b".also { calls += "rename $machineId $path $name" }
         override suspend fun move(machineId: String, cwd: String, path: String, directory: String, conflict: SessionMoveConflictPolicy?) =
             SessionMovedFile(path, "$directory/a").also { calls += "move $machineId $cwd $path $directory $conflict" }
+        override suspend fun move(machineId: String, cwd: String, paths: List<String>, directory: String, conflict: SessionMoveConflictPolicy?) =
+            paths.map { SessionMovedFile(it, "$directory/${it.substringAfterLast('/')}") }
+                .also { calls += "batch $machineId $cwd $paths $directory $conflict" }
         override suspend fun trash(machineId: String, cwd: String, paths: List<String>) =
             listOf(SessionTrashedFile(paths.single(), "t1")).also { calls += "trash $machineId ${paths.single()}" }
         override suspend fun restore(machineId: String, trashIds: List<String>) = listOf("~/a").also { calls += "restore $machineId ${trashIds.single()}" }
@@ -143,6 +146,8 @@ class GroupRoutingTest {
         assertTrue(editsFiles(machineId))
         assertEquals("~/b", rename(machineId, "/w", "~/a", "b"))
         assertEquals(SessionMovedFile("~/a", "~/folder/a"), move(machineId, "/w", "~/a", "~/folder", SessionMoveConflictPolicy.KeepBoth))
+        assertEquals(listOf("~/folder/b", "~/folder/a"),
+            move(machineId, "/w", listOf("~/b", "~/a"), "~/folder", SessionMoveConflictPolicy.Replace).map { it.to })
         assertEquals(listOf("t1"), trash(machineId, "/w", listOf("~/a")).map { it.trashId })
         assertEquals(listOf("~/a"), restore(machineId, listOf("t1")))
     }
@@ -150,7 +155,7 @@ class GroupRoutingTest {
     @Test fun anotherGroupsFileEditsReachItsMachineByThePlainId() = runBlocking<Unit> {
         val calls = mutableListOf<String>()
         EditingFiles(calls).inGroup(other).editAll("macbook~g0a1b2c3d")
-        assertEquals(listOf("edits macbook", "rename macbook ~/a b", "move macbook /w ~/a ~/folder KeepBoth", "trash macbook ~/a", "restore macbook t1"), calls)
+        assertEquals(listOf("edits macbook", "rename macbook ~/a b", "move macbook /w ~/a ~/folder KeepBoth", "batch macbook /w [~/b, ~/a] ~/folder Replace", "trash macbook ~/a", "restore macbook t1"), calls)
     }
 
     @Test fun theMergedFilesSendEditsToTheMachinesGroup() = runBlocking<Unit> {
@@ -164,8 +169,8 @@ class GroupRoutingTest {
         }
         merged.editAll("macbook")
         merged.editAll("studio~g0a1b2c3d")
-        assertEquals(listOf("edits macbook", "rename macbook ~/a b", "move macbook /w ~/a ~/folder KeepBoth", "trash macbook ~/a", "restore macbook t1"), home)
-        assertEquals(listOf("edits studio", "rename studio ~/a b", "move studio /w ~/a ~/folder KeepBoth", "trash studio ~/a", "restore studio t1"), work)
+        assertEquals(listOf("edits macbook", "rename macbook ~/a b", "move macbook /w ~/a ~/folder KeepBoth", "batch macbook /w [~/b, ~/a] ~/folder Replace", "trash macbook ~/a", "restore macbook t1"), home)
+        assertEquals(listOf("edits studio", "rename studio ~/a b", "move studio /w ~/a ~/folder KeepBoth", "batch studio /w [~/b, ~/a] ~/folder Replace", "trash studio ~/a", "restore studio t1"), work)
         // No open group: not offered, and a change fails as offline.
         assertFalse(merged.editsFiles("mini~gffffffff"))
         try { merged.move("mini~gffffffff", "/w", "~/a", "~/folder"); fail("Expected offline") }

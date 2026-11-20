@@ -18,7 +18,7 @@ internal object FileShare {
     private const val INLINE_TEXT = 100_000
 
     /** Whether ⋯ offers "Share": text, bytes that are whole (a cut image or PDF would not open), or a streamed file. */
-    fun canShare(file: SessionFileContent) = file.text != null || file.stream || (file.data != null && !file.truncated)
+    fun canShare(file: SessionFileContent) = editableText(file) != null || file.stream || (file.data != null && !file.truncated)
 
     /**
      * Shares [file] as text, or its bytes as a file through [FilesShareProvider] (a streamed file's from [download]);
@@ -26,12 +26,12 @@ internal object FileShare {
      */
     suspend fun share(context: Context, file: SessionFileContent,
         download: suspend (path: String, into: File) -> Long = { _, _ -> throw UnsupportedOperationException("download") }): Boolean {
-        val text = file.text
+        val text = editableText(file)
         val send = when {
-            text != null && text.length <= INLINE_TEXT -> Intent(Intent.ACTION_SEND)
+            text != null && !file.truncated && file.next == 0L && text.length <= INLINE_TEXT -> Intent(Intent.ACTION_SEND)
                 .setType("text/plain").putExtra(Intent.EXTRA_TEXT, text).putExtra(Intent.EXTRA_SUBJECT, file.name)
             else -> {
-                val copy = if (text == null && file.stream) {
+                val copy = if (file.stream || file.truncated || file.next > 0) {
                     val into = withContext(Dispatchers.IO) { shareFile(context, file.name.ifEmpty { "file" }) }
                     download(file.path, into)
                     into
@@ -55,7 +55,7 @@ internal object FileShare {
     internal fun shareType(file: SessionFileContent): String {
         val mime = file.mime?.substringBefore(';')?.trim().orEmpty()
         return when {
-            file.text != null -> "text/plain"
+            editableText(file) != null -> "text/plain"
             mime.isEmpty() -> "application/octet-stream"
             else -> mime
         }

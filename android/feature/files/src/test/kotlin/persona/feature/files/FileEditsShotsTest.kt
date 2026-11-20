@@ -90,7 +90,7 @@ internal class EditMachine : SessionFiles {
     override suspend fun trash(machineId: String, cwd: String, paths: List<String>): List<SessionTrashedFile> {
         asked += "trash ${paths.joinToString()}"
         failing?.let { throw it }
-        return paths.map { SessionTrashedFile(it, "t1") }
+        return paths.mapIndexed { index, path -> SessionTrashedFile(path, "t" + (index + 1)) }
     }
     override suspend fun restore(machineId: String, trashIds: List<String>): List<String> {
         asked += "restore ${trashIds.joinToString()}"
@@ -145,6 +145,24 @@ class FileEditsTest {
         tap("Rename")
         rule.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("files-rename-field"))).performTextReplacement(to)
         tap("Rename")
+    }
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h800dp")
+    @Test fun selectedFilesAskTogetherAndUndoEveryReturnedId() {
+        show()
+        menu("README.md")
+        tap("Select")
+        rule.onNodeWithText("Sources").performClick()
+        rule.onNodeWithContentDescription("Move to Trash").performClick()
+        rule.onNodeWithText("Move 2 items to the Trash?").assertExists()
+        assertTrue(machine.asked.isEmpty())
+        tap("Move to Trash")
+        assertEquals(listOf("trash ${machine.root}/Sources, ${machine.root}/README.md"), machine.asked)
+        val (message, _, undo) = toasts.shown.last()
+        assertEquals("Moved 2 items to the Trash", message)
+        rule.runOnIdle { undo!!.run() }
+        rule.waitForIdle()
+        assertEquals("restore t1, t2", machine.asked.last())
     }
 
     private fun pickMoveDestination() {

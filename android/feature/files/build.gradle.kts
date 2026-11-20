@@ -7,6 +7,7 @@ android {
     namespace = "persona.feature.files"
     // Viewers are rendered on the JVM (Robolectric's native graphics) for their screenshots.
     testOptions { unitTests { isIncludeAndroidResources = true } }
+    defaultConfig { testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
 }
 
 dependencies {
@@ -29,4 +30,8 @@ dependencies {
     testImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("org.robolectric:robolectric:4.17")
     testImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
 }

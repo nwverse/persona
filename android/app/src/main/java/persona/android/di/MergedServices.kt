@@ -279,18 +279,26 @@ internal interface MachineRoutes {
     suspend fun <T> on(machineId: String, call: suspend (MachineManagement) -> T): T
 }
 
+/** Keeps a restored terminal route offline if its hub is no longer paired. */
+internal val unpairedTerminal = object : TerminalTransport {
+    override val connection = MutableStateFlow(ConnectionState.Revoked)
+    override val features = MutableStateFlow(emptySet<String>())
+    override val events = emptyFlow<ServerEvent>()
+    override fun subscribe(key: SessionKey, epoch: String?, after: Int, size: TerminalSize?, takeover: Boolean) = false
+    override fun unsubscribe(key: SessionKey) = Unit
+    override fun input(key: SessionKey, text: String, size: TerminalSize?, scroll: Int, at: TerminalCellPosition?, click: TerminalCellPosition?) = false
+    override suspend fun screen(key: SessionKey): TerminalScreen = throw HubFailure(HubError.NoNetwork)
+    override suspend fun keys(key: SessionKey, keys: List<String>, text: String): Unit = throw HubFailure(HubError.NoNetwork)
+}
+
 /** Terminal, files, chat actions and machine metrics for the shell: each call goes to its machine's group. */
 internal class MergedShellServices(private val stacks: GroupStacks) {
     private fun stack(machineId: String) = stacks.of(machineId) ?: throw IllegalStateException(AppText.get(R.string.app_error_terminal_unavailable))
 
     fun terminal(key: SessionKey): TerminalTransport = stack(key.machineId).terminal
 
-    /**
-     * The terminal of a machine in another group (its id carries the suffix), in merged ids and on that group's own
-     * connection; null for the primary group's machines, or when the group is not open.
-     */
-    fun groupTerminal(machineId: String): TerminalTransport? =
-        if (GroupKeys.namespaceOf(machineId) == null) null else stacks.of(machineId)?.mergedTerminal
+    /** Resolve primary and secondary machines alike. A removed pairing cannot fall back to the selected hub. */
+    fun groupTerminal(machineId: String): TerminalTransport = stacks.of(machineId)?.mergedTerminal ?: unpairedTerminal
 
     /**
      * Terminal's pane lists and new tabs (docs/integrations/terminal.md "Standalone terminal"): each call goes to the machine's group with its plain
@@ -310,6 +318,8 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
             stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).panes(GroupKeys.raw(machineId)) }
         override suspend fun newTab(machineId: String, workspaceId: String, kind: String?, cwd: String?) =
             stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).newTab(GroupKeys.raw(machineId), workspaceId, kind, cwd) }
+        override suspend fun openInFolder(machineId: String, cwd: String, workspaceId: String?) =
+            stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).openInFolder(GroupKeys.raw(machineId), cwd, workspaceId) }
         override suspend fun close(machineId: String, pane: String) =
             stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).close(GroupKeys.raw(machineId), pane) }
         override suspend fun closeFinished(machineId: String, preview: Boolean, panes: List<String>) =
@@ -360,29 +370,44 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
  * no open group fails as offline. Every method is forwarded, the ones with a default implementation too, or the app
  * would get the default ("not supported") for them.
  */
-internal fun routedFiles(lookup: (machineId: String) -> SessionFiles?): SessionFiles = object : SessionFiles {
+internal fun routedFiles(wireId: (String) -> String = { it }, lookup: (machineId: String) -> SessionFiles?): SessionFiles = object : SessionFiles {
     private fun of(machineId: String) = lookup(machineId) ?: throw HubFailure(HubError.NoNetwork)
-    override suspend fun directory(machineId: String, cwd: String, path: String) = of(machineId).directory(machineId, cwd, path)
-    override suspend fun file(machineId: String, cwd: String, path: String) = of(machineId).file(machineId, cwd, path)
-    override suspend fun filePreview(machineId: String, cwd: String, path: String) = of(machineId).filePreview(machineId, cwd, path)
-    override suspend fun status(machineId: String, cwd: String) = of(machineId).status(machineId, cwd)
-    override suspend fun diff(machineId: String, cwd: String, path: String, staged: Boolean) = of(machineId).diff(machineId, cwd, path, staged)
-    override suspend fun log(machineId: String, cwd: String, skip: Int, limit: Int) = of(machineId).log(machineId, cwd, skip, limit)
-    override suspend fun show(machineId: String, cwd: String, hash: String) = of(machineId).show(machineId, cwd, hash)
-    override suspend fun pull(machineId: String, cwd: String) = of(machineId).pull(machineId, cwd)
-    override suspend fun stat(machineId: String, cwd: String, paths: List<String>) = of(machineId).stat(machineId, cwd, paths)
+    override suspend fun directory(machineId: String, cwd: String, path: String) = of(machineId).directory(wireId(machineId), cwd, path)
+    override suspend fun file(machineId: String, cwd: String, path: String) = of(machineId).file(wireId(machineId), cwd, path)
+    override suspend fun filePreview(machineId: String, cwd: String, path: String) = of(machineId).filePreview(wireId(machineId), cwd, path)
+    override suspend fun status(machineId: String, cwd: String) = of(machineId).status(wireId(machineId), cwd)
+    override suspend fun diff(machineId: String, cwd: String, path: String, staged: Boolean) = of(machineId).diff(wireId(machineId), cwd, path, staged)
+    override suspend fun log(machineId: String, cwd: String, skip: Int, limit: Int) = of(machineId).log(wireId(machineId), cwd, skip, limit)
+    override suspend fun show(machineId: String, cwd: String, hash: String) = of(machineId).show(wireId(machineId), cwd, hash)
+    override suspend fun pull(machineId: String, cwd: String) = of(machineId).pull(wireId(machineId), cwd)
+    override suspend fun stat(machineId: String, cwd: String, paths: List<String>) = of(machineId).stat(wireId(machineId), cwd, paths)
     override suspend fun download(machineId: String, cwd: String, path: String, into: java.io.File) =
-        of(machineId).download(machineId, cwd, path, into)
-    override fun comparesVersions(machineId: String) = lookup(machineId)?.comparesVersions(machineId) == true
-    override suspend fun blob(machineId: String, cwd: String, path: String, rev: String) = of(machineId).blob(machineId, cwd, path, rev)
-    override suspend fun thumbnail(machineId: String, cwd: String, path: String, size: Int) = of(machineId).thumbnail(machineId, cwd, path, size)
-    override suspend fun convertToPdf(machineId: String, cwd: String, path: String) = of(machineId).convertToPdf(machineId, cwd, path)
-    override fun editsFiles(machineId: String) = lookup(machineId)?.editsFiles(machineId) == true
-    override suspend fun rename(machineId: String, cwd: String, path: String, name: String) = of(machineId).rename(machineId, cwd, path, name)
+        of(machineId).download(wireId(machineId), cwd, path, into)
+    override fun comparesVersions(machineId: String) = lookup(machineId)?.comparesVersions(wireId(machineId)) == true
+    override suspend fun blob(machineId: String, cwd: String, path: String, rev: String) = of(machineId).blob(wireId(machineId), cwd, path, rev)
+    override suspend fun thumbnail(machineId: String, cwd: String, path: String, size: Int) = of(machineId).thumbnail(wireId(machineId), cwd, path, size)
+    override suspend fun convertToPdf(machineId: String, cwd: String, path: String) = of(machineId).convertToPdf(wireId(machineId), cwd, path)
+    override fun editsFiles(machineId: String) = lookup(machineId)?.editsFiles(wireId(machineId)) == true
+    override suspend fun rename(machineId: String, cwd: String, path: String, name: String) = of(machineId).rename(wireId(machineId), cwd, path, name)
+    override suspend fun trash(machineId: String, cwd: String, paths: List<String>) = of(machineId).trash(wireId(machineId), cwd, paths)
+    override suspend fun restore(machineId: String, trashIds: List<String>) = of(machineId).restore(wireId(machineId), trashIds)
+    override fun supports(machineId: String, feature: SessionFileFeature) = lookup(machineId)?.supports(wireId(machineId), feature) == true
+    override suspend fun findFiles(machineId: String, folder: String) = of(machineId).findFiles(wireId(machineId), folder)
+    override suspend fun fileInfo(machineId: String, cwd: String, path: String) = of(machineId).fileInfo(wireId(machineId), cwd, path)
+    override suspend fun mkdir(machineId: String, cwd: String, dir: String, name: String) = of(machineId).mkdir(wireId(machineId), cwd, dir, name)
+    override suspend fun writeText(machineId: String, cwd: String, path: String, text: String, create: Boolean, revision: String?, sha256: String?, force: Boolean) =
+        of(machineId).writeText(wireId(machineId), cwd, path, text, create, revision, sha256, force)
+    override suspend fun uploadFile(machineId: String, cwd: String, dir: String, name: String, file: java.io.File, conflict: SessionFileConflict?) =
+        of(machineId).uploadFile(wireId(machineId), cwd, dir, name, file, conflict)
+    override suspend fun copyFiles(machineId: String, cwd: String, paths: List<String>, dir: String, conflict: SessionFileConflict?) =
+        of(machineId).copyFiles(wireId(machineId), cwd, paths, dir, conflict)
     override suspend fun move(machineId: String, cwd: String, path: String, directory: String, conflict: SessionMoveConflictPolicy?) =
-        of(machineId).move(machineId, cwd, path, directory, conflict)
-    override suspend fun trash(machineId: String, cwd: String, paths: List<String>) = of(machineId).trash(machineId, cwd, paths)
-    override suspend fun restore(machineId: String, trashIds: List<String>) = of(machineId).restore(machineId, trashIds)
+        of(machineId).move(wireId(machineId), cwd, path, directory, conflict)
+    override suspend fun move(machineId: String, cwd: String, paths: List<String>, directory: String, conflict: SessionMoveConflictPolicy?) =
+        of(machineId).move(wireId(machineId), cwd, paths, directory, conflict)
+    override suspend fun zipFiles(machineId: String, cwd: String, paths: List<String>, name: String, dir: String?) =
+        of(machineId).zipFiles(wireId(machineId), cwd, paths, name, dir)
+    override suspend fun chmod(machineId: String, cwd: String, path: String, mode: Int) = of(machineId).chmod(wireId(machineId), cwd, path, mode)
 }
 
 /**

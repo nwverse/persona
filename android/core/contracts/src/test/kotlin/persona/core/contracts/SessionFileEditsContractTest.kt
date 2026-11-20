@@ -28,8 +28,13 @@ class SessionFileEditsContractTest {
             override suspend fun show(machineId: String, cwd: String, hash: String) = error("unused")
         }
         assertFalse(readOnly.editsFiles("m"))
-        for (call in listOf<suspend () -> Unit>({ readOnly.rename("m", "/w", "a", "b") }, { readOnly.move("m", "/w", "a", "/w/b") },
-                { readOnly.trash("m", "/w", listOf("a")) }, { readOnly.restore("m", listOf("t1")) })) {
+        assertTrue(SessionFileFeature.entries.none { readOnly.supports("m", it) })
+        for (call in listOf<suspend () -> Unit>({ readOnly.rename("m", "/w", "a", "b") }, { readOnly.trash("m", "/w", listOf("a")) },
+                { readOnly.restore("m", listOf("t1")) }, { readOnly.fileInfo("m", "/w", "a") }, { readOnly.findFiles("m", "/w") },
+                { readOnly.mkdir("m", "/w", ".", "b") }, { readOnly.writeText("m", "/w", "a", "", create = true) },
+                { readOnly.uploadFile("m", "/w", ".", "a", java.io.File("unopened")) },
+                { readOnly.copyFiles("m", "/w", listOf("a"), ".") }, { readOnly.move("m", "/w", "a", ".") }, { readOnly.move("m", "/w", listOf("a", "b"), ".") },
+                { readOnly.zipFiles("m", "/w", listOf("a"), "archive") }, { readOnly.chmod("m", "/w", "a", 0) })) {
             try { call(); fail("Expected UnsupportedOperationException") } catch (_: UnsupportedOperationException) {}
         }
     }

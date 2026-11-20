@@ -31,8 +31,19 @@ class HttpTerminalPanes internal constructor(
     override suspend fun panes(machineId: String): PanesResponse =
         request(panesPath(machineId), "GET", null, null).use { JsonCodec.decodeFromString(body(it)) }
 
-    override suspend fun newTab(machineId: String, workspaceId: String, kind: String?, cwd: String?): NewPaneTab {
-        val payload = newTabBody(workspaceId, kind, cwd).toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+    override suspend fun newTab(machineId: String, workspaceId: String, kind: String?, cwd: String?): NewPaneTab =
+        openPane(machineId, newTabBody(workspaceId, kind, cwd))
+
+    override suspend fun openInFolder(machineId: String, cwd: String, workspaceId: String?): NewPaneTab {
+        require(cwd.isNotBlank())
+        return openPane(machineId, buildJsonObject {
+            put("cwd", cwd)
+            if (!workspaceId.isNullOrBlank()) put("workspace_id", workspaceId)
+        })
+    }
+
+    private suspend fun openPane(machineId: String, parameters: JsonObject): NewPaneTab {
+        val payload = parameters.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
         // The hub gives the node 30 s to open the tab (without taking the computer's focus).
         return request(panesPath(machineId), "POST", payload, 35).use { JsonCodec.decodeFromString(body(it)) }
     }

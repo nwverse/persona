@@ -15,9 +15,10 @@ import java.util.Locale
 
 /** [parent] + [child] without doubling or losing a slash ("/" + "a" = "/a", "~" + "a" = "~/a"). */
 fun joinRemotePath(parent: String, child: String): String {
-    val name = child.trim('/')
+    val separator = if (FilesPaths.windowsDrive(parent) && '\\' in parent) '\\' else '/'
+    val name = child.trim('/').let { if (separator == '\\') it.replace('/', separator) else it }
     if (name.isEmpty()) return parent
-    return if (parent.endsWith("/")) parent + name else "$parent/$name"
+    return if (parent.endsWith(separator)) parent + name else "$parent$separator$name"
 }
 
 internal object FilesPaths {
@@ -32,7 +33,7 @@ internal object FilesPaths {
         val trimmed = path.trim()
         val joined = when {
             trimmed.isEmpty() -> cwd
-            trimmed.startsWith("/") || isHome(trimmed) -> trimmed
+            trimmed.startsWith("/") || windowsDrive(trimmed) || isHome(trimmed) -> trimmed
             else -> joinRemotePath(cwd, trimmed)
         }
         return normalize(joined)
@@ -40,6 +41,10 @@ internal object FilesPaths {
 
     /** "/a/./b/../c/" is "/a/c"; "~/x/.." is "~". Relative leftovers that climb out of the top stay at the top. */
     fun normalize(path: String): String {
+        if (windowsDrive(path)) {
+            val normalized = path.take(2) + normalize(displayPath(path).drop(2))
+            return if ('\\' in path) normalized.replace('/', '\\') else normalized
+        }
         val home = isHome(path)
         val absolute = path.startsWith("/")
         if (!home && !absolute) return path.trimEnd('/').ifEmpty { path }
@@ -56,10 +61,16 @@ internal object FilesPaths {
     }
 
     /** Whoever opened the path said it is a folder (a trailing slash, the home itself). */
-    fun namesDirectory(path: String): Boolean = path.trim().let { it.endsWith("/") || it == "~" }
+    fun namesDirectory(path: String): Boolean = path.trim().let { it.endsWith("/") || it == "~" || (windowsDrive(it) && it.endsWith('\\')) }
 
     /** The folder above [path]; null at the top ("/", "~"). */
     fun parent(path: String): String? {
+        if (windowsDrive(path)) {
+            val p = path.trimEnd('/', '\\')
+            if (p.length <= 2) return null
+            val i = p.lastIndexOfAny(charArrayOf('/', '\\'))
+            return if (i == 2) path.take(3) else p.substring(0, i)
+        }
         val p = path.trimEnd('/')
         if (p.isEmpty() || p == "~") return null
         val i = p.lastIndexOf('/')
@@ -71,14 +82,50 @@ internal object FilesPaths {
     }
 
     /** The last component: "/" for the root, "~" for the home. */
-    fun name(path: String): String = path.trimEnd('/').substringAfterLast('/').ifEmpty { "/" }
+    fun name(path: String): String = if (windowsDrive(path) && path.length == 3) path else
+        displayPath(path).trimEnd('/').substringAfterLast('/').ifEmpty { "/" }
 
     /** Whether [path] is [folder] or inside it. */
     fun isWithin(path: String, folder: String): Boolean {
-        val f = folder.trimEnd('/')
-        val p = path.trimEnd('/')
+        val f = displayPath(folder).trimEnd('/')
+        val p = displayPath(path).trimEnd('/')
         if (f.isEmpty()) return p.startsWith("/") || p.isEmpty()
-        return p == f || p.startsWith("$f/")
+        val windows = windowsDrive(path) || windowsDrive(folder)
+        return p.equals(f, ignoreCase = windows) || p.startsWith("$f/", ignoreCase = windows)
+    }
+
+    /** Split Windows drive paths at either separator, without treating a backslash in a Unix name as a separator. */
+    private val drive = Regex("^[A-Za-z]:[/\\\\]")
+    fun windowsDrive(path: String): Boolean = drive.containsMatchIn(path)
+    fun displayPath(path: String): String = if (windowsDrive(path)) path.replace('\\', '/') else path
+
+    fun pathBar(here: String, home: String?): List<Pair<String, String>> {
+        val shown = displayPath(here)
+        val user = home?.takeIf { it.isNotEmpty() }?.let(::displayPath)?.trimEnd('/')
+        val start = when {
+            isHome(shown) -> "~"
+            !user.isNullOrEmpty() && isWithin(shown, user) -> user
+            windowsDrive(shown) -> shown.take(3)
+            else -> "/"
+        }
+        val result = mutableListOf((if (start == user || start == "~") "~" else start) to start)
+        var path = start
+        for (part in shown.drop(start.length).split('/').filter { it.isNotEmpty() }) {
+            path = joinRemotePath(path, part)
+            result += part to path
+        }
+        return result
+    }
+
+    /** The node enforces this for writes. A missing home on an older machine does not preempt its own decision. */
+    fun writable(path: String, home: String?, os: String? = null): Boolean {
+        if (home.isNullOrEmpty()) return true
+        fun comparable(value: String) = displayPath(value).let { if (os.equals("windows", true)) it.lowercase(Locale.ROOT) else it }
+        val user = comparable(home).trimEnd('/')
+        val absolute = normalize(if (isHome(path)) user + path.removePrefix("~") else comparable(path))
+        if (!isWithin(absolute, user)) return false
+        val relative = absolute.drop(user.length).trimStart('/').lowercase(Locale.ROOT)
+        return listOf(".persona", ".jarvis", "library").none { relative == it || relative.startsWith("$it/") }
     }
 
     /** The levels from [root] down to [here] as (name, path), for the breadcrumb; just [here] when it is not under [root]. */

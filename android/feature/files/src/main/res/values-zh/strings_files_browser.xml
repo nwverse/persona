@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="files_trash_many_title">将 %1$d 项移到废纸篓？</string>
+    <string name="files_trashed_many">已将 %1$d 项移到废纸篓</string>
+    <string name="files_find">在此文件夹中查找</string>
+    <string name="files_find_placeholder">文件或文件夹名称</string>
+    <string name="files_find_none">没有匹配的文件或文件夹</string>
+    <string name="files_find_truncated">仅索引了此文件夹的部分内容。打开子文件夹可继续查找。</string>
+    <string name="files_find_failed">无法搜索此文件夹</string>
+    <string name="files_go_home">主文件夹</string>
+    <string name="files_history_back">上一个文件夹</string>
+    <string name="files_history_forward">下一个文件夹</string>
+    <string name="files_session_segment">%1$s · 会话</string>
+    <string name="files_location_read_only">此位置为只读</string>
+    <string name="files_new_menu">新建</string>
+    <string name="files_select_items">选择项目</string>
+    <string name="files_select_item">选择</string>
+    <string name="files_select_done">完成</string>
+    <string name="files_item_selected">已选择</string>
+    <string name="files_item_not_selected">未选择</string>
+    <string name="files_browser_info">信息</string>
+    <string name="files_broken_link">失效链接</string>
+    <string name="files_link_to">%1$s → %2$s</string>
+    <string name="files_info_kind">类型</string>
+    <string name="files_info_file">文件</string>
+    <string name="files_info_link_file">文件链接</string>
+    <string name="files_info_link_folder">文件夹链接</string>
+    <string name="files_info_location">位置</string>
+    <string name="files_info_link_target">链接目标</string>
+    <string name="files_info_real">实际位置</string>
+    <string name="files_info_go_real">前往实际位置</string>
+    <string name="files_info_contents">内容</string>
+    <string name="files_info_size">大小</string>
+    <string name="files_info_bytes">%1$s 字节</string>
+    <string name="files_info_size_bytes">%1$s（%2$s）</string>
+    <string name="files_info_items_more">超过 %1$s 个项目</string>
+    <string name="files_info_created">创建时间</string>
+    <string name="files_info_modified">修改时间</string>
+    <string name="files_info_changed">属性更改时间</string>
+    <string name="files_info_permissions">权限</string>
+    <string name="files_info_owner">所有者</string>
+    <string name="files_info_group">群组</string>
+    <string name="files_info_update_hub">更新 Hub 可查看更详细的文件信息。</string>
+    <string name="files_info_update_node">更新这台电脑上的 Persona 可查看更多文件信息。</string>
+    <plurals name="files_info_items">
+        <item quantity="other">%1$s 个项目</item>
+    </plurals>
+    <plurals name="files_selected_count">
+        <item quantity="other">已选择 %1$d 项</item>
+    </plurals>
+</resources>

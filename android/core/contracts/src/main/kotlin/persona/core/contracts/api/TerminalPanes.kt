@@ -29,6 +29,10 @@ interface TerminalPanes {
      */
     suspend fun newTab(machineId: String, workspaceId: String, kind: String? = null, cwd: String? = null): NewPaneTab
 
+    /** Open a separate terminal in this folder, in the session workspace when given (hub feature `pane_cwd`). */
+    suspend fun openInFolder(machineId: String, cwd: String, workspaceId: String? = null): NewPaneTab =
+        throw UnsupportedOperationException("pane_cwd")
+
     /** User-confirmed close of one pane, including a plain terminal. */
     suspend fun close(machineId: String, pane: String): Unit = error("Closing panes is unavailable")
 
