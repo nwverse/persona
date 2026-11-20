@@ -242,6 +242,10 @@ description is schema text, so its four outputs are regenerated. *Conflict:* `In
 #4512), `assistantwire/inbox.go` 3 (#9782d, #6539d, #4512), the rest none. *Gate:* none. *Rollback:* revert. *Done:*
 `scripts/gen/extension_schema.py --check` and the docs tests pass.
 
+*Landed (#11832):* every correction above, none skipped (no open PR rewrites those lines), plus the same claims in the
+`HomeInbox` comment, `docs/apple/ios.md` ("Counts"), `docs/assistant/managers.md` ("Badges") and the web side-fold
+replay's comment.
+
 **3. The Agents definition, pinned.** *Change:* every `spec/fixtures/needs-you` case gets `expected.badge_rows`, plus
 six cases: a child's card under its parent, a side folded under its parent, a quiet task's card, a directory-hidden card
 (counted nowhere), a delegating card (counts today; D11), an elicitation-only card (its session waits). The iOS and
@@ -255,6 +259,10 @@ or 9) adds a view-path case that asserts the fixture value instead. Android fail
 *Conflict:* the fixture and both replays have 0 open PRs. *Gate:* none. *Rollback:* revert. *Done:* Android
 `:core:domain:test --tests '*AgentsNeedsYouFixtureTest*'` (`--max-workers=4`) and iOS AgentsNeedsYouFixtureTests pass,
 each marked case at today's value, iOS on the implementer's own simulator.
+
+*Landed (#11823):* `badge_rows` on every case and the six cases; iOS's replays (with `HomeWidgetTests`) now drop
+directory-hidden cards and fold sides as the app does, and the one mark is Android's on
+`a_directory_hidden_card_counts_nowhere` (D1); iOS needs none.
 
 **4. The surface table and the agreement report** (section 3.5). *Change:* spec/fixtures/counts (README, surfaces.json),
 the guard, the report switch in the existing replays, the lane differ, and entries in `scripts/ci/paths.py` and

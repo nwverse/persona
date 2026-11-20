@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import type { Interaction, Session } from "./types";
 import { makeSessionLookup, type Todo } from "./todos";
-import { ownerBadge, triage, triageTodos, waitsOnOwner } from "./todo-triage";
+import { ownerBadge, ownerNeeds, triage, triageTodos, waitsOnOwner } from "./todo-triage";
 
 const NOW = Date.parse("2026-11-10T12:00:00Z");
 const hoursAgo = (h: number) => new Date(NOW - h * 3600_000).toISOString();
@@ -173,5 +173,37 @@ describe("the badge's rules", () => {
     // a closed or shelved to-do waits on nobody
     expect(waitsOnOwner(list[5], triage(list[5], lookup, NOW))).toBeNull();
     expect(waitsOnOwner(list[6], triage(list[6], lookup, NOW))).toBeNull();
+  });
+});
+
+describe("why the badge counts a to-do (#11838, ownerNeeds)", () => {
+  const list = [
+    task("failed", { start_error: "no launcher on that computer", done_at: hoursAgo(1) }),
+    task("asking", { agents: [agent("ask")] }),
+    task("decide", { agents: [agent("idle")], ask: { outcome: "decide", verdict: "Ship it or wait?", asked_at: hoursAgo(1) } }),
+    task("held", { agents: [agent("run")], delivery: { state: "merged", unblock: "user" } }),
+    personal("errand"),
+    task("stopped", { agents: [agent("idle")] }),
+    // not counted: its own Agent at work, a goal its pieces carry, a quiet task whose Agent works
+    task("working", { agents: [agent("run2")] }),
+    personal("goal"),
+    task("piece", { part_of: "goal", quiet: true, agents: [agent("run3")] }),
+    task("quiet", { quiet: true }),
+  ];
+
+  it("says what each counted to-do waits on the owner for, or that no Agent is on it", () => {
+    expect(Object.fromEntries(ownerNeeds(list, lookup, NOW))).toEqual({
+      failed: "failed_start",
+      asking: "agent_asks",
+      decide: "owner_decides",
+      held: "delivery_ok",
+      errand: "unattended",
+      stopped: "unattended",
+    });
+  });
+
+  it("is the badge: the same to-dos, so its size is the badge's number", () => {
+    expect([...ownerBadge(list, lookup, NOW)].sort()).toEqual([...ownerNeeds(list, lookup, NOW).keys()].sort());
+    expect(ownerBadge(list, lookup, NOW).size).toBe(6);
   });
 });
