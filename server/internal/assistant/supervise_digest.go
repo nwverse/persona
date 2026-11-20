@@ -759,8 +759,8 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	}
 	if g.Kind == sigCheck {
 		e.Report = g.Report
-		if g.Report == checkDecidedReport { // the option the owner took, and the decision as it was asked
-			e.Detail, e.Response, e.Decision = "", g.Detail, g.Decision
+		if g.Report == checkDecidedReport { // the owner's option, the decision as asked, whether the Agent has it
+			e.Detail, e.Response, e.Decision, e.Told = "", g.Detail, g.Decision, g.Told
 		}
 	}
 	if g.Kind == sigFailed {
