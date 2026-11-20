@@ -44,11 +44,11 @@ func TestNorthStarWeeklyIndependentReview(t *testing.T) {
 		mustDo(t, err)
 		mustDo(t, database.PutTodoSupervision(ctx, db.TodoSupervisionRow{TodoID: fixture.todo, DoneWhen: []string{}, AutoReview: raw}))
 		if fixture.link {
-			mustDo(t, database.LinkTodoReviewer(ctx, fixture.todo, "machine", "session-"+fixture.run, "synthetic", "/synthetic/private/path", fixture.run, started))
+			mustDo(t, database.LinkTodoReviewer(ctx, fixture.todo, "machine", "session-"+fixture.run, "synthetic", "/synthetic/private/path", "", fixture.run, started))
 		}
 	}
 	old := time.Date(2026, 10, 27, 12, 0, 0, 0, loc)
-	mustDo(t, database.LinkTodoReviewer(ctx, "todo-clean", "machine", "session-old", "synthetic", "/synthetic/private/path", "rv-old", old))
+	mustDo(t, database.LinkTodoReviewer(ctx, "todo-clean", "machine", "session-old", "synthetic", "/synthetic/private/path", "", "rv-old", old))
 
 	weekly, err := northStarWeeklyCommand(ctx, database, hub, "2026-11-04", loc.String(), now)
 	mustDo(t, err)
