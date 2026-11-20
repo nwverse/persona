@@ -54,20 +54,20 @@ export function TaskWorkspaceControls({ plan, index, disabled, onChange, mode }:
         <option value="existing">{t("assistant-tasks.workspace_existing")}</option>
         <option value="none">{t("assistant-tasks.workspace_none")}</option>
       </select>
-      {mode === "existing" && <select aria-label={t("assistant-tasks.workspace_select")} value={list.workspaces.some((w) => w.id === existing) ? existing : ""} className={`${field} flex-1`}
+      {mode === "existing" && <select aria-label={t("assistant-task-details.workspace_select")} value={list.workspaces.some((w) => w.id === existing) ? existing : ""} className={`${field} flex-1`}
         onChange={(e) => { if (e.target.value) onChange({ existing: e.target.value }); }}>
-        <option value="">{t("assistant-tasks.workspace_manual")}</option>
+        <option value="">{t("assistant-task-details.workspace_manual")}</option>
         {list.workspaces.filter((w) => w.machine_id === task.machine && w.available).map((w) => <option key={w.id} value={w.id}>{[w.title, w.branch, w.cwd].filter(Boolean).join(" · ")}</option>)}
       </select>}
     </div>
-    {mode === "existing" && <input aria-label={t("assistant-tasks.workspace_path")} className={`${field} w-full font-mono`} value={existing}
+    {mode === "existing" && <input aria-label={t("assistant-task-details.workspace_path")} className={`${field} w-full font-mono`} value={existing}
       spellCheck={false} autoCapitalize="off" autoCorrect="off" onChange={(e) => onChange({ existing: e.target.value })} />}
-    {mode === "new" && <input aria-label={t("assistant-tasks.workspace_branch")} className={`${field} w-full font-mono`} value={branch}
-      placeholder={task.workspace_resolved?.branch || t("assistant-tasks.workspace_branch_default")}
+    {mode === "new" && <input aria-label={t("assistant-task-details.workspace_branch")} className={`${field} w-full font-mono`} value={branch}
+      placeholder={task.workspace_resolved?.branch || t("assistant-task-details.workspace_branch_default")}
       spellCheck={false} autoCapitalize="off" autoCorrect="off" onChange={(e) => onChange({ new: { branch: e.target.value } })} />}
     <div className="text-[12px] break-all text-ink-2" aria-live="polite" data-workspace-path>
-      {current?.error ? <span role="alert" className="text-red">{current.error}</span> : pathText || t("assistant-tasks.workspace_resolving")}
+      {current?.error ? <span role="alert" className="text-red">{current.error}</span> : pathText || t("assistant-task-details.workspace_resolving")}
     </div>
-    {mode === "new" && <div className="text-[11px] text-ink-3">{t("assistant-tasks.workspace_engine_path")}</div>}
+    {mode === "new" && <div className="text-[11px] text-ink-3">{t("assistant-task-details.workspace_engine_path")}</div>}
   </fieldset>;
 }

@@ -14,12 +14,13 @@ import (
 
 // Windows the rules use. Each is half open: the view changes at the window's end, which next_change_at names.
 const (
-	failedStartFor  = 48 * time.Hour   // row 1: a failed start needs the owner this long after the failure
-	justFinishedFor = 24 * time.Hour   // rows 6 and 9: closed work unseen, or finished work after it was seen
-	inactiveAfter   = 48 * time.Hour   // row 13: no activity this long gets the Inactive mark
-	usageLimitGrace = 10 * time.Minute // a usage limit still holds this long past its reset
-	retryGrace      = 5 * time.Minute  // a scheduled retry still counts this long past its wake_at (the hub's wakeGrace)
-	prFreshFor      = 15 * time.Minute // PR facts count this long after they were checked
+	failedStartFor       = 48 * time.Hour   // row 1: a failed start needs the owner this long after the failure
+	justFinishedFor      = 24 * time.Hour   // rows 6 and 9: closed work unseen, or finished work after it was seen
+	inactiveAfter        = 48 * time.Hour   // row 13: no activity this long gets the Inactive mark
+	usageLimitGrace      = 10 * time.Minute // a usage limit still holds this long past its reset
+	prFreshFor           = 15 * time.Minute // PR facts count this long after they were checked
+	stoppedFollowupAfter = time.Hour        // unfinished stops need follow-up only after a full hour
+	retryGrace           = 5 * time.Minute  // a scheduled retry still counts this long past its wake_at
 )
 
 // runKind is how one linked run stands, as far as the rules care; the order is the order runReading checks them in.
@@ -64,10 +65,24 @@ func (r run) title() string {
 
 // since is when the run got where it is: its session's state_since, else its updated_at.
 func (r run) since() time.Time {
+	if r.s.Work != nil && r.s.Work.Phase != proto.WorkWorking && !r.s.Starting &&
+		stateOf(*r.s) != proto.StateWorking && stateOf(*r.s) != proto.StateNeedsYou && !r.s.Work.TurnAt.IsZero() {
+		return r.s.Work.TurnAt
+	}
 	if !r.s.StateSince.IsZero() {
 		return r.s.StateSince
 	}
 	return r.s.UpdatedAt
+}
+
+func (r run) reportStatus() string {
+	if r.s.Work != nil && r.s.Work.Closeout != nil {
+		switch status := r.s.Work.Closeout.Status; status {
+		case proto.CloseoutDone, proto.CloseoutNotDone, proto.CloseoutBlocked:
+			return status
+		}
+	}
+	return ""
 }
 
 func parkEvidenceInteractionID(f *Facts) string {
@@ -165,26 +180,58 @@ func runReading(r run, now time.Time) runKind {
 	switch {
 	case st == proto.StateNeedsYou:
 		return runAsks
+	case s.Starting:
+		return runStarting
+	case st == proto.StateWorking && s.Assistant:
+		return runPersona
+	case st == proto.StateWorking && !s.BackgroundWorking:
+		return runRunning
+	case runningBackground(s):
+		return runBackground
+	case s.Work != nil && s.Work.Phase == proto.WorkWorking:
+		return runRunning
 	case usageLimited(s, now):
 		return runLimited
 	case interrupted(s, now):
 		return runInterrupted
 	case s.AwaitsReply && stopped(s):
 		return runAwaitsReply
+	case r.reportStatus() == proto.CloseoutDone:
+		return runUnread
+	case r.reportStatus() != "":
+		if waitsOn(s) != "" {
+			return runWaits
+		}
+		if waitsByItself(s, now) {
+			return runBackground
+		}
+		return runIdle
 	case st == proto.StateUnread:
 		return runUnread
 	case waitsOn(s) != "":
 		return runWaits
 	case waitsByItself(s, now):
 		return runBackground
-	case s.Starting:
-		return runStarting
-	case st == proto.StateWorking && s.Assistant:
-		return runPersona
-	case st == proto.StateWorking:
-		return runRunning
 	}
 	return runIdle
+}
+
+// A generic blocked/external hint is not execution. Keep actual background and child work distinct from it.
+func runningBackground(s proto.Session) bool {
+	if s.BackgroundWorking || len(s.Background) > 0 || s.Children().Working > 0 {
+		return true
+	}
+	for _, a := range s.Subagents {
+		if a.Running {
+			return true
+		}
+	}
+	for _, w := range s.Workflows {
+		if w.Running {
+			return true
+		}
+	}
+	return false
 }
 
 // stateOf is a session's state as the apps read it: the hub's, else worked out from its status.

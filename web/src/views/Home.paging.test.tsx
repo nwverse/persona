@@ -164,7 +164,7 @@ describe("Overview on a hub that pages its Agents list, with one assistant", () 
     try {
       act(() => FakeSocket.last.onmessage?.({ data: JSON.stringify({ type: "sessions_list", revision: "r2" }) }));
       await flush();
-      expect(summaryText()).toBe("1 个完成未看。");
+      expect(summaryText()).toBe("1 个新回复。");
       expect(liveRegion()).toBe("");
     } finally {
       rows[0] = row("m1", "working");

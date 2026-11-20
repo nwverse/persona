@@ -138,89 +138,56 @@ retire, while the checkout is retained (`docs/integrations/engines.md` "Task wor
 
 ### Needs you and In progress: each thing once (#3387)
 
-Above the Assistant's composer, **Needs you** lists the user's turn and **In progress** the work that does not need
-them. On the web, **Parked** is their peer for external waits, including ready review/merge waits (#9325), not a fold
-inside active work. Each thing is one row in exactly one entry, Needs you first; task badges use the shared open-count
-rule below. Native clients keep their existing two-entry presentation until they adopt this grouping:
+The 2026-11-18 decision in #10051, implemented in stages by #10174, replaces the five-peer-group proposal in #9823.
+The composer keeps **Needs you** and **In progress**. Awaiting acceptance is an uncounted **Just finished** group
+inside In progress; explicit parks and ready review/merge waits are **Waiting** inside it, not a Parked peer.
+Stopped unfinished work is a Needs you reason, not an entry of its own. The to-do list's decided section order is
+Needs you, Working, Waiting, To do, Just finished, then folded Someday and Done
+(`docs/design/proposals/todos-redesign.md`, "Owner decisions"). This slice does not build that new list or its bar.
 
-- **Needs you**: a task whose current agent asks something (one row, its cards under the task's name), a task waiting
-  for a decision that is the owner's (an open `ask`; `needs_user` on an open task; on Android and Apple also a
-  `pending_review` that is overdue, next bullet), one whose turn broke off on a model error (`interrupted`) or whose start failed while it is
-  still the user's to retry; in the main chat, an Agent opened by hand (no task) that asks something; a plan waiting
-  for Start (one row per plan); a message card waiting for Send; the conversation's own cards.
-- **A supervisor's review is not the owner's.** A supervised task judged finished waits in `pending_review` for its
-  supervisor (the background supervisor, a leader, or the conversation that handed it out; "Supervision" and
-  "Background supervisor" below), who closes it with `task_review`. That review is Persona's to do, so the Needs you
-  badge does not count it. It comes to the owner only when something of it is theirs: its agent asks, it has an open
-  `ask` (please verify), or the review ends in `needs_user`. Unchanged by this: the To-dos page's sections, the
-  direction tree's `review` state, the Today card's "Waiting for your review" and pushes. Before 2026-11-15 every
-  `pending_review` task was listed under Needs you, a rule older than the background supervisor (#4927): most of what
-  the owner was shown there was a review Persona finished on its own minutes later.
-  - **Web: Persona reviewing** (#8678, zh 等 Persona 验收, ja Persona の確認待ち): every such task with nothing of it
-    running (its status a finished turn, `awaitsReview`) is a row in an entry of its own, after In progress, however
-    long the review has waited and whether or not the hub sends `pending_since`. The entry is there only while one
-    waits (or its tray is open), is drawn neutral (a grey `ink-3` dot and `ink-2` label, never the attention or
-    working colour) since nothing in it is the user's, and counts its rows like the others. Its rows say "Supervisor
-    reviewing" (zh 督办验收中, ja 監督の確認待ち) and open the task. A task under
-    review whose PR is open and waits for a maintainer is here, not in Parked (`supervisor_review_with_open_pr`). A
-    review whose agent is at work again is In progress with it. Until #8678 the web put a review overdue by an hour
-    (or with no `pending_since`) in Needs you, as Android and Apple still do: users opened such a row, found only the
-    Agent's finished conversation and nothing to answer, and could not tell what was wanted of them. The entry keeps a
-    stalled or missing supervisor's review in sight without making it the owner's.
-  - **Android and Apple** (until they adopt the entry): the task is **In progress**, its row saying "Supervisor
-    reviewing", for the first hour of the review, and in Needs you after that (`supervision.pending_since`; the
-    threshold is `REVIEW_OVERDUE_MS` on Android, `AssistantEntries.reviewOverdueAfter` on Apple), or at once from a hub
-    that does not send `pending_since`. The row stays in In progress whatever the To-dos page files the task under,
-    each client re-reads the clock once a minute, and a task under review with an open PR is In progress, not Waiting
-    for merge, until the review is overdue. `spec/fixtures/entries` pins this split and, in `web_review`, the rows the
-    web lists under Persona reviewing instead.
-- **Parked** (web only, #9325): explicit supervisor holds and ready review/merge waits share one peer group. A fresh,
-  matching open non-draft PR with nothing active or awaiting the owner keeps the existing `pr_open` rule, now displayed
-  inside Parked. Generic person-reply holds do not become merge waits. The To-dos status list and All board use the
-  same classification. Multiple PRs keep their own links/blockers but the task has one row and count. Overdue holds stay
-  here until the hub actually wakes/reviews them, never auto-shelved or silently filed as finished. The entry appears
-  while it has rows or its tray is open; a hold's neutral clock replaces the Agent's finished-turn check. This slice
-  keeps the existing until/reason line; contact evidence, waiting age/order and reminders are separate work in #9289.
-  Android and iOS still use their earlier presentation and do not adopt this web group in this PR.
-- **In progress**: every other task the To-dos page counts open (#3331), and in the main chat each working Agent opened
-  by hand. A task's agents are never rows of their own. Shelved tasks fold under one uncounted line. A row may remain
-  visible without being counted open (a seen supervisor review); its `data-counts-open` flag keeps counted task rows
-  across Needs you, In progress, Parked and Persona reviewing equal to the To-dos header's "Not done", for the same
-  scope. Live questions, owner decisions and active work outrank both types of wait; the supervisor's review keeps its
-  own entry. Existing acceptance/deployed precedence and PR freshness are unchanged.
-- Finished tasks (done, cancelled, accepted) are in neither. The ones the conversation handed out that finished in the
-  last 24 hours are under **Finished** (next bullet); the board (**All**) has every finished task. An answered card moves its task
-  back to In progress. An entry with nothing counted (no number on it), Needs you or In progress, is grey and still opens:
-  to the rows it lists uncounted, or to its line ("All caught up", "Nothing in progress"); the web drew such an In
-  progress in its working blue and ink until 2026-11-14.
-- **Finished** (#10922, every client; zh-Hans 已完成, ja 完了): the tasks the conversation handed out (in the main
-  conversation every handed-out task, as for the other entries) that finished in the last 24 hours, seen or not, newest
-  finished first and the same moment by id. Finished means the To-dos page's Just finished or Done section (closed,
-  cancelled, accepted, deployed, or a finished turn the owner has already seen; never a failed start), and a task
-  finished at the moment its triage rule reads (`finishedAt`: its close, its accepting review, its deploy, else its last
-  move). The window is `JUST_DONE_MS`, the one the To-dos page keeps Just finished by, so a row nobody has opened since
-  it finished is exactly that section's: it keeps Just finished's look (the unread green as a plain dot and the word
-  "Just finished" / 刚做完待看 / 完了したばかり). Opening a row opens the task and marks it seen (`seen_at`, #5707),
-  which changes only that mark: the row stays, as Done (Accepted, Cancelled), until its 24 hours pass. The entry comes
-  after In progress (on the web after Parked and Persona reviewing), only while it has rows or its tray is open, and shows
-  how many rows it has. That number is finished work, not open work: the Needs you and In progress counts and the
-  To-dos page's "Not done" do not change. It is drawn quiet (secondary words; on the web and Android the done check's
-  green as its mark), and its tray's header has **All** like the others. Before #10922 the finished rows were an
-  uncounted Just finished group under In progress that held only the unseen ones, so opening one took it out of the tray
-  and only the board still had it. The split is each client's `finished` (web `assistantEntries`, Android
-  `assistantEntries`, iOS `AssistantEntries.split`), pinned by `spec/fixtures/entries` (`expected.finished`,
-  `expected.finished_new`).
-- **One home for an Agent several tasks list** (every client, 2026-11-14: web #7490, Android #7531, iOS / Mac #7532): an
-  Agent that more than one of the conversation's tasks lists asks under one of them, the task the hub ties its session
-  to (`Session.todo`), else the first that lists it (oldest card first; one plan's tasks in the plan's order, the web's
-  slot id `plan:<plan>:<index>`). Its cards are that task's row alone and are
-  counted once; the other tasks do not wait on the user for them and are In progress, unless a decision of their own
-  keeps them in Needs you (without the Agent's cards). Before, each task listing the Agent showed and counted the same
-  approval. The shared cases (`spec/fixtures/entries`) pin it; the whole-client Needs you rule is #5974's.
+- **Needs you**: a current Agent question, an open task ask or explicit `needs_user`, an interrupted turn, a failed
+  start the owner can retry, and stopped unfinished work unattended for **more than one hour**. A plan waiting for
+  Start, a draft waiting for Send, the conversation's own pending cards, and (in the main chat) an unbound Agent's
+  question keep their existing homes. A task linked to several Agents is one row; a shared Agent's requests have one
+  home, never one copy per linked task. Dismissing a decision round does not dismiss a live Agent question.
+- **Stopped unfinished**: an open, unaccepted dispatched task with no actual execution, no explicit external hold,
+  no active usage-limit wait and no `done` closeout. `not_done`, `blocked` and an absent closeout do not complete it.
+  During the follow-up window it remains on To-dos, not among finished work. After the window it is Needs you with
+  the reason `stopped_unfinished`; it does not acquire a second, peer entry.
+- **The one-hour clock** starts at the stopped turn (`work.turn_at`, then the older-hub state/link timestamps).
+  Confirmed successful `agent_send` from this task's supervisor and an explicit supervisor `task_review` reset it.
+  `supervision.followed_up_at` persists that evidence. Read receipts, automatic ledger writes or judgments, failed or
+  unknown sends and another conversation's send do not reset it. A send does not create a new review round.
+- **In progress** counts Working plus Waiting. Foreground, child and real background execution outrank a prior
+  closeout; a resumed Agent is Working, never a finished turn. Explicit parks remain Waiting until the hub changes
+  them, including an elapsed fallback, and cannot be hidden by an Agent's generic `blocked/external` state. PR waits
+  keep each PR's own link and blockers, while the task counts once. A named Agent/external wait also stays Waiting
+  (#10411), rather than becoming unattended work merely because an hour passed. A supervisor's pending acceptance is not active
+  work and does not become an owner decision merely because `pending_since` aged.
+- **Just finished** includes an Agent's `done` closeout awaiting supervisor acceptance, even when its reply was
+  already read. It is displayed beneath Working and Waiting but never counted in In progress. Its Agent says
+  **Reported done, awaiting acceptance**, not Accepted or Done. Only the existing owner/supervisor lifecycle can
+  accept or close the to-do. The redesign's hub projection owns the To-dos page's seen/24-hour filing rules.
+- **Finished** (#10922) lists handed-out work that finished in the last 24 hours, seen or not. It counts its own
+  rows. Opening a new row marks it seen and keeps it in Finished for the rest of that window. Reported work
+  awaiting acceptance keeps its uncounted group in In progress.
+- **Agent and to-do state are separate**: the Agent's row names its closeout (reported done, unfinished, blocked and
+  whom it waits for), while a separate to-do chip names pending review, rework, an explicit hold, acceptance or closure.
+  A working Agent can have a pending review or rework chip: restarting execution does not erase the ledger. Unread
+  means **New reply**, never proof that the task or turn finished. Narrow rows wrap their explanatory line without
+  hiding the title. Existing tokens, status marks and manual expansion remain unchanged.
+- **Counts have different units**: Needs you counts actionable rows; In progress counts Working plus Waiting;
+  Just finished is listed but uncounted. The To-dos header's broader Not done count also contains work not listed in
+  those two entries, so summing the badges is not its definition. No group switch accepts a task or dispatches work.
 
 An open task whose delivery is held for the owner appears in **Needs you** with the reason for the hold.
 A structured decision already shown for the task keeps its controls. A wait assigned to CI, a reviewer or an Agent
 continues to use the normal task placement.
+
+`spec/fixtures/entries` is replayed on Web, Apple and Android, including the exact hour, confirmed follow-up,
+read/restart, explicit-park precedence and accepted-task cases. The existing entry helpers remain a compatibility
+path while #10226 adds the hub's `view`; #10174 owns the single projection, new wire routes, list and later removal of
+client triage copies. This change adds no competing projection package or new phase/section values.
 
 The split is one pure function per client: web `assistantEntries` (`web/src/lib/assistant-entries.ts`), Android
 `assistantEntries` (`persona.core.domain.tasks`), iOS / iPad / Mac `AssistantEntries.split`

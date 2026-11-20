@@ -4,7 +4,7 @@
   "cases": [
     {
       "name": "held_quiet_row_keeps_unread_state_section",
-      "description": "打开后变为已看的 held 行仍保留完成未看分段，另一个普通已看行仍折叠。",
+      "description": "打开后变为已看的 held 行仍保留新回复分段，另一个普通已看行仍折叠。",
       "source": [
         "apple/Persona/Views/Chats/AgentListOrder.swift: rank(_:) returns the Unread rank for a quiet session whose key equals held",
         "apple/Persona/App/AppModel.swift: visibleSession clears heldInList when the visible chat changes; markSeen sets it for an opened Unread row",
@@ -84,7 +84,7 @@
         "groups": [
           {
             "id": "state/unread",
-            "title": "完成未看",
+            "title": "新回复",
             "rows": [
               "machine-a/held"
             ],
@@ -120,7 +120,7 @@
     },
     {
       "name": "held_quiet_space_stays_active",
-      "description": "held 行所在的全已看空间不收进空闲空间，held 行保持完成未看次序且不被空闲行折叠。",
+      "description": "held 行所在的全已看空间不收进空闲空间，held 行保持新回复次序且不被空闲行折叠。",
       "source": [
         "apple/Persona/Views/Chats/AgentListOrder.swift: stays(_:) keeps a held quiet row out of idle folds; isQuiet(_:) excludes its space",
         "apple/Persona/Views/Chats/ChatsView.swift: spaceSection(_:) uses ordered rows for an active space and slot order only for a quiet space",

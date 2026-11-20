@@ -1,7 +1,7 @@
 {
   "needs_you": "需要你",
   "working": "工作中",
-  "unread": "完成未看",
+  "unread": "新回复",
   "idle": "已看",
   "offline": "未运行",
   "unknown": "未知",
@@ -24,7 +24,7 @@
   "count_needs_you_other": "{count} 个需要你",
   "count_working_other": "{count} 个工作中",
   "count_bg_waiting_other": "{count} 个后台等待中",
-  "count_unread_other": "{count} 个完成未看",
+  "count_unread_other": "{count} 个新回复",
   "count_done_other": "{count} 个已完成",
   "mark_all_seen": "全部标为已看",
   "mark_all_seen_count": "全部标为已看（{count}）",

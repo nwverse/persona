@@ -130,7 +130,7 @@ class ChatHeaderWordsTest {
         says("flow", "工作中（后台）")
         says("wait", "后台等待中")
         says("busy", "工作中")
-        says("unread", "完成未看")
+        says("unread", "新回复")
         for (tag in listOf("loop", "tasks")) doesNotSay(tag, "待唤醒")
     }
 

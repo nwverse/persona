@@ -70,18 +70,19 @@ class AssistantEntriesDecisionDismissalTest {
         assertEquals(listOf("task:task"), got.needsYou.map { it.key })
     }
 
-    /** #8452: a review under an hour old is its supervisor's (In progress) whatever the dismissal; an overdue one is the
-     *  owner's decision, so a same-round Don't handle hides it. */
-    @Test fun dismissalOnlyHidesAReviewThatIsTheOwners() {
-        fun pending(sinceMs: Long) = dismissed.copy(supervision = dismissed.supervision!!.copy(state = "pending_review",
-            pendingSince = Instant.parse(at).minusMillis(sinceMs).toString()))
-        val young = run(pending(REVIEW_OVERDUE_MS - 1))
-        assertTrue(young.needsYou.isEmpty())
-        assertEquals(listOf("task:task"), young.running.map { it.key })
-        val overdue = run(pending(REVIEW_OVERDUE_MS))
-        assertTrue(overdue.needsYou.isEmpty())
-        assertTrue(overdue.running.isEmpty())
-        val undismissed = pending(REVIEW_OVERDUE_MS).copy(decisionReview = null)
-        assertEquals(listOf("task:task"), run(undismissed).needsYou.map { it.key })
+    /** A reported finish is the supervisor's acceptance work, not an owner decision that ages into Needs you. */
+    @Test fun dismissalDoesNotHideAnAcceptanceOrTurnItIntoAnOwnerDecision() {
+        val reported = idle.copy(work = persona.core.contracts.WorkState("done",
+            closeout = persona.core.contracts.Closeout("done")))
+        for (age in listOf(REVIEW_OVERDUE_MS - 1, REVIEW_OVERDUE_MS, REVIEW_OVERDUE_MS + 1)) {
+            val pending = dismissed.copy(supervision = dismissed.supervision!!.copy(state = "pending_review",
+                pendingSince = Instant.parse(at).minusMillis(age).toString()))
+            for (todo in listOf(pending, pending.copy(decisionReview = null))) {
+                val got = run(todo, reported)
+                assertTrue(got.needsYou.isEmpty())
+                assertTrue(got.running.isEmpty())
+                assertEquals(listOf("task:task"), got.justFinished.map { it.key })
+            }
+        }
     }
 }

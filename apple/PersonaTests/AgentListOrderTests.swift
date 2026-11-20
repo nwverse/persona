@@ -192,7 +192,7 @@ import PersonaWire
         #expect(!plain.awaitsReply && plain.asks == nil && !plain.awaitsYourReply(muted: false))
         let odd = try? JSON.decoder.decode(Session.self, from: Data(#"{"session_id":"x","awaits_reply":"yes","asks":3}"#.utf8))
         #expect(odd?.awaitsReply == false && odd?.asks == nil, "an odd value never drops the session")
-        #expect(!awaiting("u", state: "unread").awaitsYourReply(muted: false), "完成未看 is its own state")
+        #expect(!awaiting("u", state: "unread").awaitsYourReply(muted: false), "新回复 is its own state")
     }
 
     @Test func awaitingAReplyRanksBetweenUnreadAndWorking() {
@@ -292,7 +292,7 @@ import PersonaWire
         let list = [session("work", "working", updated: 10), read, session("old", "idle", updated: 40)]
         let held = AgentListOrder(isPinned: { _ in false }, isMuted: { _ in false }, held: read.key)
         #expect(held.stays(read), "out of 还有 N 个空闲 while it is open")
-        #expect(held.rank(read) == 1, "still 完成未看's place")
+        #expect(held.rank(read) == 1, "still 新回复's place")
         #expect(held.ordered(list).map(\.sessionID) == ["read", "work", "old"])
         let left = order()
         #expect(!left.stays(read) && left.rank(read) == AgentListOrder.stateKeys.firstIndex(of: "idle"), "folds as soon as it is left")

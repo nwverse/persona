@@ -188,6 +188,8 @@ data class Todo(
      *  that review (web #4874, docs/protocol/protocol.md `GET /api/v1/todos`); null otherwise and from an older hub. */
     @SerialName("decision_review") val decisionReview: DecisionReview? = null,
     @SerialName("pr_url") val prUrl: String? = null,
+    @SerialName("pr_status") val prStatus: TaskPRFacts? = null,
+    @SerialName("other_prs") val otherPrs: List<TaskPRFacts> = emptyList(),
     /** "code" or "general" (#3380): general work draws no stage bar, its status already says how it goes; null from an
      *  older hub, which keeps the bar for any stage. */
     @SerialName("stage_kind") val stageKind: String? = null,
@@ -337,6 +339,15 @@ data class TaskReview(
     val round: Int = 0,
     val checks: List<ReviewCheck> = emptyList(),
     val note: String? = null,
+    val by: String? = null,
+)
+
+@Serializable
+data class TaskPRFacts(
+    val url: String = "",
+    val state: String = "",
+    val draft: Boolean = false,
+    @SerialName("checked_at") val checkedAt: String? = null,
 )
 
 /**
@@ -356,6 +367,8 @@ data class Supervision(
     @WireTime @SerialName("updated_at") val updatedAt: String? = null,
     /** When the task entered `pending_review`; null in every other state, and from an older hub. */
     @WireTime @SerialName("pending_since") val pendingSince: String? = null,
+    /** A confirmed supervisor review or Agent send; automatic ledger updates do not reset this clock. */
+    @WireTime @SerialName("followed_up_at") val followedUpAt: String? = null,
     /** The agent's explicit report; missing counts never imply a percentage. */
     val progress: TaskProgress? = null,
 )

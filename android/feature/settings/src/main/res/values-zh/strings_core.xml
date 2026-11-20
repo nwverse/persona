@@ -420,7 +420,7 @@
     <string name="settings_triage_read_failed">读不到 Hub 上的设置：%1$s</string>
     <string name="settings_triage_save_failed">没改成：%1$s</string>
     <string name="settings_triage_model">分诊模型</string>
-    <string name="settings_triage_about">Agent 每停下一轮，Hub 用分诊模型读它最后的回复（每轮一次），在列表里写出做完了什么或在等什么，做完的不再算完成未看。</string>
+    <string name="settings_triage_about">Agent 每停下一轮，Hub 用分诊模型读它最后的回复（每轮一次），在列表里写出做完了什么或在等什么，做完的不再算新回复。</string>
     <string name="settings_triage_actions_header">Hub 替你做</string>
     <string name="settings_triage_decide">要你决定的开卡片</string>
     <string name="settings_triage_continue">出错自动继续</string>

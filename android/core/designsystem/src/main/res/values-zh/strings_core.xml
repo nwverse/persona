@@ -91,7 +91,7 @@
     <string name="designsystem_core_draft_placeholder_left">草稿里还有没填的「%1$s」</string>
     <string name="designsystem_core_agents_pinned">置顶</string>
     <string name="designsystem_core_state_needs_you">需要你</string>
-    <string name="designsystem_core_state_unread">完成未看</string>
+    <string name="designsystem_core_state_unread">新回复</string>
     <string name="designsystem_core_state_awaiting_reply">待你回复</string>
     <string name="designsystem_core_state_working">工作中</string>
     <string name="designsystem_core_state_background_waiting">后台等待中</string>
@@ -113,7 +113,7 @@
         <item quantity="other">%1$d 个工作中</item>
     </plurals>
     <plurals name="designsystem_core_count_unread">
-        <item quantity="other">%1$d 个完成未看</item>
+        <item quantity="other">%1$d 个新回复</item>
     </plurals>
     <plurals name="designsystem_core_count_idle">
         <item quantity="other">%1$d 个空闲</item>

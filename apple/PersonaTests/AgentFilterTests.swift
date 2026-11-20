@@ -77,7 +77,7 @@ import PersonaWire
     @Test func foldedHeaderSpeaksItsCounts() {
         let g = SpaceGroup.build([session("a", state: "needs_you"), session("b", state: "unread"), session("c", state: "unread"),
                                   session("d", state: "idle")]).first!
-        #expect(StateCounts.spoken(g) == "1 个需要你，2 个完成未看，1 个空闲")
+        #expect(StateCounts.spoken(g) == "1 个需要你，2 个新回复，1 个空闲")
     }
 
     /// Spaces that changed at the same moment keep one order: they swapped between renders before.

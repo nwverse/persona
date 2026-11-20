@@ -35,6 +35,7 @@ final class AssistantEntriesFixtureTests: XCTestCase {
         var needs_you: [String]
         var running: [String]
         var shelved: [String]
+        var just_finished: [String]
         var activity: [String: Activity?]?
         /// The In Progress rows that say their supervisor is reviewing them; nil in a case with none.
         var supervisor_review: [String]?
@@ -64,10 +65,11 @@ final class AssistantEntriesFixtureTests: XCTestCase {
             XCTAssertEqual(got.needsYou.map(\.id), c.expected.needs_you, "\(c.name): needs you")
             XCTAssertEqual(got.running.map(\.id), c.expected.running, "\(c.name): running")
             XCTAssertEqual(got.shelved.map(\.id), c.expected.shelved, "\(c.name): shelved")
+            XCTAssertEqual(got.justFinished.map(\.id), c.expected.just_finished, "\(c.name): just finished")
             XCTAssertEqual(got.finished.map(\.id), c.expected.finished ?? [], "\(c.name): finished")
             XCTAssertEqual(got.finished.filter(\.fresh).map(\.id), c.expected.finished_new ?? [], "\(c.name): finished, new")
             // each thing once, and each count is its rows
-            let all = (got.needsYou + got.running + got.shelved).map(\.id) + got.finished.map(\.id)
+            let all = (got.needsYou + got.running + got.shelved + got.justFinished).map(\.id) + got.finished.map(\.id)
             XCTAssertEqual(Set(all).count, all.count, "\(c.name): a thing in two places: \(all)")
             let content = ActionTrayContent(got)
             XCTAssertEqual(content.count(.needsYou), c.expected.needs_you.count, c.name)

@@ -20,7 +20,7 @@ class AgentsFilterNamesTest {
     @Test fun theStateFiltersUseTheSharedStateNamesInEveryLanguage() {
         val context = RuntimeEnvironment.getApplication()
         val expected = mapOf(
-            "zh" to listOf("需要你", "完成未看", "工作中", "后台等待中"),
+            "zh" to listOf("需要你", "新回复", "工作中", "后台等待中"),
             "en" to listOf("Needs you", "Unread", "Working", "Waiting in the background"),
             "ja" to listOf("要対応", "未確認", "作業中", "バックグラウンドで待機中"),
         )

@@ -4,17 +4,19 @@
 // Agent's own state and a to-do's state were drawn with different icon sets.
 import { t } from "../i18n";
 import { foldedState } from "./child-sessions";
+import { shownCloseout } from "./closeout";
 import { stateName, waitName, type WaitReason } from "./state-labels";
 import { reviewState, type Supervision } from "./supervision";
 import type { AgentState, Session } from "./types";
 
 /** What the Agent of a task row is doing, as its status column names it. */
 export type AgentRowKey = "working" | "waiting" | "needs_you" | "unread" | "idle" | "stopped" | "interrupted"
-  | "usage_limit" | "failed" | "starting" | "not_started";
+  | "usage_limit" | "failed" | "starting" | "not_started" | "reported_done" | "unfinished" | "blocked";
 
 const MARK: Record<AgentRowKey, AgentState> = {
   working: "working", needs_you: "needs_you", unread: "unread", idle: "idle", waiting: "idle", interrupted: "idle",
   usage_limit: "idle", stopped: "offline", failed: "offline", starting: "working", not_started: "offline", // as #7594 draws them
+  reported_done: "idle", unfinished: "idle", blocked: "idle",
 };
 
 /** The Agent's own state for a task row: live background work first, then the task's status where it is the Agent's
@@ -23,7 +25,14 @@ const MARK: Record<AgentRowKey, AgentState> = {
  *  there and quiet. `todo` false: no to-do yet (a plan card), so nothing has started; `starting`: its start is in flight
  *  (startInFlight), so a to-do nobody dispatched reads Not started (#7594). */
 export function agentRowKey(o: { live: boolean; status: string; lead?: Session; todo: boolean; starting: boolean }): AgentRowKey {
-  if (o.live) return "working";
+  if (o.live || o.lead && (foldedState(o.lead) === "working" || o.lead.starting || o.lead.work?.phase === "working")) return "working";
+  if (o.lead && foldedState(o.lead) === "needs_you") return "needs_you";
+  if (o.todo && o.status !== "needs_you") {
+    const closeout = shownCloseout(o.lead);
+    if (closeout?.status === "done") return "reported_done";
+    if (closeout?.status === "blocked" || o.lead?.work?.phase === "blocked" && o.lead.work.on === "external") return "blocked";
+    if (closeout?.status === "not_done" || o.status === "unread" || o.status === "follow_up" || o.status === "waiting") return "unfinished";
+  }
   switch (o.status) {
     case "needs_you": case "working": case "unread": case "waiting": case "interrupted": case "usage_limit": case "failed":
       return o.status;
@@ -44,8 +53,8 @@ export function agentRowMark(key: AgentRowKey): AgentState {
 }
 
 /** The status column's words for an Agent row key; a waiting one's say what it waits on (`wait`, lib/todo-wait-reason.ts
- *  waitReason, #11090; none reads as Paused, nothing needed from you). */
-export function agentRowLabel(key: AgentRowKey, wait?: WaitReason): string {
+ *  waitReason, #11090; none reads as Paused, nothing needed from you). `lead`: a blocked closeout's own waiting line. */
+export function agentRowLabel(key: AgentRowKey, lead?: Session, wait?: WaitReason): string {
   switch (key) {
     case "working": case "needs_you": case "unread": case "interrupted": case "failed":
       return stateName(key);
@@ -55,6 +64,11 @@ export function agentRowLabel(key: AgentRowKey, wait?: WaitReason): string {
     case "stopped": return t("assistant-tasks.agent_stopped");
     case "starting": return t("assistant-tasks.status_starting");
     case "not_started": return stateName("not_started");
+    case "reported_done": return t("assistant-tasks.agent_reported_done");
+    case "unfinished": return t("assistant-tasks.agent_unfinished");
+    case "blocked": return (shownCloseout(lead)?.waiting || lead?.work?.wait || lead?.work?.line)
+      ? t("assistant-tasks.agent_waiting_on", { waiting: (shownCloseout(lead)?.waiting || lead?.work?.wait || lead?.work?.line)! })
+      : t("assistant-tasks.agent_waiting");
   }
 }
 
@@ -78,13 +92,11 @@ export function todoChipState(o: { toStart: boolean; status: string; done: boole
   if (o.done || o.status === "done") return stateName("done");
   if (review === "parked") return t("assistant-tasks.review_parked");
   if (review === "needs_user") return t("assistant-tasks.review_needs_user");
-  // Awaiting review and rework are the to-do's state only while its Agent is not at work or asking: otherwise the row is
-  // that Agent's (its status column says so) and a review chip beside it would contradict it.
-  const agentBusy = o.status === "working" || o.status === "waiting" || o.status === "needs_you" || o.status === "unread";
-  if (review === "pending_review" && !agentBusy) return t("assistant-tasks.review_pending");
-  if (review === "rework" && !agentBusy) return t("assistant-tasks.review_rework", { round: o.todo?.supervision?.round ?? 1 });
+  // Execution and the supervisor ledger are independent: resuming an Agent does not erase the to-do's review state.
+  if (review === "pending_review") return t("assistant-tasks.review_pending");
+  if (review === "rework") return t("assistant-tasks.review_rework", { round: o.todo?.supervision?.round ?? 1 });
   if (o.stage === "merge" && o.pr) return t("assistant-tasks.todo_waiting_merge");
-  return undefined;
+  return o.todo ? t("assistant-tasks.review_ongoing") : undefined;
 }
 
 /** "To-do: Parked": a to-do state as its chip says it. */

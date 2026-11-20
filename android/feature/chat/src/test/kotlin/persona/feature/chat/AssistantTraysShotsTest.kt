@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
@@ -173,6 +174,72 @@ class AssistantTraysShotsTest {
         return image.getPixel(2, 2)
     }
 
+    @Test fun decidedEntriesKeepAcceptanceUncountedAndUnfinishedWorkInNeedsYou() {
+        val fixture = Fixture()
+        val at = Instant.now().toString()
+        val old = Instant.now().minusSeconds(3700).toString()
+        val states = listOf("owner" to "needs_user", "executing" to "", "reported" to "pending_review",
+            "unfinished" to "rework", "external" to "", "parked" to "parked")
+        fixture.returnedTodos = states.map { (id, state) ->
+            val stoppedAt = if (id == "unfinished") old else at
+            Todo(id, "Example $id", origin = "main", createdAt = stoppedAt, updatedAt = stoppedAt,
+                agents = listOf(TodoAgent("box", id, linkedAt = stoppedAt)),
+                supervision = Supervision(supervisor = "main", state = state, round = 1))
+        }
+        val agents = states.map { (id, _) ->
+            val stoppedAt = if (id == "unfinished") old else at
+            Session("box", id, title = "Example $id Agent",
+                state = if (id == "executing") "working" else "idle", status = if (id == "executing") "working" else "idle",
+                updatedAt = stoppedAt, stateSince = stoppedAt,
+                work = persona.core.contracts.WorkState(if (id == "executing") "working" else if (id in listOf("external", "parked")) "blocked" else "",
+                    on = "external", turnAt = stoppedAt,
+                    closeout = persona.core.contracts.Closeout(if (id == "reported") "done" else if (id in listOf("external", "parked")) "blocked" else "not_done",
+                        waiting = "the maintainer to re-review the release")))
+        }
+        fixture.tasks.reloadTodos()
+        val host = AssistantTaskHost(fixture.tasks, "main", agents, { it }, {}, { throw it }, {})
+        val tray = AssistantTrayState()
+        var dark by mutableStateOf(false)
+        var large by mutableStateOf(false)
+        rule.setContent {
+            val density = androidx.compose.ui.unit.Density(LocalDensity.current.density, if (large) 2f else 1f)
+            CompositionLocalProvider(LocalDensity provides density) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true) {
+                    Column(Modifier.width(400.dp).background(PersonaTheme.palette.background).testTag("assistant-page-shot")) {
+                        AssistantTrays(host, tray, emptyList(), emptyList(), emptyList(), { 700.dp }, busy = false, enabled = true,
+                            onApprove = {}, onReview = {}, onSend = {}, onSchedule = {})
+                    }
+                }
+            }
+        }
+        for (big in listOf(false, true)) for (night in listOf(false, true)) {
+            large = big; dark = night; tray.expanded = null; settle()
+            for (tag in listOf("needs", "running")) rule.onNodeWithTag("assistant-entry-$tag").assert(hasText("2"))
+            for (tag in listOf("review", "stopped", "parked")) rule.onNodeWithTag("assistant-entry-$tag").assertDoesNotExist()
+            val variant = "${if (night) "dark" else "light"}-${if (big) "large" else "standard"}"
+            rule.tapTray("running"); settle()
+            rule.onNode(hasScrollToIndexAction() and hasAnyAncestor(hasTestTag("assistant-tray-running")))
+                .performScrollToNode(hasTestTag("assistant-progress-todo:reported"))
+            rule.onNodeWithTag("assistant-progress-todo:reported").assertIsDisplayed()
+            rule.onNodeWithText("Reported done · awaiting acceptance").assertIsDisplayed()
+            rule.onNodeWithText("Done").assertDoesNotExist()
+            rule.onNodeWithTag("assistant-progress-todo:external").assertDoesNotExist()
+            shot("aligned-closeouts-$variant-acceptance")
+            rule.onNode(hasScrollToIndexAction() and hasAnyAncestor(hasTestTag("assistant-tray-running")))
+                .performScrollToNode(hasTestTag("assistant-progress-todo:parked"))
+            rule.onNodeWithTag("assistant-progress-todo:parked").assertIsDisplayed()
+            rule.tapTray("needs"); settle()
+            rule.onNode(hasScrollToIndexAction() and hasAnyAncestor(hasTestTag("assistant-tray-needs")))
+                .performScrollToNode(hasTestTag("assistant-progress-todo:unfinished"))
+            rule.onNodeWithTag("assistant-progress-todo:unfinished").assertIsDisplayed()
+                .assert(hasText("To-do: Rework round 1"))
+            rule.onNodeWithText("Stopped · unfinished").assertIsDisplayed()
+            rule.onAllNodesWithTag("assistant-work-spinner", useUnmergedTree = true).assertCountEquals(0)
+            assertTrue(fixture.accepted.isEmpty()); assertTrue(fixture.patches.isEmpty())
+            shot("aligned-closeouts-$variant-needs-you")
+        }
+    }
+
     @Test
     @Config(sdk = [35], qualifiers = "zh-w400dp-h1000dp-xhdpi")
     fun backgroundWorkUsesOneSpinnerAndRealWaitUsesClockInEveryStyle() {
@@ -238,6 +305,9 @@ class AssistantTraysShotsTest {
                 fixture.sessionRows.value = fixture.sessionRows.value.map { if (it.key == workers[0].key)
                     workers[0].copy(state = "idle", status = "idle", backgroundWorking = false, backgroundTasksCount = 0,
                         work = persona.core.contracts.WorkState(phase = "blocked", on = "external", wait = "Wait for deployment")) else it }; settle()
+                fixture.returnedTodos = fixture.returnedTodos.map { if (it.id == "background-0") it.copy(
+                    supervision = Supervision(supervisor = "main", state = "parked")) else it }
+                fixture.tasks.reloadTodos(); settle()
                 shot("waiting-${s.name.lowercase()}-${if (d) "dark" else "light"}-${if (big) "large" else "default"}")
                 rule.onNodeWithTag("assistant-wait-clock", useUnmergedTree = true).assertIsDisplayed()
                 rule.onAllNodesWithTag("assistant-agent-manual").assertCountEquals(0)
@@ -490,19 +560,19 @@ class AssistantTraysShotsTest {
     /** A task whose agent stopped while the hub's completion check found it waiting (#3180): its Progress row says why it is
      *  not done, in every style, light and dark. */
     @Test fun aStoppedTaskSaysWhyItIsNotDoneInEveryStyle() =
-        stoppedTaskShots("progress-stopped", "Stopped, not done yet · Waiting for CI to finish", "Stopped", "In progress", AppStyle.entries)
+        stoppedTaskShots("progress-stopped", "Stopped, not done yet · Waiting for CI to finish", "Stopped · unfinished", "In progress", AppStyle.entries)
 
     /** The same in Chinese: 已停下 on the right (#3576). */
     @Test @Config(qualifiers = "zh-w400dp-h900dp-xhdpi")
     fun aStoppedTaskSaysWhyItIsNotDoneInChinese() =
-        stoppedTaskShots("progress-stopped-zh", "停下了，还没完成 · Waiting for CI to finish", "已停下", "进行中", listOf(AppStyle.Glass))
+        stoppedTaskShots("progress-stopped-zh", "停下了，还没完成 · Waiting for CI to finish", "停下·没做完", "进行中", listOf(AppStyle.Glass))
 
     private fun stoppedTaskShots(name: String, line: String, stoppedLabel: String, runningLabel: String, styles: List<AppStyle>) {
         val fixture = Fixture()
         val stopped = Session("computer-a", "stopped", title = "Ship the settings page", state = "idle", status = "done",
-            lastText = "Pushed the branch and opened the PR")
+            lastText = "Pushed the branch and opened the PR", updatedAt = "2026-11-01T10:00:00Z")
         fixture.sessionRows.value = fixture.sessionRows.value + stopped
-        fixture.returnedTodos = todoRows + Todo("task-d", stopped.title, origin = "main", agents = listOf(TodoAgent(stopped.machineId, stopped.sessionId)),
+        fixture.returnedTodos = todoRows + Todo("task-d", stopped.title, origin = "main", createdAt = "2026-11-01T09:00:00Z", agents = listOf(TodoAgent(stopped.machineId, stopped.sessionId, linkedAt = "2026-11-01T09:00:00Z")),
             prUrl = "https://github.com/example/project/pull/57",
             check = TodoCheck("waiting", "Waiting for CI to finish", "2026-11-01T10:00:00Z", "2026-11-01T09:00:00Z"))
         fixture.tasks.reloadTodos()
@@ -528,18 +598,21 @@ class AssistantTraysShotsTest {
         }
         settle()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("assistant-tray-bar").fetchSemanticsNodes().isNotEmpty() }
-        rule.onNodeWithTag("assistant-entry-running").performClick(); settle()
-        rule.onNodeWithText("Ship the settings page").performScrollTo()
+        rule.tapTray("needs"); settle()
         for (s in styles) for (d in listOf(false, true)) {
             style = s; dark = d; settle()
-            rule.onNodeWithTag("assistant-tray-running").assertIsDisplayed()
+            val advancing = rule.mainClock.autoAdvance
+            rule.mainClock.autoAdvance = true
+            try { rule.onNodeWithText("Ship the settings page").performScrollTo() }
+            finally { rule.mainClock.autoAdvance = advancing }
+            rule.onNodeWithTag("assistant-tray-needs").assertIsDisplayed()
             rule.onNodeWithText(line).assertIsDisplayed()
             rule.onNodeWithText("Pushed the branch and opened the PR").assertDoesNotExist()
             // its agents all stopped: it says Stopped, not In progress, and draws no spinning bar (#3576)
             rule.onNodeWithTag("assistant-progress-todo:task-d").assert(hasText(stoppedLabel)).assert(!hasText(runningLabel))
             rule.onAllNodes(hasProgressBarRangeInfo(androidx.compose.ui.semantics.ProgressBarRangeInfo.Indeterminate) and
                 hasAnyAncestor(hasTestTag("assistant-progress-todo:task-d")), useUnmergedTree = true).assertCountEquals(0)
-            rule.onNodeWithTag("assistant-progress-todo:task-a").assert(hasText(runningLabel))
+            rule.onNodeWithTag("assistant-progress-todo:task-a").assertDoesNotExist()
             shot("$name-${s.name.lowercase()}-${if (d) "dark" else "light"}")
         }
     }

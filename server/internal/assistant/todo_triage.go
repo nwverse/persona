@@ -39,6 +39,7 @@ const (
 	ruleAgentAsks      = "agent_asks"
 	ruleOwnerDecides   = "owner_decides"
 	ruleAgentRunning   = "agent_running"
+	ruleParked         = "parked"
 	ruleClosed         = "closed"
 	ruleAccepted       = "accepted"
 	ruleDeployed       = "deployed"
@@ -365,6 +366,24 @@ func triageShelvable(t Todo, now time.Time, loc *time.Location) bool {
 // filed under Done.
 // restoredAt is a restore from Shelved (zero on the hub: restores are kept on each device); loc is the user's zone, for
 // a due day; superseded: a failed start whose row's work really finished (triageSupersededFailedStarts, #3713).
+func triageExecuting(t Todo, look triageLookup) bool {
+	if look == nil {
+		return false
+	}
+	for _, a := range t.Agents {
+		if a.ReleasedAt != nil || a.StartError != "" {
+			continue
+		}
+		if s, ok := look(a.MachineID, a.SessionID); ok &&
+			(triageStateOf(s) == proto.StateWorking || s.Starting || s.BackgroundWorking || backgroundRunning(s) ||
+				s.Children().Working > 0 ||
+				s.Work != nil && s.Work.Phase == proto.WorkWorking) {
+			return true
+		}
+	}
+	return false
+}
+
 func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc *time.Location, superseded bool) todoTriage {
 	last := triageLastActivity(t, look, restoredAt)
 	status := triageStatus(t.Todo, look, now)
@@ -401,10 +420,15 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 	case t.DoneAt == nil && (t.Delivery.waitsForOwner() ||
 		!dismissed && (review == reviewNeedsUser || ask != nil && (ask.Outcome == outcomeDecide || ask.Outcome == outcomeCannot))):
 		return at(triageWaiting, ruleOwnerDecides)
+	case t.DoneAt == nil && review == reviewParked && triageExecuting(t.Todo, look):
+		return at(triageWorking, ruleAgentRunning)
 	case !settled && !(finished && !seen(last) && review != reviewParked) && triageWaitingForMerge(t, status, now):
 		// rule 9 after rule 8: a turn or review nobody has looked at stays Just finished even with its PR open. A parked
 		// hold is its supervisor's reading of the latest turn, so an agent session left unread does not hide its PR.
 		return at(triagePR, rulePROpen)
+	case t.DoneAt == nil && review == reviewParked:
+		// Generic external waiting is not execution and cannot hide an explicit supervisor hold.
+		return at(triagePR, ruleParked)
 	case status == "working" || status == "waiting":
 		return at(triageWorking, ruleAgentRunning)
 	case t.DoneAt != nil:

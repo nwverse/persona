@@ -105,7 +105,7 @@ class AssistantTrayNavigationTest {
     }
 
     @Test fun pendingTaskTitleOpensItsRealDetailSheet() {
-        val todo = Todo("task", "Review the release result", origin = "main", supervision = Supervision(state = "pending_review"))
+        val todo = Todo("task", "Review the release result", origin = "main", supervision = Supervision(state = "needs_user"))
         val fixture = Fixture(todos = listOf(todo))
         show(fixture)
         rule.onNodeWithText(todo.title).performClick()
@@ -174,7 +174,7 @@ class AssistantTrayNavigationTest {
     }
 
     @Test fun navigationRowsRenderInEveryStyleAndAppearance() {
-        val todo = Todo("task", "Review the release result", origin = "main", supervision = Supervision(state = "pending_review"))
+        val todo = Todo("task", "Review the release result", origin = "main", supervision = Supervision(state = "needs_user"))
         val fixture = Fixture(todos = listOf(todo), sessions = listOf(agent), requests = listOf(permission), drafts = listOf(draft))
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)

@@ -54,7 +54,7 @@ describe("快速筛选（iOS AgentFilter）", () => {
     expect(matchingKeys(after, "all", none).size).toBe(0);
   });
 
-  it("全部标为已读只标完成未看的", () => {
+  it("全部标为已读只标新回复的", () => {
     expect(ids(unreadOf([session("a", "unread"), session("b", "idle"), session("c", "needs_you"), session("d", "unread")]))).toEqual(["a", "d"]);
   });
 

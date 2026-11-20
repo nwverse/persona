@@ -46,7 +46,7 @@ describe("Parked grouping", () => {
     expect(entries.parked.map((item) => item.key).sort()).toEqual(["task:review", "task:supplier"]);
     expect(entries.running.map((item) => item.key)).toEqual(["task:active"]);
     expect(entries.needsYou.map((item) => item.key)).toEqual(["task:decision"]);
-    const counted = [...entries.needsYou, ...entries.running, ...entries.parked, ...entries.review].filter((item) => item.kind === "task" && item.countsOpen);
+    const counted = [...entries.needsYou, ...entries.running, ...entries.parked].filter((item) => item.kind === "task" && item.countsOpen);
     expect(counted).toHaveLength(page.open);
     expect(new Set(counted.map((item) => item.key)).size).toBe(page.open);
     const board = boardSections(list.map((todo) => ({ todo, status: todoStatus(todo, lookup), parked: triage(todo, lookup, now).section === "parked" })), []);
@@ -91,6 +91,7 @@ describe("Parked grouping", () => {
     expect(triageTodos([todo], lookup, now).open).toBe(1);
     const entries = assistantEntries({ conversation: "main", main: "main", todos: [todo], sessions: [worker], interactions: [], plans: {}, feed: [], now });
     expect(entries.parked).toEqual([]);
-    expect(entries.review).toMatchObject([{ key: "task:review", countsOpen: true }]);
+    expect(entries).not.toHaveProperty("review");
+    expect(entries.justFinished).toMatchObject([{ key: "task:review", countsOpen: false }]);
   });
 });
