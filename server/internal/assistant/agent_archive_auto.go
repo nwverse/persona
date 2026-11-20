@@ -18,9 +18,10 @@ import (
 // Never archived (autoArchivable): a session still in a host (a pane or an engine host, whatever state the host
 // reads), or working, starting or with background work; one
 // with a card waiting or queued input; one the manager is to wake or continue (session_work); one linked to an open
-// to-do; one the owner filed under a current direction (direction_sessions_keep.go, #11515); an assistant conversation; a review's reviewer; a subagent's row; a session another tool owns (its archive
-// would also move it in that tool); a desktop app's session, which that app's sidebar keeps whatever its age (only an
-// archive there or the user's here takes it off, #3304); with no to-do, one whose last words ask the user something.
+// to-do; one the owner filed under a current direction (direction_sessions_keep.go, #11515); an assistant
+// conversation; a review's reviewer; a subagent's row; a session another tool owns (its archive would also move it in
+// that tool); a desktop app's session, which that app's sidebar keeps whatever its age (only an archive there or the
+// user's here takes it off, #3304); with no to-do, one whose last words ask the user something.
 
 const (
 	// defaultArchiveClosedDays is archive_closed_days when unset; 0 turns the pass off.

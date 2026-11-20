@@ -461,8 +461,8 @@ func (s *Service) launcherNow(ctx context.Context) string {
 
 // profile is what the hub's features need of the settings (Snapshot.Profile); tasks are the scheduled tasks and todos
 // the open todos' agents as reported (either nil: unreadable, and Keep is left out, so the nodes keep what they list;
-// so it is when what places the directions' sessions cannot be read, directionKeep). nil when the settings could not
-// be read.
+// Keep is left out too when what places the directions' sessions cannot be read, directionKeep). nil when the
+// settings could not be read.
 func (s *Service) profile(ctx context.Context, tasks []TaskView, todos *TodoReport) *Profile {
 	saved, ok := s.savedSettings(ctx)
 	if !ok {
