@@ -1958,9 +1958,9 @@ Imported when merging main line 2026-11-02: pitfalls from the old single-module 
   must be in a pane starting at window top; `statusBarsPadding()` pages (`PageHeader`, chat top bar) go in a pane offset only by shell bar height, adding status-bar space themselves.
 - Moving pages in composition (single ↔ two panes) loses `remember` / `rememberSaveable`; cross-layout state like drafts belongs outside the page.
 
-- Hub stores one phone_* list (`setPhoneTools`), replaced by every `register_phone`; calls go to last registered `phoneClient`.
+- Hub keeps each device's phone_* list (`setPhoneTools`), replaced by that device's next `register_phone`; a call goes to the primary device the owner chose, else to the connected device that offers the tool and was active last (`phoneClient`, `docs/apple/phone-tools.md` "Which device takes a call").
   Android tools must exactly match iOS, no extras or parameter changes. Since Android 10 only foreground Apps can read clipboard; background `phone_clipboard_get` gets empty and explains in result.
-- With two connected phones, phone_* goes to last registered: close Persona on physical phone when testing emulator tools, or calls reach that phone and time out if its data source is off.
+- With a physical phone also connected, phone_* goes to the physical phone (an emulator registers as a simulator, which takes calls only when no real device is connected) or to the primary device chosen on iPhone or iPad: close Persona on the physical phone when testing emulator tools, or calls reach that phone and time out if its data source is off.
   Claude Code reads tool list only on startup; newly added tools need a new session.
 - Emulator has no writable calendar account by default; `phone_calendar_create_event` says "no writable calendar". Create a LOCAL calendar with `content insert` for tests.
 - Opening a pairing link while paired: clear `pendingPair` only after pairing completes. Earlier clearing makes Root switch back immediately, disposes pairing page/coroutine, and loses the link.
