@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
 
 // Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md, #930). The assistant hands the user a plan
@@ -62,14 +63,17 @@ type PlanTask struct {
 	Workspace         *TaskWorkspace         `json:"workspace,omitempty"`
 	WorkspaceResolved *TaskWorkspaceResolved `json:"workspace_resolved,omitempty"`
 	// Hub-owned identity for the default branch's preview, before a todo exists.
-	ReservedTodoID    string `json:"reserved_todo_id,omitempty"`
-	WorkspaceInferred bool   `json:"workspace_inferred,omitempty"`
-	Launcher          string `json:"launcher,omitempty"`
-	Model             string `json:"model,omitempty"`
-	Effort            string `json:"effort,omitempty"`
-	Speed             string `json:"speed,omitempty"`
-	Tier              string `json:"tier,omitempty"`
-	Permission        string `json:"permission,omitempty"`
+	ReservedTodoID     string                 `json:"reserved_todo_id,omitempty"`
+	BackendStartDigest string                 `json:"backend_start_digest,omitempty"`
+	WorkspaceError     *taskworkspace.Problem `json:"workspace_error,omitempty"`
+	backendRequest     *taskworkspace.Request
+	WorkspaceInferred  bool   `json:"workspace_inferred,omitempty"`
+	Launcher           string `json:"launcher,omitempty"`
+	Model              string `json:"model,omitempty"`
+	Effort             string `json:"effort,omitempty"`
+	Speed              string `json:"speed,omitempty"`
+	Tier               string `json:"tier,omitempty"`
+	Permission         string `json:"permission,omitempty"`
 	// Ultracode: the agent starts with Claude Code's ultracode on (#12). A pointer so that an edit from the card can
 	// turn it off, and one from a client that does not know it keeps the assistant's choice.
 	Ultracode *bool `json:"ultracode,omitempty"`
@@ -184,6 +188,8 @@ type PlanTask struct {
 	rememberKind bool
 	// task_spawn preserves the caller's mode instead of applying a fresh task's Claude-family permission default.
 	preservePermission bool
+	// A spawned session can inherit a known launcher default even when agent.new configures another model.
+	launcherDefaultModel bool
 	// planFirst: start defaults asked for the self-planning constraint in the prompt (start_defaults.go); never
 	// serialized, this try only.
 	planFirst bool

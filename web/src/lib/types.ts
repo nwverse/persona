@@ -157,6 +157,8 @@ export interface SessionCapabilities {
   read?: boolean;
   send?: boolean;
   interrupt?: boolean;
+  queue_edit?: boolean;
+  queue_send_now?: boolean;
   approve?: boolean;
   terminal?: boolean;
   attach?: boolean;

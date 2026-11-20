@@ -191,6 +191,11 @@ const (
 	// conversation (Data: conversation_agent, launcher, launcher_agent, delivered "none"): the hub answers 409, nothing
 	// was sent, and the conversation keeps its agent (docs/assistant/assistant.md, #4662).
 	CodeLauncherOtherKind = "launcher_other_kind"
+	// CodeConversationBusy: an assistant conversation is at work (a turn, background tasks) and its task-follow-up role
+	// changed, so the message would need a new process with the new role while the old one still works. Nothing was
+	// sent. The hub keeps an owner's message with an id (MethodKeepUndelivered); the manager sends it again once the
+	// conversation is idle, resolving the role again, so it starts on the new role and the old one never gets it.
+	CodeConversationBusy = "busy"
 	// CodeSupervisionRuntime means the runtime cannot receive separate supervision instructions. Nothing was sent.
 	CodeSupervisionRuntime = "assistant_supervision_runtime"
 	// CodeBodyIncomplete: MethodHTTPStreamed's body did not arrive whole (the relay was not there, broke or carried
@@ -331,6 +336,12 @@ var Routes = []string{
 	"GET /api/v1/todos/{id}",                // one to-do as the list has it, with its view
 	"GET /api/v1/todos/{id}/images/{image}", // one attached picture's exact bytes (todo_images.go, #11084)
 	"GET /api/v1/todos/{id}/repositories",
+	"GET /api/v1/todos/{id}/backend-workspace",
+	"GET /api/v1/todos/{id}/backend-workspace/operations/{operation_id}",
+	"POST /api/v1/todos/{id}/backend-workspace/prepare",
+	"POST /api/v1/todos/{id}/backend-workspace/start",
+	"POST /api/v1/todos/{id}/backend-workspace/cancel",
+	"POST /api/v1/todos/{id}/backend-workspace/cleanup",
 	"GET /api/v1/todos/{id}/workspace-rules",
 	"PUT /api/v1/todos/{id}/workspace-rules",
 	"POST /api/v1/todos/{id}/workspace-naming/preview",

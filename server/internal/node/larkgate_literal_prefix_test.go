@@ -105,3 +105,33 @@ func TestLarkContactSearchIsARead(t *testing.T) {
 		t.Fatalf("reported write risk was lost: %+v", v)
 	}
 }
+
+func TestLarkUnparsedWrapperGateNames(t *testing.T) {
+	for _, tc := range []struct {
+		name, command string
+		cards         int
+	}{
+		{"env split string gated write", `env -S "ex POST /messages/example/recall"`, 1},
+		{"env long split string gated write", `env --split-string="ex POST /messages/example/recall"`, 1},
+		{"direct gated write control", `ex POST /messages/example/recall`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, tc.cards) })
+	}
+}
+
+func TestLarkResolvedPrefixScope(t *testing.T) {
+	for _, tc := range []struct {
+		name, command string
+		cards         int
+	}{
+		{"direct read piped into script", `lark-cli docs +fetch --doc-id example | python3 /opt/example/reader.py`, 1},
+		{"variable read piped into script", `READER="python3 /opt/example/reader.py"; lark-cli docs +fetch --doc-id example | $READER`, 1},
+		{"direct script piped into read", `python3 /opt/example/reader.py | lark-cli docs +fetch --doc-id example`, 1},
+		{"variable script piped into read", `READER="python3 /opt/example/reader.py"; $READER | lark-cli docs +fetch --doc-id example`, 1},
+		{"same words in a later literal segment", `READER="python3 /opt/example/reader.py"; $READER; python3 /opt/example/reader.py; lark-cli docs +fetch --doc-id example`, 1},
+		{"resolved script in a separate sequential pipeline", `READER="python3 /opt/example/reader.py"; timeout 60 $READER list < /dev/null 2>&1 | head -30; lark-cli contact +search-user --as user --query example 2>/dev/null | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))' | head -5`, 0},
+		{"resolved opaque program in a sequential prefix", `READER="python3 /opt/example/reader.py"; $READER list; lark-cli docs +fetch --doc-id example`, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, tc.cards) })
+	}
+}
