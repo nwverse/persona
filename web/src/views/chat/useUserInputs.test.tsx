@@ -7,14 +7,11 @@ import { ApiError } from "../../lib/api";
 import type { UserInputIndex } from "../../lib/user-input-index";
 
 const pending = vi.hoisted(() => [] as { path: string; resolve: (value: unknown) => void; signal?: AbortSignal }[]);
-vi.mock("../../lib/api", async (importOriginal) => {
-  const { ApiError, sessionHistoryNotFound } = await importOriginal<typeof import("../../lib/api")>();
-  return {
-    ApiError, sessionHistoryNotFound,
-    sessionPath: (mid: string, sid: string) => `/sessions/${mid}/${sid}`,
-    api: (path: string, opts: { signal?: AbortSignal }) => new Promise((resolve) => pending.push({ path, resolve, signal: opts.signal })),
-  };
-});
+vi.mock("../../lib/api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../lib/api")>(),
+  sessionPath: (mid: string, sid: string) => `/sessions/${mid}/${sid}`,
+  api: (path: string, opts: { signal?: AbortSignal }) => new Promise((resolve) => pending.push({ path, resolve, signal: opts.signal })),
+}));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let destroy: (() => void) | undefined;
 afterEach(() => { destroy?.(); destroy = undefined; pending.length = 0; vi.useRealTimers(); });
@@ -89,6 +86,23 @@ describe("independent user-input metadata", () => {
     await act(async () => pending[0].resolve(Promise.reject(new ApiError(404, "No such computer", { code: "not_found" }))));
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
     expect(pending).toHaveLength(2);
+  });
+
+  it("retries a detail-only history 404 after 3 seconds and recovers", async () => {
+    vi.useFakeTimers();
+    const host = document.createElement("div"); const root = createRoot(host);
+    let got: UserInputIndex | null = null;
+    const read = (): UserInputIndex | null => got;
+    function Probe() { got = useUserInputs("example", "synthetic", "fixture", "last", true); return null; }
+    act(() => root.render(<Probe />)); destroy = () => act(() => root.unmount());
+    await act(async () => pending[0].resolve(Promise.reject(new ApiError(404, "Persona can't find its history",
+      { code: "not_found", detail: "transcript for session synthetic not found" }))));
+    await act(async () => { await vi.advanceTimersByTimeAsync(2999); });
+    expect(pending).toHaveLength(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(pending).toHaveLength(2);
+    await act(async () => pending[1].resolve(answer("fixture", 8)));
+    expect(read()?.total).toBe(8);
   });
 
   it("retries unsupported or incomplete indexes instead of permanently freezing the tail count", async () => {

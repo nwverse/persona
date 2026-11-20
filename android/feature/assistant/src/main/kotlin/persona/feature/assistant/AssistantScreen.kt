@@ -981,10 +981,8 @@ fun AssistantScreen(
                             // A new conversation's launcher, for it alone (iOS StarterComposer, web StarterLauncherChip); Glass's is the pill.
                             accessory = if (homeForwards.isNotEmpty() || starterQuotes.isNotEmpty() ||
                                 (active == null && !healthPage && pageManagement != null && startConversationWith != null && !demo)) ({
-                                homeForwards.forEach { ref ->
-                                    persona.feature.chat.ForwardComposerCard(ref, lines = if (homeForwards.size == 1) 2 else 1) {
-                                        persona.feature.chat.ForwardPlacements.home = persona.feature.chat.ForwardPlacements.home.filterNot { it.id == ref.id }
-                                    }
+                                persona.feature.chat.ForwardComposerCards(homeForwards) { removed ->
+                                    persona.feature.chat.ForwardPlacements.home = persona.feature.chat.ForwardPlacements.home - removed.toSet()
                                 }
                                 if (active == null && !healthPage && pageManagement != null && startConversationWith != null && !demo) {
                                     if (mentionsHere) StarterQuoteCards(starterMentions)

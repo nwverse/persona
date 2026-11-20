@@ -80,6 +80,7 @@ func TestReadsOfAGoneTranscriptAreNotFound(t *testing.T) {
 		for _, call := range []struct{ method, params string }{
 			{"session.items", `{"session_id":"` + id + `","turns":2}`},
 			{"session.items", `{"session_id":"` + id + `","limit":80}`},
+			{"session.items", `{"session_id":"` + id + `","after_seq":40}`},
 			{"session.items", `{"session_id":"` + id + `","user_inputs":true}`},
 			{"session.item", `{"session_id":"` + id + `","item_id":"x"}`},
 			{"session.image", `{"session_id":"` + id + `","item_id":"x"}`},
@@ -98,6 +99,18 @@ func TestReadsOfAGoneTranscriptAreNotFound(t *testing.T) {
 		t.Errorf("watch: %v", err)
 	}
 	n.unwatch(agent)
+}
+
+// A pi-family fallback id is runtime-shaped too, but the node's own record says this is no runtime conversation whose
+// history may come back. If its extension never reported a session id and no transcript was written, it is known and gone.
+func TestReadsOfANodeOwnedRuntimeShapedIDAreNotFound(t *testing.T) {
+	n, home := testNode(t)
+	const id = "omp-w1-p2"
+	n.state.put(id, sessionState{Launcher: "omp", Cwd: home, StartedAt: time.Now().Add(-time.Hour).UTC()})
+	_, err := n.handle(context.Background(), "session.items", json.RawMessage(`{"session_id":"`+id+`","turns":2}`))
+	if rpcCode(err) != codeNotFound || notFoundReason(err) != proto.NotFoundNoTranscript {
+		t.Fatalf("a recorded node-owned fallback id: want not_found no_transcript, got code %q reason %q: %v", rpcCode(err), notFoundReason(err), err)
+	}
 }
 
 // Reasons a read gives no more (#11450): a conversation an Agent runtime runs, whose history is the runtime's and comes

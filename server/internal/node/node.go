@@ -765,6 +765,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		ctx = promptLanguageContext(ctx, params)
 	}
 	switch method {
+	case "sessions.history": // sessions active in a time window, inactive ones too (sessions_history.go)
+		return n.sessionsHistory(ctx, params)
 	case "workspace.naming.resolve":
 		return n.resolveWorkspaceNaming(ctx, params)
 	case "session.share_projection":

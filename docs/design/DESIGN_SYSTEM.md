@@ -566,6 +566,8 @@ on-demand model panel, not the everyday Assistant home (#6887).
   place, a click anywhere on it toggles it and nothing inside it answers (no hover bar or menus), and the bar in the
   composer's place reads Cancel, "N selected" and Forward N; Esc cancels too. The row over the composer is
   `ForwardGroupBar` and the bubble's card `ForwardGroupBlock` (`views/chat/ForwardGroup.tsx`), past three "N more".
+  Android (#5184) opens selection from Forward to. Its Inbox checkmarks take the whole message as a target, and the
+  target composer and conversation use the same three-message group preview as the web and iOS.
   Web (#9469): the message menu ends in "Select messages" (「多选」) under a divider with the `check` icon, as iOS; the
   bar reads Cancel, "N selected", the Include questions chip (a round `CheckMark`, the accent tint when on) and Forward,
   Copy and Export image (Export image the primary button); on a phone the three are a card under that line, an icon over
