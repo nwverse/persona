@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import io
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_pr as release
 
@@ -154,6 +156,12 @@ class ReleasePRTests(unittest.TestCase):
             self.assertEqual(release.schedule_version("nwverse/persona", "beta", "v0.9.1", COMMIT, OTHER, [],
                 reserved=("0.9.1-beta.10",)), "0.9.1-beta.11")
 
+
+    def test_manifest_digest_is_compatible_with_system_python_and_unchanged(self):
+        self.assertEqual(release.sha256_stream(io.BytesIO(b"release bytes")),
+                         "ff7a5e6429d2c8511521e4abf41cd54a3e525ef4a1f24f8d1c67ede9d17874dd")
+        with patch.object(release.hashlib, "file_digest", create=True, side_effect=AssertionError("Python 3.11+ API used")):
+            release.sha256_stream(io.BytesIO(b"release bytes"))
 
     def test_manifest_size_and_both_digests_must_match_the_download(self):
         with tempfile.TemporaryDirectory() as directory:
