@@ -410,7 +410,7 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 		return nil
 	}
 	switch v.state(t) {
-	case reviewClosing:
+	case reviewClosing, reviewUserCheck:
 		return nil
 	case reviewTimedOut:
 		return []superviseSignal{{Todo: t.ID, Kind: sigTimedOut, Key: reviewKey(v)}}

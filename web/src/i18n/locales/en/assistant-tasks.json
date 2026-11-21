@@ -123,6 +123,7 @@
   "give_back": "Hand back to Persona",
   "plan_edit": "Edit",
   "review_pending": "Awaiting review",
+  "review_user_check": "Awaiting your verification",
   "review_supervisor": "Supervisor reviewing",
   "review_rework": "Rework round {round}",
   "review_needs_user": "Needs your call",

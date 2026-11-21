@@ -15,9 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 func (s *Service) launcherRoutes() {
@@ -293,61 +291,34 @@ func (s *Service) launcherRoutes() {
 	})
 	// "Test": one real request through the launcher on a machine (default: the assistant's).
 	s.handle("POST /api/v1/launchers/{name}/check", func(w http.ResponseWriter, r *http.Request) {
-		if proto.IsExternalLauncher(r.PathValue("name")) {
+		name := r.PathValue("name")
+		if proto.IsExternalLauncher(name) {
 			apierr.Write(w, http.StatusBadRequest, i18n.Err("external-adapter.scope_required"))
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 100*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), launcherCheckTimeout)
 		defer cancel()
+		provider := ModelProvider{ID: launcherProvider(name), Kind: "launcher"}
 		for _, l := range s.storedLaunchers(ctx) {
-			if l.Name == r.PathValue("name") && l.Kind == "api" {
-				started := time.Now()
-				config, err := s.apiConfig(ctx, ModelBinding{Provider: launcherProvider(l.Name), Model: l.Model})
-				answer := ""
-				if err == nil {
-					answer, err = s.aiClient(config).Complete(ctx, "", prompts.RenderLauncherCheck(), 128)
-				}
-				result := proto.LauncherCheck{Agent: "api", Model: config.Model, Answer: textfmt.Clip(textfmt.OneLine(answer), 200), OK: err == nil,
-					Millis: int(time.Since(started).Milliseconds())}
-				if err != nil {
-					message := err.Error()
-					if explanation := directCallFailureExplanation(s.requestCtxLang(ctx), err); explanation != "" {
-						message = explanation + ": " + message
-					}
-					result.Error = textfmt.Clip(textfmt.OneLine(message), 400)
-				}
-				apierr.WriteJSON(w, map[string]any{"check": result})
-				return
+			if l.Name == name && l.Kind == "api" {
+				provider.Kind, provider.Model = "api", l.Model
+				break
 			}
 		}
-		machine := r.URL.Query().Get("machine") // the id the app knows
-		if _, ok := s.device(ctx, machine); !ok {
-			machine = s.settings(ctx).MachineID
-		}
-		if _, ok := s.device(ctx, machine); !ok {
-			apierr.Write(w, http.StatusBadRequest, errors.New("no machine to test on"))
+		machine, res, err := s.checkModelProvider(ctx, provider, r.URL.Query().Get("machine"), r.URL.Query().Get("purpose"))
+		if err != nil {
+			if errors.Is(err, errNoLauncherCheckMachine) {
+				apierr.Write(w, http.StatusBadRequest, err)
+			} else {
+				apierr.Call(w, err)
+			}
 			return
 		}
-		if err := s.launcherScopeErr(ctx, machine, r.PathValue("name")); err != nil { // out of that computer's scope
-			apierr.Call(w, err)
-			return
+		out := map[string]any{"check": res}
+		if machine != "" {
+			out["machine"] = machine
 		}
-		observed, _ := s.launcherHealth(ctx, machine, r.PathValue("name"))
-		var res proto.LauncherCheck
-		params := map[string]any{"name": r.PathValue("name")}
-		if r.URL.Query().Get("purpose") == "assistant" {
-			params["purpose"] = "assistant"
-		}
-		if err := s.call(ctx, machine, assistantwire.DeviceLaunchersCheck, params, &res); err != nil {
-			apierr.Call(w, err)
-			return
-		}
-		// A node from before the cleanup still answers with the terminal's escapes and startup noise in it.
-		cleanCheck(&res)
-		if res.OK {
-			s.recordTestPassed(ctx, machine, r.PathValue("name"), res, observed)
-		}
-		apierr.WriteJSON(w, map[string]any{"machine": machine, "check": res})
+		apierr.WriteJSON(w, out)
 	})
 	// What still names a launcher as its own (Model configuration's purposes, extensions' too, scheduled tasks, model
 	// profiles and their tiers), in words, for the hide confirmation (#4661): hiding an rc-file launcher only takes it
