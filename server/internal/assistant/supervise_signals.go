@@ -18,6 +18,7 @@ const (
 	sigIdle          = "idle"           // its agents stopped, and the work is not finished
 	sigUnjudged      = "unjudged"       // its agents stopped, and the judge could not say whether the work is finished
 	sigNeedsYou      = "needs_you"      // an agent waits for an answer
+	sigTimedOut      = "timed_out"      // terminal agents stopped after unattended lack of progress
 	sigStalled       = "stalled"        // working, but nothing moved for long
 	sigNoProgress    = "no_progress"    // working, its session moves, but only waits and repeats: no real progress (supervise_progress.go)
 	sigAllStopped    = "all_stopped"    // every current participant stopped with nothing scheduled to resume it
@@ -161,7 +162,7 @@ func (g superviseSignal) id() string {
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
 	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
-		sigRecheck, sigUndecidable, sigOwnerCannot, sigEstimateDue, // the owner or an automatic review deadline waits
+		sigRecheck, sigUndecidable, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
 		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult:
 		return true
 	case sigReport:
@@ -409,6 +410,10 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 		return nil
 	}
 	switch v.state(t) {
+	case reviewClosing:
+		return nil
+	case reviewTimedOut:
+		return []superviseSignal{{Todo: t.ID, Kind: sigTimedOut, Key: reviewKey(v)}}
 	case reviewPending:
 		if h := v.handoffResult(); h != nil {
 			if h.ToldAt.IsZero() {
@@ -532,6 +537,12 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		s.remedyWatch(ctx, t, now, history) // a failed start's kept tab expired (start_remedy.go)
 		t = s.checkTaskHandoff(ctx, t, now)
 		agents := s.taskAgentsIn(ctx, t, lists)
+		s.closeStalledTask(ctx, t, agents, now)
+		if current, ok := s.todoNow(t.ID); ok {
+			t = current
+		} else {
+			continue
+		}
 		group := s.allStoppedGroup(ctx, t, groups[t.ID], lists)
 		allStopped := false
 		stalled := map[string]bool{}
