@@ -9,6 +9,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.assertContentDescriptionContains
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
@@ -78,6 +79,29 @@ class ModelPillTest {
         assertEquals(main, retained.value)
         assertTrue(retained.failure != null)
         assertEquals(shared, (lists.assistantCatalog("box") as JLoadable.Loaded<AssistantLaunchers>).value)
+    }
+
+    @Test fun mainPillReadsItsOwnDefaultAndNewChatKeepsTheSharedDefault() {
+        var mainReads = 0
+        val hub = object : Hub() {
+            override suspend fun mainAssistantLauncherList(machineId: String, refresh: Boolean): AssistantLaunchers {
+                mainReads++
+                return assistantLauncherList(machineId, refresh).copy(default = LauncherDefault("team", "sonnet", "low"))
+            }
+        }
+        var showMain by mutableStateOf(true)
+        val main = agent.copy(sessionId = "main", assistant = true, launcher = "claude", model = "opus")
+        rule.setContent {
+            CompositionLocalProvider(LocalHubFeatures provides setOf("assistant_model_pick")) {
+                PersonaTheme(reduceMotion = true, style = AppStyle.Glass) {
+                    PersonaModelPill(if (showMain) main else null, "box", hub, ModelPillWidth.Wide,
+                        pagePick = null, onPagePick = {}, onNotice = {})
+                }
+            }
+        }
+        rule.onNodeWithTag("model-pill").assertContentDescriptionContains("Sonnet", substring = true)
+        rule.runOnIdle { assertTrue(mainReads > 0); showMain = false }
+        rule.onNodeWithTag("model-pill").assertContentDescriptionContains("Opus", substring = true)
     }
 
     @Test fun onlyTheUsersMessageOnGlassCarriesAWaitingSwitchOut() {
