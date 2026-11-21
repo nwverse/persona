@@ -711,18 +711,20 @@ func (h *Hub) busSeen(ctx context.Context, id string, where *db.BusIdentity) {
 		e.where = cp
 		e.pending = true
 		e.gen++
+		wantGen := e.gen
 		h.bus.seenMu.Unlock()
-		h.flushBusSeen(ctx, id, e)
+		h.flushBusSeen(ctx, id, e, wantGen)
 	}
 	h.managersChanged()
 }
 
-func (h *Hub) flushBusSeen(ctx context.Context, id string, e *busSeenEntry) {
+func (h *Hub) flushBusSeen(ctx context.Context, id string, e *busSeenEntry, wantGen uint64) {
 	if h.managerStore() == nil {
 		return
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	first := true
 	for {
 		h.bus.seenMu.Lock()
 		if !e.pending {
@@ -742,11 +744,18 @@ func (h *Hub) flushBusSeen(ctx context.Context, id string, e *busSeenEntry) {
 		}) {
 			return
 		}
+		useCallerCtx := first && wantGen != 0 && gen == wantGen && ctx != nil && ctx.Err() == nil
+		first = false
 		s := h.managerStore()
 		if s != nil {
-			wctx := ctx
+			var wctx context.Context
 			var cancel context.CancelFunc
-			if wctx == nil || wctx.Err() != nil {
+			if useCallerCtx {
+				wctx = ctx
+			} else {
+				// Coalesced trailing writes and resumed/overwritten writes get a
+				// fresh bounded context instead of inheriting an older caller's
+				// expiring or canceled context.
 				wctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 			}
 			if err := s.SeeBusIdentity(wctx, id, where); err != nil {
@@ -783,7 +792,7 @@ func (h *Hub) resumeBusSeen() {
 	go func() {
 		defer h.nodeWorkers.Done()
 		for _, it := range todo {
-			h.flushBusSeen(nil, it.id, it.e)
+			h.flushBusSeen(nil, it.id, it.e, 0)
 		}
 	}()
 }

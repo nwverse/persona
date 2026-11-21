@@ -1000,6 +1000,154 @@ func TestDevelopmentPauseDefersBusSeenUpdates(t *testing.T) {
 	}
 }
 
+type busSeenCtxStore struct {
+	managerStore
+	mu       sync.Mutex
+	latest   map[string]*db.BusIdentity
+	onSee    func(ctx context.Context, id string, where *db.BusIdentity) error
+	calls    int
+	lastHost string
+}
+
+var _ managerStore = (*busSeenCtxStore)(nil)
+
+func (s *busSeenCtxStore) BusIdentities(context.Context) ([]db.BusIdentity, error) {
+	return nil, nil
+}
+
+func (s *busSeenCtxStore) SeeBusIdentity(ctx context.Context, id string, where *db.BusIdentity) error {
+	if s.onSee != nil {
+		if err := s.onSee(ctx, id, where); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var cp *db.BusIdentity
+	if where != nil {
+		v := *where
+		cp = &v
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if s.latest == nil {
+		s.latest = map[string]*db.BusIdentity{}
+	}
+	s.latest[id] = cp
+	if cp != nil {
+		s.lastHost = cp.Host
+	} else {
+		s.lastHost = ""
+	}
+	return nil
+}
+
+// Coalesced trailing busSeen updates must not inherit an earlier caller's
+// canceled or nearly expired context; they run with a fresh bounded context so
+// a reconnect queued behind a disconnect is never dropped.
+func TestBusSeenCoalescedTrailingWriteUsesFreshContext(t *testing.T) {
+	type callerTagKey struct{}
+	for _, tc := range []string{"canceled-first-caller", "nearly-expired-first-caller"} {
+		t.Run(tc, func(t *testing.T) {
+			h := newTestHub(t)
+			inFirst := make(chan struct{})
+			releaseFirst := make(chan struct{})
+			var firstOnce sync.Once
+			var trailingInheritedCaller bool
+			var trailingCtxErr error
+			var trailingRemaining time.Duration
+			var trailingSawDeadline bool
+
+			store := &busSeenCtxStore{
+				onSee: func(ctx context.Context, _ string, where *db.BusIdentity) error {
+					if where == nil {
+						firstOnce.Do(func() {
+							close(inFirst)
+							<-releaseFirst
+						})
+						return ctx.Err()
+					}
+					trailingInheritedCaller = ctx.Value(callerTagKey{}) != nil
+					trailingCtxErr = ctx.Err()
+					if dl, ok := ctx.Deadline(); ok {
+						trailingSawDeadline = true
+						trailingRemaining = time.Until(dl)
+					}
+					return ctx.Err()
+				},
+			}
+			h.bus.idents = store
+
+			baseCtx := context.WithValue(context.Background(), callerTagKey{}, true)
+			var firstCtx context.Context
+			var cancelFirst context.CancelFunc
+			if tc == "canceled-first-caller" {
+				firstCtx, cancelFirst = context.WithCancel(baseCtx)
+			} else {
+				firstCtx, cancelFirst = context.WithTimeout(baseCtx, 250*time.Millisecond)
+			}
+			defer cancelFirst()
+
+			firstDone := make(chan struct{})
+			go func() {
+				h.busSeen(firstCtx, "mgr-coal", nil)
+				close(firstDone)
+			}()
+			select {
+			case <-inFirst:
+			case <-time.After(time.Second):
+				t.Fatal("first busSeen write did not start")
+			}
+
+			secondDone := make(chan struct{})
+			go func() {
+				h.busSeen(context.Background(), "mgr-coal", &db.BusIdentity{Host: "reconnected", Version: "2.0"})
+				close(secondDone)
+			}()
+			waitFor(t, "second busSeen coalesced behind first write", func() bool {
+				h.bus.seenMu.Lock()
+				defer h.bus.seenMu.Unlock()
+				e := h.bus.seen["mgr-coal"]
+				return e != nil && e.gen >= 2
+			})
+
+			if tc == "canceled-first-caller" {
+				cancelFirst()
+			}
+			close(releaseFirst)
+
+			select {
+			case <-firstDone:
+			case <-time.After(2 * time.Second):
+				t.Fatal("first busSeen did not return")
+			}
+			select {
+			case <-secondDone:
+			case <-time.After(2 * time.Second):
+				t.Fatal("second busSeen did not return")
+			}
+
+			if trailingInheritedCaller {
+				t.Fatal("coalesced trailing busSeen inherited first caller's context")
+			}
+			if trailingCtxErr != nil {
+				t.Fatalf("coalesced trailing busSeen saw ctx.Err() = %v, want nil", trailingCtxErr)
+			}
+			if !trailingSawDeadline || trailingRemaining < time.Second {
+				t.Fatalf("coalesced trailing busSeen deadline ok=%v remaining=%v, want fresh bounded timeout", trailingSawDeadline, trailingRemaining)
+			}
+			store.mu.Lock()
+			got := store.latest["mgr-coal"]
+			store.mu.Unlock()
+			if got == nil || got.Host != "reconnected" || got.Version != "2.0" {
+				t.Fatalf("persisted mgr-coal = %+v, want host=reconnected version=2.0", got)
+			}
+		})
+	}
+}
+
 type hookedSettingsStore struct {
 	*meshStore
 	hookMu sync.Mutex
