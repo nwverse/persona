@@ -42,10 +42,10 @@ const (
 
 type deployResult struct {
 	State     string
-	Hub       string // the running hub's commit
-	Merge     string // the upstream PR's confirmed merge commit
-	Receipt   string // the running build names this PR at this commit
-	NotMerged bool   // the upstream PR was confirmed unmerged, even when the hub runs it
+	Hub       string        // the running hub's commit
+	Merge     string        // the upstream PR's confirmed merge commit
+	Receipt   deployReceipt // the running build names this PR
+	NotMerged bool          // the upstream PR was confirmed unmerged, even when the hub runs it
 	Err       error
 }
 
@@ -101,8 +101,9 @@ type prSeen struct {
 }
 
 type deployCached struct {
-	r  deployResult
-	at time.Time
+	r       deployResult
+	at      time.Time
+	hasList bool
 }
 
 // deployCacheFor is how long a result other than deployIn is reused (deployIn holds for good for that hub commit).
@@ -155,8 +156,13 @@ func (s *Service) runningHubCommit(ctx context.Context) (string, error) {
 	return hubCommitOf(version, commit), nil
 }
 
-// checkDeployed says whether the running hub contains PR pr's merge commit.
+// checkDeployed says whether the running hub contains the PR's change.
 func (s *Service) checkDeployed(ctx context.Context, pr string) deployResult {
+	return s.checkPRDeployment(ctx, pr, false)
+}
+
+// Closeouts also check upstream merge status when a running-build receipt already proves deployment.
+func (s *Service) checkPRDeployment(ctx context.Context, pr string, checkMerge bool) deployResult {
 	m := ciPRURL.FindStringSubmatch(pr)
 	if m == nil {
 		return deployResult{State: deployUnverified}
@@ -173,50 +179,55 @@ func (s *Service) checkDeployed(ctx context.Context, pr string) deployResult {
 		return deployResult{State: deployUnverified}
 	}
 	// A repaired receipt changes what we know about the running build, including during a GitHub pause.
-	var receipt string
-	if l := s.deployedListFor(hub); l != nil && strings.EqualFold(l.repo, repo) {
+	l := s.deployedListFor(hub)
+	hasList := l != nil && strings.EqualFold(l.repo, repo)
+	var receipt deployReceipt
+	if hasList {
 		receipt = l.prs[number]
+	}
+	if receipt.sha != "" && !checkMerge {
+		return deployResult{State: deployIn, Hub: hub, Receipt: receipt}
 	}
 	key := pr + "\x00" + hub
 	p := &s.deploy
 	p.mu.Lock()
-	if c, ok := p.cache[key]; ok && c.r.Receipt == receipt &&
+	if c, ok := p.cache[key]; ok && c.r.Receipt == receipt && c.hasList == hasList &&
 		(c.r.State == deployIn && c.r.Merge != "" || time.Since(c.at) < deployCacheFor) {
 		p.mu.Unlock()
 		return c.r
 	}
+	paused := time.Now().Before(p.githubDown)
 	p.mu.Unlock()
-	r := s.compareDeploy(ctx, repo, number, hub, receipt)
+	var r deployResult
+	if receipt.sha != "" {
+		r = deployResult{State: deployIn, Hub: hub, Receipt: receipt}
+		if !paused {
+			merged, sha, err := s.forge().PRMerge(ctx, repo, number)
+			if err == nil {
+				if merged {
+					r.Merge = sha
+				} else {
+					r.NotMerged = true
+				}
+			}
+		}
+	} else {
+		r = s.compareGitHub(ctx, repo, number, hub)
+		if hasList && (r.State == deployUnknown || r.State == deployUnverified) {
+			r.State = deployNotIn // as far as the file goes, not deployed
+		}
+	}
 	p.mu.Lock()
 	if p.cache == nil || len(p.cache) > 500 {
 		p.cache = map[string]deployCached{}
 	}
-	p.cache[key] = deployCached{r: r, at: time.Now()}
+	p.cache[key] = deployCached{r: r, at: time.Now(), hasList: hasList}
 	p.mu.Unlock()
 	return r
 }
 
 // githubPause is how long GitHub is not asked after it failed to answer.
 const githubPause = 10 * time.Minute
-
-// compareDeploy combines upstream PR status with the running build's receipt. The receipt can establish that the
-// change runs locally even when GitHub is unavailable or the PR is still open.
-func (s *Service) compareDeploy(ctx context.Context, repo string, number int, hub, receipt string) deployResult {
-	r := s.compareGitHub(ctx, repo, number, hub)
-	if receipt != "" {
-		r.Receipt, r.NotMerged = receipt, r.State == deployUnmerged
-		r.State, r.Hub, r.Err = deployIn, hub, nil
-		return r
-	}
-	l := s.deployedListFor(hub)
-	if l == nil || !strings.EqualFold(l.repo, repo) {
-		return r
-	}
-	if r.State == deployUnknown || r.State == deployUnverified {
-		r.State, r.Hub = deployNotIn, hub // as far as the file goes, not deployed
-	}
-	return r
-}
 
 // compareGitHub asks GitHub whether hub contains PR number's merge commit.
 func (s *Service) compareGitHub(ctx context.Context, repo string, number int, hub string) deployResult {
@@ -254,8 +265,11 @@ func (s *Service) compareGitHubNow(ctx context.Context, repo string, number int,
 	case err != nil:
 		r.State, r.Err = deployUnknown, fmt.Errorf("the PR: %w", err)
 		return r
-	case !merged || sha == "":
+	case !merged:
 		r.State = deployUnmerged
+		return r
+	case sha == "":
+		r.State, r.Err = deployUnknown, errors.New("the merged PR has no merge commit")
 		return r
 	}
 	r.Merge = sha
@@ -295,12 +309,30 @@ func shortSHA(sha string) string {
 }
 
 // heldDelivery is the delivery of work the check holds short of deployed.
-func (s *Service) heldDelivery(ctx context.Context, r deployResult) TodoDelivery {
+func (s *Service) heldDelivery(ctx context.Context, r deployResult, previouslyMerged bool) TodoDelivery {
 	state := deliveryPR
-	if r.Merge != "" || r.State == deployOut {
+	if r.mergeKnown(previouslyMerged) {
 		state = deliveryMerged
 	}
 	return TodoDelivery{State: state, Gate: clip(s.deployGateText(ctx, r), 60), Unblock: unblockOther, At: time.Now()}
+}
+
+func (r deployResult) mergeKnown(previouslyMerged bool) bool {
+	return r.Merge != "" || r.State == deployOut || previouslyMerged && r.State != deployUnmerged && !r.NotMerged
+}
+
+func (s *Service) knownDeployMerge(ctx context.Context, t Todo, pr string) bool {
+	if facts := prFacts(t, pr); facts != nil && facts.State == "merged" {
+		return true
+	}
+	b := &s.reports
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.loadStagesLocked(ctx) {
+		return false
+	}
+	w := b.stages[t.ID].Deploy
+	return w != nil && w.PR == pr && (w.Merged || w.State == deployOut)
 }
 
 // gateDeployStage is a task turn's stage once checked: a stage at deploy or past it, for a task whose PR (pr, else
@@ -328,8 +360,8 @@ func (s *Service) gateDeployStage(ctx context.Context, t Todo, stage, pr, machin
 	} else {
 		s.logf("task %s: said deployed, but the running hub (%s) does not contain %s (%s): held", t.ID, shortSHA(r.Hub), pr, r.State)
 	}
-	d := s.heldDelivery(ctx, r)
-	s.watchDeploy(ctx, t.ID, deployWatch{PR: pr, MachineID: machine, SessionID: session, Reply: clipMiddle(reply, 4000), Since: time.Now(), Hub: r.Hub, State: r.State, CheckedAt: time.Now()})
+	d := s.heldDelivery(ctx, r, s.knownDeployMerge(ctx, t, pr))
+	s.watchDeploy(ctx, t.ID, deployWatch{PR: pr, MachineID: machine, SessionID: session, Reply: clipMiddle(reply, 4000), Since: time.Now(), Hub: r.Hub, State: r.State, Merged: d.State == deliveryMerged, CheckedAt: time.Now()})
 	s.setTaskDelivery(ctx, t.ID, d)
 	return deliveryStage(d.State), false
 }
@@ -347,7 +379,7 @@ func (s *Service) gateDelivery(ctx context.Context, t Todo, d TodoDelivery, pr s
 	if !r.held() {
 		return d
 	}
-	h := s.heldDelivery(ctx, r)
+	h := s.heldDelivery(ctx, r, s.knownDeployMerge(ctx, t, pr))
 	h.At = d.At
 	return h
 }
@@ -360,8 +392,9 @@ type deployWatch struct {
 	SessionID string    `json:"session_id,omitempty"`
 	Reply     string    `json:"reply,omitempty"`
 	Since     time.Time `json:"since"`
-	Hub       string    `json:"hub,omitempty"`   // the hub commit last checked against
-	State     string    `json:"state,omitempty"` // what that check said
+	Hub       string    `json:"hub,omitempty"`    // the hub commit last checked against
+	State     string    `json:"state,omitempty"`  // what that check said
+	Merged    bool      `json:"merged,omitempty"` // last known upstream merge for this PR
 	CheckedAt time.Time `json:"checked_at"`
 }
 
@@ -455,6 +488,8 @@ func (s *Service) sweepDeploys(now time.Time) {
 		case r.State == deployUnverified:
 			s.unwatchDeploy(ctx, id, w.Since) // nothing to check it against any more: left as it is
 		default:
+			facts := prFacts(t, w.PR)
+			w.Merged = r.mergeKnown(w.Merged || w.State == deployOut || facts != nil && facts.State == "merged")
 			w.Hub, w.State, w.CheckedAt = cmp.Or(r.Hub, hub), r.State, now
 			b.mu.Lock()
 			if cur, ok := b.stages[id]; ok && cur.Deploy != nil && cur.Deploy.Since.Equal(w.Since) {
@@ -464,7 +499,7 @@ func (s *Service) sweepDeploys(now time.Time) {
 			}
 			b.mu.Unlock()
 			if r.State != deployUnknown {
-				if d := s.heldDelivery(ctx, r); t.Delivery == nil || t.Delivery.Gate != d.Gate {
+				if d := s.heldDelivery(ctx, r, w.Merged); t.Delivery == nil || t.Delivery.State != d.State || t.Delivery.Gate != d.Gate {
 					s.setTaskDelivery(ctx, id, d)
 				}
 			}
@@ -514,7 +549,7 @@ func (s *Service) sweepPRs(ctx context.Context, now time.Time, hub string, watch
 		case deployOut:
 			s.logf("task %s: %s is merged, not in the running hub (%s): merged, not deployed", t.ID, t.PRURL, shortSHA(hub))
 			s.watchDeploy(ctx, t.ID, deployWatch{PR: t.PRURL, Since: now, Hub: hub, State: r.State, CheckedAt: now})
-			s.setTaskDelivery(ctx, t.ID, s.heldDelivery(ctx, r))
+			s.setTaskDelivery(ctx, t.ID, s.heldDelivery(ctx, r, false))
 		}
 	}
 }
