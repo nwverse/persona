@@ -1245,7 +1245,9 @@ It never messages the owner: the work-log card shows it.
 A direction carries **notes** the owner writes for it: its rules, the readings that prove progress, its terms
 (`direction_notes.go`; web: Settings › Persona › Direction notes; `PUT /api/v1/assistant/directions/{id}/notes`, at most
 4,000 characters, `""` clears them; `GET /api/v1/assistant/leaders` lists `notes` and `notes_at`). They are the owner's
-content, not memory: memory stays one for every conversation (#9440), and a direction's lessons go into its notes.
+content, not memory: memory stays one for every conversation (#9440), and a lesson the owner wants a direction to keep
+goes into its notes. What accepted tasks teach by themselves (with "Learn from finished tasks" on) is kept apart, in the
+direction's project, and never written into the notes (`docs/assistant/todos.md` "Lessons from accepted tasks").
 
 The assistant uses the same record through `persona_settings`: `list` exposes each current direction as
 `direction.<id>.prompt` with its name, and `get` returns the complete notes to any assistant conversation. Only the main
