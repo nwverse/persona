@@ -17,7 +17,7 @@ import { readFileSync, statSync } from 'node:fs'
 import { createRuntime, installCurrent, interactionId, light, page, RpcError, snippet, summaryOf, verifyPackage } from '../../runtime-sdk/index.js'
 import { ALLOW_ENTRY, alwaysAllowed, branchItems, branchKey, entryItems, firstText, HOST_ENTRY, imageOf, lastHost, lastText, partialText, toolInput, toolName } from './map.js'
 
-export const RUNTIME_VERSION = '0.3.0'
+export const RUNTIME_VERSION = '0.4.0'
 const DISK_EVERY = 30_000 // ms: list the sessions on disk at most this often (pi-web)
 const TERMINAL_HOSTS = new Set(['herdr', 'terminal']) // resumed in the machine's terminal engine, not in pi-web
 const RELOAD_COMMAND = 'persona-reload' // the command a session runs on itself to load a new version (docs/integrations/pi.md "Automatic updates")
@@ -100,7 +100,12 @@ export function createPiHost(deps, options = {}) {
     version: RUNTIME_VERSION,
     assistant: Boolean(web),
     supervisionPolicy: Boolean(web),
-    ...(listDisk ? { launcher: 'pi-web', launcherModel: 'pi' } : {}),
+    ...(listDisk ? {
+      launcher: 'pi-web', launcherModel: agent,
+      // A display label is not a model argument. This adapter currently keeps
+      // the model chosen inside pi; choosing its default sends no model/effort.
+      launchers: [{ name: 'pi-web', agent, model: agent, models: [{ id: 'default', name: agent, default: true }], permission_modes: ['default', 'bypassPermissions'] }],
+    } : {}),
     socketPath: options.socketPath,
     answerFirst: options.answerFirst ?? 'auto',
     log,

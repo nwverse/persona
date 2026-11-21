@@ -293,6 +293,8 @@ test('the pi-web companion lists sessions on disk, opens one to send to it, and 
   await n.ready
   assert.equal(n.hello.runtime, 'pi-files')
   assert.equal(n.hello.launcher, 'pi-web')
+  assert.deepEqual(n.hello.launchers[0].models, [{ id: 'default', name: 'pi', default: true }], 'the display label must not become a model argument')
+  assert.deepEqual(n.hello.launchers[0].permission_modes, ['default', 'bypassPermissions'])
   await until('listed', () => n.last('runtime.sessions')?.sessions.length === 2)
   const old = n.last('runtime.sessions').sessions.find((s) => s.session_id === 's-old')
   assert.equal(old.status, 'offline')
