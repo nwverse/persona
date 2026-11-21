@@ -65,5 +65,8 @@
   "test_hidden": "连上了，但中转没有对这把 Key 开放账号额度。在中转上为这把 Key 开放后再测一次。",
   "test_failed": "没连上：{reason}",
   "test_note": "测试只读一次、不保存任何东西。",
-  "save": "保存"
+  "save": "保存",
+  "providers_title": "额度栏里的服务商",
+  "providers_footer": "关掉某个服务商，侧栏的额度栏就不再显示它。只影响显示：电脑和网关照常读取，别的功能不受影响。",
+  "provider_show": "在额度栏显示 {name}"
 }
