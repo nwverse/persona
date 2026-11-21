@@ -14,7 +14,8 @@ nonisolated enum HubOutcome: String, CaseIterable, Codable, Hashable, Sendable {
     case notYourHub = "not_your_hub"
     /// Refused, timed out, host not found, connection lost, or not a healthy hub answer.
     case unreachable = "couldnt_connect"
-    /// Cut short: another address won and the rest were cancelled, or the app went to the background first.
+    /// Cut short: another address won and the rest were cancelled, a newer attempt replaced this one, a restored SSH tunnel
+    /// came up first, or the app went to the background first.
     case unknown
 
     /// Which says more about why an open never connected: not your hub, then the certificate, then couldn't connect,
@@ -35,7 +36,7 @@ nonisolated enum HubOutcome: String, CaseIterable, Codable, Hashable, Sendable {
     }
 
     /// A request or a socket that failed, by its error: one classifier for both. Cancelled: unknown (another address
-    /// won, or the app went away). A certificate the system doesn't trust: untrusted, also when it shows only as a failed
+    /// won, a newer attempt or a restored tunnel came first, or the app went away). A certificate the system doesn't trust: untrusted, also when it shows only as a failed
     /// secure connection carrying the server's trust or a certificate error code. Anything else: couldn't connect.
     init(failure error: any Error) {
         if error is CancellationError { self = .unknown; return }

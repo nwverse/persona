@@ -446,6 +446,11 @@ final class AppModel {
     /// Unit tests: the app's voice call (`VoiceCalls.shared` otherwise), whose call to Persona keeps its group's tunnels
     /// open in the background (`callTunnelGroup`).
     @ObservationIgnored var voiceCallsForTests: VoiceCalls?
+    /// Unit tests: what the route's health probes answer (`HubRoute.healthCheck` otherwise), for the route picker, a
+    /// tunnel group's direct check and its restore race (#11390).
+    @ObservationIgnored var routeCheckForTests: HubRoute.Check?
+    /// Unit tests: what the address lines tell Developing Persona's tally, as if the switch were on (#11390).
+    @ObservationIgnored var tallyForTests: ((DevProbe.Link) -> Void)?
     /// Unit tests: no machines, agents or cards, whatever `init` restored. A simulator paired by an earlier run keeps
     /// its last snapshot, and a test of everything the model holds (the watch summary) would count those too (#1638).
     func forgetRestoredForTests() {
@@ -993,7 +998,7 @@ final class AppModel {
             self?.connection.update()
             self?.socketChanged(group)
         }
-        link.live.onAttempt = { [weak self] config, outcome in self?.socketTried(group, config, outcome) }
+        link.live.onAttempt = { [weak self] config, outcome, since in self?.socketTried(group, config, outcome, since: since) }
         link.live.credential = { [weak self] config in DeviceCredentialTrade.current(config, traded: self?.tradedTokens ?? [:]) }
         #if DEBUG
         if let hooks = linkHooksForTests {

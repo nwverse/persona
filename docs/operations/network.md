@@ -158,12 +158,19 @@ iOS implementation (#4670): Settings › hub › Addresses keeps a paired hub's 
     the attempt tries is private, as Android does (`HubRouteSelector.worst`). The paired address is not checked here: another `hub_id` there is left to the hello.
   - **Couldn't connect**: refused, timed out, host not found, connection lost, a TLS handshake cut short, or not a healthy hub answer (another status, no
     `hub_id` where one is expected, `ok` not true, Cloudflare Access answering, the socket turned down with 401).
-  - **Unknown**: the probe was cut short (another address won and the rest were cancelled), or the app went to the background before it finished.
+  - **Unknown**: the probe was cut short: another address won and the rest were cancelled, a newer attempt replaced this one (Retry Now, the network
+    coming back, a renewed credential), a restored SSH tunnel came up first (the race in "Connecting to hub through SSH (fallback when direct access
+    fails)"), or the app went to the background before it finished (so does a later probe of the same recheck asked while the app was away; one asked
+    after the app came back says what it came to). The line keeps Unknown until the address is tried again: within about 3 s after a replaced attempt,
+    but after a restored tunnel won, not before the tunnel's check of the direct way 2 minutes later (away from home with an SSH tunnel, the home
+    address shows Unknown after each return to the front until then).
   - A group with one address and no tunnel is never probed: its outcome comes from the socket's own attempt, classified the same way. Otherwise the
-    probe says, and the socket replaces only an Answers that the same attempt's own probe found at the address it then failed to open (through a
-    tunnel set to be used every time no probe runs, and the socket's failure is the tunnel's), so each attempt counts once per address. Connection
-    Details lists the addresses with their outcomes (`docs/apple/ios.md`, "Connection status (slow / offline networks)"); Developing Persona counts
-    opens by them weekly (`docs/operations/developing-persona.md`, "Connection tally (iOS)").
+    probe says, and the socket replaces only an Answers that the same attempt's own probe found at the address it then failed to open, so each attempt
+    counts once per address. Through a tunnel no probe hands the socket an address: a tunnel set to be used every time asks none, and when the restore
+    race's tunnel wins, an address that answered meanwhile keeps its Answers (the socket's failure is the tunnel's); a pick that was cancelled or
+    replaced keeps what its probes came to and hands the socket nothing. Connection Details lists the addresses with their outcomes
+    (`docs/apple/ios.md`, "Connection status (slow / offline networks)"); Developing Persona counts opens by them weekly
+    (`docs/operations/developing-persona.md`, "Connection tally (iOS)").
 - Not yet: the hub's own list (`/api/v1/endpoints`) does not feed this list, and the watch, widgets and other extensions keep the paired address.
 - DEBUG builds: `-seedHubAddresses <base64 of a [HubAddress] JSON>` sets the first hub's added addresses, `-tab settings -openHubAddresses YES` opens its page, and `-showHubAddressDraft <text>` starts its field with that text (screenshots).
 

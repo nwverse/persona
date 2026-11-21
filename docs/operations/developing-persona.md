@@ -90,15 +90,17 @@ switch off is asked in #11400 and not done.
 - **An open** is one period with the app in front, per hub group (Demo Mode left out), from the moment the phone has a
   network path; it ends when the app leaves the front. Tries made while the phone has no network path are left out (they
   say nothing about the hub), and so are the tries of an attempt that began before the period (the app left the front
-  and came back while it ran). An open whose socket is already connected when it begins (it came up in the background
-  for a silent push and is still up) counts as connected. A period already under way when the switch is turned on is
-  not counted (what happened before is not known): counting starts with the next one, or at launch with the switch on.
+  and came back while it ran, or a silent push woke the socket in the background and its attempt ends after the app is
+  opened). An open whose socket is already connected when it begins (it came up in the background for a silent push and
+  is still up) counts as connected. A period already under way when the switch is turned on is not counted (what
+  happened before is not known): counting starts with the next one, or at launch with the switch on.
 - **A week** is an ISO week in UTC (`2026-W47`, starting Monday 00:00 UTC). An open counts in the week it began.
 - **What decides an open**: what the group's tries came to while it lasted, from the attempts the app makes anyway (the
-  route picker's probes, a tunnel's check of the direct way, the recheck of preferred addresses, and for a group with one
-  address and no tunnel its socket); no probe, timer or polling is added. The outcomes are those of Connection Details
-  (`docs/operations/network.md`, "Client-added candidates": Answers, Certificate not trusted, Not your hub, Couldn't
-  connect, Unknown).
+  route picker's probes, the race that restores an SSH tunnel used last time, a tunnel's check of the direct way, the
+  recheck of preferred addresses, and for a group with one address and no tunnel its socket); no probe, timer or polling
+  is added. A pick that was cancelled or replaced still counts what its probes came to before it ended. The outcomes are
+  those of Connection Details (`docs/operations/network.md`, "Client-added candidates": Answers, Certificate not
+  trusted, Not your hub, Couldn't connect, Unknown).
 
 `connections.json` holds `format` (`persona-connection-tally`), `version` (1) and `weeks`, oldest first; per week:
 

@@ -4,8 +4,9 @@ import PersonaWire
 
 /// What each address of a hub group came to the last time the app tried it (#11390): the lines Connection Details lists
 /// under its explanation, in the order the addresses are tried (`HubRoute.candidates`). Only from attempts the app makes
-/// anyway (the route picker's probes, a tunnel's direct check, the recheck of preferred addresses, and for a group with
-/// one address and no tunnel its socket); in memory only, for this launch.
+/// anyway (the route picker's probes, the race that restores an SSH tunnel used last time, a tunnel's direct check, the
+/// recheck of preferred addresses, and for a group with one address and no tunnel its socket); in memory only, for this
+/// launch.
 ///
 /// The lines are worked out here when something changes, not in the details' `body`, which runs every second
 /// (docs/apple/performance.md P4, P5); each has the address as its stable id (P6).
@@ -32,9 +33,11 @@ final class HubAddressBoard {
     @ObservationIgnored private var order: [String: [URL]] = [:]
     /// Each group's last outcome per address (`HubRoute.key`) and when.
     @ObservationIgnored private var last: [String: [String: (outcome: HubOutcome, at: Date)]] = [:]
-    /// When the app last went to the background (`AppModel.suspendLinks`): what an attempt learned after that while it
-    /// was under way was cut short.
+    /// When the app last went to the background (`AppModel.suspendLinks`) and, once it is back, when it came to the front
+    /// (`resumeLinks`, nil while it is away): what an attempt under way at the notice learned after it was cut short,
+    /// except what it asked after the app came back.
     @ObservationIgnored private(set) var lastBackground: Date?
+    @ObservationIgnored private(set) var lastFront: Date?
     /// The addresses the group's current socket attempt probed and found answering (`beginAttempt`): only there may
     /// the socket's own failure replace an Answers, since only there did this attempt try the address itself.
     @ObservationIgnored private var answeredNow: [String: Set<String>] = [:]
@@ -77,7 +80,14 @@ final class HubAddressBoard {
         rebuild(group)
     }
 
-    func wentToBackground(at date: Date) { lastBackground = date }
+    func wentToBackground(at date: Date) {
+        lastBackground = date
+        lastFront = nil
+    }
+
+    func cameToFront(at date: Date) {
+        if lastBackground != nil { lastFront = date }
+    }
 
     /// One of the group's socket attempts begins (its route picker runs).
     func beginAttempt(_ group: String) { answeredNow[group] = [] }
@@ -92,10 +102,12 @@ final class HubAddressBoard {
         answeredNow[group]?.remove(HubRoute.key(url)) != nil
     }
 
-    /// The outcomes of an attempt that began at `start`, with what came after the app went to the background in the
-    /// meantime as unknown: that part of the attempt was cut short (#11390).
-    func cutShort(_ tried: [HubRoute.Tried], since start: Date) -> [HubRoute.Tried] {
-        guard let back = lastBackground, back >= start else { return tried }
+    /// The outcomes of an attempt that began at `start`, its tries asked at `asked` (the attempt's start for a race; a
+    /// recheck asks one address after another), with what came after the app went to the background in the meantime as
+    /// unknown: that part of the attempt was cut short (#11390), unless the try was asked after the app came back. An
+    /// attempt begun after the notice (a silent push's wake, or back in front) is left as it is.
+    func cutShort(_ tried: [HubRoute.Tried], since start: Date, asked: Date? = nil) -> [HubRoute.Tried] {
+        guard let back = lastBackground, back >= start, (asked ?? start) < (lastFront ?? .distantFuture) else { return tried }
         return tried.map { t in
             guard t.at >= back else { return t }
             var t = t

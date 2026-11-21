@@ -182,6 +182,80 @@ struct ConnectionTallyTests {
         #expect(week.notConnected == ["not_your_hub": 0, "certificate_not_trusted": 0, "couldnt_connect": 1, "unknown": 1])
     }
 
+    /// A model with one hub, paired at `paired` and added `added`, built and not connected; what its lines tell the
+    /// tally is kept in `events`.
+    @MainActor private final class Lines {
+        let model: AppModel
+        var events: [DevProbe.Link] = []
+        init(paired: String, added: [String] = []) {
+            model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "tally-lines-" + UUID().uuidString))
+            var hub = PairedHub(config: ServerConfig(url: URL(string: paired)!, token: "device"), group: "", hubID: "H")
+            hub.addresses = added.isEmpty ? nil : added.map { HubAddress(url: URL(string: $0)!) }
+            model.registry = HubRegistry(hubs: [hub])
+            model.buildLinks()
+            model.tallyForTests = { [unowned self] in self.events.append($0) }
+        }
+    }
+
+    /// The restore race (#11683) with nothing answering, the tunnel down too: each address's failure is on the lines
+    /// and in the tally, so the open says why it never connected instead of `unknown`.
+    @MainActor @Test func aRestoreRaceWithNothingAnsweringSaysWhy() async throws {
+        let dir = scratch(), clock = Clock(Date())
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let r = recorder(dir, clock)
+        r.start(active: true, page: "assistant", device: .init())
+        r.path(wifi)
+        r.link(.groups([""]))
+        let lines = Lines(paired: "https://a.invalid", added: ["https://b.invalid"])
+        let model = lines.model
+        let all = HubRoute.candidates(model.registry, group: "")
+        model.routeCheckForTests = { $0 == all[0] ? .untrusted : .unreachable }
+        model.addressBoard.beginAttempt("")
+        let start = Date()
+        let result = await model.restoreRace("", HubTunnelRecovery {}, all, since: start) { false }
+        guard case .unavailable = result else { Issue.record("something answered"); return }
+        #expect(model.addressBoard.outcome("", all[0].url) == .untrusted)
+        #expect(model.addressBoard.outcome("", all[1].url) == .unreachable)
+        // The socket then goes to the first address for its own retries, and fails: the probe already said.
+        model.socketTried("", all[0].config, .unreachable, since: start)
+        #expect(model.addressBoard.outcome("", all[0].url) == .untrusted)
+        for e in lines.events { r.link(e) }
+        clock.advance(5)
+        r.lifecycle(active: false, device: .init())
+        r.settle()
+        let week = try #require(r.store.connectionTally(now: clock.now).weeks.only)
+        #expect(week.notConnected == ["not_your_hub": 0, "certificate_not_trusted": 1, "couldnt_connect": 0, "unknown": 0])
+    }
+
+    /// One address, no tunnel: the socket's own attempt says when it began, not when it ended. One begun before the
+    /// period (a silent push's wake) that fails after it began is left out of it, as the probes' attempts are.
+    @MainActor @Test func theSocketsAttemptCountsFromWhenItBegan() async throws {
+        let lines = Lines(paired: "http://127.0.0.1:1")
+        let live = try #require(lines.model.link("")?.live)
+        live.connect(lines.model.registry.hubs[0].config)
+        defer { live.disconnect() }
+        let opened = Date() // the attempt began before this; its failure comes after
+        let deadline = Date().addingTimeInterval(15)
+        while lines.events.isEmpty, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        guard case .tried(_, let outcomes, let since)? = lines.events.first else { Issue.record("no try reached the tally"); return }
+        #expect(outcomes == [.unreachable])
+        #expect(since <= opened)
+
+        // The period began between the two: the try is the earlier period's.
+        let dir = scratch(), clock = Clock(opened)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let r = recorder(dir, clock)
+        r.start(active: true, page: "assistant", device: .init())
+        r.path(wifi)
+        r.link(.groups([""]))
+        r.link(lines.events[0])
+        clock.advance(5)
+        r.lifecycle(active: false, device: .init())
+        r.settle()
+        let week = try #require(r.store.connectionTally(now: clock.now).weeks.only)
+        #expect(week.notConnected["couldnt_connect"] == 0 && week.notConnected["unknown"] == 1)
+    }
+
     /// An open that begins before Monday 00:00 UTC and ends after it counts in the week it began; its time is split.
     @Test func anOpenCountsInTheWeekItBegan() throws {
         let dir = scratch(), clock = Clock(Self.monday.addingTimeInterval(-60)) // Sunday 23:59 UTC, 2027-W01

@@ -155,6 +155,7 @@ extension AppModel {
 
     /// Back in the app: every group's socket opens again.
     func resumeLinks() {
+        addressBoard.cameToFront(at: .now) // probes from now on say what they came to (#11390)
         reportGroups() // a period in front begins for Developing Persona's connection tally
         for link in links {
             link.live.suspended = false
@@ -250,7 +251,7 @@ extension AppModel {
             if !self.hubTunnels(group).isEmpty { return await self.tunnelRoute(group) }
             let candidates = HubRoute.candidates(self.registry, group: group)
             let start = Date()
-            let (picked, tried) = await HubRoute.pickTried(candidates)
+            let (picked, tried) = await HubRoute.pickTried(candidates, check: self.routeCheck)
             self.attemptTried(group, tried, since: start)
             return picked?.config
         }
@@ -346,14 +347,16 @@ extension AppModel {
         return await askPreferred(group, preferred(group))
     }
 
-    /// Asks `candidates` in turn until one answers, each try onto the group's lines and the tally.
+    /// Asks `candidates` in turn until one answers, each try onto the group's lines and the tally. One attempt: a probe
+    /// under way at the background notice, or asked while the app was away, was cut short; one asked after the app came
+    /// back says what it came to.
     func askPreferred(_ group: String, _ candidates: [HubRoute.Candidate], check: HubRoute.Check = HubRoute.healthCheck) async -> Bool {
         let all = HubRoute.candidates(registry, group: group)
-        // One attempt: a probe that starts after the app went to the background was cut short like the rest.
         let start = Date()
         for c in candidates {
+            let asked = Date()
             let outcome = await check(c)
-            tried(group, HubRoute.settled([.init(candidate: c, outcome: outcome, at: Date())], among: all), since: start)
+            tried(group, HubRoute.settled([.init(candidate: c, outcome: outcome, at: Date())], among: all), since: start, asked: asked)
             if outcome == .answers { return true }
         }
         return false
@@ -387,37 +390,61 @@ extension AppModel {
         reportGroups()
     }
 
-    /// What an attempt that began at `start` found at each address (the probes): onto the group's lines, and into
-    /// Developing Persona's tally while the switch is on. What came after the app went to the background meanwhile was
-    /// cut short: unknown.
-    func tried(_ group: String, _ tried: [HubRoute.Tried], since start: Date) {
+    /// What an attempt that began at `start` found at each address (the probes, asked at `asked` when not all at once):
+    /// onto the group's lines, and into Developing Persona's tally while the switch is on. What came after the app went
+    /// to the background meanwhile was cut short: unknown, unless it was asked after the app came back.
+    func tried(_ group: String, _ tried: [HubRoute.Tried], since start: Date, asked: Date? = nil) {
         guard !tried.isEmpty, let link = link(group), !link.isDemo else { return }
-        let tried = addressBoard.cutShort(tried, since: start)
+        let tried = addressBoard.cutShort(tried, since: start, asked: asked)
         addressBoard.record(group, tried.map { ($0.candidate.url, $0.outcome, $0.at) })
-        if DevProbe.listening { DevProbe.link(.tried(group: group, tried.map(\.outcome), since: start)) }
+        tally(.tried(group: group, tried.map(\.outcome), since: start))
+    }
+
+    /// What the route's health probes answer: `HubRoute.healthCheck` (unit tests answer for it).
+    var routeCheck: HubRoute.Check {
+        #if DEBUG
+        if let routeCheckForTests { return routeCheckForTests }
+        #endif
+        return HubRoute.healthCheck
+    }
+
+    /// Tells Developing Persona's tally what the lines learned; nothing while the switch is off.
+    private func tally(_ event: @autoclosure () -> DevProbe.Link) {
+        #if DEBUG
+        if let tallyForTests { tallyForTests(event()); return }
+        #endif
+        if DevProbe.listening { DevProbe.link(event()) }
     }
 
     /// `tried` for the probes of one of the group's socket attempts (its route picker): the addresses they found
-    /// answering are the ones where the socket's own failure may then say what the attempt came to.
+    /// answering are the ones where the socket's own failure may then say what the attempt came to. A pick that was
+    /// cancelled or replaced (Retry Now, the network back, a renewed credential, the background) keeps what its probes
+    /// came to and hands the socket nothing: the next attempt may have begun already (#11683).
     func attemptTried(_ group: String, _ tried: [HubRoute.Tried], since start: Date) {
         self.tried(group, tried, since: start)
+        guard !Task.isCancelled else { return }
+        attemptAnswered(group, tried, since: start)
+    }
+
+    /// The addresses this attempt's probes found answering, for the socket (`HubAddressBoard.takeAnswered`).
+    func attemptAnswered(_ group: String, _ tried: [HubRoute.Tried], since start: Date) {
         addressBoard.attemptAnswered(group, addressBoard.cutShort(tried, since: start).filter { $0.outcome == .answers }.map(\.candidate.url))
     }
 
-    /// What one of the group's socket attempts came to at the address it went to (`LiveConnection.onAttempt`). One
-    /// source per attempt and address: a group the socket goes to straight (one address, no tunnel) has no probe, so
-    /// the socket says; otherwise the probe said, and the socket only replaces an Answers at the address it then failed
-    /// to open.
-    func socketTried(_ group: String, _ config: ServerConfig, _ outcome: HubOutcome) {
+    /// What one of the group's socket attempts, begun at `start`, came to at the address it went to
+    /// (`LiveConnection.onAttempt`). One source per attempt and address: a group the socket goes to straight (one
+    /// address, no tunnel) has no probe, so the socket says; otherwise the probe said, and the socket only replaces an
+    /// Answers that the same attempt's probe found at the address it then failed to open (`attemptAnswered`).
+    func socketTried(_ group: String, _ config: ServerConfig, _ outcome: HubOutcome, since start: Date) {
         guard let link = link(group), !link.isDemo else { return }
         if link.live.route != nil {
             // Only where this attempt's own probe found the address answering: through a tunnel set to be used every
             // time no probe runs, and the socket's failure there is the tunnel's, not the address's.
             guard outcome != .answers, addressBoard.takeAnswered(group, config.url) else { return }
         }
-        let now = Date()
-        addressBoard.record(group, [(config.url, outcome, now)])
-        if DevProbe.listening { DevProbe.link(.tried(group: group, [outcome], since: now)) }
+        addressBoard.record(group, [(config.url, outcome, Date())])
+        // Counted from when the attempt began, as the probes' tries: one begun before the period is left out of it.
+        tally(.tried(group: group, [outcome], since: start))
     }
 
     /// The group's socket changed state (`LiveConnection.onChange`): not connected any more, for Developing Persona's
