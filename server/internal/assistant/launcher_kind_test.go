@@ -24,10 +24,13 @@ func TestSendRefusesALauncherOfAnotherAgentKind(t *testing.T) {
 		proto.Session{SessionID: "main", Agent: "codex", Launcher: "cx", Assistant: true},
 		proto.Session{SessionID: "claude-side", Agent: "claude", Launcher: "claude", Assistant: true},
 		proto.Session{SessionID: "codex-side", Agent: "codex", Launcher: "cx", Assistant: true},
-		proto.Session{SessionID: "rt-side", Agent: "agy", Launcher: "agy-rt", Assistant: true})
+		proto.Session{SessionID: "rt-side", Agent: "agy", Launcher: "agy-rt", Assistant: true, SourceKind: proto.SourceRuntime, SourceInstanceID: "agy"})
 	f.launcherList = append(f.launcherList,
 		proto.Launcher{Name: "agy", Source: "agy", Agent: "agy", Assistant: true},
 		proto.Launcher{Name: "unknown-rt", Source: "example-runtime", Agent: "unknown", Assistant: true})
+	f.answerNode("assistant.segment.check", func(string, json.RawMessage) (any, error) {
+		return segmentTarget{Registered: true, Prepare: true, Engine: "agy|runtime:agy"}, nil
+	})
 	send := func(sid, launcher, lang string) (map[string]any, error) {
 		p := map[string]any{"text": "hi"}
 		if launcher != "" {

@@ -374,6 +374,10 @@ func (s *Service) pickModel(ctx context.Context, sid, machine string, in proto.M
 		if errors.As(err, &other) {
 			return modelPick{}, other.rpcError(lang) // Claude Code can't resume a Codex thread, nor Codex a Claude transcript
 		}
+		var refusal *rpc.Error
+		if errors.As(err, &refusal) && refusal.Code == CodeBadRequest {
+			return modelPick{}, err // Keep the logical refusal's non-delivery receipt.
+		}
 		return modelPick{}, refusePick(http.StatusBadRequest, err)
 	}
 	if in.Model != "" && !external {
@@ -502,11 +506,11 @@ func (s *Service) keepStartPick(ctx context.Context, sess *proto.Session, launch
 
 // storedPickRefused: err refuses a pick, or a message on its conversation's pick, and carries a code the hub words and
 // the apps act on (launcher_out_of_scope, launcher_own_service, launcher_missing, launcher_other_kind): it goes on as it
-// is (409 with the code).
+// is (409 with the code, or 400 for a logical non-delivery refusal).
 func storedPickRefused(err error) bool {
 	var re *rpc.Error
 	return errors.As(err, &re) && slices.Contains([]string{proto.CodeLauncherOutOfScope, proto.CodeLauncherOwnService,
-		proto.CodeLauncherMissing, assistantwire.CodeLauncherOtherKind}, re.Code)
+		proto.CodeLauncherMissing, assistantwire.CodeLauncherOtherKind, CodeBadRequest}, re.Code)
 }
 
 // modelPickRoutes: PUT /api/v1/assistant/conversations/{id}/model {launcher, model?, effort?, machine_id?} keeps the pick
