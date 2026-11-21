@@ -936,6 +936,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		TaskInstructions string                        `json:"task_instructions"`
 		Goal             string                        `json:"goal"` // session.start: a /goal typed after the first message is in (startgoal.go)
 		DismissLost      bool                          `json:"dismiss_lost"`
+		TaskInput        bool                          `json:"task_input"`
 		TaskExecution    bool                          `json:"task_execution"`
 		ResumeOnly       bool                          `json:"resume_only"`
 		OnlyRunning      bool                          `json:"only_running"` // assistant.compact: refuse not_running rather than start the process
@@ -1740,6 +1741,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "session.fork": // "Branch to new chat" (fork.go)
 		id, err := n.fork(ctx, p.SessionID, p.AtItemID)
 		return map[string]any{"session_id": id}, err
+	case "assistant.content":
+		return map[string]any{"valid": true}, n.validatePromptContent(withSkillOwner(context.WithValue(ctx, taskInputKey{}, true), p.SkillOwner), p.SessionID, p.Cwd, p.Launcher, p.Text, modelExecution{Runtime: p.Runtime, ConfigDir: p.ConfigDir})
 	case "assistant.directory":
 		return n.taskDirectory(p.Path)
 	case "assistant.execution":
@@ -1749,6 +1752,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return nil, fmt.Errorf("conversation %s is gone", p.SessionID)
 		}
 		sctx := withSkillOwner(ctx, p.SkillOwner)
+		if p.TaskInput {
+			sctx = context.WithValue(sctx, taskInputKey{}, true)
+		}
 		if method == assistantwire.DeviceAssistantAnswerAgain {
 			var guard struct {
 				After       string `json:"answer_again_after"`
@@ -2525,10 +2531,13 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return nil, err
 		}
 		return ok(n.syncTodoTokens(ctx, in.Tokens))
-	case methodFsList:
+	case methodFsList, methodFsTaskList:
 		var in fsListParams
 		if err := json.Unmarshal(params, &in); err != nil {
 			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		if method == methodFsTaskList {
+			return n.listTaskDir(in.Path, in.Cwd)
 		}
 		return n.listDir(in.Path, in.Cwd)
 	case methodFsFind: // every file under cwd, for the web palette's file search (files_find.go)

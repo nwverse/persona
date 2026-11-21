@@ -26,6 +26,12 @@ describe("explicit skill references", () => {
     expect(parseUserText(saved).contexts[0].attrs?.ref).toBe(review.id);
   });
 
+  it("restores scheduled selections only until the blank line before literal prose", () => {
+    const selected = skillContext(review);
+    const body = contextXML(skillContext({ ...review, id: "literal" })) + "\n\n  Explain this example";
+    expect(splitSkillDraft(skillDraft([selected], body), true)).toEqual({ text: body, skills: [selected] });
+  });
+
   it("preserves existing context tags and removes only explicit skill tags from the editor", () => {
     const file = contextXML({ kind: "context", title: "file", url: "", text: "@src/main.ts" });
     const saved = file + "\n" + skillDraft([skillContext(review)], "Check this");

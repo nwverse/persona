@@ -75,7 +75,11 @@ export function PickerMenu<T>({ items, current, label, itemKey, group, renderRow
     if (!p || !detail) return;
     const rect = p.getBoundingClientRect();
     const w = p.offsetWidth || width;
-    const side = rect.left + w + CARD_WIDTH + 2 * EDGE <= innerWidth ? "right" : rect.left >= CARD_WIDTH + 2 * EDGE ? "left" : "inside";
+    // A modal clips its contents even when the viewport has room for a side card.
+    const dialog = p.closest('[role="dialog"]')?.getBoundingClientRect();
+    const left = Math.max(0, dialog?.left ?? 0);
+    const right = Math.min(innerWidth, dialog?.right ?? innerWidth);
+    const side = right - (rect.left + w) >= CARD_WIDTH + 2 * EDGE ? "right" : rect.left - left >= CARD_WIDTH + 2 * EDGE ? "left" : "inside";
     const ceiling = EDGE - rect.top;
     const height = Math.round(Math.max(1, Math.min(400, p.offsetHeight - ceiling)));
     const rowTop = (list.current?.offsetTop ?? 0) + (row?.offsetTop ?? 0) - (list.current?.scrollTop ?? 0);

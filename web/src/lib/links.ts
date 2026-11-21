@@ -320,7 +320,7 @@ export interface ContextRef {
   id: string;
   /** "workspace": a folder on a computer picked in the @ menu, carrying `machine` and `cwd` (docs/protocol/protocol.md "Tags in messages").
    *  "forward": a message forwarded from another chat (lib/forward.ts, docs/protocol/protocol.md "Forwarded messages"). */
-  kind: "context" | "edit" | "workspace" | "forward" | "skill";
+  kind: "context" | "edit" | "workspace" | "forward" | "skill" | "file";
   title: string;
   url: string;
   text: string;

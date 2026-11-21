@@ -55,11 +55,12 @@ type Task struct {
 	// runGrantBasis belongs only to the model/task snapshot consumed by this run, never the stored task.
 	runGrantBasis string
 
-	WorkoutID string `json:"workout_id,omitempty"`
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Prompt    string `json:"prompt"`
-	Repeat    string `json:"repeat"` // once / daily / interval / cron
+	WorkoutID        string `json:"workout_id,omitempty"`
+	ID               string `json:"id"`
+	Title            string `json:"title"`
+	Prompt           string `json:"prompt"`
+	PromptSelections bool   `json:"prompt_selections,omitempty"` // owner-approved envelope, never copied from a client Task
+	Repeat           string `json:"repeat"`                      // once / daily / interval / cron
 	// At is the task's next run.
 	At           time.Time `json:"at,omitempty"`
 	Time         string    `json:"time,omitempty"`     // daily: "HH:MM" in the user's time zone
@@ -219,6 +220,10 @@ func (t Task) labelIn(l i18n.Lang) string {
 	}
 	if t.Repeat == repeatOnce {
 		return i18n.T(l, "assistant-schedule.followup")
+	}
+	if t.PromptSelections {
+		_, body := taskPromptBody(t.Prompt)
+		return clip(oneLine(body), 30)
 	}
 	return clip(oneLine(t.Prompt), 30)
 }
@@ -726,12 +731,19 @@ var scheduleHeader = lazyre.New(`^(?:⏰[^\n]*（[^\n]*(?:跟进|定时任务)[^
 
 func stripScheduleHeader(p string) string {
 	p = strings.TrimSpace(p)
+	prefix, body := taskPromptBody(p)
+	if !scheduleHeader.MatchString(body) {
+		return p
+	}
 	for {
-		loc := scheduleHeader.FindStringIndex(p)
+		loc := scheduleHeader.FindStringIndex(body)
 		if loc == nil {
-			return p
+			if prefix != "" {
+				return strings.TrimSpace(prefix + "\n\n" + body)
+			}
+			return body
 		}
-		p = strings.TrimSpace(p[loc[1]:])
+		body = strings.TrimSpace(body[loc[1]:])
 	}
 }
 
@@ -905,7 +917,9 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 		return "", err
 	}
 	if err := s.setTaskModel(ctx, t.ID, a.Launcher, a.Model, a.Effort); err != nil {
-		_, _ = s.deleteTask(ctx, t.ID) // a task that cannot run with what was asked is not left behind
+		if !errors.Is(err, errTaskSelectionsOwner) {
+			_, _ = s.deleteTask(ctx, t.ID) // a task that cannot run with what was asked is not left behind
+		}
 		return "", err
 	}
 	s.broadcastSchedule()
@@ -989,7 +1003,7 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 	if title = strings.TrimSpace(title); title != "" {
 		t.Title = title
 	}
-	t.Prompt = prompt
+	t.setLiteralPrompt(prompt)
 	if push != nil { // left out: it keeps its push
 		t.Push = *push
 	}
@@ -1080,7 +1094,8 @@ func copiesRun(r ScheduleRun, title, rawPrompt string) bool {
 	if strings.TrimSpace(title) != "" {
 		return sameText(title, r.Title)
 	}
-	first, _, _ := strings.Cut(strings.TrimSpace(rawPrompt), "\n")
+	_, body := taskPromptBody(strings.TrimSpace(rawPrompt))
+	first, _, _ := strings.Cut(body, "\n")
 	return scheduleHeader.MatchString(first) && strings.HasPrefix(first, "⏰ "+r.Title+"（")
 }
 
@@ -1270,14 +1285,28 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		return "", err
 	}
 	needsOwn := hasTaskModel(a.Launcher, a.Model, a.Effort)
-	if a.ID != "" && needsOwn {
-		// Check before the save: a bad launcher must not leave the rest of the change applied.
+	changesRun := needsOwn || a.Time != "" || a.Weekdays != nil || a.Cron != "" || a.Until != nil ||
+		a.FreshEachRun != nil || a.Push != nil || a.Inbox != nil || a.Report != nil || a.RunIf != nil || a.TodoID != nil
+	title := strings.TrimSpace(a.Title)
+	requiresOwner := func(t Task) bool {
+		enables := a.Enabled != nil && *a.Enabled && !t.Enabled
+		renames := a.Title != "" && title != t.Title // the title is part of the rendered prompt
+		return t.PromptSelections && a.Prompt == "" && (changesRun || enables || renames)
+	}
+	if a.ID != "" && (changesRun || a.Enabled != nil || a.Title != "") {
+		// Refuse before model validation or pre-run command approval. Recheck
+		// under the schedule lock in case the owner edits the task meanwhile.
 		if prev, ok := s.taskView(ctx, a.ID); ok && prev.Space == space {
-			if prev.SessionID != "" {
-				return "", errTaskModelNeedsOwnConversation
+			if requiresOwner(prev) {
+				return "", errTaskSelectionsOwner
 			}
-			if err := s.validateTaskModel(ctx, a.ID, a.Launcher, a.Model, a.Effort); err != nil {
-				return "", err
+			if needsOwn {
+				if prev.SessionID != "" {
+					return "", errTaskModelNeedsOwnConversation
+				}
+				if err := s.validateTaskModel(ctx, a.ID, a.Launcher, a.Model, a.Effort); err != nil {
+					return "", err
+				}
 			}
 		}
 	}
@@ -1303,15 +1332,19 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 			return "", fmt.Errorf("no task %q (list_followups lists them)", a.ID)
 		}
 		t = sc.tasks[i]
+		if requiresOwner(t) {
+			sc.mu.Unlock()
+			return "", errTaskSelectionsOwner
+		}
 		old = t
 	} else {
 		t = Task{ID: "rt_" + randomHex(4), Repeat: repeatDaily, Enabled: true, Space: space, CreatedBy: "assistant", CreatedAt: time.Now().UTC()}
 	}
 	if a.Title != "" {
-		t.Title = strings.TrimSpace(a.Title)
+		t.Title = title
 	}
 	if a.Prompt != "" {
-		t.Prompt = stripScheduleHeader(a.Prompt)
+		t.setLiteralPrompt(stripScheduleHeader(a.Prompt))
 	}
 	if a.Time != "" || a.Weekdays != nil {
 		t.Repeat = repeatDaily
@@ -1343,22 +1376,28 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 	if a.FreshEachRun != nil {
 		t.FreshEachRun = *a.FreshEachRun
 	}
-	if err := bindScheduleTodo(&t, a.TodoID); err != nil {
-		sc.mu.Unlock()
-		return "", err
+	if t.PromptSelections {
+		// Only a pause may have changed. Preserve the saved run settings,
+		// including an elapsed end time.
+		disabledTransition(old, &t, now)
+	} else {
+		if err := bindScheduleTodo(&t, a.TodoID); err != nil {
+			sc.mu.Unlock()
+			return "", err
+		}
+		applyUntil(&t, end, hasUntil, clearUntil)
+		dropStaleUntil(&t, hasUntil, now)
+		isolateScheduledConversation(&t, mayBeMain)
+		if err := s.checkTaskSourceRestore(ctx, old, t); err != nil {
+			sc.mu.Unlock()
+			return "", err
+		}
+		if err := checkTask(&t, now); err != nil {
+			sc.mu.Unlock()
+			return "", err
+		}
+		rearm(old, &t, now)
 	}
-	applyUntil(&t, end, hasUntil, clearUntil)
-	dropStaleUntil(&t, hasUntil, now)
-	isolateScheduledConversation(&t, mayBeMain)
-	if err := s.checkTaskSourceRestore(ctx, old, t); err != nil {
-		sc.mu.Unlock()
-		return "", err
-	}
-	if err := checkTask(&t, now); err != nil {
-		sc.mu.Unlock()
-		return "", err
-	}
-	rearm(old, &t, now)
 	tasks := slices.Clone(sc.tasks)
 	if i < 0 {
 		tasks = append(tasks, t)
@@ -1371,7 +1410,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		return "", err
 	}
 	if err := s.setTaskModel(ctx, t.ID, a.Launcher, a.Model, a.Effort); err != nil {
-		if i < 0 {
+		if i < 0 && !errors.Is(err, errTaskSelectionsOwner) {
 			_, _ = s.deleteTask(ctx, t.ID) // a task that cannot run with what was asked is not left behind
 		}
 		return "", err
@@ -2034,6 +2073,11 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			// then) it moved the main conversation onto another one (plain claude, not logged in there) for good (#1518).
 			params := taskSourceParams(t, taskPrompt(t, due, now, loc, manual, kb, false), sourceCwd)
 			err := s.sendModel(ctx, t.MachineID, t.SessionID, params, s.lang(ctx))
+			if err == nil {
+				if err := s.validateTaskSelections(ctx, t.MachineID, t.SessionID, params); err != nil {
+					return s.failTaskRun(ctx, t, run, err, false)
+				}
+			}
 			unsent := err != nil // model preparation has not sent the task's message
 			if err == nil {
 				s.noteRound(m.ID, t.SessionID, t.ID, t.runGrantBasis, time.Now()) // before it is sent: its turn may plan at once (schedule_grant.go)
@@ -2172,6 +2216,9 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 func (s *Service) resumeOwn(ctx context.Context, machine, sid string, params map[string]any) error {
 	if c, ok := s.session(ctx, machine, sid); ok && signedOut(c) && (c.Agent == "" || c.Agent == "claude") {
 		params["config_dir"] = meetingProfile
+	}
+	if err := s.validateTaskSelections(ctx, machine, sid, params); err != nil {
+		return err
 	}
 	err := s.call(ctx, machine, DeviceAssistantSend, params, nil)
 	if _, asked := params["config_dir"]; asked && (nodeOutdated(err) || profileRefused(err)) {
@@ -2789,13 +2836,20 @@ func (s *Service) forgetConversation(ctx context.Context, id string) (Task, bool
 // task's own conversation, which has had all that (and the knowledge-base hint) already; it is told the earlier
 // runs are above instead. The task's prompt is always there: it may have been edited, or compacted away.
 func taskPrompt(t Task, due, now time.Time, loc *time.Location, manual, kb, continued bool) string {
+	prefix, body := "", t.Prompt
+	if t.PromptSelections {
+		prefix, body = taskPromptBody(t.Prompt)
+	}
 	r := prompts.TaskRun{Label: t.label(), TodoID: t.TodoID, Once: t.Repeat == repeatOnce, Interval: t.Repeat == repeatInterval, Due: due.In(loc),
-		Prompt: t.Prompt, KBHint: kb && t.calendar(), KnowledgeDir: t.kbDir, Continued: continued, PushAsked: t.pushesOnlyAsked(), InboxWorthy: t.inboxWorthy(), InboxEvery: t.inboxEvery(), Facts: t.factsText, State: taskStatePrompt(t)}
+		Prompt: body, KBHint: kb && t.calendar(), KnowledgeDir: t.kbDir, Continued: continued, PushAsked: t.pushesOnlyAsked(), InboxWorthy: t.inboxWorthy(), InboxEvery: t.inboxEvery(), Facts: t.factsText, State: taskStatePrompt(t)}
 	if r.Interval {
 		r.Every = everyText(t.EveryMinutes)
 	}
 	if late := now.Sub(due); !manual && !t.calendar() && late > 2*time.Minute {
 		r.Late = humanDuration(late)
+	}
+	if prefix != "" {
+		return prefix + "\n\n" + prompts.RenderTaskRun(r)
 	}
 	return prompts.RenderTaskRun(r)
 }
@@ -2913,12 +2967,26 @@ func (s *Service) taskView(ctx context.Context, id string) (Task, bool) {
 	return Task{}, false
 }
 
+// Clients that omit cron may represent an existing cron task as a one-off.
+// Keep its saved rule in both input discovery and the eventual edit.
+func keepLegacyCronRule(saved Task, draft *Task, hasCron bool) {
+	if !hasCron && saved.Repeat == repeatCron {
+		draft.Repeat, draft.Cron, draft.At = saved.Repeat, saved.Cron, saved.At
+		draft.Time, draft.Weekdays, draft.EveryMinutes = "", nil, 0
+	}
+}
+
 // editTask applies what the app changed (the hub's own fields and where runs go are kept; SessionID can only be
 // cleared, to run in a new conversation each time). Push and Until are kept: the routes set them only when the
 // body has them. A missing Until unmarshals as zero and would wipe a stored end time; null clears it.
 func editTask(old, in Task, now time.Time) Task {
 	t := old
-	t.Title, t.Prompt, t.Repeat, t.Enabled = in.Title, in.Prompt, in.Repeat, in.Enabled
+	t.Title, t.Repeat, t.Enabled = in.Title, in.Repeat, in.Enabled
+	// An old client may echo the approved prompt when saving metadata. Any
+	// replacement is literal unless the owner uses the structured route.
+	if in.Prompt != old.Prompt {
+		t.setLiteralPrompt(in.Prompt)
+	}
 	t.Time, t.Weekdays, t.EveryMinutes, t.Cron = in.Time, in.Weekdays, in.EveryMinutes, in.Cron
 	t.PermissionMode = in.PermissionMode
 	t.Launcher, t.Model, t.Effort = "", "", ""
@@ -2944,6 +3012,7 @@ func editTask(old, in Task, now time.Time) Task {
 }
 
 func (s *Service) scheduleRoutes() {
+	s.taskInputRoutes()
 	s.handle("GET /api/v1/assistant/tasks", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.scheduleReadable(r.Context()); err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
@@ -2999,6 +3068,10 @@ func (s *Service) scheduleRoutes() {
 		delete(raw, "run_if")
 		delete(raw, "until") // not a time.Time: "30m" and a local clock time would not unmarshal
 		ignoreTaskStateNote(raw)
+		if err := readStructuredTaskPrompt(raw); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
 		var in Task
 		encoded, _ := json.Marshal(raw)
 		if err := json.Unmarshal(encoded, &in); err != nil {
@@ -3006,6 +3079,9 @@ func (s *Service) scheduleRoutes() {
 			return
 		}
 		t := editTask(Task{ID: "task_" + randomHex(4), CreatedAt: now.UTC()}, in, now)
+		if _, rich := raw["structured_prompt"]; rich {
+			t.PromptSelections = true
+		}
 		t.SessionID, t.Push, t.Inbox, t.RunIf = "", push, inbox, runIf
 		if err := editTaskState(&t, in, raw, now); err != nil {
 			writeTaskStateError(w, err)
@@ -3025,6 +3101,10 @@ func (s *Service) scheduleRoutes() {
 		edit, err := s.prepareTaskExecutionEdit(r.Context(), Task{}, &t, raw)
 		if err != nil {
 			writeTaskExecutionError(w, err)
+			return
+		}
+		if err := s.validateTaskInput(r.Context(), t, edit.record); err != nil {
+			apierr.Call(w, err)
 			return
 		}
 		if err := s.commitTaskExecutionEdit(r.Context(), nil, t, edit); err != nil {
@@ -3072,18 +3152,31 @@ func (s *Service) scheduleRoutes() {
 		}
 		old := sc.tasks[i]
 		sc.mu.Unlock()
+		if err := readStructuredTaskPrompt(raw); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
 		var in Task
 		encoded, _ := json.Marshal(raw)
 		if err := json.Unmarshal(encoded, &in); err != nil {
 			apierr.Write(w, 400, err)
 			return
 		}
-		if _, has := raw["cron"]; !has && old.Repeat == repeatCron {
-			// An app that does not know cron tasks keeps the task's rule (an older iOS app reads one as a one-off,
-			// Android and the web send its repeat back without the expression).
-			in.Repeat, in.Cron, in.At, in.Time, in.Weekdays, in.EveryMinutes = old.Repeat, old.Cron, old.At, "", nil, 0
+		if in.Prompt == "" {
+			in.Prompt = old.Prompt
+			for field := range raw {
+				if strings.EqualFold(field, "prompt") {
+					in.Prompt = "" // an explicit empty prompt is still invalid
+					break
+				}
+			}
 		}
+		_, hasCron := raw["cron"]
+		keepLegacyCronRule(old, &in, hasCron)
 		t := editTask(old, in, now)
+		if _, rich := raw["structured_prompt"]; rich {
+			t.PromptSelections = true
+		}
 		if hasRunIf {
 			t.RunIf = runIf
 		}
@@ -3128,6 +3221,10 @@ func (s *Service) scheduleRoutes() {
 		edit, err := s.prepareTaskExecutionEdit(r.Context(), old, &t, raw)
 		if err != nil {
 			writeTaskExecutionError(w, err)
+			return
+		}
+		if err := s.validateTaskInput(r.Context(), t, edit.record); err != nil {
+			apierr.Call(w, err)
 			return
 		}
 		if err := s.commitTaskExecutionEdit(r.Context(), &old, t, edit); err != nil {

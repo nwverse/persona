@@ -1,10 +1,23 @@
 package prompts
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
+
+type AssistantSelectedFile struct{ Name, Path string }
+
+func RenderAssistantSelectedFiles(files []AssistantSelectedFile) string {
+	quoted := make([]AssistantSelectedFile, len(files))
+	for i, file := range files {
+		name, _ := json.Marshal(file.Name)
+		path, _ := json.Marshal(file.Path)
+		quoted[i] = AssistantSelectedFile{Name: string(name), Path: string(path)}
+	}
+	return render("assistant/selected_files", quoted)
+}
 
 type AssistantSelectedSkill struct {
 	Name, Path, Ref string

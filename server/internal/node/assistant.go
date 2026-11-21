@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/promptcontent"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/shellcmd"
@@ -461,6 +462,11 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		// Persona's explicit MCP allowlist effective; the manager/node origin policy remains the outbound boundary.
 		mode = "default"
 	}
+	if guest != nil || public || origin == originInbox {
+		if refs, err := promptcontent.Files(text); err != nil || len(refs) > 0 {
+			return "", refusal("file_unavailable", i18n.T(i18n.From(ctx), "assistant-schedule.selected_file_unavailable"), nil)
+		}
+	}
 	if guest != nil {
 		if refs, err := assistantskills.References(text); err != nil || len(refs) != 0 {
 			return "", skillSelectionError(assistantskills.ErrReference)
@@ -498,6 +504,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if onRuntime, runs := n.assistantRuntime(rl), n.runtimeAssistant(id) || strictRuntime; guest != nil && (onRuntime != nil || runs) {
 		return "", errGuestAgent
 	} else if onRuntime != nil || runs {
+		if refs, err := promptcontent.Files(text); err != nil || len(refs) > 0 {
+			return "", refusal("file_unavailable", i18n.T(i18n.From(ctx), "assistant-schedule.file_runtime_unsupported"), nil)
+		}
 		if origin == originInbox {
 			// External runtimes do not yet attest the origin on their first callback. Refuse rather than leave an
 			// unguarded startup window; built-in Claude and Codex carry it in their process and session state.
@@ -664,6 +673,11 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if !resume {
 		selectionSession = "" // a newly allocated Claude id has no resumable profile yet
 	}
+	files, err := n.selectedFiles(ctx, text, cwd, launcher, execution.Runtime)
+	if err != nil {
+		return "", err
+	}
+
 	selected, err := n.selectedSkills(ctx, selectionSession, cwd, launcher, text, execution)
 	if err != nil {
 		return "", err
@@ -917,6 +931,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		return id, nil
 	}
 	if hasInput && (launcher != selectedLauncher || execution != selectedExecution || len(selected) > 0 && p.agent == "claude") {
+		if len(files) > 0 {
+			files, err = n.selectedFiles(ctx, text, cwd, launcher, execution.Runtime)
+			if err != nil {
+				return "", err
+			}
+		}
 		// An active process may retain its old environment while a switch waits. Never send selections to that
 		// different environment simply because the display names match. Claude startup can also
 		// reveal a managed-policy cache; recheck before handing exact-file instructions to it.
@@ -924,6 +944,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if err != nil {
 			return "", err
 		}
+	}
+	if len(files) > 0 {
+		text += "\n\n" + prompts.RenderAssistantSelectedFiles(files)
 	}
 	retryMode, retryEffort := n.modesOf(id) // retain the request before an unconfirmed control can roll it back
 	// Controls do not depend on the live context. Start their acknowledged sync

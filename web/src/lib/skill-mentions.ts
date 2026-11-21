@@ -23,6 +23,8 @@ export interface SkillSource {
   launcher?: string;
   environment: string;
   agent?: boolean;
+  /** Scheduled tasks resolve discovery against their unsaved execution settings. */
+  catalog?: (signal: AbortSignal) => Promise<SkillCatalog>;
 }
 
 export function matchingSkills(skills: MentionSkill[], query: string): MentionSkill[] {
@@ -47,23 +49,27 @@ export function skillEditText(contexts: Context[], text: string): string {
 }
 
 /** Pull only leading explicit selections back into removable chips. Keep existing non-skill context bytes. */
-export function splitSkillDraft(raw: string): { text: string; skills: ContextRef[] } {
+export function splitSkillDraft(raw: string, includeFiles = false): { text: string; skills: ContextRef[] } {
   const skills: ContextRef[] = [];
   const kept: string[] = [];
   let rest = raw;
   for (;;) {
+    // Scheduled prompts separate picker records from literal prose with a blank line.
+    if (includeFiles && skills.length && /^\r?\n\r?\n/.test(rest)) break;
     const m = LEAD_CONTEXT_RE.exec(rest);
     if (!m) break;
     const tag = new RegExp(CONTEXT_RE.source).exec(m[0]);
     if (!tag) break;
     const { kind, title, url, ...attrs } = tagAttrs(tag[1]);
-    if (kind === "skill" && attrs.ref) {
-      if (!skills.some((s) => s.attrs?.ref === attrs.ref)) skills.push({ id: `skill:${attrs.ref}`, kind, title: title ?? "", url: url ?? "", text: tag[2].trim(), attrs });
+    if ((kind === "skill" && attrs.ref) || (includeFiles && kind === "file" && attrs.path)) {
+      const id = `${kind}:${kind === "file" ? attrs.path : attrs.ref}`;
+      if (!skills.some((s) => s.id === id)) skills.push({ id, kind, title: title ?? "", url: url ?? "", text: tag[2].trim(), attrs });
     } else if (kind !== "skill-instructions") {
       kept.push(m[0].trim());
     }
     rest = rest.slice(m[0].length);
   }
   if (!skills.length && !raw.includes('kind="skill-instructions"')) return { text: raw, skills };
-  return { text: [...kept, rest.trimStart()].filter(Boolean).join("\n\n"), skills };
+  const body = includeFiles ? rest.replace(/^\r?\n\r?\n/, "") : rest.trimStart();
+  return { text: [...kept, body].filter(Boolean).join("\n\n"), skills };
 }
