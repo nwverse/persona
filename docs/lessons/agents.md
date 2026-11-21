@@ -1003,6 +1003,10 @@ or the server hangs after SIGINT. The event stream is server-wide, so N director
 The plugin API doesn't expose lists or full chats, so read `opencode.db` read-only. Assistant messages are rewritten in place within a step without changing seq, and the runtime SDK doesn't repush batches without an increased `toSeq`, so push only finalized messages. See `docs/integrations/opencode.md`.
 Agents herdr reports but Persona doesn't recognize were silently dropped by `if a.Agent != "claude" { continue }` (their panes invisible on the phone). They're now terminal-only rows; new Agent integrations must not rely on "unclaimed means disappears".
 
+## OpenCode directory MCP names are not session identities (#11936)
+
+OpenCode ACP registers client MCP servers for the directory, replacing a same-name server for other sessions in that process. Different URL/token pairs named `persona` do not isolate same-directory conversations. Give each Assistant a dedicated ACP process, retaining a shared process for ordinary Agents. In the server plugin, never choose the most recently active conversation: freeze the route owner and reject ambiguous or unavailable native inventory. Revoking a worker must also revoke its MCP URL; resuming allocates a fresh URL so a cached retired token never regains authority. The pinned native-engine contract uses a fake local model to exercise actual upstream replacement semantics rather than teaching a fake the desired answer.
+
 ## claude dies, but its hook survives (2026-11-06, #4344, 2.1.318)
 
 Claude Code launches hook commands with `detached: true` on Linux / macOS, so `personad hook` has its own process group: when claude is killed with `kill -9`, crashes, or is OOM-killed, the hook survives, still connected to node.sock waiting for the phone; the card and "Needs you" remain until `hook_timeout_minutes`.

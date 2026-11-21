@@ -49,6 +49,12 @@ func TestAssistantCLICallerUsesOnlyVerifiedRuntimeWorkers(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("no local peer process lookup")
 	}
+	for _, engine := range []string{"agy", "opencode"} {
+		t.Run(engine, func(t *testing.T) { testAssistantCLICallerVerifiedRuntimeWorkers(t, engine) })
+	}
+}
+
+func testAssistantCLICallerVerifiedRuntimeWorkers(t *testing.T, engine string) {
 	n, hub := runtimeNode(t)
 	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(t.TempDir(), "s"), Net: "unix"})
 	if err != nil {
@@ -91,10 +97,10 @@ func TestAssistantCLICallerUsesOnlyVerifiedRuntimeWorkers(t *testing.T) {
 		role := strings.TrimSpace(line)
 		peers[role], pids[role] = conn, pid
 	}
-	const assistantID, agentID = "agy-assistant", "agy-agent"
+	assistantID, agentID := engine+"-assistant", engine+"-agent"
 	n.state.put(assistantID, sessionState{Cwd: identity.AssistantDir(n.home)})
 	host := n.runtimes.add(nil)
-	host.ready, host.hello.Runtime, host.hello.Caps.Assistant, host.pid = true, "agy", true, pids["runtime"]
+	host.ready, host.hello.Runtime, host.hello.Caps.Assistant, host.pid = true, engine, true, pids["runtime"]
 	n.runtimes.claim(host, assistantID)
 	n.runtimes.claim(host, agentID)
 	report := func(pids map[string]int) {
@@ -111,6 +117,14 @@ func TestAssistantCLICallerUsesOnlyVerifiedRuntimeWorkers(t *testing.T) {
 		if roots := n.assistantRoots(); len(roots) != 0 {
 			t.Fatalf("accepted non-worker PID %d: %v", pid, roots)
 		}
+	}
+	for _, otherID := range []string{agentID, engine + "-assistant-two"} {
+		if otherID != agentID {
+			n.state.put(otherID, sessionState{Cwd: identity.AssistantDir(n.home)})
+			n.runtimes.claim(host, otherID)
+		}
+		report(map[string]int{assistantID: pids["worker"], otherID: pids["worker"]})
+		check("assistant", "")
 	}
 	report(map[string]int{assistantID: pids["worker"], agentID: pids["agent"]})
 	check("assistant", assistantID)

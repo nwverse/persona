@@ -3,7 +3,6 @@ package hub
 import (
 	"bytes"
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,23 +51,6 @@ func (h *Hub) metricsRoutesRelayed(api *http.ServeMux) {
 // asks the machines it connects and the account-pool gateways (docs/server/usage-windows.md); 503 assistant_offline while
 // it is away.
 func (h *Hub) usageRoutesRelayed(api *http.ServeMux) {
-	for _, pattern := range devicewire.OwnerUsageRoutes {
-		api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-			// Only the actual owner Bearer token opens these two operations. A full device,
-			// scoped agent, query token or admin cookie must not acquire administrator access.
-			tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") || tok == "" ||
-				subtle.ConstantTimeCompare([]byte(tok), []byte(h.cfg.Token)) != 1 {
-				h.securityError(w, r, http.StatusForbidden, "forbidden", 0)
-				return
-			}
-			_ = h.waitDevices(r.Context())
-			if id, ok := h.owner(w, r, h.byRequest); ok {
-				h.forwardAdminHTTP(w, r, id)
-			}
-		})
-	}
-
 	for _, pattern := range devicewire.UsageRoutes {
 		api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) { h.forwardAwaited(w, r, h.byRequest) })
 	}

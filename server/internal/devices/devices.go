@@ -101,6 +101,10 @@ type Options struct {
 	// usagebalance.go). The assistant owns it, since it owns the launchers and their sealed keys. known false: the
 	// launcher list could not be read, so the last samples stay. nil: no balance source.
 	LauncherBalances func(ctx context.Context) (accounts []proto.UsageAccount, known bool)
+	// UsageExtension asks an extension (contributes.usage) about a launcher's gateway: usage.query, whose answer is the
+	// accounts to draw (usagesource.ExtensionAnswer). The extensions are the manager's, so it owns this; it holds the
+	// launcher's key and sends the extension's requests with it. nil: extension sources cannot be read.
+	UsageExtension func(ctx context.Context, extension, launcher string) (json.RawMessage, error)
 	// TailcatKey is the identity file the computers reached over tailcat trust (tunnel.LoadOrCreateHubKey); "": this
 	// machine's data directory's (tunnel.HubKeyPath).
 	TailcatKey string
@@ -213,6 +217,7 @@ func New(o Options) *Devices {
 	d.usageWin.gateways = d.usageGW.accounts
 	d.usageGW.init(usage, d.usageWin.invalidate, d.logf)
 	d.usageWin.balances = d.usageBal.accounts
+	d.usageGW.fetchExtension = o.UsageExtension
 	d.usageBal.init(o.LauncherBalances, d.usageWin.invalidate, d.logf)
 	return d
 }

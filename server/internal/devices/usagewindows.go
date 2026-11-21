@@ -201,9 +201,20 @@ func (u *usageWindowsHub) poll(ctx context.Context, sources []usageSource, now t
 // samples are marked stale according to their source. Accounts show where they were seen and the gateway's name when
 // available. The most used accounts come first, stale ones last.
 func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAccount {
-	var live []proto.UsageAccount
+	var live, passed []proto.UsageAccount
 	for _, a := range in {
 		if now.Sub(a.SampledAt) > usageHubMaxAge {
+			continue
+		}
+		if a.Pass { // an extension's row stands as it was sent
+			if a.Windows == nil {
+				a.Windows = []proto.UsageWindow{}
+			}
+			a.ID = usageRowID(a.Provider, "extension|"+a.Origin)
+			staleAt := a.SampledAt.Add(usageGatewayStaleAfter)
+			a.StaleAt = &staleAt
+			a.Stale = a.Stale || now.After(staleAt)
+			passed = append(passed, a)
 			continue
 		}
 		var wins []proto.UsageWindow
@@ -446,7 +457,7 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 		}
 		return out[i].ID < out[j].ID
 	})
-	return out
+	return append(out, passed...) // an extension's rows last, in the order it gave them
 }
 
 // isBalanceSample: a sample of a provider that reports a prepaid balance instead of rate-limit windows (#11825). The
