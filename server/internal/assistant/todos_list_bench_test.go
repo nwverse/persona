@@ -89,7 +89,7 @@ func todosListBodyAs(tb testing.TB, s *Service, role string) []byte {
 // all (and they were noted from its list, as SessionsChanged notes them); else it lists only the main conversation,
 // and the others' spaces are told by what the manager noted of them (conversation_space.go), as for chats quiet for
 // more than a week.
-func benchTodosManager(n int, o Options, listed bool) *Service {
+func benchTodosManager(b testing.TB, n int, o Options, listed bool) *Service {
 	f := newFakeHub().withMachine()
 	if h, ok := o.Hub.(*todoFlushHub); ok {
 		h.fakeHub = f
@@ -110,9 +110,7 @@ func benchTodosManager(n int, o Options, listed bool) *Service {
 	if listed {
 		f.setSessions("server", chats...)
 		s.conversationSpacesListed("server", chats)
-		for !s.listedSpacesWritten() {
-			time.Sleep(time.Millisecond)
-		}
+		waitFor(b, "the listed conversations' spaces to be noted", s.listedSpacesWritten)
 	} else {
 		f.setSessions("server", chats[0])
 		s.noteConversationSpaces(context.Background(), noted)
@@ -135,7 +133,7 @@ func BenchmarkTodosList(b *testing.B) {
 				name = "ext/" + name
 			}
 			b.Run(name, func(b *testing.B) {
-				s := benchTodosManager(n, Options{}, true)
+				s := benchTodosManager(b, n, Options{}, true)
 				b.ReportAllocs()
 				for b.Loop() {
 					todosListBodyAs(b, s, role)
@@ -144,7 +142,7 @@ func BenchmarkTodosList(b *testing.B) {
 		}
 	}
 	b.Run("ext,quiet/todos=1000", func(b *testing.B) {
-		s := benchTodosManager(1000, Options{}, false)
+		s := benchTodosManager(b, 1000, Options{}, false)
 		b.ReportAllocs()
 		for b.Loop() {
 			todosListBodyAs(b, s, roleExtension)
@@ -165,7 +163,7 @@ func BenchmarkTodosList(b *testing.B) {
 		}
 		b.Run(name, func(b *testing.B) {
 			database := todoTestDB(b)
-			s := benchTodosManager(1000, Options{Store: func() Store { return database }}, !c.quiet)
+			s := benchTodosManager(b, 1000, Options{Store: func() Store { return database }}, !c.quiet)
 			for i := range 1000 {
 				from := fmt.Sprintf("todo_bench%06d", i)
 				id := todoCopyForBench(s, from) // the feed is never pruned: each run writes and reads its own
@@ -215,7 +213,7 @@ func BenchmarkTodoChangedFlush(b *testing.B) {
 				database := todoTestDB(b)
 				o.Store = func() Store { return database }
 			}
-			s := benchTodosManager(1000, o, !c.quiet)
+			s := benchTodosManager(b, 1000, o, !c.quiet)
 			if c.onDisk {
 				for i := range 1000 {
 					from := fmt.Sprintf("todo_bench%06d", i)
