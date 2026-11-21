@@ -573,7 +573,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 			if g, ok := s.undecidableSignal(ctx, t, now); ok {
 				s.signal(g)
 			}
-			if g, ok := s.cardlessWaitSignal(ctx, t, agents, now); ok { // a review the owner cannot answer (#12648)
+			if g, ok := s.cardlessWaitSignal(ctx, t, agents, lists, now); ok { // a review the owner cannot answer (#12648)
 				s.signal(g)
 			}
 		}

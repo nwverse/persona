@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -159,5 +160,96 @@ func TestCardlessWorkersStopped(t *testing.T) {
 	}
 	if cardlessWorkersStopped([]proto.Session{stopped, {SessionID: "s5", PendingInteractions: 1}}) {
 		t.Error("a worker with a pending interaction means the review is not card-less")
+	}
+}
+
+// pendingCardlessSignal returns the queued card-less signal for id, failing the test if it is not there.
+func pendingCardlessSignal(t *testing.T, s *Service, id string) superviseSignal {
+	t.Helper()
+	b := &s.supervise
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	g, ok := b.pending[id+"|"+sigCardlessWait]
+	if !ok {
+		t.Fatalf("no pending cardless signal for %s", id)
+	}
+	return g
+}
+
+// A machine whose session list fails is not a stopped worker: the hand-back must wait for a reachable pass rather
+// than spend the round's one notification (and its CardlessToldAt stamp) on an unknown state (#12648 P1).
+func TestReviewCardlessWaitWaitsForAReachableWorker(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	holdDigest(s)
+	ctx := context.Background()
+	waitsForReview(t, s, f, todo.ID, "做完了。")
+	f.sessionsFail["box"] = 100
+	s.superviseWatch(ctx, time.Now().Add(cardlessSettle+time.Hour))
+	if slices.Contains(pendingKinds(s, todo.ID), sigCardlessWait) {
+		t.Fatal("the hand-back fired while the worker's machine was unreachable")
+	}
+	if todoNow(s, todo.ID).Supervision.CardlessToldAt != nil {
+		t.Fatal("the round marker was stamped on an unreachable worker")
+	}
+	// Once the machine answers again, the same review round is handed back normally.
+	f.sessionsFail["box"] = 0
+	s.superviseWatch(ctx, time.Now().Add(cardlessSettle+2*time.Hour))
+	if !slices.Contains(pendingKinds(s, todo.ID), sigCardlessWait) {
+		t.Fatalf("the hand-back did not fire after the machine recovered: %v", pendingKinds(s, todo.ID))
+	}
+}
+
+// A digest entry whose conditions changed while it queued is dropped: if an owner card (acceptance ask) appears after
+// the marker was stamped, the stale "no card" entry must not render (#12648 P1).
+func TestCardlessDigestDropsWhenACardAppears(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	holdDigest(s)
+	ctx := context.Background()
+	waitsForReview(t, s, f, todo.ID, "做完了。")
+	s.superviseWatch(ctx, time.Now().Add(cardlessSettle+time.Minute))
+	g := pendingCardlessSignal(t, s, todo.ID)
+	if _, ok := s.digestEntry(ctx, g, ""); !ok {
+		t.Fatal("the card-less entry did not render while still card-less")
+	}
+	// An owner-answerable ask now stands; the same queued entry must be suppressed on the next render.
+	s.askConclusion(ctx, todoNow(s, todo.ID), conclusionInput{Outcome: outcomeDecide, Reason: "要不要发布", Recommend: "发布"})
+	if askOf(s, todo.ID) == nil {
+		t.Fatal("the conclusion ask was not kept")
+	}
+	if _, ok := s.digestEntry(ctx, g, ""); ok {
+		t.Fatal("the stale card-less entry rendered after an owner card appeared")
+	}
+}
+
+// A worker that goes back to work after the marker is stamped also invalidates the queued card-less entry. The
+// session list is set directly so the ledger still reads pending_review (the snapshot window before
+// supervisedWorking moves it): this exercises the digest's own worker revalidation rather than the state hold.
+func TestCardlessDigestDropsWhenAWorkerResumes(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	holdDigest(s)
+	ctx := context.Background()
+	waitsForReview(t, s, f, todo.ID, "做完了。")
+	s.superviseWatch(ctx, time.Now().Add(cardlessSettle+time.Minute))
+	g := pendingCardlessSignal(t, s, todo.ID)
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now()})
+	if cur := todoNow(s, todo.ID).Supervision; cur.state(todoNow(s, todo.ID)) != reviewPending {
+		t.Fatalf("the direct session edit must leave the ledger in pending_review: %+v", cur)
+	}
+	if _, ok := s.digestEntry(ctx, g, ""); ok {
+		t.Fatal("the stale card-less entry rendered after its worker resumed")
+	}
+}
+
+// A task leader's supervision message is rendered from worker_supervise.md, not the assistant supervise.md template:
+// the cardless_wait entry must carry an explanation and the required review action there too, instead of rendering as
+// an unexplained numbered line (#12648 P2).
+func TestCardlessWaitRenderedForTaskLeader(t *testing.T) {
+	e := prompts.SuperviseEntry{ID: "todo_1", Title: "Fix the build", Kind: sigCardlessWait, Minutes: 12}
+	got := prompts.RenderWorkerSupervise([]prompts.SuperviseEntry{e})
+	for _, want := range []string{"12 minutes for your review", "no card anyone can answer", "review it now", "Fix the build"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("worker cardless_wait render lacks %q:\n%s", want, got)
+		}
 	}
 }

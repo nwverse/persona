@@ -709,7 +709,16 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		// The marker (stamped when raised, persisted whole-round) is the hold: Postgres truncates PendingSince to
 		// microseconds, so a full key comparison against it could fail only on a database-backed service.
 		if st != reviewPending || v.CardlessToldAt == nil {
-			return prompts.SuperviseEntry{}, false // reviewed, given a card or handed back already meanwhile
+			return prompts.SuperviseEntry{}, false // reviewed, or handed back already, meanwhile
+		}
+		// Re-run the conditions that made the signal valid against current data: a card or active worker can have
+		// appeared while the entry waited in a queued/batched digest, in which case the "no card" claim is stale and
+		// must not be rendered (#12648 semantic review).
+		if a, ok := s.askCopy(t.ID); ok && !acceptAskStale(&a, t) && a.AcceptedAt.IsZero() {
+			return prompts.SuperviseEntry{}, false // an owner answer now stands
+		}
+		if !cardlessWorkersStopped(s.taskAgents(ctx, t)) {
+			return prompts.SuperviseEntry{}, false // a worker holds a card or went back to work meanwhile
 		}
 	case sigRecheck:
 		if a, ok := s.askCopy(t.ID); st != reviewNeedsUser || !ok || !a.AcceptedAt.IsZero() || a.AgentReply != nil ||

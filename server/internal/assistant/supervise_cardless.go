@@ -35,8 +35,8 @@ func cardlessSince(t Todo) time.Time {
 }
 
 // cardlessWorkersStopped says none of the task's active workers still works or holds a card the owner can answer.
-// taskAgentsIn already drops a machine whose session list cannot be read (it continues past that machine), so an
-// unreachable worker simply does not appear here: this function judges only the sessions it is given.
+// It judges only the sessions it is given; callers must first prove those sessions are complete with
+// cardlessAgentsReachable, because taskAgentsIn drops a machine whose session list cannot be read.
 func cardlessWorkersStopped(agents []proto.Session) bool {
 	for _, c := range agents {
 		if c.State == proto.StateNeedsYou || c.PendingInteractions > 0 {
@@ -49,10 +49,26 @@ func cardlessWorkersStopped(agents []proto.Session) bool {
 	return true
 }
 
+// cardlessAgentsReachable reports that every machine hosting one of t's active agents answered its session list this
+// pass. taskAgentsIn records a failed read in lists but drops that machine's sessions from the slice, so without this
+// check a transient device/RPC failure would look like every worker having stopped and spend the round's one
+// hand-back (and its CardlessToldAt stamp) on an unknown state. A failed pass simply retries on a later watch tick.
+func cardlessAgentsReachable(t Todo, lists machineSessions) bool {
+	for _, a := range t.Agents {
+		if a.ReleasedAt != nil || a.DismissedAt != nil {
+			continue
+		}
+		if l, ok := lists[a.MachineID]; ok && l.err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 // cardlessWaitSignal hands a card-less pending_review task back to its supervisor, once per review round. It changes
 // nothing but the round's hand-back marker (CardlessToldAt), so a restart cannot tell the same round twice; a new
 // review round clears the marker (cardlessToldSince).
-func (s *Service) cardlessWaitSignal(ctx context.Context, t Todo, agents []proto.Session, now time.Time) (superviseSignal, bool) {
+func (s *Service) cardlessWaitSignal(ctx context.Context, t Todo, agents []proto.Session, lists machineSessions, now time.Time) (superviseSignal, bool) {
 	v := t.Supervision
 	if v == nil || t.DoneAt != nil || v.state(t) != reviewPending || v.CardlessToldAt != nil {
 		return superviseSignal{}, false
@@ -66,6 +82,11 @@ func (s *Service) cardlessWaitSignal(ctx context.Context, t Todo, agents []proto
 	// test (acceptAskEnded) is deliberately not used: a decision ask written while the task still waits for review is
 	// a live card even though its ledger is not needs_user yet.
 	if a, ok := s.askCopy(t.ID); ok && !acceptAskStale(&a, t) && a.AcceptedAt.IsZero() {
+		return superviseSignal{}, false
+	}
+	// An unreadable worker is not a stopped worker: hold the hand-back until its machine answers, rather than stamp
+	// the round on an unknown state.
+	if !cardlessAgentsReachable(t, lists) {
 		return superviseSignal{}, false
 	}
 	if !cardlessWorkersStopped(agents) {
