@@ -26,6 +26,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.*
 import persona.core.contracts.ModelPick
+import persona.core.contracts.PaseoAgent
 import persona.core.contracts.PendingSwitch
 import persona.core.contracts.Session
 import persona.core.contracts.api.AgentCreationService
@@ -34,6 +35,8 @@ import persona.core.contracts.api.AssistantLaunchers
 import persona.core.contracts.api.AssistantManagement
 import persona.core.contracts.api.ChatAction
 import persona.core.contracts.api.LauncherModels
+import persona.core.contracts.isTraeCliId
+import persona.core.contracts.unknownAgentName
 import persona.core.designsystem.*
 import persona.core.domain.models.AgentModelPanel
 import persona.core.domain.models.ModeStep
@@ -187,11 +190,16 @@ internal fun rememberPanelPrefs(scope: PanelScope): MutableState<PanelPrefs> {
  * ([knownAgentMark]), else the letter of [name], the name the chat knows the engine by (a Paseo provider's,
  * [AgentModelPanel.engineNames]), or of the engine's id.
  */
-internal fun engineMark(engine: String, name: String? = null): AgentMarkSpec = when (val kind = knownAgentMark(engine)) {
-    AgentMarkKind.Claude -> AgentMarkSpec(kind, "Claude Code", null)
-    AgentMarkKind.Codex -> AgentMarkSpec(kind, "Codex", null)
-    AgentMarkKind.Trae -> AgentMarkSpec(kind, "TRAE", null)
-    else -> AgentMarkSpec(kind, name?.takeIf(String::isNotBlank) ?: engine, null)
+internal fun engineMark(engine: String, name: String? = null): AgentMarkSpec {
+    val kind = knownAgentMark(engine)
+    val title = when {
+        isTraeCliId(engine) -> unknownAgentName(PaseoAgent, name, engine)
+        kind == AgentMarkKind.Claude -> "Claude Code"
+        kind == AgentMarkKind.Codex -> "Codex"
+        kind == AgentMarkKind.Trae -> "TRAE"
+        else -> name?.takeIf(String::isNotBlank) ?: engine
+    }
+    return AgentMarkSpec(kind, title, null)
 }
 
 /** An effort as the pill says it: Very high is "Extra" there (the web's pill-only word), the rest their names. */

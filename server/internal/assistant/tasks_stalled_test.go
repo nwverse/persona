@@ -329,6 +329,7 @@ func TestTaskStalledRegressionExclusions(t *testing.T) {
 	}{
 		{"waiting for review", reviewPending, nil},
 		{"waiting for owner input", reviewNeedsUser, nil},
+		{"waiting for personal verification", reviewUserCheck, nil},
 		{"intentionally parked", reviewParked, nil},
 		{"assistant conversation", "", func(agent *proto.Session) { agent.Assistant = true }},
 		{"not started by Persona", "", func(agent *proto.Session) { agent.StartedByPersona = false }},
@@ -339,7 +340,7 @@ func TestTaskStalledRegressionExclusions(t *testing.T) {
 			s, f, todo, agent, base := stalledTaskFixture(t, 0)
 			ctx := context.Background()
 			switch tc.state {
-			case reviewPending, reviewNeedsUser:
+			case reviewPending, reviewNeedsUser, reviewUserCheck:
 				if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { v.State = tc.state; return true }); err != nil {
 					t.Fatal(err)
 				}

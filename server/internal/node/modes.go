@@ -371,7 +371,7 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 		return nil
 	}
 	if n.codexPath(id) != "" || n.traexPath(id) != "" { // not driven through an app-server: no way to set either
-		return fmt.Errorf("Codex / TRAEX 的会话不支持在手机上改权限模式和思考强度")
+		return fmt.Errorf("Codex / TRAE CLI 的会话不支持在手机上改权限模式和思考强度")
 	}
 	if mode == "" && effort != "" {
 		if handled, err := n.ccPluginSetSettings(ctx, id, "", effort); handled {

@@ -374,6 +374,16 @@ data class SessionTodo(
  */
 const val PaseoAgent = "paseo"
 
+const val TraeCliDisplayName = "TRAE CLI"
+
+/** Known wire and launcher identifiers for the CLI. The IDE's `trae` identifier is separate. */
+fun isTraeCliId(id: String?): Boolean = id == "traex" || id == "traecli" || id == "trae-cli"
+
+internal fun isTraeCliLabel(label: String): Boolean {
+    val normalized = label.trim().lowercase()
+    return isTraeCliId(normalized) || normalized == "trae cli"
+}
+
 /**
  * The name of an agent the app does not know by its id ([agent]): what the hub calls it ([label], a runtime's own name,
  * "DSH"), else the id. Paseo's [PaseoAgent] is its engine, not the agent: there it is the provider's label, else its
@@ -382,7 +392,12 @@ const val PaseoAgent = "paseo"
 fun unknownAgentName(agent: String?, label: String?, launcher: String?): String {
     val said = label?.trim()?.takeIf(String::isNotEmpty)
     if (agent != PaseoAgent) return said ?: agent.orEmpty()
-    return said?.takeUnless { it.equals(PaseoAgent, ignoreCase = true) } ?: launcher?.trim()?.takeIf(String::isNotEmpty) ?: said ?: agent
+    val providerLabel = said?.takeUnless { it.equals(PaseoAgent, ignoreCase = true) }
+    val providerId = launcher?.trim()?.takeIf(String::isNotEmpty)
+    if (isTraeCliId(providerId) && (providerLabel == null || isTraeCliLabel(providerLabel))) {
+        return TraeCliDisplayName
+    }
+    return providerLabel ?: providerId ?: said ?: agent
 }
 
 /** A permission mode change recorded by the session's manager (GET …/mode-changes, #10297). */
@@ -755,7 +770,7 @@ data class Session(
      */
     val agentLabel: String get() = when {
         isCodex -> "Codex"
-        agent == "traex" -> "TRAEX"
+        isTraeCliId(agent) -> TraeCliDisplayName
         isClaude -> "Claude"
         else -> unknownAgentName(agent, agentLabelHint, launcher)
     }
@@ -1264,9 +1279,10 @@ data class Interaction(
     val agentDisplayName: String?
         get() = when (agent) {
             "codex" -> "Codex"
-            "traex" -> "TRAEX"
+            "traex", "traecli", "trae-cli" -> TraeCliDisplayName
             null, "", "claude" -> null
             PaseoAgent -> agentLabelHint?.trim()?.takeUnless { it.isEmpty() || it.equals(PaseoAgent, ignoreCase = true) }
+                ?.let { if (isTraeCliLabel(it)) TraeCliDisplayName else it }
             else -> agentLabelHint?.takeIf(String::isNotBlank) ?: agent
         }
 

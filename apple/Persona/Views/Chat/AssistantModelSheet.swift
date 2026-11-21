@@ -436,7 +436,7 @@ struct AssistantModelSheet: View {
                 }
             }
         } header: {
-            Text(launcher.displayName?.emptyAsNil ?? launcher.name)
+            Text(launcher.title)
         }
     }
 
