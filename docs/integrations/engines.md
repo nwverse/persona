@@ -318,7 +318,6 @@ all talk to that server. With T3 Code enabled, the node runs an in-process runti
   Code), pictures (refused, never dropped), changing modes, choosing the model, worktrees, rewinding. Not yet tested against a live T3 Code
   install; the tests run a synthetic MCP server and command line.
 
-
 ## tmux (approvals only)
 
 A Claude Code the user starts by hand in a tmux pane (`tmux new -s work`, then `claude`) is not an engine. It is listed as a session in an ordinary
