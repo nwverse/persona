@@ -19,7 +19,7 @@ type superviseFingerprint struct {
 	Hash      string    `json:"hash"`
 	At        time.Time `json:"at"`
 	Permanent bool      `json:"permanent,omitempty"`
-	// Todo makes an all_stopped fingerprint last until its key changes or the task closes.
+	// Todo keeps inactivity and unhandled-event fingerprints until the task closes.
 	// Other non-permanent kinds retain the short semantic-deduplication window.
 	Todo string `json:"todo,omitempty"`
 }
@@ -29,6 +29,18 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 		// Keep every task/PR/head independently, including a head that returns after another one.
 		key, _ := json.Marshal([]string{g.Todo, g.Kind, g.Key})
 		sum := sha256.Sum256(key)
+		return string(key), hex.EncodeToString(sum[:])
+	}
+	if g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
+		// An unhandled source is not new when its recipient or last reply changes.
+		key, _ := json.Marshal([]string{g.Todo, g.Kind, g.Key})
+		sum := sha256.Sum256(key)
+		return string(key), hex.EncodeToString(sum[:])
+	}
+	if g.externalPRReview() {
+		// Keep the latest source wake per task, independent of its Agent's answer or a manager restart.
+		key, _ := json.Marshal([]string{g.Todo, g.Kind, "external_pr"})
+		sum := sha256.Sum256([]byte(g.Key))
 		return string(key), hex.EncodeToString(sum[:])
 	}
 	// State timestamps and elapsed minutes deliberately do not participate: a new
@@ -70,7 +82,23 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 // words stay the same.
 func keyIsNews(kind string) bool {
 	switch kind {
-	case sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigFailed, sigStarted, sigAllStopped, sigDecisionReply:
+	case sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigFailed, sigStarted, sigAllStopped, sigDecisionReply, sigHandoffResult, sigEstimateDue, sigOverdue, sigTimedOut,
+		sigCheck: // a check's run, or the owner's answer to its decision: an Agent that only runs tools says the same all along
+		return true
+	}
+	return false
+}
+
+// keptUntilChange: a routine signal whose fingerprint (the agent's last words, its cards, its report, its step) is the
+// whole of what the supervisor needs to know about it. The same fingerprint is not told again while the task is open
+// (#11614): before, it woke the supervisor again every superviseDedupWindow although nothing had changed. A new turn
+// with other words, a new card or a new report changes the fingerprint and is told as before. Signals that wait on a
+// decision keep the short window or their own news key (keyIsNews).
+func keptUntilChange(g superviseSignal) bool {
+	switch g.Kind {
+	case sigReport:
+		return g.Report != upReportQuestion && g.Report != upReportBlocked
+	case sigIdle, sigUnjudged, sigStalled, sigNoProgress, sigReview, sigOrphaned, sigInterrupted, sigOverdue, sigTimedOut:
 		return true
 	}
 	return false
@@ -131,8 +159,11 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 			pending = append(pending, id)
 		}
 		fingerprint := superviseFingerprint{Hash: hash, At: now.UTC(), Permanent: signals[i].Kind == sigPRConflict || signals[i].Kind == sigDraftPR}
-		if signals[i].Kind == sigAllStopped {
+		if signals[i].Kind == sigAllStopped || keptUntilChange(signals[i]) {
 			fingerprint.Todo = signals[i].Todo
+		}
+		if g := signals[i]; g.externalPRReview() || g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
+			fingerprint.Todo = g.Todo
 		}
 		next[key] = fingerprint
 		out, kept = append(out, entry), append(kept, signals[i])
@@ -201,7 +232,7 @@ func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSign
 	b.dedup = next
 }
 
-// Inactivity fingerprints are bounded by open tasks, not elapsed time. Load once
+// Task-bound fingerprints are bounded by open tasks, not elapsed time. Load once
 // after restart; reservations keep the same cache current under dedupMu.
 func (s *Service) pruneAllStoppedDedup(ctx context.Context) {
 	b := &s.supervise

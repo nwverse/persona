@@ -18,23 +18,47 @@ import (
 // lark-cli (Feishu's official open-platform CLI, docs/plans/plan-lark-cli.md) in the assistant's Bash passes the same gate
 // as ol (larkgate.go). lark-cli tells which commands write: every command's --help prints "Risk: read", "Risk: write"
 // or "Risk: high-risk-write". Reads run at once; writes, and commands whose risk cannot be read, are confirmed on the
-// phone with the whole command on the card. Logging in and out, switching apps or profiles, and updating lark-cli are
-// the user's to do: refused.
+// phone with the whole command on the card. A command lark-cli does not have runs too: it changes nothing, and lark-cli
+// itself tells the assistant so. Logging in and out, switching apps or profiles, and updating lark-cli are the user's
+// to do: refused.
 
-// larkRisk asks lark-cli for a command's risk level ("" when it cannot say).
+// larkRisk asks lark-cli for a command's risk level ("" when it cannot say, larkCLIMissing when lark-cli has no such
+// command).
 type larkRisk func(words []string) string
+
+// larkCLIMissing is the risk of a command lark-cli says it does not have (larkRiskOf): run, it only fails with
+// "unknown subcommand", so the gate treats it as a read.
+const larkCLIMissing = "missing"
+
+// larkCLIReads says a lark-cli risk level changes nothing on Feishu: a read, or a command lark-cli does not have.
+func larkCLIReads(risk string) bool { return risk == "read" || risk == larkCLIMissing }
 
 var (
 	// lark-cli's own commands that only print: help, method schemas, the skills it carries, who is logged in.
 	// Stable read commands also work when the manager has not configured CLI risk discovery, or the lookup gets no
 	// answer (a wrapper on the login shell's PATH that cannot find the real lark-cli from the node's, #8389). Only an
 	// unknown risk falls back here: what lark-cli reports wins. Each is "Risk: read" in lark-cli 1.0.54.
-	larkCLIKnownReads = map[string]bool{"docs/+fetch": true, "im/+chat-messages-list": true, "im/+messages-search": true,
+	larkCLIKnownReads = map[string]bool{"docs/+fetch": true, "contact/+search-user": true, "im/+chat-messages-list": true, "im/+messages-search": true,
 		"im/+messages-mget": true, "im/+threads-messages-list": true, "im/+chat-search": true}
-	larkCLIRead      = map[string]bool{"schema": true, "skills": true, "whoami": true, "doctor": true, "help": true, "completion": true}
-	larkCLIAuthRead  = map[string]bool{"status": true, "check": true, "scopes": true, "list": true}
-	larkCLIEventRead = map[string]bool{"list": true, "schema": true, "status": true}
-	larkRiskRe       = lazyre.New(`(?m)^\s*Risk:\s*([a-z-]+)`)
+	// larkCLIReadVerbs name what a command does when lark-cli cannot be asked (#11193): a shortcut (`calendar +agenda`,
+	// `task +get-my-tasks`, `im +chat-messages-list`) or a generated method (`calendar events list`) named by one of them
+	// only reads. A shortcut may carry the verb as its whole name or after its last "-"; only get and list also lead a
+	// name. Any other name, a send / reply / create / update / delete included, stays a write.
+	larkCLIReadVerbs      = map[string]bool{"fetch": true, "agenda": true, "search": true, "list": true, "get": true, "mget": true}
+	larkCLILeadReadVerbs  = map[string]bool{"get": true, "list": true}
+	larkCLIMethodReadVerb = map[string]bool{"list": true, "get": true, "search": true, "mget": true, "batch_get": true}
+	// larkCLILocalDownloads save what a message carries (an image, a file) under the current directory and change
+	// nothing on Lark, though lark-cli rates them "Risk: write" (lark-cli 1.0.91): /read downloads a group's images
+	// and files with them (#11803). lark-cli overwrites an existing file and takes a dotfile name, and without --output
+	// the name is the sender's (Content-Disposition), so one is a read only when --output names a plain file in
+	// lark-im-resources/ (larkCLIDownloadOutput, the directory --download-resources uses), and only for an ordinary
+	// write rating: a high-risk one is not.
+	larkCLILocalDownloads = map[string]bool{"im/+messages-resources-download": true}
+	larkCLIDownloadOutput = lazyre.New(`^lark-im-resources/[A-Za-z0-9_][A-Za-z0-9._-]{0,199}$`)
+	larkCLIRead           = map[string]bool{"schema": true, "skills": true, "whoami": true, "doctor": true, "help": true, "completion": true}
+	larkCLIAuthRead       = map[string]bool{"status": true, "check": true, "scopes": true, "list": true}
+	larkCLIEventRead      = map[string]bool{"list": true, "schema": true, "status": true}
+	larkRiskRe            = lazyre.New(`(?m)^\s*Risk:\s*([a-z-]+)`)
 	// larkCLIRe: a lark-cli call anywhere in a command the gate cannot parse.
 	larkCLIRe = lazyre.New("(^|[\\s;&|(\"'`])(\\S*/)?lark-cli(\\s|[\"']|$)")
 	// larkCLINamed: lark-cli as a word of its own anywhere in a command, a variable's value (`L=lark-cli; $L …`)
@@ -136,17 +160,82 @@ func parseLarkCLI(args []string, risk larkRisk) (c larkCall, deny string, ok boo
 		if risk != nil {
 			c.Risk = risk(words)
 		}
-		if c.Risk == "" && larkCLIKnownReads[strings.Join(words, "/")] {
+		if c.Risk == "" && (larkCLIKnownReads[strings.Join(words, "/")] || larkCLINamedRead(words)) {
+			c.Risk = "read"
+		}
+		if (c.Risk == "" || c.Risk == "write") && larkCLILocalDownloads[strings.Join(words, "/")] && larkCLISafeDownload(flags) {
 			c.Risk = "read"
 		}
 	}
 	return c, "", true
 }
 
+// larkCLINamedRead says a lark-cli command's name marks it a read (larkCLIReadVerbs), for when lark-cli gives no risk
+// level: `<service> +<shortcut>` or `<service> <resource…> <method>`. Only the fallback: what lark-cli reports wins.
+func larkCLINamedRead(words []string) bool {
+	if len(words) < 2 {
+		return false
+	}
+	last := words[len(words)-1]
+	if name, shortcut := strings.CutPrefix(last, "+"); shortcut {
+		if len(words) != 2 || name == "" {
+			return false
+		}
+		parts := strings.Split(name, "-")
+		return larkCLIReadVerbs[parts[len(parts)-1]] || len(parts) > 1 && larkCLILeadReadVerbs[parts[0]]
+	}
+	for _, w := range words {
+		if strings.HasPrefix(w, "+") {
+			return false
+		}
+	}
+	return len(words) >= 3 && larkCLIMethodReadVerb[last]
+}
+
+// larkCLIDownloadFlags are the flags of `im +messages-resources-download` (lark-cli 1.0.91 --help), true for those
+// that take a value. The command has no -o: lark-cli rejects it today, but a later version may add one, so a word the
+// list does not name keeps the download a write.
+var larkCLIDownloadFlags = map[string]bool{
+	"--as": true, "--file-key": true, "--format": true, "-q": true, "--jq": true, "--message-id": true, "--output": true,
+	"--type": true, "--dry-run": false, "--json": false,
+}
+
+// larkCLISafeDownload: the download can only write a plain file in lark-im-resources/, nowhere else and no dotfile.
+// It has to be proved from the words alone, read in order: every one is a flag the command is known to have (no -o in
+// any spelling, no shorthand cluster, no "--", no stray argument), there is an --output, and every --output (not
+// only the last, which pflag keeps) names such a file.
+func larkCLISafeDownload(flags []string) bool {
+	outputs := 0
+	for i := 0; i < len(flags); i++ {
+		key, val, inline := strings.Cut(flags[i], "=")
+		takesValue, known := larkCLIDownloadFlags[key]
+		if !known {
+			return false
+		}
+		if !takesValue {
+			continue
+		}
+		if !inline {
+			if i+1 == len(flags) {
+				return false
+			}
+			i++
+			val = flags[i]
+		}
+		if key == "--output" {
+			if val == "" || strings.Contains(val, "..") || !larkCLIDownloadOutput.MatchString(val) {
+				return false
+			}
+			outputs++
+		}
+	}
+	return outputs > 0
+}
+
 // cliRead: a lark-cli call that only reads (its own risk level, or a GET through `lark-cli api`).
 func (c larkCall) cliRead() bool {
 	if c.Method == "CLI" {
-		return c.Risk == "read"
+		return larkCLIReads(c.Risk)
 	}
 	return c.Method == "GET" || c.Method == "HEAD"
 }
@@ -288,12 +377,11 @@ func (n *Node) larkCLIRisk(cfg proto.AssistantLark) larkRisk {
 		defer cancel()
 		cmd := exec.CommandContext(ctx, bin, append(append(larkCLIProfile(cfg.CLI), words...), "--help")...)
 		cmd.Env = larkCLIEnv(bin)
-		out, _ := cmd.CombinedOutput()
-		m := larkRiskRe.FindSubmatch(out)
-		if m == nil {
-			return "" // not cached: lark-cli may be updating, or missing for now
+		out, err := cmd.CombinedOutput()
+		r = larkRiskOf(out, words)
+		if r == "" || (r == larkCLIMissing && err != nil) {
+			return "" // not cached: lark-cli may be updating, or missing for now; only a clean run says "no such command"
 		}
-		r = string(m[1])
 		n.mu.Lock()
 		if n.larkRisks == nil {
 			n.larkRisks = map[string]string{}
@@ -302,6 +390,60 @@ func (n *Node) larkCLIRisk(cfg proto.AssistantLark) larkRisk {
 		n.mu.Unlock()
 		return r
 	}
+}
+
+// larkRiskOf reads lark-cli's `<words…> --help`: the level its Risk: line gives; larkCLIMissing when the help is the
+// group's above the command instead, which is what lark-cli prints for a command it does not have (lark-cli 1.0.98:
+// `lark-cli im messages get --help` prints `im messages`, whose methods do not include get); "" otherwise. It is the
+// group's when every Usage line names exactly lark-cli and the words without the last, the help lists the group's
+// Available Commands, and the last word is not one of them. A command that exists but has no Risk: line stays "".
+func larkRiskOf(out []byte, words []string) string {
+	if m := larkRiskRe.FindSubmatch(out); m != nil {
+		return string(m[1])
+	}
+	if len(words) == 0 {
+		return ""
+	}
+	parent := strings.Join(append([]string{"lark-cli"}, words[:len(words)-1]...), " ")
+	usage := larkHelpSection(out, "Usage:")
+	if len(usage) == 0 {
+		return ""
+	}
+	for _, line := range usage {
+		// cobra's two forms: the group's own use line and its `<path> [command]` line.
+		if strings.TrimSuffix(strings.TrimSuffix(strings.Join(strings.Fields(line), " "), " [command]"), " [flags]") != parent {
+			return ""
+		}
+	}
+	commands := larkHelpSection(out, "Available Commands:")
+	if len(commands) == 0 {
+		return ""
+	}
+	for _, line := range commands {
+		if strings.Fields(line)[0] == words[len(words)-1] {
+			return ""
+		}
+	}
+	return larkCLIMissing
+}
+
+// larkHelpSection is the indented lines under a heading of cobra's help (`Usage:`, `Available Commands:`), up to the
+// first blank or unindented line; nil without the heading.
+func larkHelpSection(out []byte, heading string) []string {
+	var lines []string
+	in := false
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimRight(line, " \r")
+		switch {
+		case !in:
+			in = line == heading
+		case line == "" || !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t"):
+			return lines
+		default:
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 // larkCLIBin is lark-cli's absolute path: lark.cli.bin as given, else looked up in a login shell (an npm install

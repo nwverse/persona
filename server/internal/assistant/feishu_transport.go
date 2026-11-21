@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // ---- the hub's transport ----
@@ -29,6 +30,9 @@ type feishuTarget struct {
 	// NoDetour: a reply whose parent is gone fails (the hub's no_detour) instead of landing in the chat as a message of
 	// its own: for what belongs under that parent or nowhere (a to-do's line into its topic, a card into a topic).
 	NoDetour bool
+	// Read: a reply under the owner's "/read" in a group (feishu_read.go): its cards carry no workbench button, which
+	// would only be refused there.
+	Read bool
 }
 
 // params adds the target's fields to p; the zero target adds none, so the call is the same as before.
@@ -49,10 +53,19 @@ func (t feishuTarget) params(p map[string]any) map[string]any {
 // with what it was (feishuSendAs): how many went out, of which kind and for which conversation, can be counted from
 // the log (#8270).
 func (s *Service) botPostTo(ctx context.Context, to feishuTarget, replyTo string, card *feishubot.Card, fallback, key string) (string, error) {
+	if to.Read {
+		return s.botPostContent(ctx, to, replyTo, card.JSON(), fallback, key)
+	}
+	return s.botPostContent(ctx, to, replyTo, s.workbenchStamp(ctx, card).JSON(), fallback, key)
+}
+
+// botPostContent is botPostTo with the message's content as it goes: a card's JSON, or a card entity's
+// (feishubot.CardEntityContent).
+func (s *Service) botPostContent(ctx context.Context, to feishuTarget, replyTo, content, fallback, key string) (string, error) {
 	var res struct {
 		MessageID string `json:"message_id"`
 	}
-	p := map[string]any{"reply_to": replyTo, "card": s.workbenchStamp(ctx, card).JSON(), "fallback": fallback}
+	p := map[string]any{"reply_to": replyTo, "card": content, "fallback": fallback}
 	if key != "" {
 		p["uuid"] = key
 	}
@@ -121,12 +134,12 @@ func (s *Service) botMessages(ctx context.Context, messageID string) ([]feishubo
 }
 
 // botName is a user's name (the hub's contact lookup; "someone" when it can't be read).
-func (s *Service) botName(ctx context.Context, openID string) string {
+func (s *Service) botName(ctx context.Context, openID string, lang i18n.Lang) string {
 	var res struct {
 		Name string `json:"name"`
 	}
 	if err := s.appCall(ctx, AppFeishu, FeishuUserName, map[string]any{"open_id": openID}, &res); err != nil || res.Name == "" {
-		return "某人"
+		return i18n.T(lang, "assistant-feishu.unknown_sender")
 	}
 	return res.Name
 }

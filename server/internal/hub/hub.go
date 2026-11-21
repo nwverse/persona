@@ -42,17 +42,27 @@ type Hub struct {
 	extRoster rosterSeen
 	// extLost are when this hub started and when managers' bus connections ended here lately (extensions_proof.go).
 	extLost busLosses
+	// clarificationProofs are short-lived, one-time full-device web question proofs.
+	clarificationProofs hubClarificationProofBook
 	// tests: replaces os.Hostname
 	hostname func() (string, error)
 
-	cfg      *Config
-	version  string
-	build    update.Build // channel, build number, where updates come from (docs/operations/hub-update.md)
-	upd      *updater     // updating itself to the publisher's release (selfupdate.go)
-	logger   *log.Logger
-	traffic  trafficLog // privacy-safe minute counters, flushed to the journal
-	machines []*Machine
-	byID     map[string]*Machine
+	cfg     *Config
+	version string
+	build   update.Build // channel, build number, where updates come from (docs/operations/hub-update.md)
+	upd     *updater     // updating itself to the publisher's release (selfupdate.go)
+	// quiesce and assistantProc pause the hub's own writers for a Web
+	// development snapshot (quiesce.go).
+	quiesce       writeQuiescer
+	assistantProc assistantGate
+	// deviceFinishes: device sessions that ended while a snapshot paused
+	// writes, written on resume (devicesessions.go).
+	deviceFinishesMu sync.Mutex
+	deviceFinishes   []deviceSessionFinish
+	logger           *log.Logger
+	traffic          trafficLog // privacy-safe minute counters, flushed to the journal
+	machines         []*Machine
+	byID             map[string]*Machine
 	// fs.watch: generation fences stale node writes, and forced replays survive machine-ID recreation.
 	fsWatchGenMu     sync.Mutex
 	fsWatchGen       map[string]uint64
@@ -168,6 +178,9 @@ type Hub struct {
 
 	mesh  meshState // the other hubs of the mesh group (mesh.go)
 	fleet fleet     // guards machines and byID (machines.go)
+	// historyReads are the history rows an extension's or scoped token was given lately, which it may read though
+	// the live list does not have them (sessions_history.go).
+	historyReads historyReads
 
 	todoLinks todoLinks // what the assistant reports of its todos' agents (assistant_todos.go)
 
@@ -365,7 +378,7 @@ func (h *Hub) closeDatabaseAfterWorkers(cancel context.CancelFunc, closeDatabase
 	if h.stopping.Load() {
 		h.shutdown.step(h, "hand over the event log", func(ctx context.Context) error { h.saveEventLog(ctx); return nil })
 	}
-	// Every stop, planned or not: the next process may be a build from before hub_push_sent (lnmode.go mirrorSent).
+	// Every stop, planned or not: the next process may be a build from before hub_push_sent (push_grading.go mirrorSent).
 	h.shutdown.step(h, "delivered pushes for an older build", h.push.mirrorSent)
 	h.shutdown.step(h, "close database", closeDatabase)
 }
@@ -595,7 +608,18 @@ func (h *Hub) callPhoneWithWait(ctx context.Context, name string, args json.RawM
 	}
 	select {
 	case r := <-ch:
-		return annotateHealthSnapshot(name, r)
+		r = annotateHealthSnapshot(name, r)
+		if !r.IsError && (name == "phone_calendar_create_event" || name == "phone_reminders_create") {
+			// A completed quick-result write came from this selected connection. Queued receipts returned above have
+			// no executing device, and older clients leave whichever identity fields they do not supply absent.
+			h.mu.Lock()
+			r.SourceDeviceName = c.name
+			h.mu.Unlock()
+			c.mu.Lock()
+			r.SourceDevicePlatform = c.meta.Platform
+			c.mu.Unlock()
+		}
+		return r
 	case <-ctx.Done():
 		if confirmed {
 			return proto.TextResult("Timed out waiting for the user to approve this on the phone. The approval may still be "+

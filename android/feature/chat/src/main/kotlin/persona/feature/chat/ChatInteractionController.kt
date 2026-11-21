@@ -22,6 +22,7 @@ import persona.core.contracts.api.ChatComposerService
 import persona.core.contracts.api.InteractionCenter
 import persona.core.contracts.api.MessageSender
 import persona.core.contracts.api.OutboxMessage
+import persona.core.contracts.api.ResolveOutcome
 import persona.core.contracts.api.SessionsRepository
 import persona.core.designsystem.AppFeedback
 import persona.core.designsystem.Haptic
@@ -89,12 +90,18 @@ internal class ChatInteractionController(
         }
     }
 
+    private suspend fun resolve(interaction: Interaction, resolution: Resolution): ResolveOutcome {
+        val phrase = resolution.ownerApprovalPhrase ?: return interactions.resolveOutcome(interaction.id, resolution)
+        interactions.replyOwnerApproval(interaction, phrase)
+        return ResolveOutcome()
+    }
+
     fun answer(interaction: Interaction, resolution: Resolution) {
         if (!taps.value.canTap(interaction, interactions.pending.value, java.time.Instant.now())) return
         taps.value = taps.value.tapped(interaction.id)
         scope.launch {
             try {
-                val result = submitInteraction { interactions.resolveOutcome(interaction.id, resolution) }
+                val result = submitInteraction { resolve(interaction, resolution) }
                 result.submission.haptic?.let(haptics)
                 taps.value = taps.value.answered(interaction.id, result.card)
                 if (result.withdraw) {
@@ -147,7 +154,7 @@ internal class ChatInteractionController(
                         trayApproval(interaction, sourceSession) != resolution) continue
                     taps.value = taps.value.tapped(interaction.id)
                     try {
-                        val result = submitInteraction { interactions.resolveOutcome(interaction.id, resolution) }
+                        val result = submitInteraction { resolve(interaction, resolution) }
                         result.submission.haptic?.let(haptics)
                         taps.value = taps.value.answered(interaction.id, result.card)
                         if (!result.withdraw) notice.value = result.notice(resources, interaction, resolution)
@@ -181,6 +188,12 @@ internal class ChatInteractionController(
         if (readOnly.value || !canSend.value) return false
         if (sending.value || submittedDraft.value != null) return false
         if (command == null && ((!hasContent && contexts.isEmpty()) || !ready)) return false
+        val applyingSwitch = command == null && switchesNext(switchSession, glassAgent)
+        if (applyingSwitch && draft.attachments.isNotEmpty() &&
+            switchSession?.let(persona.core.domain.models.AgentModelPanel::pendingEngine) != null) {
+            notify(resources.getString(R.string.chat_engine_switch_text_only))
+            return false
+        }
         val refs = if (command == null) contexts else emptyList()
         val id = java.util.UUID.randomUUID().toString()
         if (command == null) {
@@ -198,7 +211,7 @@ internal class ChatInteractionController(
                     tasks.sendRouted(key.sessionId, draft.text.trim())
                 if (!routed) {
                     // The user's own message carries a launcher switch waiting on Glass.
-                    if (command == null && switchesNext(switchSession, glassAgent)) {
+                    if (applyingSwitch) {
                         sender.sendApplyingSwitch(key, wireText, id)
                         drawerSwitch.value = null
                     } else {

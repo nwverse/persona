@@ -17,6 +17,8 @@ interface ChatTransport {
     suspend fun sessionCounts(filter: SessionListFilter = SessionListFilter()): SessionListCounts =
         throw SessionListsUnsupported()
     suspend fun items(session: SessionKey, query: ItemsQuery): ItemsResponse
+    /** The session's recorded permission mode changes, oldest first; empty where the hub has no such record. */
+    suspend fun modeChanges(session: SessionKey): List<ModeChange> = emptyList()
     suspend fun interactions(): List<Interaction>
     suspend fun resolve(id: String, resolution: Resolution)
     /** [resolve], with what the hub said about it (a card answered already carries the answer that took effect). */
@@ -24,6 +26,9 @@ interface ChatTransport {
         resolve(id, resolution)
         return ResolveOutcome()
     }
+    /** An authenticated exact reply to a server-owned proposal; never an ordinary model message or card resolution. */
+    suspend fun replyOwnerApproval(interaction: Interaction, phrase: String): Unit =
+        throw UnsupportedOperationException("Exact owner replies unavailable")
     suspend fun image(session: SessionKey, itemId: String): ByteArray
     suspend fun fullItem(session: SessionKey, itemId: String): Item
     /**

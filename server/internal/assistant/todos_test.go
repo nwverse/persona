@@ -22,7 +22,7 @@ import (
 // them, the machines' session lists as sessions.changed, what the hub shows as the snapshot's report.
 
 // todoTestDB is a clean database for the tests that need Postgres; they skip without one.
-func todoTestDB(t *testing.T) *db.DB {
+func todoTestDB(t testing.TB) *db.DB {
 	t.Helper()
 	url := os.Getenv("PERSONA_TEST_DATABASE_URL")
 	if url == "" {
@@ -125,6 +125,8 @@ func (e *todoEnv) sessions(machine string, list ...proto.Session) {
 	}
 	e.f.setSessions(machine, copied...)
 	e.s.SessionsChanged(context.Background(), DeviceSessions{MachineID: machine, Sessions: copied})
+	// The conversations' spaces it noted are in the store (conversation_space.go), as a while after a list.
+	waitFor(e.t, "the listed conversations' spaces written", e.s.listedSpacesWritten)
 }
 
 // todoOf is the todo the agent works for, as the hub is told (the report: what its session list shows); "" for none.

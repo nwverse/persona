@@ -24,13 +24,13 @@ import Testing
 
     // MARK: New Agent
 
-    @Test func onlyPaseosOtherProvidersAreLimited() {
+    @Test func paseoProvidersAreLimitedButTerminalTraexHasNoStartModes() {
         #expect(StartModes.limited(Self.grok))
         #expect(!StartModes.limited(Self.paseoClaude))
         #expect(!StartModes.limited(Self.paseoCodex))
         #expect(!StartModes.limited(Self.shellClaude))
-        // Not a Paseo launcher: this change leaves its modes as they were.
-        #expect(!StartModes.limited(Launcher(name: "traex", agent: "traex", source: "zshrc")))
+        // #1842: a discovered terminal Traex takes no start modes, rather than Paseo's Allow Everything-only set.
+        #expect(StartModes.modes(for: Launcher(name: "traex", agent: "traex", source: "zshrc")).isEmpty)
         #expect(!StartModes.limited(nil))
     }
 
@@ -99,9 +99,9 @@ import Testing
         #expect(!dsh.namesOnlyEngine && dsh.agentName(session: row) == "DSH")
     }
 
-    @Test func theShareCardDrawsAProvidersLetterNotClaudesMark() {
-        #expect(AgentKind.brand(named: "Grok") == nil)
-        #expect(AgentKind(brand: nil, name: "Grok", surface: nil).letter == "G")
+    @Test func theShareCardUsesAProvidersMarkOrLetter() {
+        #expect(AgentKind.brand(named: "Grok") == Theme.Brand.grok)
+        #expect(AgentKind(brand: nil, name: "Example", surface: nil).letter == "E")
         #expect(AgentKind.brand(named: "Claude") == Theme.Brand.claude)
         #expect(AgentKind.brand(named: "Codex") == Theme.Brand.openAI)
     }

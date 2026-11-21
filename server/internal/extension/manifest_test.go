@@ -87,6 +87,16 @@ func TestConnectorConfirmAlways(t *testing.T) {
 	}
 }
 
+func manifestEntryListForValidation(secret string) map[string]any {
+	return map[string]any{
+		"type": "array", "maxItems": 2,
+		"x-secret": map[string]any{"name": secret, "title": "Account key"},
+		"items": map[string]any{"type": "object", "properties": map[string]any{
+			"name": map[string]any{"type": "string"},
+		}},
+	}
+}
+
 func TestParseRefuses(t *testing.T) {
 	cases := map[string]func(m map[string]any){
 		"unknown top-level field": func(m map[string]any) { m["permission"] = map[string]any{} },
@@ -152,9 +162,26 @@ func TestParseRefuses(t *testing.T) {
 			m["secrets"] = []any{s, s}
 		},
 		"secret without title": func(m map[string]any) { m["secrets"] = []any{map[string]any{"name": "k"}} },
-		"network with scheme":  func(m map[string]any) { m["permissions"] = map[string]any{"network": []any{"https://example.com"}} },
-		"unknown permission":   func(m map[string]any) { m["permissions"] = map[string]any{"files": true} },
-		"unknown hub scope":    func(m map[string]any) { m["permissions"] = map[string]any{"hub": []any{"kb.delete"}} },
+		"fixed and entry secret with one name": func(m map[string]any) {
+			m["secrets"] = []any{map[string]any{"name": "account_key", "title": "Fixed key"}}
+			m["configuration"] = map[string]any{"type": "object", "properties": map[string]any{"accounts": manifestEntryListForValidation("account_key")}}
+		},
+		"entry secret declared by two lists": func(m map[string]any) {
+			m["configuration"] = map[string]any{"type": "object", "properties": map[string]any{
+				"accounts": manifestEntryListForValidation("account_key"), "other": manifestEntryListForValidation("account_key"),
+			}}
+		},
+		"fixed and entry secrets beyond the shared limit": func(m map[string]any) {
+			secrets := make([]any, 0, SecretsMost)
+			for i := range SecretsMost {
+				secrets = append(secrets, map[string]any{"name": fmt.Sprintf("key_%02d", i), "title": "Key"})
+			}
+			m["secrets"] = secrets
+			m["configuration"] = map[string]any{"type": "object", "properties": map[string]any{"accounts": manifestEntryListForValidation("account_key")}}
+		},
+		"network with scheme": func(m map[string]any) { m["permissions"] = map[string]any{"network": []any{"https://example.com"}} },
+		"unknown permission":  func(m map[string]any) { m["permissions"] = map[string]any{"files": true} },
+		"unknown hub scope":   func(m map[string]any) { m["permissions"] = map[string]any{"hub": []any{"kb.delete"}} },
 		"bad extension to call": func(m map[string]any) {
 			m["permissions"] = map[string]any{"hub": []any{"extensions.call:Bad ID"}}
 		},
@@ -514,6 +541,23 @@ func TestUINavPageGroup(t *testing.T) {
 	}
 }
 
+// A nav_page may name its icon's color (#10822), one of the named colors a row's icon_color takes; without it the
+// page has none.
+func TestUINavPageIconColor(t *testing.T) {
+	m, err := Parse(with(t, func(m map[string]any) {
+		m["contributes"] = map[string]any{"ui": []any{
+			map[string]any{"id": "garden", "title": "Garden", "placement": "nav_page", "icon": "calendar", "icon_color": "green"},
+			map[string]any{"id": "notes", "title": "Notes", "placement": "nav_page"}}}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uis := m.UIs()
+	if len(uis) != 2 || uis[0].IconColor != "green" || uis[1].IconColor != "" {
+		t.Fatalf("%+v", uis)
+	}
+}
+
 func TestUIAndEventsPoints(t *testing.T) {
 	m, err := Parse(with(t, func(m map[string]any) {
 		m["permissions"] = map[string]any{"launcher_keys": true}
@@ -572,6 +616,12 @@ func TestUIAndEventsPoints(t *testing.T) {
 		},
 		"a group without a title": func(m map[string]any) {
 			m["contributes"] = map[string]any{"ui": []any{map[string]any{"id": "x", "title": "x", "placement": "nav_page", "group": map[string]any{"id": "work", "title": ""}}}}
+		},
+		"an icon color off the navigation": func(m map[string]any) {
+			m["contributes"] = map[string]any{"ui": []any{map[string]any{"id": "x", "title": "x", "placement": "plugin_page", "icon_color": "green"}}}
+		},
+		"an icon color not in the palette": func(m map[string]any) {
+			m["contributes"] = map[string]any{"ui": []any{map[string]any{"id": "x", "title": "x", "placement": "nav_page", "icon_color": "#00ff00"}}}
 		},
 		"a page opens nothing": func(m map[string]any) {
 			m["contributes"] = map[string]any{"ui": []any{map[string]any{"id": "x", "title": "x", "placement": "nav_page"},
@@ -715,6 +765,17 @@ func TestChannelPoint(t *testing.T) {
 		if _, err := Parse(with(t, change)); err == nil {
 			t.Errorf("%s: parsed", name)
 		}
+	}
+
+	// The raw manifest exercises the public contribution contract rather than constructing an Item in Go (#11130).
+	mention, err := Parse(with(t, func(m map[string]any) {
+		m["contributes"] = map[string]any{"connectors": conn, "channel": []any{ch(map[string]any{"kind": "mention"})}}
+	}))
+	if err != nil {
+		t.Fatalf("a mention channel contribution: %v", err)
+	}
+	if got := mention.Channels(); len(got) != 1 || got[0].Kind != "mention" {
+		t.Fatalf("mention contribution decoded as %+v", got)
 	}
 }
 

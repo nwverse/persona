@@ -3,6 +3,7 @@ package persona.core.hub
 import persona.core.contracts.*
 import persona.core.contracts.api.*
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -48,6 +49,10 @@ class HubChatTransport internal constructor(
 
     private suspend fun request(path: String, method: String, body: RequestBody?) = send(path, method, body, emptyMap())
 
+    // A cut-off request may already have reached the hub: later user retries keep its event ID until a receipt wins.
+    private val ownerApprovalAttemptsLock = Any()
+    private val ownerApprovalAttempts = mutableMapOf<String, String>()
+
     override suspend fun machines() = get<MachinesResponse>(api("machines")).machines
     override suspend fun sessions() = get<SessionsResponse>(api("sessions")).sessions
 
@@ -79,6 +84,7 @@ class HubChatTransport internal constructor(
             filter.group?.let { addQueryParameter("group", it) }
             filter.source?.let { addQueryParameter("source", it) }
             filter.provider?.let { addQueryParameter("provider", it) }
+            if (null in filter.hiddenBotmuxHubs) addQueryParameter("exclude_pane_source", "feishu")
             if (filter.query.isNotEmpty()) addQueryParameter("q", filter.query)
             cursor?.let { addQueryParameter("cursor", it) }
             since?.let { addQueryParameter("since", it) }
@@ -130,6 +136,19 @@ class HubChatTransport internal constructor(
         return get(url.encodedPath + "?" + url.encodedQuery)
     }
 
+    override suspend fun modeChanges(session: SessionKey): List<ModeChange> {
+        val body = request(api("sessions", session.machineId, session.sessionId, "mode-changes"), "GET", null)
+            .use { it.body!!.string() }
+        val root = try { JsonCodec.parseToJsonElement(body) as? JsonObject }
+        catch (error: Exception) { throw HubFailure(HubError.Protocol, retryable = false, cause = error) }
+        val records = root?.get("changes") as? JsonArray ?: return emptyList()
+        return records.mapNotNull { element ->
+            val change = runCatching { JsonCodec.decodeFromJsonElement<ModeChange>(element) }.getOrNull()
+                ?: return@mapNotNull null
+            change.takeIf { it.kind in MODE_CHANGE_KINDS && parseTime(it.at) != null }
+        }
+    }
+
     /**
      * Sends one answer under one op id (#1574): when the connection cuts it off (a hub restarting, a network change),
      * the same answer goes again with the same id once the connection is back, for up to [resolveRetryMillis]; the
@@ -165,6 +184,42 @@ class HubChatTransport internal constructor(
         }
     }
 
+    /** Exact text and exact target, with no composer, quote, via, image, launcher or model fields. */
+    override suspend fun replyOwnerApproval(interaction: Interaction, phrase: String) {
+        require(interaction.ownerApprovalPhrase == phrase) { "The proposal did not advertise this exact reply" }
+        val eventID = synchronized(ownerApprovalAttemptsLock) {
+            ownerApprovalAttempts.getOrPut(interaction.id) { newOpId() }
+        }
+        val path = api("sessions", interaction.machineId, interaction.sessionId, "messages")
+        val body = JsonObject(mapOf(
+            "text" to JsonPrimitive(phrase),
+            "client_msg_id" to JsonPrimitive(eventID),
+            "approval_reply_to" to JsonPrimitive(interaction.id),
+        )).toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+        val headers = ProtocolCompatibility.operationHeaders(eventID)
+        val deadline = clockMillis() + resolveRetryMillis
+        while (true) {
+            try {
+                val text = send(path, "POST", body, headers).use { response -> runCatching { response.body?.string() }.getOrNull() }
+                val root = text?.let { runCatching { JsonCodec.parseToJsonElement(it) as? JsonObject }.getOrNull() }
+                val approved = (root?.get("approval_reply") as? JsonPrimitive)?.booleanOrNull == true
+                if (approved && field(text, "interaction_id") == interaction.id) {
+                    synchronized(ownerApprovalAttemptsLock) { ownerApprovalAttempts.remove(interaction.id) }
+                    return
+                }
+                throw HubFailure(HubError.Protocol, "The hub did not confirm this exact owner reply", retryable = false)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                val failure = HubFailure.from(error)
+                val remaining = deadline - clockMillis()
+                if (!cutOff(failure) || remaining <= 0) throw error
+                delay(RESOLVE_RETRY_PAUSE_MILLIS.coerceAtMost(remaining))
+                if (!awaitOnline((deadline - clockMillis()).coerceAtLeast(0))) throw error
+            }
+        }
+    }
+
     override suspend fun reanswer(id: String, answers: Map<String, String>, manager: String?) {
         val url = path("interactions", id, "reanswer").apply { manager?.takeIf(String::isNotEmpty)?.let { addQueryParameter("manager", it) } }.build()
         val body = JsonObject(mapOf("answers" to JsonObject(answers.mapValues { JsonPrimitive(it.value) }))).toString()
@@ -180,6 +235,7 @@ class HubChatTransport internal constructor(
         get(api("sessions", session.machineId, session.sessionId, "items", itemId, "full"))
 
     companion object {
+        private val MODE_CHANGE_KINDS = setOf("set", "restart_done", "restart_failed", "restart_dropped")
         const val OP_ID_HEADER = "X-Persona-Op-Id"
         const val RESOLVE_RETRY_MILLIS = 60_000L
         /** Between tries: a hub that answers 503 while it stops would otherwise be asked again at once. */

@@ -40,13 +40,17 @@ func (s *Service) workTick(ctx context.Context, now time.Time) {
 	full := s.workOn(ctx) // off: only transient errors' "Continue" (transient_retry)
 	s.work.mu.Lock()
 	s.work.init()
-	var due, waits, cards [][2]string
+	var due, quotaDue, waits, cards [][2]string
 	agents := map[[2]string]proto.WorkAgent{}
 	for k, e := range s.work.entries {
 		switch {
 		case !full:
-			if e.WakeAt != nil && !e.WakeAt.After(now) && e.Work.On == proto.WaitTransient && e.Work.CI == nil {
-				due = append(due, k)
+			if e.WakeAt != nil && !e.WakeAt.After(now) && e.Work.CI == nil {
+				if e.Work.On == proto.WaitTransient {
+					due = append(due, k)
+				} else if e.Work.ResetsAt != nil {
+					quotaDue = append(quotaDue, k) // classify outside work.mu; ordinary workers remain untouched
+				}
 			}
 		case e.WakeAt != nil && !e.WakeAt.After(now):
 			due = append(due, k)
@@ -69,6 +73,11 @@ func (s *Service) workTick(ctx context.Context, now time.Time) {
 		s.work.backfillAt = now
 	}
 	s.work.mu.Unlock()
+	for _, k := range quotaDue {
+		if c, ok := v.session(k[0], k[1]); ok && s.protectedQuotaWait(ctx, k[0], c) {
+			due = append(due, k)
+		}
+	}
 	for _, k := range waits {
 		if s.agentStopped(v, agents[k]) {
 			due = append(due, k)
@@ -120,7 +129,8 @@ func (s *Service) wakeWaitersOn(machine, sid string) {
 }
 
 // workGuard: the manager may act on e now — the session is still stopped on the same turn, nothing pending or queued,
-// not looked at in herdr, its machine up, and its todo not completed. ownCard: the manager's card for it may be pending.
+// not looked at in herdr (apart from an open task's mechanical transient retry), its machine up, and its todo not
+// completed. ownCard: the manager's card for it may be pending.
 func (s *Service) workGuard(v *workView, e db.SessionWork, ownCard bool) (proto.Session, string) {
 	if d, ok := v.device(e.MachineID); !ok || !d.Reachable {
 		return proto.Session{}, "offline"
@@ -145,12 +155,23 @@ func (s *Service) workGuard(v *workView, e db.SessionWork, ownCard bool) (proto.
 	switch {
 	case !ok:
 		return c, "gone"
+	case c.HiddenByDirectory():
+		return c, "hidden by directory"
+	case proto.UnrecoverableTurnErrorCode(c.TurnError) != "" || c.TurnErrorKind == proto.TurnErrorUnrecoverable:
+		return c, "conversation invalid"
 	case c.ReadOnlyReason != "":
 		return c, "read-only"
 	case c.Status == proto.StatusWorking || !sameTurn(c, e.TurnAt):
 		return c, "moved on"
 	case c.Status == proto.StatusIdle:
-		return c, "looked at in herdr"
+		// Herdr also reports an open task Agent idle after passively observing its failed turn. That is not the owner
+		// taking over, so only the mechanical transient retry survives; every other wake still yields to being seen.
+		if e.Work.On != proto.WaitTransient {
+			return c, "looked at in herdr"
+		}
+		if _, open := s.openTodoOfAgent(e.MachineID, e.SessionID); !open {
+			return c, "looked at in herdr"
+		}
 	case c.Status != proto.StatusDone:
 		return c, "not stopped"
 	case !ownCard && sessionTurnErrorCode(c) == proto.TurnErrorModelFallbackUnavailable:
@@ -166,8 +187,24 @@ func (s *Service) workGuard(v *workView, e db.SessionWork, ownCard bool) (proto.
 // workWake sends what is due for k: "Continue" after a transient error, the continue once a usage limit reset, or a
 // wake for a wait.
 func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now time.Time) {
+	s.work.mu.Lock()
+	s.work.init()
+	if s.work.retrying == nil {
+		s.work.retrying = map[[2]string]bool{}
+	}
+	if s.work.retrying[k] {
+		s.work.mu.Unlock()
+		return
+	}
+	s.work.retrying[k] = true
+	s.work.mu.Unlock()
+	defer func() {
+		s.work.mu.Lock()
+		delete(s.work.retrying, k)
+		s.work.mu.Unlock()
+	}()
 	e, ok := s.workEntry(k)
-	if !ok || e.WakeAt == nil {
+	if !ok || e.WakeAt == nil || e.Work.On == proto.WaitTransient && e.WakeAt.After(now) || e.Work.RetiredAt != nil {
 		return
 	}
 	// Read again right before acting: the pass's view may be a send or two old.
@@ -201,7 +238,12 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 		return
 	}
 	sw := s.triageSwitches(ctx)
-	if !sw.wakes(e.Work) {
+	if e.Work.On == proto.WaitTransient && !turnErrorTransient(c) {
+		e.WakeAt, e.Work.WakeAt = nil, nil
+		s.putWork(ctx, e)
+		return
+	}
+	if !sw.wakes(e.Work) && !(!sw.Enabled && sw.transientOn() && e.Work.ResetsAt != nil && s.protectedQuotaWait(ctx, k[0], c)) {
 		before := e
 		e.WakeAt, e.Work.WakeAt = nil, nil // turned off since it was set
 		if before.Work.CI != nil {
@@ -271,12 +313,12 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 			return
 		}
 		e.Retries++
-		text, kind = prompts.RenderAgentLimitContinue(), "limit_continued"
+		text, kind = prompts.RenderAgentLimitContinue(answerLanguage(s.hello(ctx).Locale)), "limit_continued"
 	case e.Work.On == proto.WaitTransient:
-		e.Retries++
+		e.Retries = min(e.Retries+1, 1<<30)
 		text, kind = continueText, "continued"
-		s.logf("work %s/%s: auto-continue: sending %q after a transient model error (attempt %d/%d)", k[0], short(k[1]), text,
-			e.Retries, e.Work.Max)
+		s.logf("work %s/%s: auto-continue: sending %q after a transient model error (attempt %d)", k[0], short(k[1]), text,
+			e.Retries)
 	case e.Work.On == proto.WaitExternal || e.Work.On == proto.WaitAgent:
 		e.Wakes++
 		wk := agentWake{Language: answerLanguage(s.hello(ctx).Locale), Attempt: e.Wakes, Wait: e.Work.Wait, Then: e.Work.Then}
@@ -306,9 +348,20 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 		}
 		return
 	}
-	e.WakeAt, e.Work.WakeAt = nil, nil
-	s.putWork(ctx, e)
-	if err := s.sendToSession(ctx, k[0], c.SessionID, text); err != nil {
+	// Keep a durable due row until acknowledgement. A crash before dispatch or
+	// after uncertain delivery retries the same hub once-only message id.
+	if kind != "continued" {
+		e.WakeAt, e.Work.WakeAt = nil, nil
+		s.putWork(ctx, e)
+	}
+	if latest, ok := s.workEntry(k); !ok || latest.Work.RetiredAt != nil || latest.Work.Deferred || !latest.TurnAt.Equal(e.TurnAt) {
+		return
+	}
+	send := func() error { return s.sendWorkText(ctx, k[0], c.SessionID, text, kind == "limit_continued") }
+	if kind == "continued" {
+		send = func() error { return s.sendModelRetry(ctx, e, text) }
+	}
+	if err := send(); err != nil {
 		s.logf("work %s/%s: %s: %v", k[0], short(k[1]), kind, err)
 		at := now.Add(2 * time.Minute).UTC()
 		e.WakeAt, e.Work.WakeAt = &at, &at
@@ -319,6 +372,13 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 		}
 		s.putWork(ctx, e)
 		return
+	}
+	if kind == "continued" {
+		current, ok := s.workEntry(k)
+		if ok && current.TurnAt.Equal(e.TurnAt) && current.Work.RetiredAt == nil {
+			e.WakeAt, e.Work.WakeAt = nil, nil
+			s.putWork(ctx, e)
+		}
 	}
 	s.logf("work %s/%s: %s (%d)", k[0], short(k[1]), kind, max(e.Retries, e.Wakes))
 	s.workEvent(k[0], k[1], kind, map[string]any{"attempt": max(e.Retries, e.Wakes), "after": now.Sub(e.TurnAt).Seconds()})
@@ -498,8 +558,8 @@ func (s *Service) backfillWork(ctx context.Context, v *workView, now time.Time) 
 			if n >= 3 {
 				return
 			}
-			if c.Assistant || c.State != proto.StateUnread || c.Work != nil || now.Sub(c.UpdatedAt) > workBackfill ||
-				now.Sub(c.UpdatedAt) < settle || !full && (c.TurnError == "" || !turnErrorTransient(c)) {
+			if c.HiddenByDirectory() || c.Assistant && !turnErrorTransient(c) && !s.protectedQuotaWait(ctx, d.ID, c) || c.State != proto.StateUnread || c.Work != nil || now.Sub(c.UpdatedAt) > workBackfill ||
+				now.Sub(c.UpdatedAt) < settle || !full && (c.TurnError == "" || !turnErrorTransient(c) && !s.protectedQuotaWait(ctx, d.ID, c)) {
 				continue
 			}
 			k := [2]string{d.ID, c.SessionID}
@@ -520,7 +580,7 @@ func (s *Service) sampleWork(v *workView) {
 	counts := map[string]any{}
 	for _, d := range v.machines() {
 		for _, c := range v.listedSessions(d.ID) { // an archive row is offline: never counted
-			if c.Assistant || c.State == proto.StateOffline {
+			if c.HiddenByDirectory() || c.Assistant || c.State == proto.StateOffline {
 				continue
 			}
 			n, _ := counts[c.State].(int)

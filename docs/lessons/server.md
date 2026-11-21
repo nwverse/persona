@@ -1,11 +1,55 @@
 # Lessons: hub / node and networking
 
+## Under a full-tunnel VPN the default route's address is the tunnel's (#11125)
+
+A UDP "connect" towards a far address reports the source address of the route it would take, the usual way to find
+"the address traffic goes out of". When a VPN routes general traffic through its tunnel, that is the tunnel's own
+address (`utun*` on macOS), and many VPN clients give the tunnel a new one on every reconnect. `hub setup` wrote it into
+`public_url` and `public.tls_listen` as the LAN address, so after the next reconnect the TLS port refused everyone, LAN
+clients included. Before an address goes into config as the LAN address, check the interface it is on: up, not
+loopback, not virtual (`pickLANIPv4` in `server/internal/hub/setup_machine.go`), else take the first private IPv4 on
+such an interface.
+
+## A cancelled RPC test must acknowledge cancellation before releasing work (#10342)
+
+A local context cancellation only starts delivery of `rpc.cancel`; it does not prove the node has processed it. A test that releases a held file write immediately can let the operation finish as `done`, after which polling for `cancelled` times out and the original destination is not restored. Keep the write held until a following `file.operation` request on the same ordered connection has been answered, then release it. Exercise cancellation and normal completion in the same command, and keep the existing deadline, cleanup and restoration assertions.
+
+## Connected Link status does not acknowledge the hub's initial writes (#10409)
+
+The active Link client reports `connected` immediately after writing `hello`; the hub may still be writing its initial `endpoints` and `node` messages. A lifecycle test that kills SSH, switches mode or unpairs on that status can make the hub write to a closed socket. Wait for the same connection to report the hub name and online node, in that order, before the destructive step. To reproduce the early close deterministically, hold the hub at that write boundary, use an abortive tunnel close and wait for the SSH process to die: a graceful FIN alone can still let the first writes succeed (`server/internal/link/ssh_readiness_test.go`).
+
+## Queue admission decides notification replay (#10394)
+
+A connected WebSocket is not evidence that its outbound queue accepted a notification. Record admission per device
+and retain the event in the existing reconnect ring when every eligible socket rejects it. If another socket for the
+same credential accepts it, do not retain a duplicate. Keep recipient-selection counts separate from queue admission
+and delivery. Exercise the real notification bus handler with a full queue, same-ID outbox retry and reconnect;
+keep push-route, capability and preference exclusions intact.
+
+## A response that stops mid-body must be aborted, not returned from (#10855)
+
+`http.ServeContent` stops at a read that fails and returns as if it were done, with the head (200 or 206 and its
+Content-Length) already sent. Over HTTP/1.1 net/http then closes the connection short of that length, which clients
+notice; over HTTP/2 it ends the stream cleanly with fewer bytes than declared, and a client that does not compare them
+keeps the cut file as the whole one. Keep the reader's error and `panic(http.ErrAbortHandler)` after `ServeContent`
+(`recoverPanics` passes it on): HTTP/2 resets the stream. Check it over a real HTTP/2 connection by reading the frames
+(`server/internal/hub/download_abort_test.go`): a `ResponseRecorder` cannot show it, and Go's client counts the bytes
+itself, so it reports the clean end and the reset alike as errors.
+
 ## Contribution identity must match both preview and commit (#10272)
 
 UI routes and switches identify a contribution by extension plus local ID. A global UI-ID conflict check can therefore
 make an unrelated disabled built-in block installation. Check both registry preview and plan commit: fixing only
 preview leaves the install broken. Exercise real installs, batched plans, upgrades, rollback and reload, while keeping
 non-UI contribution conflicts and within-manifest duplicate checks intact.
+
+## Queue admission decides notification replay (#10394)
+
+A connected WebSocket is not evidence that its outbound queue accepted a notification. Record admission per device
+and retain the event in the existing reconnect ring when every eligible socket rejects it. If another socket for the
+same credential accepts it, do not retain a duplicate. Keep recipient-selection counts separate from queue admission
+and delivery. Exercise the real notification bus handler with a full queue, same-ID outbox retry and reconnect;
+keep push-route, capability and preference exclusions intact.
 
 ## Empty assistant creation must not become a model turn
 
@@ -527,6 +571,11 @@ cost is smaller than a broken image. When something has to be listed by hand in 
   may be one in each set since each records its own part (one file in both sets is
   still refused); move only an unpublished migration to another second, never an
   applied migration or the guard.
+- A numbered migration on an older feature branch may be absent from main's
+  frozen inventory (#7100). Keep its SQL unchanged when giving that branch-only
+  file a timestamp, and map its known legacy record through the existing
+  renumbering step. Test old-only and duplicate records with saved rules and
+  operation snapshots. Keep every frozen migration and the guard unchanged.
 - Future publication needs an immutable enable-window frontier **and** a moving
   verified scan checkpoint. Using the previous scan's EOF as the window boundary
   drops a new pending turn when it completes on a later scan. Preserve first-seen
@@ -558,11 +607,17 @@ entry can import a secret target. Recreate ordinary links with `--symlink` so th
 close links for special read-only files or partially closed directories. Keep the view root read-only so later secret
 backups cannot be created. File binds still pin their inode and the top-level entry list: a replaced `node.sock` stays
 old, so a node restart requires an agent restart. Do not permanently cache probes or preflight success; bwrap/PATH and
-namespace availability can change, and full per-cwd profiles make an unbounded key space. A tmpfs mounted directly on a symlink follows it and masks the target; give an alias its own view, but do not
-claim this protects the link from unlink. Stock bwrap 0.8 has no path-aware unlink/rename filter, so protecting the link
-while keeping its parent writable needs another mechanism. It also keeps a supervisor even without `--unshare-pid` or
-with `--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
-lifecycle cleanup.
+namespace availability can change, and full per-cwd profiles make an unbounded key space. A tmpfs mounted directly on a
+symlink follows it and masks the target; the alias view alone does not protect the link from unlink. Stock bwrap 0.8 has
+no path-aware unlink/rename filter. To protect an explicit alias while its parent stays writable, a pre-exec helper can
+`open_tree` the symlink inode with `AT_SYMLINK_NOFOLLOW`, then `move_mount` the detached clone onto the alias without
+following the destination. Run the same helper in preflight and exec the agent at the same pid. Do not drop
+`CAP_SYS_ADMIN` to harden these mounts: that breaks `unshare -rm`, which was working; direct `umount` in the original
+namespace therefore remains an explicit boundary. Bubblewrap keeps a supervisor even without `--unshare-pid` or with
+`--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
+lifecycle cleanup. A kernel can pass the basic bwrap probe yet refuse `open_tree` on an alias symlink with `EPERM`
+(observed on Linux 5.4). Keep that start fail closed. Real tests may skip only the structured alias-`open_tree` `EPERM`
+from the full-profile preflight, never every unavailable result or a `move_mount` failure (#11073).
 
 ## Runtime policy and publisher-owned node packages (#2566)
 
@@ -1701,10 +1756,34 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 ## Block iCloud paths component by component (2026-11-04, #1669)
 
+- **A naming plan needs the same guard as a file path** (#7100): lexical root
+  checks miss links in the base, task and individual repository directories.
+  Resolve each through `realPath`, permit only its guarded missing tail, and
+  check both credentials and the entire physical private-state directory before
+  returning any plan. Keep the resolver pure, preserve Linux case sensitivity,
+  and reserve Darwin private paths without case; a Linux rule test or cross-build
+  does not establish native macOS filesystem behavior. Preparation rechecks when
+  resources are actually used.
+- **Test a missing state root as well as missing workspace targets** (#7100):
+  `realPath` returns the physical existing ancestors plus missing tail with
+  `ErrNotExist`. Keep that returned path for containment. A state-root link or
+  linked parent with an absent destination must still deny that destination at
+  the base, task and repository levels; a sibling sharing only its prefix stays
+  outside. Test through Node RPC with actual temporary links and no creation.
 - **Literal checks don't stop links**: `stat` / `file` only checked whether the resolved string contained `/Library/Mobile Documents`; a `~/x` symlink into iCloud still reached `os.Stat`, hanging the batch on a locked Mac.
 - **`filepath.EvalSymlinks` isn't enough**: it `Lstat`s component by component; after following a link into iCloud it stats the next component there, so checks after return are too late.
   Walk components ourselves (`realPath` in `node/pathguard.go`), checking `offLimits` before each `Lstat`; lowercase comparisons because macOS is case-insensitive by default.
 - **One hung stat mustn't stall the batch**: network drives and sleeping disks hang too. `statPaths` runs 8 concurrently, waits at most 3 seconds overall, and treats nonresponses as `missing`.
+
+## Verify saved settings on the wire (#7100)
+
+- Distinct JSON tags on an embedded saved-settings field and an effective field
+  do not collide. Verify the actual HTTP response before changing the view:
+  `workspace_rules` stays partial while `effective_workspace_rules` is complete.
+  Exercise untouched settings, partial writes, omitted fields, explicit values
+  equal to defaults and null resets through GET/PUT, then read the database and
+  GET from a fresh service. Internal struct assertions alone miss serialization
+  regressions and cannot establish the editor's inheritance contract.
 
 ## Upload names the file system cannot take
 
@@ -1990,6 +2069,46 @@ framing the connection on lanes (protocol.md "Lanes") changes the queue instead.
   still fill the transport ahead of a pong: narrowing them needs evidence from framed connections first. On Persona
   Link, frames also mean no WebSocket message over 32 KiB on the node stream, which takes away the 5 s `writeControl`
   wait and `spliceWS`'s one-minute write cap described in "Heartbeat timeouts on slow links" for that stream.
+
+## Resuming a node connection (2026-11-19, #10663)
+
+A connection that outlives its transport (protocol.md "Resuming") changes what several parts took for granted:
+
+- **The first line decides replace or resume.** A resident node used to serve a new transport at once, replacing the
+  connection it had; now it reads the transport's first line first. Read beside the accept loop, so a transport that
+  says nothing holds up no other; tests that connected without writing a line had to write one.
+- **A kept connection must still end when it should.** A resident node reloading closed its transport to end the
+  connection: with resuming that only lost it, and the reload would have waited out the window. Ending a connection
+  closes its peer too; losing it closes only the transport.
+- **Watchdogs that judge progress must know a connection is waiting.** The notes' stall check (nothing written for
+  30 s), pings and tailcat's probe would have closed a connection waiting to be resumed; they skip it, and pings that
+  find a resumable transport dead cut the transport instead of the connection.
+- **A frame can come twice.** When the node takes a connection back before it saw the old transport fail, it may read
+  frames over the old one after it told the manager how far it read; the manager writes them again. After a resume a
+  frame already read is dropped, where before any frame out of order was a protocol error.
+- **Nothing writes on a transport whose resume is not decided.** Switching the node's writer to the new transport
+  before the token was checked let a refused resume, or one over a transport still in use, take frames meant for the
+  connection: a gap on the transport in use, which ends it and counts against framing. The new transport becomes the
+  writer only inside the peer's lock, once the resume is taken.
+- **A kept connection must not hold its hooks.** A hook's event written on a lost connection waits for the resume, and
+  an agent waits on every hook: hook events go through an ordered queue the hook does not wait on while the transport
+  is lost, and what the connection never sent goes to the spool, as standby would have kept it. What the hook sends
+  next must still wait for that event: a card goes on the interactive lane, which is written before the events lane,
+  so a card asked for while the event waited reached the manager first.
+- **Acknowledge a frame when it is taken, not when more bytes are wanted.** Acknowledgements asked for only before a
+  read let a read loop slow over its lines (a handler blocking it per line) look silent to the other side, whose
+  silence check then dropped every computer's transport at once.
+- **A token rotated when its answer is written is lost with the answer.** The manager that never read the answer asks
+  again with the token it has: that one stays taken until the new transport carries a byte.
+- **A side that decides the transport is dead must tell the other.** One side's silence check fired while the other's
+  read loop was busy (not dead); the busy side then waited for its own pings, past the other side's window. The side
+  that loses a transport closes it, and the node keeps the connection longer than the manager takes to notice.
+- **A resumed connection can change path, not only transport (#10944).** After a failed try on the old path, a better
+  path may take the connection back. `path` / `via` can no longer be captured for the connection's lifetime: final
+  `pathEnded`, the better-path watcher, the machine's route and the tailcat watcher all need the pair after a successful
+  move. Commit it only after `Peer.Resume` succeeds; a failed attempt must leave the route and its accounting alone.
+  Callbacks that outlive a route (a planned switch, an RTT ping or a tailcat probe) carry its generation and check it
+  before acting. Path failure and SSH flap timing use the current route's own start, not the whole connection's.
 
 ## A new value for an existing RPC parameter may be silently ignored by an old node (2026-11-06, #4858)
 
@@ -2368,6 +2487,13 @@ time when binding evidence to activation: later transport, REST and validation w
 renew its lifetime. Test embedded publisher modules in an isolated interpreter as well as
 ordinary imports; a transitive import can be available locally and missing remotely.
 
+An unset assistant settings row is not explicit empty authority (#2628): zero-value product
+settings do not settle that contract. Require an existing empty row's revision, and use a
+guaranteed-row read with a database timestamp to distinguish absence from a failed read. Do
+not create an empty row or a synthetic main. Require an explicit unassigned plan and deliberately
+empty flags, then prove empty Hub ownership twice. Zero owned machines needs no node dial, but
+any conversation, runtime row, partial assignment or revision change must still fail closed.
+
 
 ## Release status reporting is opt-in (#2671)
 
@@ -2660,6 +2786,7 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
 - `cmd.Cancel` runs only when the context ends before the process exits. A shell that exits at once and leaves a background child holding its stdout or stderr (`sleep 4 & echo $!`) keeps `Wait` reading the pipe until that child exits or `WaitDelay`, counted from the shell's exit, closes it: the deadline passes unnoticed. `secret.run` held a 1-second run for 4 seconds, and the next command, which could no longer start, came back as timed out.
 - Watch the context for as long as `Wait` runs and stop the group at the deadline, sharing one "stopped" flag with `Cancel` so the group gets one SIGTERM (`runSecretCommand`). Classify the result by that flag, not the exit status: the shell exited 0.
 - A command that never started because the time was used up gets no result. A timed-out result for it reads as a command that ran and was stopped, and makes the Agent check the computer for one that never ran.
+- The same hole sat in the node's launcher scan (`launchers.go`, #10952): a `~/.zshrc` that left a job running in the background (or the script's children when the 20 s cap killed only the shell) kept `Output()` waiting, under the lock every launcher read takes. Each `GET /machines/{mid}/launchers` then ran into the hub's 30 s and nothing was cached. A login-shell read whose output matters takes `killGroupOnCancel`; `time zsh -ic true | cat` against `time zsh -ic true` shows such an rc file.
 
 ## An id the node makes up for a message ends up on its line (2026-11-12, #5225)
 
@@ -2771,6 +2898,74 @@ nothing ran the old build after the new one.
   video status. Check the folder's build before pressing Redeploy, and after a deploy check that no machine reports
   `node_mismatch`.
 
+## Shared preparation inputs must stay outside Manager implementation (#7357)
+
+Repository binding types were first delivered under the assistant package. Once the database and
+naming contracts consumed them, the Hub inherited that Manager dependency through the database,
+even though the Hub's new code only routed requests. Put the pure shared definitions and validators
+in `repositorywire`, retaining the delivered import path with aliases and forwarding helpers. Check
+the full Hub dependency guard as well as the Manager tests when adding shared persistent contracts.
+
+A preparation request can be saved before the Node admits it. After a rejected correction, the newest
+business operation can therefore differ from the operation that still owns the physical resources.
+Record that Node operation explicitly and target further correction/cleanup through its trusted
+record. Cover repeated corrections and cancellation before any Node effect, not only one failed fetch.
+
+Default cleanup retains branches. A workspace-private bare repository must survive removal of its
+worktree for that promise to hold. Verify the retained branch's actual commit after cleanup, including
+local commits; a directory-exists assertion alone does not show that the branch data survived.
+
+For a test of a newer transcript copy, give the base fixture an explicitly older timestamp.
+The filesystem's timestamp on a new write can lag a wall-clock value passed to `os.Chtimes`,
+so writing the continuation next does not establish the ordering the test requires. Keep
+equal-timestamp selection covered separately.
+
+
+When main moves repository persistence into the Manager-owned store, preparation and naming
+transactions must move with it and share that store's Todo lock and database pool. Keeping an old
+copy in shared db would drop link receipts and reintroduce the dependency the move removed. Node
+consumers use the neutral repositorywire contract, not its Manager compatibility import.
+
+A checkout removed during partial cleanup still has a task branch to protect. Preflight non-force
+branch deletion for removed instances too, including removal reconciled after a lost receipt; a retry
+must not reach branch -D merely because the checkout is gone. Test a real first removal followed by a
+second removal failure, refusal of the non-force retry with the local commit still referenced, and
+successful explicit force. A branch already deleted before its receipt is a separate recovery case.
+
+
+When compressed tool guidance meets a changed continuation contract, retain the upstream effective
+criteria, owner-authorized scope changes and stale scope-revision check. Regenerate tool snapshots
+from the merged source, then measure the complete schema; an old snapshot can silently lose a new
+argument even when its shorter description still fits the budget.
+
+Compare the complete measurement with the fixed main total too. A merged inventory can include the
+extra tool and pass its own updater while exceeding main's allowance. Keep every new schema field
+and shorten equivalent repeated parameter guidance rather than hiding entries or raising the limit.
+
+Regenerating the full catalog may also expose upstream tools or fields missing from main's snapshots.
+Keep those measured too; move space from equivalent parameter guidance before the guarded update,
+and compare the resulting complete total with the fixed main allowance.
+
+Keep a shared request-context hook separate from repository editor UI, so a lazy naming form does
+not pull that editor into its dependency graph just to reuse ownership and lifetime checks.
+
+The shell's worktree request channel and Agent cleanup reads must also stay separate from creation
+transport and form guidance. Import those narrow modules eagerly and retain the old exports for lazy
+callers; moving only the dialog leaves the form's top-level translations on the first screen.
+
+A cache getter must copy its map while holding the lock before a publisher iterates it. Returning the
+book after unlocking races with tag insertion/deletion even when each record is replaced atomically.
+Keep a snapshot stable across later writes and verify concurrent publication under the race detector.
+
+An automatically merged route inventory can still miss newly registered upstream routes. Regenerate
+it from actual registrations and inspect the classifications; administration routes stay restricted
+to full credentials unless the authorization policy explicitly grants an extension scope.
+
+When repository providers add shared identity, snapshot or link validation, extend the neutral `repositorywire`
+contract and keep the delivered Manager import as aliases and forwarding helpers. Provider registries and extension
+calls stay in the Manager; moving those calls with the shared fields would make Node and Hub depend on Manager
+execution. Run the original provider tests as well as workspace and dependency guards after the split.
+
 ## A fence keyed to the first credential keeps a re-paired phone under its old one (2026-11-17, #9611)
 
 - A push registration is keyed by the app's own `device_id` and fenced to the credential that first registered it.
@@ -2786,6 +2981,17 @@ nothing ran the old build after the new one.
 - Lesson: a 409 the client swallows hides a broken ownership model until something else (here a cleanup) depends on
   it. When a fence refuses a live, authenticated client, either let it prove the move or tell it plainly what to do;
   and check what a "looks unused" revocation still owns before treating it as cleanup.
+
+## Trace custom TLS boundaries explicitly (#10533)
+
+An `http.Transport` with `DialTLSContext` can emit TLS callbacks only after the custom
+function has already completed its real handshake. Invoke the context's TLS start/done
+hooks around the unchanged `HandshakeContext`, including tunnel transports, and retain
+that first measurement when the transport announces the completed handshake again.
+Otherwise a TLS stall is indistinguishable from a TCP failure. DNS and connect hooks can run concurrently
+or finish after cancellation, so synchronize snapshots and distinguish overlapping connects.
+Keep diagnostic output to finite categories and durations: never format trace payloads or
+wrapped network errors, which carry addresses, stream query parameters and certificate data.
 
 ## A restore check must not start what it checks (2026-11-18, #10497)
 
@@ -2813,6 +3019,33 @@ those inputs. Compare those callers' rendered input bytes, not just triage's gol
 The tier criteria are shared with event grouping. Describe each event's assigned new activity and unresolved
 requests, not one "current new message" for an entire batch. A mixed-event regression should keep a new request
 and screenshot separate from another event's final acknowledgement, while retaining each event's overall tier.
+
+## Sparse visibility metadata and single-session allocation budgets
+
+Directory visibility (#8578) needs a wire flag without making every `Session` larger. Keep optional flags in
+existing sparse metadata and update the handwritten encoder and its layout hash together. Check both the
+row size and single-session allocation guards: invoking visibility callbacks from a lower-level list decorator
+made its one-row slice escape even after the row size was restored. Apply the annotation at the final list or
+single-row boundary, before folding/counting, and test archive-only rows too. Read persisted supervision before
+hiding; an unavailable task inventory must preserve possible supervision notifications.
+
+## Doing the owner's call later (#10661)
+
+A message held while its computer is away must reach the Agent as the owner's, or a Claude outside Persona's
+terminals reads it as another session's (no `owner_input`) and a public share loses its submission. The devices
+manager strips both from every call a manager makes (`devices/owner_input.go`), so a manager cannot re-send it as its
+own `session.send`: keep the hub's `devicewire.NodeCall` as it came (caller, submission, share authority) and replay it
+through the devices manager's own call path (`devices/held.go`).
+
+Only an error that proves nothing was written (`errOffline`, `rpc.ErrNotSent`, `rpc.ErrSuspended`, a hop's
+`machine_offline`) may lead to an automatic second try. `rpc.ErrNotWritten` alone does not: `Peer.Call` gives it to any
+write error that matches the call's ending context, and a WebSocket writer reports its own context's end after part
+of a frame went out. A bare `ErrClosed` proves nothing either once a wrapper may have lost `ErrDropped`. Anything else,
+a deadline included, may have typed it: ask the owner instead.
+
+Sending the moment the node's connection is configured and listed is too early for a runtime Agent: the runtime
+reconnects to the new node's socket a moment later, and the node answers "no such session". Wait for the session in
+the connection's own list (a new connection starts with none).
 
 ## Moving an element to the front with `slices.Delete` in the same expression (2026-11-19, #10659)
 
@@ -2854,3 +3087,17 @@ documenting an order.
   guards against moving a switching computer were checked in memory and acted on without a lock. Each of these could leave
   the computer at `kind: link` with nobody able to undo it. Write the intent row first and decide under the lock. Keep what
   must survive a restart in the database.
+
+## Compile production and test callers after shared helper changes
+
+A helper refactor can leave a missing tuple return, a test caller without a new context argument, or a runtime reader naming the old helper. Compile both production and test packages after merging; retain the existing read-only database helper and exercise its failure paths rather than adding a parallel implementation.
+
+## A custom `DialTLSContext` owns its handshake deadline (2026-11-19, #11028)
+
+`http.Transport.TLSHandshakeTimeout` bounds only the handshake the transport runs itself. #10681 moved the link's hub
+handshake into a custom `DialTLSContext` (to trace it) and so dropped that bound, and the transport dials under a
+context that a given-up request does not end. A hub, or a proxy's tunnel, that took the connection and never answered
+the TLS hello then held it open forever, on the direct route and through the proxy alike; #10716 put the deadline back.
+Whoever writes a `DialTLSContext` gives the handshake its own deadline and closes the raw connection when it runs out.
+Test it by waiting for the far end to see the connection close, not by how long the request took: the request returns
+on its own deadline either way (`TestDirectStalledHandshakeIsClosed`, `TestProxyStallingInsideTheTunnelIsClosed`).

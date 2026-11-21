@@ -47,10 +47,15 @@ class HttpAgentCreationService(
     override suspend fun launchers(machineId: String): List<AgentLauncher> = launcherList(machineId).launchers
     override suspend fun launcherList(machineId: String): AssistantLaunchers {
         val body = read(request("api", "v1", "machines", machineId, "launchers").build())
-        // What New Agent lists off there (#8109) adds to the answer: a list this client can't read costs none of the launchers.
+        // Additions to New Agent's answer are independently optional: an unreadable one costs none of the launchers.
         val unavailable = try { JsonCodec.decodeFromJsonElement<List<UnavailableLauncher>>(body["unavailable"] ?: JsonArray(emptyList())) }
             catch (_: IllegalArgumentException) { emptyList() }
-        return AssistantLaunchers(JsonCodec.decodeFromJsonElement(body["launchers"] ?: JsonArray(emptyList())), unavailable = unavailable)
+        val tiers = try { JsonCodec.decodeFromJsonElement<List<PickerTier>>(body["tiers"] ?: JsonArray(emptyList())) }
+            catch (_: IllegalArgumentException) { emptyList() }
+        val profile = try { JsonCodec.decodeFromJsonElement<PickerTierProfile?>(body["tiers_profile"] ?: JsonNull) }
+            catch (_: IllegalArgumentException) { null }
+        return AssistantLaunchers(JsonCodec.decodeFromJsonElement(body["launchers"] ?: JsonArray(emptyList())),
+            unavailable = unavailable, tiers = tiers, tiersProfile = profile)
     }
     override suspend fun directories(machineId: String, path: String): AgentDirectories = JsonCodec.decodeFromJsonElement(read(
         request("api", "v1", "machines", machineId, "dirs")
@@ -106,12 +111,17 @@ class HttpAgentCreationService(
         // Hubs without unified model configuration: the launcher is picked here as before.
         if (failure.status == 404) null else throw failure
     }
-    override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean): LauncherModels? = try {
+    override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean): LauncherModels? =
+        launcherModels(machineId, launcher, refresh, null)
+    override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean, host: String?): LauncherModels? = try {
         val url = url("api", "v1", "machines", machineId, "launchers", launcher, "models").newBuilder()
-            .apply { if (refresh) addQueryParameter("refresh", "1") }.build()
+            .apply {
+                if (refresh) addQueryParameter("refresh", "1")
+                if (!host.isNullOrEmpty()) addQueryParameter("host", host)
+            }.build()
         JsonCodec.decodeFromJsonElement<LauncherModels>(read(request().url(url).build(), modelsHttp))
     } catch (failure: HubFailure) {
-        // Hubs without the list: no model picker, the launcher's own model as before.
+        // Hubs without the list cannot supply suggestions or a lock reason.
         if (failure.status == 404) null else throw failure
     }
     override suspend fun worktreeStatus(machineId: String, cwd: String, kind: String?): WorktreeStatus? = try {

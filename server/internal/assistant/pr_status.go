@@ -22,6 +22,13 @@ type TodoPRStatus struct {
 	Checks             string     `json:"checks"`
 	Conflicts          bool       `json:"conflicts"`
 	CheckedAt          time.Time  `json:"checked_at"`
+
+	submittedReview prSubmittedReview // consumed by the park in the same pass, separate from the stage's review summary
+}
+
+type prSubmittedReview struct {
+	ID          int64     `json:"id"`
+	SubmittedAt time.Time `json:"submitted_at"`
 }
 
 type prStatusForge interface {
@@ -69,6 +76,7 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 		return TodoPRStatus{}, fmt.Errorf("PR has no head commit")
 	}
 	type review struct {
+		ID          int64     `json:"id"`
 		State       string    `json:"state"`
 		CommitID    string    `json:"commit_id"`
 		SubmittedAt time.Time `json:"submitted_at"`
@@ -83,6 +91,15 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 	}
 	latest := map[string]review{}
 	for _, r := range reviews {
+		// A submitted review is an event even if it did not change the review verdict. Use provider time and head.
+		switch r.State {
+		case "APPROVED", "CHANGES_REQUESTED", "COMMENTED":
+			if r.ID > 0 && r.User.Login != "" && r.CommitID == pr.Head.SHA && !r.SubmittedAt.IsZero() &&
+				(r.SubmittedAt.After(out.submittedReview.SubmittedAt) ||
+					r.SubmittedAt.Equal(out.submittedReview.SubmittedAt) && r.ID > out.submittedReview.ID) {
+				out.submittedReview = prSubmittedReview{ID: r.ID, SubmittedAt: r.SubmittedAt.UTC()}
+			}
+		}
 		switch r.State {
 		case "APPROVED", "CHANGES_REQUESTED", "DISMISSED":
 			latest[r.User.Login] = r
@@ -177,7 +194,7 @@ func polledPRs(t Todo) []string {
 	}
 	for i := len(t.PRs) - 1; i >= 0 && len(out) <= prsPolled; i-- {
 		u := t.PRs[i]
-		if u == t.PRURL || !ciPRURL.MatchString(u) {
+		if u == t.PRURL || !ciPRURL.MatchString(u) && !otherReviewLink(u) {
 			continue
 		}
 		if f, ok := known[u]; ok && (f.State == "merged" || f.State == "closed") {
@@ -195,6 +212,11 @@ func polledPRs(t Todo) []string {
 				out = append(out, u)
 			}
 			break
+		}
+		if u := externalParkPRURL(r); u != "" && !slices.ContainsFunc(out, func(known string) bool {
+			return ciPRURL.MatchString(known) && triageNormalizePRURL(known) == u
+		}) {
+			out = append(out, u)
 		}
 	}
 	return out
@@ -218,18 +240,17 @@ func prFacts(t Todo, url string) *TodoPRStatus {
 
 // The existing minute deploy pass owns polling. Reads never block a task list or
 // snapshot, and failures leave the last observation to expire rather than invent success.
+// A review request on another host is polled the same way through its code host (code_host.go), which says its state
+// only: no review, checks or head.
 func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
-	f, ok := s.forge().(prStatusForge)
-	if !ok {
-		return
-	}
+	f, github := s.forge().(prStatusForge)
 	if s.ensureTodosLoaded(ctx) != nil {
 		return
 	}
 	s.todos.mu.RLock()
 	var tasks []Todo
 	for _, t := range s.todos.todos {
-		if t.DoneAt == nil && t.PRURL != "" && !isAskTodo(t.ID) {
+		if t.DoneAt == nil && (t.PRURL != "" || externalParkPRURL(t.Supervision.parking()) != "") && !isAskTodo(t.ID) {
 			tasks = append(tasks, copyTodoLocked(t))
 		}
 	}
@@ -238,12 +259,31 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 		if t.DoneAt != nil || t.Cancelled() {
 			continue
 		}
+		held := t.Supervision.parking()
+		source := externalParkPRURL(held)
 		for _, url := range polledPRs(t) {
 			m := ciPRURL.FindStringSubmatch(url)
-			if m == nil {
+			var other codeHost
+			switch {
+			case m != nil && !github:
 				continue
+			case m == nil && !otherReviewLink(url):
+				continue
+			case m == nil:
+				if other, _ = s.codeHostFor(url); other == nil {
+					continue
+				}
 			}
-			if old := prFacts(t, url); old != nil && now.Sub(old.CheckedAt) < deployRecheck {
+			var checkedAt time.Time
+			bound := source != "" && source == triageNormalizePRURL(url)
+			if bound {
+				if held.ExternalPR != nil {
+					checkedAt = held.ExternalPR.CheckedAt
+				}
+			} else if old := prFacts(t, url); old != nil {
+				checkedAt = old.CheckedAt
+			}
+			if !checkedAt.IsZero() && now.Sub(checkedAt) < deployRecheck {
 				continue
 			}
 			if ctx.Err() != nil {
@@ -266,15 +306,21 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 			last.statusPR, last.statusAt = url, now
 			p.seen[key] = last // failures are attempts too, not fresh evidence
 			p.mu.Unlock()
-			number, _ := strconv.Atoi(m[2])
-			status, err := f.PRStatus(ctx, m[1], number)
+			var status TodoPRStatus
+			var err error
+			if other != nil {
+				status, err = otherPRStatus(ctx, other, url)
+			} else {
+				number, _ := strconv.Atoi(m[2])
+				status, err = f.PRStatus(ctx, m[1], number)
+			}
 			if err != nil {
 				s.logf("task %s: PR status: %v", t.ID, err)
 				continue
 			}
 			observedAt := now.UTC()
 			// The pass may have started before this captured wait. Its source request cannot predate that wait.
-			if held := t.Supervision.parking(); held != nil && held.Evidence != nil && parkWaitsOnPR(held, url) && observedAt.Before(held.At) {
+			if held != nil && held.Evidence != nil && (parkWaitsOnPR(held, url) || bound) && observedAt.Before(held.At) {
 				observedAt = held.At
 			}
 			status.URL, status.CheckedAt = url, observedAt
@@ -288,6 +334,11 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus) error {
 	// The wait belongs to the snapshot taken before the forge request, not a park created while it was in flight.
 	held := t.Supervision.parking()
+	if source := externalParkPRURL(held); source != "" && source == triageNormalizePRURL(status.URL) {
+		if err := s.applyExternalParkPRStatus(ctx, t, status); err != nil {
+			return err
+		}
+	}
 	current, ok := s.todoNow(t.ID)
 	if !ok || current.DoneAt != nil || current.PRURL != status.URL && !slices.Contains(current.PRs, status.URL) {
 		return nil
@@ -470,7 +521,7 @@ func parkWaitsOnPR(r *TaskReview, urls ...string) bool {
 			return false
 		}
 		source := triageNormalizePRURL(e.URL)
-		if ciPRURL.FindString(source) != source || source == "" {
+		if source == "" || ciPRURL.FindString(source) != source && !otherReviewLink(source) { // other hosts: code_host.go
 			return false
 		}
 		for _, u := range urls {
@@ -499,4 +550,18 @@ func parkWaitsOnPR(r *TaskReview, urls ...string) bool {
 		}
 	}
 	return false
+}
+
+// otherPRStatus is url's state as code host h reads it, with the labels GitHub's read keeps when it knows no more.
+func otherPRStatus(ctx context.Context, h codeHost, url string) (TodoPRStatus, error) {
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	st, err := h.ReviewStatus(cctx, url)
+	if err == nil && st.State == "" {
+		err = errReviewUnsupported
+	}
+	if err != nil {
+		return TodoPRStatus{}, fmt.Errorf("%s: %w", h.Name(), err)
+	}
+	return TodoPRStatus{State: st.State, Review: "pending", Checks: "none"}, nil
 }

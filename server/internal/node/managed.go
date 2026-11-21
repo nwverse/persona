@@ -3,6 +3,7 @@ package node
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,9 +37,10 @@ import (
 // terminal or put on a command line.
 
 type managedLaunchers struct {
-	mu   sync.Mutex
-	byID map[string]proto.ManagedLauncher // the catalog: a withheld entry has no secrets
-	full map[string]proto.ManagedLauncher // what was pulled of the withheld ones, at their Rev
+	mu    sync.Mutex
+	byID  map[string]proto.ManagedLauncher // the catalog: a withheld entry has no secrets
+	full  map[string]proto.ManagedLauncher // what was pulled of the withheld ones, at their Rev
+	infer []proto.Launcher                 // sorted Claude launcher projection for inferLauncher, rebuilt on catalog change
 	// pull lets one pull of a name go out at a time (the others wait and use it).
 	pull sync.Map // name → *sync.Mutex
 }
@@ -54,8 +56,9 @@ func (n *Node) setManaged(list []proto.ManagedLauncher) {
 		l.Withheld = false
 		m[l.Name] = l
 	}
+	infer := buildManagedInferLaunchers(m)
 	n.managed.mu.Lock()
-	n.managed.byID, n.managed.full = m, nil
+	n.managed.byID, n.managed.full, n.managed.infer = m, nil, infer
 	n.managed.mu.Unlock()
 }
 
@@ -80,7 +83,8 @@ func (n *Node) setCatalog(list []proto.ManagedLauncher) {
 			full[name] = f
 		}
 	}
-	n.managed.byID, n.managed.full = m, full
+	infer := buildManagedInferLaunchers(m)
+	n.managed.byID, n.managed.full, n.managed.infer = m, full, infer
 	n.managed.mu.Unlock()
 	if len(prefetch) > 0 {
 		go func() {
@@ -218,6 +222,48 @@ func shellDirQ(p string, q func(string) string) string {
 }
 
 const openCodeSessionEnv = "PERSONA_OPENCODE_SESSION"
+const codexHeaderBindingsEnv = "PERSONA_CODEX_HEADER_BINDINGS"
+
+// withCodexHeaders carries provider header values in generated environment variables. The separate bindings value
+// contains only header and variable names; codexProviderArgs turns it into Codex's env_http_headers configuration.
+func withCodexHeaders(env []string, raw string) []string {
+	headers := piHeaders(raw)
+	if len(headers) == 0 {
+		return env
+	}
+	used := make(map[string]bool, len(env))
+	for _, name := range envNames(env) {
+		used[name] = true
+	}
+	env = slices.DeleteFunc(env, func(kv string) bool { return strings.HasPrefix(kv, codexHeaderBindingsEnv+"=") })
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	bindings := make([]string, 0, len(names))
+	for _, name := range names {
+		sum := sha256.Sum256([]byte(strings.ToLower(name)))
+		variable := fmt.Sprintf("PERSONA_CODEX_HEADER_%x", sum)
+		for used[variable] {
+			variable += "X"
+		}
+		used[variable] = true
+		env = append(env, variable+"="+headers[name])
+		bindings = append(bindings, name+"\t"+variable)
+	}
+	return append(env, codexHeaderBindingsEnv+"="+strings.Join(bindings, "\n"))
+}
+
+func codexHeaderBindings(env []string) map[string]string {
+	bindings := map[string]string{}
+	for _, line := range strings.Split(envValue(env, codexHeaderBindingsEnv), "\n") {
+		if name, variable, ok := strings.Cut(line, "\t"); ok && name != "" && variable != "" {
+			bindings[name] = variable
+		}
+	}
+	return bindings
+}
 
 func managedEnv(l proto.ManagedLauncher) []string {
 	switch l.AgentType() {
@@ -230,6 +276,7 @@ func managedEnv(l proto.ManagedLauncher) []string {
 			env = append(env, "OPENAI_API_KEY="+l.APIKey)
 		}
 		env = withLauncherEnv(env, l.Env)
+		env = withCodexHeaders(env, l.Headers)
 		if effectiveBase := envValue(env, "OPENAI_BASE_URL"); modelhttp.OpenCodeGo(effectiveBase) && envValue(env, openCodeSessionEnv) == "" {
 			session := cmp.Or(modelhttp.OpenCodeSessionHeaderValue(l.Headers), modelhttp.OpenCodeSessionID("launcher:"+cmp.Or(l.Name, effectiveBase)))
 			env = append(env, openCodeSessionEnv+"="+session)
@@ -298,11 +345,10 @@ var agentSystemDirs = []string{"/opt/homebrew/bin", "/usr/local/bin"}
 // node puts claude. commonNodePaths looks there after agentSystemDirs; a test points it elsewhere with them (#6257).
 var distroNodeDir = "/usr/bin"
 
-// claudeExecutable finds claude: PATH first, then the usual install spots. A node started by launchd (macOS) has a
-// minimal PATH that misses /opt/homebrew/bin, and nothing in `personad launch`'s own path adds it.
-func agentExecutable(bin string) (string, error) {
+// agentExecutableOnDisk finds a CLI on PATH or in the usual install locations without running shell startup files.
+func agentExecutableOnDisk(bin string) string {
 	if p, err := exec.LookPath(bin); err == nil {
-		return p, nil
+		return p
 	}
 	home := userHome()
 	var candidates []string
@@ -317,9 +363,11 @@ func agentExecutable(bin string) (string, error) {
 		filepath.Join(home, ".claude", "local", bin),
 		filepath.Join(home, ".volta", "bin", bin),
 	)
-	nvmDirs, _ := filepath.Glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin", bin))
-	sort.Sort(sort.Reverse(sort.StringSlice(nvmDirs)))
-	candidates = append(candidates, nvmDirs...)
+	for _, dir := range nvmVersionsDirs(home) {
+		paths, _ := filepath.Glob(filepath.Join(dir, "*", "bin", bin))
+		slices.Reverse(paths)
+		candidates = append(candidates, paths...)
+	}
 	for _, np := range commonNodePaths() {
 		candidates = append(candidates, filepath.Join(filepath.Dir(np), bin))
 	}
@@ -330,10 +378,16 @@ func agentExecutable(bin string) (string, error) {
 		}
 		seen[p] = true
 		if st, err := os.Stat(p); err == nil && !st.IsDir() && (st.Mode().Perm()&0111 != 0 || runtime.GOOS == "windows") {
-			return p, nil
+			return p
 		}
 	}
+	return ""
+}
 
+func agentExecutable(bin string) (string, error) {
+	if p := agentExecutableOnDisk(bin); p != "" {
+		return p, nil
+	}
 	agentExecutableMu.Lock()
 	cached := agentExecutableCache[bin]
 	agentExecutableMu.Unlock()
@@ -348,19 +402,12 @@ func agentExecutable(bin string) (string, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := loginShell(ctx, "command -v "+shellQuote(bin))
-	if out, err := cmd.Output(); err == nil {
-		lines := strings.Split(strings.TrimSpace(terminalEscapes.ReplaceAllString(string(out), "")), "\n")
-		for i := len(lines) - 1; i >= 0; i-- {
-			line := strings.TrimSpace(lines[i])
-			if filepath.IsAbs(line) {
-				if st, err := os.Stat(line); err == nil && !st.IsDir() && (st.Mode().Perm()&0111 != 0 || runtime.GOOS == "windows") {
-					agentExecutableMu.Lock()
-					agentExecutableCache[bin] = line
-					agentExecutableMu.Unlock()
-					return line, nil
-				}
-			}
+	if path := shellAgentPath(ctx, bin); path != "" {
+		if st, err := os.Stat(path); err == nil && !st.IsDir() && (st.Mode().Perm()&0111 != 0 || runtime.GOOS == "windows") {
+			agentExecutableMu.Lock()
+			agentExecutableCache[bin] = path
+			agentExecutableMu.Unlock()
+			return path, nil
 		}
 	}
 
@@ -373,7 +420,47 @@ func agentExecutable(bin string) (string, error) {
 	return "", fmt.Errorf("%s not found in PATH or the usual install locations (node service environment; add its bin directory to PATH and restart the node, or symlink into ~/.local/bin)", bin)
 }
 
+func shellAgentPath(ctx context.Context, bin string) string {
+	const begin, end = "\x01persona-agent-path-begin\x01", "\x01persona-agent-path-end\x01"
+	script := `if __persona_agent_path=$(builtin command -v ` + shellQuote(bin) + `); then
+  builtin printf '\001persona-agent-path-begin\001%s\001persona-agent-path-end\001' "$__persona_agent_path"
+fi`
+	out, err := launcherShellOutput(ctx, script)
+	if err != nil && !errors.Is(err, exec.ErrWaitDelay) {
+		return ""
+	}
+	// An rc child can hold stdout open even when the lookup never ran. Require its completed result.
+	_, body, began := strings.Cut(string(out), begin)
+	path, _, ended := strings.Cut(body, end)
+	if !began || !ended || strings.ContainsAny(path, "\r\n") || !filepath.IsAbs(path) {
+		return ""
+	}
+	return path
+}
+
 func claudeExecutable() (string, error) { return agentExecutable("claude") }
+
+// A managed model probe can skip the user's rc file when Claude and its interpreter are already available.
+// Otherwise run the original shell command so it gets the launcher and PATH established by the user's setup.
+func canProbeManagedClaudeDirectly() bool {
+	if runtime.GOOS == "windows" {
+		return true // keep the Windows executable and wrapper handling in Launch
+	}
+	claude := agentExecutableOnDisk("claude")
+	if claude == "" {
+		return false
+	}
+	dir, needsNode := launcherNodeDir(claude)
+	if dir != "" {
+		return true
+	}
+	if !needsNode {
+		// An arbitrary wrapper may depend on tools added by the user's shell.
+		return nativeExecutable(claude)
+	}
+	_, err := exec.LookPath("node")
+	return err == nil
+}
 
 // Launch is `personad launch [--ticket <ticket>] <name> [claude args…]`: the managed launcher's settings from the
 // local node, a hand-off's values with a ticket (secretenv.go), then claude.
@@ -466,8 +553,21 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 	if agent == "codex" && os.Getenv(codexBypassEnv) == "1" {
 		argv = codexBypassArgs(argv)
 	}
-	env = withoutEnv(env, []string{codexBypassEnv})
+	env = withoutEnv(env, []string{codexBypassEnv, managedModelProbeEnv})
+	if agent == "codex" {
+		// The provider wrapper is another native process boundary. Resolve npm's
+		// shim too; never let cmd.exe parse the first message on this final hop.
+		exe, env, err = codexStartProgram(exe, true, env)
+		if err != nil {
+			return fmt.Errorf("%s %w", codexStartError, err)
+		}
+	}
 	exe, argv, env, _ = launchExec(agent, exe, argv, env)
+	if agent == "codex" {
+		if err := codexStartCommandLine(argv); err != nil {
+			return fmt.Errorf("%s %w", codexStartError, err)
+		}
+	}
 	return osproc.Exec(exe, argv, env)
 }
 
@@ -547,6 +647,11 @@ func gatewayModelArgs(args, env []string, warn func(string)) []string {
 // Launch leaves it out for a session model the gateway says takes none (launchEffort, #8798).
 // codexCatalog is the model catalog URL of a Codex provider's gateway, "" for none (codexProviderArgs).
 func launchArgv(agent string, args, respArgs []string, respEffort, respModel string, respEnv []string, codexCatalog string) []string {
+	if agent == agyAgent && slices.Equal(args, []string{"models"}) {
+		// Discovery needs the same provider settings as a start, with no model selected.
+		respArgs = withoutModelArgs(respArgs)
+		respModel = ""
+	}
 	hasModelArg := false
 	hasSettingsArg := false
 	hasEffortArg := false
@@ -628,8 +733,30 @@ func codexProviderArgs(args, env []string, catalog string) []string {
 			provider += ",model_catalog_url=" + q(catalog)
 		}
 	}
+	bindings := codexHeaderBindings(env)
 	if modelhttp.OpenCodeGo(base) && envValue(env, openCodeSessionEnv) != "" {
-		provider += `,env_http_headers={` + q(modelhttp.OpenCodeSessionHeader) + `=` + q(openCodeSessionEnv) + `}`
+		explicit := false
+		for name := range bindings {
+			if strings.EqualFold(name, modelhttp.OpenCodeSessionHeader) {
+				explicit = true
+				break
+			}
+		}
+		if !explicit {
+			bindings[modelhttp.OpenCodeSessionHeader] = openCodeSessionEnv
+		}
+	}
+	if len(bindings) > 0 {
+		names := make([]string, 0, len(bindings))
+		for name := range bindings {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		entries := make([]string, 0, len(names))
+		for _, name := range names {
+			entries = append(entries, q(name)+"="+q(bindings[name]))
+		}
+		provider += `,env_http_headers={` + strings.Join(entries, ",") + `}`
 	}
 	return []string{"-c", `model_provider="persona-launcher"`, "-c", "model_providers.persona-launcher=" + provider + "}"}
 }
@@ -689,7 +816,16 @@ func launchExec(agent, exe string, argv, env []string) (string, []string, []stri
 		return sandbox.NewStatusReason("node-doctor.sandbox_unmanaged_agent", i18n.Args{"agent": agent})
 	}
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "personad launch: "+format+"\n", a...) }
-	wrapped, wenv, st := wrapAgent("launch "+agent, home, identity.DataDir(home), cwd, settingsArgs(rest), inner, append([]string{exe}, rest...), env, logf)
+	command := append([]string{exe}, rest...)
+	if agent == "claude" && os.Getenv(managedModelProbeEnv) == "1" {
+		if dir, _ := launcherNodeDir(exe); dir != "" {
+			// Only the probe needs this interpreter. Keep the child environment's PATH order for every other command.
+			exe = filepath.Join(dir, "node")
+			command = append([]string{exe}, command...)
+			argv = command
+		}
+	}
+	wrapped, wenv, st := wrapAgent("launch "+agent, home, identity.DataDir(home), cwd, settingsArgs(rest), inner, command, env, logf)
 	if wrapped[0] == exe {
 		return exe, argv, env, st
 	}
@@ -712,6 +848,9 @@ func (n *Node) launcherEnv(name string) map[string]any {
 		if l, _ = n.managedLauncher(name); l.Withheld {
 			return map[string]any{"error": errManagerAway(name).Error()}
 		}
+	}
+	if strings.TrimSpace(l.Headers) != "" && !l.CustomHeadersSupported() {
+		return map[string]any{"error": "custom_headers_unsupported: this runtime cannot send provider headers on the selected model path; clear them in Settings › Model Providers"}
 	}
 	out := map[string]any{"env": managedEnv(l), "clear": envClearFor(l), "args": l.Args, "agent": l.AgentType(), "model": l.Model}
 	if effort := launcherDefaultEffort(l); effort != "" {

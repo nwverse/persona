@@ -6,6 +6,7 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.api.InboxAssistantTransport
 import persona.core.contracts.api.InboxBulkAction
 import persona.core.contracts.api.InboxDoneTarget
+import persona.core.contracts.api.LarkMention
 import persona.core.contracts.api.LarkThreadTransport
 import persona.core.contracts.api.MailReplyTarget
 import persona.core.contracts.api.MailReplyTargetChanged
@@ -26,19 +27,30 @@ import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 
+private fun JsonObjectBuilder.putLarkMentions(mentions: List<LarkMention>) {
+    if (mentions.isEmpty()) return
+    putJsonArray("mentions") {
+        mentions.forEach { mention ->
+            require(mention.userId.isNotBlank() && mention.name.isNotBlank())
+            addJsonObject { put("user_id", mention.userId); put("name", mention.name) }
+        }
+    }
+}
+
 class HttpInboxAssistantTransport private constructor(
     override val scope: String,
     private val request: suspend (String, String, RequestBody?, Boolean) -> Response,
     private val mediaOrigin: () -> HttpUrl,
     private val publicImages: PublicImageReader,
     private val isCurrent: () -> Boolean,
+    override val replyImages: HubReplyImages? = null,
 ) : InboxAssistantTransport, LarkThreadTransport, LarkThreadReplyTransport {
     constructor(
         scope: String, connection: OkHttpHubConnection, publicImages: PublicImageReader = PublicImageReader.shared,
         isCurrent: () -> Boolean = { true },
     ) : this(
         scope, { path, method, body, buffered -> connection.request(path, method, body, buffered = buffered) },
-        { connection.activeRoute().endpoint.baseUrl() }, publicImages, isCurrent,
+        { connection.activeRoute().endpoint.baseUrl() }, publicImages, isCurrent, HubReplyImages(connection, isCurrent),
     )
 
     /** Fixed origins are only available to tests in this module. */
@@ -88,10 +100,15 @@ class HttpInboxAssistantTransport private constructor(
             cursor?.let { addQueryParameter("cursor", it) }
         }.build(),
     )
-    override suspend fun replyInThread(messageId: String, text: String, clientId: String): JsonObject {
+    override suspend fun replyInThread(messageId: String, text: String, clientId: String): JsonObject =
+        replyInThread(messageId, text, clientId, emptyList())
+    override suspend fun replyInThread(messageId: String, text: String, clientId: String, mentions: List<LarkMention>): JsonObject {
         require(messageId.isNotBlank() && text.isNotBlank() && clientId.isNotBlank())
         return json(url("api", "v1", "lark", "messages", messageId, "replies"),
-            buildJsonObject { put("text", text); put("thread", true); put("client_id", clientId) })
+            buildJsonObject {
+                put("text", text); put("thread", true); put("client_id", clientId)
+                putLarkMentions(mentions)
+            })
     }
     override suspend fun thread(messageId: String, before: String?) = json(
         url("api", "v1", "lark", "messages", messageId, "thread").newBuilder().apply {
@@ -120,12 +137,18 @@ class HttpInboxAssistantTransport private constructor(
         if (e.status != 404 && e.status != 405) throw e
         setDone(items, action != InboxBulkAction.Reopen)
     }
-    override suspend fun reply(itemId: String?, feedId: String?, text: String, clientId: String): JsonObject {
+    override suspend fun reply(itemId: String?, feedId: String?, text: String, clientId: String): JsonObject =
+        reply(itemId, feedId, text, clientId, emptyList())
+    override suspend fun reply(itemId: String?, feedId: String?, text: String, clientId: String, mentions: List<LarkMention>): JsonObject {
         require(clientId.isNotBlank() && text.isNotBlank())
         require((itemId == null) != (feedId == null))
+        require(mentions.isEmpty() || feedId != null) { "Only direct Feishu sends carry mentions" }
         val target = if (itemId != null) url("api", "v1", "inbox", itemId, "reply")
             else url("api", "v1", "lark", "conversations", requireNotNull(feedId), "messages")
-        return json(target, buildJsonObject { put("text", text); put("client_id", clientId) })
+        return json(target, buildJsonObject {
+            put("text", text); put("client_id", clientId)
+            putLarkMentions(mentions)
+        })
     }
     override suspend fun handOff(itemId: String, text: String, clientId: String): JsonObject {
         require(itemId.isNotBlank() && text.isNotBlank() && clientId.isNotBlank())
@@ -275,6 +298,12 @@ class HttpInboxAssistantTransport private constructor(
             buildJsonObject { put("url", url); put("resolved", resolved) })
     }
 
+    override suspend fun larkMembers(feedId: String, query: String, limit: Int): JsonObject {
+        require(feedId.isNotBlank() && limit in 1..200)
+        return json(url("api", "v1", "lark", "conversations", feedId, "members").newBuilder()
+            .addQueryParameter("q", query).addQueryParameter("limit", limit.toString()).build())
+    }
+
     override suspend fun documentPeople(url: String, query: String): JsonObject {
         documentUrl(url)
         return json(this.url("api", "v1", "lark", "documents", "people").newBuilder()
@@ -376,7 +405,8 @@ class HttpInboxAssistantTransport private constructor(
         val path = requireNotNull(base.hubPath(media)) { "Invalid media origin" }
         require(document && path.startsWith("/api/v1/lark/raw/documents/") ||
             path.startsWith("/api/v1/lark/media/") ||
-            Regex("/api/v1/lark/messages/[^/]+/media/.+").matches(path)) { "Invalid media path" }
+            Regex("/api/v1/lark/messages/[^/]+/media/.+").matches(path) ||
+            Regex("/api/v1/avatars/[^/]+/[^/]+").matches(path)) { "Invalid media path" }
         return request(path + (media.encodedQuery?.let { "?$it" } ?: ""), "GET", null, true).use { response ->
                 checkScope()
                 requireNotNull(response.body).bytes()

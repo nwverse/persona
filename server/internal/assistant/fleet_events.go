@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -21,6 +22,7 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 	if err := s.conversationParamsAvailable(context.Background(), machine, params); err != nil {
 		return false
 	}
+	s.historySignal(machine, event, params)
 	var hook map[string]any
 	if event == "hook.event" && json.Unmarshal(params, &hook) == nil {
 		if sid, _ := hook["session_id"].(string); sid != "" {
@@ -146,6 +148,12 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 			return nil, true, err
 		}
 		return s.closeoutCheck(ctx, machine, p), true, nil
+	case devicewire.MethodAuthorizeTaskTerminal:
+		var p devicewire.TaskTerminalCloseRequest
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, true, err
+		}
+		return map[string]bool{"authorized": s.authorizeTaskTerminal(ctx, machine, p)}, true, nil
 	case assistantwire.MethodCloseoutBrief: // a session starts: the closeout's form, up front (agents_closeout_brief.go)
 		var p assistantwire.CloseoutBriefRequest
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -192,17 +200,22 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		return out, true, nil
 	case "mcp.call":
 		var p struct {
-			Name        string          `json:"name"`
-			Args        json.RawMessage `json:"args"`
-			SessionID   string          `json:"session_id"`
-			Origin      string          `json:"origin"` // the node's attested origin, including during assistant startup
-			Assistant   bool            `json:"assistant"`
-			Guest       bool            `json:"guest"`
-			WaitUpdates bool            `json:"wait_updates"`
-			CallID      json.RawMessage `json:"call_id"`
+			Name             string                 `json:"name"`
+			Args             json.RawMessage        `json:"args"`
+			SessionID        string                 `json:"session_id"`
+			Origin           string                 `json:"origin"` // the node's attested origin, including during assistant startup
+			Assistant        bool                   `json:"assistant"`
+			Guest            bool                   `json:"guest"`
+			WaitUpdates      bool                   `json:"wait_updates"`
+			CallID           json.RawMessage        `json:"call_id"`
+			SourcePermission proto.SourcePermission `json:"source_permission"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, true, err
+		}
+		ctx = devicewire.WithSourcePermission(ctx, proto.SourcePermission{})
+		if p.SourcePermission.Matches(p.SessionID, p.Name, p.Args) {
+			ctx = devicewire.WithSourcePermission(ctx, p.SourcePermission)
 		}
 		var callID string
 		_ = json.Unmarshal(p.CallID, &callID)
@@ -234,6 +247,8 @@ func (s *Service) FleetUp(ctx context.Context) {
 	s.fleet.sent, s.fleet.archived = nil, nil
 	s.fleet.sentMu.Unlock()
 	s.hub.Tell(assistantwire.EventFleetInteractions, assistantwire.FleetInteractions{Interactions: s.pendingInteractions()})
+	reviewInteractions, _ := s.sessionReviewInteractions(ctx)
+	s.askOnPhone(reviewInteractions)
 	for _, m := range s.fleetMachines() {
 		s.publishSessions(m.ID)
 	}
