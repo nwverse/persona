@@ -1,10 +1,33 @@
 package prompts
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
+
+type AssistantSelectedFile struct{ Name, Path string }
+
+func RenderAssistantSelectedFiles(files []AssistantSelectedFile, language string) string {
+	quoted := make([]AssistantSelectedFile, len(files))
+	for i, file := range files {
+		quoted[i] = AssistantSelectedFile{Name: quoteSelectedFileValue(file.Name), Path: quoteSelectedFileValue(file.Path)}
+	}
+	return render("assistant/selected_files", struct {
+		Files    []AssistantSelectedFile
+		Language string
+	}{Files: quoted, Language: language})
+}
+
+func quoteSelectedFileValue(value string) string {
+	var encoded strings.Builder
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(value) // Encoding a string into a strings.Builder cannot fail.
+	// A literal '<' could open or close a prompt tag. Keep it JSON-escaped inside the value.
+	return strings.ReplaceAll(strings.TrimSuffix(encoded.String(), "\n"), "<", `\u003c`)
+}
 
 type AssistantSelectedSkill struct {
 	Name, Path, Ref string

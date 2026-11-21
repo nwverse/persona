@@ -63,6 +63,19 @@ func (n *Node) runtimeAssistant(id string) bool {
 	return runtimeSessionID(id) && n.isAssistantSession(id)
 }
 
+func (n *Node) strictRuntimeSession(id string, strict bool) bool {
+	if !strict {
+		return false
+	}
+	_, _, known := n.runtimes.belongs(id)
+	return known
+}
+
+// assistantRuntimeRoute classifies the resolved launcher and the existing conversation.
+func (n *Node) assistantRuntimeRoute(id, launcher string, strictRuntime bool) (*runtimeConn, bool) {
+	return n.assistantRuntime(launcher), n.runtimeAssistant(id) || strictRuntime
+}
+
 // runtimeSessionID: id is shaped like a runtime's conversation. Claude's and Codex's ids are uuids (validID); a
 // runtime's are its own (DSH: session-<uuid>).
 func runtimeSessionID(id string) bool { return id != "" && !validID(id) && runtimeIDRe.MatchString(id) }
