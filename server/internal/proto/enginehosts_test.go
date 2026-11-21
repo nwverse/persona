@@ -21,6 +21,7 @@ func TestNormalizeEngineChoice(t *testing.T) {
 		{hosts: []string{"cindy"}, wantHosts: []string{"cindy"}, wantDef: "cindy"},
 		{hosts: []string{"cindy", "herdr"}, def: "cindy", wantHosts: []string{"herdr", "cindy"}, wantDef: "cindy"},
 		{hosts: []string{"cindy", "tern"}, def: "tern", wantHosts: []string{"tern", "cindy"}, wantDef: "tern"}, // Tern before Cindy
+		{hosts: []string{"t3code", "cindy"}, wantHosts: []string{"cindy", "t3code"}, wantDef: "cindy"},         // Cindy before T3 Code
 		{hosts: nil, wantHosts: []string{}, wantDef: ""},                                                       // the empty set: no default
 		{hosts: []string{}, def: "herdr", bad: true},
 		{hosts: []string{"herdr"}, def: "orca", bad: true}, // default not enabled

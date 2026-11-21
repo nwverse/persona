@@ -1,7 +1,12 @@
 package persona.core.contracts.api
 
 import persona.core.contracts.CoreText
+import persona.core.contracts.PaseoAgent
 import persona.core.contracts.Session
+import persona.core.contracts.TraeCliDisplayName
+import persona.core.contracts.isTraeCliId
+import persona.core.contracts.isTraeCliLabel
+import persona.core.contracts.unknownAgentName
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.KeepGeneratedSerializer
@@ -213,7 +218,7 @@ data class AgentLauncher(
     val source: String? = null,
 ) {
     /** What people read for it: its display name, else its startup name (the web's `providerTitle`). */
-    val title: String get() = displayName?.trim()?.takeIf(String::isNotEmpty) ?: name
+    val title: String get() = launcherTitle(name, agentType, displayName?.trim()?.takeIf(String::isNotEmpty), baseUrl, source)
 }
 
 /**
@@ -293,7 +298,21 @@ data class UnavailableLauncher(
     val code: String = "",
     val reason: String = "",
 ) {
-    val title: String get() = displayName?.trim()?.takeIf(String::isNotEmpty) ?: name
+    val title: String get() = launcherTitle(name, agent, displayName?.trim()?.takeIf(String::isNotEmpty))
+}
+
+internal fun launcherTitle(
+    name: String, agent: String?, displayName: String?, baseUrl: String? = null, source: String? = null,
+): String {
+    // Older hubs identify the built-in launcher by its base URL marker before supplying an agent field.
+    val legacyMachineCli = name == "traex" && baseUrl == "(traex)" &&
+        (source.isNullOrEmpty() || source == "path" || source == "zshrc" || source == "builtin")
+    return when {
+        agent == PaseoAgent && isTraeCliId(name) -> unknownAgentName(agent, displayName, name)
+        (legacyMachineCli || isTraeCliId(agent)) && isTraeCliId(name) &&
+            (displayName == null || isTraeCliLabel(displayName)) -> TraeCliDisplayName
+        else -> displayName ?: name
+    }
 }
 
 /**
