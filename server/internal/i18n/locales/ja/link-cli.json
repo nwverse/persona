@@ -127,6 +127,7 @@
   "passive_running": "実行中の persona-link が 1～2 秒以内に待ち受けを開始します。再起動は不要です。",
   "passive_windows_next": "次に persona-link install --listen を実行してサインイン時に起動し待ち受けを維持するスケジュールされたタスクをインストールするか、フォアグラウンドで persona-link run を実行してください。",
   "process": "プロセス：pid {pid} · バージョン {version}",
+  "proxy_always_ssh_default": "ハブのアドレスがすべてループバックのため、SSH トンネルは既定で常に SSH を使用します。常にプロキシを使うには --no-ssh-always を付けてください",
   "proxy_current": "プロキシ：{proxy}",
   "proxy_current_always": "プロキシ：{proxy}（常にプロキシを使用）",
   "proxy_off": "オフ（HTTPS_PROXY や ALL_PROXY も使いません）",

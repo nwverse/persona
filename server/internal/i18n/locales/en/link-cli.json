@@ -127,6 +127,7 @@
   "passive_running": "The running persona-link will start listening within a second or two; no restart is needed.",
   "passive_windows_next": "Next: run persona-link install --listen to install a scheduled task that starts at sign-in and keeps listening, or run persona-link run in the foreground.",
   "process": "Process: pid {pid} · version {version}",
+  "proxy_always_ssh_default": "The hub's addresses are all loopback, so the SSH tunnel defaults to always using SSH: add --no-ssh-always to always use the proxy",
   "proxy_current": "Proxy: {proxy}",
   "proxy_current_always": "Proxy: {proxy} (always uses the proxy)",
   "proxy_off": "off (not even HTTPS_PROXY or ALL_PROXY)",

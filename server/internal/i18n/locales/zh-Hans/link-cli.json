@@ -127,6 +127,7 @@
   "passive_running": "在运行的 persona-link 一两秒内就开始监听，不用重启。",
   "passive_windows_next": "接下来：persona-link install --listen（装成登录时启动的计划任务，一直监听），或者前台跑 persona-link run。",
   "process": "进程：pid {pid} · 版本 {version}",
+  "proxy_always_ssh_default": "hub 地址都是回环地址，SSH 隧道默认总是走 SSH：加 --no-ssh-always 才能总是走代理",
   "proxy_current": "代理：{proxy}",
   "proxy_current_always": "代理：{proxy}（总是走代理）",
   "proxy_off": "关闭（也不用 HTTPS_PROXY、ALL_PROXY）",

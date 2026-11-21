@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -252,5 +254,105 @@ func TestStatusReportsProxyOnly(t *testing.T) {
 		if !strings.Contains(txt, want) {
 			t.Fatalf("English status output missing %q:\n%s", want, txt)
 		}
+	}
+}
+
+// A refused proxy-only mode or Always use SSH on pair or install leaves link.json as it was, as persona-link proxy
+// does: every refusal is checked before anything is saved, with this line's own --no-ssh-always taking effect first.
+func TestPairAndInstallRefuseBeforeSaving(t *testing.T) {
+	const (
+		noAddresses  = "persona://link?token=jp_x" // cannot be paired: a pairing that starts fails at once
+		loopbackLink = "persona://link?url=http://127.0.0.1:18661&tls=18662&fp=pin&hub=h1&token=jp_x&machine=pi"
+		newProxy     = "http://new.example:8080"
+	)
+	sshAlways := func(c *link.Config) {
+		c.SSH = &link.SSH{Server: "user@example.com", Target: "127.0.0.1:18663", Always: true}
+	}
+	proxyOnly := func(c *link.Config) { c.ProxyAlways = true }
+	loopbackOnly := func(c *link.Config) { c.Endpoints = []link.Endpoint{{URL: "https://127.0.0.1:18662", Kind: "lan"}} }
+	isErr := func(target error) func(error) bool { return func(err error) bool { return errors.Is(err, target) } }
+	sshDefault := func(err error) bool {
+		return err != nil && strings.Contains(link.ErrorText(i18n.Terminal(), err), "--no-ssh-always")
+	}
+	cases := []struct {
+		name  string
+		saved func(*link.Config)
+		args  []string // pair's; install's are the same with --pair before the link
+		link  string   // "" for install without --pair only
+		want  func(error) bool
+	}{
+		{"--proxy off", nil, []string{"--proxy", "off", "--proxy-always"}, noAddresses, isErr(errUsage)},
+		{"--proxy empty", nil, []string{"--proxy=", "--proxy-always"}, noAddresses, isErr(errUsage)},
+		{"--proxy --env", nil, []string{"--proxy", "--env", "--proxy-always"}, noAddresses, isErr(errUsage)},
+		{"saved Always use SSH", sshAlways, []string{"--proxy", newProxy, "--proxy-always"}, noAddresses, isErr(link.ErrProxyAlwaysSSHAlways)},
+		{"saved Always use SSH, URL saved", sshAlways, []string{"--proxy-always"}, noAddresses, isErr(link.ErrProxyAlwaysSSHAlways)},
+		{"loopback link", nil, []string{"--ssh", "user@example.com", "--proxy", newProxy, "--proxy-always"}, loopbackLink, sshDefault},
+		{"loopback addresses saved", loopbackOnly, []string{"--ssh", "user@example.com", "--proxy", newProxy, "--proxy-always"}, "", sshDefault},
+		{"saved proxy-only mode", proxyOnly, []string{"--ssh", "user@example.com", "--ssh-always", "--proxy", newProxy}, noAddresses, isErr(link.ErrSSHAlwaysProxyAlways)},
+		{"saved proxy-only mode, loopback link", proxyOnly, []string{"--ssh", "user@example.com", "--proxy", newProxy}, loopbackLink, isErr(link.ErrSSHAlwaysProxyAlways)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeEnv(t)
+			f.pairHere(t)
+			if err := link.Update(f.configPath(), func(c *link.Config) error {
+				c.Proxy = "http://saved.example:8080"
+				if tc.saved != nil {
+					tc.saved(c)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(f.configPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			type run struct {
+				name string
+				cmd  func(*env, []string) error
+				args []string
+			}
+			installArgs := append([]string{"--no-node"}, tc.args...)
+			runs := []run{{"install", install, installArgs}}
+			if tc.link != "" {
+				runs = []run{
+					{"pair", pairCmd, append(append([]string{}, tc.args...), tc.link)},
+					{"install", install, append(installArgs, "--pair", tc.link)},
+				}
+			}
+			for _, r := range runs {
+				if err := r.cmd(f.env, r.args); !tc.want(err) {
+					t.Fatalf("%s %v: %v", r.name, r.args, err)
+				}
+				if after, _ := os.ReadFile(f.configPath()); !bytes.Equal(after, before) {
+					t.Fatalf("a refused %s %v changed link.json:\n%s\nwas:\n%s", r.name, r.args, after, before)
+				}
+			}
+		})
+	}
+
+	// This line's --no-ssh-always takes effect first: proxy-only mode goes on, from pair and from install.
+	for _, cmd := range []string{"pair", "install"} {
+		t.Run("--no-ssh-always on "+cmd, func(t *testing.T) {
+			f := newFakeEnv(t)
+			f.pairHere(t)
+			if err := link.Update(f.configPath(), func(c *link.Config) error { sshAlways(c); return nil }); err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"--ssh", "user@example.com", "--ssh-target", "127.0.0.1:18663", "--no-ssh-always", "--proxy", newProxy, "--proxy-always"}
+			if cmd == "pair" {
+				// Saved before the pairing, which then fails: the link cannot be paired.
+				if err := pairCmd(f.env, append(args, noAddresses)); err == nil || errors.Is(err, link.ErrProxyAlwaysSSHAlways) {
+					t.Fatalf("pair %v: %v", args, err)
+				}
+			} else if err := install(f.env, append([]string{"--no-node"}, args...)); err != nil && codeOf(err) != 1 {
+				t.Fatalf("install %v: %v\n%s", args, err, f.out) // exit 1: installed, but no service here reports
+			}
+			c := readConfig(t, f)
+			if c.Proxy != newProxy || !c.ProxyAlways || c.SSH == nil || c.SSH.Always {
+				t.Fatalf("%s %v: proxy %q, proxy_always %v, ssh %+v", cmd, args, c.Proxy, c.ProxyAlways, c.SSH)
+			}
+		})
 	}
 }

@@ -40,6 +40,13 @@ func (f *proxyFlag) consume(args []string, i int) (next int, ok bool, err error)
 // any: a proxy flag is there.
 func (f proxyFlag) any() bool { return f.set || f.alwaysSet }
 
+// noProxyURL: v, given to --proxy, is no proxy URL: off, empty (the environment's again) or a flag such as --env.
+func noProxyURL(v string) bool {
+	v = strings.TrimSpace(v)
+	return v == "" || v == link.ProxyOff || strings.HasPrefix(v, "-")
+}
+
+// save saves the flags as persona-link proxy saves them; on pair and install, through routeFlags.saveProxy.
 func (f proxyFlag) save(e *env) error {
 	if f.set {
 		if err := link.SetProxy(e.configPath(), f.value); err != nil {
