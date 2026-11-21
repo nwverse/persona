@@ -530,6 +530,190 @@ func TestExtensionsGetTheUserTimezone(t *testing.T) {
 	}
 }
 
+// blockingInitSecretStore pauses one extension secret read after the fixture is set up. Later reads, including the
+// configuration update's bound-secret cleanup and a retry, proceed normally.
+type blockingInitSecretStore struct {
+	*extensionStore
+	mu             sync.Mutex
+	armed, blocked bool
+	started        chan struct{}
+	release        chan struct{}
+}
+
+func (s *blockingInitSecretStore) arm() {
+	s.mu.Lock()
+	s.armed = true
+	s.mu.Unlock()
+}
+
+func (s *blockingInitSecretStore) ExtensionSecrets(ctx context.Context, id string) (map[string]string, error) {
+	s.mu.Lock()
+	block := s.armed && !s.blocked
+	if block {
+		s.blocked = true
+	}
+	s.mu.Unlock()
+	if block {
+		close(s.started)
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return s.extensionStore.ExtensionSecrets(ctx, id)
+}
+
+type initSettingsSealer struct{}
+
+func (initSettingsSealer) Seal(value string) (string, error) { return "sealed:" + value, nil }
+func (initSettingsSealer) Open(value string) (string, error) {
+	return strings.TrimPrefix(value, "sealed:"), nil
+}
+
+func initSettingsPackage(t *testing.T, rpc bool) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bin", "gateway"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mode := `, "http": true`
+	if !rpc {
+		mode = `, "rpc": "none", "http": true`
+	}
+	manifest := fmt.Sprintf(`{"manifest_version": 1, "id": "example-gateway", "name": "Example Gateway", "version": "1.0.0",
+		"engines": {"plugin_protocol": 1}, "runtime": {"command": {%q: "bin/gateway"}%s},
+		"activation_events": ["on_startup"], "contributes": {"transcription": [{"id": "gateway", "name": "Gateway"}]},
+		"configuration": {"type": "object", "properties": {"endpoint": {"type": "string", "format": "uri"}}},
+		"secrets": [{"name": "api_key", "title": "API Key"}]}`, runtime.GOOS+"-"+runtime.GOARCH, mode)
+	if err := os.WriteFile(filepath.Join(dir, extension.ManifestFile), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// A settings change while secrets are being obtained must not let an old endpoint escape with its replacement
+// credential. This covers both initialize and the environment used by programs that do not speak RPC.
+func TestExtensionInitSettingsMovedDuringSecretResolution(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rpc  bool
+	}{{"rpc", true}, {"environment", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			ps := newExtensions(t.TempDir(), nil, func(string, ...any) {})
+			store := &blockingInitSecretStore{extensionStore: newExtensionStore(), started: make(chan struct{}), release: make(chan struct{})}
+			ps.reg = extension.NewRegistry(ps.root, store, initSettingsSealer{}, 0)
+			reg := ps.reg
+			pv, err := reg.Preview(ctx, "dir:"+initSettingsPackage(t, tc.rpc), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := reg.Install(ctx, pv.ID, pv.Digest, "test"); err != nil {
+				t.Fatal(err)
+			}
+			reg.BoundSecrets = func(_ *extension.Extension, old, next json.RawMessage) []string {
+				if string(old) != string(next) {
+					return []string{"api_key"}
+				}
+				return nil
+			}
+			configA := json.RawMessage(`{"endpoint":"https://a.example.com"}`)
+			configB := json.RawMessage(`{"endpoint":"https://b.example.com"}`)
+			if err := reg.SetConfig(ctx, "example-gateway", configA, "test"); err != nil {
+				t.Fatal(err)
+			}
+			if err := reg.SetSecret(ctx, "example-gateway", "api_key", "credential-a", "test"); err != nil {
+				t.Fatal(err)
+			}
+
+			type result struct {
+				params extension.InitializeParams
+				env    []string
+				err    error
+			}
+			handoff := func() result {
+				s, err := ps.specOf(ctx, reg.Get("example-gateway"), &hubExtension{id: "example-gateway"})
+				if err != nil {
+					return result{err: err}
+				}
+				if tc.rpc {
+					params, err := s.Init(ctx)
+					return result{params: params, err: err}
+				}
+				return result{env: s.Env}
+			}
+			store.arm()
+			results := make(chan result, 1)
+			go func() { results <- handoff() }()
+			released := false
+			defer func() {
+				if !released {
+					close(store.release)
+				}
+			}()
+			select {
+			case <-store.started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("secret resolution did not start")
+			}
+			if err := reg.SetConfig(ctx, "example-gateway", configB, "test"); err != nil {
+				t.Fatal(err)
+			}
+			if err := reg.SetSecret(ctx, "example-gateway", "api_key", "credential-b", "test"); err != nil {
+				t.Fatal(err)
+			}
+			close(store.release)
+			released = true
+
+			var got result
+			select {
+			case got = <-results:
+			case <-time.After(5 * time.Second):
+				t.Fatal("secret resolution did not finish")
+			}
+			config, credential := string(got.params.Config), got.params.Secrets["api_key"]
+			if !tc.rpc {
+				for _, entry := range got.env {
+					if value, ok := strings.CutPrefix(entry, "PERSONA_PLUGIN_CONFIG="); ok {
+						config = value
+					}
+					if value, ok := strings.CutPrefix(entry, "PERSONA_PLUGIN_SECRETS="); ok {
+						var secrets map[string]string
+						_ = json.Unmarshal([]byte(value), &secrets)
+						credential = secrets["api_key"]
+					}
+				}
+			}
+			if !errors.Is(got.err, extension.ErrSettingsMoved) {
+				t.Fatalf("hand-off returned config %s with %q (err %v), want settings_moved", config, credential, got.err)
+			}
+
+			// A fresh specification after the aborted attempt uses the new coherent pair.
+			got = handoff()
+			config, credential = string(got.params.Config), got.params.Secrets["api_key"]
+			if !tc.rpc {
+				for _, entry := range got.env {
+					if value, ok := strings.CutPrefix(entry, "PERSONA_PLUGIN_CONFIG="); ok {
+						config = value
+					}
+					if value, ok := strings.CutPrefix(entry, "PERSONA_PLUGIN_SECRETS="); ok {
+						var secrets map[string]string
+						_ = json.Unmarshal([]byte(value), &secrets)
+						credential = secrets["api_key"]
+					}
+				}
+			}
+			if got.err != nil || !sameValue(json.RawMessage(config), configB) || credential != "credential-b" {
+				t.Fatalf("retry returned config %s with %q (err %v)", config, credential, got.err)
+			}
+		})
+	}
+}
+
 // A connector's command line (connector.Manifest.CLI, #1704) reaches the assistant's machine with the connectors
 // signed in, as its name and the connector it runs (connectors.signed_in's clis, which the assistant passes on in
 // assistant.prepare): only while the connector is signed in.

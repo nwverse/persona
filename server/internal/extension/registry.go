@@ -179,9 +179,11 @@ type Registry struct {
 	planProblem error      // while a commit confirmation or package recovery is unresolved, no new writes; wait for a reload
 	mu          sync.Mutex
 	extensions  map[string]*Extension
-	reserved    map[string]map[string]string // point → contribution id → who has it (the hub's own)
-	previews    map[string]*Preview
-	now         func() time.Time
+	// settingsEpoch invalidates a process specification when its extension changes, including removal and reuse of its id.
+	settingsEpoch map[string]uint64
+	reserved      map[string]map[string]string // point → contribution id → who has it (the hub's own)
+	previews      map[string]*Preview
+	now           func() time.Time
 	// yields: built-in plugins an installed one of the same id takes the place of (Yields); yielded: those put aside.
 	yields  map[string]bool
 	yielded map[string]*Extension
@@ -605,6 +607,12 @@ func (r *Registry) audit(ctx context.Context, id, action, actor string, detail a
 }
 
 func (r *Registry) changed(c Change) {
+	r.mu.Lock()
+	if r.settingsEpoch == nil {
+		r.settingsEpoch = map[string]uint64{}
+	}
+	r.settingsEpoch[c.ID]++
+	r.mu.Unlock()
 	if r.OnChange != nil {
 		r.OnChange(c)
 	}
