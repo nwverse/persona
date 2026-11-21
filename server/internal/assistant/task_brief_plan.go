@@ -132,7 +132,6 @@ func (s *Service) planBriefs(ctx context.Context, machine, conversation string, 
 				t.ExpectMinutes, t.EstimateSource = automaticEstimate(t.ExpectMinutes, t.EstimateSource)
 			}
 			t.DoneWhen = brief.Criteria
-			brief.ExpectNow, brief.EstimateSourceNow, brief.EstimateEvidenceNow = t.ExpectMinutes, t.EstimateSource, t.EstimateEvidence
 			t.Brief = &brief
 			continue
 		}
