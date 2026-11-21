@@ -9,6 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // Reading a group with /read (#11803, docs/extensions/bots.md "Reading a group with /read"): alert and problem groups are
@@ -85,4 +86,49 @@ func readSourceReply(set FeishuBotSettings, chatID, replyTo string, now time.Tim
 		return "", true, errBotSourceReply
 	}
 	return src.ChatID, true, nil
+}
+
+// useReadCardReply reserves a /read card before transport, once for an exact stable key and route.
+// Unkeyed, invalid and truncated caller keys keep the attempt budget: they cannot prove a logical retry.
+// Checking the source and recording the reservation share the lock, including for retries at the cap.
+func (h *Manager) useReadCardReply(chatID, messageID, key string, inThread bool) error {
+	b := &h.bots
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := b.clock().UTC()
+	src := b.set.aiSource(messageID, now)
+	if b.set.Owner == nil || src == nil || src.Kind != botSourceRead || src.ChatID != chatID {
+		return errBotSourceReply
+	}
+	routeKey := ""
+	if key != "" && key == callerKey(key, feishuMaxUUID-4) {
+		routeKey = "reply:" + key
+		if inThread {
+			routeKey = "thread:" + key
+		}
+		for _, prior := range src.ReadCards {
+			age := now.Sub(prior.At)
+			if prior.Key == routeKey && age >= 0 && age < time.Hour {
+				return nil
+			}
+		}
+	}
+	if src.Replies >= src.repliesMax() {
+		return errBotSourceReply
+	}
+	previousCards := src.ReadCards
+	src.Replies++
+	if routeKey != "" {
+		src.ReadCards = append(src.ReadCards, botReadCardReply{Key: routeKey, At: now})
+	}
+	err := h.saveBotSettingsLocked()
+	if routeKey != "" && (err != nil || h.store == nil) {
+		// Nothing has been sent. A timed-out write might have committed; restoring the pre-attempt memory is still
+		// safe because a retry overwrites the same count/key, or a restart reads that committed reservation.
+		src.Replies--
+		src.ReadCards = previousCards
+		return &rpc.Error{Code: assistantwire.CodeFeishuReplyBudgetUnavailable, Message: "feishu: reply budget could not be saved"}
+	}
+	// Unkeyed/invalid/truncated calls retain the historical best-effort, per-attempt accounting.
+	return nil
 }

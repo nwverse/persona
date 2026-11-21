@@ -59,12 +59,22 @@ type BotAISource struct {
 	ChatID    string    `json:"chat_id"`
 	MessageID string    `json:"message_id"`
 	At        time.Time `json:"at"`
-	// Replies is how many replies the bot has been let write under it (botSourceReplies at most, botReadReplies for
-	// a /read source).
+	// Replies counts charged reply slots, including failed attempts (botSourceReplies at most, botReadReplies for
+	// a /read source). Keyed /read card retries within the UUID window share their original slot.
 	Replies int `json:"replies,omitempty"`
+	// ReadCards are the stable keyed card routes already charged to a /read source. Failed attempts stay
+	// reserved too: retries within the UUID window reuse a slot, without opening a new source or route.
+	ReadCards []botReadCardReply `json:"read_cards,omitempty"`
 	// Kind is what the owner asked with: "" for "/ai" (#6146), botSourceRead for "/read" (#11803, bots_read.go), whose
 	// answer is cards under the message rather than one short line.
 	Kind string `json:"kind,omitempty"`
+}
+
+// botReadCardReply binds a budget reservation to its exact wire key and thread route. Its start time bounds reuse
+// to the platform's one-hour UUID deduplication window; a later attempt must consume another slot.
+type botReadCardReply struct {
+	Key string    `json:"key"`
+	At  time.Time `json:"at"`
 }
 
 const (

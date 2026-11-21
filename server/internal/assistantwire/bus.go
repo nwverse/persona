@@ -185,6 +185,9 @@ const (
 	// CodeFeishuAPI: Feishu answered the bot's call with an error code (Data: {"code": n}): a refusal or a passing
 	// failure the assistant tells apart (the agent messages, feishu_cot.go).
 	CodeFeishuAPI = "feishu_api"
+	// CodeFeishuReplyBudgetUnavailable: a keyed /read card's budget reservation could not be saved. No message was
+	// sent; keep the channel run and retry its same key after storage recovers.
+	CodeFeishuReplyBudgetUnavailable = "feishu_reply_budget_unavailable"
 	// CodeChatDenied: the hub refused to send into a chat or to reply to a message in one, because the bot may only use
 	// the owner's private chat and the group chats the owner opted in. Nothing was sent.
 	CodeChatDenied = "chat_denied"
