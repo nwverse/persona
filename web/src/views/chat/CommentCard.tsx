@@ -31,6 +31,7 @@ export function elementWhere(e: ElementSpot): string {
 
 /** Where a comment points, worded for the reader: a file's lines, or an element of a preview. */
 function whereOf(c: NonNullable<DraftQuote["comment"]>): string {
+  if (c.file) return c.file.location;
   return c.element ? elementWhere(c.element) : c.spot ? spotWhere(c.spot) : "";
 }
 
@@ -75,6 +76,10 @@ function Excerpt({ q, lines }: { q: DraftQuote; lines: number }) {
 export function goToComment(q: DraftQuote): boolean {
   const c = q.comment;
   if (!c) return false;
+  if (c.file?.panel) {
+    openPanel(c.file.panel);
+    return true;
+  }
   if (c.element) {
     const e = c.element;
     // the preview of that session, at the page the element was on
