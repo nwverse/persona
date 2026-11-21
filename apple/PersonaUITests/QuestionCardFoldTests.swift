@@ -291,6 +291,8 @@ final class QuestionCardFoldTests: XCTestCase {
         dismissIconAlert()
         settle(2)
         let shared = task.frame.height
+        // A page tall enough for the whole question beside the open card (iPad) has nothing to give it.
+        if showsWhole(task) { throw XCTSkip("the question shows whole beside the open card: nothing to give") }
         cards.buttons["interaction-fold"].firstMatch.tap()
         settle()
         shot("both-folded-light")
@@ -299,8 +301,8 @@ final class QuestionCardFoldTests: XCTestCase {
         assertInPage(task, "the other folded")
     }
 
-    /// The grabber (#12306), light and dark, beside the conversation's folded card as in the report: up makes the task's
-    /// question taller, down shorter, a tap gives it the tallest (the conversation keeps a sliver, the fold on the page)
+    /// The grabber (#12306), light and dark, beside the conversation's folded card as in the report: down makes the task's
+    /// question shorter, up taller (past its default where the default cuts it), a tap gives it the tallest (the conversation keeps a sliver, the fold on the page)
     /// and another the default; option descriptions wrap whole; a height chosen by hand stays after a relaunch.
     @MainActor func testTheGrabberSizesTheQuestion() throws {
         let hub = try hub("PERSONA_BOTH_LONG_HUB")
@@ -319,17 +321,22 @@ final class QuestionCardFoldTests: XCTestCase {
             XCTAssertFalse(cards.descendants(matching: .any)["interaction-grabber"].firstMatch.exists,
                           "the conversation's card has a grabber beside the task's question (\(look))")
             let start = task.frame.height
+            // On a tall page (iPad) the question shows whole: taller has nothing more to show, shorter still works.
+            let whole = showsWhole(task)
             shot("grab-default-\(look)")
 
-            drag(grabber, by: -120)
+            drag(grabber, by: 100)
+            let shorter = task.frame.height
+            XCTAssertLessThan(shorter, start - 30, "dragged down, the question is \(shorter) pt (was \(start)) (\(look))")
+
+            drag(grabber, by: -180)
             let taller = task.frame.height
-            XCTAssertGreaterThan(taller, start + 40, "dragged up, the question is \(taller) pt (was \(start)) (\(look))")
+            XCTAssertGreaterThan(taller, shorter + 40, "dragged up, the question is \(taller) pt (was \(shorter)) (\(look))")
+            if !whole { XCTAssertGreaterThan(taller, start + 20, "dragged up, the question is no taller than its default \(start) pt (\(look))") }
             assertOnPage(task, "dragged up (\(look))")
 
-            drag(grabber, by: 80)
-            let shorter = task.frame.height
-            XCTAssertLessThan(shorter, taller - 30, "dragged down, the question is \(shorter) pt (was \(taller)) (\(look))")
-
+            // Off the tallest first: from there a tap goes back to the default, not to the tallest.
+            drag(grabber, by: 60)
             grabber.tap()
             settle()
             let tallest = task.frame.height
@@ -346,7 +353,7 @@ final class QuestionCardFoldTests: XCTestCase {
             XCTAssertEqual(task.frame.height, start, accuracy: 3, "tapped again, the question did not go back to the default (\(look))")
 
             // A height by hand stays after a relaunch.
-            drag(grabber, by: -90)
+            drag(grabber, by: 90)
             let chosen = task.frame.height
             app.terminate()
             launch(hub, chat: Self.main, scheme: look, keepHeight: true)
@@ -358,6 +365,12 @@ final class QuestionCardFoldTests: XCTestCase {
             XCTAssertEqual(task.frame.height, chosen, accuracy: 4, "relaunched, the question is not the height chosen (\(look))")
             app.terminate()
         }
+    }
+
+    /// The task's question shows its last option whole: nothing of it is cut.
+    @MainActor private func showsWhole(_ task: XCUIElement) -> Bool {
+        let last = text("等这一版发布以后再补")
+        return last.exists && task.frame.contains(last.frame)
     }
 
     /// Drags the grabber by `dy` (up is negative) and lets the card settle.
