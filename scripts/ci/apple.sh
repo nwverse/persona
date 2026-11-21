@@ -247,7 +247,7 @@ if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
     BUILD_SECONDS=1800
     UNIT_SECONDS=1800
   fi
-  IOS_COMMON=("${XCODE[@]}" -scheme Persona -derivedDataPath "$OUTPUT/ios-tests" \
+  IOS_COMMON=("${XCODE[@]}" -scheme PersonaOfflineUnitTests -derivedDataPath "$OUTPUT/ios-tests" \
     -parallel-testing-enabled NO -disableAutomaticPackageResolution "${TEST_SIGNING[@]}")
   # Explicit fixture-only exclusions, not evidence of those integrations passing.
   # Swift Testing method selectors include (); without it disabled integration
