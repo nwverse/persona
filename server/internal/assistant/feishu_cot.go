@@ -142,8 +142,8 @@ func (f feishuSink) cotStart(ctx context.Context, r *channel.Run, p *cotProgress
 		err = errors.New("feishu: no cot_id / message_id in the answer")
 	}
 	if err != nil {
-		if unreachable(err) {
-			return false // the hub was not reached: tried again on the next look
+		if cotNotSent(err) || unreachable(err) && !cotMaybeSent(err) {
+			return false // definitely not sent: tried again on the next look
 		}
 		s.logf("bots: agent message unavailable (%v); the process goes into the progress card's folded panel", err)
 		s.setCotExt(r, p, "cot_off", "1")
@@ -304,6 +304,10 @@ func (f feishuSink) cotPush(ctx context.Context, r *channel.Run, p *chanLive, it
 		}
 		chunk := events[:min(cotChunk, len(events))]
 		if err := s.cotCall(ctx, FeishuCotAppend, map[string]any{"cot_id": cot, "message_id": msg, "events": chunk}); err != nil {
+			if cotNotSent(err) {
+				p.cot.queue = events
+				return true
+			}
 			if cotMaybeSent(err) {
 				// The chunk may have reached Feishu (no reply came back): not sent again, which could show it twice;
 				// the end is made sure of with cot_complete (cotFinishNow).
@@ -548,7 +552,14 @@ func cotPassing(err error) bool {
 
 // cotMaybeSent: the call went out and no reply came back (a timeout, the connection dropped after it was sent, the
 // hub got no reply from Feishu): Feishu may have applied it.
+func cotNotSent(err error) bool {
+	return errors.Is(err, rpc.ErrNotSent) || errors.Is(err, rpc.ErrNotWritten) || errors.Is(err, bus.ErrOffline) || errors.Is(err, rpc.ErrClosed) && !errors.Is(err, rpc.ErrDropped)
+}
+
 func cotMaybeSent(err error) bool {
+	if cotNotSent(err) {
+		return false
+	}
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, rpc.ErrDropped) || feishuCode(err) == feishuTransport
 }
 

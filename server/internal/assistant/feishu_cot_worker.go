@@ -6,13 +6,20 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/channel"
+	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // cotWorker separates native I/O from the card's progress mutex. It owns the native
 // cursor and one replaceable snapshot of the bounded item history, never a queue
 // of ticks. A terminal snapshot supersedes progress and cancels its in-flight I/O.
+type cotFallback struct {
+	message string
+	card    *feishubot.Card
+}
+
 type cotWorker struct {
+	answer                  chan *cotFallback
 	mu                      sync.Mutex
 	wake                    chan struct{}
 	done                    chan struct{}
@@ -26,46 +33,63 @@ type cotWorker struct {
 
 // topicCotQueue runs under the progress mutex, but never waits for native I/O.
 // Its return value is the last confirmed native availability, for card fallback.
-func (f feishuSink) topicCotQueue(r *channel.Run, finish bool) bool {
+func (f feishuSink) topicCotQueue(r *channel.Run, finish bool) (bool, *cotWorker) {
 	s := f.s
 	c := &s.chans
 	c.mu.Lock()
 	owner := c.live[r.ID]
 	if owner == nil {
 		c.mu.Unlock()
-		return false
+		return false, nil
 	}
 	w := owner.native
 	if w == nil {
 		snap := *r
 		snap.Ext = cloneExt(r.Ext)
-		w = &cotWorker{wake: make(chan struct{}, 1), done: make(chan struct{}), run: snap}
+		w = &cotWorker{answer: make(chan *cotFallback, 1), wake: make(chan struct{}, 1), done: make(chan struct{}), run: snap}
 		w.live.cot = owner.cot
 		w.usable = snap.Ext["cot"] != "" && snap.Ext["cot_msg"] != "" && snap.Ext["cot_off"] == ""
 		owner.native = w
 		w.live.cot.persist = func(snap *channel.Run, key, value string) {
 			w.mu.Lock()
-			defer w.mu.Unlock()
 			c.mu.Lock()
 			defer c.mu.Unlock()
 			if snap.Ext == nil {
 				snap.Ext = map[string]string{}
 			}
 			snap.Ext[key] = value
+			if key == "cot" {
+				snap.Ext["cot_msg"] = w.live.cot.msg
+			}
 			w.usable = snap.Ext["cot"] != "" && snap.Ext["cot_msg"] != "" && snap.Ext["cot_off"] == ""
-			// Completion, a held next turn, or removal must never inherit a late write.
+			var real *channel.Run
 			if !w.aborted && c.live[r.ID] == owner && owner.native == w {
-				real := r
 				for _, candidate := range c.st.Runs {
 					if candidate.ID == r.ID {
 						real = candidate
 						break
 					}
 				}
+			}
+			if real == nil && !w.ending && !w.aborted && c.live[r.ID] == owner && owner.native == w {
+				w.aborted, w.pending, w.queued = true, nil, false
+				if w.cancel != nil {
+					w.cancel()
+				}
+			}
+			if real != nil {
 				if real.Ext == nil {
 					real.Ext = map[string]string{}
 				}
 				real.Ext[key] = value
+				if key == "cot" {
+					real.Ext["cot_msg"] = w.live.cot.msg
+				}
+			}
+			// Reuse the existing channel checkpoint, without holding the worker mutex
+			// over its store I/O. Removed durable membership never falls back to r.
+			w.mu.Unlock()
+			if real != nil {
 				s.saveChannelStateLocked()
 			}
 		}
@@ -86,7 +110,7 @@ func (f feishuSink) topicCotQueue(r *channel.Run, finish bool) bool {
 	defer w.mu.Unlock()
 	usable := w.usable
 	if w.ending || w.aborted {
-		return usable
+		return usable, w
 	}
 	w.pending, w.queued = items, true
 	if finish {
@@ -99,7 +123,7 @@ func (f feishuSink) topicCotQueue(r *channel.Run, finish bool) bool {
 	case w.wake <- struct{}{}:
 	default:
 	}
-	return usable
+	return usable, w
 }
 
 func (w *cotWorker) abort() {
@@ -147,8 +171,9 @@ func (w *cotWorker) work(f feishuSink) {
 		w.cancel = cancel
 		w.mu.Unlock()
 		ctx = feishuSendAs(ctx, "progress", w.run.MachineID, w.run.SessionID)
+		native := true
 		if finish {
-			f.cotFinishNowItems(ctx, &w.run, &w.live, items)
+			native = f.cotFinishNowItems(ctx, &w.run, &w.live, items)
 		} else {
 			f.cotProgressNowItems(ctx, &w.run, &w.live, items)
 		}
@@ -158,8 +183,31 @@ func (w *cotWorker) work(f feishuSink) {
 		w.usable = w.live.cot.cot != "" && !w.live.cot.off
 		aborted := w.aborted
 		w.mu.Unlock()
+		if finish && !native {
+			// Answer delivery is independent. A definite terminal refusal restores the
+			// process on that same delivered card, never by posting another answer.
+			select {
+			case repair := <-w.answer:
+				if repair != nil && repair.message != "" {
+					rctx, done := context.WithTimeout(f.s.runCtx(), 15*time.Second)
+					if err := f.s.botUpdateAnswerCard(rctx, repair.message, repair.card); err != nil {
+						f.s.logf("bots: native process fallback: %v", err)
+					}
+					done()
+				}
+			case <-time.After(time.Minute):
+			case <-f.s.runCtx().Done():
+			}
+		}
 		if finish || aborted {
 			return
 		}
+	}
+}
+
+func (w *cotWorker) answerFallback(card *cotFallback) {
+	select {
+	case w.answer <- card:
+	default:
 	}
 }

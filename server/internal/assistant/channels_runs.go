@@ -30,7 +30,7 @@ type channelSink interface {
 type channelProgress interface {
 	progress(ctx context.Context, r *channel.Run, took time.Duration, steps []string, live string)
 	// folded: o went into a later run; its progress message says so.
-	folded(ctx context.Context, o *channel.Run)
+	folded(ctx context.Context, o *channel.Run, owner *chanLive)
 }
 
 // channelRecall is a sink that marks a message the owner recalled: one taken out of a run that answers others too
@@ -312,7 +312,7 @@ func (s *Service) startChannelRunForBinding(r *channel.Run, generation *uint64) 
 			p.mu.Unlock()
 		}
 		if fs, ok := sink.(channelProgress); ok && ended {
-			fs.folded(ctx, o)
+			fs.folded(ctx, o, gone[o.ID])
 		}
 	}
 	s.noteChannelConversation(r.Channel, r.MachineID, r.SessionID)

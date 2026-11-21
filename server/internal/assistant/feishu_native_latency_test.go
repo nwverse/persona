@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func TestFeishuTopicBlockedNativeAllowsLaterProgressAndAnswer(t *testing.T) {
@@ -78,6 +80,7 @@ func TestFeishuTopicBlockedNativeAllowsLaterProgressAndAnswer(t *testing.T) {
 // nativeCancelHub models a transport that respects the request context, unlike
 // the late-response fake above. Only its first selected request blocks.
 type nativeCancelHub struct {
+	wrap func(error) error
 	Hub
 	method   string
 	entered  chan struct{}
@@ -93,6 +96,9 @@ func (h *nativeCancelHub) AppCall(ctx context.Context, p AppCall) (json.RawMessa
 	if blocked {
 		<-ctx.Done()
 		close(h.canceled)
+		if h.wrap != nil {
+			return nil, h.wrap(ctx.Err())
+		}
 		return nil, ctx.Err()
 	}
 	return h.Hub.AppCall(ctx, p)
@@ -387,5 +393,302 @@ func TestFeishuTopicRemovalCancelsAndFencesLateCreation(t *testing.T) {
 	}
 	if got := len(f.appParams(AppFeishu, FeishuCotComplete)); got != 1 {
 		t.Fatalf("late known message was completed %d times", got)
+	}
+}
+
+func TestFeishuTopicAmbiguousNativeCreationIsNotRetried(t *testing.T) {
+	for _, failure := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			s, posts, _ := cotHub(t, false)
+			r, _ := topicCotRun(s)
+			f := s.hub.(*fakeHub)
+			f.answerApp(AppFeishu, FeishuCotCreate, func(json.RawMessage) (any, error) { return nil, failure })
+			topicCotProgress(t, s, r, time.Second, nil, "")
+			topicCotProgress(t, s, r, 2*time.Second, nil, "")
+			finishTopicCot(t, s, r, &channel.Result{Answer: "Synthetic fallback answer"})
+			if got := len(f.appParams(AppFeishu, FeishuCotCreate)); got != 1 {
+				t.Fatalf("ambiguous creation attempts = %d", got)
+			}
+			if len(f.appParams(AppFeishu, FeishuCotAppend)) != 0 {
+				t.Fatal("ambiguous creation emitted native events")
+			}
+			card := lastCard(t, r, *posts)
+			if !strings.Contains(card, "Synthetic fallback answer") || !strings.Contains(card, "collapsible_panel") {
+				t.Fatalf("fallback card = %s", card)
+			}
+		})
+	}
+}
+
+func TestFeishuTopicRealFoldHasOneSerializedNativeEnd(t *testing.T) {
+	s, _, _ := cotHub(t, false)
+	r, p := topicCotRun(s)
+	withCot(s, r)
+	f := s.hub.(*fakeHub)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	f.answerAppBlocking(AppFeishu, FeishuCotAppend, func(json.RawMessage) (any, error) { close(entered); <-release; return map[string]any{}, nil })
+	feishuSink{s}.progress(context.Background(), r, time.Second, nil, "")
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("append did not start")
+	}
+	next := *r
+	next.ID, next.ReplyTo = "fb_next", "om_next"
+	next.Ext = map[string]string{"chat": testChat, "thread": testThread}
+	next.Started = time.Now()
+	folded := make(chan struct{})
+	go func() { s.startChannelRun(&next); close(folded) }()
+	select {
+	case <-folded:
+	case <-time.After(time.Second):
+		unblock()
+		<-folded
+		t.Fatal("fold waited for native append")
+	}
+	if got := len(f.appParams(AppFeishu, FeishuCotComplete)); got != 0 {
+		t.Fatalf("fold completed native message %d times before append returned", got)
+	}
+	var nextProgress *chanLive
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		_, nextProgress = s.channelRunByID(next.ID)
+		if nextProgress != nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if nextProgress == nil {
+		t.Fatal("next run watcher did not start")
+	}
+	feishuSink{s}.progress(context.Background(), &next, time.Second, nil, "")
+	finishTopicCot(t, s, &next, &channel.Result{Answer: "Synthetic next answer"})
+	if got := len(f.appParams(AppFeishu, FeishuCotComplete)); got != 0 {
+		t.Fatalf("next answer raced native end: completes=%d", got)
+	}
+	unblock()
+	select {
+	case <-p.native.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("folded native worker did not end")
+	}
+	if got := len(f.appParams(AppFeishu, FeishuCotComplete)); got != 1 {
+		t.Fatalf("fold native complete calls = %d", got)
+	}
+}
+
+func TestFeishuTopicCanceledAppendRespectsUnsentEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		wrap   func(error) error
+		replay bool
+	}{
+		{"uncertain", func(err error) error { return err }, false},
+		{"not sent", rpc.NotSent, true},
+		{"not written", func(err error) error { return errors.Join(rpc.ErrNotWritten, err) }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, calls := cotHub(t, false)
+			r, p := topicCotRun(s)
+			withCot(s, r)
+			h := &nativeCancelHub{Hub: s.hub, method: FeishuCotAppend, entered: make(chan struct{}), canceled: make(chan struct{}), wrap: tc.wrap}
+			s.hub = h
+			feishuSink{s}.progress(context.Background(), r, time.Second, nil, "")
+			select {
+			case <-h.entered:
+			case <-time.After(time.Second):
+				t.Fatal("append did not start")
+			}
+			s.finishChannelRun(r, &channel.Result{Answer: "Synthetic answer"})
+			select {
+			case <-p.native.done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("native end did not finish")
+			}
+			got := strings.Join(*calls, " ")
+			if strings.Contains(got, "RUN_STARTED") != tc.replay || strings.Count(got, "RUN_FINISHED") != 1 {
+				t.Fatalf("native events = %s", got)
+			}
+			if n := len(h.Hub.(*fakeHub).appParams(AppFeishu, FeishuCotAppend)); n != 1 {
+				t.Fatalf("actually sent appends = %d", n)
+			}
+		})
+	}
+}
+
+func TestFeishuTopicTerminalRefusalRepairsSameCardProcess(t *testing.T) {
+	for _, mode := range []string{"answer", "quiet", "new card"} {
+		t.Run(mode, func(t *testing.T) {
+			s, posts, _ := cotHub(t, false)
+			r, p := topicCotRun(s)
+			f := s.hub.(*fakeHub)
+			if mode == "new card" {
+				f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
+					return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_a", PairedAt: time.Unix(100, 0), Features: FeishuFeatures{Main: true, Cards: true, TopicCot: true, AnswerNewCard: true}}, nil
+				})
+			}
+			topicCotProgress(t, s, r, time.Second, nil, "")
+			entered, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			defer unblock()
+			f.answerAppBlocking(AppFeishu, FeishuCotAppend, func(json.RawMessage) (any, error) { close(entered); <-release; return nil, feishuAPIError(99991672) })
+			result := &channel.Result{Answer: "Synthetic final answer"}
+			if mode == "quiet" {
+				result = &channel.Result{Quiet: true}
+			}
+			answered := make(chan struct{})
+			go func() { s.finishChannelRun(r, result); close(answered) }()
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("terminal native append did not start")
+			}
+			select {
+			case <-answered:
+			case <-time.After(time.Second):
+				unblock()
+				<-answered
+				t.Fatal("answer waited for terminal native refusal")
+			}
+			sends := len(f.appParams(AppFeishu, FeishuPost))
+			unblock()
+			select {
+			case <-p.native.done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("terminal fallback did not finish")
+			}
+			if got := len(f.appParams(AppFeishu, FeishuPost)); got != sends {
+				t.Fatalf("fallback posted another answer: before=%d after=%d", sends, got)
+			}
+			last := (*posts)[len(*posts)-1]
+			card, _ := last["card"].(string)
+			if last["update"] != true || last["message_id"] != "om_card" || !strings.Contains(card, "collapsible_panel") {
+				t.Fatalf("same-card fallback = %v", last)
+			}
+			if mode == "answer" && !strings.Contains(card, "Synthetic final answer") {
+				t.Fatal("fallback lost the final answer")
+			}
+		})
+	}
+}
+
+type nativeCheckpointStore struct {
+	Store
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (st *nativeCheckpointStore) PutSetting(ctx context.Context, key string, value any) error {
+	if state, ok := value.(channelsState); key == channelsStateKey && ok {
+		for _, r := range state.Runs {
+			if r.Ext["cot"] != "" {
+				block := false
+				st.once.Do(func() { block = true; close(st.entered) })
+				if block {
+					select {
+					case <-st.release:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
+			}
+		}
+	}
+	return st.Store.PutSetting(ctx, key, value)
+}
+
+func TestFeishuTopicNativeCheckpointDoesNotHoldWorkerLock(t *testing.T) {
+	s, _, _ := cotHub(t, false)
+	r, p := topicCotRun(s)
+	st := &nativeCheckpointStore{Store: s.store(), entered: make(chan struct{}), release: make(chan struct{})}
+	s.store = func() Store { return st }
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(st.release) }) }
+	defer unblock()
+	feishuSink{s}.progress(context.Background(), r, time.Second, nil, "")
+	w := p.native // set before progress returned; immutable for this turn
+	select {
+	case <-st.entered:
+	case <-time.After(time.Second):
+		t.Fatal("native checkpoint did not start")
+	}
+	if !w.mu.TryLock() {
+		unblock()
+		t.Fatal("worker mutex held over existing checkpoint I/O")
+	}
+	w.mu.Unlock()
+	// The pre-existing whole-channel checkpoint still owns chans.mu. This patch
+	// preserves that ordering instead of introducing an unsafe second writer.
+	if s.chans.mu.TryLock() {
+		s.chans.mu.Unlock()
+		t.Error("fixture did not reach the existing ordered storage boundary")
+	}
+	canceled := make(chan struct{})
+	go func() { w.abort(); close(canceled) }()
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		unblock()
+		t.Fatal("slow checkpoint prevented native cancellation")
+	}
+	unblock()
+	select {
+	case <-w.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled native worker did not end")
+	}
+}
+
+func TestFeishuTopicDroppedMembershipRejectsLateNativeState(t *testing.T) {
+	s, _, _ := cotHub(t, false)
+	r, p := topicCotRun(s)
+	f := s.hub.(*fakeHub)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	f.answerAppBlocking(AppFeishu, FeishuCotCreate, func(json.RawMessage) (any, error) {
+		close(entered)
+		<-release
+		return map[string]any{"cot_id": "late-cot", "message_id": "late-message"}, nil
+	})
+	feishuSink{s}.progress(context.Background(), r, time.Second, nil, "")
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("native create did not start")
+	}
+	s.chans.mu.Lock()
+	w := p.native
+	s.chans.st.Runs = nil // durable drop before the watcher removes its live entry
+	if err := s.saveChannelStateLocked(); err != nil {
+		t.Error(err)
+	}
+	s.chans.mu.Unlock()
+	unblock()
+	select {
+	case <-w.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("dropped generation did not stop")
+	}
+	if s.runExt(r, "cot") != "" {
+		t.Fatal("late response mutated the dropped run")
+	}
+	var saved channelsState
+	if _, err := s.store().Setting(context.Background(), channelsStateKey, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Runs) != 0 {
+		t.Fatalf("late response resurrected durable runs: %v", saved.Runs)
+	}
+	if got := len(f.appParams(AppFeishu, FeishuCotAppend)); got != 0 {
+		t.Fatalf("dropped run appended %d batches", got)
+	}
+	if got := len(f.appParams(AppFeishu, FeishuCotComplete)); got != 1 {
+		t.Fatalf("late known message completion = %d", got)
 	}
 }
