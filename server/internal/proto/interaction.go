@@ -144,6 +144,15 @@ type Interaction struct {
 	// Resumable: a hook waits on it that reconnects when its node goes away (hub or node restart), so the hub keeps
 	// it pending through the gap instead of cancelling it (docs/protocol/protocol.md "Interactions survive restarts").
 	Resumable bool `json:"resumable,omitempty"`
+	// ApprovalBatchID and ApprovalItemID identify a server-owned exact owner-action proposal. NoExpiry is valid only
+	// beside these fields on a resumable proposal created by the manager; it never comes from a node or an app.
+	ApprovalBatchID string `json:"approval_batch_id,omitempty"`
+	ApprovalItemID  string `json:"approval_item_id,omitempty"`
+	OwnerProposal   bool   `json:"owner_proposal,omitempty"`
+	NoExpiry        bool   `json:"no_expiry,omitempty"`
+	// OwnerApprovalPhrases are display hints for the proposal's reply control.
+	// The manager's current settings, not this snapshot, authorize a reply.
+	OwnerApprovalPhrases []string `json:"owner_approval_phrases,omitempty"`
 	// Agent is who asks when it is not Claude Code: "codex" or "traex" (a card the node read off a Codex TUI,
 	// docs/integrations/codex.md "Questions and approvals").
 	Agent string `json:"agent,omitempty"`

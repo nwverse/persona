@@ -53,6 +53,9 @@ type Launcher struct {
 	// Pi: a Persona-managed provider pi can use on this computer too (ManagedLauncher.PiAPI, docs/integrations/pi.md
 	// "Persona's model providers").
 	Pi bool `json:"pi,omitempty"`
+	// BuiltinCompanion: this runtime launcher is backed by the node's own built-in Antigravity companion (wrapping the
+	// local `agy` CLI), not an external runtime. Set only by the node when the verified built-in companion registers.
+	BuiltinCompanion bool `json:"builtin_companion,omitempty"`
 }
 
 // StartInstead is what a new session's start asked for and does not run with, as an engine runtime that runs only its
@@ -144,6 +147,8 @@ type LauncherModels struct {
 	Models []AgentModel `json:"models"`
 	// Locked: why a model picked here would not reach the agent (the launcher fixes its own --model); empty: it would.
 	Locked string `json:"locked,omitempty"`
+	// SupportsStartModel: the node verified a new native omp session can take a model in this host.
+	SupportsStartModel bool `json:"supports_start_model,omitempty"`
 }
 
 // ModelPrice is the catalog's reference price in USD per one million tokens. It is display metadata, not a gateway quote.

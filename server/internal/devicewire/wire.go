@@ -453,6 +453,7 @@ var Routes = []string{
 	"POST /api/v1/sessions/{mid}/{sid}/start/continue",
 	// Retry and Delete on a message held for an Agent while its computer was away (#10661, internal/devices held.go),
 	// from a full device.
+	HeldOutboxRoute,
 	"POST /api/v1/sessions/{mid}/{sid}/held/{msg}/retry",
 	"DELETE /api/v1/sessions/{mid}/{sid}/held/{msg}",
 	"GET /api/v1/machines/{mid}/codex/{sid}/takeover",

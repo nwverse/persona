@@ -462,9 +462,10 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | DSH (`dsh`, configurable) | `integrations/dsh`: a Cordis plugin for `dsh web`; companion process `companion.mjs` (`dsh-files`) for when DSH isn't running | `docs/integrations/dsh.md` |
 | pi (`pi-<pid>`, `pi-web`, `pi-files`) | `integrations/pi`: pi extension (one connection per pi process) + pi-web companion process | `docs/integrations/pi.md` |
 | omp (`omp-<pid>`) | `integrations/omp`: the pi host under omp's identity (agent and name `omp`); no companion and no auto-update | `docs/integrations/omp.md` |
-| opencode (`opencode-<pid>`) | `integrations/opencode`: opencode plugin (one connection per opencode server process; list and chats read from opencode.db, live updates over the event stream, control through the plugin API) | `docs/integrations/opencode.md` |
+| opencode (`opencode` / `opencode-<pid>`) | `integrations/opencode`: standalone ACP companion (`companion.mjs`, `start`, `models`, `modes`, `assistant: true` with loopback HTTP MCP proxy, reads 1.x & 2.x `opencode.db`) and opencode server plugin (`index.js`, one connection per `opencode serve` process, merges with herdr TUI panes) | `docs/integrations/opencode.md` |
 | Grok CLI (`grok-chat`) | `integrations/grok/companion.mjs`: optional standalone ACP companion with assistant tools, permission hooks, native renaming and restart recovery; also lists conversations started in a terminal (read-only while the terminal holds them) | `integrations/grok/README.md` |
 | Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
+| Managed Agents (`managed-agents`, configurable) | `integrations/managed-agents/companion.mjs`: standalone companion for Volcengine Ark Managed Agents and compatible endpoints (cloud or self-hosted, the user's own key); reads sessions over the REST API, sends, interrupts, starts, and answers tool confirmations and question / plan tools on the phone; `--listen` makes it a daemon | `docs/integrations/managed-agents.md` |
 | echo (example) | `integrations/runtime-sdk/examples/echo-runtime.mjs` (with `--listen <port>` it's a daemon) | "Minimal example" in this doc, `docs/integrations/daemons.md` |
 
 ### Antigravity Desktop (macOS, experimental)
@@ -487,6 +488,16 @@ The session's `last_text` preview contains assistant response text after the lat
 input clears the previous reply preview, including input with no visible text. Thinking and tool records leave it empty
 until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while
 preserving genuine assistant questions. User messages and tool records remain available in the conversation items.
+
+A session is listed `unknown` when the evidence cannot say working, idle or done (`transcriptState` in
+`integrations/antigravity/lib/map.js`). It is never guessed as idle: an idle native summary closes a turn only when its
+step count covers the last exported step. The companion logs why, as reason counts, each time the tally across listed
+sessions changes (`agy unknown status: no_summary 1, summary_behind 2`, then `none` once it clears, #12003):
+`read_failed` (the native summary database could not be read), `no_summary`, `summary_not_idle`, `summary_behind` (the
+summary's step count does not cover the last exported step), `no_step_index`, and `no_relevant_step` (no user input,
+response, tool result or error has been exported). A failed summary read is logged when it starts or its cause changes,
+with SQLite's result-code text only, and once more when reads recover, with the number of failures. The lines carry no
+session IDs, message text or paths; under `personad node` they appear in the node log after `agy runtime:`.
 
 CLI companion sessions and herdr panes show images from exported tool results. Conversation pages carry only image
 references; Persona loads the bytes when an image is shown. It accepts PNG, JPEG, GIF and WebP up to 1,152 KiB from
@@ -602,6 +613,15 @@ their existing poll. Unwatch, disconnection and shutdown release the watched pol
 existing step carry a stable content revision in the history token, so a response completed at the same sequence
 replaces retained content. Ordinary appends preserve that revision and continue through incremental item batches.
 
+Until the native export catches up, a Persona-owned prompt's steps come from ACP: the sent message, thinking, tool
+calls and results, and the settled reply; a background wake's steps the same way. While they only grow they keep the
+conversation's history token, so a send and every live update arrive as appends and clients keep their page (#12014).
+Their item IDs are not the export's, so the token changes once when the export replaces them, or when an interrupt
+drops some (a send that takes over a running wake included). The token that follows is written to the conversation's
+`.persona-history-epoch` file before the first such step shows, so a restarted companion never reports the token
+clients hold those steps under, and an idle conversation keeps its token across restarts. Where that file cannot be
+written, the token changes as soon as such steps appear.
+
 Session inventory, watch cursors, item pages and live item pushes read `transcript_full.jsonl` when available.
 Antigravity Agent and Assistant sessions publish waiting messages in `Session.queued`, using an empty string for a
 photo-only message. Send Now cancels only the active prompt and starts the next queued message when it settles.
@@ -636,6 +656,14 @@ The node advertises `usage` in hello features. The SDK returns false while disco
 Only currently listed, owned sessions count. The row's agent must match the runtime's registered default agent or an advertised launcher agent. The node supplies the recorded launcher name. Claude Code, Codex, traex, pi, omp and opencode remain metered from their local records, including when hosted in Paseo. For other agents, a nonempty request ID deduplicates within one runtime connection and session for 30 minutes. Without an ID each report counts. The cache retains at most 65,536 request IDs and evicts its oldest entry when full. Reports outside the last 26 hours of minute buckets, more than a minute in the future, or with any token count over 1,000,000,000 are rejected. The file meter's 10-second tick sends the buffered per-minute totals. The manager restores persisted runtime minute buckets at startup.
 
 Daemon links allow the same event and prefix its session ID as usual. Runtime usage goes to the same token totals and agent buckets as file usage. It is added, rather than replacing a minute's total, and full file scans preserve these unreconstructable buckets.
+
+### Runtime subscription usage windows
+
+A runtime with read-only access to a subscription's rate-limit windows calls `rt.usageWindows({provider, name, plan?, sampled_at, windows})`. Each window is `{label, window_minutes, used_percent, resets_at?, model?}`; timestamps are RFC3339, lengths are positive safe-integer minutes, percentages are finite numbers from 0 through 100, and one report has at most 32 windows. This is the same account shape that `docs/server/usage-windows.md` defines; it is separate from the per-request token counts above.
+
+The node advertises `usage_windows` only to runtimes on the local socket, not to daemons (their accounts must not be attributed to the node's machine). The SDK returns false while disconnected or with an older node and does not queue reports. A connected hub is not required because the node stores the snapshot locally. Reports replace the source named by the runtime id, so a companion restart does not duplicate its account. An older sample cannot replace a newer one; a valid empty `windows` array explicitly clears the source. The machine's existing `usage_windows` off switch rejects these reports too.
+
+Antigravity implements this source with its ACP process's native `RetrieveUserQuotaSummary` method and `forceRefresh: false`. It does not read the status-line command's account fields, invoke an account API itself, or start a model request.
 
 ### Shared runtime behavior
 
