@@ -406,10 +406,15 @@ func (h *Manager) botPair(api *feishubot.Client, openID, chatID, text string) {
 	noteKey := "hub-bots_chat.pair_hint"
 	var noteArgs i18n.Args
 	var record *botRecord
+	previousOwner, previousPairing := b.set.Owner, b.set.Pairing
 	if !ok && live && regexpDigits.MatchString(text) {
 		// A code-shaped answer while a pairing is still live is a real try: say specifically that it was wrong and
 		// how many tries remain, instead of the generic hint. At the cap the pairing is dropped, so the note says
 		// the code is gone. A time-expired pairing is not "wrong": it keeps the generic hint and no failure.
+		// Keep the previous code, expiry and attempt count available until this write commits.
+		next := *p
+		p = &next
+		b.set.Pairing = p
 		if p.Fails++; p.Fails >= botPairTries {
 			b.set.Pairing = nil // guessed at: the user asks for a new code in the app
 			noteKey = "hub-bots_chat.pair_expired"
@@ -418,14 +423,22 @@ func (h *Manager) botPair(api *feishubot.Client, openID, chatID, text string) {
 			noteKey = "hub-bots_chat.pair_wrong"
 			noteArgs = i18n.Args{"n": botPairTries - p.Fails}
 		}
-		h.saveBotSettingsLocked()
 	}
 	if ok {
 		b.set.Owner = &BotOwner{OpenID: openID, ChatID: chatID, At: b.clock().UTC()}
 		b.set.Pairing = nil
-		h.saveBotSettingsLocked()
 		record = &botRecord{auditBotPaired, map[string]any{"open_id": openID}}
-	} else {
+	}
+	if ok || (!ok && live && regexpDigits.MatchString(text)) {
+		if err := h.saveBotSettingsLocked(); err != nil {
+			b.set.Owner, b.set.Pairing = previousOwner, previousPairing
+			b.mu.Unlock()
+			// Do not throttle an uncommitted attempt: sending the same code again is a legitimate retry.
+			h.botSendNote(api, chatID, i18n.T(h.userLang(), "hub-bots_chat.pair_save_failed"))
+			return
+		}
+	}
+	if !ok {
 		now := b.clock()
 		if b.pairTold == nil {
 			b.pairTold = map[string]time.Time{}
@@ -452,8 +465,12 @@ func (h *Manager) botPair(api *feishubot.Client, openID, chatID, text string) {
 	name := h.botName(ctx, api, openID)
 	b.mu.Lock()
 	if b.set.Owner != nil && b.set.Owner.OpenID == openID {
+		previousName := b.set.Owner.Name
 		b.set.Owner.Name = name
-		h.saveBotSettingsLocked()
+		if err := h.saveBotSettingsLocked(); err != nil {
+			// Pairing is already durable. Only this optional display-name enrichment failed.
+			b.set.Owner.Name = previousName
+		}
 	}
 	b.mu.Unlock()
 	if h.notifyAssistant(assistantwire.EventFeishuOwner, assistantwire.FeishuOwner{Paired: true}) == nil {
