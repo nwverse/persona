@@ -117,6 +117,7 @@ func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
 	if err != nil {
 		return proto.TextResult(outwardText(outward, err.Error()), true)
 	}
+	s.noteBackgroundToolProgress(ctx, call.SessionID, call.Name, args)
 	// A conversation that writes to other people never reads the private parts of a profile, whichever tool would
 	// give them (outward_reader.go).
 	return proto.TextResult(outwardText(outward, res), false)
@@ -1513,7 +1514,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 					folded[source] = true
 				}
 			}
-			if c.Assistant || c.FoldedUnder() != "" {
+			if c.Assistant || c.FoldedUnder() != "" || s.isBackgroundSession(ctx, c.SessionID) {
 				continue
 			}
 			c.State = c.FoldedState()

@@ -887,7 +887,7 @@ func (s *Service) mayReviewForLeader(ctx context.Context, self string, t Todo) b
 	}
 	// The background supervisor stands in for the main conversation above a task leader no leader conversation
 	// supervises: the leader's decisions come to it (digestTo).
-	return up == self || s.isBackground(ctx, self) && !s.isLeader(ctx, up)
+	return up == self || s.isBackgroundSession(ctx, self) && !s.isLeader(ctx, up)
 }
 
 // leaderTaskOf is the open task leader agent lead leads.

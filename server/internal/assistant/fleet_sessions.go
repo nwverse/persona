@@ -40,10 +40,16 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	fm, hasMachine := s.fleetMachine(machine)
 	_, hasInlineStore := s.store().(inlineViewStore)
 	now := time.Now()
+	bgCfg := s.settings(context.Background())
 	for i := range list {
 		list[i].MachineID = machine
 		// A node from before titles were stripped first sends a clipped injected tag as the title.
 		list[i].Title = transcript.Title(list[i].Title)
+		if bg := bgCfg.BackgroundSupervisor; bg != "" && list[i].PaneID == "" && list[i].SessionID != "" &&
+			list[i].SessionID != bg && list[i].SessionID != bgCfg.Main &&
+			(list[i].ParentSessionID == bg || list[i].RootSessionID == bg) {
+			s.registerBackgroundRoundFork(context.Background(), machine, list[i].SessionID, bg)
+		}
 	}
 	for _, sess := range list {
 		// Any agent (herdr or headless, started by Persona or not) finishing a turn may notify the phone.
@@ -267,7 +273,28 @@ func (s *Service) publishList(machine string) []proto.Session {
 	// A deleted conversation's row is the assistant's, never an archived one: it goes with the rows the apps see.
 	list = s.deletionRows(context.Background(), machine, list, true)
 	// A review's reviewer is no agent of the user's (supervise_autoreview.go): its result is on the task it reviewed.
+	// Forked background supervisor round branches are also internal and must not flood the ordinary Agents list (#12650).
 	hide := s.reviewerSessions()
+	if roundForks := s.hiddenBackgroundRoundForks(context.Background(), machine, list); len(roundForks) > 0 {
+		if hide == nil {
+			hide = roundForks
+		} else {
+			for k := range roundForks {
+				hide[k] = true
+			}
+		}
+	}
+	if apart {
+		if roundForks := s.hiddenBackgroundRoundForks(context.Background(), machine, archived.rows); len(roundForks) > 0 {
+			if hide == nil {
+				hide = roundForks
+			} else {
+				for k := range roundForks {
+					hide[k] = true
+				}
+			}
+		}
+	}
 	reviewWorktrees := map[string]bool{}
 	for _, e := range mustSessionReviews(s) {
 		if e.MachineID == machine && e.Worktree != "" {
@@ -500,10 +527,14 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 	defer asks.done()
 	suggested := s.hubSuggestions(machine)
 	quiet := s.quietMarks(machine) // turns of task Agents that had no output (silent_turns.go)
+	bgMatch := s.backgroundMatcher(context.Background(), machine)
 	for i := range list {
 		list[i].MachineID = machine
 		list[i].PendingInteractions = counts[list[i].SessionID]
 		list[i].Assistant = isAssistantSession(&list[i], dir, m.manager)
+		if !list[i].Assistant && bgMatch.matches(&list[i]) {
+			list[i].Assistant = true
+		}
 		if list[i].Assistant && list[i].Space == "" {
 			list[i].Space = identity.SpaceOf(list[i].Cwd)
 		}

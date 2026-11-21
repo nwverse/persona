@@ -117,8 +117,9 @@ type superviseSignal struct {
 	Inbox *prompts.SuperviseInbox
 	// Optional routine batching keeps these in memory only, after routing and before delivery. They are never part of
 	// a persisted relay payload: once admitted, the existing queue owns delivery.
-	batchTo    string
-	batchUntil time.Time
+	batchTo     string
+	batchUntil  time.Time
+	BreakerNote string `json:"breaker_note,omitempty"` // one-time circuit-breaker fallback note appended in digestEntry
 }
 
 const (

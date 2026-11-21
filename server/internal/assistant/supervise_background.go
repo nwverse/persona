@@ -80,7 +80,7 @@ func (s *Service) isBackground(ctx context.Context, id string) bool {
 // supervised task whose ledger names no current leader conversation and no task leader's agent. It may review it,
 // change its scope, answer and escalate its cards and speak to its agent as the task's own supervisor does.
 func (s *Service) backgroundSupervises(ctx context.Context, self string, t Todo) bool {
-	if t.Origin == "" || t.Supervision == nil || !s.isBackground(ctx, self) {
+	if t.Origin == "" || t.Supervision == nil || !s.isBackgroundSession(ctx, self) {
 		return false
 	}
 	sup := t.Supervision.Supervisor

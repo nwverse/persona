@@ -362,7 +362,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			n.observedRunning(s.SessionID)
 			n.noteGatewayRunning(s)
 		}
-		if earlier[s.SessionID] || !n.sessionScopeAllows(s.Cwd) {
+		if earlier[s.SessionID] || n.isRoundFork(s.SessionID) || !n.sessionScopeAllows(s.Cwd) {
 			continue
 		}
 		if n.listBlocked(s.SessionID, s.Cwd) {

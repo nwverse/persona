@@ -216,14 +216,15 @@ type Node struct {
 	takeovers     codexTakeovers
 	usageWin      usageWindowsState // subscription rate-limit windows (usagewindows.go, #2432)
 	machineID     string
-	sends         sentLog         // recent client_msg_ids (sendsafe.go)
-	echoes        echoLog         // sends tied to their transcript lines (echo.go)
-	typing        typingLocks     // one send at a time per session (sendsafe_turns.go)
-	recovery      typingLocks     // guarded resumes and user closures; first-message delivery takes typing independently
-	sendOrder     sendQueue       // sends waiting for a start, in the order they came (sendsafe_turns.go)
-	cx            codexCards      // Codex questions and approvals listed to the hub (codexask.go)
-	kept          map[string]bool // sessions always listed (node.configure keep_sessions)
-	forked        map[string]bool // sessions "Branch to new chat" made (fork.go): listed however short they are
+	sends         sentLog           // recent client_msg_ids (sendsafe.go)
+	echoes        echoLog           // sends tied to their transcript lines (echo.go)
+	typing        typingLocks       // one send at a time per session (sendsafe_turns.go)
+	recovery      typingLocks       // guarded resumes and user closures; first-message delivery takes typing independently
+	sendOrder     sendQueue         // sends waiting for a start, in the order they came (sendsafe_turns.go)
+	cx            codexCards        // Codex questions and approvals listed to the hub (codexask.go)
+	kept          map[string]bool   // sessions always listed (node.configure keep_sessions)
+	forked        map[string]bool   // sessions "Branch to new chat" made (fork.go): listed however short they are
+	roundForks    map[string]string // forked background supervision round session id -> base supervisor id (assistant_round.go)
 	// ccPlugins: Persona's Claude Code plugin in the sessions outside Persona's terminals that loaded it (ccplugin.go).
 	ccPlugins ccPluginRegistry
 	// freshForks: branches nothing has started yet, which a message may start (stopped.go); a stopped agent may not.
