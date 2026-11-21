@@ -133,7 +133,7 @@ func (d *DB) A2ADispatches(ctx context.Context, owner, machine, session string, 
 	rows, err := d.pool.Query(ctx, `SELECT `+a2aColumns+` FROM a2a_tasks
 		WHERE (owner_key=$1 OR (target_machine,target_session)=($2,$3))
 		AND body ? 'launch'
-		AND (created_at >= $4 OR state IN ('submitted','working','input_required','auth_required'))
+		AND ((target_machine,target_session)=($2,$3) OR created_at >= $4 OR state IN ('submitted','working','input_required','auth_required'))
 		ORDER BY created_at DESC,id DESC`, owner, machine, session, since)
 	if err != nil {
 		return nil, err

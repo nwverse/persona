@@ -491,8 +491,7 @@ func (s *Service) lang(ctx context.Context) i18n.Lang {
 
 // call is a DeviceCall whose answer is read into out (nil: not read).
 func (s *Service) call(ctx context.Context, device, method string, params, out any) error {
-	a2aDelivery := method == "session.a2a.send" || method == "session.a2a.wake"
-	sessionSend := method == DeviceSessionSend || method == DeviceSessionSendOnce || a2aDelivery
+	sessionSend := method == DeviceSessionSend || method == DeviceSessionSendOnce || a2aDeliveryMethod(method)
 	if conversationWrite(method) {
 		s.conversationWrites.RLock()
 		defer s.conversationWrites.RUnlock()

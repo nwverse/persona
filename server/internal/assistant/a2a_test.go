@@ -154,6 +154,10 @@ func TestA2AAmbiguousSendIsReconciledWithoutReplay(t *testing.T) {
 	if len(h.sends) != 1 || tk.Events[0].Delivery != a2aUncertain {
 		t.Fatalf("uncertain send retried: %+v", tk.Events)
 	}
+	tk.Events[0].Attempted = time.Now().Add(-a2aConfirmFor)
+	if err := s.a2aSave(t.Context(), st, tk); err != nil {
+		t.Fatal(err)
+	}
 	marked := prompts.RelayMessageText("A2A request", nil, a2aDeliveryID(tk.ID, 1))
 	h.setItems(proto.Item{Role: "user", Text: marked}, proto.Item{Role: "assistant", Kind: proto.KindText, Text: "Result."},
 		proto.Item{Role: "user", Text: "An unrelated new prompt."}, proto.Item{Role: "assistant", Kind: proto.KindText, Text: "Unrelated."})
@@ -161,6 +165,16 @@ func TestA2AAmbiguousSendIsReconciledWithoutReplay(t *testing.T) {
 	tk = a2aProcessOne(t, s, st, cfg, tk.ID)
 	if len(h.sends) != 1 || tk.State != a2aWorking || tk.Events[0].Delivery != a2aDelivered {
 		t.Fatalf("uncertain send or unrelated answer: %+v", tk.Events)
+	}
+}
+
+func TestA2ADeliveryWaitsForLogicalSwitch(t *testing.T) {
+	s, _, _, _ := logicalPair(t, "pi")
+	for _, method := range []string{"session.a2a.send", "session.a2a.wake"} {
+		_, handled, err := s.logicalCall(t.Context(), "server", method, json.RawMessage(`{"session_id":"side-chat"}`))
+		if !handled || err == nil || !a2aNoDelivery(err) {
+			t.Fatalf("%s should wait for the conversation switch: handled=%v err=%v", method, handled, err)
+		}
 	}
 }
 
@@ -309,7 +323,7 @@ func TestA2ATextOnlyHarnessReturnsQuestionAndContinues(t *testing.T) {
 }
 
 func TestA2AJSONRPCTaskOwnershipAndCancel(t *testing.T) {
-	s, _, _, _, _, child := a2aFixture(t)
+	s, h, _, _, _, child := a2aFixture(t)
 	path := "/api/v1/a2a/" + child.Machine + "/" + child.Session + "/rpc"
 	call := func(device, method, params string) a2aRPCResponse {
 		t.Helper()
@@ -342,6 +356,18 @@ func TestA2AJSONRPCTaskOwnershipAndCancel(t *testing.T) {
 	cancel := call("first", "CancelTask", params)
 	if cancel.Error != nil || cancel.Result.(map[string]any)["status"].(map[string]any)["state"] != "TASK_STATE_CANCELED" {
 		t.Fatalf("cancel result: %+v", cancel)
+	}
+	row := h.sessions[child.Machine][0]
+	row.MachineID = child.Machine
+	if err := s.noteAgentArchive(t.Context(), row, true); err != nil {
+		t.Fatal(err)
+	}
+	got := call("first", "GetTask", params)
+	if got.Error != nil || got.Result.(map[string]any)["status"].(map[string]any)["state"] != "TASK_STATE_CANCELED" {
+		t.Fatalf("owner could not read the final state after archive: %+v", got)
+	}
+	if e := call("second", "GetTask", params).Error; e == nil || e.Code != -32001 {
+		t.Fatalf("archived task available to different client: %+v", e)
 	}
 }
 

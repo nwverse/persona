@@ -171,10 +171,13 @@ func (s *Service) a2aAllowed(ctx context.Context, cfg assistantwire.A2AConfig, r
 	if ref.Session == "" || !s.a2aMachineAllowed(ctx, cfg, ref.Machine) {
 		return false
 	}
+	if machine := s.logicalExecutionMachine(ctx, ref.Machine, ref.Session); machine != ref.Machine && !s.a2aMachineAllowed(ctx, cfg, machine) {
+		return false
+	}
 	if row, ok := s.nodeSession(ref.Machine, ref.Session); ok && (!a2aVisible(row) || s.hiddenByDirectory(ref.Machine, row)) {
 		return false
 	}
-	if row, ok, err := s.archivedRow(ctx, ref.Machine, ref.Session); err == nil && ok && row.Archived {
+	if row, ok, _ := s.archivedRow(ctx, ref.Machine, ref.Session); ok && row.Archived {
 		return false
 	}
 	_, guest, err := s.guestOf(ctx, ref.Machine, ref.Session)
@@ -354,7 +357,8 @@ func (s *Service) a2aTaskVisible(ctx context.Context, cfg assistantwire.A2AConfi
 		return false
 	}
 	return s.a2aAllowed(ctx, cfg, t.target()) ||
-		t.TargetClosed && t.Owner == c.Owner && s.a2aMachineAllowed(ctx, cfg, t.TargetMachine)
+		t.Owner == c.Owner && s.a2aMachineAllowed(ctx, cfg, t.TargetMachine) &&
+			(t.TargetClosed || a2aTerminal(t.State) && s.a2aEndpointClosed(ctx, cfg, t.target()))
 }
 
 func (s *Service) a2aMutate(ctx context.Context, st a2aStore, cfg assistantwire.A2AConfig, c a2aCaller, id string, change func(*a2aTask) (bool, error)) (*a2aTask, error) {

@@ -19,6 +19,10 @@ import (
 
 const a2aConfirmFor = 10 * time.Minute
 
+func a2aDeliveryMethod(method string) bool {
+	return method == "session.a2a.send" || method == "session.a2a.wake"
+}
+
 func (s *Service) a2aLoop(ctx context.Context) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
@@ -124,16 +128,19 @@ func (s *Service) a2aProcess(ctx context.Context, st a2aStore, cfg assistantwire
 		return nil
 	}
 	if !s.a2aAllowed(ctx, cfg, t.target()) {
-		if !a2aTerminal(t.State) && s.a2aEndpointClosed(ctx, cfg, t.target()) {
+		if !t.TargetClosed && s.a2aEndpointClosed(ctx, cfg, t.target()) {
 			t.TargetClosed = true
-			t.fail("The receiving session was closed.", true)
+			if !a2aTerminal(t.State) {
+				t.fail("The receiving session was closed.", true)
+			}
 			return s.a2aSave(ctx, st, t)
 		}
 		if !t.TargetClosed || !s.a2aMachineAllowed(ctx, cfg, t.TargetMachine) {
 			return nil
 		}
 	}
-	offline := s.computerState(t.TargetMachine).state == standingComputerOffline
+	machine := s.logicalExecutionMachine(ctx, t.TargetMachine, t.TargetSession)
+	offline := s.computerState(machine).state == standingComputerOffline
 	if !a2aTerminal(t.State) && offline != t.Disconnected {
 		t.Disconnected = offline
 		if len(t.Events) < a2aMaxEvents/4 {
@@ -154,16 +161,11 @@ func (s *Service) a2aProcess(ctx context.Context, st a2aStore, cfg assistantwire
 		if !a2aActiveDelivery(e) {
 			continue
 		}
-		if e.Delivery != a2aQueued && !e.Attempted.IsZero() && time.Since(e.Attempted) >= a2aConfirmFor {
-			if e.Kind == "message" && !a2aTerminal(t.State) {
-				t.fail("Persona could not confirm delivery of the request.", true)
-			} else {
-				t.Events[i].Delivery = a2aExpired
-			}
-			return s.a2aSave(ctx, st, t)
-		}
 		to, from := t.target(), t.source()
 		if offline && e.Kind == "message" {
+			if changed, err := s.a2aExpireDelivery(ctx, st, t, i); changed || err != nil {
+				return err
+			}
 			continue
 		}
 		if e.Kind != "message" {
@@ -193,11 +195,26 @@ func (s *Service) a2aEndpointClosed(ctx context.Context, cfg assistantwire.A2ACo
 	if !s.a2aMachineAllowed(ctx, cfg, ref.Machine) {
 		return false
 	}
-	if row, ok, err := s.archivedRow(ctx, ref.Machine, ref.Session); err == nil && ok && row.Archived {
+	if row, ok, _ := s.archivedRow(ctx, ref.Machine, ref.Session); ok && row.Archived {
 		return true
 	}
 	row, ok, err := s.sessionNow(ctx, ref.Machine, ref.Session)
 	return err == nil && ok && (row.Archived || row.HiddenByDirectory() || s.hiddenByDirectory(ref.Machine, row))
+}
+
+func (s *Service) a2aExpireDelivery(ctx context.Context, st a2aStore, t *a2aTask, i int) (bool, error) {
+	e := &t.Events[i]
+	if e.Delivery == a2aQueued || e.Attempted.IsZero() || time.Since(e.Attempted) < a2aConfirmFor {
+		return false, nil
+	}
+	if e.Kind == "message" && !a2aTerminal(t.State) {
+		t.fail("Persona could not confirm delivery of the request.", true)
+	} else {
+		e.Delivery = a2aExpired
+	}
+	keep, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	return true, s.a2aSave(keep, st, t)
 }
 
 func (t *a2aTask) fail(message string, wake bool) {
@@ -257,11 +274,7 @@ func (s *Service) a2aDeliver(ctx context.Context, st a2aStore, t *a2aTask, i int
 	e := &t.Events[i]
 	id := a2aDeliveryID(t.ID, e.Seq)
 	if e.Delivery != a2aQueued {
-		items, err := s.a2aItems(ctx, to)
-		if err != nil {
-			return false, nil
-		}
-		if a2aTurn(items, id).echo {
+		if items, err := s.a2aItems(ctx, to); err == nil && a2aTurn(items, id).echo {
 			return true, s.a2aReceipt(ctx, st, t.ID, e.Seq, a2aDelivered)
 		}
 		var status proto.SessionEchoStatus
@@ -269,6 +282,9 @@ func (s *Service) a2aDeliver(ctx context.Context, st a2aStore, t *a2aTask, i int
 			if status.State == proto.EchoSeen {
 				return true, s.a2aReceipt(ctx, st, t.ID, e.Seq, a2aDelivered)
 			}
+		}
+		if changed, err := s.a2aExpireDelivery(ctx, st, t, i); changed || err != nil {
+			return changed, err
 		}
 		if e.Delivery == a2aSending && time.Since(e.Attempted) > 15*time.Second {
 			return true, s.a2aReceipt(ctx, st, t.ID, e.Seq, a2aUncertain)

@@ -204,7 +204,7 @@ func (s *Service) a2aRPC(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 		return
 	}
-	if a2aBase(cfg) == nil || !s.a2aAllowed(ctx, cfg, to) {
+	if a2aBase(cfg) == nil || !s.a2aMachineAllowed(ctx, cfg, to.Machine) {
 		http.NotFound(w, r)
 		return
 	}
@@ -226,6 +226,10 @@ func (s *Service) a2aRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp.ID = req.ID
+	if req.Method != "GetTask" && req.Method != "SubscribeToTask" && !s.a2aAllowed(ctx, cfg, to) {
+		http.NotFound(w, r)
+		return
+	}
 	if r.Header.Get("A2A-Version") != a2aProtocolVersion {
 		fail(-32009, "A2A-Version 1.0 is required")
 		return

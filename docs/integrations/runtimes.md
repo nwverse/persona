@@ -629,7 +629,8 @@ on success, failure or timeout. Completed probe workspaces stay out of the user 
 The runtime bounds native calls to a 75-second budget, followed by bounded session cleanup. Older runtimes keep the
 node's shell check. Shell and managed launchers keep their own execution context.
 
-A chat gets Persona's MCP server once, named `persona`, through ACP `mcpServers`. `agy` defers the tools over its
+A chat gets Persona's MCP server, named `persona`, through ACP `mcpServers`. Regular Agent chats can also get
+`persona_a2a` with a session-scoped ticket. `agy` defers the tools over its
 declaration budget, largest first, and has no `call_mcp_tool` for servers passed through ACP, so an assistant chat's
 server runs behind `integrations/antigravity/mcp-proxy.mjs`, which adds a small `persona_call` tool that calls any
 Persona tool by name (#7333). The proxy declares only the tools larger than `persona_call`, so it is always the smallest
