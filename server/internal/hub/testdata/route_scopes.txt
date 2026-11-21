@@ -683,7 +683,6 @@ todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
 -                    POST /api/v1/translate
 -                    POST /api/v1/translate/mail
 -                    POST /api/v1/translate/message
--                    POST /api/v1/usage-sources/test
 -                    POST /api/v1/workspace-board
 -                    POST {adminUploadPath}
 -                    POST {base}/catalog/preview
@@ -787,7 +786,6 @@ todos.write          PUT /api/v1/todos/{id}/repositories/{repo_id}/links
 todos.write          PUT /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    PUT /api/v1/todos/{id}/thread
 todos.write          PUT /api/v1/todos/{id}/workspace-rules
--                    PUT /api/v1/usage-sources/{id}
 -                    PUT /api/v1/workspace-board/settings
 -                    PUT {base}/market-settings
 -                    PUT {base}/markets/{mid}
