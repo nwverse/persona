@@ -307,13 +307,13 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 		s.nameTodoLater(ctx, todo.ID, title, cmp.Or(strings.TrimSpace(prompt), title))
 	}
 	var v Supervision
-	var ledgers, rescoped map[string]*Supervision
+	var rollback *continuationRollback
 	if continuing {
 		// A takeover inherits the brief and changes its scope before any ledger or Agent link is committed. A rejected
 		// risky criterion therefore aborts the whole adoption instead of surviving in an unapproved open card (#5732).
-		v, ledgers, rescoped, err = s.continueBriefFor(ctx, self, supervisor, previous, todo, notes, doneWhen, expect)
+		v, rollback, err = s.continueBriefFor(ctx, self, supervisor, previous, todo, notes, doneWhen, expect)
 		if err != nil {
-			s.dropContinuation(ctx, todo.ID, ledgers, rescoped, err)
+			s.dropContinuation(ctx, todo.ID, rollback, err)
 			return Todo{}, false, fmt.Errorf("continue the previous task: %w", err)
 		}
 	} else {
@@ -331,7 +331,7 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 	todo.Supervision = &v
 	if err := s.linkTodoAgent(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent); err != nil {
 		if continuing {
-			s.dropContinuation(ctx, todo.ID, ledgers, rescoped, err)
+			s.dropContinuation(ctx, todo.ID, rollback, err)
 		} else {
 			s.dropAdoption(ctx, todo.ID, err)
 		}
@@ -596,28 +596,50 @@ type taskCardBody struct {
 	Wake string `json:"wake,omitempty"`
 }
 
-// dropContinuation closes an aborted takeover and removes its brief link and scope as well. A sibling ledger is restored
-// only while it still equals the value this rescope wrote; a concurrent task_scope or review wins instead (#5732).
-func (s *Service) dropContinuation(ctx context.Context, id string, ledgers, rescoped map[string]*Supervision, why error) {
+// dropContinuation closes an aborted takeover and removes only its own brief link and scope event. Every current or
+// snapshot member follows the latest restored brief; a revision recheck prevents a stale brief read from overwriting a
+// newer scope. Review fields are restored only when the before/after/current evidence attributes them to this abort.
+func (s *Service) dropContinuation(ctx context.Context, id string, rollback *continuationRollback, why error) {
 	ctx = context.WithoutCancel(ctx) // the caller may have left exactly when its Agent link failed; cleanup still has to commit
-	if err := s.unlinkTaskBrief(ctx, id); err != nil {
+	if rollback == nil {
+		s.dropAdoption(ctx, id, why)
+		return
+	}
+	if err := s.unlinkTaskBrief(ctx, id, rollback.eventID); err != nil {
 		why = errors.Join(why, fmt.Errorf("take back the continuation: %w", err))
-	} else {
-		for todoID, before := range ledgers {
-			after := rescoped[todoID]
-			if after == nil {
-				continue
+	}
+	// A member added after the before snapshot is included too. A member without a ledger still gets none: its later
+	// dispatch reads the restored brief instead of having a ledger invented by cleanup.
+	targets := map[string]bool{}
+	for todoID := range rollback.before {
+		targets[todoID] = true
+	}
+	for _, todoID := range s.briefTodos(rollback.brief) {
+		targets[todoID] = true
+	}
+	for todoID := range targets {
+		for {
+			brief, revision, ok := s.briefSnapshotByID(rollback.brief)
+			if !ok {
+				break
 			}
-			if _, _, err := s.updateSupervisionGuarded(ctx, todoID, func(t Todo) bool {
-				return t.DoneAt == nil && reflect.DeepEqual(t.Supervision, after)
+			_, _, err := s.updateSupervisionGuarded(ctx, todoID, func(t Todo) bool {
+				return t.DoneAt == nil && t.Supervision != nil
 			}, func(v *Supervision) bool {
-				if reflect.DeepEqual(v, before) {
+				desired := rollback.restoredLedger(todoID, v, brief)
+				if reflect.DeepEqual(v, desired) {
 					return false
 				}
-				*v = *before.clone()
+				*v = *desired
 				return true
-			}); err != nil {
+			})
+			if err != nil {
 				why = errors.Join(why, fmt.Errorf("restore task %s after the continuation: %w", todoID, err))
+				break
+			}
+			_, currentRevision, ok := s.briefSnapshotByID(rollback.brief)
+			if !ok || currentRevision == revision {
+				break
 			}
 		}
 	}

@@ -54,6 +54,7 @@ type scopeChange struct {
 	DoneWhen        []string
 	Expect          int
 	Approval        *BriefRequest
+	eventID         string // in-memory identity of an aborted continuation's own event
 }
 
 // errScopeNothing: the change changes nothing (the same criteria and time, no words).
@@ -115,7 +116,7 @@ func (s *Service) applyScope(ctx context.Context, t Todo, c scopeChange) (TaskBr
 		estimateSource = briefEstimateOverride
 	}
 	ev := BriefEvent{At: time.Now().UTC(), Kind: briefEventScope, Todo: t.ID, By: c.By, Change: clip(oneLine(c.Change), 300),
-		Why: clip(oneLine(c.Why), 300), Added: added, Dropped: dropped, ExpectMinutes: expect, EstimateSource: estimateSource}
+		Why: clip(oneLine(c.Why), 300), Added: added, Dropped: dropped, ExpectMinutes: expect, EstimateSource: estimateSource, eventID: c.eventID}
 	if len(added)+len(dropped) > 0 {
 		ev.DoneWhen = next
 		if ev.DoneWhen == nil {
@@ -161,8 +162,13 @@ func (s *Service) applyScope(ctx context.Context, t Todo, c scopeChange) (TaskBr
 // a ledger), and new criteria or a new expected time (none: kept) go through the brief's log as a scope change made
 // through via. Its ledger as it is then.
 func (s *Service) rescope(ctx context.Context, t Todo, self, supervisor, via string, doneWhen []string, expect int) (Supervision, error) {
+	return s.rescopeWithEvent(ctx, t, self, supervisor, via, doneWhen, expect, "")
+}
+
+// rescopeWithEvent marks a continuation's scope event with an in-memory identity for its exact rollback.
+func (s *Service) rescopeWithEvent(ctx context.Context, t Todo, self, supervisor, via string, doneWhen []string, expect int, eventID string) (Supervision, error) {
 	if len(doneWhen) > 0 || expect > 0 {
-		c := scopeChange{By: self, Why: "set through " + via, Expect: expect} // the tool is named in why, which is not read for risky words
+		c := scopeChange{By: self, Why: "set through " + via, Expect: expect, eventID: eventID} // the tool is named in why, which is not read for risky words
 		if len(doneWhen) > 0 {
 			c.DoneWhen = doneWhen
 			c.Change = "done_when replaced"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -113,6 +114,7 @@ type BriefEvent struct {
 	Added         []string      `json:"added,omitempty"`
 	Dropped       []string      `json:"dropped,omitempty"`
 	Approval      *BriefRequest `json:"approval,omitempty"`
+	eventID       string        // process-local continuation rollback identity; never part of the wire or stored schema
 }
 
 // BriefCriterion is one criterion's result when the work ended: met, not_met, unchecked (nobody checked it), or dropped
@@ -217,8 +219,9 @@ type LineageStep struct {
 }
 
 type taskBrief struct {
-	rec briefRecord
-	st  briefState
+	rec      briefRecord
+	st       briefState
+	revision uint64 // process-local optimistic-concurrency revision for continuation rollback
 }
 
 type taskBriefLink struct {
@@ -519,6 +522,19 @@ func (s *Service) continuationTodos(id string) []string {
 	return out
 }
 
+// briefSnapshotByID returns a brief and its process-local revision in one read.
+func (s *Service) briefSnapshotByID(id string) (TaskBrief, uint64, bool) {
+	b := &s.tbriefs
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.init()
+	tb := b.briefs[id]
+	if tb == nil {
+		return TaskBrief{}, 0, false
+	}
+	return tb.view(), tb.revision, true
+}
+
 // briefOfTodo is the brief to-do id works for, false when it has none.
 func (s *Service) briefOfTodo(id string) (TaskBrief, bool) {
 	b := &s.tbriefs
@@ -745,10 +761,18 @@ func (s *Service) putTaskBrief(ctx context.Context, rec briefRecord, todoID stri
 	return v, nil
 }
 
+// continuationRollback identifies the exact event an aborted adoption owns and the review fields it may have reset.
+type continuationRollback struct {
+	brief           string
+	eventID         string
+	criteriaChanged bool
+	before, after   map[string]*Supervision
+}
+
 // continueBriefFor puts a newly adopted agent's card on its previous card's brief. Older tasks without one get a
-// reconstructed brief first, so the source and take-over remain traceable in both directions (#5732). The returned
-// before/after ledger snapshots let a failed adoption undo only its own rescope, never a concurrent review or scope.
-func (s *Service) continueBriefFor(ctx context.Context, self, supervisor string, previous, todo Todo, reason string, doneWhen []string, expect int) (Supervision, map[string]*Supervision, map[string]*Supervision, error) {
+// reconstructed brief first, so the source and take-over remain traceable in both directions (#5732). The rollback
+// owns only its marked event and a terminal review state that event reset; concurrent events and reviews stay intact.
+func (s *Service) continueBriefFor(ctx context.Context, self, supervisor string, previous, todo Todo, reason string, doneWhen []string, expect int) (Supervision, *continuationRollback, error) {
 	if _, ok := s.briefOfTodo(previous.ID); !ok {
 		var criteria []string
 		minutes := 0
@@ -759,7 +783,7 @@ func (s *Service) continueBriefFor(ctx context.Context, self, supervisor string,
 	}
 	brief, ok := s.briefOfTodo(previous.ID)
 	if !ok {
-		return Supervision{}, nil, nil, fmt.Errorf("previous task %s has no brief", previous.ID)
+		return Supervision{}, nil, fmt.Errorf("previous task %s has no brief", previous.ID)
 	}
 	snapshots := func() map[string]*Supervision {
 		out := map[string]*Supervision{}
@@ -770,14 +794,65 @@ func (s *Service) continueBriefFor(ctx context.Context, self, supervisor string,
 		}
 		return out
 	}
-	before := snapshots()
+	rollback := &continuationRollback{brief: brief.ID, eventID: randomHex(8), before: snapshots()}
 	if err := s.linkTaskBrief(ctx, brief.ID, todo.ID, previous.ID, reason); err != nil {
-		return Supervision{}, before, before, err
+		rollback.after = rollback.before
+		return Supervision{}, rollback, err
 	}
 	// Rescope also creates the new ledger when no criteria changed, inheriting the linked brief. Its error is fatal:
 	// swallowing it would let a rejected risky takeover proceed with unapproved work (#5732).
-	v, err := s.rescope(ctx, todo, self, supervisor, "agent_takeover", doneWhen, expect)
-	return v, before, snapshots(), err
+	v, err := s.rescopeWithEvent(ctx, todo, self, supervisor, "agent_takeover", doneWhen, expect, rollback.eventID)
+	rollback.after = snapshots()
+	if current, _, ok := s.briefSnapshotByID(brief.ID); ok {
+		for _, ev := range current.Log {
+			if ev.eventID == rollback.eventID {
+				rollback.criteriaChanged = len(ev.Added)+len(ev.Dropped) > 0
+				break
+			}
+		}
+	}
+	return v, rollback, err
+}
+
+// continuationUnowned masks the fields applyScope itself can change. Comparing the rest across before, after and now
+// tells rollback whether a concurrent review, report or other ledger write must be preserved.
+func continuationUnowned(v *Supervision) *Supervision {
+	if v == nil {
+		return nil
+	}
+	out := v.clone()
+	out.DoneWhen, out.Criteria, out.ExpectMinutes = nil, nil, 0
+	out.State, out.PendingSince, out.UpdatedAt = "", nil, time.Time{}
+	return out
+}
+
+// restoredLedger aligns criteria with the latest restored brief, never with an old snapshot. Review state and criterion
+// evidence are restored only when the complete before/after/current evidence attributes those exact changes to this
+// continuation and no different scope survives.
+func (r *continuationRollback) restoredLedger(id string, current *Supervision, brief TaskBrief) *Supervision {
+	desired := current.clone()
+	desired.DoneWhen, desired.ExpectMinutes = slices.Clone(brief.Criteria), brief.ExpectNow
+	before, after := r.before[id], r.after[id]
+	if before == nil || after == nil || !slices.Equal(before.DoneWhen, brief.Criteria) ||
+		!reflect.DeepEqual(continuationUnowned(before), continuationUnowned(after)) ||
+		!reflect.DeepEqual(continuationUnowned(after), continuationUnowned(current)) {
+		return desired
+	}
+	expectedState := before.State
+	if r.criteriaChanged && (before.State == reviewAccepted || before.State == reviewCancelled) {
+		expectedState = ""
+		if before.Round > 0 {
+			expectedState = reviewRework
+		}
+	}
+	if current.State == after.State && after.State == expectedState {
+		desired.State = before.State
+	}
+	expectedCriteria := db.AlignTodoCriteria(after.DoneWhen, before.Criteria)
+	if reflect.DeepEqual(current.Criteria, after.Criteria) && reflect.DeepEqual(after.Criteria, expectedCriteria) {
+		desired.Criteria = before.clone().Criteria
+	}
+	return desired
 }
 
 // linkTaskBrief puts to-do todoID on brief id, continuing to-do continues for reason (a take-over); a to-do already on
@@ -806,20 +881,21 @@ func (s *Service) linkTaskBrief(ctx context.Context, id, todoID, continues, reas
 	return nil
 }
 
-// unlinkTaskBrief takes back a continuation whose adoption failed, including only the scope events written for its new
-// to-do. Durable writes go first: a failure leaves memory matching what a restart would read rather than hiding stale
-// lineage or criteria only until then.
-func (s *Service) unlinkTaskBrief(ctx context.Context, todoID string) error {
+// unlinkTaskBrief takes back a continuation whose adoption failed, including only its uniquely marked scope event.
+// Durable writes go first: a failure leaves memory matching what a restart would read rather than hiding stale lineage
+// or criteria only until then. Scope and link removal are separate steps; the caller restores ledgers from the brief
+// that actually remains after both attempts.
+func (s *Service) unlinkTaskBrief(ctx context.Context, todoID, eventID string) error {
 	b := &s.tbriefs
 	b.mu.Lock()
 	link, linked := b.links[todoID]
 	b.mu.Unlock()
-	if linked && link.Brief != "" {
+	if linked && link.Brief != "" && eventID != "" {
 		if _, _, err := s.changeBrief(ctx, link.Brief, func(tb *taskBrief) bool {
 			kept := make([]BriefEvent, 0, len(tb.st.Log))
 			removed := false
 			for _, ev := range tb.st.Log {
-				if ev.Kind == briefEventScope && ev.Todo == todoID {
+				if ev.Kind == briefEventScope && ev.Todo == todoID && ev.eventID == eventID {
 					removed = true
 					continue
 				}
@@ -862,6 +938,7 @@ func (s *Service) changeBrief(ctx context.Context, id string, change func(tb *ta
 		b.mu.Unlock()
 		return v, false, nil
 	}
+	tb.revision++
 	raw, err := json.Marshal(tb.st)
 	v := tb.view()
 	b.mu.Unlock()
@@ -873,6 +950,7 @@ func (s *Service) changeBrief(ctx context.Context, id string, change func(tb *ta
 	if err != nil {
 		b.mu.Lock()
 		tb.st = before
+		tb.revision++
 		b.mu.Unlock()
 		return TaskBrief{}, false, err
 	}

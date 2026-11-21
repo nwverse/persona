@@ -158,8 +158,9 @@ func TestAgentSendAfterCloseStartsAnIndependentBrief(t *testing.T) {
 
 type failingTakeoverAgentStore struct {
 	*db.DB
-	fail   atomic.Bool
-	onFail func()
+	fail       atomic.Bool
+	failUnlink atomic.Bool
+	onFail     func()
 }
 
 func (s *failingTakeoverAgentStore) LinkTodoAgentWithSource(ctx context.Context, todoID, machineID, sessionID, title, cwd, agent, startError, source, via string, linkedAt time.Time) ([]string, error) {
@@ -173,6 +174,13 @@ func (s *failingTakeoverAgentStore) LinkTodoAgentWithSource(ctx context.Context,
 		return nil, errors.New("injected takeover Agent link failure")
 	}
 	return s.DB.LinkTodoAgentWithSource(ctx, todoID, machineID, sessionID, title, cwd, agent, startError, source, via, linkedAt)
+}
+
+func (s *failingTakeoverAgentStore) UnlinkTaskBriefTodo(ctx context.Context, todoID string) error {
+	if s.failUnlink.Load() {
+		return errors.New("injected brief unlink failure")
+	}
+	return s.DB.UnlinkTaskBriefTodo(ctx, todoID)
 }
 
 // A continuation whose Agent cannot be linked is closed, but it must not remain in the closed task's durable lineage.
@@ -351,4 +359,195 @@ func TestFailedTakeoverPreservesConcurrentSiblingScope(t *testing.T) {
 	if after, ok := s.briefOfTodo(sibling.ID); !ok || !slices.Equal(after.Criteria, concurrent) || after.ExpectNow != 11 {
 		t.Fatalf("brief and sibling ledger diverged after concurrent scope: brief %+v, ledger %+v", after, got)
 	}
+}
+
+func continuationRollbackSetup(t *testing.T, st Store) (*Service, Todo, Todo, Todo, TaskBrief) {
+	t.Helper()
+	s, f, old := newSupervisedServiceOn(t, st)
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	raw, _ := json.Marshal(map[string]any{"todo_id": old.ID, "verdict": "accepted", "note": "Spec 已验收", "checks": completeReviewChecks(todoNow(s, old.ID))})
+	if _, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw); err != nil {
+		t.Fatal(err)
+	}
+	brief, ok := s.briefOfTodo(old.ID)
+	if !ok {
+		t.Fatal("closed task has no brief")
+	}
+	sibling, err := s.createTodo(context.Background(), "Open sibling on the same brief", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.superviseTodo(context.Background(), sibling.ID, "conv1", brief.Criteria, brief.ExpectNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.linkTaskBrief(context.Background(), brief.ID, sibling.ID, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := s.createTodo(context.Background(), "Aborted continuation", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, old, failed, sibling, brief
+}
+
+func continuationRollbackFixtureOn(t *testing.T, st Store) (*Service, Todo, Todo, TaskBrief, *continuationRollback) {
+	t.Helper()
+	s, old, failed, sibling, brief := continuationRollbackSetup(t, st)
+	_, rollback, err := s.continueBriefFor(context.Background(), "conv1", "conv1", old, failed, "test rollback", []string{"criterion from a failed takeover"}, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, failed, sibling, brief, rollback
+}
+
+func continuationRollbackFixture(t *testing.T) (*Service, Todo, Todo, TaskBrief, *continuationRollback) {
+	t.Helper()
+	return continuationRollbackFixtureOn(t, todoTestDB(t))
+}
+
+// Even when a concurrent scope is included in the after snapshot, the brief's event history says it is not the failed
+// takeover's own write and must survive the rollback.
+func TestFailedTakeoverDoesNotOwnConcurrentScopeInAfterSnapshot(t *testing.T) {
+	s, failed, sibling, _, rollback := continuationRollbackFixture(t)
+	concurrent := []string{"legitimate concurrent criterion"}
+	if _, err := s.rescope(context.Background(), sibling, "conv1", "conv1", "concurrent_test_scope", concurrent, 11); err != nil {
+		t.Fatal(err)
+	}
+	rollback.after[sibling.ID] = todoNow(s, sibling.ID).Supervision.clone()
+	s.dropContinuation(context.Background(), failed.ID, rollback, errors.New("injected Agent link failure"))
+	got := todoNow(s, sibling.ID).Supervision
+	if got == nil || !slices.Equal(got.DoneWhen, concurrent) || got.ExpectMinutes != 11 {
+		t.Fatalf("after snapshot hid a concurrent scope from the rollback: %+v", got)
+	}
+	if brief, ok := s.briefOfTodo(sibling.ID); !ok || !slices.Equal(brief.Criteria, concurrent) || brief.ExpectNow != 11 {
+		t.Fatalf("brief and concurrent ledger diverged: brief %+v, ledger %+v", brief, got)
+	}
+}
+
+// A concurrent review is preserved, but it does not entitle the failed takeover's criteria to stay on the sibling.
+func TestFailedTakeoverRestoresCriteriaAcrossConcurrentReview(t *testing.T) {
+	s, failed, sibling, brief, rollback := continuationRollbackFixture(t)
+	reviewTask(t, s, sibling.ID, map[string]any{"verdict": "needs_user", "reason": "Choose the rollout", "recommend": "Option A"})
+	s.dropContinuation(context.Background(), failed.ID, rollback, errors.New("injected Agent link failure"))
+	got := todoNow(s, sibling.ID).Supervision
+	if got == nil || !slices.Equal(got.DoneWhen, brief.Criteria) || got.ExpectMinutes != brief.ExpectNow {
+		t.Fatalf("concurrent review retained the failed takeover criteria: %+v", got)
+	}
+	if got.State != reviewNeedsUser || len(got.Reviews) != 1 || got.Reviews[0].Verdict != reviewNeedsUser {
+		t.Fatalf("rollback discarded the concurrent review: %+v", got)
+	}
+}
+
+// A scope committed after the rollback reads the restored brief must win over that stale snapshot.
+func TestFailedTakeoverRechecksBriefAfterLedgerWrite(t *testing.T) {
+	s, failed, sibling, _, rollback := continuationRollbackFixture(t)
+	s.todos.writing.Lock()
+	done := make(chan struct{})
+	go func() {
+		s.dropContinuation(context.Background(), failed.ID, rollback, errors.New("injected Agent link failure"))
+		close(done)
+	}()
+	waitForSuperviseMutex(t, "updateSupervisionGuarded", &s.todos.writing)
+	concurrent := []string{"scope after the restored brief snapshot"}
+	if _, err := s.rescope(context.Background(), sibling, "conv1", "conv1", "concurrent_test_scope", concurrent, 11); err != nil {
+		t.Fatal(err)
+	}
+	s.todos.writing.Unlock()
+	<-done
+	got := todoNow(s, sibling.ID).Supervision
+	if got == nil || !slices.Equal(got.DoneWhen, concurrent) || got.ExpectMinutes != 11 {
+		t.Fatalf("stale brief snapshot overrode a later scope: %+v", got)
+	}
+	if brief, ok := s.briefOfTodo(sibling.ID); !ok || !slices.Equal(brief.Criteria, concurrent) || brief.ExpectNow != 11 {
+		t.Fatalf("brief and later ledger diverged: brief %+v, ledger %+v", brief, got)
+	}
+}
+
+// A before snapshot can see a scope's log entry before that scope reaches the sibling ledger. Restoring the snapshot's
+// old criteria would then contradict the brief even though no event appears after the snapshot's log baseline.
+func TestFailedTakeoverDoesNotRestoreCriteriaFromIncompleteBeforeSnapshot(t *testing.T) {
+	s, old, failed, sibling, _ := continuationRollbackSetup(t, todoTestDB(t))
+	concurrent := []string{"scope between the before log and ledger snapshots"}
+	if _, _, err := s.changeBrief(context.Background(), mustBriefOfTodo(t, s, old.ID).ID, func(tb *taskBrief) bool {
+		tb.st.Log = append(tb.st.Log, BriefEvent{At: time.Now().UTC(), Kind: briefEventScope, Todo: sibling.ID,
+			DoneWhen: concurrent, ExpectMinutes: 11})
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, rollback, err := s.continueBriefFor(context.Background(), "conv1", "conv1", old, failed, "test rollback", []string{"criterion from a failed takeover"}, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.dropContinuation(context.Background(), failed.ID, rollback, errors.New("injected Agent link failure"))
+	got := todoNow(s, sibling.ID).Supervision
+	if got == nil || !slices.Equal(got.DoneWhen, concurrent) || got.ExpectMinutes != 11 {
+		t.Fatalf("incomplete before snapshot replaced the committed scope: %+v", got)
+	}
+}
+
+// A member that joins after the before snapshot still has to follow the brief restored by the failed takeover.
+func TestFailedTakeoverRestoresSiblingAddedAfterBeforeSnapshot(t *testing.T) {
+	s, failed, sibling, brief, rollback := continuationRollbackFixture(t)
+	late, err := s.createTodo(context.Background(), "Late sibling on the same brief", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedBrief, ok := s.briefOfTodo(sibling.ID)
+	if !ok {
+		t.Fatal("shared brief is missing")
+	}
+	if err := s.superviseTodo(context.Background(), late.ID, "conv1", failedBrief.Criteria, failedBrief.ExpectNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.linkTaskBrief(context.Background(), failedBrief.ID, late.ID, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	s.dropContinuation(context.Background(), failed.ID, rollback, errors.New("injected Agent link failure"))
+	got := todoNow(s, late.ID).Supervision
+	if got == nil || !slices.Equal(got.DoneWhen, brief.Criteria) || got.ExpectMinutes != brief.ExpectNow {
+		t.Fatalf("late sibling retained the failed takeover criteria: %+v", got)
+	}
+}
+
+// A legitimate scope on the aborted card is a separate event, not another copy of the takeover's scope to delete.
+func TestFailedTakeoverRemovesOnlyItsOwnScopeEvent(t *testing.T) {
+	s, failed, sibling, _, rollback := continuationRollbackFixture(t)
+	concurrent := []string{"legitimate scope on the aborted card"}
+	if _, err := s.rescope(context.Background(), todoNow(s, failed.ID), "conv1", "conv1", "concurrent_test_scope", concurrent, 11); err != nil {
+		t.Fatal(err)
+	}
+	s.dropContinuation(context.Background(), failed.ID, rollback, errors.New("injected Agent link failure"))
+	got := todoNow(s, sibling.ID).Supervision
+	if got == nil || !slices.Equal(got.DoneWhen, concurrent) || got.ExpectMinutes != 11 {
+		t.Fatalf("rollback removed a concurrent scope on the aborted card: %+v", got)
+	}
+	if brief, ok := s.briefOfTodo(sibling.ID); !ok || !slices.Equal(brief.Criteria, concurrent) || brief.ExpectNow != 11 {
+		t.Fatalf("brief and concurrent aborted-card scope diverged: brief %+v, ledger %+v", brief, got)
+	}
+}
+
+// Removing the scope and removing the link are separate durable steps. A link failure must not skip ledger restoration
+// after the brief itself has already been restored.
+func TestFailedTakeoverRestoresLedgersWhenUnlinkFails(t *testing.T) {
+	st := &failingTakeoverAgentStore{DB: todoTestDB(t)}
+	st.failUnlink.Store(true)
+	s, failed, sibling, brief, rollback := continuationRollbackFixtureOn(t, st)
+	s.dropContinuation(context.Background(), failed.ID, rollback, errors.New("injected Agent link failure"))
+	if _, ok := s.briefOfTodo(failed.ID); !ok {
+		t.Fatal("the injected unlink failure did not leave the continuation link in place")
+	}
+	got := todoNow(s, sibling.ID).Supervision
+	if got == nil || !slices.Equal(got.DoneWhen, brief.Criteria) || got.ExpectMinutes != brief.ExpectNow {
+		t.Fatalf("unlink failure skipped ledger restoration: %+v", got)
+	}
+}
+
+func mustBriefOfTodo(t *testing.T, s *Service, id string) TaskBrief {
+	t.Helper()
+	brief, ok := s.briefOfTodo(id)
+	if !ok {
+		t.Fatalf("task %s has no brief", id)
+	}
+	return brief
 }
