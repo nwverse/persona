@@ -275,6 +275,7 @@ The authenticated WS `hello.features` always lists server capabilities; trusted 
 - Added by the hub:
   - Always: `sessions_list` (see "Bounded Agents lists"), `sessions_lookup` (see "Exact runtime-session detail"), `sessions_search` (see "Ranked runtime search"), `sessions_pane_source` (see "Pane/host origins"), `sessions_manager` (see "One manager's sessions"), `sessions_page_counts` and `agents_page_counts` (see "Counts with the page"), `agents_provider_or` (see "Personal-agent provider OR sets"), `sessions_hierarchy` (see "Session hierarchy"), `sessions_catalog` (see "Projects and spaces"), `sessions_agents_only` (see "Agents-only sessions"), `sessions_todo` (see "Sessions by to-do"), `sessions_quick_filters` (see "Quick filters"), `sessions_just_finished` (see "Just finished rows"), `machine_rename` (see "Renaming a computer").
   - `mcp_wait_v1`: token-bearing MCP calls may opt into ephemeral, enum-only wait updates over the existing node and device channels (see "MCP tools (`personad mcp`)"). The node forwards that opt-in only when this hub feature is present, and reads that feature afresh for each local call. A manager independently names `mcp_wait_v1` in `manager.hello`; the hub sends it hub-mediated approval updates only while its current connection declares that capability. A target node separately names it in `node.info` to promise that `computer.call` preserves `call_id` through a nested `computer.elicit`; without that target capability the manager omits the id and reports `unknown` for the delegated RPC. Missing opt-in, capability or updates otherwise keeps the old single-response behavior and the `Still waiting` fallback.
+  - `assistant_segments` only while the connected default manager names it in `manager.hello`; extension reports cannot add it. This enables the explicit logical assistant conversation switch operation (see "Logical assistant conversation segments"). The default-enabled switch setting controls new switches, while existing segment routing remains active for rollback.
   - `meeting_attendance` only while the default manager (the one recording routes go to) is connected and names it in its `manager.hello` capabilities (an extension's report cannot add it): attending a recorded meeting (the `attendance` / `attending_session` upload fields, `…/live`, `…/ask` and the `meeting_attendance_default` setting, see "Recording sync"). The phone offers a role only when the hub lists it, since an older hub or manager accepts the fields and ignores them.
   - `meeting_conversation` only while the default manager names both `meeting_attendance` and `meeting_conversation` in its `manager.hello` capabilities, the same way: the meeting conversation's phase 1 (the upload's `room` and `private`, the room conversation, `…/ask` answered by it, `…/just-me`, `…/private`, `…/followup`, the origins `meeting` and `meeting_followup`, the `meeting_live` event and the fields phase 1 adds to `GET …/live` and `detail.meta`; see "Meeting conversation (#3862)").
   - `meeting_photos` only while the default manager names `meeting_photos` beside `meeting_conversation` (and so `meeting_attendance`) in its `manager.hello` capabilities, the same way: the meeting conversation's phase 3, its photos (`POST` / `GET …/photos`, `GET` / `DELETE …/photos/{n}`, forwarding them to the room, the room's `meeting_photo_note`, `photo` on minutes items, the `photos` part of `meeting_live` and of `GET …/live`'s `revs`; see "Meeting conversation (#3862)"). The phone sends photos only when the hub lists it.
@@ -6084,3 +6085,37 @@ With tab naming enabled, automatic naming calls the node's
 `session.rename_tab_if_current` with `session_id`, `tab_id`,
 `expected_tab_name` and `tab_name`. The node checks the live slot and its current
 host label before changing it and replies with `{ok: true}` on success.
+
+### Logical assistant conversation segments
+
+Feature `assistant_segments` advertises an explicit manager-owned operation. A full-access client sends
+`POST /api/v1/assistant/conversations/{id}/switch` with `{source_machine_id, operation_id, expected_epoch,
+machine_id, launcher, model?, effort?, permission_mode?}`. The target machine/launcher is explicit, including when
+forcing another segment on the same engine. The response acknowledges durable `preparing`; it does not mean a model
+turn ran. Reusing an operation ID requires the same request. Query
+`GET /api/v1/assistant/conversations/{id}/switch/{operation}?machine_id=<public machine>` for
+`{operation_id, phase, expected_epoch, error}`. Phases are `preparing`, `prepared`, `active`, `accepted`, `rejected`
+and `in_doubt`. An unfinished operation serializes changes to that conversation. Ordinary model picks never initiate
+this operation; older clients retain the existing cross-engine refusal.
+
+`GET/PUT /api/v1/assistant/segments` reads/writes `{enabled}` (default true). Disabling new switches never disables
+routing of existing segments. Queued inputs retain their original `client_msg_id`; a sending/in-doubt input fences
+later input until reconciled. Definitive first-turn refusal restores the source at a higher epoch. The source is
+closed only after first-turn acceptance. Full/image requests and scoped subscriptions always use public identity.
+
+Logical seq values remain signed-int32-safe integers. Each later segment starts at the previous segment's offset plus
+its frozen physical end. First-segment item IDs and history remain unchanged; later item IDs have a segment namespace.
+Frozen-range backfill and retired-tail appends do not rewrite logical history. A real source-generation rewrite does.
+Live spans, empty boundary bridges, history pages and reconnect backlog follow the same projection. The manager may
+report `devices.state` machine `transport_for` to retain a bus identity after a source computer is removed; the hub
+validates manager ownership and forwards only, without resolving segments.
+
+The logical-segment client first reads
+`GET /api/v1/assistant/conversations/{id}/segments?machine_id=...` to obtain the
+current epoch and unfinished operation identity. The response exposes no physical
+segment IDs and starts nothing. The explicitly confirmed switch sends its epoch
+and a fresh operation ID to the switch POST. A transport retry must keep the exact
+request, including the original epoch; it must not read a new epoch and silently
+create a second operation. Registered runtime identity is part of a segment's
+opaque engine identity, so two runtimes embedding the same engine are distinct
+execution paths. Unknown engine kinds or identity suffixes are rejected.

@@ -3001,6 +3001,18 @@ can be shown, including with one installed assistant (an offline one counts, one
 roster has no Default chip, and **New Assistant** and **Manage Assistants…** stay below it. On a hub without a roster,
 `AppModel.showsAssistantSwitcher` is false and the sidebar keeps the persona's name as its title.
 
+**Hubs in the switcher** (#12594, [multi-hub.md](../protocol/multi-hub.md)): with several groups of hubs the list starts with
+them under the heading "hub": one row per group in order (`AssistantSwitcherText.hubs`), its symbol in a well with its link's
+dot at the foot (`HubStatusDot`), its name, and a check on the current hub; then a divider and "Assistants on <hub>" over the
+current hub's assistants, so the header picks hub › its assistants in one place. Picking another hub makes it the current
+hub (`AppModel.selectHub`), closes the list and says so in a toast; the header then names that hub's assistant. With one
+hub the list is the assistants alone, unchanged. A hub without a roster keeps the plain title with `HubSwitcher` under it.
+The conversation's menu (the face or the name in its top bar, the Separate layout's Assistant segment) has no hub section:
+it holds only that conversation's actions. Where the sidebar is away (an iPad with the column hidden, the iPhone and the
+folded Duo, where it is a drawer), its button brings the header back; the Inbox's top left and Settings › hub switch hubs
+too. Tests: `AssistantSwitcherTests.theHubsComeFirstOnlyWithSeveral`; UI suite `HubSwitchSidebarTests` (two mock hubs,
+the switch made in the sidebar's header, and the conversation's menu without hubs).
+
 The pick is the manager's id per group (`AppModel.assistantPicks`), kept on this device across launches (`AssistantPickStore`,
 the app's defaults); no pick follows the hub's default. A pick whose manager leaves the roster, or that the roster marks
 `hidden`, goes back to the default (`ManagerRoster.canPick`; a hidden one can't be picked either), and one that becomes the
