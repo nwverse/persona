@@ -1039,8 +1039,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", externalAdapterError(ctx, ctx.Err())
 		}
 		if werr == nil {
+			sentAt := time.Now()
 			werr = p.writeInput(in) // a new id each attempt: a process that died may have written the last one down
 			if werr == nil {
+				if !wasBusy {
+					n.ttft.arm(id, sentAt, "")
+				}
 				n.commitModelChoice(id, execution)
 			}
 			timing.mark("input_written", werr == nil)
@@ -1178,8 +1182,10 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			Event    struct {
 				Type  string `json:"type"`
 				Delta struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
+					Type        string `json:"type"`
+					Text        string `json:"text"`
+					Thinking    string `json:"thinking"`
+					PartialJSON string `json:"partial_json"`
 				} `json:"delta"`
 				Message struct {
 					Model string `json:"model"`
@@ -1245,6 +1251,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 					n.toolsAtStart(p.id, ev.Tools)
 				}
 				if resumed {
+					n.ttft.arm(p.id, time.Now(), "")
 					n.notifySessionsSoon()
 				}
 				continue
@@ -1278,6 +1285,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		case "control_response":
 			p.controlResponse(ev.Response)
 		case "command_lifecycle":
+			if ev.State == "started" {
+				n.ttft.arm(p.id, time.Now(), ev.Command)
+			}
 			if p.commandLifecycle(ev.Command, ev.State) {
 				n.notifySessionsSoon() // the queue strip shows it, or no longer
 			}
@@ -1333,6 +1343,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 					n.emitDelta(p.id, "")
 				}
 			case "content_block_delta":
+				if ev.Event.Delta.Text != "" || ev.Event.Delta.Thinking != "" || ev.Event.Delta.PartialJSON != "" {
+					n.ttft.firstToken(p.id, time.Now(), "")
+				}
 				if ev.Event.Delta.Type != "text_delta" {
 					continue
 				}
@@ -1352,6 +1365,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				n.emitDelta(p.id, text)
 			}
 		case "result":
+			n.ttft.clearPending(p.id)
 			var kinds []string
 			if ev.IsError {
 				kinds = n.claudeResultKinds(p.id)

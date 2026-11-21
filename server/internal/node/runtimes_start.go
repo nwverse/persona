@@ -224,6 +224,7 @@ func (n *Node) noteRuntimeWorking(h *runtimeConn, id string, before *proto.Sessi
 	if h == nil || id == "" {
 		return
 	}
+	n.ttft.arm(id, time.Now(), "")
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for index := range h.sessions {
