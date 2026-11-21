@@ -17,7 +17,7 @@ const configOptions = [
   { id: 'variant', category: 'reasoning', currentValue: 'low', options: [{ value: 'low' }, { value: 'high' }] },
 ]
 const optionsOf = (sessionId) => configOptions.map((option) => ({ ...option, currentValue: sessions.get(sessionId)?.[option.id] || option.currentValue }))
-record({ started: true })
+record({ started: true, args: process.argv.slice(2) })
 if (process.env.FAKE_OPENCODE_CHILD === '1') {
   const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
   record({ descendant: descendant.pid })

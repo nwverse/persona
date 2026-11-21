@@ -47,6 +47,13 @@ test('same-directory assistants have independent processes/MCP identities; ordin
   assert.equal(created.length, 4)
   assert.equal(created[2].worker, created[3].worker)
   assert.ok(!Object.values(f.pids()).includes(created[2].worker))
+  const spawned = f.calls().filter((r) => r.started)
+  for (const worker of spawned.slice(0, 2)) {
+    assert.equal(worker.args[worker.args.indexOf('--port') + 1], '0')
+    assert.equal(worker.args[worker.args.indexOf('--hostname') + 1], '127.0.0.1')
+    assert.ok(worker.args.includes('--no-mdns'))
+  }
+  assert.equal(spawned[2].args.includes('--port'), false, 'ordinary shared-process arguments retain their prior behavior')
   assert.equal(f.node.hello.caps.supervision_policy, undefined)
   await Promise.all([f.call('send', a, { text: 'probe' }), f.call('send', b, { text: 'probe' })])
   await until('both MCP calls', () => f.node.toolCalls.length === 2)

@@ -28,8 +28,10 @@ async function fakeModel(t) {
       const user = JSON.stringify(body.messages[lastUser]?.content ?? '')
       const alreadyCalled = body.messages.slice(lastUser + 1).some((m) => m.role === 'tool')
       const name = body.tools?.find((tool) => /probe$/.test(tool.function?.name))?.function.name
-      const call = /PROBE_IDENTITY/.test(user) && !alreadyCalled
-      if (call && body.stream) assert.ok(name, 'real engine must expose the Persona MCP tool to the model')
+      // Native title/metadata requests may repeat the user text without any
+      // tools. Only a main tool-enabled request can select probe; the outer
+      // identity assertions still require every requested MCP call to happen.
+      const call = /PROBE_IDENTITY/.test(user) && !alreadyCalled && Boolean(name)
       if (!body.stream) {
         res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ id: 'fake', object: 'chat.completion', model: 'test-model', choices: [{ index: 0, message: { role: 'assistant', content: 'Test conversation' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } }))
         return
@@ -100,8 +102,9 @@ test('pinned OpenCode reproduces shared MCP replacement and isolates same-direct
 
     const node = await startFakeNode(t, { tools: [probe], features: ['assistant_pids', 'prefer_running'] })
     node.resolve = () => ({ allow: true })
+    const privateEnv = { ...env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...JSON.parse(env.OPENCODE_CONFIG_CONTENT), server: { port: Number(new URL(model.url).port), hostname: '0.0.0.0', mdns: true } }) }
     const firstTokens = new Map()
-    const companion = createOpencodeCompanion({ home, bin, env, socketPath: node.path, retryMs: 20, pushDelayMs: 5,
+    const companion = createOpencodeCompanion({ home, bin, env: privateEnv, socketPath: node.path, retryMs: 20, pushDelayMs: 5,
       assistantAcpFactory: (options) => {
         const client = new OpencodeAcpClient(options)
         client.on('update', (params) => {
@@ -150,12 +153,13 @@ test('pinned OpenCode reproduces shared MCP replacement and isolates same-direct
       warm.push(await firstToken(id, performance.now()))
       const pid = companion.live.get(id).worker.acp.pid
       rss.push(Number(readFileSync(`/proc/${pid}/status`, 'utf8').match(/^VmRSS:\s+(\d+)/m)?.[1]))
+      assert.ok(Number.isFinite(rss.at(-1)) && rss.at(-1) > 0, 'RSS must be a valid observation')
       await node.peer.call('session.close', { session_id: id })
     }
     const quantile = (list, q) => [...list].sort((a, b) => a - b)[Math.ceil(list.length * q) - 1]
     t.diagnostic(JSON.stringify({ version: '1.19.6', samples: 5, cache: 'uncontrolled OS cache; fresh worker versus existing worker',
       cold_ms: { p50: quantile(cold, .5), p95: quantile(cold, .95) }, warm_ms: { p50: quantile(warm, .5), p95: quantile(warm, .95) }, rss_kib: rss }))
-    assert.equal(model.requests.some((r) => r.error), false)
+    assert.deepEqual(model.requests.filter((r) => r.error), [], 'fake model accepts all native request shapes')
   } catch (error) {
     t.diagnostic(logs.slice(-20).join('\n'))
     throw error

@@ -18,7 +18,7 @@ import { homedir } from 'node:os'
 import { basename, isAbsolute, relative, resolve } from 'node:path'
 import { createRuntime, interactionId, light, page, RpcError, snippet } from '../../runtime-sdk/index.js'
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
-import { OpencodeAcpClient } from './acp.js'
+import { OpencodeAcpClient, privateAcpArgs } from './acp.js'
 import { createAssistantWorkers } from './assistant-workers.js'
 import { defaultDbPath, openReadOnly } from './db.js'
 import {
@@ -261,7 +261,7 @@ export function createOpencodeCompanion(options = {}) {
     idleMs: options.assistantIdleMs ?? 300_000,
     now,
     create(worker) {
-      const config = { ...acpOptions, processGroup: true }
+      const config = { ...acpOptions, args: privateAcpArgs(acpOptions.args), processGroup: true }
       const client = options.assistantAcpFactory ? options.assistantAcpFactory(config) : new OpencodeAcpClient(config)
       if (client === sharedAcp || [...assistantWorkers.workers].some((other) => other !== worker && other.acp === client)) {
         throw new Error('Assistant execution needs a dedicated ACP client')
