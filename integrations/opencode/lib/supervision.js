@@ -112,15 +112,14 @@ export function createSupervisionStore({ home, bin, env, directory, run = runFil
         const initialized = await client.ensureStarted(15_000)
         if (initialized.agentInfo?.version !== version) throw refusal()
         ready = { version, channel: supportsSystemPrompt(initialized.capabilities) ? 'append' : 'config' }
-        return ready
       } catch {
         // Never log config stdout/stderr: it can contain user provider settings.
         ready = null
-        return null
       } finally {
-        await client?.stop().catch(() => {})
-        await remove(record)
+        try { await client?.stop() } catch { ready = null }
+        try { await remove(record) } catch { ready = null }
       }
+      return ready
     },
     async stop() {
       ready = null

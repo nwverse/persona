@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -109,4 +109,35 @@ test('ACP systemPrompt append takes precedence over process instructions and is 
   await f.call('send', id, { text: 'clear', supervision_instructions: '' })
   await f.settled(id)
   assert.equal(f.calls().findLast((call) => call.method === 'session/resume').params.systemPrompt, null)
+})
+
+test('a queued/in-flight mode change keeps its worker and prevents a concurrent policy rebuild', async (t) => {
+  const f = await fixture(t)
+  const id = await f.start({ assistant: true, supervision_instructions: 'original' })
+  const worker = f.companion.live.get(id).worker
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const set = worker.acp.setConfigOption.bind(worker.acp)
+  worker.acp.setConfigOption = async (...args) => { entered.resolve(); await release.promise; return set(...args) }
+  const control = f.call('modes', id, { effort: 'high' })
+  await entered.promise
+  try {
+    await assert.rejects(f.call('send', id, { text: 'blocked input', supervision_instructions: 'new policy' }), (error) => error.code === 'busy')
+    assert.equal(f.companion.live.get(id).worker, worker)
+    assert.equal(f.companion.live.get(id).policy, 'original')
+  } finally { release.resolve() }
+  await control
+})
+
+test('failure to prepare an unwritable policy preserves the existing idle worker and sends nothing', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, async (t) => {
+  const f = await fixture(t)
+  const id = await f.start({ assistant: true, supervision_instructions: 'original' })
+  const state = f.companion.live.get(id), worker = state.worker
+  const root = join(f.home, 'policies')
+  chmodSync(root, 0o500)
+  try {
+    await assert.rejects(f.call('send', id, { text: 'unwritable input', supervision_instructions: 'new policy' }), (error) => error.code === 'assistant_supervision_runtime')
+    assert.equal(state.worker, worker)
+    assert.equal(state.policy, 'original')
+    assert.equal(f.calls().some((call) => call.method === 'session/prompt'), false)
+  } finally { chmodSync(root, 0o700) }
 })

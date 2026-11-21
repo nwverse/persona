@@ -304,9 +304,14 @@ export function createOpencodeCompanion(options = {}) {
   })
 
   async function withSessionWorker(session, fn) {
-    if (!session.assistant) return fn(sharedAcp)
-    const worker = await assistantWorkers.acquire(session)
-    try { return await fn(worker.acp) } finally { assistantWorkers.release(worker) }
+    // Cover admission itself, before the serialized pool grants a lease. A
+    // concurrent role change must not retire a process whose control is queued.
+    session.admitting++
+    try {
+      if (!session.assistant) return await fn(sharedAcp)
+      const worker = await assistantWorkers.acquire(session)
+      try { return await fn(worker.acp) } finally { assistantWorkers.release(worker) }
+    } finally { session.admitting-- }
   }
 
   function requestedPolicy(params) {
@@ -1301,7 +1306,7 @@ export function createOpencodeCompanion(options = {}) {
     }
 
     const isAsst = assistantEnabled && (params.assistant === true || s.assistant)
-    if (isAsst && !s.assistant && (s.running || s.queued || s.asks.size)) throw new RpcError('Wait for the Agent turn to finish before changing its role', 'busy')
+    if (isAsst && !s.assistant && (s.running || s.queued || s.asks.size || s.admitting)) throw new RpcError('Wait for the Agent turn to finish before changing its role', 'busy')
     if (isAsst && !s.assistant && sharedAcp.loadedSessions.has(s.id)) {
       throw new RpcError('Start a new assistant conversation instead of sharing an Agent execution process', 'busy')
     }
