@@ -733,4 +733,29 @@ func TestLauncherBalancesViaMachineUsesKeySealedForPrecedence(t *testing.T) {
 			t.Fatalf("broken ViaMachine override must not fall back to global key: known=%v calls=%d accounts=%+v", known, devs.calls.Load(), accounts)
 		}
 	})
+
+	t.Run("routed machine with no own or global key is skipped instead of using another machine's key", func(t *testing.T) {
+		s, _ := launcherTestService(t)
+		devs := &viaDevs{}
+		s.devs = devs
+		sealedOther, _ := s.sealKey(otherKey)
+		putLaunchers(t, s, storedLauncher{
+			ViaMachine:      "server",
+			ManagedLauncher: proto.ManagedLauncher{Name: "deepseek", BaseURL: "https://api.deepseek.com/anthropic"},
+		})
+		if err := s.putSetting(context.Background(), launchersMachineKeysKey, []machineKey{
+			{Launcher: "deepseek", Machine: "a-other", KeySealed: sealedOther},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		asked := false
+		interceptProbe(t, func(r *http.Request) (*http.Response, error) {
+			asked = true
+			return respondByKey(r)
+		})
+		accounts, known := s.LauncherBalances(context.Background())
+		if !known || len(accounts) != 0 || asked || devs.calls.Load() != 0 {
+			t.Fatalf("ViaMachine with no effective key must be skipped: known=%v asked=%v calls=%d accounts=%+v", known, asked, devs.calls.Load(), accounts)
+		}
+	})
 }

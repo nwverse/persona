@@ -207,16 +207,19 @@ type launcherKeyCandidate struct {
 // launcherKeyCandidates returns the sealed key(s) to try for l, honoring keySealedFor's precedence (a computer's own
 // key overrides the launcher's global key):
 //   - When ViaMachine names a routed machine, keySealedFor selects that machine's effective key (its per-computer key
-//     when present, falling back to l.KeySealed only when that machine has none).
+//     when present, falling back to l.KeySealed only when that machine has none); if empty, returns nil so the
+//     launcher is skipped instead of borrowing another computer's key.
 //   - When the launcher is not shared to any computer (shareNone), only the launcher's own global key applies.
 //   - When the launcher is scoped to selected computers (shareSelected), only in-scope computers' keys are considered
 //     via keySealedFor, with per-computer overrides ordered before the global fallback.
 //   - Otherwise, per-computer keys are tried first in sorted machine-name order, with l.KeySealed as fallback.
 func (s *Service) launcherKeyCandidates(l storedLauncher, machineKeys []machineKey) []launcherKeyCandidate {
-	if l.ViaMachine != "" {
-		if sealed := s.keySealedFor(l, machineKeys, l.ViaMachine); sealed != "" {
-			return []launcherKeyCandidate{{sealed: sealed, machine: l.ViaMachine}}
+	if via := strings.TrimSpace(l.ViaMachine); via != "" {
+		sealed := s.keySealedFor(l, machineKeys, via)
+		if sealed == "" {
+			return nil
 		}
+		return []launcherKeyCandidate{{sealed: sealed, machine: via}}
 	}
 	if l.Share == shareNone {
 		if l.KeySealed == "" {
