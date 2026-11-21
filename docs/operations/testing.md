@@ -9,6 +9,7 @@ cd apple && xcodegen generate -q && xcodebuild -project Persona.xcodeproj -schem
   -destination "id=$SIM" test   # iOS unit tests (ChatStore, ScreenParser, phone tool registry)
 ./scripts/app/sim.sh [--with-watch] [-openSession <machine>/<id>]     # run in simulator, pair automatically to the real hub ("Development builds")
 cd apple/Packages/PersonaKit && swift test                             # PersonaKit unit tests: directly on Mac, no App build or simulator
+cd apple/Packages/PersonaWire && swift test -Xswiftc -warnings-as-errors # PersonaWire unit tests, warnings as errors as CI runs them
 python3 -B scripts/test/test_sim_boot.py                               # sim-boot.sh (fake xcrun / simslim, no simulator)
 n=0 failed=""; for f in $(find scripts -name 'test_*.py' -not -path '*/node_modules/*' | sort); do grep -q unittest "$f" || continue; n=$((n + 1)); (cd "$(dirname "$f")" && python3 -B -m unittest -q "$(basename "$f" .py)") || failed="$failed $f"; done; echo "$n suites, failed:${failed:- none}"; [ -z "$failed" ]   # all Python suites in scripts/, like CI (it skips files that never mention unittest); any failure exits nonzero
 ```
@@ -39,13 +40,17 @@ gh workflow run pr-needs-issue.yml --ref main -f pr_number=<number>  # metadata 
 ```
 
 The seven required lanes have independent reusable workflows. **CI required** rejects failed, cancelled, missing or unexpectedly skipped
-selected jobs. iOS/Watch contributes to that aggregate; **Mac (non-blocking)** reports its actual independent result without
+selected jobs, and any run whose path selection or guards did not succeed; it reads only the jobs' results, so it checks out one
+commit, not the whole history. iOS/Watch contributes to that aggregate; **Mac (non-blocking)** reports its actual independent result without
 `continue-on-error` and is not part of the aggregate. An unselected lane is never claimed as tested.
 All workflows except the image publisher accept only `workflow_dispatch` and, for reusable platform workflows, `workflow_call`.
 The image and Release publisher additionally retains `push` for **`v*` release tags**: Docker installations use its version and `latest` images, and the same tag gets a GitHub Release.
 No branch push or PR starts it. The issue-link Action also requires explicit dispatch from the default branch with a PR number.
 
-The `changes` job runs repository/commit privacy and path safety, including `scripts/ci/guards.sh`, migration freeze, sleep ratchet and the no-CallKit source guard (`docs/operations/release.md`, "No CallKit").
+The `guards` job (**Manual repository guards**) runs `scripts/ci/guards.sh`: repository/commit privacy and path safety, migration freeze, sleep ratchet and the no-CallKit source guard (`docs/operations/release.md`, "No CallKit").
+It checks against the base the `changes` job (**Manual path selection**) resolved, so one run has one base. No platform lane needs it:
+a failing guard says nothing about the platforms, so their results still come out, and **CI required**, which needs both
+jobs, fails and names the guards. Before #12725 the guards ran inside `changes` and a guard failure skipped every lane.
 An edit, deletion or rename of a `.sql` file already on the base under `server/internal/db/migrations/hub` or
 `server/internal/db/migrations/manager` fails that check. Comment-only and whitespace-only edits pass; add a new migration instead.
 A new file is named by the UTC second it is written, `YYYYMMDDHHMMSS_<name>.sql` in lower case (`$(date -u +%Y%m%d%H%M%S)_<name>.sql`),
@@ -63,7 +68,7 @@ squash merge leaves them (`git merge-file` where `main` changed a file too), wit
 messages apply, the sleep ratchet's never-raise check included, and the merge is refused when a file ends further from its baseline
 than `main` has it. A file `main` already fails is left to its own fix unless the PR moves it further; a file both sides change in
 conflicting ways is left to the merge, which refuses it. A new per-file ratchet goes into that script's `RATCHETS` too.
-With `lanes=auto`, the base defaults to `origin/main`; an explicit `base` is resolved to a commit before guards and path selection.
+With `lanes=auto`, the base defaults to `origin/main`; an explicit `base` is resolved to a commit once, in `changes`, and the guards use that commit.
 
 Dispatched code runs with `contents: read`, without persisted checkout credentials, private config or new secrets. The issue-link
 workflow uses metadata-only write permissions and runs only from the default branch. Image and GitHub Release publishing have `packages: write` and `contents: write` only in the publish job. CI concurrency keys use the repository/branch and full/lanes selection; dispatches in the same group cancel stale
@@ -83,6 +88,18 @@ tests, rather than inferring runtime from `Sleep` inside fake-clock tests, and e
 (from its panic, if any; a timeout's names the test still running) so an excerpt that keeps only a log's head and tail, like the
 PR watcher's report, still says what failed (`scripts/ci/server-shards.py`). The full scripts suite splits complete sorted discovery
 across two independently isolated jobs, scheduled one at a time; each has its own synthetic HOME and mock ports.
+
+**Why tests stay uncached.** check-fast, the CI shards, `scripts/test/test-server.sh` and the bounded runner's
+commands below all pass `-count=1`, so no Go test result comes from Go's test cache; the build cache still serves
+compilation. The test cache reuses a result while the test binary, its flags and the environment variables and files
+the test process itself consulted are unchanged, and it checks those files only inside the module root, `server/`
+(`go help test`). Server tests read inputs outside it (`spec/fixtures/` alone in 19 packages; `schema/`, `sdk/go/`,
+`docs/`, `apple/` and `android/` sources), which are exactly the paths check-fast routes to the packages that read
+them, and guards such as `internal/archguard` read the module through a child `go list`, whose reads are never
+recorded. A cached run then repeats an old `ok` for a change that breaks the test, while a hit saves only seconds per
+package, and only on packages the change did not reach
+(`docs/lessons/testing.md`, "Go's test cache can repeat a pass the change broke").
+A plain `go test` while editing is fine; a result reported as verification comes from `-count=1`.
 
 Android runs two independently isolated lanes, both at once: `lint-build-test-0` (checker tests, all-module lint, the debug APK and
 the first of two disjoint sorted feature-test shards) and `test-1` (core tests, the second feature shard, and platform/app tests).
@@ -402,6 +419,7 @@ Path mapping (a new mapping is a rule in check-fast's per-path table, `scripts/c
 | `spec/icons/**`, `apple/Shared/Design/Icons.swift`, `android/core/designsystem/src/main/kotlin/persona/core/designsystem/icons/**` | `scripts/assets/test_gen_icon_meanings.py`: the icon meanings against `Theme.Icon`, the Phosphor glyphs and `PersonaIcons.kt` |
 | `docs/**`, any `*.md` | `scripts/test/test_doc_paths.py`, `scripts/test/test_doc_go_paths.py` (quoted paths and CLAUDE.md documentation index; test_doc_paths.py also fails a table that a blank line splits), `scripts/test/test_doc_sections.py` (section names quoted after a doc path match a heading, a **bold** label, an `<a id>` or a list item's opening phrase of that doc; `scripts/test/doc_sections_known.txt` lists the ones left for now and only shrinks), `scripts/test/test_doc_wire.py` (protocol.md and extensions.md list every WebSocket type, feature flag, extension point and manifest field the code has) |
 | `server/internal/{proto,hub,extension}/**`, `schema/extension/manifest.schema.json` | Also `scripts/test/test_doc_wire.py`: these hold the code side of the lists it compares with the docs |
+| `AGENTS.md`, `CLAUDE.md` | Also `scripts/test/test_agents_md.py`: git records `AGENTS.md` as a symlink (mode 120000) whose target is exactly `CLAUDE.md`, and `CLAUDE.md` as a regular file; it reads the index, so a checkout without symlinks passes too |
 | `server/**`, `web/src/**`, `web/e2e/**`, `scripts/**`, `sdk/**`, `apple/**`, `android/**`, `integrations/**`, `spec/**`, `schema/**` | Also `scripts/test/test_doc_sections.py`: most of the section names it checks are in code comments there |
 | `apple/**` | `scripts/test/test_apple_l10n.py` (complete String Catalogs and Swift Chinese literals included in catalogs) and `scripts/test/test_apple_no_callkit.py` (no CallKit import or link setting; also run for `scripts/persona_config.py`); iOS / macOS builds and tests need a Mac and are reported as skipped |
 | `apple/project.yml` and the includes its tests turn on (`apple/app-entitlements.yml`, `apple/watch-and-share.yml`, `apple/lean-dev-build.yml`, `apple/siri-calls.yml`), `scripts/app/sim.sh`, `scripts/app/ui-test.sh`, `scripts/app/perf-test.sh`, `scripts/app/share-from-apps.sh`, `scripts/app/lean-build-note.sh`, `scripts/app/island_peer.sh`, `scripts/diag/stream-scroll/run-ios.sh`, `scripts/release/release.sh`, `scripts/ci/apple.sh`, `native/iphone-bridge/build.sh` | Also `scripts/test/test_apple_dev_build.py`: the switch that leaves the watch app and the share extension out of a development build, that only `sim.sh` sets it and every other script that generates a project clears it, which slices of the Rust core each build takes, the line a lean build prints, and the Release-only commit stamp ("Development builds"; the project checks need xcodegen). Its searches of the whole tree also catch a new caller, which no row maps |
@@ -435,6 +453,12 @@ it isn't in `PersonaTests`; the Apple CI script runs its SwiftPM tests separatel
 - Assertions needing App types (views, `FilePaths`) stay in `PersonaTests`, also adding `import PersonaKit`.
 - Package code must build with Foundation only: no SwiftUI / UIKit imports, App `Theme` or `AppModel`. Design-system source checks (`TokenRatchetTests`, etc.) don't scan it.
 - The package declares macOS 15, so its test bundle also loads on a macOS 15 host without a target override. To check that deployment target from a newer Apple-silicon Mac, use a separate build folder: `swift test --scratch-path /tmp/personakit-macos15 -Xswiftc -target -Xswiftc arm64-apple-macosx15.0` (use `x86_64-apple-macosx15.0` on Intel). `scripts/test/test_apple_ci.py` guards the macOS floors of all tracked local Swift packages.
+
+**PersonaWire** (`apple/Packages/PersonaWire`, #7895): the Foundation-only wire layer every app target links, the watch,
+widgets and extensions included. Its tests run with `xcrun swift test --package-path apple/Packages/PersonaWire -Xswiftc
+-warnings-as-errors`, as the `packages` lane of `scripts/ci/apple.sh` runs them (#12734). The flag on the command line also
+applies to a package's dependencies, so PersonaWire must build without warnings for any package that depends on it to pass
+the same flag; a file inside the package never imports `PersonaWire` itself.
 
 **PersonaCore** (`apple/Packages/PersonaCore`, #6871): the iOS-only binding of the shared Rust continuity core. Run
 `native/app-core/scripts/build-apple.sh` before XcodeGen / package resolution, then `xcrun swift test --package-path
@@ -603,6 +627,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   The hub's notice line (#4305): `MOCK_TASKS=1 MOCK_TASKS_NOTICE=1 MOCK_TASKS_NO_ASKS=1` adds "电脑和模型接好了，定时任务恢复运行，这次是「早报」" as the conversation's last line, small and centered.
   What didn't go through overnight on the Today card (#4124): `MOCK_TODAY_FAILED=1` (with `MOCK_TASKS=1`) adds a task whose Agent didn't start, a failed scheduled run and a skipped one, with `failed_total` 5, so the row says how many in all and "2 more"; without it the card is as before.
   Message card states (#4797): `MOCK_TASKS_MESSAGE=filed` marks the card about the widget task as handled elsewhere (`filed_at`): no Send, the draft greyed out with a line saying it wasn't sent. `MOCK_TASKS_MESSAGE=sent` marks it as replied from the card (`sent_at`).
+- Question cards over the composer (#9392, #12306): `QuestionCardFoldTests` lists its mock hubs in its class comment. `MOCK_TASK_ASK_LONG=1` (with `MOCK_TASKS=1`) gives the task's question four options with long descriptions; with `MOCK_ASK_LONG=source MOCK_CARD_SOURCE=1` beside it (`TEST_RUNNER_PERSONA_BOTH_LONG_HUB`) the tests check that the conversation's folded card leaves its half to the task's question and that the grabber makes it taller, shorter, the tallest and the default, the height kept after a relaunch. The iPhone app is portrait only, so the open Duo held sideways is checked on the device. `-ui.questionCardHeight ""` starts the app from the default height.
 - A reply's code block on the iPhone Duo (#8212, `docs/lessons/ios.md` "A sideways scroll view draws into the safe area beside it"): `MOCK_CODE_WIDE=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` adds `macbook/a1f3c2d4-0000-4000-8000-0000000c1e30`, an answer with a code block and a table far wider than any column. `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/CodeBlockOverflowUITests` on the Duo simulator, folded or open on its side, checks that no code is drawn past the block's trailing edge; `TEST_RUNNER_PERSONA_SHOTS=<directory>` saves the screen.
 - Typing a model ID (#1644, `docs/assistant/model-config.md` "Typing a model ID"): `MOCK_CUSTOM_MODELS=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` lists IDs typed before after the Claude Code / Codex lists (`custom: true`), takes Forget (`DELETE …/models/custom?model=`) and remembers a start's or a `…/modes` typed model; `=forgetfail` makes Forget answer 500 (the row comes back), `=empty` gives Claude Code an empty list ("Enter Model ID…"), `=fail` a 502 for every list; `GET /mock/custom_models` shows what is remembered (`?reset=1` puts the first IDs back). `TEST_RUNNER_PERSONA_CUSTOM_MODELS_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/CustomModelUITests` walks New Agent (typed IDs, Forget, the reason under a bad ID, the pick in the start), a running session's "Other Model…" (`POST …/modes`, then the menu ticking it with the ID once the session runs it) and the Persona chat's launcher menu (against `=1`), New Agent's "Enter Model ID…" beside a list that couldn't be read and its clear button (against `=fail`), the empty list (`=empty`) and a refused Forget (`=forgetfail`); each test skips the other modes. `TEST_RUNNER_PERSONA_SHOTS` / `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE` save the screenshots. The mock lists `typed_models` in its features in every mode (the chat's "Other Model…" needs it). The web's: `node web/e2e/custom-model.mjs <web URL> --hub <mock URL> [--shots <dir>]` follows the mock's mode: New Agent, a session's model panel (the composer's model pill: the IDs typed before with Forget, "Use “…”" from the search, #5032) and a Persona chat's (#5033) (`=1`), a refused Forget in New Agent and the model panel (`=forgetfail`), New Agent without a list (`=empty`, `=fail`: the group's error and Retry, still the launcher's Default row and "Use “…”" from the search, #5104); light and dark.
 - A new Persona conversation's model menu (#11472, `docs/apple/ios.md` "New shell"): `MOCK_MODEL_DEFAULTS=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` answers `?purpose=assistant` with Main chat's `default`. `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/StarterModelMenuUITests` sets Main chat to the mock's `claude` launcher with `sonnet` (`PATCH …/model-config/purposes/assistant`; the launcher's own model is `opus`), then checks, light and dark, that the button names Sonnet, that `claude` lists its models a level down with Sonnet ticked, that picking Fable names the button, and that Follow Main Chat default goes back. `TEST_RUNNER_PERSONA_SHOTS=<directory>` keeps `starter-model-iphone-<look>-<step>.png`. `PersonaTests/AssistantStarterChoiceTests` covers the start request (nothing picked names neither launcher nor model; a model goes with its launcher; a Default entry sends none), the title and the effort levels.
@@ -1341,6 +1366,7 @@ TEST_RUNNER_PERSONA_HUB_A=http://127.0.0.1:18760 TEST_RUNNER_PERSONA_HUB_B=http:
 
 Two mock hubs, each a group of its own with data of its own, check that the iPhone's sidebar follows the current hub in both layouts: Persona's chats
 (Home's mock titles, Work's `MOCK_TITLES=1` titles) and the Agents list narrowed to one hub (`服务器 · Home`, `Work server · Work`).
+The hub is switched in the sidebar's assistant switcher (its hub group, #12594), and the conversation's menu is checked to have no hub section.
 
 ```sh
 PORT=18870 MOCK_HUB_ID=hub-home MOCK_HUB_NAME=Home python3 scripts/mock/mock_hub.py &
@@ -1549,7 +1575,7 @@ Not private: loopback (`127.0.0.0/8`, `::1`, `localhost`, including protocol/por
 backtick paths/commands/config keys in `CLAUDE.local.md` (only ID/host/email/IP-like values count), and `site/` contact/site domain
 (`app_store.feedback_email`, `privacy_url`, already public for App Store/OAuth). Docs say hub machine/another Mac;
 example machine ids `server` / `laptop`. `release.sh` scans before packaging;
-precommit hooks: `git config core.hooksPath scripts/hooks` (`pre-commit` staged content, plus `scripts/assets/gen_tokens.py --check` and the token drift tests when `spec/tokens`, `apple/Shared/Design` or the generated Android tokens are staged; `commit-msg` commit message, `pre-push` changed files/messages against the first of `origin/HEAD`, `origin/main`, `origin/master` that shares history with the pushed commit, every file and message of an orphan branch; `pre-push` also checks the trusted Deno adapter, see "Trusted Deno adapter").
+precommit hooks: `git config core.hooksPath scripts/hooks` (`pre-commit` staged content, plus `scripts/assets/gen_tokens.py --check` and the token drift tests when `spec/tokens`, `apple/Shared/Design` or the generated Android tokens are staged; `commit-msg` commit message, `pre-push` changed files/messages against the first of `origin/HEAD`, `origin/main`, `origin/master` that shares history with the pushed commit, every file and message of an orphan branch; `pre-push` also checks the trusted Deno adapter, see "Trusted Deno adapter", and refuses a branch under `artifacts/` or `pr-assets/`, see `docs/operations/collaboration.md`, "Screenshots in PRs").
 **Message lines** (#1107): `--message <file>` checks every line, Markdown headings included (a PR's title and body become the squash commit's message as they are).
 `commit-msg` passes `--commit-msg`, which checks only what `git commit` records: when git opened an editor it skips the comment lines (hints, branch, paths) and everything from the scissors line down (the `commit -v` diff);
 a `-m` / `-F` message keeps its `#` lines, so they are checked. It follows git's comment string and `commit.cleanup` (`commit_msg_lines`), but cannot see `--cleanup` or `-v` on the command line; `pre-push` still reads every recorded line.

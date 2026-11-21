@@ -28,6 +28,7 @@ public final class SSHTunnel: @unchecked Sendable {
     private let pinnedHostKey: String?
     private let timings: SSHTunnelTimings
     private let loop: EventLoop
+    let traceID = PersonaSSH.traceID("tunnel")
 
     /// Told of every new phase, on the tunnel's event loop. Set before `start`.
     public var onPhase: (@Sendable (Phase) -> Void)?
@@ -138,7 +139,9 @@ public final class SSHTunnel: @unchecked Sendable {
         if let dialing { return dialing }
         if let lastError, NIODeadline.now() < retryAt { return loop.makeFailedFuture(lastError) }
         set(.connecting)
-        let f = dial()
+        let attemptID = PersonaSSH.traceID("dial")
+        trace("\(traceID ?? "tunnel") connection requested: \(session == nil ? "no current session" : "current session inactive")")
+        let f = dial(attemptID)
         dialing = f
         f.whenComplete { result in
             self.dialing = nil
@@ -148,13 +151,16 @@ public final class SSHTunnel: @unchecked Sendable {
             }
             switch result {
             case .success(let channel):
+                trace("\(self.traceID) \(attemptID) session authenticated")
                 self.session = channel
                 self.failures = 0
                 self.lastError = nil
                 self.set(.connected)
                 channel.closeFuture.whenComplete { _ in
+                    trace("\(self.traceID) \(attemptID) close observed")
                     guard self.session === channel else { return }
                     self.session = nil
+                    trace("\(self.traceID) \(attemptID) current owner cleared")
                     if !self.stopped { self.set(.idle) }
                 }
             case .failure(let error):
@@ -169,7 +175,8 @@ public final class SSHTunnel: @unchecked Sendable {
         return f
     }
 
-    private func dial() -> EventLoopFuture<Channel> {
+    private func dial(_ attemptID: String?) -> EventLoopFuture<Channel> {
+        trace("\(traceID) \(attemptID) dial start")
         let attempt = DialAttempt(on: loop)
         connecting = attempt
         let ready = attempt.ready
@@ -196,7 +203,7 @@ public final class SSHTunnel: @unchecked Sendable {
                     let sync = channel.pipeline.syncOperations
                     try sync.addHandler(NIOSSHHandler(role: .client(.init(userAuthDelegate: auth, serverAuthDelegate: hostKeys)),
                                                       allocator: channel.allocator, inboundChildChannelInitializer: nil))
-                    try sync.addHandler(SessionHandler(ready: ready))
+                    try sync.addHandler(SessionHandler(ready: ready, traceID: "\(self.traceID) \(attemptID)"))
                 }
             }
             .connect(host: config.host, port: config.port)
@@ -251,7 +258,7 @@ public final class SSHTunnel: @unchecked Sendable {
         let over = LoopFlag()
         result.futureResult.whenComplete { _ in over.value = true }
         let timeout = loop.scheduleTask(in: .milliseconds(Int64(timings.open * 1000))) {
-            trace("ssh channel open timed out after \(self.timings.open) seconds; closing its session")
+            trace("\(self.traceID) channel open timed out after \(self.timings.open) seconds; closing its session")
             result.fail(SSHTunnelError.timedOut)
             session.close(promise: nil)
         }

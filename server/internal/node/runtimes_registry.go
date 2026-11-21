@@ -705,7 +705,7 @@ func (h *runtimeConn) formLauncherLocked(l runtimeLauncher) proto.Launcher {
 	}
 	builtinCompanion := h.builtinAgy && h.daemon == "" && h.hello.Runtime == agyRuntimeID && agent == agyAgent
 	return proto.Launcher{Name: l.Name, Model: l.Model, Source: h.hello.Runtime, Agent: agent, PromptOptional: l.PromptOptional,
-		Assistant: assistant, AssistantFor: assistantFor, AutoAccept: l.AutoAccept, DisplayName: l.DisplayName, PermissionModes: modes,
+		Assistant: assistant, SupervisionPolicy: assistant && h.hello.Caps.SupervisionPolicy, AssistantFor: assistantFor, AutoAccept: l.AutoAccept, DisplayName: l.DisplayName, PermissionModes: modes,
 		BuiltinCompanion: builtinCompanion}
 }
 

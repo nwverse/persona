@@ -11,6 +11,7 @@ import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheS
 import { useRef, useSyncExternalStore } from "react";
 import { AGENTS_PAGE_COUNTS_FEATURE, agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode, setPersonalPageCounts } from "./agents";
 import { onRuntimeChanges, runtimeAgents, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts, supportsPagedAgents } from "./runtime-list";
+import { isHeldLevel } from "./attention";
 import { sameValue } from "./stable-lines";
 import { SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
 import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
@@ -67,6 +68,8 @@ export interface State {
   version: string;
   /** What the hub can do (hello `features`): terminal_stream, terminal_control… */
   features: string[];
+  /** Whether the hub's push grading switch is enabled (`hello.push_grading` / `push_grading` event). */
+  pushGrading: boolean;
   /** This hub's name and its interconnected group (docs/archive/operations/plan-hub-mesh.md 2.6); empty on older hubs. */
   hubName: string;
   mesh: MeshHub[];
@@ -110,6 +113,7 @@ let state: State = {
   link: { ...NO_LINK, networkUp: networkUp() },
   version: "",
   features: [],
+  pushGrading: false,
   hubName: "",
   mesh: [],
   machines: [],
@@ -1013,6 +1017,7 @@ function onMessage(msg: Record<string, unknown>) {
         link: { ...state.link, nextTry: 0, restarting: false, networkUp: true },
         version: String(msg.server_version ?? ""),
         features: Array.isArray(msg.features) ? (msg.features as string[]) : [],
+        pushGrading: msg.push_grading === true,
         hubName: typeof msg.hub_name === "string" ? msg.hub_name : "",
         mesh: Array.isArray(mesh) ? mesh : [],
       });
@@ -1113,13 +1118,24 @@ function onMessage(msg: Record<string, unknown>) {
     }
     case "interaction": {
       const ix = msg.interaction as Interaction;
-      if (!endedHere.has(ix.id)) changeInteraction(ix.id, ix);
+      const prev = state.interactions.find((i) => i.id === ix.id);
+      if (!endedHere.has(ix.id)) {
+        changeInteraction(ix.id, ix);
+        refreshCountsForCard(prev, ix);
+      }
       break;
     }
-    case "interaction_resolved":
+    case "interaction_resolved": {
+      const id = msg.id as string;
+      const prev = state.interactions.find((i) => i.id === id);
       if (msg.answered_by === "assistant") answeredForUser(msg);
-      changeInteraction(msg.id as string, null);
-      cardWithdrawn(msg.id as string);
+      changeInteraction(id, null);
+      cardWithdrawn(id);
+      refreshCountsForCard(prev, undefined);
+      break;
+    }
+    case "push_grading":
+      set({ pushGrading: msg.enabled === true });
       break;
     case "interaction_reanswered":
       noteReanswer(msg.id as string, answersIn((msg.resolution as { answers?: unknown } | undefined)?.answers));
@@ -1399,6 +1415,20 @@ function syncAssistant(mid: string, list: Session[]): Partial<State> {
 let ixRev = 0;
 const ixChanges = new Map<string, { rev: number; ix: Interaction | null }>();
 const IX_CHANGES_KEPT = 500;
+
+function refreshCountsForCard(prev: Interaction | undefined, next: Interaction | undefined) {
+  if (!isHeldLevel(prev?.push_level) && !isHeldLevel(next?.push_level)) return;
+  if (supportsPagedAgents(state.features)) {
+    const agentsList = runtimeAgents.getSnapshot();
+    if (agentsList.loaded || agentsList.loading || agentsList.error !== null) runtimeAgents.invalidate();
+  } else if (state.features.includes(SESSIONS_LIST_FEATURE)) {
+    runtimeSessions.invalidate();
+  }
+}
+
+export function setPushGrading(pushGrading: boolean) {
+  if (state.pushGrading !== pushGrading) set({ pushGrading });
+}
 
 function changeInteraction(id: string, ix: Interaction | null) {
   ixChanges.delete(id); // re-inserted: the oldest are dropped first
@@ -1916,6 +1946,7 @@ export function reset() {
     spacesSupported: true,
     loaded: false,
     features: [],
+    pushGrading: false,
     conn: "connecting",
     link: { ...NO_LINK, networkUp: networkUp() },
   });

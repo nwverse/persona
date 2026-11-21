@@ -10,7 +10,7 @@
 //	    name); with --format text the connector shows its answer for people (docs/protocol/connector-protocol.md "Command line")
 //
 // The Agent-side exception is an Agent's own tools (node.callerTools: task_spawn, its to-do's todo_decisions and
-// repository tools, report_to_supervisor, a task leader's task_plan and task_review, dispatch): the node names the
+// repository tools, report_to_supervisor, a task leader's task_plan and task_review, dispatch, A2A): the node names the
 // Agent from its pane or Codex thread, as for `personad mcp`, and the manager decides each call for that Agent (a
 // worker gets no task_plan, todo_decisions reads only its own to-do). It never grants the assistant's connector tools.
 //
@@ -95,7 +95,8 @@ const (
 	usageTool = "personad tool <tool> [<json args> | -]"
 	usageCLI  = "personad tool --cli <connector> [--format json|text] <words…>"
 	usage     = "personad tool: a connector's tools from the assistant's shell, through the Persona hub\n  " + usageTool + "\n  " + usageCLI +
-		"\n  from an Agent's pane: its own tools (task_spawn, todo_decisions, a task leader's task_plan, …), as its MCP server calls them"
+		"\n  from an Agent's pane: its own tools (task_spawn, todo_decisions, a task leader's task_plan, …), as its MCP server calls them" +
+		"\n  a2a_sessions, a2a_send, a2a_get, a2a_report, a2a_cancel: communicate through Persona A2A"
 )
 
 // Main runs one command line and returns its exit code. Help is the usage on stdout; a mistake in the command line
