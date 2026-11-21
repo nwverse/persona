@@ -8,31 +8,7 @@ import { createServer } from 'node:http'
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024
 
-/** Build a regex matching any gated shell command or script path (`tool.shell`). */
-export function shellWordsRe(words) {
-  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const alts = (Array.isArray(words) ? words : [])
-    .filter((w) => typeof w === 'string' && w !== '')
-    .map((w) => (w.includes('/') ? `[^\\s;&|]*${esc(w)}` : esc(w)))
-  return alts.length ? new RegExp(`(^|[\\s;&|(\`$])(${alts.join('|')})(\\s|$)`) : null
-}
-
-/** Extract command-gate shell matchers from Persona tool descriptors returned by `rt.tools({ assistant: true })`. */
-export function extractShellGates(tools) {
-  const out = []
-  for (const t of Array.isArray(tools) ? tools : []) {
-    if (!Array.isArray(t?.shell) || t.shell.length === 0) continue
-    const re = shellWordsRe(t.shell)
-    if (re) out.push({ name: t.name, command: t.shell[0], re })
-  }
-  return out
-}
-
-/** Check whether a shell command string hits a Persona command gate (returns the matching gate or undefined). */
-export function matchShellGate(command, gates) {
-  if (typeof command !== 'string' || !command.trim() || !Array.isArray(gates) || gates.length === 0) return undefined
-  return gates.find((g) => g.re.test(command))
-}
+export { shellWordsRe, extractShellGates, matchShellGate } from '../../runtime-sdk/lib/shell-gates.js'
 
 /**
  * Create a loopback HTTP MCP server bound to `127.0.0.1:0`.
@@ -84,6 +60,12 @@ export function createMcpProxy({ tools, call, log = () => {} }) {
           return
         }
         chunks.push(chunk)
+      }
+      // Retirement can revoke/replace the binding while a slow request body
+      // is arriving. Possession of the former URL is no longer authority.
+      if (closed || routes.get(pathname) !== binding) {
+        res.writeHead(404).end()
+        return
       }
       const msg = JSON.parse(Buffer.concat(chunks).toString('utf8'))
       if (msg.id === undefined) {

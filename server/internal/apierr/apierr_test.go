@@ -452,6 +452,25 @@ func TestOpenElsewhereSpeaksTheClientsLanguage(t *testing.T) {
 	}
 }
 
+func TestCodexComposerTimeoutUsesNodeWait(t *testing.T) {
+	for _, code := range []string{"codex_no_box", "codex_no_box_here"} {
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			rec := httptest.NewRecorder()
+			err := &rpc.Error{Code: code, Message: "node diagnostic", Data: json.RawMessage(`{"seconds":181.5}`)}
+			body := call(t, langWriter{rec, lang}, rec, err)
+			summary, _ := body["error"].(string)
+			if !strings.Contains(summary, "181.5") || body["seconds"] != 181.5 || body["code"] != code {
+				t.Fatalf("%s %s: %v", code, lang, body)
+			}
+		}
+		rec := httptest.NewRecorder()
+		old := call(t, langWriter{rec, i18n.En}, rec, &rpc.Error{Code: code, Message: "old node diagnostic"})
+		if summary, _ := old["error"].(string); !strings.Contains(summary, "a minute") {
+			t.Fatalf("%s without a duration: %v", code, old)
+		}
+	}
+}
+
 func TestCodexWriterConflictSpeaksTheClientsLanguage(t *testing.T) {
 	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 		rec := httptest.NewRecorder()
@@ -619,6 +638,26 @@ func TestStartContinueRefusalsAreWorded(t *testing.T) {
 			if body["error"] != i18n.T(lang, "rpc-errors."+code) || body["error"] == "" || body["error"] == "node text" {
 				t.Errorf("%s %s: %v", code, lang, body)
 			}
+		}
+	}
+}
+
+func TestSupervisionRefusalsSpeakTheClientsLanguage(t *testing.T) {
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		for _, code := range []string{"assistant_supervision_runtime", "assistant_supervision_account"} {
+			rec := httptest.NewRecorder()
+			data := json.RawMessage(`{"delivered":"none","launchers":["OpenCode","agy"]}`)
+			body := call(t, langWriter{rec, lang}, rec, &rpc.Error{Code: code, Message: "runtime diagnostic", Data: data})
+			want := i18n.T(lang, "rpc-errors."+code, i18n.Args{"launchers": "OpenCode, agy"})
+			if rec.Code != http.StatusConflict || body["code"] != code || body["error"] != want || body["delivered"] != "none" {
+				t.Fatalf("%s %s: %d %v", lang, code, rec.Code, body)
+			}
+		}
+		rec := httptest.NewRecorder()
+		body := call(t, langWriter{rec, lang}, rec, &rpc.Error{Code: "assistant_supervision_runtime", Message: "legacy refusal"})
+		want := i18n.T(lang, "rpc-errors.assistant_supervision_runtime", i18n.Args{"launchers": i18n.T(lang, "rpc-errors.assistant_supervision_none")})
+		if body["error"] != want {
+			t.Fatalf("legacy %s: %v", lang, body)
 		}
 	}
 }
