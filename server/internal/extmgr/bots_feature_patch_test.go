@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
 type featurePatchStore struct {
@@ -321,5 +323,79 @@ func TestBotFeaturePatchPermissions(t *testing.T) {
 	code, _ := call(t, routes, http.MethodPut, "/api/v1/bots/feishu", token, `{"features":{"read_group":true}}`)
 	if code != http.StatusOK || !x.saved(t).Features.ReadGroup {
 		t.Fatalf("full device settings save: %d", code)
+	}
+}
+
+// Model the decisive read/write order without a scheduler race: configure prepares its
+// request against the live features, then updateBot's lazy load observes a newer durable
+// settings write. Both entry points use the real RPC/PUT handlers; no transport is started.
+func TestBotFeaturePatchConfigureKeepsCommitState(t *testing.T) {
+	x := newFeaturePatchWorld(t, false)
+	if w := x.put(`{"features":{"read_group":true}}`); w.Code != http.StatusOK {
+		t.Fatal(w.Code)
+	}
+	// Keep the newer PUT durable, while the preparation read sees the earlier snapshot.
+	// The next locked settings load restores the newer value before the RPC commits.
+	x.h.bots.mu.Lock()
+	x.h.bots.set.Features = defaultBotFeatures
+	x.h.bots.loaded = false
+	x.h.bots.mu.Unlock()
+	_, handled, err := x.h.AppCall(t.Context(), assistantwire.AppCall{AppID: assistantwire.AppFeishu, Method: assistantwire.FeishuConfigure, Params: json.RawMessage(`{"features":{"agents":true}}`)})
+	if !handled || err != nil {
+		t.Fatalf("configure RPC: handled=%v err=%v", handled, err)
+	}
+	s := x.saved(t)
+	if !s.Features.Agents || !s.Features.ReadGroup || !s.Features.Reports {
+		t.Fatalf("configure lost another request's switch: %+v", s.Features)
+	}
+	x.checkView(t, s)
+	select {
+	case <-x.entered:
+		t.Fatal("feature RPC started app configuration")
+	default:
+	}
+}
+
+func TestBotFeaturePatchConfigureSemantics(t *testing.T) {
+	for _, tc := range []struct {
+		name, params  string
+		initial, want BotFeatures
+		bad, fail     bool
+	}{
+		{name: "all cards enables cards", params: `{"features":{"all_cards":true}}`, initial: BotFeatures{ReadGroup: true}, want: BotFeatures{AllCards: true, Cards: true, ReadGroup: true}},
+		{name: "all cards wins over cards false", params: `{"features":{"cards":false,"all_cards":true}}`, initial: BotFeatures{ReadGroup: true}, want: BotFeatures{AllCards: true, Cards: true, ReadGroup: true}},
+		{name: "all cards off keeps cards", params: `{"features":{"all_cards":false}}`, initial: BotFeatures{AllCards: true, Cards: true, ReadGroup: true}, want: BotFeatures{Cards: true, ReadGroup: true}},
+		{name: "explicit false", params: `{"features":{"cards":false}}`, initial: defaultBotFeatures, want: BotFeatures{Main: true, Reports: true, TopicCot: true}},
+		{name: "empty", params: `{"features":{}}`, initial: defaultBotFeatures, want: defaultBotFeatures},
+		{name: "omitted", params: `{}`, initial: defaultBotFeatures, want: defaultBotFeatures},
+		{name: "unknown rejects whole request", params: `{"enabled":true,"features":{"agents":true,"unknown":true}}`, initial: defaultBotFeatures, want: defaultBotFeatures, bad: true},
+		{name: "failed write rolls back", params: `{"enabled":true,"features":{"all_cards":true}}`, initial: defaultBotFeatures, want: defaultBotFeatures, fail: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			x := newFeaturePatchWorld(t, false)
+			x.h.bots.set.Features = tc.initial
+			if err := x.h.saveBotSettingsLocked(); err != nil {
+				t.Fatal(err)
+			}
+			before := x.saved(t)
+			x.store.fail.Store(tc.fail)
+			_, handled, err := x.h.AppCall(t.Context(), assistantwire.AppCall{AppID: assistantwire.AppFeishu, Method: assistantwire.FeishuConfigure, Params: json.RawMessage(tc.params)})
+			if !handled || (err != nil) != (tc.bad || tc.fail) {
+				t.Fatalf("configure RPC: handled=%v err=%v", handled, err)
+			}
+			s := x.saved(t)
+			if s.Features != tc.want {
+				t.Fatalf("features=%+v want=%+v", s.Features, tc.want)
+			}
+			if (tc.bad || tc.fail) && !reflect.DeepEqual(before, s) {
+				t.Fatal("rejected configure changed settings")
+			}
+			x.checkView(t, s)
+			select {
+			case <-x.entered:
+				t.Fatal("feature RPC started app configuration")
+			default:
+			}
+		})
 	}
 }

@@ -76,8 +76,10 @@ The two complement each other and have separate switches.
 
 `PUT /api/v1/bots/feishu` changes only the feature keys supplied in `features`; omitted keys keep their current values,
 including changes saved by another client while credentials are being validated (#12646). Explicit `false` still turns a
-switch off, and sending every feature key replaces the complete feature set. A failed credential check or settings write
-leaves that request's credentials, switches and owner changes unapplied. Switch-only saves do not wait for remote validation.
+switch off, and sending every feature key replaces the complete feature set. The `feishu.configure` RPC likewise merges
+only the supplied switches; enabling `all_cards` also enables `cards`. A failed credential check or durable write rolls back
+that single credentials-and-features commit, including its owner changes. Later topic-chat, profile and other settings
+writes are separate operations, outside this transaction. Switch-only saves do not wait for remote validation.
 
 | Switch | What it does |
 | --- | --- |

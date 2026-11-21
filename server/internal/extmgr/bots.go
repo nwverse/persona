@@ -114,7 +114,7 @@ type BotFeatures struct {
 var defaultBotFeatures = BotFeatures{Main: true, Cards: true, Reports: true, TopicCot: true}
 
 // botFeatureUpdate keeps partial settings intent separate from an internal full replacement.
-// A patch is validated by the route, then merged into current features under bots.mu.
+// A patch is validated by its entry point, then merged into current features under bots.mu.
 type botFeatureUpdate struct {
 	replace *BotFeatures
 	patch   json.RawMessage
