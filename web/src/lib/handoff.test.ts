@@ -3,8 +3,8 @@
 // Agent's page, the way back, and the chat's place (#5096).
 import { afterEach, describe, expect, it } from "vitest";
 import { agentOpenMode, setAgentOpenMode } from "./agent-open";
-import { chatPlaceIn, chatPlaceOf, dropChatPlace, handoffFrom, leaveChat, openAgent, openTask, taskRoute } from "./handoff";
-import { closePanel, getPanel } from "./panel";
+import { chatPlaceIn, chatPlaceOf, dropChatPlace, fromHere, handoffFrom, leaveChat, openAgent, openedFromHere, openFromPage, openTask, panelIn, sidebarPageOf, taskRoute } from "./handoff";
+import { closePanel, getPanel, openPanel } from "./panel";
 import { getState, reset, type State } from "./store";
 import type { Todo } from "./todos";
 
@@ -81,14 +81,124 @@ describe("leaving a conversation", () => {
     expect(chatPlaceIn()).toBeUndefined();
   });
 
-  it("opens a link's page with no way-back strip, and anything but a conversation as a plain page", () => {
+  it("opens a link's page with no way-back strip, and from any other page names that page (#12055)", () => {
     history.replaceState(null, "", "/persona");
     leaveChat({ name: "session", mid: "m1", sid: "s1" }, false);
     expect(handoffFrom()).toBeUndefined();
-    history.replaceState(null, "", "/settings");
+    history.replaceState(null, "", "/workspace-board");
     leaveChat({ name: "session", mid: "m1", sid: "s2" });
     expect(location.pathname).toBe("/s/m1/s2");
+    expect(handoffFrom()).toEqual({ path: "/workspace-board" });
+    history.replaceState(null, "", "/workspace-board");
+    leaveChat({ name: "session", mid: "m1", sid: "s3" }, false);
     expect(handoffFrom()).toBeUndefined();
+  });
+});
+
+describe("an Agent opened from inside a page (#12055)", () => {
+  const back = () => new Promise<void>((done) => {
+    addEventListener("popstate", () => setTimeout(done, 0), { once: true });
+    history.back();
+  });
+
+  it("is a new entry naming the page, and Back returns to it", async () => {
+    history.replaceState(null, "", "/todos?id=t1");
+    const before = history.length;
+    openFromPage({ name: "session", mid: "m1", sid: "s1" });
+    expect(location.pathname).toBe("/s/m1/s1");
+    expect(history.length).toBe(before + 1);
+    expect(handoffFrom()).toEqual({ path: "/todos?id=t1" });
+    expect(sidebarPageOf(handoffFrom())).toBe("/todos?id=t1");
+    await back();
+    expect(location.pathname + location.search).toBe("/todos?id=t1");
+    expect(handoffFrom()).toBeUndefined();
+  });
+
+  it("from a Persona conversation, is the hand-off it always was: the chat's place kept, the conversation named", () => {
+    history.replaceState(null, "", "/persona/c1");
+    chat({ top: 300, height: 1500, client: 600 });
+    openFromPage({ name: "session", mid: "m1", sid: "s1" });
+    expect(handoffFrom()).toEqual({ path: "/persona/c1" });
+    history.back();
+  });
+
+  it("from an Agent's page opened from another page, keeps that first page for the sidebar", () => {
+    history.replaceState(null, "", "/kb/projects/p1");
+    openFromPage({ name: "session", mid: "m1", sid: "s1" });
+    expect(fromHere()).toEqual({ path: "/s/m1/s1", page: "/kb/projects/p1" });
+    openFromPage({ name: "session", mid: "m1", sid: "s2" });
+    expect(handoffFrom()).toEqual({ path: "/s/m1/s1", page: "/kb/projects/p1" });
+    expect(sidebarPageOf(handoffFrom())).toBe("/kb/projects/p1");
+    // an Agent's page picked in the sidebar is the first page itself
+    history.replaceState(null, "", "/s/m1/root");
+    expect(fromHere()).toEqual({ path: "/s/m1/root" });
+    // a page that is not an Agent's starts a chain of its own, whatever its entry carries
+    history.replaceState({ handoff: { path: "/persona" } }, "", "/todos?id=t1");
+    expect(openedFromHere()).toEqual({ handoff: { path: "/todos?id=t1" } });
+  });
+
+  it("reads only addresses in the app", () => {
+    expect(handoffFrom({ handoff: { path: "/s/m1/s1", page: "https://example.com/" } })).toEqual({ path: "/s/m1/s1" });
+    expect(handoffFrom({ handoff: { path: "/s/m1/s1", page: "/todos" } })).toEqual({ path: "/s/m1/s1", page: "/todos" });
+    expect(handoffFrom({ handoff: { page: "/todos" } })).toBeUndefined();
+    expect(sidebarPageOf(undefined)).toBeUndefined();
+  });
+});
+
+describe("leaving a conversation from its side panel (Open Agent page)", () => {
+  const back = () => new Promise<void>((done) => {
+    addEventListener("popstate", () => setTimeout(done, 0), { once: true });
+    history.back();
+  });
+
+  it("opens the task's panel again and puts the main chat back where it was, on Back (the strip's return too)", async () => {
+    history.replaceState(null, "", "/persona/c1");
+    chat({ top: 300, height: 1500, client: 600 });
+    // the panel's own chat scroller comes after the main one's and is not the conversation's place
+    const aside = document.createElement("aside");
+    const inPanel = document.createElement("div");
+    inPanel.setAttribute("data-chat-scroll", "");
+    aside.append(inPanel);
+    document.body.prepend(aside);
+    openPanel({ kind: "task", todo: "t1" });
+    leaveChat({ name: "session", mid: "m1", sid: "s1" }, true, getPanel()!);
+    closePanel();
+    expect(location.pathname).toBe("/s/m1/s1");
+    expect(handoffFrom()).toEqual({ path: "/persona/c1" });
+    expect(panelIn()).toBeUndefined();
+    await back();
+    expect(location.pathname).toBe("/persona/c1");
+    expect(getPanel()).toEqual({ kind: "task", todo: "t1" });
+    expect(chatPlaceIn()).toEqual({ end: false, line: "b", offset: -40 });
+  });
+
+  it("keeps an Agent's panel too, and nothing for other panels or a plain hand-off", async () => {
+    history.replaceState(null, "", "/persona");
+    leaveChat({ name: "session", mid: "m1", sid: "s1" }, true, { kind: "agent", mid: "m1", sid: "s1" });
+    await back();
+    expect(getPanel()).toEqual({ kind: "agent", mid: "m1", sid: "s1" });
+    closePanel();
+    leaveChat({ name: "session", mid: "m1", sid: "s1" }, true, { kind: "files", mid: "m1", sid: "s1", cwd: "/example" });
+    await back();
+    expect(getPanel()).toBeNull();
+    // a hand-off with no panel clears what an earlier one kept on this entry
+    leaveChat({ name: "session", mid: "m1", sid: "s1" }, true, { kind: "task", todo: "t1" });
+    await back();
+    closePanel();
+    chat({ top: 900, height: 1500, client: 600 });
+    leaveChat({ name: "session", mid: "m1", sid: "s1" });
+    await back();
+    expect(getPanel()).toBeNull();
+    expect(panelIn({ sidePanel: { kind: "link", url: "https://example.com/" } })).toBeUndefined();
+  });
+
+  it("keeps the panel for Back when it leaves from an overlay's entry", async () => {
+    history.replaceState({ personaOverlay: "o1" }, "", "/persona/c1");
+    leaveChat({ name: "session", mid: "m1", sid: "s1" }, true, { kind: "task", todo: "t1" });
+    expect(panelIn()).toBeUndefined();
+    history.replaceState(null, "", "/persona/c1");
+    dispatchEvent(new PopStateEvent("popstate"));
+    expect(getPanel()).toEqual({ kind: "task", todo: "t1" });
   });
 });
 

@@ -319,12 +319,12 @@ final class TasksStore {
         return startFailure(todo).map(StartFailureWords.rowLine)
     }
 
-    func startFailureCard(_ todo: TodoItem) -> String? {
+    func startFailureCard(_ todo: TodoItem, canOpen: Bool) -> String? {
         let task = planTask(todo)
         if let line = TaskStartRemedy.failureLine(code: task?.errorCode, args: task?.errorArgs) {
             return String(localized: "Didn't start: \(line) [Tasks Store 38bbb7]")
         }
-        return startFailure(todo).map(StartFailureWords.cardLine)
+        return startFailure(todo).map { StartFailureWords.cardLine($0, canOpen: canOpen) }
     }
 
     /// The detail page leads with the coded short line; its raw hub error remains available under Details.

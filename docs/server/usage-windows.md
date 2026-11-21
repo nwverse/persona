@@ -13,9 +13,10 @@ Persona collects usage on each computer without reading or handling agent login 
 | Codex app-server | In a bounded background poll, the node asks the official local Codex app-server for `account/rateLimits/read`. Codex makes the authenticated usage read and can return `accountId` with the same snapshot. Persona sends only a digest of a personal account ID to the usage manager | Preferred |
 | Codex rollout | `token_count` events in `~/.codex/sessions/…/rollout-*.jsonl` carry `rate_limits`: `primary` / `secondary` with `used_percent`, `window_minutes`, `resets_at` (seconds), plus `plan_type`, `limit_id`. The node reads the tail (512 KB) of the most recent few rollouts and takes the last event whose `limit_id` is `codex` (or unset). This sample identifies its reporting source only | Fallback |
 | Claude Code status line | Claude Code puts `rate_limits` (`five_hour` / `seven_day`, each with `used_percentage`, `resets_at`) in the **JSON input of the status line command** (see its changelog), and writes it to neither the transcript nor any other file | Yes, but the user has to wire it up (next section) |
+| Antigravity native quota summary | The agy companion asks its ACP process's local native service for `RetrieveUserQuotaSummary` every five minutes, with `forceRefresh: false` so agy's own cache controls upstream reads. Valid buckets and groups become 5-hour / weekly windows using `remainingFraction`, `window` (or a legacy bucket id), `resetTime` and the optional model. No conversation or model request is started, and no status-line email or credential is read | Yes |
 | Codex account usage API (ChatGPT's `wham/usage`) | Needs the login token in `~/.codex/auth.json` | **No**. Moshi uses it; Persona does not read `auth.json` |
 | Claude account usage API (`/api/oauth/usage`) and the `anthropic-ratelimit-*` response headers | Needs Claude's OAuth token (Keychain / `.credentials.json`); the headers also need a request of your own | **No**, same reason |
-| Others (Kimi, Grok, Antigravity, GLM / MiniMax API key plans) | All need an account API or a key | Not doing |
+| Others (Kimi, Grok, GLM / MiniMax API key plans) | All need an account API or a key | Not doing |
 
 The app-server starts no conversation or model request. The account ID applies only to the usage returned in that response, so a saved rollout from a previous login is never assigned to the current account.
 
@@ -44,14 +45,15 @@ The gateway's `rate_limits.spend_limit` (an amount of money) is not a window and
 ## Collection and merging
 
 - **node** (`server/internal/node/usagewindows.go`): refreshes every 5 minutes (the first time 20 seconds after connecting to the hub, so the hub's `node.configure` delivers the switch first).
-  Each source (one Codex home, one `claude*.json`) keeps its last sample, kept even when the source goes quiet, and dropped after 3 days. Windows whose `resets_at` has passed are dropped (those numbers belong to the previous period);
-  a source whose windows have all passed is not listed. `usage.windows` uses the cache or local files without waiting for the Codex app-server.
+  Each source (one Codex home, one `claude*.json`, or one local runtime id) keeps its last sample, kept even when the source goes quiet, and dropped after 3 days. Windows whose `resets_at` has passed are dropped (those numbers belong to the previous period);
+  a source whose windows have all passed is not listed. A local runtime reports through the optional `usage.windows` event when the node advertises `usage_windows`; its runtime id replaces the same source after a companion restart, and a valid empty snapshot clears it. `usage.windows` uses the cache or local files without waiting for the Codex app-server.
 - **Off**: `machines[].usage_windows` in `hub.json` (`docs/operations/config.md`); with `false`, that computer's node stops collection and the manager does not ask it. Unset means on.
   If the node is older than this version (no `usage.windows`), the manager treats it as having no data.
 - **Manager** (`server/internal/devices/usagewindows.go`): on `GET /api/v1/usage/windows` it asks the online machines (in parallel, 8 seconds each; repeated requests within 30 seconds reuse the previous merged result),
   remembers each machine's last answer (in memory only, forgotten after 3 days or when the machine is removed from hub.json), then merges:
   - **Codex**: samples with the same upstream personal account ID form one row, with the newest sample's windows and the names of the computers that reported it. Without a personal account ID, each source gets its own row with its source label. A shared workspace ID does not identify a member's allowance. A reset time describes a window and plays no part in Codex account grouping.
   - **Other providers**: samples for one provider can merge when they have a plan window with the same length and the same reset second. Each window length takes the newest sample with that window.
+  - **Prepaid balances** (#11825): an official DeepSeek launcher reports money left, not an allowance window. One row per launcher key carries `balance` instead of `windows` (below); it takes no place among the two fullest window bars, and the popover lists it beside them.
   - Samples older than 30 minutes are marked `stale` (sorted last, faded in the UI and labeled "out of date"); windows older than 3 days or past their reset time are dropped.
     Each account also says when it turns stale if nothing newer comes, `stale_at` (the newest sample's time plus its source's threshold: 30 minutes for a computer, 6 hours for a gateway). A client keeping an answer while refreshes fail judges it again with `stale || now >= stale_at`, so old numbers fade and read "out of date" however long ago it last heard from the hub, and no client hard-codes the thresholds (#1905).
   - **Every row has its own id** (clients use it as the row key, #1904). Codex row IDs are derived from the account or reporting source and stay stable across resets. Other providers use a digest of the longest plan window with the gateway reference or reporting source where needed. The node's grouping keys and the raw upstream ID stay out of the client response.
@@ -66,6 +68,10 @@ API (read-only, not usable with extension tokens, `testdata/route_scopes.txt`):
   "sampled_at": "2026-11-05T09:08:06Z", "stale": false, "stale_at": "2026-11-05T09:38:06Z",
   "local": true, "machines": ["MacBook"],
   "windows": [{"label": "5h", "window_minutes": 300, "used_percent": 22.0, "resets_at": "2026-11-05T13:08:06Z"}]
+}, {
+  "id": "deepseek-7f2a1c3d", "provider": "deepseek", "name": "DeepSeek",
+  "sampled_at": "2026-11-05T09:08:06Z", "stale": false, "stale_at": "2026-11-05T09:38:06Z",
+  "windows": [], "balance": {"amount": "12.34", "currency": "CNY"}
 }], "checked_at": "2026-11-05T09:08:20Z"}
 ```
 
@@ -206,6 +212,16 @@ Besides the sidebar, the same in-memory data feeds Agent scheduling: `devices.Ca
 one unavailable until its reset. It is read-only like everything here — the call performs no gateway or machine read beyond the windows' own short poll cache — and carries no
 credential or gateway-side account id. How the launcher picker consumes it is in `docs/server/launcher-health.md` ("Capacity-aware notes").
 
+
+## Prepaid balances (#11825)
+
+DeepSeek's official API is prepaid: an account has a balance, with no 5-hour or weekly allowance window to draw. Its read-only `GET /user/balance` answers the remaining amount and its currency. `amount` is the provider's own decimal string, kept verbatim, and is never converted into a percentage.
+
+- **Who reads it**: the manager, which already holds the launcher's key sealed (a launcher added in Persona; `docs/integrations/launchers.md`). It asks once every 5 minutes, at most 20 seconds per read, and only when the launcher's base URL is one of the official DeepSeek bases (`officialDeepSeekURL`: HTTPS, `api.deepseek.com` with no user info, query, fragment or extra path). A gateway, another host or a lookalike is never sent the key there. A launcher found in a shell rc file keeps its key on that computer, so it is not read.
+- **Key handling**: unchanged from the launcher's own calls. The sealed key is opened with the manager's `secret.key`, a reference (`op://…`) resolves through its provider extension, and a launcher with no key of its own may use its first per-computer key. The key goes only into the request's `Authorization` (and `x-api-key`, which the launcher also uses) at the official origin; no API answer, log line or stored sample holds it.
+- **One row per key**: two launchers with the same key are one account. The row's `provider` is `deepseek`, its `name` is the launcher's display name (or its name), and its `id` is derived from the launcher, so it stays stable while the amount moves.
+- **Success, zero and failure**: a successful read replaces `balance` and its `sampled_at`. A genuine zero is `"amount": "0.00"` with no `problem`: the account is out of prepaid credit, which the panel shows as an amount in the caution colour. A failed read keeps the last amount with `problem` (`rejected`, `unreachable` or `failed`) and `stale`, and says the amount is the last known one; a launcher whose first read failed has no `balance`, so the strip shows `—` and the popover says "Balance unavailable" and why, rather than zero. A failed balance never hides a window account. When the provider lists more than one currency, the first valid one is shown.
+- **Coexistence**: a balance row has `windows: []` and is merged like any other account, but it is not one of the two fullest window accounts the collapsed strip draws. The strip shows it as name + amount/currency (for example `CNY 12.34`), and the popover lists it with the window accounts.
 
 ## Who owns this (2026-11-05)
 
