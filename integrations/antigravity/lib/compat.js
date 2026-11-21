@@ -18,11 +18,11 @@ export function mcpServers(bin, pid, assistant, a2aToken) {
   for (const [name, value] of [['PERSONA_SESSION_ID', pid], ...(assistant ? [['PERSONA_ASSISTANT', '1']] : [])]) {
     env.push({ name, value }, { name: legacyEnvName(name), value })
   }
-  // One server, not one per MCP_SERVER_NAMES: agy counts every declaration against its tool budget. An assistant
-  // chat's tools go through mcp-proxy.mjs, so the ones agy defers stay reachable (#7333).
+  // Keep the regular catalog on its existing server. A scoped ticket grants only A2A tools.
+  // Assistant tools go through the proxy so deferred tools remain reachable (#7333).
   if (!assistant) {
-    if (a2aToken) env.push({ name: 'PERSONA_A2A_TOKEN', value: a2aToken })
-    return [{ name: 'persona', command: bin, args: ['mcp'], env }]
+    const server = { name: 'persona', command: bin, args: ['mcp'], env }
+    return a2aToken ? [server, { ...server, name: 'persona_a2a', env: [...env, { name: 'PERSONA_A2A_TOKEN', value: a2aToken }] }] : [server]
   }
   return [{ name: 'persona', command: process.execPath, args: [MCP_PROXY, bin, 'mcp'], env }]
 }

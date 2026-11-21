@@ -127,12 +127,12 @@ func (d *DB) A2AClaim(ctx context.Context, limit int) ([]A2ARow, error) {
 	return out, rows.Err()
 }
 
-// A2ADispatches retains recent dispatches for compatibility and always includes
-// in-flight dispatches for the caller's concurrency and depth checks.
+// A2ADispatches lists recent launches and all active launches for the caller's
+// dispatch tools, concurrency limit, and delegation depth check.
 func (d *DB) A2ADispatches(ctx context.Context, owner, machine, session string, since time.Time) ([]A2ARow, error) {
 	rows, err := d.pool.Query(ctx, `SELECT `+a2aColumns+` FROM a2a_tasks
 		WHERE (owner_key=$1 OR (target_machine,target_session)=($2,$3))
-		AND body->'launch'->'dispatch'='true'::jsonb
+		AND body ? 'launch'
 		AND (created_at >= $4 OR state IN ('submitted','working','input_required','auth_required'))
 		ORDER BY created_at DESC,id DESC`, owner, machine, session, since)
 	if err != nil {

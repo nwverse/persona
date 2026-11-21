@@ -82,23 +82,19 @@ func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwir
 		t, err = s.a2aGet(ctx, st, cfg, c, a.Task)
 	case "a2a_send":
 		if a.Task == "" {
-			guardTool := "conversation_send"
-			if a.CWD != "" {
-				guardTool = "agent_start"
-			}
-			if err := s.guardRefusal(ctx, c.Ref.Machine, c.Ref.Session, guardTool); err != nil {
-				return nil, err
-			}
 			var launch *a2aLaunch
 			if a.CWD != "" {
-				if err := s.dispatchToolGuard(ctx, c.Ref.Machine, c.Ref.Session, guardTool); err != nil {
+				if err := s.guardRefusal(ctx, c.Ref.Machine, c.Ref.Session, "agent_start"); err != nil {
+					return nil, err
+				}
+				if err := s.dispatchToolGuard(ctx, c.Ref.Machine, c.Ref.Session, "agent_start"); err != nil {
 					return nil, err
 				}
 				if err := s.workerRefusal(ctx, c.Ref.Machine, c.Ref.Session); err != nil {
 					return nil, err
 				}
 				launch = &a2aLaunch{CWD: a.CWD, Launcher: a.Launcher, Pending: true}
-			} else if err := s.dispatchSendGuard(withToolCaller(ctx, c.Ref.Machine, c.Ref.Session), c.Ref.Session, a.Machine, a.Session, a.Text); err != nil {
+			} else if err := s.a2aCanSendMessage(ctx, c.Ref, a.a2aRef, a.Text); err != nil {
 				return nil, err
 			}
 			t, err = s.a2aStart(ctx, st, cfg, c, a.a2aRef, a.ID, a.Context, a.Text, a.Wake == nil || *a.Wake, launch)
@@ -107,6 +103,9 @@ func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwir
 		t, err = s.a2aMutate(ctx, st, cfg, c, a.Task, func(t *a2aTask) (bool, error) {
 			if t.Owner != c.Owner {
 				return false, errA2ANotFound
+			}
+			if err := s.a2aCanSendMessage(ctx, c.Ref, t.target(), a.Text); err != nil {
+				return false, err
 			}
 			return a2aContinue(t, a.ID, a.Text)
 		})
@@ -128,6 +127,13 @@ func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwir
 		return nil, err
 	}
 	return t.view(), nil
+}
+
+func (s *Service) a2aCanSendMessage(ctx context.Context, from, to a2aRef, text string) error {
+	if err := s.guardRefusal(ctx, from.Machine, from.Session, "conversation_send"); err != nil {
+		return err
+	}
+	return s.dispatchSendGuard(withToolCaller(ctx, from.Machine, from.Session), from.Session, to.Machine, to.Session, text)
 }
 
 func a2aReport(t *a2aTask, sender a2aRef, id, state, text string) (bool, error) {
@@ -184,7 +190,7 @@ func (s *Service) a2aInbox(ctx context.Context, st a2aStore, cfg assistantwire.A
 		if err != nil {
 			return nil, err
 		}
-		if s.a2aAllowed(ctx, cfg, t.target()) && (t.SourceSession == "" || s.a2aAllowed(ctx, cfg, t.source())) {
+		if s.a2aTaskVisible(ctx, cfg, c, t) {
 			v := t.view()
 			// The full history is available when the caller selects one task.
 			v.Events = v.Events[len(v.Events)-1:]

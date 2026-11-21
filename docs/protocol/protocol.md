@@ -74,7 +74,6 @@ The web client may send `"replaces":"<this browser's previous device id>"`: once
     when starting a session. Resuming a session also requires this grant because resume can retain its permission mode.
     It opens only the permission mode field on the modes endpoint.
   - `agents.a2a` opens the per-session Agent Card and A2A JSON-RPC endpoint on enrolled machines. See [Agent-to-Agent communication](../integrations/a2a.md).
-    See [Agent-to-Agent communication](../integrations/a2a.md).
   - Machine-specific restrictions are unsupported. A request with `machines` returns 400
     `unsupported_machine_restriction`. Files, device administration and other ungranted routes stay closed.
     A scoped credential stays with the hub that issued it. After a mesh center migration, issue a new one at the new center.

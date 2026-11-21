@@ -28,6 +28,7 @@ const (
 	a2aSending   = "sending"
 	a2aDelivered = "delivered"
 	a2aUncertain = "uncertain"
+	a2aExpired   = "unconfirmed"
 	a2aDiscarded = "discarded"
 	a2aMaxText   = 12000
 	a2aMaxEvents = 96
@@ -80,6 +81,7 @@ type a2aBody struct {
 	Events       []a2aEvent `json:"events"`
 	Launch       *a2aLaunch `json:"launch,omitempty"`
 	Disconnected bool       `json:"disconnected,omitempty"`
+	TargetClosed bool       `json:"target_closed,omitempty"`
 }
 
 type a2aLaunch struct {
@@ -170,6 +172,9 @@ func (s *Service) a2aAllowed(ctx context.Context, cfg assistantwire.A2AConfig, r
 		return false
 	}
 	if row, ok := s.nodeSession(ref.Machine, ref.Session); ok && (!a2aVisible(row) || s.hiddenByDirectory(ref.Machine, row)) {
+		return false
+	}
+	if row, ok, err := s.archivedRow(ctx, ref.Machine, ref.Session); err == nil && ok && row.Archived {
 		return false
 	}
 	_, guest, err := s.guestOf(ctx, ref.Machine, ref.Session)
@@ -272,6 +277,8 @@ func (s *Service) a2aStart(ctx context.Context, st a2aStore, cfg assistantwire.A
 		}
 		launch.CWD = proto.ExpandHome(launch.CWD, dev.Home)
 		to.Session = newStartSessionID()
+		s.dispatch.admit.Lock()
+		defer s.dispatch.admit.Unlock()
 	}
 	if !a2aValidID(id) || !a2aValidText(text) || contextID != "" && !a2aValidID(contextID) || to == c.Ref {
 		return nil, errA2AInvalid
@@ -286,6 +293,8 @@ func (s *Service) a2aStart(ctx context.Context, st a2aStore, cfg assistantwire.A
 		if _, err := s.a2aSession(ctx, cfg, to); err != nil {
 			return nil, err
 		}
+	} else if err := s.checkDispatchCapacity(ctx, c.Ref, time.Now()); err != nil {
+		return nil, err
 	}
 	if contextID == "" {
 		contextID = randomHex(16)
@@ -334,11 +343,18 @@ func (s *Service) a2aGet(ctx context.Context, st a2aStore, cfg assistantwire.A2A
 	if err != nil {
 		return nil, err
 	}
-	if t == nil || !t.participant(c) || !s.a2aAllowed(ctx, cfg, t.target()) ||
-		t.SourceSession != "" && !s.a2aAllowed(ctx, cfg, t.source()) {
+	if t == nil || !t.participant(c) || !s.a2aTaskVisible(ctx, cfg, c, t) {
 		return nil, errA2ANotFound
 	}
 	return t, nil
+}
+
+func (s *Service) a2aTaskVisible(ctx context.Context, cfg assistantwire.A2AConfig, c a2aCaller, t *a2aTask) bool {
+	if t.SourceSession != "" && !s.a2aAllowed(ctx, cfg, t.source()) {
+		return false
+	}
+	return s.a2aAllowed(ctx, cfg, t.target()) ||
+		t.TargetClosed && t.Owner == c.Owner && s.a2aMachineAllowed(ctx, cfg, t.TargetMachine)
 }
 
 func (s *Service) a2aMutate(ctx context.Context, st a2aStore, cfg assistantwire.A2AConfig, c a2aCaller, id string, change func(*a2aTask) (bool, error)) (*a2aTask, error) {
@@ -367,7 +383,11 @@ func a2aAppendOnce(t *a2aTask, ev a2aEvent) (bool, error) {
 			return false, nil
 		}
 	}
-	if a2aTerminal(t.State) || len(t.Events) >= a2aMaxEvents-2 {
+	limit := a2aMaxEvents - 2
+	if a2aTerminal(ev.State) {
+		limit = a2aMaxEvents
+	}
+	if a2aTerminal(t.State) || len(t.Events) >= limit {
 		return false, fmt.Errorf("%w: task is closed or its history is full", errA2AInvalid)
 	}
 	t.append(ev)
@@ -375,7 +395,7 @@ func a2aAppendOnce(t *a2aTask, ev a2aEvent) (bool, error) {
 }
 
 func a2aReturn(t *a2aTask, ev a2aEvent) a2aEvent {
-	if t.SourceSession != "" && t.Wake && ev.Kind != "progress" {
+	if t.SourceSession != "" && t.Wake && ev.Kind == "status" {
 		ev.Delivery = a2aQueued
 	}
 	return ev
@@ -392,7 +412,18 @@ func a2aContinue(t *a2aTask, id, text string) (bool, error) {
 	if t.State != a2aInput {
 		return false, fmt.Errorf("%w: task is not waiting for an answer", errA2AInvalid)
 	}
-	return a2aAppendOnce(t, ev)
+	changed, err := a2aAppendOnce(t, ev)
+	if changed {
+		for i := len(t.Events) - 2; i >= 0; i-- {
+			if t.Events[i].State == a2aInput {
+				if t.Events[i].Delivery == a2aQueued {
+					t.Events[i].Delivery = a2aDiscarded
+				}
+				break
+			}
+		}
+	}
+	return changed, err
 }
 
 func a2aCancel(t *a2aTask) (bool, error) {

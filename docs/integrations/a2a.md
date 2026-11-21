@@ -29,6 +29,8 @@ running a node enrolls by its machine ID. A runtime daemon enrolls through its
 node. To let it call A2A tools, set `"a2a": true` on that daemon's entry
 in `daemons.json`. Its original session ID is used when it calls the runtime
 SDK, and Persona addresses it by the namespaced ID listed in discovery.
+An enrolled daemon can discover and send tasks to eligible sessions across
+the Manager's enrolled computers. Enable this for runtimes you trust with that access.
 
 ## Send and receive
 
@@ -44,6 +46,7 @@ Use the tools through Persona MCP, a runtime's existing `callTool` API, or
 | `a2a_cancel` | Cancel a request that has not entered a turn, or one waiting for input |
 
 For an existing session, send its exact machine and session IDs.
+Each receiving session can have one active A2A task at a time.
 
 ```sh
 personad tool a2a_send '{"machine_id":"box","session_id":"runtime.session-1","message_id":"request-001","text":"Run the checks and return the failing cases."}'
@@ -87,7 +90,9 @@ messages wait for a live session. Returning results can also resume a parent
 whose node recorded an idle stop or restart. Runtimes such as Paseo can also
 wake a parent they released while idle. If the runtime may have taken a message
 and its reply was lost, the manager checks for delivery evidence. An unresolved
-delivery is shown as `uncertain`.
+delivery is shown as `uncertain` for up to ten minutes. It then records
+`unconfirmed` and releases the task's hold on the recipient. A closed receiving
+session ends the task and sends the parent a status update.
 
 ## Client and harness coverage
 
@@ -137,6 +142,7 @@ the response grants exactly the intended scope before giving it to a client.
 Use the issued token in the Authorization header. A client can only read or
 continue the A2A tasks created with its credential. The recipient can read
 and report on its own tasks through the node.
+This credential can send tasks to any eligible session in the Manager's enrollment.
 
 ```json
 {

@@ -164,6 +164,84 @@ func TestA2AAmbiguousSendIsReconciledWithoutReplay(t *testing.T) {
 	}
 }
 
+func TestA2AUnconfirmedInputReleasesTheTarget(t *testing.T) {
+	s, h, st, cfg, parent, child := a2aFixture(t)
+	ctx := t.Context()
+	task, err := s.a2aStart(ctx, st, cfg, parent, child, "initial", "", "Inspect the build.", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.sendErr = errors.New("lost send reply")
+	task = a2aProcessOne(t, s, st, cfg, task.ID)
+	if task.Events[0].Delivery != a2aUncertain {
+		t.Fatalf("delivery should remain uncertain: %+v", task.Events[0])
+	}
+	task.Events[0].Attempted = time.Now().Add(-a2aConfirmFor)
+	if err := s.a2aSave(ctx, st, task); err != nil {
+		t.Fatal(err)
+	}
+	task = a2aProcessOne(t, s, st, cfg, task.ID)
+	if task.State != a2aFailed || task.Events[0].Delivery != a2aExpired || len(h.sends) != 1 {
+		t.Fatalf("expired task was replayed or still holds the target: %+v (%d sends)", task.Events, len(h.sends))
+	}
+	if _, err := s.a2aStart(ctx, st, cfg, parent, child, "next", "", "Inspect the next build.", true, nil); err != nil {
+		t.Fatalf("expired task did not release the target: %v", err)
+	}
+}
+
+func TestA2AArchiveClosesTheTaskAndTellsTheSender(t *testing.T) {
+	s, h, st, cfg, parent, child := a2aFixture(t)
+	ctx := t.Context()
+	task, err := s.a2aStart(ctx, st, cfg, parent, child, "initial", "", "Inspect the build.", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2aProcessOne(t, s, st, cfg, task.ID)
+	row := h.sessions[child.Machine][0]
+	row.MachineID = child.Machine
+	if err := s.noteAgentArchive(ctx, row, true); err != nil {
+		t.Fatal(err)
+	}
+	setStatus(h.fakeHub, parent.Ref.Machine, parent.Ref.Session, proto.StatusIdle)
+	task = a2aProcessOne(t, s, st, cfg, task.ID)
+	if !task.TargetClosed || task.State != a2aFailed {
+		t.Fatalf("archive did not close task: %+v", task)
+	}
+	a2aProcessOne(t, s, st, cfg, task.ID)
+	if len(h.sends) != 2 || h.sends[1].Device != parent.Ref.Machine || !strings.Contains(string(h.sends[1].Params), "receiving session was closed") {
+		t.Fatalf("archive result did not reach the parent: %+v", h.sends)
+	}
+	if _, err := s.a2aGet(ctx, st, cfg, parent, task.ID); err != nil {
+		t.Fatalf("sender could not read the closed task: %v", err)
+	}
+	if _, err := s.a2aGet(ctx, st, cfg, a2aSessionCaller(child), task.ID); !errors.Is(err, errA2ANotFound) {
+		t.Fatalf("archived session could still read task: %v", err)
+	}
+}
+
+func TestA2ALaunchesShareTheDispatchLimitAndDepth(t *testing.T) {
+	s, h, st, cfg, parent, _ := a2aFixture(t)
+	ctx := t.Context()
+	h.hello.Agents.Dispatch.MaxActive = 1
+	start := func(c a2aCaller, machine, id string) (*a2aTask, error) {
+		return s.a2aStart(ctx, st, cfg, c, a2aRef{Machine: machine}, id, "", "Inspect the build.", true,
+			&a2aLaunch{CWD: "/code/app", Pending: true})
+	}
+	task, err := start(parent, "box", "launch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := start(parent, "box", "launch"); err != nil || again.ID != task.ID {
+		t.Fatalf("an idempotent retry consumed capacity: %+v %v", again, err)
+	}
+	if _, err := start(parent, "box", "second-launch"); err == nil || !strings.Contains(err.Error(), "the limit is 1") {
+		t.Fatalf("a second launch exceeded the dispatch limit: %v", err)
+	}
+	if _, err := start(a2aSessionCaller(task.target()), "mac", "child-launch"); err == nil || !strings.Contains(err.Error(), "does not dispatch") {
+		t.Fatalf("a child could dispatch another child: %v", err)
+	}
+}
+
 func TestA2ATextOnlyHarnessReturnsQuestionAndContinues(t *testing.T) {
 	s, h, st, cfg, parent, child := a2aFixture(t)
 	ctx := t.Context()
@@ -178,6 +256,7 @@ func TestA2ATextOnlyHarnessReturnsQuestionAndContinues(t *testing.T) {
 		t.Fatalf("unrelated turn changed the task: %s", task.State)
 	}
 	h.setItems(proto.Item{Role: "user", Text: prompts.RelayMessageText("Check the build.", nil, a2aDeliveryID(task.ID, 1))},
+		proto.Item{Role: "user", Kind: proto.KindToolResult, Text: "The tool output appeared inside the same turn."},
 		proto.Item{Role: "assistant", Kind: proto.KindText, Text: question}, proto.Item{Kind: "turn_duration", ID: "closed-turn"},
 		proto.Item{Role: "user", ClientMsgID: "different-message"})
 	task = a2aProcessOne(t, s, st, cfg, task.ID)
@@ -203,6 +282,20 @@ func TestA2ATextOnlyHarnessReturnsQuestionAndContinues(t *testing.T) {
 	}
 	h.setItems(proto.Item{Role: "user", ClientMsgID: a2aDeliveryID(task.ID, questionSeq)},
 		proto.Item{Role: "assistant", Kind: proto.KindText, Text: "A2A " + task.ID + " answer\nUse the integration target."})
+	guard := DispatchGuard{Enabled: true, Targets: []DispatchGuardTarget{{MachineID: parent.Ref.Machine, SessionID: parent.Ref.Session, Deny: []string{"conversation_send"}}}}
+	if err := s.saveDispatchGuard(ctx, guard); err != nil {
+		t.Fatal(err)
+	}
+	if task = a2aProcessOne(t, s, st, cfg, task.ID); task.State != a2aInput {
+		t.Fatalf("a text reply bypassed the dispatch guard: %s", task.State)
+	}
+	args, _ := json.Marshal(map[string]string{"task_id": task.ID, "message_id": "guarded-answer", "text": "Use the integration target."})
+	if _, err := s.a2aToolCall(ctx, st, cfg, parent, "a2a_send", args); err == nil {
+		t.Fatal("a follow-up tool call bypassed the dispatch guard")
+	}
+	if err := s.saveDispatchGuard(ctx, DispatchGuard{}); err != nil {
+		t.Fatal(err)
+	}
 	if task = a2aProcessOne(t, s, st, cfg, task.ID); task.State != a2aSubmitted {
 		t.Fatalf("text answer was not accepted: %s", task.State)
 	}
@@ -441,18 +534,13 @@ func TestA2AWakesAnIdleStoppedParentAndLeavesAUserStopAlone(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("parent was not resumed")
 	}
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
+	waitFor(t, "the durable A2A wake receipt", func() bool {
 		task, err := decodeA2A(st.A2AGet(ctx, task.ID))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if task.Events[len(task.Events)-1].Delivery == a2aDelivered {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("wake had no durable delivery receipt")
+		return task.Events[len(task.Events)-1].Delivery == a2aDelivered
+	})
 }
 
 func TestA2AStandardStreamCarriesTaskAndArtifact(t *testing.T) {
@@ -532,14 +620,13 @@ func TestA2AAcceptsOneLaunchPerMessageID(t *testing.T) {
 		t.Fatal(err)
 	}
 	a2aProcessOne(t, s, st, cfg, task.ID)
-	deadline := time.Now().Add(5 * time.Second)
-	for task.Launch.Pending && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	waitFor(t, "the A2A launch result", func() bool {
 		task, err = decodeA2A(st.A2AGet(t.Context(), task.ID))
 		if err != nil {
 			t.Fatal(err)
 		}
-	}
+		return !task.Launch.Pending
+	})
 	if task.Launch.Pending || task.Events[0].Delivery != a2aUncertain || len(h.starts) != 1 ||
 		h.starts[0]["permission_mode"] != "plan" {
 		t.Fatalf("launch: %+v; starts %+v", task, h.starts)

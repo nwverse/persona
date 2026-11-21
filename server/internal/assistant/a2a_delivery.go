@@ -17,6 +17,8 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
+const a2aConfirmFor = 10 * time.Minute
+
 func (s *Service) a2aLoop(ctx context.Context) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
@@ -84,8 +86,9 @@ func a2aTurn(items []proto.Item, id string) a2aTurnView {
 	var out a2aTurnView
 	start := -1
 	for i, item := range items {
-		if item.Role == "user" || item.Wake || item.Injected != nil {
-			if item.Role == "user" && (item.ClientMsgID == id || prompts.RelayMessageID(item.Text) == id) {
+		user := item.Role == "user" && item.Kind != proto.KindToolResult
+		if user || item.Wake || item.Injected != nil {
+			if user && (item.ClientMsgID == id || prompts.RelayMessageID(item.Text) == id) {
 				start = i
 			} else if start != -1 {
 				return a2aReadTurn(items[start:i], false)
@@ -113,17 +116,33 @@ func a2aReadTurn(items []proto.Item, current bool) a2aTurnView {
 }
 
 func (s *Service) a2aProcess(ctx context.Context, st a2aStore, cfg assistantwire.A2AConfig, t *a2aTask) error {
-	if !s.a2aAllowed(ctx, cfg, t.target()) || t.SourceSession != "" && !s.a2aAllowed(ctx, cfg, t.source()) {
+	if t.SourceSession != "" && !s.a2aAllowed(ctx, cfg, t.source()) {
+		if !a2aTerminal(t.State) && s.a2aEndpointClosed(ctx, cfg, t.source()) {
+			t.fail("The sending session was closed.", false)
+			return s.a2aSave(ctx, st, t)
+		}
 		return nil
 	}
-	offline := s.computerState(t.TargetMachine).state == standingComputerOffline
-	if !a2aTerminal(t.State) && offline != t.Disconnected && len(t.Events) < a2aMaxEvents-2 {
-		t.Disconnected = offline
-		e := a2aEvent{ID: randomHex(16), Kind: "connection", Text: "The receiving computer reconnected."}
-		if offline {
-			e.Text = "The receiving computer disconnected. The task will be checked when it returns."
+	if !s.a2aAllowed(ctx, cfg, t.target()) {
+		if !a2aTerminal(t.State) && s.a2aEndpointClosed(ctx, cfg, t.target()) {
+			t.TargetClosed = true
+			t.fail("The receiving session was closed.", true)
+			return s.a2aSave(ctx, st, t)
 		}
-		t.append(a2aReturn(t, e))
+		if !t.TargetClosed || !s.a2aMachineAllowed(ctx, cfg, t.TargetMachine) {
+			return nil
+		}
+	}
+	offline := s.computerState(t.TargetMachine).state == standingComputerOffline
+	if !a2aTerminal(t.State) && offline != t.Disconnected {
+		t.Disconnected = offline
+		if len(t.Events) < a2aMaxEvents/4 {
+			e := a2aEvent{ID: randomHex(16), Kind: "connection", Text: "The receiving computer reconnected."}
+			if offline {
+				e.Text = "The receiving computer disconnected. The task will be checked when it returns."
+			}
+			t.append(e)
+		}
 		if err := s.a2aSave(ctx, st, t); err != nil {
 			return err
 		}
@@ -134,6 +153,14 @@ func (s *Service) a2aProcess(ctx context.Context, st a2aStore, cfg assistantwire
 	for i, e := range t.Events {
 		if !a2aActiveDelivery(e) {
 			continue
+		}
+		if e.Delivery != a2aQueued && !e.Attempted.IsZero() && time.Since(e.Attempted) >= a2aConfirmFor {
+			if e.Kind == "message" && !a2aTerminal(t.State) {
+				t.fail("Persona could not confirm delivery of the request.", true)
+			} else {
+				t.Events[i].Delivery = a2aExpired
+			}
+			return s.a2aSave(ctx, st, t)
 		}
 		to, from := t.target(), t.source()
 		if offline && e.Kind == "message" {
@@ -162,6 +189,36 @@ func (s *Service) a2aProcess(ctx context.Context, st a2aStore, cfg assistantwire
 	return s.a2aObserve(ctx, st, t)
 }
 
+func (s *Service) a2aEndpointClosed(ctx context.Context, cfg assistantwire.A2AConfig, ref a2aRef) bool {
+	if !s.a2aMachineAllowed(ctx, cfg, ref.Machine) {
+		return false
+	}
+	if row, ok, err := s.archivedRow(ctx, ref.Machine, ref.Session); err == nil && ok && row.Archived {
+		return true
+	}
+	row, ok, err := s.sessionNow(ctx, ref.Machine, ref.Session)
+	return err == nil && ok && (row.Archived || row.HiddenByDirectory() || s.hiddenByDirectory(ref.Machine, row))
+}
+
+func (t *a2aTask) fail(message string, wake bool) {
+	for i := range t.Events {
+		switch t.Events[i].Delivery {
+		case a2aQueued:
+			t.Events[i].Delivery = a2aDiscarded
+		case a2aSending, a2aUncertain:
+			t.Events[i].Delivery = a2aExpired
+		}
+	}
+	if t.Launch != nil {
+		t.Launch.Pending = false
+	}
+	e := a2aEvent{ID: randomHex(16), Kind: "status", State: a2aFailed, Text: message}
+	if wake {
+		e = a2aReturn(t, e)
+	}
+	t.append(e)
+}
+
 // A text-only parent can answer the latest question in the turn that received
 // it. The event ID makes recovery idempotent across Manager restarts.
 func (s *Service) a2aObserveAnswer(ctx context.Context, st a2aStore, t *a2aTask) error {
@@ -186,7 +243,7 @@ func (s *Service) a2aObserveAnswer(ctx context.Context, st a2aStore, t *a2aTask)
 		return nil
 	}
 	answer, ok := a2aReplyBody(turn.reply, "A2A "+t.ID+" answer")
-	if !ok {
+	if !ok || s.a2aCanSendMessage(ctx, t.source(), t.target(), answer) != nil {
 		return nil
 	}
 	changed, err := a2aContinue(t, fmt.Sprintf("persona-answer-%d", question.Seq), answer)
@@ -390,8 +447,7 @@ func a2aNoDelivery(err error) bool {
 		return false
 	}
 	return nodeDelivered(re) == "none" || re.Code == devicewire.CodeMachineOffline || re.Code == devicewire.CodeNoDevice ||
-		re.Code == "a2a_session_busy" || re.Code == proto.CodeAgentStopped || re.Message == "unknown method session.a2a.send" ||
-		re.Message == "unknown method session.a2a.wake"
+		re.Code == "a2a_session_busy" || re.Code == proto.CodeAgentStopped
 }
 
 func a2aIdle(sess proto.Session) bool {
@@ -423,12 +479,14 @@ func (s *Service) a2aObserve(ctx context.Context, st a2aStore, t *a2aTask) error
 	if t.State != a2aWorking && t.State != a2aAuth {
 		return nil
 	}
-	var seq int
-	for _, e := range t.Events {
-		if e.Kind == "message" {
-			seq = e.Seq
-		}
+	idx := len(t.Events) - 1
+	for idx >= 0 && t.Events[idx].Kind != "message" {
+		idx--
 	}
+	if idx < 0 {
+		return nil
+	}
+	message := t.Events[idx]
 	sess, ok, err := s.sessionNow(ctx, t.TargetMachine, t.TargetSession)
 	if err != nil || !ok {
 		return nil
@@ -437,9 +495,12 @@ func (s *Service) a2aObserve(ctx context.Context, st a2aStore, t *a2aTask) error
 	if err != nil {
 		return nil
 	}
-	turn := a2aTurn(items, a2aDeliveryID(t.ID, seq))
+	turn := a2aTurn(items, a2aDeliveryID(t.ID, message.Seq))
 	var state, text string
 	switch {
+	case (!turn.echo || !turn.closed && (!turn.current || turn.reply == "")) &&
+		a2aIdle(sess) && time.Since(message.Attempted) > a2aConfirmFor:
+		state, text = a2aFailed, "Persona could not find the receiving session's finished task turn."
 	case !turn.echo:
 		return nil
 	case len(t.Events) >= a2aMaxEvents-1:

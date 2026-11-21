@@ -36,13 +36,13 @@ func (s *Service) dispatchTasks(ctx context.Context, ref a2aRef) ([]dispatchTask
 		if err != nil {
 			return nil, false, err
 		}
-		if task.Launch == nil || !task.Launch.Dispatch {
+		if task.Launch == nil {
 			continue
 		}
 		if task.target() == ref {
 			child = true
 		}
-		if task.Owner == caller.Owner && s.a2aAllowed(ctx, cfg, task.target()) {
+		if task.Owner == caller.Owner && s.a2aTaskVisible(ctx, cfg, caller, task) {
 			tasks = append(tasks, dispatchTask{FromMachine: ref.Machine, FromSession: ref.Session, Machine: task.TargetMachine,
 				Session: task.TargetSession, Cwd: task.Launch.CWD, Title: task.Launch.Title, At: task.Created, a2a: task})
 		}
@@ -75,29 +75,39 @@ func (s *Service) admitDispatchA2A(ctx context.Context, from a2aRef, target, req
 			}
 		}
 	}
-	tasks, child, err := s.dispatchTasks(ctx, from)
-	if err != nil {
+	if err := s.checkDispatchCapacity(ctx, from, now); err != nil {
 		return nil, false, err
-	}
-	limit, active := s.hello(ctx).Agents.Dispatch.Limit(), 0
-	for _, task := range tasks {
-		child = child || task.Machine == from.Machine && task.Session == from.Session
-		if task.FromMachine == from.Machine && task.FromSession == from.Session && s.dispatchWorking(ctx, task, now) {
-			active++
-		}
-	}
-	if child {
-		return nil, false, errors.New("you are a task another agent handed to this computer: do the work here (your own in-session " +
-			"subagents are fine), a dispatched task does not dispatch; nothing was started")
-	}
-	if active >= limit {
-		return nil, false, fmt.Errorf("%d tasks you dispatched are still working (the limit is %d): read them with dispatch_read and "+
-			"wait for one to stop; nothing was started", active, limit)
 	}
 	if dev, ok := s.machineByName(ctx, target); !ok || !dev.Online && !dev.Reachable {
 		return nil, false, fmt.Errorf("%s is offline; nothing was started", target)
 	}
 	return s.prepareDispatchA2A(ctx, from, target, requestID, prompt, launch)
+}
+
+func (s *Service) checkDispatchCapacity(ctx context.Context, from a2aRef, now time.Time) error {
+	tasks, child, err := s.dispatchTasks(ctx, from)
+	if err != nil {
+		return err
+	}
+	limit, active := s.hello(ctx).Agents.Dispatch.Limit(), 0
+	for _, task := range tasks {
+		child = child || task.Machine == from.Machine && task.Session == from.Session
+		if task.FromMachine != from.Machine || task.FromSession != from.Session {
+			continue
+		}
+		if task.a2a != nil && !a2aTerminal(task.a2a.State) || task.a2a == nil && s.dispatchWorking(ctx, task, now) {
+			active++
+		}
+	}
+	if child {
+		return errors.New("you are a task another agent handed to this computer: do the work here (your own in-session " +
+			"subagents are fine), a dispatched task does not dispatch; nothing was started")
+	}
+	if active >= limit {
+		return fmt.Errorf("%d tasks you dispatched are still working (the limit is %d): read them with dispatch_read and "+
+			"wait for one to stop; nothing was started", active, limit)
+	}
+	return nil
 }
 
 func (s *Service) prepareDispatchA2A(ctx context.Context, from a2aRef, target, requestID, prompt string, launch a2aLaunch) (*dispatchA2AStart, bool, error) {

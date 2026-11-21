@@ -108,6 +108,9 @@ A daemon is not necessarily trustworthy, e.g. a multi-tenant platform, or someth
 | | Claim a local terminal pane through `pane_id`, or start a command in the local terminal engine through `resume_argv`: both fields are dropped, and `features` does not tell it `resume_argv` exists |
 | | Reply `code: handover` to a send so the node hands the message to another runtime: the node turns it into `not_running` and sends nothing; `features` does not tell it `handover` exists either |
 
+With A2A enabled, the daemon's own listed sessions can discover and send tasks
+to eligible sessions across the Manager's enrolled computers.
+
 ## SDK
 
 `createRuntime` in `integrations/runtime-sdk` gains a `listen` option. The driver needs no changes; the same runtime works with both ways of connecting:
