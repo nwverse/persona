@@ -26,6 +26,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Base64
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -81,7 +82,7 @@ import persona.feature.chat.LocalChatForwarding
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "en-w400dp-h1200dp-xhdpi")
 class AssistantForwardPhotosTest {
-    @get:Rule val rule = createAndroidComposeRule<ComponentActivity>(effectContext = kotlinx.coroutines.Dispatchers.Main)
+    @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
     private val source = Session("mac", "source", title = "Source", cwd = "/source", agent = "claude", status = "idle", state = "idle")
     private val main = SessionKey("mac", "main")
     private val paths = listOf("/source/home/first.png", "/source/home/second.png")
@@ -123,7 +124,7 @@ class AssistantForwardPhotosTest {
 
     private class Composer : ChatComposerService {
         override val deliveries = MutableStateFlow(emptyMap<String, ComposerDelivery>())
-        val uploads = mutableListOf<Pair<SessionKey, String>>()
+        val uploads = java.util.Collections.synchronizedList(mutableListOf<Pair<SessionKey, String>>())
         override suspend fun upload(session: SessionKey, name: String, file: File): String {
             uploads += session to name
             return "/up/${session.machineId}/$name"
@@ -149,6 +150,13 @@ class AssistantForwardPhotosTest {
         val files = Files()
         val composer = Composer()
         val composerState = persona.feature.chat.ChatComposerState()
+        val uploaded = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val upload: persona.feature.chat.ComposerAttachmentUpload = { service, session, attachment, onStaged ->
+            onStaged(attachment.size ?: 0)
+            service.upload(session, attachment.name, File(attachment.name)).also {
+                if (composer.uploads.size == 2) uploaded.complete(Unit)
+            }
+        }
         val hub = Hub()
         var home by mutableStateOf(false)
         val chats = object : ChatRepository {
@@ -179,10 +187,7 @@ class AssistantForwardPhotosTest {
                         CompositionLocalProvider(LocalManagerRoster provides ManagerRoster(listOf(
                             HubManager("assistant", "Helper", online = true, isDefault = true)), "assistant")) {
                             AssistantScreen(navigator, hub, hub, hub::start, composerService = composer,
-                                composerUpload = { service, session, attachment, onStaged ->
-                                    onStaged(attachment.size ?: 0)
-                                    service.upload(session, attachment.name, File(attachment.name))
-                                },
+                                composerUpload = upload,
                                 mainConversationSender = hub, chatContent = { Text("chat:${it.sessionId}") },
                                 composerState = composerState)
                         }
@@ -210,10 +215,16 @@ class AssistantForwardPhotosTest {
         val forward = ForwardPlacements.home.single()
         fun waitMain(timeout: Long = 10_000, condition: () -> Boolean) = rule.waitUntil(timeout) {
             // Background uploads resume through Robolectric's main dispatcher, not Compose's idle detection alone.
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
             org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
             condition()
         }
-        waitMain { composerState.attachments.size == 2 && composerState.ready }
+        kotlinx.coroutines.runBlocking {
+            uploaded.await()
+            kotlinx.coroutines.withTimeout(10_000) {
+                androidx.compose.runtime.snapshotFlow { composerState.ready }.first { it }
+            }
+        }
         rule.onNodeWithContentDescription("Photo 1", useUnmergedTree = true).assertExists()
         rule.onNodeWithContentDescription("Photo 2", useUnmergedTree = true).assertExists()
         assertEquals(setOf(main to "first.png", main to "second.png"), composer.uploads.toSet())

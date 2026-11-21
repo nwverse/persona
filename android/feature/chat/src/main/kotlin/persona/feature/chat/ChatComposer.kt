@@ -292,7 +292,6 @@ fun ChatComposer(
                 if (attachment.uploadState == DraftUploadState.Invalid) return@LaunchedEffect
                 // Once the computer has it, a revoked local picker grant cannot make the attachment unsendable.
                 if (attachment.path != null) return@LaunchedEffect
-                System.err.println("UPLOAD TRACE start ${attachment.name} ${kotlinx.coroutines.currentCoroutineContext()}")
                 if (!withContext(Dispatchers.IO) { attachmentReadable(context, attachment) }) {
                     val reason = resources.getString(R.string.chat_composer_attachment_gone)
                     state.attachments = state.attachments.map {
@@ -302,10 +301,8 @@ fun ChatComposer(
                     return@LaunchedEffect
                 }
                 if (attachment.error != null || service == null) return@LaunchedEffect
-                System.err.println("UPLOAD TRACE readable ${attachment.name} ${kotlinx.coroutines.currentCoroutineContext()}")
                 try {
                     val path = uploadLimiter.withSlot {
-                        System.err.println("UPLOAD TRACE slot ${attachment.name} ${kotlinx.coroutines.currentCoroutineContext()}")
                         state.attachments = state.attachments.map {
                             if (it.id == attachment.id) it.copy(uploadState = DraftUploadState.Uploading) else it
                         }
@@ -315,7 +312,6 @@ fun ChatComposer(
                             }
                         }
                     }
-                    System.err.println("UPLOAD TRACE returned ${attachment.name} $path ${kotlinx.coroutines.currentCoroutineContext()}")
                     if (state.attachments.any { it.id == attachment.id }) {
                         state.attachments = state.attachments.map {
                             if (it.id == attachment.id) it.copy(path = path, uploadState = DraftUploadState.Uploaded) else it
