@@ -254,13 +254,24 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	if f := s.editWriteHook; f != nil {
 		f(id)
 	}
+	reopening := e.Done != nil && !*e.Done
+	if reopening {
+		// Keep a concurrent ledger writer from publishing an older state over the reopened row.
+		s.supervise.writeMu.Lock()
+	}
 	s.todos.writing.Lock()
+	unlock := func() {
+		s.todos.writing.Unlock()
+		if reopening {
+			s.supervise.writeMu.Unlock()
+		}
+	}
 	if links {
 		// Checked again with the graph held still: a write since the caller's check may have changed the request
 		// (todo_pieces.go). A *pieceError when it no longer holds.
 		l, err := s.recheckPieces(id, e)
 		if err != nil {
-			s.todos.writing.Unlock()
+			unlock()
 			return Todo{}, err
 		}
 		e.PartOf, e.After = l.PartOf, l.After
@@ -270,7 +281,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	if st := s.todoDB(); st != nil {
 		var err error
 		if row, err = st.EditTodo(ctx, id, e, now); err != nil {
-			s.todos.writing.Unlock()
+			unlock()
 			return Todo{}, err
 		}
 	} else {
@@ -278,7 +289,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		// again from the copy read before the lock)
 		base, ok := s.todoNow(id)
 		if !ok {
-			s.todos.writing.Unlock()
+			unlock()
 			return Todo{}, db.ErrTodoNotFound
 		}
 		r := todoRowOf(base)
@@ -286,7 +297,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		row = &r
 	}
 	out, doneKeys, applied := s.setTodoRow(id, *row, nil)
-	s.todos.writing.Unlock()
+	unlock()
 	if applied {
 		s.todoRowSet(ctx, doneKeys)
 	}

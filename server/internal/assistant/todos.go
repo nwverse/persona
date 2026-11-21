@@ -394,6 +394,7 @@ func (s *Service) loadTodosLocked(ctx context.Context) error {
 		for _, r := range rows {
 			if t, ok := tmap[r.TodoID]; ok {
 				t.Supervision = supervisionFromRow(r)
+				t.resetReopenedUserCheck()
 			}
 		}
 	}
@@ -1508,6 +1509,7 @@ func (s *Service) setTodoRow(id string, row db.TodoRow, guard func(*Todo) bool) 
 	t.DoneAt = row.DoneAt
 	t.StartError = row.StartError
 	t.DoneBy, t.DoneReason, t.ReopenedAt = row.DoneBy, row.DoneReason, row.ReopenedAt
+	t.resetReopenedUserCheck()
 	if reopened {
 		t.Check = nil // the work it judged is over (task_check.go)
 	}
@@ -2011,7 +2013,7 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 }
 
 // reopenTodo reopens done todo id as the user's PATCH {done: false} does (reopened_at set: the stretch of work before
-// does not close it again); a todo open by then is left as it is.
+// does not close it again). Feedback also restarts an open personal-verification task and invalidates its old Pass.
 func (s *Service) reopenTodo(ctx context.Context, id string) error {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return err
@@ -2020,30 +2022,13 @@ func (s *Service) reopenTodo(ctx context.Context, id string) error {
 	if !ok {
 		return db.ErrTodoNotFound
 	}
-	if cur.DoneAt == nil {
+	userCheck := cur.Supervision != nil && cur.Supervision.State == reviewUserCheck
+	if cur.DoneAt == nil && !userCheck {
 		return nil
 	}
-	s.todos.writing.Lock()
-	now := time.Now().UTC()
-	row := &db.TodoRow{ID: cur.ID, Title: cur.Title, Notes: cur.Notes, CreatedAt: cur.CreatedAt, UpdatedAt: now,
-		Origin: cur.Origin, PlanID: cur.PlanID, ReopenedAt: &now, Quiet: cur.Quiet}
-	cur.keepPlan(row)
-	row.SomedayUntil = nil // reopened: out of Someday, as db.TodoEdit.Apply does on the store
-	if st := s.todoDB(); st != nil {
-		open := false
-		r, err := st.UpdateTodo(ctx, id, nil, nil, &open, now)
-		if err != nil {
-			s.todos.writing.Unlock()
-			return err
-		}
-		row = r
-	}
-	_, doneKeys, applied := s.setTodoRow(id, *row, nil)
-	s.todos.writing.Unlock()
-	if applied {
-		s.todoRowSet(ctx, doneKeys)
-	}
-	return nil
+	open := false
+	_, err := s.editTodo(ctx, id, db.TodoEdit{Done: &open, RestartWork: userCheck})
+	return err
 }
 
 // reopenFailedTodo reopens a task whose agent did not start, for its start again (retryTask): its error cleared, the

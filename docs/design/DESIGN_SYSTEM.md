@@ -2120,6 +2120,13 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
 
 ### 4.8.0 Task cards (web, #5569)
 
+**Personal verification** (#10047): a supervisor's `accepted` review with `user_check: true` is not a completed
+to-do. Reuse the review chip and caution tone for **Awaiting your verification** (zh-Hans **待你验收**, ja
+**あなたの確認待ち**), keep one actionable home in Needs you, and count it as open Waiting on you even when deployed.
+The existing Agent state column continues to describe the Agent, not the task. Only the owner's Pass completes the
+task; change feedback returns it to ongoing work and invalidates that verification round. Reuse the existing
+verification card, Pass action and chat feedback path; no new setting, component, group or polling loop.
+
 The task cards follow `docs/design/task-cards.md`, which holds the state tables and the reasons.
 
 - **One card per task, when it is handed out** (#8237, replacing #5569's conclusion cards): the hand-off card is a task's only card in the chat, and it updates in place: its state word follows the task, and a start that failed or a turn the model service cut off reads as such on it, in the danger color, with why in plain words (a raw error stays in the task's details; one naming no known cause reads "Didn't start. Open it for details."). Receipts (done, stopped, failed to start, interrupted), reviews and reports are not drawn, old ones in the history neither, and nothing in the chat says where progress went. The task's row says it: In Progress and Needs You below. iOS, the web and Android since #8237 (Android: #8312). A failed start's and an interrupted task's Needs you row keeps `--danger-wash` with `--ink` words, as the conclusion cards had (contrast in D10 of `docs/design/task-cards.md`).

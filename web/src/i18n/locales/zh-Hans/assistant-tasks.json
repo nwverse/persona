@@ -110,6 +110,7 @@
   "give_back": "交给 Persona",
   "plan_edit": "改一下",
   "review_pending": "待验收",
+  "review_user_check": "待你验收",
   "review_supervisor": "督办验收中",
   "review_rework": "返工第 {round} 轮",
   "review_needs_user": "等你决定",

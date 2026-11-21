@@ -32162,6 +32162,29 @@
       },
       "extractionState" : "manual"
     },
+    "Awaiting your verification" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Awaiting your verification"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "あなたの確認待ち"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待你验收"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Back" : {
       "localizations" : {
         "en" : {

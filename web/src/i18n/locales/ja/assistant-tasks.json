@@ -110,6 +110,7 @@
   "give_back": "Personaに戻す",
   "plan_edit": "修正",
   "review_pending": "検収待ち",
+  "review_user_check": "あなたの確認待ち",
   "review_supervisor": "監督の確認待ち",
   "review_rework": "差し戻し {round} 回目",
   "review_needs_user": "判断待ち",
