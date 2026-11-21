@@ -69,6 +69,7 @@ func (u *updater) begin(ctx context.Context, now bool) error {
 	// Reserve the selected object before returning, so a settings write or second
 	// trigger cannot change the candidate between acceptance and goroutine start.
 	u.running = true
+	u.opGen++
 	if r.Development != nil {
 		u.state = "building"
 	} else {
@@ -89,6 +90,7 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		return
 	}
 	u.running = true
+	u.opGen++
 	r := u.release
 	u.mu.Unlock()
 	u.installCandidate(ctx, auto, r)

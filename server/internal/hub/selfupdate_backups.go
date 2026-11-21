@@ -50,6 +50,7 @@ func (u *updater) beginDevelopmentRestore(ctx context.Context, id string) error 
 		return i18n.Err("hub-selfupdate.err_development_recovery")
 	}
 	u.checking = true // reserves source and candidate while reading snapshot metadata
+	u.opGen++
 	u.mu.Unlock()
 	versions, err := u.developmentBackups(ctx)
 	u.mu.Lock()
@@ -80,6 +81,7 @@ func (u *updater) beginDevelopmentRestore(ctx context.Context, id string) error 
 	}
 	u.release = r
 	u.running, u.now = true, false
+	u.opGen++
 	u.state, u.progress, u.errText = "applying_backup", "", ""
 	go u.installCandidate(ctx, false, r)
 	return nil

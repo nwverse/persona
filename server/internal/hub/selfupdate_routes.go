@@ -136,6 +136,7 @@ func (u *updater) routes(api *http.ServeMux) {
 			return
 		}
 		var checkedCurrent string
+		var checkedOpGen uint64
 		var checkedRecovery bool
 		if backupDir != nil {
 			// Snapshots in the folder being left must not be stranded: the
@@ -148,6 +149,7 @@ func (u *updater) routes(api *http.ServeMux) {
 				return
 			}
 			checkedCurrent = u.developmentBackupConfigLocked().Directory
+			checkedOpGen = u.opGen
 			u.mu.Unlock()
 			if !backup.SamePath(*backupDir, checkedCurrent) {
 				if err := backup.UnrecoveredSnapshot(checkedCurrent); err != nil {
@@ -206,6 +208,20 @@ func (u *updater) routes(api *http.ServeMux) {
 				current := u.developmentBackupConfigLocked().Directory
 				sameAsChecked := current == checkedCurrent || backup.SamePath(current, checkedCurrent)
 				if !sameAsChecked || (!backup.SamePath(*backupDir, current) && !checkedRecovery) {
+					u.mu.Unlock()
+					writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_busy"))
+					return
+				}
+				if !backup.SamePath(*backupDir, current) {
+					// Re-check under u.mu so a failed update or helper marker
+					// created after the unlocked check cannot be stranded.
+					if err := backup.UnrecoveredSnapshot(current); err != nil {
+						u.mu.Unlock()
+						writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_development_backup_recovery", i18n.Args{"error": err.Error()}))
+						return
+					}
+				}
+				if u.opGen != checkedOpGen {
 					u.mu.Unlock()
 					writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_busy"))
 					return

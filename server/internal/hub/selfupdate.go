@@ -140,8 +140,9 @@ type updater struct {
 	busy        []busyItem
 	running     bool
 	checking    bool
-	now         bool // the user confirmed "Update now": stop waiting for idle
-	confirmed   bool // no update to confirm, or this process confirmed it
+	opGen       uint64 // bumped whenever an update or check starts, preventing busy-check ABA races
+	now         bool   // the user confirmed "Update now": stop waiting for idle
+	confirmed   bool   // no update to confirm, or this process confirmed it
 
 	// refreshing is held by the one request reading latest.json for an install script (freshRelease); refreshTried
 	// is when one last did. releaseRead is when release was read: a read that worked (lastCheck is when the hub last

@@ -1055,6 +1055,66 @@ func TestDevelopmentBackupSettingsRefusedWhileActiveOrFolderChanged(t *testing.T
 			})
 		}
 	})
+
+	t.Run("ABA update failure or late recovery marker before save re-acquires lock", func(t *testing.T) {
+		for _, race := range []string{"update-failed-with-incomplete-marker", "incomplete-marker-without-active-flag", "update-ran-and-finished"} {
+			t.Run(race, func(t *testing.T) {
+				u, _, _ := updaterWithStoredSettings(t)
+				initial := filepath.Join(t.TempDir(), "initial")
+				if err := os.Mkdir(initial, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				next := filepath.Join(t.TempDir(), "next")
+				u.mu.Lock()
+				u.settings.DevelopmentBackupDirectory = &initial
+				u.loaded = true
+				u.mu.Unlock()
+				u.testAfterBackupRecoveryCheck = func() {
+					switch race {
+					case "update-failed-with-incomplete-marker":
+						u.mu.Lock()
+						u.running = true
+						u.opGen++
+						u.mu.Unlock()
+						if err := os.Mkdir(filepath.Join(initial, ".incomplete-aba"), 0o700); err != nil {
+							t.Fatal(err)
+						}
+						u.mu.Lock()
+						u.running = false
+						u.checking = false
+						u.mu.Unlock()
+					case "incomplete-marker-without-active-flag":
+						if err := os.Mkdir(filepath.Join(initial, ".incomplete-late"), 0o700); err != nil {
+							t.Fatal(err)
+						}
+					case "update-ran-and-finished":
+						u.mu.Lock()
+						u.running = true
+						u.opGen++
+						u.running = false
+						u.checking = false
+						u.mu.Unlock()
+					}
+				}
+				w := nodePolicyRequest(t, u, http.MethodPut, fmt.Sprintf(`{"development_backup_directory":%q}`, next))
+				if w.Code != http.StatusConflict {
+					t.Fatalf("ABA race %s was not refused -> %d: %s", race, w.Code, w.Body.String())
+				}
+				if race != "update-ran-and-finished" && !strings.Contains(w.Body.String(), "incomplete") {
+					t.Fatalf("ABA race %s body = %s, want incomplete recovery refusal", race, w.Body.String())
+				}
+				u.mu.Lock()
+				got := ""
+				if u.settings.DevelopmentBackupDirectory != nil {
+					got = *u.settings.DevelopmentBackupDirectory
+				}
+				u.mu.Unlock()
+				if got != initial {
+					t.Fatalf("saved directory after %s = %q, want %q", race, got, initial)
+				}
+			})
+		}
+	})
 }
 
 // Finding #7: POSIX backslash paths are refused by the settings API before
