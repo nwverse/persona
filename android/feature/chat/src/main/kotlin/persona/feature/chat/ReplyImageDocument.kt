@@ -19,6 +19,12 @@ internal class ReplyImageDocument private constructor(
     private val marker: String,
     private val groups: List<IntRange>,
 ) {
+    /** The chat draws at most six tiles per strip. Hidden tiles are counted on the last tile. */
+    fun visiblePictures(): List<ReplyPicture> {
+        val hidden = groups.flatMap { it.drop(ReplyImageLayout.mostShown) }.toSet()
+        return pictures.filterIndexed { index, _ -> index !in hidden }
+    }
+
     fun group(fence: String): IntRange? {
         val lines = fence.lineSequence().map { it.trim() }.iterator()
         if (!lines.hasNext() || lines.next() != "~~~$marker" || !lines.hasNext()) return null

@@ -180,6 +180,7 @@ internal fun MessageMenuSheet(
     onDelete: ((MessageTarget) -> Unit)? = null,
     /** Who answers here and where: on Glass "Share" opens the message's picture (iOS `MessageShareSheet`); without, it shares the text. */
     share: ShareCardSource? = null,
+    onPick: ((MessageTarget) -> Unit)? = null,
 ) {
     var sharing by remember { mutableStateOf<MessagePicture?>(null) }
     val pictures = share?.takeIf { PersonaTheme.style == AppStyle.Glass }
@@ -190,7 +191,7 @@ internal fun MessageMenuSheet(
     val target = menu.target
     val resources = LocalResources.current
     val extras = MessageExtras(fork = onFork != null, rewind = rewind != null, rewindBlock = rewind?.block, delete = onDelete != null,
-        dontSend = PersonaTheme.style == AppStyle.Glass)
+        dontSend = PersonaTheme.style == AppStyle.Glass, pick = onPick != null)
     if (target != null) MessageMenuOverlay(menu.pointerAnchor,
         messageMenuActions(target, writes, onForward != null, resources, extras) { action ->
         when (action) {
@@ -202,6 +203,7 @@ internal fun MessageMenuSheet(
                 else if (!shareText(context, target.text)) { onNotice(resources.getString(R.string.chat_menu_no_share)) }
             }
             MessageAction.Forward -> onForward?.invoke(target)
+            MessageAction.Pick -> onPick?.invoke(target)
             MessageAction.Context -> onContext(target.text)
             MessageAction.Edit -> onEdit(target.editText)
             MessageAction.Fork -> onFork?.invoke(target.id)
@@ -237,7 +239,7 @@ internal fun messagePicture(target: MessageTarget, source: ShareCardSource): Mes
 internal enum class MessageAction(@StringRes val label: Int) {
     Copy(R.string.chat_menu_copy), Select(R.string.chat_menu_select), Quote(R.string.chat_menu_quote), Forward(R.string.chat_menu_forward),
     Share(R.string.chat_menu_share), Context(R.string.chat_menu_context), Edit(R.string.chat_menu_edit),
-    Fork(R.string.chat_menu_fork), Rewind(R.string.chat_menu_rewind), Delete(R.string.chat_delivery_delete),
+    Fork(R.string.chat_menu_fork), Rewind(R.string.chat_menu_rewind), Delete(R.string.chat_delivery_delete), Pick(R.string.chat_forward_select_messages),
 }
 
 /**
@@ -247,7 +249,7 @@ internal enum class MessageAction(@StringRes val label: Int) {
 internal data class MessageExtras(val fork: Boolean = false, val rewind: Boolean = false, val rewindBlock: String? = null,
     val delete: Boolean = false,
     /** Deleting one still waiting reads "Don't send", the word of its mark's menu on Glass ([OutboxBubble], iOS); else "Cancel send". */
-    val dontSend: Boolean = false)
+    val dontSend: Boolean = false, val pick: Boolean = false)
 
 /** The menu's actions for [target]: [writes] for the composer ones, [forward] when "Forward" is offered. */
 internal fun messageActions(target: MessageTarget, writes: Boolean, forward: Boolean,
@@ -267,6 +269,7 @@ internal fun messageActions(target: MessageTarget, writes: Boolean, forward: Boo
     // "Branch to new chat" on a reply that is a transcript line of its own; "Rewind to here" on your messages.
     if (extras.fork && !target.user && Rewind.forkable(target.id)) add(MessageAction.Fork)
     if (extras.rewind && writes && target.user) add(MessageAction.Rewind)
+    if (extras.pick && target.text.isNotBlank()) add(MessageAction.Pick)
 }
 
 internal fun messageMenuActions(target: MessageTarget, writes: Boolean, forward: Boolean, resources: Resources,
@@ -288,10 +291,11 @@ internal fun messageMenuActions(target: MessageTarget, writes: Boolean, forward:
             MessageAction.Edit -> PhIcons.PencilSimple
             MessageAction.Fork -> PhIcons.GitBranch
             MessageAction.Rewind -> PhIcons.ArrowUUpLeft
+            MessageAction.Pick -> PersonaIcons.success
             MessageAction.Delete -> PersonaIcons.delete
         }, destructive = action == MessageAction.Delete, enabled = action != MessageAction.Rewind || extras.rewindBlock == null,
             // The session-wide ones under a rule, as web's ⋯ items after the message's own.
-            separatorBefore = index > 0 && action in setOf(MessageAction.Fork, MessageAction.Rewind)) { run(action) }
+            separatorBefore = index > 0 && action in setOf(MessageAction.Fork, MessageAction.Rewind, MessageAction.Pick)) { run(action) }
     }
 
 /**

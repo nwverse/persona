@@ -22,6 +22,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.rightClick
 import androidx.compose.ui.unit.dp
@@ -118,6 +119,7 @@ class MessagePointerMenuTest {
                             onNotice = { events += "notice:$it" }, onFork = { events += "fork:$it" },
                             rewind = RewindMenu(render.rewindBlock) { target, restore -> events += "rewind:${target.id}:$restore" },
                             onDelete = { events += "delete:${it.id}" },
+                            onPick = { events += "pick:${it.id}" },
                             share = ShareCardSource("Claude", null, "space › tab"))
                     }
                 }
@@ -132,14 +134,14 @@ class MessagePointerMenuTest {
         }
         val reply = MessageTarget("00000000-0000-0000-0000-000000000001#0", "reply", user = false)
         val pending = ordinary.copy(pending = DeliveryState.WaitingForNetwork)
-        val extras = MessageExtras(fork = true, rewind = true, delete = true)
+        val extras = MessageExtras(fork = true, rewind = true, delete = true, pick = true)
         for (pointer in listOf(false, true)) for (target in listOf(ordinary, reply, pending)) {
             val expected = messageActions(target, writes = true, forward = false, extras = extras)
             open(pointer, target)
             assertActionOrder(expected, target)
             for (action in expected) {
                 open(pointer, target)
-                rule.onNodeWithText(label(action, target)).performClick()
+                rule.onNodeWithText(label(action, target)).performScrollTo().performClick()
                 rule.waitForIdle()
                 when (action) {
                     MessageAction.Copy -> {
@@ -155,6 +157,7 @@ class MessagePointerMenuTest {
                     }
                     MessageAction.Quote -> assertEquals("quote:${target.id}", events.last())
                     MessageAction.Share -> assertReaderOpensAndReturns(R.string.chat_share_card_title)
+                    MessageAction.Pick -> assertEquals("pick:${target.id}", events.last())
                     MessageAction.Forward -> assertEquals("forward:${target.id}", events.last())
                     MessageAction.Context -> assertEquals("context:${target.text}", events.last())
                     MessageAction.Edit -> assertEquals("edit:${target.editText}", events.last())

@@ -64,11 +64,11 @@ internal class AttachedPhotos(private val files: SessionFiles, private val machi
     }
 
     /** A thumbnail of the photo, its long side about [side] pixels. */
-    suspend fun thumbnail(path: String, side: Int): ImageBitmap {
-        val key = "$machineId:$path:$side"
+    suspend fun thumbnail(path: String, side: Int, forExport: Boolean = false): ImageBitmap {
+        val key = "$machineId:$path:$side:$forExport"
         cachedThumbnails[key]?.let { return it }
         val bytes = bytes(path)
-        val image = withContext(Dispatchers.Default) { decodePicture(bytes, side, atMost = false).asImageBitmap() }
+        val image = withContext(Dispatchers.Default) { decodePicture(bytes, side, atMost = forExport, software = forExport).asImageBitmap() }
         cachedThumbnails[key] = image
         return image
     }

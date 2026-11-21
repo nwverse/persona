@@ -473,7 +473,7 @@ internal fun deliverForward(target: ForwardTarget, messages: List<ForwardPlaceme
  * (the whole of it read when it goes, if cut). [session] and [machine] are the chat's, as its page has them.
  */
 internal fun forwardDraftOf(target: MessageTarget, key: SessionKey, session: Session?, machine: Machine?, style: ChatRenderStyle,
-    forwarding: ChatForwarding): ForwardDraft {
+    forwarding: ChatForwarding?): ForwardDraft {
     val persona = style == ChatRenderStyle.Assistant || session?.assistant == true
     val role = when {
         target.from != null -> ForwardMessage.Role.Other
@@ -483,7 +483,7 @@ internal fun forwardDraftOf(target: MessageTarget, key: SessionKey, session: Ses
     }
     // On the wire Persona's messages are by "Persona", as iOS and the web write them.
     val author = target.from ?: if (persona) "Persona" else session?.agentLabel ?: "Claude"
-    val chat = session?.let { if (persona) forwarding.conversationTitle(it) else it.displayTitle }.orEmpty()
+    val chat = session?.let { if (persona) forwarding?.conversationTitle?.invoke(it) ?: it.displayTitle else it.displayTitle }.orEmpty()
     val source = ForwardMessage.Source(key, target.id, role, author, chat,
         project = if (persona) null else session?.forwardProject, machine = if (persona) null else machine?.displayName,
         time = parseTime(target.time))

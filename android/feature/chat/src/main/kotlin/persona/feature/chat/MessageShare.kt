@@ -193,7 +193,7 @@ internal object ShareCardBlocks {
     }
 
     /** The fence a line opens (its character and run), or null; a backtick run with another backtick after it is inline code. */
-    private fun fenceOf(line: String): Pair<Char, Int>? {
+    fun fenceOf(line: String): Pair<Char, Int>? {
         if (!line.startsWith("```") && !line.startsWith("~~~")) return null
         val c = line.first()
         val count = line.takeWhile { it == c }.length
@@ -201,7 +201,7 @@ internal object ShareCardBlocks {
         return c to count
     }
 
-    private fun closes(fence: Pair<Char, Int>, line: String): Boolean {
+    fun closes(fence: Pair<Char, Int>, line: String): Boolean {
         val run = line.takeWhile { it == fence.first }.length
         return run >= fence.second && line.drop(run).all { it == ' ' || it == '\t' }
     }

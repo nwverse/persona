@@ -42,16 +42,22 @@ internal fun ChatMessageActions(
     val photoReader = LocalChatRowActions.current?.photos
     val pick = messageMenu.forwardPick
     val focus = LocalFocusManager.current
+    val share = shareCardSource(session, LocalPersonaName.current)
     MessageMenuSheet(messageMenu, messageMenuWrites(readOnly, session),
         onQuote = quoteTarget, onEdit = composer::edit,
         onContext = onContext, onForward = forwarding?.let { pick::open },
         onNotice = onNotice, onFork = onFork, rewind = rewindMenu, onDelete = onDelete,
-        share = shareCardSource(session, LocalPersonaName.current))
+        share = share,
+        onPick = { focus.clearFocus(); pick.start(it) })
     val targets = pick.sheet ?: return
-    if (forwarding == null) return
     val drafts = remember(targets, key, session, machine, renderStyle, forwarding) {
         targets.map { forwardDraftOf(it, key, session, machine, renderStyle, forwarding) }
     }
+    if (pick.action != PickAction.Forward) {
+        PickedMessageExport(pick, drafts, key, repository, photoReader, share.agent, onNotice)
+        return
+    }
+    if (forwarding == null) return
     ForwardSheet(drafts, forwarding,
         complete = {
             val limit = ForwardMessage.limit(drafts.size)

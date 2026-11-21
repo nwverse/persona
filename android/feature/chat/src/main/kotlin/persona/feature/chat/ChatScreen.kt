@@ -590,6 +590,11 @@ private fun ChatPage(
         onFailed = onFailed, onCleared = { refs -> linkContexts = linkContexts.filterNot { ref -> refs.any { it.id == ref.id } } })
     // Chat content (group A): the message menu, the image viewer, photos and paths in messages, the API error retry.
     val messageMenu = remember(key) { MessageMenuState() }
+    SideEffect {
+        messageMenu.forwardPick.readQuestions = { pickQuestions(projection.turns) }
+        messageMenu.forwardPick.readInclude = { context.getSharedPreferences("chat-pick", 0).getBoolean("includeQuestions", true) }
+        messageMenu.forwardPick.saveInclude = { context.getSharedPreferences("chat-pick", 0).edit().putBoolean("includeQuestions", it).apply() }
+    }
     // A swipe to the left quotes (iOS #1058) wherever the long-press menu's "Quote" is offered.
     val quoteTarget: (MessageTarget) -> Unit = { target ->
         // Over the box as a quote that goes with the next message, the draft left as it is (iOS #986).

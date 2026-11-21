@@ -33,10 +33,19 @@
     <string name="chat_forward_select_messages">メッセージを選択…</string>
     <string name="chat_forward_selected">%1$d 件選択中</string>
     <string name="chat_forward_send_count">%1$d 件を転送</string>
-    <string name="chat_forward_select_limit">一度に転送できるメッセージは %1$d 件までです。</string>
+    <string name="chat_forward_select_limit">一度に選択できるメッセージは %1$d 件までです。</string>
     <string name="chat_forward_group">転送されたメッセージ %1$d 件</string>
     <string name="chat_forward_group_chat">転送されたメッセージ %1$d 件 · %2$s</string>
     <string name="chat_forward_group_line">%1$s：%2$s</string>
     <string name="chat_forward_group_more">ほか %1$d 件</string>
     <string name="chat_forward_several_no_note">上に転送したメッセージを確認してください。</string>
+    <string name="chat_pick_questions">質問を含める</string>
+    <string name="chat_pick_export">画像を書き出す</string>
+    <string name="chat_pick_heading">チャットのタイトルと日付</string>
+    <string name="chat_pick_author">%1$s：</string>
+    <string name="chat_pick_page">%2$d ページ中 %1$d ページ</string>
+    <string name="chat_pick_failed">選択したメッセージを準備できませんでした。</string>
+    <string name="chat_pick_photo_missing">写真を読み込めません</string>
+    <string name="chat_pick_working">画像を準備中…</string>
+    <string name="chat_pick_included">含まれる質問</string>
 </resources>

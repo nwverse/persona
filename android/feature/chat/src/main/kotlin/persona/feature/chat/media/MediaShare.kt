@@ -60,10 +60,27 @@ object MediaShare {
     suspend fun shareImage(context: Context, bytes: ByteArray): Boolean {
         val type = ImageMath.sniffMime(bytes)
         val uri = sharedUri(context, bytes, ImageMath.extension(type)) ?: return false
-        val send = Intent(Intent.ACTION_SEND).apply {
+        return shareUris(context, type, listOf(uri))
+    }
+
+    /** PNG pages have distinct names even when several are completed in the same millisecond. */
+    internal fun writePng(context: Context, bitmap: Bitmap, page: Int): File {
+        val file = File.createTempFile("persona-page-$page-", ".png", sharedFolder(context))
+        try {
+            file.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+            return file
+        } catch (failure: Throwable) { file.delete(); throw failure }
+    }
+
+    internal fun sharePngs(context: Context, files: List<File>) = files.isNotEmpty() && shareUris(context, "image/png",
+        files.map { FileProvider.getUriForFile(context, authority(context), it) })
+
+    private fun shareUris(context: Context, type: String, uris: List<Uri>): Boolean {
+        val send = Intent(if (uris.size == 1) Intent.ACTION_SEND else Intent.ACTION_SEND_MULTIPLE).apply {
             this.type = type
-            putExtra(Intent.EXTRA_STREAM, uri)
-            clipData = ClipData.newRawUri("", uri)
+            if (uris.size == 1) putExtra(Intent.EXTRA_STREAM, uris.single())
+            else putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+            clipData = ClipData.newRawUri("", uris.first()).apply { uris.drop(1).forEach { addItem(ClipData.Item(it)) } }
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         val chooser = Intent.createChooser(send, context.getString(R.string.chat_viewer_share_title))
@@ -109,10 +126,7 @@ object MediaShare {
     /** [bytes] as a file in `cache/shared/` and its content URI; shared files older than a day are dropped on the way. */
     private suspend fun sharedUri(context: Context, bytes: ByteArray, extension: String): Uri? = withContext(Dispatchers.IO) {
         try {
-            val folder = File(context.cacheDir, "shared").apply { mkdirs() }
-            val now = System.currentTimeMillis()
-            folder.listFiles()?.forEach { if (now - it.lastModified() > SharedMaxAgeMs) it.delete() }
-            val file = File(folder, "image-$now.$extension")
+            val file = File.createTempFile("image-", ".$extension", sharedFolder(context))
             file.writeBytes(bytes)
             FileProvider.getUriForFile(context, authority(context), file)
         } catch (e: CancellationException) {
@@ -120,6 +134,12 @@ object MediaShare {
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun sharedFolder(context: Context) = File(context.cacheDir, "shared").apply {
+        mkdirs()
+        val now = System.currentTimeMillis()
+        listFiles()?.forEach { if (now - it.lastModified() > SharedMaxAgeMs) it.delete() }
     }
 
     private tailrec fun Context.activity(): Activity? = when (this) {

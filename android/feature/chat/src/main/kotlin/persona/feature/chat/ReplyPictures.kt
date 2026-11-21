@@ -96,7 +96,8 @@ private fun WithReplyPictures(text: String, id: String, source: ReplyImageSource
 
 internal class ReplyGallery(val document: ReplyImageDocument, val source: ReplyImageSource, val throughHub: Boolean,
     private val ownReply: Boolean, private val allowed: MutableMap<String, Boolean>,
-    private val open: (List<ViewerImage>, Int) -> Unit) {
+    private val open: (List<ViewerImage>, Int) -> Unit,
+    val exported: Map<String, Bitmap?>? = null) {
     fun canLoad(picture: ReplyPicture) = (throughHub && ownReply) || allowed[picture.url] == true
     fun allow(picture: ReplyPicture) { allowed[picture.url] = true }
 
@@ -120,8 +121,11 @@ private sealed interface TileState {
 }
 
 @Composable
-private fun thumbnail(gallery: ReplyGallery, picture: ReplyPicture, size: Int, allowed: Boolean, attempt: Int): TileState =
-    key(gallery.source, picture.url, size, allowed, attempt) {
+private fun thumbnail(gallery: ReplyGallery, picture: ReplyPicture, size: Int, allowed: Boolean, attempt: Int): TileState {
+    gallery.exported?.let { pictures ->
+        return if (!allowed) TileState.Loading else pictures[picture.url]?.let(TileState::Ready) ?: TileState.Failed
+    }
+    return key(gallery.source, picture.url, size, allowed, attempt) {
         val state by produceState<TileState>(TileState.Loading) {
             if (allowed) value = try {
                 val bytes = gallery.source.load(picture.url, size, allowDirect = !gallery.throughHub)
@@ -134,6 +138,7 @@ private fun thumbnail(gallery: ReplyGallery, picture: ReplyPicture, size: Int, a
         }
         state
     }
+}
 
 @Composable
 internal fun ReplyPictureRun(gallery: ReplyGallery, range: IntRange) {
