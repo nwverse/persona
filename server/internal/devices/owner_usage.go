@@ -23,27 +23,41 @@ var usageSourceID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 // A dedicated box uses the existing AES-GCM implementation. It is separate from the
 // manager's database key: that key's rotation only re-seals values in Postgres.
 func (d *Devices) usageKeyBox() *secretkey.Box {
-	return secretkey.New(filepath.Join(filepath.Dir(d.opts.ConfigFile), "usage-source.key"))
+	return secretkey.New(d.usageKeyPath())
+}
+
+func (d *Devices) usageKeyPath() string {
+	return filepath.Join(filepath.Dir(d.opts.ConfigFile), "usage-source.key")
 }
 
 func (d *Devices) openUsageKey(s *UsageSourceConfig) error {
+	s.KeyUnavailable = false
 	if s.SealedKey == "" {
 		return nil
 	} // legacy sources remain readable
-	key, err := d.usageKeyBox().Open(s.SealedKey)
+	s.Key, s.KeyUnavailable = "", true
+	// Reading ciphertext must never create a replacement for a missing encryption key.
+	key, err := secretkey.ReadKey(d.usageKeyPath())
 	if err != nil {
 		return errUsageStorage
 	}
-	s.Key = key
+	plain, err := secretkey.OpenWith(key, s.SealedKey)
+	if err != nil {
+		return errUsageStorage
+	}
+	s.Key, s.KeyUnavailable = plain, false
 	return nil
 }
 
 func (d *Devices) sealUsageKey(s *UsageSourceConfig) error {
+	if d.opts.ConfigFile == "" {
+		return errUsageStorage
+	}
 	sealed, err := d.usageKeyBox().Seal(s.Key)
 	if err != nil {
 		return errUsageStorage
 	}
-	s.Key, s.SealedKey = "", sealed
+	s.Key, s.SealedKey, s.KeyUnavailable = "", sealed, false
 	return nil
 }
 
@@ -124,10 +138,12 @@ func (d *Devices) ownerUsageRoutes(mux *http.ServeMux) {
 							return u, list, errUsageStorage
 						}
 					}
-					if s.Enabled != nil && !*s.Enabled {
-						_ = entry.Set("enabled", false)
-					} else {
-						entry.Del("enabled")
+					if in.Enabled != nil {
+						if !*in.Enabled {
+							_ = entry.Set("enabled", false)
+						} else {
+							entry.Del("enabled")
+						}
 					}
 					list = append([]json.RawMessage(nil), list...)
 					if index >= 0 {

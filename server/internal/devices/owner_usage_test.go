@@ -125,3 +125,86 @@ func TestOwnerUsageFailedConnectionCreatesNoFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnerUsageUpsertPreservesDisabledSource(t *testing.T) {
+	d, c := usageTestDevices(t, "")
+	d.usageGW.fetch = func(context.Context, usagesource.Config, time.Time) (usagesource.Result, error) {
+		return usagesource.Result{Seen: usagesource.Seen{Accounts: 1, Windows: 2}}, nil
+	}
+	for _, enabled := range []string{`,"enabled":false`, ``, `,"enabled":true`} {
+		body := `{"type":"relay","name":"Example","url":"https://gateway.example.com","key":"` + usageTestKey + `"` + enabled + `}`
+		status, out, _ := c.do("PUT", "/api/v1/usage-sources/src-example", body)
+		if status != 200 || out["ok"] != true {
+			t.Fatalf("save: %d %v", status, out)
+		}
+		cfg, err := d.diskUsage()
+		if err != nil || len(cfg.Sources) != 1 {
+			t.Fatal("source missing")
+		}
+		if want := enabled == `,"enabled":true`; cfg.Sources[0].on() != want {
+			t.Fatal("omitted enabled changed saved switch")
+		}
+	}
+}
+
+func TestBrokenUsageKeyDoesNotHideOtherSourcesOrCreateAKey(t *testing.T) {
+	for _, broken := range []string{"missing", "corrupt", "replaced"} {
+		t.Run(broken, func(t *testing.T) {
+			d, c := usageTestDevices(t, `{"usage":{"poll_minutes":7,"sources":[{"id":"legacy","type":"generic","name":"Legacy","url":"https://legacy.example.com","key":"legacy-example-key"}]}}`)
+			d.usageGW.fetch = func(context.Context, usagesource.Config, time.Time) (usagesource.Result, error) {
+				return usagesource.Result{Seen: usagesource.Seen{Accounts: 1, Windows: 2}}, nil
+			}
+			body := `{"type":"relay","name":"Example","url":"https://gateway.example.com","key":"` + usageTestKey + `"}`
+			status, out, _ := c.do("PUT", "/api/v1/usage-sources/src-example", body)
+			if status != 200 || out["ok"] != true {
+				t.Fatal("initial save failed")
+			}
+			path := d.usageKeyPath()
+			switch broken {
+			case "missing":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			case "corrupt":
+				if err := os.WriteFile(path, []byte("invalid"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "replaced":
+				if err := os.WriteFile(path, []byte(strings.Repeat("x", 32)), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg, err := d.diskUsage()
+			if err != nil || len(cfg.Sources) != 2 || cfg.PollMinutes != 7 || cfg.Sources[0].Key != "legacy-example-key" || cfg.Sources[0].KeyUnavailable || !cfg.Sources[1].KeyUnavailable || cfg.Sources[1].Key != "" {
+				t.Fatal("broken source affected other sources or settings")
+			}
+			if broken == "missing" {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatal("read created a replacement key")
+				}
+			}
+			status, out, _ = c.do("PUT", "/api/v1/admin/usage-sources", `{"poll_minutes":9}`)
+			if status != 200 || out["poll_minutes"] != float64(9) {
+				t.Fatal("broken key blocked unrelated settings edit")
+			}
+			if broken == "missing" {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatal("settings edit created a replacement key")
+				}
+			}
+			restarted := New(Options{ConfigFile: d.opts.ConfigFile})
+			if got := restarted.usageGW.config(); len(got.Sources) != 2 || got.Sources[0].Key != "legacy-example-key" || !got.Sources[1].KeyUnavailable {
+				t.Fatal("restart lost unaffected source")
+			}
+			d.usageGW.setConfig(cfg)
+			d.usageGW.fetch = func(context.Context, usagesource.Config, time.Time) (usagesource.Result, error) {
+				t.Fatal("broken key was sent anonymously")
+				return usagesource.Result{}, nil
+			}
+			d.usageGW.read(context.Background(), cfg.Sources[1], time.Now())
+			if got := d.usageGW.status("src-example"); got.Error != usagesource.CodeBadConfig {
+				t.Fatalf("status: %+v", got)
+			}
+		})
+	}
+}

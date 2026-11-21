@@ -80,9 +80,9 @@ func (d *Devices) diskUsage() (UsageConfig, error) {
 		return cfg.Usage, err
 	}
 	for i := range cfg.Usage.Sources {
-		if err := d.openUsageKey(&cfg.Usage.Sources[i]); err != nil {
-			return UsageConfig{}, err
-		}
+		// A broken sealed source is isolated; other sources and settings still load.
+		// KeyUnavailable makes polling report bad_config without sending an empty key.
+		_ = d.openUsageKey(&cfg.Usage.Sources[i])
 	}
 	return cfg.Usage, nil
 }
@@ -93,7 +93,7 @@ func (d *Devices) adminUsageView() adminUsageView {
 		HiddenProviders: append([]string{}, cfg.HiddenProviders...)}
 	v.Providers = uniqueSorted(append(append([]string{"claude", "codex"}, cfg.HiddenProviders...), d.usageWin.providers()...))
 	for _, s := range cfg.Sources {
-		v.Sources = append(v.Sources, adminUsageSource{ID: s.ID, Name: s.Name, Type: s.Type, URL: s.URL, HasKey: s.Key != "", Enabled: s.on(), Status: d.usageGW.status(s.ID)})
+		v.Sources = append(v.Sources, adminUsageSource{ID: s.ID, Name: s.Name, Type: s.Type, URL: s.URL, HasKey: s.Key != "" || s.SealedKey != "", Enabled: s.on(), Status: d.usageGW.status(s.ID)})
 	}
 	return v
 }
@@ -360,7 +360,7 @@ func (d *Devices) adminUsageRoutes(mux *http.ServeMux) {
 				if err := json.Unmarshal(raw, &cur); err != nil {
 					return u, list, err
 				}
-				if err := d.openUsageKey(&cur); err != nil {
+				if err := d.openUsageKey(&cur); err != nil && !in.ClearKey && (in.Key == nil || strings.TrimSpace(*in.Key) == "") {
 					return u, list, errUsageStorage
 				}
 				next, code, err := applyUsageInput(cur, in, false)

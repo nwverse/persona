@@ -61,7 +61,9 @@ type UsageSourceConfig struct {
 	// legacy manager.json is 0600; owner writes use SealedKey. No API answer or log ever has it).
 	Key       string `json:"key,omitempty"`
 	SealedKey string `json:"sealed_key,omitempty"`
-	Enabled   *bool  `json:"enabled,omitempty"`
+	// KeyUnavailable is a failed local decryption, never a request to fetch anonymously.
+	KeyUnavailable bool  `json:"-"`
+	Enabled        *bool `json:"enabled,omitempty"`
 }
 
 // UnmarshalJSON reads a source as manager.json has it, older type names included (usagesource.StoredType): a section
@@ -90,7 +92,7 @@ func (c UsageConfig) interval() time.Duration {
 // fingerprint changes when what a source reads changes (its type, address or key): the samples of the old one are
 // not the new one's.
 func (s UsageSourceConfig) fingerprint() string {
-	sum := sha256.Sum256([]byte(s.Type + "\x00" + s.URL + "\x00" + s.Key))
+	sum := sha256.Sum256([]byte(s.Type + "\x00" + s.URL + "\x00" + s.Key + "\x00" + strconv.FormatBool(s.KeyUnavailable)))
 	return hex.EncodeToString(sum[:8])
 }
 
@@ -248,7 +250,13 @@ func (g *usageGateways) read(ctx context.Context, s UsageSourceConfig, now time.
 	if fetch == nil {
 		fetch = usagesource.Fetch
 	}
-	res, err := fetch(c, usagesource.Config{Type: s.Type, URL: s.URL, Key: s.Key}, now)
+	var res usagesource.Result
+	var err error
+	if s.KeyUnavailable {
+		err = &usagesource.Error{Code: usagesource.CodeBadConfig}
+	} else {
+		res, err = fetch(c, usagesource.Config{Type: s.Type, URL: s.URL, Key: s.Key}, now)
+	}
 	g.mu.Lock()
 	st := g.state[s.ID]
 	if st == nil || st.fingerprint != s.fingerprint() { // edited or removed while it was being read
