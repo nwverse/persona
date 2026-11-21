@@ -222,10 +222,29 @@ func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Ho
 			return true, nil
 		}
 	}
+	codexAgent := false
+	codexExtra := 0
+	if a, ok := n.agent(id); ok && a.PaneID == pane && a.Agent == "codex" {
+		codexAgent = true
+		if !requireFresh {
+			// While mid-turn on an app-server, abort the turn at the protocol level first so Ctrl+C reaches an
+			// idle composer; otherwise keep Ctrl+C-only keys (codex_waiting_test.go) and follow up within Codex's
+			// ~1s "Press Ctrl-C again to exit" window before stopWait expires it (#12389).
+			wireInterrupted := n.interruptCodexActiveTurn(ctx, id)
+			codexExtra = 1
+			if !wireInterrupted && (a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked) {
+				codexExtra = 2
+			}
+		}
+	}
 	_ = n.sendKeys(ctx, pane, "ctrl+c")
 	time.Sleep(200 * time.Millisecond)
 	if err := n.sendKeys(ctx, pane, "ctrl+c"); err != nil {
 		return false, err
+	}
+	extraAt := time.Time{}
+	if codexAgent && codexExtra > 0 && stopWait >= 400*time.Millisecond {
+		extraAt = time.Now().Add(250 * time.Millisecond)
 	}
 	for deadline := time.Now().Add(stopWait); ; {
 		if err := ctx.Err(); err != nil {
@@ -238,8 +257,22 @@ func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Ho
 			err = n.refreshHosts(ctx)
 		}
 		if err == nil {
-			if a, ok := n.agent(id); !ok || a.PaneID != pane {
+			a, ok := n.agent(id)
+			if !ok || a.PaneID != pane {
 				return true, nil
+			}
+			// If earlier Ctrl+C presses only aborted a turn or cleared a draft, follow up with Ctrl+C while still
+			// inside Codex's short exit-confirmation window (never on non-Codex panes).
+			if codexExtra > 0 && !extraAt.IsZero() && !time.Now().Before(extraAt) {
+				codexExtra--
+				if codexExtra > 0 {
+					extraAt = time.Now().Add(250 * time.Millisecond)
+				} else {
+					extraAt = time.Time{}
+				}
+				if a.Agent == "codex" {
+					_ = n.sendKeys(ctx, pane, "ctrl+c")
+				}
 			}
 		} else if requireFresh {
 			return false, err
