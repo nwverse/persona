@@ -155,12 +155,20 @@ class PersonaShellOverlayTest {
         frames()
         close().assertDoesNotExist()
         sidebar()
-        rule.onNodeWithText(agent.displayTitle).performClick()
+        fun pickAgent(title: String) {
+            val rowTitle = hasText(title) and hasAnyAncestor(hasScrollAction())
+            rule.waitUntil(5_000) {
+                frames()
+                rule.onAllNodes(rowTitle, useUnmergedTree = true).fetchSemanticsNodes().size == 1
+            }
+            rule.onNode(rowTitle, useUnmergedTree = true).performClick()
+        }
+        pickAgent(agent.displayTitle)
         frames()
         close().assertDoesNotExist()
         awaitText("The trip outline is ready.")
         sidebar()
-        rule.onNodeWithText(otherAgent.displayTitle).performClick()
+        pickAgent(otherAgent.displayTitle)
         awaitText("The packing list is ready.")
         close().assertDoesNotExist()
         sidebar()
@@ -572,17 +580,117 @@ class PersonaShellOverlayTest {
         override fun avatar(ref: String?): AuthenticatedLarkImage? = null
     }
 
+    @Config(qualifiers = "en-w411dp-h951dp-mdpi")
+    @Test fun mergedDrawerPicksAPlaceAsRootAndKeepsItsDrillDownBack() {
+        shell(withTodos = true, sidebarLayout = SidebarLayout.Merged) { scenario ->
+            awaitText("The trip outline is ready.")
+            rule.onNodeWithTag("home-switcher").assertDoesNotExist()
+            sidebar()
+            rule.onNodeWithTag("merged-sidebar-list").performScrollToNode(hasText("To-dos"))
+            clickText("To-dos")
+            close().assertDoesNotExist()
+            awaitText("Trip plan")
+            assertTrue(hasDisplayedContentDescription("Sidebar"))
+            assertFalse(hasDisplayedContentDescription("Back"))
+            clickText("Trip plan")
+            awaitText(otherAgent.displayTitle)
+            assertTrue(hasDisplayedContentDescription("Back"))
+            back(scenario)
+            awaitText("Trip plan")
+            back(scenario)
+            awaitText("The trip outline is ready.")
+        }
+    }
+
+    @Config(qualifiers = "en-w411dp-h951dp-mdpi")
+    @Test fun mergedMessagesFollowHealthAndOpenNativeChatAsARoot() {
+        val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
+        val styleStore = AppStyleStore(app).apply { setLarkHomeMessages(true) }
+        shell(styleStore = styleStore, larkMessagesRepository = listedMessagesRepository(),
+            sidebarLayout = SidebarLayout.Merged, withComputers = true) { scenario ->
+            awaitText("The trip outline is ready.")
+            sidebar()
+            rule.onNodeWithTag("merged-sidebar-list").performScrollToNode(hasText("Computers"))
+            val healthTop = rule.onNodeWithText("Health").fetchSemanticsNode().boundsInRoot.top
+            val messagesTop = rule.onNodeWithText("Messages").fetchSemanticsNode().boundsInRoot.top
+            val computersTop = rule.onNodeWithText("Computers").fetchSemanticsNode().boundsInRoot.top
+            assertTrue("Messages must follow Health in the merged sidebar", healthTop < messagesTop)
+            assertTrue("Messages must precede Computers in the merged sidebar", messagesTop < computersTop)
+            clickText("Messages")
+            close().assertDoesNotExist()
+            awaitText("Listed Lark chat")
+            assertTrue(hasDisplayedContentDescription("Sidebar"))
+            assertFalse(hasDisplayedContentDescription("Back"))
+            clickText("Listed Lark chat")
+            awaitText("Native chat")
+            back(scenario)
+            awaitText("Listed Lark chat")
+            back(scenario)
+            awaitText("The trip outline is ready.")
+        }
+    }
+
+    @Test fun aDirectAgentOpenDismissesTheMergedOverlayOnTheSameTab() {
+        val navigation = mutableStateOf<((Router) -> ResolvedRoute?)?>({ ResolvedRoute(AppTab.Agents, route) })
+        shell(sidebarLayout = SidebarLayout.Merged, openNavigation = navigation) {
+            awaitText("The trip outline is ready.")
+            sidebar()
+            close().assertExists()
+            rule.runOnIdle {
+                navigation.value = { ResolvedRoute(AppTab.Agents,
+                    ChatRoute(otherAgent.machineId, otherAgent.sessionId, ConversationKind.Agent)) }
+            }
+            awaitText("The packing list is ready.")
+            close().assertDoesNotExist()
+        }
+    }
+
+    @Config(qualifiers = "en-w1000dp-h800dp-mdpi")
+    @Test fun separateIsDefaultAndAppearanceSwitchKeepsTheOpenChatAndSettings() {
+        shell(sidebarLayout = SidebarLayout.Separate) { scenario ->
+            awaitText("The trip outline is ready.")
+            rule.onNodeWithTag("home-switcher").assertExists()
+            rule.onNodeWithTag("merged-sidebar-list").assertDoesNotExist()
+            val draft = "Draft before the sidebar change"
+            rule.onNode(hasSetTextAction()).performTextInput(draft)
+            frames()
+            rule.onNodeWithContentDescription("Settings").performClick()
+            frames()
+            rule.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("settings-search")))
+                .performTextInput("Appearance")
+            frames()
+            rule.onNode(hasText("Appearance") and hasClickAction() and !hasSetTextAction()).performClick()
+            frames()
+            rule.onNodeWithText("Separate").assertIsDisplayed().assertIsSelected()
+            clickText("Merged")
+            rule.onNodeWithText("Merged").assertIsSelected()
+            rule.onNodeWithText("Separate").assertIsNotSelected()
+            clickText("Separate")
+            rule.onNodeWithText("Separate").assertIsSelected()
+            clickText("Merged")
+            back(scenario)
+            back(scenario)
+            awaitText("The trip outline is ready.")
+            rule.onNodeWithTag("home-switcher").assertDoesNotExist()
+            rule.onNodeWithTag("merged-sidebar-list").assertExists()
+            rule.onNode(hasSetTextAction() and hasText(draft)).assertExists()
+        }
+    }
+
     private fun shell(agents: Boolean = false, sideInset: Int = 0, width: MutableState<Int>? = null,
-        withTodos: Boolean = false, groupByTodo: Boolean = false,
+        withTodos: Boolean = false, withComputers: Boolean = false, groupByTodo: Boolean = false,
         automation: Boolean = true,
         styleStore: AppStyleStore? = null,
         larkMessagesRepository: LarkMessagesRepository? = null,
         larkMessagesFlow: MutableStateFlow<LarkMessagesRepository?>? = null,
+        sidebarLayout: SidebarLayout? = null,
         openNavigation: MutableState<((Router) -> ResolvedRoute?)?>? = null,
         content: (@Composable (ShellSession) -> Unit)? = null,
         check: (ActivityScenario<ComponentActivity>) -> Unit) {
         AssistantManagerChoice.choose("hub", null, "assistant")
         val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
+        val appearance = styleStore ?: sidebarLayout?.let { AppStyleStore(app) }
+        if (sidebarLayout != null && sidebarLayout != SidebarLayout.Separate) appearance?.setSidebar(sidebarLayout)
         Shadows.shadowOf(app.packageManager).addActivityIfNotPresent(ComponentName(app, ComponentActivity::class.java))
         val main = Session("computer", "assistant", title = "Main conversation", assistant = true)
         val recent = main.copy(sessionId = "recent", title = "Weekend plans")
@@ -677,7 +785,12 @@ class PersonaShellOverlayTest {
         }
         val preferences = preferences()
         if (groupByTodo) kotlinx.coroutines.runBlocking { preferences.grouping(persona.core.domain.sort.AgentGrouping.Todo) }
-        val session = ShellSession(hubScope.path, connection, repositories, chat, interactions, sender, assistant, inbox, preferences, tasks = tasks)
+        val session = ShellSession(hubScope.path, connection, repositories, chat, interactions, sender, assistant, inbox, preferences,
+            metrics = if (withComputers) object : MachineMetricsApi {
+                override suspend fun dashboard() = error("No metrics in this fixture")
+                override suspend fun history(machineId: String, range: MetricRange) = error("No metrics in this fixture")
+            } else null,
+            tasks = tasks)
         val host = object : ShellHost {
             override val automation = automation
             override val posture = mutableStateOf<String?>(null)
@@ -708,11 +821,8 @@ class PersonaShellOverlayTest {
                                         historySession = snapshot.conversations.firstOrNull { it.key == key })
                                 })
                         }
-                        CompositionLocalProvider(
-                            LocalWindowInfo provides window,
-                            LocalAssistantHost provides assistantHost,
-                            LocalAppStyleStore provides styleStore,
-                        ) {
+                        CompositionLocalProvider(LocalWindowInfo provides window, LocalAssistantHost provides assistantHost,
+                            LocalAppStyleStore provides appearance) {
                             Box(Modifier.then(if (width == null) Modifier.fillMaxSize() else
                                 Modifier.width(width.value.dp).fillMaxHeight())) {
                                 if (content != null) content(session)

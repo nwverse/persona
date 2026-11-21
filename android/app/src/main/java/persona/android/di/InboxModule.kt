@@ -114,7 +114,7 @@ class InboxDataOwner @Inject constructor(
                         else -> OutboxState.Unknown
                     }
                 },
-                sendThread = { root, request -> transport.replyInThread(root, request.text, request.clientId) },
+                sendThread = { root, request -> transport.replyInThread(root, request.text, request.clientId, request.mentions) },
                 download = media::download,
                 // "Hand to AI" to an Agent uses the same outbox as the Agents tab, and its targets come from the merged list:
                 // the app-wide sender takes the session to its own group (by the merged id's suffix).
@@ -267,6 +267,7 @@ class InboxDataOwner @Inject constructor(
         override suspend fun react(messageId: String, key: String, remove: Boolean) = use { it.inbox.react(messageId, key, remove) }
         override suspend fun cardAction(messageId: String, actionId: String) = use { it.inbox.cardAction(messageId, actionId) }
         override suspend fun userProfile(userId: String, feedId: String?) = use { it.inbox.userProfile(userId, feedId) }
+        override suspend fun larkMembers(feedId: String, query: String, limit: Int) = use { it.inbox.larkMembers(feedId, query, limit) }
         override suspend fun quickReactions() = use { it.inbox.quickReactions() }
         override suspend fun emojis() = use { it.inbox.emojis() }
         override suspend fun inboxMutes(manager: String?) = use { it.inbox.inboxMutes(manager) }

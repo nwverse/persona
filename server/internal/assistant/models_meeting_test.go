@@ -74,7 +74,7 @@ func TestMeetingPurposesInTheCatalog(t *testing.T) {
 		id, kind, launch, parent, group, machine string
 		fields                                   []string
 	}{
-		{purposeMeetingRoom, "launcher", "headless", "assistant", "group_assistant", "server", []string{"provider", "model", "effort"}},
+		{purposeMeetingRoom, "launcher", "headless", "assistant", "group_assistant", "server", []string{"provider", "model", "effort", "permission_mode"}},
 		{purposeMeetingMinutes, "api", "", "kb", "group_processing", "server", purposeOf(t, s, "kb").Fields},
 	} {
 		p, own := rows[c.id], purposeOf(t, s, c.id)

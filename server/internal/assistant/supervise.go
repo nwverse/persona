@@ -27,6 +27,8 @@ import (
 // A supervised todo is never closed by the hub's judge (done.go): a finished stretch of work waits for review instead.
 
 const (
+	reviewClosing   = "timeout_closing"
+	reviewTimedOut  = "timed_out"
 	reviewPending   = "pending_review"
 	reviewAccepted  = "accepted"
 	reviewRework    = "rework"
@@ -118,6 +120,8 @@ type TaskReview struct {
 	Evidence *ParkEvidence `json:"evidence,omitempty"`
 	// Reply is the source receipt that ended this exact park, committed with the pending-review transition.
 	Reply *connectorwire.LarkReplyObservation `json:"reply,omitempty"`
+	// ExternalPR is this external-event park's observed object, independent of the task's PR associations.
+	ExternalPR *externalPRObservation `json:"external_pr,omitempty"`
 	// Decided: the owner's decision (its id) that ended this park before its time (parkDecided, parked.go), and
 	// DecidedTold: when a supervision message carried that to the supervisor.
 	Decided     string    `json:"decided,omitempty"`
@@ -171,6 +175,10 @@ func (v *Supervision) clone() *Supervision {
 		if r.Reply != nil {
 			receipt := *r.Reply
 			out.Reviews[i].Reply = &receipt
+		}
+		if r.ExternalPR != nil {
+			observation := *r.ExternalPR
+			out.Reviews[i].ExternalPR = &observation
 		}
 	}
 	if out.DoneWhen == nil {
@@ -322,9 +330,19 @@ func pendingSince(before, after string, since *time.Time, now time.Time) *time.T
 // updateSupervision changes todo id's ledger (a new one when it has none) with change, which says whether it changed
 // anything; the ledger as it is then. Writes are one at a time.
 func (s *Service) updateSupervision(ctx context.Context, id string, change func(*Supervision) bool) (Supervision, bool, error) {
+	return s.updateSupervisionAt(ctx, id, time.Now().UTC(), change)
+}
+
+// updateSupervisionAt is updateSupervision at the caller's supervision-pass time.
+func (s *Service) updateSupervisionAt(ctx context.Context, id string, now time.Time, change func(*Supervision) bool) (Supervision, bool, error) {
 	b := &s.supervise
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
+	return s.updateSupervisionLockedAt(ctx, id, now, change)
+}
+
+// updateSupervisionLockedAt is updateSupervisionAt with supervise.writeMu already held.
+func (s *Service) updateSupervisionLockedAt(ctx context.Context, id string, now time.Time, change func(*Supervision) bool) (Supervision, bool, error) {
 	t, ok := s.todoNow(id)
 	if !ok {
 		return Supervision{}, false, db.ErrTodoNotFound
@@ -334,12 +352,17 @@ func (s *Service) updateSupervision(ctx context.Context, id string, change func(
 		v = (&Supervision{}).clone()
 	}
 	before := v.State
+	park := v.parking()
 	if !change(v) {
 		return *v, false, nil
 	}
 	v.Criteria = db.AlignTodoCriteria(v.DoneWhen, v.Criteria)
-	v.UpdatedAt = time.Now().UTC()
+	v.UpdatedAt = now.UTC()
 	v.PendingSince = pendingSince(before, v.State, v.PendingSince, v.UpdatedAt)
+	if park != nil && v.State == reviewPending && park.ExternalPR != nil && park.ExternalPR.wakes(park) {
+		// Match the review period after a reload. Postgres stores PendingSince to microsecond precision.
+		park.ExternalPR.PendingSince = v.UpdatedAt.Truncate(time.Microsecond)
+	}
 	if st := s.supervisionDB(); st != nil && s.todoDB() != nil {
 		if err := st.PutTodoSupervision(ctx, v.row(id)); err != nil {
 			return Supervision{}, false, err

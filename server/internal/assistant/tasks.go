@@ -101,10 +101,15 @@ type PlanTask struct {
 	// Reroute is set once a flexible task has been moved to another machine; nil while it runs where it was asked.
 	// Repeated moves keep the original FromMachine and refresh ToMachine and Reason (#2271).
 	Reroute *PlanReroute `json:"reroute,omitempty"`
-	// DoneWhen: what done means, criteria the supervisor checks before it accepts the work; ExpectMinutes: how long it
-	// should take (#3124, supervise.go). Both optional; the agent is told the criteria with its prompt.
-	DoneWhen      []string `json:"done_when,omitempty"`
-	ExpectMinutes int      `json:"expect_minutes,omitempty"`
+	// DoneWhen: what done means, criteria the supervisor checks before it accepts the work. ExpectMinutes is an optional
+	// override of the hub-selected estimate; EstimateSource records which automatic estimate the brief owns (#11685).
+	DoneWhen         []string              `json:"done_when,omitempty"`
+	ExpectMinutes    int                   `json:"expect_minutes,omitempty"`
+	EstimateSource   string                `json:"estimate_source,omitempty"`
+	EstimateEvidence *TaskEstimateEvidence `json:"estimate_evidence,omitempty"`
+	// EstimateCalibration is set only by task_plan and stored with the task.
+	// Direct owner starts and older plans have no calibration provenance.
+	EstimateCalibration bool `json:"estimate_calibration,omitempty"`
 	// The brief (#3822, task_brief.go): Goal is the work in one sentence (the title when left out), OutOfBounds what
 	// the agent must not do. Continues: the to-do this task carries on in (a retry on another computer or a rework
 	// round), for ContinuesWhy: it keeps that to-do and its brief instead of creating another. Brief is
@@ -125,9 +130,9 @@ type PlanTask struct {
 	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
 	// plan is made and again when it starts; it is not what the apps send back with an edit.
 	ReuseTodo string `json:"reuse_todo,omitempty"`
-	// Role: "leader" makes the task's agent a task leader that may hand out workers beneath this task (task_leader.go,
-	// #3656); "" is an ordinary worker. Only a supervising conversation's task_plan sets it. Parent: the leader's task
-	// this task is a worker of; the hub's, never what a tool call or an edit says.
+	// Role: every new task declares "worker" or "leader". A leader may hand out workers beneath its task
+	// (task_leader.go, #3656); a role-less task in a legacy stored plan remains an ordinary worker. Parent: the
+	// leader's task this task is a worker of; the hub's, never what a tool call or an edit says.
 	Role   string `json:"role,omitempty"`
 	Parent string `json:"parent,omitempty"`
 	// PartOf and After: the request the task's to-do is a piece of and the pieces of it the to-do waits for
@@ -921,6 +926,11 @@ func (s *Service) taskRoutes() {
 			apierr.Write(w, http.StatusBadRequest, errFeedCursor)
 			return
 		}
+		ext := r.Header.Get(RoleHeader) == roleExtension
+		if ext && s.feedHiddenFromExtension(r.Context(), r.PathValue("id")) { // feed_scope.go
+			apierr.Write(w, http.StatusNotFound, errNoSuchConversation)
+			return
+		}
 		var items []FeedItem
 		var nextCursor string
 		var err error
@@ -938,6 +948,10 @@ func (s *Service) taskRoutes() {
 			return
 		}
 		plans := s.feedPlans(r.Context(), items)
+		var shown func(TaskCard) bool
+		if ext {
+			items, plans, shown = s.extensionFeed(r.Context(), items, plans)
+		}
 		for id, p := range plans {
 			plans[id] = s.planWithSuggestion(r.Context(), p, s.requestLang(r))
 		}
@@ -962,6 +976,9 @@ func (s *Service) taskRoutes() {
 		cards, cardErr := s.taskCards(r.Context(), items, plans)
 		if cardErr != nil {
 			s.logf("feed: task card projection: %v", cardErr)
+		}
+		if shown != nil && cards != nil {
+			cards = slices.DeleteFunc(cards, func(c TaskCard) bool { return !shown(c) })
 		}
 		out := map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks}
 		if paginated {

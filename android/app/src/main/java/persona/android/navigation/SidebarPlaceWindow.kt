@@ -96,8 +96,9 @@ internal class SidebarPlaceWindow {
         stack: List<NavKey>,
         pageRoots: SidebarPageRoots,
         showHost: (NavKey, List<NavKey>) -> Unit,
+        allowCompactRoot: Boolean = false,
     ): Boolean {
-        if (!regular || !persona) return false
+        if ((!regular && !allowCompactRoot) || !persona) return false
         if (stack.size != 1) return false
         val root = stack.firstOrNull() ?: return false
         if (root == AssistantRoute) return false
@@ -142,7 +143,9 @@ internal class SidebarPlaceWindow {
                 assignPersona(hosts.current)
                 return
             }
-            val promoted = regularPromotion(assistantStack.toList(), pageRoots::openedAsRoot)
+            val promoted = if (hosts.current === assistantStack) {
+                regularPromotion(assistantStack.toList(), pageRoots::openedAsRoot)
+            } else null
             if (promoted != null) {
                 replaceBackStack(assistantStack, listOf(AssistantRoute))
                 pageRoots.adoptVisible(promoted.first())

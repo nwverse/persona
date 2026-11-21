@@ -105,8 +105,10 @@ fun LarkScreen(repository: InboxRepository, route: LarkRoute, navigator: Navigat
 /** A chat's thread, read with the chat's message display settings (a pin that replies in a thread opens here too, iOS `LarkThreadView`). */
 @Composable
 internal fun LarkChatThreadSheet(root: LarkMessage, repository: InboxRepository, display: LarkMessageDisplay,
-    onDismiss: () -> Unit) {
-    CompositionLocalProvider(LocalLarkMessageDisplay provides display) { LarkThreadSheet(root, repository, onDismiss = onDismiss) }
+    mentionFeed: String? = null, onDismiss: () -> Unit) {
+    CompositionLocalProvider(LocalLarkMessageDisplay provides display) {
+        LarkThreadSheet(root, repository, mentionFeed = mentionFeed, onDismiss = onDismiss)
+    }
 }
 
 @Composable
@@ -292,7 +294,8 @@ private fun LarkConversationScreen(repository: InboxRepository, route: LarkRoute
     // Pictures in a thread or a forwarded bundle open in the same viewer (alone when they are not the conversation's).
     val openImage: (LarkPart.Image) -> Unit = remember { { image -> viewer = larkGallery(larkImages(messages), image) } }
     thread?.let { root -> CompositionLocalProvider(LocalLarkImageOpener provides openImage) {
-        LarkChatThreadSheet(root, repository, shownDisplay, onDismiss = { thread = null })
+        LarkChatThreadSheet(root, repository, shownDisplay, mentionFeed = larkMentionFeed(route.feedId, conversation),
+            onDismiss = { thread = null })
     } }
     profilePerson?.let { person ->
         LarkProfileSheet(person, repository, onDismiss = { profilePerson = null })
@@ -400,7 +403,9 @@ private fun LarkConversationScreen(repository: InboxRepository, route: LarkRoute
                 JIconButton(PhIcons.DotsThree, stringResource(R.string.inbox_more), { more = true })
             })
     }, bottomBar = {
-        ReplyComposerField(reply, composer::update, onSend = { composer.send(context = repository.pagePins) }, stringResource(R.string.inbox_lark_reply_to, title),
+        LarkReplyComposerField(repository, composer, reply, larkMentionFeed(route.feedId, conversation),
+            onSend = { composer.send(context = repository.pagePins) },
+            placeholder = stringResource(R.string.inbox_lark_reply_to, title),
             modifier = Modifier.imePadding(), accessory = {
                 // Opened in place of the item's extension page, which broke: one line with "Retry" (inbox_item, #1683).
                 InboxExtensionNotice(route.itemId, route, Modifier)

@@ -12,6 +12,8 @@ import java.util.UUID
 import persona.core.contracts.SessionKey
 import persona.core.contracts.LarkReaction
 import persona.core.contracts.api.ConnectionState
+import persona.core.contracts.api.LarkMember
+import persona.core.contracts.api.LarkMention
 import persona.core.contracts.api.MailTransport
 import persona.core.contracts.api.OutboxMessage
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -130,6 +132,7 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     suspend fun react(messageId: String, key: String, remove: Boolean) = Unit
     suspend fun cardAction(messageId: String, actionId: String) = Unit
     suspend fun userProfile(userId: String, feedId: String? = null): kotlinx.serialization.json.JsonObject? = null
+    suspend fun larkMembers(feedId: String, query: String, limit: Int = 30): List<LarkMember> = emptyList()
     suspend fun quickReactions(): List<String> = emptyList()
     suspend fun emojis(): kotlinx.serialization.json.JsonObject? = null
 
@@ -338,12 +341,21 @@ sealed interface ReplyTarget {
 }
 
 @Serializable
-data class ReplyRequest(val text: String, @SerialName("client_id") val clientId: String,
-    val mailTarget: persona.core.contracts.api.MailReplyTarget? = null)
+data class ReplyRequest(
+    val text: String,
+    @SerialName("client_id") val clientId: String,
+    val mailTarget: persona.core.contracts.api.MailReplyTarget? = null,
+    val mentions: List<LarkMention> = emptyList(),
+)
 
 /** [ai]: the text came from AI (the AI twin, or "AI draft"); sending it asks first, sending the user's own words does not. */
 @Serializable
-data class ReplyDraft(val text: String, val clientId: String = UUID.randomUUID().toString(), val ai: Boolean = false)
+data class ReplyDraft(
+    val text: String,
+    val clientId: String = UUID.randomUUID().toString(),
+    val ai: Boolean = false,
+    val mentions: List<LarkMention> = emptyList(),
+)
 
 data class LarkConversation(
     val title: String = "",

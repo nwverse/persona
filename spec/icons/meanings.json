@@ -45,9 +45,17 @@
       "sf": "chevron.left",
       "phosphor": "caret-left"
     },
+    "backgroundMonitor": {
+      "sf": "display",
+      "phosphor": "monitor"
+    },
     "backgroundTask": {
       "sf": "gearshape.2",
       "phosphor": "gear-six"
+    },
+    "backgroundTasks": {
+      "sf": "list.clipboard",
+      "phosphor": "list-checks"
     },
     "backgroundWaiting": {
       "sf": "clock.fill",
@@ -628,6 +636,10 @@
     "skills": {
       "sf": "puzzlepiece.extension",
       "phosphor": "puzzle-piece"
+    },
+    "someday": {
+      "sf": "moon.stars.fill",
+      "phosphor": "couch"
     },
     "space": {
       "sf": "square.stack.3d.up",
