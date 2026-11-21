@@ -2535,6 +2535,15 @@ hint styles. A choice with consequences can request confirmation for a specific 
 affected scope, impact, timing and an action-specific button. All dismissal paths preserve the edit. On success the
 field’s polite save status can explain when the choice takes effect. Show this receipt once, in the field footer.
 
+## Extension entry lists
+
+A declared list of extension accounts, gateways or similar entries (#9504) belongs in the existing **Settings** group; it does not create a page, tabs or an extension-owned layout. The audience is an everyday owner managing a small list, so rows use the entry's name and plain state words, never its host-owned ID, array index, secret name or engine terminology. Reuse settings `Group`, `Row`, `Button`, `IconButton` and `Dialog`, the existing radius, surface, hairline, spacing and type roles; do not introduce a second card style or new tokens for one extension.
+
+- Each entry is one surface with a title and secret state, then its declared flat text fields. Prefer its `name`, then its first nonempty field, then a localized numbered title. **Secret** opens the shared write-only secret dialog and names both entry and secret. Before the entry is saved, the button is disabled and the reason says to save first. Entry secrets never also appear in the fixed Secrets group.
+- **Add entry** appends one empty entry and is disabled at the manifest's maximum. All field edits and additions remain drafts until the page's existing **Save**. The host owns saved entry identity; an unsaved browser key must survive immutable field edits without becoming a visible value or part of the JSON payload.
+- Removal uses the shared confirmation `Dialog`, names the entry, and says that the entry and its saved secret are deleted **when Save succeeds**. Cancel leaves the draft untouched. A required list keeps only its declared minimum; an optional list can always return to its valid absent state even when a present array would have a positive minimum. If an address participates in configured-network permission, a nearby hint says that saving a changed address clears that entry's secret. These are consequences of the pending configuration write, not claims that merely opening or dismissing the dialog changed hub state.
+- Text and explanations wrap at phone width and the largest accessibility text size; buttons stay on one line using the existing button behavior. Destructive actions remain reachable without horizontal scrolling. Dark and light themes use the same semantic roles as every other settings card.
+
 ## A chosen page that is not there now (#9071)
 
 A setting that names something which can come and go (the web's **Open on**, Settings › General › Start page: a page of
