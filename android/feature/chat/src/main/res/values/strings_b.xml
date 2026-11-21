@@ -160,6 +160,12 @@
     <string name="chat_request_secret_run_note">Used once, never saved. The assistant never sees it.</string>
     <string name="chat_request_secret_run_run">Run</string>
     <string name="chat_request_secret_run_decline">Decline</string>
+    <string name="chat_secret_handoff_always">Always allow</string>
+    <string name="chat_secret_handoff_lead">“%1$s” on %2$s gets these for this run only:</string>
+    <string name="chat_secret_handoff_lead_unnamed">An Agent on %1$s gets these for this run only:</string>
+    <string name="chat_secret_handoff_lead_bare">An Agent gets these for this run only:</string>
+    <string name="chat_secret_handoff_note">Persona and the assistant never see the values.</string>
+    <string name="chat_secret_handoff_always_scope">Always allow %1$s.</string>
     <string name="chat_plan_approve_edits">Approve edits</string>
     <string name="chat_plan_reject">Send back</string>
     <string name="chat_plan_approve_all">Approve and auto-run</string>

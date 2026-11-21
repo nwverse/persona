@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/voice/voicetest"
 )
 
@@ -33,9 +34,9 @@ func dictationTestStart() map[string]any {
 	return map[string]any{"type": "start", "protocol": 2, "mode": "dictation", "model": "rt/m1"}
 }
 
-func dictationTestReady(t *testing.T, pl *Plugin) (*app, map[string]any) {
+func dictationTestReady(t *testing.T, pl *Plugin, header ...http.Header) (*app, map[string]any) {
 	t.Helper()
-	a := dialApp(t, pl, dictationTestStart())
+	a := dialApp(t, pl, dictationTestStart(), header...)
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
 	for {
@@ -462,29 +463,41 @@ func TestDictationUpstreamFailure(t *testing.T) {
 }
 
 func TestDictationConnectionLossDoesNotReconnect(t *testing.T) {
-	script := voicetest.Script{DropAfter: map[int]float64{1: 0.2}}
-	live := voicetest.NewLive(t, script)
-	pl, _ := dictationTestPlugin(t, live)
-	a, _ := dictationTestReady(t, pl)
-	dictationTestWriteAudio(t, a, voicetest.PCM(script, 0.4))
+	for _, tt := range []struct{ lang, message string }{
+		{"en", "The dictation connection was lost. Start dictation again"},
+		{"zh-Hans", "听写连接断了，请重新开始听写"},
+		{"ja", "音声入力の接続が切れました。音声入力を再開してください"},
+	} {
+		t.Run(tt.lang, func(t *testing.T) {
+			script := voicetest.Script{DropAfter: map[int]float64{1: 0.2}}
+			live := voicetest.NewLive(t, script)
+			pl, _ := dictationTestPlugin(t, live)
+			a, _ := dictationTestReady(t, pl, http.Header{extwire.HeaderLang: {tt.lang}})
+			dictationTestWriteAudio(t, a, voicetest.PCM(script, 0.4))
 
-	dictationTestFatal(t, a, codeUpstreamFailed)
-	dictationTestClosed(t, a)
-	if starts := live.Starts(); len(starts) != 1 {
-		t.Fatalf("upstream starts after connection loss = %d, want exactly 1", len(starts))
-	}
-	if handshakes := live.Handshakes(); handshakes != 1 {
-		t.Fatalf("upstream handshakes after connection loss = %d, want exactly 1 (no reconnect)", handshakes)
-	}
-	timer := time.NewTimer(5 * time.Second)
-	defer timer.Stop()
-	select {
-	case <-live.Done(1):
-	case <-timer.C:
-		t.Fatal("the upstream session did not finish closing after the dictation ended")
-	}
-	if open := live.Open(); open != 0 {
-		t.Fatalf("open upstream sessions after fatal connection loss = %d, want 0", open)
+			failure := dictationTestFatal(t, a, codeUpstreamFailed)
+			message, _ := failure["message"].(string)
+			if !strings.HasPrefix(message, tt.message) || len(message) <= len(tt.message) {
+				t.Fatalf("dictation loss message = %q, want localized prefix %q and upstream reason", message, tt.message)
+			}
+			dictationTestClosed(t, a)
+			if starts := live.Starts(); len(starts) != 1 {
+				t.Fatalf("upstream starts after connection loss = %d, want exactly 1", len(starts))
+			}
+			if handshakes := live.Handshakes(); handshakes != 1 {
+				t.Fatalf("upstream handshakes after connection loss = %d, want exactly 1 (no reconnect)", handshakes)
+			}
+			timer := time.NewTimer(5 * time.Second)
+			defer timer.Stop()
+			select {
+			case <-live.Done(1):
+			case <-timer.C:
+				t.Fatal("the upstream session did not finish closing after the dictation ended")
+			}
+			if open := live.Open(); open != 0 {
+				t.Fatalf("open upstream sessions after fatal connection loss = %d, want 0", open)
+			}
+		})
 	}
 }
 
