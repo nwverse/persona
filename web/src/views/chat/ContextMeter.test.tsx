@@ -58,4 +58,15 @@ describe("ContextMeter", () => {
     expect(html).not.toContain("opus");
     expect(renderToStaticMarkup(<ContextMeter session={{ ...s, context_window: undefined }} compact />)).toBe("");
   });
+  it("shows a compact token pill when context window is unknown but item token usage exists", () => {
+    const html = renderToStaticMarkup(
+      <ContextMeter
+        session={{ ...s, context_tokens: undefined, context_window: undefined, assistant: true }}
+        items={[{ id: "1", seq: 1, role: "assistant", kind: "text", usage: [{ in: 2500, out: 1500 }] }]}
+        assistant
+      />,
+    );
+    expect(html).toContain("4.0k tok");
+    expect(html).not.toContain("progressbar");
+  });
 });
