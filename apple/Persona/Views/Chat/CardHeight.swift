@@ -52,9 +52,13 @@ import SwiftUI
         withAnimation(Theme.Motion.standard) { set(min(max(now + delta, 0), 1)) }
     }
 
+    /// Kept off the main actor (docs/apple/performance.md P2): once per drag or tap, never while dragging.
     private func set(_ value: Double?) {
         share = value
-        if let value { UserDefaults.standard.set(value, forKey: Self.key) } else { UserDefaults.standard.removeObject(forKey: Self.key) }
+        let key = Self.key
+        Task.detached(priority: .utility) {
+            if let value { UserDefaults.standard.set(value, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+        }
     }
 
     private static func clamp(_ h: CGFloat, _ r: ClosedRange<CGFloat>) -> CGFloat { min(max(h, r.lowerBound), r.upperBound) }
