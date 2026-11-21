@@ -270,7 +270,36 @@ if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
     -skip-testing:PersonaTests/AboutVersionRegularVisualTests
     -skip-testing:PersonaTests/AssistantHTMLCardTests -skip-testing:PersonaTests/AssistantHTMLSecurityTests)
   # A generic destination must retain the host's single runnable architecture.
-  ci_run 'Build iOS offline unit tests' "$BUILD_SECONDS" "${IOS_COMMON[@]}" \
+  ci_run 'Build iOS offline unit tests' "$BUILD_SECONDS" bash -c '
+    set -euo pipefail
+    ci_root="$1"; output="$2"; seconds="$3"; shift 3
+    watch_log="$output/diagnostics/build-resources"
+    mkdir -p "$watch_log"
+    printf "%s\n" "{\"unavailable\":\"observer did not complete; no memory-pressure verdict\"}" > "$watch_log/final.pending"
+    mv "$watch_log/final.pending" "$watch_log/final.json"
+    printf "%s\n" "observer incomplete; bounded unavailable final evidence only" > "$watch_log/observer.status.txt"
+    python3 "$ci_root/scripts/ci/apple_build_watch.py" \
+      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" &
+    watcher=$!
+    stop_watcher() {
+      local code=$?
+      trap - EXIT TERM INT
+      : > "$watch_log/stop"
+      # A short stop drain covers normal completion. The observer reaper bounds
+      # final collection and kills its detached process group if needed.
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "$watcher" 2>/dev/null || break
+        sleep 0.05
+      done
+      if kill -0 "$watcher" 2>/dev/null; then
+        kill -KILL "-$watcher" 2>/dev/null || kill -KILL "$watcher" 2>/dev/null || true
+      fi
+      wait "$watcher" || true
+      exit "$code"
+    }
+    trap stop_watcher EXIT TERM INT
+    "$@"
+  ' -- "$CI_ROOT" "$OUTPUT" "$BUILD_SECONDS" "${IOS_COMMON[@]}" \
     -destination 'generic/platform=iOS Simulator' ARCHS="$(uname -m)" ONLY_ACTIVE_ARCH=YES \
     "${IOS_UNIT_SELECTION[@]}" build-for-testing
   ci_run 'No CallKit in the simulator build' 300 python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \

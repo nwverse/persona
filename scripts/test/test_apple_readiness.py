@@ -180,7 +180,8 @@ class AppleReadinessTests(unittest.TestCase):
         source = SCRIPT.read_text()
         helpers = source[source.index("simulator_udid() {"):source.index("cleanup() {")]
         helpers += source[source.index("result() {"):source.index('if [ "$LANE" = all ]', source.index("test_batch() {"))]
-        settings = source.index('  if [ "$LANE" = ios18 ]; then', source.index('if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then'))
+        settings = source.index('  if [ "$LANE" = ios18 ]; then',
+                                source.index('if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then'))
         helpers += source[settings:source.index('  IOS_COMMON=(', settings)]
         if regular_only:
             start = source.index("  # The same compiled fixture and compatible runtime as #11289")
