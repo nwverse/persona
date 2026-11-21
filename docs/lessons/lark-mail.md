@@ -120,6 +120,13 @@ Review follow-up: the optional projection isn't a required field for a whole pag
 
 ## Lark Open Platform bots (`docs/extensions/bots.md`)
 
+- Keep the tenant-token cache mutex out of HTTP exchanges (#12681). Concurrent calls share a per-client
+  completion signal and select their own context cancellation while waiting. A successful exchange is reused;
+  a failed or cancelled leader releases waiters to try with their own contexts, without sharing credentials
+  or API domains across clients. Gate the token endpoint in loopback tests and assert cancellation returns
+  before releasing the gate; checking only the eventual error misses this blocking bug. This coordination
+  does not change API retry budgets or permit replaying uncertain writes without an idempotency key.
+
 - With card JSON 2.0, **one unknown extra field rejects the whole card** (1.0 ignores it): 2.0 has no `action` module and no `note` (lay buttons out horizontally with `column_set` + `flex_mode: flow`,
   small text with `div` + `text_size: notation`), and button callbacks go in `behaviors`; a new card returned from a card callback must also be 2.0, otherwise you get 200830. Before writing, check every field against the 2.0 component docs.
 - 1.0's Markdown doesn't support headings, tables or quotes, so a model answer dropped straight in shows raw symbols; use 2.0. Cards treat things like `<at>` and `<font>` as their own tags: escape `<` in the body first.
