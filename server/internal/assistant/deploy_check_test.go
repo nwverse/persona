@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -16,14 +17,45 @@ import (
 // fakeForge is GitHub as a deploy check sees it: one PR (merged or not, its merge commit) and which hub commits
 // contain it.
 type fakeForge struct {
-	mu        sync.Mutex
-	merged    bool
-	sha       string
-	contains  map[string]bool // by hub commit; a commit not in it is not in the repository
-	err       error
-	issueOnly bool
-	issueErr  error
-	calls     int
+	mu            sync.Mutex
+	merged        bool
+	sha           string
+	contains      map[string]bool // by hub commit; a commit not in it is not in the repository
+	err           error
+	issueOnly     bool
+	issueErr      error
+	issueState    string            // default issue state ("open" when empty)
+	issueStates   map[string]string // optional per-issue states keyed by "owner/repo#number"
+	issueStateErr error
+	// ownedPRs maps "owner/repo#number" to whether the viewer opened it; a missing key means ownership is unknown
+	// (known=false), so the gate keeps its conservative delivery default.
+	ownedPRs map[string]bool
+	calls    int
+}
+
+// PROwnedByViewer backs prOwnershipForge in tests; a missing key reads as unknown, never foreign.
+func (f *fakeForge) PROwnedByViewer(_ context.Context, repo string, number int) (bool, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	owned, known := f.ownedPRs[repo+"#"+strconv.Itoa(number)]
+	return owned, known, nil
+}
+
+func (f *fakeForge) IssueState(_ context.Context, repo string, number int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.issueStateErr != nil {
+		return "", f.issueStateErr
+	}
+	if f.issueStates != nil {
+		if st, ok := f.issueStates[repo+"#"+strconv.Itoa(number)]; ok {
+			return st, nil
+		}
+	}
+	if f.issueState != "" {
+		return f.issueState, nil
+	}
+	return "open", nil
 }
 
 func (f *fakeForge) IsPR(context.Context, string, int) (bool, error) {

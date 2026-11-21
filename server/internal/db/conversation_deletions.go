@@ -28,7 +28,10 @@ func (d *DB) PutConversationDeletion(ctx context.Context, machine, session strin
 		if _, err := tx.Exec(ctx, `UPDATE settings SET value=value || jsonb_build_object($2::text,$3::jsonb), updated_at=now() WHERE key=$1`, ConversationDeletionsKey, conversationDeletionKey(machine, session), row); err != nil {
 			return err
 		}
-		return dropSearchConversationTx(ctx, tx, machine, session)
+		if err := dropSearchConversationTx(ctx, tx, machine, session); err != nil {
+			return err
+		}
+		return dropConversationHistoryTx(ctx, tx, machine, session)
 	})
 }
 
@@ -41,6 +44,38 @@ func (d *DB) ConversationDeletion(ctx context.Context, machine, session string) 
 		return nil, false, nil
 	}
 	return raw, len(raw) > 0 && string(raw) != "null", err
+}
+
+// ConversationDeletions are the records of machine's deleted conversations among sessions, by session id, in one read
+// (ConversationDeletion's for each).
+func (d *DB) ConversationDeletions(ctx context.Context, machine string, sessions []string) (map[string]json.RawMessage, error) {
+	out := map[string]json.RawMessage{}
+	if len(sessions) == 0 {
+		return out, nil
+	}
+	keys := make([]string, len(sessions))
+	byKey := make(map[string]string, len(sessions))
+	for i, s := range sessions {
+		keys[i] = conversationDeletionKey(machine, s)
+		byKey[keys[i]] = s
+	}
+	rows, err := d.pool.Query(ctx, `SELECT k, s.value -> k FROM settings s CROSS JOIN unnest($2::text[]) AS k
+		WHERE s.key = $1 AND s.value ? k`, ConversationDeletionsKey, keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		var raw []byte
+		if err := rows.Scan(&key, &raw); err != nil {
+			return nil, err
+		}
+		if len(raw) > 0 && string(raw) != "null" {
+			out[byKey[key]] = raw
+		}
+	}
+	return out, rows.Err()
 }
 
 func (d *DB) ConversationDeletedID(ctx context.Context, session string) (bool, error) {

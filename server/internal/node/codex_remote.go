@@ -755,12 +755,16 @@ func (n *Node) sendCodex(ctx context.Context, id, text string, images []proto.Im
 		method = "turn/steer"
 		params["expectedTurnId"] = t.turn
 	}
-	// An effort the phone chose that its app-server could not take on its own (codex_effort.go): a turn takes it for
-	// itself and the turns after; a steer cannot, so it waits for the next turn.
-	effort := ""
+	// Model and/or effort the phone chose that its app-server could not take on its own (codex_effort.go): a turn
+	// takes them for itself and the turns after; a steer cannot, so they wait for the next turn.
+	var pModel, pEffort string
 	if method == "turn/start" {
-		if effort = n.codexPendingEffort(id, c, t); effort != "" {
-			params["effort"] = effort
+		pModel, pEffort = n.codexPendingTurn(id, c, t)
+		if pModel != "" {
+			params["model"] = pModel
+		}
+		if pEffort != "" {
+			params["effort"] = pEffort
 		}
 	}
 	var reply struct {
@@ -770,7 +774,7 @@ func (n *Node) sendCodex(ctx context.Context, id, text string, images []proto.Im
 	}
 	err = c.wire.call(ctx, method, params, &reply)
 	var re *codexError
-	if errors.As(err, &re) && effort != "" {
+	if errors.As(err, &re) && (pModel != "" || pEffort != "") {
 		// Codex refused a turn that carried the choice: drop it, so it does not fail every message after this one.
 		n.dropCodexPending(id, c.generation, t.id)
 	}
@@ -786,8 +790,8 @@ func (n *Node) sendCodex(ctx context.Context, id, text string, images []proto.Im
 	if err != nil {
 		return uncertain(err)
 	}
-	if effort != "" {
-		n.codexEffortTaken(id, c, t.id, effort)
+	if pModel != "" || pEffort != "" {
+		n.codexTurnSettingsTaken(id, c, t.id, pModel, pEffort)
 	}
 	if reply.Turn.ID != "" {
 		c.mu.Lock()

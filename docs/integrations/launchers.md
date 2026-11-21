@@ -317,7 +317,7 @@ A new terminal Agent can take an explicit `speed`: `standard`, `fast` or `ultraf
 
 - **Codex:** `fast` becomes `-c service_tier=priority`; `ultrafast` becomes `-c service_tier=ultrafast`. Before launch the node checks that the selected model's own catalog advertises that native tier. An invalid or unadvertised choice is refused rather than letting Codex run it silently; the rollout's `turn_context` records the native `service_tier`.
 - **Claude Code:** `fast` adds `"fastMode": true` to a merged, per-start `--settings` file, preserving the launcher's effective settings. `ultrafast` is refused. If a shell function supplies `--settings` that cannot be merged, `fast` is refused before launch rather than replacing them. Claude Code itself falls back to standard when its account or model cannot run fast mode (currently fast mode requires Opus on the first-party API with usage credits), so Persona cannot guarantee the faster output speed.
-- **Everything else and resumes:** faster speed is refused before approval or launch. This includes work agents, traex, omp, external runtimes, Paseo providers, desktop apps and every resume. A node without `session_start_speed` returns `node_outdated` for `fast` or `ultrafast` instead of silently starting standard.
+- **Everything else and resumes:** faster speed is refused before approval or launch. This includes work agents, TRAE CLI, omp, external runtimes, Paseo providers, desktop apps and every resume. A node without `session_start_speed` returns `node_outdated` for `fast` or `ultrafast` instead of silently starting standard.
 
 Speed is start-only: it is not kept in the execution fingerprint or herdr's automatic-resume command, and a later resume uses the launcher's own setting. The current New Agent form and plan cards do not show or edit speed; the launcher-list and worker-preset responses expose it for clients and extensions.
 
@@ -740,6 +740,8 @@ picked otherwise. They also count for the send check (`launcherHasModel`), so a 
 “Quota” on the launcher page reads how much allowance its key has left at the gateway. **Which gateways to read and how is the quota extension's responsibility** (`docs/extensions/extensions.md`, “Quota”): the open-source repository contains no gateway-specific readers.
 Without a quota extension, this section explains that querying is unavailable, without an error. Code: shared `server/internal/quota` (report shape, delegated requests), manager-side `assistant/models_quota.go` (routes, cache, gateway selection), hub-side `extmgr/extension_quota.go` (extension quota reading, `app.call plugins.quota`),
 and node-side `node/launcherquota.go`.
+
+A launcher whose provider reports a prepaid balance rather than an allowance window is separate from the Quota extension: an official DeepSeek launcher added in Persona has its `GET /user/balance` read by the manager with the same sealed key and shown as an amount and currency in the sidebar's usage panel (`docs/server/usage-windows.md`, “Prepaid balances (#11825)”). The key never leaves the manager, and a launcher found in a shell rc file keeps its key on that computer, so only launchers added in Persona report a balance.
 
 - Extensions **cannot see keys**: They answer `quota.query` and pass requests through `quota.http` to the party holding the key, which replaces `${launcher_key}` in the request with the key.
   Requests may go only to the launcher's own gateway (same origin, including redirects); key occurrences in responses are replaced with the placeholder again.

@@ -25,6 +25,13 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.mikepenz.markdown.compose.components.markdownComponents
+import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.model.State as MarkdownState
+import org.intellij.markdown.MarkdownElementTypes
+import org.intellij.markdown.MarkdownTokenTypes
+import org.intellij.markdown.ast.CompositeASTNode
+import org.intellij.markdown.ast.LeafASTNode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -268,5 +275,50 @@ class ChatLinkMenuTest {
         rule.onNodeWithText("List item link").performTouchInput { longClick(Offset(24f, centerY)) }
         rule.waitForIdle()
         assertEquals(listUrl, linkMenu.target?.url)
+    }
+
+    @Test fun selectableMarkdownDoesNotOpenLinkMenuInsideSelectionContainer() {
+        val url = "https://example.com/selectable-default"
+        val markdown = "[Selectable default link]($url)"
+        val linkMenu = ChatLinkMenuState()
+
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true) {
+                CompositionLocalProvider(LocalChatLinkMenu provides linkMenu) {
+                    Column(Modifier.width(360.dp).padding(Tokens.Space.m)) {
+                        // Default selectable = true wraps content in SelectionContainer.
+                        ChatMarkdown(markdown, id = "m5")
+                    }
+                }
+            }
+        }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("Selectable default link").fetchSemanticsNodes().isNotEmpty() }
+        rule.waitForIdle()
+
+        rule.onNodeWithText("Selectable default link").performTouchInput {
+            longClick(Offset(24f, centerY))
+        }
+        rule.waitForIdle()
+        assertNull("link menu must stay off inside SelectionContainer", linkMenu.target)
+    }
+
+    @Test fun leafTextNodeRendersItsContentWithoutBlanking() {
+        val raw = "Top-level leaf text"
+        val leaf = LeafASTNode(MarkdownTokenTypes.TEXT, 0, raw.length)
+        val root = CompositeASTNode(MarkdownElementTypes.MARKDOWN_FILE, listOf(leaf))
+        val parsed = MarkdownState.Success(node = root, content = raw, linksLookedUp = true)
+
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true) {
+                Markdown(
+                    state = parsed,
+                    components = markdownComponents(
+                        text = { model -> LinkAwareMarkdownText(model.content, model.node, model.typography.text) },
+                    ),
+                )
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithText(raw).assertIsDisplayed()
     }
 }

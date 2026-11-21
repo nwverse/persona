@@ -120,13 +120,13 @@ describe('MCP proxy (#7333)', { timeout: 15_000 }, () => {
 })
 
 describe('MCP declaration enums (#9944)', { timeout: 15_000 }, () => {
-  const prompt = readFileSync(new URL('../../../server/internal/prompts/mcp/agents/task_review.md', import.meta.url), 'utf8')
-  const taskSchema = JSON.parse(prompt.match(/```json\s*\n([\s\S]*?)\n```/)[1])
-  const taskTool = { name: 'task_review', description: 'Review a task', inputSchema: taskSchema }
+  // The template has language branches and is not JSON until the server renders it. Use its recorded MCP wire form.
+  const rendered = JSON.parse(readFileSync(new URL('../../../server/internal/hub/testdata/prompts/mcp_tools/assistant/task_review.golden', import.meta.url), 'utf8'))
+  const taskTool = { name: rendered.name, description: rendered.description, inputSchema: rendered.input_schema }
   const catalogTool = { name: 'tool_catalog', inputSchema: { type: 'object' } }
 
   it('projects the real task_review schema without its boolean enum and keeps boolean call arguments', async (t) => {
-    assert.deepEqual(taskSchema.properties.evidence.properties.ready.enum, [true])
+    assert.deepEqual(taskTool.inputSchema.properties.evidence.properties.ready.enum, [true])
     const { call } = proxied(t, [taskTool])
     const listed = await call('tools/list', {})
     const expected = structuredClone(taskTool)

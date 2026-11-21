@@ -82,6 +82,18 @@
   the same derived data and suite selection; preserve failure propagation, integration exclusions and result-bundle
   inspection rather than increasing the execution timeout or dropping suites.
 
+- App-hosted simulator launch failures are not necessarily boot or product-test failures (#1738). A completed boot,
+  testmanagerd control connection and app installation can all precede a Mach -308 launch timeout without a test-bundle
+  proxy connection. Capture the host process and launchd/runtime-mount evidence before Xcode timeout cleanup, and keep
+  the app host distinct from the test bundle. Requiring both UDID and bundle ID misses launchd errors; filtering a large
+  raw log only after buffering it also discards the evidence. Neither an absent log nor a process presence proves a cause.
+  When an iPhone readiness probe passes but the later iPad launch fails, the iPad needs its own live scope and observer:
+  the iPhone's successful result, host samples and scoped log do not explain the other device's launch. An outer test
+  deadline can kill a background observer before its `finally` block writes status: preseed bounded unavailable records,
+  replace them atomically on completion, and use a separate process group plus a bounded drain/reaper. Test both probe
+  and result-inspection deadlines for deterministic status/evidence and no surviving watcher; success and strict-result
+  failure must still complete normally.
+
 - Sync replay must wait for its initial session, built transcript and pending-card snapshot before issuing user actions
   (#1112). Fixed startup sleeps can turn a tap on an unloaded card into a silent no-op; accepting a reply with no held
   request then falsely labels the later card snapshot as a resurrection. Require an actual request before delivering
@@ -1325,3 +1337,18 @@ next file or pipe the script opens takes the free fd 2, and stderr writes land i
 substitution's pipe there (`lsof` shows fd 2 as a PIPE after `done < <(…)`), which hid the failure in a run whose plan
 had used one. A script that copies stderr checks it at the start (`: 9>&2 || exec 2>/dev/null`) and goes on without
 what it would have shown there.
+
+## A delayed response test has to order the refreshes, not only their reads (2026-11-21, #10289)
+
+`PushInterceptsTests.lateResponseCannotOverwriteNewerRead()` held the first `intercepts` *call* and let the second one
+answer immediately, while the model keeps the answer of the refresh that *started* last (`revision` / `ticket`). Two
+refreshes started with `async let` and a direct `await` on the main actor are not ordered against each other: the
+second-started refresh can be the one that calls `intercepts` first, take the held answer, and then correctly win, so
+the test failed as "Old" on the hosted runner and passed 30/30 elsewhere. Gate the refreshes themselves: start the
+second one only after the first is holding its answer (yield from inside the fake, wait on an `AsyncStream`), then
+release it. No sleep is needed, and the refresh meant to be stale always is.
+
+- `xcodebuild -test-iterations N` repeats XCTest cases, not Swift Testing tests: with `-test-iterations 20`, Xcode 27.2
+  ran this Swift Testing suite once ("Test run with 9 tests in 1 suite"). Repeat a Swift Testing suite by looping
+  `xcodebuild … test-without-building` (about 20 s a run once built), and accept its `TEST EXECUTE SUCCEEDED`, not
+  `TEST SUCCEEDED`.

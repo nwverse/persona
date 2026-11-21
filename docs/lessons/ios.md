@@ -182,6 +182,29 @@ the fix and 448 KB after; the Assistant page went from 906 to 573 KB and a conve
   into a view or modifier of their own. Lower the ceiling or the baseline in the same change when a page or function
   improves; never raise one.
 
+## A closure as a lock's whole state grows on every read (2026-11-22, #12624)
+
+A TestFlight iPhone with Developing Persona on crashed in the stack guard of a URLSession delegate-queue thread: ICU and
+Foundation frames on top, under `DevRecorder`, under two reabstraction thunks for
+`(NSURLSessionTask, NSURLSessionTaskMetrics) -> ()` that alternated down to `@objc HubRedirects.urlSession(_:task:didFinishCollecting:)`.
+`HubRedirects.finished` kept its closure as the bare state of `OSAllocatedUnfairLock<(@Sendable (…) -> Void)?>`.
+`withLock` passes the state `inout`, and a function type in a generic's storage sits at the most general abstraction.
+So Swift copies it into a concrete temporary and writes it back on return, wrapped in two more thunks, on a read
+(`withLock { $0 }`) too. Each finished request read it once, so each request made the next call two frames deeper.
+A few thousand requests in one launch made a call deeper than the thread's 512 KB, and the crash landed wherever the
+stack ran out.
+
+- Never make a function type (or an optional, or a tuple holding one) the whole state of `OSAllocatedUnfairLock`,
+  `Mutex` or any other generic `inout` container that is read often: put it in a struct
+  (`struct Observer { var finished: … }`) and read the field. Measured with Xcode 27.2: bare state, 1,000 reads add
+  ~80 KB to one call, at `-Onone` and `-O` alike; in a struct, nothing. `HubRedirectsObserverTests` checks it.
+- MetricKit's call stacks drop the repeating middle of a deep stack. Two frames alternating with nothing between them,
+  under an `@objc` delegate thunk, can be a chain of closures rather than recursion in the code.
+- No dSYM for the build (the archive was not kept): a Release rebuild of the same commit gets another UUID, and its
+  addresses drift by tens of KB, so `atos` gives plausible wrong names. Use it to find the neighborhood, then match the
+  structure: which module's code is there, functions that sit next to each other, the calls each return address
+  follows. Then prove the mechanism by disassembling the rebuild and with a standalone repro.
+
 ## Keep a control's accessibility identifier off its surrounding container (#7033)
 
 A SwiftUI container's `accessibilityIdentifier` can replace the identifiers on a nested `Menu` and `ScrollView`, while the buttons inside the scroll view keep theirs. The Agents capsule looked correct and its filters remained queryable, but its grouping icon was exposed under the capsule's identifier instead of `agents.grouping`. Put identifiers on the actionable controls, not on their surrounding capsule, and test both the menu's identity and its fixed frame after a horizontal drag.
@@ -3165,3 +3188,20 @@ The lens then jumped on by 33–50 ms of its 0.65 s glide in one frame, by up to
   thousands of methods (1,883 locations for every `_UIContextMenu*` method) slows the app until the test's own steps time out.
 - In a UI test, a held drag that starts on a menu item is the menu's slide-to-choose on a phone: letting go chose the item under
   the finger and closed the menu. Swipe the menu's own list (`app.collectionViews.containing(.button, identifier: <an item>)`).
+
+
+## Foreground SSH recovery owns its route and pending work (#11671)
+
+- Closing an authenticated SSH session is not enough: a pre-authentication TCP channel has not yet become the saved
+  session. Retain and close that channel too, fail the handshake wait immediately, and leave the final phase idle.
+- An unfinished app-level start must be retired by attempt identity. Removing only the tunnel lets the next foreground
+  caller join the old start; clearing an old task unconditionally can erase its replacement. In-app relay cleanup needs
+  the same ownership: one lease per attempt, retained through pairing adoption.
+- A local HTTP refresh can start before foreground route selection installs the tunnel. Resolve the route before
+  building the request URL and authorization; include conditional reads, which drive Inbox and To-dos, and preserve
+  each request's manager, account and operation id. Wait per hub group, not for every group or for a WebSocket hello.
+- Race the last working SSH route only while restoring a closed tunnel. Racing an already-routed tunnel on every
+  attempt lets a fast SSH path always beat a recovered direct address and defeats the periodic return to direct.
+  Cancel the loser by its owner, so a late completion cannot install a route or close the next recovery's tunnel.
+- Test a server that accepts TCP but never sends its SSH greeting, and use controlled route continuations. Killing
+  an established test sshd session alone does not exercise pending-dial cancellation or foreground request ordering.

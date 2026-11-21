@@ -89,10 +89,14 @@ files into a private runtime directory and replace every placeholder; restrict t
   prompt echoes, other sessions, additional prose and duplicate marked results are rejected. The response must still
   match the watcher's JSON schema and changed-line validation; transcript text is transport, never approval by itself.
   Each review gets a fresh session ID and is never resumed into another PR. If Herdr's five-second startup observation
-  stalls, the helper checks the same pane before failing: working or blocked states retain the accepted prompt and
-  wait for that session's marked result instead of resubmitting it. An idle or done state is accepted only after the
-  current invocation's transcript proves a valid marked result. Otherwise the prompt is failed as unstarted; startup
-  waiting does not weaken the total review deadline or the slot bound. The visible launch ends in
+  stalls, the helper polls the same pane and current-session transcript for a bounded startup grace period (30 seconds
+  by default, configurable from 1 to 120 seconds). Working or blocked states retain the accepted prompt and wait for
+  that session's marked result instead of resubmitting it. An idle or done state is accepted only after the current
+  invocation's transcript proves a valid marked result. Persistent idle state without that result or an exited scope
+  fails the attempt after the grace period; it never passes as review evidence. Only the first status observation after
+  a stall may tolerate a blocked state; the allowance is consumed after that poll regardless of status, and any later
+  blocked state fails as an unexpected interaction. Startup waiting does not weaken the total review deadline or the
+  slot bound. The visible launch ends in
   `zsh -lic cc_k3`; the trusted launcher and `launcher_environment` keep
   safe-mode, Read-only tools, the maintainer's interactive permission policy, per-session identity and any
   cgroup-v1 affinity/rlimit fallback out of the displayed command. Each `pr-review-rNN-PID-TOKEN.scope` has a unique
