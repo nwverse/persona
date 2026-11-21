@@ -399,6 +399,16 @@ jobs:
             printf '%s' "${!name}" | base64 --decode > "$RUNNER_TEMP/profile-$i.mobileprovision"
             cp "$RUNNER_TEMP/profile-$i.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/"
           done
+      - name: Prepare the explicitly public privacy waiver without logging private values
+        env:
+          PERSONA_PRIVACY_PUBLIC_WORDS: ${{ secrets.PERSONA_PRIVACY_PUBLIC_WORDS }}
+        run: |
+          set -euo pipefail
+          test "$PERSONA_PRIVACY_PUBLIC_WORDS" = 'chyroc'
+          umask 077
+          mkdir -p "$RUNNER_TEMP/persona-public-config/persona"
+          printf '# The public account identifier is not private; all other privacy checks remain active.\n!chyroc\n' > "$RUNNER_TEMP/persona-public-config/persona/private-words.txt"
+          printf 'XDG_CONFIG_HOME=%s\n' "$RUNNER_TEMP/persona-public-config" >> "$GITHUB_ENV"
       - name: Archive, export and upload the formal iPhone/Watch build
         env:
           RUSTUP_TOOLCHAIN: '1.98.0'

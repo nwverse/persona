@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -290,6 +291,8 @@ var rpcFailureKeys = map[string]string{
 	"agent_speed_model":                  "rpc-errors.agent_speed_model",
 	"agent_speed_invalid":                "rpc-errors.agent_speed_invalid",
 	"readonly_unsupported":               "rpc-errors.readonly_unsupported",
+	"assistant_supervision_runtime":      "rpc-errors.assistant_supervision_runtime",
+	"assistant_supervision_account":      "rpc-errors.assistant_supervision_account",
 	// a start whose engine runs only its own launchers and has none of the launcher's kind (#8140); the engine's own
 	// words, naming the launcher, stay in detail
 	proto.CodeLauncherKindMissing: "rpc-errors.launcher_kind_missing",
@@ -331,6 +334,7 @@ var rpcFailureKeys = map[string]string{
 	// session.modes (node/modes.go, #1843)
 	proto.CodeModesOnComputer:     "rpc-errors.modes_on_computer",
 	proto.CodeModesNotRunning:     "rpc-errors.modes_not_running",
+	proto.CodeModesUnsupported:    "rpc-errors.modes_unsupported",
 	proto.CodeEffortChangePending: "rpc-errors.effort_change_pending",
 	// a message to a stopped agent: read-only, its terminal page's Resume brings it back (node stopped.go, #4754)
 	"agent_stopped":      "rpc-errors.agent_stopped",
@@ -392,6 +396,21 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	code, _ := body["code"].(string)
 	key := rpcFailureKeys[code]
 	args := i18n.Args{"reason": original}
+	if code == "assistant_supervision_runtime" {
+		var names []string
+		if values, ok := body["launchers"].([]any); ok {
+			for _, v := range values {
+				if name, ok := v.(string); ok && name != "" {
+					names = append(names, name)
+				}
+			}
+		}
+		label := strings.Join(names, ", ")
+		if label == "" {
+			label = i18n.T(l, "rpc-errors.assistant_supervision_none")
+		}
+		args["launchers"] = label
+	}
 	if code == "codex_no_box" || code == "codex_no_box_here" {
 		var re *rpc.Error
 		var detail struct {

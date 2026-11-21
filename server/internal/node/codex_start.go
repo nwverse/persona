@@ -321,6 +321,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		return n.openCodexWait(ctx, pane, cwd, launcher, mode, execution, began), nil
 	}
 	defer n.unclaimCodexThread(id)
+	id = n.codexPublicID(n.codexPaneHome(pane), id)
 	n.bindPane(pane, id)
 	n.namePersonaTab(ctx, pane, id) // the tab was marked before the thread was known (personatab.go)
 	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC(), Model: execution.Model, ModelEffort: execution.Effort, TaskInstructions: execution.TaskInstructions}
@@ -335,6 +336,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	}
 	n.putAgentState(ctx, launch, id, st)
 	_ = n.refreshHosts(ctx)
+	n.joinCodexPanes(ctx)
 	a, ok := n.agent(id)
 	if !ok {
 		a = host.Agent{Agent: "codex", PaneID: pane, Cwd: cwd, AgentStatus: proto.StatusWorking}

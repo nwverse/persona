@@ -641,3 +641,23 @@ func TestStartContinueRefusalsAreWorded(t *testing.T) {
 		}
 	}
 }
+
+func TestSupervisionRefusalsSpeakTheClientsLanguage(t *testing.T) {
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		for _, code := range []string{"assistant_supervision_runtime", "assistant_supervision_account"} {
+			rec := httptest.NewRecorder()
+			data := json.RawMessage(`{"delivered":"none","launchers":["OpenCode","agy"]}`)
+			body := call(t, langWriter{rec, lang}, rec, &rpc.Error{Code: code, Message: "runtime diagnostic", Data: data})
+			want := i18n.T(lang, "rpc-errors."+code, i18n.Args{"launchers": "OpenCode, agy"})
+			if rec.Code != http.StatusConflict || body["code"] != code || body["error"] != want || body["delivered"] != "none" {
+				t.Fatalf("%s %s: %d %v", lang, code, rec.Code, body)
+			}
+		}
+		rec := httptest.NewRecorder()
+		body := call(t, langWriter{rec, lang}, rec, &rpc.Error{Code: "assistant_supervision_runtime", Message: "legacy refusal"})
+		want := i18n.T(lang, "rpc-errors.assistant_supervision_runtime", i18n.Args{"launchers": i18n.T(lang, "rpc-errors.assistant_supervision_none")})
+		if body["error"] != want {
+			t.Fatalf("legacy %s: %v", lang, body)
+		}
+	}
+}

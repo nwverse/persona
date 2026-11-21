@@ -130,6 +130,32 @@ function before trusting it.
 - The system's CPU and memory kills leave no `Persona-…` crash log: ask for the `cpu_resource` or `JetsamEvent` entry
   under Analytics Data instead.
 
+## A freeze only the device has: sample it on the device (2026-11-22, #12318)
+
+An iPhone Duo froze, then was killed (`0x8BADF00D`, scene-update), when Persona was dragged from split screen to full
+screen while an Agent's reply streamed. The report's one main-thread stack was SwiftUI layout under the live resize
+(`_computeMetricsAndCrossFadeInLiveResize` → the transition's alongside block → `layoutBelowIfNeeded`), with no app frame.
+
+- **Hours on simulators did not reproduce it.** Duo fold / unfold / turn and an iPad's windowed live resize all
+  finished; no simulator has both the phone idiom and an in-place live resize.
+- **Measure main-thread CPU, not wall time, on a loaded Mac.** At load ~130 the watchdog's "blocks" of several seconds
+  were the thread waiting for a core. `ps -M -p <pid>`: the first row is the main thread; its STIME and UTIME are the
+  7th and 8th columns (reading the 6th and 7th dropped the user time and made every change look free).
+- **The report's CPU line says loop or wait.** "Elapsed application CPU time" close to the 10 s window means the main
+  thread spun; it did here.
+- **What found it:** a Debug build whose main-thread watchdog keeps sampling while blocked and appends the stacks to
+  Documents (they survive the kill), pulled with `devicectl device copy from --domain-type appDataContainer`. A
+  second build logged each `UICollectionView` layout pass and each cell's self-sizing while blocked (swizzled, never
+  committed). The block lasted 88 s, then a CPU-limit kill. The log showed the sidebar's Agents `List` given a
+  different frame on every pass (331.67 / 72.3 pt left safe area, then 322.67 / 81.7, a three-pass cycle), cell heights
+  unchanged, `AssistantSidebar` re-rendering each time: a value written from layout moving the layout (P7).
+- **The fix, checked the same way.** The line the rows stand on (`rowsLeading`) is measured inside the list and pads the
+  head and the main row above it; under the Duo's side safe area it briefly read 89.67 pt. The head and main row now
+  take the column's width and no more, and the write is guarded against echoes (`LayoutEchoGuard`). On the device the
+  drag no longer blocked, and the guard never had to refuse a write: the cap is what broke the loop.
+- Symbolicate system frames from Xcode's DeviceSupport copy (`…/iOS DeviceSupport/<device> <os>/…/Symbols`) with
+  `atos -l <__TEXT vmaddr>` and `vmaddr + offset`; Objective-C UIKit methods resolve, Swift internals of SwiftUI do not.
+
 ## A device's freeze report names its build: check it before reproducing (#9173)
 
 An iPhone Duo froze scrolling up an Agent chat, at the same answer each time, until the watchdog killed it
@@ -181,6 +207,29 @@ the fix and 448 KB after; the Assistant page went from 906 to 573 KB and a conve
   `AnyView` at its stage boundaries, and lift heavy members (a big struct, a binding to a big value) out of the chain
   into a view or modifier of their own. Lower the ceiling or the baseline in the same change when a page or function
   improves; never raise one.
+
+## A closure as a lock's whole state grows on every read (2026-11-22, #12624)
+
+A TestFlight iPhone with Developing Persona on crashed in the stack guard of a URLSession delegate-queue thread: ICU and
+Foundation frames on top, under `DevRecorder`, under two reabstraction thunks for
+`(NSURLSessionTask, NSURLSessionTaskMetrics) -> ()` that alternated down to `@objc HubRedirects.urlSession(_:task:didFinishCollecting:)`.
+`HubRedirects.finished` kept its closure as the bare state of `OSAllocatedUnfairLock<(@Sendable (…) -> Void)?>`.
+`withLock` passes the state `inout`, and a function type in a generic's storage sits at the most general abstraction.
+So Swift copies it into a concrete temporary and writes it back on return, wrapped in two more thunks, on a read
+(`withLock { $0 }`) too. Each finished request read it once, so each request made the next call two frames deeper.
+A few thousand requests in one launch made a call deeper than the thread's 512 KB, and the crash landed wherever the
+stack ran out.
+
+- Never make a function type (or an optional, or a tuple holding one) the whole state of `OSAllocatedUnfairLock`,
+  `Mutex` or any other generic `inout` container that is read often: put it in a struct
+  (`struct Observer { var finished: … }`) and read the field. Measured with Xcode 27.2: bare state, 1,000 reads add
+  ~80 KB to one call, at `-Onone` and `-O` alike; in a struct, nothing. `HubRedirectsObserverTests` checks it.
+- MetricKit's call stacks drop the repeating middle of a deep stack. Two frames alternating with nothing between them,
+  under an `@objc` delegate thunk, can be a chain of closures rather than recursion in the code.
+- No dSYM for the build (the archive was not kept): a Release rebuild of the same commit gets another UUID, and its
+  addresses drift by tens of KB, so `atos` gives plausible wrong names. Use it to find the neighborhood, then match the
+  structure: which module's code is there, functions that sit next to each other, the calls each return address
+  follows. Then prove the mechanism by disassembling the rebuild and with a standalone repro.
 
 ## Keep a control's accessibility identifier off its surrounding container (#7033)
 
