@@ -340,6 +340,7 @@ export function createOpencodeCompanion(options = {}) {
   async function synchronizePolicy(s, text, interruptVersion) {
     if (text === undefined || text === s.policy) {
       try { await policyStore.check(s.policyRecord) } catch { throw new RpcError('OpenCode follow-up instructions are unavailable. Nothing was sent.', SUPERVISION_ERROR_CODE) }
+      if (text === '') await policyStore.removeForSession(s.id)
       return null
     }
     if (s.running || s.queued || s.asks.size || s.admitting > 1 || s.worker?.leases || s.policyFlight) throw new RpcError('Wait for this conversation to finish before changing its follow-up instructions', 'busy')
@@ -358,12 +359,16 @@ export function createOpencodeCompanion(options = {}) {
         s.policy = previous.text
         s.policyRecord = previous.record
         s.loadedGeneration = s.worker === previous.worker ? previous.loadedGeneration : 0
-        if (oldFileRemoved && previous.text) s.policyRecord = await policyStore.create(previous.text)
+        if (oldFileRemoved && previous.text) {
+          s.policyRecord = await policyStore.create(previous.text)
+          await policyStore.bind(s.policyRecord, s.id)
+        }
         await policyStore.remove(next)
       } finally { s.policyFlight = false }
     }
     try {
       next = await policyStore.create(text)
+      await policyStore.bind(next, s.id)
       if (cancelled()) throw new Error('Input cancelled')
       if (s.worker) await assistantWorkers.discard(s.worker)
       s.policy = text
@@ -375,7 +380,10 @@ export function createOpencodeCompanion(options = {}) {
       // Keep the role-change lock until the admitting caller either queues its
       // first input synchronously or restores the old role after interruption.
       return {
-        async retireOldFile() { await policyStore.remove(previous.record); oldFileRemoved = true },
+        async retireOldFile() {
+          await policyStore.remove(previous.record); oldFileRemoved = true
+          await policyStore.removeForSession(s.id, next)
+        },
         accept() { s.policyFlight = false },
         rollback,
       }
@@ -1214,6 +1222,7 @@ export function createOpencodeCompanion(options = {}) {
       const created = await acp.newSession({ cwd, mcpServers: [route.acpServer], ...(isAsst ? nativePolicy(seed) : {}) })
       sessionId = typeof created?.sessionId === 'string' ? created.sessionId.trim() : ''
       if (!sessionId) throw new RpcError('opencode ACP 没有返回新会话 ID', 'opencode')
+      await policyStore.bind(record, sessionId)
 
       const initialTitle = typeof params.prompt === 'string' && params.prompt.trim()
         ? snippet(visibleUserText(params.prompt))
@@ -1561,6 +1570,7 @@ export function createOpencodeCompanion(options = {}) {
       s.policy = ''
       live.delete(id)
     }
+    if (!s || s.assistant) await policyStore.removeForSession(id)
     listCache.at = 0
     rt.streamEnd(id)
     rt.sessionsChanged(0)

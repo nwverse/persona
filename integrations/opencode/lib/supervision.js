@@ -2,7 +2,7 @@
 // systemPrompt, never through user text or shared workspace instructions.
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir, mkdtemp, writeFile, readFile, realpath, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile, readFile, realpath, rm, readdir, lstat, rename } from 'node:fs/promises'
 import { join, relative, resolve, isAbsolute, dirname, basename } from 'node:path'
 import { promisify } from 'node:util'
 import { RpcError } from '../../runtime-sdk/index.js'
@@ -12,6 +12,7 @@ import { stripJsonc } from './models.js'
 export const VERIFIED_POLICY_VERSIONS = new Set(['1.19.6'])
 const runFile = promisify(execFile)
 const MAX_POLICY_BYTES = 128 * 1024
+const OWNER_KIND = 'persona-opencode-policy'
 const refusal = () => new RpcError('OpenCode could not apply isolated follow-up instructions. Nothing was sent.', 'assistant_supervision_runtime')
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 const contained = (parent, path) => { const rel = relative(parent, path); return rel === '' || !rel.startsWith('..') && !isAbsolute(rel) }
@@ -71,6 +72,8 @@ export function createSupervisionStore({ home, bin, env, directory, run = runFil
     owned.add(dir)
     const file = join(dir, 'policy.md')
     try {
+      // Cleanup metadata never supplies tool identity or execution authority.
+      await writeFile(join(dir, 'owner.json'), JSON.stringify({ kind: OWNER_KIND, version: 1, pid: process.pid, sessionId: '' }), { mode: 0o600, flag: 'wx' })
       await writeFile(file, text, { mode: 0o600, flag: 'wx' })
       return { dir, file, text }
     } catch (error) { await remove({ dir }); throw error }
@@ -79,6 +82,51 @@ export function createSupervisionStore({ home, bin, env, directory, run = runFil
     if (!record || !owned.has(record.dir)) return
     await rm(record.dir, { recursive: true, force: true })
     owned.delete(record.dir)
+  }
+  async function bind(record, sessionId) {
+    if (!record) return
+    if (!owned.has(record.dir) || typeof sessionId !== 'string' || !sessionId || sessionId.length > 1024) throw refusal()
+    const pending = join(record.dir, 'owner.next')
+    await writeFile(pending, JSON.stringify({ kind: OWNER_KIND, version: 1, pid: process.pid, sessionId }), { mode: 0o600, flag: 'wx' })
+    await rename(pending, join(record.dir, 'owner.json'))
+  }
+  async function records() {
+    // Do not create a policy directory merely to close an ordinary disk chat.
+    let entries
+    try {
+      const persona = await realpath(join(home, '.persona')).catch(() => resolve(home, '.persona'))
+      if (contained(resolve(home, '.persona'), root) || contained(persona, await realpath(root))) throw refusal()
+      entries = await readdir(root, { withFileTypes: true })
+    } catch (error) { if (error.code === 'ENOENT') return []; throw error }
+    const result = []
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !/^session-[A-Za-z0-9]{6}$/.test(entry.name)) continue
+      const dir = join(root, entry.name)
+      try {
+        const marker = join(dir, 'owner.json'), info = await lstat(marker)
+        if (!info.isFile() || info.isSymbolicLink() || info.size > 4096) continue
+        const owner = JSON.parse(await readFile(marker, 'utf8'))
+        if (isObject(owner) && owner.kind === OWNER_KIND && owner.version === 1 && Number.isInteger(owner.pid) && owner.pid > 0 && owner.pid <= 2147483647 && typeof owner.sessionId === 'string' && owner.sessionId.length <= 1024) result.push({ dir, owner })
+      } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error }
+    }
+    return result
+  }
+  async function removeForSession(sessionId, keep) {
+    for (const record of await records()) {
+      if (record.owner.sessionId !== sessionId || record.dir === keep?.dir) continue
+      await rm(record.dir, { recursive: true, force: true })
+      owned.delete(record.dir)
+    }
+  }
+  async function collectStale() {
+    for (const record of await records()) {
+      if (owned.has(record.dir)) continue
+      let alive = true
+      try { process.kill(record.owner.pid, 0) } catch (error) { alive = error.code !== 'ESRCH' }
+      if (!alive) {
+        await rm(record.dir, { recursive: true, force: true })
+      }
+    }
   }
   async function verify(record, route) {
     if (!record || await readFile(record.file, 'utf8') !== record.text) throw refusal()
@@ -94,7 +142,10 @@ export function createSupervisionStore({ home, bin, env, directory, run = runFil
   return {
     get ready() { return ready },
     create,
+    bind,
     remove,
+    removeForSession,
+    collectStale,
     verify,
     async check(record) {
       if (record && await readFile(record.file, 'utf8') !== record.text) throw refusal()
@@ -103,6 +154,7 @@ export function createSupervisionStore({ home, bin, env, directory, run = runFil
       ready = null
       let record, client
       try {
+        await collectStale()
         const { stdout } = await run(bin, ['--version'], { env, cwd: home, timeout: 10_000, maxBuffer: 4096 })
         const version = stdout.trim()
         if (!VERIFIED_POLICY_VERSIONS.has(version)) return null
