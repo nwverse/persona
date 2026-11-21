@@ -747,14 +747,24 @@ func (s *Service) channelAnswerAsk(ctx context.Context, id string, m channel.Mes
 
 // resolveInteraction answers a card as the user did in channel ch (interactions.resolve), with the owner's action the
 // hub handed over with that message or press there (the hub refuses one without it, or one of another channel):
-// false when it is no longer pending.
+// false when no live answer was taken; resolveInteractionResult also keeps the history status.
 func (s *Service) resolveInteraction(ctx context.Context, ch, id string, r proto.Resolution, action string) (bool, error) {
-	var res struct {
-		OK bool `json:"ok"`
-	}
+	res, err := s.resolveInteractionResult(ctx, ch, id, r, action)
+	return res.OK, err
+}
+
+type interactionResolveResult struct {
+	OK     bool   `json:"ok"`
+	Status string `json:"status"`
+}
+
+// resolveInteractionResult keeps the history status when a live interaction could not be answered.
+// A missing live entry can still be pending in history, or the history can be unavailable.
+func (s *Service) resolveInteractionResult(ctx context.Context, ch, id string, r proto.Resolution, action string) (interactionResolveResult, error) {
+	var res interactionResolveResult
 	err := s.appCall(ctx, AppInteractions, InteractionsResolve, map[string]any{"interaction_id": id, "resolution": r,
 		"action": action, "channel": ch}, &res)
-	return res.OK, err
+	return res, err
 }
 
 // clarifyInteraction sends a question through the channel's owner-action
