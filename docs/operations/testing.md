@@ -47,6 +47,16 @@ All workflows except the image publisher accept only `workflow_dispatch` and, fo
 The image and Release publisher additionally retains `push` for **`v*` release tags**: Docker installations use its version and `latest` images, and the same tag gets a GitHub Release.
 No branch push or PR starts it. The issue-link Action also requires explicit dispatch from the default branch with a PR number.
 
+The `changes` and `guards` jobs and the scripts shards need history and the base, so they fetch every branch and tag, but with file
+contents only at the tip (`filter: blob:none`, #12753); a full fetch would also download every screenshot branch's files, which no
+check reads. Git fetches a blob a check reads at the base when it asks for it, without a token (checkout has dropped it by then; the
+repository is public). One such fetch is quick; a new check there that reads many old files one at a time (`git blame`, `git log -p`
+over a long range) would wait on each, so it belongs in a job with a full checkout. A fetch can also fail, and then `git show` and
+`git cat-file -e` fail just as they do for a file the base does not have. So a check that reads a file at the base decides whether
+the file is there from the tree (`git ls-tree <base> -- <path>`, which needs no fetch) and fails when a listed file cannot be read;
+counting a failed read as "not at the base" would skip a never-raise comparison and pass. The migration freeze, the sleep and
+prompt-language ratchets and the counts table's base read work this way.
+
 The `guards` job (**Manual repository guards**) runs `scripts/ci/guards.sh`: repository/commit privacy and path safety, migration freeze, sleep ratchet and the no-CallKit source guard (`docs/operations/release.md`, "No CallKit").
 It checks against the base the `changes` job (**Manual path selection**) resolved, so one run has one base. No platform lane needs it:
 a failing guard says nothing about the platforms, so their results still come out, and **CI required**, which needs both

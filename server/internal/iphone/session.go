@@ -117,8 +117,11 @@ type session struct {
 	lastDemand time.Time     // last time a call wanted the link
 	lastUse    time.Time     // last time a call finished
 	since      time.Time     // when the state last changed
-	// prepared: this link already tried to mount the developer disk image by itself (maybePrepare), once per link.
+	// prepared: this link already tried to mount the developer disk image by itself (maybePrepare) and is not to try
+	// again; a failure that can clear by itself (prepareAgain) leaves it unset, so the next health check tries again.
 	prepared *conn
+	// prepareFail: the code of the last failed attempt, so a phone that stays locked is logged once, not every time.
+	prepareFail string
 }
 
 func newSession(m *Manager, udid string) *session {
@@ -468,9 +471,11 @@ func (s *session) health(c *conn) {
 	}
 }
 
-// maybePrepare mounts the developer disk image by itself, once per link, when the phone came up without it and its
-// owner allowed that (Record.AutoPrepare, after preparing it from the app): a restarted phone has dropped the image.
-// In the background, as one call like any other; a failure is only logged (the app's status says ddi_not_mounted).
+// maybePrepare mounts the developer disk image by itself when the phone came up without it and its owner allowed that
+// (Record.AutoPrepare, after preparing it from the app): a restarted phone has dropped the image. In the background, as
+// one call like any other; a failure is only logged (the app's status says ddi_not_mounted). Once per link, except that
+// a failure that can clear by itself (prepareAgain: the phone locked, say) is tried again at the link's next health
+// check, which comes no sooner than healthEvery after the attempt; any other waits for the next link (#12556).
 func (s *session) maybePrepare(c *conn) {
 	s.mu.Lock()
 	info, done := s.info, s.prepared == c
@@ -492,13 +497,39 @@ func (s *session) maybePrepare(c *conn) {
 	go func() {
 		ctx, cancel := context.WithTimeout(s.m.ctx, prepareTimeout)
 		defer cancel()
-		if _, err := s.m.Call(ctx, s.udid, opMountDDI, json.RawMessage(`{}`)); err != nil {
-			s.m.logf("iphone %s: mounting the developer disk image again: %v", short(s.udid), err)
-			return
+		_, err := s.m.Call(ctx, s.udid, opMountDDI, json.RawMessage(`{}`))
+		code := Code(err)
+		s.mu.Lock()
+		again := err != nil && prepareAgain[code]
+		if again && s.prepared == c {
+			s.prepared = nil
 		}
-		s.m.logf("iphone %s: mounted the developer disk image again", short(s.udid))
+		repeat := err != nil && code == s.prepareFail
+		if err != nil {
+			s.prepareFail = code
+		} else {
+			s.prepareFail = ""
+		}
+		s.mu.Unlock()
+		switch {
+		case err == nil:
+			s.m.logf("iphone %s: mounted the developer disk image again", short(s.udid))
+		case repeat: // still locked, say: said once already
+		case again:
+			s.m.logf("iphone %s: mounting the developer disk image again: %v; trying again at the next check", short(s.udid), err)
+		default:
+			s.m.logf("iphone %s: mounting the developer disk image again: %v", short(s.udid), err)
+		}
 	}()
 }
+
+// prepareAgain are the failures of an automatic mount that can clear by themselves, so the link's next health check
+// tries again: the phone locked (the bridge asks before it sends anything), no answer in time, Apple's signing server
+// unreachable. A mount whose answer never came reaches here as CodeUncertain (Call reports every change it sent without
+// an answer so), and is tried again as well: mount_ddi first looks whether the image is there, and then does nothing.
+// The others (no image on this computer, no build for this phone, Developer Mode off, …) need someone to act, and wait
+// for the next link.
+var prepareAgain = map[string]bool{"locked": true, bridgeTimeout: true, "tss_failed": true, CodeUncertain: true}
 
 // restartLink ends c on purpose: the supervisor connects again at once.
 func (s *session) restartLink(c *conn) {
