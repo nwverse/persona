@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { request } from 'node:http'
 import { createMcpProxy, extractShellGates, matchShellGate } from '../lib/mcp.js'
 
 async function postJson(url, headers, body) {
@@ -11,6 +12,25 @@ async function postJson(url, headers, body) {
   const text = await res.text()
   return { status: res.status, json: text ? JSON.parse(text) : null }
 }
+
+test('revoking a worker binding while its HTTP body is pending prevents later tool execution', async (t) => {
+  let calls = 0
+  const proxy = createMcpProxy({ tools: () => [], call: () => { calls++; return { content: [] } } })
+  t.after(() => proxy.stop())
+  const route = await proxy.allocate({ assistant: true, sessionId: 'retired' })
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'probe', arguments: {} } })
+  const status = await new Promise((resolve, reject) => {
+    const req = request(route.url, { method: 'POST', timeout: 2000, headers: { ...route.headersObject, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), Expect: '100-continue' } })
+    t.after(() => req.destroy())
+    req.on('error', reject)
+    req.on('timeout', () => req.destroy(new Error('pending request timed out')))
+    req.on('continue', () => { route.release(); req.end(body) })
+    req.on('response', (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)) })
+    req.flushHeaders()
+  })
+  assert.equal(status, 404)
+  assert.equal(calls, 0)
+})
 
 test('createMcpProxy enforces Bearer auth, method checks, route isolation, allocate+bind, and tool forwarding', async (t) => {
   const seenTools = []
