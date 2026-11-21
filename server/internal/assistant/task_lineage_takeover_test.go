@@ -261,3 +261,44 @@ func TestCancelledTakeoverStillClosesItsCard(t *testing.T) {
 		t.Fatalf("cancelled takeover rewrote the previous task's lineage: %+v", lineage)
 	}
 }
+
+// A failed takeover rolls back every open ledger its scope change touched on the shared brief, not only the brief's log.
+func TestFailedTakeoverRestoresSiblingLedger(t *testing.T) {
+	st := &failingTakeoverAgentStore{DB: todoTestDB(t)}
+	s, f, old := newSupervisedServiceOn(t, st)
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	raw, _ := json.Marshal(map[string]any{"todo_id": old.ID, "verdict": "accepted", "note": "Spec 已验收", "checks": completeReviewChecks(todoNow(s, old.ID))})
+	if _, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw); err != nil {
+		t.Fatal(err)
+	}
+	brief, ok := s.briefOfTodo(old.ID)
+	if !ok {
+		t.Fatal("closed task has no brief")
+	}
+	sibling, err := s.createTodo(context.Background(), "Open sibling on the same brief", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.superviseTodo(context.Background(), sibling.ID, "conv1", brief.Criteria, brief.ExpectNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.linkTaskBrief(context.Background(), brief.ID, sibling.ID, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	machine, ok := s.device(context.Background(), "box")
+	if !ok {
+		t.Fatal("task machine is missing")
+	}
+	agent, ok := s.session(context.Background(), "box", "s1")
+	if !ok {
+		t.Fatal("task agent is missing")
+	}
+	st.fail.Store(true)
+	if _, made, err := s.adoptAgent(context.Background(), "conv1", machine, agent, "接手实现", "", "换 Agent 接手实现", []string{"criterion from a failed takeover"}, 7, true); err == nil || made {
+		t.Fatalf("adopt with a failed Agent link: made %v, err %v", made, err)
+	}
+	got := todoNow(s, sibling.ID).Supervision
+	if got == nil || !slices.Equal(got.DoneWhen, brief.Criteria) || got.ExpectMinutes != brief.ExpectNow {
+		t.Fatalf("failed takeover left its scope on the sibling ledger: %+v, want criteria %v and %d minutes", got, brief.Criteria, brief.ExpectNow)
+	}
+}

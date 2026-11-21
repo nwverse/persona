@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -306,12 +307,13 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 		s.nameTodoLater(ctx, todo.ID, title, cmp.Or(strings.TrimSpace(prompt), title))
 	}
 	var v Supervision
+	var ledgers map[string]*Supervision
 	if continuing {
 		// A takeover inherits the brief and changes its scope before any ledger or Agent link is committed. A rejected
 		// risky criterion therefore aborts the whole adoption instead of surviving in an unapproved open card (#5732).
-		v, err = s.continueBriefFor(ctx, self, supervisor, previous, todo, notes, doneWhen, expect)
+		v, ledgers, err = s.continueBriefFor(ctx, self, supervisor, previous, todo, notes, doneWhen, expect)
 		if err != nil {
-			s.dropContinuation(ctx, todo.ID, err)
+			s.dropContinuation(ctx, todo.ID, ledgers, err)
 			return Todo{}, false, fmt.Errorf("continue the previous task: %w", err)
 		}
 	} else {
@@ -329,7 +331,7 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 	todo.Supervision = &v
 	if err := s.linkTodoAgent(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent); err != nil {
 		if continuing {
-			s.dropContinuation(ctx, todo.ID, err)
+			s.dropContinuation(ctx, todo.ID, ledgers, err)
 		} else {
 			s.dropAdoption(ctx, todo.ID, err)
 		}
@@ -594,12 +596,25 @@ type taskCardBody struct {
 	Wake string `json:"wake,omitempty"`
 }
 
-// dropContinuation closes an aborted takeover and removes its brief link as well. Otherwise the closed previous card
-// would forever name a card that never took over as its successor, in memory and after a restart (#5732).
-func (s *Service) dropContinuation(ctx context.Context, id string, why error) {
+// dropContinuation closes an aborted takeover and removes its brief link and scope as well, restoring every ledger
+// rescope touched. Otherwise the closed previous card and its open siblings would keep work that never took over (#5732).
+func (s *Service) dropContinuation(ctx context.Context, id string, ledgers map[string]*Supervision, why error) {
 	ctx = context.WithoutCancel(ctx) // the caller may have left exactly when its Agent link failed; cleanup still has to commit
 	if err := s.unlinkTaskBrief(ctx, id); err != nil {
 		why = errors.Join(why, fmt.Errorf("take back the continuation: %w", err))
+	} else {
+		for todoID, saved := range ledgers {
+			current, ok := s.todoNow(todoID)
+			if !ok || current.DoneAt != nil || reflect.DeepEqual(current.Supervision, saved) {
+				continue
+			}
+			if _, _, err := s.updateSupervision(ctx, todoID, func(v *Supervision) bool {
+				*v = *saved.clone()
+				return true
+			}); err != nil {
+				why = errors.Join(why, fmt.Errorf("restore task %s after the continuation: %w", todoID, err))
+			}
+		}
 	}
 	s.dropAdoption(ctx, id, why)
 }

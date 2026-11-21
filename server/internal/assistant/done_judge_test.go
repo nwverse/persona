@@ -110,6 +110,8 @@ func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
 		name, reply, verdict, reason string
 	}{
 		{"manual operation", "Spec 写好了。需要你本人操作部署。", verdictNeedsUser, "需要你本人操作"},
+		{"Markdown emphasis inside a Chinese manual operation", "实现已完成，需要你**本人操作**批准发布。", verdictNeedsUser, "本人操作"},
+		{"Markdown emphasis inside a Chinese narrative stays informational", "已检查是否需要你**本人操作**，结论是无需操作。", verdictDone, ""},
 		{"owner starts the next step", "Spec 已完成，后续由你发起实现。", verdictNeedsUser, "由你发起"},
 		{"offer to continue", "方案已经完成。要不要开始实现？", verdictNeedsUser, "要不要开始实现"},
 		{"English offer", "The spec is ready. Would you like me to start the implementation?", verdictNeedsUser, "Would you like me to"},

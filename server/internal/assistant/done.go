@@ -817,7 +817,7 @@ func ownerActionLine(text string) string {
 		if line == "" {
 			continue
 		}
-		compact := strings.Join(strings.Fields(line), "")
+		compact := strings.Join(strings.Fields(ownerMarkdownLine(line)), "")
 		for _, p := range []struct {
 			marker    string
 			negations []string
