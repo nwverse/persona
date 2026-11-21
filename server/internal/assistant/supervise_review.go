@@ -659,6 +659,7 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 			if cur, ok := s.todoNow(id); ok {
 				s.createPRFollowups(ctx, cur)
 			}
+			s.evaluateTodoAfterDependents(ctx, id)
 		}
 		if t, now := s.todoNow(id); ok && now {
 			// A side conversation's task the main conversation supervised: the planning conversation hears it ended (#4669).

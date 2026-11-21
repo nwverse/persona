@@ -461,6 +461,9 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	if status.URL == t.PRURL && status.State == "merged" && stageIndex(t.Stage) < stageIndex("merge") {
 		s.setTaskStageOn(ctx, t.ID, "merge", "", "", false, status.URL)
 	}
+	if strings.EqualFold(status.State, "merged") {
+		s.evaluateTodoAfterDependents(ctx, t.ID)
+	}
 	return nil
 }
 

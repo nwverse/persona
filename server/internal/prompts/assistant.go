@@ -950,6 +950,23 @@ type SuperviseEntry struct {
 	// LastReview: the task's last review, shown only in a Fresh message (#7315): a round that does not see the earlier
 	// ones does not ask or send back the same thing again. nil when it was never reviewed.
 	LastReview *SuperviseLastReview
+	// TodoReady: an open, unstarted dependent to-do whose after prerequisites are all satisfied (#12606).
+	TodoReady *SuperviseTodoReady
+}
+
+// SuperviseTodoReady describes an open, unstarted to-do ready to advance once all of its after prerequisites are met.
+type SuperviseTodoReady struct {
+	PartOf    string                  // parent request to-do id (when set)
+	Notes     string                  // saved notes / launch instructions on the ready to-do
+	Satisfied []SupervisePrerequisite // satisfied prerequisites, with any merged PR URLs
+}
+
+// SupervisePrerequisite is one satisfied after prerequisite carried on a todo_ready wake.
+type SupervisePrerequisite struct {
+	ID        string
+	Title     string
+	Reason    string // "done" or "pr_merged"
+	MergedPRs []string
 }
 
 // SuperviseLastReview is a task's last task_review as a Fresh supervision message repeats it: the verdict, when (local

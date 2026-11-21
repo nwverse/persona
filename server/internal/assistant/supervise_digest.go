@@ -349,6 +349,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	if len(entries) == 0 {
 		s.agentDecisionRepliesTold(ctx, holds)
 		s.handoffResultsTold(ctx, holds)
+		s.todoReadyTold(ctx, holds)
 		s.turnsTold(ctx, holds) // said the same within the window: told
 		s.finishFailedStartBatches(ctx, to, nil, holds, now)
 		b.mu.Lock()
@@ -380,6 +381,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.parkDecidedTold(ctx, kept)
 		s.agentDecisionRepliesTold(ctx, kept)
 		s.handoffResultsTold(ctx, kept)
+		s.todoReadyTold(ctx, kept)
 		s.turnsTold(ctx, holds) // and how a turn ended: kept went, the rest of them was said the same within the window
 		s.finishFailedStartBatches(ctx, to, kept, settled, now)
 	}()
@@ -566,16 +568,34 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	}
 	v := t.Supervision
 	if v == nil {
-		if g.Kind != sigReport {
+		if g.Kind != sigReport && g.Kind != sigTodoReady {
 			return prompts.SuperviseEntry{}, false
 		}
-		v = &Supervision{} // a reporting conversation's report has no ledger (agent_control.go)
+		v = &Supervision{} // a reporting conversation's report or an unstarted dependent to-do has no ledger yet
 	}
 	st := v.state(t)
 	var replyAsk acceptAsk
 	var draft *TodoPRStatus
 	var estimateBrief *TaskBrief
 	switch g.Kind {
+	case sigTodoReady:
+		prereqs, ready := s.todoAfterReadyState(ctx, t)
+		if !ready || todoReadyKey(t) != g.Key {
+			return prompts.SuperviseEntry{}, false
+		}
+		return prompts.SuperviseEntry{
+			ID:       t.ID,
+			Title:    t.Title,
+			Kind:     sigTodoReady,
+			DoneWhen: v.DoneWhen,
+			Link:     todoLink(web, t.ID),
+			Quiet:    t.Quiet,
+			TodoReady: &prompts.SuperviseTodoReady{
+				PartOf:    t.PartOf,
+				Notes:     clip(strings.TrimSpace(t.Notes), 2000),
+				Satisfied: prereqs,
+			},
+		}, true
 	case sigHandoffResult:
 		h := v.handoffResult()
 		if h == nil || h.ID != g.Key {
@@ -870,7 +890,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigOrphaned: 4, sigTimedOut: 4, sigReview: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigTodoReady: 3, sigInterrupted: 4, sigOrphaned: 4, sigTimedOut: 4, sigReview: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind == sigCheck && e.Report == checkDecidedReport: // the owner's answer

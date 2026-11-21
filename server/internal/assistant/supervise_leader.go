@@ -106,6 +106,14 @@ func (s *Service) planTaskSupervisor(ctx context.Context, conversation string, t
 // supervise_background.go). A successful retry remains one of the main conversation's started signals.
 func (s *Service) digestTo(cfg Settings, g superviseSignal) string {
 	own := s.ownSupervisor(cfg)
+	if g.Kind == sigTodoReady {
+		// Dependent to-do readiness wakes go to the owning supervisor conversation (Leader or Main chat), never to the
+		// background supervisor.
+		if g.To != "" && g.To != cfg.BackgroundSupervisor {
+			return g.To
+		}
+		return cfg.Main
+	}
 	if g.To != "" {
 		switch {
 		case (g.Kind == sigDecide || g.Kind == sigCheck) && g.To == cfg.Main:
