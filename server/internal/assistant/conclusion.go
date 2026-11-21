@@ -61,8 +61,8 @@ func askSummary(l i18n.Lang, a *acceptAsk) string {
 }
 
 // checkOptionTaken says the owner answered a, a recurring check's decision, with one of its options or its
-// recommendation, which went to the task's supervisor (checkDecided). Their own words went to its Agent, as any
-// decision's do (answerDecisionTextLocked).
+// recommendation, which went to the task's supervisor (checkDecided). Explicit free-text delivery outcomes take
+// precedence in acceptedNote, since their words may also match an option label.
 func checkOptionTaken(a *acceptAsk) bool {
 	return a.Check != "" &&
 		(a.Chosen == "" || slices.ContainsFunc(a.Options, func(o DecisionOption) bool { return o.Label == a.Chosen }))
@@ -81,10 +81,18 @@ func acceptedNote(l i18n.Lang, a *acceptAsk) string {
 		return i18n.T(l, "assistant-reports.decision_handled_in_agent")
 	case decideAsk(a) && a.ByDefault:
 		return i18n.T(l, "assistant-reports.verdict_taken_default")
+	case decideAsk(a) && a.TextDelivery == decisionTextAgent && a.Chosen != "":
+		return i18n.T(l, "assistant-reports.decision_chosen_noted", i18n.Args{"option": a.Chosen})
+	case decideAsk(a) && a.TextDelivery == decisionTextSupervisor && a.Chosen != "":
+		return i18n.T(l, "assistant-reports.decision_chosen_supervisor", i18n.Args{"option": a.Chosen})
+	case decideAsk(a) && a.TextDelivery != "" && a.Chosen != "": // unknown future outcome: do not invent delivery
+		return i18n.T(l, "assistant-reports.decision_chosen_recorded", i18n.Args{"option": a.Chosen})
 	case decideAsk(a) && checkOptionTaken(a) && a.Chosen != "": // a check's option went to the supervisor
 		return i18n.T(l, "assistant-reports.decision_chosen_supervisor", i18n.Args{"option": a.Chosen})
 	case decideAsk(a) && checkOptionTaken(a) && a.Response == "": // its OK: to the supervisor, not the Agent
 		return i18n.T(l, "assistant-reports.verdict_taken_supervisor")
+	case decideAsk(a) && a.Check != "" && a.Chosen != "": // older free text has no stored delivery evidence
+		return i18n.T(l, "assistant-reports.decision_chosen_recorded", i18n.Args{"option": a.Chosen})
 	case decideAsk(a) && a.Chosen != "":
 		return i18n.T(l, "assistant-reports.decision_chosen_noted", i18n.Args{"option": a.Chosen})
 	case decideAsk(a) && a.Response != "":

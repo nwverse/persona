@@ -282,6 +282,14 @@ func decisionLines(l i18n.Lang, loc *time.Location, a *acceptAsk) []string {
 
 // ---- answering ----
 
+// decisionTextDelivery records where an explicitly addressed free-text answer actually went.
+type decisionTextDelivery string
+
+const (
+	decisionTextAgent      decisionTextDelivery = "agent"
+	decisionTextSupervisor decisionTextDelivery = "supervisor"
+)
+
 // errDecisionOption: the option named is none of the decision's.
 var errDecisionOption = errors.New("option is not one of the decision's options")
 
@@ -470,12 +478,14 @@ func (s *Service) answerDecisionTextLocked(ctx context.Context, st todoStore, t 
 	completeDismissal()
 	s.decisionsChanged(ctx, id, at)
 	result := acceptSucceeded()
+	delivery := decisionTextAgent
 	if sendErr != nil {
+		delivery = decisionTextSupervisor
 		result = s.decisionNotDelivered(ctx, id, a.AskedAt, text, sendErr)
 	} else {
 		s.userDecided(ctx, id)
 	}
-	s.endAsk(ctx, id, a.AskedAt, "", row.Choice)
+	s.endAskWithTextDelivery(ctx, id, a.AskedAt, "", row.Choice, delivery)
 	return item, result, nil
 }
 
@@ -489,6 +499,11 @@ func (s *Service) askCardNow(id, card string) bool {
 // endAsk marks task id's decision asked at as answered (response: the fixed answer it got, or chosen: the option
 // taken that was not the recommended one), and redraws its cards.
 func (s *Service) endAsk(ctx context.Context, id string, asked time.Time, response, chosen string) {
+	s.endAskWithTextDelivery(ctx, id, asked, response, chosen, "")
+}
+
+// endAskWithTextDelivery persists the observed free-text outcome with the answer before redrawing any cards.
+func (s *Service) endAskWithTextDelivery(ctx context.Context, id string, asked time.Time, response, chosen string, delivery decisionTextDelivery) {
 	b := &s.accept
 	b.mu.Lock()
 	a := b.asks[id]
@@ -496,7 +511,7 @@ func (s *Service) endAsk(ctx context.Context, id string, asked time.Time, respon
 		b.mu.Unlock()
 		return
 	}
-	a.AcceptedAt, a.Response, a.Chosen = time.Now().UTC(), response, chosen
+	a.AcceptedAt, a.Response, a.Chosen, a.TextDelivery = time.Now().UTC(), response, chosen, delivery
 	s.saveAcceptLocked(ctx)
 	cp := *a
 	b.mu.Unlock()
