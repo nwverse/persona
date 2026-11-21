@@ -27,7 +27,7 @@ func TestCodexAndPiAssistantConversationRoles(t *testing.T) {
 				for _, purpose := range []string{"assistant", purposeMain, purposeSupervise} {
 					setModel(t, s, purpose, binding)
 				}
-				yes := true
+				yes := role != "background_supervisor"
 				setSettings(t, s, func(v *Settings) { v.Main = ""; v.MainSupervisesOwnTasks = &yes })
 				var id string
 				wantPolicy := true
@@ -43,6 +43,9 @@ func TestCodexAndPiAssistantConversationRoles(t *testing.T) {
 					}
 				case "background_supervisor":
 					s.noBackground = false
+					if !s.backgroundOn(s.settings(ctx)) {
+						t.Fatal("background supervisor is not enabled")
+					}
 					var err error
 					id, err = s.startBackground(ctx)
 					if err != nil || id == "" {
