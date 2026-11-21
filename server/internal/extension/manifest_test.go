@@ -1032,3 +1032,31 @@ func TestManifestTags(t *testing.T) {
 		t.Fatal("a manifest without tags is changed")
 	}
 }
+
+// contributes.usage names a gateway whose usage the extension turns into the usage bars' rows; like quota it reads
+// with a launcher's key, so it needs the permission, and its hosts are host names.
+func TestUsageContribution(t *testing.T) {
+	usage := func(perm bool, item map[string]any) []byte {
+		return with(t, func(m map[string]any) {
+			m["contributes"] = map[string]any{"usage": []any{item}}
+			m["permissions"] = map[string]any{"launcher_keys": perm}
+		})
+	}
+	ok := map[string]any{"id": "example-pool", "name": "Example pool", "hosts": []any{"pool.example.com", "*.example.net"}}
+	m, err := Parse(usage(true, ok))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u := m.Usages(); len(u) != 1 || u[0].Hosts[1] != "*.example.net" || m.Kind() != "usage" {
+		t.Fatalf("%+v %s", u, m.Kind())
+	}
+	if _, err := Parse(usage(false, ok)); err == nil || !strings.Contains(err.Error(), "launcher_keys") {
+		t.Fatal("usage without launcher_keys:", err)
+	}
+	if _, err := Parse(usage(true, map[string]any{"id": "x", "name": "x", "hosts": []any{"https://x"}})); err == nil {
+		t.Fatal("a host with a scheme")
+	}
+	if _, err := Parse(usage(true, map[string]any{"id": "x"})); err == nil {
+		t.Fatal("no name")
+	}
+}

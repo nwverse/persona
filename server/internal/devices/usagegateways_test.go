@@ -3,6 +3,7 @@ package devices
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -446,5 +447,71 @@ func TestUsageSourceConfigReadsOlderTypeNames(t *testing.T) {
 	}
 	if want := []string{"generic", "relay", "relay", "", "relay_key"}; !slices.Equal(got, want) {
 		t.Fatalf("types = %q, want %q", got, want)
+	}
+}
+
+// A source of type extension is asked through the manager's hook, its rows stay as the extension sent them (not merged
+// with a computer's account of the same provider) and go last, in its order.
+func TestExtensionSourceRowsAreNotMerged(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	var g usageGateways
+	asked := 0
+	g.fetchExtension = func(_ context.Context, ext, launcher string) (json.RawMessage, error) {
+		asked++
+		if ext != "example-usage" || launcher != "pool" {
+			t.Errorf("asked %q %q", ext, launcher)
+		}
+		return json.RawMessage(`{"accounts": [
+			{"provider": "claude", "name": "Pool", "headline": "available 5/6", "windows": [{"label": "5h", "used_percent": 40, "group": "5h"}, {"label": "7d", "used_percent": 10, "group": "weekly"}]},
+			{"provider": "claude", "name": "Seat 1", "notice": "no numbers"}]}`), nil
+	}
+	g.init(UsageConfig{Sources: []UsageSourceConfig{{ID: "s1", Name: "Pool", Type: "extension", Extension: "example-usage", Launcher: "pool"}}}, func() {}, func(string, ...any) {})
+	g.pollDue(context.Background(), now)
+	got := g.accounts(now)
+	if asked != 1 || len(got) != 2 || !got[0].Pass || got[0].Sources[0] != "Pool" || got[0].Ref != "" {
+		t.Fatalf("%d %+v", asked, got)
+	}
+	machine := local("claude", "Claude", now, uw("5h", 300, 40, now.Add(time.Hour)), uw("7d", 10080, 10, now.Add(48*time.Hour)))
+	merged := mergeUsageAccounts(append([]proto.UsageAccount{machine}, got...), now)
+	if len(merged) != 3 || merged[0].Name != "Claude" || merged[1].Name != "Pool" || merged[2].Name != "Seat 1" {
+		t.Fatalf("%+v", merged)
+	}
+	if merged[1].Headline != "available 5/6" || merged[1].Windows[0].Group != "5h" || merged[1].StaleAt == nil || merged[1].ID == merged[2].ID || merged[1].ID == merged[0].ID {
+		t.Fatalf("%+v", merged[1])
+	}
+	if merged[2].Windows == nil || merged[2].Notice != "no numbers" {
+		t.Fatalf("%+v", merged[2])
+	}
+	// The hook failing keeps the last answer and says why; no hook at all is a configuration problem.
+	g.fetchExtension = func(context.Context, string, string) (json.RawMessage, error) {
+		return nil, errors.New("extension is not running")
+	}
+	g.pollDue(context.Background(), now.Add(6*time.Minute))
+	if got := g.accounts(now.Add(6 * time.Minute)); len(got) != 2 || !got[0].Stale || got[0].Problem != "unreachable" {
+		t.Fatalf("%+v", got)
+	}
+	var none usageGateways
+	none.init(UsageConfig{Sources: []UsageSourceConfig{{ID: "s2", Name: "X", Type: "extension", Extension: "e", Launcher: "l"}}}, func() {}, func(string, ...any) {})
+	none.pollDue(context.Background(), now)
+	if st := none.status("s2"); st.Error != usagesource.CodeBadConfig {
+		t.Fatalf("%+v", st)
+	}
+}
+
+// manager.json's extension source keeps its extension and launcher through a read and a rewrite, and a different one is
+// another source (its samples are not the old one's).
+func TestExtensionSourceConfigRoundTrip(t *testing.T) {
+	var c UsageConfig
+	if err := json.Unmarshal([]byte(`{"sources": [{"id": "s1", "name": "Pool", "type": "extension", "extension": "example-usage", "launcher": "pool"}]}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	s := c.Sources[0]
+	if s.Type != "extension" || s.Extension != "example-usage" || s.Launcher != "pool" {
+		t.Fatalf("%+v", s)
+	}
+	other := s
+	other.Launcher = "pool2"
+	if s.fingerprint() == other.fingerprint() {
+		t.Fatal("same fingerprint")
 	}
 }

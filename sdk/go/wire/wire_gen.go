@@ -273,6 +273,7 @@ type Contributes struct {
 	Browser             []NamedItem              `json:"browser,omitempty"`
 	Iphone              []NamedItem              `json:"iphone,omitempty"`
 	Quota               []QuotaItem              `json:"quota,omitempty"`
+	Usage               []UsageItem              `json:"usage,omitempty"`
 	Providers           []ProviderItem           `json:"providers,omitempty"`
 	API                 []APIItem                `json:"api,omitempty"`
 	Assistant           []AssistantItem          `json:"assistant,omitempty"`
@@ -304,7 +305,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -336,7 +337,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -672,6 +673,12 @@ type NamedItem struct {
 }
 
 type QuotaItem struct {
+	ID    string   `json:"id"`
+	Name  string   `json:"name"`
+	Hosts []string `json:"hosts,omitempty"`
+}
+
+type UsageItem struct {
 	ID    string   `json:"id"`
 	Name  string   `json:"name"`
 	Hosts []string `json:"hosts,omitempty"`
@@ -6571,6 +6578,7 @@ var newDef = map[string]func() any{
 	"ConnectorItem":                 func() any { return new(ConnectorItem) },
 	"NamedItem":                     func() any { return new(NamedItem) },
 	"QuotaItem":                     func() any { return new(QuotaItem) },
+	"UsageItem":                     func() any { return new(UsageItem) },
 	"ProviderItem":                  func() any { return new(ProviderItem) },
 	"ProviderModel":                 func() any { return new(ProviderModel) },
 	"APIItem":                       func() any { return new(APIItem) },

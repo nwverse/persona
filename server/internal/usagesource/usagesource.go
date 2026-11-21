@@ -34,6 +34,8 @@ const (
 )
 
 // Known reports whether t is a type a source may have (what the admin page accepts).
+//
+// TypeExtension is not one of them: it is read from manager.json (usage.sources[]) and has no address of its own.
 func Known(t string) bool { return t == TypeRelay || t == TypeRelayKey || t == TypeGeneric }
 
 // StoredType is the type of a source as a saved config (hub.json) names it. Before the relay type had its own name,
@@ -41,7 +43,7 @@ func Known(t string) bool { return t == TypeRelay || t == TypeRelayKey || t == T
 // ever been, so any other non-empty name is that earlier one and reads as relay. What a person types on the admin page
 // is not read with this: there only the known types are accepted.
 func StoredType(t string) string {
-	if t == "" || Known(t) {
+	if t == "" || Known(t) || t == TypeExtension {
 		return t
 	}
 	return TypeRelay
