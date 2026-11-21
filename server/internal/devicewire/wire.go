@@ -544,3 +544,10 @@ const (
 	// is a HeldAnswer. Nothing was written to the node.
 	CodeHeld = "held"
 )
+
+// OwnerUsageRoutes are the only usage-source operations opened by the hub owner Bearer token.
+// They do not grant access to admin settings, deletion, or other administrator APIs.
+var OwnerUsageRoutes = []string{
+	"POST /api/v1/usage-sources/test",
+	"PUT /api/v1/usage-sources/{id}",
+}

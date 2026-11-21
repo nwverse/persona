@@ -1825,9 +1825,9 @@ if os.environ.get("MOCK_AGENT_MARKS"):
         ("marks-pi", "pi", "给导出脚本加上进度条", "idle", "idle", 30),
         ("marks-gemini", "gemini", "Gemini CLI", "working", "working", 2),
         ("marks-cursor", "cursor", "补全设置页的单元测试", "idle", "idle", 50),
-        ("marks-traex", "traex", "TRAEX 的一个会话", "done", "done", 9),
+        ("marks-traex", "traex", "TRAE CLI 的一个会话", "done", "done", 9),
         ("marks-amp", "amp", "amp 的一个会话", "idle", "idle", 70),
-        ("marks-trae", "trae", "TRAE CLI 的一个会话", "working", "working", 3),
+        ("marks-trae", "trae", "TRAE 的一个会话", "working", "working", 3),
         ("marks-grok", "grok", "Grok", "idle", "idle", 5),
         ("marks-agy", "agy", "Antigravity CLI", "working", "working", 7),
         ("marks-dsh", "dsh", "DeepSeek Harness", "done", "done", 8),
@@ -18824,7 +18824,7 @@ def summary_row(s):
 
 def pane_origin(s):
     """Where a session was opened, as the hub's sessionorigin.Of says it (the paged list's pane_source)."""
-    if s.get("space_kind") == "codex_app" or s.get("host") in ("paseo", "cindy") or (s.get("source_kind") == "runtime" and s.get("source_instance_id") == "orca"):
+    if s.get("space_kind") == "codex_app" or s.get("host") in ("paseo", "cindy", "t3code") or (s.get("source_kind") == "runtime" and s.get("source_instance_id") == "orca"):
         return "desktop"
     pane = s.get("pane_id") or ""
     if not pane:
@@ -23745,10 +23745,10 @@ for _m in MACHINES:
                       if _m.get("online") else [])
 
 # MOCK_ENGINE_SETS=1 (#2576, docs/integrations/engines.md "Host sets"): a hub that takes sets of engine hosts. Every machine lists
-# engine_hosts / engine_default; the MacBook enables herdr + Herdr App, the Mac Studio herdr + Orca (Tern and Paseo found
+# engine_hosts / engine_default; the MacBook enables herdr + Herdr App, the Mac Studio herdr + Orca (Tern, Rex, Paseo, Cindy and T3 Code found
 # there too); the widget session on the MacBook is live in Herdr App as well (also_open_in). PUT …/engine takes {hosts, default}.
 ENGINE_SETS = os.environ.get("MOCK_ENGINE_SETS") == "1"
-ENGINE_HOST_IDS = ["herdr", "herdr-core", "orca", "tern", "paseo", "cindy"]
+ENGINE_HOST_IDS = ["herdr", "herdr-core", "orca", "tern", "rex", "paseo", "cindy", "t3code"]
 
 
 def legacy_engine(hosts, default):
@@ -23764,8 +23764,10 @@ if ENGINE_SETS:
         _m["engine"] = legacy_engine(_m["engine_hosts"], _m["engine_default"])
         if _m.get("online"):
             _m["engines"].append({"id": "tern", "name": "Tern", "available": _m["id"] == "studio", "version": "0.9.13"})
+            _m["engines"].append({"id": "rex", "name": "Rex", "available": _m["id"] == "studio", "version": "0.1.0"})
             _m["engines"].append({"id": "paseo", "name": "Paseo", "available": _m["id"] == "studio", "version": "0.9"})
             _m["engines"].append({"id": "cindy", "name": "Cindy", "available": _m["id"] == "studio", "version": "0.1.128"})
+            _m["engines"].append({"id": "t3code", "name": "T3 Code", "available": _m["id"] == "studio", "version": "0.1.11"})
             found = [h for h in ENGINE_HOST_IDS if any(e["id"] == h and e["available"] for e in _m["engines"])] or ["herdr"]
             _m["engine_suggested"] = {"hosts": found, "default": found[0]}
     for _s in SESSIONS:
@@ -27972,7 +27974,7 @@ class H(BaseHTTPRequestHandler):
                     except Exception: pass
                 return self.send_json(out_machine(machine))
             engine = body.get("engine")
-            if engine not in ("herdr", "herdr-core", "herdr-both", "orca", "tern", "paseo", "cindy") and not any(
+            if engine not in ("herdr", "herdr-core", "herdr-both", "orca", "tern", "rex", "paseo", "cindy", "t3code") and not any(
                     e["id"] == engine and e["available"] for e in machine["engines"]):
                 return self.send_json({"error": "未知引擎"}, 400)
             if os.environ.get("MOCK_ENGINE_ERROR"): return self.send_json({"error": "暂时无法保存"}, 503)

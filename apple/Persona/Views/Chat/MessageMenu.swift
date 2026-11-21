@@ -33,8 +33,8 @@ final class MessageMenu {
     /// Where the chat's messages come from ("app › leader"), printed on share cards (read when sharing: the
     /// session may not be loaded yet when the chat binds the menu).
     @ObservationIgnored var source: () -> String = { "" }
-    /// Who answers in this chat ("Claude" / "Codex" / "TRAEX"), for share cards.
-    @ObservationIgnored var agent: () -> String = { "Claude" }
+    /// The answering session, read when making a share card because it may arrive after the menu is bound.
+    @ObservationIgnored var session: () -> Session? = { nil }
     /// Quote: the text, the message's id, whether it is the user's own, and the part quoted (nil: the whole message;
     /// `ContextRef.selectionPart`: words picked in Select Text).
     @ObservationIgnored var quote: ((String, String, Bool, String?) -> Void)?
@@ -70,6 +70,13 @@ final class MessageMenu {
     static let row = "message-menu-row"
     @ObservationIgnored private var pressing = false
     @ObservationIgnored private var pressEnded = Date.distantPast
+
+    func shareMessage(text: String, isUser: Bool, date: Date?) -> ShareMessage {
+        let session = session()
+        return ShareMessage(text: text, isUser: isUser, source: source(), date: date,
+                            agent: session?.agentLabel ?? "Claude", showsTerminalMark: session?.isTraex == true,
+                            prefersLetterMark: AgentKind.prefersLetterMark(for: session))
+    }
 
     #if os(iOS) || os(visionOS)
     func pressChanged(_ state: UIGestureRecognizer.State) {
@@ -610,7 +617,7 @@ struct MessageActionBar: View {
             })
         } else {
             all.append(Item(title: String(localized: "Share"), symbol: Theme.Icon.share) {
-                menu.sharing = ShareMessage(text: text, isUser: isUser, source: menu.source(), date: date, agent: menu.agent())
+                menu.sharing = menu.shareMessage(text: text, isUser: isUser, date: date)
             })
         }
         if isUser && !pending {

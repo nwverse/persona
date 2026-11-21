@@ -2,7 +2,9 @@ package persona.feature.settings
 
 import persona.core.contracts.GroupKeys
 import persona.core.contracts.Machine
+import persona.core.contracts.TraeCliDisplayName
 import persona.core.contracts.api.HubLauncher
+import persona.core.contracts.isTraeCliId
 
 // A Persona-managed provider's device scope (docs/integrations/launchers.md "Device scope and on-demand delivery", the web's
 // lib/provider-scope.ts): which computers it runs on, when its key travels, whether it stands back where the harness has a
@@ -199,11 +201,12 @@ internal fun harnessGroups(list: List<HubLauncher>): List<Pair<String, List<HubL
 }
 
 /** A harness's header: the products' own names; null for a direct API, which the page words in its language. */
-internal fun harnessName(h: String): String? = when (h) {
-    "claude" -> "Claude Code"
-    "codex" -> "Codex"
-    "agy" -> "Antigravity"
-    "omp" -> "Oh My Pi"
-    "api" -> null
+internal fun harnessName(h: String): String? = when {
+    h == "claude" -> "Claude Code"
+    h == "codex" -> "Codex"
+    isTraeCliId(h) -> TraeCliDisplayName
+    h == "agy" -> "Antigravity"
+    h == "omp" -> "Oh My Pi"
+    h == "api" -> null
     else -> h
 }

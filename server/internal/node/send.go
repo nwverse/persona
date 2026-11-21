@@ -104,7 +104,7 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 		ctx = n.withResumeHost(ctx, id)
 	}
 	if err != nil && (n.codexPath(id) != "" || n.traexPath(id) != "") {
-		return n.stoppedRefusal(id) // a stopped Codex or TRAEX takes no messages (stopped.go, #4754)
+		return n.stoppedRefusal(id) // a stopped Codex or TRAE CLI takes no messages (stopped.go, #4754)
 	}
 	kind := "claude"
 	if err == nil {

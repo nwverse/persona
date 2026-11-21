@@ -7,5 +7,6 @@
   "invalid_poll": "查询间隔是 1 到 1440 分钟",
   "too_many": "最多 {n} 个来源",
   "not_found": "没有这个来源",
-  "busy": "上一次测试还没结束，稍后再试"
+  "busy": "上一次测试还没结束，稍后再试",
+  "invalid_providers": "要隐藏的服务商必须是 codex、claude 这样的名字（最多 16 个）"
 }

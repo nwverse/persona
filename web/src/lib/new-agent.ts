@@ -1,4 +1,5 @@
 import { t } from "../i18n";
+import { agentId } from "./agent-kind";
 import { isEcho, type Seen } from "./echo";
 import { ApiError, errorText, isAbort, isTransient, sessionPath } from "./api";
 import { parseUserText } from "./turns";
@@ -23,6 +24,11 @@ export interface AgentLaunch {
   cwd: string;
   launcher: string;
   agentType?: string;
+  /** Display-only effective target resolved at launch time (never sent to POST /sessions): keeps the sidebar Starting
+   *  placeholder icon, StartingAgent header, and newly opened session composer aligned with Follow model settings. */
+  displayLauncher?: string;
+  displayEngine?: string;
+  displayModel?: string;
   workSession?: boolean;
   /** Start with the first message when this harness takes it as part of creation. */
   inlinePrompt?: boolean;
@@ -68,7 +74,7 @@ export interface AgentLaunch {
 }
 
 /** `open: false` starts it without opening its conversation (Compare runs starts several and opens their page, #8916). */
-export function launchAgent(input: Pick<AgentLaunch, "machineId" | "cwd" | "workspaceId" | "launcher" | "agentType" | "workSession" | "inlinePrompt" | "model" | "effort" | "launcherDefaultEffort" | "permissionMode" | "host" | "ultracode" | "text" | "nameHint" | "attachments" | "todoId">, options: { open?: boolean } = {}) {
+export function launchAgent(input: Pick<AgentLaunch, "machineId" | "cwd" | "workspaceId" | "launcher" | "agentType" | "displayLauncher" | "displayEngine" | "displayModel" | "workSession" | "inlinePrompt" | "model" | "effort" | "launcherDefaultEffort" | "permissionMode" | "host" | "ultracode" | "text" | "nameHint" | "attachments" | "todoId">, options: { open?: boolean } = {}) {
   const launch: AgentLaunch = { ...input, id: `local-${uuid()}`, phase: "creating", uploaded: {}, ...launchOpIds() };
   putLaunch(launch);
   if (options.open !== false) navigate({ name: "session", mid: launch.machineId, sid: launch.id });
@@ -94,6 +100,35 @@ async function launchOp<T>(path: string, opId: string, signal: AbortSignal, json
     if (r.launcher_note) void import("./assistant-start").then((m) => m.showLauncherNote(`${r.session?.machine_id}/${r.session?.session_id}`, r.launcher_note));
     return r;
   }
+}
+
+/** The engine mark ID for a starting placeholder in the sidebar; undefined falls back to the generic agent icon. */
+export function launchDisplayEngine(launch: Pick<AgentLaunch, "launcher" | "agentType" | "displayEngine" | "displayLauncher">): string | undefined {
+  if (launch.displayEngine) return agentId(launch.displayEngine);
+  if (launch.agentType) return agentId(launch.agentType);
+  const name = (launch.displayLauncher || launch.launcher).trim().toLowerCase();
+  if (!name) return undefined;
+  if (name === "claude" || name === "codex" || name === "agy" || name === "omp" || name === "traex") return name;
+  return undefined;
+}
+
+/**
+ * The advertised start model for a newly launched session before its first transcript turn reports `session.model`.
+ * Returns undefined as soon as the session reports its own model or if the launched launcher changed.
+ */
+export function launchModelForSession(
+  launches: Record<string, AgentLaunch> | undefined,
+  session: Pick<Session, "machine_id" | "session_id" | "launcher" | "model">,
+): string | undefined {
+  if (!launches || session.model) return undefined;
+  for (const launch of Object.values(launches)) {
+    if (launch.machineId !== session.machine_id || launch.session?.session_id !== session.session_id) continue;
+    const expectedLauncher = launch.launcher || launch.displayLauncher;
+    if (expectedLauncher && session.launcher && expectedLauncher !== session.launcher) continue;
+    const model = launch.model || launch.displayModel;
+    if (model) return model;
+  }
+  return undefined;
 }
 
 /** `user` (a user message, or an item the hub tied to a message) is the copy of a started conversation's first message. */

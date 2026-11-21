@@ -517,10 +517,10 @@ func TestRuntimeSendRefusedWithoutTheCap(t *testing.T) {
 // runtime's own, never a subagent's. Rows of a runtime that did not declare it say false, not nothing.
 func TestRuntimeModesCapability(t *testing.T) {
 	for _, c := range []struct {
-		declared         bool
-		rt, rtAgent, id  string
-		agent            string
-		want             bool
+		declared        bool
+		rt, rtAgent, id string
+		agent           string
+		want            bool
 	}{
 		{true, "orca", "", "session-1", "claude", true},
 		{true, "agy", "agy", "session-1", "agy", true},

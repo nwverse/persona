@@ -1252,7 +1252,7 @@ The new shell's Model · Effort menu still sends `/model <id>` as a message.
   wand, Allow Everything a red shield; not reported yet the plain permissions shield (never a guessed Ask First). A tap opens the mode menu; going into
   Allow Everything asks first, and so does leaving it when `bypass_available` is false (no way back from the phone; assistant conversations and Antigravity `agy` switch directly without confirmation); the composer's model menu
   goes through the same `ChatView.requestMode`. Shown where the agent has a mode to see or change (`SessionModes.showsInHeader`): not Codex,
-  TRAEX or a runtime without modes, not hosted pages (one-row header, #3255), not the folded bar. A row that lists its own modes (#8261, Paseo's
+  TRAE CLI or a runtime without modes, not hosted pages (one-row header, #3255), not the folded bar. A row that lists its own modes (#8261, Paseo's
   Grok, OpenCode or Codex) shows its two rows instead, its own approval as the plain shield, a switch both ways (`SessionModes.menuOptions`,
   `headerLook(session:)`; see the New Agent paragraph above). Client-only: `permission_mode` is already in every
   session row (read off the transcript tail the node reads anyway), so no request, push or poll was added (measured in the PR).
@@ -1278,7 +1278,7 @@ off by default, never remembered and never turned back on by itself after a resu
 [web.md](../web/web.md) "Claude Code ultracode"). Pure rules are `Shared/Ultracode.swift` (the watch compiles them for its rows' mark), requests
 and what this device asked are `AppModel.setUltracode` / `dismissUltracodeLost`, views `Views/Chat/UltracodeViews.swift`.
 
-- **Where**: the hub lists the `ultracode` feature (an older hub shows nothing), the agent is Claude Code (not TRAEX, Codex or a runtime's), its effort can
+- **Where**: the hub lists the `ultracode` feature (an older hub shows nothing), the agent is Claude Code (not TRAE CLI, Codex or a runtime's), its effort can
   change now (it takes messages, no read-only source, not offline), and it is not a Persona conversation (the main chat included: the server refuses those).
 - **Session fields**: `ultracode` (omitted is unknown, drawn off; the info card says Unknown), `ultracode_note` (the node's reason), `ultracode_pending`
   (applies next turn) and `ultracode_lost_at`. An odd value never drops the session. `ChatCache` stays at `chats-v10`: the hub only rewrites the text of

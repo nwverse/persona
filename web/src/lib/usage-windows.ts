@@ -79,6 +79,12 @@ export function pace(w: UsageWindow, now = Date.now()): Pace | null {
   return { expected, state: diff > PACE_TOLERANCE ? "over" : diff < -PACE_TOLERANCE ? "under" : "on" };
 }
 
+/** The pace of one of an account's windows, as the popover shows it. An out-of-date reading says nothing about how
+ *  fast it is being used now, so a stale account has none (#12411): its numbers and reset stay, faded and dated. */
+export function accountPace(a: Pick<UsageAccount, "stale">, w: UsageWindow, now = Date.now()): Pace | null {
+  return a.stale ? null : pace(w, now);
+}
+
 type Countdown = { kind: "due" | "clock" | "span"; text: string };
 
 /** When a window starts over: the span ("45m", "2d 3h", "5d" with no hours left over; each language's own units, "2 天 3 小时"),
