@@ -716,6 +716,15 @@ test('assistant mode registers loopback MCP, hides context snapshots, enforces m
     ],
   })
   const d = fakeDb()
+  const openDb = d.openDb
+  let inventoryUnavailable = false
+  d.openDb = async () => {
+    const handle = await openDb()
+    return { ...handle, all(sql, ...params) {
+      if (inventoryUnavailable && sql.startsWith('select id, directory')) throw new Error('inventory unavailable')
+      return handle.all(sql, ...params)
+    } }
+  }
   const host = createOpencodeHost(
     { openDb: d.openDb, pid: 4252, home: '/home/u' },
     { socketPath: n.path, retryMs: 20, pushDelayMs: 5, answerFirst: 'local' },
@@ -763,6 +772,20 @@ test('assistant mode registers loopback MCP, hides context snapshots, enforces m
   assert.equal(callRes.result.content[0].text, 'todo_list ran')
   assert.equal(n.toolCalls[0].assistant, true)
   assert.equal(n.toolCalls[0].session_id, 'ses_asst_v2')
+
+  const callAssistantTool = async () => fetch(mcpAdded[0].config.url, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...mcpAdded[0].config.headers },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'todo_list', arguments: {} } }),
+  }).then((response) => response.json())
+  // A native/TUI conversation unknown to Persona can use the same directory
+  // server too. It must not inherit the sole registered Assistant's identity.
+  d.session('ses_native_other', { directory: '/home/u/.persona/assistant' })
+  assert.equal((await callAssistantTool()).result.isError, true)
+  d.db.prepare('delete from session_v2 where id = ?').run('ses_native_other')
+  inventoryUnavailable = true
+  assert.equal((await callAssistantTool()).result.isError, true)
+  assert.equal(n.toolCalls.length, 1, 'ambiguous or unavailable inventory executes no hub tools')
+  inventoryUnavailable = false
 
   // Send with context snapshot + memory_dir; reject supervision_instructions.
   await assert.rejects(

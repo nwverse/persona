@@ -60,7 +60,7 @@ function environment(home, modelUrl) {
     OPENCODE_DISABLE_AUTOCOMPACT: '1', OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_AUTH_CONTENT: '{}',
     OPENCODE_CONFIG_CONTENT: JSON.stringify({
       model: 'test/test-model', small_model: 'test/test-model', formatter: false, lsp: false,
-      enabled_providers: ['test'], share: 'disabled',
+      enabled_providers: ['test'], share: 'disabled', permission: { '*': 'allow' },
       provider: { test: { name: 'Test', id: 'test', env: [], npm: '@ai-sdk/openai-compatible',
         options: { apiKey: 'fake-contract-key', baseURL: modelUrl },
         models: { 'test-model': { id: 'test-model', name: 'Test Model', attachment: false, reasoning: false,
@@ -83,7 +83,9 @@ test('pinned OpenCode reproduces shared MCP replacement and isolates same-direct
     sharedCalls.push(binding.sessionId)
     return { content: [{ type: 'text', text: 'fake identity' }] }
   } })
-  const shared = new OpencodeAcpClient({ bin, cwd: home, env, processGroup: true, log: (line) => logs.push(line) })
+  const shared = new OpencodeAcpClient({ bin, cwd: home, env, processGroup: true, log: (line) => logs.push(line),
+    onPermissionRequest: ({ options }) => ({ outcome: { outcome: 'selected', optionId: options.find((option) => option.kind === 'allow_once').optionId } }),
+  })
   t.after(async () => { await shared.stop(); proxy.stop() })
   try {
     const routeA = await proxy.allocate({ sessionId: 'a', assistant: true })
@@ -97,7 +99,18 @@ test('pinned OpenCode reproduces shared MCP replacement and isolates same-direct
     await shared.stop()
 
     const node = await startFakeNode(t, { tools: [probe], features: ['assistant_pids', 'prefer_running'] })
+    node.resolve = () => ({ allow: true })
+    const firstTokens = new Map()
     const companion = createOpencodeCompanion({ home, bin, env, socketPath: node.path, retryMs: 20, pushDelayMs: 5,
+      assistantAcpFactory: (options) => {
+        const client = new OpencodeAcpClient(options)
+        client.on('update', (params) => {
+          if (params.update?.sessionUpdate === 'agent_message_chunk' && firstTokens.get(params.sessionId) === null) {
+            firstTokens.set(params.sessionId, performance.now())
+          }
+        })
+        return client
+      },
       log: (line) => logs.push(line), openDb: async () => ({ all: () => [], close() {} }),
       discoverModels: async () => [{ providerID: 'test', id: 'test-model', name: 'Test Model' }],
     })
@@ -121,21 +134,19 @@ test('pinned OpenCode reproduces shared MCP replacement and isolates same-direct
     // samples and five warm turns; OS page-cache state is uncontrolled.
     const cold = [], warm = [], rss = []
     const firstToken = async (id, began) => {
-      const acp = companion.live.get(id).worker.acp
-      const got = new Promise((resolve) => {
-        const listen = (params) => {
-          if (params.sessionId === id && params.update?.sessionUpdate === 'agent_message_chunk') {
-            acp.off('update', listen); resolve(performance.now() - began)
-          }
-        }
-        acp.on('update', listen)
-      })
+      firstTokens.set(id, null)
       await prompt(id, 'PERFORMANCE_TEXT')
-      return got
+      const timestamp = firstTokens.get(id)
+      assert.equal(typeof timestamp, 'number', 'the engine must produce a first token')
+      firstTokens.delete(id)
+      return timestamp - began
     }
     for (let sample = 0; sample < 5; sample++) {
-      const began = performance.now(), id = await start()
-      cold.push(await firstToken(id, began))
+      const id = await start()
+      await companion.assistantWorkers.discard(companion.live.get(id).worker)
+      // This send starts a new process, initializes, then session/resume's the
+      // existing native conversation. It does not time session/new instead.
+      cold.push(await firstToken(id, performance.now()))
       warm.push(await firstToken(id, performance.now()))
       const pid = companion.live.get(id).worker.acp.pid
       rss.push(Number(readFileSync(`/proc/${pid}/status`, 'utf8').match(/^VmRSS:\s+(\d+)/m)?.[1]))

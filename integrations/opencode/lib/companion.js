@@ -1183,9 +1183,9 @@ export function createOpencodeCompanion(options = {}) {
   }
 
   async function resolveSession(id) {
+    if (closedSessions.has(id)) throw new RpcError('opencode 会话已关闭', 'closed')
     let s = live.get(id)
     if (s) return s
-    if (closedSessions.has(id)) throw new RpcError('opencode 会话已关闭', 'closed')
     const dbData = await readDbItems(id)
     if (!dbData) throw new RpcError(`opencode 里没有这个会话（${id}）`, 'not_found')
     const cwd = dbData.meta.directory || home

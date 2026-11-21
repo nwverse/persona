@@ -11,7 +11,8 @@ const run = promisify(execFile)
 const version = '1.19.6'
 const integrity = 'SUQS023u46+2+wMUej1Cm8VSFpHUd2c6cO4m2r7suRaCgrdIjR1iXr7ebl31xb/gHzaYS65xnj1fxRqHpzhU1A=='
 if (process.platform !== 'linux' || process.arch !== 'x64') {
-  throw new Error('The pinned OpenCode contract requires Linux x64; run it on the CI host')
+  process.stdout.write('SKIP pinned OpenCode native contract: Linux x64 only; portable runtime tests still apply\n')
+  process.exit(0)
 }
 const directory = await mkdtemp(join(tmpdir(), 'persona-opencode-contract-'))
 try {
