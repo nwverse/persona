@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -169,40 +170,41 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 					return err
 				}
 			}
-			if current.Switch != nil || pending {
-				client, _ := p["client_msg_id"].(string)
-				if client == "" {
-					client, _ = p["once_id"].(string)
-					if client != "" {
-						client = "segment-once:" + client
-						p["client_msg_id"] = client
-					}
-				}
-				if client == "" {
-					if _, external := ctx.Value(logicalTransportKey{}).(devicewire.NodeCall); external {
-						return logicalRefusal(ctx, "message_id_required")
-					}
-					client = "segment-input:" + randomHex(16)
+			client, _ := p["client_msg_id"].(string)
+			if client == "" {
+				client, _ = p["once_id"].(string)
+				if client != "" {
+					client = "segment-once:" + client
 					p["client_msg_id"] = client
 				}
-				queued := logicalInput{Method: method, Params: p}
-				if original, ok := ctx.Value(logicalTransportKey{}).(devicewire.NodeCall); ok {
-					// Keep authenticated provenance, not another copy of the message
-					// or a transport fallback that could address the retired source.
-					original.Params, original.Fallback = nil, nil
-					original.Request = ""
-					queued.Transport = &original
+			}
+			needsQueue := current.Switch != nil || pending
+			if client == "" && needsQueue {
+				if _, external := ctx.Value(logicalTransportKey{}).(devicewire.NodeCall); external {
+					return logicalRefusal(ctx, "message_id_required")
 				}
-				body, e := json.Marshal(queued)
+				client = "segment-input:" + randomHex(16)
+				p["client_msg_id"] = client
+			}
+			if client != "" {
+				body, e := marshalLogicalInput(ctx, method, p)
 				if e != nil {
 					return e
 				}
-				if e = st.EnqueueConversationInput(ctx, machine, id, client, current.Epoch, body); e != nil {
+				seen, e := st.ConversationInputReceipt(ctx, machine, id, client, body)
+				if e != nil {
 					return e
 				}
-				out, e = json.Marshal(map[string]any{"ok": true, "queued": true, "session_id": id, "client_msg_id": client})
-				s.historyWake()
-				return e
+				if seen != "" || needsQueue {
+					if seen == "" {
+						if e = st.EnqueueConversationInput(ctx, machine, id, client, current.Epoch, body); e != nil {
+							return e
+						}
+					}
+					out, e = json.Marshal(map[string]any{"ok": true, "queued": seen != "accepted" && seen != "rejected", "duplicate": seen != "", "session_id": id, "client_msg_id": client})
+					s.historyWake()
+					return e
+				}
 			}
 		}
 		if logicalSendMethod(method) && current.Epoch > 1 {
@@ -267,6 +269,20 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 	// Control replies may contain the physical session row. Only the public root
 	// is returned to the application; source references stay inside the manager.
 	return publicLogicalReply(out, c), true, nil
+}
+
+// Automatic role context is resolved again at delivery and must not change a
+// client's idempotency identity or leave another copy in the durable queue.
+func marshalLogicalInput(ctx context.Context, method string, p map[string]any) (json.RawMessage, error) {
+	params := maps.Clone(p)
+	delete(params, "supervision_instructions")
+	queued := logicalInput{Method: method, Params: params}
+	if original, ok := ctx.Value(logicalTransportKey{}).(devicewire.NodeCall); ok {
+		original.Params, original.Fallback = nil, nil
+		original.Request = ""
+		queued.Transport = &original
+	}
+	return json.Marshal(queued)
 }
 
 func cloneLogicalParams(p map[string]any, active conversationlog.Segment) map[string]any {

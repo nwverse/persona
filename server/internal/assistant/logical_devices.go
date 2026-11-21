@@ -17,7 +17,7 @@ import (
 type logicalConversationStore interface {
 	LogicalConversation(context.Context, string, string) (*db.LogicalConversation, error)
 	LogicalConversations(context.Context) ([]db.LogicalConversation, error)
-	AdoptConversation(context.Context, string, string, string, string, string) error
+	AdoptConversationAliases(context.Context, string, string, string, string, string, []string) error
 	WithConversationEpoch(context.Context, string, string, int64, func(*db.LogicalConversation) error) error
 	BeginConversationSwitch(context.Context, string, string, db.ConversationSwitch) error
 	PrepareConversationSegment(context.Context, string, string, string, conversationlog.Segment, int) error
@@ -28,6 +28,7 @@ type logicalConversationStore interface {
 	ObserveConversationRevision(context.Context, string, string, int64) error
 	ConversationSegmentClosed(context.Context, string) error
 	EnqueueConversationInput(context.Context, string, string, string, int64, json.RawMessage) error
+	ConversationInputReceipt(context.Context, string, string, string, json.RawMessage) (string, error)
 	ClaimConversationInput(context.Context, string, string, int64) (*db.ConversationInput, error)
 	ResolveConversationInput(context.Context, string, string, string, string) error
 }

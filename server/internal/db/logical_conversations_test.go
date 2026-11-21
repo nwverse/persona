@@ -465,3 +465,93 @@ func TestLogicalDeliveryFailureCannotReleaseNextInputBeforeRollback(t *testing.T
 		t.Fatalf("stale receipt changed recovered input: %v", err)
 	}
 }
+
+func TestConcurrentAdoptionThroughPhysicalAliasesCreatesOnlyOneRoot(t *testing.T) {
+	d, url := historyDB(t)
+	other, err := Open(t.Context(), url, ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for i, database := range []*DB{d, other} {
+		go func(i int, database *DB) {
+			<-start
+			machine, segment := "former-device", "former-segment"
+			if i == 1 {
+				machine, segment = "current-device", "current-segment"
+			}
+			results <- database.AdoptConversationAliases(t.Context(), machine, "same-chat", segment, "claude", "history", []string{"former-device", "current-device"})
+		}(i, database)
+	}
+	close(start)
+	passed, stale := 0, 0
+	for range 2 {
+		err := <-results
+		if err == nil {
+			passed++
+		} else if errors.Is(err, ErrConversationEpoch) || errors.Is(err, ErrConversationSwitchBusy) {
+			stale++
+		} else {
+			t.Fatal(err)
+		}
+	}
+	if passed != 1 || stale != 1 {
+		t.Fatalf("adoption race: passed=%d stale=%d", passed, stale)
+	}
+	var roots int
+	if err := d.pool.QueryRow(t.Context(), `SELECT count(*) FROM logical_conversations WHERE session_id='same-chat'`).Scan(&roots); err != nil || roots != 1 {
+		t.Fatalf("roots=%d err=%v", roots, err)
+	}
+}
+
+func TestAliasDeletionPreventsAdoptionUnderAnotherDeviceName(t *testing.T) {
+	d, _ := historyDB(t)
+	if err := d.PutConversationDeletion(t.Context(), "former-device", "deleted-chat", json.RawMessage(`{"session_id":"deleted-chat"}`)); err != nil {
+		t.Fatal(err)
+	}
+	err := d.AdoptConversationAliases(t.Context(), "current-device", "deleted-chat", "first", "claude", "history", []string{"former-device"})
+	if !errors.Is(err, ErrConversationDeleted) {
+		t.Fatalf("adopted deleted alias: %v", err)
+	}
+}
+
+func TestAcceptedInputKeepsOnlyDigestAndCannotReplayAfterPayloadCleanup(t *testing.T) {
+	d, _ := historyDB(t)
+	ctx := t.Context()
+	op := prepareLogicalSwitch(t, d)
+	payload := json.RawMessage(`{"text":"private input","params":{"supervision_instructions":"private role"}}`)
+	if err := d.EnqueueConversationInput(ctx, "root-machine", "root-chat", "receipt", 1, payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PutConversationHandoff(ctx, "root-machine", "root-chat", op.OperationID, json.RawMessage(`{"text":"private handoff"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.ActivateConversationSegment(ctx, "root-machine", "root-chat", op.OperationID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if row, err := d.ClaimConversationInput(ctx, "root-machine", "root-chat", 2); err != nil || row == nil {
+		t.Fatalf("claim: %+v %v", row, err)
+	}
+	if err := d.ResolveConversationDelivery(ctx, "root-machine", "root-chat", "receipt", 2, op.OperationID, "accepted"); err != nil {
+		t.Fatal(err)
+	}
+	var raw, hash []byte
+	if err := d.pool.QueryRow(ctx, `SELECT payload,payload_hash FROM conversation_inputs WHERE client_msg_id='receipt'`).Scan(&raw, &hash); err != nil || string(raw) != "{}" || len(hash) != 32 {
+		t.Fatalf("content retained: %q hash=%d %v", raw, len(hash), err)
+	}
+	var handoff []byte
+	if err := d.pool.QueryRow(ctx, `SELECT handoff FROM conversation_switches WHERE operation_id=$1`, op.OperationID).Scan(&handoff); err != nil || len(handoff) != 0 {
+		t.Fatalf("handoff retained: %q %v", handoff, err)
+	}
+	if state, err := d.ConversationInputReceipt(ctx, "root-machine", "root-chat", "receipt", payload); err != nil || state != "accepted" {
+		t.Fatalf("receipt: %s %v", state, err)
+	}
+	if err := d.EnqueueConversationInput(ctx, "root-machine", "root-chat", "receipt", 2, payload); err != nil {
+		t.Fatalf("same input after cleanup: %v", err)
+	}
+	if _, err := d.ConversationInputReceipt(ctx, "root-machine", "root-chat", "receipt", json.RawMessage(`{"text":"different"}`)); err == nil {
+		t.Fatal("reused identity changed content")
+	}
+}

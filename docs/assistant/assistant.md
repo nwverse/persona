@@ -2724,3 +2724,13 @@ only deletion markers and minimal offline closure identities.
 reads and recovery running. A manager binary from before segment routing is **not a safe downgrade after a switch**:
 it could resume the retired first segment and fork the conversation. Roll back with a segment-aware manager and the
 switch setting disabled. The phase-1 history-read setting does not disable logical routing.
+
+Logical-segment queue retention: an accepted input keeps its client ID, SHA-256
+content digest, delivery state and ordering metadata; its duplicate payload and
+transport provenance are removed after the receipt commits. A rejected first
+input that rollback requeues keeps its payload until the restored source accepts
+it. Ambiguous deliveries retain their content for positive-receipt reconciliation.
+Terminal switch records discard their handoff summary. Deleting the logical chat
+cascades to receipts, segments, inputs and switch context. Physical device aliases
+are locked together during first adoption, preventing concurrent managers from
+creating two logical roots for the same physical chat.

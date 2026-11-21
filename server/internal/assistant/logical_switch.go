@@ -212,7 +212,7 @@ func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p 
 		if page.History == "" {
 			return nil, logicalRefusal(ctx, "missing_generation")
 		}
-		if err = st.AdoptConversation(ctx, machine, id, randomHex(16), row.Agent, page.History); err != nil {
+		if err = st.AdoptConversationAliases(ctx, machine, id, randomHex(16), row.Agent, page.History, s.physicalAliases(machine)); err != nil {
 			return nil, err
 		}
 		c, err = st.LogicalConversation(ctx, machine, id)

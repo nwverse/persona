@@ -850,3 +850,52 @@ func TestLogicalQueuePersistsOnePayloadAndAuthenticatedProvenance(t *testing.T) 
 		t.Fatalf("content/provenance changed: %s", row.Payload)
 	}
 }
+
+func TestLogicalQueueRetryIgnoresRefreshedRoleAndDoesNotReplayAcceptedInput(t *testing.T) {
+	s, f, st, _ := logicalPair(t, "codex")
+	ctx := t.Context()
+	raw := json.RawMessage(`{"session_id":"side-chat","client_msg_id":"retry-role","text":"continue"}`)
+	if _, _, err := s.logicalCall(ctx, "server", DeviceSessionSend, raw); err != nil {
+		t.Fatal(err)
+	}
+	// Context inserted by the manager on a later attempt must not conflict with
+	// the same client input. The current policy is re-attested during dispatch.
+	changed := json.RawMessage(`{"session_id":"side-chat","client_msg_id":"retry-role","text":"continue","supervision_instructions":"changed automatic context"}`)
+	if _, _, err := s.logicalCall(ctx, "server", DeviceSessionSend, changed); err != nil {
+		t.Fatalf("role refresh changed input identity: %v", err)
+	}
+	activatePair(t, st)
+	input, err := st.ClaimConversationInput(ctx, "server", "side-chat", 2)
+	if err != nil || input == nil {
+		t.Fatalf("claim: %+v %v", input, err)
+	}
+	if err := st.ResolveConversationDelivery(ctx, "server", "side-chat", "retry-role", 2, "operation", "accepted"); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	before := len(f.sends)
+	f.mu.Unlock()
+	if _, handled, err := s.logicalCall(ctx, "server", DeviceSessionSend, raw); err != nil || !handled {
+		t.Fatalf("receipt replay: %v %v", handled, err)
+	}
+	f.mu.Lock()
+	after := len(f.sends)
+	f.mu.Unlock()
+	if after != before {
+		t.Fatal("accepted input was dispatched again")
+	}
+}
+
+func TestLogicalInputIdentityDoesNotIncludeAutomaticRole(t *testing.T) {
+	first, err := marshalLogicalInput(t.Context(), DeviceSessionSend, map[string]any{"text": "same content", "client_msg_id": "same-id", "supervision_instructions": "old role"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := marshalLogicalInput(t.Context(), DeviceSessionSend, map[string]any{"text": "same content", "client_msg_id": "same-id", "supervision_instructions": "new role"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != string(second) || strings.Contains(string(first), "role") {
+		t.Fatalf("automatic policy retained in input identity: %s / %s", first, second)
+	}
+}

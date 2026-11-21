@@ -59,6 +59,7 @@ CREATE TABLE conversation_inputs (
     position bigint GENERATED ALWAYS AS IDENTITY,
     epoch bigint NOT NULL,
     payload bytea NOT NULL CHECK (octet_length(payload) <= 1048576),
+    payload_hash bytea NOT NULL CHECK (octet_length(payload_hash) = 32),
     state text NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'sending', 'accepted', 'in_doubt', 'rejected')),
     FOREIGN KEY (logical_machine, logical_session) REFERENCES logical_conversations ON DELETE CASCADE,
     PRIMARY KEY (logical_machine, logical_session, client_msg_id)

@@ -3,8 +3,10 @@ package db
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"slices"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -147,12 +149,48 @@ func (d *DB) LogicalConversations(ctx context.Context) ([]LogicalConversation, e
 }
 
 func (d *DB) AdoptConversation(ctx context.Context, machine, session, segment, engine, history string) error {
+	return d.AdoptConversationAliases(ctx, machine, session, segment, engine, history, nil)
+}
+
+// Authenticated physical aliases must be adopted as one identity. Sorted advisory
+// locks serialize concurrent first adoption even before either logical row exists.
+// Aliases are manager-supplied device configuration, never client input.
+func (d *DB) AdoptConversationAliases(ctx context.Context, machine, session, segment, engine, history string, aliases []string) error {
 	if machine == "" || session == "" || segment == "" || engine == "" || history == "" {
 		return errors.New("incomplete conversation identity")
 	}
+	aliases = append(slices.Clone(aliases), machine)
+	slices.Sort(aliases)
+	aliases = slices.Compact(aliases)
 	return conversationTransaction(ctx, d, func(tx pgx.Tx) error {
-		if err := conversationAvailableTx(ctx, tx, machine, session); err != nil {
-			return err
+		for _, alias := range aliases {
+			if alias == "" {
+				continue
+			}
+			key := "persona.logical.adopt:" + conversationDeletionKey(alias, session)
+			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, key); err != nil {
+				return err
+			}
+		}
+		for _, alias := range aliases {
+			if alias == "" {
+				continue
+			}
+			if err := conversationAvailableTx(ctx, tx, alias, session); err != nil {
+				return err
+			}
+			c, err := readLogicalConversation(ctx, tx, alias, session)
+			if err != nil {
+				return err
+			}
+			if c != nil {
+				if c.Deleted {
+					return ErrConversationDeleted
+				}
+				if c.MachineID != machine || c.SessionID != session {
+					return ErrConversationEpoch
+				}
+			}
 		}
 		_, err := tx.Exec(ctx, `INSERT INTO logical_conversations(machine_id,session_id,history,revision) VALUES($1,$2,$3,coalesce((SELECT revision FROM conversation_histories WHERE machine_id=$1 AND session_id=$2),0)) ON CONFLICT DO NOTHING`, machine, session, history)
 		if err != nil {
@@ -166,7 +204,7 @@ func (d *DB) AdoptConversation(ctx context.Context, machine, session, segment, e
 			return ErrConversationDeleted
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO conversation_segments(id,logical_machine,logical_session,ordinal,machine_id,session_id,engine,source_history,seq_offset,state)
-		 VALUES($1,$2,$3,1,$2,$3,$4,$5,0,'active') ON CONFLICT(logical_machine,logical_session,ordinal) DO NOTHING`, segment, machine, session, engine, history)
+   VALUES($1,$2,$3,1,$2,$3,$4,$5,0,'active') ON CONFLICT(logical_machine,logical_session,ordinal) DO NOTHING`, segment, machine, session, engine, history)
 		return err
 	})
 }
@@ -398,7 +436,7 @@ func resolveConversationSwitchTx(ctx context.Context, tx pgx.Tx, machine, sessio
 			}
 		}
 	}
-	_, err := tx.Exec(ctx, `UPDATE conversation_switches SET phase=$4,error=$5,updated_at=now() WHERE logical_machine=$1 AND logical_session=$2 AND operation_id=$3`, machine, session, operation, outcome, reason)
+	_, err := tx.Exec(ctx, `UPDATE conversation_switches SET phase=$4,error=$5,handoff=CASE WHEN $4 IN ('accepted','rejected') THEN NULL ELSE handoff END,updated_at=now() WHERE logical_machine=$1 AND logical_session=$2 AND operation_id=$3`, machine, session, operation, outcome, reason)
 	return err
 }
 
@@ -495,6 +533,7 @@ func (d *DB) EnqueueConversationInput(ctx context.Context, machine, session, id 
 	if id == "" || len(id) > 512 || len(payload) > 1048576 || !json.Valid(payload) {
 		return errors.New("invalid conversation input")
 	}
+	digest := sha256.Sum256(payload)
 	return conversationTransaction(ctx, d, func(tx pgx.Tx) error {
 		var current int64
 		if err := tx.QueryRow(ctx, `SELECT epoch FROM logical_conversations WHERE machine_id=$1 AND session_id=$2 AND deleted_at IS NULL FOR SHARE`, machine, session).Scan(&current); err != nil {
@@ -503,19 +542,38 @@ func (d *DB) EnqueueConversationInput(ctx context.Context, machine, session, id 
 		if current != epoch {
 			return ErrConversationEpoch
 		}
-		_, err := tx.Exec(ctx, `INSERT INTO conversation_inputs(logical_machine,logical_session,client_msg_id,epoch,payload) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, machine, session, id, epoch, []byte(payload))
+		_, err := tx.Exec(ctx, `INSERT INTO conversation_inputs(logical_machine,logical_session,client_msg_id,epoch,payload,payload_hash) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`, machine, session, id, epoch, []byte(payload), digest[:])
 		if err != nil {
 			return err
 		}
 		var old []byte
-		if err = tx.QueryRow(ctx, `SELECT payload FROM conversation_inputs WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3`, machine, session, id).Scan(&old); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT payload_hash FROM conversation_inputs WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3`, machine, session, id).Scan(&old); err != nil {
 			return err
 		}
-		if !bytes.Equal(old, payload) {
+		if !bytes.Equal(old, digest[:]) {
 			return errors.New("message identity reused for different input")
 		}
 		return nil
 	})
+}
+
+// A terminal receipt survives payload cleanup and later engine switches. Matching
+// a previous input never replays it on a different physical engine.
+func (d *DB) ConversationInputReceipt(ctx context.Context, machine, session, id string, payload json.RawMessage) (string, error) {
+	var hash []byte
+	var state string
+	err := d.pool.QueryRow(ctx, `SELECT payload_hash,state FROM conversation_inputs WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3`, machine, session, id).Scan(&hash, &state)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(payload)
+	if !bytes.Equal(hash, digest[:]) {
+		return "", errors.New("message identity reused for different input")
+	}
+	return state, nil
 }
 
 // Claim exactly one queue head. A sending/in-doubt head fences later input until
@@ -619,9 +677,14 @@ func (d *DB) ResolveConversationDelivery(ctx context.Context, machine, session, 
 			}
 		}
 		if operation != "" {
-			return resolveConversationSwitchTx(ctx, tx, machine, session, operation, outcome, "")
+			if err := resolveConversationSwitchTx(ctx, tx, machine, session, operation, outcome, ""); err != nil {
+				return err
+			}
 		}
-		return nil
+		// A rejected first input can have been requeued by rollback above. Keep
+		// that payload; only terminal states may discard content/provenance.
+		_, err = tx.Exec(ctx, `UPDATE conversation_inputs SET payload='{}'::bytea WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3 AND state IN ('accepted','rejected')`, machine, session, id)
+		return err
 	})
 }
 
@@ -629,7 +692,7 @@ func (d *DB) ResolveConversationInput(ctx context.Context, machine, session, id,
 	if state != "accepted" && state != "rejected" && state != "in_doubt" {
 		return errors.New("invalid input outcome")
 	}
-	_, err := d.pool.Exec(ctx, `UPDATE conversation_inputs SET state=$4 WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3 AND state IN ('sending','in_doubt')`, machine, session, id, state)
+	_, err := d.pool.Exec(ctx, `UPDATE conversation_inputs SET state=$4,payload=CASE WHEN $4='accepted' THEN '{}'::bytea ELSE payload END WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3 AND state IN ('sending','in_doubt')`, machine, session, id, state)
 	return err
 }
 
