@@ -1251,11 +1251,15 @@ extension AssistantSidebar {
                     AssistantSwitcherHeader(manager: current, nameFont: Theme.Font.title, compact: macTitleRow,
                                             faceGap: part == .header ? Self.headFaceGap : Theme.Space.m, openSettings: showSettings)
                 } else {
-                    #if os(macOS)
-                    Text(model.assistantShownName).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
-                    #else
-                    Text(model.assistantShownName).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
-                    #endif
+                    // A hub without a roster has no switcher: with several hubs the title keeps a hub menu under it (#12594).
+                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                        #if os(macOS)
+                        Text(model.assistantShownName).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
+                        #else
+                        Text(model.assistantShownName).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
+                        #endif
+                        HubSwitcher(compact: true)
+                    }
                 }
                 Spacer(minLength: Theme.Space.s)
                 if part == .header {

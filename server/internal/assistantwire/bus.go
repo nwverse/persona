@@ -501,4 +501,9 @@ var Routes = []string{
 // (extwire.MethodAccept) to the default manager, as it relays the extensions' routes, never as http.request; the
 // manager's extensions layer hands them to the assistant (extmgr.Options.AssistantSocket). The assistant serves exactly
 // these on its socket handler (assistant.Service.ServeSocket).
-var SocketRoutes = []string{"GET /api/v1/recordings/{id}/audio"}
+const (
+	A2ARPC  = "POST /api/v1/a2a/{mid}/{sid}/rpc"
+	A2ACard = "GET /api/v1/a2a/{mid}/{sid}/.well-known/agent-card.json"
+)
+
+var SocketRoutes = []string{"GET /api/v1/recordings/{id}/audio", A2ARPC, A2ACard}

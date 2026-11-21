@@ -746,6 +746,9 @@ func (n *Node) sendCodex(ctx context.Context, id, text string, images []proto.Im
 	params := map[string]any{"threadId": t.id, "input": input}
 	method := "turn/start"
 	if t.status == proto.StatusWorking || t.status == proto.StatusBlocked {
+		if _, a2a := ctx.Value(a2aIdleKey{}).(bool); a2a {
+			return a2aBusy()
+		}
 		if t.turn == "" {
 			t.turn = c.activeTurn(ctx, t.id) // a turn already running when Persona joined (codex_daemon.go)
 		}

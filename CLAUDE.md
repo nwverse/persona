@@ -298,6 +298,7 @@ Every maintained doc under `docs/` (lessons excluded) must be listed here.
 
 | Area | Docs |
 | --- | --- |
+| Agent-to-Agent communication | `docs/integrations/a2a.md` session addresses, durable delivery, and the A2A JSON-RPC interface |
 | Super rules | `docs/SUPER_RULES.md` highest-priority rules and prior administrator approval for changes |
 | Start | `docs/README.md` navigation · `docs/operations/getting-started.md` setup without a terminal · `docs/assistant/onboarding.md` new-user onboarding · `docs/operations/config.md` config.json and hub.json · `docs/operations/collaboration.md` claims, PRs, templates · `docs/protocol/i18n.md` localization |
 | Feature map | `docs/feature-map.md` source-verified capabilities, public entries, implementation, test and deployment evidence, gaps and maintenance protocol |

@@ -462,6 +462,13 @@ type ContextDirection struct{ ID, Name string }
 
 func RenderAssistantContext(c AssistantContext) string { return render("assistant/context", c) }
 
+// SupervisorStart is the message an explicitly started background supervisor's conversation starts with
+// (assistant/supervisor_start): what it is for, before its first supervision message. Automatic replacement of a
+// legacy background supervisor stays disabled under universal main supervision (#5732).
+type SupervisorStart struct{ Owner string }
+
+func RenderSupervisorStart(d SupervisorStart) string { return render("assistant/supervisor_start", d) }
+
 // TaskRun is the message a scheduled task's run starts with (assistant/task_run).
 type TaskRun struct {
 	Label          string
@@ -1359,6 +1366,9 @@ type SegmentHandoff struct {
 }
 
 func RenderSegmentHandoff(h SegmentHandoff) string { return render("assistant/segment_handoff", h) }
+
+// RenderSegmentSummary accepts the established language display names as well as BCP 47 codes.
+// Empty and Chinese retain the original default bytes; Japanese and English are the other supported branches.
 func RenderSegmentSummary(language string) string {
-	return render("assistant/segment_summary", language)
+	return render("assistant/segment_summary", struct{ Language string }{Language: language})
 }
