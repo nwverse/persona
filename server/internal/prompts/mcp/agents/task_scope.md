@@ -1,4 +1,4 @@
-Change what a task you supervise is to do, or what done means for it, after it started (its todo id). The task's brief (the owner's request and the criteria it started with) is never rewritten: this adds an entry to the brief's log with what changed and why, applies the new done_when and expect_minutes, restarts overdue, estimate_due only on a new estimate, and the owner reads the change in their next digest. It is the only way done_when changes after a task started (agent_supervise and agent_send with a task on your own task go through the same log). Give done_when as the whole list after the change: a criterion you leave out is recorded as dropped by this change, and the completion report says so. A change that adds a step only the owner may allow (deploying, merging, releasing, sending or commenting where other people see it, deleting, spending, changing production) and was not part of the task is refused unless the owner's own message started this turn: ask them first (ask_user, or task_review needs_user), then call it again when they answered. Only the task's supervisor may call it. The agent is not told: send it what changed with agent_send. Use it also for estimate_due/overdue: explain and set expect_minutes.{{template "shared/mcp_language" .}}
+Change a task you supervise or its acceptance criteria after dispatch. Keep the original brief. Log what changed and why, apply done_when and expect_minutes, and show the owner in the next digest. Restart overdue; restart estimate_due only with a new estimate. Only this log changes criteria (including via agent_supervise or agent_send). Give the full done_when list. Omitted criteria are recorded as dropped and shown at completion. Adding deploy, merge, release, external sends/comments, deletion, spending or production changes outside the existing scope requires the owner's message to have started this turn. Otherwise ask_user or task_review needs_user, then retry after approval. Only the supervisor can edit. Tell the Agent with agent_send. For a revised estimate or overdue clock, explain and set expect_minutes.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -8,6 +8,10 @@ Change what a task you supervise is to do, or what done means for it, after it s
     "todo_id": {
       "type": "string",
       "description": "the task's todo id (todo_…)"
+    },
+    "inbox_item": {
+      "type": "string",
+      "description": "Inbox source; omit for the conversation's sole eligible open handoff. Several require an id. Links the existing task and its Agents."
     },
     "change": {
       "type": "string",

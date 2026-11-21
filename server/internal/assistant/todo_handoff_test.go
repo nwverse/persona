@@ -85,6 +85,63 @@ func reportHandoffTest(s *Service, session, kind string, receipt map[string]stri
 	return s.reportToSupervisor(context.Background(), "box", session, args, time.Now())
 }
 
+func TestTaskHandoffInboxStaysWithOrigin(t *testing.T) {
+	for _, mode := range []string{"omitted", "explicit", "already linked to origin", "already linked to receiver", "unassigned receiver"} {
+		t.Run(mode, func(t *testing.T) {
+			d := todoTestDB(t)
+			s, f, origin, _, receiving := handoffTestTodos(t, d)
+			it := taskInboxItem(t, s, "example:release-check", "server", "conv1")
+			session := "receiver"
+			if mode == "unassigned receiver" {
+				session = "unassigned"
+				f.setSessions("box",
+					proto.Session{MachineID: "box", SessionID: "origin-a", Status: proto.StatusIdle, Agent: "codex"},
+					proto.Session{MachineID: "box", SessionID: session, Status: proto.StatusIdle, Agent: "codex"})
+			}
+			if mode == "already linked to origin" || mode == "already linked to receiver" {
+				id := origin.ID
+				if mode == "already linked to receiver" {
+					id = receiving.ID
+				}
+				source := PlanTask{InboxItem: it.ID}
+				if err := s.planInboxSource(t.Context(), "server", "conv1", &source); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.linkExistingTaskInbox(t.Context(), "conv1", source, id, id, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			args := map[string]any{"machine": "box", "session_id": session, "text": "Please run the release check.",
+				"handoff": map[string]string{"todo_id": origin.ID, "receiving_todo_id": receiving.ID, "head": strings.Repeat("a", 40),
+					"check": handoffCheck, "until": "2h"}}
+			if mode != "omitted" {
+				args["inbox_item"] = it.ID
+			}
+			got, err := existingInboxCall(t, s, "agent_send", args)
+			if mode == "unassigned receiver" || mode == "already linked to receiver" {
+				if err == nil || len(sentToAgent(f)) != 0 {
+					t.Fatalf("invalid handoff sent a message: %s, %v", got, err)
+				}
+				return
+			}
+			if err != nil || len(sentToAgent(f)) != 1 {
+				t.Fatalf("handoff did not send exactly once: %s, %v", got, err)
+			}
+			// Read the persisted backlink through a new manager. Its chain points
+			// to the receiver without moving that Agent onto the origin.
+			next, _ := newQuietServiceOn(t, d)
+			if err := next.inboxReady(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			origin.Agents = receiving.Agents
+			assertExistingInboxLink(t, next, it.ID, origin)
+			if current, ok := s.openTodoOfAgent("box", session); !ok || current.ID != receiving.ID {
+				t.Fatal("handoff changed the receiver's owning task", current.ID)
+			}
+		})
+	}
+}
+
 func TestConfirmedTaskHandoffsWakeOnlyMatchingOrigin(t *testing.T) {
 	ctx := context.Background()
 	d, err := db.Open(ctx, newDatabase(t), db.AllSets)

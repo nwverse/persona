@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -17,15 +18,19 @@ const testReportDelay = 50 * time.Millisecond
 
 // reportService is a task service whose Feishu bot is paired, with reports on (or off) and the execution steps on (the
 // card as it was before #3218), recording the posts.
-func reportService(t *testing.T, on bool) (*Service, *fakeHub, func() []string) {
+func reportService(t *testing.T, on bool, stores ...Store) (*Service, *fakeHub, func() []string) {
 	t.Helper()
-	return reportServiceWith(t, FeishuFeatures{Main: true, Cards: true, Reports: on, ReportSteps: true})
+	return reportServiceWith(t, FeishuFeatures{Main: true, Cards: true, Reports: on, ReportSteps: true}, stores...)
 }
 
 // reportServiceWith is reportService with the bot's switches as given.
-func reportServiceWith(t *testing.T, feats FeishuFeatures) (*Service, *fakeHub, func() []string) {
+func reportServiceWith(t *testing.T, feats FeishuFeatures, stores ...Store) (*Service, *fakeHub, func() []string) {
 	t.Helper()
-	s, f := newTaskService(t)
+	var st Store
+	if len(stores) > 0 {
+		st = stores[0]
+	}
+	s, f := newTaskServiceOn(t, st)
 	s.reports.mu.Lock()
 	s.reports.delay = testReportDelay
 	s.reports.mu.Unlock()
@@ -55,8 +60,10 @@ func reportServiceWith(t *testing.T, feats FeishuFeatures) (*Service, *fakeHub, 
 // A task's turn that ends with a merged PR is one card in the chat: the task, its stage, what was said, links to the
 // task's page, the PR and the agent; never a bare id. The todo carries the stage and the PR for the apps.
 func TestTaskDoneIsReportedInFeishu(t *testing.T) {
-	s, f, posts := reportService(t, true)
+	s, f, posts := reportService(t, true, repositorystore.New(todoTestDB(t)))
 	todo := startedTask(t, s, f)
+	artifactNodeProof(f, "https://github.com/o/r/pull/901", "contributor", "contributor",
+		"fix/login", "fix/login", "abc", "abc")
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "修好了，https://github.com/o/r/pull/901 已合并", 0)
 	waitFor(t, "the report", func() bool { return len(posts()) == 1 })

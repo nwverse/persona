@@ -356,7 +356,7 @@ func sameTurnRow(now, last proto.Session) bool {
 // Not kept in a package variable: that would read the catalogs whenever personad starts, a hook too (#1308).
 func silentTurnErrorIn(l i18n.Lang) string { return i18n.T(l, "assistant-tasks.silent_turn") }
 
-var prLink = lazyre.New(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+|https://[^/\s<>"()]+/(?:[^/\s<>"()]+/)+merge_requests/\d+\b`)
+var prLink = lazyre.New(`https?://github\.com/[\w.-]+/[\w.-]+/pull/\d+|https?://[^/\s<>"()]+/(?:[^/\s<>"()]+/)+merge_requests/\d+\b`)
 
 // taskTurnEnded: one of the task's agents (sid on machine) ended a turn. Once none of them works or waits for the
 // user any more, the conversation gets a receipt (once per stretch of work), and the todo is closed if the judge
@@ -713,12 +713,10 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 		} else {
 			body.Criteria = list
 		}
+		body.PR = s.ownedReplyPR(cctx, current, last.MachineID, last.SessionID, text, taskReplyItem(items).TS)
 	}
 	if body.Summary == "" {
 		body.Summary = i18n.T(s.lang(cctx), "assistant-tasks.done")
-	}
-	if pr := prLink.FindAllString(text, -1); len(pr) > 0 {
-		body.PR = pr[len(pr)-1]
 	}
 	// One receipt, one judgment and one supervision signal for each turn the runtime closed, whatever tells of its end
 	// and however often. The ledger says whether this turn was taken up before; its receipt has one id, so the feed
@@ -760,7 +758,7 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 		return settleTaken
 	}
 	s.taskNoticeOf(cctx, t, name, "done", "", clipMarkdown(text, 1500), 0, files)
-	if s.advanceTaskReply(cctx, t, last.MachineID, last.SessionID, text) {
+	if s.advanceTaskReplyAt(cctx, t, last.MachineID, last.SessionID, text, last.UpdatedAt) {
 		go s.askAcceptance(t, last.MachineID, last.SessionID, text) // verified, by the supervising assistant or the user (acceptance.go)
 	}
 	s.taskReport(t, reportDone, name, [2]string{last.MachineID, last.SessionID}, text, nil)
