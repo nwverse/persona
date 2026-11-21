@@ -19,13 +19,15 @@ nonisolated struct SendReceipt: Equatable, Sendable {
     enum Kind: Sendable { case message, todo }
 
     /// Which send a receipt is for. Ids are compared without case: the hub lowercases op ids, and iOS sends upper-case
-    /// UUIDs. `group`: the hub group whose socket it came on (docs/protocol/multi-hub.md), stamped by `ServerEvent.stamped`.
+    /// UUIDs. `group`: the hub group whose socket it came on (docs/protocol/multi-hub.md), stamped by
+    /// `ServerEvent.stamped`. A sender names the group it writes to (`HubLink.group`), which need not be the default
+    /// one, so it has no default.
     struct Key: Hashable, Sendable {
         var group: String
         let kind: Kind
         let id: String
 
-        init(group: String = "", kind: Kind, id: String) {
+        init(group: String, kind: Kind, id: String) {
             self.group = group
             self.kind = kind
             self.id = id.lowercased()
@@ -63,12 +65,13 @@ nonisolated struct SendReceipt: Equatable, Sendable {
         guard type == messageType || type == todoType,
               let f = try? JSON.decoder.decode(Fields.self, from: data),
               let state = f.state.flatMap(State.init(rawValue:)) else { return nil }
+        // The default group until `ServerEvent.stamped` gives it its link's.
         if type == todoType {
             guard state != .kept, let op = f.clientOpID, !op.isEmpty, let todo = f.todoID, !todo.isEmpty else { return nil }
-            return SendReceipt(key: Key(kind: .todo, id: op), target: .todo(todo), state: state)
+            return SendReceipt(key: Key(group: "", kind: .todo, id: op), target: .todo(todo), state: state)
         }
         guard let id = f.clientMsgID, !id.isEmpty, let m = f.machineID, !m.isEmpty, let s = f.sessionID, !s.isEmpty else { return nil }
-        return SendReceipt(key: Key(kind: .message, id: id), target: .session(machineID: m, sessionID: s), state: state)
+        return SendReceipt(key: Key(group: "", kind: .message, id: id), target: .session(machineID: m, sessionID: s), state: state)
     }
 }
 
@@ -80,7 +83,8 @@ nonisolated struct SendReceiptTrust: Hashable, Sendable {
     var messages = false
     var todos = false
 
-    static let none = SendReceiptTrust()
+    /// Neither kind (not `none`, which an optional chain would read as `Optional.none`).
+    static let untrusted = SendReceiptTrust()
 
     func admits(_ receipt: SendReceipt) -> Bool {
         switch receipt.key.kind {
@@ -104,7 +108,7 @@ nonisolated struct SendReceiptTrust: Hashable, Sendable {
 
     /// The markers a hello frame carries.
     static func decode(hello data: Data) -> SendReceiptTrust {
-        guard let f = try? JSON.decoder.decode(Fields.self, from: data) else { return .none }
+        guard let f = try? JSON.decoder.decode(Fields.self, from: data) else { return .untrusted }
         return SendReceiptTrust(messages: f.messages?.one == true, todos: f.todos?.one == true)
     }
 }

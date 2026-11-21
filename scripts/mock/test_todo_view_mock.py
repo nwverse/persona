@@ -5,7 +5,8 @@ EXPECTED, read with Node); the places add up; an unchanged list answers 304; the
 (old) answers 405 and lists none of stage 1's fields; today's answers (accept, Don't handle, retry, a tick on a failed
 start, the Widget's plan card) move the views without MOCK_TASKS, and a refused write changes nothing; the hellos under
 late lack the view, have it, lack it, have it, and again after /mock/reset; two managers' answers are joined as the hub
-joins them; the send receipts go to whom the hub sends them, in its order, and say what the answer said.
+joins them; the send receipts go to whom the hub sends them, in its order, say what the answer said, and come from
+the request that claimed the id alone.
 
     python3 -B scripts/mock/test_todo_view_mock.py
 """
@@ -20,6 +21,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -105,12 +107,12 @@ class Hub:
 class Socket:
     """A WebSocket to the mock, enough to read what it sends."""
 
-    def __init__(self, port):
+    def __init__(self, port, query=""):
         self.sock = socket.create_connection(("127.0.0.1", port), timeout=10)
         key = base64.b64encode(os.urandom(16)).decode()
-        self.sock.sendall(("GET /api/v1/ws HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nUpgrade: websocket\r\n"
+        self.sock.sendall(("GET /api/v1/ws%s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nUpgrade: websocket\r\n"
                            "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n"
-                           % (port, key)).encode())
+                           % (query, port, key)).encode())
         self.buf = b""
         while b"\r\n\r\n" not in self.buf:
             chunk = self.sock.recv(4096)
@@ -646,7 +648,6 @@ class TwoManagersTests(Case):
         self.assertEqual(places["counts"], listed["counts"])
 
 
-
 _mock_spec = importlib.util.spec_from_file_location("todo_view_mock", HERE / "todo_view_mock.py")
 receipts = importlib.util.module_from_spec(_mock_spec)
 _mock_spec.loader.exec_module(receipts)
@@ -696,6 +697,24 @@ class ReceiptTests(Case):
         self.assertEqual((status, again), (200, first), "the same op id gets the first answer")
         self.assertIsNone(ws.message(receipt("todo_send_state"), seconds=1), "and says nothing")
 
+    def test_the_sockets_url_asks_too(self):
+        ws = Socket(self.hub.port, "?features=sessions_delta,todo_send_state")
+        self.addCleanup(ws.close)
+        self.assertIsNotNone(ws.message(lambda m: m.get("type") == "hello"))
+        op = "0a1b2c3d-0000-4000-8000-0000000000af"  # no client_hello yet: the URL is enough, as on the hub
+        self.assertEqual(self.post(ROUTE, {"todo_id": "t01", "text": "Hi"}, **{"X-Persona-Op-Id": op})[0], 200)
+        self.assertEqual([ws.message(receipt("todo_send_state"))["state"] for _ in range(2)], ["processing", "delivered"])
+
+    def test_what_the_hub_refuses_first_says_nothing(self):
+        ws, _ = self.socket("todo_send_state", subscribe=WIDGET)
+        status, _, _ = self.post(ROUTE, {"todo_id": "t01", "text": "Hi"}, **{"X-Persona-Op-Id": "not-a-uuid"})
+        self.assertEqual(status, 400, "withClientOp: an op id is a UUID")
+        path = "/api/v1/sessions/macbook/%s/messages" % WIDGET
+        status, _, _ = self.post(path, {"text": "Hi", "client_msg_id": "msg-ro", "todo_id": "t01"},
+                                 **{"X-Mock-Role": "readonly"})
+        self.assertEqual(status, 403, "a read-only device's message to a to-do")
+        self.assertIsNone(ws.message(lambda m: m.get("type") in ("todo_send_state", "message_send_state"), seconds=1))
+
     def test_no_receipt_without_an_op_id_or_a_todo(self):
         ws, _ = self.socket("todo_send_state")
         self.assertEqual(self.post(ROUTE, {"todo_id": "t01", "text": "Hi"})[0], 200)
@@ -741,6 +760,43 @@ class ReceiptTests(Case):
         self.assertEqual(message(202, {"delivered": "later"}), "kept")
         self.assertEqual(message(502, {"delivered": "unknown"}), "unknown")
         self.assertEqual(message(409, {"delivered": "none"}), "failed")
+
+
+class InFlightReceiptTests(Case):
+    """A repeat of an id while its first request is still under way joins it, as the hub's withClientOp and send
+    flight do: one Processing, one write, the first answer for both."""
+    ENV = {"MOCK_TODO_VIEW": "1", "MOCK_TASKS": "1", "MOCK_SEND_DELAY_MS": "1500"}
+    socket = ReceiptTests.socket
+
+    def twice(self, path, body, want, **headers):
+        """The first request's and the repeat's (status, answer), the repeat sent once the first said Processing."""
+        first = []
+        thread = threading.Thread(target=lambda: first.append(self.post(path, body, **headers)))
+        thread.start()
+        self.addCleanup(thread.join)
+        self.assertEqual(self.ws.message(want)["state"], "processing")
+        status, _, again = self.post(path, body, **headers)
+        thread.join()
+        return (first[0][0], first[0][2]), (status, again)
+
+    def test_the_same_op_id_twice(self):
+        self.ws, _ = self.socket("todo_send_state")
+        op = "0a1b2c3d-0000-4000-8000-0000000000ae"
+        body = {"todo_id": "t01", "text": "Book the quieter one."}
+        first, again = self.twice(ROUTE, body, receipt("todo_send_state"), **{"X-Persona-Op-Id": op})
+        self.assertEqual(first[0], 200, first)
+        self.assertEqual(again, first, "the first answer, typed once")
+        self.assertEqual(self.ws.message(receipt("todo_send_state"))["state"], "delivered")
+        self.assertIsNone(self.ws.message(receipt("todo_send_state"), seconds=1), "the repeat said nothing")
+
+    def test_the_same_client_msg_id_twice(self):
+        self.ws, _ = self.socket(subscribe=WIDGET)
+        path = "/api/v1/sessions/macbook/%s/messages" % WIDGET
+        first, again = self.twice(path, {"text": "Go on.", "client_msg_id": "msg-3"}, receipt("message_send_state"))
+        self.assertEqual(first[0], 200, first)
+        self.assertEqual(again, first)
+        self.assertEqual(self.ws.message(receipt("message_send_state"))["state"], "delivered")
+        self.assertIsNone(self.ws.message(receipt("message_send_state"), seconds=1), "the repeat said nothing")
 
 
 class OldHubReceiptTests(Case):

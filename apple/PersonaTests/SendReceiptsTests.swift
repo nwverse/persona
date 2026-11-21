@@ -11,7 +11,7 @@ struct SendReceiptsTests {
     private static let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
     private static let op = "0A1B2C3D-0000-4000-8000-0000000000AB"
-    private static let todoKey = SendReceipt.Key(kind: .todo, id: op)
+    private static let todoKey = SendReceipt.Key(group: "", kind: .todo, id: op)
 
     static func todoFrame(_ state: String, op: String = op, todo: String = "t01") -> String {
         #"{"type":"todo_send_state","todo_id":"\#(todo)","client_op_id":"\#(op.lowercased())","state":"\#(state)","at":"2026-11-22T01:02:03.123456789Z"}"#
@@ -37,7 +37,7 @@ struct SendReceiptsTests {
 
     @Test func decodesATodoWritesReceipt() throws {
         let receipt = try #require(decoded(Self.todoFrame("processing")))
-        #expect(receipt.key == SendReceipt.Key(kind: .todo, id: Self.op))
+        #expect(receipt.key == SendReceipt.Key(group: "", kind: .todo, id: Self.op))
         #expect(receipt.key.id == Self.op.lowercased(), "op ids are compared without case")
         #expect(receipt.target == .todo("t01"))
         #expect(receipt.state == .processing && !receipt.state.isFinal)
@@ -48,7 +48,7 @@ struct SendReceiptsTests {
 
     @Test func decodesASessionMessagesReceipt() throws {
         let receipt = try #require(decoded(Self.messageFrame("kept")))
-        #expect(receipt.key == SendReceipt.Key(kind: .message, id: "MSG-1"))
+        #expect(receipt.key == SendReceipt.Key(group: "", kind: .message, id: "MSG-1"))
         #expect(receipt.target == .session(machineID: "m1", sessionID: "s1"))
         #expect(receipt.state == .kept && receipt.state.isFinal)
     }
@@ -66,12 +66,12 @@ struct SendReceiptsTests {
 
     @Test func onlyTheHellosOwnMarkersVouch() throws {
         #expect(hello(Self.trusting)?.sendReceipts == SendReceiptTrust(messages: true, todos: true))
-        #expect(hello(#"{"type":"hello","features":["message_send_state","todo_send_state"]}"#)?.sendReceipts == SendReceiptTrust.none,
+        #expect(hello(#"{"type":"hello","features":["message_send_state","todo_send_state"]}"#)?.sendReceipts == SendReceiptTrust.untrusted,
                 "a feature-array entry is not proof")
         #expect(hello(#"{"type":"hello","message_send_state":1}"#)?.sendReceipts == SendReceiptTrust(messages: true, todos: false))
         // Another shape or version is no trust, never a lost hello.
         let odd = try #require(hello(#"{"type":"hello","features":["x"],"message_send_state":"1","todo_send_state":2}"#))
-        #expect(odd.features == ["x"] && odd.sendReceipts == SendReceiptTrust.none)
+        #expect(odd.features == ["x"] && odd.sendReceipts == SendReceiptTrust.untrusted)
     }
 
     /// The hub's own hello (spec/fixtures/wire/connection.json, `Hub.hello`) vouches for both.
@@ -86,11 +86,32 @@ struct SendReceiptsTests {
     @Test func onlyTheIOSAppAsksForTodoReceipts() {
         let phone = RequestClientMetadata(platform: .iOS, surface: .app, version: "1")
         #expect(LiveConnection.helloFeatures(phone).contains("todo_send_state"))
+        #expect(LiveConnection.asksTodoReceipts(phone))
         for other in [RequestClientMetadata(platform: .watchOS, surface: .app, version: "1"),
                       RequestClientMetadata(platform: .visionOS, surface: .app, version: "1"),
                       RequestClientMetadata(platform: .iOS, surface: .widget, version: "1")] {
             #expect(!LiveConnection.helloFeatures(other).contains("todo_send_state"))
+            #expect(!LiveConnection.asksTodoReceipts(other))
         }
+    }
+
+    /// The socket's URL says it too, so the hub knows from the upgrade on, before it has read `client_hello`.
+    @Test func theSocketsURLAsksForTodoReceipts() {
+        let features = { (todos: Bool) in
+            LiveConnection.queryItems(EventCursor(), todoReceipts: todos).first { $0.name == "features" }?.value?.split(separator: ",") ?? []
+        }
+        #expect(features(true).contains("todo_send_state"))
+        #expect(!features(false).contains("todo_send_state"))
+    }
+
+    /// Receipts are stamped with their link's group (`AppModel.makeLink`), as a sender's key names it.
+    @Test func aReceiptIsStampedWithItsLinksGroup() throws {
+        let event = try #require(ServerEvent.decode(Data(Self.todoFrame("processing").utf8)))
+        guard case .sendReceipt(let receipt) = event.stamped("g2") else {
+            Issue.record("not a receipt")
+            return
+        }
+        #expect(receipt.key == SendReceipt.Key(group: "g2", kind: .todo, id: Self.op))
     }
 
     // MARK: The table
@@ -131,7 +152,7 @@ struct SendReceiptsTests {
 
     @Test func staysBounded() {
         var table = SendReceipts()
-        let keys = (0...SendReceipts.limit).map { SendReceipt.Key(kind: .message, id: "m\($0)") }
+        let keys = (0...SendReceipts.limit).map { SendReceipt.Key(group: "", kind: .message, id: "m\($0)") }
         var gone: [SendReceipt.Key] = []
         for key in keys { if let out = table.expect(key, target: .session(machineID: "m1", sessionID: "s1")) { gone.append(out) } }
         #expect(table.count == SendReceipts.limit)
@@ -145,6 +166,21 @@ struct SendReceiptsTests {
     /// What the app sent over the socket.
     final class Sent {
         var messages: [[String: Any]] = []
+    }
+
+    /// Each link's socket, in the order the links connected.
+    @MainActor final class Sockets {
+        var all: [SyncSocket] = []
+
+        func make() -> SyncSocket {
+            let socket = SyncSocket()
+            all.append(socket)
+            return socket
+        }
+    }
+
+    @MainActor final class Changes {
+        var count = 0
     }
 
     private func app() throws -> (AppModel, SyncSocket, Sent) {
@@ -165,7 +201,7 @@ struct SendReceiptsTests {
         let (model, socket, _) = try app()
         deliver(socket, Self.trusting)
         let cell = model.sendReceipts.expect(Self.todoKey, target: .todo("t01"))
-        let other = model.sendReceipts.expect(SendReceipt.Key(kind: .message, id: "msg-1"),
+        let other = model.sendReceipts.expect(SendReceipt.Key(group: "", kind: .message, id: "msg-1"),
                                                target: .session(machineID: "m1", sessionID: "s1"))
         #expect(cell.state == nil, "Sending until the hub says anything")
         deliver(socket, Self.todoFrame("processing"))
@@ -183,7 +219,7 @@ struct SendReceiptsTests {
         let (model, socket, _) = try app()
         deliver(socket, #"{"type":"hello","features":["message_send_state","todo_send_state"],"message_send_state":1}"#)
         let todo = model.sendReceipts.expect(Self.todoKey, target: .todo("t01"))
-        let message = model.sendReceipts.expect(SendReceipt.Key(kind: .message, id: "msg-1"),
+        let message = model.sendReceipts.expect(SendReceipt.Key(group: "", kind: .message, id: "msg-1"),
                                                  target: .session(machineID: "m1", sessionID: "s1"))
         deliver(socket, Self.todoFrame("processing"))
         deliver(socket, Self.messageFrame("processing"))
@@ -196,7 +232,7 @@ struct SendReceiptsTests {
         deliver(socket, Self.trusting)
         let cell = model.sendReceipts.expect(Self.todoKey, target: .todo("t01"))
         socket.drop?()
-        #expect(model.live.receiptTrust == SendReceiptTrust.none)
+        #expect(model.live.receiptTrust == SendReceiptTrust.untrusted)
         model.live.reconnectNow()
         deliver(socket, Self.todoFrame("processing")) // before the new socket's hello
         #expect(cell.state == nil)
@@ -216,12 +252,61 @@ struct SendReceiptsTests {
         #expect(model.live.receiptTrust == SendReceiptTrust(messages: true, todos: true))
         let cell = model.sendReceipts.expect(Self.todoKey, target: .todo("t01"))
         #expect(model.live.renewCredential(from: ServerConfig.demo.token, to: "device-token"))
-        #expect(model.live.receiptTrust == SendReceiptTrust.none)
+        #expect(model.live.receiptTrust == SendReceiptTrust.untrusted)
         deliver(socket, Self.todoFrame("processing"))
         #expect(cell.state == nil)
         deliver(socket, Self.trusting)
         deliver(socket, Self.todoFrame("processing"))
         #expect(cell.state == .processing)
+    }
+
+    /// What offers to check a send reads the trust while it draws: it sees it come with the hello and go with the drop,
+    /// and a new attempt, which clears a trust the socket no longer had, tells it nothing.
+    @Test func whatDrawsFromTheTrustSeesItComeAndGo() throws {
+        let (model, socket, _) = try app()
+        withExtendedLifetime(model) { // the socket's closures hold the model weakly
+            let seen = Changes()
+            let watch = {
+                withObservationTracking { _ = model.live.receiptTrust } onChange: { MainActor.assumeIsolated { seen.count += 1 } }
+            }
+            watch()
+            deliver(socket, Self.trusting)
+            #expect(seen.count == 1 && model.live.receiptTrust.todos)
+            watch()
+            socket.drop?()
+            #expect(seen.count == 2 && model.live.receiptTrust == SendReceiptTrust.untrusted)
+            watch()
+            model.live.reconnectNow()
+            #expect(seen.count == 2, "nothing changed")
+            deliver(socket, Self.trusting)
+            #expect(seen.count == 3)
+        }
+    }
+
+    /// Two hubs in two groups: a receipt on the second group's socket moves the send expected under that group, and not
+    /// the default group's send under the same op id.
+    @Test func aReceiptLandsInItsOwnHubsGroup() throws {
+        let hub = FakeHub()
+        let transport = try #require(hub.client.transport)
+        let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "send-receipts-groups-" + UUID().uuidString))
+        let sockets = Sockets()
+        model.linkHooksForTests = (transport: transport, socket: { sockets.make() })
+        model.registry = HubRegistry(hubs: [PairedHub(id: "a", config: .demo, group: ""), PairedHub(id: "b", config: .demo, group: "g2")])
+        model.buildLinks()
+        try withExtendedLifetime(model) {
+            #expect(model.links.map(\.group) == ["", "g2"])
+            for link in model.links { link.live.connect(.demo) }
+            #expect(sockets.all.count == 2)
+            let home = try #require(sockets.all.first), other = try #require(sockets.all.last)
+            deliver(home, Self.trusting)
+            deliver(other, Self.trusting)
+            let theirs = model.sendReceipts.expect(SendReceipt.Key(group: "g2", kind: .todo, id: Self.op), target: .todo("t01"))
+            let ours = model.sendReceipts.expect(Self.todoKey, target: .todo("t01"))
+            deliver(other, Self.todoFrame("processing"))
+            #expect(theirs.state == .processing && ours.state == nil)
+            deliver(home, Self.todoFrame("delivered"))
+            #expect(ours.state == .delivered && theirs.state == .processing)
+        }
     }
 
     @Test func theAppAsksForTodoReceiptsInItsHello() throws {
@@ -236,11 +321,11 @@ struct SendReceiptsTests {
     }
 }
 
-/// V-PERF for the receipts (#10465): the main thread's time per event while a burst arrives, against the same frames
-/// under a type no build reads, which is what an app before this one did with them (decoded to nothing and dropped).
-/// A unit measurement in the test host (a Debug build on the simulator), not an optimized build: it compares the two
-/// paths in one build, and prints `SEND-RECEIPT-COST` lines. Three runs of 3,128 frames: 3,000 receipts for other
-/// devices' sends (ignored), and Processing then a final state for 64 sends this app waits on.
+/// The receipts' cost on the main thread (docs/apple/performance.md P12, #10465): the time per event while a burst
+/// arrives, against the same frames under a type no build reads, which is what an app before this one did with them
+/// (decoded to nothing and dropped). It compares the two paths in one build, in whatever build the test host is (an
+/// optimized one for numbers worth reporting), and prints `SEND-RECEIPT-COST` lines. Three runs of 3,128 frames: 3,000
+/// receipts for other devices' sends (ignored), and Processing then a final state for 64 sends this app waits on.
 @MainActor @Suite(.serialized)
 struct SendReceiptsBurstTests {
     private func app() throws -> (AppModel, SyncSocket) {
@@ -267,8 +352,8 @@ struct SendReceiptsBurstTests {
         }
         for i in 0..<32 {
             let op = UUID().uuidString, id = "mine-\(i)"
-            b.waits.append((SendReceipt.Key(kind: .todo, id: op), .todo("t01")))
-            b.waits.append((SendReceipt.Key(kind: .message, id: id), .session(machineID: "m1", sessionID: "s1")))
+            b.waits.append((SendReceipt.Key(group: "", kind: .todo, id: op), .todo("t01")))
+            b.waits.append((SendReceipt.Key(group: "", kind: .message, id: id), .session(machineID: "m1", sessionID: "s1")))
             for state in ["processing", "delivered"] {
                 b.frames.append(Data(SendReceiptsTests.todoFrame(state, op: op).utf8))
                 b.frames.append(Data(SendReceiptsTests.messageFrame(state, id: id).utf8))

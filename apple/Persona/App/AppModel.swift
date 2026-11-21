@@ -5385,10 +5385,12 @@ extension AppModel {
 }
 
 /// The hub's receipts for the sends this app waits on (`SendReceipts`; docs/protocol/protocol.md "Message feedback
-/// (#5258)"). A sender expects its `client_msg_id` or op id before it sends and keeps the cell it is given; a receipt the
-/// socket trusted (`LiveConnection.receiptTrust`) moves that cell alone, so other sends' receipts, every session's
-/// included, draw nothing. The cell keeps the final state after the table lets the id go. Nothing draws them yet: the
-/// to-do composer will (#10465), and the chats still show Processing after the HTTP answer (`ChatSendFeedback`).
+/// (#5258)"). A sender expects its `client_msg_id` or op id before it sends and keeps the cell it is given, and forgets
+/// it once the HTTP answer comes, not when it stops waiting for one: the hub's final state still says how the send
+/// ended. A receipt the socket trusted (`LiveConnection.receiptTrust`) moves that cell alone, so other sends' receipts,
+/// every session's included, draw nothing. The cell keeps the final state after the table lets the id go. Nothing
+/// draws them yet: the to-do composer will (#10465), and the chats still show Processing after the HTTP answer
+/// (`ChatSendFeedback`).
 final class SendReceiptStore {
     private var table = SendReceipts()
     private var cells: [SendReceipt.Key: SendReceiptCell] = [:]
@@ -5396,8 +5398,9 @@ final class SendReceiptStore {
     /// The sends still waiting on a receipt.
     var waiting: Int { table.count }
 
-    /// Before sending under `key` to `target`: the cell its receipts land in. Expecting a key again starts it over with
-    /// a new cell; when the table is full, the oldest send's cell stops moving.
+    /// Before sending under `key` to `target`: the cell its receipts land in. The key names the hub group the send
+    /// goes to (`HubLink.group`), as its receipts are stamped with their socket's. Expecting a key again starts it over
+    /// with a new cell; when the table is full, the oldest send's cell stops moving.
     func expect(_ key: SendReceipt.Key, target: SendReceipt.Target) -> SendReceiptCell {
         let cell = SendReceiptCell()
         if let gone = table.expect(key, target: target) { cells[gone] = nil }
@@ -5411,7 +5414,7 @@ final class SendReceiptStore {
         if state.isFinal { cells[receipt.key] = nil }
     }
 
-    /// The sender has its answer, or stopped waiting: later receipts for `key` are ignored.
+    /// The sender has its answer: later receipts for `key` are ignored.
     func forget(_ key: SendReceipt.Key) {
         table.forget(key)
         cells[key] = nil

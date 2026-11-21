@@ -507,8 +507,10 @@ final class LiveConnection {
     private(set) var personaContracts = false
     /// The send receipts this connection's authenticated hello vouches for (docs/protocol/protocol.md "Message feedback
     /// (#5258)"): none until it comes, and none again as soon as the socket drops, another opens or the credential
-    /// changes. A receipt of a kind it does not vouch for is dropped here, before `onEvent`.
-    @ObservationIgnored private(set) var receiptTrust = SendReceiptTrust.none
+    /// changes. A receipt of a kind it does not vouch for is dropped here, before `onEvent`. Observed, so what offers
+    /// to check a send's receipt follows the current socket; written only when it changes (`trust`), since every
+    /// attempt clears it.
+    private(set) var receiptTrust = SendReceiptTrust.untrusted
     /// Where the app is in the hub's numbered broadcasts: kept across reconnects, cleared with another hub.
     @ObservationIgnored private(set) var cursor = EventCursor()
     /// iOS/Mac list clients opt in; watch/extension consumers retain their existing full-list contract.
@@ -591,7 +593,7 @@ final class LiveConnection {
 
     func disconnect() {
         personaContracts = false
-        receiptTrust = .none
+        trust(.untrusted)
         generation += 1
         cancelRoute()
         task?.cancel(with: .goingAway, reason: nil)
@@ -677,7 +679,7 @@ final class LiveConnection {
     private func open() {
         guard let config, !suspended else { return }
         personaContracts = false
-        receiptTrust = .none
+        trust(.untrusted)
         generation += 1
         cancelRoute()
         attemptBegan = Date()
@@ -721,7 +723,8 @@ final class LiveConnection {
         if config != given { self.config = config }
         var comps = URLComponents(url: config.url.appending(path: "/api/v1/ws"), resolvingAgainstBaseURL: false)!
         comps.scheme = config.url.scheme == "https" ? "wss" : "ws"
-        comps.queryItems = Self.queryItems(cursor, sessionList: usesSessionList, extensionStream: usesExtensionUIStream, sessionLive: true)
+        comps.queryItems = Self.queryItems(cursor, sessionList: usesSessionList, extensionStream: usesExtensionUIStream, sessionLive: true,
+                                           todoReceipts: Self.asksTodoReceipts(RequestClientMetadata.current))
         var req = URLRequest(url: HubTransport.resolve(comps.url!, hub: config.url))
         config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
@@ -743,9 +746,12 @@ final class LiveConnection {
     /// The socket URL's query: session lists as deltas (an older hub ignores the question and sends whole lists), the
     /// extensions' install steps (`extension_operation`, #3307), the managers' roster changes (`managers`,
     /// docs/assistant/managers.md), Persona Link entries in the `desktops` event (`desktops_link`, `DesktopDevice`),
-    /// Claude's live status (`session_live`), and where to resume the broadcasts from once a hello gave a stream.
-    static func queryItems(_ cursor: EventCursor, sessionList: Bool = false, extensionStream: Bool = false, sessionLive: Bool = false) -> [URLQueryItem] {
-        [URLQueryItem(name: "features", value: (extensionStream ? "extension_ui_stream_v1," : "") + (sessionLive ? "session_live," : "") + (sessionList ? "sessions_list," + SessionListChanges.feature + "," : "") + "sessions_delta,extension_operations,managers,desktops_link," + HubNaming.feature)] + cursor.queryItems
+    /// Claude's live status (`session_live`), a to-do write's receipts (`todo_send_state`, also in `client_hello`: here
+    /// the hub knows it from the upgrade on, so a write it takes before the hello's answer still says Processing), and
+    /// where to resume the broadcasts from once a hello gave a stream.
+    static func queryItems(_ cursor: EventCursor, sessionList: Bool = false, extensionStream: Bool = false, sessionLive: Bool = false,
+                           todoReceipts: Bool = false) -> [URLQueryItem] {
+        [URLQueryItem(name: "features", value: (extensionStream ? "extension_ui_stream_v1," : "") + (sessionLive ? "session_live," : "") + (sessionList ? "sessions_list," + SessionListChanges.feature + "," : "") + (todoReceipts ? SendReceipt.todoFeature + "," : "") + "sessions_delta,extension_operations,managers,desktops_link," + HubNaming.feature)] + cursor.queryItems
     }
 
     private func heartbeat(_ t: URLSessionWebSocketTask, _ gen: Int) {
@@ -845,7 +851,7 @@ final class LiveConnection {
                     DevProbe.socket(.dropped)
                     let attempt = self.state != .connected // not a drop: this attempt never connected
                     self.personaContracts = false
-                    self.receiptTrust = .none
+                    self.trust(.untrusted)
                     let planned = self.restartNotice || (!self.closedQuiet && t.closeCode == .goingAway)
                     self.dropped(restart: planned)
                     // The handshake's answer: 401 is the hub refusing this credential, not the hub being away.
@@ -902,7 +908,7 @@ final class LiveConnection {
         }, dropped: { [weak self] in
             guard let self, gen == self.generation else { return }
             self.personaContracts = false
-            self.receiptTrust = .none
+            self.trust(.untrusted)
             self.dropped(restart: self.restartNotice)
             self.state = .failed(String(localized: "Connection lost"))
             self.stalled = false
@@ -913,7 +919,11 @@ final class LiveConnection {
     /// This socket's authenticated hello: what it may send under the canonical contracts, and which receipts to trust.
     private func heard(_ hello: HubHello) {
         personaContracts = hello.features.contains(HubNaming.feature)
-        receiptTrust = hello.sendReceipts
+        trust(hello.sendReceipts)
+    }
+
+    private func trust(_ new: SendReceiptTrust) {
+        if receiptTrust != new { receiptTrust = new }
     }
 
     /// Whether an event goes on to `onEvent`: a send receipt only while this socket's hello vouches for its kind.
@@ -1019,8 +1029,8 @@ final class LiveConnection {
 
     /// `elicitation` (MCP forms and links, `ElicitationForm`) from the iOS app alone: the frozen Mac app and visionOS
     /// don't declare it, so the hub hands those cards to the terminal when they are the only apps open. The iOS app
-    /// alone also asks for `todo_send_state` (`SendReceipt.todoFeature`): the to-do page that writes with an op id is
-    /// its own.
+    /// alone also asks for `todo_send_state` (`SendReceipt.todoFeature`, on the socket's URL too), since only its to-do
+    /// page writes to a to-do with an op id.
     /// `persona_card_ring` (```persona-card rings, `PersonaCard.swift`) from the apps that build the chat (iOS, Mac,
     /// visionOS), not the watch or the extensions: a client without it gets each ring as a stacked bar (the hub's
     /// card_compat.go), which every build before the ring draws.
@@ -1028,6 +1038,11 @@ final class LiveConnection {
         let iOSApp = RequestClientMetadata.Platform.iOS.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue
         let chatApps = [RequestClientMetadata.Platform.iOS, .macOS, .visionOS].map { $0.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue }
         return [HubNaming.feature] + (client.platform == iOSApp ? ["elicitation", UndeliveredMessage.agentHoldFeature, SendReceipt.todoFeature] : []) + (chatApps.contains(client.platform) ? [cardRingFeature, "closeout.markdown.v1"] : [])
+    }
+
+    /// Whether this app asks for `todo_send_state` (`helloFeatures`), which the socket's URL then says as well.
+    nonisolated static func asksTodoReceipts(_ client: RequestClientMetadata) -> Bool {
+        helloFeatures(client).contains(SendReceipt.todoFeature)
     }
 
     /// The client_hello feature that says this app draws ```persona-card rings (#3068).

@@ -1748,8 +1748,8 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   `AgentListOrder` (Agents list sorting and grouping), then convert to a reducer.
 - Unit tests never connect to the hub: replace `APIClient.transport` with `FakeHub` (PersonaTests), which returns fixed JSON by "method path" and records requests; view models use real requests and decoding.
   Demo mode still uses the global `APIClient.local`.
-- `AppModel` (`Persona/App`): pairing stored in Keychain; `LiveConnection` (WebSocket, exponential-backoff reconnect, resubscribing with `since_seq` after reconnect);
-  one `ChatStore` per session (deduplicated by id, sorted by seq, `buildRows` produces display rows).
+- `AppModel` (`Persona/App`): pairing stored in Keychain; `LiveConnection` (WebSocket, exponential-backoff reconnect, resubscribing with `since_seq` after reconnect;
+  send receipts trusted per socket, "Send receipts" under To-dos); one `ChatStore` per session (deduplicated by id, sorted by seq, `buildRows` produces display rows).
 - Entering a chat page calls `subscribe`, leaving calls `unsubscribe`; the hub pushes `items` / `screen` / `sessions` / `interaction`.
 - Phone tools: hub pushes `tool_call` → `PhoneToolRegistry.call` (writes require confirmation first) → `tool_result`. On connection, `register_phone` declares tools (`docs/apple/phone-tools.md`).
 - Push: after pairing, request notification permission and register APNs, `POST /api/v1/devices`; when the hub has `apns.json`, it pushes new interactions and Agent completion (completion waits 1 minute, is skipped if seen on a computer or in the App, and waits for background tasks to finish; push policy in `docs/server/server.md`), with "Title" (no ✅; interrupted or failed is "⚠️ Title"),
@@ -2189,18 +2189,22 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   one on only while its own authenticated hello carries that kind's top-level version, `message_send_state: 1` or
   `todo_send_state: 1` (`SendReceiptTrust`; a feature-array entry is not proof). That trust goes the moment the socket
   drops, another opens or the credential changes (`LiveConnection.receiptTrust`), so a new connection has to say it
-  again. The iOS app alone declares `todo_send_state` in `client_hello` (the hub sends it only to the full devices that
-  ask); `message_send_state` goes to a session's subscribers unasked. `AppModel.sendReceipts` (`SendReceiptStore`) holds
-  the sends the app waits on: before it sends, a sender expects its `client_msg_id` or op id (compared without case: the
-  hub lowercases op ids) with the session or to-do it goes to, and keeps the `SendReceiptCell` it is given. A receipt for
-  another id, session, to-do or hub group is ignored; Processing moves the cell; the final state (`delivered`,
-  `failed`, `unknown`, or `kept` for a session's message) ends the entry, which leaves the table (at most 64: one more
-  lets the oldest go without a state), while the cell keeps what it was told. Each cell is observed on its own, so a
-  burst of other sends' receipts draws nothing. Receipts are feedback only: the HTTP answer, or the op id's receipt,
-  stays authoritative, and the events are not replayed after a reconnect. Nothing reads the cells yet: the to-do
-  page's composer will, and the chats still show Processing after the HTTP answer (`ChatSendFeedback`). `MOCK_TODO_VIEW`
-  sends both (`docs/operations/testing.md`). Tests: `SendReceiptsTests`; `SendReceiptsBurstTests` prints the main
-  thread's time per event under a burst.
+  again. It is observed and written only when it changes, so what offers to check a send follows the current socket;
+  the hello kept on `HubLink` (`HubHello.sendReceipts`) is the last socket's word, through a drop too, and decides
+  nothing. The iOS app alone declares `todo_send_state`, in `client_hello` and in the socket URL's `features`, so the
+  hub knows from the upgrade on (it sends the event only to the full devices that ask); `message_send_state` goes to a
+  session's subscribers unasked. `AppModel.sendReceipts` (`SendReceiptStore`) holds the sends the app waits on: before
+  it sends, a sender expects its `client_msg_id` or op id (compared without case: the hub lowercases op ids) under the
+  hub group it writes to (`HubLink.group`; receipts are stamped with their socket's group, and the key has no default
+  group) with the session or to-do it goes to, keeps the `SendReceiptCell` it is given, and forgets the key once the
+  HTTP answer comes, not when it stops waiting. A receipt for another id, session, to-do or hub group is ignored;
+  Processing moves the cell; the final state (`delivered`, `failed`, `unknown`, or `kept` for a session's message) ends
+  the entry, which leaves the table (at most 64: one more lets the oldest go without a state), while the cell keeps
+  what it was told. Each cell is observed on its own, so a burst of other sends' receipts draws nothing. Receipts are
+  feedback only: the HTTP answer, or the op id's receipt, stays authoritative, and the events are not replayed after a
+  reconnect. Nothing reads the cells yet: the to-do page's composer will, and the chats still show Processing after
+  the HTTP answer (`ChatSendFeedback`). `MOCK_TODO_VIEW` sends both (`docs/operations/testing.md`). Tests:
+  `SendReceiptsTests`; `SendReceiptsBurstTests` prints the main thread's time per event under a burst.
 - **404 and 405.** An older hub answers 405 for `GET /api/v1/todos/{id}` and `GET /api/v1/todos/places` (the `PATCH` and
   `DELETE` routes of `/api/v1/todos/{id}` match the path) and 404 for the other new routes: `TodoNotThere` takes both
   as "not there". A 404 with `todo_not_found` is the to-do itself gone. `GET /api/v1/todos` answering 404 still hides
