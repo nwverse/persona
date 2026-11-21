@@ -98,9 +98,10 @@ switch off is asked in #11400 and not done.
 - **What decides an open**: what the group's tries came to while it lasted, from the attempts the app makes anyway (the
   route picker's probes, the race that restores an SSH tunnel used last time, a tunnel's check of the direct way, the
   recheck of preferred addresses, and for a group with one address and no tunnel its socket); no probe, timer or polling
-  is added. A pick that was cancelled or replaced still counts what its probes came to before it ended. The outcomes are
-  those of Connection Details (`docs/operations/network.md`, "Client-added candidates": Answers, Certificate not
-  trusted, Not your hub, Couldn't connect, Unknown).
+  is added. A pick that a newer attempt replaced still counts what its probes came to before it ended; one that ended
+  because the app left the front usually reports after the period is over, so the tally leaves it out (Connection
+  Details still shows it). The outcomes are those of Connection Details (`docs/operations/network.md`, "Client-added
+  candidates": Answers, Certificate not trusted, Not your hub, Couldn't connect, Unknown).
 
 `connections.json` holds `format` (`persona-connection-tally`), `version` (1) and `weeks`, oldest first; per week:
 

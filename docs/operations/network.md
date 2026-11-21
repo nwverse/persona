@@ -162,8 +162,8 @@ iOS implementation (#4670): Settings › hub › Addresses keeps a paired hub's 
     coming back, a renewed credential), a restored SSH tunnel came up first (the race in "Connecting to hub through SSH (fallback when direct access
     fails)"), or the app went to the background before it finished (so does a later probe of the same recheck asked while the app was away; one asked
     after the app came back says what it came to). The line keeps Unknown until the address is tried again: within about 3 s after a replaced attempt,
-    but after a restored tunnel won, not before the tunnel's check of the direct way 2 minutes later (away from home with an SSH tunnel, the home
-    address shows Unknown after each return to the front until then).
+    but after a restored tunnel won, at the tunnel's check of the direct way 2 minutes later, or sooner if the socket reconnects meanwhile (away from
+    home with an SSH tunnel, the home address can show Unknown that long after each return to the front).
   - A group with one address and no tunnel is never probed: its outcome comes from the socket's own attempt, classified the same way. Otherwise the
     probe says, and the socket replaces only an Answers that the same attempt's own probe found at the address it then failed to open, so each attempt
     counts once per address. Through a tunnel no probe hands the socket an address: a tunnel set to be used every time asks none, and when the restore
