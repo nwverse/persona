@@ -16,7 +16,8 @@ import (
 // this hub does not know (a plugin written for a newer hub) are left out, a section they emptied with them; those
 // newer than the app are drawn with what it knows where that says the same (a markdown as text, a table as rows, an
 // empty state as a text and a button, a section's more as a button, a filter as a segmented, a columns view as a
-// stack, a section's link as a row, a tile's gauge as its value and subtitle, a graph as indented rows), left out
+// stack, a section's link as a row, a tile's gauge as its value and subtitle, a graph as indented rows, a scene as
+// its poster or a row per pin), left out
 // where it does not; refresh_after is held to its bounds. The view the extension drew is checked first (CheckView), whatever the
 // app draws, so that a view is refused or drawn alike for every app; then what the app gets is checked again
 // (wire.CheckFitted), a compact one to its limits. It says what types it left out.
@@ -127,7 +128,8 @@ func fit(v *View, slot UISlot, uiVersion int, native bool, languages ...i18n.Lan
 		for _, s := range v.Sections {
 			n += len(s.Items)
 			for _, e := range s.Items {
-				// a graph is one item of the card; its nodes still count toward the page's 300 (wire.CheckView)
+				// a graph or a scene is one item of the card; its nodes or pins still count toward the page's 300
+				// (wire.CheckView)
 				n += max(len(e.Tiles)-1, 0)
 				if e.Type == "field" || e.Type == "composer" {
 					return dropped, errors.New("a card has no fields: open a page for them")
@@ -143,9 +145,10 @@ func fit(v *View, slot UISlot, uiVersion int, native bool, languages ...i18n.Lan
 
 // FitResult makes what ui.action answered something the app can use, past the view (Fit): lines and components in
 // place (UI version 5) are checked and the components fitted one by one; an older app gets neither, so it draws the
-// page again. Components holding a graph are checked as an app of 10 gets them, so a bad graph is refused for every
-// app alike; an app below 10 then gets no components either, since its graph is many rows that cannot stand in for
-// one component, and draws the page again, where Fit draws those rows.
+// page again. Components holding a graph or a scene are checked as an app of the newest version gets them, so a bad
+// one is refused for every app alike; an app below 10 for a graph, or below 11 for a scene, then gets no components
+// either, since the graph or scene is more or fewer items that cannot stand in for one component, and draws the page
+// again, where Fit draws them.
 func FitResult(res *ActionResult, slot UISlot, uiVersion int, languages ...i18n.Lang) error {
 	l := i18n.Default
 	if len(languages) > 0 {

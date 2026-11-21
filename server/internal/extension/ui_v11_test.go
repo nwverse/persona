@@ -5,9 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/extension/uistream"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -166,6 +169,57 @@ func TestFitNativeV11(t *testing.T) {
 	img := native(&ImageSource{URL: "https://example.com/home.png"})
 	if len(img) != 1 || img[0].Type != wire.ComponentImage || img[0].Src.URL != "https://example.com/home.png" {
 		t.Errorf("native with a url poster: %+v", img)
+	}
+}
+
+// A native stream's rows always have a key the stream can hold: a section's key or an overlong `key/id` gives a free
+// digest instead, and the snapshot decodes.
+func TestFitNativeV11RowKeys(t *testing.T) {
+	page, _ := Slot("nav_page")
+	box := []wire.SceneShape{{Kind: wire.SceneShapeBox, Center: []float64{0, 0}, Size: []float64{1, 1}, Bottom: num(0), Top: num(1)}}
+	pin := func(id string) wire.ScenePin { return wire.ScenePin{ID: id, At: []float64{0, 0}, Label: id} }
+	section := &View{Sections: []Section{
+		{Key: "home/a", Items: []UIElem{{Type: "text", Text: "x", Key: "t"}}},
+		{Key: "s", Items: []UIElem{{Type: wire.ComponentScene, Key: "home", Alt: "A flat", Shapes: box,
+			Pins: []wire.ScenePin{pin("a"), pin("b")}}}},
+	}}
+	tooLong := &View{Sections: []Section{{Key: "s", Items: []UIElem{{Type: wire.ComponentScene, Key: strings.Repeat("k", 100),
+		Alt: "A flat", Shapes: box, Pins: []wire.ScenePin{pin(strings.Repeat("n", 40))}}}}}}
+	for name, v := range map[string]*View{"a section takes the row key": section, "the row key is too long": tooLong} {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fitted, err := FitNative(raw, page, 11, i18n.En)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var got wire.View
+		if err := json.Unmarshal(fitted, &got); err != nil {
+			t.Fatalf("%s: %s", name, fitted)
+		}
+		rows := 0
+		for _, s := range got.Sections {
+			for _, e := range s.Items {
+				if e.Type != wire.ComponentRow {
+					continue
+				}
+				rows++
+				if e.Key == "" || e.Key == "home/a" || utf8.RuneCountInString(e.Key) > graphRowKeyMost {
+					t.Fatalf("%s: row key %q", name, e.Key)
+				}
+			}
+		}
+		if rows == 0 {
+			t.Fatalf("%s: no rows in %s", name, fitted)
+		}
+		snapshot, err := json.Marshal(wire.UIStreamSnapshot{Protocol: 1, Session: "s", Epoch: "e", RootKey: "root", Version: 1, View: got})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := uistream.DecodeSnapshot(snapshot); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
 }
 

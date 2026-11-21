@@ -24,7 +24,11 @@ import (
 func downgrade11(v *View, native, compact bool) {
 	used := make(map[string]bool)
 	room := CompactItems
+	// every key on the page: a section's and an item's, and every item's tile keys share the page's one key space
 	for i := range v.Sections {
+		if k := v.Sections[i].Key; k != "" {
+			used[k] = true
+		}
 		for j := range v.Sections[i].Items {
 			e := &v.Sections[i].Items[j]
 			if k := e.Key; k != "" {
