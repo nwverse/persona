@@ -18,6 +18,10 @@ func lockHerdrDir(string) (func(), error) { return func() {}, nil }
 // herdrPaneShell: herdr on Windows does not read HERDR_AGENT, so nothing types it (hostherdr.go). A var for tests.
 var herdrPaneShell = func() string { return "" }
 
+// herdrRestoreShells are the shells that read a resume_argv after herdr restarts (herdrresume.go): herdr's configured
+// or default pane shell (windowsRestoreShells). A var for tests.
+var herdrRestoreShells = windowsRestoreShells
+
 // adoptedPaneShells: an adopted pane whose innermost program is PowerShell or pwsh takes a new PowerShell pane's
 // handoff; any other stack is used as it is (windowsAdoptedPaneShells). A var for tests.
 var adoptedPaneShells = windowsAdoptedPaneShells

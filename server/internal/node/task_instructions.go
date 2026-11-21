@@ -128,11 +128,14 @@ func codexKeptTaskInstructions(st sessionState) string {
 	}
 	return ""
 }
-func codexTaskFlags(text string) string {
+
+// codexTaskFlags is a Codex resume's -c for its kept task instructions, quoting with q (resumeArgv's: dquote for the
+// eval line, shellQuote for a PowerShell pane's Git Bash handoff).
+func codexTaskFlags(text string, q func(string) string) string {
 	if text == "" {
 		return ""
 	}
-	return " -c " + dquote(codexTaskConfig(text))
+	return " -c " + q(codexTaskConfig(text))
 }
 
 // Herdr refuses an apostrophe even inside quoted argv; TOML's Unicode escape preserves it.
