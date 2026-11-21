@@ -164,8 +164,8 @@ class AboutVersionMatrixTest {
                     val suffix = "$selectedWidth-${density.key}-scale-$selectedScale-long-$longValue-" +
                         "${if (present) "present" else "unknown"}-${selectedStyle.name.lowercase()}-" +
                         if (selectedDark) "dark" else "light"
-                    out().resolve("native-$suffix.png").writePng(nativeImage)
-                    out().resolve("generated-$suffix.png").writePng(generatedImage)
+                    outputDirectory.resolve("native-$suffix.png").writePng(nativeImage)
+                    outputDirectory.resolve("generated-$suffix.png").writePng(generatedImage)
                     assertEquals("$label dimensions", nativeImage.width to nativeImage.height,
                         generatedImage.width to generatedImage.height)
                     assertTrue("$label native/generated pixels differ", nativeImage.sameAs(generatedImage))
@@ -379,7 +379,9 @@ class AboutVersionMatrixTest {
         }
     }
 
-    private fun out(): File = File(System.getProperty("persona.shots") ?: "build/about-version-matrix-shots").also { it.mkdirs() }
+    private val outputDirectory by lazy {
+        newAboutCaptureRun("build/about-version-matrix-shots", System.getProperty("persona.shots"))
+    }
 
     private fun File.writePng(bitmap: Bitmap) = outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
 }
