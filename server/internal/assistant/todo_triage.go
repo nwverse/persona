@@ -156,6 +156,9 @@ func triageStatus(t Todo, look triageLookup, now time.Time) string {
 		}
 	}
 	if len(active) == 0 {
+		if t.Responsible != nil {
+			return "follow_up"
+		}
 		return "not_started"
 	}
 	var interrupted, limited, unread, working, waiting bool

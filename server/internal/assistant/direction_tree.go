@@ -100,11 +100,12 @@ func (c *treeCounts) add(state string) {
 
 // treeTask is one open task of a direction.
 type treeTask struct {
-	ID     string      `json:"id"`
-	Title  string      `json:"title"`
-	State  string      `json:"state"`
-	Agents []treeAgent `json:"agents"`
-	last   time.Time   // its latest activity (the SOP's), for the order
+	ID          string           `json:"id"`
+	Title       string           `json:"title"`
+	State       string           `json:"state"`
+	Agents      []treeAgent      `json:"agents"`
+	Responsible *TodoResponsible `json:"responsible,omitempty"`
+	last        time.Time        // its latest activity (the SOP's), for the order
 }
 
 // treeAgent is one Agent of a task, or one under another Agent: State is the session's state as the apps get it on
@@ -627,6 +628,8 @@ func (tb *treeBuild) state(t listedTodo) string {
 		return treePlanned
 	case taskStuck(t.Todo, tr, tb.reached[t.ID], tb.now):
 		return treeStuck
+	case len(t.Agents) == 0 && t.Responsible != nil && responsibleBlocked(t.Todo):
+		return treeStuck
 	}
 	return treeWorking
 }
@@ -652,7 +655,8 @@ func (tb *treeBuild) tree(names map[string]string) directionTree {
 		g.Counts.add(state)
 		agents := tb.agents(t.ID, map[[2]string]bool{})
 		g.Running = g.Running || treeRunning(agents)
-		g.Tasks = append(g.Tasks, treeTask{ID: t.ID, Title: t.Title, State: state, Agents: agents, last: tb.placed[id].Last})
+		g.Tasks = append(g.Tasks, treeTask{ID: t.ID, Title: t.Title, State: state, Agents: agents,
+			Responsible: cloneResponsible(t.Responsible), last: tb.placed[id].Last})
 	}
 	for _, g := range append(slicesOf(groups, tb.leads), sec) {
 		slices.SortStableFunc(g.Tasks, func(a, b treeTask) int {
