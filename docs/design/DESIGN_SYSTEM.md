@@ -1187,7 +1187,7 @@ field for these sessions.
 
 ### 3.8 Chips, badges, avatars, marks
 
-`Chip` (look neutral, tint or outline), `CountBadge` (99+ cap), `LinkBadge`, `Monogram`, `ChatAvatar`, `AgentMark`, `BrandMark`, `SessionAvatar`, `ThreadAvatar`. An agent named by its kind reads the same on every client, the product's own spelling (opencode and pi in lower case): `spec/fixtures/agent-names/names.json`, which the web's `agentName` and the iPhone's `AgentKind(usageAgent:)` are tested against (#10042). Chips are text-only and read as their text. Decorative marks are hidden from VoiceOver when adjacent text names them. Sources are in `apple/Persona/DesignSystem/Components.swift` and neighbors.
+`Chip` (look neutral, tint or outline), `CountBadge` (99+ cap), `LinkBadge`, `Monogram`, `ChatAvatar`, `AgentMark`, `BrandMark`, `SessionAvatar`, `ThreadAvatar`. An agent named by its kind reads the same on every client, using the product's own spelling (TRAE CLI, with opencode and pi in lower case): `spec/fixtures/agent-names/names.json`, which the web's `agentName` and the iPhone's `AgentKind(usageAgent:)` are tested against (#10042). Chips are text-only and read as their text. Decorative marks are hidden from VoiceOver when adjacent text names them. Sources are in `apple/Persona/DesignSystem/Components.swift` and neighbors.
 
 The web has the same `CountBadge` (`web/src/ui/CountBadge.tsx`, #4538) in three tones: `needs` for what waits for the user (for now the web's other Needs-you counts' look, `--attention` on the neutral field as the sidebar's badges; #4653 turns all of them to the Needs-you blue at once), `neutral` for a passive total, `accent` for a selected item or a mention. It shows nothing at zero and "99+" past 99, is 18 px high (16 px `dense`), and its exact number is spoken unless the host control's label already says it (`label={false}`). The Inbox section bar (#9053) uses it first, so it is a module of its own, off the first screen, while only that page draws it; the web's other counts keep their own pills until #4538 moves them.
 
@@ -2119,6 +2119,13 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
 - **Everywhere at once**: the first decision on any surface (phone, web, notification, watch) wins. Every other entry updates at once, with a light haptic, and offers Undo where the action can be undone.
 
 ### 4.8.0 Task cards (web, #5569)
+
+**Personal verification** (#10047): a supervisor's `accepted` review with `user_check: true` is not a completed
+to-do. Reuse the review chip and caution tone for **Awaiting your verification** (zh-Hans **待你验收**, ja
+**あなたの確認待ち**), keep one actionable home in Needs you, and count it as open Waiting on you even when deployed.
+The existing Agent state column continues to describe the Agent, not the task. Only the owner's Pass completes the
+task; change feedback returns it to ongoing work and invalidates that verification round. Reuse the existing
+verification card, Pass action and chat feedback path; no new setting, component, group or polling loop.
 
 The task cards follow `docs/design/task-cards.md`, which holds the state tables and the reasons.
 

@@ -273,7 +273,12 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/file/convert
 -                    GET /api/v1/machines/{mid}/file/download
 -                    GET /api/v1/machines/{mid}/file/thumb
+-                    GET /api/v1/machines/{mid}/files/download
+-                    GET /api/v1/machines/{mid}/files/list
 -                    GET /api/v1/machines/{mid}/files/operations/{oid}
+-                    GET /api/v1/machines/{mid}/files/preview
+-                    GET /api/v1/machines/{mid}/files/roots
+-                    GET /api/v1/machines/{mid}/files/tail
 -                    GET /api/v1/machines/{mid}/fs
 -                    GET /api/v1/machines/{mid}/fs/find
 -                    GET /api/v1/machines/{mid}/git/blob

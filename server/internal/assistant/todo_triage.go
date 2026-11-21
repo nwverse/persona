@@ -229,6 +229,9 @@ func triageReviewState(t Todo) string {
 		return ""
 	}
 	st := t.Supervision.State
+	if st == reviewUserCheck && t.DoneAt != nil {
+		return reviewAccepted
+	}
 	if t.DoneAt == nil && (st == reviewAccepted && !acceptanceStands(t) || st == reviewCancelled) {
 		return ""
 	}
@@ -325,7 +328,7 @@ func triageWaitingForMerge(t listedTodo, status string, now time.Time) bool {
 		return false
 	}
 	dismissed := t.DecisionReview != nil && t.DecisionReview.DismissalID != ""
-	if !dismissed && (triageReviewState(t.Todo) == reviewNeedsUser || t.Ask != nil && (t.Ask.Outcome == outcomeDecide || t.Ask.Outcome == outcomeCannot)) {
+	if !dismissed && (triageReviewState(t.Todo) == reviewNeedsUser || triageReviewState(t.Todo) == reviewUserCheck || t.Ask != nil && (t.Ask.Outcome == outcomeDecide || t.Ask.Outcome == outcomeCannot)) {
 		return false
 	}
 	return true
@@ -401,7 +404,7 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 		return at(triageDone, ruleFailedStart)
 	case status == "needs_you" || status == "interrupted":
 		return at(triageWaiting, ruleAgentAsks)
-	case t.DoneAt == nil && (t.Delivery.waitsForOwner() ||
+	case t.DoneAt == nil && (review == reviewUserCheck || t.Delivery.waitsForOwner() ||
 		!dismissed && (review == reviewNeedsUser || ask != nil && (ask.Outcome == outcomeDecide || ask.Outcome == outcomeCannot))):
 		return at(triageWaiting, ruleOwnerDecides)
 	case !settled && !(finished && (!seen(last) || acceptanceRequired) && review != reviewParked) && triageWaitingForMerge(t, status, now):

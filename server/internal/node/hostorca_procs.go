@@ -89,7 +89,7 @@ func agentOfCmd(argv []string) string {
 	switch progName(argv[0]) {
 	case "codex":
 		return "codex"
-	case traexAgent:
+	case traexAgent, "traecli":
 		return traexAgent
 	case "node", "bun":
 		if len(argv) > 1 && (progName(argv[1]) == "codex" || strings.Contains(filepath.ToSlash(argv[1]), "/codex/")) {

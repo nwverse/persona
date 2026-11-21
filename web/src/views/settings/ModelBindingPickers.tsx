@@ -6,7 +6,7 @@ import { api, errorText } from "../../lib/api";
 import { effortChoices, providerModels, takesEffort } from "../../lib/launcher-models";
 import { lazyPage } from "../../lib/lazy-page";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
-import { providerAgent, providerName, type ModelBinding, type ModelProvider, type ModelPurpose } from "../../lib/model-config";
+import { modelProviderTitle, providerAgent, providerName, type ModelBinding, type ModelProvider, type ModelPurpose } from "../../lib/model-config";
 import { providersFor } from "../../lib/model-config-execution";
 import { EFFORT_LEVELS, type ProviderModel } from "../../lib/providers";
 import { effortTitle } from "../../lib/session-actions";
@@ -149,7 +149,7 @@ export function ProviderSelect({
       )}
       {candidates.map((v) => (
         <option key={v.id} value={v.id}>
-          {v.hidden ? t("settings-modelconfiguration.provider_hidden", { name: v.name }) : v.name}
+          {v.hidden ? t("settings-modelconfiguration.provider_hidden", { name: modelProviderTitle(v) }) : modelProviderTitle(v)}
         </option>
       ))}
     </select>

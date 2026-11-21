@@ -262,7 +262,15 @@ func acceptedAfterJudgeDelivery(t *testing.T, s *Service, f *fakeHub, todo strin
 	}
 	reviewTask(t, s, todo, map[string]any{"verdict": "accepted", "note": "验收通过", "user_check": userCheck,
 		"checks": completeReviewChecks(todoNow(s, todo))})
-	waitFor(t, "closed by main", func() bool { return todoNow(s, todo).DoneAt != nil })
+	if userCheck {
+		// main's user_check keeps the task open for the owner's own verification rather than closing it.
+		waitFor(t, "the owner's verification", func() bool { return todoNow(s, todo).Supervision.State == reviewUserCheck })
+		if todoNow(s, todo).DoneAt != nil {
+			t.Fatal("user_check closed the task before the owner verified it")
+		}
+	} else {
+		waitFor(t, "closed by main", func() bool { return todoNow(s, todo).DoneAt != nil })
+	}
 	waitFor(t, "its ask", func() bool { a := askOf(s, todo); return a != nil && !a.AskedAt.IsZero() })
 }
 

@@ -403,6 +403,7 @@ export function shownStatus(todo: Todo, status: TodoStatus): TodoStatus {
  *  (or accepted and nothing runs again). */
 export function todoStatusLabel(todo: Todo, status: TodoStatus): string {
   if (isCancelled(todo)) return t("lib-todos.review_cancelled");
+  if (!todo.done_at && todo.supervision?.state === "user_check") return t("assistant-tasks.review_user_check");
   if (acceptedAtRest(todo, status)) return t("lib-todos.review_done");
   if (waitsForOwner(todo)) return t("work-entry.pending");
   if (awaitsReview(todo, status)) return t("assistant-tasks.review_pending");

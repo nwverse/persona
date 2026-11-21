@@ -99,7 +99,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
               "auto",
               "bypassPermissions"
             ],
-            "description": "mode; empty: writable default; readonly/replacement/Codex rules: see description; traex and omp take none"
+            "description": "mode; empty: writable default; readonly/replacement/Codex rules: see description; TRAE CLI and omp take none"
           },
           "role": {
             "type": "string",

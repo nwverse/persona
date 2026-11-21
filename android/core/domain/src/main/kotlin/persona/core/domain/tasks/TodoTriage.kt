@@ -186,7 +186,8 @@ fun Todo.triage(
     }
     if (status == TriageStatus.NeedsYou || status == TriageStatus.Interrupted) return at(TriageSection.Waiting, TriageRule.AgentAsks)
     val ownerDelivery = hold?.unblock == HoldUnblock.User
-    val ownerReview = !decisionDismissed() && (review == "needs_user" || ask?.outcome == "decide" || ask?.outcome == "cannot")
+    val ownerReview = review == "user_check" ||
+        !decisionDismissed() && (review == "needs_user" || ask?.outcome == "decide" || ask?.outcome == "cannot")
     if (!isDone && (ownerDelivery || ownerReview)) {
         return at(TriageSection.Waiting, TriageRule.OwnerDecides)
     }

@@ -247,18 +247,27 @@ func (s *Service) backgroundLost(ctx context.Context, old, to, web string) []sup
 			if to != "" {
 				msg.OnceID = ""                                                     // another destination is a separate delivery
 				msg.TriedAt, msg.Looks, msg.LookAfter = time.Time{}, 0, time.Time{} // the earlier try was to another conversation
-				r.st.Queue[to] = append(r.st.Queue[to], msg)
 				moved++
 			} else if msg.Handover == "" {
 				retained = append(retained, msg)
 			}
 		}
 		s.handoversMovedLocked(handovers, to, title) // an owner-word hand-over with nowhere to go ends as not delivered
-		keepOld = len(retained) > 0
-		if keepOld {
-			r.st.Queue[old] = retained
-		} else {
+		if to != "" {
+			for _, msg := range r.st.Queue[old] {
+				if msg.Tool == superviseTool && len(lost) > 0 {
+					continue
+				}
+				r.st.Queue[to] = append(r.st.Queue[to], msg)
+			}
 			delete(r.st.Queue, old)
+		} else {
+			keepOld = len(retained) > 0
+			if keepOld {
+				r.st.Queue[old] = retained
+			} else {
+				delete(r.st.Queue, old)
+			}
 		}
 		s.saveRelayLocked()
 	}
