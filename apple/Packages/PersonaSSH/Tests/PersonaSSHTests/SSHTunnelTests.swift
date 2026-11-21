@@ -200,7 +200,7 @@ struct SSHTunnelTests {
         let t = tunnel(sshd, pinned: sshd.fingerprint)
         let port = try await t.start()
         t.stop()
-        try await Self.until { !FreePort.isListening(port) }
+        try await Self.until { !FreePort.isListening(port) && t.phase == .idle }
         #expect(t.phase == .idle)
     }
 

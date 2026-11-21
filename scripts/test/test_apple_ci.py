@@ -85,12 +85,13 @@ class AppleCIPreparationTests(unittest.TestCase):
     def test_explicit_unsigned_build_lane_preserves_the_real_build_and_skips_devices(self):
         script = SCRIPT.read_text()
         workflow = (ROOT / '.github/workflows/apple-test.yml').read_text()
-        self.assertIn('options: [ios, ios18, ios-build, packages]', workflow)
+        self.assertIn('options: [ios, ios18, ios-build, packages, ios-focused]', workflow)
         self.assertIn("inputs.lane == 'packages' && 'Native package tests (Xcode 26.0)'", workflow)
-        self.assertIn('all|ios|ios18|packages|ios-build', script)
-        self.assertIn('[ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ]', script)
+        self.assertIn("inputs.lane == 'ios-focused' && 'Focused iOS and About tests (Xcode 26.0)'", workflow)
+        self.assertIn('all|ios|ios18|packages|ios-build|ios-focused', script)
+        self.assertIn('[ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ]', script)
         self.assertIn('[ "$LANE" != packages ] && [ "$LANE" != ios-build ]', script)
-        start = script.index('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ]')
+        start = script.index('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ]')
         end = script.index('if [ "$LANE" = ios18 ]; then', start)
         device = script[start:end]
         for step in ('Stage resolved packages for Meta configuration',
@@ -106,6 +107,42 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertNotIn('sim-boot.sh', device)
         self.assertNotIn('PersonaSSH native tunnel integration tests', script[start:])
         self.assertNotIn('Blocking calls on the main actor (isolation lint)', script[start:])
+
+    def test_focused_lane_keeps_real_simulators_and_strict_about_results(self):
+        script = SCRIPT.read_text()
+        self.assertIn('if [ "$LANE" = ios-focused ]; then', script)
+        for suite in ('PageSearchableTests', 'StarredMessagesTests', 'LauncherModelChoiceTests',
+                      'OmpNewAgentTests', 'PaseoPermissionModesTests', 'PaseoProvidersTests',
+                      'AboutVersionCompactVisualTests'):
+            self.assertIn(f'-only-testing:PersonaTests/{suite}', script)
+            self.assertIn(suite, script[script.index('result ios-unit "$SIM" PageSearchableTests'):])
+        self.assertIn('result ios-unit "$SIM" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests', script)
+        self.assertNotIn('result ios-unit "$SIM" TypeScaleTests\n  if [ "$LANE" = ios-focused ]; then', script)
+        self.assertIn('if [ "$LANE" != ios-focused ]; then', script)
+        self.assertIn('result ios-about-regular "$REGULAR_SIM" AboutVersionRegularVisualTests', script)
+        self.assertIn('TEST_RUNNER_PERSONA_SHOTS="$OUTPUT/shots"', script)
+        self.assertIn('TEST_RUNNER_PERSONA_SHOTS="$OUTPUT/regular-shots"', script)
+        self.assertIn('Create stock regular-width About test simulator', script)
+        self.assertIn('Verify hosted iOS test readiness', script)
+
+    def test_regular_ipad_observer_has_an_independent_scope_and_strict_probe(self):
+        script = SCRIPT.read_text()
+        regular = script[script.index('  REGULAR_SIM=$(simulator_udid'):script.index("  ci_run 'Verify token baseline")]
+        self.assertIn('--record "$OUTPUT/regular-readiness-context.json" --udid "$REGULAR_SIM" --bundle-id "$CI_BUNDLE_ID"', regular)
+        self.assertIn('"$OUTPUT/diagnostics/live-regular-readiness" "$REGULAR_SIM"', regular)
+        self.assertNotIn('app_host_readiness', script[script.index("test_batch() {"):script.index('if [ "$LANE" = all ]')])
+        self.assertNotIn('app_host_readiness', regular)
+        self.assertIn('bash -c "exec python3 \\"\\$@\\"" -- "$ci_root/scripts/ci/apple_readiness_watch.py"', regular)
+        self.assertIn('python3 "$checker" "$bundle" TypeScaleTests', regular)
+        self.assertIn("-only-testing:PersonaTests/TypeScaleTests", regular)
+        self.assertIn("ci_run 'Verify hosted regular iPad test readiness' 900", regular)
+        self.assertIn("ci_run 'iOS regular-width About visual test on real iPad' 600", regular)
+        self.assertIn('result ios-about-regular "$REGULAR_SIM" AboutVersionRegularVisualTests', regular)
+        readiness = regular
+        self.assertIn('--app "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona"', readiness)
+        self.assertIn('--test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests"', readiness)
+
+
     def test_native_ssh_tests_run_before_the_app_and_fail_the_lane_on_error(self):
         script = SCRIPT.read_text()
         packages = script.split('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then\n', 1)[1].split('\nfi', 1)[0]
@@ -345,7 +382,7 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
             output, destination = root / 'output', root / 'artifacts'
             output.mkdir()
             for name in ('simulator.log', 'simulator-boot.log', 'simulator-readiness.log', 'runtimes-iOS-before.json',
-                         'regular-simulator.log', 'regular-simulator-boot.log', 'native-ssh-trace.log'):
+                         'regular-simulator.log', 'regular-simulator-boot.log', 'regular-readiness.log', 'native-ssh-trace.log'):
                 (output / name).write_text('diagnostic fixture')
             (output / 'config.json').write_text('configuration must stay in output')
             (output / 'private.key').write_text('key fixture must stay in output')
@@ -354,6 +391,12 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
             result.mkdir()
             (result / 'summary.json').write_text('test results')
             (result / 'external-key').symlink_to(output / 'private.key')
+            for name in ("live-readiness", "live-regular-readiness"):
+                observer = output / "diagnostics" / name
+                observer.mkdir(parents=True)
+                (observer / "observer.status.txt").write_text(name)
+                (observer / "private.key").write_text("must stay in output")
+                (observer / "external.json").symlink_to(output / "private.key")
             calls = []
             def runner(command, **kwargs):
                 calls.append((command, kwargs))
@@ -368,8 +411,9 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
             self.assertEqual((destination / 'disk-space.txt').read_text(), 'disk space diagnostic')
             self.assertEqual({path.name for path in destination.iterdir()}, {
                 'simulator.log', 'simulator-boot.log', 'simulator-readiness.log', 'runtimes-iOS-before.json',
-                'regular-simulator.log', 'regular-simulator-boot.log', 'native-ssh-trace.log',
+                'regular-simulator.log', 'regular-simulator-boot.log', 'regular-readiness.log', 'native-ssh-trace.log',
                 'ios-unit.xcresult', 'simctl-list.json', 'simctl-list.stderr.txt', 'simctl-list.status.txt',
+                'live-readiness', 'live-regular-readiness',
                 'disk-space.txt', 'disk-space.stderr.txt', 'disk-space.status.txt',
                 'simulator-launch.status.txt',
             })

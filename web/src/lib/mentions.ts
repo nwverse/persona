@@ -5,7 +5,7 @@
 // <persona-context> before the message). No DOM here.
 
 import { t } from "../i18n";
-import { isTraeCli, normalizeTraeCliName } from "./agent-kind";
+import { normalizeTraeCliName } from "./agent-kind";
 import { baseName, shortPath } from "./format";
 import type { Item, Session } from "./types";
 import { byTime } from "./times";
@@ -93,7 +93,7 @@ export function byPrefix<T>(rows: T[], name: (t: T) => string, filter: string): 
 export function agentLabel(s: Pick<Session, "agent" | "agent_label" | "source_kind">): string {
   if (s.agent === "codex" || s.source_kind === "codex_app_server" || s.source_kind === "codex_history") return "Codex";
   if (!s.agent || s.agent === "claude") return "Claude";
-  return normalizeTraeCliName(isTraeCli(s.agent) ? s.agent : s.agent_label || s.agent);
+  return normalizeTraeCliName(s.agent_label || s.agent);
 }
 
 /** A session's folder by its name: "app" for /home/me/code/app, and for C:\Users\me\code\app, a Windows computer's path

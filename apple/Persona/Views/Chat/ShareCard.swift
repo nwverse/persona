@@ -15,6 +15,8 @@ struct ShareMessage: Identifiable {
     var agent = "Claude"
     /// The built-in TRAE CLI terminal keeps the share-card mark it already uses.
     var showsTerminalMark = false
+    /// Keeps the session's letter mark when its display name would pick a different logo.
+    var prefersLetterMark = false
     var id: String { text }
 }
 
@@ -91,7 +93,7 @@ struct MessageShareCard: View {
             ThemedIcon(Theme.Icon.terminalFilled).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
                 .frame(width: 32, height: 32)
                 .background(LinearGradient(colors: [Color(hex: 0x2FD38F), Color(hex: 0x12935E)], startPoint: .top, endPoint: .bottom), in: .circle)
-        } else if let mark = AgentKind.brand(named: message.agent) {
+        } else if !message.prefersLetterMark, let mark = AgentKind.brand(named: message.agent) {
             Image(mark)
                 .resizable().scaledToFit().foregroundStyle(.primary)
                 .padding(7)

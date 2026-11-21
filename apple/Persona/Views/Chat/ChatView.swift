@@ -5334,7 +5334,7 @@ struct ChatView: View {
                                   agent: s?.assistant == true ? model.assistantShownName(in: key) : (s?.agentLabel ?? ""),
                                   pieces: { questions in (questions ? with : without).flatMap(\.pieces) },
                                   loadImage: first.loadImage, width: menu.areaWidth > 0 ? menu.areaWidth : Self.phoneWidth,
-                                  prefersLetterMark: s?.isTraex == true)
+                                  prefersLetterMark: AgentKind.prefersLetterMark(for: s))
     }
 
     /// A phone's width, for a picture drawn before the chat knows its own.

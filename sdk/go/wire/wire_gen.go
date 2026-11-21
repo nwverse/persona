@@ -49,7 +49,8 @@ type Manifest struct {
 	// An extension pack (docs "Extension packs"): installing it installs these. A pack has no runtime and no contributes
 	// of its own.
 	ExtensionPack []PackMember `json:"extension_pack,omitempty"`
-	// The configuration's JSON Schema, in the subset every app draws as a form (docs "Configuration: the form subset").
+	// The configuration's JSON Schema, in the settings-form subset (docs "Configuration: the form subset"). Capable
+	// clients draw declared entry lists after opting in; other clients receive compatibility projections.
 	Configuration json.RawMessage `json:"configuration,omitempty"`
 	Secrets       []SecretSpec    `json:"secrets,omitempty"`
 	// The program checks a change of its settings or secrets before the hub saves it (settings.check).

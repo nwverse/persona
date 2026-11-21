@@ -97,14 +97,31 @@ test('createMcpProxy enforces Bearer auth, method checks, route isolation, alloc
   assert.equal(gone.status, 404)
 })
 
-test('extractShellGates and matchShellGate detect gated commands and script paths', () => {
+test('extractShellGates and matchShellGate detect gated commands, shell syntax, quoting, paths, and long prefixes', () => {
   const gates = extractShellGates([
     { name: 'mail_send', shell: ['send-mail', 'scripts/mail.py'] },
     { name: 'plain_tool' },
   ])
   assert.equal(gates.length, 1)
   assert.equal(matchShellGate('send-mail --to alice', gates)?.name, 'mail_send')
+  assert.equal(matchShellGate('send-mail; echo ok', gates)?.name, 'mail_send')
+  assert.equal(matchShellGate('send-mail&&id', gates)?.name, 'mail_send')
+  assert.equal(matchShellGate('send-mail||true', gates)?.name, 'mail_send')
+  assert.equal(matchShellGate('send-mail|cat', gates)?.name, 'mail_send')
+  assert.equal(matchShellGate('(send-mail)', gates)?.name, 'mail_send')
+  assert.equal(matchShellGate('"send-mail" --to alice', gates)?.name, 'mail_send')
+  assert.equal(matchShellGate("'send-mail' --to alice", gates)?.name, 'mail_send')
+  assert.equal(matchShellGate('send""-mail --to alice', gates)?.name, 'mail_send')
+  assert.equal(matchShellGate('\\send-mail --to alice', gates)?.name, 'mail_send')
+  assert.equal(matchShellGate('/usr/local/bin/send-mail --to alice', gates)?.name, 'mail_send')
+  assert.equal(matchShellGate('sh -c "send-mail; echo ok"', gates)?.name, 'mail_send')
+  assert.equal(matchShellGate("bash -lc 'send-mail&&id'", gates)?.name, 'mail_send')
+  assert.equal(matchShellGate('eval "send-mail --draft"', gates)?.name, 'mail_send')
+  assert.equal(matchShellGate('echo $(send-mail --to a)', gates)?.name, 'mail_send')
+  assert.equal(matchShellGate('echo `send-mail --to a`', gates)?.name, 'mail_send')
+  assert.equal(matchShellGate(`${'x'.repeat(16_000)}; send-mail --to alice`, gates)?.name, 'mail_send')
   assert.equal(matchShellGate('echo ok && python3 /opt/scripts/mail.py --draft', gates)?.name, 'mail_send')
+  assert.equal(matchShellGate('echo my-send-mail-helper', gates), undefined)
   assert.equal(matchShellGate('ls -la', gates), undefined)
   assert.equal(matchShellGate('', gates), undefined)
 })

@@ -61,6 +61,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/standing-authorizations/{id}
 -                    DELETE /api/v1/assistant/starred/{id}
 -                    DELETE /api/v1/assistant/tasks/{id}
+-                    DELETE /api/v1/assistant/tasks/{id}/skip-next
 -                    DELETE /api/v1/assistant/tasks/{id}/start-grant
 -                    DELETE /api/v1/auth/tokens/{id}
 -                    DELETE /api/v1/bots/feishu/owner
@@ -77,6 +78,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 inbox.write          DELETE /api/v1/inbox/mutes/{id}
 inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/kb/projects/{id}
+-                    DELETE /api/v1/kb/projects/{id}/lessons/{lesson}
 -                    DELETE /api/v1/launchers/{name}
 -                    DELETE /api/v1/looks/uploads/{id}
 -                    DELETE /api/v1/machines/{mid}/browser/cookies
@@ -166,6 +168,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/assistant/skills
 -                    GET /api/v1/assistant/standing-authorizations
 -                    GET /api/v1/assistant/starred
+-                    GET /api/v1/assistant/starred/import
 assistant.start_defaults GET /api/v1/assistant/start-defaults
 -                    GET /api/v1/assistant/tasks
 -                    GET /api/v1/assistant/tasks/cron
@@ -182,6 +185,7 @@ assistant.start_defaults GET /api/v1/assistant/worker-presets
 -                    GET /api/v1/connectors/sent/chat-rules
 -                    GET /api/v1/connectors/{id}/media
 -                    GET /api/v1/connectors/{id}/thread
+decisions.raise      GET /api/v1/decisions/{id}
 -                    GET /api/v1/devices/push
 -                    GET /api/v1/devices/{id}/lock-tests/{test_id}
 -                    GET /api/v1/devices/{id}/prefs
@@ -230,6 +234,7 @@ kb.read              GET /api/v1/kb-search
 kb.read              GET /api/v1/kb/chats/{id}/context
 kb.read              GET /api/v1/kb/chats/{id}/days/{day}
 kb.read              GET /api/v1/kb/moments/{id}
+-                    GET /api/v1/kb/projects/{id}/lessons
 -                    GET /api/v1/kb/selection
 -                    GET /api/v1/kb/selection/candidates
 kb.read              GET /api/v1/kb/{kind}
@@ -268,7 +273,12 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/file/convert
 -                    GET /api/v1/machines/{mid}/file/download
 -                    GET /api/v1/machines/{mid}/file/thumb
+-                    GET /api/v1/machines/{mid}/files/download
+-                    GET /api/v1/machines/{mid}/files/list
 -                    GET /api/v1/machines/{mid}/files/operations/{oid}
+-                    GET /api/v1/machines/{mid}/files/preview
+-                    GET /api/v1/machines/{mid}/files/roots
+-                    GET /api/v1/machines/{mid}/files/tail
 -                    GET /api/v1/machines/{mid}/fs
 -                    GET /api/v1/machines/{mid}/fs/find
 -                    GET /api/v1/machines/{mid}/git/blob
@@ -289,10 +299,12 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/launchers/{name}/start-options
 -                    GET /api/v1/machines/{mid}/omp-settings
 -                    GET /api/v1/machines/{mid}/panes
+-                    GET /api/v1/machines/{mid}/ports
 -                    GET /api/v1/machines/{mid}/ports/{port}
 -                    GET /api/v1/machines/{mid}/ports/{port}/connect
 -                    GET /api/v1/machines/{mid}/preview/connect
 -                    GET /api/v1/machines/{mid}/preview/servers
+-                    GET /api/v1/machines/{mid}/processes
 -                    GET /api/v1/machines/{mid}/screen/video/connect
 machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/managers
@@ -449,10 +461,13 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/rule-suggestions/{id}/not-now
 -                    POST /api/v1/assistant/saved-prompts
 -                    POST /api/v1/assistant/starred
+-                    POST /api/v1/assistant/starred/import
+-                    POST /api/v1/assistant/starred/import/preview
 assistant.start_defaults POST /api/v1/assistant/start-defaults/preview
 -                    POST /api/v1/assistant/tasks
 -                    POST /api/v1/assistant/tasks/{id}/fresh
 -                    POST /api/v1/assistant/tasks/{id}/run
+-                    POST /api/v1/assistant/tasks/{id}/skip-next
 -                    POST /api/v1/assistant/urgent-call/test
 -                    POST /api/v1/assistant/warm
 todos.write          POST /api/v1/assistant/workspace-naming/preview
@@ -474,6 +489,8 @@ todos.write          POST /api/v1/assistant/workspace-naming/preview
 -                    POST /api/v1/connectors/{id}/login
 -                    POST /api/v1/connectors/{id}/logout
 -                    POST /api/v1/connectors/{id}/thread/reply
+decisions.raise      POST /api/v1/decisions
+decisions.raise      POST /api/v1/decisions/{id}/withdraw
 -                    POST /api/v1/devices
 -                    POST /api/v1/devices/{id}/live-activity
 -                    POST /api/v1/devices/{id}/lock-tests
@@ -574,6 +591,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/panes/split
 -                    POST /api/v1/machines/{mid}/ports/{port}/open
 -                    POST /api/v1/machines/{mid}/preview/start
+-                    POST /api/v1/machines/{mid}/processes/{pid}/kill
 -                    POST /api/v1/machines/{mid}/reconnect
 -                    POST /api/v1/machines/{mid}/spaces/{wid}/rename
 -                    POST /api/v1/machines/{mid}/tabs/close
@@ -719,6 +737,7 @@ inbox.write          PUT /api/v1/inbox/folders
 inbox.write          PUT /api/v1/inbox/{id}/folder
 inbox.write          PUT /api/v1/inbox/{id}/parent
 -                    PUT /api/v1/iphone/consent
+-                    PUT /api/v1/kb/projects/{id}/lessons/{lesson}
 -                    PUT /api/v1/kb/selection
 kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/launchers/{name}

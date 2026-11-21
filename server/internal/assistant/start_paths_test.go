@@ -43,6 +43,8 @@ var supervisedStarts = map[string]string{
 	"startTaskSuccessor": "startTaskSuccessor",
 	// agent_send's resume of a stopped agent: on an open task of the caller's, or the task the send made (#8099)
 	"resumeAndSend": "resumeAndSend",
+	// a timed-out task's original session: the user's Resume keeps its existing supervision ledger
+	"continueTimedOut": "continueTimedOut",
 }
 
 // startOptOuts are the start paths that stay unsupervised on purpose, with why. Each is the user's own conversation or

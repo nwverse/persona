@@ -42,6 +42,12 @@ func interactionPayloadIn(l i18n.Lang, ix proto.Interaction, machine string) map
 	name := map[string]string{"codex": "Codex", "traex": "TRAE CLI", "traecli": "TRAE CLI", "trae-cli": "TRAE CLI"}[ix.Agent]
 	if name == "" && ix.Agent != "" && ix.Agent != "claude" {
 		name = ix.AgentLabel // an agent runtime's card (docs/integrations/runtimes.md): "DSH needs your permission"
+		if ix.Agent == "paseo" {
+			switch strings.ToLower(strings.TrimSpace(name)) {
+			case "traex", "traecli", "trae-cli", "trae cli":
+				name = "TRAE CLI"
+			}
+		}
 	}
 	if name != "" {
 		switch ix.Kind {

@@ -232,8 +232,13 @@ switch the detail without a push when a sidebar item is chosen; only drilling do
   to its root; an edge swipe at a root stays on it; an Agent's chat picked in the sidebar has the sidebar's button and no ‹,
   pushed from a page it has ‹ (`testTheLeadingButtonFollowsHowThePageWasReached`); in the Separate layout's Agents tab an
   Agent and then another replace the root with no transition (`testTheAgentsTabSwitchesItsRootWithoutAPush`). A task's card in the
-  conversation pushes its Agent's chat with Back, the root staying the conversation (#9971, `SecondaryPageBackTests`). Run on the iPad, the open Duo upright and
-  on its side, and an iPhone.
+  conversation pushes its Agent's chat with Back, the root staying the conversation (#9971, `SecondaryPageBackTests`). So do the
+  other ways into an Agent from inside a page (#12006, `AppModel.openInPage`, `PageAgentPushTests`): a Brief card's Open, a
+  to-do's Agent rows and the Agent it is handed to, a knowledge project's Agents, a meeting's hand-off, a card's session link and
+  a held push. The conversation pushes on its path (`pushInboxChat`); a page that was itself pushed pushes the chat from its own
+  destination (`pushedAgentChat`), since some are pushed by view and a value would land under them. A page in a sheet closes and
+  the Agent opens as before; the sidebar's own rows, notifications and Open in Agents still pick a root. Run on the iPad, the
+  open Duo upright and on its side, and an iPhone.
 
 **Android** (#9667). A regular window — the sidebar column beside the page, or over it — follows this section. `SidebarPageRoots`
 (`android/app/src/main/java/persona/android/navigation/SidebarPageRoots.kt`) is the pure model, with the same steps as `SidebarPageRoots.swift`: a place

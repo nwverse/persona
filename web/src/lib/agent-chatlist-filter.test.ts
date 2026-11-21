@@ -56,14 +56,26 @@ afterEach(() => {
 
 describe("session metadata extractors & facet building", () => {
   it("finds TRAE CLI by the product name and its command spelling", () => {
-    for (const agent of ["traex", "traecli", "trae-cli"]) {
-      const session = mkSession("cli", { agent });
+    const aliases = ["traex", "traecli", "trae-cli"];
+    const sessions = aliases.map((agent, index) => mkSession(`cli-${index}`, { agent }));
+    sessions.push(mkSession("paseo", { agent: "paseo", launcher: "trae-cli" }), mkSession("launcher", { agent: "", launcher: "trae-cli" }));
+    for (const session of sessions) {
       expect(agentSearchHit(session, "TRAE CLI", baseCtx).score).toBe(40);
       expect(agentSearchHit(session, "traecli", baseCtx).score).toBe(40);
-      expect(agentSearchHit(session, "harness:traecli", baseCtx).score).toBe(30);
+      expect(agentSearchHit(session, "harness:trae", baseCtx).score).toBe(0);
+      for (const alias of aliases) expect(agentSearchHit(session, `harness:${alias}`, baseCtx).score).toBe(30);
     }
     const genericTrae = mkSession("generic", { agent: "trae" });
-    expect(agentSearchHit(genericTrae, "harness:traecli", baseCtx).score).toBe(0);
+    for (const alias of aliases) expect(agentSearchHit(genericTrae, `harness:${alias}`, baseCtx).score).toBe(0);
+    const list = [...sessions, genericTrae];
+    const facets = buildAgentFacets(list, machines, baseCtx.pins);
+    expect(facets.harnesses).toEqual([
+      { id: "traex", label: "TRAE CLI", count: 5 },
+      { id: "trae", label: "TRAE", count: 1 },
+    ]);
+    expect(applyDimensionFilters(list, { ...DEFAULT_DIMENSION_FILTERS, harnesses: ["trae"] }, baseCtx).sessions).toEqual([genericTrae]);
+    expect(applyDimensionFilters(list, { ...DEFAULT_DIMENSION_FILTERS, harnesses: ["traex"] }, baseCtx).sessions).toEqual(sessions);
+    expect(applyDimensionFilters(list, { ...DEFAULT_DIMENSION_FILTERS, searchAsCode: true, customPlanCode: 's.harness === "trae-cli"' }, baseCtx).sessions).toEqual(sessions);
   });
 
   it("extracts harness, project, model, and error status", () => {

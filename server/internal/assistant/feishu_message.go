@@ -113,6 +113,9 @@ func (s *Service) feishuMessage(ev feishubot.MessageEvent, st FeishuStatus, acti
 	if !content.Forward && s.acceptReply(ctx, msg.MessageID, content.Text, len(content.Media) > 0, msg.ParentID, msg.RootID) {
 		return // about a "Please verify" card (acceptance_reply.go)
 	}
+	if !content.Forward && len(content.Media) == 0 && s.botApproveOwnerAction(ctx, ev, content.Text, action) {
+		return // an exact direct reply to an owner-action proposal (owner_action_reply.go)
+	}
 	if !content.Forward && len(content.Media) == 0 && s.botAnswerQuestion(ctx, msg.MessageID, content.Text, action, msg.RootID, msg.ParentID) {
 		return // the answer to the card waiting in this topic (feishu_text_answer.go)
 	}

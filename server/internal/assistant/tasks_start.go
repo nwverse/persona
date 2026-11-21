@@ -241,7 +241,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			return nil, err
 		}
 	}
-	s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
+	s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, p)})
 	for i := range p.Tasks {
 		if task := p.Tasks[i]; task.TodoID != "" && task.Error == "" {
 			s.startPlanTaskAsync(p.ID, p.Conversation, i, task, false, func() {
@@ -1126,6 +1126,9 @@ var continueHold = 30 * time.Second
 // one is on its way, or before the agent took it up, answer the todo as it is, as does a task with no agent cut off.
 // The agent's machine offline is refused.
 func (s *Service) continueTask(ctx context.Context, cur Todo) (json.RawMessage, error) {
+	if cur.Supervision != nil && cur.Supervision.state(cur) == reviewTimedOut {
+		return s.continueTimedOut(ctx, cur)
+	}
 	cut := cutAgent(s.taskAgents(ctx, cur))
 	if cut.SessionID == "" {
 		return s.todoView(ctx, cur.ID)
@@ -1345,6 +1348,6 @@ func (s *Service) dismissPlan(ctx context.Context, id string) (*TaskPlan, error)
 	if !ok {
 		return nil, errPlanNotOpen
 	}
-	s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
+	s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, p)})
 	return p, nil
 }

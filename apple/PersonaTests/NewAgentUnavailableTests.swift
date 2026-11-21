@@ -106,4 +106,16 @@ import PersonaWire
         cli.displayName = "My CLI"
         #expect(cli.title == "My CLI")
     }
+
+    @Test func findsUnavailablePaseoLaunchersByProductOrCustomTitle() {
+        for id in ["traex", "traecli", "trae-cli"] {
+            for displayName in [nil, "TRAEX", "My CLI"] as [String?] {
+                let title = displayName == "My CLI" ? "My CLI" : "TRAE CLI"
+                var cli = item(id, display: displayName)
+                cli.agent = "paseo"
+                #expect(cli.title == title)
+                #expect(UnavailableLauncher.shown([cli], after: [], query: title) == [cli])
+            }
+        }
+    }
 }

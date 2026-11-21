@@ -1,13 +1,13 @@
 #!/bin/bash
 # Public, local-runnable Apple checks. Requires XcodeGen, Python 3 and rsync.
 # The default lane uses macOS 26 and Xcode 26.0.x; ios18 uses the 18.6 simulator.
-# Usage: scripts/ci/apple.sh [all|ios|ios18|packages|ios-build]
+# Usage: scripts/ci/apple.sh [all|ios|ios18|packages|ios-build|ios-focused]
 # Cache CI_SPM_CACHE (default ~/Library/Caches/persona-ci/spm); keep the printed
 # output directory's *.xcresult bundles when investigating failures.
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 LANE="${1:-all}"
-case "$LANE" in all|ios|ios18|packages|ios-build) ;; *) printf 'Usage: %s [all|ios|ios18|packages|ios-build]\n' "$0" >&2; exit 2 ;; esac
+case "$LANE" in all|ios|ios18|packages|ios-build|ios-focused) ;; *) printf 'Usage: %s [all|ios|ios18|packages|ios-build|ios-focused]\n' "$0" >&2; exit 2 ;; esac
 [ "$#" -le 1 ] || { printf 'apple-ci: too many arguments\n' >&2; exit 2; }
 [ "$(uname -s)" = Darwin ] || { printf 'apple-ci: FAIL requires macOS with Xcode\n' >&2; exit 1; }
 for tool in python3 xcodebuild xcrun xcodegen rsync git; do
@@ -184,7 +184,7 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   ci_run 'Isolation lint unit tests' 900 xcrun swift test -c release --disable-testable-imports --package-path "$SPM/IsolationLint/package" --scratch-path "$SPM/IsolationLint/build"
   ci_run 'Blocking calls on the main actor (isolation lint)' 300 "$SPM/IsolationLint/build/release/isolation-lint" --root "$SOURCE" --baseline "$SOURCE/scripts/test/apple_isolation_baseline.json"
 fi
-if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ]; then
+if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ]; then
   for sdk in iphoneos iphonesimulator watchos watchsimulator; do
     ci_run "Require $sdk SDK" 60 xcrun --sdk "$sdk" --show-sdk-version
   done
@@ -266,11 +266,52 @@ if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
   # #11289's real .regular foreground scene cannot run on this lane's iPhone.
   # It is neither skipped nor replaced with an overridden trait: a separate
   # real-iPad test-without-building lane below runs the unchanged pixel test.
+  if [ "$LANE" = ios-focused ]; then
+  # Explicit diagnostic suites after the same build/readiness gates as ios.
+  # The ordinary lane below is unchanged and keeps every selection/assertion.
+  IOS_UNIT_SELECTION=(-only-testing:PersonaTests/PageSearchableTests
+    -only-testing:PersonaTests/StarredMessagesTests
+    -only-testing:PersonaTests/LauncherModelChoiceTests
+    -only-testing:PersonaTests/OmpNewAgentTests
+    -only-testing:PersonaTests/PaseoPermissionModesTests
+    -only-testing:PersonaTests/PaseoProvidersTests
+    -only-testing:PersonaTests/AboutVersionCompactVisualTests)
+else
   IOS_UNIT_SELECTION=("${IOS_EXCLUSIONS[@]}" -only-testing:PersonaTests
     -skip-testing:PersonaTests/AboutVersionRegularVisualTests
     -skip-testing:PersonaTests/AssistantHTMLCardTests -skip-testing:PersonaTests/AssistantHTMLSecurityTests)
+fi
   # A generic destination must retain the host's single runnable architecture.
-  ci_run 'Build iOS offline unit tests' "$BUILD_SECONDS" "${IOS_COMMON[@]}" \
+  ci_run 'Build iOS offline unit tests' "$BUILD_SECONDS" bash -c '
+    set -euo pipefail
+    ci_root="$1"; output="$2"; seconds="$3"; shift 3
+    watch_log="$output/diagnostics/build-resources"
+    mkdir -p "$watch_log"
+    printf "%s\n" "{\"unavailable\":\"observer did not complete; no memory-pressure verdict\"}" > "$watch_log/final.pending"
+    mv "$watch_log/final.pending" "$watch_log/final.json"
+    printf "%s\n" "observer incomplete; bounded unavailable final evidence only" > "$watch_log/observer.status.txt"
+    python3 "$ci_root/scripts/ci/apple_build_watch.py" \
+      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" &
+    watcher=$!
+    stop_watcher() {
+      local code=$?
+      trap - EXIT TERM INT
+      : > "$watch_log/stop"
+      # A short stop drain covers normal completion. The observer reaper bounds
+      # final collection and kills its detached process group if needed.
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "$watcher" 2>/dev/null || break
+        sleep 0.05
+      done
+      if kill -0 "$watcher" 2>/dev/null; then
+        kill -KILL "-$watcher" 2>/dev/null || kill -KILL "$watcher" 2>/dev/null || true
+      fi
+      wait "$watcher" || true
+      exit "$code"
+    }
+    trap stop_watcher EXIT TERM INT
+    "$@"
+  ' -- "$CI_ROOT" "$OUTPUT" "$BUILD_SECONDS" "${IOS_COMMON[@]}" \
     -destination 'generic/platform=iOS Simulator' ARCHS="$(uname -m)" ONLY_ACTIVE_ARCH=YES \
     "${IOS_UNIT_SELECTION[@]}" build-for-testing
   ci_run 'No CallKit in the simulator build' 300 python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \
@@ -294,18 +335,39 @@ if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
     --record "$OUTPUT/simulator-readiness-context.json" --udid "$SIM" --bundle-id "$CI_BUNDLE_ID"
   ci_run 'Verify hosted iOS test readiness' 900 bash -c '
     set -euo pipefail
-    checker="$1"; bundle="$2"; log="$3"; lane="$4"; device="$5"; shift 5
+    checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; lane="$9"; shift 9
     if [ "$lane" = ios18 ]; then
       status=0
       "$@" -only-testing:PersonaTests/TypeScaleTests -resultBundlePath "$bundle" test-without-building 2>&1 | tee "$log" || status=$?
-      python3 "$checker" "$bundle" TypeScaleTests --ios18 "$device" "$log" --xcode-status "$status"
+      python3 "$checker" "$bundle" TypeScaleTests --ios18 "$udid" "$log" --xcode-status "$status"
       exit "$status"
     fi
+    mkdir -p "$watch_log"
+    python3 "$ci_root/scripts/ci/apple_readiness_watch.py" \
+      --udid "$udid" --bundle-id "$bundle_id" --scope-root "$output" \
+      --app "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona" \
+      --test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests" \
+      --output "$watch_log" --seconds 900 &
+    watcher=$!
+    stop_watcher() {
+      local code=$?
+      trap - EXIT TERM INT
+      if kill -0 "$watcher" 2>/dev/null; then
+        mkdir -p "$watch_log"
+        : > "$watch_log/observer.stop"
+        kill -TERM "$watcher" 2>/dev/null || true
+      fi
+      # This wait is inside the original readiness deadline. The outer process
+      # group deadline still bounds a stuck watcher and all its child commands.
+      wait "$watcher" || true
+      exit "$code"
+    }
+    trap stop_watcher EXIT TERM INT
     {
       "$@" -only-testing:PersonaTests/TypeScaleTests -resultBundlePath "$bundle" test-without-building
       python3 "$checker" "$bundle" TypeScaleTests
     } 2>&1 | tee "$log"
-  ' -- "$CI_ROOT/scripts/ci/apple_result.py" "$OUTPUT/ios-readiness.xcresult" "$OUTPUT/simulator-readiness.log" "$LANE" "$SIM" "${IOS_TESTS[@]}"
+  ' -- "$CI_ROOT/scripts/ci/apple_result.py" "$OUTPUT/ios-readiness.xcresult" "$OUTPUT/simulator-readiness.log" "$OUTPUT/diagnostics/live-readiness" "$SIM" "$CI_ROOT" "$CI_BUNDLE_ID" "$OUTPUT" "$LANE" "${IOS_TESTS[@]}"
 
   # The real EventKit round-trip uses only this disposable simulator's store.
   # TCC grants can precede installation of the synthetic CI app.
@@ -332,7 +394,12 @@ if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
   fi
   test_batch ios-unit 'iOS offline unit and design/token tests' "$UNIT_SECONDS" "${IOS_TESTS[@]}" "${IOS_UNIT_SELECTION[@]}" \
     -resultBundlePath "$OUTPUT/ios-unit.xcresult" test-without-building
-  result ios-unit "$SIM" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests
+  if [ "$LANE" = ios-focused ]; then
+    result ios-unit "$SIM" PageSearchableTests StarredMessagesTests LauncherModelChoiceTests OmpNewAgentTests PaseoPermissionModesTests PaseoProvidersTests AboutVersionCompactVisualTests
+  else
+    result ios-unit "$SIM" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests
+  fi
+  if [ "$LANE" != ios-focused ]; then
   test_batch ios-html-card 'iOS HTML card tests (separate batch)' 600 "${IOS_TESTS[@]}" \
     -only-testing:PersonaTests/AssistantHTMLCardTests -resultBundlePath "$OUTPUT/ios-html-card.xcresult" test
   result ios-html-card "$SIM" AssistantHTMLCardTests
@@ -341,6 +408,7 @@ if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
     "-skip-testing:PersonaTests/AssistantHTMLSecurityTests/aRealInfiniteLoopCanBeDiscardedWithoutBlockingANewCard()" \
     -resultBundlePath "$OUTPUT/ios-html-security.xcresult" test
   result ios-html-security "$SIM" AssistantHTMLSecurityTests
+  fi
   if [ "$LANE" = ios18 ]; then
     about_visual() {
       local name="$1" suite="$2" device="$3"
@@ -365,6 +433,59 @@ if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
   if [ "$LANE" = ios18 ]; then
     about_visual ios-visual-regular AboutVersionRegularVisualTests "$REGULAR_SIM"
   else
+    # Exercise the real test host on the fresh iPad before the regular batch.
+    # Keep its strict probe, launch scope and evidence separate from the iPhone.
+    python3 "$CI_ROOT/scripts/ci/apple_launch_diagnostics.py" \
+      --record "$OUTPUT/regular-readiness-context.json" --udid "$REGULAR_SIM" --bundle-id "$CI_BUNDLE_ID"
+    ci_run 'Verify hosted regular iPad test readiness' 900 bash -c '
+      set -euo pipefail
+      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; shift 8
+      mkdir -p "$watch_log"
+      printf "%s\n" "observer incomplete; bounded unavailable final evidence only; no launch cause established" > "$watch_log/observer.status.pending"
+      mv "$watch_log/observer.status.pending" "$watch_log/observer.status.txt"
+      printf "%s\n" "{\"unavailable\":\"observer did not complete; no host-process verdict\"}" > "$watch_log/host-final.pending"
+      mv "$watch_log/host-final.pending" "$watch_log/host-final.json"
+      for product in 0 1 2; do
+        printf "%s\n" "unavailable: product collection incomplete" > "$watch_log/product-$product-architecture.pending"
+        mv "$watch_log/product-$product-architecture.pending" "$watch_log/product-$product-architecture.txt"
+        printf "%s\n" "unavailable: product collection incomplete" > "$watch_log/product-$product-libraries.pending"
+        mv "$watch_log/product-$product-libraries.pending" "$watch_log/product-$product-libraries.txt"
+      done
+      for product in 0 1; do
+        printf "%s\n" "unavailable: bundle signature collection incomplete" > "$watch_log/product-$product-bundle-signature.pending"
+        mv "$watch_log/product-$product-bundle-signature.pending" "$watch_log/product-$product-bundle-signature.txt"
+      done
+      # Give the observer its own group so a probe deadline cannot leave its
+      # detached collectors behind. Both steps use the unchanged budget.
+      bash -c "exec python3 \"\$@\"" -- "$ci_root/scripts/ci/apple_readiness_watch.py" \
+        --udid "$udid" --bundle-id "$bundle_id" --scope-root "$output" \
+        --app "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona" \
+        --test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests" \
+        --output "$watch_log" --seconds 900 &
+      watcher=$!
+      stop_watcher() {
+        local code=$?
+        trap - EXIT TERM INT
+        : > "$watch_log/observer.stop"
+        for _ in $(seq 1 50); do
+          kill -0 "$watcher" 2>/dev/null || break
+          sleep 0.1
+        done
+        if kill -0 "$watcher" 2>/dev/null; then
+          kill -KILL "-$watcher" 2>/dev/null || kill -KILL "$watcher" 2>/dev/null || true
+        fi
+        wait "$watcher" || true
+        exit "$code"
+      }
+      trap stop_watcher EXIT TERM INT
+      {
+        "$@" -only-testing:PersonaTests/TypeScaleTests -resultBundlePath "$bundle" test-without-building
+        python3 "$checker" "$bundle" TypeScaleTests
+      } 2>&1 | tee "$log"
+    ' -- "$CI_ROOT/scripts/ci/apple_result.py" "$OUTPUT/ios-regular-readiness.xcresult" \
+      "$OUTPUT/regular-readiness.log" "$OUTPUT/diagnostics/live-regular-readiness" "$REGULAR_SIM" \
+      "$CI_ROOT" "$CI_BUNDLE_ID" "$OUTPUT" "${IOS_COMMON[@]}" \
+      -destination "platform=iOS Simulator,id=$REGULAR_SIM" -destination-timeout 120
     mkdir -p "$OUTPUT/regular-shots"
     TEST_RUNNER_PERSONA_SHOTS="$OUTPUT/regular-shots" \
       ci_run 'iOS regular-width About visual test on real iPad' 600 "${IOS_COMMON[@]}" \

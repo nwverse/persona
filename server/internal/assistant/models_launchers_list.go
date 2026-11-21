@@ -132,6 +132,7 @@ func (s *Service) launcherViewsFrom(ctx context.Context, zshrc []zshrcLaunchers,
 	}
 	hidden := s.hiddenLaunchers(ctx)
 	byName := map[string]*LauncherView{}
+	unrestrictedModes := map[string]bool{}
 	var names []string
 	for _, m := range zshrc {
 		for _, l := range m.Launchers {
@@ -147,7 +148,13 @@ func (s *Service) launcherViewsFrom(ctx context.Context, zshrc []zshrcLaunchers,
 				v = &LauncherView{Name: l.Name, Source: src, Agent: l.Agent, BaseURL: l.BaseURL, Model: l.Model, Hidden: slices.Contains(hidden, l.Name), PermissionModes: l.PermissionModes, builtinCompanion: l.BuiltinCompanion, modelRunMachines: []string{}}
 				byName[l.Name] = v
 				names = append(names, l.Name)
-			} else if l.PermissionModes != 0 {
+				if l.PermissionModes == 0 {
+					unrestrictedModes[l.Name] = true
+				}
+			} else if l.PermissionModes == 0 {
+				unrestrictedModes[l.Name] = true
+				v.PermissionModes = 0
+			} else if !unrestrictedModes[l.Name] {
 				v.PermissionModes |= l.PermissionModes
 			}
 			v.Machines = append(v.Machines, m.MachineID)

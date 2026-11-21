@@ -106,32 +106,51 @@ func TestDocumentUsesFullFieldsAndDoesNotInventTranscript(t *testing.T) {
 
 func TestSearchFindsTraeCLIByDisplayName(t *testing.T) {
 	var items []sessionlist.Item
-	for _, agent := range []string{"traex", "traecli", "trae-cli"} {
-		row := proto.Session{MachineID: "computer", SessionID: agent, Agent: agent, State: "idle"}
-		item := sessionlist.Item{ID: agent, Machine: row.MachineID, State: row.State, Full: row, Summary: row}
+	var cliIDs, ideIDs []string
+	for _, tc := range []struct{ id, agent, launcher, originLabel, originName, harness, label string }{
+		{"legacy", "traex", "", "", "", "traex", "TRAE CLI"},
+		{"unhyphenated", "traecli", "", "TRAEX", "", "traex", "TRAE CLI"},
+		{"hyphenated", "trae-cli", "", "Team relay", "", "traex", "Team relay"},
+		{"older-row", "", "trae-cli", "", "", "traex", "TRAE CLI"},
+		{"paseo-cli", "paseo", "traex", "Paseo", "", "traex", "TRAE CLI"},
+		{"paseo-custom", "paseo", "traecli", "Workspace agent", "", "traex", "Workspace agent"},
+		{"paseo-custom-name", "paseo", "trae-cli", "Paseo", "Local CLI", "traex", "Local CLI"},
+		{"ide", "trae", "", "", "", "trae", "Trae"},
+		{"paseo-ide", "paseo", "trae", "", "", "trae", "Trae"},
+	} {
+		row := proto.Session{MachineID: "computer", SessionID: tc.id, Agent: tc.agent, Launcher: tc.launcher, AgentLabel: tc.originLabel, AgentName: tc.originName, State: "idle"}
+		item := sessionlist.Item{ID: tc.id, Machine: row.MachineID, State: row.State, Full: row, Summary: row}
 		doc, err := Document(item)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if doc.HarnessLabel != "TRAE CLI" {
-			t.Errorf("agent %q has label %q", agent, doc.HarnessLabel)
+		if doc.Harness != tc.harness || doc.HarnessLabel != tc.label {
+			t.Errorf("%q has harness %q and label %q, want %q and %q", tc.id, doc.Harness, doc.HarnessLabel, tc.harness, tc.label)
+		}
+		if tc.harness == "traex" {
+			cliIDs = append(cliIDs, tc.id)
+		} else {
+			ideIDs = append(ideIDs, tc.id)
 		}
 		items = append(items, item)
 	}
-	custom := proto.Session{MachineID: "computer", SessionID: "custom", Agent: "traex", AgentLabel: "Team relay", State: "idle"}
-	items = append(items, sessionlist.Item{ID: custom.SessionID, Machine: custom.MachineID, State: custom.State, Full: custom, Summary: custom})
 	var index sessionlist.Index
 	index.Replace("fixture", items)
-	for query, want := range map[string]int{
-		"TRAE CLI": 4, "traecli": 4, "harness:traecli": 4, "harness:traex": 2,
-		"Team relay": 1, "harness:relay": 1,
+	for query, want := range map[string][]string{
+		"TRAE CLI": cliIDs, "traecli": cliIDs, "harness:traecli": cliIDs, "harness:traex": cliIDs, "harness:trae-cli": cliIDs,
+		"harness:trae": ideIDs, "Team relay": {"hyphenated"}, "harness:relay": {"hyphenated"},
+		"Workspace agent": {"paseo-custom"}, "harness:workspace": {"paseo-custom"}, "Local CLI": {"paseo-custom-name"},
 	} {
 		page, err := index.Query(sessionlist.Options{Search: query, SearchContext: &sessionlist.SearchContext{Document: Document}, Limit: 10})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(page.Sessions) != want {
-			t.Errorf("%q got %d sessions, want %d", query, len(page.Sessions), want)
+		var got []string
+		for _, row := range page.Sessions {
+			got = append(got, row.(proto.Session).SessionID)
+		}
+		if !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
+			t.Errorf("%q got %v, want %v", query, got, want)
 		}
 	}
 }

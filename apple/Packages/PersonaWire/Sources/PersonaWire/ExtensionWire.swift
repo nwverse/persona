@@ -54,8 +54,8 @@ public nonisolated struct ExtensionManifest: Codable, Hashable, Sendable {
     /// An extension pack (docs "Extension packs"): installing it installs these. A pack has no runtime and no
     /// contributes of its own.
     public var extensionPack: [ExtensionPackMember]?
-    /// The configuration's JSON Schema, in the subset every app draws as a form (docs "Configuration: the form
-    /// subset").
+    /// The configuration's JSON Schema, in the settings-form subset (docs "Configuration: the form subset"). Capable
+    /// clients draw declared entry lists after opting in; other clients receive compatibility projections.
     public var configuration: JSONValue?
     public var secrets: [ExtensionSecretSpec]?
     /// The program checks a change of its settings or secrets before the hub saves it (settings.check).

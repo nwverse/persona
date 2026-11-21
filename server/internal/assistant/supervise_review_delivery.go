@@ -235,6 +235,30 @@ func (s *Service) tryForgetNonPR(ctx context.Context, t Todo, pr, repo string, n
 	return true, note, err
 }
 
+// tryForgetOwnedNonPR applies a task-owned, completed non-PR closeout even when the stale PR exists and is unmerged.
+// It removes only the disproved association, then checks all remaining delivery evidence again.
+func (s *Service) tryForgetOwnedNonPR(ctx context.Context, t Todo, pr, outcome string) (handled bool, note string, err error) {
+	replacement, noPR, err := s.reportedTaskPR(ctx, t, pr)
+	if err != nil || (!noPR && replacement == "") {
+		return false, "", nil
+	}
+	if !noPR && replacement == pr {
+		return false, "", nil
+	}
+	if err := s.forgetTaskPR(ctx, t.ID, pr, replacement); err != nil {
+		return true, "", err
+	}
+	current, ok := s.todoNow(t.ID)
+	if !ok {
+		return true, "", fmt.Errorf("task %s no longer exists", t.ID)
+	}
+	if current.PRURL != replacement {
+		return true, "", fmt.Errorf("task %s: its delivery record changed during verification; retry the review", t.ID)
+	}
+	note, err = s.acceptedDeliveryError(ctx, current, "", outcome)
+	return true, note, err
+}
+
 // checkIssueDelivery verifies that a linked repository issue is closed before closing the task.
 func (s *Service) checkIssueDelivery(ctx context.Context, t Todo, issueURL, gate string) (string, error) {
 	if m := ciIssueURL.FindStringSubmatch(issueURL); m != nil {

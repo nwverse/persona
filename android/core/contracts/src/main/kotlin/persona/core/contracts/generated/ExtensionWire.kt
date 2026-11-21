@@ -72,8 +72,8 @@ data class ExtensionManifest(
      */
     @SerialName("extension_pack") val extensionPack: List<ExtensionPackMember>? = null,
     /**
-     * The configuration's JSON Schema, in the subset every app draws as a form (docs "Configuration: the form
-     * subset").
+     * The configuration's JSON Schema, in the settings-form subset (docs "Configuration: the form subset"). Capable
+     * clients draw declared entry lists after opting in; other clients receive compatibility projections.
      */
     val configuration: JsonElement? = null,
     val secrets: List<ExtensionSecretSpec>? = null,

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -78,14 +79,8 @@ func (s *extensionStore) Extensions(context.Context) ([]extension.Record, error)
 	}
 	return out, nil
 }
-func (s *extensionStore) PutExtension(_ context.Context, r extension.Record) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.failPut || s.failPutID == r.ID {
-		return errors.New("the database cannot be written")
-	}
-	s.rows[r.ID] = r
-	return nil
+func (s *extensionStore) PutExtension(ctx context.Context, r extension.Record) error {
+	return s.PutExtensionPlan(ctx, []extension.Record{r})
 }
 func (s *extensionStore) PutExtensionPlan(_ context.Context, records []extension.Record) error {
 	s.mu.Lock()
@@ -96,7 +91,23 @@ func (s *extensionStore) PutExtensionPlan(_ context.Context, records []extension
 		}
 	}
 	for _, record := range records {
+		if record.ExpectedConfig != nil {
+			current := s.rows[record.ID].Config
+			if len(current) == 0 {
+				current = json.RawMessage(`{}`)
+			}
+			if !sameValue(current, record.ExpectedConfig) {
+				return extension.ErrSettingsMoved
+			}
+		}
+	}
+	for _, record := range records {
+		deleted := slices.Clone(record.DeleteSecrets)
+		record.ExpectedConfig, record.DeleteSecrets = nil, nil
 		s.rows[record.ID] = record
+		for _, name := range deleted {
+			delete(s.secrets[record.ID], name)
+		}
 	}
 	return nil
 }

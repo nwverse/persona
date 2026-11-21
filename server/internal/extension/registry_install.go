@@ -111,6 +111,10 @@ func (r *Registry) Rollback(ctx context.Context, id, actor string) (*Extension, 
 			return err
 		}
 		row := snapshotExtension(cur).Record
+		row.Config, err = rollbackFixedSlots(cur.Full, m, row.Config)
+		if err != nil {
+			return err
+		}
 		row.ExpectedID, row.ExpectedVersion = cur.Record.ID, cur.Record.Version
 		row.ID, row.PreviousID = previousID, ""
 		if previousID != id && !slices.Contains(row.Aliases, id) {

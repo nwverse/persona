@@ -117,6 +117,7 @@ export function getSearchAsCodeProvider(): SearchAsCodeProvider | null {
 /** Normalized harness id for a session (`claude`, `codex`, `opencode`, `pi`, `gemini`, `cursor`, `trae`, or custom). */
 export function sessionHarnessId(s: Session): string {
   const { agent } = sessionAgent(s);
+  if (isTraeCli(agent || s.launcher)) return "traex";
   if (agent) return agentId(agent);
   if (s.launcher) {
     const low = s.launcher.trim().toLowerCase();
@@ -136,6 +137,13 @@ export function sessionHarnessLabel(s: Session): string {
 function searchableHarnessLabel(s: Session): string {
   const label = sessionHarnessLabel(s);
   return isTraeCli(label) ? `${label} · traecli` : label;
+}
+
+const canonicalHarness = (target: string) => isTraeCli(target) ? "traex" : target;
+
+/** TRAE desktop and TRAE CLI share a prefix, so their selectors use exact harness IDs. */
+function matchesHarness(id: string, target: string, label = id): boolean {
+  return target === "trae" || target === "traex" ? id === target : id.includes(target) || label.includes(target);
 }
 
 /** Normalized project name for a session (from repo_root, space_name, workspace_cwd, or cwd). */
@@ -491,7 +499,7 @@ export function compileSearchAsCode(
   }
 
   // 3. Detect harnesses from filter pills, operators, or natural language mentions
-  const harnessTargets = new Set<string>([...filters.harnesses.map((h) => h.toLowerCase()), ...parsed.harnesses]);
+  const harnessTargets = new Set<string>([...filters.harnesses.map((h) => h.toLowerCase()), ...parsed.harnesses].map(canonicalHarness));
   for (const h of nl ? ["claude", "codex", "opencode", "pi", "gemini", "cursor", "trae"] : []) {
     if (parsed.terms.some((w) => w.toLowerCase() === h)) harnessTargets.add(h);
   }
@@ -501,7 +509,7 @@ export function compileSearchAsCode(
     predicates.push((s) => {
       const hid = sessionHarnessId(s).toLowerCase();
       const hlabel = searchableHarnessLabel(s).toLowerCase();
-      return list.some((target) => hid.includes(target) || hlabel.includes(target));
+      return list.some((target) => matchesHarness(hid, target, hlabel));
     });
   }
 
@@ -626,7 +634,7 @@ function evaluateCustomPlanCode(code: string, s: Session, ctx: EvalContext): boo
   for (const m of code.matchAll(/s\.(machine|project|harness|model|state|title)\s*===\s*["']([^"']+)["']/g)) {
     const field = m[1];
     const target = m[2].toLowerCase();
-    if (!String(record[field] ?? "").includes(target)) return false;
+    if (field === "harness" ? !matchesHarness(String(record.harness), canonicalHarness(target)) : !String(record[field] ?? "").includes(target)) return false;
   }
   for (const m of code.matchAll(/\/([^/]+)\/[a-z]*\.test\(s\.(machine|project|harness|model|title)\)/g)) {
     try {

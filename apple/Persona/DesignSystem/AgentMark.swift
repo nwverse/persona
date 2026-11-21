@@ -41,6 +41,15 @@ nonisolated struct AgentKind: Equatable, Sendable {
         }
     }
 
+    /// Shares and exports normally look up the displayed name. Preserve a legacy CLI's letter when that lookup
+    /// would give its renamed title the TRAE logo, including when Paseo reports it as a provider.
+    static func prefersLetterMark(for session: Session?) -> Bool {
+        guard let session else { return false }
+        if session.isTraex { return true }
+        return Session.providerEngines.contains(session.agent?.lowercased() ?? "")
+            && session.launcher?.lowercased() == "traex" && Self(session).brand == nil
+    }
+
     /// The agent a token usage share names (`UsageAgentShare.agent`, `Session.agent`'s names, #9984): its mark and its
     /// product's name, the names every client uses (spec/fixtures/agent-names, checked by TokenCalendarTests); nil for
     /// "", the usage the hub stored before it kept agents apart.

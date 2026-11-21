@@ -19,6 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/orcart"
 	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rexcli"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/terncli"
 )
@@ -65,6 +66,8 @@ func TestMain(m *testing.M) {
 	botmuxBin = func() string { return "" }
 	// Nor the user's Tern: no tern binary is found (a test that wants one gives its client a fake).
 	ternClient = func() *terncli.Client { return &terncli.Client{Bin: func() string { return "" }} }
+	// Nor the user's Rex: no rex binary is found (a test that wants one gives its client a fake).
+	rexClient = func() *rexcli.Client { return &rexcli.Client{Bin: func() string { return "" }} }
 	// Nor the user's gh outside the test's PATH (ghpath.go).
 	ghFallbackDirs = func() []string { return nil }
 	// Nor the user's Codex catalog: a model recovery on a Codex list runs no `codex debug models` (a test that wants
@@ -78,6 +81,10 @@ func TestMain(m *testing.M) {
 	os.Setenv("PASEO_HOME", "/tmp/persona-test-no-paseo")
 	// Nor the user's Cindy: its home points nowhere (a test that wants one sets its own).
 	os.Setenv("CINDY_HOME", "/tmp/persona-test-no-cindy")
+	// Nor the user's T3 Code: its home points nowhere and its command line is not found (a test that wants one sets
+	// its own).
+	os.Setenv("T3CODE_HOME", "/tmp/persona-test-no-t3code")
+	t3codeBin = func() string { return "" }
 	// Nor the user's Claude config directory (claude under a profile, or these tests run from inside a Claude Code
 	// session): the node's own default is then ~/.claude of the test's home (#2140; a test that wants one sets its own).
 	os.Unsetenv("CLAUDE_CONFIG_DIR")

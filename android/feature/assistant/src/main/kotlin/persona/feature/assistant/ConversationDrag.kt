@@ -2,8 +2,6 @@ package persona.feature.assistant
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
-import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -38,6 +36,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.SharedMotion
 import persona.core.designsystem.Tokens
 
 /** Pixel state for Arrange's drag gesture; the optimistic order and its writes live in [ConversationArranger]. */
@@ -50,8 +49,8 @@ internal class ConversationDragState(
     internal var activityIds: () -> List<String> = { emptyList() }
     internal var edge = 0f
     internal var speed = 0f
-    internal var liftSpec: AnimationSpec<Float> = snap()
-    internal var settleSpec: AnimationSpec<Float> = snap()
+    internal var liftSpec: AnimationSpec<Float> = SharedMotion.instant()
+    internal var settleSpec: AnimationSpec<Float> = SharedMotion.instant()
     internal var haptics: HapticFeedback? = null
 
     var dragging: String? by mutableStateOf(null)
@@ -180,7 +179,6 @@ internal fun rememberConversationDrag(
     val state = remember(list, arranger) { ConversationDragState(list, arranger, scope) }
     val density = LocalDensity.current
     val haptics = LocalHapticFeedback.current
-    val motion = PersonaTheme.motion
     val reduce = PersonaTheme.reduceMotion
     val latestIds = androidx.compose.runtime.rememberUpdatedState(activityIds)
     SideEffect {
@@ -188,8 +186,8 @@ internal fun rememberConversationDrag(
         state.edge = with(density) { EdgeZone.toPx() }
         state.speed = with(density) { EdgeSpeed.toPx() }
         state.haptics = haptics
-        state.liftSpec = if (reduce) snap() else tween(motion.quick)
-        state.settleSpec = if (reduce) snap() else motion.enter()
+        state.liftSpec = if (reduce) SharedMotion.instant() else SharedMotion.expand()
+        state.settleSpec = if (reduce) SharedMotion.instant() else SharedMotion.conceal()
     }
     return state
 }

@@ -90,7 +90,7 @@ func TestStartOpensInTheNamedHost(t *testing.T) {
 	if hh.asked() != 1 || oh.asked() != 1 {
 		t.Errorf("default start: herdr asked %d, orca asked %d (%v)", hh.asked(), oh.asked(), err)
 	}
-	// A TRAEX resume named into Orca is refused before any host is asked (Orca continues only Claude, #5548); a
+	// A TRAE CLI resume named into Orca is refused before any host is asked (Orca continues only Claude, #5548); a
 	// Claude resume of a session this computer has a record of opens there.
 	const id = "0d000000-0000-4000-8000-0000000000ee"
 	n.state.put(id, sessionState{Launcher: "claude", Cwd: t.TempDir()})

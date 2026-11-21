@@ -146,7 +146,8 @@ export function providerName(id: string | undefined, providers: ModelProvider[] 
 }
 
 export function modelProviderTitle({ id, name }: Pick<ModelProvider, "id" | "name">): string {
-  return id === "launcher.traex" ? normalizeTraeCliName(name || "traex") : name;
+  const launcher = id.startsWith("launcher.") ? id.slice("launcher.".length) : "";
+  return isTraeCli(launcher) ? normalizeTraeCliName(name || launcher) : name;
 }
 
 export function modelSummary(p: ModelPurpose, providers: ModelProvider[] = []): string {

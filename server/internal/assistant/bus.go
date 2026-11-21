@@ -612,6 +612,10 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			s.appSendRefused(p.MachineID, p.SessionID, err) // the hub sends nothing: no ConversationSent (north_star.go)
 			return nil, err
 		}
+		if target, _ := params[ownerApprovalHandledParam].(string); target != "" {
+			s.notesOwnerRefused(ctx, carry) // an approval is not a model turn or a conversation message
+			return map[string]any{"params": params}, nil
+		}
 		s.notesOwnerSent(ctx, carry, msg)
 		if *note != "" {
 			return map[string]any{"params": params, "launcher_note": *note}, nil
