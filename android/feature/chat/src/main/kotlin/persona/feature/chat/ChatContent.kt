@@ -431,7 +431,10 @@ internal fun ChatLineContent(
             line is ChatLine.Row && (line.row.type == "reply" || line.row.type == "notice") -> line.row.item?.item?.text
             else -> null
         }
-        if (raw != null || line is ChatLine.ApiError) return TurnErrorFixCard(turnFix, raw, turnLauncher)
+        if (raw != null || line is ChatLine.ApiError) {
+            val retry = LocalChatRowActions.current?.takeIf { it.retryLineId == line.id }?.onRetry
+            return TurnErrorFixCard(turnFix, raw, turnLauncher, retry)
+        }
     }
     when (line) {
         is ChatLine.Row -> when (line.row.type) {

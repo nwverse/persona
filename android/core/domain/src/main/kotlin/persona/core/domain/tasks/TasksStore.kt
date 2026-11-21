@@ -39,6 +39,7 @@ import persona.core.contracts.draftPlaceholder
 import persona.core.contracts.api.AssistantManagerChoice
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.HubConnection
+import persona.core.contracts.api.LauncherRetryUnsupportedException
 import persona.core.contracts.api.PhoneQuickResults
 import persona.core.contracts.api.RequestManager
 import persona.core.contracts.api.hubCodedFailure
@@ -679,9 +680,42 @@ class TasksStore(
      * off (#1516) it is "Continue": the hub tells its agent to go on, once.
      */
     fun retryTask(todo: Todo, onError: (Throwable) -> Unit) = act(retryKey(todo.id), onError) {
-        val t = api.retryTask(todo.id)
+        val t = withManager(todo.manager) { api.retryTask(todo.id) }
         _todos.update { list -> list.map { if (it.id == t.id) t else it } }
         reloadTodos()
+    }
+
+    /** The current plan/feature-backed launcher suggestion, including a taken-over to-do without `plan_id`. */
+    fun launcherForRetry(todo: Todo): String? =
+        persona.core.domain.tasks.retryLauncher(planTaskOf(todo, plans.value), features?.value.orEmpty())
+
+    /** Plain and launcher Retry share one busy key and the same returned-to-do reconciliation. */
+    fun retryTaskOnLauncher(todo: Todo, launcher: String, onError: (Throwable) -> Unit) {
+        if (TASK_RETRY_LAUNCHER_FEATURE !in features?.value.orEmpty()) {
+            onError(LauncherRetryUnsupportedException())
+            return
+        }
+        act(retryKey(todo.id), onError) {
+            val t = withManager(todo.manager) { api.retryTaskOnLauncher(todo.id, launcher) }
+            _todos.update { list -> list.map { if (it.id == t.id) t else it } }
+            reloadTodos()
+        }
+    }
+
+    /**
+     * Answer the failed start's question once under Retry's busy key. Success updates the returned to-do immediately;
+     * a refusal propagates unchanged and leaves the question and the task recoverable. False means one is already running.
+     */
+    suspend fun answerTaskStart(todo: Todo, choice: String): Boolean {
+        val key = retryKey(todo.id)
+        if (key in busy.value) return false
+        busy.update { it + key }
+        try {
+            val t = withManager(todo.manager) { api.answerTaskStart(todo.id, choice) }
+            _todos.update { list -> list.map { if (it.id == t.id) t else it } }
+            reloadTodos()
+            return true
+        } finally { busy.update { it - key } }
     }
 
     /** Removes a task that does not run (one whose agent never started): its todo goes, and any route to it. */

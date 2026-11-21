@@ -57,12 +57,15 @@ import persona.core.domain.tasks.TaskState
 import persona.core.domain.tasks.Interruption
 import persona.core.domain.tasks.notDoneReason
 import persona.core.domain.tasks.orphanedLine
+import persona.core.domain.tasks.planTaskOf
+import persona.core.domain.tasks.retryLauncher
 import persona.core.domain.tasks.TasksStore
 import persona.core.domain.tasks.assistantEntries
 import persona.core.domain.tasks.finishedSummary
 import persona.core.domain.tasks.triage
 import persona.core.domain.tasks.TriageSection
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import persona.core.domain.tasks.HeldPushItem
 import persona.core.domain.tasks.HeldPushDestination
@@ -753,6 +756,7 @@ private fun TrayUsageLimitRow(entry: RunningEntry.Task, host: AssistantTaskHost,
  * A failed start or a cut-off turn (#8237): a danger wash, ink words, and its own buttons under the row. The row opens
  * the task. Retry and Remove, or Continue, are separate taps.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TrayOutcomeRow(entry: NeedsYouEntry.Task, host: AssistantTaskHost, enabled: Boolean, taskBusy: Set<String>) {
     val palette = PersonaTheme.palette
@@ -760,7 +764,12 @@ private fun TrayOutcomeRow(entry: NeedsYouEntry.Task, host: AssistantTaskHost, e
     val failed = entry.status == TriageStatus.Failed
     val lead = host.tasks.lead(todo, host.sessions)
     val cut = Interruption.of(lead)
-    val why = if (failed) startFailureRowLine(todo.startError.orEmpty()) else interruptedWhy(lead?.turnError)
+    val plans by host.tasks.plans.collectAsStateWithLifecycle()
+    val features by (host.tasks.features ?: remember { MutableStateFlow(emptySet<String>()) }).collectAsStateWithLifecycle()
+    val failedTask = if (failed) planTaskOf(todo, plans) else null
+    val instead = retryLauncher(failedTask, features)
+    val why = if (failed) startFailureCodeLine(failedTask?.errorCode, failedTask?.errorArgs)
+        ?: startFailureRowLine(todo.startError.orEmpty()) else interruptedWhy(lead?.turnError)
     val retrying = TasksStore.retryKey(todo.id) in taskBusy
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(Tokens.Radius.card)).background(palette.danger.tint)
         .testTag(if (failed) "assistant-tray-failed" else "assistant-tray-interrupted")) {
@@ -772,10 +781,21 @@ private fun TrayOutcomeRow(entry: NeedsYouEntry.Task, host: AssistantTaskHost, e
                     else (if (failed) TaskState.Failed else TaskState.Interrupted).label).text(),
                     style = PersonaTheme.type.micro, color = palette.ink, maxLines = 1)
             })
-        Row(Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.s, bottom = Tokens.Space.s),
-            horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+        if (failed && failedTask != null) TaskShellQuestion(todo, failedTask, host.tasks,
+            Modifier.padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs))
+        val actions: @Composable () -> Unit = {
             if (failed) {
+                if (instead != null) JButton(
+                    stringResource(persona.core.designsystem.R.string.designsystem_use_launcher_instead, instead),
+                    { host.tasks.retryTaskOnLauncher(todo, instead, host.onError) },
+                    modifier = Modifier.testTag("assistant-tray-retry-launcher"),
+                    size = JButtonSize.Small,
+                    icon = PersonaIcons.retry,
+                    enabled = enabled && !retrying,
+                    loading = retrying,
+                )
                 JButton(stringResource(R.string.chat_tasks_retry), { host.tasks.retryTask(todo, host.onError) },
+                    kind = if (instead == null) JButtonKind.Primary else JButtonKind.Secondary,
                     size = JButtonSize.Small, enabled = enabled, loading = retrying, modifier = Modifier.testTag("assistant-tray-retry"))
                 JButton(stringResource(R.string.chat_tasks_remove), { host.tasks.removeTask(todo, host.onError) },
                     kind = JButtonKind.Destructive, size = JButtonSize.Small, enabled = enabled,
@@ -785,6 +805,10 @@ private fun TrayOutcomeRow(entry: NeedsYouEntry.Task, host: AssistantTaskHost, e
                     size = JButtonSize.Small, enabled = enabled, loading = retrying, modifier = Modifier.testTag("assistant-tray-continue"))
             }
         }
+        val actionModifier = Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.s, bottom = Tokens.Space.s)
+        if (instead == null) Row(actionModifier, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) { actions() }
+        else FlowRow(actionModifier, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+            verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) { actions() }
     }
 }
 

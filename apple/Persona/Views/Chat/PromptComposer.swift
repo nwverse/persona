@@ -269,7 +269,10 @@ enum PromptItems {
             return ["opus", "sonnet", "haiku"].first { m.lowercased().contains($0) } ?? m
         }
         if let row = list.first(where: { $0.id.caseInsensitiveCompare(m) == .orderedSame }) { return row.id }
-        if let alias = list.first(where: { !$0.isDefault && $0.resolved == m }) ?? list.first(where: { $0.resolved == m }) {
+        let matches: (AgentModel) -> Bool = { row in
+            row.resolved == m || (row.aliases ?? []).contains { $0.caseInsensitiveCompare(m) == .orderedSame }
+        }
+        if let alias = list.first(where: { !$0.isDefault && matches($0) }) ?? list.first(where: matches) {
             return alias.id
         }
         return m

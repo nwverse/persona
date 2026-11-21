@@ -110,9 +110,11 @@ internal fun apiErrorTime(ts: String?, resources: Resources, zone: ZoneId = Zone
  * the card keeps "Retry" whatever the error says: the configured model may be back by the time it is tapped. [lines] are
  * in reading order (oldest first).
  */
-internal fun retryLine(lines: List<ChatLine>, working: Boolean, canSend: Boolean, exhausted: Boolean = false): String? {
+internal fun retryLine(lines: List<ChatLine>, working: Boolean, canSend: Boolean, exhausted: Boolean = false,
+    turnFix: TurnErrorFix? = null): String? {
     val last = lines.lastOrNull() as? ChatLine.ApiError ?: return null
-    return last.id.takeIf { canSend && !working && (exhausted || !last.info.needsAction) }
+    val retryable = exhausted || !last.info.needsAction || turnFix == TurnErrorFix.ToolSearchUnsupported
+    return last.id.takeIf { canSend && !working && retryable }
 }
 
 /** An exhausted recovery chain (#7824) on the card of [lineId]: [refusal] is the session's marker, with the cause, the recovery time and the models tried. */
