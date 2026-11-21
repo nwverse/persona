@@ -78,12 +78,20 @@ func parseResponsiblePatch(raw json.RawMessage) (set bool, val *TodoResponsible,
 	return true, &clean, nil
 }
 
-// responsibleBlocked reports whether a to-do owned by an external responsible party (with no linked Persona agents)
-// has a latest progress note explicitly reporting "blocked" that is at least as recent as the to-do's last edit.
-func responsibleBlocked(t Todo) bool {
-	if t.Supervision == nil || t.Supervision.Progress == nil {
-		return false
+// formatResponsibleHints renders the optional machine_id / session_id hints for plain-text tool output without stray
+// slashes when only one hint is set.
+func formatResponsibleHints(r *TodoResponsible) string {
+	if r == nil {
+		return ""
 	}
-	p := t.Supervision.Progress
-	return p.Kind == upReportBlocked && !p.At.Before(t.UpdatedAt)
+	switch {
+	case r.MachineID != "" && r.SessionID != "":
+		return r.MachineID + "/" + r.SessionID
+	case r.MachineID != "":
+		return "machine " + r.MachineID
+	case r.SessionID != "":
+		return "session " + r.SessionID
+	default:
+		return ""
+	}
 }

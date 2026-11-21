@@ -215,8 +215,8 @@ func (s *Service) toolTodoGet(ctx context.Context, machine, self string, args js
 	}
 	if t.Responsible != nil {
 		fmt.Fprintf(&b, "responsible: %s %q", t.Responsible.Kind, clip(oneLine(t.Responsible.Name), 120))
-		if t.Responsible.MachineID != "" || t.Responsible.SessionID != "" {
-			fmt.Fprintf(&b, " (%s/%s)", t.Responsible.MachineID, t.Responsible.SessionID)
+		if hints := formatResponsibleHints(t.Responsible); hints != "" {
+			fmt.Fprintf(&b, " (%s)", hints)
 		}
 		b.WriteString("\n")
 	}

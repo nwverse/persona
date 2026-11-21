@@ -628,8 +628,6 @@ func (tb *treeBuild) state(t listedTodo) string {
 		return treePlanned
 	case taskStuck(t.Todo, tr, tb.reached[t.ID], tb.now):
 		return treeStuck
-	case len(t.Agents) == 0 && t.Responsible != nil && responsibleBlocked(t.Todo):
-		return treeStuck
 	}
 	return treeWorking
 }

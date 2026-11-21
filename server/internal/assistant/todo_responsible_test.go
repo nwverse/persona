@@ -41,7 +41,7 @@ func TestTodoResponsibleAPIAndPersistence(t *testing.T) {
 			t.Fatalf("GET list = %+v", got)
 		}
 
-		// MCP todo_get and todo_list expose responsible.
+		// MCP todo_get and todo_list expose responsible, formatting hints without stray slashes.
 		getOut, err := e.s.toolTodoGet(context.Background(), "", "", mustMarshalJSON(t, map[string]any{"id": created.Todo.ID}))
 		if err != nil {
 			t.Fatalf("toolTodoGet: %v", err)
@@ -56,6 +56,25 @@ func TestTodoResponsibleAPIAndPersistence(t *testing.T) {
 		if !strings.Contains(listOut, "responsible session: deploy-watch") {
 			t.Fatalf("toolTodoList missing responsible: %s", listOut)
 		}
+
+		// Single-hint cases in toolTodoGet avoid stray slashes like "(gpu-1/)" or "(/s-ext)".
+		e.must("PATCH", "/api/v1/todos/"+created.Todo.ID, `{"responsible":{"kind":"session","name":"deploy-watch","machine_id":"gpu-1"}}`)
+		getMachineOnly, err := e.s.toolTodoGet(context.Background(), "", "", mustMarshalJSON(t, map[string]any{"id": created.Todo.ID}))
+		if err != nil {
+			t.Fatalf("toolTodoGet machine-only: %v", err)
+		}
+		if !strings.Contains(getMachineOnly, `responsible: session "deploy-watch" (machine gpu-1)`+"\n") {
+			t.Fatalf("toolTodoGet machine-only = %s", getMachineOnly)
+		}
+		e.must("PATCH", "/api/v1/todos/"+created.Todo.ID, `{"responsible":{"kind":"session","name":"deploy-watch","session_id":"s-ext"}}`)
+		getSessionOnly, err := e.s.toolTodoGet(context.Background(), "", "", mustMarshalJSON(t, map[string]any{"id": created.Todo.ID}))
+		if err != nil {
+			t.Fatalf("toolTodoGet session-only: %v", err)
+		}
+		if !strings.Contains(getSessionOnly, `responsible: session "deploy-watch" (session s-ext)`+"\n") {
+			t.Fatalf("toolTodoGet session-only = %s", getSessionOnly)
+		}
+		e.must("PATCH", "/api/v1/todos/"+created.Todo.ID, `{"responsible":{"kind":"session","name":"deploy-watch","machine_id":"host-1","session_id":"sess-9"}}`)
 
 		// PATCH omitting responsible preserves it.
 		e.must("PATCH", "/api/v1/todos/"+created.Todo.ID, `{"notes":"watching metrics"}`)
@@ -72,6 +91,13 @@ func TestTodoResponsibleAPIAndPersistence(t *testing.T) {
 		wantPerson := TodoResponsible{Kind: db.ResponsiblePerson, Name: "Jordan"}
 		if updated.Todo.Responsible == nil || *updated.Todo.Responsible != wantPerson {
 			t.Fatalf("updated responsible = %+v, want %+v", updated.Todo.Responsible, wantPerson)
+		}
+		getNoHints, err := e.s.toolTodoGet(context.Background(), "", "", mustMarshalJSON(t, map[string]any{"id": created.Todo.ID}))
+		if err != nil {
+			t.Fatalf("toolTodoGet no-hints: %v", err)
+		}
+		if !strings.Contains(getNoHints, `responsible: person "Jordan"`+"\n") {
+			t.Fatalf("toolTodoGet no-hints = %s", getNoHints)
 		}
 
 		// Reloading from Postgres preserves responsible.
@@ -183,7 +209,6 @@ func TestTodoResponsibleChangedEvents(t *testing.T) {
 func TestDirectionTreeResponsibleStateAndCounts(t *testing.T) {
 	e := treeEnv(t)
 	now := time.Now()
-	fresh := now.Add(-10 * time.Minute)
 	stale := now.Add(-3 * time.Hour)
 
 	e.f.setSessions("mac",
@@ -193,88 +218,59 @@ func TestDirectionTreeResponsibleStateAndCounts(t *testing.T) {
 	)
 
 	// 1. Plain task (no linked agent, no responsible) -> planned.
-	plainID := e.task("Unassigned planned task", func(td *Todo) {
-		td.Supervision = &Supervision{Supervisor: "conv_lead_a"}
-		td.UpdatedAt = fresh
-	})
+	plainID := e.task("Unassigned planned task", supervisedBy("conv_lead_a"))
 
-	// 2. Responsible set, no linked agent, fresh updated_at -> working (not planned).
-	freshRespID := e.task("External session fresh update", func(td *Todo) {
-		td.Supervision = &Supervision{Supervisor: "conv_lead_a"}
-		td.Responsible = &TodoResponsible{Kind: db.ResponsibleSession, Name: "nightly-runner", MachineID: "box-1", SessionID: "s-ext"}
-		td.UpdatedAt = fresh
-	})
+	// 2. Responsible set via real PATCH, no linked agent, fresh updated_at -> working (not planned).
+	freshRespID := e.task("External session fresh update", supervisedBy("conv_lead_a"))
+	e.must("PATCH", "/api/v1/todos/"+freshRespID, `{"responsible":{"kind":"session","name":"nightly-runner","machine_id":"box-1","session_id":"s-ext"}}`)
 
-	// 3. Responsible set, no linked agent, stale created/updated_at but fresh progress note -> working.
-	progressRespID := e.task("External person fresh progress", func(td *Todo) {
-		td.Supervision = &Supervision{
-			Supervisor: "conv_lead_a",
-			Progress:   &TaskProgress{Kind: upReportProgress, Text: "Waiting on benchmark run", At: fresh},
-		}
-		td.Responsible = &TodoResponsible{Kind: db.ResponsiblePerson, Name: "Alex"}
-		td.CreatedAt = stale
-		td.UpdatedAt = stale
-	})
+	// 3. Responsible set via real PATCH, no linked agent, stale (no updates for >= 2h) -> stuck (not planned).
+	staleRespID := e.task("External session stale", supervisedBy("conv_lead_a"))
+	e.must("PATCH", "/api/v1/todos/"+staleRespID, `{"responsible":{"kind":"session","name":"old-runner"}}`)
+	e.s.todos.mu.Lock()
+	e.s.todos.todos[staleRespID].CreatedAt = stale
+	e.s.todos.todos[staleRespID].UpdatedAt = stale
+	e.s.todos.mu.Unlock()
 
-	// 4. Responsible set, no linked agent, stale created/updated_at and no fresh progress -> stuck (not planned).
-	staleRespID := e.task("External session stale", func(td *Todo) {
-		td.Supervision = &Supervision{Supervisor: "conv_lead_a"}
-		td.Responsible = &TodoResponsible{Kind: db.ResponsibleSession, Name: "old-runner"}
-		td.CreatedAt = stale
-		td.UpdatedAt = stale
-	})
-
-	// 5. Responsible set, no linked agent, blocked progress note -> stuck.
-	blockedRespID := e.task("External person blocked", func(td *Todo) {
-		td.Supervision = &Supervision{
-			Supervisor: "conv_lead_a",
-			Progress:   &TaskProgress{Kind: upReportBlocked, Text: "Waiting for quota increase", At: fresh},
-		}
-		td.Responsible = &TodoResponsible{Kind: db.ResponsiblePerson, Name: "Casey"}
-		td.UpdatedAt = fresh
-	})
-
-	// 6. Responsible set, no linked agent, pending review -> review.
+	// 4. Responsible set via real PATCH, no linked agent, pending review -> review.
 	reviewRespID := e.task("External session pending review", func(td *Todo) {
 		td.Supervision = &Supervision{Supervisor: "conv_lead_a", State: reviewPending}
-		td.Responsible = &TodoResponsible{Kind: db.ResponsibleSession, Name: "ci-watch"}
-		td.UpdatedAt = fresh
 	})
+	e.must("PATCH", "/api/v1/todos/"+reviewRespID, `{"responsible":{"kind":"session","name":"ci-watch"}}`)
 
-	// 7. Responsible set, no linked agent, needs_user -> needs_you.
+	// 5. Responsible set via real PATCH, no linked agent, needs_user -> needs_you.
 	needsRespID := e.task("External person needs owner", func(td *Todo) {
 		td.Supervision = &Supervision{Supervisor: "conv_lead_a", State: reviewNeedsUser}
-		td.Responsible = &TodoResponsible{Kind: db.ResponsiblePerson, Name: "Riley"}
-		td.UpdatedAt = fresh
 	})
+	e.must("PATCH", "/api/v1/todos/"+needsRespID, `{"responsible":{"kind":"person","name":"Riley"}}`)
 
-	// 8. Linked Persona agent takes precedence over responsible:
+	// 6. Linked Persona agent takes precedence over responsible:
 	//    - linked needs_you agent wins over fresh responsible.
 	linkedNeedsID := e.task("Linked agent needs you", func(td *Todo) {
 		td.Supervision = &Supervision{Supervisor: "conv_lead_b"}
-		td.Responsible = &TodoResponsible{Kind: db.ResponsiblePerson, Name: "Alex"}
 		td.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-needs"}}
-		td.UpdatedAt = fresh
 	})
-	//    - linked working agent wins even when responsible has blocked progress note.
+	e.must("PATCH", "/api/v1/todos/"+linkedNeedsID, `{"responsible":{"kind":"person","name":"Alex"}}`)
+	//    - linked working agent stays working even when to-do updated_at is stale.
 	linkedWorkID := e.task("Linked agent working", func(td *Todo) {
-		td.Supervision = &Supervision{
-			Supervisor: "conv_lead_b",
-			Progress:   &TaskProgress{Kind: upReportBlocked, Text: "old note", At: fresh},
-		}
-		td.Responsible = &TodoResponsible{Kind: db.ResponsibleSession, Name: "ext-1"}
+		td.Supervision = &Supervision{Supervisor: "conv_lead_b"}
 		td.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-work"}}
-		td.CreatedAt = stale
-		td.UpdatedAt = stale
 	})
+	e.must("PATCH", "/api/v1/todos/"+linkedWorkID, `{"responsible":{"kind":"session","name":"ext-1"}}`)
+	e.s.todos.mu.Lock()
+	e.s.todos.todos[linkedWorkID].CreatedAt = stale
+	e.s.todos.todos[linkedWorkID].UpdatedAt = stale
+	e.s.todos.mu.Unlock()
 	//    - linked stale idle agent is stuck (linked agent precedence).
 	linkedStaleID := e.task("Linked idle agent stale", func(td *Todo) {
 		td.Supervision = &Supervision{Supervisor: "conv_lead_b"}
-		td.Responsible = &TodoResponsible{Kind: db.ResponsibleSession, Name: "ext-2"}
 		td.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-idle"}}
-		td.CreatedAt = stale
-		td.UpdatedAt = stale
 	})
+	e.must("PATCH", "/api/v1/todos/"+linkedStaleID, `{"responsible":{"kind":"session","name":"ext-2"}}`)
+	e.s.todos.mu.Lock()
+	e.s.todos.todos[linkedStaleID].CreatedAt = stale
+	e.s.todos.todos[linkedStaleID].UpdatedAt = stale
+	e.s.todos.mu.Unlock()
 
 	tree := e.s.directionTree(context.Background(), now)
 	if len(tree.Directions) != 3 {
@@ -287,13 +283,11 @@ func TestDirectionTreeResponsibleStateAndCounts(t *testing.T) {
 		stateA[task.ID] = task
 	}
 	wantStatesA := map[string]string{
-		plainID:        treePlanned,
-		freshRespID:    treeWorking,
-		progressRespID: treeWorking,
-		staleRespID:    treeStuck,
-		blockedRespID:  treeStuck,
-		reviewRespID:   treeReview,
-		needsRespID:    treeNeedsYou,
+		plainID:      treePlanned,
+		freshRespID:  treeWorking,
+		staleRespID:  treeStuck,
+		reviewRespID: treeReview,
+		needsRespID:  treeNeedsYou,
 	}
 	for id, want := range wantStatesA {
 		if got := stateA[id].State; got != want {
@@ -303,12 +297,21 @@ func TestDirectionTreeResponsibleStateAndCounts(t *testing.T) {
 	wantCountsA := treeCounts{
 		NeedsYou: 1,
 		Review:   1,
-		Stuck:    2,
-		Working:  2,
+		Stuck:    1,
+		Working:  1,
 		Planned:  1,
 	}
 	if leadA.Counts != wantCountsA {
 		t.Fatalf("leadA counts = %+v, want %+v", leadA.Counts, wantCountsA)
+	}
+	// Advancing clock past the silence threshold moves the unlinked fresh responsible task to stuck while plain stays planned.
+	treeLater := e.s.directionTree(context.Background(), now.Add(3*time.Hour))
+	laterA := map[string]string{}
+	for _, task := range treeLater.Directions[0].Tasks {
+		laterA[task.ID] = task.State
+	}
+	if laterA[freshRespID] != treeStuck || laterA[plainID] != treePlanned {
+		t.Fatalf("after 3h silence: freshResp=%q (want stuck), plain=%q (want planned)", laterA[freshRespID], laterA[plainID])
 	}
 	if stateA[freshRespID].Responsible == nil || stateA[freshRespID].Responsible.Name != "nightly-runner" || stateA[freshRespID].Responsible.MachineID != "box-1" {
 		t.Fatalf("tree task responsible = %+v", stateA[freshRespID].Responsible)
@@ -329,12 +332,36 @@ func TestDirectionTreeResponsibleStateAndCounts(t *testing.T) {
 		t.Fatalf("leadB counts/running = %+v running=%v", leadB.Counts, leadB.Running)
 	}
 
+	// Updating a stale external-responsible to-do via real PATCH bumps updated_at and moves it from stuck to working.
+	e.must("PATCH", "/api/v1/todos/"+staleRespID, `{"notes":"progress: resumed benchmark run"}`)
+	treeAfterPatch := e.s.directionTree(context.Background(), time.Now())
+	leadAAfterPatch := treeAfterPatch.Directions[0]
+	var resumedTask treeTask
+	for _, task := range leadAAfterPatch.Tasks {
+		if task.ID == staleRespID {
+			resumedTask = task
+		}
+	}
+	if resumedTask.State != treeWorking {
+		t.Fatalf("after PATCH notes on stale responsible task: state = %q, want %q", resumedTask.State, treeWorking)
+	}
+	wantCountsAfterPatch := treeCounts{
+		NeedsYou: 1,
+		Review:   1,
+		Stuck:    0,
+		Working:  2,
+		Planned:  1,
+	}
+	if leadAAfterPatch.Counts != wantCountsAfterPatch {
+		t.Fatalf("leadA counts after PATCH notes = %+v, want %+v", leadAAfterPatch.Counts, wantCountsAfterPatch)
+	}
+
 	// Clearing responsible via PATCH returns the unlinked task to planned and updates direction tree counts.
 	e.must("PATCH", "/api/v1/todos/"+freshRespID, `{"responsible":null}`)
-	treeAfter := e.s.directionTree(context.Background(), now)
-	leadAAfter := treeAfter.Directions[0]
+	treeAfterClear := e.s.directionTree(context.Background(), time.Now())
+	leadAAfterClear := treeAfterClear.Directions[0]
 	var clearedTask treeTask
-	for _, task := range leadAAfter.Tasks {
+	for _, task := range leadAAfterClear.Tasks {
 		if task.ID == freshRespID {
 			clearedTask = task
 		}
@@ -342,15 +369,15 @@ func TestDirectionTreeResponsibleStateAndCounts(t *testing.T) {
 	if clearedTask.State != treePlanned || clearedTask.Responsible != nil {
 		t.Fatalf("after clearing responsible: task = %+v, want planned & nil responsible", clearedTask)
 	}
-	wantCountsAfter := treeCounts{
+	wantCountsAfterClear := treeCounts{
 		NeedsYou: 1,
 		Review:   1,
-		Stuck:    2,
+		Stuck:    0,
 		Working:  1,
 		Planned:  2,
 	}
-	if leadAAfter.Counts != wantCountsAfter {
-		t.Fatalf("leadA counts after clear = %+v, want %+v", leadAAfter.Counts, wantCountsAfter)
+	if leadAAfterClear.Counts != wantCountsAfterClear {
+		t.Fatalf("leadA counts after clear = %+v, want %+v", leadAAfterClear.Counts, wantCountsAfterClear)
 	}
 }
 
