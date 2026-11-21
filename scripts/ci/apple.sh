@@ -1,13 +1,13 @@
 #!/bin/bash
 # Public, local-runnable Apple checks. Requires XcodeGen, Python 3 and rsync.
 # The default lane uses macOS 26 and Xcode 26.0.x; ios18 uses the 18.6 simulator.
-# Usage: scripts/ci/apple.sh [all|ios|ios18|packages|ios-build]
+# Usage: scripts/ci/apple.sh [all|ios|ios18|packages|ios-build|ios-focused]
 # Cache CI_SPM_CACHE (default ~/Library/Caches/persona-ci/spm); keep the printed
 # output directory's *.xcresult bundles when investigating failures.
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 LANE="${1:-all}"
-case "$LANE" in all|ios|ios18|packages|ios-build) ;; *) printf 'Usage: %s [all|ios|ios18|packages|ios-build]\n' "$0" >&2; exit 2 ;; esac
+case "$LANE" in all|ios|ios18|packages|ios-build|ios-focused) ;; *) printf 'Usage: %s [all|ios|ios18|packages|ios-build|ios-focused]\n' "$0" >&2; exit 2 ;; esac
 [ "$#" -le 1 ] || { printf 'apple-ci: too many arguments\n' >&2; exit 2; }
 [ "$(uname -s)" = Darwin ] || { printf 'apple-ci: FAIL requires macOS with Xcode\n' >&2; exit 1; }
 for tool in python3 xcodebuild xcrun xcodegen rsync git; do
@@ -184,7 +184,7 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   ci_run 'Isolation lint unit tests' 900 xcrun swift test -c release --disable-testable-imports --package-path "$SPM/IsolationLint/package" --scratch-path "$SPM/IsolationLint/build"
   ci_run 'Blocking calls on the main actor (isolation lint)' 300 "$SPM/IsolationLint/build/release/isolation-lint" --root "$SOURCE" --baseline "$SOURCE/scripts/test/apple_isolation_baseline.json"
 fi
-if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ]; then
+if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ]; then
   for sdk in iphoneos iphonesimulator watchos watchsimulator; do
     ci_run "Require $sdk SDK" 60 xcrun --sdk "$sdk" --show-sdk-version
   done
@@ -266,9 +266,21 @@ if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
   # #11289's real .regular foreground scene cannot run on this lane's iPhone.
   # It is neither skipped nor replaced with an overridden trait: a separate
   # real-iPad test-without-building lane below runs the unchanged pixel test.
+  if [ "$LANE" = ios-focused ]; then
+  # Explicit diagnostic suites after the same build/readiness gates as ios.
+  # The ordinary lane below is unchanged and keeps every selection/assertion.
+  IOS_UNIT_SELECTION=(-only-testing:PersonaTests/PageSearchableTests
+    -only-testing:PersonaTests/StarredMessagesTests
+    -only-testing:PersonaTests/LauncherModelChoiceTests
+    -only-testing:PersonaTests/OmpNewAgentTests
+    -only-testing:PersonaTests/PaseoPermissionModesTests
+    -only-testing:PersonaTests/PaseoProvidersTests
+    -only-testing:PersonaTests/AboutVersionCompactVisualTests)
+else
   IOS_UNIT_SELECTION=("${IOS_EXCLUSIONS[@]}" -only-testing:PersonaTests
     -skip-testing:PersonaTests/AboutVersionRegularVisualTests
     -skip-testing:PersonaTests/AssistantHTMLCardTests -skip-testing:PersonaTests/AssistantHTMLSecurityTests)
+fi
   # A generic destination must retain the host's single runnable architecture.
   ci_run 'Build iOS offline unit tests' "$BUILD_SECONDS" "${IOS_COMMON[@]}" \
     -destination 'generic/platform=iOS Simulator' ARCHS="$(uname -m)" ONLY_ACTIVE_ARCH=YES \
@@ -353,7 +365,12 @@ if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
   fi
   test_batch ios-unit 'iOS offline unit and design/token tests' "$UNIT_SECONDS" "${IOS_TESTS[@]}" "${IOS_UNIT_SELECTION[@]}" \
     -resultBundlePath "$OUTPUT/ios-unit.xcresult" test-without-building
-  result ios-unit "$SIM" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests
+  if [ "$LANE" = ios-focused ]; then
+    result ios-unit "$SIM" PageSearchableTests StarredMessagesTests LauncherModelChoiceTests OmpNewAgentTests PaseoPermissionModesTests PaseoProvidersTests AboutVersionCompactVisualTests
+  else
+    result ios-unit "$SIM" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests
+  fi
+  if [ "$LANE" != ios-focused ]; then
   test_batch ios-html-card 'iOS HTML card tests (separate batch)' 600 "${IOS_TESTS[@]}" \
     -only-testing:PersonaTests/AssistantHTMLCardTests -resultBundlePath "$OUTPUT/ios-html-card.xcresult" test
   result ios-html-card "$SIM" AssistantHTMLCardTests
@@ -362,6 +379,7 @@ if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
     "-skip-testing:PersonaTests/AssistantHTMLSecurityTests/aRealInfiniteLoopCanBeDiscardedWithoutBlockingANewCard()" \
     -resultBundlePath "$OUTPUT/ios-html-security.xcresult" test
   result ios-html-security "$SIM" AssistantHTMLSecurityTests
+  fi
   if [ "$LANE" = ios18 ]; then
     about_visual() {
       local name="$1" suite="$2" device="$3"
@@ -386,6 +404,18 @@ if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
   if [ "$LANE" = ios18 ]; then
     about_visual ios-visual-regular AboutVersionRegularVisualTests "$REGULAR_SIM"
   else
+    # Exercise the real test host on the fresh iPad before the regular batch.
+    # Keep its strict probe separate from both iPhone readiness and regular results.
+    ci_run 'Verify hosted regular iPad test readiness' 900 bash -c '
+      set -euo pipefail
+      checker="$1"; bundle="$2"; log="$3"; shift 3
+      {
+        "$@" -only-testing:PersonaTests/TypeScaleTests -resultBundlePath "$bundle" test-without-building
+        python3 "$checker" "$bundle" TypeScaleTests
+      } 2>&1 | tee "$log"
+    ' -- "$CI_ROOT/scripts/ci/apple_result.py" "$OUTPUT/ios-regular-readiness.xcresult" \
+      "$OUTPUT/regular-readiness.log" "${IOS_COMMON[@]}" \
+      -destination "platform=iOS Simulator,id=$REGULAR_SIM" -destination-timeout 120
     mkdir -p "$OUTPUT/regular-shots"
     TEST_RUNNER_PERSONA_SHOTS="$OUTPUT/regular-shots" \
       ci_run 'iOS regular-width About visual test on real iPad' 600 "${IOS_COMMON[@]}" \
