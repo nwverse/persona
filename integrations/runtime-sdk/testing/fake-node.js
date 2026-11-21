@@ -52,6 +52,7 @@ export async function startFakeNode(t, opts = {}) {
           if (!n.offer || params?.name !== n.offer.name) throw new RpcError(`no package ${params?.name}`, 'not_found')
           return n.offer
         }
+        if (method === 'runtime.a2a_mcp' && n.a2aMcpToken) return { token: n.a2aMcpToken(params.session_id) }
         if (method === 'interaction.create') {
           const sid = params.interaction?.session_id
           if (opts.strict && !n.last('runtime.sessions')?.sessions?.some((s) => s.session_id === sid)) {

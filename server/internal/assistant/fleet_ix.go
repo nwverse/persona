@@ -330,8 +330,12 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 	if !ownerActionProposal(ix) {
 		ix.NoExpiry = false
 	}
+	freshLogical, err := s.logicalPublishInteraction(ctx, ix)
+	if err != nil {
+		return proto.Resolution{}, err
+	}
 	again := false
-	if ix.Resumable {
+	if ix.Resumable && !freshLogical {
 		restartPrepared := false
 		s.fleet.mu.Lock()
 		if p := s.fleet.interactions[ix.ID]; p != nil && p.local == nil {
@@ -478,12 +482,14 @@ func (s *Service) await(ctx context.Context, p *pending) (proto.Resolution, erro
 		p.resolved = make(chan struct{})
 	}
 	resolved := p.resolved
-	s.fleet.mu.Unlock()
 	id := p.ix.ID
+	expiresAt := p.ix.ExpiresAt
+	persistent := persistentOwnerProposal(p.ix)
+	s.fleet.mu.Unlock()
 	var timer *time.Timer
 	var timeout <-chan time.Time
-	if !p.ix.ExpiresAt.IsZero() && !persistentOwnerProposal(p.ix) {
-		timer = time.NewTimer(time.Until(p.ix.ExpiresAt))
+	if !expiresAt.IsZero() && !persistent {
+		timer = time.NewTimer(time.Until(expiresAt))
 		timeout = timer.C
 		defer timer.Stop()
 	}
@@ -710,6 +716,11 @@ func (s *Service) resolveApproved(ctx context.Context, id string, r proto.Resolu
 }
 
 func (s *Service) resolveAnswer(ctx context.Context, id string, r proto.Resolution, remember bool, authorization *standingResolution,
+	approver *assistantwire.HandoffApprover) error {
+	return s.logicalInteractionAnswer(ctx, id, r, func() error { return s.resolveActiveAnswer(ctx, id, r, remember, authorization, approver) })
+}
+
+func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Resolution, remember bool, authorization *standingResolution,
 	approver *assistantwire.HandoffApprover) error {
 	r.ModeActor = nil // provenance is never taken from an answer body
 	s.fleet.mu.Lock()
@@ -965,6 +976,11 @@ func hasSecretField(ix proto.Interaction) bool {
 }
 
 func (s *Service) finishInteraction(id string) {
+	if routes, ok := s.store().(logicalInteractionStore); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_ = routes.FinishConversationInteraction(ctx, id)
+		cancel()
+	}
 	s.fleet.mu.Lock()
 	p, ok := s.fleet.interactions[id]
 	delete(s.fleet.interactions, id)

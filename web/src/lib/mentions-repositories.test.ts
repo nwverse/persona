@@ -60,7 +60,7 @@ describe("mentions-repositories", () => {
         repositories: [
           { id: "r1", provider: "github", path: "nwverse/persona", canonical_url: "https://github.com/nwverse/persona", name: " Persona ", aliases: [" hub ", ""] },
           // duplicate id
-          { id: "r1", provider: "github", path: "nwverse/other", canonical_url: "https://github.com/nwverse/other" },
+          { id: "r1", provider: "github", path: "example/other", canonical_url: "https://github.com/example/other" },
           // duplicate canonical_url
           { id: "r-dup-url", provider: "github", path: "nwverse/persona", canonical_url: "https://github.com/nwverse/persona" },
           // full_path fallback

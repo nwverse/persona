@@ -344,6 +344,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	purpose := p.Purpose
 	if purpose == "" {
 		purpose = "assistant"
+		if main {
+			purpose = purposeMain
+		}
 	}
 	if p.Launcher != "" {
 		fit, refusal := s.mainChatFit(ctx, machine, p.Launcher)
@@ -447,6 +450,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if p.Human && (p.Origin == "" || p.Origin == OriginUser) && strings.TrimSpace(p.Text) != "" {
 		s.humanSent.noteForReply(sess.SessionID, firstReplySendID, p.Text)
 	}
+	sess.Effort, _ = params["effort"].(string)
 	sess.Model, _ = params["model"].(string) // what it was started with ("": the launcher's default)
 	return sess, nil
 }
@@ -1299,6 +1303,9 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		p["idle_compaction"] = s.idleCompactionPolicy(ctx)
 	}
 	putMainCompactWindow(cfg, p)
+	if handled, err := s.logicalSendModel(ctx, machine, sid, p); handled {
+		return err
+	}
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
 		p["interject_background"] = true
 	}
@@ -1358,8 +1365,18 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	if l == "" {
 		c, known := s.session(ctx, machine, sid)
 		if known && c.SourceKind == proto.SourceRuntime {
-			// The node resumes the session on the runtime that owns it, even for scheduled chats and leaders.
-			return nil
+			// Preserve existing runtime inheritance unless the main chat has its
+			// own binding. That binding still passes the execution identity check.
+			if p["is_main"] != true {
+				return nil
+			}
+			record, err := s.modelRecord(ctx, purposeMain)
+			if err != nil {
+				return err
+			}
+			if record.Binding == (ModelBinding{}) {
+				return nil
+			}
 		}
 		if known && !followsSetting {
 			l = c.Launcher // no launcher picked: the one this conversation runs
@@ -1406,7 +1423,9 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	// The background supervisor runs under its own purpose (which follows Main chat until it is set apart), whoever
 	// writes to it: the hub's relays already do (backgroundModel), so a message typed to it must too.
 	purpose := "assistant"
-	if s.isBackground(ctx, sid) {
+	if p["is_main"] == true {
+		purpose = purposeMain
+	} else if s.isBackground(ctx, sid) {
 		purpose = purposeSupervise
 	}
 	if pickedLauncher {
@@ -1415,6 +1434,11 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		}
 	} else {
 		if err := preservePermissionMode(p, func() error { return s.applyModel(ctx, purpose, p) }); err != nil {
+			return err
+		}
+	}
+	if purpose == purposeMain {
+		if err := s.mainDefaultExecution(ctx, machine, sid, p); err != nil {
 			return err
 		}
 	}

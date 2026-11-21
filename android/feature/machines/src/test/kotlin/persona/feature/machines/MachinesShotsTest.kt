@@ -17,8 +17,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -47,8 +49,8 @@ import java.time.ZoneOffset
 import java.util.Locale
 
 /**
- * Machine monitor and a machine's page in each of the app's languages, Glass and Brief, light and dark (docs/protocol/i18n.md). Written
- * as PNGs to `build/i18n-shots/` (or `-Dpersona.shots=<dir>`) to look at.
+ * Machine monitor and a machine's page in all three styles, light and dark in English, plus Chinese and Japanese
+ * localization (docs/protocol/i18n.md). PNGs go to `build/i18n-shots/` (or `-Dpersona.shots=<dir>`).
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -60,20 +62,36 @@ class MachinesShotsTest {
     @Config(sdk = [35], qualifiers = "zh-w400dp-h5200dp-xhdpi")
     @Test fun simplifiedChinese() {
         assertEquals("2026年11月2日 08:30", MetricFormat.boot(1_793_579_400.0, Locale.SIMPLIFIED_CHINESE, ZoneOffset.ofHours(8)))
-        shots("zh", listTitle = "机器监控", detail = "引擎与连接", botmux = "同时显示 botmux 会话",
+        shots("zh", listTitle = "机器监控", detail = "引擎与连接", botmux = "同时显示 botmux 会话", load = "每核 1.6",
             offline = "连不上这台电脑。确认它开着、网络通、node 在运行，然后重新连接")
     }
 
     @Config(sdk = [35], qualifiers = "en-w400dp-h5200dp-xhdpi")
     @Test fun english() {
         assertTrue(MetricFormat.boot(1_793_579_400.0, Locale.ENGLISH, ZoneOffset.ofHours(8))!!.startsWith("Nov 2, 2026"))
-        shots("en", listTitle = "Machines", detail = "Engine and connection", botmux = "Also show botmux sessions",
+        shots("en", listTitle = "Machines", detail = "Engine and connection", botmux = "Also show botmux sessions", load = "1.6 per core",
             offline = "Can't reach this computer. Make sure it's on, the network is up and the node is running, then reconnect")
     }
 
     @Config(sdk = [35], qualifiers = "ja-w400dp-h5200dp-xhdpi")
-    @Test fun japanese() = shots("ja", listTitle = "マシン", detail = "エンジンと接続", botmux = "botmux のセッションも表示",
+    @Test fun japanese() = shots("ja", listTitle = "マシン", detail = "エンジンと接続", botmux = "botmux のセッションも表示", load = "コアあたり 1.6",
         offline = "このコンピューターに接続できません。電源が入っていて、ネットワークがつながり、ノードが動作していることを確認してから、再接続してください")
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h5200dp-xhdpi", fontScale = 2f)
+    @Test fun loadReadingsFitAtMaximumTextSize() {
+        val page = MachinesViewModel(api, repository, "lab") { now }
+        runBlocking { page.load(MetricRange.Hour) }
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                Box(Modifier.width(400.dp).height(5200.dp)) { MachinesScreen("lab", page, navigator) }
+            }
+        }
+        val raw = rule.onNodeWithText("6.2").assertIsDisplayed().getUnclippedBoundsInRoot()
+        val normalized = rule.onAllNodesWithText("1.6 per core").assertCountEquals(2).onFirst()
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        assertTrue("The per-core figure is below the raw reading", raw.bottom <= normalized.top)
+        rule.onNodeWithText(rule.activity.getString(R.string.machines_load_definition)).assertIsDisplayed()
+    }
 
     private val now = 1_793_600_000L
     private val lab = Machine("lab", name = "Lab", kind = "ssh", sshHost = "lab.example.com", online = true, hostname = "lab.local",
@@ -131,7 +149,7 @@ class MachinesShotsTest {
     }
 
     /** [offline]: what the offline MacBook's card says first instead of the hub's raw error (#4463). */
-    private fun shots(language: String, listTitle: String, detail: String, botmux: String, offline: String) {
+    private fun shots(language: String, listTitle: String, detail: String, botmux: String, load: String, offline: String) {
         val list = MachinesViewModel(api, repository, null) { now }
         val page = MachinesViewModel(api, repository, "lab") { now }
         runBlocking { list.load(MetricRange.Hour); page.load(MetricRange.Hour) }
@@ -142,20 +160,31 @@ class MachinesShotsTest {
         var detailPage by mutableStateOf(false)
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
-                Box(Modifier.testTag("shot").width(400.dp).height(if (detailPage) 5200.dp else 1000.dp).background(PersonaTheme.palette.background)) {
+                Box(Modifier.testTag("shot").width(400.dp).height(if (detailPage) 5200.dp else 1200.dp).background(PersonaTheme.palette.background)) {
                     if (detailPage) MachinesScreen("lab", page, navigator, actions) else MachinesScreen(null, list, navigator)
                 }
             }
         }
-        for (d in listOf(true, false)) for (s in listOf(AppStyle.Glass, AppStyle.entries.last())) for (dk in listOf(false, true)) {
-            if (s != AppStyle.Glass && dk) continue
-            detailPage = d; style = s; dark = dk
+        val styles = if (language == "en") AppStyle.entries else listOf(AppStyle.Glass, AppStyle.entries.last())
+        for (d in listOf(true, false)) for (s in styles) for (dk in listOf(false, true)) {
+            if (language != "en" && s != AppStyle.Glass && dk) continue
+            rule.runOnIdle { detailPage = d; style = s; dark = dk }
             rule.waitForIdle()
             val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
             val name = "machines-${if (d) "detail" else "list"}-$language-${s.name.lowercase()}-${if (dk) "dark" else "light"}.png"
             File(out(), name).outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-            rule.onNodeWithText(if (d) detail else listTitle).assertExists()
+            when {
+                d -> rule.onNodeWithText(detail).assertExists()
+                // Brief uses the machine summary as the list heading instead of the title.
+                s == AppStyle.Brief -> rule.onNodeWithText("1 of 2 online", substring = true).assertExists()
+                else -> rule.onNodeWithText(listTitle).assertExists()
+            }
+            rule.onAllNodesWithText(load, useUnmergedTree = true).assertCountEquals(if (d) 2 else 1)
+            rule.onNodeWithText(rule.activity.getString(R.string.machines_load_definition)).assertExists()
             if (d) {
+                rule.onNodeWithText("6.2").assertExists()
+                rule.onNodeWithText("${rule.activity.getString(R.string.machines_metric_load)} 6.2").assertExists()
+                rule.onNodeWithText(rule.activity.resources.getQuantityString(R.plurals.machines_chart_reference, 4, 4)).assertExists()
                 rule.onNodeWithText(botmux).assertExists()
                 rule.onAllNodesWithText("TRAE CLI").assertCountEquals(2)
                 rule.onNodeWithText("Team CLI").assertExists()
