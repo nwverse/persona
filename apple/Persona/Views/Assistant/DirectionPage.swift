@@ -167,10 +167,15 @@ enum DirectionPageLogic {
 
     /// Reads it again now (Retry, the direction leaving the tree), in a task of the page's own.
     func refresh(_ api: APIClient?) {
-        Task { await self.load(api) }
+        // Out from now, not from when the task starts: no frame reads "nothing out" in between (a retry included).
+        inFlight += 1
+        Task { await self.load(api, counted: true) }
     }
 
-    func load(_ api: APIClient?) async {
+    /// `counted`: `refresh` has already marked this read as out.
+    func load(_ api: APIClient?, counted: Bool = false) async {
+        if !counted { inFlight += 1 }
+        defer { inFlight -= 1 }
         asked += 1
         let n = asked
         guard let api else {
@@ -178,8 +183,6 @@ enum DirectionPageLogic {
             return
         }
         if status != .read { status = .reading } // rows read before stay drawn while a read is out
-        inFlight += 1
-        defer { inFlight -= 1 }
         do {
             var r = try await api.direction(id)
             guard n > landed else { return } // a newer answer was taken meanwhile
@@ -196,8 +199,10 @@ enum DirectionPageLogic {
             guard n > landed, n == asked else { return }
             if error is CancellationError || (error as? URLError)?.code == .cancelled {
                 // Not an answer: read again (a few times), the page as it was meanwhile.
+                // Cancelled four times in a row counts as a failed read (Couldn't read, Retry; rows read before
+                // say Offline · their time), never as an answer.
                 cancelled += 1
-                if cancelled <= 3 { refresh(api) } else if status == .reading { status = .failed }
+                if cancelled <= 3 { refresh(api) } else { cancelled = 0; status = .failed }
                 return
             }
             // The newest read's failure takes its number too: an older read landing after it is not drawn as fresh.
@@ -482,6 +487,7 @@ private struct DirectionAddedRow: View {
         let source = row.session.addedByOwner ? String(localized: "Added by you [Filed Session]")
                                               : String(localized: "Opened from this chat [Filed Session]")
         Button { openTodoAgentChat(row.key, in: model, push: conversationAgentPush(pushChat)) } label: {
+            // The whole width takes the tap, a row without a word too (`BesideOrUnder` with one view is that view's size).
             HStack(alignment: .top, spacing: Theme.Space.s) {
                 StatusDot(state: DirectionPageLogic.dot(standing))
                     .padding(.top, Theme.Space.xs)
@@ -493,6 +499,7 @@ private struct DirectionAddedRow: View {
                     if let word { standingText(word, standing) }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, Theme.Sidebar.rowPadding)
             .scaledFrame(minHeight: Theme.Sidebar.row)
             .contentShape(.rect)

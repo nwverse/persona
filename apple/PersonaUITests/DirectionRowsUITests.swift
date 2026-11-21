@@ -429,8 +429,10 @@ final class DirectionRowsUITests: XCTestCase {
     @MainActor private func allThenInboxThenAll() throws {
         openFirstPage()
         XCTAssertTrue(app.navigationBars["Persona 产品"].waitForExistence(timeout: 5))
-        // A pushed page has only ‹ on a phone (the drawer's button is the conversation's): back to the lead's chat.
-        app.navigationBars["Persona 产品"].buttons.firstMatch.tap()
+        // A pushed page has only ‹ on a phone (the drawer's button is the conversation's): back to the lead's chat
+        // there. Where the sidebar stays on screen (an iPad's column) the page stays on the path, the case the fix is for.
+        let column = app.buttons["sidebar-todos"].firstMatch
+        if !(column.exists && column.isHittable) { app.navigationBars["Persona 产品"].buttons.firstMatch.tap() }
         openSidebar()
         let inbox = app.descendants(matching: .any).matching(identifier: "sidebar-inbox").firstMatch
         XCTAssertTrue(reveal(inbox), "no Inbox in the sidebar:\n\(app.debugDescription)")
