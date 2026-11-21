@@ -74,6 +74,14 @@ export class OpencodeAcpClient extends EventEmitter {
     this.agentInfo = null
     this.emit('process', child.pid ?? 0)
 
+    child.stdin?.on('error', (err) => {
+      this.log(`opencode acp stdin error: ${err?.message ?? err}`)
+      if (this.proc === child) {
+        this._failAll(new Error(`opencode acp stdin error: ${err?.message ?? err}`))
+        this._clearProc()
+        this._terminateChild(child)
+      }
+    })
     child.stdout?.setEncoding('utf8')
     child.stdout?.on('data', (chunk) => this._onStdout(chunk))
     child.stderr?.setEncoding('utf8')
@@ -93,14 +101,33 @@ export class OpencodeAcpClient extends EventEmitter {
       if (this.proc === child) this._clearProc()
     })
 
-    const init = await this._callRaw('initialize', {
-      protocolVersion: 1,
-      clientCapabilities: {},
-      clientInfo: { name: 'persona', version: '0.1.0' },
-    }, timeoutMs)
+    let init
+    try {
+      init = await this._callRaw('initialize', {
+        protocolVersion: 1,
+        clientCapabilities: {},
+        clientInfo: { name: 'persona', version: '0.1.0' },
+      }, timeoutMs)
+    } catch (err) {
+      if (this.proc === child) this._clearProc()
+      this._terminateChild(child)
+      throw err
+    }
     this.capabilities = init?.agentCapabilities || {}
     this.agentInfo = init?.agentInfo || null
     return { capabilities: this.capabilities, agentInfo: this.agentInfo }
+  }
+
+  _terminateChild(child) {
+    if (!child || child.exitCode !== null) return
+    try { child.kill('SIGTERM') } catch {}
+    const killTimer = setTimeout(() => {
+      if (child.exitCode === null) {
+        try { child.kill('SIGKILL') } catch {}
+      }
+    }, STOP_GRACE_MS)
+    killTimer.unref?.()
+    child.once('exit', () => clearTimeout(killTimer))
   }
 
   _clearProc() {
@@ -155,7 +182,11 @@ export class OpencodeAcpClient extends EventEmitter {
     }
     // Server-initiated request (e.g. session/request_permission)
     if (msg.id !== undefined && typeof msg.method === 'string') {
-      this._handleServerRequest(msg)
+      const expectedProc = this.proc
+      const expectedGen = this.generation
+      void this._handleServerRequest(msg, expectedProc, expectedGen).catch((err) => {
+        this.log(`opencode acp server request failed: ${err?.message ?? err}`)
+      })
       return
     }
     // Notification (e.g. session/update)
@@ -165,18 +196,43 @@ export class OpencodeAcpClient extends EventEmitter {
     }
   }
 
-  async _handleServerRequest(msg) {
+  _safeWriteFor(expectedProc, expectedGen, obj) {
+    if (!expectedProc || this.proc !== expectedProc || this.generation !== expectedGen) {
+      return false
+    }
+    try {
+      this._write(obj)
+      return true
+    } catch (err) {
+      this.log(`opencode acp write dropped: ${err?.message ?? err}`)
+      return false
+    }
+  }
+
+  async _handleServerRequest(msg, expectedProc = this.proc, expectedGen = this.generation) {
     try {
       let result
       if (msg.method === 'session/request_permission') {
         result = await this.onPermissionRequest(msg.params)
       } else {
-        this._write({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: `Method not found: ${msg.method}` } })
+        this._safeWriteFor(expectedProc, expectedGen, {
+          jsonrpc: '2.0',
+          id: msg.id,
+          error: { code: -32601, message: `Method not found: ${msg.method}` },
+        })
         return
       }
-      this._write({ jsonrpc: '2.0', id: msg.id, result: result ?? { outcome: { outcome: 'cancelled' } } })
+      this._safeWriteFor(expectedProc, expectedGen, {
+        jsonrpc: '2.0',
+        id: msg.id,
+        result: result ?? { outcome: { outcome: 'cancelled' } },
+      })
     } catch (err) {
-      this._write({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: err?.message ?? String(err) } })
+      this._safeWriteFor(expectedProc, expectedGen, {
+        jsonrpc: '2.0',
+        id: msg.id,
+        error: { code: -32000, message: err?.message ?? String(err) },
+      })
     }
   }
 

@@ -159,6 +159,24 @@ struct DispatchedTasksTests {
     }
 }
 
+@MainActor
+struct DispatchHandoffActivityTimeTests {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    @Test(arguments: [5.0, 0, -10, -44.999])
+    func recentActivityReadsJustNow(offset: TimeInterval) {
+        #expect(DispatchHandoffCardBody.activityTime(now.addingTimeInterval(offset), now: now) == String(localized: "Just now"))
+    }
+
+    @Test(arguments: [45.0, 180, 7200])
+    func olderActivityKeepsTheShortRelativeTime(age: TimeInterval) {
+        let at = now.addingTimeInterval(-age)
+        let relative = RelativeDateTimeFormatter()
+        relative.unitsStyle = .short
+        #expect(DispatchHandoffCardBody.activityTime(at, now: now) == relative.localizedString(for: at, relativeTo: now))
+    }
+}
+
 /// The hand-off card is the task's only card in the chat (#8237): a start that failed or a turn the model service cut off
 /// shows on it, in place, with why.
 @MainActor

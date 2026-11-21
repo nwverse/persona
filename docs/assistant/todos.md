@@ -45,7 +45,7 @@ Auto Accept (their launcher says `auto_accept`; Grok and Paseo's other ACP provi
 as the owner decided (#8141, `docs/integrations/paseo.md` "Agents Persona starts"). A read-only task's first message adds
 `本任务只读：不改项目文件、不提交、不对外写入` after its own prompt, without changing the saved prompt or duplicating the
 constraint on retries. With the default `assistant.readonly_mode: sandbox`, Codex read-only tasks keep `permission: plan`
-and the hard read-only sandbox. traex and omp take no permission mode or effort, so their tasks start with neither
+and the hard read-only sandbox. TRAE CLI and omp take no permission mode or effort, so their tasks start with neither
 and a read-only one has only the first-message constraint (#7559); one the call names is refused. pi, cursor and agy
 start a writable task the same way, but one the call names is dropped rather than refused, as the node ignores it for
 them (#8151); a read-only task for them is refused (below). Planning, card edits,
@@ -603,6 +603,7 @@ records each criterion as it did for the supervisor's review.
 - **Only `live` and `none` auto-complete**: if `verdict` is `done` but delivery incomplete, change to `undelivered` and keep to-do open.
   Main-chat-supervised tasks (#3124, already not closed by hub) do not enter pending review; supervision message says "Finished but not live yet: …(at PR, blocked on '…')", for main chat to follow up or ask user approval.
 - **A supervisor's `accepted` is held to the active delivery gate** (#6428, #12034, `assistant/supervise_review_delivery.go`): under `merged` (default), `task_review accepted` refuses while any linked PR is unmerged or any linked repository issue is still open (guiding the supervisor to `park` until merge/closure); under `live` (`done_needs_delivery: true`), it additionally requires the PR to be contained in the running hub (not merged, merged but not in the running hub, not named by its deployed-commits file, or check failing; where the running hub cannot be checked against, the PR still has to be merged, and PR-only criteria do not override `live`). Under `off`, no delivery gate runs. `outcome: cannot` and tasks with no linked PR or issue are never held.
+- **Post-closure PR follow-up** (#12371, `assistant/pr_followup.go`, table `todo_pr_followups`): when a to-do is accepted while its own delivery PR(s) (`pr_url` and the stage-tracked `prs`, not every repository link) are still open — possible under the `off` gate, a PR-only/draft-only scope, or a PR that merges after acceptance — the close path records one lightweight follow-up subscription per PR instead of leaving it unwatched. The to-do is never reopened and no synthetic task is created. The deploy minute pass (`sweepPRFollowups`, riding the same pass as `sweepPRStatuses`) polls these subscriptions independently of the to-do's `DoneAt`: a **merged/closed** PR sends one closing notice to the original supervisor conversation (`supervision.supervisor`, falling back to the to-do's `origin`) and deletes the subscription; a new **merge conflict** or a **changes-requested review on the current head** sends one notice per head (`notified_conflict_head` / `notified_review_head` dedupe, so an old head's review never re-wakes anyone). These are `pr_followup` relay records, not acceptance signals and not a reopen, consistent with #9289's evidence-driven model and #8373's boundary that a PR-terminal wake does not imply the criteria are done. When GitHub is unconnected or the PR's host has no code host that can read it, the subscription records nothing and stays for a later pass rather than pretending to poll. A non-terminal subscription silent for more than 24 hours surfaces in the daily briefing (`brief_body.pr_followups`, an optional field older clients ignore).
 - **A bare `accepted` is refused when the result does not settle the task** (#12026, `assistant/supervise_accept_guard.go`): nothing is written and the error names the fix when the review's note/reason/checks or the Agent's last reply show a closeout whose status is not done, a blocker only the owner can clear (missing owner-only information), or an inconclusive / ineffective / partly-done result. The supervisor must instead send `needs_user` (`why_owner: only_owner_knows` for missing owner information), `accepted` with `user_check: true` so the to-do stays in Needs you until the owner passes it (the intended path for read-only research and evaluations), or hand out a linked follow-up to-do first. `user_check` and `outcome: cannot` are deliberate closures the guard lets through; a question written only in chat text never reaches Needs you.
 - **To-do shows the blocker**: judgment results except `not_done` are recorded in to-do `delivery` (`{"state", "gate", "unblock", "at"}`, settings `assistant.todo_stages` alongside stage strip, no new table); delivery replaces unconfirmed reply-keyword guesses (PR → review, merged → merge, off by default/live → deploy), but never rolls stored progress back or caps a deployment confirmed by the deploy gate. Explicit verification is recorded only after an acceptance is saved; a supervisor's `accepted` alone does not verify a high-priority task still awaiting its owner. All stage writes are forward-only except an explicit review withdrawing verification (`unverified`) from `verify`; rework, `cannot` and a requested user check do not count as verification.
   Web to-do rows add "At PR · Blocked on '…' · Needs your approval" while open and `state` is `pr` / `merged` / `off`; Android to-do rows (when the Agent is neither working nor waiting for you) and details show the same line (`Todo.hold` in `core:domain`); iOS / Mac do not render it yet (optional field, old clients unaffected).
@@ -785,6 +786,20 @@ Something the owner raises in the main conversation and wants an answer to is a 
 - **Asked without waiting** (`wait: false`, #4928; `docs/assistant/assistant.md`, "Asking without holding the turn"): its card's expiry makes the same to-do with the same record, deadline handling and briefing row. Since no tool call is waiting to hear it, the asking conversation is told in a message that the question is now this to-do (or that its recommended options were taken by default); the owner's later decision, or closing the to-do, then reaches the conversation as above. Such a card survives a manager restart, and one whose time ran out while no manager ran becomes the to-do when the next one starts. One exception: when the owner wrote in the asking conversation while the card was up, its expiry makes no to-do and takes no default, since what they wrote may have been the answer; the conversation is told and asks again if it still needs one.
 
 ## Waiting for the owner
+
+**Personal verification** (#10047): `task_review` with `verdict: "accepted"` and `user_check: true` records the
+supervisor's review but leaves `done_at` unset, with `supervision.state: "user_check"` (**Awaiting your
+verification**). The task remains open and counted as Waiting on you, even if its delivery is already live or its
+reply has been read. Its existing "Please verify" ask is reused; without a Lark card the same ask stays available in
+the apps. Completed-task retirement does not select this Agent, and personal verification also protects it from the
+ordinary stalled-task idle limit. This does not change the closure policy for tasks that really have completed.
+
+The owner's **Pass** (app, card or approval reply) marks the task verified, closes it by review, and permits normal
+completed-task retirement. Change feedback records a new work round before relaying the words to the same Agent;
+the old Pass can no longer complete that round. Failed delivery is shown as failed, not as successful rework.
+The same applies to the owner's next message from the task card or directly in its Agent chat. A recorded Pass
+interrupted by a hub restart is completed by the acceptance recovery sweep, not left waiting for a second Pass.
+An accepted review without `user_check` still completes the task immediately as before.
 
 (#2056, `assistant/todo_ask.go`.) A to-do whose result waits for the owner carries that ask on itself, so the apps can show it in the to-do list and take it with one tap, not only the briefing and the Lark card.
 
@@ -1017,6 +1032,76 @@ Step 3 of the three-loop process (#2820): Agent conclusions automatically settle
   - Handoff to an existing Agent (message) includes decisions only, not project context.
 
 Not yet: manual editing/undo of conclusions (currently **Replace** in decisions), Lark reporting (#2768), iOS / Android decision lists.
+
+## Lessons from accepted tasks
+
+A task the supervisor accepts after corrections teaches the next Agents of its project what to do better (#12295,
+`server/internal/assistant/task_lessons.go`). It is a short retrospective written in the background. It asks which
+mistakes came back, what background the owner had to add, which steps wasted time and what would make this kind of task
+go better. The answers become lessons that new tasks of the same project get by themselves, so nobody has to remember
+them.
+
+- **Switch**: "Learn from finished tasks" (Settings › Persona; `task_lessons` in `GET/PUT /api/v1/assistant`;
+  `persona_settings` key `assistant.task_lessons`, approved on the phone), **off by default**. Off, nothing here runs: no
+  model call, no lesson written, and every first prompt is byte for byte what it was. Lessons learned before stay on
+  their projects' pages, where they can still be edited or deleted.
+- **When**: a supervised task (one with a supervision ledger) is accepted (`task_review` `accepted`, in `reviewDoneTodo`
+  beside the outcome and the learned estimate). It runs in the background, so the acceptance answer never waits for it.
+  A rework round triggers nothing by itself: its review is read when the task is accepted. Cancelled tasks, failed
+  starts, to-dos without a ledger, and to-dos whose history may hold the health space's words or cannot be told yet
+  (`todoVerdicts`) teach nothing.
+- **Only after friction**: the model is called only when the stretch of work the acceptance closes had something to
+  learn from. That means a rework round or a needs_user review, a criterion a review found not met, a scope change in
+  the brief's log, an answer the owner gave on the to-do (a question card, a note on it, its chat thread), or at least
+  twice the estimate. A continued to-do counts only the reviews, changes and answers since its earlier acceptance. A task
+  accepted at once and in time makes no call.
+- **Who writes it, from what**: one call of the Information processing model (`kb.project`, the purpose that writes the
+  outcome; prompts `server/internal/prompts/todo/lessons.md`, `lessons_input.md`). It reads the title, the owner's
+  request, goal and criteria from the brief, the scope changes, each review of the stretch (verdict, round, note, the
+  criteria not met with what was found), the owner's answers, how each criterion ended, the estimate against the time
+  taken, the newest Agent's last reply (2,000 characters), and the project's 12 newest lessons. The supervisor's
+  instructions and `task_review` are unchanged.
+- **What it answers**: at most 3 lessons, each `{kind, text, same_as}`. `kind` is `repeated_mistake`, `missing_context`,
+  `wasted_step` or `improvement`, and `text` is one sentence of at most 200 characters in the owner's language that says
+  what to do next time. `same_as` names a lesson of the project the new one repeats. Nothing is invented, and an empty
+  list is the usual answer. A lesson of another kind, an empty one, or one that the shared-transcript scrub
+  (`transcript.SanitizeShareText`) would redact (a key, a token, a password, a secret in a link) is dropped. Without a
+  model nothing is learned.
+- **Where**: typed `lesson` records in the project's `memory.jsonl` ([knowledge.md](knowledge.md)), under the ownership
+  worker outcomes use (`projectsForTask`: the to-do's live project, then its direction's project, then the projects of
+  its last Agent's directory). Without a project nothing is learned. A record keeps `kind`, the text in `conclusion`,
+  the to-do (`todo_id`), `verification` (`accepted`, or `owner` once corrected), `seen`, `first_seen_at`,
+  `last_seen_at`, `recorded_at` and up to 5 `sources`. Lessons never go into the direction's notes, which stay the
+  owner's own text. A manager from before lessons skips these records, and the outcome, decision and pitfall records
+  and their prompt are unchanged.
+- **Merging, deleting, aging**: records are never changed in place. A lesson the project already has (the one the model
+  named, else one with the same letters and digits, `kb.LessonKey`) is taught again: a record that supersedes it, with
+  `seen` up, the to-do added to its sources and its text kept (the owner may have corrected it). A to-do already among
+  its sources does not count again, and a completion is learned from once (its record IDs start with a key of the to-do
+  and its completion time). A deleted lesson leaves a `lesson_retired` tombstone that keeps its text, and a lesson with
+  that text is never learned again. All writes go through `kb.Engine.UpdateProjectLessons`, which decides from the
+  lessons as they are under the store's lock, so a merge, an edit and a delete never supersede the same version twice. A
+  lessons read goes through at most the last 8 MiB of the file.
+- **Handed to new Agents**: every new Agent of the project gets, after the project's own block (`todo/project.md` or
+  `todo/project_memory.md`, both unchanged), a block of its own (`server/internal/prompts/todo/project_lessons.md`). It
+  holds the fresh lessons, the most repeated first and then the most recently taught. At most 2 of one kind, 5 in all and
+  1,200 characters, each with its kind, `seen` and last date. A lesson not taught again for 90 days is left out. The block
+  says the lessons were learned from accepted tasks and that the task's own instructions win where they differ. The
+  starts are the same as for the project context ("Record conclusions on completion" above), and work machines get none.
+- **Seen and changed by the owner**: the project's page in Knowledge on the web lists them, with the kind, the text,
+  how many times, the last time, the newest source task and whether it is still handed out, and offers Edit and Delete
+  (Delete asks first). Its routes are in `docs/protocol/protocol.md` "Project lessons", for the owner's apps only.
+- **Cost**: at most one model call per accepted task that had friction, none otherwise; no call at dispatch, which reads
+  a bounded tail of the file.
+- **Checks**: `server/internal/kb/project_lessons_test.go` (chains, tombstones, stale writes, the read's bound, dispatch
+  memory unchanged); `server/internal/assistant/task_lessons_test.go` (an accepted rework learned end to end and handed
+  to the next Agent, off by default and byte-identical, no call for a smooth acceptance, nothing without a model,
+  merges and deletions, selection bounds, friction, the routes); goldens `todo_lessons.*`, `todo_lessons_input.*`,
+  `todo_project_lessons.*` in `server/internal/hub/testdata/prompts`; web `web/src/views/knowledge/ProjectLessons.test.tsx`
+  and `web/src/views/settings/AssistantSettings.task-lessons.test.tsx`.
+- **Not yet**: the iOS, Android and HarmonyOS project pages and switches; ranking lessons by how well they match the new
+  task's words; promoting a lesson into the direction's notes; showing lessons to the supervisor or leader as it plans;
+  measuring rework rounds and owner corrections per accepted task before and after (the evaluation #8231 asks for).
 
 ## Due date, reminder, priority
 

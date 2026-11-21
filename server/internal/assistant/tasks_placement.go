@@ -457,8 +457,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if t.WaitInputID != "" {
 		params["client_msg_id"] = t.WaitInputID
 	}
-	if t.WorkspaceResolved != nil && t.WorkspaceResolved.WorkspaceID != "" {
-		params["workspace_id"] = t.WorkspaceResolved.WorkspaceID
+	if w := t.WorkspaceResolved; w != nil && w.WorkspaceID != "" {
+		params["workspace_id"] = w.WorkspaceID
+		if w.Created || w.Reused {
+			params["reopen_worktree_workspace"] = true
+		}
 	}
 	ctx, unlockTaskSpace, err := s.withTaskSpaceStart(ctx, *t, m, params)
 	if err != nil {

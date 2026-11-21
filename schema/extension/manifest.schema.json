@@ -572,9 +572,16 @@
             "not": {"anyOf": [{"enum": ["github.com", "www.github.com", "api.github.com", "ssh.github.com", "gitlab.com", "altssh.gitlab.com"]}, {"pattern": "(^|\\.)([0-9]+|0x[0-9a-f]*)$"}]}}},
         "link_kinds": {"type": "array", "description": "What it calls the link kinds it names (each at most once; the others keep their usual words). Only relabels: the kinds stay issue and pull_request.", "maxItems": 2, "uniqueItems": true,
           "items": {"$ref": "#/$defs/RepositoryLinkLabel"},
-          "not": {"minItems": 2, "anyOf": [{"items": {"properties": {"kind": {"const": "issue"}}}}, {"items": {"properties": {"kind": {"const": "pull_request"}}}}]}}
+          "not": {"minItems": 2, "anyOf": [{"items": {"properties": {"kind": {"const": "issue"}}}}, {"items": {"properties": {"kind": {"const": "pull_request"}}}}]}},
+        "capabilities": {"type": "array", "description": "What else the program answers (#11584): pr_status, the state of a pull request for delivery checks (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.", "maxItems": 1, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/RepositoryCapability"}}
       },
       "required": ["id", "name", "hosts"]
+    },
+    "RepositoryCapability": {
+      "description": "A repository provider's optional answer: pr_status (repo.pr_status).",
+      "type": "string",
+      "enum": ["pr_status"]
     },
     "RepositoryLinkLabel": {
       "description": "The word a repository provider shows for one kind of its links (MR for a pull_request).",
