@@ -17,7 +17,8 @@ test('pinned process instructions preserve project/AGENTS instructions, survive 
   writeFileSync(agents, 'SHARED_AGENTS_SENTINEL')
   writeFileSync(project, 'PROJECT_INSTRUCTIONS_SENTINEL')
   const projectConfig = join(cwd, 'opencode.json')
-  const originalConfig = JSON.stringify({ instructions: [project] })
+  // Seed the normal schema field; this pinned CLI migrates schema-less files.
+  const originalConfig = JSON.stringify({ $schema: 'https://opencode.ai/config.json', instructions: [project] })
   writeFileSync(projectConfig, originalConfig)
   const model = await fakeModel(t)
   const env = environment(home, model.url)
