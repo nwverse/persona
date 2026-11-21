@@ -129,13 +129,14 @@ class AppleCIPreparationTests(unittest.TestCase):
     def test_explicit_unsigned_build_lane_preserves_the_real_build_and_skips_devices(self):
         script = SCRIPT.read_text()
         workflow = (ROOT / '.github/workflows/apple-test.yml').read_text()
-        self.assertIn('options: [ios, ios18, ios-build, packages, ios-focused]', workflow)
+        self.assertIn('options: [ios, ios18, ios-build, packages, ios-focused, ios-regressions]', workflow)
         self.assertIn("inputs.lane == 'packages' && 'Native package tests (Xcode 26.0)'", workflow)
         self.assertIn("inputs.lane == 'ios-focused' && 'Focused iOS and About tests (Xcode 26.0)'", workflow)
-        self.assertIn('all|ios|ios18|packages|ios-build|ios-focused', script)
-        self.assertIn('[ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ]', script)
+        self.assertIn("inputs.lane == 'ios-regressions' && 'iOS stack and Live Activity regressions (Xcode 26.0)'", workflow)
+        self.assertIn('all|ios|ios18|packages|ios-build|ios-focused|ios-regressions', script)
+        self.assertIn('[ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ] || [ "$LANE" = ios-regressions ]', script)
         self.assertIn('[ "$LANE" != packages ] && [ "$LANE" != ios-build ]', script)
-        start = script.index('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ]')
+        start = script.index('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ] || [ "$LANE" = ios-regressions ]')
         end = script.index('if [ "$LANE" = ios18 ]; then', start)
         device = script[start:end]
         for step in ('Stage resolved packages for Meta configuration',
@@ -168,6 +169,39 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn('TEST_RUNNER_PERSONA_SHOTS="$OUTPUT/regular-shots"', script)
         self.assertIn('Create stock regular-width About test simulator', script)
         self.assertIn('Verify hosted iOS test readiness', script)
+
+    def test_regression_lane_stops_after_two_strict_suites(self):
+        script = SCRIPT.read_text()
+        selection = script[script.index('if [ "$LANE" = ios-regressions ]; then'):script.index('# A generic destination')]
+        self.assertEqual(re.findall(r'-only-testing:PersonaTests/(\w+)', selection), [
+            'MainPagesStackTests', 'PhoneSystemToolsTests',
+        ])
+        self.assertNotIn('IOS_EXCLUSIONS', selection)
+        readiness = script.index("ci_run 'Verify hosted iOS test readiness' 900")
+        batch = script.index("test_batch ios-unit 'iOS offline unit and design/token tests'")
+        strict = script.index('result ios-unit "$SIM" MainPagesStackTests PhoneSystemToolsTests')
+        stop = script.rindex('if [ "$LANE" = ios-regressions ]; then', batch, strict)
+        finish = script.index('if [ "$LANE" != ios-focused ]; then', strict)
+        ordinary = script.index('result ios-unit "$SIM" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests')
+        focused_start = script.index('if [ "$LANE" = ios-focused ]; then', batch)
+        focused_result = script.index('result ios-unit "$SIM" PageSearchableTests', focused_start)
+        focused = script[focused_start:script.index('\n', focused_result) + 1]
+        self.assertLess(readiness, batch)
+        self.assertLess(batch, ordinary)
+        self.assertLess(ordinary, stop)
+        self.assertLess(stop, strict)
+        self.assertEqual(script[stop:finish], '''if [ "$LANE" = ios-regressions ]; then
+    result ios-unit "$SIM" MainPagesStackTests PhoneSystemToolsTests
+    exit "$IOS_FAILED"
+  fi
+  ''')
+        self.assertLess(strict, script.index("test_batch ios-html-card 'iOS HTML card tests"))
+        # The established compact/About branch remains exactly unchanged.
+        self.assertEqual(focused, '''if [ "$LANE" = ios-focused ]; then
+    result ios-unit "$SIM" PageSearchableTests StarredMessagesTests LauncherModelChoiceTests OmpNewAgentTests PaseoPermissionModesTests PaseoProvidersTests AboutVersionCompactVisualTests
+''')
+        self.assertIn('elif [ "$LANE" != ios-regressions ]; then', script[focused_start:ordinary])
+        self.assertIn('if [ "$LANE" != ios-focused ]; then', script[finish:])
 
     def test_regular_ipad_observer_has_an_independent_scope_and_strict_probe(self):
         script = SCRIPT.read_text()
