@@ -142,6 +142,9 @@ type Settings struct {
 	// InboxSignals: new Inbox messages the judge links to a supervised task reach its supervisor as the signal inbox
 	// (#4293, supervise_inbox.go). nil is off (the default): each one is a supervisor turn.
 	InboxSignals *bool `json:"inbox_signals,omitempty"`
+	// InboxTodoForward: deterministically forward PR/Issue Inbox items to the bound open to-do's Agent without LLM
+	// calls (#12492, inbox_forward.go). nil is off (the default): zero automatic forwards until opted in.
+	InboxTodoForward *bool `json:"inbox_todo_forward,omitempty"`
 	// InboxPost: the assistant may put a conversation into the Inbox (inbox_post, a task's "put it in the Inbox when
 	// done", inbox_post.go). nil is on: a row only comes from the user's own request or a task they set. The Inbox
 	// Sources page's switch for it.
@@ -735,6 +738,8 @@ type assistantView struct {
 	AgentAutoNamingIntervalHours int  `json:"agent_auto_naming_interval_hours"`
 	// InboxSignals is in effect, like DoneNeedsDelivery.
 	InboxSignals bool `json:"inbox_signals"`
+	// InboxTodoForward is in effect, like InboxSignals (#12492).
+	InboxTodoForward bool `json:"inbox_todo_forward"`
 	// NextSuggestions is in effect, like DoneNeedsDelivery.
 	NextSuggestions bool `json:"next_suggestions"`
 	// MainSupervisesOwnTasks is in effect, like DoneNeedsDelivery: false means the background supervisor follows up
@@ -784,7 +789,8 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		AgentAutoNaming:              quietOn(v.AgentAutoNaming),
 		AgentAutoNamingMax:           agentNamingLimit(v),
 		AgentAutoNamingIntervalHours: agentNamingInterval(v),
-		InboxSignals:                 v.InboxSignals != nil && *v.InboxSignals, MainSupervisesOwnTasks: !s.backgroundOn(v),
+		InboxSignals:                 v.InboxSignals != nil && *v.InboxSignals,
+		InboxTodoForward:             v.InboxTodoForward != nil && *v.InboxTodoForward, MainSupervisesOwnTasks: !s.backgroundOn(v),
 		SupervisionBatchMinutes: supervisionBatchMinutesOf(v),
 		NextSuggestions:         v.NextSuggestions != nil && *v.NextSuggestions}
 	if d, ok := s.device(ctx, v.MachineID); ok {
