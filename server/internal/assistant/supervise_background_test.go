@@ -434,12 +434,32 @@ func TestDigestToWithBackgroundSupervisor(t *testing.T) {
 			t.Errorf("a task %s plans is supervised by %q %v, want %q", conv, got, ok, want)
 		}
 	}
+	// A direction the owner ended (#11394): its open tasks are this route's now, as a task whose ledger names the main
+	// conversation is.
+	ended, err := s.createTodo(ctx, "结束了的方向的任务", "", "lead2", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, ended.ID, "lead2", []string{"做完"}, 30)
+	endedAt := time.Now().UTC().Add(time.Second)
+	s.directions.mu.Lock()
+	if !s.directionsLocked(ctx) {
+		t.Fatal("the directions could not be read")
+	}
+	s.directions.m["lead2"] = &direction{By: directionByUser, At: endedAt.Add(-time.Hour), EndedAt: &endedAt}
+	s.directions.mu.Unlock()
 	cfg := s.settings(ctx)
 	for _, c := range []struct {
 		name string
 		g    superviseSignal
 		want string
 	}{
+		{"an ended direction's review", superviseSignal{Todo: ended.ID, Kind: sigReview}, "bg1"},
+		{"a task leader's decision for an ended direction", superviseSignal{Todo: ended.ID, Kind: sigDecide, To: "lead2"}, "bg1"},
+		{"the owner's answer to a check for an ended direction", superviseSignal{Todo: ended.ID, Kind: sigCheck, Report: checkDecidedReport, To: "lead2"}, "bg1"},
+		// A failed start goes to the main conversation for an ended direction's task too, as for the main
+		// conversation's own (#11735).
+		{"an ended direction's failed start", superviseSignal{Todo: ended.ID, Kind: sigFailed}, "conv1"},
 		{"a review", superviseSignal{Todo: todo.ID, Kind: sigReview}, "bg1"},
 		{"a report", superviseSignal{Todo: todo.ID, Kind: sigReport}, "bg1"},
 		{"a stall", superviseSignal{Todo: todo.ID, Kind: sigStalled}, "bg1"},
