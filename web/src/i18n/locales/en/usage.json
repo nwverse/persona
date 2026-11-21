@@ -35,5 +35,12 @@
   "balance_unreachable": "Couldn't reach DeepSeek",
   "balance_unreachable_kept": "Couldn't reach DeepSeek; this is the last known balance",
   "balance_failed": "Couldn't read the balance",
-  "balance_failed_kept": "Couldn't read the balance; this is the last known amount"
+  "balance_failed_kept": "Couldn't read the balance; this is the last known amount",
+  "pin_account": "Pin {name} to sidebar",
+  "unpin_account": "Unpin {name} from sidebar",
+  "pin_title": "Pin to sidebar",
+  "unpin_title": "Unpin from sidebar",
+  "pinned_summary": "Pinned in sidebar: {count}",
+  "pinned_fallback": "Pinned accounts unavailable · showing automatic",
+  "reset_pinned": "Reset to automatic"
 }

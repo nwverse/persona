@@ -3,7 +3,7 @@
 // behind an even pace. Hidden entirely while the hub has no data.
 import { type ComponentType, useEffect, useRef, useState } from "react";
 import { t as tr } from "../i18n";
-import { fullest, isBalanceAccount, isWarn, liveAccounts, topAccounts, useUsageWindows, sourceNames, type UnconnectedProvider, type UsageAccount } from "../lib/usage-windows";
+import { fullest, isWarn, liveAccounts, selectSidebarUsageAccounts, sourceNames, usePinnedUsageAccounts, useUsageWindows, type UnconnectedProvider, type UsageAccount } from "../lib/usage-windows";
 import { cx } from "../ui/atoms";
 import { lazyOverlay } from "./LazyOverlay";
 
@@ -33,9 +33,9 @@ const EMPTY_UNCONNECTED: readonly UnconnectedProvider[] = [];
 export function UsageBars({ accounts, unconnected = EMPTY_UNCONNECTED, now = Date.now() }: { accounts: UsageAccount[]; unconnected?: readonly UnconnectedProvider[]; now?: number }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const pinnedIds = usePinnedUsageAccounts();
   const live = liveAccounts(accounts, now);
-  const top = topAccounts(live);
-  const balances = live.filter(isBalanceAccount);
+  const { bars: top, balances } = selectSidebarUsageAccounts(live, pinnedIds);
 
   useEffect(() => {
     if (!open) return;
@@ -80,7 +80,7 @@ export function UsageBars({ accounts, unconnected = EMPTY_UNCONNECTED, now = Dat
         {balances.map((a) => (
           <BalanceRow key={a.id} a={a} />
         ))}
-        {unconnected.slice(0, 4 - top.length || 1).map((p) => (
+        {unconnected.slice(0, Math.max(1, 4 - top.length)).map((p) => (
           <span key={`_${p.id}`} data-usage-unconnected={p.id} className="flex items-baseline gap-2 text-xs text-ink-3">
             <span className="min-w-0 flex-1 truncate">{p.title}</span>
             <span className="shrink-0">{tr("usage.not_connected")}</span>

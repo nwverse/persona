@@ -35,5 +35,12 @@
   "balance_unreachable": "暂时连不上 DeepSeek",
   "balance_unreachable_kept": "暂时连不上 DeepSeek，显示的是上次的余额",
   "balance_failed": "读取余额失败",
-  "balance_failed_kept": "读取余额失败，显示的是上次的金额"
+  "balance_failed_kept": "读取余额失败，显示的是上次的金额",
+  "pin_account": "将 {name} 固定到侧栏",
+  "unpin_account": "取消将 {name} 固定到侧栏",
+  "pin_title": "固定到侧栏",
+  "unpin_title": "取消固定",
+  "pinned_summary": "侧栏已固定 {count} 个账号",
+  "pinned_fallback": "固定账号暂不可用 · 已自动展示",
+  "reset_pinned": "恢复默认"
 }
