@@ -129,13 +129,14 @@ class AppleCIPreparationTests(unittest.TestCase):
     def test_explicit_unsigned_build_lane_preserves_the_real_build_and_skips_devices(self):
         script = SCRIPT.read_text()
         workflow = (ROOT / '.github/workflows/apple-test.yml').read_text()
-        self.assertIn('options: [ios, ios18, ios-build, packages, ios-focused, ios-ipad-diagnostic]', workflow)
+        self.assertIn('options: [ios, ios18, ios-build, packages, ios-focused, ios-regressions, ios-ipad-diagnostic]', workflow)
         self.assertIn("inputs.lane == 'packages' && 'Native package tests (Xcode 26.0)'", workflow)
         self.assertIn("inputs.lane == 'ios-focused' && 'Focused iOS and About tests (Xcode 26.0)'", workflow)
-        self.assertIn('all|ios|ios18|packages|ios-build|ios-focused|ios-ipad-diagnostic', script)
-        self.assertIn('[ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ] || [ "$LANE" = ios-ipad-diagnostic ]', script)
+        self.assertIn("inputs.lane == 'ios-regressions' && 'iOS stack and Live Activity regressions (Xcode 26.0)'", workflow)
+        self.assertIn('all|ios|ios18|packages|ios-build|ios-focused|ios-regressions|ios-ipad-diagnostic', script)
+        self.assertIn('[ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ] || [ "$LANE" = ios-regressions ] || [ "$LANE" = ios-ipad-diagnostic ]', script)
         self.assertIn('[ "$LANE" != packages ] && [ "$LANE" != ios-build ]', script)
-        start = script.index('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ]')
+        start = script.index('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ] || [ "$LANE" = ios-regressions ]')
         end = script.index('if [ "$LANE" = ios18 ]; then', start)
         device = script[start:end]
         for step in ('Stage resolved packages for Meta configuration',
@@ -175,9 +176,9 @@ class AppleCIPreparationTests(unittest.TestCase):
         choices = data[True]['workflow_dispatch']['inputs']['lane']['options']
         self.assertIn('ios-ipad-diagnostic', choices)
         ordinary = yaml.safe_load(subprocess.run(
-            ['git', 'show', '5f73a16154d626ccc7dc5359f10254fd5ced6d0d:.github/workflows/apple-test.yml'], cwd=ROOT,
+            ['git', 'show', 'af32ff9d9459e4faafbba63cd93b3901bd487534:.github/workflows/apple-test.yml'], cwd=ROOT,
             check=True, capture_output=True, text=True).stdout)
-        for lane in ('ios', 'ios-focused'):
+        for lane in ('ios', 'ios-focused', 'ios-regressions'):
             current = dict(data['jobs']['apple'])
             current.pop('steps')
             baseline = dict(ordinary['jobs']['apple'])
@@ -203,9 +204,9 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertLess(script.index('exit 0\n    fi\n    mkdir -p "$OUTPUT/regular-shots"'),
                         script.index("ci_run 'iOS regular-width About visual test on real iPad'"))
         self.assertNotIn("ci_run 'Collect regular iPad diagnostic evidence'", script)
-        original_script = subprocess.run(['git', 'show', '5f73a16154d626ccc7dc5359f10254fd5ced6d0d:scripts/ci/apple.sh'], cwd=ROOT,
+        original_script = subprocess.run(['git', 'show', 'af32ff9d9459e4faafbba63cd93b3901bd487534:scripts/ci/apple.sh'], cwd=ROOT,
                                          check=True, capture_output=True, text=True).stdout
-        for lane in ('ios', 'ios-focused'):
+        for lane in ('ios', 'ios-focused', 'ios-regressions'):
             current = script.replace(' || [ "$LANE" = ios-ipad-diagnostic ]', '').replace('|ios-ipad-diagnostic', '')
             current = current.replace('      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; diagnostics="$9"; lane="${10}"; shift 10',
                                       '      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; shift 8')
@@ -216,6 +217,39 @@ class AppleCIPreparationTests(unittest.TestCase):
             current = current.replace('      "$OUTPUT" "$DIAGNOSTICS" --scope "$scope"', '      "$OUTPUT" "$DIAGNOSTICS"')
             current = current.replace('    if [ "$LANE" = ios-ipad-diagnostic ]; then\n      # A deliberate app-host diagnostic stops after its own strict probe and\n      # observer cleanup; it neither runs nor substitutes for the visual suite.\n      exit 0\n    fi\n', '')
             self.assertEqual(current, original_script)
+
+    def test_regression_lane_stops_after_two_strict_suites(self):
+        script = SCRIPT.read_text()
+        selection = script[script.index('if [ "$LANE" = ios-regressions ]; then'):script.index('# A generic destination')]
+        self.assertEqual(re.findall(r'-only-testing:PersonaTests/(\w+)', selection), [
+            'MainPagesStackTests', 'PhoneSystemToolsTests',
+        ])
+        self.assertNotIn('IOS_EXCLUSIONS', selection)
+        readiness = script.index("ci_run 'Verify hosted iOS test readiness' 900")
+        batch = script.index("test_batch ios-unit 'iOS offline unit and design/token tests'")
+        strict = script.index('result ios-unit "$SIM" MainPagesStackTests PhoneSystemToolsTests')
+        stop = script.rindex('if [ "$LANE" = ios-regressions ]; then', batch, strict)
+        finish = script.index('if [ "$LANE" != ios-focused ]; then', strict)
+        ordinary = script.index('result ios-unit "$SIM" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests')
+        focused_start = script.index('if [ "$LANE" = ios-focused ]; then', batch)
+        focused_result = script.index('result ios-unit "$SIM" PageSearchableTests', focused_start)
+        focused = script[focused_start:script.index('\n', focused_result) + 1]
+        self.assertLess(readiness, batch)
+        self.assertLess(batch, ordinary)
+        self.assertLess(ordinary, stop)
+        self.assertLess(stop, strict)
+        self.assertEqual(script[stop:finish], '''if [ "$LANE" = ios-regressions ]; then
+    result ios-unit "$SIM" MainPagesStackTests PhoneSystemToolsTests
+    exit "$IOS_FAILED"
+  fi
+  ''')
+        self.assertLess(strict, script.index("test_batch ios-html-card 'iOS HTML card tests"))
+        # The established compact/About branch remains exactly unchanged.
+        self.assertEqual(focused, '''if [ "$LANE" = ios-focused ] || [ "$LANE" = ios-ipad-diagnostic ]; then
+    result ios-unit "$SIM" PageSearchableTests StarredMessagesTests LauncherModelChoiceTests OmpNewAgentTests PaseoPermissionModesTests PaseoProvidersTests AboutVersionCompactVisualTests
+''')
+        self.assertIn('elif [ "$LANE" != ios-regressions ]; then', script[focused_start:ordinary])
+        self.assertIn('if [ "$LANE" != ios-focused ]; then', script[finish:])
 
     def test_regular_ipad_observer_has_an_independent_scope_and_strict_probe(self):
         script = SCRIPT.read_text()
@@ -605,6 +639,7 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
                 (observer / 'observer.status.txt').write_text(name)
             (output / 'regular-readiness-context.json').write_text('regular scope')
             (output / 'simulator-readiness-context.json').write_text('phone scope')
+            (output / 'simulator.log').write_text('phone-device')
             apple_diagnostics.collect(output, destination, lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '', ''), scope='regular')
             self.assertEqual({path.name for path in destination.iterdir()}, {
                 'regular-simulator.log', 'regular-simulator-boot.log', 'regular-readiness.log',
@@ -623,9 +658,28 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
             destination = Path(directory) / 'artifacts'
             apple_diagnostics.collect(output, destination, lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '', ''), scope='regular')
             context = json.loads((destination / 'regular-readiness-context.json').read_text())
-            self.assertEqual(context, {'unavailable': 'regular iPad probe did not publish its owned context'})
+            self.assertEqual(context, {'unavailable': 'regular iPad probe did not publish an owned regular-file context'})
             self.assertFalse((destination / 'simulator-launch.status.txt').exists())
             self.assertTrue((destination / 'regular-readiness.log').is_file())
+
+    def test_regular_context_symlink_is_rejected_without_reading_its_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'output'
+            output.mkdir()
+            (output / 'private.json').write_text('private target must not be exported')
+            (output / 'regular-readiness-context.json').symlink_to(output / 'private.json')
+            destination = Path(directory) / 'artifacts'
+            apple_diagnostics.collect(output, destination, lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '', ''), scope='regular')
+            context = json.loads((destination / 'regular-readiness-context.json').read_text())
+            self.assertEqual(context, {'unavailable': 'regular iPad probe did not publish an owned regular-file context'})
+            self.assertNotIn('private target', (destination / 'regular-readiness-context.json').read_text())
+            self.assertFalse((destination / 'regular-readiness-context.json').is_symlink())
+            for name, contents in (('oversize', 'x' * 1025), ('invalid', 'not-json')):
+                with self.subTest(case=name):
+                    (output / 'regular-readiness-context.json').unlink()
+                    (output / 'regular-readiness-context.json').write_text(contents)
+                    apple_diagnostics.collect(output, destination, lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '', ''), scope='regular')
+                    self.assertEqual(json.loads((destination / 'regular-readiness-context.json').read_text()), context)
 
     def test_unavailable_simctl_still_retains_existing_logs(self):
         with tempfile.TemporaryDirectory() as directory:

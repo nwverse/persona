@@ -50,11 +50,12 @@ def collect(output, destination, runner=subprocess.run, scope="all"):
     else:
         # The regular observer already retained its own scoped launch collection.
         # Never read the earlier iPhone's root context in this shared job output.
-        if output.joinpath("regular-readiness-context.json").is_file():
-            shutil.copyfile(output / "regular-readiness-context.json", destination / "regular-readiness-context.json")
-        else:
-            (destination / "regular-readiness-context.json").write_text(
-                '{"unavailable":"regular iPad probe did not publish its owned context"}\n')
+        try:
+            context = apple_launch_diagnostics.read_scope_file(output / "regular-readiness-context.json")
+            json.loads(context)
+        except (ValueError, TypeError):
+            context = '{"unavailable":"regular iPad probe did not publish an owned regular-file context"}\n'
+        apple_launch_diagnostics.publish(destination / "regular-readiness-context.json", context)
     commands = [
         ("simctl-list", ["xcrun", "simctl", "list", "--json"], 120, "json"),
         ("disk-space", ["df", "-h", str(output)], 30, "txt"),

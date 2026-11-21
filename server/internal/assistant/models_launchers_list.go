@@ -299,11 +299,12 @@ func (s *Service) machineLaunchersFrom(ctx context.Context, machine string, res 
 		out = append(out, proto.Launcher{Name: "claude", Source: "builtin"})
 	}
 	agyAssistant := slices.ContainsFunc(res.Launchers, func(l proto.LauncherEnvelope) bool { return l.Agent == "agy" && l.Assistant })
+	agyPolicy := slices.ContainsFunc(res.Launchers, func(l proto.LauncherEnvelope) bool { return l.Agent == "agy" && l.Assistant && l.SupervisionPolicy })
 	for _, m := range managed {
 		if m.Kind == "api" {
 			continue
 		}
-		out = append(out, proto.Launcher{Name: m.Name, BaseURL: m.BaseURL, Model: m.Model, Source: "persona", Agent: m.Agent, Assistant: m.Agent == "agy" && agyAssistant,
+		out = append(out, proto.Launcher{Name: m.Name, BaseURL: m.BaseURL, Model: m.Model, Source: "persona", Agent: m.Agent, Assistant: m.Agent == "agy" && agyAssistant, SupervisionPolicy: m.Agent == "agy" && agyPolicy,
 			PromptOptional: m.Agent == "codex" && codexOptional, RunHere: m.Agent == "codex" && codexHere, Pi: m.PiAPI() != ""})
 	}
 	return out, res.HostRuntime
