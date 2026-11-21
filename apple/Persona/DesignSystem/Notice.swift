@@ -72,7 +72,7 @@ struct NoticeBanner<Action: View>: View {
                 .font(Theme.Font.labelStrong)
                 .foregroundStyle(.secondary)
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain) // secondary ink, not the button tint
         .tapTargetOutset(.all)
         .accessibilityLabel(Text("Hide"))
         .accessibilityIdentifier("notice.dismiss")
