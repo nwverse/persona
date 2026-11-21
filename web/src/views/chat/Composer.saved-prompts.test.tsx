@@ -9,7 +9,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 
 const hub = vi.hoisted(() => ({
-  prompts: [] as { id: string; name: string; text: string }[],
+  prompts: [] as { id: string; name: string; text: string; template?: true }[],
+  templates: false,
   listeners: new Map<string, Set<(m: Record<string, unknown>) => void>>(),
 }));
 vi.mock("../../lib/api", async (original) => {
@@ -17,7 +18,7 @@ vi.mock("../../lib/api", async (original) => {
   return {
     ...real,
     api: vi.fn(async (path: string) => {
-      if (path === "/assistant/saved-prompts") return { prompts: hub.prompts };
+      if (path === "/assistant/saved-prompts") return { prompts: hub.prompts, ...(hub.templates && { template_version: 1 }) };
       throw new real.ApiError(404, "not found", {});
     }),
   };
@@ -30,6 +31,9 @@ vi.mock("../../lib/store", async (original) => ({
     return () => void hub.listeners.get(type)?.delete(l);
   },
 }));
+import { setPairedToken } from "../../lib/api";
+import { chooseManager, resetManagerChoice } from "../../lib/manager-choice";
+import { onPermissionPicker } from "../../lib/permissions-command";
 import { resetSavedPrompts } from "../../lib/saved-prompts";
 import { Composer, type Outgoing } from "./Composer";
 
@@ -38,13 +42,15 @@ import { Composer, type Outgoing } from "./Composer";
 let host: HTMLDivElement;
 let root: Root;
 const box = () => host.querySelector("textarea")!;
-const typeInto = (text: string) =>
+const typeInto = (text: string, field = box()) =>
   act(() => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box(), text);
-    box().dispatchEvent(new Event("input", { bubbles: true }));
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, text);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
   });
-const key = (name: string) => act(() => void box().dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true })));
+const key = (name: string, field = box()) => act(() => void field.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true })));
 const rows = () => [...host.querySelectorAll("[role=option]")].map((o) => o.textContent);
+const dialog = () => document.querySelector<HTMLDivElement>("[role=dialog]");
+const action = (name: string) => [...dialog()!.querySelectorAll("button")].find((button) => button.textContent === name)!;
 const until = async (check: () => void) => {
   for (let i = 0; i < 200; i++) {
     await act(async () => { await new Promise((ok) => setTimeout(ok, 5)); });
@@ -59,6 +65,7 @@ const until = async (check: () => void) => {
 const saved = (name: string) => `${name}${t("chat-savedprompts.source")}`;
 
 beforeEach(() => {
+  hub.templates = false;
   hub.prompts = [
     { id: "sp1", name: "review", text: "Review this diff for security issues." },
     { id: "sp2", name: "standup", text: "Write today's standup from the commits." },
@@ -66,6 +73,7 @@ beforeEach(() => {
   hub.listeners.clear();
   vi.stubGlobal("matchMedia", (q: string) => ({ matches: q.includes("fine"), addEventListener() {}, removeEventListener() {} }));
   localStorage.clear();
+  resetManagerChoice();
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -107,4 +115,112 @@ it("are offered where the chat has no commands of its own", async () => {
   act(() => root.render(<Composer draftKey="none" placeholder="" onSend={async () => true} commands={[]} />));
   typeInto("/");
   await until(() => expect(rows()).toEqual([saved("review"), saved("standup")]));
+});
+
+it("fills one field for each name and inserts literal values without sending or opening a built-in picker", async () => {
+  hub.templates = true;
+  hub.prompts = [
+    { id: "sp3", name: "entry", text: "{{command}}", template: true },
+    { id: "sp4", name: "review", text: "{{topic}} → {{topic}} ({{audience}})", template: true },
+  ];
+  const onSend = vi.fn(async (_: Outgoing) => true);
+  const openPicker = vi.fn();
+  const unregister = onPermissionPicker("templates", openPicker);
+  try {
+    act(() => root.render(<Composer draftKey="templates" placeholder="" onSend={onSend} />));
+    typeInto("/entry");
+    await until(() => expect(rows()).toEqual([saved("entry")]));
+    key("Tab");
+    await until(() => expect(dialog()).not.toBeNull());
+    expect(box().value).toBe("/entry");
+    const command = dialog()!.querySelector("textarea")!;
+    expect(command.required).toBe(true);
+    expect(action(t("prompt-template.insert")).disabled).toBe(true);
+    typeInto(" \t\n ", command);
+    expect(action(t("prompt-template.insert")).disabled).toBe(true);
+    typeInto("/permissions", command);
+    expect(action(t("prompt-template.insert")).disabled).toBe(false);
+    act(() => action(t("prompt-template.insert")).click());
+    expect(box().value).toBe("/permissions");
+    await until(() => expect(document.activeElement).toBe(box()));
+    expect(box().selectionStart).toBe("/permissions".length);
+    typeInto("/review");
+    await until(() => expect(rows()).toEqual([saved("review")]));
+    act(() => host.querySelector<HTMLButtonElement>("[role=option]")!.click());
+    await until(() => expect(dialog()!.querySelectorAll("textarea")).toHaveLength(2));
+    expect([...dialog()!.querySelectorAll("label")].map((label) => label.textContent)).toEqual(["topic", "audience"]);
+    const [topic, audience] = dialog()!.querySelectorAll("textarea");
+    typeInto(" {{literal}} ", topic);
+    expect(action(t("prompt-template.insert")).disabled).toBe(true);
+    typeInto("team", audience);
+    act(() => action(t("prompt-template.insert")).click());
+    expect(box().value).toBe(" {{literal}}  →  {{literal}}  (team)");
+    expect(onSend).not.toHaveBeenCalled();
+    expect(openPicker).not.toHaveBeenCalled();
+  } finally {
+    unregister();
+  }
+});
+
+it("preserves the slash draft on Cancel, provides keyboard selection, and retires a draft-key round trip", async () => {
+  hub.templates = true;
+  hub.prompts = [{ id: "sp3", name: "entry", text: "Write {{topic}}", template: true }];
+  const render = (draftKey: string) => act(() => root.render(<Composer draftKey={draftKey} placeholder="" onSend={async () => true} />));
+  const open = async () => {
+    typeInto("/entry");
+    await until(() => expect(rows()).toEqual([saved("entry")]));
+    key("Enter");
+    await until(() => expect(dialog()).not.toBeNull());
+  };
+  render("templates");
+  await open();
+  const field = dialog()!.querySelector("textarea")!;
+  typeInto("private", field);
+  act(() => field.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true })));
+  key("Escape", field);
+  expect(dialog()).not.toBeNull();
+  act(() => action(t("common.cancel")).click());
+  expect(box().value).toBe("/entry");
+  await until(() => expect(document.activeElement).toBe(box()));
+  typeInto("/entr");
+  await until(() => expect(rows()).toEqual([saved("entry")]));
+  key("Enter");
+  await until(() => expect(dialog()).not.toBeNull());
+  expect(dialog()!.querySelector("textarea")?.value).toBe("");
+  render("other");
+  expect(dialog()).toBeNull();
+  render("templates");
+  expect(dialog()).toBeNull();
+});
+
+it("retires manager and credential round trips while a template contains local values", async () => {
+  hub.templates = true;
+  hub.prompts = [{ id: "sp3", name: "entry", text: "Write {{topic}}", template: true }];
+  act(() => root.render(<Composer draftKey="templates" placeholder="" onSend={async () => true} />));
+  const open = async () => {
+    typeInto("/entr");
+    typeInto("/entry");
+    await until(() => expect(rows()).toEqual([saved("entry")]));
+    key("Enter");
+    await until(() => expect(dialog()).not.toBeNull());
+    typeInto("private", dialog()!.querySelector("textarea")!);
+  };
+  await open();
+  await act(async () => { chooseManager("other"); chooseManager(null); });
+  expect(dialog()).toBeNull();
+  expect(box().value).toBe("/entry");
+  await open();
+  await act(async () => { setPairedToken("other"); setPairedToken(""); });
+  expect(dialog()).toBeNull();
+  expect(box().value).toBe("/entry");
+});
+
+it("preserves literal braces when the server doesn't advertise template support", async () => {
+  hub.prompts = [{ id: "sp3", name: "entry", text: "Write {{topic}}", template: true }];
+  act(() => root.render(<Composer draftKey="templates" placeholder="" onSend={async () => true} />));
+  typeInto("/entry");
+  await until(() => expect(rows()).toEqual([saved("entry")]));
+  key("Enter");
+  expect(dialog()).toBeNull();
+  expect(box().value).toBe("Write {{topic}}");
 });

@@ -7,13 +7,14 @@ import { t } from "../i18n";
 
 const hub = vi.hoisted(() => ({
   listeners: new Map<string, Set<(m: Record<string, unknown>) => void>>(),
-  prompts: new Map<string, { id: string; name: string; text: string }[]>(),
+  prompts: new Map<string, SavedPrompt[]>(),
   calls: [] as { path: string; method: string; json?: unknown; manager?: string }[],
   missing: false,
+  templates: false,
   failNext: null as Error | null,
   /** What the composers get: the module hands them their rows. */
   published: [] as string[][],
-  rows: [] as readonly { word: string; text: string; source?: string; key?: string }[],
+  rows: [] as readonly { word: string; text: string; source?: string; key?: string; template?: true }[],
 }));
 vi.mock("./saved-prompt-rows", () => ({ setSavedPromptRows: (next: typeof hub.rows) => { hub.rows = next; hub.published.push(next.map((row) => row.word)); } }));
 vi.mock("./api", async (original) => {
@@ -32,11 +33,11 @@ vi.mock("./api", async (original) => {
       }
       if (hub.missing) throw new real.ApiError(404, "not found", {});
       const list = hub.prompts.get(manager) ?? [];
-      if (method === "GET") return { prompts: list };
+      if (method === "GET") return { prompts: list, ...(hub.templates && { template_version: 1 }) };
       if (method === "POST") {
         const p = { id: `sp${list.length + 1}`, ...(init?.json as { name: string; text: string }) };
         hub.prompts.set(manager, [...list, p]);
-        return { prompt: p };
+        return { prompt: p, ...(hub.templates && { template_version: 1 }) };
       }
       if (method === "PUT" && path.endsWith("/order")) {
         const ids = (init?.json as { ids: string[] }).ids;
@@ -48,7 +49,7 @@ vi.mock("./api", async (original) => {
         const id = path.split("/").pop()!;
         const next = list.map((p) => (p.id === id ? { id, ...(init?.json as { name: string; text: string }) } : p));
         hub.prompts.set(manager, next);
-        return { prompt: next.find((p) => p.id === id) };
+        return { prompt: next.find((p) => p.id === id), ...(hub.templates && { template_version: 1 }) };
       }
       if (method === "DELETE") {
         hub.prompts.set(manager, list.filter((p) => !path.endsWith(`/${p.id}`)));
@@ -69,6 +70,7 @@ vi.mock("./store", async (original) => ({
 import { api, handleUnauthorized, setPairedToken, setToken } from "./api";
 import { chooseManager, resetManagerChoice, setRosterDefault, settleRosterDefault } from "./manager-choice";
 import {
+  captureSavedPromptScope,
   deleteSavedPrompt,
   moveSavedPrompt,
   resetSavedPrompts,
@@ -93,6 +95,7 @@ beforeEach(() => {
   hub.prompts.clear();
   hub.calls.length = 0;
   hub.missing = false;
+  hub.templates = false;
   hub.failNext = null;
   hub.rows = [];
   hub.published = [];
@@ -182,6 +185,7 @@ describe("the list the page follows", () => {
     await settle();
     expect(rows()).toEqual([]);
     hub.missing = false;
+  hub.templates = false;
     hub.prompts.set("assistant", [prompt("sp1", "review")]);
     emit("hello");
     await settle();
@@ -439,4 +443,49 @@ it("retires cold recovery after a discovered default switches away and back", as
   finish({ prompt: prompt("sp2", "unproven") }); await pending; await settle();
   expect(rows().map((row) => row.word)).toEqual(["/newer"]);
   expect(hub.calls).toHaveLength(calls);
+});
+
+describe("fillable saved prompts", () => {
+  it("requires the manager's template version before publishing template slash rows", async () => {
+    hub.prompts.set("assistant", [{ ...prompt("sp1", "review", "Review {{repo}}."), template: true }]);
+    startSavedPrompts();
+    await settle();
+    expect(rows()[0].template).toBeUndefined();
+
+    hub.templates = true;
+    emit("assistant_saved_prompts");
+    await settle();
+    expect(rows()[0].template).toBe(true);
+  });
+
+  it("writes explicit opt-in but rejects a write after the manager lost support", async () => {
+    hub.templates = true;
+    settleRosterDefault();
+    startSavedPrompts();
+    await settle();
+    const saved = await saveSavedPrompt(null, { name: "review", text: "Review {{repo}}.", template: true });
+    expect(saved.template).toBe(true);
+    expect(hub.calls.find((call) => call.method === "POST")?.json).toMatchObject({ template: true });
+    await settle();
+
+    hub.templates = false;
+    vi.mocked(api).mockResolvedValueOnce({ prompt: prompt(saved.id, "review", "Review {{repo}}.") });
+    await expect(saveSavedPrompt(saved.id, { name: "review", text: "Review {{repo}}.", template: false }))
+      .rejects.toThrow(t("prompt-template.unsupported"));
+    await settle();
+    expect(rows()[0].template).toBeUndefined();
+    const writes = hub.calls.filter((call) => call.method !== "GET").length;
+    await expect(saveSavedPrompt(saved.id, { name: "review", text: "Review {{repo}}.", template: true }))
+      .rejects.toThrow(t("prompt-template.unsupported"));
+    expect(hub.calls.filter((call) => call.method !== "GET")).toHaveLength(writes);
+  });
+
+  it("retires an editor if its original assistant is left and later picked again", () => {
+    chooseManager("m-first");
+    const current = captureSavedPromptScope();
+    expect(current()).toBe(true);
+    chooseManager("m-second");
+    chooseManager("m-first");
+    expect(current()).toBe(false);
+  });
 });

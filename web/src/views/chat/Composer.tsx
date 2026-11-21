@@ -12,7 +12,8 @@ import { promptCommands, type ComposerCommand as Command } from "../../lib/exten
 import { useSavedPromptRows } from "../../lib/saved-prompt-rows";
 import { LOOP_TEXT, loopHint } from "../../lib/loop-command";
 import { WORKFLOWS_COMMAND } from "../../lib/background-panel";
-import { credentialOwner } from "../../lib/api";
+import { credentialOwner, subscribeCredentialOwner } from "../../lib/api";
+import { onManagerChoice, shownManager } from "../../lib/manager-choice";
 import { composerEntryDrop, dragHasEntry, droppedEntry } from "../../lib/entry-drag";
 import { uuid } from "../../lib/format";
 import { lazyPage } from "../../lib/lazy-page";
@@ -38,7 +39,7 @@ import { ContextChips } from "../link/ContextChips";
 import { ForwardBars } from "./ForwardCard";
 import { QuoteBars } from "./Quote";
 import type { ComposerPanelHandle, MentionRow, MentionSource, PanelPick } from "./ComposerPanel";
-import { OverlayBoundary } from "../LazyOverlay";
+import { lazyOverlay, OverlayBoundary } from "../LazyOverlay";
 import type { PlanMode } from "./PermissionPicker";
 import { useSendHistory } from "./useSendHistory";
 import { isModelCommand, requestModelPicker } from "../../lib/model-switch";
@@ -59,6 +60,7 @@ const SlashSkillEntry = lazyPage(() => import("./SlashSkillView").then((m) => m.
 const HistorySearch = lazyPage(() => import("./HistorySearch").then((m) => m.HistorySearch));
 // The shared picker shell is already idle-preloaded with @. Load slash-specific rows when the user types /.
 const SlashPalette = lazyPage(() => import("./SlashPalette").then((m) => m.SlashPalette));
+const SavedPromptTemplateDialog = lazyOverlay(() => import("./SavedPromptTemplateDialog").then((m) => m.SavedPromptTemplateDialog));
 /** How long "Not sent yet" stays under the box after Enter was pressed while blocked. */
 const NUDGE_MS = 4000;
 
@@ -317,6 +319,10 @@ export const Composer = memo(function Composer({
   };
   const keyNow = useRef(draftKey);
   keyNow.current = draftKey;
+  const [template, setTemplate] = useState<{ key: string; source: string; onClose: () => void; onInsert: (text: string) => void } | null>(null);
+  const stopTemplate = useRef<(() => void) | null>(null);
+  useLayoutEffect(() => () => stopTemplate.current?.(), [draftKey]);
+  const showTemplate = template?.key === draftKey && stopTemplate.current ? template : null;
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -865,6 +871,44 @@ export const Composer = memo(function Composer({
       pickRow(c, { start: 0, end: draft.length, query: "" });
       return;
     }
+    if (c.template) {
+      stopTemplate.current?.();
+      // Fence the selection immediately, including while the fill dialog is loading.
+      const manager = shownManager();
+      const owner = credentialOwner();
+      const current = () => mounted.current && keyNow.current === draftKey && shownManager() === manager && credentialOwner() === owner;
+      const retire = () => {
+        stopManager();
+        stopOwner();
+        stopTemplate.current = null;
+      };
+      const close = () => {
+        retire();
+        setTemplate(null);
+      };
+      const stopManager = onManagerChoice(() => { if (shownManager() !== manager) close(); });
+      const stopOwner = subscribeCredentialOwner(close);
+      stopTemplate.current = retire;
+      setDismissed(true);
+      const finish = (text?: string) => {
+        if (stopTemplate.current !== retire) return;
+        close();
+        if (!current()) return;
+        if (text !== undefined && draftNow.current === draft && canWriteDraft() && !input.current?.disabled && !box.current?.inert) {
+          setDraft(text);
+          setCaret(text.length);
+        } else {
+          text = undefined;
+        }
+        requestAnimationFrame(() => {
+          if (!current() || stopTemplate.current) return;
+          input.current?.focus({ preventScroll: true });
+          if (text !== undefined) input.current?.setSelectionRange(text.length, text.length);
+        });
+      };
+      setTemplate({ key: draftKey, source: c.text, onClose: () => finish(), onInsert: finish });
+      return;
+    }
     if (c.confirm && !confirm(c.confirm)) return;
     // `/permissions` opens the permission menu at once; where the chat has no picker it goes in the box as any command
     if (c.text === PERMISSIONS_COMMAND && requestPermissionPicker(draftKey)) {
@@ -916,6 +960,7 @@ export const Composer = memo(function Composer({
       )}
 
       {history.searching && <Suspense fallback={null}><HistorySearch onPick={history.pick} onClose={history.closeSearch} /></Suspense>}
+      {showTemplate && <SavedPromptTemplateDialog source={showTemplate.source} onClose={showTemplate.onClose} onInsert={showTemplate.onInsert} />}
 
       {token && (
         <Suspense fallback={null}>
@@ -1035,13 +1080,20 @@ export const Composer = memo(function Composer({
               if (e.key === "Escape") e.stopPropagation();
               return;
             }
+            if (showTemplate) {
+              if (e.key === "Escape") showTemplate.onClose();
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
             const send = enterSends(e, hasFinePointer());
             // Mod+Enter sends rather than choosing a slash/@ row; Mod+Alt/Shift falls through to the window unchanged.
             const modEnter = e.ctrlKey || e.metaKey;
             // a plain Enter picks the highlighted row; Shift+Enter or Alt+Enter is always a new line
             const pickEnter = e.key === "Enter" && !modEnter && !e.shiftKey && !e.altKey;
+            const highlighted = slashOpen ? rows[Math.min(active, rows.length - 1)] : undefined;
             // `/model` or `/permissions` alone opens its picker, ahead of the slash palette's Enter, which would pick its row
-            if (send && pickerCommand(draft)) {
+            if (send && !(pickEnter && highlighted?.template) && pickerCommand(draft)) {
               e.preventDefault();
               return;
             }
@@ -1073,9 +1125,9 @@ export const Composer = memo(function Composer({
                 return;
               }
               // with nothing matching, Enter sends the words as they are: the list holds only a few of the agent's commands
-              if ((pickEnter || e.key === "Tab") && rows.length) {
+              if ((pickEnter || e.key === "Tab") && highlighted) {
                 e.preventDefault();
-                pick(rows[Math.min(active, rows.length - 1)]);
+                pick(highlighted);
                 return;
               }
               if (e.key === "Escape") {

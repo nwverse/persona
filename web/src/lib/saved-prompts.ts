@@ -7,7 +7,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { api, ApiError, credentialOwner, errorText, getToken, subscribeCredentialOwner } from "./api";
 import type { ComposerCommand } from "./extension-prompts";
-import { chosenManager, currentHeaders, defaultKnown, onDefaultManager, onManagerChoice, shownManager } from "./manager-choice";
+import { chosenManager, currentHeaders, defaultKnown, onDefaultManager, onManagerChoice, shownManager, stampedHeaders } from "./manager-choice";
 import { setSavedPromptRows } from "./saved-prompt-rows";
 import { onHubEvent } from "./store";
 
@@ -22,6 +22,7 @@ export interface SavedPrompt {
   id: string;
   name: string;
   text: string;
+  template?: true;
   created_at?: string;
   updated_at?: string;
 }
@@ -33,6 +34,7 @@ export interface SavedPromptsView {
   prompts: readonly SavedPrompt[];
   status: "loading" | "ready" | "failed" | "unsupported";
   error: string;
+  templateVersion?: 1;
 }
 
 let view: SavedPromptsView = { manager: "", prompts: [], status: "loading", error: "" };
@@ -73,9 +75,15 @@ function requestOwner() {
   };
 }
 
+/** A dialog can be opened before a lazy import and outlive the page that launched it. */
+export function captureSavedPromptScope() {
+  const owner = requestOwner();
+  return () => owner.current() || owner.recoverable();
+}
+
 function show(next: SavedPromptsView) {
   view = next;
-  setSavedPromptRows(next.status === "ready" ? savedPromptCommands(next.prompts) : []);
+  setSavedPromptRows(next.status === "ready" ? savedPromptCommands(next.prompts, next.templateVersion) : []);
   listeners.forEach((l) => l());
 }
 
@@ -92,9 +100,12 @@ export async function reloadSavedPrompts(): Promise<void> {
     show({ manager, prompts: [], status: "loading", error: "" });
   }
   try {
-    const r = await api<{ prompts?: unknown }>(PATH, owner.options);
+    const r = await api<{ prompts?: unknown; template_version?: unknown }>(PATH, owner.options);
     if (n !== reads || !owner.current()) return;
-    show({ manager, prompts: Array.isArray(r.prompts) ? r.prompts.filter(isPrompt) : [], status: "ready", error: "" });
+    show({
+      manager, prompts: Array.isArray(r.prompts) ? r.prompts.filter(isPrompt) : [], status: "ready", error: "",
+      ...(r.template_version === 1 && { templateVersion: 1 }),
+    });
   } catch (e) {
     if (n !== reads || !owner.current()) return;
     if (e instanceof ApiError && e.status === 404) return show({ manager, prompts: [], status: "unsupported", error: "" });
@@ -128,10 +139,13 @@ export function useSavedPrompts(): SavedPromptsView {
 
 /** The prompts as rows of the "/" list: the word is the name, picking one fills the composer with its text (never sends
  *  it, as an extension's quick prompt does), and the row's source says it is one of yours. */
-export function savedPromptCommands(prompts: readonly SavedPrompt[]): ComposerCommand[] {
+export function savedPromptCommands(prompts: readonly SavedPrompt[], templateVersion?: 1): ComposerCommand[] {
   if (!prompts.length) return [];
   const source = t("chat-savedprompts.source");
-  return prompts.map((p) => ({ key: `saved:${p.id}`, word: `/${p.name}`, desc: "", text: p.text, source }));
+  return prompts.map((p) => ({
+    key: `saved:${p.id}`, word: `/${p.name}`, desc: "", text: p.text, source,
+    ...(templateVersion === 1 && p.template === true && { template: true }),
+  }));
 }
 
 /** A name as the hub keeps it: trimmed, without a "/" typed before it. */
@@ -182,10 +196,22 @@ function keep(owner: string, change: (prompts: readonly SavedPrompt[]) => readon
 }
 
 /** Adds a prompt (`id` null) or changes one; the list shows it at once and is read again. */
-export async function saveSavedPrompt(id: string | null, input: { name: string; text: string }): Promise<SavedPrompt> {
+export async function saveSavedPrompt(id: string | null, input: { name: string; text: string; template?: boolean }): Promise<SavedPrompt> {
   const owner = requestOwner();
-  const body = { name: savedPromptName(input.name), text: input.text.trim() };
-  const r = await api<{ prompt: SavedPrompt }>(id ? `${PATH}/${encodeURIComponent(id)}` : PATH, { ...owner.options, method: id ? "PUT" : "POST", json: body });
+  const { template } = input;
+  if (template !== undefined && (viewOwner !== owner.key || view.templateVersion !== 1)) {
+    throw new Error(t("prompt-template.unsupported"));
+  }
+  const body = { name: savedPromptName(input.name), text: input.text.trim(), ...(template !== undefined && { template }) };
+  const r = await api<{ prompt: SavedPrompt; template_version?: unknown }>(id ? `${PATH}/${encodeURIComponent(id)}` : PATH, {
+    ...owner.options,
+    headers: owner.identified ? stampedHeaders(owner.manager) : owner.options.headers,
+    method: id ? "PUT" : "POST", json: body,
+  });
+  if (template !== undefined && (r.template_version !== 1 || (r.prompt.template === true) !== template)) {
+    if (owner.current() || owner.recoverable()) void reloadSavedPrompts();
+    throw new Error(t("prompt-template.unsupported"));
+  }
   if (owner.current() && owner.identified) {
     keep(owner.key, (prompts) => (id ? prompts.map((p) => (p.id === id ? r.prompt : p)) : [...prompts, r.prompt]));
   }

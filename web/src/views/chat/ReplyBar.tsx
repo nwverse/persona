@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
 import { exactTime, relativeTime } from "../../lib/relative-time";
+import { captureSavedPromptScope } from "../../lib/saved-prompts";
 import { Button, copyText, cx, Dialog, Menu, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { REPLY_BAR_FADE_MS, REPLY_BAR_LINGER_MS } from "../../ui/motion";
@@ -80,10 +81,13 @@ export function savePromptActions(text: string): Action[] {
   if (!text.trim()) return [];
   return [{
     key: "save-prompt", label: t("chat-messageactions.save_as_prompt"), icon: "book",
-    onSelect: () => import("../settings/SavedPromptDialog").then(
-      (m) => m.openSavedPromptDialog(text),
-      (e: unknown) => toast(e instanceof Error ? e.message : String(e), "error"), // the chunk would not load
-    ),
+    onSelect: () => {
+      const scope = captureSavedPromptScope();
+      return import("../settings/SavedPromptDialog").then(
+        (m) => m.openSavedPromptDialog(text, scope),
+        (e: unknown) => toast(e instanceof Error ? e.message : String(e), "error"),
+      );
+    },
   }];
 }
 

@@ -12,6 +12,8 @@ export interface ComposerCommand {
   text: string;
   confirm?: string;
   key?: string;
+  /** A saved prompt the owner enabled as a fillable template. */
+  template?: true;
   /** The small label at the right of its row in the "/" palette, where it comes from: the agent's name for its own slash
    *  commands (agentCommands), the extension's name for a quick prompt; none for Persona's own. */
   source?: string;

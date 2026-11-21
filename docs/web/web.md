@@ -1493,6 +1493,15 @@ or writes them: the main chat's fixed payload stays as it was.
   lines; ⌘/Ctrl-Return saves). It says a rule before asking the hub: a name another prompt has at once, the name and text
   rules once there is something to check or Save was pressed; the hub's own refusal shows in the dialog and keeps what
   was typed. A count appears past 80% of the 8,000 characters.
+- **Fill in fields before inserting** (#12115) is available in the editor when the chosen assistant supports it. Turn it
+  on to make `{{repository}}` or `{{question}}` a named field. Selecting the saved item in the slash list opens **Fill
+  saved prompt** with one input per name in first-use order. **Insert** fills the unsent chat draft, using the same
+  literal value at each occurrence. **Cancel** leaves the draft as it was. The form's values are discarded on close or
+  an assistant, credential, or draft change. The filled text then behaves like any other draft.
+  Ordinary prompts keep inserting their text directly. On a manager that only supports ordinary saved prompts, the
+  editor hides the template switch. Older apps display editable literal source for templates. The browser workflow is
+  covered by `web/e2e/saved-prompts.mjs --templates` with `MOCK_SAVED_PROMPTS=templates`, and by `--legacy-templates`
+  with `MOCK_SAVED_PROMPTS=1`.
 - **Save as Prompt…** on your own message's menu (right click, a long press, the ⋯ beside the bubble) where the chat
   can send: the editor over the page, filled with the message's words and a name from its first ones (lower case, joined
   by `-`, moved past a name taken). Not on replies, and not in a read-only chat.

@@ -6,5 +6,7 @@
   "err_text": "提示词内容不能为空，最多 {max} 个字。",
   "err_too_many": "最多只能保存 {max} 条常用提示词。",
   "err_order": "常用提示词在别的设备上改过了，请刷新列表后再试。",
-  "err_name_taken": "已经有叫“/{name}”的提示词了。"
+  "err_name_taken": "已经有叫“/{name}”的提示词了。",
+  "err_template_invalid": "请使用 1 到 8 个有效的字段，占位符总数最多 64 个。要输入普通的双花括号，请加反斜杠。",
+  "err_template_unavailable": "此助手无法存储可填写的提示词模板。"
 }

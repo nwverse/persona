@@ -3,7 +3,7 @@
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { onOverlayEntry } from "../../lib/back-close";
+import { afterBack, onOverlayEntry } from "../../lib/back-close";
 import { loadPages } from "../../lib/lazy-page";
 import { Composer } from "./Composer";
 import { COMPOSER_LINES, lineCount, offersExpand } from "./composer-grow";
@@ -141,10 +141,12 @@ describe("the phone composer", () => {
 
     act(() => expandButton()!.click());
     expect(onOverlayEntry()).toBe(true);
-    act(() => document.querySelector<HTMLButtonElement>('[data-testid="composer-collapse"]')!.click());
+    await act(async () => {
+      const popped = new Promise<boolean>((resolve) => afterBack(resolve, 3_000));
+      document.querySelector<HTMLButtonElement>('[data-testid="composer-collapse"]')!.click();
+      expect(await popped).toBe(true);
+    });
     expect(editor()).toBeNull();
-    // back-close's 0 ms timer, then the Back it causes
-    await act(async () => void (await new Promise((r) => setTimeout(r, 30))));
     expect(onOverlayEntry()).toBe(false);
     expect(location.href).toBe(at);
   });
