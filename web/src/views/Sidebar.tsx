@@ -331,8 +331,8 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   const go = useGo(onNavigate);
 
   const planCount = (list: Session[]) => list.reduce((n, c) => n + (openPlans.byConversation.get(c.session_id) ?? 0), 0);
-  const recentOpenPlans = planCount(ownChats);
-  const hiddenNonMainOpenPlans = Math.max(0, openPlans.nonMain - planCount(directions) - planCount(recent));
+  const recentOpenPlans = planCount(recent);
+  const hiddenNonMainOpenPlans = Math.max(0, openPlans.nonMain - planCount(directions) - recentOpenPlans);
   const planBadgeLabel = (count: number) => t("sidebar.open_plans_badge", { count });
 
   // A lead's row is an ordinary conversation row under the 常驻 heading (#6214): no pin glyph of its own, so it never

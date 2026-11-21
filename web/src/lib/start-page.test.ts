@@ -15,6 +15,7 @@ vi.mock("./store", () => ({
     return () => void hubListeners.get(type)?.delete(listener);
   },
   useStore: (select: (state: { conn: string; features: string[] }) => unknown) => select({ conn: "online", features: [] }),
+  setOpenPlansHydrator: () => {},
 }));
 // The modules each test loads afresh (load(), the Settings row's), transformed and evaluated while the file is
 // collected, outside the test timeout (as highlight-lazy.test.tsx, #4955). Each test still resets and runs them again;

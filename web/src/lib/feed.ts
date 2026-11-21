@@ -433,6 +433,7 @@ let feedRevision = 0;
 let planRevision = 0;
 const itemRevisions = new Map<string, number>();
 const planRevisions = new Map<string, number>();
+const hydratedOpenPlans = new Map<string, Set<string>>();
 const draftOwners = new WeakMap<FeedItem, string>();
 const feedKey = (item: FeedItem) => `${item.conversation}/${item.id}`;
 const currentCard = (card: FeedItem) => st.feeds[card.conversation]?.find((it) => it.id === card.id) ?? card;
@@ -630,7 +631,7 @@ onHubEvent("task_plan", (m) => {
   if (p && !deletedConversationID(p.conversation)) recordPlan(p, typeof m.manager === "string" && m.manager ? m.manager : BUILTIN_MANAGER);
 });
 
-/** Hydrates open default-space plans from GET /api/v1/assistant, reconciling stale open entries for that manager. */
+/** Hydrates open default-space plans from GET /api/v1/assistant, reconciling only previously hydrated open entries for that manager. */
 function hydrateOpenPlans(plans: TaskPlan[], manager: string, startedAt: number) {
   const next = { ...st.plans }, openIds = new Set<string>();
   let changed = false;
@@ -639,11 +640,15 @@ function hydrateOpenPlans(plans: TaskPlan[], manager: string, startedAt: number)
     openIds.add(p.id);
     if ((planRevisions.get(p.id) ?? 0) <= startedAt) { next[p.id] = stampPlan(p, manager); changed = true; }
   }
-  for (const [id, p] of Object.entries(next)) {
-    if (p.state === "open" && !p.space && (p.manager ?? defaultManager()) === manager && !openIds.has(id) && (planRevisions.get(id) ?? 0) <= startedAt) {
+  for (const id of hydratedOpenPlans.get(manager) ?? []) {
+    if (openIds.has(id)) continue;
+    if ((planRevisions.get(id) ?? 0) > startedAt) { openIds.add(id); continue; }
+    const p = next[id];
+    if (p?.state === "open" && !p.space && (p.manager ?? defaultManager()) === manager) {
       delete next[id]; changed = true;
     }
   }
+  hydratedOpenPlans.set(manager, openIds);
   if (changed) set({ plans: next });
 }
 

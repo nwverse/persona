@@ -59,6 +59,7 @@ const healthPlan: TaskPlan = {
 };
 
 let openPlansPayload: TaskPlan[];
+let conversationsPayload: Session[];
 let host: HTMLDivElement;
 let root: Root;
 
@@ -79,11 +80,12 @@ function FoldedPagesTally() {
 beforeEach(() => {
   localStorage.clear();
   openPlansPayload = [];
+  conversationsPayload = [mainChat, routineChat, sideChat];
   vi.stubGlobal("WebSocket", FakeSocket);
   vi.stubGlobal("fetch", vi.fn((url: string) => {
     const path = new URL(url, "http://x").pathname;
     const body = path === "/api/v1/assistant"
-      ? { machine_id: "hub", main: "main", conversations: [mainChat, routineChat, sideChat], open_plans: openPlansPayload }
+      ? { machine_id: "hub", main: "main", conversations: conversationsPayload, open_plans: openPlansPayload }
       : path === "/api/v1/machines"
         ? { machines: [{ id: "hub", name: "Hub", online: true }] }
         : {};
@@ -193,5 +195,36 @@ describe("sidebar indicators for open pending plans (#12254)", () => {
     expect(subBadge).not.toBeNull();
     expect(subBadge.querySelector("[aria-hidden]")?.textContent).toBe("1");
     expect(subBadge.title).toBe(t("sidebar.open_plans_badge", { count: 1 }));
+  });
+
+  it("does not double-count plans past the Recent slice between folded Recent and All Persona chats", async () => {
+    localStorage.setItem("fold:recent-chats", "1");
+    // 7 user chats exceed RECENT_DEFAULT (5): recent holds own-1..own-5, while own-6 and own-7 sit behind All Persona chats.
+    const ownChats = Array.from({ length: 7 }, (_, i) => ({
+      ...conv(`own-${i + 1}`, `Chat ${i + 1}`, "user"),
+      updated_at: `2026-11-10T0${7 - i}:00:00Z`,
+    }));
+    conversationsPayload = [mainChat, ...ownChats];
+    openPlansPayload = [
+      { id: "plan-in-recent", conversation: "own-1", state: "open", created_at: at, tasks: [{ title: "In recent", prompt: "p", cwd: "/code", machine: "hub" }] },
+      { id: "plan-past-recent", conversation: "own-7", state: "open", created_at: at, tasks: [{ title: "Past recent", prompt: "p", cwd: "/code", machine: "hub" }] },
+    ];
+    await act(async () => {
+      await refresh();
+    });
+    act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
+    await flush();
+
+    // Recent badge counts only the 1 plan inside the visible Recent slice.
+    const subBadge = host.querySelector<HTMLElement>("[data-subheading-badge]")!;
+    expect(subBadge).not.toBeNull();
+    expect(subBadge.querySelector("[aria-hidden]")?.textContent).toBe("1");
+    expect(subBadge.title).toBe(t("sidebar.open_plans_badge", { count: 1 }));
+
+    // All Persona chats badge counts only the 1 overflow plan beyond the Recent slice.
+    const allChatsLink = host.querySelector<HTMLAnchorElement>('a[href="/history"]')!;
+    const expectedOne = t("sidebar.open_plans_badge", { count: 1 });
+    expect(allChatsLink.title).toBe(expectedOne);
+    expect([...allChatsLink.querySelectorAll(".sr-only")].map((el) => el.textContent)).toContain(expectedOne);
   });
 });

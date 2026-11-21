@@ -28,7 +28,7 @@ import {
 import { conversationCards } from "./assistant-views";
 import { retryOnLauncher, TASK_RETRY_LAUNCHER_FEATURE } from "./start-retry";
 import { getPanel, openPanel } from "./panel";
-import { getState, markConversationDeleted, refreshTodos, reset } from "./store";
+import { getState, markConversationDeleted, refreshAssistant, refreshTodos, reset } from "./store";
 import type { Todo } from "./todos";
 import type { ChatLine, Segment } from "./turns";
 import type { Item } from "./types";
@@ -524,4 +524,66 @@ it("discards a feed response arriving after deletion, including its plan and car
   expect(getFeedState().plans.late).toBeUndefined();
   expect(getFeedState().taskCards[sid]).toBeUndefined();
   reset();
+});
+
+describe("hydrateOpenPlans reconciliation (#12254)", () => {
+  afterEach(() => {
+    reset();
+    for (const id of Object.keys(getFeedState().plans)) delete getFeedState().plans[id];
+    vi.unstubAllGlobals();
+  });
+
+  it("prunes stale open_plans hydrated from /assistant without deleting open plans loaded by archived or leader feeds", async () => {
+    const hydratedPlan: TaskPlan = {
+      id: "plan-hydrated-stale",
+      conversation: "routine-open",
+      state: "open",
+      tasks: [{ title: "Nightly check", prompt: "Check", cwd: "/code", machine: "hub" }],
+    };
+    const archivedPlan: TaskPlan = {
+      id: "plan-archived-feed",
+      conversation: "conv-archived",
+      state: "open",
+      tasks: [{ title: "Archived work", prompt: "Work", cwd: "/code", machine: "hub" }],
+    };
+    const leaderPlan: TaskPlan = {
+      id: "plan-leader-feed",
+      conversation: "conv-leader",
+      state: "open",
+      tasks: [{ title: "Leader work", prompt: "Lead", cwd: "/code", machine: "hub" }],
+    };
+
+    let openPlans: TaskPlan[] = [hydratedPlan];
+    vi.stubGlobal("localStorage", { getItem: () => "tok", setItem() {}, removeItem() {} });
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const path = new URL(url, "http://hub").pathname;
+      if (path === "/api/v1/assistant") {
+        return Response.json({ machine_id: "hub", main: "main", conversations: [], open_plans: openPlans });
+      }
+      if (path === "/api/v1/assistant/conversations/conv-archived/feed") {
+        return Response.json({ items: [], plans: { [archivedPlan.id]: archivedPlan } });
+      }
+      if (path === "/api/v1/assistant/conversations/conv-leader/feed") {
+        return Response.json({ items: [], plans: { [leaderPlan.id]: leaderPlan } });
+      }
+      return Response.json({});
+    }));
+
+    // Initial /assistant hydration populates hydratedPlan.
+    await refreshAssistant();
+    expect(getFeedState().plans[hydratedPlan.id]?.state).toBe("open");
+
+    // Loading archived and leader feeds adds their own open plans, which openPlansForMain intentionally excludes.
+    await loadFeed("conv-archived");
+    await loadFeed("conv-leader");
+    expect(getFeedState().plans[archivedPlan.id]?.state).toBe("open");
+    expect(getFeedState().plans[leaderPlan.id]?.state).toBe("open");
+
+    // Subsequent /assistant refresh no longer returns hydratedPlan; it is pruned, while archived/leader feed plans stay.
+    openPlans = [];
+    await refreshAssistant();
+    expect(getFeedState().plans[hydratedPlan.id]).toBeUndefined();
+    expect(getFeedState().plans[archivedPlan.id]?.state).toBe("open");
+    expect(getFeedState().plans[leaderPlan.id]?.state).toBe("open");
+  });
 });
