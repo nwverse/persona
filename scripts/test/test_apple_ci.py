@@ -142,6 +142,7 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn('--app "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona"', readiness)
         self.assertIn('--test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests"', readiness)
 
+
     def test_native_ssh_tests_run_before_the_app_and_fail_the_lane_on_error(self):
         script = SCRIPT.read_text()
         packages = script.split('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then\n', 1)[1].split('\nfi', 1)[0]

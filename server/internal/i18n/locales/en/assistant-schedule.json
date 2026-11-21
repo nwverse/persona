@@ -70,5 +70,6 @@
   "todo_wait": "Keep waiting",
   "todo_wait_cost": "Another scheduled window may pass without advancing the task.",
   "todo_change_result": "Ask the supervisor to propose another approach within the existing permissions.",
-  "todo_wait_result": "Keep the approved approach and wait for the next scheduled check."
+  "todo_wait_result": "Keep the approved approach and wait for the next scheduled check.",
+  "execution_antigravity_unavailable": "Antigravity is disconnected or unavailable on {machine}. Restore Antigravity on that computer, then run this task again to continue its existing conversation."
 }

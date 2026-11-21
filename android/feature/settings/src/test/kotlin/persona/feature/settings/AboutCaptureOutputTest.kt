@@ -38,7 +38,7 @@ class AboutCaptureOutputTest {
         assertEquals(overrideBase.canonicalFile, overridden.parentFile)
         assertEquals(overridden, reported)
         assertFalse(File(defaultBase).exists())
-        assertEquals(listOf(overridden), overrideBase.listFiles()?.toList())
+        assertEquals(listOf(overridden), overridden.parentFile.listFiles()?.toList())
     }
 
     @Test fun freshRunExcludesStaleScenariosWithoutDeletingOtherRunDirectories() {
