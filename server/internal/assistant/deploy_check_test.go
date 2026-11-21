@@ -27,7 +27,18 @@ type fakeForge struct {
 	issueState    string            // default issue state ("open" when empty)
 	issueStates   map[string]string // optional per-issue states keyed by "owner/repo#number"
 	issueStateErr error
-	calls         int
+	// ownedPRs maps "owner/repo#number" to whether the viewer opened it; a missing key means ownership is unknown
+	// (known=false), so the gate keeps its conservative delivery default.
+	ownedPRs map[string]bool
+	calls    int
+}
+
+// PROwnedByViewer backs prOwnershipForge in tests; a missing key reads as unknown, never foreign.
+func (f *fakeForge) PROwnedByViewer(_ context.Context, repo string, number int) (bool, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	owned, known := f.ownedPRs[repo+"#"+strconv.Itoa(number)]
+	return owned, known, nil
 }
 
 func (f *fakeForge) IssueState(_ context.Context, repo string, number int) (string, error) {
