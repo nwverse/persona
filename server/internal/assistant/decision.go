@@ -282,12 +282,12 @@ func decisionLines(l i18n.Lang, loc *time.Location, a *acceptAsk) []string {
 
 // ---- answering ----
 
-// decisionTextDelivery records where an explicitly addressed free-text answer actually went.
+// decisionTextDelivery distinguishes Agent delivery from a record awaiting supervisor follow-up.
 type decisionTextDelivery string
 
 const (
-	decisionTextAgent      decisionTextDelivery = "agent"
-	decisionTextSupervisor decisionTextDelivery = "supervisor"
+	decisionTextAgent    decisionTextDelivery = "agent"
+	decisionTextRecorded decisionTextDelivery = "recorded_for_supervisor"
 )
 
 // errDecisionOption: the option named is none of the decision's.
@@ -480,7 +480,7 @@ func (s *Service) answerDecisionTextLocked(ctx context.Context, st todoStore, t 
 	result := acceptSucceeded()
 	delivery := decisionTextAgent
 	if sendErr != nil {
-		delivery = decisionTextSupervisor
+		delivery = decisionTextRecorded
 		result = s.decisionNotDelivered(ctx, id, a.AskedAt, text, sendErr)
 	} else {
 		s.userDecided(ctx, id)
@@ -512,6 +512,8 @@ func (s *Service) endAskWithTextDelivery(ctx context.Context, id string, asked t
 		return
 	}
 	a.AcceptedAt, a.Response, a.Chosen, a.TextDelivery = time.Now().UTC(), response, chosen, delivery
+	// Only option/fixed-answer callers use endAsk; explicit text always supplies its delivery outcome.
+	a.OptionTaken = delivery == "" && response == "" && chosen != ""
 	s.saveAcceptLocked(ctx)
 	cp := *a
 	b.mu.Unlock()

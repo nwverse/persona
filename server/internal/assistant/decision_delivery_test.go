@@ -18,12 +18,14 @@ import (
 // Drive the real ask-answer route: the card must describe the relay result, not guess it from the answer's spelling.
 func TestCheckDecisionWordsCardDelivery(t *testing.T) {
 	for _, tc := range []struct {
-		name, kind string
-		stop       func(*fakeHub)
-		status     int
+		name, kind, supervisor string
+		stop                   func(*fakeHub)
+		status                 int
 	}{
 		{name: "delivered", status: http.StatusOK},
 		{name: "no agent", stop: func(f *fakeHub) { f.setSessions("box") }, status: http.StatusOK},
+		{name: "no supervisor configured", supervisor: "missing", stop: func(f *fakeHub) { f.setSessions("box"); f.setSessions("server") }, status: http.StatusOK},
+		{name: "supervisor unreachable", supervisor: "unreachable", stop: func(f *fakeHub) { f.setSessions("box"); f.setSessions("server") }, status: http.StatusOK},
 		{name: "stopped refusal", stop: func(f *fakeHub) {
 			f.mu.Lock()
 			f.failSend = &rpc.Error{Code: proto.CodeAgentStopped, Message: "the agent has stopped"}
@@ -50,6 +52,17 @@ func TestCheckDecisionWordsCardDelivery(t *testing.T) {
 				t.Fatalf("check ask: %+v", a)
 			}
 			agentAtWork(f, todo)
+			if tc.supervisor != "" {
+				setSettings(t, s, func(v *Settings) {
+					v.Main = ""
+					v.BackgroundSupervisor = ""
+				})
+				if tc.supervisor == "missing" {
+					if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { v.Supervisor = ""; return true }); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
 			if tc.stop != nil {
 				tc.stop(f)
 			}
@@ -71,7 +84,7 @@ func TestCheckDecisionWordsCardDelivery(t *testing.T) {
 				sends = 0
 			}
 			if tc.stop != nil {
-				wantKey = "assistant-reports.decision_chosen_supervisor"
+				wantKey = "assistant-reports.decision_chosen_for_supervisor"
 				delivered = "none"
 				sends = 0
 			}
@@ -114,6 +127,26 @@ func TestCheckDecisionWordsCardDelivery(t *testing.T) {
 			if err != nil || len(rows) != 1 || rows[0].Choice != words {
 				t.Fatalf("decisions: %+v, %v", rows, err)
 			}
+			if tc.supervisor != "" {
+				// Make the synthetic signals due and attempt the real digest; no reachable recipient can take them.
+				s.supervise.mu.Lock()
+				if s.supervise.timer != nil {
+					s.supervise.timer.Stop()
+				}
+				s.supervise.last = time.Time{}
+				for key, g := range s.supervise.pending {
+					g.At = time.Now().Add(-2 * time.Hour)
+					s.supervise.pending[key] = g
+				}
+				s.supervise.mu.Unlock()
+				s.sendDigest(ctx)
+				s.supervise.mu.Lock()
+				told := s.supervise.sent[todo.ID+"|"+sigIdle] == "undelivered|"+a.AskedAt.UTC().Format(time.RFC3339Nano)
+				s.supervise.mu.Unlock()
+				if told {
+					t.Fatal("the unreachable supervisor was marked told")
+				}
+			}
 			if tc.stop != nil {
 				found := false
 				for _, g := range pendingFor(s, todo.ID) {
@@ -122,7 +155,7 @@ func TestCheckDecisionWordsCardDelivery(t *testing.T) {
 					}
 				}
 				if !found {
-					t.Fatal("no supervisor delivery handoff")
+					t.Fatal("no pending record for supervisor follow-up")
 				}
 			}
 			want := i18n.T(s.botLang(ctx), wantKey, i18n.Args{"option": words})
