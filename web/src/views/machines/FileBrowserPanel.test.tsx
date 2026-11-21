@@ -33,7 +33,7 @@ let host: HTMLDivElement;
 let root: Root;
 let calls: Array<{ url: string; method: string; body?: string }>;
 let tailCalls = 0;
-let writeMode: "ok" | "conflict" = "ok";
+let writeMode: "ok" | "conflict" | "plain-409" = "ok";
 let listDirPath = "/home/dev";
 let createRequire412Once = false;
 
@@ -71,7 +71,7 @@ function stubHub(input: RequestInfo | URL, init?: RequestInit): Promise<Response
   }
   if (url.includes("/files/list")) {
     const reqPath = new URL(url, "http://localhost").searchParams.get("path") ?? "";
-    const curPath = reqPath.endsWith("/logs") ? reqPath : listDirPath;
+    const curPath = reqPath.endsWith("/logs") || reqPath.endsWith("/logs-archived") ? reqPath : listDirPath;
     return Promise.resolve(json({
       path: curPath,
       canonical_path: curPath,
@@ -164,10 +164,12 @@ function stubHub(input: RequestInfo | URL, init?: RequestInit): Promise<Response
   }
   if (url.includes("/files/tail")) {
     tailCalls++;
+    const reqPath = new URL(url, "http://localhost").searchParams.get("path") ?? "/home/dev/app.log";
+    const name = reqPath.split("/").pop() || "app.log";
     return Promise.resolve(json({
-      path: "/home/dev/app.log",
-      canonical_path: "/home/dev/app.log",
-      name: "app.log",
+      path: reqPath,
+      canonical_path: reqPath,
+      name,
       size: 600000,
       mime: "text/plain; charset=utf-8",
       revision: `r-log-${tailCalls}`,
@@ -182,6 +184,9 @@ function stubHub(input: RequestInfo | URL, init?: RequestInit): Promise<Response
   if (url.includes("/files/content") && method === "PUT") {
     if (writeMode === "conflict") {
       return Promise.resolve(json({ code: "file_changed", error: "file was modified externally" }, 409));
+    }
+    if (writeMode === "plain-409") {
+      return Promise.resolve(json({ error: "conflict" }, 409));
     }
     return Promise.resolve(json({
       path: "/home/dev/.env",
@@ -215,12 +220,15 @@ function stubHub(input: RequestInfo | URL, init?: RequestInit): Promise<Response
   }
   if (url.includes("/files/entry") && method === "PATCH") {
     const parsed = JSON.parse(body ?? "{}") as { path?: string; dest_path?: string };
+    const dest = parsed.dest_path ?? "";
+    const name = dest.split("/").pop() || "renamed";
+    const isDir = (parsed.path ?? "").endsWith("/logs");
     return Promise.resolve(json({
       old_path: parsed.path,
-      path: parsed.dest_path,
-      canonical_path: parsed.dest_path,
-      name: "renamed",
-      entry: { name: "renamed", path: parsed.dest_path, kind: "dir", size: 4096, mode: "drwxr-xr-x", perm: 0o755 },
+      path: dest,
+      canonical_path: dest,
+      name,
+      entry: { name, path: dest, kind: isDir ? "dir" : "file", size: isDir ? 4096 : 600000, mode: isDir ? "drwxr-xr-x" : "-rw-r--r--", perm: isDir ? 0o755 : 0o644 },
     }));
   }
   if (url.includes("/files/entry") && method === "DELETE") {
@@ -673,6 +681,97 @@ describe("FileBrowserPanel", () => {
     });
     await flush();
     expect(host.querySelector('[data-testid="upload-confirm-panel"]')).toBeNull();
+  });
+
+  it("handles plain HTTP 409 CAS conflict, reloads tail/moved dir on rename, and preserves overwrite across 412 sensitive confirm", async () => {
+    act(() => root.render(<FileBrowserPanel machines={onlineMachines} />));
+    await flush();
+
+    // 1. Plain HTTP 409 (without code: "file_changed") still shows CAS conflict banner and clears after subsequent save.
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="file-entry-win.ini"]')!.click();
+    });
+    await flush();
+    await act(async () => { findButton(/^(编辑|Edit)$/).click(); });
+    const editor = host.querySelector<HTMLTextAreaElement>('[data-testid="machine-file-editor"]')!;
+    await act(async () => { setNativeValue(editor, "alpha\nbeta-plain409\ngamma\n"); });
+    await act(async () => { findButton(/查看差异|Review diff/).click(); });
+    writeMode = "plain-409";
+    await act(async () => {
+      findButton(/确认保存|Confirm & Save/, host.querySelector('[data-testid="machine-file-diff"]')!).click();
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="cas-conflict-banner"]')).not.toBeNull();
+    writeMode = "ok";
+    await act(async () => { findButton(/查看差异|Review diff/).click(); });
+    await act(async () => {
+      findButton(/确认保存|Confirm & Save/, host.querySelector('[data-testid="machine-file-diff"]')!).click();
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="cas-conflict-banner"]')).toBeNull();
+    expect(host.querySelector('[data-testid="saved-notice"]')).not.toBeNull();
+
+    // 2. Renaming a file currently open in tail mode reloads tail from the new path.
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="file-entry-app.log"]')!.click();
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="machine-file-content"]')?.textContent).toContain("tail-batch-1");
+    const renameLogBtn = [...host.querySelectorAll("button")].find((b) => b.getAttribute("aria-label")?.includes("app.log") && b.getAttribute("aria-label")?.match(/rename|重命名/i));
+    expect(renameLogBtn).toBeTruthy();
+    await act(async () => { renameLogBtn!.click(); });
+    const renameInput = host.querySelector<HTMLInputElement>('[data-testid="rename-dest-input"]')!;
+    await act(async () => { setNativeValue(renameInput, "/home/dev/app-rotated.log"); });
+    await act(async () => {
+      findButton(/重命名|Rename/, host.querySelector('[data-testid="rename-entry-panel"]')!).click();
+    });
+    await flush();
+    expect(calls.some((c) => c.url.includes("/files/tail?path=%2Fhome%2Fdev%2Fapp-rotated.log"))).toBe(true);
+    expect(host.querySelector('[data-testid="machine-file-content"]')?.textContent).toContain("tail-batch-2");
+
+    // 3. Renaming a directory navigates to the moved directory via loadDirectory.
+    const renameDirBtn = [...host.querySelectorAll("button")].find((b) => b.getAttribute("aria-label")?.includes("logs") && b.getAttribute("aria-label")?.match(/rename|重命名/i));
+    expect(renameDirBtn).toBeTruthy();
+    await act(async () => { renameDirBtn!.click(); });
+    const renameDirInput = host.querySelector<HTMLInputElement>('[data-testid="rename-dest-input"]')!;
+    await act(async () => { setNativeValue(renameDirInput, "/home/dev/logs-archived"); });
+    await act(async () => {
+      findButton(/重命名|Rename/, host.querySelector('[data-testid="rename-entry-panel"]')!).click();
+    });
+    await flush();
+    expect(calls.some((c) => c.url.includes("/files/list?path=%2Fhome%2Fdev%2Flogs-archived"))).toBe(true);
+    expect(host.querySelector<HTMLInputElement>('input[aria-label]')?.value).toBe("/home/dev/logs-archived");
+
+    // 4. Upload 409 exists -> Overwrite (overwrite=1) -> 412 sensitive confirm -> final retry keeps BOTH overwrite=1 and confirm_sensitive=1.
+    const uploadInput = host.querySelector<HTMLInputElement>('[data-testid="machine-file-upload-input"]')!;
+    const file = new File([new Uint8Array(64)], "vault.txt", { type: "text/plain" });
+    await act(async () => {
+      Object.defineProperty(uploadInput, "files", { configurable: true, value: [file] });
+      uploadInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => {
+      FakeXHR.last!.status = 409;
+      FakeXHR.last!.responseText = JSON.stringify({ code: "exists", error: "already exists" });
+      FakeXHR.last!.onload?.();
+    });
+    await act(async () => {
+      findButton(/覆盖上传|Overwrite/, host.querySelector('[data-testid="upload-confirm-panel"]')!).click();
+    });
+    expect(FakeXHR.last?.url).toContain("overwrite=1");
+
+    await act(async () => {
+      FakeXHR.last!.status = 412;
+      FakeXHR.last!.responseText = JSON.stringify({ code: "machine_file_sensitive_confirm", sensitive_reason: "protected" });
+      FakeXHR.last!.onload?.();
+    });
+    const sensCheckbox = host.querySelector<HTMLInputElement>('[data-testid="upload-sensitive-checkbox"]')!;
+    expect(sensCheckbox).not.toBeNull();
+    await act(async () => { sensCheckbox.click(); });
+    await act(async () => {
+      findButton(/确认上传|Start upload/, host.querySelector('[data-testid="upload-confirm-panel"]')!).click();
+    });
+    expect(FakeXHR.last?.url).toContain("overwrite=1");
+    expect(FakeXHR.last?.url).toContain("confirm_sensitive=1");
   });
 
   it("shows offline notice without issuing file requests when selected machine is offline", async () => {

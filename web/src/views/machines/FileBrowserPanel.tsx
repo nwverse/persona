@@ -324,6 +324,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     kind: "sensitive" | "exists";
     reason?: string;
     confirmedSensitive?: boolean;
+    overwrite?: boolean;
   } | null>(null);
   const [uploadSensitiveAck, setUploadSensitiveAck] = useState(false);
 
@@ -544,7 +545,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
       setSavedNotice(t("machines-files.saved_notice"));
       if (dir?.path) void loadDirectory(machine.id, dir.path);
     } catch (err) {
-      if (err instanceof ApiError && (err.status === 409 || err.code === "file_changed") && err.code === "file_changed") {
+      if (err instanceof ApiError && (err.status === 409 || err.code === "file_changed")) {
         setCasConflict(true);
         setReviewingDiff(false);
       } else {
@@ -584,7 +585,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
         void loadFile(machine.id, res.entry.path, "preview", tailLines);
       }
     } catch (err) {
-      if (err instanceof ApiError && (err.status === 412 || err.code === "machine_file_sensitive_confirm") && err.code === "machine_file_sensitive_confirm") {
+      if (err instanceof ApiError && (err.status === 412 || err.code === "machine_file_sensitive_confirm")) {
         const reason = typeof err.body.sensitive_reason === "string" ? err.body.sensitive_reason : "";
         setCreateServerSensitive({ reason });
         setCreateSensitiveAck(false);
@@ -613,22 +614,40 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
           confirm_sensitive: needsSensitive ? renameSensitiveAck : false,
         },
       });
-      if (selectedEntry?.path === renameTarget.path) {
-        setSelectedEntry(res.entry);
-        if (preview?.path === renameTarget.path) {
-          void loadFile(machine.id, res.entry.path, mode, tailLines);
+      const renamedDir = renameTarget.kind === "dir" || res.entry.kind === "dir" || dir?.path === renameTarget.path;
+      const newPath = res.entry.path || res.path;
+      if (renamedDir) {
+        const oldPrefix = renameTarget.path.endsWith("/") ? renameTarget.path : `${renameTarget.path}/`;
+        if (selectedEntry && (selectedEntry.path === renameTarget.path || selectedEntry.path.startsWith(oldPrefix))) {
+          setSelectedEntry(null);
+          setPreview(null);
+          setTail(null);
+          resetEditor();
         }
+      } else if (
+        selectedEntry?.path === renameTarget.path ||
+        preview?.path === renameTarget.path ||
+        tail?.path === renameTarget.path
+      ) {
+        setSelectedEntry(res.entry);
+        setPreview(null);
+        setTail(null);
+        void loadFile(machine.id, newPath, mode, tailLines);
       }
       setRenameTarget(null);
       setRenameDest("");
       setRenameSensitiveAck(false);
-      if (dir?.path) void loadDirectory(machine.id, dir.path);
+      if (renamedDir && newPath) {
+        void loadDirectory(machine.id, newPath);
+      } else if (dir?.path) {
+        void loadDirectory(machine.id, dir.path);
+      }
     } catch (err) {
       setDirError(t("machines-files.action_error", { error: errorText(err) }));
     } finally {
       setRenaming(false);
     }
-  }, [machine?.id, machine?.online, renameTarget, renameDest, renameSensitiveAck, selectedEntry?.path, preview?.path, mode, tailLines, dir?.path, loadDirectory, loadFile]);
+  }, [machine?.id, machine?.online, renameTarget, renameDest, renameSensitiveAck, selectedEntry, preview?.path, tail?.path, mode, tailLines, dir?.path, loadDirectory, loadFile, resetEditor]);
 
   const submitDelete = useCallback(async () => {
     if (!machine?.online || !deleteTarget) return;
@@ -737,7 +756,14 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
         if (xhr.status === 412 && code === "machine_file_sensitive_confirm") {
           if (stillInTargetDir) {
             const reason = typeof body.sensitive_reason === "string" ? body.sensitive_reason : "";
-            setPendingUpload({ mid: targetMid, dir: targetDir, file, kind: "sensitive", reason });
+            setPendingUpload({
+              mid: targetMid,
+              dir: targetDir,
+              file,
+              kind: "sensitive",
+              reason,
+              overwrite: Boolean(opts.overwrite),
+            });
           } else {
             const msg = typeof body.error === "string" && body.error ? body.error : `HTTP ${xhr.status}`;
             setDirError(t("machines-files.action_error", { error: msg }));
@@ -1079,7 +1105,12 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                       <Button
                         tone="primary"
                         disabled={!uploadSensitiveAck}
-                        onClick={() => startStreamingUpload(pendingUpload.file, { dir: pendingUpload.dir, confirmSensitive: true })}
+                        onClick={() =>
+                          startStreamingUpload(pendingUpload.file, {
+                            dir: pendingUpload.dir,
+                            overwrite: pendingUpload.overwrite,
+                            confirmSensitive: true,
+                          })}
                       >
                         {t("machines-files.upload_confirm_start")}
                       </Button>
