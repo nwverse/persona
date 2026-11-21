@@ -75,8 +75,27 @@ func (h *Manager) botEvent(ctx context.Context, payload []byte) (any, error) {
 		if json.Unmarshal(env.Event, &ev) == nil {
 			go h.botWelcome(ev.OperatorID.OpenID, ev.ChatID)
 		}
+	case feishubot.EventBotMenu:
+		var ev feishubot.BotMenu
+		if json.Unmarshal(env.Event, &ev) == nil {
+			go h.botMenu(ev)
+		}
 	}
 	return nil, nil
+}
+
+// botMenu hands the owner's press on the bot's menu to the assistant, which answers it in the owner's private chat as
+// the command the entry names (docs/extensions/bots.md "The menu"). Anyone else's press is nothing: the menu shows
+// to whoever opens a chat with the bot.
+func (h *Manager) botMenu(ev feishubot.BotMenu) {
+	_, set := h.botAPI()
+	if set.Owner == nil || ev.Operator.OperatorID.OpenID != set.Owner.OpenID || strings.TrimSpace(ev.EventKey) == "" {
+		return
+	}
+	if err := h.callAssistantWaiting(assistantwire.MethodFeishuMenu, assistantwire.FeishuMenu{Key: strings.TrimSpace(ev.EventKey)}, nil,
+		time.Now().Add(30*time.Second), 10*time.Second); err != nil {
+		h.logf("bots: the menu's %s: %v", ev.EventKey, err)
+	}
 }
 
 // botRecalled tells the assistant a message was recalled in a chat the bot is used in (the owner's private chat, a

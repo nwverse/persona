@@ -107,6 +107,7 @@
   "tasks_no_decide": "暂时没有等你拍板的事。",
   "tasks_no_todos": "暂时没有在途任务。",
   "help_always": "- `/stop` 停下当前这一轮\n- `/status` 现在发给谁\n- `/help` 这些说明",
+  "menu_needs_workbench": "这个菜单项要先打开工作台：在 Persona 的「设置 › 飞书机器人」里打开「工作台」。",
   "model_main_only": "此命令只适用于 Persona 主聊天，请先发送 /main。",
   "model_no_main": "主聊天尚未创建，请先发送一条消息。",
   "model_list_title": "主聊天模型",

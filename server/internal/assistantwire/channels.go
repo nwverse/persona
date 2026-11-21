@@ -30,6 +30,8 @@ const (
 	MethodFeishuAction = "feishu.card_action"
 	// MethodFeishuView: {} → FeishuView, what GET /api/v1/bots/feishu shows of the bot's chat.
 	MethodFeishuView = "feishu.view"
+	// MethodFeishuMenu: FeishuMenu → {}: the owner pressed an entry of the bot's menu (its event key).
+	MethodFeishuMenu = "feishu.menu"
 
 	// EventInteractionAnnounced: InteractionAnnounced, one way: a new card (not a quiet task's).
 	EventInteractionAnnounced = "interaction.announced"
@@ -221,6 +223,11 @@ const FeishuFromRead = "read"
 type FeishuAction struct {
 	Event  json.RawMessage `json:"event"`
 	Action string          `json:"action,omitempty"`
+}
+
+// FeishuMenu is MethodFeishuMenu's params: the event key of the menu entry the owner pressed.
+type FeishuMenu struct {
+	Key string `json:"key"`
 }
 
 // ClarificationProof is the bound question returned when a one-time proof is
