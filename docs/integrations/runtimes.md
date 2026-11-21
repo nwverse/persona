@@ -723,3 +723,19 @@ Don't put host pane information in the runtime id: panes are matched on node's s
 
 Platforms built on DSH that don't run `dsh web` (multi-tenant, running DSH in containers) implement the same protocol on the platform side and connect as a daemon (`docs/integrations/daemons.md`),
 reusing the SDK and `integrations/dsh/lib/map.js` directly, with no code added on the Persona side.
+
+### Assistant admission evidence (#11936)
+
+`TestCodexAndPiAssistantConversationRoles` exercises manager admission and actual
+fake-node delivery for `codex` and `pi`, each with `main`,
+`background_supervisor`, `direction_supervisor`, and `scheduled_task` subtests.
+Supervisor inputs carry the exact manager policy; scheduled runs resume the same
+conversation and retain their execution binding. The managed Codex launcher and
+the policy-capable pi-web companion use the contracts merged in #12569
+(`7085c82a1f`). Pi's runtime hook contract is also covered by
+`assistant policy/context and tool authority are isolated to the actual pi session`
+in `integrations/pi/test/assistant.test.js`. Tests use fake runtimes/models.
+
+Unproven supervision channels (plugin paths, DSH, Grok, Cursor ACP and TRAE)
+remain refused as required by the adopted isolation review. Their refusal does
+not imply that Codex or a verified pi companion is ineligible.
