@@ -293,6 +293,7 @@ fun TodoDetailScreen(
                                 placeholder = stringResource(R.string.agents_todo_notes_edit_placeholder),
                                 minLines = 3,
                                 maxLines = 8,
+                                readingContent = true,
                                 supportingText = dictate?.heard?.takeIf { it.isNotBlank() },
                                 trailing = dictate?.let { d -> {
                                     persona.feature.chat.DictationMic(d, stringResource(R.string.agents_todo_notes_dictate), enabled = !saving)
@@ -330,11 +331,13 @@ fun TodoDetailScreen(
                                 }, enabled = titleText.isNotBlank() && !saving && dictate?.active != true, loading = saving)
                             }
                         } else if (todo.notes.isNotBlank()) {
-                            Text(
-                                todo.notes,
-                                style = PersonaTheme.type.body,
-                                color = PersonaTheme.palette.ink2
-                            )
+                            ReadingContent {
+                                Text(
+                                    todo.notes,
+                                    style = PersonaTheme.type.body,
+                                    color = PersonaTheme.palette.ink2
+                                )
+                            }
                         } else {
                             Text(
                                 stringResource(R.string.agents_todo_notes_empty),

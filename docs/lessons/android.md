@@ -240,6 +240,12 @@ message-text role for its action, not the accent; inspect light/dark images and 
 
 Setting `LocalConfiguration.fontScale` alone can leave the rendered Compose text at the original size. Override
 `LocalDensity` with the same font scale, assert that default/large pixels differ, and inspect the real page's capture.
+Supply that test density **outside** `PersonaTheme`: an inner provider replaces the theme's interface cap and produces
+false large-font evidence. Keep the 2.0 system-maximum input, add the exact interface cap as another case, and require
+byte-for-byte layout expectations to use the capped density rather than deleting overflow assertions (#7321).
+`BasicTextField` resolves its own text layout outside `decorationBox`: `ReadingContent { inner() }` changes decoration
+layout but leaves the typed words capped. Put `ReadingContent` around the whole editor and `InterfaceContent` around
+its placeholder, label and accessories; assert the editor's real `TextLayoutResult`, not only the decoration's bounds.
 A decorative mark inside a clickable row may be merged into that row's semantics: assert its test tag with the
 unmerged tree, not by dropping the visual assertion. With a frozen Compose clock, a Robolectric `performScrollTo`
 can keep waiting for a choreographer frame and fill the trace-recording heap; keep the requested rows visible in a

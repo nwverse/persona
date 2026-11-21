@@ -186,7 +186,7 @@ const val UnsentBubbleAlpha = 0.6f
 @Composable
 fun UserBubble(text: String, modifier: Modifier = Modifier, time: String? = null) {
     UserBubbleFrame(modifier, footer = time?.let { { Text(it, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) } }) {
-        Text(text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
+        ReadingContent { Text(text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
     }
 }
 
@@ -602,16 +602,20 @@ fun ComposerTextField(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
 ) {
     val palette = PersonaTheme.palette
-    BasicTextField(
-        value, onValueChange, modifier.fillMaxWidth().hardwareShortcutTextInput(), enabled = enabled, maxLines = maxLines, keyboardOptions = keyboardOptions,
-        textStyle = PersonaTheme.type.body.copy(color = palette.ink), cursorBrush = SolidColor(if (PersonaTheme.style == AppStyle.Brief) palette.ink else palette.accent),
-        decorationBox = { inner ->
-            Box {
-                if (value.isEmpty()) Text(placeholder, style = PersonaTheme.type.body, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                inner()
-            }
-        },
-    )
+    ReadingContent {
+        BasicTextField(
+            value, onValueChange, modifier.fillMaxWidth().hardwareShortcutTextInput(), enabled = enabled, maxLines = maxLines, keyboardOptions = keyboardOptions,
+            textStyle = PersonaTheme.type.body.copy(color = palette.ink), cursorBrush = SolidColor(if (PersonaTheme.style == AppStyle.Brief) palette.ink else palette.accent),
+            decorationBox = { inner ->
+                Box {
+                    if (value.isEmpty()) InterfaceContent {
+                        Text(placeholder, style = PersonaTheme.type.body, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    inner()
+                }
+            },
+        )
+    }
 }
 
 enum class SendKind { Send, Stop }
