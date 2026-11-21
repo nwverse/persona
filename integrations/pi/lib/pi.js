@@ -553,7 +553,9 @@ export function createPiHost(deps, options = {}) {
       const command = input.command ?? input.cmd
       if (typeof command !== 'string' || !command.trim()) return { block: true, reason: 'The shell command could not be checked. Nothing ran.' }
       try {
+        if (!rt.hubConnected) throw new Error('rules unavailable')
         const tools = await rt.tools({ assistant: true, sessionId: s.id, signal: ctx.signal })
+        if (!rt.hubConnected) throw new Error('rules unavailable')
         if (matchShellGate(command, extractShellGates(tools))) return { block: true, reason: 'Use the Persona action tool instead of running this command directly.' }
       } catch {
         return { block: true, reason: 'Persona command rules are unavailable. Nothing ran.' }
