@@ -89,7 +89,11 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 		}
 		n.runtimes.pushed(p.SessionID, last, p.History, p.FromSeq != nil && *p.FromSeq == 0)
 		if n.peer != nil {
-			_ = n.peer.Notify("session.items", n.echoedRaw(p.SessionID, params, "items")) // echo.go
+			out := n.echoedRaw(p.SessionID, params, "items") // echo.go
+			if h.agent() == agyAgent {
+				out = n.enrichAgyItemsRaw(p.SessionID, out, "items")
+			}
+			_ = n.peer.Notify("session.items", out)
 		}
 	case "session.delta":
 		var p struct {

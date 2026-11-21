@@ -56,12 +56,16 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	}
 	n.mu.Lock()
 	agents := make(map[string]host.Agent, len(n.agents))
+	agyConversations := map[string]string{}
 	agyRuntimeIDs := map[string]string{}
 	for id, agent := range n.agents {
 		agents[id] = agent
-		if agent.Agent == agyAgent && agent.AgentStatus != proto.StatusOffline && agent.AgentStatus != proto.StatusInterrupted {
+		if agent.Agent == agyAgent {
 			if conversation := n.agyConversationLocked(id, agent.PaneID); conversation != "" {
-				agyRuntimeIDs[id] = agyAgent + "-" + conversation
+				agyConversations[id] = conversation
+				if agent.AgentStatus != proto.StatusOffline && agent.AgentStatus != proto.StatusInterrupted {
+					agyRuntimeIDs[id] = agyAgent + "-" + conversation
+				}
 			}
 		}
 	}
@@ -241,11 +245,23 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			// Herdr drives the pane (agent.prompt, the keys). Agy can also read its verified conversation (workagent.go).
 			if runtimeID := agyRuntimeIDs[id]; runtimeID != "" {
 				seen[runtimeID] = true
-				if s.Model == "" {
-					if runtimeRow, _, ok := n.runtimes.rowOf(runtimeID); ok {
+				if runtimeRow, _, ok := n.runtimes.rowOf(runtimeID); ok {
+					if s.Model == "" {
 						s.Model = runtimeRow.Model
 					}
+					if s.ContextTokens == 0 && runtimeRow.ContextTokens > 0 {
+						s.ContextTokens = runtimeRow.ContextTokens
+					}
+					if s.ContextWindow == 0 && runtimeRow.ContextWindow > 0 {
+						s.ContextWindow = runtimeRow.ContextWindow
+					}
+					if s.OutputTokens == 0 && runtimeRow.OutputTokens > 0 {
+						s.OutputTokens = runtimeRow.OutputTokens
+					}
 				}
+			}
+			if a.Agent == agyAgent {
+				n.mergeAgyTranscript(&s, agyConversations[id])
 			}
 		case otherAgent(a):
 			s.ReadOnlyReason = otherNoReader(a.Agent)
@@ -305,6 +321,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				}
 				s.SetAliases(aliases)
 			}
+		} else if s.Agent == agyAgent {
+			n.mergeAgyTranscript(s, agyRuntimeConversationID(s.SessionID))
 		}
 		seen[s.SessionID] = true
 		if j != i {
