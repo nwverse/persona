@@ -10,8 +10,8 @@
 //    and herdr TUI rows continue merging cleanly via `mergeOpencodeRow`.
 //
 // Assistant ACP processes and MCP routes are private per session. Process
-// isolation alone does not prove an authoritative policy channel: this version
-// still omits caps.supervision_policy and rejects supervision_instructions.
+// isolation alone does not prove an authoritative policy channel. A pinned
+// version/config/ACP self-check must pass before supervision is advertised.
 
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
@@ -20,6 +20,7 @@ import { createRuntime, interactionId, light, page, RpcError, snippet } from '..
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
 import { OpencodeAcpClient, privateAcpArgs } from './acp.js'
 import { createAssistantWorkers } from './assistant-workers.js'
+import { createSupervisionStore, policyEnvironment, supportsSystemPrompt } from './supervision.js'
 import { defaultDbPath, openReadOnly } from './db.js'
 import {
   acpPermissionCard,
@@ -48,7 +49,7 @@ import {
   resolveModel,
 } from './models.js'
 
-export const COMPANION_VERSION = '0.3.0'
+export const COMPANION_VERSION = '0.4.0'
 const ROOTS = 200
 const LIST_CACHE = 3000
 const MODELS_EVERY = 5 * 60_000
@@ -57,6 +58,7 @@ const VALID_EFFORTS = new Set(PERSONA_EFFORTS)
 const SUPERVISION_ERROR_CODE = 'assistant_supervision_runtime'
 const INTERRUPT_SETTLE_MS = 10_000
 const THOUGHT_PUSH_MS = 150
+const DEFAULT_ACP_IDLE_MS = 5 * 60_000
 
 /**
  * Build the child env for `opencode acp`, ensuring `bash`, `edit`, and `write` always route
@@ -105,7 +107,10 @@ export function buildAcpEnv(baseEnv = process.env) {
  *   log?: (msg: string) => void,
  *   now?: () => number,
  *   acp?: OpencodeAcpClient,
+ *   acpIdleMs?: number,
  *   assistantAcpFactory?: (options: object) => OpencodeAcpClient,
+ *   policyStore?: ReturnType<typeof createSupervisionStore>,
+ *   policyDir?: string,
  *   maxAssistantWorkers?: number,
  *   assistantIdleMs?: number,
  *   assistantReapMs?: number,
@@ -120,6 +125,7 @@ export function createOpencodeCompanion(options = {}) {
   const now = options.now || Date.now
   const listDays = options.listDays ?? 7
   const maxSessions = options.maxSessions ?? 80
+  const acpIdleMs = options.acpIdleMs ?? DEFAULT_ACP_IDLE_MS
   const runtimeId = options.runtime || 'opencode'
   const label = options.name || 'opencode'
   const launcherName = options.launcher === undefined ? 'opencode' : String(options.launcher).trim()
@@ -149,10 +155,13 @@ export function createOpencodeCompanion(options = {}) {
   let schemaKind = '' // 'v2' | 'v1' | ''
   let listCache = { at: 0, rows: [] }
   let stopped = false
+  let acpIdleTimer = null
 
   let assistantWorkers
   let assistantReaper
   const acpOptions = { bin, args: options.args, cwd: home, env: buildAcpEnv(env), log }
+  const policyStore = options.policyStore || createSupervisionStore({ home, bin, env: acpOptions.env, directory: options.policyDir })
+  let supervisionReady = null
   const sharedAcp = options.acp || new OpencodeAcpClient(acpOptions)
   const accepts = (client, worker, id) => {
     const session = live.get(id)
@@ -185,6 +194,33 @@ export function createOpencodeCompanion(options = {}) {
     return client
   }
   connectAcp(sharedAcp)
+
+  function isAcpBusy() {
+    if (sharedAcp.busy) return true
+    for (const s of live.values()) {
+      if (!s.assistant && (s.running || s.queued > 0 || s.asks.size > 0)) return true
+    }
+    return false
+  }
+
+  function cancelAcpIdleStop() {
+    if (acpIdleTimer) {
+      clearTimeout(acpIdleTimer)
+      acpIdleTimer = null
+    }
+  }
+
+  function scheduleAcpIdleStop() {
+    cancelAcpIdleStop()
+    if (stopped || acpIdleMs <= 0 || !sharedAcp.pid || isAcpBusy()) return
+    acpIdleTimer = setTimeout(() => {
+      acpIdleTimer = null
+      if (stopped || isAcpBusy() || !sharedAcp.pid) return
+      log('stopping idle opencode acp child')
+      void sharedAcp.stopChild().catch((err) => log(`idle opencode acp stop: ${err?.message ?? err}`))
+    }, acpIdleMs)
+    acpIdleTimer.unref?.()
+  }
 
   const mcpProxy = createMcpProxy({
     tools: async (binding) => {
@@ -235,7 +271,8 @@ export function createOpencodeCompanion(options = {}) {
     assistant: assistantEnabled,
     readonly: true,
     modelSwitch: true,
-    // Security boundary (#11220): intentionally DO NOT set supervisionPolicy: true.
+    // No hello is sent until the pinned binary/config/ACP startup probe settles.
+    get supervisionPolicy() { return Boolean(supervisionReady) },
     requires: ['prefer_running'],
     socketPath: options.socketPath,
     connect: options.connect,
@@ -260,15 +297,32 @@ export function createOpencodeCompanion(options = {}) {
     limit: options.maxAssistantWorkers ?? 8,
     idleMs: options.assistantIdleMs ?? 300_000,
     now,
-    create(worker) {
+    async create(worker, session) {
       const config = { ...acpOptions, args: privateAcpArgs(acpOptions.args), processGroup: true }
-      const client = options.assistantAcpFactory ? options.assistantAcpFactory(config) : new OpencodeAcpClient(config)
-      if (client === sharedAcp || [...assistantWorkers.workers].some((other) => other !== worker && other.acp === client)) {
-        throw new Error('Assistant execution needs a dedicated ACP client')
+      let allocated
+      try {
+        if (session && !session.mcpRoute) {
+          session.mcpRoute = allocated = await mcpProxy.allocate({ session, sessionId: session.id, assistant: true })
+        }
+        if (session?.policyRecord) {
+          if (!supervisionReady) throw new RpcError('OpenCode follow-up instructions are unavailable', SUPERVISION_ERROR_CODE)
+          const checkedEnv = await policyStore.verify(session.policyRecord, session.mcpRoute)
+          config.env = supervisionReady.channel === 'append'
+            ? policyEnvironment(acpOptions.env, null, session.mcpRoute)
+            : checkedEnv
+        }
+        const client = options.assistantAcpFactory ? options.assistantAcpFactory(config) : new OpencodeAcpClient(config)
+        if (client === sharedAcp || [...assistantWorkers.workers].some((other) => other !== worker && other.acp === client)) {
+          throw new Error('Assistant execution needs a dedicated ACP client')
+        }
+        return connectAcp(client, worker)
+      } catch (error) {
+        if (allocated) { allocated.release(); session.mcpRoute = null }
+        if (session?.policyRecord) throw new RpcError('OpenCode follow-up instruction self-check failed. Nothing was sent.', SUPERVISION_ERROR_CODE)
+        throw error
       }
-      return connectAcp(client, worker)
     },
-    busy: (session) => session.running || session.queued > 0 || session.asks.size > 0 || session.forking,
+    busy: (session) => session.running || session.queued > 0 || session.asks.size > 0 || session.forking || session.admitting > 0 || session.policyFlight,
     retiring(worker) {
       const session = worker.session
       if (!session || session.worker !== worker) return
@@ -281,20 +335,100 @@ export function createOpencodeCompanion(options = {}) {
   })
 
   async function withSessionWorker(session, fn) {
-    if (!session.assistant) return fn(sharedAcp)
-    const worker = await assistantWorkers.acquire(session)
-    try { return await fn(worker.acp) } finally { assistantWorkers.release(worker) }
+    // Cover admission itself, before the serialized pool grants a lease. A
+    // concurrent role change must not retire a process whose control is queued.
+    session.admitting++
+    try {
+      if (!session.assistant) return await fn(sharedAcp)
+      const worker = await assistantWorkers.acquire(session)
+      try { return await fn(worker.acp) } finally { assistantWorkers.release(worker) }
+    } finally { session.admitting-- }
   }
 
-  function rejectSupervisionPolicy(params) {
-    if (typeof params?.supervision_instructions === 'string' && params.supervision_instructions.trim() !== '') {
+  function requestedPolicy(params) {
+    if (!Object.hasOwn(params, 'supervision_instructions')) return undefined
+    if (typeof params.supervision_instructions !== 'string') throw new RpcError('Invalid follow-up instructions', SUPERVISION_ERROR_CODE)
+    const text = params.supervision_instructions
+    if (text && !supervisionReady) {
       throw new RpcError('opencode does not support isolated supervision policy channels', SUPERVISION_ERROR_CODE)
+    }
+    return text
+  }
+
+  function nativePolicy(s) {
+    if (supervisionReady?.channel !== 'append') return {}
+    return { systemPrompt: s.policy ? { mode: 'append', content: [{ type: 'text', text: s.policy }] } : null }
+  }
+
+  function verifyWorkerPolicy(s, initialized) {
+    if (!s.policy) return
+    if (!supervisionReady || initialized.agentInfo?.version !== supervisionReady.version ||
+      supervisionReady.channel === 'append' && !supportsSystemPrompt(initialized.capabilities)) {
+      throw new RpcError('OpenCode follow-up instruction capability changed. Nothing was sent.', SUPERVISION_ERROR_CODE)
+    }
+  }
+
+  async function synchronizePolicy(s, text, interruptVersion) {
+    if (text === undefined || text === s.policy) {
+      try { await policyStore.check(s.policyRecord) } catch { throw new RpcError('OpenCode follow-up instructions are unavailable. Nothing was sent.', SUPERVISION_ERROR_CODE) }
+      if (text === '') await policyStore.removeForSession(s.id)
+      return null
+    }
+    if (s.running || s.queued || s.asks.size || s.admitting > 1 || s.worker?.leases || s.policyFlight) throw new RpcError('Wait for this conversation to finish before changing its follow-up instructions', 'busy')
+    s.policyFlight = true
+    const previous = { text: s.policy, record: s.policyRecord, worker: s.worker, loadedGeneration: s.loadedGeneration }
+    let next, oldFileRemoved = false
+    const cancelled = () => stopped || closedSessions.has(s.id) || interruptVersion !== s.interruptVersion
+    const rollback = async () => {
+      try {
+        if (s.worker && s.worker !== previous.worker) await assistantWorkers.discard(s.worker)
+        if (stopped || closedSessions.has(s.id)) {
+          s.policy = ''; s.policyRecord = null; s.loadedGeneration = 0
+          await Promise.all([policyStore.remove(previous.record), policyStore.remove(next)])
+          return
+        }
+        s.policy = previous.text
+        s.policyRecord = previous.record
+        s.loadedGeneration = s.worker === previous.worker ? previous.loadedGeneration : 0
+        if (oldFileRemoved && previous.text) {
+          s.policyRecord = await policyStore.create(previous.text)
+          await policyStore.bind(s.policyRecord, s.id)
+        }
+        await policyStore.remove(next)
+      } finally { s.policyFlight = false }
+    }
+    try {
+      next = await policyStore.create(text)
+      await policyStore.bind(next, s.id)
+      if (cancelled()) throw new Error('Input cancelled')
+      if (s.worker) await assistantWorkers.discard(s.worker)
+      s.policy = text
+      s.policyRecord = next
+      if (cancelled()) throw new Error('Input cancelled')
+      const worker = await assistantWorkers.acquire(s)
+      try { await ensureLoaded(s, worker.acp) } finally { assistantWorkers.release(worker) }
+      if (cancelled()) throw new Error('Input cancelled')
+      // Keep the role-change lock until the admitting caller either queues its
+      // first input synchronously or restores the old role after interruption.
+      return {
+        async retireOldFile() {
+          await policyStore.remove(previous.record); oldFileRemoved = true
+          await policyStore.removeForSession(s.id, next)
+        },
+        accept() { s.policyFlight = false },
+        rollback,
+      }
+    } catch {
+      await rollback().catch(() => {})
+      throw new RpcError('OpenCode could not change its follow-up instructions. Nothing was sent.', SUPERVISION_ERROR_CODE, { delivered: 'none' })
     }
   }
 
   async function refreshGateRules({ throwOnError = false } = {}) {
     try {
+      if (!rt.hubConnected) throw new Error('Persona tool rules are unavailable')
       const list = await rt.tools({ assistant: true })
+      if (!rt.hubConnected) throw new Error('Persona tool rules are unavailable')
       gateShellRules = extractShellGates(list)
       gateShellRulesReady = true
     } catch (err) {
@@ -507,6 +641,10 @@ export function createOpencodeCompanion(options = {}) {
       worker: null,
       processFailure: false,
       interruptVersion: 0,
+      policy: '',
+      policyRecord: null,
+      policyFlight: false,
+      admitting: 0,
       running: false,
       queued: 0,
       tail: Promise.resolve(),
@@ -917,7 +1055,7 @@ export function createOpencodeCompanion(options = {}) {
           ? { outcome: { outcome: 'selected', optionId: rejectOnce.optionId } }
           : { outcome: { outcome: 'cancelled' } }
       }
-      if (!gateShellRulesReady) {
+      if (!gateShellRulesReady || !rt.hubConnected) {
         return rejectOnce
           ? { outcome: { outcome: 'selected', optionId: rejectOnce.optionId } }
           : { outcome: { outcome: 'cancelled' } }
@@ -978,7 +1116,9 @@ export function createOpencodeCompanion(options = {}) {
   // ---- session lifecycle & control ----
 
   async function ensureLoaded(s, acp) {
-    await acp.ensureStarted()
+    if (acp === sharedAcp) cancelAcpIdleStop()
+    const initialized = await acp.ensureStarted()
+    verifyWorkerPolicy(s, initialized)
     if (s.loadedGeneration === acp.generation && acp.loadedSessions.has(s.id)) return
     const desiredMode = s.mode
     if (!s.mcpRoute) s.mcpRoute = s.assistant
@@ -986,7 +1126,7 @@ export function createOpencodeCompanion(options = {}) {
       : await mcpProxy.forSession(s)
     const desired = { model: s.model, effort: s.effort, permission_mode: desiredMode }
     const res = await (s.assistant ? acp.resumeSession({
-      sessionId: s.id, cwd: s.cwd, mcpServers: [s.mcpRoute.acpServer],
+      sessionId: s.id, cwd: s.cwd, mcpServers: [s.mcpRoute.acpServer], ...nativePolicy(s),
     }) : acp.loadSession({
       sessionId: s.id, cwd: s.cwd, mcpServers: [s.mcpRoute.acpServer],
     }))
@@ -1074,7 +1214,7 @@ export function createOpencodeCompanion(options = {}) {
   }
 
   async function start(params = {}, onSessionId) {
-    rejectSupervisionPolicy(params)
+    const initialPolicy = requestedPolicy(params) || ''
     const cwd = typeof params.cwd === 'string' && params.cwd.trim() ? resolve(params.cwd.trim()) : ''
     if (!cwd) throw new RpcError('需要选择一个目录', 'bad_request')
 
@@ -1099,17 +1239,25 @@ export function createOpencodeCompanion(options = {}) {
 
     const isAsst = assistantEnabled && (params.assistant === true || isAssistantDir(cwd, home))
     if (isAsst) await ensureGateRules()
-    const worker = isAsst ? await assistantWorkers.reserve() : null
-    const acp = worker?.acp || sharedAcp
+    if (initialPolicy && !isAsst) throw new RpcError('Follow-up instructions require an Assistant conversation', SUPERVISION_ERROR_CODE)
+    let worker, record
+    let acp = sharedAcp
     let route
     let sessionId = ''
     let createdState
+    if (!worker) cancelAcpIdleStop()
     try {
       route = await mcpProxy.allocate({ assistant: isAsst, mode: reqMode || 'default' })
-      await acp.ensureStarted()
-      const created = await acp.newSession({ cwd, mcpServers: [route.acpServer] })
+      record = isAsst ? await policyStore.create(initialPolicy) : null
+      const seed = { policy: initialPolicy, policyRecord: record, mcpRoute: route }
+      worker = isAsst ? await assistantWorkers.reserve(seed) : null
+      acp = worker?.acp || sharedAcp
+      const initialized = await acp.ensureStarted()
+      verifyWorkerPolicy(seed, initialized)
+      const created = await acp.newSession({ cwd, mcpServers: [route.acpServer], ...(isAsst ? nativePolicy(seed) : {}) })
       sessionId = typeof created?.sessionId === 'string' ? created.sessionId.trim() : ''
       if (!sessionId) throw new RpcError('opencode ACP 没有返回新会话 ID', 'opencode')
+      await policyStore.bind(record, sessionId)
 
       const initialTitle = typeof params.prompt === 'string' && params.prompt.trim()
         ? snippet(visibleUserText(params.prompt))
@@ -1124,6 +1272,8 @@ export function createOpencodeCompanion(options = {}) {
         startedByPersona: true,
       })
       createdState = s
+      s.policy = initialPolicy
+      s.policyRecord = record
       if (worker) {
         assistantWorkers.bind(worker, s)
         rt.assistantPid(s.id, acp.pid)
@@ -1167,6 +1317,7 @@ export function createOpencodeCompanion(options = {}) {
 
       listCache.at = 0
       rt.sessionsChanged(0)
+      scheduleAcpIdleStop()
       return { session: liveRow(s) }
     } catch (err) {
       route?.release()
@@ -1175,6 +1326,9 @@ export function createOpencodeCompanion(options = {}) {
         await acp.closeSession(sessionId).catch(() => {})
       }
       if (worker) await assistantWorkers.discard(worker)
+      else scheduleAcpIdleStop()
+      await policyStore.remove(record)
+      if (initialPolicy && !(err instanceof RpcError)) throw new RpcError('OpenCode follow-up instructions could not be applied. Nothing was sent.', SUPERVISION_ERROR_CODE)
       if (err instanceof RpcError) throw err
       throw new RpcError(`opencode：${err?.message ?? err}`, 'opencode')
     } finally {
@@ -1206,7 +1360,7 @@ export function createOpencodeCompanion(options = {}) {
   }
 
   async function send(params) {
-    rejectSupervisionPolicy(params)
+    const policy = requestedPolicy(params)
     const id = params.session_id
     const s = await resolveSession(id)
     const rawText = typeof params.text === 'string' ? params.text : ''
@@ -1216,7 +1370,7 @@ export function createOpencodeCompanion(options = {}) {
     }
 
     const isAsst = assistantEnabled && (params.assistant === true || s.assistant)
-    if (isAsst && !s.assistant && (s.running || s.queued || s.asks.size)) throw new RpcError('Wait for the Agent turn to finish before changing its role', 'busy')
+    if (isAsst && !s.assistant && (s.running || s.queued || s.asks.size || s.admitting)) throw new RpcError('Wait for the Agent turn to finish before changing its role', 'busy')
     if (isAsst && !s.assistant && sharedAcp.loadedSessions.has(s.id)) {
       throw new RpcError('Start a new assistant conversation instead of sharing an Agent execution process', 'busy')
     }
@@ -1224,10 +1378,31 @@ export function createOpencodeCompanion(options = {}) {
     if (typeof params.memory_dir === 'string' && params.memory_dir) s.memoryDir = params.memory_dir
     const reqMode = params.mode || params.permission_mode || ''
     const reqEffort = typeof params.effort === 'string' && params.effort.trim() ? params.effort.trim().toLowerCase() : ''
-    const worker = isAsst ? await assistantWorkers.acquire(s) : null
+    if (policy && !isAsst) throw new RpcError('Follow-up instructions require an Assistant conversation', SUPERVISION_ERROR_CODE)
+    if (s.policyFlight) throw new RpcError('Follow-up instructions are changing; try again shortly', 'busy')
+    const interruptVersion = s.interruptVersion
+    s.admitting++
+    let worker, transition
+    try {
+      if (policy !== undefined && policy !== s.policy) {
+        // Validate the whole input before committing its new process policy.
+        // Rejected model/mode choices must not change a conversation's role.
+        if (reqMode && !VALID_MODES.has(reqMode)) throw new RpcError('Unsupported permission mode', 'bad_request')
+        if (reqEffort && !VALID_EFFORTS.has(reqEffort)) throw new RpcError('Unsupported reasoning effort', 'bad_request')
+        if (params.model) {
+          if (catalog.length === 0) await models()
+          resolveModel(params.model, catalog)
+        }
+        if (isAsst) await ensureGateRules()
+      }
+      transition = await synchronizePolicy(s, policy, interruptVersion)
+      worker = isAsst ? await assistantWorkers.acquire(s) : null
+    } catch (error) {
+      await transition?.rollback()
+      throw error
+    } finally { s.admitting-- }
     const acp = worker?.acp || sharedAcp
     const wasBusy = s.running || s.queued > 0
-    const interruptVersion = s.interruptVersion
     s.queued++
     let enqueued = false
     try {
@@ -1261,6 +1436,10 @@ export function createOpencodeCompanion(options = {}) {
         }
       }
 
+      await transition?.retireOldFile()
+      if (stopped || closedSessions.has(id) || isAsst && interruptVersion !== s.interruptVersion) {
+        throw new RpcError('Input was interrupted before delivery', 'busy', { delivered: 'none' })
+      }
       const turnDone = s.tail.catch(() => {}).then(async () => {
         s.queued = Math.max(0, s.queued - 1)
         if (stopped || closedSessions.has(id) || isAsst && interruptVersion !== s.interruptVersion) return
@@ -1337,12 +1516,19 @@ export function createOpencodeCompanion(options = {}) {
           listCache.at = 0
           pushLiveSnapshot(s)
           rt.sessionsChanged(0)
+          if (!worker) scheduleAcpIdleStop()
         }
       }).finally(() => { if (worker) assistantWorkers.release(worker) })
       s.tail = turnDone
       s.activeTurnDone = turnDone
       enqueued = true
+      transition?.accept()
       return wasBusy ? { queued: true } : {}
+    } catch (error) {
+      try { await transition?.rollback() } catch {
+        throw new RpcError('OpenCode could not restore its follow-up instructions. Nothing was sent.', SUPERVISION_ERROR_CODE, { delivered: 'none' })
+      }
+      throw error
     } finally {
       if (!enqueued) {
         s.queued = Math.max(0, s.queued - 1)
@@ -1374,14 +1560,20 @@ export function createOpencodeCompanion(options = {}) {
 
   async function modes(params) {
     const s = await resolveSession(params.session_id)
-    await withSessionWorker(s, async (acp) => {
-      await ensureLoaded(s, acp)
-      await applySessionConfig(s, {
-        model: params.model, effort: params.effort, permission_mode: params.permission_mode,
-      }, acp)
-    })
-    listCache.at = 0
-    rt.sessionsChanged(0)
+    if (s.policyFlight) throw new RpcError('Follow-up instructions are changing; try again shortly', 'busy')
+    if (!s.assistant) cancelAcpIdleStop()
+    try {
+      await withSessionWorker(s, async (acp) => {
+        await ensureLoaded(s, acp)
+        await applySessionConfig(s, {
+          model: params.model, effort: params.effort, permission_mode: params.permission_mode,
+        }, acp)
+      })
+      listCache.at = 0
+      rt.sessionsChanged(0)
+    } finally {
+      if (!s.assistant) scheduleAcpIdleStop()
+    }
   }
 
   async function rename(params) {
@@ -1416,15 +1608,24 @@ export function createOpencodeCompanion(options = {}) {
       }
       s.mcpRoute?.release()
       s.mcpRoute = null
+      await policyStore.remove(s.policyRecord)
+      s.policyRecord = null
+      s.policy = ''
       live.delete(id)
     }
+    if (!s || s.assistant) await policyStore.removeForSession(id)
     listCache.at = 0
     rt.streamEnd(id)
     rt.sessionsChanged(0)
+    scheduleAcpIdleStop()
   }
 
   async function startCompanion() {
     stopped = false
+    // A supplied ACP object cannot establish that the configured binary is the
+    // same executable. Tests and custom embedders must supply their own probe.
+    supervisionReady = assistantEnabled && (!options.acp || options.policyStore) ? await policyStore.probe() : null
+    if (stopped) return
     if (!assistantReaper) {
       assistantReaper = setInterval(() => { void assistantWorkers.reap().catch((err) => log(`opencode worker retirement: ${err.message}`)) }, options.assistantReapMs ?? Math.min(30_000, Math.max(10, (options.assistantIdleMs ?? 300_000) / 2)))
       assistantReaper.unref?.()
@@ -1435,6 +1636,7 @@ export function createOpencodeCompanion(options = {}) {
 
   async function stopCompanion() {
     stopped = true
+    cancelAcpIdleStop()
     clearInterval(assistantReaper)
     assistantReaper = null
     for (const s of live.values()) {
@@ -1448,6 +1650,8 @@ export function createOpencodeCompanion(options = {}) {
       s.mcpRoute?.release()
     }
     await Promise.allSettled([assistantWorkers.stop(), sharedAcp.stop()])
+    await policyStore.stop()
+    supervisionReady = null
     live.clear()
     mcpProxy.stop()
     rt.stop()

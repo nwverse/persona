@@ -69,7 +69,7 @@ function ModelConfigurationForManager({ manager, open, onOpen, onProviders }: { 
       if (at !== loads.current) return;
       // each use set apart from a category right after it (#7980): the In-meeting conversation after the supervisor,
       // Meeting minutes after Information processing
-      setData(withUsesAfterCategories(withPurposeAfter(catalog, SUPERVISE_PURPOSE, "assistant", supervise?.purpose)));
+      setData(withPurposeAfter(withUsesAfterCategories(withPurposeAfter(catalog, SUPERVISE_PURPOSE, "assistant", supervise?.purpose)), "assistant.main", "assistant"));
       setError("");
     } catch (e) {
       if (at !== loads.current) return;

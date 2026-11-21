@@ -1,5 +1,5 @@
 {
-  "name_assistant": "主对话",
+  "name_assistant": "对话默认值",
   "name_agent_new": "Agents",
   "name_kb": "信息处理",
   "name_inbox_triage": "信息筛选",
@@ -28,7 +28,7 @@
   "name_assistant_supervise": "后台督办",
   "name_meeting_room": "会中对话",
   "name_meeting_minutes": "会议纪要",
-  "desc_assistant": "和你对话，把事情拆成任务派出去。只有这个对话是你在等它回复的。",
+  "desc_assistant": "新对话和其他助手用途的默认设置；各自设置后使用自己的配置。",
   "desc_agent_new": "在你的各台电脑上干活的 Agent。任务开始时仍可以单独指定模型。",
   "desc_kb": "没有人在等的文字处理：翻译、草拟回复、起标题、整理知识库。",
   "desc_inbox_triage": "分拣、摘要收件箱里的新内容并判断重要性。同一个模型还判断 Agent 为什么停下、哪些事交给 AI 分身。调用多而小。",
@@ -150,5 +150,7 @@
   "candidate_not_direct": "无法直接调用供应商 {provider}",
   "candidate_provider_gone": "供应商 {provider} 已移除或无法直接调用",
   "err_permission_mode_launcher_only": "只有启动器类型的模型用途才能设置权限模式",
-  "err_permission_mode_unsupported": "该启动器不支持所选的权限模式"
+  "err_permission_mode_unsupported": "该启动器不支持所选的权限模式",
+  "name_assistant_main": "主对话",
+  "desc_assistant_main": "和你对话并派发任务。这些设置只用于主对话，不改变新对话的默认值。"
 }

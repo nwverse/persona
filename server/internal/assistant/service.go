@@ -62,7 +62,10 @@ type Options struct {
 
 // Service is the assistant. It implements Handler.
 type Service struct {
-	history conversationHistoryBook
+	logical          logicalDeviceState
+	a2aWake          chan struct{}
+	a2aLogicalWrites chan struct{}
+	history          conversationHistoryBook
 	// agentDirs keeps each computer's hidden Agent folders (hidden_agent_dirs.go); nil: none.
 	agentDirs AgentDirs
 	// remoteImages fetches the pictures replies name by address for the apps (remote_image.go).
@@ -342,11 +345,15 @@ var _ Handler = (*Service)(nil)
 // New makes the assistant; nothing runs until the hub calls it.
 func New(o Options) *Service {
 	s := &Service{hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
-		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1)}
+		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
+		a2aWake: make(chan struct{}, 1), a2aLogicalWrites: make(chan struct{}, 4)}
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
 	s.remoteImages = remoteimage.New(remoteimage.Options{CacheDir: o.RemoteImageCache, Logf: o.Logf, DoH: s.remoteImageDoH})
 	if s.store == nil {
 		s.store = func() Store { return nil }
+	}
+	if _, ok := s.store().(logicalConversationStore); ok && s.devs != nil {
+		s.devs = &logicalDevices{Devices: s.devs, s: s}
 	}
 	if s.logf == nil {
 		s.logf = func(string, ...any) {}
@@ -356,6 +363,7 @@ func New(o Options) *Service {
 	s.archiveRoutes()
 	s.conversationTagRoutes()
 	s.conversationDeleteRoutes()
+	s.logicalSwitchRoutes()
 	s.modelPickRoutes()
 	s.agentArchiveRoutes()
 	s.agentNamingRoutes() // agent_naming_request.go
@@ -485,6 +493,7 @@ func (s *Service) lang(ctx context.Context) i18n.Lang {
 
 // call is a DeviceCall whose answer is read into out (nil: not read).
 func (s *Service) call(ctx context.Context, device, method string, params, out any) error {
+	sessionSend := method == DeviceSessionSend || method == DeviceSessionSendOnce || a2aDeliveryMethod(method)
 	if conversationWrite(method) {
 		s.conversationWrites.RLock()
 		defer s.conversationWrites.RUnlock()
@@ -499,6 +508,12 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		if err != nil {
 			return err
 		}
+		if result, handled, err := s.logicalCall(ctx, device, method, raw); handled {
+			if err != nil || out == nil {
+				return err
+			}
+			return json.Unmarshal(result, out)
+		}
 		if result, handled, err := s.historyCall(ctx, device, method, raw); handled {
 			if err != nil || out == nil {
 				return err
@@ -507,8 +522,8 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		}
 	}
 	taken := false // the node took this send (or may have): a direction's notes block it carried counts as given
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend ||
-		method == DeviceSessionSendOnce || method == assistantwire.DeviceAssistantAnswerAgain) {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || sessionSend ||
+		method == assistantwire.DeviceAssistantAnswerAgain) {
 		id, _ := p["session_id"].(string)
 		pctx, carry := withNotesCarry(ctx)
 		// Settled however this returns: a send refused before it left was not taken (direction_notes.go).
@@ -516,7 +531,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		if err := s.putSupervisionInstructions(pctx, device, id, p); err != nil {
 			return beforeNodeWrite(method, err)
 		}
-		if method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce {
+		if method == DeviceAssistantSend || sessionSend {
 			// Initial assistant.send starts do not pass through SendParams, and Inbox continuations use session.send.
 			// The hub forwards session.send_once to the same node entry, so attest it here before that forwarding too.
 			// Attest the explicit ordinary/unknown decision on every manager-owned node send.
@@ -538,7 +553,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			if !originKnown || (origin != "" && origin != OriginTask) || p["is_main"] == true {
 				delete(p, devicewire.LegacyTaskExecution)
 			}
-			if method == DeviceSessionSend || method == DeviceSessionSendOnce {
+			if sessionSend {
 				cfg := s.settings(ctx)
 				if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
 					p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
@@ -565,7 +580,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			}
 		}
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceSessionSend || method == DeviceSessionSendOnce) {
+	if p, ok := params.(map[string]any); ok && sessionSend {
 		if id, _ := p["session_id"].(string); id != "" {
 			s.workTold(device, id) // the turn it starts is this manager's doing, not the owner's hand (setup_suggest.go)
 		}
@@ -592,10 +607,10 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			p["interject_background"] = true // what the node does with a message that comes while it answers
 		}
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce) && p["is_main"] == true {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || sessionSend) && p["is_main"] == true {
 		p["idle_compaction"] = s.idleCompactionPolicy(ctx)
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || sessionSend) {
 		// The window the main conversation is held to (main_compact_window.go), as sendModel puts it: a start, a relay,
 		// an internal message and the spare warmed for its next start carry it with is_main, or the node starts it again
 		// on its launcher's window (and never adopts the spare).
@@ -611,7 +626,11 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if p, ok := params.(map[string]any); ok && startScopeMethods[method] {
 		// A Persona-managed provider out of this computer's scope does not run there (models_launchers_scope.go).
 		if name, _ := p["launcher"].(string); name != "" {
-			if err := s.launcherScopeErr(ctx, device, name); err != nil {
+			scopeMachine := device
+			if id, _ := p["session_id"].(string); id != "" {
+				scopeMachine = s.logicalExecutionMachine(ctx, device, id)
+			}
+			if err := s.launcherScopeErr(ctx, scopeMachine, name); err != nil {
 				if method == DeviceAssistantSend {
 					s.recordManagerSend(device, p, nil, err) // a failed start or resume all the same (north_star.go)
 				}
@@ -644,7 +663,10 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		return beforeNodeWrite(method, err)
 	}
 	p := DeviceCall{Device: device, Method: nodeMethod(method, params), Params: raw}
-	res, ok, err := s.localFleetDeviceCall(ctx, p) // what the hub answered before the nodes' events were the manager's
+	res, ok, err := s.logicalCall(ctx, device, p.Method, p.Params)
+	if !ok {
+		res, ok, err = s.localFleetDeviceCall(ctx, p)
+	} // what the hub answered before the nodes' events were the manager's
 	if !ok {
 		res, err = s.hub.DeviceCall(ctx, p)
 	}
@@ -984,6 +1006,7 @@ func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn
 // TurnEnded: a task's agent may be done (in the background: it waits for the agents to settle), an agent's turn is
 // triaged; a new conversation is named after its first turn.
 func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
+	s.a2aSignal()
 	s.approvalAnswerTurnEnded(r)
 	s.turnEnded(ctx, r, s.meetingTurnEnded(r.MachineID, r.SessionID))
 }

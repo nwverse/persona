@@ -66,6 +66,10 @@ export class OpencodeAcpClient extends EventEmitter {
     return this.proc?.pid ?? 0
   }
 
+  get busy() {
+    return Boolean(this.starting) || this.pending.size > 0
+  }
+
   async ensureStarted(timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
     if (this.stopped) throw new Error('opencode ACP client stopped')
     if (this.proc && !this.proc.killed && this.proc.exitCode === null && this.capabilities) {
@@ -318,8 +322,8 @@ export class OpencodeAcpClient extends EventEmitter {
     }
   }
 
-  async newSession({ cwd, mcpServers = [] }, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
-    const res = await this.call('session/new', { cwd, mcpServers }, timeoutMs)
+  async newSession({ cwd, mcpServers = [], systemPrompt }, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
+    const res = await this.call('session/new', { cwd, mcpServers, ...(systemPrompt === undefined ? {} : { systemPrompt }) }, timeoutMs)
     if (res?.sessionId) this.loadedSessions.add(res.sessionId)
     return res
   }
@@ -330,9 +334,9 @@ export class OpencodeAcpClient extends EventEmitter {
     return res
   }
 
-  async resumeSession({ sessionId, cwd, mcpServers = [] }, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
+  async resumeSession({ sessionId, cwd, mcpServers = [], systemPrompt }, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
     // resume reconnects without replaying the transcript as session/update.
-    const res = await this.call('session/resume', { sessionId, cwd, mcpServers }, timeoutMs)
+    const res = await this.call('session/resume', { sessionId, cwd, mcpServers, ...(systemPrompt === undefined ? {} : { systemPrompt }) }, timeoutMs)
     this.loadedSessions.add(sessionId)
     return res
   }
@@ -359,8 +363,7 @@ export class OpencodeAcpClient extends EventEmitter {
     }
   }
 
-  async stop() {
-    this.stopped = true
+  async stopChild() {
     const child = this.proc
     this._failAll(new Error('opencode acp stopped'))
     if (!child) return
@@ -378,5 +381,10 @@ export class OpencodeAcpClient extends EventEmitter {
       killTimer.unref?.()
       try { this._signal(child, 'SIGTERM') } catch { done() }
     })
+  }
+
+  async stop() {
+    this.stopped = true
+    await this.stopChild()
   }
 }
