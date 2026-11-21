@@ -41,7 +41,7 @@ import persona.core.contracts.api.ResolveOutcome
 import persona.core.contracts.api.SessionsRepository
 import persona.core.domain.answer.AnswerAction
 
-/** A suspended full-card approval is marked once and a second tap cannot submit it again. */
+/** Full-card answers preserve hand-off and exact owner-reply transport semantics in the Agents editor. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AgentsSecretHandoffAnswerTest {
     private lateinit var model: AgentsViewModel
@@ -83,6 +83,29 @@ class AgentsSecretHandoffAnswerTest {
         }, preferences)
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { model.page.collect {} }
         runCurrent()
+    }
+
+    @Test fun ownerReplyUsesTheExactReplyEnvelopeInsteadOfOrdinaryResolution() = runTest {
+        val ownerRequest = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_owner","machine_id":"m","session_id":"s","kind":"permission","owner_proposal":true,
+                "approval_batch_id":"batch","owner_approval_phrases":["yes"]}""",
+        )
+        val replies = mutableListOf<Pair<Interaction, String>>()
+        val center = object : InteractionCenter {
+            override val pending = MutableStateFlow(listOf(ownerRequest))
+            override suspend fun refresh() = Unit
+            override suspend fun resolve(id: String, resolution: Resolution) = error("Exact replies do not use resolve")
+            override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean): ResolveOutcome =
+                error("Exact replies do not use ordinary resolution")
+            override suspend fun replyOwnerApproval(interaction: Interaction, phrase: String) {
+                replies += interaction to phrase
+            }
+        }
+        start(center)
+        model.answer(ownerRequest, AnswerAction.OwnerReply)
+        runCurrent()
+        assertEquals(listOf(ownerRequest to "yes"), replies)
+        assertEquals(RequestDelivery.Sent, model.delivery.value[ownerRequest.id])
     }
 
     @Test fun allowIsMarkedAndASecondTapWaitsForItsOutcome() = runTest {

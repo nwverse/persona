@@ -41,7 +41,12 @@ export interface PlanTask {
   why?: string;
   /** The reasoning effort the assistant chose for its Agent (task_plan's `effort`); absent: the launcher's default. */
   effort?: string;
+  /** The to-do the task runs on; cleared on an older plan once a later one continues that to-do (#11854). */
   todo_id?: string;
+  /** The to-do this task carries on in (task_plan's `continues`) or runs on instead of a new one (`todo_id`, kept as
+   *  `reuse_todo`): both stay when `todo_id` is cleared. */
+  continues?: string;
+  reuse_todo?: string;
   error?: string;
   /** The failed start's coded refusal and its details (as a session's start_error_code / start_error_args). */
   error_code?: string;
@@ -112,6 +117,10 @@ export interface BriefRow {
   /** accept: a conclusion's verdict (left out for a deployed task); decide waits for the user's decision, and Accept takes `recommend`. */
   outcome?: TodoAsk["outcome"];
   recommend?: string;
+  /** waiting, later: the chat the card or the question came from (#2320), which Open opens in the app (#12055); a hub from
+   *  before leaves them out, and Open is then the row's `link`. */
+  machine_id?: string;
+  session_id?: string;
 }
 
 /** What a `BriefRow` field says when it is text: the value if it is a string, nothing otherwise. The rows come off the
@@ -128,7 +137,7 @@ export function briefRow(raw: unknown): BriefRow | undefined {
   const id = text(r.id);
   if (!id) return undefined;
   const row: BriefRow = { id, title: text(r.title) ?? "", waited_s: typeof r.waited_s === "number" && Number.isFinite(r.waited_s) ? r.waited_s : 0 };
-  for (const key of ["detail", "from", "link", "asked_at", "verdict", "recommend"] as const) {
+  for (const key of ["detail", "from", "link", "asked_at", "verdict", "recommend", "machine_id", "session_id"] as const) {
     const v = text(r[key]);
     if (v) row[key] = v;
   }
@@ -728,7 +737,7 @@ export async function retryTask(todo: Todo, on?: { launcher: string; model?: str
 
 /** How a decision is answered other than by taking its recommendation (#3804): one of its options by its label, or one
  *  of the fixed responses that say the owner cannot answer it as asked. */
-export type AskAnswer = { option: string } | { response: string };
+export type AskAnswer = { option: string } | { response: string } | { answers: Record<string, string> };
 
 /** The Accept button of a `brief` item's task to verify: "accepted" when the hub took it, "recorded" when no Agent could
  *  receive the decision and the supervisor has it, or "handled" when that round is already over (409). Any other failure

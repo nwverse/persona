@@ -31,6 +31,10 @@ interface InteractionCenter {
     suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean): ResolveOutcome =
         resolveOutcome(id, resolution)
 
+    /** Replies to the exact proposal and removes it only after the hub confirms that same target. */
+    suspend fun replyOwnerApproval(interaction: Interaction, phrase: String): Unit =
+        throw UnsupportedOperationException("Exact owner replies unavailable")
+
     /**
      * Questions the assistant answered for the user, oldest first (iOS `AppModel.delegatedAnswers`): from
      * `interaction_resolved` with `answered_by: "assistant"`, or the hub's `already` reply to an answer of this device's

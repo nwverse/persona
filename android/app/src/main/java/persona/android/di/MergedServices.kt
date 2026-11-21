@@ -128,6 +128,10 @@ internal fun mergedInteractions(stacks: GroupStacks): InteractionCenter = object
         resolveOutcome(id, resolution, handoffCard = false)
     override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean) =
         stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.resolveOutcome(GroupKeys.raw(id), resolution, handoffCard) }
+    override suspend fun replyOwnerApproval(interaction: Interaction, phrase: String) =
+        stacks.use(GroupKeys.namespaceOf(interaction.id)) {
+            it.repositories.interactions.replyOwnerApproval(it.names.rawInteraction(interaction), phrase)
+        }
     override suspend fun discardLocal(id: String) =
         stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.discardLocal(GroupKeys.raw(id)) }
     override val delegated = stacks.merged(emptyList<DelegatedAnswer>(), { s ->
@@ -164,6 +168,8 @@ internal fun mergedChats(stacks: GroupStacks, storage: ChatLocalStorage): ChatRe
                     ?: flowOf(ChatSnapshot(loading = false, verified = false))
             }
         override suspend fun loadOlder(session: SessionKey) = stacks.use(session) { it.repositories.chats.loadOlder(it.names.raw(session)) }
+        override suspend fun earlierEnginePage(session: SessionKey, beforeSeq: Int?) =
+            stacks.use(session) { it.repositories.chats.earlierEnginePage(it.names.raw(session), beforeSeq) }
         override suspend fun modeChanges(session: SessionKey): List<ModeChange> =
             stacks.use(session) { it.repositories.chats.modeChanges(it.names.raw(session)) }
         override suspend fun expandFold(session: SessionKey, fromSeq: Int, toSeq: Int) =
@@ -375,12 +381,16 @@ internal fun routedFiles(lookup: (machineId: String) -> SessionFiles?): SessionF
     override suspend fun stat(machineId: String, cwd: String, paths: List<String>) = of(machineId).stat(machineId, cwd, paths)
     override suspend fun download(machineId: String, cwd: String, path: String, into: java.io.File) =
         of(machineId).download(machineId, cwd, path, into)
+    override suspend fun readLogTail(machineId: String, cwd: String, path: String, manager: String?) =
+        of(machineId).readLogTail(machineId, cwd, path, manager)
     override fun comparesVersions(machineId: String) = lookup(machineId)?.comparesVersions(machineId) == true
     override suspend fun blob(machineId: String, cwd: String, path: String, rev: String) = of(machineId).blob(machineId, cwd, path, rev)
     override suspend fun thumbnail(machineId: String, cwd: String, path: String, size: Int) = of(machineId).thumbnail(machineId, cwd, path, size)
     override suspend fun convertToPdf(machineId: String, cwd: String, path: String) = of(machineId).convertToPdf(machineId, cwd, path)
     override fun editsFiles(machineId: String) = lookup(machineId)?.editsFiles(machineId) == true
     override suspend fun rename(machineId: String, cwd: String, path: String, name: String) = of(machineId).rename(machineId, cwd, path, name)
+    override suspend fun move(machineId: String, cwd: String, path: String, directory: String, conflict: SessionMoveConflictPolicy?) =
+        of(machineId).move(machineId, cwd, path, directory, conflict)
     override suspend fun trash(machineId: String, cwd: String, paths: List<String>) = of(machineId).trash(machineId, cwd, paths)
     override suspend fun restore(machineId: String, trashIds: List<String>) = of(machineId).restore(machineId, trashIds)
 }
@@ -462,6 +472,8 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
         override suspend fun newAgentModel() = creations.getOrNull(chosen)?.newAgentModel()
         override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean) =
             creation(of(machineId)).launcherModels(machineId, launcher, refresh)
+        override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean, host: String?) =
+            creation(of(machineId)).launcherModels(machineId, launcher, refresh, host)
         override suspend fun worktreeStatus(machineId: String, cwd: String, kind: String?) = creation(of(machineId)).worktreeStatus(machineId, cwd, kind)
         override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String, kind: String?) =
             creation(of(machineId)).addWorktree(machineId, cwd, nameHint, branch, kind)

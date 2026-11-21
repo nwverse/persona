@@ -15,11 +15,11 @@ import (
 // A card's push carries the manager's level: with the switch on a P1 escalation is held (recorded, no alert) while a
 // P0 one and a card that names no level (P0) alert.
 func TestQuietCardPushHonoursTheManagersLevel(t *testing.T) {
-	h, _ := lnHub(t)
-	if err := h.push.setLnMode(context.Background(), true); err != nil {
+	h, _ := gradingHub(t)
+	if err := h.push.setPushGrading(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
-	attempts := lnAttempts(h)
+	attempts := gradingAttempts(h)
 	card := func(id string) proto.Interaction {
 		return proto.Interaction{ID: id, MachineID: "m1", SessionID: "s1", Kind: proto.IxPermission, Summary: "git push"}
 	}
@@ -27,7 +27,7 @@ func TestQuietCardPushHonoursTheManagersLevel(t *testing.T) {
 	if *attempts != 0 {
 		t.Fatalf("a P1 escalation alerted %d times", *attempts)
 	}
-	view := h.push.lnInterceptsView("", 0)
+	view := h.push.heldPushesView("", 0)
 	if len(view) != 1 || view[0].Reason != interceptReasonP1 || view[0].RelatedKey != "ix:ix_p1" {
 		t.Fatalf("intercepts %+v, want the held card", view)
 	}
@@ -41,14 +41,14 @@ func TestQuietCardPushHonoursTheManagersLevel(t *testing.T) {
 
 // With the switch off every card alerts, whatever level the manager named.
 func TestQuietOffCardPushIgnoresLevel(t *testing.T) {
-	h, _ := lnHub(t)
-	attempts := lnAttempts(h)
+	h, _ := gradingHub(t)
+	attempts := gradingAttempts(h)
 	h.notifyInteractionAt("", proto.Interaction{ID: "ix1", MachineID: "m1", SessionID: "s1", Kind: proto.IxPermission, Summary: "ls"},
 		"box", false, assistantwire.LevelP1, "")
 	if *attempts != 1 {
 		t.Fatalf("got %d alerts, want 1", *attempts)
 	}
-	if view := h.push.lnInterceptsView("", 0); len(view) != 0 {
+	if view := h.push.heldPushesView("", 0); len(view) != 0 {
 		t.Fatalf("held with the switch off: %+v", view)
 	}
 }
@@ -56,11 +56,11 @@ func TestQuietOffCardPushIgnoresLevel(t *testing.T) {
 // Reply reminders merge per question, not per agent: with the switch on, one agent's second question within 12 hours
 // still rings, while a repeat of the same question does not (an older manager without a key is keyed by the text).
 func TestQuietReplyReminderKeyedByQuestion(t *testing.T) {
-	h, _ := lnHub(t)
-	if err := h.push.setLnMode(context.Background(), true); err != nil {
+	h, _ := gradingHub(t)
+	if err := h.push.setPushGrading(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
-	attempts := lnAttempts(h)
+	attempts := gradingAttempts(h)
 	h.notifyReplyKeyed("", "m1", "box", "s1", "Agent", "Which branch?", "reply:s1@1")
 	h.notifyReplyKeyed("", "m1", "box", "s1", "Agent", "Deploy now?", "reply:s1@2")
 	if *attempts != 2 {
@@ -81,14 +81,14 @@ func TestQuietReplyReminderKeyedByQuestion(t *testing.T) {
 // the hub's settings itself.
 func TestQuietSwitchReachesTheManagerOverTheHello(t *testing.T) {
 	h := newTestHub(t)
-	h.push.store = newLnStore()
+	h.push.store = newGradingStore()
 	a := connectAssistant(t, h)
 	quietPush := func() bool { hello, _ := a.bh.Hello(context.Background()); return hello.QuietPush }
 	if quietPush() {
 		t.Fatal("the manager's hello says on before the switch was turned on")
 	}
 	mux := http.NewServeMux()
-	h.lnRoutes(mux)
+	h.pushGradingRoutes(mux)
 	put := func(on bool) {
 		t.Helper()
 		body := `{"enabled":false}`

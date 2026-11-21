@@ -11,7 +11,7 @@ import { stateOf } from "./format";
 import { foldedState } from "./child-sessions";
 import { foldRows } from "./folded-rows";
 import { splitAgentSessions, type AgentGroup, type AgentMutes } from "./agent-groups";
-import type { AgentState, Interaction, Machine, Session } from "./types";
+import type { AgentState, Interaction, Machine, Question, Session } from "./types";
 import type { Route } from "./router";
 import { byTime } from "./times";
 import { stateName, waitName } from "./state-labels";
@@ -168,6 +168,8 @@ export function orphanedLine(todo: Pick<Todo, "orphaned" | "done_at">): { lead: 
  * `asked_at` is the round, which POST /todos/{id}/accept takes back (an earlier round's is 409).
  */
 export interface TodoAsk {
+  /** An expired ask_user's original form. Answer it on the to-do, not its expired interaction. */
+  questions?: Question[];
   outcome?: "done" | "cannot" | "decide" | string;
   verdict: string;
   recommend?: string;
@@ -360,6 +362,19 @@ export function isReviewDone(todo: Todo): boolean {
   return Boolean(todo.done_at) && todo.done_by === "review";
 }
 
+/** A cancelled task: its supervisor ended it without the work being accepted (the row's status line says Cancelled).
+ *  Only this outcome is struck through, so an accepted or deployed one does not read as thrown away (#11677). */
+export function isCancelled(todo: Todo): boolean {
+  return isReviewDone(todo) && todo.supervision?.state === "cancelled";
+}
+
+/** Whether a finished row strikes its title through: only a cancelled to-do (#11677). A task that succeeded — accepted,
+ *  deployed, ticked by the owner or auto-completed — keeps a plain muted title; the filled check and the muted tone
+ *  already say it is closed. A row still open (a failed start waiting on the owner) is never struck (#3713). */
+export function strikesThrough(todo: Todo, open: boolean): boolean {
+  return !open && isCancelled(todo);
+}
+
 /** An open task its supervisor accepted, reopened by the hub when its agent got more work, with nothing of it running
  *  or asking now: it reads as accepted, not "Follow up" (#3156, docs/assistant/todo-status-sop.md "Accepted tasks").
  *  An open concern still waits for its report, so neither an accepted verdict nor its done styling applies (#3582). */
@@ -377,6 +392,9 @@ export function shownStatus(todo: Todo, status: TodoStatus): TodoStatus {
 export function todoStatusLabel(todo: Todo, status: TodoStatus): string {
   if (acceptedAtRest(todo, status)) return t("lib-todos.review_done");
   if (status === "done" && isReviewDone(todo)) return todo.supervision?.state === "cancelled" ? t("lib-todos.review_cancelled") : t("lib-todos.review_done");
+  if (status === "follow_up" && todo.supervision?.state === "parked" && todo.supervision.parked?.handoff && !openAsk(todo)) {
+    return TODO_STATUS_INFO.waiting.label;
+  }
   return status === "done" && isAutoDone(todo) ? t("lib-todos.auto_done") : TODO_STATUS_INFO[status].label;
 }
 
@@ -659,12 +677,13 @@ export function buildTodoAgentGroups(
   machines: Machine[],
   todos: Todo[],
   mutes: AgentMutes = { spaces: [], sessions: [] },
+  compareSessions?: (a: Session, b: Session) => number,
 ): AgentGroup[] {
   const { live } = splitAgentSessions(all, machines);
   const lookup = makeSessionLookup(live);
 
-  // order of unfinished todos
-  const openTodos = sortTodos(todos.filter((t) => !t.done_at), lookup);
+  // The To-dos page's order without live Agent rank: activity updates a group's status, not its place (#11801).
+  const openTodos = sortTodos(todos.filter((t) => !t.done_at));
 
   // map each todo to its live sessions
   const liveByKey = new Map<string, Session>();
@@ -685,6 +704,12 @@ export function buildTodoAgentGroups(
   }
   const assignedSessionKeys = new Set(homeOf.keys());
   const groups: AgentGroup[] = [];
+  const byRank = compareSessions ?? ((a: Session, b: Session) => {
+    const rA = sessionRank(a, mutes);
+    const rB = sessionRank(b, mutes);
+    if (rA !== rB) return rA - rB;
+    return byDate(a, b);
+  });
 
   for (const todo of openTodos) {
     // in the todo's agents order, then the sessions on it by their own todo only
@@ -693,13 +718,8 @@ export function buildTodoAgentGroups(
     const todoSessions = keys.map((key) => liveByKey.get(key)!);
 
     if (todoSessions.length > 0) {
-      // order within a group: by status priority (pinned / needs you first, muted down), same priority by time, newest first
-      todoSessions.sort((a, b) => {
-        const rA = sessionRank(a, mutes);
-        const rB = sessionRank(b, mutes);
-        if (rA !== rB) return rA - rB;
-        return byDate(a, b);
-      });
+      // The caller's presentation order; without one, status priority then newest activity.
+      todoSessions.sort(byRank);
 
       const st = todoStatus(todo, lookup);
       groups.push({
@@ -712,12 +732,6 @@ export function buildTodoAgentGroups(
     }
   }
 
-  const byRank = (a: Session, b: Session) => {
-    const rA = sessionRank(a, mutes);
-    const rB = sessionRank(b, mutes);
-    if (rA !== rB) return rA - rB;
-    return byDate(a, b);
-  };
   // agents on no todo go last in one "Unassigned" segment, folded by default; opened by hand in a terminal or not (#6591)
   const unassigned = live.filter((s) => !assignedSessionKeys.has(`${s.machine_id}/${s.session_id}`));
   if (unassigned.length > 0) {
