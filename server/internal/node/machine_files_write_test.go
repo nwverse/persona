@@ -349,6 +349,41 @@ func TestMachineFilesCreateRenameDeleteAndGuards(t *testing.T) {
 		}
 	}
 
+	// Renaming onto an existing hard link to the same inode must fail with CodeExists (not POSIX no-op).
+	hlSrc := filepath.Join(root, "hardlink-a.txt")
+	hlDst := filepath.Join(root, "hardlink-b.txt")
+	if err := os.WriteFile(hlSrc, []byte("same-inode\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if os.Link(hlSrc, hlDst) == nil {
+		_, err = n.machineFileRename(proto.MachineFileRenameRequest{
+			Path:     hlSrc,
+			DestPath: hlDst,
+			Root:     root,
+		})
+		assertRPCCode(t, "rename onto hard link in same dir", err, proto.CodeExists)
+		if _, statErr := os.Lstat(hlSrc); statErr != nil {
+			t.Fatalf("source hard link unexpectedly removed: %v", statErr)
+		}
+		subDir := filepath.Join(root, "hl-sub")
+		if err := os.MkdirAll(subDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		hlSubDst := filepath.Join(subDir, "hardlink-c.txt")
+		if err := os.Link(hlSrc, hlSubDst); err != nil {
+			t.Fatal(err)
+		}
+		_, err = n.machineFileRename(proto.MachineFileRenameRequest{
+			Path:     hlSrc,
+			DestPath: hlSubDst,
+			Root:     root,
+		})
+		assertRPCCode(t, "rename onto hard link in subdir", err, proto.CodeExists)
+		if _, statErr := os.Lstat(hlSrc); statErr != nil {
+			t.Fatalf("source hard link unexpectedly removed after cross-dir check: %v", statErr)
+		}
+	}
+
 	// Refuse deleting root boundary itself and sensitive files without confirm.
 	_, err = n.machineFileDelete(proto.MachineFileDeleteRequest{Path: root, Root: root})
 	assertRPCCode(t, "delete root boundary", err, proto.CodeMachineFileBoundary)
@@ -500,5 +535,74 @@ func TestMachineFilesStreamingUploadSizeCapsAndAbortCleanup(t *testing.T) {
 			Size: 10,
 		})
 		assertRPCCode(t, "upload into escaping symlink dir", err, proto.CodeMachineFileBoundary)
+
+		// 7. Uploading over an existing leaf symlink (even pointing inside root with overwrite=true) is refused
+		// without modifying the symlink's target or leaking temp files.
+		realTarget := filepath.Join(root, "real-target.txt")
+		if err := os.WriteFile(realTarget, []byte("keep-me"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		leafLink := filepath.Join(root, "target-link.txt")
+		if err := os.Symlink(realTarget, leafLink); err != nil {
+			t.Fatal(err)
+		}
+		danglingLink := filepath.Join(root, "dangling-link.txt")
+		if err := os.Symlink(filepath.Join(root, "does-not-exist.txt"), danglingLink); err != nil {
+			t.Fatal(err)
+		}
+		for _, tc := range []struct {
+			desc      string
+			name      string
+			overwrite bool
+		}{
+			{"leaf symlink without overwrite", "target-link.txt", false},
+			{"leaf symlink with overwrite", "target-link.txt", true},
+			{"dangling symlink with overwrite", "dangling-link.txt", true},
+		} {
+			_, err = n.machineFileUploadBegin(proto.MachineFileUploadBeginRequest{
+				Dir:       root,
+				Name:      tc.name,
+				Root:      root,
+				Size:      7,
+				Overwrite: tc.overwrite,
+			})
+			assertRPCCode(t, tc.desc, err, proto.CodeMachineFileBoundary)
+		}
+		if got, err := os.ReadFile(realTarget); err != nil || string(got) != "keep-me" {
+			t.Fatalf("symlink target modified by refused upload: %q err=%v", string(got), err)
+		}
+		if left := countTempArtifacts(t, root); len(left) > 0 {
+			t.Fatalf("temp file leaked on symlink upload refusal: %v", left)
+		}
+
+		// 8. TOCTOU: if a symlink is swapped in at the leaf before upload end, commit is refused and cleaned up.
+		toctouBegin, err := n.machineFileUploadBegin(proto.MachineFileUploadBeginRequest{
+			Dir:       root,
+			Name:      "toctou-link.txt",
+			Root:      root,
+			Size:      4,
+			Overwrite: true,
+		})
+		if err != nil {
+			t.Fatalf("toctou begin: %v", err)
+		}
+		if _, err := n.machineFileUploadChunk(proto.MachineFileUploadChunkRequest{
+			UploadID: toctouBegin.UploadID,
+			Offset:   0,
+			Data:     []byte("evil"),
+		}); err != nil {
+			t.Fatalf("toctou chunk: %v", err)
+		}
+		if err := os.Symlink(realTarget, filepath.Join(root, "toctou-link.txt")); err != nil {
+			t.Fatal(err)
+		}
+		_, err = n.machineFileUploadEnd(proto.MachineFileUploadEndRequest{UploadID: toctouBegin.UploadID})
+		assertRPCCode(t, "toctou leaf symlink on upload end", err, proto.CodeMachineFileBoundary)
+		if got, err := os.ReadFile(realTarget); err != nil || string(got) != "keep-me" {
+			t.Fatalf("symlink target modified by TOCTOU upload end: %q err=%v", string(got), err)
+		}
+		if left := countTempArtifacts(t, root); len(left) > 0 {
+			t.Fatalf("temp file leaked after TOCTOU upload end refusal: %v", left)
+		}
 	}
 }

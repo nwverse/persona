@@ -503,8 +503,17 @@ func (n *Node) machineFileRename(req proto.MachineFileRenameRequest) (*proto.Mac
 		return nil, machineBoundaryError("cannot move a directory into itself")
 	}
 
-	// Allow case-only rename of the exact same entry on case-insensitive filesystems.
-	if dstSt, err := os.Lstat(destRes.CanonicalLeaf); err == nil && os.SameFile(dstSt, srcInfo) {
+	// Allow case-only rename of the exact same entry on case-insensitive filesystems,
+	// without letting distinct hard links to the same inode bypass overwrite protection.
+	caseOnlySameEntry := false
+	if srcRes.ParentCanonical == destRes.ParentCanonical &&
+		srcRes.Name != destRes.Name &&
+		strings.EqualFold(srcRes.Name, destRes.Name) {
+		if dstSt, err := os.Lstat(destRes.CanonicalLeaf); err == nil && os.SameFile(dstSt, srcInfo) {
+			caseOnlySameEntry = true
+		}
+	}
+	if caseOnlySameEntry {
 		if err := os.Rename(srcRes.CanonicalLeaf, destRes.CanonicalLeaf); err != nil {
 			return nil, explainRename(srcRes.DisplayPath, explainDenied(destRes.DisplayPath, n.home, err))
 		}
@@ -606,6 +615,8 @@ type machineFileUpload struct {
 
 	f             *os.File
 	tmpPath       string
+	dirDisplay    string
+	dirCanonical  string
 	destDisplay   string
 	destCanonical string
 	rootPath      string
@@ -756,39 +767,47 @@ func (n *Node) machineFileUploadBegin(req proto.MachineFileUploadBeginRequest) (
 	}
 
 	destDisplay := filepath.Join(dirRes.DisplayPath, name)
-	destRes, err := n.resolveMachinePath(destDisplay, req.Root, machinePathOptions{AllowMissingLeaf: true})
-	if err != nil {
-		return nil, err
+	// Resolve the leaf inside dirRes.CanonicalPath without following a leaf symlink,
+	// so symlink guards trigger on the link itself and the final rename stays in the temp file's directory.
+	destLeaf := filepath.Clean(filepath.Join(dirRes.CanonicalPath, name))
+	if dirRes.RootPath != "" && !isWithinCanonicalRoot(destLeaf, dirRes.RootPath) {
+		return nil, machineBoundaryError("path escapes the allowed root boundary")
 	}
-	if destRes.Sensitive && !req.ConfirmSensitive {
-		return nil, machineSensitiveConfirmError(destRes.SensitiveReason)
+	if err := n.offLimitsResolved(destLeaf); err != nil {
+		return nil, machineBoundaryError(err.Error())
+	}
+	sensitive, sensitiveReason := classifyMachineSensitivePath(destDisplay, destLeaf)
+	if sensitive && !req.ConfirmSensitive {
+		return nil, machineSensitiveConfirmError(sensitiveReason)
 	}
 
-	if lst, err := os.Lstat(destRes.CanonicalPath); err == nil {
-		if lst.IsDir() {
-			return nil, errExists(name)
-		}
+	if lst, err := os.Lstat(destLeaf); err == nil {
 		if lst.Mode()&fs.ModeSymlink != 0 {
 			return nil, machineBoundaryError("refusing to upload over a symlink")
+		}
+		if lst.IsDir() {
+			return nil, errExists(name)
 		}
 		if !req.Overwrite {
 			return nil, errExists(name)
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return nil, explainDenied(destRes.DisplayPath, n.home, err)
+		return nil, explainDenied(destDisplay, n.home, err)
 	}
 
 	tmp, err := os.CreateTemp(dirRes.CanonicalPath, ".persona-mfupload-*")
 	if err != nil {
-		return nil, explainDenied(destRes.DisplayPath, n.home, err)
+		return nil, explainDenied(destDisplay, n.home, err)
 	}
 	id := randHex(8)
 	up := &machineFileUpload{
 		f:             tmp,
 		tmpPath:       tmp.Name(),
-		destDisplay:   destRes.DisplayPath,
-		destCanonical: destRes.CanonicalPath,
-		rootPath:      destRes.RootPath,
+		dirDisplay:    dirRes.DisplayPath,
+		dirCanonical:  dirRes.CanonicalPath,
+		destDisplay:   destDisplay,
+		destCanonical: destLeaf,
+		rootPath:      dirRes.RootPath,
 		name:          name,
 		expectedSize:  req.Size,
 		maxBytes:      maxBytes,
@@ -897,22 +916,28 @@ func (n *Node) machineFileUploadEnd(req proto.MachineFileUploadEndRequest) (*pro
 	up.f = nil
 	up.mu.Unlock()
 
-	// Re-verify canonical destination and boundary against TOCTOU symlink swaps before commit.
-	recheck, err := n.resolveMachinePath(up.destDisplay, up.rootPath, machinePathOptions{AllowMissingLeaf: true})
+	// Re-verify parent directory canonically and non-followed leaf against TOCTOU symlink swaps before commit.
+	dirRecheck, err := n.resolveMachinePath(up.dirDisplay, up.rootPath, machinePathOptions{})
 	if err != nil {
 		return nil, err
 	}
-	if recheck.CanonicalPath != up.destCanonical {
+	if dirRecheck.CanonicalPath != up.dirCanonical {
 		return nil, machineBoundaryError("upload destination changed during transfer")
+	}
+	if up.rootPath != "" && !isWithinCanonicalRoot(up.destCanonical, up.rootPath) {
+		return nil, machineBoundaryError("path escapes the allowed root boundary")
+	}
+	if err := n.offLimitsResolved(up.destCanonical); err != nil {
+		return nil, machineBoundaryError(err.Error())
 	}
 
 	mode := os.FileMode(0o644)
 	if lst, lerr := os.Lstat(up.destCanonical); lerr == nil {
-		if lst.IsDir() {
-			return nil, errExists(up.name)
-		}
 		if lst.Mode()&fs.ModeSymlink != 0 {
 			return nil, machineBoundaryError("refusing to upload over a symlink")
+		}
+		if lst.IsDir() {
+			return nil, errExists(up.name)
 		}
 		if !up.overwrite {
 			return nil, errExists(up.name)
