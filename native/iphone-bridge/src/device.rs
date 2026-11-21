@@ -392,23 +392,24 @@ impl Device {
         // The developer services are listed only while the disk image is mounted, and a session reads the directory
         // when it connects. One mounted since (by Xcode, or by another session's mount_ddi) needs a fresh read, and
         // that can't be relied on: on iOS 27.2.1 a second read in the same tunnel failed even with nothing mounted
-        // since. So the session is done only when the phone has the image (cryptexd or the image mounter says so) and
-        // this session still can't list its services: connect again. A phone without the image keeps its session; a
-        // failed read alone used to end it at every health check (#12556).
+        // since. So unless the phone says it has no image (cryptexd and the image mounter), this session can't reach
+        // the services: connect again. A phone that says so keeps its session; a failed read alone used to end it at
+        // every health check (#12556). A phone that can't say is treated as having it: on iOS 27.2.1 a session that
+        // predated an install apparently got no answer from cryptexd, and only a later check that timed out ended it.
         if developer_mode != Some(false)
             && !self.lists_developer_services()
             && self.services_checked.elapsed() >= SERVICES_FRESH
             && !(self.read_services_again().await && self.lists_developer_services())
-            && matches!(
+            && !matches!(
                 tokio::time::timeout(CRYPTEXD_TIMEOUT, crate::ddi::Mounter::mounted(self)).await,
-                Ok(Ok(true))
+                Ok(Ok(false))
             )
         {
             self.stale = true;
             return Err(BridgeError::new(
                 Code::Disconnected,
-                "the developer disk image was mounted after this session connected and its services aren't listed \
-                 here: connect again",
+                "this session can't list the developer services, and the phone has the developer disk image or can't \
+                 say whether it does: connect again",
             ));
         }
         let orientation = self.orientation().await;
