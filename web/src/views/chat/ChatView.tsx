@@ -1292,6 +1292,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const sendNow = useRef(onSend);
   sendNow.current = onSend;
   const send = useCallback((out: Outgoing) => sendNow.current(out), []);
+  const compactSession = useCallback(() => send({ text: "/compact", images: [] }), [send]);
   // The assistant's tasks (docs/assistant/unified-entry.md): the conversation's feed, and the main one's "Today" card.
   const taskFeed = useFeed((s) => (assistant ? (s.feeds[sid] ?? NO_FEED) : NO_FEED));
   useEffect(() => {
@@ -2415,13 +2416,16 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         />
         )}
         {!stoppedLine && session && (
-          assistant
-            ? sourceSubtitle(session) && <div data-composer-usage className="px-2 pt-0.5"><ComposerSource session={session} assistant /></div>
-            : (
-              <Suspense fallback={null}>
-                <AgentStatusLine key={draftKey} session={session} source={sourceSubtitle(session) ? <ComposerSource session={session} assistant /> : undefined} />
-              </Suspense>
-            )
+          <Suspense fallback={null}>
+            <AgentStatusLine
+              key={draftKey}
+              session={session}
+              assistant={assistant}
+              items={earlier.liveItems}
+              onCompact={assistant ? undefined : compactSession}
+              source={sourceSubtitle(session) ? <ComposerSource session={session} assistant /> : undefined}
+            />
+          </Suspense>
         )}
         </div>
       </div>
