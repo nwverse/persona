@@ -460,6 +460,7 @@ var Routes = []string{
 	"PUT /api/v1/assistant/history",
 	"GET /api/v1/assistant/segments",
 	"PUT /api/v1/assistant/segments",
+	"GET /api/v1/assistant/conversations/{id}/segments",
 	"POST /api/v1/assistant/conversations/{id}/switch",
 	"GET /api/v1/assistant/conversations/{id}/switch/{operation}",
 	// The selection: what the knowledge base brings in and keeps (kb_selection.go there).
