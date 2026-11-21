@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -388,5 +389,86 @@ func TestBackgroundBreakerTripsOnMCPToolsDiscoveryDowngrade(t *testing.T) {
 	r.mu.Unlock()
 	if !tripped {
 		t.Fatal("mcp.tools discovery downgrade during active background round did not trip breaker")
+	}
+}
+
+// Replacing an outgrown background supervisor clears any fork and circuit-breaker state that belonged to the previous
+// supervisor, so the replacement starts with a clean slate; if starting the replacement fails, the old supervisor's
+// state stays intact.
+func TestReplaceBackgroundClearsForkAndBreakerState(t *testing.T) {
+	s, f, _, bg, nextSignal := setupAllStoppedBackground(t)
+	ctx := context.Background()
+
+	// Seed a forked round session and trip both the repeated no-op all_stopped breaker and the auth-denied breaker.
+	const staleFork = "bg1-fork-stale"
+	s.registerBackgroundRoundFork(ctx, "server", staleFork, bg)
+	if !s.isBackgroundSession(ctx, staleFork) {
+		t.Fatal("registered fork should be recognized before replacement")
+	}
+
+	wakeRound(s, nextSignal(1))
+	s.backgroundRoundTurnEnded(ctx, bg, time.Now())
+	wakeRound(s, nextSignal(2))
+	s.backgroundRoundTurnEnded(ctx, bg, time.Now())
+	s.backgroundRoundDelivered(ctx, bg, relayMsg{Tool: superviseTool}, time.Now())
+	s.noteAssistantDenied(ctx, "server", staleFork, "task_review")
+
+	// Mark bg outgrown so ensureBackground attempts replaceBackground.
+	s.superviseRoundAnswered(bg, superviseRoundReply{Context: "kept", Why: "no_anchor"})
+
+	// If starting the replacement fails, old supervisor continues and its fork/breaker state must NOT be wiped.
+	f.mu.Lock()
+	f.failAssistant = errors.New("start failed")
+	f.mu.Unlock()
+	if id, gone := s.ensureBackground(ctx); id != bg || gone != "" {
+		t.Fatalf("failed replaceBackground returned (%q, %q), want (%q, \"\")", id, gone, bg)
+	}
+	r := &s.background.rounds
+	r.mu.Lock()
+	keptForks := len(r.forks)
+	keptByTodo := len(r.breaker.byTodo)
+	keptAuthTrips := r.breaker.authTrips
+	r.replacedAt = time.Time{} // allow immediate retry once start succeeds
+	r.mu.Unlock()
+	if keptForks != 1 || keptByTodo == 0 || keptAuthTrips == 0 {
+		t.Fatalf("failed replaceBackground wiped state: forks=%d byTodo=%d authTrips=%d", keptForks, keptByTodo, keptAuthTrips)
+	}
+
+	// Once start succeeds, replaceBackground installs a new supervisor and clears stale fork and breaker state.
+	f.mu.Lock()
+	f.failAssistant = nil
+	f.mu.Unlock()
+	newID, gone := s.ensureBackground(ctx)
+	if newID == "" || newID == bg || gone != bg {
+		t.Fatalf("replaceBackground returned (%q, %q), want new id replacing %q", newID, gone, bg)
+	}
+	r.mu.Lock()
+	gotForks := len(r.forks)
+	gotActive := r.breaker.active
+	gotByTodo := len(r.breaker.byTodo)
+	gotAuthTrips := r.breaker.authTrips
+	gotAuthUntil := r.breaker.authUntil
+	gotAuthAlerted := r.breaker.authAlerted
+	gotLastDenied := r.breaker.lastDeniedTool
+	r.mu.Unlock()
+	if gotForks != 0 || gotActive != nil || gotByTodo != 0 || gotAuthTrips != 0 || !gotAuthUntil.IsZero() || gotAuthAlerted || gotLastDenied != "" {
+		t.Fatalf("replaceBackground left stale state: forks=%d active=%v byTodo=%d authTrips=%d authUntil=%v authAlerted=%v lastDenied=%q",
+			gotForks, gotActive, gotByTodo, gotAuthTrips, gotAuthUntil, gotAuthAlerted, gotLastDenied)
+	}
+	if s.isBackgroundSession(ctx, staleFork) {
+		t.Fatal("stale fork from replaced supervisor is still authorized")
+	}
+
+	// The new supervisor receives the next all_stopped wake cleanly (not suppressed or redirected to main).
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: newID, MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+	)
+	wakeRound(s, nextSignal(3))
+	if got := len(assistantSendsTo(f, newID)); got != 1 {
+		t.Fatalf("new supervisor sends after replacement = %d, want 1 (main sends = %d)", got, len(assistantSendsTo(f, "conv1")))
+	}
+	if got := len(assistantSendsTo(f, "conv1")); got != 0 {
+		t.Fatalf("main conversation should not receive fallback after clean replacement: %d sends", got)
 	}
 }
