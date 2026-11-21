@@ -588,6 +588,8 @@ class CheckFastCompareTests(ScriptsRepoTestCase):
         (bin_dir / "go").write_text(FAKE_GO_COMPARE)
         (bin_dir / "go").chmod(0o755)
         self.go_log = bin_dir / "go.log"
+        # The go timeout the reruns' -timeout comes from, whatever the caller's environment sets (#12733).
+        self.go_env = {"FAKE_GO_LOG": str(self.go_log), "CHECK_FAST_TIMEOUT_GO_TEST": "300"}
         return str(bin_dir)
 
     def worktrees(self):
@@ -605,8 +607,7 @@ class CheckFastCompareTests(ScriptsRepoTestCase):
 
     def test_compare_main_says_which_failures_the_merge_base_has(self):
         path = self.go_repo()
-        code, out = self.check_fast("--base", "base", "--compare-main", path=path,
-                                    env={"FAKE_GO_LOG": str(self.go_log)})
+        code, out = self.check_fast("--base", "base", "--compare-main", path=path, env=self.go_env)
         self.assertEqual(1, code, out)  # a failure the base has is still a failure
         self.assertIn("         rerun: (cd server && go test -count=1 -run '^(TestRed|TestMine)$' ./internal/foo)", out)
         base = subprocess.run(["git", "-C", str(self.repo), "rev-parse", "--short=10", "base"], capture_output=True,
@@ -631,8 +632,7 @@ class CheckFastCompareTests(ScriptsRepoTestCase):
     def test_compare_main_does_not_attribute_a_test_the_change_edits(self):
         path = self.go_repo()
         self.write("server/internal/foo/foo_test.go", "package foo\n\n// changed\n")
-        code, out = self.check_fast("--base", "base", "--compare-main", path=path,
-                                    env={"FAKE_GO_LOG": str(self.go_log)})
+        code, out = self.check_fast("--base", "base", "--compare-main", path=path, env=self.go_env)
         self.assertEqual(1, code, out)
         self.assertIn("EDITED   server/internal/foo TestRed: not attributable, because this change edits that test's "
                       "files (server/internal/foo/foo_test.go)", out)
