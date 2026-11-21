@@ -329,7 +329,10 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 	if spokeKnown && (!terminal && m.isAssistant(spokeSession) || isText && strings.TrimSpace(text) != "") {
 		// The manager also observes owner messages to Agents before delivery, so a task's decision default can pause.
 		spoke := assistantwire.UserSpokeParams{SessionRef: assistantwire.SessionRef{MachineID: m.cfg.ID, SessionID: sid}}
-		if (terminal || !m.isAssistant(spokeSession)) && isText && personSent(r.Context()) {
+		// A person's own app supplies the text for every conversation, including a supervisor / direction
+		// conversation: its needs_user decision cards are answered there too, and this event reaches the manager
+		// before the message is persisted, so the text cannot be recovered from transcript history at this point.
+		if isText && personSent(r.Context()) {
 			spoke.Text = text
 		}
 		h.asstOf(h.sessionOwner(m.cfg.ID, sid)).userSpoke(r.Context(), spoke)

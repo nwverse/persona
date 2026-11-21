@@ -947,6 +947,12 @@ func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) 
 		s.retireTodoWork([2]string{r.MachineID, r.SessionID}) // /exit or /quit starts no turn that could cancel the wake
 	}
 	s.agentDecisionSpoke(ctx, r, time.Now(), text)
+	// A supervisor / direction conversation is never a task's active worker session, so the
+	// Agent-chat path above finds nothing for it. Settle the needs_user cards it supervises by
+	// reverse lookup instead (decision_supervisor_reply.go). Provenance-marked input is ignored.
+	if s.activeTodoOf(r.MachineID, r.SessionID) == "" {
+		s.supervisorDecisionSpoke(ctx, r, time.Now(), text)
+	}
 	s.ownerHeard(r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	s.progressMade(r.MachineID, r.SessionID, time.Now()) // told something: a new stretch (supervise_progress.go)

@@ -113,7 +113,10 @@ type SessionRef struct {
 	SessionID string `json:"session_id"`
 }
 
-// UserSpokeParams carries text only when the hub authenticated a person's own app.
+// UserSpokeParams carries text only when the hub authenticated a person's own app, for both
+// Agent conversations and the assistant's own supervisor / direction conversations. The event
+// reaches the manager before the message is persisted, so a direction's decision cards rely on
+// this text rather than a transcript read.
 // Keep it out of SessionRef: session references are also used as map keys.
 type UserSpokeParams struct {
 	SessionRef
