@@ -130,6 +130,7 @@ type Hub struct {
 	// deltas: the live text of each session's message being generated, as last relayed (machine, session -> text): a
 	// client subscribing in the middle of it gets it after the backlog instead of waiting for the next token.
 	deltas     map[[2]string]string
+	ttft       hubTTFTTracker
 	phoneTools map[string]db.PhoneToolRegistration
 	calls      map[string]chan proto.ToolResult
 	wokeAt     map[string]time.Time // device -> last silent push to wake it for a tool call

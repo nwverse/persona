@@ -525,10 +525,14 @@ func (h *Hub) linkSentTodo(ctx context.Context, m *Machine, todoID, sid string, 
 func (h *Hub) deliverOnce(ctx context.Context, m *Machine, p map[string]any) (int, []byte, string) {
 	var out json.RawMessage
 	sendTimingOf(ctx).mark("dispatch_started", true)
+	sentAt := time.Now()
 	err := m.call(ctx, "session.send", p, &out)
 	sendTimingOf(ctx).mark("node_returned", err == nil)
 	switch outcome := sendOutcome(err); {
 	case err == nil:
+		if sid, _ := p["session_id"].(string); sid != "" {
+			h.ttft.arm(m.cfg.ID, sid, sentAt)
+		}
 		if len(out) == 0 {
 			out = json.RawMessage("{}")
 		}
