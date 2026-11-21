@@ -705,6 +705,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const skillManager = useStore((s) => session?.manager ?? s.machines.find((m) => m.id === mid)?.manager) ?? shownManager;
   const skillEnvironment = JSON.stringify([session?.launcher, session?.model_pick, session?.pending_switch, session?.source_kind, assistantLauncher]);
   const mention = useMemo(() => ({ cwd: session?.cwd, self: draftKey, files: () => chatFiles(items.current), workspaces: Boolean(assistant),
+    repositories: assistant ? skillManager : undefined,
     skills: { manager: skillManager, session: sid, launcher: assistant ? skillLauncher : undefined, environment: skillEnvironment, agent: !assistant },
   }), [session?.cwd, skillManager, draftKey, assistant, sid, skillLauncher, skillEnvironment]);
 
