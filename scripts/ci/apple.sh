@@ -1,13 +1,13 @@
 #!/bin/bash
 # Public, local-runnable Apple checks. Requires XcodeGen, Python 3 and rsync.
 # The default lane uses macOS 26 and Xcode 26.0.x; ios18 uses the 18.6 simulator.
-# Usage: scripts/ci/apple.sh [all|ios|ios18|packages|ios-build|ios-focused]
+# Usage: scripts/ci/apple.sh [all|ios|ios18|packages|ios-build|ios-focused|ios-regressions]
 # Cache CI_SPM_CACHE (default ~/Library/Caches/persona-ci/spm); keep the printed
 # output directory's *.xcresult bundles when investigating failures.
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 LANE="${1:-all}"
-case "$LANE" in all|ios|ios18|packages|ios-build|ios-focused) ;; *) printf 'Usage: %s [all|ios|ios18|packages|ios-build|ios-focused]\n' "$0" >&2; exit 2 ;; esac
+case "$LANE" in all|ios|ios18|packages|ios-build|ios-focused|ios-regressions) ;; *) printf 'Usage: %s [all|ios|ios18|packages|ios-build|ios-focused|ios-regressions]\n' "$0" >&2; exit 2 ;; esac
 [ "$#" -le 1 ] || { printf 'apple-ci: too many arguments\n' >&2; exit 2; }
 [ "$(uname -s)" = Darwin ] || { printf 'apple-ci: FAIL requires macOS with Xcode\n' >&2; exit 1; }
 for tool in python3 xcodebuild xcrun xcodegen rsync git; do
@@ -184,7 +184,7 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   ci_run 'Isolation lint unit tests' 900 xcrun swift test -c release --disable-testable-imports --package-path "$SPM/IsolationLint/package" --scratch-path "$SPM/IsolationLint/build"
   ci_run 'Blocking calls on the main actor (isolation lint)' 300 "$SPM/IsolationLint/build/release/isolation-lint" --root "$SOURCE" --baseline "$SOURCE/scripts/test/apple_isolation_baseline.json"
 fi
-if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ]; then
+if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ] || [ "$LANE" = ios-regressions ]; then
   for sdk in iphoneos iphonesimulator watchos watchsimulator; do
     ci_run "Require $sdk SDK" 60 xcrun --sdk "$sdk" --show-sdk-version
   done
@@ -280,6 +280,11 @@ else
   IOS_UNIT_SELECTION=("${IOS_EXCLUSIONS[@]}" -only-testing:PersonaTests
     -skip-testing:PersonaTests/AboutVersionRegularVisualTests
     -skip-testing:PersonaTests/AssistantHTMLCardTests -skip-testing:PersonaTests/AssistantHTMLSecurityTests)
+fi
+  if [ "$LANE" = ios-regressions ]; then
+  # Run only the two remaining regressions after the shared build/readiness gates.
+  IOS_UNIT_SELECTION=(-only-testing:PersonaTests/MainPagesStackTests
+    -only-testing:PersonaTests/PhoneSystemToolsTests)
 fi
   # A generic destination must retain the host's single runnable architecture.
   ci_run 'Build iOS offline unit tests' "$BUILD_SECONDS" bash -c '
@@ -396,8 +401,12 @@ fi
     -resultBundlePath "$OUTPUT/ios-unit.xcresult" test-without-building
   if [ "$LANE" = ios-focused ]; then
     result ios-unit "$SIM" PageSearchableTests StarredMessagesTests LauncherModelChoiceTests OmpNewAgentTests PaseoPermissionModesTests PaseoProvidersTests AboutVersionCompactVisualTests
-  else
+  elif [ "$LANE" != ios-regressions ]; then
     result ios-unit "$SIM" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests
+  fi
+  if [ "$LANE" = ios-regressions ]; then
+    result ios-unit "$SIM" MainPagesStackTests PhoneSystemToolsTests
+    exit "$IOS_FAILED"
   fi
   if [ "$LANE" != ios-focused ]; then
   test_batch ios-html-card 'iOS HTML card tests (separate batch)' 600 "${IOS_TESTS[@]}" \
