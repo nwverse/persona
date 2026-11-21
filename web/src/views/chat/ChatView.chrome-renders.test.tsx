@@ -191,16 +191,19 @@ it("a turn starting or ending renders the message actions of its own exchange on
   const flip = async (sid: string, exchanges: number) => {
     serve(exchanges);
     await open(<ChatView mid="mac" sid={sid} inPage />, row({ session_id: sid }));
-    asks.n = 0;
+    const counts: number[] = [];
     for (const state of ["idle", "working"] as const) {
+      asks.n = 0;
       act(() => applyCompleteSessions([row({ session_id: sid, status: state, state })]));
       await settle();
+      counts.push(asks.n);
     }
-    return asks.n;
+    return counts;
   };
   const one = await flip("s1", 1);
-  expect(one).toBeGreaterThan(0); // the exchange that ended, and started again
-  expect(await flip("s2", 6)).toBe(one);
+  // Both ending and starting still update the current exchange; neither scales with finished history.
+  for (const count of one) expect(count).toBeGreaterThan(0);
+  expect(await flip("s2", 6)).toEqual(one);
 });
 
 it("finished exchanges before the last two skip drawing while off screen, from a guessed height", async () => {
