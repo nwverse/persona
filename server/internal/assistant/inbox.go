@@ -167,6 +167,8 @@ type InboxItem struct {
 	// ChainSeq numbers the chain's entries; SuggestSeq is the last suggestion's version (a new one is the next).
 	ChainSeq   int `json:"chain_seq,omitempty"`
 	SuggestSeq int `json:"suggest_seq,omitempty"`
+	// ReplyApproval is the overdue reminder's receipt, not another owner request.
+	ReplyApproval *inboxReplyApproval `json:"reply_approval,omitempty"`
 }
 
 type InboxLark struct {
@@ -240,6 +242,7 @@ func (it *InboxItem) listed() InboxItem {
 	c.ArrivedAt = time.Time{}
 	c.Meta, c.Group = nil, nil
 	c.ChainSeq, c.SuggestSeq = 0, 0
+	c.ReplyApproval = nil
 	c.Status = it.status()
 	c.Now, c.TitleBy = it.nowKey(), ""
 	c.PreMergeTitle, c.PreMergeTitleBy, c.MergeTitle = "", "", ""

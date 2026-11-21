@@ -674,6 +674,11 @@ checks the orders a stress test meets only by chance; and a status that says "at
 that can say otherwise: the requests out, the cap, and how long the longest has been out, since none outlives its
 caller's deadline.
 
+## Outbound commitments (#9754)
+
+- An outward promise belongs to the actual source topic, not the task's work topic (#9754). A request forwarded from one group can have a separate Lark work thread, and a GitHub Inbox comment can be associated with that same task. Keep the original source thread identity; never substitute the work thread or use an update there as proof that the other person received a follow-up. An intent without a saved delivery receipt requires source readback, not a resend.
+- Keep local reply deduplication, provider readback, and receipt attachment distinct (#9754). Validate a source and check local duplicates before preparing an intent, require explicit receipts to match the original topic for every source, and retain the first confirmation until task attachment is durable. A retry repairs the original receipt; it cannot invent a send, advance its time, or fulfill a newer promise. Only real reply content enters this bookkeeping: automatic bot status notes, especially a deferred missing-pieces warning, must stay outside it.
+
 ## A send whose answer came too late may have gone in (2026-11-12)
 
 The manager waits 90 s for a relayed message (`drainRelays`) and kept it queued when no answer came. The node had

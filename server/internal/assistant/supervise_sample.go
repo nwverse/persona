@@ -111,6 +111,9 @@ func spotChecked(id, work string, pct int) bool {
 // conversation's accepted would: the review is the judge's, with the checks; the task's conclusion card goes to the
 // owner. False when the task changed meanwhile (it waits for review instead) or could not be closed.
 func (s *Service) judgeClose(ctx context.Context, t Todo, key, reason string, c *taskAutoCheck) bool {
+	if err := s.outboundCompletionError(ctx, t.ID); err != nil {
+		return false
+	}
 	checks := make([]ReviewCheck, 0, len(c.Checks))
 	for _, x := range c.Checks {
 		checks = append(checks, x.ReviewCheck)

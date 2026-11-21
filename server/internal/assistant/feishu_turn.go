@@ -204,6 +204,24 @@ func (f feishuSink) recalled(ctx context.Context, m channel.Folded) {
 // wait, posts it as a card of its own under a key (so a retry lands once) — so the chat never stays on "Working" and
 // is never left silent.
 func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End) error {
+	out := f.s.outboundRunReply(ctx, r, answer)
+	if quiet {
+		out = outboundReply{}
+	}
+	if err := f.s.prepareOutbound(ctx, out, time.Now()); err != nil {
+		return err
+	}
+	delivered := false
+	err := f.answerDelivery(ctx, r, answer, note, took, final, quiet, end, &delivered, f.s.outboundTracksTopic(out))
+	if err == nil && delivered {
+		if receiptErr := f.s.finishOutbound(ctx, out, time.Now()); receiptErr != nil {
+			f.s.logf("bot reply delivered; commitment receipt not saved: %v", receiptErr)
+		}
+	}
+	return err
+}
+
+func (f feishuSink) answerDelivery(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End, delivered *bool, strictTopic bool) error {
 	ctx = feishuSendAs(ctx, "answer", r.MachineID, r.SessionID)
 	s := f.s
 	l := s.botLang(ctx)
@@ -250,6 +268,9 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 	}
 	// r is a copy of the run (channels_answer.go): its Ext is read without the lock.
 	to := runTo(r.Ext)
+	if strictTopic {
+		to.NoDetour = true
+	}
 	var missing []int // the pieces that did not get out (1-based): said at the end, not sent again
 	defer func() {
 		if len(missing) > 0 {
@@ -339,6 +360,7 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 			s.rememberBotThread(mid, botTargetOf(r), r.Label)
 		}
 	}
+	*delivered = !quiet && len(missing) == 0
 	if !final {
 		return nil
 	}

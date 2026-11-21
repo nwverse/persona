@@ -574,6 +574,9 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	st := v.state(t)
 	var replyAsk acceptAsk
 	var draft *TodoPRStatus
+	if g.Kind == sigReport && strings.HasPrefix(g.Key, "promise:") && !s.outboundSignalHolds(ctx, g) {
+		return prompts.SuperviseEntry{}, false
+	}
 	var estimateBrief *TaskBrief
 	switch g.Kind {
 	case sigHandoffResult:

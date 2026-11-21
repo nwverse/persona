@@ -26,6 +26,7 @@ func (s *Service) botPostKeyed(ctx context.Context, replyTo string, card *feishu
 // zero value is what the calls always did.
 type feishuTarget struct {
 	ChatID   string
+	ThreadID string // observed source identity, not a separate transport parameter
 	InThread bool
 	// NoDetour: a reply whose parent is gone fails (the hub's no_detour) instead of landing in the chat as a message of
 	// its own: for what belongs under that parent or nowhere (a to-do's line into its topic, a card into a topic).
@@ -95,7 +96,7 @@ func (s *Service) botNote(ctx context.Context, messageID, text string) {
 	s.botNoteTo(ctx, feishuTarget{}, messageID, text)
 }
 
-// botNoteTo is botNote to a target.
+// botNoteTo is botNote to a target. Operational notes never create or fulfill outward promises.
 func (s *Service) botNoteTo(ctx context.Context, to feishuTarget, messageID, text string) {
 	if err := s.appCall(ctx, AppFeishu, FeishuText, to.params(map[string]any{"reply_to": messageID, "text": text}), nil); err != nil {
 		s.logf("bots: note: %v", err)
