@@ -61,6 +61,7 @@ DOMAINS = [
     "saved_prompts_mock",  # Settings › Saved Prompts (/api/v1/assistant/saved-prompts…), MOCK_SAVED_PROMPTS
     "link_switch_mock",  # SSH to Persona Link scenarios (/api/v1/machines/{mid}/link-switch), MOCK_LINK_SWITCH
     "starred_mock",  # Starred messages (/api/v1/assistant/starred…), MOCK_STARRED
+    "task_skip_mock",  # One scheduled occurrence, MOCK_SKIP_OCCURRENCE
 ]
 
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")

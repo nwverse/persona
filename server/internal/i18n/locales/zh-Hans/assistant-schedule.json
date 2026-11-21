@@ -1,4 +1,8 @@
 {
+  "skip_next_changed": "下次执行时间已变化。请刷新后重试。",
+  "skip_next_forbidden": "只有所有者可以跳过一次定时执行。",
+  "skip_next_invalid": "请输入有效的执行时间。",
+  "skip_next_owner": "你已跳过这次执行",
   "execution_context_unavailable": "暂时无法核对任务对话的执行环境。请重新连接其 Agent 后重试。",
   "followup": "定时跟进",
   "morning": "早报",

@@ -1524,6 +1524,23 @@ To verify the web flow, run the mock hub with `MOCK_STARRED=1` and follow the co
 `web/e2e/starred-messages.mjs`. It drives two isolated browser contexts and verifies cross-device changes,
 search, copy, Undo, exact links, and a snapshot whose original is absent.
 
+#### Back up starred messages (#12061)
+
+Open **Backup** on the Starred page. Download a JSON backup to restore later or choose
+Markdown for a copy you can read and edit in a text editor. Exports include the selected assistant's
+saved text, title, speaker, source category and timestamps. They omit device and conversation identifiers.
+
+Choose a JSON backup and select **Preview restore** to see how many messages would be added, how many are
+already saved and how much space is available. Select **Restore messages** to save the batch. If another device changed Starred after you
+previewed it, review the current counts and confirm again. A backup that would exceed the 300-message limit
+stays in preview until you make room.
+
+Restored messages are archival snapshots. You can search, copy or remove them. They retain the saved words
+and timestamps independently of the original conversation. An older manager can still supply the snapshots
+for export. Restore appears when the connected manager supports it.
+
+Run the browser test with `MOCK_STARRED=1 MOCK_STARRED_BACKUP=1` and `node web/e2e/starred-backup.mjs`.
+
 ### Exporting a conversation (#7375)
 
 **Export Conversation…** in every chat's ⋯ (Agent chats and Persona conversations) saves the whole conversation as one

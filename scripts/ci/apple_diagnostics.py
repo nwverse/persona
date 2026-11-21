@@ -25,6 +25,15 @@ def collect(output, destination, runner=subprocess.run):
             shutil.copytree(bundle, destination / bundle.name, dirs_exist_ok=True,
                             ignore=lambda directory, names: [name for name in names
                                 if (Path(directory) / name).is_symlink()])
+    for name in ("live-readiness", "live-regular-readiness"):
+        source = output / "diagnostics" / name
+        for path in sorted(source.glob("*")) if source.is_dir() else []:
+            # The observer writes only bounded, allowlisted launch evidence. Copy
+            # flat files without following links; no DerivedData or source enters.
+            if path.is_file() and not path.is_symlink() and path.suffix in {".json", ".txt"}:
+                live = destination / name
+                live.mkdir(exist_ok=True)
+                shutil.copyfile(path, live / path.name)
     for path in sorted((output / "diagnostics").glob("build-resources/*")) if (output / "diagnostics").is_dir() else []:
         # Bounded compiler metadata and resource samples only, never compiler
         # arguments, source files or private configuration.

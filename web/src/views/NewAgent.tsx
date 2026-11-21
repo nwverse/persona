@@ -761,7 +761,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     // a Codex keeps its own modes; the choice stays for this computer's next Claude Code. A launcher that lists its own
     // takes one of those alone, never the remembered one (its own goes as no mode).
     const permissionMode = claudeModes ? mode
-      : providerModes ? (providerModes.includes(providerMode) && providerMode !== "default" ? providerMode : "")
+      : providerModes ? (providerMode && providerModes.includes(providerMode) ? providerMode : "")
       : tier && listLauncher === tier.launcher && tier.permission_mode ? tier.permission_mode : "";
     if (claudeModes) {
       if (mode) localStorage.setItem(`new.mode.${mid}`, mode);
@@ -1083,7 +1083,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           {providerModes && providerModes.some((m) => m !== "default") && (
             <Field label={t("newagent.permission_mode")}>
               <div role="radiogroup" aria-label={t("newagent.permission_mode")} data-testid="new-agent-provider-modes" className="flex flex-wrap gap-1.5">
-                <Choice radio selected={providerMode === "" || !providerModes.includes(providerMode)} onClick={() => chooseProviderMode("")}>{t("newagent.follow_launcher")}</Choice>
+                <Choice radio selected={providerMode === "" || providerMode === "default" || !providerModes.includes(providerMode)} onClick={() => chooseProviderMode("")}>{t("newagent.follow_launcher")}</Choice>
                 {providerModes.filter((id) => id !== "default").map(listedModeOption).map((m) => (
                   <Choice key={m.id} radio selected={providerMode === m.id} onClick={() => chooseProviderMode(m.id)} title={m.detail}>
                     {m.title}

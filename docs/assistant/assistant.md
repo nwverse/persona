@@ -1157,6 +1157,21 @@ Now one `Task` table (`assistant/schedule.go`, settings `assistant.tasks`), four
 
 `until` is optional on a repeating task. It is stored and compared in UTC and shown in the user's time zone. One-off tasks ignore it, and saving a one-off clears it. Omitting `until` on update keeps the stored time; `null` clears it. Once that time is reached the task is turned off and a skipped run is recorded instead of running.
 
+**Skip one occurrence (#12075).** In Web Scheduled tasks, open the actions for an active daily, interval or
+cron task and choose **Skip next run**. The row shows the scheduled time you selected. **Cancel skip**
+is available before the chosen time. The hub checks the selected time and the saved skip
+before applying a change, so an outdated page cannot clear a later skip.
+
+The occurrence appears in history as **Skipped by you** and does not count as a failed run. The next
+scheduled occurrence follows the existing rule and its usual catch-up behavior after a restart.
+**Run now** is still available and leaves the scheduled skip pending.
+
+Editing the schedule's time, rule, or enabled state can replace the selected occurrence. After
+a conflict, review the current time before trying again. Older managers keep their existing schedule
+actions. To verify the Web flow, run the mock hub with `MOCK_SKIP_OCCURRENCE=1` and use
+`node web/e2e/task-skip-occurrence.mjs`. Use `MOCK_SKIP_OCCURRENCE=legacy` and the script's
+`--legacy` option to check older-manager behavior.
+
 **Last run** (#10182): the scheduler saves a run's `last_run` before the run starts (a restart in between loses the run rather than repeating it), while `last_status` / `last_error` change only when the run is recorded (sent, failed to start, skipped, its turn failed). The task also stores when the run that outcome is of started (`status_run`: the recorded run's own start, an automatic retry's being the retry's, so a Run now that ended without starting its conversation never lends its time to another run's outcome; a task saved before it has none, which means `last_run`). Every view shows the outcome with that time: the live snapshot's daily tasks, `list_followups`, and `GET /api/v1/assistant/tasks`, which sends it as `last_run` and never sends `status_run`. So a run that is still starting shows the previous run with its own time and outcome, not its own start with the previous outcome: a morning briefing read "last run today 08:45 failed" about the day before's failure while it was starting, and told the owner its run had been recorded as failed. A run lost to a restart leaves the previous run shown until the next one; nothing marks a run as running. Recording an outcome makes the next message take a new live snapshot.
 
 **Tasks it hands out** (#8045): a round's `task_plan` follows the plan rules ([unified-entry.md](unified-entry.md) "Plans"), and `user_requested` counts for nothing in it. A writable task waits on its card unless the owner let this scheduled task start its kind, on the card of one of its own rounds: the task's `start_grant`, shown with Remove on its page and dropped when the task changes. A task with a grant runs each round in a new conversation without the live snapshot, and a round that reads anything from outside (mail, Inbox, web pages, a shell) keeps the card; a task given facts, the report or a state note never offers a grant ([unified-entry.md](unified-entry.md) "A scheduled task's own start grant").
