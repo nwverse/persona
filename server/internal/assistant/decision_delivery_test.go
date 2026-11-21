@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -68,7 +69,7 @@ func TestCheckDecisionWordsCardDelivery(t *testing.T) {
 			}
 			words := "Run only the unit tests first, then look again"
 			input := map[string]string{"text": words}
-			wantKey, delivered, sends := "assistant-reports.decision_chosen_noted", "yes", 1
+			wantKey, delivered, sends := "assistant-reports.decision_chosen_noted", "", 1
 			switch tc.kind {
 			case "label":
 				words = a.Options[1].Label
@@ -117,8 +118,13 @@ func TestCheckDecisionWordsCardDelivery(t *testing.T) {
 				s.waitWorkEvents()
 				return
 			}
-			if !strings.Contains(rec.Body.String(), `"delivered":"`+delivered+`"`) {
-				t.Errorf("delivery response: %s", rec.Body)
+			// Normal completion omits delivered; the existing wire only names special delivery outcomes.
+			var answer assistantwire.TodoAskAnswered
+			if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil {
+				t.Fatal(err)
+			}
+			if answer.Delivered != delivered {
+				t.Errorf("delivery response: %q, want %q", answer.Delivered, delivered)
 			}
 			if got.AcceptedAt.IsZero() || todoNow(s, todo.ID).Supervision.State == reviewNeedsUser {
 				t.Fatalf("still waits: %+v", got)
