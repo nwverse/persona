@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import persona.core.contracts.*
 import persona.core.contracts.api.*
+import persona.core.contracts.api.ResolveOutcome
 import persona.core.domain.answer.*
 import persona.core.domain.sort.*
 import kotlinx.coroutines.CancellationException
@@ -988,7 +989,11 @@ internal class AgentsViewModel(
         _delivery.update { it + (interaction.id to RequestDelivery.Sending) }
         viewModelScope.launch {
             try {
-                val outcome = interactions.resolveOutcome(interaction.id, resolution)
+                val outcome = resolution.ownerApprovalPhrase?.let { phrase ->
+                    interactions.replyOwnerApproval(latest, phrase)
+                    ResolveOutcome()
+                } ?: interactions.resolveOutcome(interaction.id, resolution,
+                    handoffCard = interaction.isSecretHandoff && resolution.allow == true)
                 _delivery.update { it + (interaction.id to RequestDelivery.Sent) }
                 val effective = if (outcome.already) outcome.resolution else resolution
                 // The notice outlives the card: it keeps the answer without a password card's typed value (#1581).
