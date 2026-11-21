@@ -89,8 +89,8 @@ func (p *Pusher) sendFromPolicy(manager string, policy pushPolicy, build localiz
 			}
 		}
 		if allow, reason := p.applyPushGrading(policy); !allow {
-			// Held back for every device; the selection counts as zero. The WebSocket still carries it (callers run
-			// notifyWSFrom themselves), so the app's lists and briefings keep updating.
+			// Held back for every device (including WebSocket notify and Web Push, gated by callers via heldReason);
+			// state lists and held-push briefings keep updating.
 			return 0, 0, reason
 		}
 	} else {
