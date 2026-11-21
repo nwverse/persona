@@ -129,7 +129,8 @@ func (s *Service) wakeWaitersOn(machine, sid string) {
 }
 
 // workGuard: the manager may act on e now — the session is still stopped on the same turn, nothing pending or queued,
-// not looked at in herdr, its machine up, and its todo not completed. ownCard: the manager's card for it may be pending.
+// not looked at in herdr (apart from an open task's mechanical transient retry), its machine up, and its todo not
+// completed. ownCard: the manager's card for it may be pending.
 func (s *Service) workGuard(v *workView, e db.SessionWork, ownCard bool) (proto.Session, string) {
 	if d, ok := v.device(e.MachineID); !ok || !d.Reachable {
 		return proto.Session{}, "offline"
@@ -163,7 +164,14 @@ func (s *Service) workGuard(v *workView, e db.SessionWork, ownCard bool) (proto.
 	case c.Status == proto.StatusWorking || !sameTurn(c, e.TurnAt):
 		return c, "moved on"
 	case c.Status == proto.StatusIdle:
-		return c, "looked at in herdr"
+		// Herdr also reports an open task Agent idle after passively observing its failed turn. That is not the owner
+		// taking over, so only the mechanical transient retry survives; every other wake still yields to being seen.
+		if e.Work.On != proto.WaitTransient {
+			return c, "looked at in herdr"
+		}
+		if _, open := s.openTodoOfAgent(e.MachineID, e.SessionID); !open {
+			return c, "looked at in herdr"
+		}
 	case c.Status != proto.StatusDone:
 		return c, "not stopped"
 	case !ownCard && sessionTurnErrorCode(c) == proto.TurnErrorModelFallbackUnavailable:

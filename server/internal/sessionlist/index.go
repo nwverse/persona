@@ -101,6 +101,11 @@ type Options struct {
 	AllowedMachines                                                                    []string
 	Limit                                                                              int
 	ID, Cursor, Since, State, Machine, Project, Group, Source, Provider, Q, PaneSource string
+	// Providers is the personal-Agent OR-set form of Provider. ParseProviderSets
+	// uses it for every nonempty provider value, including a singleton. Values are
+	// exact and case-sensitive; order and duplicates do not affect matching, cache
+	// keys or cursor bindings. At most 64 supplied values, none empty.
+	Providers []string
 	// Manager selects the rows of the batches replaced with that owner (ReplaceOwned); like the other filters, a
 	// cursor is bound to it. It is the adapter's to set (not a key Parse reads): the adapter knows which owners exist
 	// and who may ask for which.
@@ -218,8 +223,9 @@ type journalEntry struct {
 
 type filters struct {
 	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under, Todo, Waiting, ExcludePaneSource, JustFinished string
-	// Places and Spaces are Options' as placesKey spells them: filters stay comparable.
-	Places, Spaces                              string
+	// Places and Spaces are Options' as placesKey spells them, Providers as
+	// providersKey spells the set: filters stay comparable.
+	Places, Spaces, Providers                   string
 	Roots, NoPrivate, IncludeHidden, AgentsOnly bool
 }
 

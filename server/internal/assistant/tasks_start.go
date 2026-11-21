@@ -1126,6 +1126,9 @@ var continueHold = 30 * time.Second
 // one is on its way, or before the agent took it up, answer the todo as it is, as does a task with no agent cut off.
 // The agent's machine offline is refused.
 func (s *Service) continueTask(ctx context.Context, cur Todo) (json.RawMessage, error) {
+	if cur.Supervision != nil && cur.Supervision.state(cur) == reviewTimedOut {
+		return s.continueTimedOut(ctx, cur)
+	}
 	cut := cutAgent(s.taskAgents(ctx, cur))
 	if cut.SessionID == "" {
 		return s.todoView(ctx, cur.ID)
