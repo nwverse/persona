@@ -425,6 +425,9 @@ func (s *Service) sweepDeploys(now time.Time) {
 	// never use up this pass's time before the hub's commit, sweepPRs and the watches have run. They run even when the
 	// hub's health cannot be read (they do not need it).
 	defer s.sweepPRStatusesBounded(now)
+	// Post-closure subscriptions ride the same minute pass, so a closed to-do's open PR keeps being watched without a
+	// second timer (#12371).
+	defer s.sweepPRFollowupsBounded(now)
 	hub, err := s.runningHubCommit(ctx)
 	if err != nil {
 		s.logf("deploys: the hub's health: %v", err)

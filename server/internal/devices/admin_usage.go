@@ -25,7 +25,8 @@ import (
 // session gets here (every /api/v1/admin/ route; a device token, even a full one, does not open them), and says so
 // in assistantwire.AdminHeader; a request without it is refused here too. Nothing answers with a key: a source says
 // only whether it has one. The keys live in the manager's manager.json (0600, docs/operations/config.md "manager.json"), written
-// in one step under a lock on its directory (managerconf.Edit), and a change applies at once.
+// in one step under a lock on its directory (managerconf.Edit), and a change applies at once. Sources
+// written by the owner API (owner_usage.go) have sealed_key instead; this editor preserves that encryption.
 
 const usageTestMost = 25 * time.Second
 
@@ -77,6 +78,11 @@ func (d *Devices) diskUsage() (UsageConfig, error) {
 	}
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return cfg.Usage, err
+	}
+	for i := range cfg.Usage.Sources {
+		if err := d.openUsageKey(&cfg.Usage.Sources[i]); err != nil {
+			return UsageConfig{}, err
+		}
 	}
 	return cfg.Usage, nil
 }
@@ -354,6 +360,9 @@ func (d *Devices) adminUsageRoutes(mux *http.ServeMux) {
 				if err := json.Unmarshal(raw, &cur); err != nil {
 					return u, list, err
 				}
+				if err := d.openUsageKey(&cur); err != nil {
+					return u, list, errUsageStorage
+				}
 				next, code, err := applyUsageInput(cur, in, false)
 				if err != nil {
 					bad, badCode = err, code
@@ -369,7 +378,15 @@ func (d *Devices) adminUsageRoutes(mux *http.ServeMux) {
 						return u, list, err
 					}
 				}
-				if next.Key == "" {
+				if cur.SealedKey != "" {
+					if err := d.sealUsageKey(&next); err != nil {
+						return u, list, errUsageStorage
+					}
+					entry.Del("key")
+					if err := entry.Set("sealed_key", next.SealedKey); err != nil {
+						return u, list, err
+					}
+				} else if next.Key == "" {
 					entry.Del("key")
 				} else if err := entry.Set("key", next.Key); err != nil {
 					return u, list, err
