@@ -39,9 +39,6 @@ export interface ChatContextValue {
   /** The chat is drawn inside another page's panel (the Team panel's worker, ChatView `embedded`): what would open in
    *  the side panel opens in place instead, since that panel is the one it is drawn in (a workflow card, #5421). */
   embedded?: boolean;
-  /** The dock RunningStatusBar is currently displaying this foreground turn's own status and elapsed clock, so the
-   *  in-stream WorkGroup suppresses its competing elapsed timer (and empty non-expandable live placeholder, #12380). */
-  dockTurnClock?: boolean;
 }
 
 export const ChatContext = createContext<ChatContextValue>({ tasks: emptyTaskIndex(), subagents: [], scope: "", workflowCalls: NO_WORKFLOW_CALLS });

@@ -85,7 +85,7 @@
                   "bypassPermissions",
                   "plan"
                 ],
-                "description": "empty: the default mode for a writable task. Claude-family launchers always use bypassPermissions; readonly=true adds a first-prompt constraint; Codex keeps plan; traex and omp take none"
+                "description": "empty: the default mode for a writable task. Claude-family launchers always use bypassPermissions; readonly=true adds a first-prompt constraint; Codex keeps plan; TRAE CLI and omp take none"
               },
               "readonly": {
                 "type": "boolean",
