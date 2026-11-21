@@ -131,6 +131,7 @@ type fakeHub struct {
 	judged       int                       // the done judge's calls to the model
 	judge        string                    // what they answer ("": an error)
 	judgeFails   int                       // the done judge's next calls that fail before f.judge answers
+	judgeDelay   time.Duration             // how long the done judge waits before answering (its caller can time out)
 	judgeAsked   []string                  // what the done judge was given (its input)
 	judgeBy      func(input string) string // when set, what the done judge answers to its input (instead of f.judge)
 	outcome      string                    // what the outcome model answers (todo_outcome.go; "": an error)
@@ -1518,7 +1519,7 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		case strings.HasSuffix(strings.TrimSpace(in.System), jsonOnly):
 			f.judged++
 			f.judgeAsked = append(f.judgeAsked, user)
-			reply, fail = f.judge, f.judge == ""
+			reply, fail, delay = f.judge, f.judge == "", f.judgeDelay
 			if f.judgeBy != nil {
 				reply = f.judgeBy(user)
 				fail = reply == ""
