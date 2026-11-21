@@ -101,6 +101,9 @@ func (b *inboxBook) applyPolicyTier(it *InboxItem) bool {
 
 // policyTierChange is the policy that would change its tier, nil when none would; under b.mu.
 func (b *inboxBook) policyTierChange(it *InboxItem) *InboxPolicy {
+	if it.Source == "larkcli" && it.Kind == "bot_handoff" {
+		return nil // a main-chat handoff is not a request, even in an otherwise actionable chat
+	}
 	p := b.policyOf(it)
 	if p == nil || p.Tier == "" || it.Tier == p.Tier {
 		return nil

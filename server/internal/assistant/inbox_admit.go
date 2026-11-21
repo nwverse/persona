@@ -35,6 +35,9 @@ type inboxBatch struct {
 	read       map[string]string
 	registered map[string]string
 	writes     map[string]*inboxWrite
+	// only is non-nil for an exact-message recovery, even when it matched no
+	// items. Global maintenance must not change anything outside this set.
+	only map[string]bool
 }
 
 func newInboxBatch() *inboxBatch {

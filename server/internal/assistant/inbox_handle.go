@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"crypto/rand"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -298,12 +299,18 @@ func ownSend(it *InboxItem, last string) bool {
 // escalate hands the manager its work, under b.mu: a newly triaged Needs you event (recent) gets a processing
 // conversation (queued); new content of an event that has one — being handled, or triaged Needs you again — is sent into
 // that conversation. It returns the items it moved, settled (inbox_rollback.go).
-func (b *inboxBook) escalate(since, now time.Time) []*inboxWrite {
+func (b *inboxBook) escalate(since, now time.Time, only ...inboxMove) []*inboxWrite {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var changed []*inboxWrite
 	for _, it := range b.items {
+		if len(only) > 0 && !slices.Contains(only, inboxMove{it.ID, it.Last}) {
+			continue
+		}
 		a := it.Agent
+		if it.Source == "larkcli" && it.Kind == "bot_handoff" {
+			continue // the owner's request belongs to the main conversation, never a second processing agent
+		}
 		if !it.open() || it.Context == "" || a != nil && (a.Of == it.Last || a.savingRetry) {
 			continue
 		}

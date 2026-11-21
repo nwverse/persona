@@ -23,6 +23,8 @@
   "larkcli_placeholder_sticker": "表情",
   "larkcli_placeholder_card": "卡片",
   "larkcli_placeholder_message": "消息",
+  "larkcli_addressed_rule": "规则：这条消息明确提及你或你连接的机器人。",
+  "larkcli_handoff_rule": "你已请 Persona 在主对话中处理这条消息。",
   "larkcli_reply_to": "由机器人（不是你本人）发到「{chat}」，会话里的人都能看到",
   "larkcli_reply_to_topic": "由机器人（不是你本人）发到「{chat}」的这个话题里，群里的人都能看到",
   "larkcli_reply_to_unnamed": "由机器人（不是你本人）发到这个会话，会话里的人都能看到",
