@@ -325,7 +325,10 @@ func (s *Service) finishChannelRun(r *channel.Run, res *channel.Result) {
 				delete(c.answered, k)
 			}
 		}
-		c.answered[[2]string{r.MachineID, r.SessionID}] = now
+		// An unrelated end closes an older wait; it did not answer the conversation's new turn.
+		if res.End != channel.EndUnrelated {
+			c.answered[[2]string{r.MachineID, r.SessionID}] = now
+		}
 	}
 	others := slices.ContainsFunc(c.st.Runs, func(o *channel.Run) bool { return o.Channel == r.Channel })
 	s.saveChannelStateLocked()
