@@ -262,9 +262,10 @@ func TestDecisionAgentReplyPauseSurvivesReload(t *testing.T) {
 func TestSideConversationHookDoesNotWithdrawDecision(t *testing.T) {
 	s, f, todo := decisionAgentReplyService(t)
 	a := askOf(s, todo.ID)
+	now := time.Now()
 	f.items = []proto.Item{
-		{Seq: 1, Role: "user", Kind: proto.KindText, Text: prompts.RenderSideConversation("also check the flaky parser test")},
-		{Seq: 2, Role: "assistant", Kind: proto.KindText, Text: "On it."},
+		{Seq: 1, Role: "user", Kind: proto.KindText, TS: now.Add(-time.Second), Text: prompts.RenderSideConversation("also check the flaky parser test")},
+		{Seq: 2, Role: "assistant", Kind: proto.KindText, TS: now, Text: "On it."},
 	}
 	params, _ := json.Marshal(map[string]any{"session_id": a.SessionID, "event": "UserPromptSubmit", "prompt_source": "user"})
 	if !s.NodeEvent(a.MachineID, "hook.event", params) {
@@ -326,9 +327,10 @@ func TestRelayMessageDoesNotWithdrawDecision(t *testing.T) {
 	t.Run("older node hook reported as user", func(t *testing.T) {
 		s, f, todo := decisionAgentReplyService(t)
 		a := askOf(s, todo.ID)
+		now := time.Now()
 		f.items = []proto.Item{
-			{Seq: 1, Role: "user", Kind: proto.KindText, Text: relay},
-			{Seq: 2, Role: "assistant", Kind: proto.KindText, Text: "On it."},
+			{Seq: 1, Role: "user", Kind: proto.KindText, TS: now.Add(-time.Second), Text: relay},
+			{Seq: 2, Role: "assistant", Kind: proto.KindText, TS: now, Text: "On it."},
 		}
 		params, _ := json.Marshal(map[string]any{"session_id": a.SessionID, "event": "UserPromptSubmit", "prompt_source": "user"})
 		if !s.NodeEvent(a.MachineID, "hook.event", params) {
@@ -345,4 +347,80 @@ func TestRelayMessageDoesNotWithdrawDecision(t *testing.T) {
 			t.Fatal("the pending decision left needs_user")
 		}
 	})
+}
+
+// An owner pasting the side-conversation template into their own message keeps ownership:
+// ProtectUserMessage's author=user block must take precedence over the raw side-conversation
+// markers, so the reply pauses the default instead of being silently ignored (semantic review
+// P2 on #12383).
+func TestProtectedSideConversationPasteStillCountsAsOwner(t *testing.T) {
+	s, f, todo := decisionAgentReplyService(t)
+	a := askOf(s, todo.ID)
+	relay := prompts.RenderRelay(prompts.Relay{FromID: "conv-other", FromTitle: "Direction",
+		Tool: "conversation_send", Hop: 1, MaxHops: 3, Text: "take this follow-up"})
+	pasted := prompts.ProtectUserMessage(relay) + "\n" + prompts.RenderSideConversation("pasted side template")
+	s.userSpokeText(context.Background(), SessionRef{MachineID: a.MachineID, SessionID: a.SessionID}, pasted)
+	waitFor(t, "the protected owner reply to pause the default", func() bool {
+		got := askOf(s, todo.ID)
+		return got != nil && got.AgentReply != nil && !got.DueAt.IsZero()
+	})
+	if got := askOf(s, todo.ID); got.Chosen != "" || !got.AcceptedAt.IsZero() {
+		t.Fatalf("protected paste was treated as a decision choice: %+v", got)
+	}
+	waitFor(t, "the protected owner hand-off", func() bool {
+		return signalled(s, f, todo.ID, sigDecisionReply, "task_decided")
+	})
+}
+
+// An injected system notice with no MessageSource kind (the answer_again re-prompt) must not
+// settle or withdraw a pending decision through the text path (semantic review P2 on #12383).
+func TestInjectedNoticeDoesNotWithdrawDecision(t *testing.T) {
+	s, f, todo := decisionAgentReplyService(t)
+	a := askOf(s, todo.ID)
+	notice := prompts.RenderAssistantAnswerAgain(prompts.AssistantAnswerAgain{Language: "English"}) + " please reply"
+	if prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: notice}) != nil {
+		t.Fatal("the fixture notice gained a MessageSource kind; pick one without it")
+	}
+	s.userSpokeText(context.Background(), SessionRef{MachineID: a.MachineID, SessionID: a.SessionID}, notice)
+	if got := askOf(s, todo.ID); got == nil || got.AgentReply != nil || !got.DueAt.IsZero() || got.Chosen != "" {
+		t.Fatalf("an injected notice changed the pending decision: %+v", got)
+	}
+	if signalled(s, f, todo.ID, sigDecisionReply, "task_decided") {
+		t.Fatal("an injected notice emitted a decision_reply signal")
+	}
+	if todoNow(s, todo.ID).Supervision.State != reviewNeedsUser {
+		t.Fatal("the pending decision left needs_user")
+	}
+}
+
+// UserPromptSubmit fires before the prompt lands in the transcript, so turns:1 can still show
+// the previous turn. A side conversation sitting in that older turn must not block the owner's
+// genuine reply: when every visible prompt is older than the hook, the node's prompt_source
+// classification stands and the default is paused (CaC033 review on #12383).
+func TestStaleTranscriptSideConversationDoesNotBlockOwnerHook(t *testing.T) {
+	s, f, todo := decisionAgentReplyService(t)
+	a := askOf(s, todo.ID)
+	hookAt := time.Now()
+	f.items = []proto.Item{
+		{Seq: 1, Role: "user", Kind: proto.KindText, TS: hookAt.Add(-2 * time.Minute),
+			Text: prompts.RenderSideConversation("also check the flaky parser test")},
+		{Seq: 2, Role: "assistant", Kind: proto.KindText, TS: hookAt.Add(-90 * time.Second), Text: "On it."},
+	}
+	params, _ := json.Marshal(map[string]any{
+		"session_id": a.SessionID, "event": "UserPromptSubmit", "prompt_source": "user",
+		"spooled_at": hookAt.UTC().Format(time.RFC3339Nano),
+	})
+	if !s.NodeEvent(a.MachineID, "hook.event", params) {
+		t.Fatal("hook event was not accepted")
+	}
+	waitFor(t, "the owner's own reply to pause the default", func() bool {
+		got := askOf(s, todo.ID)
+		return got != nil && got.AgentReply != nil && !got.DueAt.IsZero()
+	})
+	if got := askOf(s, todo.ID); got.Chosen != "" || !got.AcceptedAt.IsZero() {
+		t.Fatalf("the stale transcript settled the decision: %+v", got)
+	}
+	if !signalled(s, f, todo.ID, sigDecisionReply, "task_decided") {
+		t.Fatal("the owner's hook reply did not hand back to the supervisor")
+	}
 }
