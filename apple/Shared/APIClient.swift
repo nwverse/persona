@@ -940,6 +940,16 @@ nonisolated struct APIClient: Sendable {
     }
     /// The hub installs its own personad build on the machine and reconnects; progress comes with the machine list.
     func deploy(machine: String) async throws { try await post("/api/v1/machines/\(machine)/deploy") }
+    /// Starts the one confirmed switch from SSH to Persona Link (#10662). The accepted state is immediate; the machine
+    /// list then carries every later phase. Callers never repeat this request when its answer is uncertain.
+    func startLinkSwitch(machine: String) async throws -> MachineLinkSwitch {
+        nonisolated struct R: Decodable, Sendable {
+            var linkSwitch: MachineLinkSwitch
+            enum CodingKeys: String, CodingKey { case linkSwitch = "link_switch" }
+        }
+        let id = machine.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? machine
+        return try await post("/api/v1/machines/\(id)/link-switch", as: R.self).linkSwitch
+    }
 
     /// Every machine's latest sample and its last hour by minute (docs/server/machines.md).
     func metricsOverview() async throws -> [MachineMetrics] {
@@ -1291,6 +1301,14 @@ nonisolated struct APIClient: Sendable {
         var current: String?
         /// Per credential, the push way of the device it registered last; nil from an older hub.
         var push: [String: PushRoute]?
+        /// Which device takes the phone tools' calls (docs/apple/phone-tools.md); nil from an older hub.
+        var phone: PhonePrimary?
+    }
+    /// The hub's primary device for phone calls: `primary` is a credential id ("" = Automatic); `candidates` are the
+    /// credentials of the devices that offer phone tools now (the ones that can be chosen), already sorted.
+    struct PhonePrimary: Decodable, Hashable, Sendable {
+        var primary: String
+        var candidates: [String]
     }
 
     /// Trades this credential for a device's own (kind "watch": answer-only).
@@ -1302,6 +1320,11 @@ nonisolated struct APIClient: Sendable {
     }
     func revokeToken(_ id: String, timeout: TimeInterval = 30) async throws {
         _ = try await request("DELETE", "/api/v1/auth/tokens/\(id)", timeout: timeout)
+    }
+    /// Chooses the device phone calls go to first; "" goes back to Automatic. The answer is the hub's own view.
+    func setPhonePrimary(_ credentialID: String, timeout: TimeInterval = 30) async throws -> PhonePrimary {
+        struct Body: Encodable { var credential_id: String }
+        return try JSON.decoder.decode(PhonePrimary.self, from: try await request("PUT", "/api/v1/phone/primary", body: Body(credential_id: credentialID), timeout: timeout))
     }
 
     /// A QR code's modules as the hub draws them: rows of "0" / "1".

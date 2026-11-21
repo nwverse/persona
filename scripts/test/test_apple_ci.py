@@ -12,6 +12,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/ci/apple.sh"
@@ -19,6 +21,48 @@ sys.path.insert(0, str(ROOT / "scripts/ci"))
 import apple_runtime
 import apple_result
 import apple_diagnostics
+
+
+class AppleOfflineUnitSchemeTests(unittest.TestCase):
+    def setUp(self):
+        project = yaml.safe_load((ROOT / 'apple/project.yml').read_text())
+        self.schemes = project['schemes']
+        self.script = SCRIPT.read_text()
+
+    def test_offline_scheme_excludes_ui_target_and_preserves_default_scheme(self):
+        offline = self.schemes['PersonaOfflineUnitTests']
+        self.assertEqual(offline['build']['targets'], {'Persona': 'all', 'PersonaTests': ['test']})
+        self.assertEqual(offline['test'], {'targets': ['PersonaTests'], 'language': 'zh-Hans', 'region': 'CN'})
+        self.assertNotIn('PersonaUITests', str(offline))
+        # The existing unit-only visual scheme demonstrates the same minimal build-target pattern.
+        for key in ('build', 'run'):
+            self.assertEqual(offline[key], self.schemes['AboutVersionVisualTests'][key])
+        default = self.schemes['Persona']
+        self.assertEqual(default['build']['targets'], {
+            'Persona': 'all', 'PersonaTests': ['test'], 'PersonaUITests': ['test'],
+        })
+        self.assertEqual(default['test']['targets'], ['PersonaTests', 'PersonaUITests'])
+        self.assertEqual((default['test']['language'], default['test']['region']), ('zh-Hans', 'CN'))
+
+    def test_offline_build_and_execution_share_the_unit_only_scheme(self):
+        common = self.script.split('  IOS_COMMON=(', 1)[1].split('\n', 2)[:2]
+        self.assertEqual(common[0], '"${XCODE[@]}" -scheme PersonaOfflineUnitTests -derivedDataPath "$OUTPUT/ios-tests" \\')
+        self.assertNotIn('-scheme Persona ', ''.join(common))
+        for marker in ('"${IOS_UNIT_SELECTION[@]}" build-for-testing',
+                       '"${IOS_UNIT_SELECTION[@]}" \\\n    -resultBundlePath "$OUTPUT/ios-unit.xcresult" test-without-building',
+                       '-only-testing:PersonaTests/TypeScaleTests -resultBundlePath "$bundle" test-without-building',
+                       '-only-testing:PersonaTests/AboutVersionRegularVisualTests'):
+            self.assertIn(marker, self.script)
+        self.assertIn('BUILD_SECONDS=1800', self.script)
+        self.assertIn('UNIT_SECONDS=1800', self.script)
+        self.assertIn("result ios-unit \"$SIM\" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests", self.script)
+
+    def test_local_ui_test_entry_keeps_default_scheme_and_ui_target(self):
+        ui_test = (ROOT / 'scripts/app/ui-test.sh').read_text()
+        self.assertIn('xcodebuild test -project Persona.xcodeproj -scheme Persona -destination "id=$SIM"', ui_test)
+        self.assertIn('-only-testing:PersonaUITests', ui_test)
+        self.assertNotIn('PersonaOfflineUnitTests', ui_test)
+        self.assertNotIn('ui-test.sh', self.script)
 
 
 class AppleCIPreparationTests(unittest.TestCase):
@@ -229,7 +273,7 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn('-derivedDataPath "$OUTPUT/ios-device"', script[device_build:device_check])
         self.assertIn('python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \\\n'
                       '    "$OUTPUT/ios-device/Build/Products/Debug-iphoneos/Persona.app"', script[device_check:simulator_build])
-        self.assertIn('IOS_COMMON=("${XCODE[@]}" -scheme Persona -derivedDataPath "$OUTPUT/ios-tests"', script)
+        self.assertIn('IOS_COMMON=("${XCODE[@]}" -scheme PersonaOfflineUnitTests -derivedDataPath "$OUTPUT/ios-tests"', script)
         self.assertIn('python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \\\n'
                       '    "$OUTPUT/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app"', script[simulator_check:create])
         guards = (ROOT / 'scripts/ci/guards.sh').read_text()

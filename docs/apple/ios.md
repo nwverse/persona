@@ -1252,7 +1252,7 @@ The new shell's Model · Effort menu still sends `/model <id>` as a message.
   wand, Allow Everything a red shield; not reported yet the plain permissions shield (never a guessed Ask First). A tap opens the mode menu; going into
   Allow Everything asks first, and so does leaving it when `bypass_available` is false (no way back from the phone; assistant conversations and Antigravity `agy` switch directly without confirmation); the composer's model menu
   goes through the same `ChatView.requestMode`. Shown where the agent has a mode to see or change (`SessionModes.showsInHeader`): not Codex,
-  TRAEX or a runtime without modes, not hosted pages (one-row header, #3255), not the folded bar. A row that lists its own modes (#8261, Paseo's
+  TRAE CLI or a runtime without modes, not hosted pages (one-row header, #3255), not the folded bar. A row that lists its own modes (#8261, Paseo's
   Grok, OpenCode or Codex) shows its two rows instead, its own approval as the plain shield, a switch both ways (`SessionModes.menuOptions`,
   `headerLook(session:)`; see the New Agent paragraph above). Client-only: `permission_mode` is already in every
   session row (read off the transcript tail the node reads anyway), so no request, push or poll was added (measured in the PR).
@@ -1278,7 +1278,7 @@ off by default, never remembered and never turned back on by itself after a resu
 [web.md](../web/web.md) "Claude Code ultracode"). Pure rules are `Shared/Ultracode.swift` (the watch compiles them for its rows' mark), requests
 and what this device asked are `AppModel.setUltracode` / `dismissUltracodeLost`, views `Views/Chat/UltracodeViews.swift`.
 
-- **Where**: the hub lists the `ultracode` feature (an older hub shows nothing), the agent is Claude Code (not TRAEX, Codex or a runtime's), its effort can
+- **Where**: the hub lists the `ultracode` feature (an older hub shows nothing), the agent is Claude Code (not TRAE CLI, Codex or a runtime's), its effort can
   change now (it takes messages, no read-only source, not offline), and it is not a Persona conversation (the main chat included: the server refuses those).
 - **Session fields**: `ultracode` (omitted is unknown, drawn off; the info card says Unknown), `ultracode_note` (the node's reason), `ultracode_pending`
   (applies next turn) and `ultracode_lost_at`. An odd value never drops the session. `ChatCache` stays at `chats-v10`: the hub only rewrites the text of
@@ -1756,7 +1756,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   subtitle "Machine · Space › Tab", and the last reply as the body. No banner when the App is foregrounded and showing that session. Simulator automation (`-pairURL`) neither requests notification permission nor registers as a phone.
   Notifications allowed in Settings after a denial take effect when the App comes back to the front (`PushRegistrar.foreground`, #1861): it registers then, without a relaunch, and never shows the prompt itself; it waits for a launch or pairing request still open, so one answer registers once.
   A registration the hub no longer has is made again (#9612): a write for this device (`PUT /api/v1/devices/{id}/prefs`, `POST /api/v1/devices/{id}/live-activity`) answered 409 `push_registration_required` (the hub retired it, its credential revoked, #9611) registers once with that group's hub and then tries the write once more (`APIClient.request`, `PushRegistrar.registrationRequired`); another 409 within 10 minutes starts none. Coming back to the front also asks each hub, at most once an hour, whether `GET /api/v1/auth/tokens` lists a push route for this credential, and registers with one that lists none. A registration that did not reach a hub (the POST failed, the pairings could not be read yet, APNs gave no token) is tried again when the App comes back or, while it stays open, when due: 30 s, doubling to at most an hour, one registration in flight at a time.
-  When the current hub confirms that this credential has no route, `PushHealth.missingRoutes` remembers the outage without confusing it with an older hub that supplies no route data. Persona's new and existing main conversations then show `PushHealthNotice`, a `NoticeBanner` over the composer in everyday language with one action: denied permission opens the system's notification settings; other confirmed outages open Settings › Notifications, whose detailed diagnostics and repair stay unchanged. Unknown or unchecked hubs, available routes and `lastFailed` do not show it. Returning to the front after registration also refreshes the cached system permission, so turning notifications off cannot leave the notice stale.
+  When the current hub confirms that this credential has no route, `PushHealth.missingRoutes` remembers the outage without confusing it with an older hub that supplies no route data. Persona's new and existing main conversations then show `PushHealthNotice`, a `NoticeBanner` over the composer in everyday language with one action: denied permission opens the system's notification settings; other confirmed outages open Settings › Notifications, whose detailed diagnostics and repair stay unchanged. Unknown or unchecked hubs, available routes and `lastFailed` do not show it. Its ✕ (#12319) is remembered in this device's UserDefaults per hub group and `PushNoticeContent.Cause` (`PushHealthStore.dismiss`): that cause stays hidden at that hub until its status is available or `lastFailed` again, which forgets the ✕ so the next outage shows; another cause or hub shows its own notice. An unknown or unchecked read is not a recovery and keeps it. Returning to the front after registration also refreshes the cached system permission, so turning notifications off cannot leave the notice stale.
   Interaction pushes carry buttons (`NotificationActions`, category is the hub's `INTERACTION_<KIND>`): permissions "Allow / Deny", plans "Approve / Request changes" (changes can include typed feedback). Completion category `SESSION_DONE` supports direct "Reply" (#3449): unlock first, then send a normal message to that session in the background (new `client_msg_id`); failure produces a local notification explaining why. When a session appears on screen (`AppModel.show`), its old notifications (same `thread-id` and `machine_id`) are removed from Notification Center.
   Affirmative buttons require unlocking (`.authenticationRequired`); Deny does not. Plan approval from a notification uses `acceptEdits` (the whole plan has not been viewed, so commands still need individual approval),
   and "Approve and run automatically" is App-only. Buttons call resolve directly in the background without opening the App; failure (already handled, cannot reach hub) produces a local notification explaining why. Questions and terminal interactions have no buttons; tap to handle them.
@@ -1831,6 +1831,26 @@ state in `AppModel.readiness`, `AssistantReadinessModel`), using the same presen
 - For watches and devices connected with a temporary code themselves, the hub returns 403; the card shows the hub's message and "Retry". Old hubs without a QR code show only the temporary code and link.
 
 Screenshots: `-openDevices YES -openConnectDevice YES` (`web`: open the Browser mode); mock hub `MOCK_PAIR_SECONDS` shortens validity, `POST /api/v1/auth/tokens` simulates a new device connecting.
+
+## Primary device for phone calls (#12019)
+
+Settings › Devices has a **Primary Device** row below the device list, for someone who uses Persona on more than one phone or tablet
+(`DevicesView`, `PhonePrimaryChoices`). Audience: everyday owners with an iPhone and an iPad on one Apple ID; the plain-language
+footer says what the choice does and what "Automatic" means. The hub's rule is in `docs/apple/phone-tools.md`.
+
+- Shown only when `GET /api/v1/auth/tokens` carries a `phone` object and either `phone.candidates` has two or more devices or
+  `phone.primary` is not empty (so a chosen device can be changed back). An older hub (no `phone`) or an account with one phone shows
+  the page exactly as before.
+- Options: Automatic (`credential_id` ""), then every candidate in the hub's order, named as the device list names it, the device
+  in hand marked "This Device". A chosen device that is not a candidate now (its phone data is off) is listed after them so the
+  current choice always shows; a credential the list cannot name (revoked since) is left out and the row reads Automatic.
+  The pure rules are `PhonePrimaryChoices` (`PhonePrimaryChoicesTests`).
+- Choosing shows at once (local state first), then `PUT /api/v1/phone/primary` `{"credential_id": id}`; the hub's answer
+  (`{"primary", "candidates"}`) replaces the local value. A failure (409 `not_a_phone`, 403, network) puts the old value back and
+  shows the error the page always uses (`model.show`). One save at a time: the row is disabled while one is on its way, and a
+  refresh that arrives meanwhile does not overwrite it.
+- Screenshots: `-openDevices YES` against the mock hub; `MOCK_PHONE_PRIMARY=dev_phone` starts with one chosen, `MOCK_PHONE=none`
+  is a hub before this feature (no row), `MOCK_PHONE=single` has one candidate (no row).
 
 ## Add and confirm computers (#4196)
 
@@ -2476,6 +2496,14 @@ Like Telegram: network trouble shows no banner; **the page title becomes "small 
 - Placement (`ConnectionTitle` / `ConnectionLabel`): center of the navigation bar (`.principal`) in Agents (normally no title, title area empty), Inbox, and Settings › Machines;
   in the Persona tab, the name capsule below the avatar becomes the status (menu adds "Connection details"); the chat's expanded header keeps the session name but replaces the subtitle with status (like Telegram), while its collapsed small capsule is replaced entirely.
   Tap status for an explanation (`ConnectionDetails`: cause, last failure, seconds until retry, last connection, queued message count, "Retry now").
+- **Addresses in Connection Details** (#11390): under the explanation and its lines, **Addresses** lists one line per address the app tries for the
+  hub-level group, in the order tried (`HubRoute.candidates`: the center first, a hub's paired address before its added ones, then the addresses only the
+  mesh lists). Each line is the address, then what its last try came to as a `Chip` (**Answers**, **Certificate Not Trusted**, **Not Your Hub**,
+  **Couldn't Connect**, **Unknown**) and the time of the last try, bare beside it (VoiceOver says "Tried at <time>"); the address the socket is on says **In Use** (an outline `Chip`, as Settings › hub › Addresses),
+  and one not tried yet in this launch says "Not tried yet". What each word means, and where it comes from: `docs/operations/network.md` ("Client-added candidates", iOS).
+  The outcomes come only from tries the app makes anyway (no probe, timer or polling of its own) and are kept in memory (`HubAddressBoard`, `apple/Persona/App/HubAddressBoard.swift`);
+  the lines are worked out when a try ends, not in the details' `body`, which runs every second, and are drawn by their own view (`ConnectionAddresses`) with the address as their id.
+  The title keeps saying "Connecting…": nothing on the primary screens changes.
 - Offline actions:
   - **Send messages**: when unreachable, make no request; the bubble has a clock and "Sends automatically when connected" (tap the clock for "Retry now / Cancel send"); requests failing offline / on timeout also become waiting,
     with no error alert. After reconnect and "Updating…" completion, send automatically in composition order (for unopened chats, first fetch one page of latest messages; delivered ones appear in the transcript and are removed automatically).
@@ -2494,7 +2522,8 @@ Like Telegram: network trouble shows no banner; **the page title becomes "small 
     with a blue "Can't reach the hub / No network; that action did not take effect" notice (at most one per 4 seconds), not a red error.
   - Offline / unreachable-hub errors (`Error.isOffline`) are hidden in pages like timeouts (`Error.shown` is nil); background refresh and history-loading failures show nothing, as the title already explains it.
     The watch lacks this title and keeps showing errors as before.
-- Debugging: `-showConnection waiting|connecting|updating` pins a state; add `-openConnectionDetails YES` to open the explanation;
+- Debugging: `-showConnection waiting|connecting|updating` pins a state; add `-openConnectionDetails YES` to open the explanation, and
+  `-showConnectionAddresses YES` to give the hub-level group's addresses every outcome in turn, made up and kept (screenshots; real tries are not taken while it is on);
   `-simulateOffline YES` makes NWPathMonitor treat the network as unavailable (the simulator always has the Mac's network). Mock slow / offline switches are in `docs/operations/testing.md`.
 
 <a id="ssh-隧道直连不通时的后备891"></a>

@@ -9,6 +9,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,10 +22,7 @@ func golden(t *testing.T, name, got string) {
 	t.Helper()
 	path := filepath.Join("testdata", "prompts", name+".golden")
 	if os.Getenv("UPDATE_GOLDEN") != "" {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+		if err := writeGolden(path, got); err != nil {
 			t.Fatal(err)
 		}
 		return
@@ -35,6 +33,45 @@ func golden(t *testing.T, name, got string) {
 	}
 	if got != string(want) {
 		t.Errorf("%s differs from %s\n--- got ---\n%s\n--- want ---\n%s", name, path, got, want)
+	}
+}
+
+// writeGolden does not let a narrowly selected partition's incomplete render erase a real fixture (#12482).
+func writeGolden(path, got string) error {
+	if got == "" {
+		if old, err := os.ReadFile(path); err == nil && len(old) > 0 {
+			return fmt.Errorf("%s: refusing to replace a nonempty golden with an empty render", path)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(got), 0o644)
+}
+
+func TestGoldenUpdateKeepsARealFixtureOnAnIncompleteRender(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.MkdirAll(filepath.Join("testdata", "prompts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join("testdata", "prompts", "kept.golden")
+	if err := os.WriteFile(path, []byte("real fixture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("UPDATE_GOLDEN", "1")
+	t.Run("incomplete render", func(t *testing.T) {
+		if err := writeGolden(path, ""); err == nil {
+			t.Fatal("an incomplete render was accepted")
+		}
+	})
+	raw, err := os.ReadFile(path)
+	if err != nil || string(raw) != "real fixture" {
+		t.Fatalf("an incomplete render replaced the fixture: %q, %v", raw, err)
+	}
+	golden(t, "kept", "intentional replacement")
+	raw, err = os.ReadFile(path)
+	if err != nil || string(raw) != "intentional replacement" {
+		t.Fatalf("an intentional update was not kept: %q, %v", raw, err)
 	}
 }
 

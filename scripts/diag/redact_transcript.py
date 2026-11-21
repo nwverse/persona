@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import random
 import re
 import secrets
@@ -235,11 +236,14 @@ def main():
                     help="drop lines of this type (default: the big api-request blobs)")
     ap.add_argument("src", nargs="+", help="file.jsonl[:ranges] (1-based line numbers)")
     args = ap.parse_args()
+    sources = [parse_spec(spec) for spec in args.src]
+    if os.path.exists(args.out) and any(os.path.samefile(args.out, path) for path, _ in sources):
+        ap.error("output must not refer to an input transcript")
+
     r = Redactor()
     n = 0
     with open(args.out, "w") as out:
-        for spec in args.src:
-            path, want = parse_spec(spec)
+        for path, want in sources:
             with open(path, errors="replace") as f:
                 for i, line in enumerate(f, 1):
                     if want is not None and i not in want:

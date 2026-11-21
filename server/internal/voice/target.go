@@ -127,14 +127,19 @@ type prepared struct {
 
 // agentLabel is what the voice calls the agent in s.
 func agentLabel(s *proto.Session) string {
+	agent := strings.ToLower(s.Agent)
+	switch agent {
+	case "traex", "traecli", "trae-cli":
+		switch strings.ToLower(strings.TrimSpace(s.AgentLabel)) {
+		case "", "traex", "traecli", "trae-cli", "trae cli":
+			return "TRAE CLI"
+		}
+	}
 	if s.AgentLabel != "" {
 		return s.AgentLabel
 	}
-	switch strings.ToLower(s.Agent) {
-	case "codex":
+	if agent == "codex" {
 		return "Codex"
-	case "traex":
-		return "TRAEX"
 	}
 	return "Claude Code"
 }

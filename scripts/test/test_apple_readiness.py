@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import textwrap
 import unittest
@@ -226,6 +227,7 @@ class AppleReadinessTests(unittest.TestCase):
         settings = source.index('  if [ "$LANE" = ios18 ]; then',
                                 source.index('if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then'))
         helpers += source[settings:source.index('  IOS_COMMON=(', settings)]
+        helpers += source[source.index('  IOS_COMMON=(', settings):source.index('  # Explicit fixture-only exclusions', settings)]
         if regular_only:
             start = source.index("  # The same compiled fixture and compatible runtime as #11289")
             block = source[start:source.index('  ci_run \'Verify token baseline', start)]
@@ -247,9 +249,7 @@ ci_run() {
 }
 XCODE=(xcodebuild)
 TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER=)
-''' + helpers + '''
-IOS_COMMON=(xcodebuild)
-''' + block
+''' + helpers + block
         env = dict(os.environ, PATH=str(self.fixture.bin) + os.pathsep + os.environ["PATH"],
                    LANE="ios", CI_ROOT=str(ROOT), SOURCE=str(ROOT), OUTPUT=str(self.output),
                    PERSONA_CONFIG=str(self.output / "config.json"), SIM_NAME="owned readiness fixture",
@@ -280,6 +280,7 @@ IOS_COMMON=(xcodebuild)
         for call in calls[1:]:
             self.assertFalse(any(arg.startswith(("ARCHS=", "ONLY_ACTIVE_ARCH=")) for arg in call))
         for call in calls:
+            self.assertEqual(call[call.index("-scheme") + 1], "PersonaOfflineUnitTests")
             self.assertIn("CODE_SIGNING_ALLOWED=YES", call)
             self.assertEqual(call[call.index("-derivedDataPath") + 1], str(self.output / "ios-tests"))
         context = json.loads((self.output / "simulator-readiness-context.json").read_text())
@@ -328,6 +329,156 @@ IOS_COMMON=(xcodebuild)
         ])
         self.assertIn("TEST_RUNNER_PERSONA_SHOTS",
                       (self.root / "xcode-env.jsonl").read_text())
+
+    def test_readiness_shell_does_not_depend_on_unexported_ci_variables(self):
+        source = SCRIPT.read_text()
+        marker = "  ci_run 'Verify hosted iOS test readiness'"
+        start = source.index(marker)
+        block = source[start:source.index("\n\n", start)]
+        # A background observer must not inherit the captured stdout pipe. Keep
+        # its log in this writable fixture, not at a machine-level fixture path.
+        observer = textwrap.dedent('''\
+            #!/usr/bin/env python3
+            import json, os, signal, sys
+            from pathlib import Path
+            root = Path(os.environ["READINESS_FIXTURE"])
+            arguments = sys.argv[1:]
+            log = (root / "observer.log").open("w")
+            sys.stdout = sys.stderr = log
+            root.joinpath("observer.pid").write_text(str(os.getpid()))
+            root.joinpath("observer-arguments.json").write_text(json.dumps(arguments))
+            def stop(*_):
+                root.joinpath("observer-stopped").write_text("terminated")
+                sys.exit(0)
+            signal.signal(signal.SIGTERM, stop)
+            signal.signal(signal.SIGINT, stop)
+            root.joinpath("observer-ready").write_text("ready")
+            print("observer-ready", flush=True)
+            log.close()
+            os.close(1)
+            os.close(2)
+            signal.pause()
+        ''')
+        ci_root = self.root / "ci-root/scripts/ci"
+        ci_root.mkdir(parents=True)
+        (ci_root / "apple_readiness_watch.py").write_text(observer)
+        (ci_root / "run.py").symlink_to(ROOT / "scripts/ci/run.py")
+        (ci_root / "apple_result.py").symlink_to(ROOT / "scripts/ci/apple_result.py")
+        (self.root / "ci-root/scripts/app").symlink_to(ROOT / "scripts/app", target_is_directory=True)
+        probe = textwrap.dedent('''\
+            #!/usr/bin/env python3
+            import json, os, sys, time
+            from pathlib import Path
+            args = sys.argv[1:]
+            root = Path(os.environ["READINESS_FIXTURE"])
+            assert os.environ.get("OUTPUT") is None
+            assert os.environ.get("CI_BUNDLE_ID") is None
+            assert args.count("-only-testing:PersonaTests/TypeScaleTests") == 1, args
+            assert args[args.index("-destination") + 1] == (
+                "platform=iOS Simulator,id=11111111-1111-1111-1111-111111111111"), args
+            assert args[-1] == "test-without-building", args
+            deadline = time.monotonic() + 10
+            while not root.joinpath("observer-ready").exists():
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("observer did not become ready")
+                time.sleep(0.01)
+            assert not root.joinpath("observer-stopped").exists(), "observer stopped before the probe"
+            bundle = Path(args[args.index("-resultBundlePath") + 1])
+            assert bundle.parent == Path(os.environ["READINESS_OUTPUT"]), args
+            bundle.mkdir()
+            bundle.joinpath("tests.json").write_text(json.dumps({"testNodes": [{
+                "nodeType": "Test Case",
+                "nodeIdentifier": "PersonaTests/TypeScaleTests/usesTextTokens()",
+                "result": "Passed"}]}))
+            root.joinpath("probe-arguments.json").write_text(json.dumps(args))
+        ''')
+        result_reader = textwrap.dedent('''\
+            #!/usr/bin/env python3
+            import json, os, sys
+            from pathlib import Path
+            args = sys.argv[1:]
+            assert args[:4] == ["xcresulttool", "get", "test-results", "tests"], args
+            assert args[4] == "--path" and args[6:] == ["--compact"], args
+            root = Path(os.environ["READINESS_FIXTURE"])
+            assert os.environ.get("OUTPUT") is None
+            assert os.environ.get("CI_BUNDLE_ID") is None
+            root.joinpath("result-arguments.json").write_text(json.dumps(args[3:]))
+            with root.joinpath("result-calls.jsonl").open("a") as log:
+                log.write(json.dumps(args) + "\\n")
+            print(Path(args[5]).joinpath("tests.json").read_text())
+        ''')
+        for name, body in (("xcodebuild", probe), ("xcrun", result_reader),
+                           ("bash", "#!/bin/sh\nexec /bin/bash \"$@\"\n"),
+                           ("python3", "#!/bin/sh\nexec /usr/bin/python3 \"$@\"\n"),
+                           ("tee", "#!/bin/sh\n/bin/cat >> \"$1\"\n")):
+            path = self.fixture.bin / name
+            path.write_text(body)
+            path.chmod(0o755)
+        shell = '''set -euo pipefail
+unset OUTPUT CI_BUNDLE_ID
+ci_run() {
+  local label="$1" budget="$2"
+  printf '%s|%s\\n' "$label" "$budget" >> "$READINESS_FIXTURE/budgets"
+  shift 2
+  /usr/bin/python3 "$CI_ROOT/scripts/ci/run.py" --label "$label" --timeout "$budget" -- "$@"
+}
+CI_ROOT="$READINESS_CI_ROOT"
+OUTPUT="$READINESS_OUTPUT"
+LANE=ios
+SIM=11111111-1111-1111-1111-111111111111
+CI_BUNDLE_ID=org.example.persona.ci
+IOS_TESTS=(xcodebuild -destination "platform=iOS Simulator,id=$SIM" -destination-timeout 120)
+''' + block
+        output = self.root / "writable-output"
+        output.mkdir()
+        env = {"PATH": str(self.fixture.bin) + os.pathsep + os.defpath,
+               "FAKE": str(self.root), "READINESS_FIXTURE": str(self.root),
+               "READINESS_CI_ROOT": str(self.root / "ci-root"),
+               "READINESS_OUTPUT": str(output),
+               "PYTHONDONTWRITEBYTECODE": "1"}
+        shell_source = self.root / "extracted-readiness.sh"
+        shell_source.write_text(shell)
+        syntax = subprocess.run(["/bin/bash", "-n", str(shell_source)], cwd=self.root,
+                                env=env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(syntax.returncode, 0, syntax.stdout + syntax.stderr)
+        # The outer deadline owns the extracted shell's whole process group,
+        # including the observer and its children if an assertion regresses.
+        result = subprocess.run(["/usr/bin/python3", str(ROOT / "scripts/ci/run.py"),
+                                 "--label", "readiness shell input regression", "--timeout", "30",
+                                 "--", "/bin/bash", str(shell_source)], cwd=self.root, env=env,
+                                capture_output=True, text=True, timeout=45)
+        stdout, stderr = result.stdout, result.stderr
+        log_path = output / "simulator-readiness.log"
+        details = stdout + stderr + (log_path.read_text() if log_path.exists() else "")
+        self.assertEqual(result.returncode, 0, details)
+        self.assertNotIn("unbound variable", stdout + stderr)
+        self.assertEqual((self.root / "observer-stopped").read_text(), "terminated")
+        self.assertEqual((self.root / "budgets").read_text(), "Verify hosted iOS test readiness|900\n")
+        arguments = json.loads((self.root / "observer-arguments.json").read_text())
+        self.assertEqual(arguments[arguments.index("--bundle-id") + 1], "org.example.persona.ci")
+        self.assertEqual(arguments[arguments.index("--scope-root") + 1], str(output))
+        self.assertEqual(arguments[arguments.index("--output") + 1],
+                         str(output / "diagnostics/live-readiness"))
+        self.assertEqual(arguments[arguments.index("--seconds") + 1], "900")
+        self.assertEqual((output / "simulator-readiness.log").read_text(),
+                         "apple-ci: PASS ios-readiness.xcresult: 1 test cases, zero failed/skipped\n")
+        self.assertIn("PASS Verify hosted iOS test readiness", stdout)
+        self.assertTrue((output / "diagnostics/live-readiness/observer.stop").is_file())
+        observer_pid = int((self.root / "observer.pid").read_text())
+        with self.assertRaises(ProcessLookupError, msg="observer survived shell cleanup"):
+            os.kill(observer_pid, 0)
+        arguments = json.loads((self.root / "observer-arguments.json").read_text())
+        self.assertEqual(arguments[arguments.index("--udid") + 1],
+                         "11111111-1111-1111-1111-111111111111")
+        for option, expected in (("--app", "ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona"),
+                                 ("--test-bundle", "ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests")):
+            self.assertEqual(arguments[arguments.index(option) + 1], str(output / expected))
+        result_arguments = json.loads((self.root / "result-arguments.json").read_text())
+        self.assertEqual(result_arguments,
+                         ["tests", "--path", str(output / "ios-readiness.xcresult"), "--compact"])
+        probe_arguments = json.loads((self.root / "probe-arguments.json").read_text())
+        self.assertEqual(probe_arguments[probe_arguments.index("-resultBundlePath") + 1],
+                         str(output / "ios-readiness.xcresult"))
 
     def test_compact_visual_output_directory_is_run_specific_and_not_a_skip(self):
         result, calls = self.run_preparation()
@@ -381,6 +532,8 @@ cleanup_device "$REGULAR_SIM" "$REGULAR_SIM_NAME" "$REGULAR_SIM_STARTED"
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(len(calls), 2)
         probe, call = calls
+        for args in (probe, call):
+            self.assertEqual(args[args.index("-scheme") + 1], "PersonaOfflineUnitTests")
         self.assertEqual([a for a in probe if a.startswith(("-only-testing:", "-skip-testing:"))],
                          ["-only-testing:PersonaTests/TypeScaleTests"])
         self.assertEqual(probe[probe.index("-destination") + 1], "platform=iOS Simulator,id=" + REGULAR_UDID)
