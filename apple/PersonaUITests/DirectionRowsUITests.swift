@@ -91,21 +91,28 @@ final class DirectionRowsUITests: XCTestCase {
         let list = sidebarList
         let open = { (all.exists && all.isHittable) || (list.exists && list.isHittable) }
         let end = Date().addingTimeInterval(timeout)
+        // The drawer's button: the conversation's, a shell place's (the Inbox), or the Sidebar layout's.
+        let buttons = NSPredicate(format: "identifier IN %@", ["assistant-sidebar-button", "shell-place-sidebar", "sidebar-drawer-button"])
         while Date() < end && !open() {
-            if let menu = app.buttons.matching(identifier: "assistant-sidebar-button").allElementsBoundByIndex.first(where: \.isHittable) {
+            if let menu = app.buttons.matching(buttons).allElementsBoundByIndex.first(where: \.isHittable) {
                 menu.tapCenter()
-                if all.waitForExistence(timeout: 5) || list.waitForExistence(timeout: 1) { break }
+                // On screen, not merely there: a closed drawer's rows exist too.
+                let opened = Date().addingTimeInterval(5)
+                while Date() < opened && !open() { usleep(300_000) }
             } else {
                 usleep(500_000)
             }
         }
-        XCTAssertTrue(all.exists || list.exists, "the sidebar did not open:\n\(app.debugDescription)")
+        XCTAssertTrue(open(), "the sidebar did not open:\n\(app.debugDescription)")
     }
 
     /// The sidebar's list: on a phone it inherits the drawer's identifier; the iPad's column is the list of its rows.
     @MainActor private var sidebarList: XCUIElement {
         let byID = app.collectionViews.matching(identifier: "assistant-sidebar").firstMatch
         if byID.exists { return byID }
+        // In the Sidebar layout the drawer's host carries it and is no list (`SidebarLayoutPhoneTests.reach`).
+        let host = app.descendants(matching: .any).matching(identifier: "assistant-sidebar").firstMatch
+        if host.exists { return host }
         // Never the direction page's list, which draws the sidebar's own to-do and Agent rows (`sidebar-direction-…`).
         return app.collectionViews.containing(NSPredicate(format: "identifier BEGINSWITH 'sidebar-'"))
             .matching(NSPredicate(format: "identifier != 'direction-page'")).firstMatch
