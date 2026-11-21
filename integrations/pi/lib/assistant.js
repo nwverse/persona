@@ -1,5 +1,4 @@
-// Assistant state is a per-session custom record, outside user message content.
-// Policy is applied only through pi's system-prompt hook, never as a user prompt.
+// Per-session state; policy uses only the system-prompt hook.
 import { RpcError } from '../../runtime-sdk/index.js'
 
 export const ASSISTANT_ENTRY = 'persona-assistant-state'
@@ -25,8 +24,7 @@ export function recordAssistant(sm, params, previous = assistantState(sm)) {
   return next
 }
 
-// pi's extension API is session-local. Every tool execution rechecks the actual
-// context's session, so a registered tool never inherits another session's role.
+// pi's API is session-local; tools recheck the actual caller's session.
 export async function assistantBeforeTurn(rt, pi, ctx, event, installed) {
   const id = ctx.sessionManager.getSessionId()
   const state = assistantState(ctx.sessionManager)
