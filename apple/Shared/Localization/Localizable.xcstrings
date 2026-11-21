@@ -53945,6 +53945,50 @@
         }
       }
     },
+    "Couldn't get this iPhone ready." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't get this iPhone ready."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このiPhoneを準備できませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能准备好这台 iPhone。"
+          }
+        }
+      }
+    },
+    "Couldn't get this iPhone ready: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't get this iPhone ready: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このiPhoneを準備できませんでした：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能准备好这台 iPhone：%1$@"
+          }
+        }
+      }
+    },
     "Couldn't get this image. Tap Retry to try again." : {
       "extractionState" : "manual",
       "localizations" : {
