@@ -746,6 +746,9 @@ type UIItem struct {
 	Hosts []string `json:"hosts,omitempty"`
 	// nav_page only.
 	Icon string `json:"icon,omitempty"`
+	// nav_page only: the icon's named color in the sidebar, the same colors as a row's icon_color, drawn only while the
+	// owner chose Colored sidebar icons (#10822); without it the icon stays the sidebar's neutral ink.
+	IconColor string `json:"icon_color,omitempty"`
 	// overview_card, capsule_card and widget only: a nav_page or extension_page of the same extension.
 	Opens string `json:"opens,omitempty"`
 	// inbox_item only: one of the extension's own connectors.
@@ -782,16 +785,19 @@ type ChannelItem struct {
 }
 
 type ChannelCapabilities struct {
-	ImagesIn bool   `json:"images_in,omitempty"`
-	FilesIn  bool   `json:"files_in,omitempty"`
-	VoiceIn  bool   `json:"voice_in,omitempty"`
-	Format   string `json:"format,omitempty"`
-	MaxText  int    `json:"max_text,omitempty"`
-	Asks     string `json:"asks,omitempty"`
-	Push     bool   `json:"push,omitempty"`
-	Typing   bool   `json:"typing,omitempty"`
-	Progress bool   `json:"progress,omitempty"`
-	Threads  bool   `json:"threads,omitempty"`
+	ImagesIn bool `json:"images_in,omitempty"`
+	// It can send pictures: the hub puts an answer's pictures in channel.send's images instead of leaving them as
+	// Markdown in the text.
+	ImagesOut bool   `json:"images_out,omitempty"`
+	FilesIn   bool   `json:"files_in,omitempty"`
+	VoiceIn   bool   `json:"voice_in,omitempty"`
+	Format    string `json:"format,omitempty"`
+	MaxText   int    `json:"max_text,omitempty"`
+	Asks      string `json:"asks,omitempty"`
+	Push      bool   `json:"push,omitempty"`
+	Typing    bool   `json:"typing,omitempty"`
+	Progress  bool   `json:"progress,omitempty"`
+	Threads   bool   `json:"threads,omitempty"`
 }
 
 type EventsItem struct {
@@ -1140,6 +1146,8 @@ type UIPlace struct {
 	Connector     string `json:"connector,omitempty"`
 	// A nav_page's sidebar group, its title in the request's language (#9071).
 	Group *UIGroup `json:"group,omitempty"`
+	// A nav_page's icon color as its manifest names it, drawn only with Colored sidebar icons (#10822).
+	IconColor string `json:"icon_color,omitempty"`
 }
 
 type UIPlaces struct {
@@ -3548,6 +3556,10 @@ type ConnectorTool struct {
 	// with tool search when needed (#7317). A connector does not need to send it; the manager sets it on every list
 	// whatever a connector sent.
 	DeferLoading bool `json:"defer_loading,omitempty"`
+	// Set by Persona itself on the tool list of an assistant conversation with the work guide on: the tool is found on
+	// demand through the guide (#11078). A connector does not need to send it; the manager sets it on every list
+	// whatever a connector sent.
+	WorkGuideTool bool `json:"work_guide_tool,omitempty"`
 }
 
 // ConnectorTools: tools.list and actions.list.
@@ -4553,6 +4565,10 @@ type ChannelMessage struct {
 	Forward string `json:"forward,omitempty"`
 	// The chat app's id of the message it answers.
 	ReplyTo string `json:"reply_to,omitempty"`
+	// The chat app's thread the message is in, as an opaque key. For a channel with capabilities.threads, each thread
+	// has a conversation of its own: its first message starts a new one (the channel's target stays as it is), later
+	// ones continue it. Without it, or without threads, the message goes to the channel's target.
+	Thread string `json:"thread,omitempty"`
 	// What it had that the channel cannot bring, for people (a voice message, a sticker).
 	Unsupported []string `json:"unsupported,omitempty"`
 }
@@ -4590,6 +4606,9 @@ type ChannelSendParams struct {
 	Kind         string `json:"kind"`
 	// The owner's message it answers (ChannelMessage.id).
 	ReplyTo string `json:"reply_to,omitempty"`
+	// Pictures to send after text, in order, to a channel with capabilities.images_out only: JPEG or PNG of at most 3 MB
+	// each. text may then be empty. They belong to this ref: sent once with it, like the text.
+	Images []ChannelBlob `json:"images,omitempty"`
 }
 
 // ChannelSendResult: channel.send's answer: the chat app's id of what was sent, for channel.edit.
@@ -5590,6 +5609,17 @@ type StorageClaimParams struct {
 // StorageClaimResult: one claimed job; job is absent when no pending job is due.
 type StorageClaimResult struct {
 	Job *StorageJob `json:"job,omitempty"`
+}
+
+// StorageRenewParams: extend only the current run's unexpired lease on this exact key, job and token. The host sets
+// lease_until to the later of its current value and renewal time plus lease_seconds; job state and attempts do not
+// change.
+type StorageRenewParams struct {
+	RequestID    string `json:"request_id"`
+	Key          string `json:"key"`
+	ID           string `json:"id"`
+	Lease        string `json:"lease"`
+	LeaseSeconds int    `json:"lease_seconds"`
 }
 
 type StorageSettleParams struct {
@@ -6919,6 +6949,7 @@ var newDef = map[string]func() any{
 	"StorageJobResult":              func() any { return new(StorageJobResult) },
 	"StorageClaimParams":            func() any { return new(StorageClaimParams) },
 	"StorageClaimResult":            func() any { return new(StorageClaimResult) },
+	"StorageRenewParams":            func() any { return new(StorageRenewParams) },
 	"StorageSettleParams":           func() any { return new(StorageSettleParams) },
 	"StorageRetryParams":            func() any { return new(StorageRetryParams) },
 	"StorageDeleteResult":           func() any { return new(StorageDeleteResult) },
@@ -7046,6 +7077,7 @@ var Calls = map[string]Call{
 	"storage.queue.list":             {Name: "storage.queue.list", From: "program", Params: "StorageQueueListParams", Result: "StorageQueueListResult"},
 	"storage.queue.enqueue":          {Name: "storage.queue.enqueue", From: "program", Params: "StorageEnqueueParams", Result: "StorageJobResult"},
 	"storage.queue.claim":            {Name: "storage.queue.claim", From: "program", Params: "StorageClaimParams", Result: "StorageClaimResult"},
+	"storage.queue.renew":            {Name: "storage.queue.renew", From: "program", Params: "StorageRenewParams", Result: "StorageJobResult"},
 	"storage.queue.ack":              {Name: "storage.queue.ack", From: "program", Params: "StorageSettleParams", Result: "StorageJobResult"},
 	"storage.queue.forget":           {Name: "storage.queue.forget", From: "program", Params: "StorageSettleParams", Result: "StorageDeleteResult"},
 	"storage.queue.retry":            {Name: "storage.queue.retry", From: "program", Params: "StorageRetryParams", Result: "StorageJobResult"},

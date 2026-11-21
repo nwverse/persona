@@ -6,6 +6,7 @@ import {
   shownDecisions,
   heldDelivery,
   isAutoDone,
+  isCancelled,
   isRemovable,
   TODO_STATUS_INFO,
   todoStatusLabel,
@@ -22,6 +23,7 @@ import {
   resolveLinkCurrentTodoId,
   runningSubagents,
   sortTodos,
+  strikesThrough,
   stoppedReason,
   taskNow,
   todoDueBy,
@@ -31,6 +33,7 @@ import {
   type TodoSpace,
 } from "./todos";
 import type { AgentMutes } from "./agent-groups";
+import { machineSessionOrder } from "./herdr-tree";
 import { BOARD_ORDER, boardSectionOf } from "./task-board";
 
 const machines: Machine[] = [
@@ -414,9 +417,9 @@ describe("Agents 侧边栏「按待办」分组 (buildTodoAgentGroups)", () => {
     ];
 
     const groups = buildTodoAgentGroups([sMoved, sStays], machines, todos, mutes);
-    expect(groups.map((g) => g.key)).toEqual(["todo:todo-a", "todo:todo-b"]);
-    expect(groups[0].sessions.map((s) => s.session_id)).toEqual(["stays"]);
-    expect(groups[1].sessions.map((s) => s.session_id)).toEqual(["moved"]);
+    expect(groups.map((g) => g.key)).toEqual(["todo:todo-b", "todo:todo-a"]);
+    expect(groups.find((g) => g.todoId === "todo-a")?.sessions.map((s) => s.session_id)).toEqual(["stays"]);
+    expect(groups.find((g) => g.todoId === "todo-b")?.sessions.map((s) => s.session_id)).toEqual(["moved"]);
   });
 
   it("会话挂的待办已完成时，归第一个列着它的未完成待办 (#4802)", () => {
@@ -450,6 +453,21 @@ describe("Agents 侧边栏「按待办」分组 (buildTodoAgentGroups)", () => {
     // nothing above it: the whole list, open
     expect(groups[0].folded).toBe(false);
     expect(groups[0].sessions.map((s) => s.session_id)).toEqual(["done-task"]);
+  });
+
+  it("keeps to-do groups in page order when only a later group's Agent needs you (#11801)", () => {
+    const first = mockSession("mac-1", "first-agent", "idle", { todo: { id: "first", title: "First" } });
+    const second = mockSession("mac-1", "second-agent", "idle", { todo: { id: "second", title: "Second" } });
+    const todos: Todo[] = [
+      { id: "first", title: "First", created_at: "2026-11-02T10:00:00Z", updated_at: "", agents: [{ machine_id: "mac-1", session_id: "first-agent", linked_at: "" }] },
+      { id: "second", title: "Second", created_at: "2026-11-02T09:00:00Z", updated_at: "", agents: [{ machine_id: "mac-1", session_id: "second-agent", linked_at: "" }] },
+    ];
+    const order = machineSessionOrder(machines);
+    const before = buildTodoAgentGroups([first, second], machines, todos, mutes, order);
+    const after = buildTodoAgentGroups([first, { ...second, state: "needs_you" }], machines, todos, mutes, order);
+    expect(before.map((g) => g.todoId)).toEqual(["first", "second"]);
+    expect(after.map((g) => g.todoId)).toEqual(["first", "second"]);
+    expect(after.map((g) => g.todoStatus)).toEqual(["follow_up", "needs_you"]);
   });
 
   it("屏蔽的 Agent 在待办组内降级，但同组的需要你仍然排在最前面", () => {
@@ -906,6 +924,35 @@ describe("a to-do's decisions shown (#6447)", () => {
   });
 });
 
+describe("strikesThrough (#11677)", () => {
+  const at = "2026-11-19T10:00:00Z";
+  const td = (extra: Partial<Todo> = {}): Todo => ({ id: "t", title: "t", created_at: at, updated_at: at, done_at: at, ...extra });
+
+  it("strikes only a cancelled task whose supervisor closed it", () => {
+    const cancelled = td({ done_by: "review", supervision: { supervisor: "c", state: "cancelled" } });
+    expect(isCancelled(cancelled)).toBe(true);
+    expect(strikesThrough(cancelled, false)).toBe(true);
+    // still open (reopened): the row is not struck
+    expect(strikesThrough({ ...cancelled, done_at: null }, true)).toBe(false);
+  });
+
+  it("leaves an accepted, deployed, auto-completed or owner-ticked task plain", () => {
+    const accepted = td({ done_by: "review", supervision: { supervisor: "c", state: "accepted" } });
+    const deployed = td({ delivery: { state: "live", at } });
+    const auto = td({ done_by: "auto" });
+    const ticked = td();
+    for (const t of [accepted, deployed, auto, ticked]) {
+      expect(isCancelled(t)).toBe(false);
+      expect(strikesThrough(t, false)).toBe(false);
+    }
+  });
+
+  it("never strikes an open row, including a failed start waiting on the owner", () => {
+    const failed = td({ start_error: "machine offline", done_by: "review", supervision: { supervisor: "c", state: "cancelled" } });
+    expect(strikesThrough(failed, true)).toBe(false);
+  });
+});
+
 describe("hasRequestPieces", () => {
   const td = (id: string, extra: Partial<Todo> = {}): Todo => ({ id, title: id, created_at: "2026-11-10T00:00:00Z", updated_at: "2026-11-10T00:00:00Z", ...extra });
   it("is a to-do part_of another listed one, or two to-dos of one plan", () => {
@@ -915,5 +962,43 @@ describe("hasRequestPieces", () => {
     expect(hasRequestPieces([td("b", { part_of: "gone" }), td("c", { part_of: "c" })])).toBe(false);
     expect(hasRequestPieces([td("a", { plan_id: "p" }), td("b", { plan_id: "q" })])).toBe(false);
     expect(hasRequestPieces([td("a", { plan_id: "p" }), td("b", { plan_id: "p" })])).toBe(true);
+  });
+});
+
+describe("striking a finished to-do's title through (#11677)", () => {
+  const td = (extra: Partial<Todo> = {}): Todo => ({
+    id: "t", title: "Ship the report", created_at: "2026-11-10T00:00:00Z", updated_at: "2026-11-10T00:00:00Z", ...extra,
+  });
+  const cancelled = td({
+    done_at: "2026-11-10T01:00:00Z",
+    done_by: "review",
+    supervision: { supervisor: "conv", state: "cancelled" },
+  });
+  const accepted = td({
+    done_at: "2026-11-10T01:00:00Z",
+    done_by: "review",
+    supervision: { supervisor: "conv", state: "accepted", reviews: [{ at: "2026-11-10T01:00:00Z", verdict: "accepted" }] },
+  });
+  const deployed = td({ done_at: "2026-11-10T01:00:00Z", delivery: { state: "live", at: "2026-11-10T01:00:00Z" } });
+  const ticked = td({ done_at: "2026-11-10T01:00:00Z" });
+  const auto = td({ done_at: "2026-11-10T01:00:00Z", done_by: "auto" });
+  const failed = td({ done_at: "2026-11-10T01:00:00Z", start_error: "machine offline" });
+
+  it("strikes only a cancelled task, and only once it is closed", () => {
+    expect(isCancelled(cancelled)).toBe(true);
+    expect(strikesThrough(cancelled, false)).toBe(true);
+    // reopened, it is no longer closed and reads like any open row
+    expect(strikesThrough(td({ supervision: { supervisor: "conv", state: "cancelled" } }), true)).toBe(false);
+  });
+
+  it("leaves every successful outcome plain", () => {
+    for (const t of [accepted, deployed, ticked, auto, failed]) {
+      expect(isCancelled(t)).toBe(false);
+      expect(strikesThrough(t, false)).toBe(false);
+    }
+  });
+
+  it("never strikes an open row, including a failed start waiting on the owner", () => {
+    expect(strikesThrough(failed, true)).toBe(false);
   });
 });

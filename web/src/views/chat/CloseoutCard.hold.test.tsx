@@ -3,8 +3,9 @@
 // or the transcript's exchange, keeps its did, Verified and evidence rows back until both are in (HOLD_MS at most), so
 // the card grows once; after a failed load they draw without the row. Each test imports the card afresh: the chunk's
 // state belongs to the module.
-import { act } from "react";
+import { act, Suspense } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import type { Segment } from "../../lib/turns";
@@ -81,6 +82,43 @@ afterEach(() => {
 });
 
 describe("CloseoutCard and its evidence chunk", () => {
+  it("does not statically import the loader that imports the card", () => {
+    // Vite may recover a cycle by evaluating the card before its imports finish. The shared evidence loader is a
+    // separate module so its store preload cannot expose this partially initialized component (#10408).
+    const source = readFileSync("src/views/chat/CloseoutCard.tsx", "utf8");
+    expect(source).not.toMatch(/^import[^;]*from\s+["']\.\/closeout-chunks["']/m);
+  });
+
+  it("loads the report reader with the card and keeps surrounding replies visible", async () => {
+    let calls = 0;
+    let release!: () => void;
+    const latch = new Promise<void>((resolve) => { release = resolve; });
+    vi.doMock("./CloseoutCard", async (original) => {
+      calls++;
+      await latch;
+      return original();
+    });
+    try {
+      const { useCloseoutReader, LazyCloseoutCard } = await import("./closeout-chunks");
+      const report = "The sample passed.\n\n### Persona work report\n- Status: done\n- Merged: n/a\n- Deployed: n/a\n---";
+      function Reply({ covered }: { covered: boolean }) {
+        const strip = useCloseoutReader(covered);
+        return <p>{strip ? strip(report) : "Earlier reply."}</p>;
+      }
+      await act(async () => root.render(<Reply covered={false} />));
+      expect(calls).toBe(0);
+      await act(async () => root.render(<><Reply covered={false} /><Suspense fallback={null}><Reply covered /></Suspense></>));
+      await vi.waitFor(() => expect(calls).toBe(1));
+      expect(host.textContent).toBe("Earlier reply.");
+      const card = LazyCloseoutCard.preload();
+      await act(async () => { release(); await card; });
+      await turns(() => host.textContent === "Earlier reply.The sample passed.");
+      expect(host.textContent).toBe("Earlier reply.The sample passed.");
+      expect(calls).toBe(1);
+    } finally {
+      vi.doUnmock("./CloseoutCard");
+    }
+  });
   it("keeps did, Verified and the evidence row back until the chunk is in, then draws them together", async () => {
     await card(read);
     await asked(1); // the card's own load: nothing started it before

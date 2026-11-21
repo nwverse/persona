@@ -162,6 +162,8 @@ type legacyUIPlace struct {
 	Connector     string           `json:"connector,omitempty"`
 	// Group as on the new path: an app old enough for these keys reads no group and ignores it
 	Group *extension.UIGroup `json:"group,omitempty"`
+	// IconColor as on the new path; such an app ignores it too
+	IconColor string `json:"icon_color,omitempty"`
 }
 
 func legacyUIPlaces(us []UIPlace) []legacyUIPlace {
@@ -302,8 +304,11 @@ func withExtensionEnv(env []string) []string {
 }
 
 // extensionConfigs are hub.json's extensions: "extensions", then the old "plugins" (an id in both is taken from
-// "extensions").
+// "extensions"). Legacy entries warn once at manager startup and keep this merge behavior for one release.
 func (c *Config) extensionConfigs(logf func(string, ...any)) []ExtensionConfig {
+	if len(c.LegacyExtensions) > 0 {
+		logf("manager.json: plugins is deprecated; use extensions instead (plugins will stop being read after the one-release warning window)")
+	}
 	out := slices.Clone(c.Extensions)
 	for _, e := range c.LegacyExtensions {
 		if slices.ContainsFunc(out, func(x ExtensionConfig) bool { return x.ID == e.ID }) {

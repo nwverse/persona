@@ -1504,28 +1504,30 @@ func (s *Service) Run(ctx context.Context) {
 	s.recoverSendsOut(recoverCtx) // sends of more for accepted tasks the manager before this one left out (tasks_sends_out.go)
 	s.recoverApprovalJournals(recoverCtx)
 	cancel()
-	go s.delayedWaitsRecoveryLoop(ctx) // usage-limit retries and task receipt rechecks left by the previous manager
-	go s.taskCloseLoop(ctx)            // the agents of finished tasks (tasks_close.go)
-	go s.superviseLoop(ctx)            // the tasks the main conversation follows up (supervise_signals.go)
-	go s.workLoop(ctx)                 // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
-	go s.replyLoop(ctx)                // questions the user looked at and left unanswered (agents_reply.go)
-	go s.nudgeLoop(ctx)                // the Lark bot's cards left unanswered (feishu_nudge.go)
-	go s.sourceReportLoop(ctx)         // the reports back to where a todo was asked (todo_source.go)
-	go s.remindLoop(ctx)               // the todos' reminders (todo_plan.go)
-	go s.urgentLoop(ctx)               // urgent calls' retries and reminders (urgent_call_loop.go)
-	go s.channelLoop(ctx)              // the channels' runs that lost their watcher (channels.go)
-	go s.kbLoop(ctx)                   // the knowledge base (kb.go)
-	go s.kbHistoryLoop(ctx)            // importing chats' older history into it, off by default (kbhistory/history.go)
-	go s.memoryDreamLoop(ctx)          // consolidating assistant memory, off by default
-	go s.memoryMergeLoop(ctx)          // telling the user what the node merged into the one memory (memory_merge.go)
-	go s.viewActionLoop(ctx)           // durable card reply outbox
-	go s.acceptLoop(ctx)               // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
-	go s.admissionQueueLoop(ctx)       // plan tasks the admission gate parked: timed retries until they start or time out (task_queue.go)
+	go s.delayedWaitsRecoveryLoop(ctx)     // usage-limit retries and task receipt rechecks left by the previous manager
+	go s.failedStartBatchRecoveryLoop(ctx) // deferred leader failures, including when every failed to-do is closed
+	go s.taskCloseLoop(ctx)                // the agents of finished tasks (tasks_close.go)
+	go s.superviseLoop(ctx)                // the tasks the main conversation follows up (supervise_signals.go)
+	go s.workLoop(ctx)                     // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
+	go s.replyLoop(ctx)                    // questions the user looked at and left unanswered (agents_reply.go)
+	go s.nudgeLoop(ctx)                    // the Lark bot's cards left unanswered (feishu_nudge.go)
+	go s.sourceReportLoop(ctx)             // the reports back to where a todo was asked (todo_source.go)
+	go s.remindLoop(ctx)                   // the todos' reminders (todo_plan.go)
+	go s.urgentLoop(ctx)                   // urgent calls' retries and reminders (urgent_call_loop.go)
+	go s.channelLoop(ctx)                  // the channels' runs that lost their watcher (channels.go)
+	go s.kbLoop(ctx)                       // the knowledge base (kb.go)
+	go s.kbHistoryLoop(ctx)                // importing chats' older history into it, off by default (kbhistory/history.go)
+	go s.memoryDreamLoop(ctx)              // consolidating assistant memory, off by default
+	go s.memoryMergeLoop(ctx)              // telling the user what the node merged into the one memory (memory_merge.go)
+	go s.viewActionLoop(ctx)               // durable card reply outbox
+	go s.acceptLoop(ctx)                   // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
+	go s.admissionQueueLoop(ctx)           // plan tasks the admission gate parked: timed retries until they start or time out (task_queue.go)
 	// The leaders' tasks that got stuck (leader_reports.go).
 	go s.leaderReportsLoop(ctx)
 	go s.healthLoop(ctx)       // each machine's launchers (launcher_health.go)
 	go s.instructionsLoop(ctx) // the CLAUDE.md on the assistant's machine (start.go)
 	go s.searchLoop(ctx)       // the chat search index (search_index.go)
+	go s.historyLoop(ctx)      // durable assistant history, on by default
 	go s.undeliveredLoop(ctx)  // the owner's messages that could not go in (undelivered.go)
 	s.scheduleLoop(ctx)
 	s.todoViewsStop() // the To-dos view's timers (todo_view_push.go)
