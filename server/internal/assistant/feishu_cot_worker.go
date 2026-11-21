@@ -20,6 +20,7 @@ type cotFallback struct {
 
 type cotWorker struct {
 	answer                  chan *cotFallback
+	ownerDone               <-chan struct{}
 	mu                      sync.Mutex
 	wake                    chan struct{}
 	done                    chan struct{}
@@ -46,7 +47,7 @@ func (f feishuSink) topicCotQueue(r *channel.Run, finish bool) (bool, *cotWorker
 	if w == nil {
 		snap := *r
 		snap.Ext = cloneExt(r.Ext)
-		w = &cotWorker{answer: make(chan *cotFallback, 1), wake: make(chan struct{}, 1), done: make(chan struct{}), run: snap}
+		w = &cotWorker{answer: make(chan *cotFallback, 1), ownerDone: owner.done, wake: make(chan struct{}, 1), done: make(chan struct{}), run: snap}
 		w.live.cot = owner.cot
 		w.usable = snap.Ext["cot"] != "" && snap.Ext["cot_msg"] != "" && snap.Ext["cot_off"] == ""
 		owner.native = w
@@ -184,19 +185,25 @@ func (w *cotWorker) work(f feishuSink) {
 		aborted := w.aborted
 		w.mu.Unlock()
 		if finish && !native {
-			// Answer delivery is independent. A definite terminal refusal restores the
-			// process on that same delivered card, never by posting another answer.
+			// A failed answer attempt has no repair target. A successful retry can
+			// supply one while native I/O is still blocked; removal still ends the wait.
+			var repair *cotFallback
 			select {
-			case repair := <-w.answer:
-				if repair != nil && repair.message != "" {
-					rctx, done := context.WithTimeout(f.s.runCtx(), 15*time.Second)
-					if err := f.s.botUpdateAnswerCard(rctx, repair.message, repair.card); err != nil {
-						f.s.logf("bots: native process fallback: %v", err)
-					}
-					done()
+			case repair = <-w.answer:
+			case <-w.ownerDone:
+				select {
+				case repair = <-w.answer:
+				default:
 				}
 			case <-time.After(time.Minute):
 			case <-f.s.runCtx().Done():
+			}
+			if repair != nil && repair.message != "" {
+				rctx, done := context.WithTimeout(f.s.runCtx(), 15*time.Second)
+				if err := f.s.botUpdateAnswerCard(rctx, repair.message, repair.card); err != nil {
+					f.s.logf("bots: native process fallback: %v", err)
+				}
+				done()
 			}
 		}
 		if finish || aborted {

@@ -212,7 +212,7 @@ func (f feishuSink) recalled(ctx context.Context, m channel.Folded) {
 // still turns the progress card into that line — or, when that card was refused or the run gave it back on a held
 // wait, posts it as a card of its own under a key (so a retry lands once) — so the chat never stays on "Working" and
 // is never left silent.
-func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End) error {
+func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End) (answerErr error) {
 	ctx = feishuSendAs(ctx, "answer", r.MachineID, r.SessionID)
 	s := f.s
 	l := s.botLang(ctx)
@@ -232,7 +232,11 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 		native = f.cotFinishNow(ctx, r)
 	}
 	if worker != nil {
-		defer func() { worker.answerFallback(repair) }()
+		defer func() {
+			if answerErr == nil {
+				worker.answerFallback(repair)
+			}
+		}()
 	}
 	if !native {
 		steps = append([]string{}, all...)

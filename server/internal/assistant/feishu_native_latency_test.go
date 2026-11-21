@@ -692,3 +692,89 @@ func TestFeishuTopicDroppedMembershipRejectsLateNativeState(t *testing.T) {
 		t.Fatalf("late known message completion = %d", got)
 	}
 }
+
+func TestFeishuTopicTerminalRefusalKeepsSuccessfulAnswerRetryTarget(t *testing.T) {
+	s, posts, _ := cotHub(t, false)
+	r, p := topicCotRun(s)
+	f := s.hub.(*fakeHub)
+	topicCotProgress(t, s, r, time.Second, nil, "")
+	originalPost := f.apps[AppFeishu+" "+FeishuPost]
+	originalUpdate := f.apps[AppFeishu+" "+FeishuUpdateCard]
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	f.answerAppBlocking(AppFeishu, FeishuCotAppend, func(json.RawMessage) (any, error) { close(entered); <-release; return nil, feishuAPIError(99991672) })
+	fail := func(json.RawMessage) (any, error) { return nil, rpc.ErrClosed }
+	f.answerApp(AppFeishu, FeishuPost, fail)
+	f.answerApp(AppFeishu, FeishuUpdateCard, fail)
+	result := &channel.Result{Answer: "Synthetic retried answer"}
+	s.finishChannelRun(r, result)
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("terminal append did not start")
+	}
+	if current, _ := s.channelRunByID(r.ID); current == nil {
+		t.Fatal("failed answer was not retained for retry")
+	}
+	f.answerApp(AppFeishu, FeishuPost, originalPost)
+	f.answerApp(AppFeishu, FeishuUpdateCard, originalUpdate)
+	s.finishChannelRun(r, result)
+	if current, _ := s.channelRunByID(r.ID); current != nil {
+		t.Fatal("successful retry did not end the run")
+	}
+	sends := len(f.appParams(AppFeishu, FeishuPost))
+	unblock()
+	select {
+	case <-p.native.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("native fallback did not finish after retry")
+	}
+	if got := len(f.appParams(AppFeishu, FeishuPost)); got != sends {
+		t.Fatalf("native fallback posted another answer: %d -> %d", sends, got)
+	}
+	last := (*posts)[len(*posts)-1]
+	card, _ := last["card"].(string)
+	if last["update"] != true || !strings.Contains(card, "Synthetic retried answer") || !strings.Contains(card, "collapsible_panel") {
+		t.Fatalf("retried answer fallback = %v", last)
+	}
+}
+
+func TestFeishuTopicTerminalRefusalWithoutDeliveredAnswerStops(t *testing.T) {
+	s, posts, _ := cotHub(t, false)
+	r, p := topicCotRun(s)
+	f := s.hub.(*fakeHub)
+	topicCotProgress(t, s, r, time.Second, nil, "")
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	f.answerAppBlocking(AppFeishu, FeishuCotAppend, func(json.RawMessage) (any, error) { close(entered); <-release; return nil, feishuAPIError(99991672) })
+	fail := func(json.RawMessage) (any, error) { return nil, rpc.ErrClosed }
+	f.answerApp(AppFeishu, FeishuPost, fail)
+	f.answerApp(AppFeishu, FeishuUpdateCard, fail)
+	result := &channel.Result{Answer: "Synthetic undelivered answer"}
+	s.finishChannelRun(r, result)
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("terminal append did not start")
+	}
+	p.mu.Lock()
+	p.failing = time.Now().Add(-2 * channelAnswerTries)
+	p.mu.Unlock()
+	s.finishChannelRun(r, result)
+	if current, _ := s.channelRunByID(r.ID); current != nil {
+		t.Fatal("expired answer retry kept the run")
+	}
+	unblock()
+	select {
+	case <-p.native.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker waited for an answer target after the run ended")
+	}
+	if len(*posts) != 1 {
+		t.Fatalf("undelivered answer produced extra visible cards: %v", *posts)
+	}
+}
