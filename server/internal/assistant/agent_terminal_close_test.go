@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -24,7 +25,7 @@ func retireCalls(f *fakeHub) []string {
 	defer f.mu.Unlock()
 	var out []string
 	for _, c := range f.calls {
-		if c.Method != deviceSessionStop && c.Method != deviceSessionRetire && c.Method != "session.close" {
+		if c.Method != deviceSessionStop && c.Method != nodeproto.StopIfIdle && c.Method != deviceSessionRetire && c.Method != "session.close" {
 			continue
 		}
 		var a map[string]any
@@ -59,8 +60,7 @@ func TestCloseEndedTerminalsIsOffByDefault(t *testing.T) {
 	}
 }
 
-// A done task's idle agent: off, it is stopped and keeps its terminal (as before); on, it is closed through
-// session.retire with close_terminal, recording task_completed.
+// A done task's idle agent always uses the cancellable activity guard, including when terminal cleanup is on.
 func TestDoneTaskAgentTerminalFollowsTheSetting(t *testing.T) {
 	for _, on := range []bool{false, true} {
 		t.Run(map[bool]string{false: "off", true: "on"}[on], func(t *testing.T) {
@@ -76,9 +76,9 @@ func TestDoneTaskAgentTerminalFollowsTheSetting(t *testing.T) {
 			taskCloseIdle = 0
 			t.Cleanup(func() { taskCloseIdle = old })
 			s.closeDoneTaskAgents(ctx, taskCloseRefused{}, doneSeen{})
-			want := "session.stop retire=true,stop_cause=task_completed"
+			want := nodeproto.StopIfIdle + " retire=true,stop_cause=task_completed"
 			if on {
-				want = "session.retire close_terminal=true,after_exit=true,stop_cause=task_completed"
+				want = nodeproto.StopIfIdle + " retire=true,close_terminal=true,stop_cause=task_completed"
 			}
 			if got := retireCalls(f); len(got) != 1 || got[0] != want {
 				t.Fatalf("calls %v, want %q", got, want)
@@ -130,13 +130,13 @@ func TestIdleStopKeepsTheTerminal(t *testing.T) {
 	c := idleAgent(time.Now().Add(-48 * time.Hour))
 	f.setSessions("box", c)
 	s.retireAgent(ctx, taskCloseRefused{}, "idle", "box", c, time.Now())
-	if got := retireCalls(f); len(got) != 1 || !strings.HasPrefix(got[0], deviceSessionStop+" ") {
+	if got := retireCalls(f); len(got) != 1 || !strings.HasPrefix(got[0], nodeproto.StopIfIdle+" ") || strings.Contains(got[0], "close_terminal") {
 		t.Fatalf("idle stop asked %v", got)
 	}
 }
 
-// A cancelled task's idle agent is closed with the setting on; a working one is only stopped (it keeps its
-// terminal), and with the setting off nothing changes.
+// Cancellation never stops an Agent immediately. After the inactivity grace, the same guarded pass honors the
+// terminal setting; working Agents and background work are still left alone.
 func TestCancelledTaskAgentTerminal(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -144,26 +144,14 @@ func TestCancelledTaskAgentTerminal(t *testing.T) {
 		edit func(*proto.Session)
 		want string
 	}{
-		{"off", false, nil, "session.stop "},
-		{"on idle", true, nil, "session.retire close_terminal=true,after_exit=true,stop_cause=user"},
-		{"on working", true, func(c *proto.Session) { c.Status, c.State = proto.StatusWorking, proto.StateWorking }, "session.stop "},
-		{"on loop", true, func(c *proto.Session) { c.Loop = &proto.LoopInfo{} }, "session.stop "},
+		{"off", false, nil, nodeproto.StopIfIdle + " retire=true,stop_cause=task_completed"},
+		{"on idle", true, nil, nodeproto.StopIfIdle + " retire=true,close_terminal=true,stop_cause=task_completed"},
+		{"on working", true, func(c *proto.Session) { c.Status, c.State = proto.StatusWorking, proto.StateWorking }, ""},
+		{"on loop", true, func(c *proto.Session) { c.Loop = &proto.LoopInfo{} }, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ft, row := closeTestService(t, tc.edit)
 			closeOnEnd(t, ft.s, tc.on)
-			ft.f.answerNode(deviceSessionStop, func(_ string, _ json.RawMessage) (any, error) {
-				gone := row
-				gone.Status, gone.State, gone.PaneID, gone.Loop = proto.StatusOffline, proto.StateOffline, "", nil
-				ft.d.setSessions("mac", []proto.Session{gone})
-				return map[string]any{"stopped": true}, nil
-			})
-			ft.f.answerNode(deviceSessionRetire, func(_ string, _ json.RawMessage) (any, error) {
-				gone := row
-				gone.Status, gone.State, gone.PaneID = proto.StatusOffline, proto.StateOffline, ""
-				ft.d.setSessions("mac", []proto.Session{gone})
-				return map[string]any{"closed": true}, nil
-			})
 			s, ctx := ft.s, context.Background()
 			todo, err := s.createTodo(ctx, "做", "做", "conv1", "")
 			if err != nil {
@@ -172,8 +160,27 @@ func TestCancelledTaskAgentTerminal(t *testing.T) {
 			if err := s.linkTodoAgent(ctx, todo.ID, "mac", row.SessionID, "x", "/code", "claude"); err != nil {
 				t.Fatal(err)
 			}
-			s.stopCancelledAgent(ctx, todo.ID, "mac", row.SessionID)
-			if got := retireCalls(ft.f); len(got) != 1 || got[0] != tc.want {
+			if ok, err := s.reviewDoneTodo(ctx, todo.ID, "Cancelled", false); err != nil || !ok {
+				t.Fatalf("cancel: %v %v", ok, err)
+			}
+			if got := retireCalls(ft.f); len(got) != 0 {
+				t.Fatalf("cancellation stopped an Agent immediately: %v", got)
+			}
+			s.closeDoneTaskAgents(ctx, taskCloseRefused{}, doneSeen{})
+			if got := retireCalls(ft.f); len(got) != 0 {
+				t.Fatalf("cancellation skipped the inactivity grace: %v", got)
+			}
+			old := time.Now().Add(-time.Hour)
+			s.todos.mu.Lock()
+			s.todos.todos[todo.ID].DoneAt = &old
+			s.todos.mu.Unlock()
+			s.closeDoneTaskAgents(ctx, taskCloseRefused{}, doneSeen{{"mac", row.SessionID}: {done: old, running: old}})
+			got := retireCalls(ft.f)
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Fatalf("busy cancelled Agent was stopped: %v", got)
+				}
+			} else if len(got) != 1 || got[0] != tc.want {
 				t.Fatalf("calls %v, want %q", got, tc.want)
 			}
 		})

@@ -109,14 +109,16 @@ func spotChecked(id, work string, pct int) bool {
 
 // judgeClose closes supervised task t, whose work since key passed the judge's check and was not sampled, as the main
 // conversation's accepted would: the review is the judge's, with the checks; the task's conclusion card goes to the
-// owner. False when the task changed meanwhile (it waits for review instead) or could not be closed.
-func (s *Service) judgeClose(ctx context.Context, t Todo, key, reason string, c *taskAutoCheck) bool {
+// owner. False when the task changed meanwhile or could not be closed. An activity refusal lets the caller defer the
+// judgment instead of leaving a review of that turn pending.
+func (s *Service) judgeClose(ctx context.Context, t Todo, key, reason string, c *taskAutoCheck) (bool, error) {
 	checks := make([]ReviewCheck, 0, len(c.Checks))
 	for _, x := range c.Checks {
 		checks = append(checks, x.ReviewCheck)
 	}
-	note := cmp.Or(clip(oneLine(reason), 80), "判官核对全过、已上线") // i18n-ignore: the review's note, as the supervisor's are
-	if _, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+	note := cmp.Or(clip(oneLine(reason), 80), "判官核对全过、已上线")               // i18n-ignore: the review's note, as the supervisor's are
+	closing := &taskReviewClose{reason: "判官核对通过：" + note, accepted: true} // i18n-ignore: done_reason, as a review's
+	if _, changed, err := s.updateSupervisionWithClose(ctx, t.ID, func(v *Supervision) bool {
 		cur, ok := s.todoNow(t.ID) // as it is now: the supervisor may have reviewed it since the judge was asked
 		if !ok || !judgeMayClose(cur, v) {
 			return false
@@ -129,28 +131,13 @@ func (s *Service) judgeClose(ctx context.Context, t Todo, key, reason string, c 
 			v.Reviews = v.Reviews[len(v.Reviews)-20:]
 		}
 		return true
-	}); err != nil || !changed {
+	}, closing); err != nil || !changed {
 		if err != nil {
 			s.logf("task %s: judge close: %v", t.ID, err)
 		}
-		return false
+		return false, err
 	}
-	closed, err := s.reviewDoneTodo(ctx, t.ID, "判官核对通过："+note, true) // i18n-ignore: done_reason, as a review's
-	if err != nil {
-		s.logf("task %s: judge close: %v", t.ID, err)
-		// Not closed: the judge's acceptance comes off the ledger again, and the task waits for review as before.
-		if _, _, uerr := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-			n := len(v.Reviews)
-			if v.State != reviewAccepted || n == 0 || v.Reviews[n-1].By != reviewerJudge {
-				return false
-			}
-			v.Reviews, v.State = v.Reviews[:n-1], ""
-			return true
-		}); uerr != nil {
-			s.logf("task %s: judge close: undo: %v", t.ID, uerr)
-		}
-		return false
-	}
+	closed := closing.closed
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
@@ -173,5 +160,5 @@ func (s *Service) judgeClose(ctx context.Context, t Todo, key, reason string, c 
 		}
 	}()
 	s.logf("task %s: closed by the judge, its check passed (%d criteria, live; work %s)", t.ID, len(checks), key)
-	return true
+	return true, nil
 }

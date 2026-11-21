@@ -531,7 +531,13 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.backfillBriefs(ctx, tasks)   // tasks from before briefs get one from what they still have (task_brief.go)
 	groups := allStoppedTaskGroups(tasks)
 	for _, t := range tasks {
-		if t.Supervision == nil || t.DoneAt != nil {
+		if t.DoneAt != nil {
+			continue
+		}
+		if t.Supervision == nil {
+			if e, ok := s.turnOf(ctx, t.ID); ok && e.State == turnDone && e.Judged == nil {
+				s.watchTurn(ctx, t, s.taskAgentsIn(ctx, t, lists))
+			}
 			continue
 		}
 		s.remedyWatch(ctx, t, now, history) // a failed start's kept tab expired (start_remedy.go)

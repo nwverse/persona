@@ -587,7 +587,7 @@ func (s *Service) todoReport(ctx context.Context) *TodoReport {
 		}
 	}
 	for key, t := range completed {
-		r.Completed = append(r.Completed, TodoLink{MachineID: key[0], SessionID: key[1], TodoID: t.ID, Title: t.Title})
+		r.Completed = append(r.Completed, TodoLink{MachineID: key[0], SessionID: key[1], TodoID: t.ID, Title: t.Title, Cancelled: t.Cancelled()})
 	}
 	for key := range s.quietSessionsLocked(now) {
 		r.Quiet = append(r.Quiet, SessionRef{MachineID: key[0], SessionID: key[1]})

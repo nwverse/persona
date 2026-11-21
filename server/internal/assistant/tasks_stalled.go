@@ -163,7 +163,7 @@ func (s *Service) closeStalledTask(ctx context.Context, task Todo, agents []prot
 				v.State = reviewRework
 			}
 			return true
-		})
+		}, nil)
 	}
 	if !recovering {
 		updated, changed, err := s.updateSupervisionLockedAt(ctx, task.ID, now, func(v *Supervision) bool {
@@ -172,7 +172,7 @@ func (s *Service) closeStalledTask(ctx context.Context, task Todo, agents []prot
 			}
 			v.State = reviewClosing
 			return true
-		})
+		}, nil)
 		if err != nil {
 			s.logf("task %s: record timeout intent: %v", task.ID, err)
 			return
@@ -227,7 +227,7 @@ func (s *Service) closeStalledTask(ctx context.Context, task Todo, agents []prot
 		v.State = reviewTimedOut
 		v.Reviews = append(v.Reviews, TaskReview{At: now.UTC(), Verdict: reviewTimedOut, By: "system"})
 		return true
-	}); err != nil {
+	}, nil); err != nil {
 		s.logf("task %s: record timeout: %v", task.ID, err)
 	}
 }

@@ -65,13 +65,20 @@ func idleCloseable(c proto.Session, since, now time.Time, idle time.Duration, op
 }
 
 // closeIdleAgents retires the agents on reachable machines that have been idle for too long (idleCloseable).
-func (s *Service) closeIdleAgents(ctx context.Context, refused taskCloseRefused, seen idleSeen) {
+func (s *Service) closeIdleAgents(ctx context.Context, refused taskCloseRefused, completed doneSeen, seen idleSeen) {
 	idle := s.idleCloseAfter(ctx)
 	if idle <= 0 || !s.todosLoaded() {
 		return
 	}
 	now := time.Now()
 	running := map[[2]string]bool{}
+	closedTasks := map[[2]string]bool{}
+	for _, a := range s.doneTaskAgents() {
+		key := [2]string{a.machine, a.session}
+		if w := completed[key]; !w.resumed || !sameTaskCompletion(w.done, a.doneAt) {
+			closedTasks[key] = true
+		}
+	}
 	for _, d := range s.devices(ctx) {
 		if !d.Reachable {
 			for k := range seen { // an unreachable machine keeps what was seen
@@ -95,20 +102,31 @@ func (s *Service) closeIdleAgents(ctx context.Context, refused taskCloseRefused,
 				continue
 			}
 			key := [2]string{d.ID, c.SessionID}
+			if closedTasks[key] {
+				continue // the task's own grace period and archive belong to closeDoneTaskAgents
+			}
 			running[key] = true
 			since, ok := seen[key]
 			if !ok {
-				seen[key] = now
 				since = now
 			}
+			if w := completed[key]; w.resumed && w.running.After(since) {
+				since = w.running // a new run can leave the previous run's idle timestamp behind
+			}
+			seen[key] = since
 			open, touched, userCheck := s.openTaskOf(key)
 			if userCheck || !idleCloseable(c, since, now, idle, open, touched) {
+				continue
+			}
+			if s.sessionActivityReason(ctx, d.ID, c.SessionID, now) != "" {
 				continue
 			}
 			if r, ok := refused[key]; ok && r.updated.Equal(c.UpdatedAt) && now.Sub(r.at) < taskCloseRetry {
 				continue
 			}
-			s.retireAgent(ctx, refused, "idle", d.ID, c, now)
+			if s.retireAgent(ctx, refused, "idle", d.ID, c, now) {
+				delete(seen, key)
+			}
 		}
 	}
 	for k := range seen {

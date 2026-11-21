@@ -135,12 +135,14 @@ type BodyStream struct {
 // version, capabilities}; its answer is Hello (with the hub's name, role and managers besides).
 const (
 	// The assistant calls the hub (Hub).
-	MethodHello    = "manager.hello"
-	MethodDevice   = "device.call"
-	MethodApp      = "app.call"
-	MethodNotify   = "notify.request"
-	MethodSnapshot = "manager.snapshot"
-	EventBroadcast = "ws.broadcast" // one way
+	MethodHello  = "manager.hello"
+	MethodDevice = "device.call"
+	// MethodDeviceRetire forwards only session.stop_if_idle, with caller cancellation.
+	MethodDeviceRetire = "device.retire"
+	MethodApp          = "app.call"
+	MethodNotify       = "notify.request"
+	MethodSnapshot     = "manager.snapshot"
+	EventBroadcast     = "ws.broadcast" // one way
 
 	// The hub calls the assistant (Handler).
 	MethodHTTP = "http.request" // HTTPRequest → HTTPResponse

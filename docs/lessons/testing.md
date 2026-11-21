@@ -478,6 +478,16 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
 - A test that needs Postgres skips without `PERSONA_TEST_DATABASE_URL`, and a plain `go test` prints `ok` for its package. #5031 changed what `task_plan` answers and checked `internal/hub` without a database, so `TestSupervisedTaskOverTheBus`, which drives that answer end to end, never ran and went red on `main` (#5182). Before a change that touches what a database test covers, run its package with `scripts/test/test-server.sh <package>`, or `go test -v` and check for `SKIP` lines.
 - Allocation budgets are set from numbers measured on the hub machine (linux/amd64). The same tests read about 2 KB lower on an arm64 Mac, so #5150 passed `TestReindexOneRevAllocation` and `TestIndexWholeListAllocation` there and failed them on the hub (#5188). Judge a budget only from a `test-server.sh` run. To find where a regression comes from, compare `allocated(...)` in a probe at both commits; the Mac shows the same difference, so a `pprof -sample_index=alloc_space` profile of the measured call can be taken there.
 
+## Retirement tests must pass the first-sight floor (2026-11-18, #6819, #10311)
+
+When merging the finished-task pass's resume history with owner-activity protection, keep one `doneSeen` across passes.
+Tests that age a task to exercise the stop RPC must also seed that completion's earlier running observation; otherwise
+the first-sight floor skips the RPC and can hide a broken activity or post-stop guard. Keep the first-sight and resume
+regressions too, rather than shortening the production inactivity window to make the older tests reach their barrier.
+
+When an upstream result accessor is renamed, keep refused-review assertions on the same stored result
+(`resultOfTodo(id)`). Dropping the no-result assertion would hide review effects published before a refused commit.
+
 ## "Not listed" holds for a transcript the list never shows (2026-11-12, #5054)
 
 The node's list leaves out offline Claude transcripts under 2 KB (a hook probe's, `scanOffline`), and the fixtures of
@@ -657,6 +667,11 @@ first, and the old copy's state goes its own way.
   Test scripts also verify listening ports with `lsof` after starting mock and fail immediately if absent.
 
 ## New UI tests
+
+- An intentional UI removal also changes dependent integration assertions. After the meeting header became hidden,
+  the photo test still expected a `joined` row and stopped before checking image credentials and deletion. Compare an
+  untouched upstream snapshot, keep the intended rendering and all photo checks, and correct the stale expected rows;
+  do not restore removed UI or loosen timeouts to make the integration test pass.
 
 - File-preview mock has two entry points (2026-11-03, #796): `MOCK_TREE` for the tree, `FILES` for full text/pagination. Update both for new Markdown fixtures, or names/sizes show new content but opening still loads the old long text and tests cannot find new links.
 - `socket.create_connection(timeout=3)` leaves the timeout on the returned socket too. Forwarding mocks must call `settimeout(None)` after connection, letting WebSocket disconnection end the stream. If the simulator pauses over 3 seconds before WebView creation / HTTP requests, the old mock closes TCP while waiting for responses, leaving a correctly opened drawer white. Do not loosen page-load assertions because of it.

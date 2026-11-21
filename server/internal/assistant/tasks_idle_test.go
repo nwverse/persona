@@ -76,7 +76,7 @@ func TestIdleAgentIsClosed(t *testing.T) {
 	f.setSessions("box", taskAgent, free)
 	refused, seen := taskCloseRefused{}, idleSeen{}
 
-	s.closeIdleAgents(ctx, refused, seen) // first sight: the clock starts now
+	s.closeIdleAgents(ctx, refused, nil, seen) // first sight: the clock starts now
 	if got := f.retires(); len(got) != 0 {
 		t.Fatalf("closed at first sight: %v", got)
 	}
@@ -86,7 +86,7 @@ func TestIdleAgentIsClosed(t *testing.T) {
 	for k := range seen {
 		seen[k] = time.Now().Add(-13 * time.Hour)
 	}
-	s.closeIdleAgents(ctx, refused, seen)
+	s.closeIdleAgents(ctx, refused, nil, seen)
 	if got := f.retires(); len(got) != 1 || got[0] != "free" {
 		t.Fatalf("retired %v, want only the agent of no task", got)
 	}
@@ -98,7 +98,7 @@ func TestIdleAgentIsClosed(t *testing.T) {
 	off := 0
 	setSettings(t, s, func(v *Settings) { v.IdleCloseHours = &off })
 	seen[[2]string{"box", "free"}] = time.Now().Add(-100 * time.Hour)
-	s.closeIdleAgents(ctx, refused, seen)
+	s.closeIdleAgents(ctx, refused, nil, seen)
 	if got := f.retires(); len(got) != 1 {
 		t.Fatalf("closed while off: %v", got)
 	}

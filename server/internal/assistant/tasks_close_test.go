@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -102,7 +103,7 @@ func TestDoneTaskAgentIsClosed(t *testing.T) {
 	f.mu.Lock()
 	args := f.retireArgs[0]
 	f.mu.Unlock()
-	if args["method"] != deviceSessionStop || args["retire"] != true { // its terminal stays (#4754)
+	if args["method"] != nodeproto.StopIfIdle || args["retire"] != true { // its terminal stays (#4754)
 		t.Fatalf("asked %v", args)
 	}
 	if a := todoNow(s, todo.ID).Agents; len(a) != 1 || a[0].SessionID != "s1" || a[0].ReleasedAt != nil {
@@ -137,7 +138,7 @@ func TestRefusedRetireIsNotRepeated(t *testing.T) {
 		defer f.mu.Unlock()
 		n := 0
 		for _, c := range f.calls {
-			if c.Method == deviceSessionStop {
+			if c.Method == nodeproto.StopIfIdle {
 				n++
 			}
 		}
@@ -207,6 +208,57 @@ func doneTaskAgentClosed(t *testing.T) (*Service, *fakeHub, Todo, taskCloseRefus
 		t.Fatalf("retired %v", got)
 	}
 	return s, f, todo, refused, seen
+}
+
+func TestResumedDoneTaskAgentRetiresWhenIdle(t *testing.T) {
+	ctx := t.Context()
+	s, f, _, refused, done := doneTaskAgentClosed(t)
+	old := time.Now().Add(-24 * time.Hour)
+	key := [2]string{"box", "s1"}
+	f.setSessions("box", retiredAgent(old))
+	s.closeDoneTaskAgents(ctx, refused, done)
+	f.setSessions("box", idleAgent(old))
+	s.closeDoneTaskAgents(ctx, refused, done)
+	if !done[key].resumed {
+		t.Fatal("the task pass did not recognize the resume")
+	}
+	seen := idleSeen{key: old}
+	s.closeIdleAgents(ctx, refused, done, seen)
+	if got := f.retires(); len(got) != 1 {
+		t.Fatalf("stopped on the first idle pass after resuming: %v", got)
+	}
+	seen[key] = old
+	w := done[key]
+	w.running = old
+	done[key] = w
+	setTaskViewer(t, s, "box", "s1", true)
+	s.closeIdleAgents(ctx, refused, done, seen)
+	if got := f.retires(); len(got) != 1 {
+		t.Fatalf("stopped while the owner was viewing: %v", got)
+	}
+	setTaskViewer(t, s, "box", "s1", false)
+	s.closeIdleAgents(ctx, refused, done, seen)
+	if got := f.retires(); len(got) != 1 {
+		t.Fatalf("stopped immediately after the owner left: %v", got)
+	}
+	s.taskActivity.mu.Lock()
+	s.taskActivity.times[runtimeListID("box", "s1")] = old
+	s.taskActivity.mu.Unlock()
+	s.closeIdleAgents(ctx, refused, done, seen)
+	if got := f.retires(); len(got) != 2 {
+		t.Fatalf("the resumed Agent never stopped after the idle window: %v", got)
+	}
+	f.mu.Lock()
+	args := f.retireArgs[1]
+	f.mu.Unlock()
+	if args["method"] != nodeproto.StopIfIdle || args["stop_cause"] != string(proto.StopIdle) || args["close_terminal"] != nil {
+		t.Fatalf("the idle pass did not use guarded stop with the terminal kept: %v", args)
+	}
+	s.closeDoneTaskAgents(ctx, refused, done)
+	s.closeIdleAgents(ctx, refused, done, seen)
+	if got := f.retires(); len(got) != 2 {
+		t.Fatalf("stopped again before observing an offline row: %v", got)
+	}
 }
 
 // The owner resumes a done task's stopped agent and types for a while (#10311): the resume adds no step, so its last
