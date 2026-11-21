@@ -102,3 +102,26 @@ func TestOwnerUsageTestAndValidatedUpsert(t *testing.T) {
 		t.Fatal("admin edit wrote plaintext")
 	}
 }
+
+func TestOwnerUsageFailedConnectionCreatesNoFiles(t *testing.T) {
+	d, c := usageTestDevices(t, "")
+	var logs strings.Builder
+	d.logf = func(f string, args ...any) { fmt.Fprintf(&logs, f, args...) }
+	d.usageGW.fetch = func(context.Context, usagesource.Config, time.Time) (usagesource.Result, error) {
+		return usagesource.Result{}, fmt.Errorf("transport error containing %s", usageTestKey)
+	}
+	body := `{"type":"relay","name":"Example","url":"https://gateway.example.com","key":"` + usageTestKey + `"}`
+	for _, op := range [][2]string{{"POST", "/api/v1/usage-sources/test"}, {"PUT", "/api/v1/usage-sources/src-example"}} {
+		status, out, w := c.do(op[0], op[1], body)
+		if status != 200 || out["ok"] != false {
+			t.Fatalf("failed test: %d %v", status, out)
+		}
+		if strings.Contains(w.Body.String(), usageTestKey) || strings.Contains(logs.String(), usageTestKey) {
+			t.Fatal("secret exposed")
+		}
+		entries, err := os.ReadDir(filepath.Dir(d.opts.ConfigFile))
+		if err != nil || len(entries) != 0 {
+			t.Fatal("failed connection created config, key or temporary files")
+		}
+	}
+}
