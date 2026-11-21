@@ -6,7 +6,7 @@ struct TodoHandoffSheet: View {
     @Environment(\.dismiss) private var dismiss
     var todo: TodoItem
     /// The to-do page's way to open the Agent (`TodoDetailView.openAgent`): pushed over that page. Nil: as before.
-    var openAgent: ((SessionKey) -> Void)? = nil
+    var onOpenAgent: ((SessionKey) -> Void)? = nil
 
     @State private var mode: Mode = .newAgent
     @State private var instruction = ""
@@ -131,7 +131,7 @@ struct TodoHandoffSheet: View {
 
     /// The Agent it was handed to, once this sheet goes.
     private func opened(_ key: SessionKey) {
-        if let openAgent { openAgent(key) } else { openTodoAgentChat(key, in: model) }
+        if let onOpenAgent { onOpenAgent(key) } else { openTodoAgentChat(key, in: model) }
     }
 
     private var canSubmit: Bool {

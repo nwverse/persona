@@ -689,6 +689,10 @@ private fun ChatPage(
     val viewerState = remember { mutableStateOf<ViewerRequest?>(null) }
     var viewer by viewerState
     val photos = remember(chrome.files, key, session?.cwd) { chrome.files?.let { AttachedPhotos(it, key.machineId, session?.cwd.orEmpty()) } }
+    val localCacheDir = androidx.compose.ui.platform.LocalContext.current.cacheDir
+    val localImages = remember(chrome.files, chrome.hubScope, key.machineId, session?.cwd, localCacheDir) {
+        chrome.files?.let { LocalMarkdownImages(it, chrome.hubScope, key.machineId, session?.cwd.orEmpty(), localCacheDir) }
+    }
     // A "Continue" already on its way counts as working: the card offers no second one.
     // A turn that failed on the refusal fallback's missing model (#2528): "Continue" would go to the same model.
     // Every model of a main or leader conversation's recovery chain failed (#7824): the turn's last error card names
@@ -710,7 +714,7 @@ private fun ChatPage(
     val imageDescription = stringResource(R.string.chat_content_image)
     val replyImages = remember(key, repository) { (repository as? ChatLocalStorage)?.replyImages(key) }
         ?.collectAsStateWithLifecycle(initialValue = null)?.value
-    val rowActions = remember(key, repository, replyImages, photos, retryId, exhausted, chrome.onOpenPath != null, pathPresence, chrome.files, session?.cwd) {
+    val rowActions = remember(key, repository, replyImages, localImages, photos, retryId, exhausted, chrome.onOpenPath != null, pathPresence, chrome.files, session?.cwd) {
         ChatRowActions(key, fullText = { item -> repository.fullText(key, item.id) },
             openPath = if (chrome.onOpenPath != null) ({ path, line -> currentOpenPath?.invoke(path, line) }) else null,
             paths = pathPresence,
@@ -720,7 +724,8 @@ private fun ChatPage(
             thumbnails = chrome.files?.let { files ->
                 val cwd = session?.cwd.orEmpty().ifBlank { "~" }
                 ({ path -> "${key.machineId}\n$cwd\n$path" to { pixels: Int -> files.thumbnail(key.machineId, cwd, path, pixels) } })
-            }, viewerImage = { item, description -> chatViewerImage(key, item, repository, description) }, exhausted = exhausted, replyImages = replyImages)
+            }, viewerImage = { item, description -> chatViewerImage(key, item, repository, description) }, exhausted = exhausted,
+            replyImages = replyImages, localImages = localImages)
     }
     val currentMarkdownPaths by rememberUpdatedState(rowActions.paths?.takeIf { rowActions.openPath != null })
     LaunchedEffect(liveItems) {

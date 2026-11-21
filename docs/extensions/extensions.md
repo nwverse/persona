@@ -824,7 +824,11 @@ Whatever scopes it was granted, an extension's token never sees:
   the health space (by its directory or its conversation's space), and a card without a directory whose conversation cannot be found
   are left out of `GET /api/v1/interactions` and `/interactions/history`, and `agent.needs_you` is not sent of them. An extension
   page's own confirmation card (`confirm` on an action) names no computer or directory, so it is one of them: the page's action
-  already waits for its answer.
+  already waits for its answer. A token that nonetheless holds or guesses such a pending card's id cannot act on it either:
+  `POST /api/v1/interactions/{id}/resolve` and `…/choose` answer 404 as for a card that does not exist, and nothing is forwarded
+  to the manager (#12216). The action rule uses the definitive signals (the card's own directory, its listed session's space or
+  `private`); a pending card whose session is not currently listed keeps going to its manager, which applies its own scoping.
+  `reanswer` names an answered, not pending, card and is not part of that guard.
 - **Values typed into a card's fields** (`resolution.values` in the history), and the answer to a card: a `resolve` of a card
   answered already says so (`already`) without its `resolution`.
 - **A to-do that may hold the health space's words, and a to-do's answered cards** (#10941;
