@@ -23493,6 +23493,29 @@
       },
       "extractionState" : "manual"
     },
+    "Agents in T3 Code" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agents in T3 Code"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "T3 Codeのエージェント"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "T3 Code 里的 Agent"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Agents in This Space" : {
       "localizations" : {
         "en" : {
