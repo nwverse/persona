@@ -1,5 +1,5 @@
 // One knowledge entry (/kb/<kind>/<id>): its tile, name, badges, one line and tags, "Ask Persona"; then the places a
-// search found, the Agents on a project, the timeline, the profile, Moments, related entries by kind, code directories,
+// search found, the Agents on a project, the timeline, a project's lessons from finished tasks, the profile, Moments, related entries by kind, code directories,
 // a chat's last 7 days and the folder (docs/apple/ios.md "Information architecture", knowledge base). "Tag" in the header.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, ApiError, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../../lib/api";
@@ -17,6 +17,7 @@ import { hasMaterial, meetingRunning } from "../../lib/meeting-thread";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { Relationships } from "./Relationships";
 import { TopicPoints } from "./TopicPoints";
+import { ProjectLessons, projectLessonsDeps } from "./ProjectLessons";
 import { ago, sessionPreview, sessionTitle, shortPath, stateOf, tabLabel } from "../../lib/format";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import {
@@ -116,6 +117,8 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
   const [token] = useState(getToken);
   const current = useCallback(() => credentialOwner() === owner && shownManager() === manager, [owner, manager]);
   const auth = useMemo(() => ({ token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager } }), [token, owner, manager]);
+  // A project's lessons from finished tasks (#12295): read by the section itself, drawn only when there are some.
+  const lessonsDeps = useMemo(() => projectLessonsDeps(id, auth), [id, auth]);
   const request = useRef(0);
   const [resp, setResp] = useState<KBDetailResponse | null>(null);
   const [error, setError] = useState("");
@@ -443,6 +446,8 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
                   </Card>
                 </section>
               )}
+
+              {d.kind === "projects" && <ProjectLessons key={id} deps={lessonsDeps} current={current} />}
 
               {isKind(kind) && <ConfirmedFacts
                 kind={kind}

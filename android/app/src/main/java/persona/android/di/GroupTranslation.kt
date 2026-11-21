@@ -34,6 +34,8 @@ internal class GroupNames(val namespace: String?) {
     /** Interaction ids are the hub's own and two hubs can use the same one: other groups' carry the suffix too. */
     fun interactionId(raw: String) = GroupKeys.machine(raw, namespace)
     fun interaction(value: Interaction) = if (plain) value else value.copy(id = interactionId(value.id), machineId = machineId(value.machineId))
+    fun rawInteraction(value: Interaction) = if (plain) value else
+        value.copy(id = GroupKeys.raw(value.id), machineId = rawMachine(value.machineId))
     fun fleet(value: FleetState) = if (plain) value else value.copy(items = value.items.map { item ->
         // The id is "machine/session": FleetSummary.key opens and answers by its machine part.
         item.copy(id = path(item.id), interaction = item.interaction?.let(::interactionId))
@@ -237,6 +239,7 @@ internal fun MachineManagement.inGroup(names: GroupNames): MachineManagement {
         override suspend fun launcherQuota(machineId: String, name: String, refresh: Boolean) =
             source.launcherQuota(names.rawMachine(machineId), name, refresh).let { a -> a.copy(machine = a.machine?.takeIf { it.isNotBlank() }?.let(names::machineId)) }
         override suspend fun reconnect(machineId: String) = source.reconnect(names.rawMachine(machineId))
+        override suspend fun startLinkSwitch(machineId: String) = source.startLinkSwitch(names.rawMachine(machineId))
         override suspend fun rename(machineId: String, name: String) = source.rename(names.rawMachine(machineId), name)
         override suspend fun deploy(machineId: String) = source.deploy(names.rawMachine(machineId))
         override suspend fun herdr(machineId: String) = source.herdr(names.rawMachine(machineId))
@@ -347,7 +350,9 @@ internal fun MainConversationSender.inGroup(names: GroupNames, scope: CoroutineS
         override val outbox = source.outbox.mapIn(scope) { list -> list.map(names::outbox) }
         override val sendReceipts = source.sendReceipts.mapIn(scope) { list -> list.map(names::receipt) }
         override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) =
-            source.sendToMain(text, clientMessageId, draft?.let(names::rawDraft))
+            sendToMain(text, clientMessageId, draft, null)
+        override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?, via: String?) =
+            source.sendToMain(text, clientMessageId, draft?.let(names::rawDraft), via)
         override suspend fun mainReplaced(previous: SessionKey) = source.mainReplaced(names.raw(previous))
         override suspend fun mainChanged() = source.mainChanged()
     }

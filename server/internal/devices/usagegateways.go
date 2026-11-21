@@ -22,7 +22,8 @@ import (
 // source in memory; the sidebar's merge (usagewindows.go) puts those accounts next to the ones the machines read and
 // shows an account both saw once. The key is only ever in the manager's manager.json (0600; its usage section, beside the
 // extensions' sections, docs/operations/config.md "manager.json") and in the request's Authorization header:
-// not in a log line, an error, an API answer, the bus or the database.
+// not in a log line, an error or an API answer. Owner API requests cross the authenticated bus once;
+// their keys are sealed before the manager writes the config.
 
 const (
 	usagePollDefault = 5 // minutes
@@ -43,6 +44,9 @@ type UsageConfig struct {
 	// PollMinutes is how often each gateway is asked (default 5, at most a day).
 	PollMinutes int                 `json:"poll_minutes,omitempty"`
 	Sources     []UsageSourceConfig `json:"sources,omitempty"`
+	// HiddenProviders are providers ("codex", "claude"…) the usage bars leave out (#11753). Display only: nodes and
+	// gateways are still read and the scheduler's capacity view still counts them.
+	HiddenProviders []string `json:"hidden_providers,omitempty"`
 }
 
 // UsageSourceConfig is one gateway.
@@ -50,12 +54,14 @@ type UsageSourceConfig struct {
 	ID string `json:"id"`
 	// Name is what the sidebar calls the source ("Relay").
 	Name string `json:"name"`
-	// Type: relay | generic (usagesource; an older manager.json's earlier name of relay reads as relay).
+	// Type: relay | relay_key | generic (usagesource; an older manager.json's earlier name of relay reads as relay).
 	Type string `json:"type"`
 	URL  string `json:"url"`
-	// Key is the gateway's management key (a secret: manager.json is 0600; no API answer or log ever has it).
-	Key     string `json:"key,omitempty"`
-	Enabled *bool  `json:"enabled,omitempty"`
+	// Key is the gateway's management key, for relay_key an ordinary API key of the gateway (a secret either way:
+	// legacy manager.json is 0600; owner writes use SealedKey. No API answer or log ever has it).
+	Key       string `json:"key,omitempty"`
+	SealedKey string `json:"sealed_key,omitempty"`
+	Enabled   *bool  `json:"enabled,omitempty"`
 }
 
 // UnmarshalJSON reads a source as manager.json has it, older type names included (usagesource.StoredType): a section
@@ -137,6 +143,7 @@ func (g *usageGateways) setConfig(cfg UsageConfig) {
 
 func (g *usageGateways) setLocked(cfg UsageConfig) {
 	cfg.Sources = slices.Clone(cfg.Sources)
+	cfg.HiddenProviders = slices.Clone(cfg.HiddenProviders)
 	g.cfg = cfg
 	if g.state == nil {
 		g.state = map[string]*gatewayState{}
@@ -160,6 +167,7 @@ func (g *usageGateways) config() UsageConfig {
 	defer g.mu.Unlock()
 	c := g.cfg
 	c.Sources = slices.Clone(c.Sources)
+	c.HiddenProviders = slices.Clone(c.HiddenProviders)
 	return c
 }
 

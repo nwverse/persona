@@ -72,8 +72,8 @@ data class ExtensionManifest(
      */
     @SerialName("extension_pack") val extensionPack: List<ExtensionPackMember>? = null,
     /**
-     * The configuration's JSON Schema, in the subset every app draws as a form (docs "Configuration: the form
-     * subset").
+     * The configuration's JSON Schema, in the settings-form subset (docs "Configuration: the form subset"). Capable
+     * clients draw declared entry lists after opting in; other clients receive compatibility projections.
      */
     val configuration: JsonElement? = null,
     val secrets: List<ExtensionSecretSpec>? = null,
@@ -853,7 +853,20 @@ data class ExtensionRepositoryProviderItem(
      * the kinds stay issue and pull_request.
      */
     @SerialName("link_kinds") val linkKinds: List<ExtensionRepositoryLinkLabel>? = null,
+    /**
+     * What else the program answers (#11584): pr_status, the state of a pull request for delivery checks
+     * (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
+     */
+    val capabilities: List<String>? = null,
 )
+
+/**
+ * A repository provider's optional answer: pr_status (repo.pr_status).
+ */
+object ExtensionRepositoryCapability {
+    const val PR_STATUS = "pr_status"
+    val ALL = listOf("pr_status")
+}
 
 /**
  * The word a repository provider shows for one kind of its links (MR for a pull_request).

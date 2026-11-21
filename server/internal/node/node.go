@@ -99,6 +99,12 @@ type Node struct {
 
 	// doctorAt replaces the places node.doctor looks at (tests; doctor_rpc.go).
 	doctorAt func() DoctorOptions
+	// machineProcs replaces OS process/port hooks in tests (machine_procs.go).
+	machineProcs *machineProcsOps
+	// serviceRunner replaces OS command execution for machine.services* RPCs in tests.
+	serviceRunner *machineServiceRunner
+	// networkDiagAt replaces machine.network dependencies in tests (machine_network.go).
+	networkDiagAt func() machineNetworkOptions
 	// fileReadDeps replaces file.read's filesystem operations in tests.
 	fileReadDeps *fileReadDependencies
 
@@ -500,6 +506,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		n.logger.Printf("write claude config: %v", err)
 	}
 	n.peer = rpc.New("n", w)
+	n.peer.ReadLimit = nodeproto.RPCReadLimit
 	// What the node sends hides the values handed to Agent starts (secretenv.go): every line, as it goes out.
 	n.peer.LineFilter = n.handoffs().scrub.filter
 	if n.updater != nil {
@@ -829,6 +836,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return n.doctor(ctx, params, false)
 	case "node.doctor.fix": // the same path as `node doctor --fix`: Persona's own generated files only
 		return n.doctor(ctx, params, true)
+	case proto.MethodMachineNetwork: // on-demand read-only network & proxy diagnostics (machine_network.go)
+		return n.machineNetwork(ctx, params)
 	case proto.MethodRoutineCheck:
 		return routineCheck(ctx, params)
 	case proto.MethodSecretRun: // the password card's commands (secretrun.go); its params never reach the decoding below
@@ -855,6 +864,22 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case proto.MethodMachineCleanup:
 		return machdiag.Cleanup(ctx, params)
 	}
+	switch method { // listening port inspector and process management (machine_procs.go)
+	case proto.MethodMachinePorts:
+		return n.machinePorts(ctx, params)
+	case proto.MethodMachineProcesses:
+		return n.machineProcesses(ctx, params)
+	case proto.MethodMachineProcessKill:
+		return n.machineProcessKill(ctx, params)
+	}
+	switch method { // the machine page's services and containers (machine_services.go)
+	case proto.MethodMachineServices:
+		return n.machineServices(ctx, params)
+	case proto.MethodMachineServiceLogs:
+		return n.machineServiceLogs(ctx, params)
+	case proto.MethodMachineServiceAction:
+		return n.machineServiceAction(ctx, params)
+	}
 	if method == codexTakeoverPrepare || method == codexTakeoverCommit {
 		return n.codexTakeoverCall(ctx, method, params)
 	}
@@ -879,6 +904,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		TaskID                  string        `json:"task_id"`
 		WorkspaceID             string        `json:"workspace_id"`
 		WorkspaceLabel          string        `json:"workspace_label"`
+		ReopenWorktreeWorkspace bool          `json:"reopen_worktree_workspace"`
 		NameHint                string        `json:"name_hint"` // session.start: what a start whose first message goes after it is named after (claudedesktop_new.go)
 		Text                    string        `json:"text"`
 		SkillOwner              string        `json:"skill_owner"` // manager-owned identity for explicit skill selections
@@ -1236,6 +1262,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			n.runtimeHost.setOrcaBridge(n.hostEnabled(proto.EngineOrca))
 			// Cindy's agents come through its bridge (cindybridge.go).
 			n.runtimeHost.setCindyBridge(n.hostEnabled(proto.EngineCindy))
+			// T3 Code's threads come through its bridge (t3codebridge.go).
+			n.runtimeHost.setT3CodeBridge(n.hostEnabled(proto.EngineT3Code))
 		}
 		n.configured()
 		c := n.engineChoice()
@@ -1510,6 +1538,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			}
 		}
 		ctx, taskSpace := withTaskSpace(ctx, p.TaskID, p.WorkspaceID, p.WorkspaceLabel)
+		if p.ReopenWorktreeWorkspace && taskSpace == nil {
+			ctx = context.WithValue(ctx, reopenWorktreeWorkspaceKey{}, true)
+		}
 		// Optional tool waits correlate the first input through the existing echo ledger.
 		// Capture the resume boundary before launching, so an identical historical input cannot match.
 		var echoOpts sendOpts
@@ -2436,6 +2467,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return nil, err
 		}
 		return n.readFileChunk(chunk)
+	case proto.MethodMachineFilesRoots, proto.MethodMachineFilesList, proto.MethodMachineFilesPreview, proto.MethodMachineFilesTail, proto.MethodMachineFilesChunk:
+		return n.handleMachineFiles(ctx, method, params)
 	case methodGitBlob:
 		var b proto.GitBlobRequest
 		if err := json.Unmarshal(params, &b); err != nil {
