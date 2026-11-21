@@ -476,7 +476,8 @@ class DesktopWorkflowTests(unittest.TestCase):
         workflow = yaml.load((root / '.github/workflows/desktop-test.yml').read_text(), Loader=yaml.BaseLoader)
         self.assertEqual(set(workflow['jobs']), {'linux', 'macos', 'windows', 'update'})
         self.assertEqual(workflow['on']['workflow_call'], '')
-        self.assertEqual(workflow['on']['workflow_dispatch'], '')
+        self.assertEqual(workflow['on']['workflow_dispatch']['inputs']['acceptance']['options'], ['full', 'first-run'])
+        self.assertEqual(workflow['on']['workflow_dispatch']['inputs']['acceptance']['default'], 'full')
         text = (root / '.github/workflows/desktop-test.yml').read_text()
         self.assertNotIn('inputs.signed', text)
         self.assertNotIn('CSC_LINK', text)
@@ -495,6 +496,63 @@ class DesktopWorkflowTests(unittest.TestCase):
         self.assertIn('target: nsis', production)
         for platform in ('server', 'web', 'android', 'apple', 'core', 'runtimes', 'desktop', 'scripts'):
             self.assertIn(f'"{platform}"', (root / 'scripts/ci/required.py').read_text())
+    def test_linux_packaged_sandbox_preserves_first_run_and_cleanup_results(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = yaml.load((root / '.github/workflows/desktop-test.yml').read_text(), Loader=yaml.BaseLoader)
+        linux = workflow['jobs']['linux']
+        steps = {step.get('id', step.get('name')): step for step in linux['steps']}
+        package = linux['steps'].index(next(step for step in linux['steps'] if step.get('name') == 'Build the unsigned Linux package'))
+        dependencies = linux['steps'].index(next(step for step in linux['steps'] if step.get('name') == 'Install desktop dependencies for the packaged first-run'))
+        self.assertLess(dependencies, package)
+        self.assertEqual(linux['steps'][dependencies]['run'], 'npm --prefix desktop ci --ignore-scripts')
+        load = steps['sandbox-load']
+        run = steps['first-run']
+        record = next(step for step in linux['steps'] if step.get('name') == 'Record the packaged first-run result')
+        cleanup = steps['sandbox-cleanup']
+        self.assertLess(package, linux['steps'].index(load))
+        self.assertEqual(load['if'], '${{ !cancelled() }}')
+        self.assertEqual(linux['steps'][package]['if'], '${{ !cancelled() }}')
+        self.assertIn('scripts/ci/desktop-first-run-apparmor.sh load', load['run'])
+        self.assertEqual(run['continue-on-error'], 'true')
+        self.assertIn('first-run-ok', record['run'])
+        self.assertIn('first-run-failed', record['run'])
+        self.assertIn('always()', cleanup['if'])
+        self.assertIn("steps.sandbox-load.outcome != 'skipped'", cleanup['if'])
+        self.assertIn("steps.first-run-result.outcome != 'cancelled'", cleanup['if'])
+        self.assertIn('cleanup-owned', cleanup['run'])
+        self.assertEqual(cleanup['continue-on-error'], 'true')
+        verdict = next(step for step in linux['steps'] if step.get('name') == 'Enforce packaged first-run and sandbox cleanup verdicts')
+        self.assertIn('FIRST_RUN_OUTCOME', verdict['env'])
+        self.assertIn('RECORD_OUTCOME', verdict['env'])
+        self.assertIn('CLEANUP_OUTCOME', verdict['env'])
+        self.assertIn('exit 1', verdict['run'])
+        for diagnostic in ('DIAGNOSTICS_BEFORE_OUTCOME', 'DIAGNOSTICS_LOADED_OUTCOME', 'DIAGNOSTICS_CLEANUP_OUTCOME'):
+            self.assertIn(diagnostic, verdict['env'])
+            self.assertIn(f'"${diagnostic}" != success', verdict['run'])
+        self.assertLess(linux['steps'].index(cleanup), linux['steps'].index(verdict))
+        for upload in (step for step in linux['steps'] if step.get('uses', '').startswith('actions/upload-artifact')):
+            if upload['with']['name'].startswith('persona-desktop-linux-first-run'):
+                self.assertIn('always()', upload['if'])
+                self.assertGreater(linux['steps'].index(upload), linux['steps'].index(verdict))
+        for name in ('macos', 'windows', 'update'):
+            self.assertIn("inputs.acceptance != 'first-run'", workflow['jobs'][name]['if'])
+        helper = (root / 'scripts/ci/desktop-first-run-apparmor.sh').read_text()
+        self.assertIn('sudo apparmor_parser --abort-on-error -K -T -B -a "$compiled"', helper)
+        self.assertIn('sudo apparmor_parser --abort-on-error -R "$profile"', helper)
+        self.assertIn('sudo grep -E -q -e "^${name} ', helper)
+        self.assertIn('-- "$profiles_file"', helper)
+        diagnostics = (root / 'scripts/ci/desktop-first-run-apparmor-diagnostics.sh').read_text()
+        for command in ('sudo grep', 'sudo ls -l', 'sudo cat', 'sudo aa-status'):
+            self.assertIn(command, diagnostics)
+        workflow_text = (root / '.github/workflows/desktop-test.yml').read_text()
+        self.assertIn("'after-cleanup' ||", workflow_text)
+        self.assertIn('diagnostics-$DIAGNOSTIC_PHASE', workflow_text)
+        for forbidden in ('apparmor_parser', 'chmod', 'chown', 'mount ', 'umount', 'systemctl', 'tee', 'stat ', 'command '):
+            self.assertNotIn(forbidden, diagnostics)
+        self.assertNotIn('PERSONA_APPARMOR', helper)
+        self.assertNotIn('--no-sandbox', helper)
+        for forbidden in ('chmod 4755', '--no-sandbox', 'fuse', 'apparmor_parser -r'):
+            self.assertNotIn(forbidden, (root / '.github/workflows/desktop-test.yml').read_text())
 
 
 class AppleWorkflowTests(unittest.TestCase):

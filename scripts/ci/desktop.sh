@@ -4,6 +4,7 @@ source "$(dirname "$0")/common.sh"
 ci_run 'Desktop TypeScript and policy tests' 600 npm --prefix desktop ci --ignore-scripts
 ci_run 'Desktop typecheck' 180 npm --prefix desktop run typecheck
 ci_run 'Desktop tests' 180 npm --prefix desktop test
+ci_run 'Linux packaged first-run sandbox state transitions' 180 node --test scripts/ci/desktop-first-run-apparmor.test.mjs scripts/ci/desktop-first-run-apparmor-diagnostics.test.mjs
 ci_run 'Desktop dependency audit' 180 npm --prefix desktop audit --audit-level=high
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
