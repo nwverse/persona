@@ -3,7 +3,7 @@ import { cardDismissed, cardFiled, cardSent, startFailure, type FeedItem, type T
 import { cardBucket, taskCardSlots, type TaskCardMetadata } from "./task-cards";
 import { decisionDismissed, linkedParkInteraction, parkInteractionID, reviewState, withoutParkInteraction } from "./supervision";
 import { finishedAt, JUST_DONE_MS, supersededFailedStarts, triage } from "./todo-triage";
-import { awaitsReview, dockAgents, makeSessionLookup, openAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { awaitsReview, dockAgents, heldDelivery, makeSessionLookup, openAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
 import { homeKey } from "./folded-rows";
 import type { Interaction, Session } from "./types";
@@ -63,6 +63,7 @@ export interface AssistantEntriesInput {
   conversation: string;
   /** The main conversation's id: it watches every task and the Agents opened by hand. */
   main?: string;
+  manager?: string;
   todos: Todo[];
   /** Every session, as the lists show them (answered cards applied). */
   sessions: Session[];
@@ -193,10 +194,11 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
     const waits = status === "failed" ? bucket === "open" : !todo.done_at && WAITS_ON_YOU.has(status);
     const decision = taskAwaitsDecision(todo);
+    const deliveryApproval = heldDelivery(todo)?.unblock === "user";
     if (asks.length) asking.push({ kind: "task", key, todo, status, asks, countsOpen });
-    else if (waits || decision) {
+    else if (waits || decision || deliveryApproval) {
       // Only the review decision is hidden; a live Agent question above still has its home.
-      if (!(status !== "needs_you" && decision && (decisionDismissed(todo) || input.deferred?.[decisionLaterKey(todo)]))) {
+      if (deliveryApproval || !(status !== "needs_you" && decision && (decisionDismissed(todo) || input.deferred?.[decisionLaterKey(todo)]))) {
         deciding.push({ item: { kind: "task", key, todo, status, asks, countsOpen }, rank: todoRank(todo, status), at: card.at });
       }
     }
@@ -233,7 +235,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   }
 
   const plansWaiting: NeedsYouItem[] = Object.values(plans)
-    .filter((plan) => plan.conversation === conversation && plan.state === "open")
+    .filter((plan) => ((isMain && !plan.space) || plan.conversation === conversation) && plan.state === "open" && (!input.manager || !plan.manager || plan.manager === input.manager))
     .sort((a, b) => byTime(a.created_at, b.created_at) || a.id.localeCompare(b.id))
     .map((plan) => ({ kind: "plan", key: `plan:${plan.id}`, plan }));
   const messages: NeedsYouItem[] = feed.filter((it) => messageWaits(it, input.deferred)).map((item) => ({ kind: "message", key: `message:${item.id}`, item }));
@@ -263,7 +265,8 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
 export function needsYouBySupervisor(items: readonly NeedsYouItem[], conversation: string): { supervisor: string; items: NeedsYouItem[] }[] {
   const groups = new Map<string, NeedsYouItem[]>([[conversation, []]]);
   for (const item of items) {
-    const supervisor = item.kind === "task" && item.todo.origin ? item.todo.origin : conversation;
+    const supervisor = item.kind === "task" && item.todo.origin ? item.todo.origin :
+      item.kind === "plan" ? item.plan.conversation || conversation : conversation;
     const group = groups.get(supervisor);
     if (group) group.push(item);
     else groups.set(supervisor, [item]);

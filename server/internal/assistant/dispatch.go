@@ -215,7 +215,7 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 	}
 	title := s.tabName(sctx, a.Prompt)
 	params := map[string]any{"cwd": a.Cwd, "launcher": strings.TrimSpace(a.Launcher), "model": "", "effort": "",
-		"tab_name": title, "prompt": s.withCloseoutBrief(sctx, prompts.RenderDispatchTask(from), false)}
+		"tab_name": title, "title": title, "prompt": s.withCloseoutBrief(sctx, am.ID, prompts.RenderDispatchTask(from), false)}
 	if err := s.applyModel(sctx, "agent.new", params); err != nil {
 		return "", fmt.Errorf("%w; nothing was started", err)
 	}
@@ -243,6 +243,7 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 		}
 		return "", fmt.Errorf("the start on %s failed: %w", am.Name, err)
 	}
+	title = s.nameStartedAgent(sctx, am.ID, res.Session, title)
 	s.addDispatched(ctx, dispatchTask{FromMachine: machine, FromSession: session, Machine: s.canonical(am.ID),
 		Session: res.Session.SessionID, Cwd: a.Cwd, Title: title, At: now})
 	s.logf("dispatch %s/%s -> %s/%s in %s", machine, short(session), am.ID, short(res.Session.SessionID), a.Cwd)

@@ -1,4 +1,4 @@
-Update supplied fields now; omitted stay. Empty text clears; after=[] clears dependencies. Completion uses todo_complete/reopen. outward_reply records a successful send's original HTTPS topic, permalink, exact text and RFC3339 provider time. Retry recording, never resending. promise overrides detection; due_at overrides 24h.
+Update supplied title, notes, due/reminder, priority, project, part_of or after immediately, including task to-dos; no confirmation. Omitted fields stay; "" clears notes/due/remind/project/part_of, [] clears after. New reminder times notify again. Completion/reopening uses todo_complete/todo_reopen. outward_reply records a successful send's original HTTPS topic, permalink, exact text and RFC3339 provider time. Retry recording, never resending. promise overrides detection; due_at overrides 24h.{{template "shared/mcp_language" .}}
 
 ```json
 {

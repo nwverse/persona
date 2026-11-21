@@ -17,7 +17,7 @@ import { SUPERVISE_PURPOSE } from "./background-supervisor";
 import {
   defaultModel, forgetCustomModel, launcherModels, listedModel, machineLaunchers, modelName, withoutCustom, type AgentModel, type LauncherDefault, type LauncherModels, type UnavailableLauncher,
 } from "./launcher-models";
-import { canSwitchModel, isCurrentModel, sessionLauncher } from "./model-switch";
+import { canSwitchModel, isCurrentModel, namesWholeModel, rowModelIds, sessionLauncher } from "./model-switch";
 import { hasEffortOnly, hasModes } from "./session-actions";
 import type { Launcher, Session } from "./types";
 import { chosenManager, defaultKnown, defaultManager, onDefaultManager, onManagerChoice } from "./manager-choice";
@@ -184,9 +184,10 @@ export function readModels(mid: string, launcher: string, o: { again?: boolean; 
       }
       lists.set(key, { list: r && hidden.size ? { ...r, models: r.models.filter((m) => !(m.custom && hidden.has(m.id))) } : r });
     } catch (e) {
-      // a list already shown stays (and says nothing): a newer one just didn't come
-      const now = lists.get(key);
-      lists.set(key, now?.list !== undefined ? { list: now.list } : { error: errorText(e) });
+      // Keep the catalog on a failed refresh. A new omp start still needs the node to confirm its capability.
+      const list = lists.get(key)?.list;
+      lists.set(key, list === undefined ? { error: errorText(e) } :
+        { list: list?.supports_start_model ? { ...list, supports_start_model: false } : list });
     } finally {
       done();
       reads.delete(key);
@@ -315,17 +316,22 @@ export function sessionSwitches(s: Session): { model: boolean; effort: boolean }
 export function currentModelRow(models: AgentModel[], model: string | undefined): AgentModel | undefined {
   if (!model) return defaultModel(models);
   const c = model.toLowerCase();
-  const exact = models.filter((m) => [m.id, m.resolved, ...(m.aliases ?? [])].some((v) => v && v.toLowerCase() === c));
+  const exact = models.filter((m) => rowModelIds(m).some((v) => v?.toLowerCase() === c));
   const hits = exact.length ? exact : models.filter((m) => isCurrentModel(m, model));
   return hits.find((m) => !m.default) ?? hits[0];
 }
 
-/** A model ID said briefly where no list names it: Claude's as "opus 5.5", GPT's as their list would, a gateway's path
- *  without its vendor. */
+/** A model ID said briefly where no list names it: Claude's as "opus 5.5", GPT's as their list would; gateway paths keep
+ *  their routing prefix so the upstream channel stays visible (#10125). */
 export function modelLabel(id: string): string {
-  const short = id.split("/").pop() || id;
-  const claude = modelShort(short);
-  return claude !== short ? claude : modelName({ id: short });
+  const trimmed = id.trim();
+  const claude = modelShort(trimmed);
+  return claude !== trimmed ? claude : modelName({ id: trimmed });
+}
+
+export function pillModel(models: AgentModel[], active: string | undefined, fallback = active): string | undefined {
+  const row = currentModelRow(models, active);
+  return row && namesWholeModel(row, active) ? modelName(row) : fallback ? modelLabel(fallback) : undefined;
 }
 
 /** One setup as the pill draws it. */
@@ -383,8 +389,7 @@ export function pendingView(s: Session, listOf: (launcher: string) => ModelList)
 }
 
 export function pillView(s: Session, e: ModelList): PillView {
-  const row = currentModelRow(e.list?.models ?? [], s.model);
-  const model = row ? modelName(row) : s.model ? modelLabel(s.model) : undefined;
+  const model = pillModel(e.list?.models ?? [], s.model);
   const out: PillView = { engine: sessionEngine(s), provider: sessionLauncher(s), loading: e.list === undefined && Boolean(e.loading), failed: e.list === undefined && Boolean(e.error) };
   if (s.agent_label) out.engineLabel = s.agent_label;
   if (model) out.model = model;

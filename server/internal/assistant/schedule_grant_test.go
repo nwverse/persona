@@ -109,7 +109,7 @@ func numberItems(items []proto.Item) {
 // and what the tool said.
 func (g *grantFixture) plan(machine, session, cwd string, extra ...map[string]any) (string, string) {
 	g.t.Helper()
-	task := map[string]any{"title": "Update dependencies", "prompt": "Update and open a PR",
+	task := map[string]any{"title": "Update dependencies", "prompt": "Update and open a PR", "role": "worker",
 		"machine": "box", "cwd": cwd, "permission": "bypassPermissions", "why": "the repository is on box", "schedule": "other",
 		"schedule_title": "Forged", "schedule_basis": "forged"}
 	for _, e := range extra {
@@ -187,6 +187,52 @@ func TestScheduledRoundStartsTheKindItsOwnerGranted(t *testing.T) {
 	waitFor(t, "the second task's agent", func() bool { return fakeStarts(g.f) == 2 })
 	if _, out := g.plan(machine, session2, "/wt/other/x"); !waitsForStart(out) {
 		t.Fatalf("a kind outside the grant started: %s", out)
+	}
+}
+
+// With the opt-in guide, a granted round gets its planning steps inline. File reads
+// or a native skill call still require the owner's Start, even for a covered kind.
+func TestWorkGuideScheduledGrant(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		enabled   bool
+		tool      string
+		automatic bool
+	}{
+		{"default", false, "ToolSearch", true},
+		{"enabled", true, "ToolSearch", true},
+		{"native skill read", true, "Skill", false},
+		{"reference file read", true, "Read", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newGrantFixture(t, granted(depsTask()))
+			setSettings(t, g.s, func(v *Settings) { v.WorkGuide = ptr(tc.enabled) })
+			machine, session := g.round("deps", nil, toolUse(tc.tool), toolResult())
+			if !g.s.cleanRoundSession(session) {
+				t.Fatal("expected the scheduler to start a separate granted round")
+			}
+			const inline = "Leave user_requested false"
+			round := g.s.Context(t.Context(), ContextParams{SessionID: session})
+			if strings.Contains(round.Text, inline) != tc.enabled {
+				t.Fatalf("unexpected scheduled instructions: %q", round.Text)
+			}
+			if other := g.s.Context(t.Context(), ContextParams{SessionID: "ordinary-chat"}); strings.Contains(other.Text, inline) {
+				t.Fatal("scheduled guidance leaked into another chat")
+			}
+			// The node prepends the rendered context to the native transcript's user message.
+			block := prompts.RenderTurnContext(prompts.TurnContext{Full: true, Sections: []prompts.TurnSection{{Text: round.Text}}})
+			g.mu.Lock()
+			g.items[0].Text = block + "\n" + g.items[0].Text
+			g.mu.Unlock()
+			if _, out := g.plan(machine, session, "/wt/app/deps"); tc.automatic {
+				if !strings.Contains(out, "without asking") {
+					t.Fatal(out)
+				}
+				waitFor(t, "covered dispatch", func() bool { return fakeStarts(g.f) == 1 })
+			} else if !waitsForStart(out) || fakeStarts(g.f) != 0 {
+				t.Fatalf("expected approval with zero starts: %s", out)
+			}
+		})
 	}
 }
 

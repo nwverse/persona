@@ -164,10 +164,11 @@ Health records can't catch that in time: the periodic checks are off by default,
 Every new Agent is now held to what its target computer can start before anything goes out (`launcher_fit.go`, `fitLauncher`): `task_plan`'s card and its dispatch (`startTaskAgent`, on the computer a flexible task lands on), `agent_start`, the App's New Agent (`agents.start_params`) and a message resuming an Agent started outside Persona (`agents.resume_params`).
 
 - **What the computer has**: `machineLaunchers` (its own list without the hidden ones, plus Persona-managed ones), the launchers `hub.json` names for it, plain `claude` and every managed launcher (both run anywhere). The same answer backs `launcherAvailable`, which keeps the main chat off a launcher that is gone.
-- **A default it lacks** (the caller named no launcher; the `agent.new` binding, a profile or a tier gave it): the start runs on `claude` when the computer has Claude Code (its node reported a version, or its list names `claude`), otherwise on the first launcher in its list that takes a prompt (not a runtime's), otherwise on `claude` anyway.
-  The default's model and effort are dropped (the new launcher runs its own default model; an effort the caller gave stays), and so is a tier that no longer applies.
+- **An implicit default it lacks** (the caller named no launcher or tier; only the `agent.new` binding or a profile gave the launcher): the start runs on `claude` when the computer has Claude Code (its node reported a version, or its list names `claude`), otherwise on the first launcher in its list that takes a prompt (not a runtime's), otherwise on `claude` anyway.
+  The default's model and effort are dropped (the new launcher runs its own default model; an effort the caller gave stays).
   The task's `why` says so in the user's language ("<launcher> isn't on <computer>, so this runs on claude with its default model"), and the plan card names the launcher that will run: the plan is changed when the card is made, or, when the computer's list couldn't be read then, at dispatch (the card updates).
   `agent_start` puts the same line on its confirmation and in its answer (`Note: …`).
+- **An explicit tier whose launcher the computer lacks** (#12032): a tier the caller named is a caller choice, the same as naming the launcher itself, so it is refused rather than swapped — no terminal or process starts, and the tier's model, effort, model fingerprint and speed are preserved on the card instead of being cleared. The same applies to a tier a start-defaults policy selected for that start. The refusal reuses `launcher_not_on_machine` and names the launchers the computer has: `task_plan` fails that task, `agent_start` starts nothing (before the user is asked to confirm), New Agent gets a 400, and a plan whose launcher disappears between the card and `session.start` fails that task at dispatch. When the tier's launcher *is* present, its full preset (launcher, model, effort, speed) reaches the start unchanged. A tier supplied alongside an explicitly named launcher keeps the old precedence: the named launcher wins and the tier contributes nothing.
 - **A launcher the caller named** that the computer lacks: refused before any tab opens, naming the ones the computer has: `task_plan` fails that task, `agent_start` starts nothing (before the user is asked to confirm), New Agent gets a 400. A plan card moved to such a computer fails that task at dispatch the same way.
 - **A list that can't be read** (computer offline, a 10-second timeout, an older node) counts as having the launcher, as `launcherAvailable` always has: nothing is refused or swapped on a guess.
 - **A computer whose start goes to Paseo** (#8140, `docs/integrations/paseo.md` "A launcher Paseo does not have"): Paseo runs only its own providers, so what the computer has is Paseo's list for that host (the node's `launchers.list {host}` answers `host_runtime`), without the managed launchers and plain `claude`, and the rule above changes for it: a launcher the caller named or a default gave that Paseo does not have runs on Paseo's provider of the same kind of agent (its built-in one of that kind first, else the first), the task's `why`, the card, `agent_start`'s confirmation and answer and New Agent's `launcher_note` saying so; the model goes with it only when that provider offers it. With none of that kind it is refused, naming Paseo's providers. What Paseo itself ran in place of what was asked (the session's answer's `instead`: a stand-in, its default model, a lower effort) is said the same way afterwards, and the start's health is recorded under the launcher that ran. Paseo's own refusal (`launcher_kind_missing`) is the request's: it does not count against the launcher.
@@ -286,6 +287,45 @@ belongs to at most one group:
   attempts and 30 minutes count from then. `agent_start` on a group launcher is refused at once with the same reason.
 - **Change it** like the other lines: `persona_settings` reads and sets `assistant.admission` with the phone approval card; the next start
   uses the new groups.
+
+### Wait for a gateway's quota recovery
+
+A launcher group can also opt in to a bounded wait before the first background launch of a plan task (#2409).
+Set `quota_pool` on that group through the existing `assistant.admission` setting and its approval card.
+
+```json
+{
+  "launcher_groups": [
+    {
+      "name": "shared-pool",
+      "launchers": ["launcher-a", "launcher-b"],
+      "cap": 4,
+      "quota_pool": {"source": "gateway-source-id", "provider": "claude"}
+    }
+  ]
+}
+```
+
+Use the ID of the configured relay usage source and its provider, `claude` or `codex`. Use this binding only when the
+listed launchers use the same account pool that the usage source can observe across every computer where they run. Persona confirms the selected launcher and
+provider on the computer before queueing. Removing the binding or switching off admission removes the reason to wait.
+A group with no binding only enforces its existing concurrency cap.
+
+The gate uses the latest cached account inventory for that source and provider. It needs a complete read, source and
+enabled account observations no more than ten minutes old, and a known future recovery for every account that can
+take work. It ignores disabled accounts and model-only windows. When an account has several active quota restrictions,
+its latest recovery controls. The pool's estimate is the first account's recovery. Incomplete or stale evidence,
+a working account, and a recovery beyond the wait budget leave the start to ordinary admission.
+
+The task card shows the expected recovery while it waits without occupying an admission slot. The manager checks
+again after at most 90 seconds or at the estimated recovery, whichever is sooner, on its existing minute sweep.
+The 30-minute budget is recorded with the task plan and survives a restart. At the deadline, or sooner if the
+evidence no longer warrants waiting, the manager releases the task to its ordinary start gate. A resource or
+concurrency refusal can still queue it there. It retains the launch claim rules for later retries. Direct Agent starts, explicit task retries and tasks reusing an existing to-do use their ordinary start paths.
+
+When the manager releases a task, it checks the saved to-do while committing a launch claim and again just before sending the start to the computer. A completed,
+cancelled, or already linked task leaves the queue. If a restart or disconnect leaves the launch outcome unknown, the card asks the
+owner to check the computer and Persona does not replay the launch automatically.
 
 ## Not done
 

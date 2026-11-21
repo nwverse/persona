@@ -6,7 +6,7 @@ hit without opening the row, and the row opens from the keyboard; a long-pressed
 
 Needs a running web page against the fake hub and Playwright for Python (it drives the installed Chrome):
 
-    PORT=18964 python3 scripts/mock/mock_hub.py &
+    MOCK_GITHUB_INBOX=1 PORT=18964 python3 scripts/mock/mock_hub.py &
     (cd web && PERSONA_HUB_URL=http://127.0.0.1:18964 npx vite --port 5964 --strictPort &)
     uv run --no-project --with playwright==1.58.0 python3 scripts/test/web_mobile_pages_e2e.py http://127.0.0.1:5964 [--shots <dir>]
 
@@ -16,6 +16,7 @@ Prints one line per check and a verdict; exits 1 on the first failure. --shots s
 import argparse
 import json
 import os
+import re
 import sys
 
 from playwright.sync_api import expect, sync_playwright
@@ -113,7 +114,10 @@ def sheet_checks(page, w, h, tag, shots):
         open_new_agent(page)
         close()
         page.wait_for_selector(PANEL, state="detached")
-        page.wait_for_timeout(300)
+        try:  # its entry goes a tick after it closes (lib/back-close.ts)
+            page.wait_for_function("!history.state?.personaOverlay", timeout=3000)
+        except Exception:
+            pass
         check(not page.evaluate("history.state && history.state.personaOverlay"), f"{tag}: closing it from the page leaves no overlay entry")
 
 
@@ -130,6 +134,7 @@ def touch_hit(page, tag):
     goto(page, "/settings?tab=general")
     sw = page.locator("[role=switch]").first
     sw.wait_for()
+    sw.scroll_into_view_if_needed()  # below a phone's first screen since #10656 (the font pickers above it)
     res = page.evaluate("""() => { const b = document.querySelector('[role=switch]'); const r = b.getBoundingClientRect();
       return { h: r.height, hit: document.elementFromPoint(r.left + r.width / 2, r.top - 8)?.closest('[role=switch]') === b }; }""")
     check(res["h"] < 44 and res["hit"], f"{tag}: a {res['h']:.0f}px switch is hit 8px above it", res)
@@ -138,14 +143,20 @@ def touch_hit(page, tag):
 def settings_list(page, tag, shots):
     goto(page, "/settings")
     page.locator('nav[aria-label="设置分类"]').wait_for()
-    rows = page.evaluate("() => [...document.querySelectorAll('nav[aria-label=\"设置分类\"] button')].map(b => [b.textContent.trim(), Math.round(b.getBoundingClientRect().height)])")
+    # the categories' rows; the first group's 切换 (#3667, its assistants) is a text button in its title line
+    rows = page.evaluate("() => [...document.querySelectorAll('nav[aria-label=\"设置分类\"] button:not([data-settings-switch])')].map(b => [b.textContent.trim(), Math.round(b.getBoundingClientRect().height)])")
     check(len(rows) >= 10 and all(h >= 44 for _, h in rows), f"{tag}: 设置 opens on the list of categories, rows of 44pt+", rows)
+    sw = page.evaluate("""() => { const b = document.querySelector('[data-settings-switch]'); if (!b) return null; const r = b.getBoundingClientRect();
+      const at = (y) => document.elementFromPoint(r.left + r.width / 2, y)?.closest('[data-settings-switch]') === b;
+      return { h: r.height, up: at(r.top - 10), down: at(r.bottom + 10) }; }""")
+    check(sw is None or (sw["up"] and sw["down"]), f"{tag}: 切换 is hit 10px above and below it", sw)
     shot(page, shots, f"settings_list_{tag}")
-    page.get_by_role("button", name="Codex").tap()
-    page.wait_for_function("location.search === '?tab=codex'")
-    expect(page.locator("header h1")).to_have_text("Codex")
-    check(page.locator('nav[aria-label="设置分类"]').count() == 0, f"{tag}: Codex opens as its own page with a back button")
-    shot(page, shots, f"settings_codex_{tag}")
+    # Codex is a section of Agent since #2317 (Claude Code, Codex, Antigravity, omp, one category)
+    page.locator('nav[aria-label="设置分类"]').get_by_role("button", name=re.compile(r"^Agent")).tap()
+    page.wait_for_function("location.search === '?tab=agents'")
+    expect(page.locator("header h1")).to_have_text("Agent")
+    check(page.locator('nav[aria-label="设置分类"]').count() == 0, f"{tag}: Agent opens as its own page with a back button")
+    shot(page, shots, f"settings_agents_{tag}")
     page.go_back()
     page.wait_for_function("location.pathname === '/settings' && location.search === ''")
     page.locator('nav[aria-label="设置分类"]').wait_for()
@@ -187,6 +198,9 @@ def inbox_filters(page, tag, shots):
     shot(page, shots, f"inbox_menu_{tag}")
     page.keyboard.press("Escape")
     page.get_by_role("menu").wait_for(state="detached")
+    # the menu's history entry goes a tick after it closes (lib/back-close.ts): until then the next page's address is
+    # the one its Back pops, which left the to-dos step on /inbox about one run in two
+    page.wait_for_function("!history.state?.personaOverlay")
 
 
 def todos(page, tag, shots):
@@ -355,10 +369,51 @@ def wide_dialog(browser, base, token, shots):
     if shots:
         open_new_agent(page, tap=False)
         shot(page, shots, "dialog_1280")
-    # Settings keeps its tab bar
+    # Settings keeps its categories beside the page (a column since #2342, not the phone's list): /settings is 通用
     page.goto(f"{base}/settings")
     page.locator('nav[aria-label="设置分类"] button[aria-current="page"]', has_text="通用").wait_for()
-    check(page.locator("header nav[aria-label='设置分类']").count() == 1, "1280: 设置 keeps the tab bar, /settings is 通用")
+    check(page.locator("aside nav[aria-label='设置分类']").count() == 1 and page.get_by_role("button", name="返回设置").count() == 0,
+          "1280: 设置 keeps its category column, /settings is 通用")
+    ctx.close()
+
+
+INBOX_TITLE = """() => { const h = document.querySelector('[data-item-title]'); const s = h.querySelector('span');
+  const done = [...h.closest('.items-start').querySelectorAll(':scope > button')].pop();
+  const text = [...done.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim()); const range = document.createRange(); range.selectNodeContents(text);
+  const lh = parseFloat(getComputedStyle(s).lineHeight);
+  return { text: s.textContent, cw: s.clientWidth, sw: s.scrollWidth, ch: s.clientHeight, sh: s.scrollHeight, lines: Math.round(s.getBoundingClientRect().height / lh),
+    wrap: getComputedStyle(s).whiteSpace, done: done.textContent.trim(), doneLines: new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size,
+    doneH: done.getBoundingClientRect().height }; }"""
+
+
+def inbox_title_phone(browser, base, token, shots):
+    """An Inbox item's title wraps on a phone for every source (#11511), not only a Feishu one's: a GitHub review's
+    "Add …" was cut to a few letters beside Done. It wraps in full, all of it shown; Done stays one line; wide, the
+    title is still one line, cut at its end."""
+    item = "/inbox/github%3Areview12"  # the fake hub's GitHub review (MOCK_GITHUB_INBOX=1), "Add retries to the example uploader"
+    for lang, locale in (("en", "en-US"), ("ja", "ja-JP")):
+        ctx = browser.new_context(viewport={"width": 360, "height": 740}, device_scale_factor=3, is_mobile=True, has_touch=True,
+                                  user_agent=UA, locale=locale)
+        ctx.add_init_script(f"localStorage.setItem('persona.language', '{lang}')")
+        page = ctx.new_page()
+        page.set_default_timeout(10000)
+        page.goto(f"{base}/overview?token={token}")
+        page.wait_for_selector("aside", state="attached", timeout=20000)
+        goto(page, item)
+        page.wait_for_selector("[data-item-title]")
+        page.wait_for_timeout(500)
+        res = page.evaluate(INBOX_TITLE)
+        check(res["sw"] <= res["cw"] + 1 and res["sh"] <= res["ch"] + 1 and res["lines"] >= 2,
+              f"360 {lang}: a GitHub item's title wraps to {res['lines']} lines, all of it shown", res)
+        check(res["doneLines"] == 1 and res["doneH"] <= 33, f"360 {lang}: {res['done']} stays on one line", res)
+        shot(page, shots, f"inbox_title_360_{lang}")
+        ctx.close()
+    ctx, page = open_page(browser, base, token, 1280, 820, mobile=False)
+    goto(page, item)
+    page.wait_for_selector("[data-item-title]")
+    page.wait_for_timeout(500)
+    res = page.evaluate(INBOX_TITLE)
+    check(res["wrap"] == "nowrap" and res["lines"] == 1, "1280: the title stays one line, cut at its end", res)
     ctx.close()
 
 
@@ -394,6 +449,7 @@ def main():
             ctx.close()
             toast_undo_edges(browser, base, a.token)
             wide_dialog(browser, base, a.token, a.shots)
+            inbox_title_phone(browser, base, a.token, a.shots)
         finally:
             browser.close()
     print("PASS web mobile pages e2e")
