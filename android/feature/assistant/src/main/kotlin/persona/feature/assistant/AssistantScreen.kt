@@ -189,7 +189,9 @@ fun AssistantScreen(
     /** The selected hub group's name while several are paired, which ends the title menu's heading as on iOS; null with one. */
     hubGroup: String? = null,
     composerUpload: persona.feature.chat.ComposerAttachmentUpload? = null,
+    composerState: persona.feature.chat.ChatComposerState? = null,
 ) = PersonaTheme {
+    val suppliedComposer = composerState
     val receivedSnapshot by repository.assistant.collectAsStateWithLifecycle()
     val conversationsOf = repository as? persona.core.contracts.api.AssistantConversations
     // The page shows the current assistant (docs/assistant/managers.md "Clients"), picked in the sidebar's switcher.
@@ -244,7 +246,7 @@ fun AssistantScreen(
     val archivedWords = stringResource(R.string.assistant_archived)
     var query by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf("") }
     val composerState = rememberAssistantComposerState(managerChoice.hubId, managerChoice.shown,
-        draftRepository, draftScope, demo)
+        draftRepository, draftScope, demo, suppliedComposer)
     val composer = composerState.composer
     val savedComposer = composerState.savedComposer
     val draftEditor = composerState.draftEditor

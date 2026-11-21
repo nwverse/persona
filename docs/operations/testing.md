@@ -77,7 +77,7 @@ self-hosted capacity as part of these controls.
 
 Server keeps four independent shards (at most two concurrent runners): browser/node, hub/voice/assistant, all other packages, and
 formatting/vet/build/Windows/SDK checks. Every package from `go list ./...` belongs to exactly one test shard, including future packages.
-Browser tests remain isolated from other packages. `internal/node` runs its roughly 2,400 serial tests in two concurrent `go test -run '^(…)$'` partitions, split round-robin from `go test -list`; every test runs in exactly one, and each partition keeps the shard's `-p` and `-timeout=10m`. `internal/assistant` (about 4,100 serial tests, 570 s in one process on the hub machine) runs the same way in three partitions in the managers shard beside `internal/hub` and `internal/voice` (#7644). `scripts/test/go_partitions.py` holds the packages and their split for the shards, the release build (`scripts/release/build_hub_release.py`) and `scripts/test/test-server.sh` on the hub machine (through `scripts/test/go_test_partitioned.py`, which runs the partitions beside the other packages with the caller's flags and prints each partition's output whole when it ends), so they cannot drift; each serial run had outgrown the ten-minute limits (#5328, #5594, #7644). A plain `go test ./internal/node`, as a PR verifier runs it (no `-run`, `-list`, `-bench`, `-fuzz`, `-v`, `-json`, coverage or profiles), splits itself the same way: its `TestMain` lists the tests and runs them round-robin in concurrent processes of the test binary, half the CPUs and at most six by default, prints each one's output whole when it ends, keeps go test's cache log, and fails when any partition does (`server/internal/node/partition_test.go`, #5734). A run with `-run` (the partitions above, a helper process) or with `NODE_TEST_PARTITIONS=1` runs in one process; `NODE_TEST_PARTITIONS=n` sets how many share the tests. Go module/build caches are keyed by exact Go version, shard, dependency sums and
+Browser tests remain isolated from other packages. `internal/node` runs its roughly 4,100 serial tests in three concurrent `go test -run '^(…)$'` partitions, split round-robin from `go test -list`; every test runs in exactly one, and each partition keeps the shard's `-p` and `-timeout=10m`. Its two partitions reached about 569 and 572 seconds of test time before the unchanged 600-second lane stopped them with subtests still advancing (#12256); three uses more of the four-CPU runner without removing a test or lengthening a timeout. `internal/assistant` (about 4,100 serial tests, 570 s in one process on the hub machine) runs the same way in three partitions in the managers shard beside `internal/hub` and `internal/voice` (#7644). `scripts/test/go_partitions.py` holds the packages and their split for the shards, the release build (`scripts/release/build_hub_release.py`) and `scripts/test/test-server.sh` on the hub machine (through `scripts/test/go_test_partitioned.py`, which runs the partitions beside the other packages with the caller's flags and prints each partition's output whole when it ends), so they cannot drift; each serial run had outgrown the ten-minute limits (#5328, #5594, #7644). A plain `go test ./internal/node`, as a PR verifier runs it (no `-run`, `-list`, `-bench`, `-fuzz`, `-v`, `-json`, coverage or profiles), splits itself the same way: its `TestMain` lists the tests and runs them round-robin in concurrent processes of the test binary, half the CPUs, at least three and at most six by default, prints each one's output whole when it ends, keeps go test's cache log, and fails when any partition does (`server/internal/node/partition_test.go`, #5734). A run with `-run` (the partitions above, a helper process) or with `NODE_TEST_PARTITIONS=1` runs in one process; `NODE_TEST_PARTITIONS=n` sets how many share the tests. Go module/build caches are keyed by exact Go version, shard, dependency sums and
 source inputs, with same-shard fallback keys; `-count=1` keeps test execution uncached. Test-event summaries report the slowest real
 tests, rather than inferring runtime from `Sleep` inside fake-clock tests, and end by repeating each failed test with its first lines
 (from its panic, if any; a timeout's names the test still running) so an excerpt that keeps only a log's head and tail, like the
@@ -149,6 +149,17 @@ On Apple failure, collect the simulator UDID log, boot command/status log, insta
 disk space, and any xcresult bundles before deleting the owned simulator. The workflow uploads the allowlisted diagnostics as
 `apple-<lane>-diagnostics-<run id>-<attempt>` artifacts for seven days. Source/configuration files, keys and result-bundle symlink targets
 are excluded. Do not infer a simulator boot timeout's cause without its diagnostics, add automatic retries, or extend the boot deadline.
+The app-hosted readiness probes also have a bounded live observer. On both the ordinary iPhone probe and the separate
+regular-iPad TypeScaleTests probe it samples only an app executable under that probe's owned UDID, checks the disposable
+app/test-bundle architecture and ad-hoc signature, and captures scoped launchd/runtime-mount events before Xcode timeout
+cleanup can shut down the device. The iPad has its own `regular-readiness-context.json` and `live-regular-readiness/`
+artifact directory; neither scope nor host samples can be borrowed from the iPhone. NDJSON is filtered while it is read;
+launchd lines need not contain both the UDID and bundle ID. An absent process, missing log, Shutdown during cleanup,
+valid signature, or runtime mount alone is not a launch-cause verdict. The observer does not change signing, test selection,
+runtime or the 900-second deadlines. The iPad observer starts with deterministic unavailable status/host/product records,
+then replaces them atomically as bounded collection completes. Its separate process group gets a short bounded stop drain;
+if collection still cannot finish, the group is reaped without leaking its detached collectors. Probe and result-inspection
+deadline regressions require status and evidence to exist and every recorded watcher PID to be gone.
 A maintainer-approved `gh run rerun --failed` runs the original commit; it cannot acquire diagnostic code added by a later commit.
 
 Deliberate boundaries: web `compatibility.live.test.ts` needs an isolated live hub/token and explicitly skips its one probe without them.
@@ -791,7 +802,13 @@ answers as before. The domains on the registry are desktop registration (`script
 sign-ins and thread page (`scripts/mock/github_mock.py`), Settings › Knowledge selection (`scripts/mock/kb_selection_mock.py`)
 and mail's accounts and write paths (`scripts/mock/mail_mock.py`), moved out of `mock_hub.py` in #11543, and the hub's own
 update (`scripts/mock/hub_update_mock.py`), Messages' reader (`scripts/mock/imessage_mock.py`; its connector stays in
-`mock_hub.py`) and Settings › Saved Prompts (`scripts/mock/saved_prompts_mock.py`), moved in #11649.
+`mock_hub.py`) and Settings › Saved Prompts (`scripts/mock/saved_prompts_mock.py`), moved in #11649, and a project's lessons from
+finished tasks (`scripts/mock/project_lessons_mock.py`, #12295; `MOCK_PROJECT_LESSONS=none|missing`, driven by
+`scripts/mock/test_project_lessons_mock.py` and `web/e2e/project-lessons.mjs`). The opt-in SSH → Persona
+Link scenarios live in `scripts/mock/link_switch_mock.py` (#10671): `MOCK_LINK_SWITCH=1` makes `server` an eligible Linux SSH
+computer, and `GET /mock/link_switch?state=available|checking|installing|connecting|rolling_back|succeeded|failed|unconfirmed|unavailable|refused|forbidden|uncertain|hold|old`
+changes the fixture and pushes the machine list. `hold` keeps the POST answer out until `?release=1`; the no-query response reports
+the state and start-attempt count. With the switch off, existing mock screens do not change.
 `scripts/mock/test_mock_domains.py` checks every hook against a running mock. A block that moves out of `mock_hub.py` lists
 the names it took in that test's `MOVED`: a branch from before the move that kept the old block when it resolved its conflict
 then fails there, with the module to edit instead

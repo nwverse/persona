@@ -126,6 +126,9 @@ type Settings struct {
 	// AgentTasks: every agent Persona starts is on a quiet, supervised todo (#3617, agent_tasks.go). nil is off (the
 	// default).
 	AgentTasks *bool `json:"agent_tasks,omitempty"`
+	// TaskLessons: a supervised task accepted after friction teaches its project's next Agents what it learned
+	// (#12295, task_lessons.go). nil is off (the default): no model call, no lesson written, no prompt changed.
+	TaskLessons *bool `json:"task_lessons,omitempty"`
 	// CloseEndedTerminals: when an Agent's session ends (its task is done or cancelled, it quit by itself or was told
 	// to), its terminal tab is closed too, through the "Archive and close" path (#10355, agent_terminal_close.go).
 	// nil is off (the default): the terminal stays, as since #4754.
@@ -344,7 +347,7 @@ func (s *Service) claudeInteractive(ctx context.Context) bool {
 	return v != nil && *v
 }
 
-var defaultOwnerApprovalPhrases = []string{"发", "同意"}
+var defaultOwnerApprovalPhrases = []string{"发", "同意"} // i18n-ignore: exact affirmative owner input, not displayed text
 
 func ownerReplyApprovalOn(v Settings) bool {
 	return v.OwnerReplyApproval != nil && *v.OwnerReplyApproval
@@ -723,6 +726,8 @@ type assistantView struct {
 	OwnerApprovalPhrases       []string `json:"owner_reply_approval_phrases"`
 	// AgentTasks is in effect, like DoneNeedsDelivery.
 	AgentTasks bool `json:"agent_tasks"`
+	// TaskLessons is in effect, like DoneNeedsDelivery.
+	TaskLessons bool `json:"task_lessons"`
 	// CloseEndedTerminals is in effect, like DoneNeedsDelivery.
 	CloseEndedTerminals          bool `json:"close_ended_terminals"`
 	AgentAutoNaming              bool `json:"agent_auto_naming"`
@@ -774,6 +779,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		PersistentOwnerActionCards:   persistentOwnerActionCardsOn(v),
 		OwnerApprovalPhrases:         ownerApprovalPhrasesForView(v),
 		AgentTasks:                   v.AgentTasks != nil && *v.AgentTasks,
+		TaskLessons:                  v.TaskLessons != nil && *v.TaskLessons,
 		CloseEndedTerminals:          v.CloseEndedTerminals != nil && *v.CloseEndedTerminals,
 		AgentAutoNaming:              quietOn(v.AgentAutoNaming),
 		AgentAutoNamingMax:           agentNamingLimit(v),

@@ -31,12 +31,15 @@ type Record struct {
 	StorageID  string   `json:"storage_id,omitempty"`
 	PreviousID string   `json:"previous_id,omitempty"`
 	Aliases    []string `json:"aliases,omitempty"`
-	// ExpectedID and ExpectedVersion are transaction-only compare-and-swap guards.
-	ExpectedID      string `json:"-"`
-	ExpectedVersion string `json:"-"`
-	NewInstallation bool   `json:"-"`
-	Source          string `json:"source"`
-	Origin          string `json:"origin,omitempty"`
+	// ExpectedID, ExpectedVersion and ExpectedConfig are transaction-only compare-and-swap guards.
+	ExpectedID      string          `json:"-"`
+	ExpectedVersion string          `json:"-"`
+	ExpectedConfig  json.RawMessage `json:"-"`
+	// DeleteSecrets removes these sealed rows in the same transaction as the record write.
+	DeleteSecrets   []string `json:"-"`
+	NewInstallation bool     `json:"-"`
+	Source          string   `json:"source"`
+	Origin          string   `json:"origin,omitempty"`
 	// MarketKey is the verified official key captured from this installed package's
 	// catalog entry, never inferred from the market's current mutable identity.
 	MarketKey       string `json:"market_key,omitempty"`
@@ -345,6 +348,7 @@ func (r *Registry) Load(ctx context.Context) error {
 // fromRow is an installed plugin as its row says.
 func (r *Registry) fromRow(row Record) *Extension {
 	row.ExpectedID, row.ExpectedVersion, row.NewInstallation = "", "", false
+	row.ExpectedConfig, row.DeleteSecrets = nil, nil
 	p := &Extension{Record: row}
 	m, err := Parse(row.Manifest)
 	if err != nil {
@@ -358,6 +362,10 @@ func (r *Registry) fromRow(row Record) *Extension {
 	}
 	p.Full, p.Manifest = m, m.Without(row.DisabledContributions)
 	p.Schema, _ = ParseSchema(m.Configuration)
+	if err := checkEntrySecretNamespace(m, p.Schema, row.Config); err != nil {
+		p.problemErr = err
+		p.Problem = err.Error()
+	}
 	if row.Remote == nil || row.AttachedPackage() {
 		p.Dir = r.installedDir(row.StorageKey(), row.Version)
 		if !hasManifest(p.Dir) {
@@ -426,6 +434,8 @@ func snapshotExtension(p *Extension) *Extension {
 	out := *p
 	out.Record.Manifest = slices.Clone(p.Record.Manifest)
 	out.Record.Config = slices.Clone(p.Record.Config)
+	out.Record.ExpectedConfig = slices.Clone(p.Record.ExpectedConfig)
+	out.Record.DeleteSecrets = slices.Clone(p.Record.DeleteSecrets)
 	out.Record.Aliases = slices.Clone(p.Record.Aliases)
 	out.Record.Granted.Network = slices.Clone(p.Record.Granted.Network)
 	out.Record.Granted.Hub = slices.Clone(p.Record.Granted.Hub)
@@ -561,7 +571,16 @@ func (r *Registry) write(ctx context.Context, row Record) error {
 	if row.Source == SourceInstalled {
 		row.ExpectedID, row.ExpectedVersion = row.ID, row.Version
 	}
-	err := r.store.PutExtension(ctx, row)
+	var err error
+	if len(row.DeleteSecrets) > 0 {
+		store, ok := r.store.(PlanStore)
+		if !ok {
+			return fmt.Errorf("the store cannot delete secrets with the configuration")
+		}
+		err = store.PutExtensionPlan(ctx, []Record{row})
+	} else {
+		err = r.store.PutExtension(ctx, row)
+	}
 	var unknown *CommitUnknownError
 	if errors.As(err, &unknown) {
 		r.planProblem = err

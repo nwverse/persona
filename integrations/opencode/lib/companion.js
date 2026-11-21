@@ -26,6 +26,7 @@ import {
   fromRow,
   imageOf,
   lastText,
+  loadBlobImage,
   messageItems,
   promptWithContext,
   toolInput,
@@ -39,7 +40,9 @@ import {
   buildLauncher,
   discoverCliModels,
   normalizeModels,
+  parseAcpEffortOptions,
   parseAcpModelOptions,
+  PERSONA_EFFORTS,
   readConfiguredModel,
   resolveModel,
 } from './models.js'
@@ -49,8 +52,31 @@ const ROOTS = 200
 const LIST_CACHE = 3000
 const MODELS_EVERY = 5 * 60_000
 const VALID_MODES = new Set(['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'])
+const VALID_EFFORTS = new Set(PERSONA_EFFORTS)
 const SUPERVISION_ERROR_CODE = 'assistant_supervision_runtime'
 const INTERRUPT_SETTLE_MS = 10_000
+const THOUGHT_PUSH_MS = 150
+
+/**
+ * Build the child env for `opencode acp`, ensuring `bash`, `edit`, and `write` always route
+ * through `session/request_permission` so command gates, plan mode, memory writes, acceptEdits,
+ * and bypassPermissions are enforced by the companion rather than bypassed by opencode defaults.
+ */
+export function buildAcpEnv(baseEnv = process.env) {
+  let perm = {}
+  if (typeof baseEnv?.OPENCODE_PERMISSION === 'string' && baseEnv.OPENCODE_PERMISSION.trim()) {
+    try {
+      const parsed = JSON.parse(baseEnv.OPENCODE_PERMISSION)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) perm = { ...parsed }
+    } catch {
+      // ignore malformed user env
+    }
+  }
+  perm.bash = 'ask'
+  perm.edit = 'ask'
+  perm.write = 'ask'
+  return { ...baseEnv, OPENCODE_PERMISSION: JSON.stringify(perm) }
+}
 
 /**
  * @param {{
@@ -97,15 +123,17 @@ export function createOpencodeCompanion(options = {}) {
   const openDb = options.openDb || (() => openReadOnly(options.dbPath || defaultDbPath(env, home)))
   const discoverModelsFn = options.discoverModels || (() => discoverCliModels({ bin, env }))
 
-  let configuredDefaultModel = typeof options.model === 'string' && options.model.trim()
+  const explicitDefaultModel = typeof options.model === 'string' && options.model.trim()
     ? options.model.trim()
     : readConfiguredModel({ configDir: options.configDir, env, home })
+  let displayDefaultModel = explicitDefaultModel
 
   let catalog = []
   let catalogAt = 0
   let catalogFlight
   const windows = new Map()
   let gateShellRules = []
+  let gateShellRulesReady = false
 
   // Sessions created or actively driven by this companion over ACP.
   const live = new Map()
@@ -121,7 +149,7 @@ export function createOpencodeCompanion(options = {}) {
     bin,
     args: options.args,
     cwd: home,
-    env,
+    env: buildAcpEnv(env),
     log,
     onPermissionRequest: (params) => handlePermissionRequest(params),
   })
@@ -132,7 +160,10 @@ export function createOpencodeCompanion(options = {}) {
     tools: async (binding) => {
       const asst = binding?.assistant === true
       const list = await rt.tools({ assistant: asst })
-      if (asst) gateShellRules = extractShellGates(list)
+      if (asst) {
+        gateShellRules = extractShellGates(list)
+        gateShellRulesReady = true
+      }
       return list
     },
     call: async (binding, name, args) => {
@@ -148,7 +179,7 @@ export function createOpencodeCompanion(options = {}) {
   })
 
   const initialLaunchers = launcherName
-    ? [buildLauncher({ name: launcherName, displayName, models: catalog, defaultModel: configuredDefaultModel })]
+    ? [buildLauncher({ name: launcherName, displayName, models: catalog, defaultModel: displayDefaultModel })]
     : undefined
 
   const rt = createRuntime({
@@ -170,7 +201,7 @@ export function createOpencodeCompanion(options = {}) {
     name: label,
     agent: 'opencode',
     version: COMPANION_VERSION,
-    ...(launcherName ? { launcher: launcherName, launcherModel: configuredDefaultModel || undefined, launchers: initialLaunchers } : {}),
+    ...(launcherName ? { launcher: launcherName, launcherModel: displayDefaultModel || undefined, launchers: initialLaunchers } : {}),
     assistant: assistantEnabled,
     readonly: true,
     modelSwitch: true,
@@ -184,7 +215,11 @@ export function createOpencodeCompanion(options = {}) {
     refreshMs: options.refreshMs ?? 15_000,
     log,
     onHub: (connected) => {
-      if (connected && assistantEnabled) void refreshGateRules()
+      if (!connected) {
+        gateShellRulesReady = false
+        return
+      }
+      if (assistantEnabled) void refreshGateRules()
     },
   })
 
@@ -194,27 +229,38 @@ export function createOpencodeCompanion(options = {}) {
     }
   }
 
-  async function refreshGateRules() {
+  async function refreshGateRules({ throwOnError = false } = {}) {
     try {
       const list = await rt.tools({ assistant: true })
       gateShellRules = extractShellGates(list)
+      gateShellRulesReady = true
     } catch (err) {
+      gateShellRulesReady = false
       log(`persona: opencode assistant tools: ${err.message}`)
+      if (throwOnError) {
+        throw new RpcError(`获取助手工具策略失败：${err.message}`, 'opencode')
+      }
+    }
+  }
+
+  async function ensureGateRules() {
+    if (!gateShellRulesReady) {
+      await refreshGateRules({ throwOnError: rt.hubConnected })
     }
   }
 
   // ---- models ----
 
   function publishCatalog(rawList, fallbackDefault = '') {
-    const def = configuredDefaultModel || fallbackDefault
+    const def = explicitDefaultModel || fallbackDefault
     const normalized = normalizeModels(rawList, def)
     for (const [k, w] of normalized.windows) windows.set(k, w)
     if (normalized.models.length > 0) {
       catalog = normalized.models
-      if (!configuredDefaultModel && normalized.defaultModel) configuredDefaultModel = normalized.defaultModel
+      displayDefaultModel = explicitDefaultModel || normalized.defaultModel || displayDefaultModel
     }
     if (launcherName) {
-      rt.launchersChanged([buildLauncher({ name: launcherName, displayName, models: catalog, defaultModel: configuredDefaultModel })])
+      rt.launchersChanged([buildLauncher({ name: launcherName, displayName, models: catalog, defaultModel: displayDefaultModel })])
     }
     return catalog
   }
@@ -238,14 +284,19 @@ export function createOpencodeCompanion(options = {}) {
     return catalogFlight
   }
 
-  function applyConfigOptions(s, configOptions) {
+  function applyConfigOptions(s, configOptions, { preserveMode = false } = {}) {
     if (!Array.isArray(configOptions)) return
     const { models: acpModels, currentModel } = parseAcpModelOptions(configOptions)
-    if (currentModel && !s.model) s.model = currentModel
-    else if (currentModel) s.model = currentModel
+    if (currentModel) s.model = currentModel
+    const { configId: effortConfigId, currentEffort, efforts: acpEfforts } = parseAcpEffortOptions(configOptions)
+    if (effortConfigId) s.effortConfigId = effortConfigId
+    if (acpEfforts.length > 0) s.acpEfforts = acpEfforts
+    if (currentEffort) s.effort = currentEffort
     const modeOpt = configOptions.find((c) => c && (c.id === 'mode' || c.category === 'mode'))
-    if (modeOpt?.currentValue === 'plan') s.mode = 'plan'
-    else if (modeOpt?.currentValue && s.mode === 'plan') s.mode = 'default'
+    if (!preserveMode) {
+      if (modeOpt?.currentValue === 'plan') s.mode = 'plan'
+      else if (modeOpt?.currentValue && s.mode === 'plan') s.mode = 'default'
+    }
     if (acpModels.length > 0 && catalog.length === 0) {
       publishCatalog(acpModels, currentModel)
     }
@@ -320,9 +371,16 @@ export function createOpencodeCompanion(options = {}) {
     if (!meta) return null
     if (meta._schema === 'v2') {
       const rows = await queryRows('select id, seq, type, data, time_updated from session_message where session_id = ? order by seq', id)
-      const all = rows.flatMap((r) => messageItems(fromRow(r), r.seq))
+      let userOrdinal = 0
+      const all = []
+      const msgs = []
+      for (const r of rows) {
+        const msg = fromRow(r)
+        msgs.push({ ...msg, seq: r.seq })
+        if (msg.type === 'user') userOrdinal++
+        all.push(...messageItems(msg, r.seq, { clientMsgIdFor, userOrdinal }))
+      }
       const toSeq = rows.at(-1)?.seq ?? 0
-      const msgs = rows.map((r) => ({ ...fromRow(r), seq: r.seq }))
       const lastAssistant = [...msgs].reverse().find((m) => m.type === 'assistant')
       const revertHash = meta.revert ? `:r${createHash('sha256').update(String(meta.revert)).digest('hex').slice(0, 8)}` : ''
       return {
@@ -336,6 +394,7 @@ export function createOpencodeCompanion(options = {}) {
           : (lastAssistant?.model?.id || parseSessionModelJson(meta.model)),
         tokens: contextTokens(lastAssistant),
         hasAssistant: !!lastAssistant,
+        userCount: userOrdinal,
       }
     }
     const messages = await queryRows('select id, time_created, time_updated, data from message where session_id = ? order by time_created asc, rowid asc', id)
@@ -360,6 +419,7 @@ export function createOpencodeCompanion(options = {}) {
       model: qualifiedModel,
       tokens: mapped.tokens,
       hasAssistant: mapped.hasAssistant,
+      userCount: mapped.userCount,
       messages,
       partsByMessage: byMsg,
     }
@@ -367,13 +427,16 @@ export function createOpencodeCompanion(options = {}) {
 
   // ---- live session state ----
 
-  function createLiveState(id, cwd, { assistant = false, title = '', model = '', mode = 'default', startedByPersona = false } = {}) {
+  function createLiveState(id, cwd, { assistant = false, title = '', model = '', mode = 'default', effort = '', startedByPersona = false } = {}) {
     const s = {
       id,
       cwd,
       title: title || basename(cwd) || 'opencode',
       model,
       mode: mode || 'default',
+      effort: effort || '',
+      effortConfigId: '',
+      acpEfforts: [],
       assistant,
       memoryDir: '',
       startedByPersona,
@@ -388,8 +451,11 @@ export function createOpencodeCompanion(options = {}) {
       pushedSeq: 0,
       activeText: '',
       activeThought: '',
-      activeTools: new Map(), // toolCallId -> index in liveItems
+      activeThoughtItem: null,
+      thoughtTimer: null,
+      activeTools: new Map(), // toolCallId -> { item, rawName }
       lastText: '',
+      turnError: '',
       contextTokens: 0,
       contextWindow: 0,
       updatedAt: now(),
@@ -421,11 +487,33 @@ export function createOpencodeCompanion(options = {}) {
     return full
   }
 
-  function flushLiveText(s) {
-    if (s.activeThought) {
+  function pushLiveUpdate(s, item) {
+    if (!rt.watching(s.id) || !item) return
+    if (item.seq <= s.pushedSeq) {
+      rt.append(s.id, { items: [light(item)], toSeq: s.pushedSeq, history: `${s.history}:live`, update: true })
+    } else {
+      pushLiveSnapshot(s)
+    }
+  }
+
+  function flushActiveThought(s) {
+    if (s.thoughtTimer) {
+      clearTimeout(s.thoughtTimer)
+      s.thoughtTimer = null
+    }
+    if (s.activeThoughtItem) {
+      s.activeThoughtItem.text = s.activeThought
+      pushLiveUpdate(s, s.activeThoughtItem)
+      s.activeThoughtItem = null
+      s.activeThought = ''
+    } else if (s.activeThought) {
       appendLiveItem(s, { role: 'assistant', kind: 'thinking', text: s.activeThought })
       s.activeThought = ''
     }
+  }
+
+  function flushLiveText(s) {
+    flushActiveThought(s)
     if (s.activeText) {
       appendLiveItem(s, { role: 'assistant', kind: 'text', text: s.activeText })
       s.lastText = snippet(s.activeText)
@@ -454,16 +542,28 @@ export function createOpencodeCompanion(options = {}) {
         break
       case 'agent_thought_chunk': {
         const txt = upd.content?.text
-        if (typeof txt === 'string' && txt) s.activeThought += txt
+        if (typeof txt === 'string' && txt) {
+          s.activeThought += txt
+          if (!s.activeThoughtItem) {
+            s.activeThoughtItem = appendLiveItem(s, { role: 'assistant', kind: 'thinking', text: s.activeThought })
+            pushLiveSnapshot(s)
+          } else {
+            s.activeThoughtItem.text = s.activeThought
+            if (!s.thoughtTimer) {
+              s.thoughtTimer = setTimeout(() => {
+                s.thoughtTimer = null
+                if (s.activeThoughtItem) pushLiveUpdate(s, s.activeThoughtItem)
+              }, THOUGHT_PUSH_MS)
+              s.thoughtTimer.unref?.()
+            }
+          }
+        }
         break
       }
       case 'agent_message_chunk': {
         const txt = upd.content?.text
         if (typeof txt === 'string' && txt) {
-          if (s.activeThought) {
-            appendLiveItem(s, { role: 'assistant', kind: 'thinking', text: s.activeThought })
-            s.activeThought = ''
-          }
+          flushActiveThought(s)
           s.activeText += txt
           s.lastText = snippet(s.activeText)
           s.hasAssistant = true
@@ -483,12 +583,17 @@ export function createOpencodeCompanion(options = {}) {
           tool_use_id: callId,
           tool_input: toolInput(rawName, upd.rawInput),
         })
-        s.activeTools.set(callId, item)
+        s.activeTools.set(callId, { item, rawName })
         pushLiveSnapshot(s)
         break
       }
       case 'tool_call_update': {
         const callId = upd.toolCallId
+        const tracked = callId ? s.activeTools.get(callId) : undefined
+        if (tracked && upd.rawInput && typeof upd.rawInput === 'object') {
+          tracked.item.tool_input = toolInput(tracked.rawName, upd.rawInput)
+          pushLiveUpdate(s, tracked.item)
+        }
         if (upd.status === 'completed' || upd.status === 'failed' || upd.status === 'error') {
           let resultStr = ''
           if (Array.isArray(upd.content)) {
@@ -508,6 +613,7 @@ export function createOpencodeCompanion(options = {}) {
             is_error: upd.status === 'failed' || upd.status === 'error',
             text: resultStr,
           })
+          if (callId) s.activeTools.delete(callId)
           pushLiveSnapshot(s)
         }
         break
@@ -532,10 +638,18 @@ export function createOpencodeCompanion(options = {}) {
 
   // ---- session listing and reading ----
 
+  function effortsForModel(s) {
+    if (s.acpEfforts?.length > 0) return s.acpEfforts
+    if (!s.model) return []
+    const entry = catalog.find((m) => m.id === s.model)
+    return Array.isArray(entry?.efforts) ? entry.efforts : []
+  }
+
   function liveRow(s) {
     const status = s.asks.size > 0
       ? 'blocked'
       : (s.running || s.queued > 0 ? 'working' : (s.hasAssistant || s.liveItems.length > 0 ? 'done' : 'idle'))
+    const efforts = effortsForModel(s)
     const row = {
       session_id: s.id,
       title: s.title || basename(s.cwd) || 'opencode',
@@ -548,9 +662,12 @@ export function createOpencodeCompanion(options = {}) {
       space_kind: 'opencode',
       ...(s.lastText ? { last_text: s.lastText } : {}),
       ...(s.model ? { model: s.model } : {}),
+      ...(s.effort ? { effort: s.effort } : {}),
+      ...(efforts.length ? { efforts } : {}),
       ...(s.startedByPersona ? { started_by_persona: true } : {}),
       ...(launcherName ? { launcher: launcherName } : {}),
       ...(s.mode && s.mode !== 'default' ? { permission_mode: s.mode } : {}),
+      ...(s.turnError ? { turn_error: s.turnError } : {}),
     }
     if (s.contextTokens > 0) {
       row.context_tokens = s.contextTokens
@@ -673,20 +790,32 @@ export function createOpencodeCompanion(options = {}) {
       if (img) return img
     } else if (c.dbData?.meta?._schema === 'v2' && Number.isSafeInteger(seq) && seq >= 1) {
       const [r] = await queryRows('select id, seq, type, data from session_message where session_id = ? and seq = ?', params.session_id, seq)
-      const img = r && imageOf(fromRow(r), idx)
-      if (img) return img
+      if (r) {
+        const msg = fromRow(r)
+        const img = imageOf(msg, idx) || await loadBlobImage(queryRows, { sessionId: params.session_id, msg, seq, idx })
+        if (img) return img
+      }
     }
     throw new RpcError(`no image ${params.item_id}`, 'not_found')
   }
 
   // ---- permissions ----
 
-  function isMemoryWrite(s, rawName, input) {
+  function isMemoryWrite(s, rawName, input, rawInput) {
     if (!s?.assistant || !s.memoryDir || s.mode === 'plan') return false
     if (rawName !== 'write' && rawName !== 'edit') return false
-    const file = typeof input?.file_path === 'string' ? input.file_path : ''
+    const file = typeof rawInput?.filePath === 'string' && rawInput.filePath
+      ? rawInput.filePath
+      : (typeof rawInput?.path === 'string' && rawInput.path
+        ? rawInput.path
+        : (typeof rawInput?.file_path === 'string' && rawInput.file_path
+          ? rawInput.file_path
+          : (typeof input?.file_path === 'string' ? input.file_path : '')))
     if (!file) return false
-    const rel = relative(s.memoryDir, resolve(s.memoryDir, file))
+    const baseDir = s.cwd || s.memoryDir
+    const target = isAbsolute(file) ? resolve(file) : resolve(baseDir, file)
+    const memRoot = resolve(s.memoryDir)
+    const rel = relative(memRoot, target)
     return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
   }
 
@@ -704,11 +833,25 @@ export function createOpencodeCompanion(options = {}) {
     const allowAlways = pickOption(options, 'allow_always') ?? allowOnce
     const rejectOnce = pickOption(options, 'reject_once') ?? pickOption(options, 'reject_always')
     const card = acpPermissionCard(params)
+    const rawInput = params?.toolCall?.rawInput && typeof params.toolCall.rawInput === 'object' ? params.toolCall.rawInput : {}
+    const rawCommand = typeof rawInput.command === 'string'
+      ? rawInput.command
+      : (typeof rawInput.cmd === 'string'
+        ? rawInput.cmd
+        : (typeof card.tool_input?.command === 'string' ? card.tool_input.command : ''))
+    const isShell = card.raw_name === 'bash' || card.raw_name === 'shell'
 
     // 1. Assistant command gates are never auto-approved, even in bypassPermissions.
-    if (s.assistant && (card.raw_name === 'bash' || card.raw_name === 'shell')) {
-      const gate = matchShellGate(card.tool_input?.command || '', gateShellRules)
+    // Match against the full, unclipped raw command and fail closed if gate rules could not be loaded.
+    if (s.assistant && isShell) {
+      if (!gateShellRulesReady) await refreshGateRules()
+      const gate = matchShellGate(rawCommand, gateShellRules)
       if (gate) {
+        return rejectOnce
+          ? { outcome: { outcome: 'selected', optionId: rejectOnce.optionId } }
+          : { outcome: { outcome: 'cancelled' } }
+      }
+      if (!gateShellRulesReady) {
         return rejectOnce
           ? { outcome: { outcome: 'selected', optionId: rejectOnce.optionId } }
           : { outcome: { outcome: 'cancelled' } }
@@ -722,8 +865,9 @@ export function createOpencodeCompanion(options = {}) {
         : { outcome: { outcome: 'cancelled' } }
     }
 
-    // 3. Assistant memory writes outside plan mode and bypassPermissions auto-approve.
-    if (isMemoryWrite(s, card.raw_name, card.tool_input) || s.mode === 'bypassPermissions') {
+    // 3. Auto-approve: assistant memory writes (outside plan), acceptEdits (write/edit), or bypassPermissions.
+    const acceptEditAuto = s.mode === 'acceptEdits' && (card.raw_name === 'write' || card.raw_name === 'edit')
+    if (isMemoryWrite(s, card.raw_name, card.tool_input, rawInput) || acceptEditAuto || s.mode === 'bypassPermissions') {
       return allowOnce
         ? { outcome: { outcome: 'selected', optionId: allowOnce.optionId } }
         : { outcome: { outcome: 'cancelled' } }
@@ -770,6 +914,7 @@ export function createOpencodeCompanion(options = {}) {
   async function ensureLoaded(s) {
     await acp.ensureStarted()
     if (s.loadedGeneration === acp.generation && acp.loadedSessions.has(s.id)) return
+    const desiredMode = s.mode
     if (!s.mcpRoute) s.mcpRoute = await mcpProxy.forSession(s)
     const res = await acp.loadSession({
       sessionId: s.id,
@@ -777,10 +922,22 @@ export function createOpencodeCompanion(options = {}) {
       mcpServers: [s.mcpRoute.acpServer],
     })
     s.loadedGeneration = acp.generation
-    applyConfigOptions(s, res?.configOptions)
+    applyConfigOptions(s, res?.configOptions, { preserveMode: desiredMode !== 'default' })
+    // Never silently downgrade a user-requested plan mode after an ACP child restart.
+    if (desiredMode === 'plan') {
+      try {
+        const modeRes = await acp.setConfigOption(s.id, 'mode', 'plan')
+        applyConfigOptions(s, modeRes?.configOptions, { preserveMode: true })
+        s.mode = 'plan'
+      } catch (err) {
+        throw new RpcError(`opencode 无法恢复只读模式（plan）：${err.message}`, 'readonly_unsupported')
+      }
+    } else if (desiredMode && desiredMode !== 'default') {
+      s.mode = desiredMode
+    }
   }
 
-  async function applySessionConfig(s, { model, permission_mode }) {
+  async function applySessionConfig(s, { model, effort, permission_mode, forceModel = false }) {
     if (permission_mode) {
       if (!VALID_MODES.has(permission_mode)) {
         throw new RpcError(`不支持的权限模式 "${permission_mode}"`, 'bad_request')
@@ -790,7 +947,7 @@ export function createOpencodeCompanion(options = {}) {
       if (targetNative !== prevNative || permission_mode === 'plan') {
         try {
           const res = await acp.setConfigOption(s.id, 'mode', targetNative)
-          applyConfigOptions(s, res?.configOptions)
+          applyConfigOptions(s, res?.configOptions, { preserveMode: true })
         } catch (err) {
           if (permission_mode === 'plan') {
             throw new RpcError(`opencode 无法切换到只读模式（plan）：${err.message}`, 'readonly_unsupported')
@@ -805,13 +962,29 @@ export function createOpencodeCompanion(options = {}) {
         try { await models() } catch {}
       }
       const resolved = resolveModel(model, catalog)
-      if (resolved && resolved.id !== s.model) {
+      if (resolved && (forceModel || resolved.id !== s.model)) {
         try {
           const res = await acp.setConfigOption(s.id, 'model', resolved.id)
-          applyConfigOptions(s, res?.configOptions)
+          applyConfigOptions(s, res?.configOptions, { preserveMode: true })
           s.model = resolved.id
         } catch (err) {
           throw new RpcError(`opencode 切换模型失败（${resolved.id}）：${err.message}`, 'opencode')
+        }
+      }
+    }
+    if (typeof effort === 'string' && effort.trim()) {
+      const normalizedEffort = effort.trim().toLowerCase()
+      if (!VALID_EFFORTS.has(normalizedEffort)) {
+        throw new RpcError(`不支持的思考深度 "${effort}"`, 'bad_request')
+      }
+      if (normalizedEffort !== s.effort) {
+        const configId = s.effortConfigId || 'variant'
+        try {
+          const res = await acp.setConfigOption(s.id, configId, normalizedEffort)
+          applyConfigOptions(s, res?.configOptions, { preserveMode: true })
+          s.effort = normalizedEffort
+        } catch (err) {
+          throw new RpcError(`opencode 切换思考深度失败（${normalizedEffort}）：${err.message}`, 'opencode')
         }
       }
     }
@@ -828,6 +1001,10 @@ export function createOpencodeCompanion(options = {}) {
     if (reqMode && !VALID_MODES.has(reqMode)) {
       throw new RpcError(`不支持的权限模式 "${reqMode}"`, 'bad_request')
     }
+    const reqEffort = typeof params.effort === 'string' && params.effort.trim() ? params.effort.trim().toLowerCase() : ''
+    if (reqEffort && !VALID_EFFORTS.has(reqEffort)) {
+      throw new RpcError(`不支持的思考深度 "${params.effort}"`, 'bad_request')
+    }
 
     let chosenModel = null
     if (typeof params.model === 'string' && params.model.trim()) {
@@ -838,6 +1015,7 @@ export function createOpencodeCompanion(options = {}) {
     }
 
     const isAsst = assistantEnabled && (params.assistant === true || isAssistantDir(cwd, home))
+    if (isAsst) await ensureGateRules()
     const route = await mcpProxy.allocate({ assistant: isAsst, mode: reqMode || 'default' })
     let sessionId = ''
     try {
@@ -849,10 +1027,11 @@ export function createOpencodeCompanion(options = {}) {
       const initialTitle = typeof params.prompt === 'string' && params.prompt.trim()
         ? snippet(visibleUserText(params.prompt))
         : ''
+      // Leave model empty until ACP reports its actual currentValue or setConfigOption succeeds.
       const s = createLiveState(sessionId, cwd, {
         assistant: isAsst,
         title: initialTitle,
-        model: chosenModel?.id || '',
+        model: '',
         mode: reqMode || 'default',
         startedByPersona: true,
       })
@@ -860,17 +1039,23 @@ export function createOpencodeCompanion(options = {}) {
       s.mcpRoute = route
       route.bind(s)
       onSessionId?.(sessionId)
-      applyConfigOptions(s, created.configOptions)
+      applyConfigOptions(s, created.configOptions, { preserveMode: Boolean(reqMode) })
 
       // Strictly apply plan mode (readonly) before any prompt runs.
       if (reqMode === 'plan') {
         await applySessionConfig(s, { permission_mode: 'plan' })
       }
-      const targetModel = chosenModel?.id || (configuredDefaultModel && configuredDefaultModel !== s.model ? configuredDefaultModel : '')
+      // Only override ACP's default model when the caller requested a model or an explicit default was configured.
+      const targetModel = chosenModel?.id || (explicitDefaultModel && explicitDefaultModel !== s.model ? explicitDefaultModel : '')
       if (targetModel) {
-        await applySessionConfig(s, { model: targetModel })
+        await applySessionConfig(s, {
+          model: targetModel,
+          forceModel: Boolean(chosenModel && chosenModel.id !== s.model),
+        })
       }
-      if (isAsst) void refreshGateRules()
+      if (reqEffort) {
+        await applySessionConfig(s, { effort: reqEffort })
+      }
 
       const hasInput = Boolean(
         (typeof params.prompt === 'string' && params.prompt.trim()) ||
@@ -920,6 +1105,7 @@ export function createOpencodeCompanion(options = {}) {
     s.lastText = dbData.lastText
     s.hasAssistant = dbData.hasAssistant
     s.history = dbData.history
+    s.userInputCount = dbData.userCount ?? 0
     return s
   }
 
@@ -937,6 +1123,7 @@ export function createOpencodeCompanion(options = {}) {
     s.assistant = isAsst
     if (typeof params.memory_dir === 'string' && params.memory_dir) s.memoryDir = params.memory_dir
     const reqMode = params.mode || params.permission_mode || ''
+    const reqEffort = typeof params.effort === 'string' && params.effort.trim() ? params.effort.trim().toLowerCase() : ''
     const wasBusy = s.running || s.queued > 0
     s.queued++
 
@@ -944,16 +1131,28 @@ export function createOpencodeCompanion(options = {}) {
       ? promptWithContext(rawText, params.context)
       : rawText
 
-    // Validate model/mode upfront when idle so invalid requests fail immediately instead of asynchronously.
+    // Validate model/mode/effort upfront when idle so invalid requests fail immediately instead of asynchronously.
     if (!wasBusy) {
       if (reqMode && !VALID_MODES.has(reqMode)) {
         s.queued--
         throw new RpcError(`不支持的权限模式 "${reqMode}"`, 'bad_request')
       }
+      if (reqEffort && !VALID_EFFORTS.has(reqEffort)) {
+        s.queued--
+        throw new RpcError(`不支持的思考深度 "${params.effort}"`, 'bad_request')
+      }
       if (params.model) {
         try {
           if (catalog.length === 0) await models().catch(() => {})
           resolveModel(params.model, catalog)
+        } catch (err) {
+          s.queued--
+          throw err
+        }
+      }
+      if (isAsst) {
+        try {
+          await ensureGateRules()
         } catch (err) {
           s.queued--
           throw err
@@ -965,14 +1164,16 @@ export function createOpencodeCompanion(options = {}) {
       s.queued = Math.max(0, s.queued - 1)
       if (stopped || closedSessions.has(id)) return
       s.running = true
+      s.turnError = ''
       s.abort = new AbortController()
       s.activeText = ''
       s.activeThought = ''
+      s.activeThoughtItem = null
       s.activeTools.clear()
 
       const shown = visibleUserText(rawText)
+      s.userInputCount++
       if (shown) {
-        s.userInputCount++
         if (params.client_msg_id) {
           s.sentClientMsgIds.set(s.userInputCount, { text: shown, id: params.client_msg_id })
         }
@@ -994,8 +1195,9 @@ export function createOpencodeCompanion(options = {}) {
       rt.sessionsChanged(0)
 
       try {
+        if (isAsst) await ensureGateRules()
         await ensureLoaded(s)
-        await applySessionConfig(s, { model: params.model, permission_mode: reqMode })
+        await applySessionConfig(s, { model: params.model, effort: reqEffort, permission_mode: reqMode })
         const promptBlocks = []
         if (promptText) promptBlocks.push({ type: 'text', text: promptText })
         for (const img of images) {
@@ -1015,10 +1217,16 @@ export function createOpencodeCompanion(options = {}) {
         if (s.abort?.signal.aborted) {
           appendLiveItem(s, { role: 'system', kind: 'notice', text: '已中断' })
         } else {
-          appendLiveItem(s, { role: 'system', kind: 'notice', text: `出错了：${snippet(err?.message ?? String(err))}` })
+          const msg = snippet(err?.message ?? String(err))
+          s.turnError = msg
+          appendLiveItem(s, { role: 'system', kind: 'notice', text: `出错了：${msg}` })
         }
       } finally {
         rt.streamEnd(id)
+        if (s.thoughtTimer) {
+          clearTimeout(s.thoughtTimer)
+          s.thoughtTimer = null
+        }
         for (const ac of s.asks) ac.abort()
         s.asks.clear()
         s.running = false
@@ -1056,7 +1264,11 @@ export function createOpencodeCompanion(options = {}) {
   async function modes(params) {
     const s = await resolveSession(params.session_id)
     await ensureLoaded(s)
-    await applySessionConfig(s, { model: params.model, permission_mode: params.permission_mode })
+    await applySessionConfig(s, {
+      model: params.model,
+      effort: params.effort,
+      permission_mode: params.permission_mode,
+    })
     listCache.at = 0
     rt.sessionsChanged(0)
   }
@@ -1075,6 +1287,10 @@ export function createOpencodeCompanion(options = {}) {
     const s = live.get(id)
     closedSessions.add(id)
     if (s) {
+      if (s.thoughtTimer) {
+        clearTimeout(s.thoughtTimer)
+        s.thoughtTimer = null
+      }
       s.abort?.abort()
       for (const ac of s.asks) ac.abort()
       s.asks.clear()
@@ -1098,6 +1314,10 @@ export function createOpencodeCompanion(options = {}) {
   async function stopCompanion() {
     stopped = true
     for (const s of live.values()) {
+      if (s.thoughtTimer) {
+        clearTimeout(s.thoughtTimer)
+        s.thoughtTimer = null
+      }
       s.abort?.abort()
       for (const ac of s.asks) ac.abort()
       s.asks.clear()

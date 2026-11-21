@@ -37,6 +37,7 @@ internal fun rememberAssistantComposerState(
     draftRepository: DraftRepository?,
     draftScope: CoroutineScope?,
     demo: Boolean,
+    suppliedComposer: ChatComposerState?,
 ): AssistantComposerState {
     val transientComposer = key(hubId, shown) { rememberChatComposerState() }
     val draftEditors = remember(draftRepository, draftScope) { mutableMapOf<Pair<String?, String>, ChatDraftEditor>() }
@@ -67,6 +68,6 @@ internal fun rememberAssistantComposerState(
     val sendState = sends.getOrPut(hubId to shown) {
         AssistantSendState().apply { first.value = failedStarts.read(firstPage).takeUnless { demo } }
     }
-    return AssistantComposerState(savedComposer ?: transientComposer, savedComposer, draftEditor, draftError,
+    return AssistantComposerState(savedComposer ?: suppliedComposer ?: transientComposer, savedComposer, draftEditor, draftError,
         draftEditor == null || draftRead, sendState, failedStarts, firstPage)
 }

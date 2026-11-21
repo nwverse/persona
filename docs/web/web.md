@@ -117,6 +117,15 @@ drives the built client with synthetic data in Chinese, English and Japanese, wi
 Dismiss, Undo, reload, new same-reference progress, and that no reply or task/Agent mutation was requested; `--cdp`
 uses the shared browser and keeps the test pages open.
 
+**Pending plans across conversations (#12254).** Main's Needs you includes every open task plan of the current
+assistant in its ordinary space, including plans made by scheduled routines and side conversations. Health keeps its
+own plans; archived and deleted source conversations are excluded from the Main snapshot. The source conversation labels its group;
+Start and Don't start act on that plan's source, and Open navigates there. Other conversations show only their own plans.
+The Main feed carries the pending-plan snapshot on initial load and reconnect. A newer live update or completed owner
+action wins over an older read. Each open plan counts as one decision, however many tasks it contains. Conversation rows
+add those decisions to their existing needs-you count, and the Persona chats heading keeps the aggregate visible even
+when recent chats or the whole section are collapsed. Managers' plans are counted separately.
+
 **The open tray's room (#4656).** An open Needs you / In progress tray follows the viewport instead of the old
 `min(20rem, 40dvh)` box: while it is open, `styles.css` lets the chat dock (`DOCK_MAX`, 55% of the visible height otherwise)
 take up to `--assistant-dock-open-max` (82% of `--kb-h`), the conversation above giving up the room, and the tray fills only
@@ -953,6 +962,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   **Topics** (#3783, `docs/assistant/knowledge.md` "Topics") list in one section, importance set by hand first, then the most points; a row shows its point count. A topic's page shows its knowledge points instead of the profile rendered from them (`knowledge/TopicPoints.tsx`): the points directly under the topic, then a section per subtopic with its own subtopics as headings, each point with its kind (pitfalls and open questions in the warning tone), its reason or cause, its sources by name (opening them; a source the detail does not name is left out rather than shown as an id) and the day it was last confirmed.
   **Knowledge map** (`/kb/map`, the header's **Knowledge map** button, `knowledge/KnowledgeMap.tsx`, `src/lib/kb-map.ts`): a two-sided mind map in two views. **Topics** (the default): a branch per topic, biggest first, the six biggest open onto their subtopics and the rest closed, a topic's subtopics from its points' paths, more than three loose points beside subtopics under one closed **Other**. **Projects**: active projects to the right by importance, done and paused ones to the left, each with the curated summary's sections (goal and current state open), the main chat's goal, role and its own timeline notes by day, code folders and related chats and people. A tap selects (the side panel: counts, a topic's kinds and points, a point's reason, sources and day, a project's goal, summary and notes), a double tap or the round toggle opens and closes; nodes are buttons in the tab order (Enter selects, the arrow keys open and close). Pinch zooms around the fingers (ctrl+wheel, Safari's gesture events, two touches), with a zoom bar. The first paint fits the map (not below 65%) and centers the root once that zoom is drawn. With no topics yet the page says the background curation fills it in, or, with `kb_topics` off, that it is off and where to turn it on. Settings › Knowledge has the **Organize knowledge points by topic** switch (`settings/KnowledgeTopics.tsx`, `PUT /api/v1/assistant {kb_topics}`, on unless turned off) above the selection, inside its assistant picker. To look at them in a browser, `MOCK_KB_TOPICS=1` gives the mock hub five topics of fictional points over its example projects and chats.
   **Confirmed facts** shows your explicit corrections separately from the inferred profile for projects, chats, people, docs, meetings, events and recordings. Add or edit the text; remove all text and save to clear it. Cancel discards the draft without writing; ⌘↩ / Ctrl+↩ in the box saves as **Save** does (audit item 70). Saving sends only the confirmed facts, preserving text and newlines as entered and leaving tagging, locks and the inferred profile alone.
+  **Lessons from finished tasks** (#12295, `views/knowledge/ProjectLessons.tsx`) shows, on a project's page under its timeline, what the project's accepted tasks taught ([todos.md](../assistant/todos.md) "Lessons from accepted tasks"). Each row has the kind (a mistake that came back, background you had to add, a step that wasted time, a better way to work), the text, how many times and when it was last taught, the newest task it came from, "Edited by you" and "Not seen lately" for one no longer handed out. **Edit** opens a dialog with the text, and Save is enabled only for a changed text within 200 characters. **Delete** asks first with a destructive button and says the lesson won't be learned again. Every answer is the list after the change; one changed on another device meanwhile shows the hub's current list with a note. The footer says whether learning is on (Settings › Persona › **Learn from finished tasks**, off by default, `task_lessons`). The section is drawn only when the project has lessons, and not at all on a hub without the route.
   A failed save keeps the draft for retry. After saving, the page reloads authoritative detail; if that read fails, **Retry refresh** repeats only the read and explains that the facts were already saved. Drafts and delayed results belong to the requested entry, authenticated credentials and default manager, and are discarded when that identity changes.
   **Remove relationship** appears beside explicit metadata-backed related entries. Confirming names both entries and preserves their records, content, tags and confirmed facts. Provenance links, such as a document's source chat, remain navigation-only. Project links to documents, meetings, events and recordings are removed by updating the linked item's project list.
   By default only that link is kept out (#10333, "Removed links" in `docs/assistant/knowledge.md`): the dialog says Persona won't link the two again on its own and the rest keeps updating, and sends `lock_lists: false`. **Also stop automatic changes to both lists** (a switch, off by default, fixed once the request is sent) sends `lock_lists: true` and shows which two whole lists it protects. The readback confirms the link is gone and `excluded` on both entries (plus `locked_fields` when the switch was on); a hub that only locks reads as unconfirmed. **Removed by you** under the related entries lists `detail.removed` with **Allow again** (`allow_people` / `allow_chats` / `allow_projects`; a project's document is allowed through the document), which links nothing and lets Persona decide again; the page reloads the entry and says so if the link is still kept out.
@@ -1523,6 +1533,23 @@ directly. The protocol is in `docs/protocol/protocol.md` ("REST (App → hub)").
 To verify the web flow, run the mock hub with `MOCK_STARRED=1` and follow the commands in
 `web/e2e/starred-messages.mjs`. It drives two isolated browser contexts and verifies cross-device changes,
 search, copy, Undo, exact links, and a snapshot whose original is absent.
+
+#### Back up starred messages (#12061)
+
+Open **Backup** on the Starred page. Download a JSON backup to restore later or choose
+Markdown for a copy you can read and edit in a text editor. Exports include the selected assistant's
+saved text, title, speaker, source category and timestamps. They omit device and conversation identifiers.
+
+Choose a JSON backup and select **Preview restore** to see how many messages would be added, how many are
+already saved and how much space is available. Select **Restore messages** to save the batch. If another device changed Starred after you
+previewed it, review the current counts and confirm again. A backup that would exceed the 300-message limit
+stays in preview until you make room.
+
+Restored messages are archival snapshots. You can search, copy or remove them. They retain the saved words
+and timestamps independently of the original conversation. An older manager can still supply the snapshots
+for export. Restore appears when the connected manager supports it.
+
+Run the browser test with `MOCK_STARRED=1 MOCK_STARRED_BACKUP=1` and `node web/e2e/starred-backup.mjs`.
 
 ### Exporting a conversation (#7375)
 
@@ -2148,6 +2175,14 @@ all-types example unchanged, `invalid` shows a document whose saved values are m
 its empty, correctable state, `keyboard` refuses the first single-choice save so its Tab stop can be checked, `empty` shows
 a document without groups, `unsupported` shows an unknown kind and a newer schema version, and the failure scenarios show
 only the module they happen in. The page is never built.
+
+## Extension entry-list settings (#9504)
+
+`web/src/views/settings/Extensions.tsx` renders a declared extension entry list inside the existing extension settings page, not through the generic configuration-Document form above. `EntryListControl` uses the existing settings surfaces, field rows, buttons and shared secret/removal dialogs. Saved entry `_id` metadata keys each React entry but is not an input; an unsaved entry carries an enumerable symbol that object spreading preserves across immutable edits and `JSON.stringify` omits. Arrays are atomic when a dirty draft rebases onto a fresh detail, avoiding index-wise merges of different entries.
+
+`web/src/lib/extensions.ts` adds `entry_lists=1` to every detail read and detail-returning extension write, including lifecycle and secret responses. Without it the hub supplies the legacy projection, so a response to a write must not accidentally remove the editor on the next render. Immediate fixed-field saves (the machine switches) add `preserve_entries=1`: a stale page cannot turn its old entry array into removals or secret-clearing rebinds, and the response still contains the capable form. Entry add/edit/remove changes only the raw nested configuration draft; secret values stay exclusively in the existing write-only dialog and API. New entries cannot open that dialog until the hub has saved them and minted an ID. Dynamic secret rows are rendered in their entries, not duplicated in the fixed Secrets group. A required entry list keeps an explicit empty array through compaction, dirty tracking and draft rebasing; an optional one compacts back to absent. The shared helpers cover numeric paths, indexed validation errors (`accounts[0].address`), entry identity and the maximum-entry bound.
+
+The server contract, legacy preservation, egress/consent and fixed-slot migration are in `docs/extensions/extensions.md` ("Entry lists and per-entry secrets") and `docs/protocol/protocol.md` ("Extension entry-list settings"). The interaction rules and accessibility acceptance are in `docs/design/DESIGN_SYSTEM.md` ("Extension entry lists").
 
 ## Labs
 

@@ -262,6 +262,39 @@ describe("New agent: presets (#2225)", () => {
     expect(launched[1]?.permissionMode).toBeUndefined();
   });
 
+  it("preserves explicit default mode from a listed-mode preset over agent.new bypassPermissions", async () => {
+    purpose = {
+      purpose: { id: "agent.new", effective: { provider: "launcher.grok", permission_mode: "bypassPermissions" } },
+      providers: [{ id: "launcher.grok", name: "Grok", kind: "launcher", agent: "grok", permission_modes: ["default", "bypassPermissions"] }],
+    };
+    launchers = [
+      { name: "claude", agent: "claude" },
+      { name: "grok", agent: "grok", permission_modes: ["default", "bypassPermissions"] },
+    ];
+    tiers = [
+      { name: "grok-default", launcher: "grok", permission_mode: "default" },
+    ];
+    await open();
+
+    // Picking a listed-mode preset with explicit "default" sends permissionMode: "default" so it overrides agent.new.
+    await pick("preset:grok-default");
+    act(() => button("启动").click());
+    expect(launched[0]).toMatchObject({ launcher: "grok", permissionMode: "default" });
+
+    // Reopen, pick preset, then explicitly click Follow launcher: clears permissionMode to undefined.
+    act(() => root.render(<><NewAgent open={false} onClose={() => {}} /><Toasts /></>));
+    await flush();
+    await open();
+    await pick("preset:grok-default");
+    const followBtn = [...document.body.querySelectorAll<HTMLButtonElement>('[data-testid="new-agent-provider-modes"] button')]
+      .find((b) => b.textContent?.trim() === "跟随启动器")!;
+    act(() => followBtn.click());
+    await flush();
+    act(() => button("启动").click());
+    expect(launched[1]).toMatchObject({ launcher: "grok" });
+    expect(launched[1]?.permissionMode).toBeUndefined();
+  });
+
   it("passes permissionMode on Codex presets without leaking into Claude mode on manual switch", async () => {
     localStorage.setItem("new.mode.mac", "default");
     launchers = [
