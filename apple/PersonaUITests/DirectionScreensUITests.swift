@@ -28,17 +28,28 @@ final class DirectionScreensUITests: XCTestCase {
     @discardableResult private func get(_ path: String) -> Data? {
         var req = URLRequest(url: URL(string: hub + path)!)
         req.setValue("Bearer mock", forHTTPHeaderField: "Authorization")
-        let done = expectation(description: path)
+        // A semaphore, not an expectation: teardown blocks call this too.
+        let done = DispatchSemaphore(value: 0)
         let box = Answer()
-        URLSession.shared.dataTask(with: req) { data, _, _ in box.data = data; done.fulfill() }.resume()
-        wait(for: [done], timeout: 15)
+        URLSession.shared.dataTask(with: req) { data, _, _ in box.data = data; done.signal() }.resume()
+        _ = done.wait(timeout: .now() + 15)
         return box.data
     }
 
     private func reset(_ query: String = "") {
+        get("/mock/down?s=0") // an earlier test's outage never outlives it
         get("/mock/reset")
         get("/mock/direction_sessions?" + query)
     }
+
+    /// Move To…: by its identifier where the menu keeps it (a context menu), by its words where not (a Menu).
+    @MainActor private var moveTo: XCUIElement {
+        let byID = app.buttons["move-to"].firstMatch
+        return byID.exists ? byID : app.buttons[word("Move To…", "移到…", "移動…")].firstMatch
+    }
+
+    /// A word of the app in the run's language.
+    private func word(_ en: String, _ zh: String, _ ja: String) -> String { lang == "en" ? en : lang == "ja" ? ja : zh }
 
     @MainActor private func launch() {
         app = XCUIApplication()
@@ -62,32 +73,33 @@ final class DirectionScreensUITests: XCTestCase {
     }
 
     @MainActor private func openSidebar() {
-        let todos = app.buttons["sidebar-todos"].firstMatch
+        // The drawer's list is on screen once it is out, however far it was scrolled the last time.
+        let head = sidebarList
         let end = Date().addingTimeInterval(30)
-        while Date() < end && !(todos.exists && todos.isHittable) {
+        while Date() < end && !(head.exists && head.isHittable) {
             if let menu = app.buttons.matching(identifier: "assistant-sidebar-button").allElementsBoundByIndex.first(where: \.isHittable) {
                 menu.tapCenter()
-                if todos.waitForExistence(timeout: 5) { break }
+                if head.waitForExistence(timeout: 5) { break }
             } else {
                 usleep(500_000)
             }
         }
-        XCTAssertTrue(todos.exists, "the sidebar did not open:\n\(app.debugDescription)")
+        XCTAssertTrue(head.exists, "the sidebar did not open:\n\(app.debugDescription)")
     }
 
     /// Scrolls the sidebar (a lazy list: rows below the fold are not made) until `element` is on screen.
-    @MainActor @discardableResult private func reveal(_ element: XCUIElement, rounds: Int = 12) -> Bool {
-        let anchor = app.buttons["sidebar-todos"].firstMatch
-        let x = anchor.exists ? anchor.frame.midX : app.frame.width * 0.3
-        let origin = app.coordinate(withNormalizedOffset: .zero)
-        for _ in 0..<rounds {
+    @MainActor @discardableResult private func reveal(_ element: XCUIElement, rounds: Int = 8) -> Bool {
+        // Down the list first, then back up: the drawer keeps where it was scrolled.
+        for round in 0..<rounds * 2 {
             if element.exists && element.isHittable { return true }
-            origin.withOffset(CGVector(dx: x, dy: app.frame.height * 0.78))
-                .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: x, dy: app.frame.height * 0.45)))
-            usleep(500_000)
+            if round < rounds { sidebarList.swipeUp(velocity: .slow) } else { sidebarList.swipeDown(velocity: .slow) }
+            usleep(400_000)
         }
         return element.exists && element.isHittable
     }
+
+    /// The drawer's list (its rows inherit the drawer's identifier on a phone).
+    @MainActor private var sidebarList: XCUIElement { app.collectionViews.matching(identifier: "assistant-sidebar").firstMatch }
 
     /// The first lead (「Persona 产品」), whose name is mock data in every language.
     @MainActor private func firstLeadToggle() -> XCUIElement {
@@ -97,7 +109,8 @@ final class DirectionScreensUITests: XCTestCase {
 
     @MainActor private func openFirstLead() {
         let toggle = firstLeadToggle()
-        XCTAssertTrue(toggle.waitForExistence(timeout: 20), "no fold for Persona 产品:\n\(app.debugDescription)")
+        if !toggle.waitForExistence(timeout: 20) || !toggle.isHittable { reveal(toggle) }
+        XCTAssertTrue(toggle.exists, "no fold for Persona 产品:\n\(app.debugDescription)")
         if toggle.value as? String != expanded { toggle.tap() }
         XCTAssertTrue(reveal(app.buttons["sidebar-direction-all"].firstMatch),
                       "no All › under the open row:\n\(app.debugDescription)")
@@ -135,7 +148,9 @@ final class DirectionScreensUITests: XCTestCase {
         sleep(1)
         shot("page")
         let more = app.buttons["direction-page-more"].firstMatch
+        for _ in 0..<8 where !(more.exists && more.isHittable) { app.collectionViews.firstMatch.swipeUp(velocity: .slow) }
         XCTAssertTrue(more.waitForExistence(timeout: 5), "no Show All N with nine added")
+        shot("page-more")
         more.tap()
         sleep(1)
         app.collectionViews.firstMatch.swipeUp(velocity: .slow)
@@ -155,7 +170,8 @@ final class DirectionScreensUITests: XCTestCase {
         sleep(2)
         // Assistant tapped again opens the conversation's menu (docs/design/DESIGN_SYSTEM.md 3.5).
         app.buttons["shell-assistant"].firstMatch.tap()
-        let item = app.buttons["assistant-direction-page"].firstMatch
+        // Items of a Menu carry no identifiers: by its words.
+        let item = app.buttons[word("Tasks and Chats", "任务和会话", "タスクとチャット")].firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 5), "no Tasks and Chats in the lead's title menu:\n\(app.debugDescription)")
         shot("title-menu")
         item.tap()
@@ -193,23 +209,34 @@ final class DirectionScreensUITests: XCTestCase {
         let row = chat("帮我约周五")
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         row.press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["move-to"].firstMatch.waitForExistence(timeout: 5))
         app.buttons["move-to"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["增长"].firstMatch.waitForExistence(timeout: 5))
         app.buttons["增长"].firstMatch.tap()
         XCTAssertTrue(app.descendants(matching: .any)["toast"].firstMatch.waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["toast-action"].exists, "a refusal offers no Undo")
         shot("refused")
     }
 
+    /// The Agent menus are one inventory (`AgentActionMenu`, the row's long press and the chat's ⋯): the chat's, on an
+    /// Agent filed here, opened from the page.
     @MainActor func testAgentMenu() {
         reset()
         launch()
-        let agents = app.buttons["shell-agents"].firstMatch
-        if agents.waitForExistence(timeout: 10) { agents.tap() }
-        let row = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "菜谱网站加搜索")).firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 15), "no 菜谱 Agent:\n\(app.debugDescription)")
-        row.press(forDuration: 1.2)
-        XCTAssertTrue(app.buttons["move-to"].firstMatch.waitForExistence(timeout: 5), "no Move To… on the Agent:\n\(app.debugDescription)")
+        openPageFromSidebar()
+        let agent = app.buttons.matching(identifier: "direction-page-filed")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "整理首页改版的设计稿")).firstMatch
+        XCTAssertTrue(agent.waitForExistence(timeout: 10))
+        agent.tap()
+        let more = app.buttons["chat.more"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 15), "no ⋯ on the Agent's chat:\n\(app.debugDescription)")
+        more.tap()
+        sleep(1)
+        XCTAssertTrue(moveTo.waitForExistence(timeout: 5), "no Move To… on the Agent:\n\(app.debugDescription)")
         shot("agent-menu")
+        moveTo.tap()
+        sleep(1)
+        shot("agent-choices")
     }
 
     @MainActor func testUnpinConfirmation() {
@@ -257,6 +284,7 @@ final class DirectionScreensUITests: XCTestCase {
         XCTAssertTrue(app.buttons.matching(identifier: "direction-page-filed").firstMatch.waitForExistence(timeout: 10))
         app.navigationBars.buttons.firstMatch.tap()
         sleep(1)
+        addTeardownBlock { [self] in get("/mock/down?s=0") }
         get("/mock/down?s=90")
         sleep(6)
         openPageFromSidebar()
@@ -288,7 +316,7 @@ final class DirectionScreensUITests: XCTestCase {
     /// `none` (a hub with no directions: the mock with MOCK_LEADERS=0), `feature` (no `direction_sessions`), `manager`
     /// (another manager's page) or `missing` (the routes answer 404 without their codes: one Move To… learns it first).
     @MainActor func testOffCasesLookAsBefore() throws {
-        guard let off = ProcessInfo.processInfo.environment["PERSONA_OFF_CASE"] else {
+        guard let off = ProcessInfo.processInfo.environment["PERSONA_OFF_CASE"], !off.isEmpty else {
             throw XCTSkip("PERSONA_OFF_CASE=none|feature|manager|missing")
         }
         reset(off == "feature" ? "feature=off" : off == "missing" ? "routes=missing" : "")

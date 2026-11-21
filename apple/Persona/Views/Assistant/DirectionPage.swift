@@ -386,8 +386,10 @@ private struct DirectionAddedRow: View {
                 }
                 Spacer(minLength: Theme.Space.xs)
                 if let word {
+                    // Where it stands wins over the title at large text sizes: the title truncates first.
                     Text(word).font(Theme.Font.caption)
                         .foregroundStyle(row.moving ? Color.secondary : DirectionPageLogic.tone(standing)).lineLimit(1)
+                        .layoutPriority(1)
                 }
             }
             .padding(.vertical, Theme.Sidebar.rowPadding)
