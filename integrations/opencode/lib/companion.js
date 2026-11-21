@@ -58,6 +58,7 @@ const VALID_EFFORTS = new Set(PERSONA_EFFORTS)
 const SUPERVISION_ERROR_CODE = 'assistant_supervision_runtime'
 const INTERRUPT_SETTLE_MS = 10_000
 const THOUGHT_PUSH_MS = 150
+const DEFAULT_ACP_IDLE_MS = 5 * 60_000
 
 /**
  * Build the child env for `opencode acp`, ensuring `bash`, `edit`, and `write` always route
@@ -106,6 +107,7 @@ export function buildAcpEnv(baseEnv = process.env) {
  *   log?: (msg: string) => void,
  *   now?: () => number,
  *   acp?: OpencodeAcpClient,
+ *   acpIdleMs?: number,
  *   assistantAcpFactory?: (options: object) => OpencodeAcpClient,
  *   policyStore?: ReturnType<typeof createSupervisionStore>,
  *   policyDir?: string,
@@ -123,6 +125,7 @@ export function createOpencodeCompanion(options = {}) {
   const now = options.now || Date.now
   const listDays = options.listDays ?? 7
   const maxSessions = options.maxSessions ?? 80
+  const acpIdleMs = options.acpIdleMs ?? DEFAULT_ACP_IDLE_MS
   const runtimeId = options.runtime || 'opencode'
   const label = options.name || 'opencode'
   const launcherName = options.launcher === undefined ? 'opencode' : String(options.launcher).trim()
@@ -152,6 +155,7 @@ export function createOpencodeCompanion(options = {}) {
   let schemaKind = '' // 'v2' | 'v1' | ''
   let listCache = { at: 0, rows: [] }
   let stopped = false
+  let acpIdleTimer = null
 
   let assistantWorkers
   let assistantReaper
@@ -190,6 +194,33 @@ export function createOpencodeCompanion(options = {}) {
     return client
   }
   connectAcp(sharedAcp)
+
+  function isAcpBusy() {
+    if (sharedAcp.busy) return true
+    for (const s of live.values()) {
+      if (!s.assistant && (s.running || s.queued > 0 || s.asks.size > 0)) return true
+    }
+    return false
+  }
+
+  function cancelAcpIdleStop() {
+    if (acpIdleTimer) {
+      clearTimeout(acpIdleTimer)
+      acpIdleTimer = null
+    }
+  }
+
+  function scheduleAcpIdleStop() {
+    cancelAcpIdleStop()
+    if (stopped || acpIdleMs <= 0 || !sharedAcp.pid || isAcpBusy()) return
+    acpIdleTimer = setTimeout(() => {
+      acpIdleTimer = null
+      if (stopped || isAcpBusy() || !sharedAcp.pid) return
+      log('stopping idle opencode acp child')
+      void sharedAcp.stopChild().catch((err) => log(`idle opencode acp stop: ${err?.message ?? err}`))
+    }, acpIdleMs)
+    acpIdleTimer.unref?.()
+  }
 
   const mcpProxy = createMcpProxy({
     tools: async (binding) => {
@@ -395,7 +426,9 @@ export function createOpencodeCompanion(options = {}) {
 
   async function refreshGateRules({ throwOnError = false } = {}) {
     try {
+      if (!rt.hubConnected) throw new Error('Persona tool rules are unavailable')
       const list = await rt.tools({ assistant: true })
+      if (!rt.hubConnected) throw new Error('Persona tool rules are unavailable')
       gateShellRules = extractShellGates(list)
       gateShellRulesReady = true
     } catch (err) {
@@ -1022,7 +1055,7 @@ export function createOpencodeCompanion(options = {}) {
           ? { outcome: { outcome: 'selected', optionId: rejectOnce.optionId } }
           : { outcome: { outcome: 'cancelled' } }
       }
-      if (!gateShellRulesReady) {
+      if (!gateShellRulesReady || !rt.hubConnected) {
         return rejectOnce
           ? { outcome: { outcome: 'selected', optionId: rejectOnce.optionId } }
           : { outcome: { outcome: 'cancelled' } }
@@ -1083,6 +1116,7 @@ export function createOpencodeCompanion(options = {}) {
   // ---- session lifecycle & control ----
 
   async function ensureLoaded(s, acp) {
+    if (acp === sharedAcp) cancelAcpIdleStop()
     const initialized = await acp.ensureStarted()
     verifyWorkerPolicy(s, initialized)
     if (s.loadedGeneration === acp.generation && acp.loadedSessions.has(s.id)) return
@@ -1211,6 +1245,7 @@ export function createOpencodeCompanion(options = {}) {
     let route
     let sessionId = ''
     let createdState
+    if (!worker) cancelAcpIdleStop()
     try {
       route = await mcpProxy.allocate({ assistant: isAsst, mode: reqMode || 'default' })
       record = isAsst ? await policyStore.create(initialPolicy) : null
@@ -1282,6 +1317,7 @@ export function createOpencodeCompanion(options = {}) {
 
       listCache.at = 0
       rt.sessionsChanged(0)
+      scheduleAcpIdleStop()
       return { session: liveRow(s) }
     } catch (err) {
       route?.release()
@@ -1290,6 +1326,7 @@ export function createOpencodeCompanion(options = {}) {
         await acp.closeSession(sessionId).catch(() => {})
       }
       if (worker) await assistantWorkers.discard(worker)
+      else scheduleAcpIdleStop()
       await policyStore.remove(record)
       if (initialPolicy && !(err instanceof RpcError)) throw new RpcError('OpenCode follow-up instructions could not be applied. Nothing was sent.', SUPERVISION_ERROR_CODE)
       if (err instanceof RpcError) throw err
@@ -1479,6 +1516,7 @@ export function createOpencodeCompanion(options = {}) {
           listCache.at = 0
           pushLiveSnapshot(s)
           rt.sessionsChanged(0)
+          if (!worker) scheduleAcpIdleStop()
         }
       }).finally(() => { if (worker) assistantWorkers.release(worker) })
       s.tail = turnDone
@@ -1523,14 +1561,19 @@ export function createOpencodeCompanion(options = {}) {
   async function modes(params) {
     const s = await resolveSession(params.session_id)
     if (s.policyFlight) throw new RpcError('Follow-up instructions are changing; try again shortly', 'busy')
-    await withSessionWorker(s, async (acp) => {
-      await ensureLoaded(s, acp)
-      await applySessionConfig(s, {
-        model: params.model, effort: params.effort, permission_mode: params.permission_mode,
-      }, acp)
-    })
-    listCache.at = 0
-    rt.sessionsChanged(0)
+    if (!s.assistant) cancelAcpIdleStop()
+    try {
+      await withSessionWorker(s, async (acp) => {
+        await ensureLoaded(s, acp)
+        await applySessionConfig(s, {
+          model: params.model, effort: params.effort, permission_mode: params.permission_mode,
+        }, acp)
+      })
+      listCache.at = 0
+      rt.sessionsChanged(0)
+    } finally {
+      if (!s.assistant) scheduleAcpIdleStop()
+    }
   }
 
   async function rename(params) {
@@ -1574,6 +1617,7 @@ export function createOpencodeCompanion(options = {}) {
     listCache.at = 0
     rt.streamEnd(id)
     rt.sessionsChanged(0)
+    scheduleAcpIdleStop()
   }
 
   async function startCompanion() {
@@ -1592,6 +1636,7 @@ export function createOpencodeCompanion(options = {}) {
 
   async function stopCompanion() {
     stopped = true
+    cancelAcpIdleStop()
     clearInterval(assistantReaper)
     assistantReaper = null
     for (const s of live.values()) {
