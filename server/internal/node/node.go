@@ -101,6 +101,8 @@ type Node struct {
 	doctorAt func() DoctorOptions
 	// machineProcs replaces OS process/port hooks in tests (machine_procs.go).
 	machineProcs *machineProcsOps
+	// serviceRunner replaces OS command execution for machine.services* RPCs in tests.
+	serviceRunner *machineServiceRunner
 	// networkDiagAt replaces machine.network dependencies in tests (machine_network.go).
 	networkDiagAt func() machineNetworkOptions
 	// fileReadDeps replaces file.read's filesystem operations in tests.
@@ -869,6 +871,14 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return n.machineProcesses(ctx, params)
 	case proto.MethodMachineProcessKill:
 		return n.machineProcessKill(ctx, params)
+	}
+	switch method { // the machine page's services and containers (machine_services.go)
+	case proto.MethodMachineServices:
+		return n.machineServices(ctx, params)
+	case proto.MethodMachineServiceLogs:
+		return n.machineServiceLogs(ctx, params)
+	case proto.MethodMachineServiceAction:
+		return n.machineServiceAction(ctx, params)
 	}
 	if method == codexTakeoverPrepare || method == codexTakeoverCommit {
 		return n.codexTakeoverCall(ctx, method, params)
