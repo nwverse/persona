@@ -194,3 +194,10 @@ unsupported explicit model/effort choices and permission modes before releasing
 input; it supports default approvals and bypassPermissions. No permission upgrade
 is inferred during a logical conversation switch. Unit contracts use fake pi
 extension APIs and a fake web backend, without a provider call.
+
+Native shell actions still obey Persona command gates in bypassPermissions. The
+adapter reads current tool rules for the actual session, rejects matching shell
+commands (including nested shell wrappers), and asks the model to use the scoped
+Persona action tool. Failed rule reads block shell execution; ordinary coding
+Agent sessions retain their existing behavior. Gate parsing is shared with the
+OpenCode companion and covered by its existing contracts plus pi-specific fakes.

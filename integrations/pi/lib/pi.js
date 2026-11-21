@@ -1,4 +1,5 @@
 import { assistantState, recordAssistant, assistantBeforeTurn } from './assistant.js'
+import { extractShellGates, matchShellGate } from '../../runtime-sdk/lib/shell-gates.js'
 import { wirePackageName } from '../../runtime-sdk/lib/compat.js'
 import { customTypeMatches, legacyCustomType, LEGACY_RELOAD, piHostKind } from './compat.js'
 // The pi runtime (docs/integrations/pi.md): the sessions of one pi process — a pi in a terminal, `pi --mode rpc`, or pi-web's
@@ -545,6 +546,19 @@ export function createPiHost(deps, options = {}) {
     const name = e.toolName ?? e.name
     const asst = assistantState(ctx.sessionManager)
     if (asst?.closed) return { block: true, reason: 'This execution session is retired' }
+    // Persona actions retain their dedicated approval/scope path even when
+    // ordinary native tools use bypassPermissions. Failed rule reads stay closed.
+    if (asst && ['bash', 'shell'].includes(String(name).toLowerCase())) {
+      const input = e.input ?? e.args ?? {}
+      const command = input.command ?? input.cmd
+      if (typeof command !== 'string' || !command.trim()) return { block: true, reason: 'The shell command could not be checked. Nothing ran.' }
+      try {
+        const tools = await rt.tools({ assistant: true, sessionId: s.id, signal: ctx.signal })
+        if (matchShellGate(command, extractShellGates(tools))) return { block: true, reason: 'Use the Persona action tool instead of running this command directly.' }
+      } catch {
+        return { block: true, reason: 'Persona command rules are unavailable. Nothing ran.' }
+      }
+    }
     if (asst?.mode === 'bypassPermissions') return undefined
     if (!asst && !approve.has(name)) return undefined
     const entries = ctx.sessionManager.getEntries()
