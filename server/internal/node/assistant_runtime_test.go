@@ -109,6 +109,14 @@ func TestRuntimeAssistantFirstMessageIsVerbatimWithoutAutomaticCommands(t *testi
 			if compactable, why := n.compactableRuntime(id); compactable {
 				t.Fatalf("unexpected automatic compaction support: %s", why)
 			}
+			row := proto.Session{SessionID: id, Cwd: cwd, Status: proto.StatusIdle, Rev: 2, ContextTokens: 190000, ContextWindow: 200000}
+			if err := host.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{row}}); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "nearly full runtime row", func() bool {
+				got, _, ok := n.runtimes.rowOf(id)
+				return ok && proto.ContextNearlyFull(int(got.ContextTokens), int(got.ContextWindow))
+			})
 			const next = "Continue with the same request."
 			if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": id, "text": next, "compact_if_full": true}); err != nil {
 				t.Fatal(err)
