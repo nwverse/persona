@@ -142,6 +142,15 @@ describe("the popover", () => {
     expect(html.match(/data-pace-tick/g)).toHaveLength(1);
     expect(html.match(/用得偏快/g)).toHaveLength(1);
   });
+  it("keeps an out-of-date account's numbers and reset but gives no pace, nor a tick (#12411)", () => {
+    const html = renderToStaticMarkup(<UsagePopover accounts={[account("a", 70, 10, { stale: true })]} now={NOW} />);
+    expect(html).toContain("已过期");
+    expect(html).toContain("70%");
+    expect(html).toContain("2 天 3 小时后重置");
+    expect(html).not.toContain("用得偏快");
+    expect(html).not.toContain("用得偏慢");
+    expect(html).not.toContain("data-pace-tick");
+  });
   it("is a labelled dialog", () => {
     expect(renderToStaticMarkup(<UsagePopover accounts={[account("a", 1, 1)]} now={NOW} />)).toContain('role="dialog" aria-label="订阅额度"');
   });
@@ -216,6 +225,25 @@ describe("where the numbers came from (#2595)", () => {
     expect(strip).toContain("Antigravity");
     expect(strip).toContain("75%");
     expect(strip).not.toContain("未接额度数据");
+  });
+  it("says in plain words whether a provider is not read yet or can only be read through its relay (#12411)", () => {
+    const html = renderToStaticMarkup(
+      <UsagePopover
+        accounts={[]}
+        unconnected={[
+          { id: "claude", title: "Claude Code", agent: "claude" },
+          { id: "agy", title: "Antigravity", agent: "agy" },
+          { id: "deepseek", title: "DeepSeek", agent: "claude" },
+        ]}
+        now={NOW}
+      />,
+    );
+    expect(html).toContain("还没读到 Claude Code 的额度");
+    expect(html).toContain("还没读到 Antigravity 的额度");
+    // a launcher run through Claude Code against another provider is not Claude's subscription
+    expect(html.match(/还没读到 Claude Code/g)).toHaveLength(1);
+    expect(html).toContain("不能直接读这家服务商的额度");
+    expect(html).not.toMatch(/statusLine|网关/);
   });
   it("lists active providers without usage data and hands setup off to the assistant on click", () => {
     const live = [account("c", 40, 75, { provider: "codex", name: "Codex Pro", local: true })];

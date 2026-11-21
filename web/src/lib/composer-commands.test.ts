@@ -19,7 +19,7 @@ describe("agentCommands", () => {
     expect(words(session({ state: "working", status: "working" }))).toEqual(["继续", "/compact", "/model", LOOP_TEXT.trim()]);
     expect(words(session({ state: "needs_you", status: "blocked" }))).toEqual(["继续", "/compact", "/model", LOOP_TEXT.trim()]);
   });
-  it("has neither for Codex, TRAEX or a runtime that cannot switch models", () => {
+  it("has neither for Codex, TRAE CLI or a runtime that cannot switch models", () => {
     for (const s of [session({ agent: "codex" }), session({ agent: "traex" }), session({ source_kind: "codex_app_server", capabilities: { send: true, terminal: true } })]) {
       const w = words(s);
       expect(w).not.toContain("/model");

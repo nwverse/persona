@@ -164,7 +164,7 @@ import PersonaWire
         let empty = LauncherModelChoice(list: LauncherModels(agent: "claude", models: []), picked: "glm-5")
         #expect(empty.canPick && empty.sent == "glm-5" && empty.remembered.isEmpty)
         #expect(LauncherModelChoice(list: LauncherModels(agent: "codex", models: [])).canPick)
-        // Another agent (TRAEX, a runtime) takes no model: no row, nothing sent.
+        // Another agent (TRAE CLI, a runtime) takes no model: no row, nothing sent.
         let traex = LauncherModelChoice(list: LauncherModels(agent: "traex", models: []), picked: "glm-5")
         #expect(!traex.canPick && !traex.takesTyped && traex.sent == nil)
         var locked = l
