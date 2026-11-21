@@ -38,10 +38,18 @@ type agyStep struct {
 		Name string          `json:"name"`
 		Args json.RawMessage `json:"args"`
 	} `json:"tool_calls"`
-	seq    int
-	key    string
-	branch string
-	record [32]byte
+	seq      int
+	key      string
+	branch   string
+	record   [32]byte
+	rendered [32]byte
+}
+
+type agyStepMemo struct {
+	seq      int
+	key      string
+	rendered [32]byte
+	running  bool
 }
 
 type agyHistory struct {
@@ -50,14 +58,91 @@ type agyHistory struct {
 	seq                  int
 	items                []proto.Item
 	// A compact export can leave full tool output in its step directory.
-	outputs map[string]int
-	media   map[string]agyMedia
+	outputs    map[string]int
+	media      map[string]agyMedia
+	stepHashes map[int][32]byte
 }
 
 type agyRevision struct {
 	length                  int
 	hash                    [32]byte
 	branch, native, rewrite string
+	steps                   []agyStepMemo
+}
+
+func isAgyStepRunning(status string) bool {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "RUNNING", "PENDING", "IN_PROGRESS", "QUEUED":
+		return true
+	default:
+		return false
+	}
+}
+
+// renderedHash hashes only the fields projected into transcript items so
+// status-only transitions (such as RUNNING -> DONE) or unrendered metadata
+// changes do not masquerade as history rewrites.
+func (s agyStep) renderedHash() [32]byte {
+	h := sha256.New()
+	write := func(v string) {
+		var lenBuf [8]byte
+		n := len(v)
+		for i := range lenBuf {
+			lenBuf[i] = byte(n >> (i * 8))
+		}
+		_, _ = h.Write(lenBuf[:])
+		_, _ = h.Write([]byte(v))
+	}
+	write(s.Type)
+	write(s.Source)
+	write(s.Content)
+	write(s.ClientMsgID)
+	write(s.Thinking)
+	write(s.Error)
+	if s.Status == "ERROR" {
+		write("ERROR")
+	} else {
+		write("")
+	}
+	write(strings.Join(s.TruncatedFields, "\x00"))
+	write(string(bytes.TrimSpace(s.Media)))
+	for _, tc := range s.ToolCalls {
+		if tc == nil {
+			write("")
+			continue
+		}
+		write(tc.Name)
+		write(string(bytes.TrimSpace(tc.Args)))
+	}
+	var sum [32]byte
+	h.Sum(sum[:0])
+	return sum
+}
+
+// agyStepsRewritten reports whether a prefix change or file truncation altered
+// settled history, rather than normal RUNNING -> DONE progress or non-rendered
+// metadata updates.
+func agyStepsRewritten(oldSteps, newSteps []agyStepMemo) bool {
+	if len(newSteps) < len(oldSteps) {
+		return true
+	}
+	bySeq := make(map[int]agyStepMemo, len(newSteps))
+	for _, s := range newSteps {
+		bySeq[s.seq] = s
+	}
+	for _, prev := range oldSteps {
+		cur, ok := bySeq[prev.seq]
+		if !ok {
+			return true
+		}
+		if cur.key != prev.key {
+			return true
+		}
+		if cur.rendered != prev.rendered && !prev.running {
+			return true
+		}
+	}
+	return false
 }
 
 func agyDigest(s string) string {
@@ -120,6 +205,7 @@ func parseAgySteps(raw []byte, conversation string) ([]agyStep, agyRevision) {
 			continue
 		}
 		step.record = sha256.Sum256(line)
+		step.rendered = step.renderedHash()
 		if step.Index != nil && *step.Index >= 0 {
 			step.seq = *step.Index + 1
 		} else if len(steps) > 0 {
@@ -140,11 +226,19 @@ func parseAgySteps(raw []byte, conversation string) ([]agyStep, agyRevision) {
 			if step.seq < last.seq && (floor < 0 || steps[floor].seq != step.seq) {
 				at = floor + 1
 				rev.native = fmt.Sprintf("%x", step.record[:10])
+			} else if step.seq < last.seq && floor >= 0 && steps[floor].seq == step.seq &&
+				isAgyStepRunning(steps[floor].Status) && step.Type == steps[floor].Type && step.CreatedAt == steps[floor].CreatedAt {
+				// An earlier RUNNING step (such as a background tool call) finished after later steps were logged.
+				// Update it in place without treating it as a branch rewind or discarding later steps.
+				step.branch = steps[floor].branch
+				step.key = steps[floor].key
+				steps[floor] = step
+				continue
 			} else {
 				if step.seq < last.seq || step.Type != last.Type || step.CreatedAt != last.CreatedAt {
 					rev.branch = agyDigest(rev.branch + "\n" + string(line))
 					rev.native = ""
-				} else if step.record != last.record {
+				} else if !isAgyStepRunning(last.Status) && step.rendered != last.rendered {
 					rev.native = fmt.Sprintf("%x", step.record[:10])
 				}
 				for len(steps) > 0 && steps[len(steps)-1].seq >= step.seq {
@@ -158,6 +252,15 @@ func parseAgySteps(raw []byte, conversation string) ([]agyStep, agyRevision) {
 		step.branch = rev.branch
 		step.key = strconv.Itoa(step.seq) + "@" + agyDigest(conversation+"\n"+step.CreatedAt+"\n"+rev.branch)
 		steps = slices.Insert(steps, at, step)
+	}
+	rev.steps = make([]agyStepMemo, len(steps))
+	for i, s := range steps {
+		rev.steps[i] = agyStepMemo{
+			seq:      s.seq,
+			key:      s.key,
+			rendered: s.rendered,
+			running:  isAgyStepRunning(s.Status),
+		}
 	}
 	return steps, rev
 }
@@ -257,6 +360,9 @@ func (s agyStep) wakeKey() string {
 
 func mapAgySteps(steps []agyStep, fallback time.Time, receipts map[string]bool) agyHistory {
 	var history agyHistory
+	if len(steps) > 0 {
+		history.stepHashes = make(map[int][32]byte, len(steps))
+	}
 	var pending []string
 	if fallback.IsZero() {
 		fallback = time.Now()
@@ -267,6 +373,7 @@ func mapAgySteps(steps []agyStep, fallback time.Time, receipts map[string]bool) 
 	var notified bool
 	for _, step := range steps {
 		history.seq = step.seq
+		history.stepHashes[step.seq] = step.rendered
 		at, err := time.Parse(time.RFC3339Nano, step.CreatedAt)
 		if err != nil || at.IsZero() {
 			at = fallback
