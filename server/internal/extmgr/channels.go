@@ -362,7 +362,7 @@ func (h *Manager) channelExtensionSet(ctx context.Context, id string, on bool) e
 
 // configureFeishu applies the assistant's changes to the bot's switches (feishu.configure): only what is given.
 func (h *Manager) configureFeishu(ctx context.Context, enabled *bool, features map[string]bool) error {
-	var fs *BotFeatures
+	var fs *botFeatureUpdate
 	if len(features) > 0 {
 		f := h.botFeatures()
 		for id, on := range features {
@@ -402,7 +402,7 @@ func (h *Manager) configureFeishu(ctx context.Context, enabled *bool, features m
 				return errors.New(i18n.T(h.botLang(ctx), "hub-channels.no_feature", i18n.Args{"feature": id}))
 			}
 		}
-		fs = &f
+		fs = &botFeatureUpdate{replace: &f}
 	}
 	return h.updateBot(ctx, enabled, nil, nil, nil, fs)
 }
