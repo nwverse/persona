@@ -91,7 +91,7 @@ type Settings struct {
 	// MainBackgroundFolded: the apps fold the main conversation's background rounds (another conversation's message,
 	// a scheduled task or follow-up) into one line that opens on request (#4314). nil is on (the default).
 	MainBackgroundFolded *bool `json:"main_background_folded,omitempty"`
-	// MainCompactWindow: the compaction window, in tokens, the main conversation is held to when its launcher declares a
+	// MainCompactWindow: the compaction cap, in tokens, for main/lead/background conversations when the launcher declares a
 	// larger one (#7314, main_compact_window.go); nil is 400000, 0 follows the launcher.
 	MainCompactWindow *int `json:"main_compact_window,omitempty"`
 	// RecentTaskChats: the apps' sidebar Recent lists the chats a scheduled task or the background supervisor started
