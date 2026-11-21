@@ -28,7 +28,7 @@ var mainOnlySignals = []string{sigFailed, sigStarted, sigEscalated, sigLeaderStu
 // backgroundSignals are the signals digestTo sends the background supervisor for the main conversation's tasks:
 // every kind but mainOnlySignals.
 var backgroundSignals = []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigAllStopped, sigInterrupted,
-	sigPRConflict, sigDraftPR, sigReport, sigOrphaned, sigAsk, sigDecide, sigDecisionReply, sigRecheck, sigUndecidable,
+	sigPRConflict, sigDraftPR, sigReport, sigOrphaned, sigAsk, sigDecide, sigDecisionReply, sigRecheck, sigUndecidable, sigCardlessWait,
 	sigOwnerCannot, sigParkedDue, sigParkDecided, sigInbox, sigOverdue, sigCheck}
 
 // roundConnectorTools are the round's tools that come with the Lark extension (lark_search) or the lark-cli connector
