@@ -796,8 +796,13 @@ func TestMCPAssistantWithoutPeer(t *testing.T) {
 	check := func(cases map[string]bool) {
 		t.Helper()
 		for session, want := range cases {
-			if got, ok := n.mcpAssistantOf(0, errNoPeer, nil, session); ok != want || ok && got != session {
+			got, rt, ok := n.mcpAssistantOf(0, errNoPeer, nil, session)
+			if ok != want || ok && got != session {
 				t.Errorf("%q: %q %v, want %v", session, got, ok, want)
+			}
+			// The runtime that vouches for one of its own conversations, none for one of this node's processes.
+			if onRuntime := strings.HasPrefix(session, "session-"); ok && (rt != nil) != onRuntime {
+				t.Errorf("%q: runtime %v, want one %v", session, rt, onRuntime)
 			}
 		}
 	}
@@ -814,11 +819,15 @@ func TestMCPAssistantWithoutPeer(t *testing.T) {
 	}
 	n.state.put("session-p", sessionState{Cwd: identity.AssistantDir(n.home)})
 	n.runtimes.claim(connect("plain", false), "session-p") // a runtime that runs no assistant
-	n.runtimes.claim(connect("dsh", true), "session-r")
+	dsh := connect("dsh", true)
+	n.runtimes.claim(dsh, "session-r")
 	n.runtimes.claim(connect("dsh2", true), "session-w") // not an assistant conversation
 	check(map[string]bool{"session-r": true, "session-p": false, "session-w": false})
+	if _, rt, _ := n.mcpAssistantOf(0, errNoPeer, nil, "session-r"); rt != dsh {
+		t.Errorf("session-r: runtime %v, want the one that has it", rt)
+	}
 	// Any other reason the peer is not known (not a unix socket) is no assistant's.
-	if got, ok := n.mcpAssistantOf(0, errors.New("not a unix socket"), nil, "s1"); ok {
+	if got, _, ok := n.mcpAssistantOf(0, errors.New("not a unix socket"), nil, "s1"); ok {
 		t.Errorf("a peer not known for another reason: %q", got)
 	}
 }

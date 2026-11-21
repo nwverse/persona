@@ -211,7 +211,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	case "mcp.tools":
 		var res map[string]any
 		// The assistant's only when the node says so too (clicall.go mcpSession).
-		session, assistant := n.mcpSession(c, req)
+		session, assistant, rt := n.mcpSession(c, req)
 		if session == "" && !assistant {
 			session = n.paneCaller(req.Pane) // an agent's: the hub tells a task leader's tools from any other's by it
 		}
@@ -229,6 +229,16 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 			if res == nil {
 				res = map[string]any{}
 			}
+			// A runtime's assistant conversation (Antigravity) lists its tools here, through `personad mcp`, not on the
+			// runtime socket: the command gates' tools are its own, as there (runtimehost.go). Claude Code's assistant
+			// runs those commands with Bash, through its hook. Only a full list: an unchanged one keeps what was sent.
+			// shortcut: a gate that comes or goes while the hub's tools stay the same shows at their next change.
+			if tools, ok := res["tools"].([]any); ok && rt != nil && !guest && req.ToolSet == "" {
+				for _, g := range n.gateTools() {
+					tools = append(tools, g)
+				}
+				res["tools"] = tools
+			}
 			res["session"] = session
 			resp = res
 		}
@@ -236,14 +246,23 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		resp = n.cliCall(ctx, c, req)
 	case "mcp.call":
 		var res proto.ToolResult
-		session, assistant := n.mcpSession(c, req)
+		session, assistant, rt := n.mcpSession(c, req)
 		sid := n.mcpCaller(req.Name, session, req.Pane, assistant)
+		guest := req.Guest || n.guestOf(sid) != nil
 		if req.Name == toolMailSaveAttachment { // writes on this machine (mailattachment.go)
-			resp = n.saveMailAttachment(ctx, req.Args, sid, assistant, req.Guest || n.guestOf(sid) != nil)
+			resp = n.saveMailAttachment(ctx, req.Args, sid, assistant, guest)
 			break
 		}
+		// A command gate's tool runs here for one of the runtime's assistant conversations only, as on the runtime
+		// socket (runtimehost.go): through the gate (larkCheck), then the skill's script.
+		if rt != nil && !guest && req.ToolSet == "" && n.runtimeAssistantChat(rt, sid) && n.runtimeWorkerCaller(c, rt, sid) {
+			if g := n.gateTool(req.Name); g != nil {
+				resp = n.assistantGateTool(ctx, g, sid, req.Args)
+				break
+			}
+		}
 		params := map[string]any{"name": req.Name, "args": req.Args, "session_id": sid,
-			"assistant": assistant, "guest": req.Guest || n.guestOf(sid) != nil}
+			"assistant": assistant, "guest": guest}
 		n.putSourcePermission(c, params, sid, req.Name, req.Args)
 		if origin := n.assistantOrigin(sid); origin != "" {
 			params["origin"] = origin
