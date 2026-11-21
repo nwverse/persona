@@ -597,7 +597,8 @@ type taskCardBody struct {
 // dropContinuation closes an aborted takeover and removes its brief link as well. Otherwise the closed previous card
 // would forever name a card that never took over as its successor, in memory and after a restart (#5732).
 func (s *Service) dropContinuation(ctx context.Context, id string, why error) {
-	if err := s.unlinkTaskBrief(context.WithoutCancel(ctx), id); err != nil {
+	ctx = context.WithoutCancel(ctx) // the caller may have left exactly when its Agent link failed; cleanup still has to commit
+	if err := s.unlinkTaskBrief(ctx, id); err != nil {
 		why = errors.Join(why, fmt.Errorf("take back the continuation: %w", err))
 	}
 	s.dropAdoption(ctx, id, why)

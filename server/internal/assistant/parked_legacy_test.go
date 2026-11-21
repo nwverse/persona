@@ -271,14 +271,15 @@ func TestLegacyOwnerPriorityPreservesOwnerDecisions(t *testing.T) {
 			if err != nil || len(decisions) != 1 || r == nil || r.Decided != decisions[0].ID {
 				t.Fatalf("missing or duplicated owner decision: %+v, review %+v, %v", decisions, r, err)
 			}
-			// Immediate delivery can take the pending signal before this assertion runs. Accept either settled form:
+			// Immediate delivery can move the pending signal between two reads. Wait for one settled form in a single loop:
 			// the recovered signal is still pending, or exactly one real message carried it; never both nor neither.
-			waitFor(t, "the recovered park decision", func() bool {
-				return slices.Contains(pendingKinds(again, task.ID), sigParkDecided) ||
-					strings.Contains(strings.Join(hub.notices(), "\n"), "signal=park_decided")
+			var pending []string
+			var delivered int
+			waitFor(t, "the recovered park decision to settle", func() bool {
+				pending = pendingKinds(again, task.ID)
+				delivered = strings.Count(strings.Join(hub.notices(), "\n"), "signal=park_decided")
+				return slices.Equal(pending, []string{sigParkDecided}) && delivered == 0 || len(pending) == 0 && delivered == 1
 			})
-			pending := pendingKinds(again, task.ID)
-			delivered := strings.Count(strings.Join(hub.notices(), "\n"), "signal=park_decided")
 			if len(pending) > 0 && (!slices.Equal(pending, []string{sigParkDecided}) || delivered != 0) {
 				t.Fatalf("an answered legacy choice was restated or duplicated: pending %v, messages %q", pending, hub.notices())
 			} else if len(pending) == 0 && delivered != 1 {

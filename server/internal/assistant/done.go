@@ -842,7 +842,7 @@ func ownerActionLine(text string) string {
 				return line
 			}
 		}
-		lower := strings.ToLower(line)
+		lower := strings.ToLower(ownerMarkdownLine(line))
 		for _, p := range []struct {
 			marker    string
 			negations []string

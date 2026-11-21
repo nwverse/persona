@@ -197,8 +197,9 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 		task.Delivery = clip(oneLine(deliverySummary(t)), 80)
 		var rank int
 		task.Health, rank = taskHealth(t, agents, now) // supervised tasks: what needs the assistant first (supervise.go)
-		if dismissed, err := s.decisionDismissed(ctx, t); err == nil && dismissed {
-			// The owner chose Don't handle on this decision: not theirs to answer now, so it is not raised again.
+		if dismissed, err := s.decisionDismissed(ctx, t); err == nil && dismissed && !t.Delivery.waitsForOwner() {
+			// The owner chose Don't handle on this decision: not theirs to answer now, so it is not raised again. An
+			// independent delivery approval is a different owner wait and keeps both its state and its priority (#5732).
 			task.Health, rank = "你选了不处理这个决定", 6 // i18n-ignore: the snapshot's words, as taskHealth has them
 		}
 		if v := t.Supervision; v.state(t) == reviewParked {

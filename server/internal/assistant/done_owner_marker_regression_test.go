@@ -101,6 +101,8 @@ func TestOwnerMarkerConditionalAndQuotedOccurrences(t *testing.T) {
 		{"Markdown list direct requirement", `- You need to approve the release.`, verdictNeedsUser},
 		{"Markdown ordered bold direct requirement", `1. **You need to approve the release.**`, verdictNeedsUser},
 		{"Markdown bold direct requirement", `**You need to approve the release.**`, verdictNeedsUser},
+		{"Markdown emphasis inside the direct marker", `The work is complete. You **need to** approve the release.`, verdictNeedsUser},
+		{"Markdown emphasis inside a conditional marker stays conditional", `If you **need to** roll back, run make rollback.`, verdictDone},
 		{"Markdown list conditional stays conditional", `- If the release fails, you need to roll it back.`, verdictDone},
 		{"Markdown emphasis does not make a narrative direct", `**The report evaluates whether you need to split the module and concludes no.**`, verdictDone},
 	} {

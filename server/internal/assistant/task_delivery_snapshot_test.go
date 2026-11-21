@@ -95,7 +95,7 @@ func TestSnapshotDecisionDismissalKeepsIndependentDeliveryApproval(t *testing.T)
 	e.s.todos.mu.Lock()
 	e.s.todos.todos["task"].Delivery = &TodoDelivery{State: deliveryPR, Gate: "Approve the release", Unblock: unblockUser, At: time.Now()}
 	e.s.todos.mu.Unlock()
-	if got := snapshotStatesForTest(e.s, ctx)["task"]; got.State != "等你处理" {
+	if got := snapshotStatesForTest(e.s, ctx)["task"]; got.State != "等你处理" || got.Health != "等你处理" {
 		t.Fatalf("independent delivery approval was dismissed with the review: %+v", got)
 	}
 }

@@ -794,15 +794,38 @@ func (s *Service) linkTaskBrief(ctx context.Context, id, todoID, continues, reas
 	return nil
 }
 
-// unlinkTaskBrief takes back a continuation whose adoption failed. The durable row goes first: a failed delete leaves
-// memory matching what a restart would read rather than hiding the stale lineage only until then.
+// unlinkTaskBrief takes back a continuation whose adoption failed, including only the scope events written for its new
+// to-do. Durable writes go first: a failure leaves memory matching what a restart would read rather than hiding stale
+// lineage or criteria only until then.
 func (s *Service) unlinkTaskBrief(ctx context.Context, todoID string) error {
+	b := &s.tbriefs
+	b.mu.Lock()
+	link, linked := b.links[todoID]
+	b.mu.Unlock()
+	if linked && link.Brief != "" {
+		if _, _, err := s.changeBrief(ctx, link.Brief, func(tb *taskBrief) bool {
+			kept := make([]BriefEvent, 0, len(tb.st.Log))
+			removed := false
+			for _, ev := range tb.st.Log {
+				if ev.Kind == briefEventScope && ev.Todo == todoID {
+					removed = true
+					continue
+				}
+				kept = append(kept, ev)
+			}
+			if removed {
+				tb.st.Log = kept
+			}
+			return removed
+		}); err != nil {
+			return err
+		}
+	}
 	if st := s.taskBriefDB(); st != nil {
 		if err := st.UnlinkTaskBriefTodo(ctx, todoID); err != nil {
 			return err
 		}
 	}
-	b := &s.tbriefs
 	b.mu.Lock()
 	delete(b.links, todoID)
 	b.mu.Unlock()

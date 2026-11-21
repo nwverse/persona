@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -157,11 +158,18 @@ func TestAgentSendAfterCloseStartsAnIndependentBrief(t *testing.T) {
 
 type failingTakeoverAgentStore struct {
 	*db.DB
-	fail atomic.Bool
+	fail   atomic.Bool
+	onFail func()
 }
 
 func (s *failingTakeoverAgentStore) LinkTodoAgentWithSource(ctx context.Context, todoID, machineID, sessionID, title, cwd, agent, startError, source, via string, linkedAt time.Time) ([]string, error) {
 	if s.fail.Load() {
+		if s.onFail != nil {
+			s.onFail()
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		return nil, errors.New("injected takeover Agent link failure")
 	}
 	return s.DB.LinkTodoAgentWithSource(ctx, todoID, machineID, sessionID, title, cwd, agent, startError, source, via, linkedAt)
@@ -185,7 +193,11 @@ func TestFailedTakeoverAgentLinkRollsBackLineage(t *testing.T) {
 		t.Fatal("task agent is missing")
 	}
 	st.fail.Store(true)
-	if _, made, err := s.adoptAgent(context.Background(), "conv1", machine, agent, "接手实现", "", "换 Agent 接手实现", nil, 0, true); err == nil || made {
+	briefBefore, ok := s.briefOfTodo(old.ID)
+	if !ok {
+		t.Fatal("closed task has no brief")
+	}
+	if _, made, err := s.adoptAgent(context.Background(), "conv1", machine, agent, "接手实现", "", "换 Agent 接手实现", []string{"criterion from a failed takeover"}, 7, true); err == nil || made {
 		t.Fatalf("adopt with a failed Agent link: made %v, err %v", made, err)
 	}
 	if lineage := s.taskLineage(old.ID); len(lineage) != 1 || lineage[0].SupersededBy != "" {
@@ -210,5 +222,42 @@ func TestFailedTakeoverAgentLinkRollsBackLineage(t *testing.T) {
 		if link.Continues == old.ID {
 			t.Fatalf("failed takeover left a durable continuation: %+v", link)
 		}
+	}
+	briefAfter, ok := s.briefOfTodo(old.ID)
+	if !ok || !slices.Equal(briefAfter.Criteria, briefBefore.Criteria) || briefAfter.ExpectNow != briefBefore.ExpectNow || len(briefAfter.Log) != len(briefBefore.Log) {
+		t.Fatalf("failed takeover changed the shared brief: before %+v, after %+v", briefBefore, briefAfter)
+	}
+}
+
+// Caller cancellation during the Agent link must not stop the aborted continuation's own cleanup on real Postgres.
+func TestCancelledTakeoverStillClosesItsCard(t *testing.T) {
+	st := &failingTakeoverAgentStore{DB: todoTestDB(t)}
+	s, f, old := newSupervisedServiceOn(t, st)
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	raw, _ := json.Marshal(map[string]any{"todo_id": old.ID, "verdict": "accepted", "note": "Spec 已验收", "checks": completeReviewChecks(todoNow(s, old.ID))})
+	if _, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw); err != nil {
+		t.Fatal(err)
+	}
+	machine, ok := s.device(context.Background(), "box")
+	if !ok {
+		t.Fatal("task machine is missing")
+	}
+	agent, ok := s.session(context.Background(), "box", "s1")
+	if !ok {
+		t.Fatal("task agent is missing")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	st.onFail = cancel
+	st.fail.Store(true)
+	if _, made, err := s.adoptAgent(ctx, "conv1", machine, agent, "接手实现", "", "换 Agent 接手实现", nil, 0, true); !errors.Is(err, context.Canceled) || made {
+		t.Fatalf("cancelled adoption: made %v, err %v", made, err)
+	}
+	for _, todo := range s.todosOf(context.Background(), "*") {
+		if todo.ID != old.ID && todo.DoneAt == nil {
+			t.Fatalf("cancellation left an aborted takeover open: %+v", todo)
+		}
+	}
+	if lineage := s.taskLineage(old.ID); len(lineage) != 1 || lineage[0].SupersededBy != "" {
+		t.Fatalf("cancelled takeover rewrote the previous task's lineage: %+v", lineage)
 	}
 }
