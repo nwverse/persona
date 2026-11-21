@@ -547,6 +547,11 @@ func (s *Service) renderProjectContexts(ctx context.Context, e *kb.Engine, proje
 		if block == "" {
 			block = s.renderLegacyProject(e, p, language, fromExtensions[p.Slug])
 		}
+		// The lessons its accepted tasks taught (task_lessons.go): a block of their own after the project's, so either
+		// rendering above stays as it was.
+		if lessons := s.renderProjectLessons(ctx, e, p, language); lessons != "" {
+			block = strings.TrimSpace(block + "\n\n" + lessons)
+		}
 		if block != "" {
 			blocks = append(blocks, block)
 		}
