@@ -1177,15 +1177,13 @@ private extension Error {
     var watchShown: String? { isOffline ? localizedDescription : shown }
 }
 
-/// A running agent's title in the list, with Claude Code's ultracode mark after its last word while that is on (#1307; no
-/// switch on the watch). The mark is part of the text: beside the text's frame it sat after the first line of a title on
-/// two, between its halves. It comes and goes with a state change, at once with Reduce Motion.
+/// A running Agent's title, with its confirmed workflow mark after the last word even when the title wraps.
 struct WatchTitle: View {
     var session: Session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let mark = Ultracode.rowMark(session)
+        let mark = Ultracode.workflowMark(session)
         title(mark)
             .font(.headline)
             .lineLimit(2)
@@ -1193,12 +1191,12 @@ struct WatchTitle: View {
     }
 
     /// The label is the whole text's: an image's own inside a `Text` is not read.
-    private func title(_ mark: Bool) -> Text {
+    private func title(_ mark: AgentWorkflowKind?) -> Text {
         let title = session.displayTitle
-        guard mark else { return Text(title) }
+        guard let mark else { return Text(title) }
         let icon = Text(Theme.Icon.image(Theme.Icon.workflow)).font(.footnote.weight(.semibold)).foregroundStyle(Theme.ai)
         return (Text(title) + Text(verbatim: "\u{00A0}") + icon)
-            .accessibilityLabel(title + String(localized: ", ", comment: "List separator") + Ultracode.onWords)
+            .accessibilityLabel(title + String(localized: ", ", comment: "List separator") + mark.onWords)
     }
 }
 

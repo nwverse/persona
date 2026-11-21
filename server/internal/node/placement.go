@@ -611,6 +611,11 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 	for id, a := range n.agents {
 		if a.PaneID != "" {
 			was[a.PaneID] = id
+			if a.Agent == "codex" && m[id].PaneID != a.PaneID && (heard == nil || heard[host.ParsePane(a.PaneID).Kind]) {
+				if st, ok := n.state.get(id); ok && st.CodexMultiAgentPane == a.PaneID {
+					moved = append(moved, func() { n.state.clearCodexMultiAgent(id, a.PaneID) })
+				}
+			}
 		}
 	}
 	for id, a := range m {

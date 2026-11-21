@@ -634,6 +634,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		}
 	}()
 	placed, placedWhy, placedPermission := t.Machine, t.Why, t.Permission
+	workflowKind, workflowActive, workflowNote := t.WorkflowKind, t.WorkflowActive, t.WorkflowNote
 	if t.Role == roleLeader { // legacy one-shot tool discovery may wait for this link (task_leader.go)
 		s.leaderStarts.Add(1)
 		defer s.leaderStarts.Add(-1)
@@ -703,8 +704,12 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		s.logf("task %s: queued launch eligibility unconfirmed: %v", t.TodoID, quotaState)
 		return
 	}
-	if t.Machine != placed || t.Why != placedWhy || t.Permission != placedPermission { // workspace admission already persisted the actual checkout
-		s.updatePlanTask(ctx, planID, i, t)
+	if t.Machine != placed || t.Why != placedWhy || t.Permission != placedPermission ||
+		t.WorkflowKind != workflowKind || t.WorkflowActive != workflowActive || t.WorkflowNote != workflowNote {
+		// A reconciled launch can arrive after the original start deadline. Persist its receipt before linking it.
+		saveCtx, saveCancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+		s.updatePlanTask(saveCtx, planID, i, t)
+		saveCancel()
 	}
 	launched := err == nil
 	if launched {

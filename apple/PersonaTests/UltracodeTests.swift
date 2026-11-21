@@ -150,6 +150,24 @@ struct UltracodeTests {
         #expect(SessionModesMenu.title(try session(#","ultracode":true,"model":"claude-opus-5-5""#), setsModes: false)?.mark == nil)
     }
 
+    @Test func codexWorkflowRequiresConfirmationAndNeverOffersALiveSwitch() throws {
+        let fields = #","agent":"codex","effort":"ultra""#
+        let confirmed = try session(fields + #","codex_multi_agent_v2":true"#)
+        #expect(confirmed.codexMultiAgentV2 == true)
+        #expect(Ultracode.workflowMark(confirmed) == .codexMultiAgentV2)
+        #expect(!Ultracode.offered(confirmed, features: Self.features))
+        #expect(Ultracode.workflowMark(try session(fields)) == nil)
+        #expect(Ultracode.workflowMark(try session(fields + #","codex_multi_agent_v2":false"#)) == nil)
+        #expect(Ultracode.workflowMark(try session(fields + #","codex_multi_agent_v2":"true""#)) == nil)
+        #expect(Ultracode.workflowMark(try session(fields + #","codex_multi_agent_v2":true"#, state: "offline")) == nil)
+        #expect(Ultracode.workflowMark(try session(#","ultracode":true"#)) == .claudeUltracode)
+
+        let summary = try session(fields + #","waiting":false,"codex_multi_agent_v2":true"#)
+        let unconfirmed = try session(fields + #","waiting":false"#)
+        #expect(summary.preservingDetails(from: unconfirmed).codexMultiAgentV2 == true)
+        #expect(unconfirmed.preservingDetails(from: confirmed).codexMultiAgentV2 == nil)
+    }
+
     @Test func theResumeNotice() throws {
         let lost = #","ultracode":false,"ultracode_lost_at":"2026-11-01T08:00:00Z""#
         #expect(Ultracode.lostShown(try session(lost), features: Self.features))

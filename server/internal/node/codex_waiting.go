@@ -172,6 +172,9 @@ func codexSkipUpdateKeys(text string) []string {
 func (n *Node) openCodexWait(ctx context.Context, pane, cwd, launcher, mode string, execution modelExecution, began time.Time) *proto.Session {
 	w := &codexWait{id: codexWaitID(), pane: pane, cwd: cwd, began: began}
 	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC(), Model: execution.Model, ModelEffort: execution.Effort}
+	if execution.CodexMultiAgentV2 {
+		st.CodexMultiAgentPane = pane
+	}
 	if mode == "plan" { // as a start with a message keeps it (codex_start.go), for the thread to take
 		st.AppMode = mode
 	}
@@ -694,7 +697,7 @@ func (n *Node) attachCodexWait(ctx context.Context, w *codexWait, thread, how st
 	if !w.manual {
 		st, _ := n.state.get(w.id)
 		n.state.put(thread, sessionState{Pane: w.pane, Launcher: st.Launcher, Cwd: st.Cwd, Model: st.Model, ModelEffort: st.ModelEffort,
-			StartedAt: st.StartedAt, AppMode: st.AppMode, CreationID: st.CreationID, Incarnation: st.Incarnation})
+			StartedAt: st.StartedAt, AppMode: st.AppMode, CreationID: st.CreationID, Incarnation: st.Incarnation, CodexMultiAgentPane: st.CodexMultiAgentPane})
 	}
 	n.mu.Lock()
 	occupied := n.agents[thread].PaneID

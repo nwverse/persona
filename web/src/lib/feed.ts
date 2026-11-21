@@ -22,6 +22,7 @@ import { upsertTaskCards, type TaskCardMetadata } from "./task-cards";
 
 export type TaskWorkspace = "new" | "none" | { existing: string } | { new: { branch?: string } };
 export interface TaskWorkspaceResolved { machine: string; path: string; branch?: string; workspace_id?: string; created?: boolean }
+export type PlanWorkflowKind = "claude_ultracode" | "codex_multi_agent_v2" | "unsupported";
 
 export interface PlanTask {
   title: string;
@@ -35,8 +36,14 @@ export interface PlanTask {
   /** An Agent preset (#2225): a tier of the model profile in use, resolved when the task starts. */
   tier?: string;
   permission?: string;
-  /** The agent starts with Claude Code's ultracode on (#12). On start, `true` / `false` overrides it; left out, the hub keeps the assistant's choice. */
+  /** The requested workflow mode. On start, true / false overrides it; left out, the hub keeps the assistant's choice. */
   ultracode?: boolean;
+  /** The workflow this task's resolved launcher supports, as reported by the manager. */
+  workflow_kind?: PlanWorkflowKind;
+  /** The node confirmed the Codex workflow in this task's start receipt. */
+  workflow_active?: true;
+  /** The manager's explanation when the task started without its requested workflow. */
+  workflow_note?: string;
   readonly?: boolean;
   why?: string;
   /** The reasoning effort the assistant chose for its Agent (task_plan's `effort`); absent: the launcher's default. */
@@ -636,14 +643,13 @@ export function planEditsChanged(before: PlanTaskEdit[], edits: PlanTaskEdit[]):
   return edits.some((e, i) => (Object.keys(e) as (keyof PlanTaskEdit)[]).some((k) => JSON.stringify(e[k] ?? "") !== JSON.stringify(before[i]?.[k] ?? "")));
 }
 
-/** Whether a computer can't start an agent with ultracode (lib/ultracode machineStartBlocked); a task chosen with it
- *  there starts without. */
-export type UltracodeBlocked = (machine: string) => boolean;
+/** Whether the task's workflow is blocked on the selected computer. */
+export type UltracodeBlocked = (machine: string, workflow?: PlanWorkflowKind) => boolean;
 
 /** A task's ultracode as Start sends it (#12): the choice, off on a computer that can't; undefined when that is the
  *  assistant's own (left out, the hub keeps it). */
 function ultracodeToSend(planned: PlanTask | undefined, on: boolean, machine: string, blocked: UltracodeBlocked): boolean | undefined {
-  const sent = on && !blocked(machine);
+  const sent = on && !blocked(machine, planned?.workflow_kind);
   return sent === (planned?.ultracode === true) ? undefined : sent;
 }
 

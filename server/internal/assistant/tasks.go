@@ -74,10 +74,13 @@ type PlanTask struct {
 	Speed              string `json:"speed,omitempty"`
 	Tier               string `json:"tier,omitempty"`
 	Permission         string `json:"permission,omitempty"`
-	// Ultracode: the agent starts with Claude Code's ultracode on (#12). A pointer so that an edit from the card can
-	// turn it off, and one from a client that does not know it keeps the assistant's choice.
+	// Ultracode requests this launcher's workflow at start. Omission keeps the plan's choice on an edit.
 	Ultracode *bool `json:"ultracode,omitempty"`
-	Readonly  bool  `json:"readonly,omitempty"`
+	// WorkflowKind is projected by the manager from the fitted launcher. It records the kind requested, not success.
+	WorkflowKind   taskWorkflowKind `json:"workflow_kind,omitempty"`
+	WorkflowActive bool             `json:"workflow_active,omitempty"`
+	WorkflowNote   string           `json:"workflow_note,omitempty"`
+	Readonly       bool             `json:"readonly,omitempty"`
 	// UserRequested: the user asked for this very task in the turn that planned it (#2559); with
 	// assistant.start_requested_tasks on it starts without the card's "Start".
 	UserRequested bool   `json:"user_requested,omitempty"`

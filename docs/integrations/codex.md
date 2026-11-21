@@ -419,6 +419,20 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   multiple turns each, messages with quotes / newlines / `$` / backticks / Chinese / long text,
   unchanged in rollout, one session per pane, correct route, a subsequent phone message received). App: `MachinePagesTests.testNewCodexSessionStartsWithItsFirstMessage`.
 
+### Multi-agent v2 for one start (#12082)
+
+Set `ultracode: true` on an `agent_start` call or a task in `task_plan` that selects a fresh local terminal Codex
+launcher. The node checks the executable it will run and enables the stable `features.multi_agent_v2` flag for that
+process with `-c features.multi_agent_v2=true`. The first verified stable upstream version is
+[Codex CLI 0.145.0](https://github.com/openai/codex/blob/rust-v0.145.0/codex-rs/features/src/lib.rs). Other starts use their
+ordinary launch arguments. The process-local flag requires no change to `~/.codex/config.toml`.
+
+An unsupported executable, remote runtime, desktop App session, or resume is refused before launching with the flag.
+For a new assistant-dispatched Agent, Persona retries without the option once and reports the reason in its receipt.
+The Agent list shows the option for the live process that Persona started. The plan editor distinguishes a request
+from its start receipt, which records whether the launch used the option. Codex reasoning effort and Claude Code's
+live workflow control have their own settings.
+
 ### Starting without a first message
 
 Since 2026-11-12 (#4961) a Codex start may leave out the first message: Agents run in a terminal (#4754), and `codex` in a terminal needs none. The node opens Codex in its new tab as above, without the message,

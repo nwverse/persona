@@ -27,7 +27,7 @@ import { draftLine, rowLine } from "../../lib/row-line";
 import { useLeftDraft } from "../../lib/drafts";
 import { rememberSessionRow, useStore } from "../../lib/store";
 import type { Session } from "../../lib/types";
-import { ultracodeMarkShown } from "../../lib/ultracode";
+import { agentWorkflowMark } from "../../lib/ultracode";
 import { SessionMark } from "../../ui/AgentMark";
 import { cx, Menu, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { contextMenuProps } from "../../ui/context-menu";
@@ -354,7 +354,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
   const previewText = line?.text || plainMarkdown(sessionPreview(s)) || s.activity || "";
   const now = useNow(60_000, Boolean(s.updated_at));
   const timeLabel = s.updated_at ? ago(s.updated_at, now) : "";
-  const ultra = ultracodeMarkShown(s);
+  const ultra = agentWorkflowMark(s);
   const hasErr = sessionHasError(s, ctx.interactions);
 
   const evidence = useMemo(
@@ -424,7 +424,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
             >
               {sessionTitle(s)}
             </span>
-            {ultra && <UltraMark size={10} />}
+            {ultra && <UltraMark size={10} {...ultra} />}
             {timeLabel && (
               <span className="shrink-0 text-[11px] text-ink-3 tabular-nums group-hover/row:invisible">
                 {timeLabel}

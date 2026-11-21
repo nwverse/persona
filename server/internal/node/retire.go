@@ -426,6 +426,7 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 		return err // the tab is closed: no pane to bind
 	}
 	defer done()
+	n.state.clearCodexMultiAgent(id, "")
 	n.bindPane(pane, id) // the pane runs this thread (kept in its state): no guessing another rollout for it
 	wait, cancel := context.WithTimeout(ctx, codexStartWait)
 	defer cancel()

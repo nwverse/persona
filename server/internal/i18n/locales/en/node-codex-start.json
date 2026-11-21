@@ -1,6 +1,8 @@
 {
   "cleanup_failed": "Could not stop the abandoned Codex start in pane {pane}. No new tab will be opened until it can be closed: {reason}",
   "command_line_too_long": "The Codex message and launcher arguments need {units} UTF-16 units; Windows allows {limit}. Nothing was sent. Shorten the first message.",
+  "multi_agent_cli": "The selected Codex CLI could not enable multi-agent v2. It needs Codex 0.145.0 or later and a configuration that allows it.",
+  "multi_agent_launcher": "Multi-agent v2 needs a new local Codex terminal process with compatible launcher options.",
   "no_box_here": "Codex started in the pane you picked, but its input box didn’t appear within {seconds} seconds. The pane is left as it is.",
   "paste_unconfirmed": "The first message was not confirmed in Codex’s input box ({view}); Enter was not pressed.",
   "session_cleanup_failed": "The failed launch pane was closed, but its session could not be archived: {reason}"

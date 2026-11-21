@@ -693,8 +693,13 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		case proto.FasterSpeed(a.Speed):
 			where += " · " + a.Speed
 		}
+		approvedWorkflow := fit.taskWorkflow()
 		if a.Ultracode {
-			where += " · ultracode"
+			if approvedWorkflow == workflowCodex {
+				where += " · " + i18n.T(s.lang(ctx), "assistant-tools.codex_multi_agent")
+			} else {
+				where += " · ultracode"
+			}
 		}
 		if ok, err := s.confirmOutbound(ctx, machine, self, name, where+"\n\n"+a.Prompt, withoutSecretEnv(args)); err != nil {
 			return "", err
@@ -765,6 +770,11 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		if note != "" {
 			note = " Note: " + note + "."
+		}
+		workflow := fit.taskWorkflow()
+		if a.Ultracode && approvedWorkflow.changedTo(workflow) {
+			delete(params, "ultracode")
+			note += " " + i18n.T(s.lang(ctx), "assistant-tasks.workflow_launcher_changed")
 		}
 		// Secrets for this run (secret_handoff.go): checked, then asked on the card, for the computer and launcher it
 		// starts with; resolved and staged right before the start.
@@ -854,8 +864,13 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
 		if reason, refused := s.ultracodeRefusal(ctx, err, params); refused {
-			delete(params, "ultracode")                                  // an extra the agent it landed on cannot have: it starts without it (#3596)
-			note += " Note: started without ultracode (" + reason + ")." // an answer lost on the way still says so
+			delete(params, "ultracode")
+			// An answer lost on the way still reports the definite pre-start refusal.
+			if workflow == workflowCodex {
+				note += " " + skippedTaskWorkflow(s.lang(ctx), workflow, reason)
+			} else {
+				note += " Note: started without ultracode (" + reason + ")."
+			}
 			err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
 			// Refused before the node took the ticket, the same ticket starts it; one the refused start took and
 			// dropped is gone, and the values are staged once more for this start.
@@ -877,6 +892,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", err
 		}
 		s.nameStartedAgent(sctx, am.ID, res.Session, title)
+		if res.Session.CodexMultiAgentV2 {
+			note += " " + i18n.T(s.lang(ctx), "assistant-tools.codex_multi_agent_confirmed")
+		}
 		s.recordStartSuccess(ctx, am.ID, ranLauncher(launcher, res.Instead, res.Session))
 		if said := s.startInsteadNote(ctx, am, res.Instead, res.Session); said != "" {
 			note += " Note: " + said + "." // the engine ran another of the same kind, its default model, a lower effort (#8140)
@@ -1578,7 +1596,9 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		if !c.UpdatedAt.IsZero() {
 			fmt.Fprintf(&b, " · %s", ago(c.UpdatedAt))
 		}
-		if mode := ultracodeState(c.Ultracode); mode != "" {
+		if c.CodexMultiAgentV2 {
+			b.WriteString(" · codex_multi_agent_v2=on")
+		} else if mode := ultracodeState(c.Ultracode); mode != "" {
 			fmt.Fprintf(&b, " · ultracode=%s", mode)
 		}
 		if c.Loop != nil {

@@ -334,6 +334,8 @@ export interface Session {
   ultracode_note?: string;
   /** A switch request waits for the turn to end ("Applies next turn"); not the requested value. */
   ultracode_pending?: boolean;
+  /** The node enabled multi-agent v2 for this Codex process at launch. */
+  codex_multi_agent_v2?: true;
   /** It was on before the agent resumed, and the resumed process has it off: the chat offers to turn it back on. */
   ultracode_lost_at?: string;
   assistant?: boolean;

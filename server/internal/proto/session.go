@@ -241,6 +241,8 @@ type Session struct {
 	// apply to it, and a launcher switch to Launcher itself brings it back there. Beside EffortChangeFailed, in its
 	// padding: a Session stays in its allocation size class.
 	OffLauncher bool `json:"off_launcher,omitempty"`
+	// CodexMultiAgentV2 is true when Persona enabled multi-agent v2 for this Codex process at launch.
+	CodexMultiAgentV2 bool `json:"codex_multi_agent_v2,omitempty"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
 	// UltracodePending (beside AsksRead) means a requested change waits for an idle input box; LostAt asks the client
 	// to offer reopening after a resumed process reset an enabled switch. Reopening or dismissing the notice clears

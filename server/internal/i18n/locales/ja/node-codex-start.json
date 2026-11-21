@@ -1,6 +1,8 @@
 {
   "cleanup_failed": "ペイン {pane} で中断した Codex の起動を停止できませんでした。このペインを閉じられるまで、新しいタブは開きません：{reason}",
   "command_line_too_long": "Codex の最初のメッセージと起動引数は UTF-16 で {units} 単位必要ですが、Windows の上限は {limit} です。送信していません。最初のメッセージを短くしてください。",
+  "multi_agent_cli": "選択した Codex CLI ではマルチエージェント v2 を有効にできませんでした。Codex 0.145.0 以降と、機能を許可する設定が必要です。",
+  "multi_agent_launcher": "マルチエージェント v2 には、対応する起動オプションでローカル端末から新しい Codex プロセスを開始する必要があります。",
   "no_box_here": "選んだペインで Codex を起動しましたが、{seconds} 秒以内に入力欄が表示されませんでした。ペインはそのままです。",
   "paste_unconfirmed": "Codex の入力欄で最初のメッセージを確認できませんでした（{view}）。Enter は押していません。",
   "session_cleanup_failed": "起動に失敗したペインは閉じましたが、セッションをアーカイブできませんでした：{reason}"

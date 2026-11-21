@@ -73,14 +73,8 @@ nonisolated enum DispatchedTasks {
     static func entries(for item: FeedItem, plans: [String: TaskPlan], titleOf: (String) -> String?, fallback: String) -> [Entry]? {
         switch item.kind {
         case .plan:
-            guard let ref = item.ref, let plan = plans[ref] ?? item.plan,
-                  plan.conversation == item.conversation, plan.state == .started else { return nil }
-            return plan.tasks.enumerated().map { index, task in
-                Entry(id: "plan:\(plan.id):\(index)", todoID: task.todoID,
-                      title: task.todoID.flatMap(titleOf) ?? task.title,
-                      wake: task.continues?.isEmpty == false ? "continuation" : nil,
-                      error: task.error, conversation: item.conversation)
-            }
+            guard let ref = item.ref, let plan = plans[ref] ?? item.plan else { return nil }
+            return entries(for: plan, conversation: item.conversation, titleOf: titleOf)
         case .task:
             guard let id = item.ref else { return [] }
             guard !plans.values.contains(where: { plan in
@@ -88,6 +82,17 @@ nonisolated enum DispatchedTasks {
             }) else { return [] }
             return [Entry(id: "todo:" + id, todoID: id, title: titleOf(id) ?? fallback, wake: item.wake, conversation: item.conversation)]
         default: return nil
+        }
+    }
+
+    /// Pass the plan already resolved by the feed so its embedded body is decoded once per render.
+    static func entries(for plan: TaskPlan, conversation: String, titleOf: (String) -> String?) -> [Entry]? {
+        guard plan.conversation == conversation, plan.state == .started else { return nil }
+        return plan.tasks.enumerated().map { index, task in
+            Entry(id: "plan:\(plan.id):\(index)", todoID: task.todoID,
+                  title: task.todoID.flatMap(titleOf) ?? task.title,
+                  wake: task.continues?.isEmpty == false ? "continuation" : nil,
+                  error: task.error, conversation: conversation)
         }
     }
 }

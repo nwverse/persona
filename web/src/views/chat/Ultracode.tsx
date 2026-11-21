@@ -47,13 +47,13 @@ export function QuotaLine({ quota, warn, className, now }: { quota: UltracodeQuo
 
 /** The switch's head: the mark, the name and the switch, one line. Grayed, its track keeps a hairline: the shared
  *  switch's 50% on a white card all but vanishes, and here it sits beside the reason it can't be used. */
-function SwitchHead({ on, disabled, busy, onChange }: { on: boolean; disabled: boolean; busy?: boolean; onChange: (on: boolean) => void }) {
+function SwitchHead({ on, disabled, busy, onChange, label = ULTRACODE }: { on: boolean; disabled: boolean; busy?: boolean; onChange: (on: boolean) => void; label?: string }) {
   return (
     <div className="flex items-center gap-2">
       <Icon name="layers" size={13} stroke={2.2} className="shrink-0 text-ai" />
-      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ink">{ULTRACODE}</span>
+      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ink">{label}</span>
       {busy && <Spinner size={11} />}
-      <Switch on={on} disabled={disabled} onChange={onChange} label={ULTRACODE} className="disabled:shadow-[inset_0_0_0_1px_var(--ink-3)]" />
+      <Switch on={on} disabled={disabled} onChange={onChange} label={label} className="disabled:shadow-[inset_0_0_0_1px_var(--ink-3)]" />
     </div>
   );
 }
@@ -84,19 +84,23 @@ export function UltracodeSwitchRow({ session }: { session: Session }) {
 /** The same switch for an agent about to start: in "New agent", under "Thinking effort" (off each time the sheet opens,
  *  never remembered), and for each task in a plan's "Edit" (#12). `blocked`: why this computer can't start with it (its
  *  Claude Code is too old), grayed and said instead of the line. */
-export function UltracodeStartRow({ on, onChange, blocked }: { on: boolean; onChange: (on: boolean) => void; blocked: string }) {
+export function UltracodeStartRow({ on, onChange, blocked, copy }: {
+  on: boolean; onChange: (on: boolean) => void; blocked: string; copy?: { label: string; subtitle: string };
+}) {
   return (
     <div className="rounded-control bg-surface px-3 py-2 shadow-hairline">
-      <SwitchHead on={on && !blocked} disabled={Boolean(blocked)} onChange={onChange} />
-      <p data-ultracode-line className={cx("mt-1 pl-[21px] text-[11.5px] leading-snug break-words", blocked ? "text-orange" : "text-ink-3")}>{blocked || t("ultracode.subtitle")}</p>
-      <UltracodeQuotaLine warn={!blocked} className="mt-1 pl-[21px]" />
+      <SwitchHead on={on && !blocked} disabled={Boolean(blocked)} onChange={onChange} label={copy?.label} />
+      <p data-ultracode-line className={cx("mt-1 pl-[21px] text-[11.5px] leading-snug break-words", blocked ? "text-orange" : "text-ink-3")}>{blocked || (copy?.subtitle ?? t("ultracode.subtitle"))}</p>
+      {!copy && <UltracodeQuotaLine warn={!blocked} className="mt-1 pl-[21px]" />}
     </div>
   );
 }
 
 /** A plan task's ultracode on its card (#12), beside its computer, folder, model and permission chips: a toggle in the
  *  AI colour while on, quiet while off. `blocked`: why its computer can't start with it, grayed and said on hover. */
-export function UltracodeChip({ on, onChange, blocked, disabled }: { on: boolean; onChange: (on: boolean) => void; blocked: string; disabled?: boolean }) {
+export function UltracodeChip({ on, onChange, blocked, disabled, label }: {
+  on: boolean; onChange: (on: boolean) => void; blocked: string; disabled?: boolean; label?: string;
+}) {
   const shown = on && !blocked;
   return (
     <button
@@ -104,7 +108,7 @@ export function UltracodeChip({ on, onChange, blocked, disabled }: { on: boolean
       data-testid="plan-ultracode"
       aria-pressed={shown}
       disabled={disabled || Boolean(blocked)}
-      title={blocked || (shown ? t("ultracode.plan_on") : t("ultracode.plan_off"))}
+      title={blocked || (label ? undefined : shown ? t("ultracode.plan_on") : t("ultracode.plan_off"))}
       onClick={() => onChange(!shown)}
       className={cx(
         "inline-flex h-6 items-center gap-1 rounded-full px-2 text-[12px] whitespace-nowrap transition-colors disabled:cursor-not-allowed",
@@ -113,7 +117,7 @@ export function UltracodeChip({ on, onChange, blocked, disabled }: { on: boolean
       )}
     >
       <Icon name="layers" size={12} stroke={2.2} className="shrink-0" />
-      {ULTRACODE}
+      {label ?? ULTRACODE}
     </button>
   );
 }

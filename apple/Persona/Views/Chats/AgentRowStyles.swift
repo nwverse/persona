@@ -133,10 +133,10 @@ extension SlotRow {
     }
 
     @MainActor private var titleText: some View {
-        UltracodeMark.after(session.displayTitle, on: ultracodeMark)
+        UltracodeMark.after(session.displayTitle, workflow: workflowMark)
             .font(session.state == .unread ? Theme.Font.bodyHeavy : Theme.Font.bodyStrong)
             .lineLimit(1)
-            .animation(UltracodeMark.motion, value: ultracodeMark)
+            .animation(UltracodeMark.motion, value: workflowMark)
     }
 
     @MainActor private var timeText: some View {

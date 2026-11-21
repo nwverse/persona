@@ -86,3 +86,16 @@ func TestRuntimeSummaryKeepsJustFinished(t *testing.T) {
 		t.Fatalf("%s %v", b, err)
 	}
 }
+
+func TestRuntimeSummaryKeepsConfirmedCodexWorkflow(t *testing.T) {
+	for _, active := range []bool{true, false} {
+		row := runtimeSummary(proto.Session{Agent: "codex", SessionID: "codex-thread", CodexMultiAgentV2: active})
+		raw, err := json.Marshal(&row)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(string(raw), `"codex_multi_agent_v2":true`); got != active {
+			t.Fatalf("summary confirmation = %v, want %v: %s", got, active, raw)
+		}
+	}
+}

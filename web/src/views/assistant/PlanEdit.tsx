@@ -55,7 +55,7 @@ export function PlanEditDialog({ plan, original, ultracode, onClose, onStart }: 
       footer={
         <>
           <Button onClick={close}>{t("common.cancel")}</Button>
-          <Button tone="accent" disabled={!ready} onClick={() => onStart(planEditsToSend(original, tasks, (machine) => Boolean(machineStartBlocked(getState(), machine))))}>
+          <Button tone="accent" disabled={!ready} onClick={() => onStart(planEditsToSend(original, tasks, (machine, workflow) => Boolean(machineStartBlocked(getState(), machine, workflow))))}>
             {t("assistant-tasks.plan_start")}
           </Button>
         </>
@@ -65,6 +65,7 @@ export function PlanEditDialog({ plan, original, ultracode, onClose, onStart }: 
         {tasks.map((task, i) => {
           const id = `plan-${plan.id}-${i}`;
           const known = machines.some((m) => m.id === task.machine);
+          const workflow = plan.tasks[i]?.workflow_kind;
           return (
             <fieldset key={i} className="flex flex-col gap-3">
               <legend className="mb-2 text-[12px] font-semibold text-ink-3">{tasks.length > 1 ? t("assistant-taskeditor.plan_edit_task_n", { n: i + 1 }) : t("assistant-taskeditor.plan_edit_task")}</legend>
@@ -105,9 +106,13 @@ export function PlanEditDialog({ plan, original, ultracode, onClose, onStart }: 
                 <label htmlFor={`${id}-model`} className={LABEL}>{t("assistant-taskeditor.plan_edit_model")}</label>
                 <input id={`${id}-model`} value={task.model ?? ""} spellCheck={false} autoCapitalize="off" autoCorrect="off" placeholder={modelPlaceholder(plan.tasks[i]?.model, plan.tasks[i]?.tier)} onChange={(e) => set(i, { model: e.target.value })} className={FIELD} />
               </div>
-              {ultracodeOffered && (
+              {ultracodeOffered && workflow !== "unsupported" && (
                 <div data-testid="plan-edit-ultracode">
-                  <UltracodeStartRow on={task.ultracode} blocked={machineStartBlocked({ features, machines }, task.machine)} onChange={(on) => set(i, { ultracode: on })} />
+                  <UltracodeStartRow on={task.ultracode} blocked={machineStartBlocked({ features, machines }, task.machine, workflow)}
+                    copy={workflow === "codex_multi_agent_v2" ? {
+                      label: t("ultracode.codex_multi_agent"), subtitle: t("assistant-taskeditor.plan_edit_codex_workflow"),
+                    } : undefined}
+                    onChange={(on) => set(i, { ultracode: on })} />
                 </div>
               )}
               <div>

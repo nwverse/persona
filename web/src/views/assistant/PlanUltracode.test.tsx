@@ -5,6 +5,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../../i18n";
 import type { PlanTask, TaskPlan } from "../../lib/feed";
 import { loadPages } from "../../lib/lazy-page";
 import type { Todo } from "../../lib/todos";
@@ -103,6 +104,35 @@ describe("ultracode on the plan card", () => {
     expect(sent()).toEqual([{ ultracode: false }]);
   });
 
+  it("applies the Claude version gate only to Claude tasks on the same computer and hides ineligible workflows", async () => {
+    await render(<PlanCard plan={plan([
+      task({ machine: "m2", ultracode: true, workflow_kind: "claude_ultracode" }),
+      task({ machine: "m2", ultracode: true, workflow_kind: "codex_multi_agent_v2" }),
+      task({ machine: "m2", workflow_kind: "unsupported" }),
+    ])} />);
+    const [claude, codex] = chips();
+    expect(chips()).toHaveLength(2);
+    expect(claude.disabled).toBe(true);
+    expect(codex.disabled).toBe(false);
+    expect(codex.textContent).toBe(t("ultracode.codex_multi_agent"));
+    expect(codex.getAttribute("aria-pressed")).toBe("true");
+    await click(byText("开始 3 个任务")[0]);
+    expect(sent()).toEqual([{ ultracode: false }, {}, {}]);
+  });
+
+  it("shows the confirmed and skipped Codex outcomes after reloading a started plan", async () => {
+    const skipped = "Codex 0.144.0 cannot enable multi-agent v2.";
+    await render(<PlanCard plan={{ ...plan([
+      task({ title: "Confirmed", ultracode: true, workflow_kind: "codex_multi_agent_v2", workflow_active: true }),
+      task({ title: "Older CLI", ultracode: false, workflow_kind: "codex_multi_agent_v2", workflow_note: skipped }),
+      task({ title: "Requested", ultracode: true, workflow_kind: "codex_multi_agent_v2" }),
+    ]), state: "started" }} />);
+    expect(chips()).toHaveLength(0);
+    expect(host.textContent).toContain("Confirmed · " + t("ultracode.codex_multi_agent"));
+    expect(host.textContent).toContain("Older CLI · " + skipped);
+    expect(host.textContent).not.toContain("Requested · " + t("ultracode.codex_multi_agent"));
+  });
+
   it("shows nothing and sends nothing where the hub has no ultracode", async () => {
     seed({ features: [] });
     await render(<PlanCard plan={plan([task({ ultracode: true })])} />);
@@ -129,6 +159,24 @@ describe("ultracode on the plan card", () => {
     expect(editSwitches()[0].getAttribute("aria-checked")).toBe("true"); // the assistant's choice again
     await click(startInDialog());
     expect(sent()?.[0]).not.toHaveProperty("ultracode"); // left out: the hub keeps the assistant's
+  });
+
+  it("keeps Codex intent after changing computers and sends an explicit off when the owner turns it off", async () => {
+    await render(<PlanCard plan={plan([
+      task({ ultracode: true, workflow_kind: "codex_multi_agent_v2" }),
+      task({ workflow_kind: "unsupported" }),
+    ])} />);
+    await click(byText("改一下")[0]);
+    expect(editSwitches()).toHaveLength(1);
+    await pickMachine("m2");
+    const [codex] = editSwitches();
+    expect(codex.getAttribute("aria-label")).toBe(t("ultracode.codex_multi_agent"));
+    expect(codex.getAttribute("aria-checked")).toBe("true");
+    expect(codex.disabled).toBe(false);
+    await click(codex);
+    await click(startInDialog());
+    expect(sent()?.[0]).toMatchObject({ machine: "m2", ultracode: false });
+    expect(sent()?.[0]).not.toHaveProperty("workflow_kind");
   });
 
   it("starts without it from 改一下 where the task stays on a computer that can't", async () => {

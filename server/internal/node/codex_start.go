@@ -193,7 +193,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	if mode == "bypassPermissions" {
 		argv = n.codexBypassArgv(launcher, argv)
 	}
-	if n.codexOnSharedDaemon(argv) {
+	if !execution.CodexMultiAgentV2 && n.codexOnSharedDaemon(argv) {
 		if err := codexDaemonSocketGone(n.codexHome()); err != nil {
 			return nil, err // a new tab would only show codex failing to connect, after a minute's wait
 		}
@@ -202,7 +202,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	if err := n.closeAbandonedCodex(ctx, key); err != nil {
 		return nil, err
 	}
-	if codexOnRemote(argv) {
+	if !execution.CodexMultiAgentV2 && codexOnRemote(argv) {
 		// A launcher on an explicit app-server (--remote) sends no directory unless told one.
 		argv = append(argv, "-C", cwd)
 	}
@@ -217,7 +217,8 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	if runtime.GOOS == "windows" {
 		prompt = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(inertControls(prompt))
 	}
-	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), IsolateHooks: isolateHooks, Dir: cwd})
+	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), IsolateHooks: isolateHooks, Dir: cwd,
+		MultiAgentV2: execution.CodexMultiAgentV2})
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		return nil, err
 	}
@@ -307,6 +308,9 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	n.bindPane(pane, id)
 	n.namePersonaTab(ctx, pane, id) // the tab was marked before the thread was known (personatab.go)
 	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC(), Model: execution.Model, ModelEffort: execution.Effort, TaskInstructions: execution.TaskInstructions}
+	if execution.CodexMultiAgentV2 {
+		st.CodexMultiAgentPane = pane
+	}
 	if st.TaskInstructions != "" && slices.Contains(argv, codexTaskConfig(st.TaskInstructions)) {
 		st.TaskInstructionChannel = "codex"
 	}
@@ -322,9 +326,8 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	if !ok {
 		a = host.Agent{Agent: "codex", PaneID: pane, Cwd: cwd, AgentStatus: proto.StatusWorking}
 	}
-	s := n.sessionFor(id, a)
-	s.Agent = "codex"
-	return s, nil
+	a.Agent = "codex"
+	return n.sessionFor(id, a), nil
 }
 
 // codexOnRemote: the launcher attaches to an app-server of its own (--remote).
@@ -526,6 +529,8 @@ const (
 type codexStartFile struct {
 	Argv   []string `json:"argv"`
 	Prompt string   `json:"prompt"`
+	// MultiAgentV2 marks a verified opt-in start with a pinned executable.
+	MultiAgentV2 bool `json:"multi_agent_v2,omitempty"`
 	// Agent is the HERDR_AGENT the words run with (hostherdr.go): "codex" for a Codex started in a herdr pane; "" leaves
 	// the variable as it is (tab-start, other hosts).
 	Agent string `json:"agent,omitempty"`
@@ -556,7 +561,7 @@ func CodexStart(args []string) error {
 		return fmt.Errorf("%s the first message is gone: %v", codexStartError, err)
 	}
 	words := f.Argv
-	env := os.Environ()
+	env := withoutEnv(os.Environ(), []string{codexMultiAgentExecEnv})
 	var explicit []string
 	if f.Dir != "" {
 		if err := os.Chdir(f.Dir); err != nil {
@@ -572,6 +577,10 @@ func CodexStart(args []string) error {
 		explicit = append(explicit, herdrAgentEnv+"="+f.Agent)
 	}
 	for len(words) > 0 && shellcmd.AssignRe.MatchString(words[0]) {
+		if f.MultiAgentV2 { // The pinned executable must see the same explicit values as its capability check.
+			key, _, _ := strings.Cut(words[0], "=")
+			env = withoutEnv(env, []string{key})
+		}
 		env = append(env, words[0])
 		explicit = append(explicit, words[0])
 		words = words[1:]
@@ -595,7 +604,12 @@ func CodexStart(args []string) error {
 		return fmt.Errorf("%s %v", codexStartError, err)
 	}
 	argv := append([]string(nil), words...)
-	if f.IsolateHooks && !codexOnRemote(argv) && codexOwnProcess(argv) == "" {
+	if f.MultiAgentV2 && envValue(explicit, codexMultiAgentExecEnv) == "" {
+		if err := verifyCodexMultiAgentExec(context.Background(), path, f.Dir, env, argv[1:]); err != nil {
+			return err
+		}
+	}
+	if f.IsolateHooks && envValue(explicit, codexMultiAgentExecEnv) == "" && !codexOnRemote(argv) && codexOwnProcess(argv) == "" {
 		// Probe the executable in the new terminal, not the node's PATH. Older CLIs have no shared daemon or flag.
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		probe := exec.CommandContext(ctx, path, "--help")

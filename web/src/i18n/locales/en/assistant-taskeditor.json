@@ -7,6 +7,7 @@
   "plan_edit_model": "Model",
   "plan_edit_permission": "Permissions",
   "plan_edit_prompt": "First message to the agent",
+  "plan_edit_codex_workflow": "Request multi-agent mode for this start. The launcher is checked when the task starts.",
   "plan_edit_discard": "Discard these changes?",
   "plan_edit_model_placeholder": "Leave empty for the default",
   "plan_edit_model_placeholder_kept": "Leave empty to keep {model}, Persona's pick",

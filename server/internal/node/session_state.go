@@ -86,6 +86,8 @@ type sessionState struct {
 	// Ultracode: what was last seen of ultracode in the process Persona runs this session in (ultracode.go). Written
 	// by setUltracode only, which never makes a record for a session that has none.
 	Ultracode *ultracodeRecord `json:"ultracode_process,omitempty"`
+	// CodexMultiAgentPane names the pane whose process was started with Persona's per-task Codex override.
+	CodexMultiAgentPane string `json:"codex_multi_agent_pane,omitempty"`
 	// PendingSwitch: a switch to another launcher waiting for the next message (launcher_switch.go), kept with the
 	// record so a node restart neither loses it nor carries it out without the message. Written by setPendingSwitch,
 	// which never makes a record; cleared by the start that carries it out (which writes a new record).
@@ -407,6 +409,17 @@ func (s *stateFile) setPane(id, pane string) {
 			return false
 		}
 		v.Pane = pane
+		v.CodexMultiAgentPane = ""
+		return true
+	})
+}
+
+func (s *stateFile) clearCodexMultiAgent(id, pane string) {
+	s.update(id, func(v *sessionState) bool {
+		if v.CodexMultiAgentPane == "" || pane != "" && v.CodexMultiAgentPane != pane {
+			return false
+		}
+		v.CodexMultiAgentPane = ""
 		return true
 	})
 }

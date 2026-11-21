@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -84,9 +85,22 @@ func (n *Node) codexEffortInherited(ctx context.Context, argv, pane []string, cw
 	if exe == "codex" {
 		// codex-start preserves a same-name shell function. Its flags are not in argv and may select another effort.
 		// Otherwise its shell runs the first codex on its PATH, which the pane's rc files may change.
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, codexStartShellProgram(), "-ic", `
+		exe = codexPaneExecutable(ctx, cwd, append(slices.Clone(pane), argv[:len(argv)-len(words)]...))
+		if exe == "" {
+			return false
+		}
+	}
+	if !filepath.IsAbs(exe) {
+		exe = filepath.Join(cwd, exe)
+	}
+	return codexCLIExecutable(exe)
+}
+
+// codexPaneExecutable resolves a bare codex in the native shell that codex-start uses, and excludes shell functions.
+func codexPaneExecutable(ctx context.Context, cwd string, env []string) string {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, codexStartShellProgram(), "-ic", `
 if [ -n "${ZSH_VERSION-}" ]; then
   (( $+functions[codex] )) && exit 0
   p=$(whence -p codex) || exit 0
@@ -98,24 +112,19 @@ else
 fi
 printf '\001persona-codex-unshadowed\001%s\001' "$p"
 `)
-		cmd.Dir = cwd
-		cmd.Env = append(append(cmd.Environ(), pane...), argv[:len(argv)-len(words)]...)
-		killGroupOnCancel(cmd)
-		out, err := cmd.Output()
-		_, found, ok := bytes.Cut(out, []byte("\x01persona-codex-unshadowed\x01"))
-		if err != nil || !ok {
-			return false
-		}
-		found, _, ok = bytes.Cut(found, []byte("\x01"))
-		if !ok {
-			return false
-		}
-		exe = string(found)
+	cmd.Dir = cwd
+	cmd.Env = append(cmd.Environ(), env...)
+	killGroupOnCancel(cmd)
+	out, err := cmd.Output()
+	_, found, ok := bytes.Cut(out, []byte("\x01persona-codex-unshadowed\x01"))
+	if err != nil || !ok {
+		return ""
 	}
-	if !filepath.IsAbs(exe) {
-		exe = filepath.Join(cwd, exe)
+	found, _, ok = bytes.Cut(found, []byte("\x01"))
+	if !ok || len(found) == 0 {
+		return ""
 	}
-	return codexCLIExecutable(exe)
+	return string(found)
 }
 
 // codexPaneEnv is what a pane of launch's engine holds before its shell reads the rc files, which may choose another

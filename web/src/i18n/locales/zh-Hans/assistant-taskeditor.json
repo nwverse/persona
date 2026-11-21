@@ -7,6 +7,7 @@
   "plan_edit_model": "模型",
   "plan_edit_permission": "权限",
   "plan_edit_prompt": "交给 Agent 的第一条消息",
+  "plan_edit_codex_workflow": "为本次任务请求多 Agent 模式。任务启动时会检查启动器。",
   "plan_edit_discard": "放弃这些修改？",
   "plan_edit_model_placeholder": "空着用默认",
   "plan_edit_model_placeholder_kept": "空着用 Persona 选的 {model}",

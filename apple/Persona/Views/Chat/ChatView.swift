@@ -7599,10 +7599,15 @@ struct SessionInfoSheet: View {
                         // A session that lists its own modes (#8261) in its own words: no mode is its own approval.
                         row("lock.open", String(localized: "Permissions"), SessionModes.infoLabel(info.permissionMode, session: model.session(key) ?? session))
                         row(Theme.Icon.effort, String(localized: "Thinking Effort"), SessionModes.effortLabel(info.effort))
-                        // Claude Code's ultracode (#1307): on, off, or unknown (no evidence yet, an older node).
-                        if let s = model.session(key) ?? session, Ultracode.infoShown(s, features: model.features(key.group)) {
-                            row(Theme.Icon.workflow, Ultracode.name, Ultracode.stateWord(s.ultracode))
-                                .accessibilityIdentifier("session-ultracode")
+                        // Claude reports its live switch. Codex reports a confirmed launch workflow.
+                        if let s = model.session(key) ?? session {
+                            if Ultracode.infoShown(s, features: model.features(key.group)) {
+                                row(Theme.Icon.workflow, Ultracode.name, Ultracode.stateWord(s.ultracode))
+                                    .accessibilityIdentifier("session-ultracode")
+                            } else if Ultracode.workflowMark(s) == .codexMultiAgentV2 {
+                                row(Theme.Icon.workflow, AgentWorkflowKind.codexMultiAgentV2.name, Ultracode.stateWord(true))
+                                    .accessibilityIdentifier("session-codex-multi-agent-v2")
+                            }
                         }
                     }
                     // Counts nobody gives (#8261, `usage_unknown`: Paseo's agents that are not Claude Code's) are left out,

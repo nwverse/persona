@@ -312,6 +312,28 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if withDefaults { // only what the task left open, after the fit, which may itself have filled some in
 		s.applyStartExtras(ctx, t, caller, defaults, fit.agent, params, presetNote)
 	}
+	workflow := fit.taskWorkflow()
+	skipWorkflow := caller.ultracode != nil && *caller.ultracode && t.WorkflowKind.changedTo(workflow)
+	var workflowNote string
+	var workflowActive bool
+	if skipWorkflow {
+		workflowNote = i18n.T(s.lang(ctx), "assistant-tasks.workflow_launcher_changed")
+	}
+	recordStarted := func(session proto.Session) {
+		t.startedAgent = cmp.Or(session.Agent, fit.snapshot)
+		workflowActive = session.CodexMultiAgentV2
+	}
+	defer func() {
+		if err == nil && sid != "" {
+			t.WorkflowKind, t.WorkflowActive, t.WorkflowNote = workflow, workflowActive, ""
+			if workflowActive {
+				t.WorkflowKind = workflowCodex
+			}
+			if workflowNote != "" {
+				t.skipWorkflow(workflowNote)
+			}
+		}
+	}()
 	// The goal: a rule's, else the Codex default for a task with criteria (startGoalSource); the default is not sent
 	// where the node is known to refuse it, and its refusal elsewhere is only logged (below).
 	defaultGoal := s.applyStartGoal(t, defaults, withDefaults, fit.agent, defaultGoalRefusedOn(m, params, fit), params)
@@ -474,7 +496,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		}
 		params["permission_mode"] = mode
 	} // else none, plan included: a read-only task's first message carries the constraint (above)
-	if t.Ultracode != nil && *t.Ultracode {
+	if skipWorkflow {
+		delete(params, "ultracode")
+	} else if t.Ultracode != nil && *t.Ultracode {
 		params["ultracode"] = true
 	}
 	if t.inPane != "" { // a retry in the tab an earlier try did not start in (start_remedy.go)
@@ -528,8 +552,6 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	err = start()
 	// Extras the agent it landed on cannot have (ultracode #3596, a start goal: start_defaults.go) are each dropped
 	// once, in whatever order the node refuses them; both refusals come before anything starts.
-	var skipped string
-	var refused bool
 	for range 2 {
 		if reason, no := s.goalRefusal(err, params); no {
 			delete(params, "goal")
@@ -547,9 +569,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			continue
 		}
 		if reason, no := s.ultracodeRefusal(ctx, err, params); no {
-			skipped, refused = reason, true
+			workflowNote = skippedTaskWorkflow(s.lang(ctx), workflow, reason)
 			delete(params, "ultracode")
-			s.logf("task %s: start: %s; starting without ultracode", t.TodoID, skipped)
+			s.logf("task %s: start: %s; starting without the workflow", t.TodoID, reason)
 			if err := s.checkContinuationScope(t); err != nil {
 				return "", "", err
 			}
@@ -574,7 +596,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 					session, found := s.adoptStartedSession(lookup, m, s.startLauncher(ctx, picked), t.Cwd, expectID, nil)
 					cancel()
 					if found {
-						t.startedAgent = cmp.Or(session.Agent, fit.snapshot)
+						recordStarted(session)
 						return m.ID, session.SessionID, nil
 					}
 				}
@@ -585,7 +607,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			// once, with no failure receipt, retry or reroute (and no duplicate agent on another computer, #6540).
 			if sess, ok := s.adoptTaskStartSession(ctx, m, s.startLauncher(ctx, picked), t.Cwd, expectID, knownIDs); ok {
 				s.logf("task %s: start answered late on %s; adopted session %s from the machine's own list", t.TodoID, m.ID, sess.SessionID)
-				t.startedAgent = cmp.Or(sess.Agent, fit.snapshot)
+				recordStarted(sess)
 				return m.ID, sess.SessionID, nil
 			}
 			// Nothing found, and the link took the answer (it closed, or the machine is not reachable now): the
@@ -598,7 +620,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 					// of time, so a retry never opens a second agent beside one still being built (#6540).
 					if sess, ok := s.adoptTaskStartSessionUntil(ctx, m, s.startLauncher(ctx, picked), t.Cwd, expectID, knownIDs, startMayHaveArrived(err, sentAt)); ok {
 						s.logf("task %s: start's link dropped; adopted session %s on %s after it reconnected", t.TodoID, sess.SessionID, m.ID)
-						t.startedAgent = cmp.Or(sess.Agent, fit.snapshot)
+						recordStarted(sess)
 						return m.ID, sess.SessionID, nil
 					}
 				}
@@ -643,15 +665,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		}
 		t.noteWhy(note)
 	}
-	if refused { // only once it started here: a task moved elsewhere after a failed start asks again
-		off := false
-		t.Ultracode = &off // a retry does not ask again
-		if t.callerPick != nil {
-			t.callerPick.ultracode = copyBool(t.Ultracode) // nor a policy's later rule: off is the task's own now
-		}
-		t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.ultracode_skipped", i18n.Args{"reason": skipped}))
-	}
-	t.startedAgent = cmp.Or(res.Session.Agent, fit.snapshot)
+	recordStarted(res.Session)
 	return m.ID, res.Session.SessionID, nil
 }
 
@@ -718,7 +732,8 @@ func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t Pl
 	launch := t.storedLaunch()
 	if err := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {
 		pt.Machine, pt.Cwd, pt.Why = t.Machine, t.Cwd, t.Why
-		pt.Reroute, pt.Ultracode = t.Reroute, launch.ultracode
+		pt.Reroute, pt.Ultracode, pt.WorkflowKind = t.Reroute, launch.ultracode, t.WorkflowKind
+		pt.WorkflowActive, pt.WorkflowNote = t.WorkflowActive, t.WorkflowNote
 		pt.Workspace, pt.WorkspaceResolved, pt.MachinePolicy = t.Workspace, t.WorkspaceResolved, t.MachinePolicy
 		pt.WorkspaceInferred, pt.ReservedTodoID = t.WorkspaceInferred, t.ReservedTodoID
 		pt.Launcher, pt.Model, pt.Effort, pt.Speed, pt.Tier = launch.launcher, launch.model, launch.effort, launch.speed, launch.tier

@@ -8,7 +8,7 @@ import { api, ApiError, errorText, sessionPath } from "./api";
 import { stateOf } from "./format";
 import { hasModes } from "./session-actions";
 import { flushPushes, getSession, hubHas, upsertSession } from "./store";
-import type { PlanTask } from "./feed";
+import type { PlanTask, PlanWorkflowKind } from "./feed";
 import type { SessionLookup, Todo } from "./todos";
 import type { Machine, Session } from "./types";
 import { isWarn, liveAccounts, sampleAge, windowMinutes, type UsageAccount } from "./usage-windows";
@@ -39,6 +39,15 @@ export function ultracodeOn(s: Pick<Session, "ultracode" | "assistant" | "agent"
  *  after the process is gone, and a resume starts it off. */
 export function ultracodeMarkShown(s: Session): boolean {
   return stateOf(s) !== "offline" && ultracodeOn(s);
+}
+
+/** What an Agent row can mark from its current process. */
+export function agentWorkflowMark(s: Session): { label?: string; title?: string } | undefined {
+  if (s.agent === "codex" && s.codex_multi_agent_v2 === true && !s.assistant && stateOf(s) !== "offline") {
+    const label = t("ultracode.codex_multi_agent");
+    return { label, title: label };
+  }
+  return ultracodeMarkShown(s) ? {} : undefined;
 }
 
 /** The workflow mark on a to-do (#12): one of its agents shows it on its Agent list row; before any agent started, the
@@ -76,9 +85,9 @@ export function startBlocked(claudeVersion: string | undefined): string {
   return versionTooOld(claudeVersion) ? t("ultracode.version_low", { version: claudeVersion!.trim(), min: ULTRACODE_MIN_VERSION.join(".") }) : "";
 }
 
-/** Why an agent can't start with it on computer `machine` (a plan task's, #12), "" when it can or the hub has no
- *  ultracode (then nothing about it is shown or sent). */
-export function machineStartBlocked(s: { features: string[]; machines: Pick<Machine, "id" | "claude_version">[] }, machine: string): string {
+/** A known old Claude Code blocks its switch. For Codex, the launch preflight checks the actual executable. */
+export function machineStartBlocked(s: { features: string[]; machines: Pick<Machine, "id" | "claude_version">[] }, machine: string, workflow?: PlanWorkflowKind): string {
+  if (workflow && workflow !== "claude_ultracode") return "";
   return hubHas(s.features, ULTRACODE_FEATURE) ? startBlocked(s.machines.find((m) => m.id === machine)?.claude_version) : "";
 }
 

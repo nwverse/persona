@@ -1136,6 +1136,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// Claude Code's session-only ultracode switch (#3427, docs/protocol/protocol.md "Claude Code ultracode"): what the
     /// node last saw, nil while unknown (no evidence yet, an older node, not Claude); never what was asked for.
     var ultracode: Bool? = nil
+    /// Set when the node confirmed that this Codex Agent started with the multi-agent v2 feature.
+    var codexMultiAgentV2: Bool? = nil
     /// The node's reason (fixed text, in Chinese) why the switch is unavailable, was refused, could not be confirmed
     /// or still waits; nil when it has none.
     var ultracodeNote: String? = nil
@@ -1552,6 +1554,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case permissionMode = "permission_mode", bypassAvailable = "bypass_available", bypassPending = "bypass_pending"
         case contextTokens = "context_tokens", contextWindow = "context_window"
         case ultracode, ultracodeNote = "ultracode_note", ultracodePending = "ultracode_pending", ultracodeLostAt = "ultracode_lost_at"
+        case codexMultiAgentV2 = "codex_multi_agent_v2"
         case repoRoot = "repo_root", worktree, branch
         case machineID = "machine_id", sessionID = "session_id", paneID = "pane_id", tabID = "tab_id",
              workspaceID = "workspace_id", agentName = "agent_name", startedByPersona = "started_by_persona", assistant, archived, state,
@@ -1625,6 +1628,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         contextWindow = try? c.decodeIfPresent(Int.self, forKey: .contextWindow)
         // An odd ultracode field never drops the session; omitted is unknown (an older hub or node), not off.
         ultracode = (try? c.decodeIfPresent(Bool.self, forKey: .ultracode)).flatMap { $0 }
+        codexMultiAgentV2 = (try? c.decode(Bool.self, forKey: .codexMultiAgentV2)) == true ? true : nil
         ultracodeNote = (try? c.decodeIfPresent(String.self, forKey: .ultracodeNote)).flatMap { $0 }.flatMap { $0.isEmpty ? nil : $0 }
         ultracodePending = (try? c.decodeIfPresent(Bool.self, forKey: .ultracodePending)).flatMap { $0 } ?? false
         ultracodeLostAt = (try? c.decodeIfPresent(Date.self, forKey: .ultracodeLostAt)).flatMap { $0 }.flatMap { $0.isMeaningful ? $0 : nil }

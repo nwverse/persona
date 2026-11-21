@@ -5,6 +5,7 @@
   "on": "ultracode on",
   "icon_title": "ultracode is on: every task runs as a multi-agent workflow, which uses a lot of quota",
   "codex_ultra_title": "Ultra: splits the work across several subagents, which uses a lot of quota",
+  "codex_multi_agent": "Codex multi-agent",
   "lost": "ultracode off after resume",
   "reopen": "Turn back on",
   "dismiss": "Dismiss",

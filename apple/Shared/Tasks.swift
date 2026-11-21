@@ -14,9 +14,14 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
     var launcher: String?
     var model: String?
     var permission: String?
-    /// Claude Code's ultracode for this task (#12): the assistant's choice; on start, true / false replaces it and left
-    /// out keeps it (PlanUltracode.swift).
+    /// The assistant's workflow choice. At Start, true / false replaces it and omission keeps it.
     var ultracode: Bool?
+    /// Read-only eligibility projected by the manager for the launcher. Omission is the older-hub shape.
+    var workflowKind: AgentWorkflowKind?
+    /// Why a successful start did not use the requested workflow, in the owner's language.
+    var workflowNote: String? = nil
+    /// Set only when the launched Codex Agent actually enabled multi-agent v2.
+    var workflowActive: Bool? = nil
     var readonly: Bool?
     var why: String?
     /// Set once started: the todo the task is, and why its agent did not start.
@@ -37,11 +42,13 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case title, prompt, machine, cwd, launcher, model, permission, ultracode, readonly, why, error, brief, schedule
         case todoID = "todo_id", scheduleTitle = "schedule_title", tier, continues
+        case workflowKind = "workflow_kind", workflowNote = "workflow_note", workflowActive = "workflow_active"
     }
 
     init(title: String, prompt: String, machine: String, cwd: String, launcher: String? = nil, model: String? = nil,
          permission: String? = nil, ultracode: Bool? = nil, readonly: Bool? = nil, why: String? = nil, todoID: String? = nil,
-         error: String? = nil, brief: TaskBrief? = nil, schedule: String? = nil, scheduleTitle: String? = nil, tier: String? = nil) {
+         error: String? = nil, brief: TaskBrief? = nil, schedule: String? = nil, scheduleTitle: String? = nil, tier: String? = nil,
+         workflowKind: AgentWorkflowKind? = nil) {
         self.title = title
         self.prompt = prompt
         self.machine = machine
@@ -50,6 +57,7 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
         self.model = model
         self.permission = permission
         self.ultracode = ultracode
+        self.workflowKind = workflowKind
         self.readonly = readonly
         self.why = why
         self.todoID = todoID
@@ -70,6 +78,10 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
         model = try c.decodeIfPresent(String.self, forKey: .model)
         permission = try c.decodeIfPresent(String.self, forKey: .permission)
         ultracode = try c.decodeIfPresent(Bool.self, forKey: .ultracode)
+        workflowKind = c.contains(.workflowKind)
+            ? (try? c.decode(AgentWorkflowKind.self, forKey: .workflowKind)) ?? .unsupported : nil
+        workflowNote = (try? c.decode(String.self, forKey: .workflowNote)).flatMap { $0.isEmpty ? nil : $0 }
+        workflowActive = (try? c.decode(Bool.self, forKey: .workflowActive)) == true ? true : nil
         readonly = try c.decodeIfPresent(Bool.self, forKey: .readonly)
         why = try c.decodeIfPresent(String.self, forKey: .why)
         todoID = try c.decodeIfPresent(String.self, forKey: .todoID)

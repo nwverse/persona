@@ -1590,6 +1590,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if !wantsUltracode(p.Ultracode) {
 			p.Ultracode = nil // off is what a new process is anyway: as if left out (no checks, no command)
 		}
+		codexMultiAgent := false
 		if p.Ultracode != nil {
 			kind := p.AgentType
 			if kind == "" {
@@ -1598,14 +1599,26 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			if kind == ompAgent {
 				return nil, ompOptionsRefusal(ctx)
 			}
-			if _, runtime := engineRuntimes[cmp.Or(p.Host, n.defaultKind())]; runtime { // the start's host is a runtime (Paseo)
+			if _, runtime := engineRuntimes[cmp.Or(p.Host, n.defaultKind())]; runtime || work.runtime != nil {
 				kind = "runtime"
 			}
 			if h, _ := n.startRuntimeIn(withStartHost(ctx, p.Host), p.Launcher); h != nil { // what runtimeStart below would start it in
 				kind = "runtime"
 			}
-			if err := n.checkUltracodeStart(ctx, p.Ultracode, kind); err != nil {
-				return nil, err
+			if isCodexAppLauncher(p.Launcher) {
+				return nil, codexMultiAgentRefusal(ctx, "multi_agent_launcher")
+			}
+			if kind != "runtime" && kind != traexAgent {
+				_, codexMultiAgent = n.codexLauncher(ctx, p.Launcher)
+			}
+			if codexMultiAgent {
+				if p.ResumeSessionID != "" {
+					return nil, codexMultiAgentRefusal(ctx, "multi_agent_launcher")
+				}
+			} else {
+				if err := n.checkUltracodeStart(ctx, p.Ultracode, kind); err != nil {
+					return nil, err
+				}
 			}
 		}
 		// A goal is set after the first message is in, so a start without a first message cannot take one: a new
@@ -1679,7 +1692,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		// Only Claude Code has a session id before it starts; another agent picks its own (start_agent.go).
 		asyncAgent := n.startAgentType(p.Launcher, p.AgentType)
-		if p.Async && p.ResumeSessionID == "" && (p.AgentType == "" || p.AgentType == "claude") &&
+		if p.Async && !codexMultiAgent && p.ResumeSessionID == "" && (p.AgentType == "" || p.AgentType == "claude") &&
 			asyncAgent != traexAgent && asyncAgent != ompAgent && asyncAgent != agyAgent {
 			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace})
 			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)

@@ -35,6 +35,7 @@ describe("where the switch is offered", () => {
   it("not in a Persona conversation (the main one included), another agent, an offline one or a read-only source", () => {
     expect(ultracodeOffered(claude({ assistant: true }), FEATURES)).toBe(false);
     expect(ultracodeOffered(claude({ agent: "codex" }), FEATURES)).toBe(false);
+    expect(ultracodeOffered(claude({ agent: "codex", codex_multi_agent_v2: true }), FEATURES)).toBe(false);
     expect(ultracodeOffered(claude({ agent: "agy" }), FEATURES)).toBe(false);
     expect(ultracodeOffered(claude({ status: "offline" }), FEATURES)).toBe(false);
     expect(ultracodeOffered(claude({ source_kind: "claude_bg" }), FEATURES)).toBe(false);

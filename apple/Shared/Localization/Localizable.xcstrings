@@ -44519,6 +44519,52 @@
       },
       "extractionState" : "manual"
     },
+    "Codex multi-agent v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex multi-agent v2"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex マルチエージェント v2"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 多智能体 v2"
+          }
+        }
+      }
+    },
+    "Codex multi-agent v2 on" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex multi-agent v2 on"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex マルチエージェント v2 がオン"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 多智能体 v2 已开启"
+          }
+        }
+      }
+    },
     "Codex needs a first message" : {
       "localizations" : {
         "en" : {
@@ -92397,6 +92443,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "可以收尾了：把最终的总结和回复写回这条收件箱事项。"
+          }
+        }
+      }
+    },
+    "Lets Codex delegate parts of the task to other agents." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lets Codex delegate parts of the task to other agents."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex がタスクの一部を他のエージェントに任せられるようにします。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许 Codex 将任务的一部分交给其他智能体。"
           }
         }
       }

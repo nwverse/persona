@@ -40,6 +40,16 @@ describe("an agent's row", () => {
     expect(more(renderToStaticMarkup(<SessionRow {...rowProps} active />))).toMatch(/class="[^"]*\bflex\b/);
     expect(more(renderToStaticMarkup(<SessionRow {...rowProps} active={false} />))).toMatch(/class="[^"]*\bhidden\b/);
   });
+
+  it("marks only active Codex processes with confirmed multi-agent mode", () => {
+    const render = (patch: Partial<Session>) => renderToStaticMarkup(<SessionRow {...rowProps} active={false}
+      s={{ ...session, agent: "codex", ...patch }} />);
+    const codexLabel = t("ultracode.codex_multi_agent");
+    expect(render({ effort: "ultra" })).not.toContain("data-ultracode-mark");
+    expect(render({ codex_multi_agent_v2: true })).toContain('aria-label="' + codexLabel + '"');
+    expect(render({ codex_multi_agent_v2: true, state: "offline" })).not.toContain("data-ultracode-mark");
+    expect(render({ agent: "claude", ultracode: true })).toContain('aria-label="' + t("ultracode.on") + '"');
+  });
 });
 
 describe("where an agent was opened, as a mark at its row's end (#2526)", () => {

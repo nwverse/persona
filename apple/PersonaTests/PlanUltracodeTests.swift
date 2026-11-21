@@ -72,7 +72,7 @@ struct PlanUltracodeTests {
 
     @Test func aBlockedComputerStartsWithoutIt() throws {
         let p = plan([task("a", machine: "old", ultracode: true), task("b", machine: "new", ultracode: true)])
-        let edits = try #require(Ultracode.cardEdits(p, choices: Ultracode.choices(p, card: [:]), blocked: { $0 == "old" }))
+        let edits = try #require(Ultracode.cardEdits(p, choices: Ultracode.choices(p, card: [:]), blocked: { $0.machine == "old" }))
         #expect(edits.map(\.ultracode) == [false, nil])
     }
 
@@ -96,7 +96,38 @@ struct PlanUltracodeTests {
         #expect(sent[0].title == "a, reworded")
         // Moved to a computer that can't: off goes out for the one the assistant had on.
         edited[0].machine = "old"
-        #expect(Ultracode.editsToSend(p, edits: edited, blocked: { $0 == "old" }).map(\.ultracode) == [false, true])
+        #expect(Ultracode.editsToSend(p, edits: edited, blocked: { $0.machine == "old" }).map(\.ultracode) == [false, true])
+    }
+
+    @Test func workflowProjectionUsesTheLauncherAndStaysOutOfStartEdits() throws {
+        let fields = #""title":"Check","prompt":"Check the patch","machine":"box","cwd":"/app""#
+        let codex = try decode("{\(fields),\"workflow_kind\":\"codex_multi_agent_v2\",\"ultracode\":true,\"workflow_note\":\"Uses the default workflow\"}", as: PlanTask.self)
+        let legacy = try decode("{\(fields)}", as: PlanTask.self)
+        let unsupported = try decode("{\(fields),\"workflow_kind\":\"unsupported\"}", as: PlanTask.self)
+        let future = try decode("{\(fields),\"workflow_kind\":\"future_workflow\"}", as: PlanTask.self)
+        let confirmed = try decode("{\(fields),\"workflow_kind\":\"codex_multi_agent_v2\",\"workflow_active\":true}", as: PlanTask.self)
+        #expect(Ultracode.planWorkflow(codex, features: []) == .codexMultiAgentV2)
+        #expect(Ultracode.planWorkflow(legacy, features: [Ultracode.feature]) == .claudeUltracode)
+        #expect(Ultracode.planWorkflow(legacy, features: []) == nil)
+        #expect(Ultracode.planWorkflow(unsupported, features: [Ultracode.feature]) == nil)
+        #expect(Ultracode.planWorkflow(future, features: [Ultracode.feature]) == nil)
+        #expect(codex.workflowNote == "Uses the default workflow")
+        #expect(codex.workflowActive == nil)
+        #expect(confirmed.workflowActive == true)
+        #expect(confirmed.workflowNote == nil)
+
+        let p = plan([codex, legacy, unsupported])
+        let card = try #require(Ultracode.cardEdits(p, choices: [false, false, true], blocked: { _ in false }))
+        #expect(card.map(\.ultracode) == [false, nil, nil])
+        let wire = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(card)) as? [[String: Any]])
+        #expect(wire.allSatisfy { $0["workflow_kind"] == nil })
+        #expect(wire.allSatisfy { $0["workflow_note"] == nil && $0["workflow_active"] == nil })
+        #expect(wire.first?["ultracode"] as? Bool == false)
+
+        // A Claude version block on this machine must not clear the Codex request on the same machine.
+        let mixed = plan([codex, task("Claude", ultracode: true)])
+        let edits = try #require(Ultracode.cardEdits(mixed, choices: [true, true], blocked: { $0.workflowKind != .codexMultiAgentV2 }))
+        #expect(edits.map(\.ultracode) == [nil, false])
     }
 
     @Test func startPlanBodyLeavesOutUnsetUltracode() async throws {

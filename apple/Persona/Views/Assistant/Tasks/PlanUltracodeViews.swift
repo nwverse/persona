@@ -1,24 +1,19 @@
 import SwiftUI
 
-// Claude Code's ultracode on plan cards and to-dos (#12): the plan task's chip and Edit's switch row; the mark after a
-// task's title is the Agent list row's (`UltracodeMark`, Views/Chat/UltracodeViews.swift). The rules are
-// Shared/PlanUltracode.swift on top of Shared/Ultracode.swift.
+// Workflow controls for tasks before they start. The manager identifies which workflow the launcher takes.
 
 @MainActor
 extension Ultracode {
-    /// The hub has it: the card shows each task's and Edit its switch.
-    static var planOffered: Bool { AppModel.shared.hubFeatures.contains(feature) }
-
-    /// Why `machine` can't start an agent with it now, nil where it can or where the hub has no ultracode.
-    static func blocked(machine: String) -> String? {
-        guard planOffered else { return nil }
-        let model = AppModel.shared
-        return startBlocked(claudeVersion: model.machine(model.hubRef(machine))?.claudeVersion)
+    static func planWorkflow(_ task: PlanTask) -> AgentWorkflowKind? {
+        let features = task.workflowKind == nil ? AppModel.shared.hubFeatures : []
+        return planWorkflow(task, features: features)
     }
 
-    /// The computers of `tasks` that can't start with it now: what Start sends checks as it goes.
-    static func blockedMachines(_ tasks: [PlanTask]) -> Set<String> {
-        Set(tasks.map(\.machine).filter { blocked(machine: $0) != nil })
+    /// The version check applies to the Claude Code workflow. Codex support comes from the manager's projection.
+    static func blocked(_ task: PlanTask) -> String? {
+        guard planWorkflow(task) == .claudeUltracode else { return nil }
+        let model = AppModel.shared
+        return startBlocked(claudeVersion: model.machine(model.hubRef(task.machine))?.claudeVersion)
     }
 }
 
@@ -33,6 +28,7 @@ extension TasksStore {
 /// A plan task's ultracode beside its computer, folder, model and permission chips: a toggle in the AI color while on,
 /// quiet while off. `blocked`: why its computer can't start with it, outlined and said in its help.
 struct UltracodeChip: View {
+    var kind: AgentWorkflowKind
     var on: Bool
     var blocked: String?
     var change: (Bool) -> Void
@@ -42,22 +38,28 @@ struct UltracodeChip: View {
         Button {
             withAnimation(Theme.Motion.state) { change(!shown) }
         } label: {
-            Chip(text: Ultracode.name, symbol: Theme.Icon.workflow,
+            Chip(text: kind.name, symbol: Theme.Icon.workflow,
                  look: blocked != nil ? .outline : shown ? .tint(Theme.aiTint, text: Theme.ai) : .neutral)
         }
         .buttonStyle(.plain)
         .disabled(blocked != nil)
-        .help(blocked ?? (shown
-            ? String(localized: "Starts with ultracode: every task runs as a multi-agent workflow, which uses a lot of quota")
-            : String(localized: "Starts without ultracode. With it, every task runs as a multi-agent workflow, which uses a lot of quota")))
+        .help(blocked ?? help(on: shown))
         .accessibilityAddTraits(shown ? .isSelected : [])
         .accessibilityIdentifier("plan.ultracode")
+    }
+
+    private func help(on: Bool) -> String {
+        if kind == .codexMultiAgentV2 { return kind.summary }
+        return on
+            ? String(localized: "Starts with ultracode: every task runs as a multi-agent workflow, which uses a lot of quota")
+            : String(localized: "Starts without ultracode. With it, every task runs as a multi-agent workflow, which uses a lot of quota")
     }
 }
 
 /// Edit's switch for a task about to start, under its permissions: New Agent's row (`UltracodeStartRow`) without the
 /// quota. `blocked`: why its computer can't start with it, grayed and said instead of the line.
 struct PlanUltracodeRow: View {
+    var kind: AgentWorkflowKind
     @Binding var on: Bool
     var blocked: String?
 
@@ -67,8 +69,8 @@ struct PlanUltracodeRow: View {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                 ThemedIcon(Theme.Icon.workflow).foregroundStyle(Theme.ai)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(verbatim: Ultracode.name).lineLimit(1)
-                    Text(blocked ?? Ultracode.subtitle)
+                    Text(verbatim: kind.name)
+                    Text(blocked ?? kind.summary)
                         .font(Theme.Font.label)
                         .foregroundStyle(blocked == nil ? Color.secondary : Theme.cautionText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -77,5 +79,14 @@ struct PlanUltracodeRow: View {
         }
         .disabled(blocked != nil)
         .accessibilityIdentifier("plan.edit.ultracode")
+    }
+}
+
+private extension AgentWorkflowKind {
+    var summary: String {
+        if self == .codexMultiAgentV2 {
+            return String(localized: "Lets Codex delegate parts of the task to other agents.")
+        }
+        return Ultracode.subtitle
     }
 }

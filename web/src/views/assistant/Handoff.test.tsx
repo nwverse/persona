@@ -126,6 +126,37 @@ describe("hand-off cards", () => {
     expect(opened()).toBe("/todos?id=example-task");
   });
 
+  it("shows each recorded Codex workflow outcome once in the simplified feed", async () => {
+    const skip = "This Codex version does not support multi-agent mode.";
+    const workflow = {
+      prompt: "Review the project",
+      cwd: "/example",
+      machine: "example-computer",
+      workflow_kind: "codex_multi_agent_v2" as const,
+    };
+    const plan: TaskPlan = {
+      id: "workflow-plan", conversation, state: "started", created_at: at,
+      tasks: [
+        { ...workflow, title: "Confirmed task", todo_id: "confirmed-task", ultracode: true, workflow_active: true },
+        { ...workflow, title: "Older CLI task", todo_id: "older-cli-task", ultracode: false, workflow_note: skip },
+        { ...workflow, title: "Requested task", todo_id: "requested-task", ultracode: true },
+      ],
+    };
+    getFeedState().plans[plan.id] = plan;
+    const older = { ...agent, session_id: "older-agent", title: "Older Agent" };
+    await show({ id: "workflow-event", conversation, at, kind: "plan", ref: plan.id }, [
+      linked("confirmed-task", "Confirmed task", [agent]),
+      linked("older-cli-task", "Older CLI task", [older]),
+      linked("requested-task", "Requested task", []),
+    ], [agent, older]);
+    const label = t("ultracode.codex_multi_agent");
+    const text = host.textContent ?? "";
+    expect(cards()).toHaveLength(3);
+    expect(text.split(`Confirmed task · ${label}`)).toHaveLength(2);
+    expect(text.split(`Older CLI task · ${skip}`)).toHaveLength(2);
+    expect(text).not.toContain(`Requested task · ${label}`);
+  });
+
   it("a task that did not start says why; one removed since says so and opens nothing", async () => {
     const plan: TaskPlan = { id: "plan-two", conversation, state: "started", created_at: at, tasks: [
       { title: "Broken task", prompt: "a", cwd: "/example", machine: "example-computer", todo_id: "broken-task" },

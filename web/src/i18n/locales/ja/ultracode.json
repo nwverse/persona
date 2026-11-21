@@ -5,6 +5,7 @@
   "on": "ultracode オン",
   "icon_title": "ultracode がオン：すべてのタスクをマルチエージェントの workflow で進め、使用量を大きく消費します",
   "codex_ultra_title": "ウルトラ：複数のサブエージェントに作業を分担させ、使用量を大きく消費します",
+  "codex_multi_agent": "Codex マルチエージェント",
   "lost": "再開後 ultracode オフ",
   "reopen": "再びオン",
   "dismiss": "閉じる",

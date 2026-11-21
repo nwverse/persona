@@ -60,6 +60,7 @@ DOMAINS = [
     "imessage_mock",  # Messages' reader (/api/v1/imessage…), MOCK_IMESSAGE; the connector stays in mock_hub.py
     "saved_prompts_mock",  # Settings › Saved Prompts (/api/v1/assistant/saved-prompts…), MOCK_SAVED_PROMPTS
     "starred_mock",  # Starred messages (/api/v1/assistant/starred…), MOCK_STARRED
+    "codex_multi_agent_mock",  # a mixed workflow task plan, MOCK_CODEX_MULTI_AGENT with MOCK_TASKS
 ]
 
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")

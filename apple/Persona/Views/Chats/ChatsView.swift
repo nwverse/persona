@@ -4582,13 +4582,13 @@ nonisolated struct SlotRow: View, Equatable {
                     RunningChildrenCaption(session: session)
                 }
                 // The badge's column holds the state alone (#3004): the agent's mark leads the title (#6390), with
-                // ultracode's mark after it while that is on (#1307; the library's row has no slot after the title).
+                // the workflow mark beside it (the library's row has no slot after the title).
                 .titleLeading(session.assistant ? nil : {
                     HStack(spacing: Theme.Space.xs) {
                         AgentMark(session)
-                        if ultracodeMark { UltracodeMark().transition(.opacity) }
+                        if let workflowMark { UltracodeMark(spoken: workflowMark.onWords).transition(.opacity) }
                     }
-                    .animation(UltracodeMark.motion, value: ultracodeMark)
+                    .animation(UltracodeMark.motion, value: workflowMark)
                 })
                 // Over the room left for it at the row's end (inside the row's inset), centered on the row's height.
             } else if let rowStyle {
@@ -4609,13 +4609,12 @@ nonisolated struct SlotRow: View, Equatable {
                     // accessibility text sizes the time goes under the words (`TimeBesideOrUnder`, #1658).
                     TimeBesideOrUnder {
                         VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                            // Ultracode's mark right after the title's last word while it is on (#1307).
-                            UltracodeMark.after(session.displayTitle, on: ultracodeMark)
+                            UltracodeMark.after(session.displayTitle, workflow: workflowMark)
                                 .font(session.state == .unread ? Theme.Font.bodyHeavy : Theme.Font.bodyStrong)
                                 .lineLimit(2)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .animation(UltracodeMark.motion, value: ultracodeMark)
+                                .animation(UltracodeMark.motion, value: workflowMark)
                             if let last = session.listPreview(muted: muted) {
                                 Text(last).font(Theme.Font.secondary).lineHeight(.secondary).foregroundStyle(.secondary).lineLimit(2)
                             }
@@ -4659,8 +4658,8 @@ nonisolated struct SlotRow: View, Equatable {
         .opacity(muted ? 0.8 : 1) // quieter than live agents, never fainter than the idle spaces below
     }
 
-    /// Claude Code's ultracode is on (#1307): its mark beside the title; not on an offline row.
-    var ultracodeMark: Bool { Ultracode.rowMark(session) }
+    /// A confirmed start workflow, drawn beside the title while the Agent is online.
+    var workflowMark: AgentWorkflowKind? { Ultracode.workflowMark(session) }
 
     /// Where it was opened, at the start of the row's place line; not for the assistant's own conversation.
     @MainActor @ViewBuilder var sourceLabel: some View {
@@ -4871,8 +4870,9 @@ nonisolated struct CompactSlotRow: View, Equatable {
                     .font(session.state == .unread ? CompactList.titleUnread : CompactList.title)
                     .lineLimit(1)
                     .layoutPriority(1)
-                // Claude Code's ultracode on (#1307): its mark right after the title, never cut.
-                if Ultracode.rowMark(session) { UltracodeMark(font: CompactList.meta).fixedSize().transition(.opacity) }
+                if let workflow = Ultracode.workflowMark(session) {
+                    UltracodeMark(font: CompactList.meta, spoken: workflow.onWords).fixedSize().transition(.opacity)
+                }
                 // The starter mark stays whole: the line's other words give way to the title.
                 if pane?.launcher == true { Text("Started It").font(CompactList.metaStrong).foregroundStyle(.secondary).lineLimit(1).fixedSize() }
                 if let place, !place.isEmpty {
@@ -4886,7 +4886,7 @@ nonisolated struct CompactSlotRow: View, Equatable {
                     }
                 }
             }
-            .animation(UltracodeMark.motion, value: Ultracode.rowMark(session))
+            .animation(UltracodeMark.motion, value: Ultracode.workflowMark(session))
             Spacer(minLength: Theme.Space.xs)
             // Awaiting Reply in words (#5096): the dot is a seen agent's gray.
             if !hideState && (session.awaitsYourReply(muted: muted) || session.showsJustFinished(muted: muted)) {

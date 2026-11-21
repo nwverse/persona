@@ -206,6 +206,7 @@ func (n *Node) resumeCodexThread(ctx context.Context, id, launcher, text string,
 		} else {
 			st.Pane = n.paneOf(id)
 		}
+		st.CodexMultiAgentPane = ""
 		n.state.put(id, st)
 	}
 	return err

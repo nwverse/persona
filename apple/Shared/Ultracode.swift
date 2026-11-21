@@ -1,6 +1,29 @@
 import Foundation
 import PersonaWire
 
+/// The workflow a task can request and the node can confirm for its Agent.
+nonisolated enum AgentWorkflowKind: String, Codable, Hashable, Sendable {
+    case claudeUltracode = "claude_ultracode"
+    case codexMultiAgentV2 = "codex_multi_agent_v2"
+    case unsupported
+
+    var name: String {
+        switch self {
+        case .claudeUltracode: Ultracode.name
+        case .codexMultiAgentV2: String(localized: "Codex multi-agent v2")
+        case .unsupported: ""
+        }
+    }
+
+    var onWords: String {
+        switch self {
+        case .claudeUltracode: Ultracode.onWords
+        case .codexMultiAgentV2: String(localized: "Codex multi-agent v2 on")
+        case .unsupported: ""
+        }
+    }
+}
+
 // Claude Code's ultracode switch on iOS, the Mac and the watch (#1307; the server is #3427, docs/protocol/protocol.md
 // "Claude Code ultracode"; the web's lib/ultracode.ts does the same): with it on, Claude runs every substantive task as a
 // multi-agent workflow. It is its own switch beside the thinking effort, only for the session's current process, off by
@@ -33,6 +56,13 @@ nonisolated enum Ultracode {
     /// The mark beside a list row's title: on, and not on an offline row (the node keeps the last value it saw after the
     /// process is gone, and a resume starts it off).
     static func rowMark(_ s: Session) -> Bool { on(s) && s.state != .offline }
+
+    /// The running Agent's confirmed workflow. Codex effort alone does not confirm multi-agent v2.
+    static func workflowMark(_ s: Session) -> AgentWorkflowKind? {
+        guard !s.assistant, s.state != .offline else { return nil }
+        if s.isCodex, s.codexMultiAgentV2 == true { return .codexMultiAgentV2 }
+        return on(s) ? .claudeUltracode : nil
+    }
 
     /// The info card's row: a Claude Code agent on a hub that has the switch, whose process runs. Not on an offline one,
     /// as its row and chip (`rowMark`): the node keeps the last value it saw, and a resume starts it off.

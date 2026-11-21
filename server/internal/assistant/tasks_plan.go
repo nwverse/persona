@@ -122,6 +122,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			return "", fmt.Errorf("task %d: title, prompt and cwd are required", i+1)
 		}
 		t.Brief = nil // the hub's (planBriefs below), never the tool call's
+		t.WorkflowKind, t.WorkflowActive, t.WorkflowNote = "", false, ""
 		t.Goal, t.OutOfBounds = clip(oneLine(t.Goal), 300), cleanDoneWhen(t.OutOfBounds)
 		t.Continues, t.ContinuesWhy = strings.TrimSpace(t.Continues), clip(oneLine(t.ContinuesWhy), 300)
 		t.StartedWhy = clip(oneLine(t.StartedWhy), 300)
@@ -181,6 +182,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			if err != nil {
 				return "", fmt.Errorf("task %d: %w", i+1, err)
 			}
+			t.WorkflowKind = fit.taskWorkflow()
 			switch {
 			case t.Readonly:
 				if fit.allowAll() {

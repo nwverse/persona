@@ -55,6 +55,9 @@ func listKeySized(list []proto.Session, size int) string {
 			w.int(int64(s.OutputTokens), '\n')
 		}
 		writeUltracodeKey(&w, s)
+		if s.CodexMultiAgentV2 {
+			w.b.WriteString("codex-multi-agent-v2\n")
+		}
 		if s.ServiceTier != "" || len(s.ServiceTiers) > 0 {
 			fmt.Fprintf(&w.b, "speed:%q/%v\n", s.ServiceTier, s.ServiceTiers)
 		}

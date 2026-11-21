@@ -432,6 +432,9 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	}
 	if st, ok := n.decorateState(s, true); ok {
 		s.Compaction = st.Compaction
+		if s.Agent == "codex" {
+			s.CodexMultiAgentV2 = s.PaneID != "" && s.Status != proto.StatusOffline && st.CodexMultiAgentPane == s.PaneID
+		}
 		s.PendingSwitch = st.PendingSwitch   // launcher_switch.go
 		s.SetEngineHistory(st.EngineHistory) // engine_switch.go
 	}

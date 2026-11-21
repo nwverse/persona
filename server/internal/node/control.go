@@ -100,6 +100,9 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		return nil, refusal(secretEnvAgentCode, secretEnvAgentText, nil)
 	}
 	if resume != "" && validID(resume) && n.codexPath(resume) != "" && !n.isAssistantSession(resume) {
+		if wantsUltracode(execution.Ultracode) {
+			return nil, codexMultiAgentRefusal(ctx, "multi_agent_launcher")
+		}
 		if _, live := n.agent(resume); !live { // a Codex thread nothing runs (codex_resume.go)
 			return n.resumeCodexSession(ctx, resume, launcher, prompt, mode)
 		} else if mode == "plan" {
@@ -201,8 +204,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			return nil, readonlyStartUnsupported()
 		}
 	}
-	if err := n.checkUltracodeStart(ctx, execution.Ultracode, kind); err != nil {
-		return nil, err
+	startsCodex := codex && kind != traexAgent && resume == ""
+	if !startsCodex {
+		if err := n.checkUltracodeStart(ctx, execution.Ultracode, kind); err != nil {
+			return nil, err
+		}
 	}
 	if execution.Model != "" && kind != ompAgent && workAgentKind(launcher, kind) == "" {
 		agent, err := n.launcherModelCheck(ctx, launcher, execution.Model)
@@ -271,6 +277,14 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			return nil, err
 		}
 	}
+	if startsCodex && wantsUltracode(execution.Ultracode) {
+		runs := n.codexOwnEffort(ctx, argv, codexPaneEnv(launch), cwd, execution)
+		argv, err = n.prepareCodexMultiAgent(ctx, cwd, launcher, launch, codexExecutionArgs(argv, runs))
+		if err != nil {
+			return nil, err
+		}
+		execution.CodexMultiAgentV2 = true
+	}
 	ws, err := n.tabSpace(ctx, launch, cwd, workspaceID)
 	if err != nil {
 		return nil, err
@@ -279,9 +293,12 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		if resume != "" { // a Codex thread is resumed above: this id is not one
 			return nil, refusal(codexResumeRefused, "找不到这个 Codex 会话的记录，没法接着它：请在电脑上恢复（codex resume）。", nil)
 		}
-		// An inherited effort needs no override, which would leave the shared app-server; the record keeps it all the same.
-		runs := n.codexOwnEffort(ctx, argv, codexPaneEnv(launch), cwd, execution)
-		s, err := n.startCodex(ctx, launch, cwd, launcher, codexExecutionArgs(argv, runs), execution, prompt, ws, tabName, mode)
+		if !execution.CodexMultiAgentV2 {
+			// An inherited effort needs no override, which would leave the shared app-server; the record keeps it all the same.
+			runs := n.codexOwnEffort(ctx, argv, codexPaneEnv(launch), cwd, execution)
+			argv = codexExecutionArgs(argv, runs)
+		}
+		s, err := n.startCodex(ctx, launch, cwd, launcher, argv, execution, prompt, ws, tabName, mode)
 		if err == nil && strings.TrimSpace(prompt) != "" {
 			n.codexGoalAfterStart(s.SessionID, s.PaneID, execution.Goal) // its first message is in (codex_start_goal.go)
 		}

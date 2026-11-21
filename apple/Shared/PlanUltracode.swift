@@ -1,11 +1,16 @@
 import Foundation
 
-// Claude Code's ultracode on plan cards and to-dos (#12): the assistant turns it on per task, the card can change it
-// before the task starts, and a to-do carries the Agent list row's mark while one of its agents runs with it. The web's
-// rules (web/src/lib/ultracode.ts, web/src/lib/feed.ts), on top of the switch's own (`Ultracode`, Ultracode.swift); the
-// views are in Persona/Views/Assistant/Tasks/PlanUltracodeViews.swift.
+// A task's workflow can be set before Start. The wire request keeps its tri-state ultracode field for both engines.
 
 nonisolated extension Ultracode {
+    static func planWorkflow(_ task: PlanTask, features: Set<String>) -> AgentWorkflowKind? {
+        switch task.workflowKind {
+        case .unsupported?: nil
+        case let kind?: kind
+        case nil: features.contains(feature) ? .claudeUltracode : nil
+        }
+    }
+
     /// The mark on a to-do: one of its agents still in it shows the Agent list row's (`rowMark`); before any agent
     /// started, the plan task it starts from asks for it. Never on a to-do that is done or did not start.
     static func todoShown(_ todo: TodoItem, lookup: TodosLogic.SessionLookup, planned: PlanTask? = nil) -> Bool {
@@ -17,9 +22,9 @@ nonisolated extension Ultracode {
 
     // MARK: What Start sends
 
-    /// A task's ultracode as Start sends it: the choice, off on a computer that can't; nil when that is the assistant's
-    /// own (left out, the hub keeps it).
+    /// Start sends only a changed workflow choice. A known unsupported launcher has no workflow control.
     static func toSend(planned: PlanTask?, on: Bool, blocked: Bool) -> Bool? {
+        if planned?.workflowKind == .unsupported { return nil }
         let sent = on && !blocked
         return sent == (planned?.ultracode == true) ? nil : sent
     }
@@ -33,19 +38,19 @@ nonisolated extension Ultracode {
     static func editsOf(_ plan: TaskPlan, choices: [Bool]) -> [PlanTask] {
         plan.tasks.enumerated().map { i, t in
             var e = t
-            e.ultracode = i < choices.count ? choices[i] : (t.ultracode == true)
+            e.ultracode = t.workflowKind == .unsupported ? nil : (i < choices.count ? choices[i] : t.ultracode == true)
             return e
         }
     }
 
     /// What the card's own Start sends: the plan's tasks as they are, `ultracode` set only on those whose choice, as
     /// sent, differs from the assistant's; nil when nothing differs, so a plain Start still sends no `tasks`.
-    /// `blocked(machine)`: that computer can't start with it.
-    static func cardEdits(_ plan: TaskPlan, choices: [Bool], blocked: (String) -> Bool) -> [PlanTask]? {
+    /// `blocked(task)`: its computer cannot start the requested workflow.
+    static func cardEdits(_ plan: TaskPlan, choices: [Bool], blocked: (PlanTask) -> Bool) -> [PlanTask]? {
         var changed = false
         let edits = plan.tasks.enumerated().map { i, t -> PlanTask in
             var e = t
-            e.ultracode = toSend(planned: t, on: i < choices.count && choices[i], blocked: blocked(t.machine))
+            e.ultracode = toSend(planned: t, on: i < choices.count && choices[i], blocked: blocked(t))
             if e.ultracode != nil { changed = true }
             return e
         }
@@ -53,11 +58,15 @@ nonisolated extension Ultracode {
     }
 
     /// What Edit's Start sends: the edited tasks, `ultracode` left out where it is the assistant's own.
-    static func editsToSend(_ plan: TaskPlan, edits: [PlanTask], blocked: (String) -> Bool) -> [PlanTask] {
+    static func editsToSend(_ plan: TaskPlan, edits: [PlanTask], blocked: (PlanTask) -> Bool) -> [PlanTask] {
         edits.enumerated().map { i, e in
             var out = e
             let planned = i < plan.tasks.count ? plan.tasks[i] : nil
-            out.ultracode = toSend(planned: planned, on: e.ultracode == true, blocked: blocked(e.machine))
+            if e.workflowKind == .unsupported {
+                out.ultracode = nil
+            } else {
+                out.ultracode = toSend(planned: planned, on: e.ultracode == true, blocked: blocked(e))
+            }
             return out
         }
     }

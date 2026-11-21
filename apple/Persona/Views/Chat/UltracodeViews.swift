@@ -29,10 +29,14 @@ struct UltracodeMark: View {
     /// that wraps carries it at the end of its last line. Beside the text's frame it sat after the first line, between
     /// the title's two halves. The label is the whole text's: an image's own inside a `Text` is not read.
     static func after(_ title: String, on: Bool, font: Font = Theme.Font.label) -> Text {
-        guard on else { return Text(title) }
+        after(title, workflow: on ? .claudeUltracode : nil, font: font)
+    }
+
+    static func after(_ title: String, workflow: AgentWorkflowKind?, font: Font = Theme.Font.label) -> Text {
+        guard let workflow else { return Text(title) }
         let mark = Text(Theme.Icon.image(Theme.Icon.workflow)).font(font).foregroundStyle(Theme.ai)
         return (Text(title) + Text(verbatim: "\u{00A0}") + mark)
-            .accessibilityLabel(title + String(localized: ", ", comment: "List separator") + Ultracode.onWords)
+            .accessibilityLabel(title + String(localized: ", ", comment: "List separator") + workflow.onWords)
     }
 }
 

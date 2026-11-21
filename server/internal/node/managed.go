@@ -500,9 +500,16 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 	if agent == "" {
 		agent = "claude"
 	}
-	exe, err := agentExecutable(agent)
-	if err != nil {
-		return fmt.Errorf("personad launch: %w", err)
+	multiAgentExe := os.Getenv(codexMultiAgentExecEnv)
+	if multiAgentExe != "" && (agent != "codex" || !filepath.IsAbs(multiAgentExe)) {
+		return errors.New(codexStartError + " the chosen Codex launcher changed during startup")
+	}
+	exe := multiAgentExe
+	if exe == "" {
+		exe, err = agentExecutable(agent)
+		if err != nil {
+			return fmt.Errorf("personad launch: %w", err)
+		}
 	}
 	var env []string
 	if agent == "claude" {
@@ -553,13 +560,21 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 	if agent == "codex" && os.Getenv(codexBypassEnv) == "1" {
 		argv = codexBypassArgs(argv)
 	}
-	env = withoutEnv(env, []string{codexBypassEnv, managedModelProbeEnv})
+	if multiAgentExe != "" {
+		argv = codexMultiAgentArgs(argv)
+	}
+	env = withoutEnv(env, []string{codexBypassEnv, codexMultiAgentExecEnv, managedModelProbeEnv})
 	if agent == "codex" {
 		// The provider wrapper is another native process boundary. Resolve npm's
 		// shim too; never let cmd.exe parse the first message on this final hop.
 		exe, env, err = codexStartProgram(exe, true, env)
 		if err != nil {
 			return fmt.Errorf("%s %w", codexStartError, err)
+		}
+		if multiAgentExe != "" {
+			if err := verifyCodexMultiAgentExec(ctx, exe, "", env, argv[1:]); err != nil {
+				return err
+			}
 		}
 	}
 	exe, argv, env, _ = launchExec(agent, exe, argv, env)

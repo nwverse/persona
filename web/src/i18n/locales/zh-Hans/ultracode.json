@@ -5,6 +5,7 @@
   "on": "ultracode 开",
   "icon_title": "ultracode 开着：每个任务都编排多 Agent workflow，很费额度",
   "codex_ultra_title": "极高档：会分给多个子 Agent 一起做，很费额度",
+  "codex_multi_agent": "Codex 多 Agent",
   "lost": "恢复后 ultracode 已关",
   "reopen": "重新打开",
   "dismiss": "关掉这条提示",

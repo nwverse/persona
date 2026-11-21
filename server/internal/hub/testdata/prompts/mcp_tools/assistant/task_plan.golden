@@ -183,7 +183,7 @@
             },
             "ultracode": {
               "type": "boolean",
-              "description": "large tasks (many files, multi-angle checks): Claude Code multi-agent workflows for substantial steps, slower/costlier; small tasks: false; Claude Code 2.1.284+ only, otherwise starts without it; never put it in prompt/title"
+              "description": "large tasks: opt in to Claude Code ultracode (2.1.284+) or local Codex CLI multi-agent v2 (0.145.0+) for this start; unsupported launchers start without it; small tasks: false; never put it in prompt/title"
             },
             "readonly": {
               "type": "boolean",

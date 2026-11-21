@@ -29,6 +29,8 @@ type modelExecution struct {
 	UseEffort   bool
 	Fingerprint string
 	Ultracode   *bool `json:"-"` // explicit TUI start request; never a default or execution fingerprint
+	// CodexMultiAgentV2 is set only after checking the actual executable and enabling its process override.
+	CodexMultiAgentV2 bool `json:"-"`
 	// PlanThen: the permission mode a start in plan mode goes on in once its plan is approved (planthen.go); never
 	// part of a fingerprint.
 	PlanThen string `json:"-"`

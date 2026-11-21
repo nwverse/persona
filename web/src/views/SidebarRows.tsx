@@ -18,7 +18,7 @@ import type { AgentState, Session } from "../lib/types";
 import { cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
 import { runningWorkflows, workflowLine, workflowShortLine } from "../lib/workflows";
-import { ultracodeMarkShown } from "../lib/ultracode";
+import { agentWorkflowMark } from "../lib/ultracode";
 import { Rolling } from "../ui/Rolling";
 import { BrandMark } from "../ui/BrandMark";
 import { OriginMark } from "../ui/ChannelMark";
@@ -327,9 +327,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   // words left unsent in its box, once you are not in it (#5568): in place of what it asks or did
   const draft = draftLine(useLeftDraft(`${given.machine_id}/${given.session_id}`));
   const line = draft ?? (showState && !s.assistant ? rowLine(s, ix, awaiting, finished) : undefined);
-  // ultracode on (#3428): the workflow mark in the AI colour right after the title; a row without it is drawn as before.
-  // Not on an offline row: the node keeps the last value it saw after the process is gone, and a resume starts it off.
-  const ultra = showState && ultracodeMarkShown(s);
+  const ultra = showState ? agentWorkflowMark(s) : undefined;
   const link = (
     <a
       ref={regRow}
@@ -364,7 +362,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
               <span className={cx("min-w-0 truncate text-[13px]", active ? "font-medium text-ink" : "text-ink-2", st === "unread" && !active && !usageLimitLabel(s) && "font-medium text-ink")}>
                 {label ?? title}
               </span>
-              <UltraMark size={10} />
+              <UltraMark size={10} {...ultra} />
             </span>
           ) : (
             <span className={cx("truncate text-[13px]", active ? "font-medium text-ink" : st === "offline" ? "text-ink-3" : "text-ink-2", st === "unread" && !active && !usageLimitLabel(s) && "font-medium text-ink")}>

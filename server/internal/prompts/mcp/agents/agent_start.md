@@ -6,7 +6,7 @@ When the work needs a branch and checkout of its own (work in parallel with what
 
 When the agent needs credentials the user keeps in a secret provider (a token in 1Password, say), give `secret_env`: each environment variable it should have, with the reference its value comes from (such as `op://vault/item/field`), never the secret itself. The user approves the hand-off on a card on iPhone or the web before anything starts, and the values reach only that agent's environment, for this run: you never see them, and the answer lists each variable as granted, declined, expired or failed. Only Claude Code agents on a computer this manager connects take them. Tell the agent the variables exist; never ask it to print them.
 
-Give `ultracode: true` for a large task: one that spans many files or needs checking from several angles (design, tests, review). Claude Code then runs every substantial step as a multi-agent workflow: slower and costlier: off for small work. Do not write the word "ultracode" into the prompt instead. Claude Code agents only (2.1.284 or later): any other agent, an older Claude Code or a node too old for it starts without it, and the answer says so. Once Claude Code confirms it, agents_list shows `ultracode=on`. An organization policy may keep some conversations read-only: a call from such a conversation is refused with the policy's reason. Do not retry; follow the refusal.{{template "shared/mcp_language" .}}
+Give `ultracode: true` for a large task: one that spans many files or needs checking from several angles (design, tests, review). Claude Code then runs every substantial step as a multi-agent workflow: slower and costlier: off for small work. Do not write the word "ultracode" into the prompt instead. Supported fresh starts are Claude Code 2.1.284+ and local terminal Codex CLI 0.145.0+ (multi-agent v2 for that run). If unsupported, the agent starts without it and the answer says why. Confirmed agents_list states are `ultracode=on` for Claude and `codex_multi_agent_v2=on` for Codex. An organization policy may keep some conversations read-only: a call from such a conversation is refused with the policy's reason. Do not retry; follow the refusal.{{template "shared/mcp_language" .}}
 
 `wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.
 
@@ -52,7 +52,7 @@ Give `ultracode: true` for a large task: one that spans many files or needs chec
     },
     "ultracode": {
       "type": "boolean",
-      "description": "Claude Code multi-agent workflows for substantial steps; default false"
+      "description": "Claude Code ultracode or local Codex multi-agent v2 for this launch; default false"
     },
     "worktree": {
       "type": "object",
