@@ -225,6 +225,9 @@ func TestSupervisorAndWorkingAgentCompactionSettings(t *testing.T) {
 			f.n.setManaged([]proto.ManagedLauncher{l})
 			p := map[string]any{"launcher": "gw", "cwd": t.TempDir(), "text": "hello", "is_main": tc.main,
 				"main_compact_window": tc.limit, "model_fingerprint": "fp"}
+			if tc.name == "working Agent" {
+				p["task_execution"], p["origin"], p["origin_known"] = true, "task", true
+			}
 			raw, err := nodeCall(t, f.n, "assistant.send", p)
 			if err != nil {
 				t.Fatal(err)
@@ -248,7 +251,15 @@ func TestSupervisorAndWorkingAgentCompactionSettings(t *testing.T) {
 				t.Fatalf("lost cap: %+v", st)
 			}
 			f.idle(t, out.SessionID)
-			if _, err := f.n.assistantSend(context.Background(), out.SessionID, "", "", "next", nil, "", ""); err != nil {
+			if tc.name == "working Agent" {
+				p["session_id"] = out.SessionID
+				if _, err := nodeCall(t, f.n, "assistant.send", p); err != nil {
+					t.Fatal(err)
+				}
+				if st, _ := f.n.state.get(out.SessionID); !st.TaskExecution {
+					t.Fatal("worker lost task execution")
+				}
+			} else if _, err := f.n.assistantSend(context.Background(), out.SessionID, "", "", "next", nil, "", ""); err != nil {
 				t.Fatal(err)
 			}
 			if f.proc(out.SessionID) != proc {
