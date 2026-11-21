@@ -69,8 +69,11 @@ func (s *Service) otherKindPick(ctx context.Context, machine, sid, launcher stri
 	} else {
 		picked = assistantKind(s.launcherAgent(ctx, machine, launcher))
 	}
-	if picked == "" || picked == conv {
+	if picked == "" {
 		return nil
+	}
+	if picked == conv {
+		return s.logicalAdapterPick(ctx, machine, c, launcher)
 	}
 	return &launcherOtherKind{conversationAgent: conv, launcher: launcher, launcherAgent: picked}
 }
