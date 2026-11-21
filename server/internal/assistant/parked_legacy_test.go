@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -255,7 +256,7 @@ func TestLegacyOwnerPriorityPreservesOwnerDecisions(t *testing.T) {
 			database.down.Store(when == "stored while ledger fails")
 			writeDecision(t, s, task.ID, "Should the update be published?", "Do not publish")
 			database.down.Store(false)
-			again, _ := restartedOn(t, database)
+			again, hub := restartedOn(t, database)
 			holdDigest(again)
 			if err := again.ensureTodosLoaded(ctx); err != nil {
 				t.Fatal(err)
@@ -270,8 +271,18 @@ func TestLegacyOwnerPriorityPreservesOwnerDecisions(t *testing.T) {
 			if err != nil || len(decisions) != 1 || r == nil || r.Decided != decisions[0].ID {
 				t.Fatalf("missing or duplicated owner decision: %+v, review %+v, %v", decisions, r, err)
 			}
-			if got := pendingKinds(again, task.ID); !slices.Equal(got, []string{sigParkDecided}) {
-				t.Fatalf("an answered legacy choice was restated or not told: %v", got)
+			// Immediate delivery can take the pending signal before this assertion runs. Accept either settled form:
+			// the recovered signal is still pending, or exactly one real message carried it; never both nor neither.
+			waitFor(t, "the recovered park decision", func() bool {
+				return slices.Contains(pendingKinds(again, task.ID), sigParkDecided) ||
+					strings.Contains(strings.Join(hub.notices(), "\n"), "signal=park_decided")
+			})
+			pending := pendingKinds(again, task.ID)
+			delivered := strings.Count(strings.Join(hub.notices(), "\n"), "signal=park_decided")
+			if len(pending) > 0 && (!slices.Equal(pending, []string{sigParkDecided}) || delivered != 0) {
+				t.Fatalf("an answered legacy choice was restated or duplicated: pending %v, messages %q", pending, hub.notices())
+			} else if len(pending) == 0 && delivered != 1 {
+				t.Fatalf("an answered legacy choice was not told exactly once: pending %v, messages %q", pending, hub.notices())
 			}
 		})
 	}

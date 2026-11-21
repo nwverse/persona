@@ -1298,6 +1298,8 @@ func (s *Service) applyTaskDone(ctx context.Context, t Todo, work time.Time, wor
 		if _, reporting := s.reporterOf(ctx, t.Origin); reporting {
 			// An active reporting conversation deliberately keeps its task unsupervised (#12152): preserve its ordinary
 			// quiet completion instead of attaching main here. Other legacy unsupervised tasks join main below (#5732).
+			// judgeTaskDoneWith suppresses WouldClose for universal review; this legacy route alone restores main's verdict.
+			c.WouldClose = c.Verdict == verdictDone
 			s.turnJudged(ctx, t.ID, c, err, "")
 			if err != nil {
 				if !ai.IsPaused(err) {
