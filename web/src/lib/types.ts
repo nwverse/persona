@@ -1027,6 +1027,8 @@ export interface AssistantInfo {
   /** The background supervisor's conversation (#4927, lib/background-supervisor.ts): its session id once the hub made
    *  it; absent before that and from an older hub. Read-only. */
   background_supervisor?: string;
+  /** Default-space state=open task plans belonging to this manager, hydrated on /assistant load (#12254). */
+  open_plans?: import("./feed").TaskPlan[];
   conversations: Session[];
 }
 

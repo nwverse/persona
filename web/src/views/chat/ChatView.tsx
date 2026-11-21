@@ -143,7 +143,8 @@ import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted
 import { CardConversation } from "../../ui/AssistantCard";
 import { SessionMark, sessionMarkName } from "../../ui/AgentMark";
 import { sessionAgentName } from "../../lib/agent-kind";
-import { AssistantActionBar, DayLine, FeedLineView, QuickResultCard, RouteChip, TaskQuestions } from "../assistant/Tasks";
+import { AssistantActionBar, DayLine, FeedLineView, QuickResultCard, RouteChip } from "../assistant/Tasks";
+const LazyTaskQuestions = lazy(() => import("../assistant/TaskQuestions").then((m) => ({ default: m.TaskQuestions })));
 import { t } from "../../i18n";
 import { lazyDialog, lazyOverlay } from "../LazyOverlay";
 
@@ -2308,7 +2309,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         )}
         {assistant && (
           <>
-            {voiceState === "live" && <TaskQuestions conversation={sid} />}
+            {voiceState === "live" && <Suspense fallback={null}><LazyTaskQuestions conversation={sid} /></Suspense>}
             {/* the cards this chat's own turn waits on, open above the capsules (also while a voice call is live); the cards
                 of the sessions folded under it are in the chat under the bar (#4883, as iOS): Needs you counts them and
                 lists a row for each that closes the tray onto its card. */}

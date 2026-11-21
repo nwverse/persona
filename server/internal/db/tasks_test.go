@@ -503,3 +503,54 @@ func TestTaskPlansMadeSince(t *testing.T) {
 		t.Fatalf("queue candidates = %v", got)
 	}
 }
+
+// TaskPlansOpen returns only state=open plans across conversations in created_at, id order, and stops returning
+// a plan once it moves to started or dismissed.
+func TestTaskPlansOpen(t *testing.T) {
+	ctx := context.Background()
+	d := open(t)
+	prefix := fmt.Sprintf("plan_open_%d", time.Now().UnixNano())
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	rows := []TaskPlanRow{
+		{ID: prefix + "_b", Conversation: prefix + "_routine", State: "open", CreatedAt: base.Add(2 * time.Minute), UpdatedAt: base.Add(2 * time.Minute), Tasks: json.RawMessage(`[{"title":"Routine task"}]`)},
+		{ID: prefix + "_a", Conversation: prefix + "_main", State: "open", CreatedAt: base.Add(time.Minute), UpdatedAt: base.Add(time.Minute), Tasks: json.RawMessage(`[{"title":"Main task"}]`)},
+		{ID: prefix + "_started", Conversation: prefix + "_side", State: "started", CreatedAt: base.Add(3 * time.Minute), UpdatedAt: base.Add(3 * time.Minute), Tasks: json.RawMessage(`[{"title":"Started task"}]`)},
+		{ID: prefix + "_dismissed", Conversation: prefix + "_side", State: "dismissed", CreatedAt: base.Add(4 * time.Minute), UpdatedAt: base.Add(4 * time.Minute), Tasks: json.RawMessage(`[{"title":"Dismissed task"}]`)},
+	}
+	for _, p := range rows {
+		if err := d.CreateTaskPlan(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	openRows, err := d.TaskPlansOpen(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range openRows {
+		if strings.HasPrefix(r.ID, prefix+"_") {
+			got = append(got, strings.TrimPrefix(r.ID, prefix+"_")+":"+r.Conversation)
+		}
+	}
+	want := "a:" + prefix + "_main,b:" + prefix + "_routine"
+	if strings.Join(got, ",") != want {
+		t.Fatalf("TaskPlansOpen = %q, want %q", strings.Join(got, ","), want)
+	}
+	ok, err := d.UpdateTaskPlan(ctx, prefix+"_b", "open", "started", rows[0].Tasks, base.Add(5*time.Minute))
+	if err != nil || !ok {
+		t.Fatalf("UpdateTaskPlan = %v, %v", ok, err)
+	}
+	openRows, err = d.TaskPlansOpen(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = nil
+	for _, r := range openRows {
+		if strings.HasPrefix(r.ID, prefix+"_") {
+			got = append(got, strings.TrimPrefix(r.ID, prefix+"_"))
+		}
+	}
+	if strings.Join(got, ",") != "a" {
+		t.Fatalf("TaskPlansOpen after start = %v, want [a]", got)
+	}
+}

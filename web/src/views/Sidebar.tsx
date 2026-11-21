@@ -293,7 +293,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
       .filter((c) => !c.archived).length,
     [assistant?.conversations, liveChats, manager],
   );
-  const { phase, online, total, main: mainConversation, sections, more } = useNavPages();
+  const { phase, online, total, main: mainConversation, sections, more, openPlans } = useNavPages();
   // a phone's drawer has the pages as two rows of icons, so its first screen reaches the Agents (#1996)
   const narrow = useMedia(NARROW);
   const activeKey = useActiveKey(route);
@@ -330,14 +330,19 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   useStickyTop(nav);
   const go = useGo(onNavigate);
 
+  const planCount = (list: Session[]) => list.reduce((n, c) => n + (openPlans.byConversation.get(c.session_id) ?? 0), 0);
+  const recentOpenPlans = planCount(ownChats);
+  const hiddenNonMainOpenPlans = Math.max(0, openPlans.nonMain - planCount(directions) - planCount(recent));
+  const planBadgeLabel = (count: number) => t("sidebar.open_plans_badge", { count });
+
   // A lead's row is an ordinary conversation row under the 常驻 heading (#6214): no pin glyph of its own, so it never
   // reads as a button. Its "等你 N" stays on hover and the ⋯ has its own reserved end slot (keepTrailing).
   const directionRow = (c: Session) => (
-    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={directionLabel(directionNames, c.session_id, conversationTitle(c))} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull showState={false} workingMark={counts.get(c.session_id)?.running ?? false} keepTrailing onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
+    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={directionLabel(directionNames, c.session_id, conversationTitle(c))} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull showState={false} workingMark={counts.get(c.session_id)?.running ?? false} openPlans={openPlans.byConversation.get(c.session_id) ?? 0} keepTrailing onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
   );
 
   const recentRow = (c: Session) => (
-    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={conversationTitle(c)} showState={false} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
+    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={conversationTitle(c)} showState={false} openPlans={openPlans.byConversation.get(c.session_id) ?? 0} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
   );
 
   return (
@@ -364,7 +369,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
         {/* the main conversation is the column's first row, Main chat with the home symbol, and only there (#2004, #5109); it
             stays at the top while the rest scrolls (#5581), with a solid divider above the sticky groups */}
         <div data-sidebar-sticky className="sticky top-0 z-30 flex flex-col gap-px bg-canvas pt-1">
-          <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} chord={bindings.persona} onMenu={onConvMenu} />
+          <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} openPlans={openPlans.total} chord={bindings.persona} onMenu={onConvMenu} />
           <span aria-hidden data-persona-divider className="mx-2 my-1 h-px shrink-0 bg-line" />
         </div>
         {/* a phone's drawer has Pages as its grid of icons; every other group (#9071) is a section, as on a wide screen */}
@@ -391,6 +396,12 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
                     <span className="truncate">{countsLabel(leaderTotal, t)}</span>
                   </span>
                 )}
+                {personaFolded && openPlans.nonMain > 0 && (
+                  <span data-persona-plans-badge title={planBadgeLabel(openPlans.nonMain)} className={cx("flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1 text-xs font-semibold tabular-nums", BADGE_CLASS.attention)}>
+                    <span aria-hidden>{openPlans.nonMain}</span>
+                    <span className="sr-only">{planBadgeLabel(openPlans.nonMain)}</span>
+                  </span>
+                )}
                 <SectionAdd icon="compose" label={t("sidebar.new_chat")} to={{ name: "persona-new" }} go={go} active={activeKey === "j:new"} />
               </>
             }
@@ -410,7 +421,14 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
                 </Suspense>
               ) : recent.length > 0 && (
                 <>
-                  <SubHeading label={t("sidebar.recent_chats")} folded={recentFolded} onToggle={toggleRecent} help={t("sidebar.recent_chats_help")} />
+                  <SubHeading
+                    label={t("sidebar.recent_chats")}
+                    folded={recentFolded}
+                    onToggle={toggleRecent}
+                    help={t("sidebar.recent_chats_help")}
+                    badge={recentFolded && recentOpenPlans > 0 ? recentOpenPlans : undefined}
+                    badgeLabel={recentFolded && recentOpenPlans > 0 ? planBadgeLabel(recentOpenPlans) : undefined}
+                  />
                   <Collapse open={!recentFolded} sidebarFold>
                     <div className="sidebar-indent" inert={recentFolded || undefined}>
                       {recent.map(recentRow)}
@@ -435,6 +453,10 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
               {assistant && (
                 <NavRow k="history" reg={reg} hover={hover} active={activeKey === "history"} to={{ name: "history" }} go={go} icon="list"
                   label={t("sidebar.all_chats")}
+                  badge={hiddenNonMainOpenPlans || undefined}
+                  badgeTone="attention"
+                  badgeLabel={hiddenNonMainOpenPlans ? planBadgeLabel(hiddenNonMainOpenPlans) : undefined}
+                  title={hiddenNonMainOpenPlans ? planBadgeLabel(hiddenNonMainOpenPlans) : undefined}
                   hintCount={unarchived > 0 ? {
                     n: unarchived,
                     label: t("sidebar.unarchived_chat_count", { count: unarchived }),

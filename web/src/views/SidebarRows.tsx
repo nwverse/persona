@@ -50,10 +50,10 @@ import type { UIColor } from "../lib/extension-ui-v6";
 // The assistant's identity belongs to the sidebar head; a left draft keeps its existing second line.
 // Its menu (Copy session ID, End…: iOS's long press on the main row) opens on a right click, the menu key or its ⋯.
 // Memoized like SessionRow: a push that leaves the main conversation as it was does not render it again.
-export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, main, chord, onMenu: menuOf }: { reg: RegFn; hover: (k: string | null) => void; active: boolean; go: GoFn; main?: Session; /** The "Open Persona" shortcut as bound now ("": none). */ chord?: string; /** The conversation rows' menu, opened on `main`: none without it. */ onMenu?: RowMenuFn }) {
+export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, main, openPlans = 0, chord, onMenu: menuOf }: { reg: RegFn; hover: (k: string | null) => void; active: boolean; go: GoFn; main?: Session; /** Open task plans waiting for confirmation in Main chat's Needs you tray. */ openPlans?: number; /** The "Open Persona" shortcut as bound now ("": none). */ chord?: string; /** The conversation rows' menu, opened on `main`: none without it. */ onMenu?: RowMenuFn }) {
   const to: Route = { name: "persona" };
   const st = main ? stateOf(main) : undefined;
-  const pending = main?.pending_interactions ?? 0;
+  const pending = (main?.pending_interactions ?? 0) + openPlans;
   const onMenu = main && menuOf ? (anchor: HTMLElement, at?: MenuAt) => menuOf(main, anchor, at) : undefined;
   // one ref for the row's life, so a re-render does not let go of it and register it again (useGlide's reg)
   const ref = useMemo(() => reg("persona"), [reg]);
@@ -109,7 +109,7 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
 
 /** A subgroup title. Its disclosure and help are separate controls. */
 const SUB_HEADING_TYPE = "text-[11px] font-semibold text-ink-3";
-export function SubHeading({ label, folded, onToggle, help }: { label: string; folded?: boolean; onToggle?: () => void; help?: string }) {
+export function SubHeading({ label, folded, onToggle, help, badge, badgeLabel }: { label: string; folded?: boolean; onToggle?: () => void; help?: string; badge?: number; badgeLabel?: string }) {
   return (
     <div className="flex items-center gap-1 px-2 py-0.5">
       <div role="heading" aria-level={3} className={cx("min-w-0 flex-1", !onToggle && "truncate", SUB_HEADING_TYPE)}>
@@ -120,6 +120,12 @@ export function SubHeading({ label, folded, onToggle, help }: { label: string; f
           </button>
         ) : label}
       </div>
+      {badge !== undefined && (
+        <span data-subheading-badge title={badgeLabel} className={cx("flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1 text-xs font-semibold tabular-nums", BADGE_CLASS.attention)}>
+          <span aria-hidden>{badge}</span>
+          {badgeLabel && <span className="sr-only">{badgeLabel}</span>}
+        </span>
+      )}
       {help && <InfoTip name={label} text={help} className="[@media(pointer:coarse)]:size-11" />}
     </div>
   );
@@ -226,6 +232,8 @@ function SecondLine({ line, draft }: { line: { lead?: string; text: string; tone
 
 // `prefix`: a word before the title (a tab's name, a pane's agent), in `prefixClass`
 type SessionRowProps = { menuLabel?: string; /** The mark at the start when the state is not shown (a Persona conversation's; pinned: the pin). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; to: Route; go: GoFn; tab?: boolean; label?: string; prefix?: string; prefixClass?: string; hint?: string; /** The hint is whole, never cut (a lead's counts). */ hintFull?: boolean; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean; /** A lead row whose own conversation is idle while something under it runs (the direction tree's `running`, #6626): draw the working arc anyway (#6230). An own needs-you / unread state still takes precedence. */ workingMark?: boolean;
+  /** Open task plans waiting for confirmation in this conversation (#12254). */
+  openPlans?: number;
   /** 常驻 rows (#6214): the "在做 N · 等你 N" counts never fade on hover and the ⋯ sits in a reserved end slot instead
    * of covering them, so hovering removes no information. */
   keepTrailing?: boolean };
@@ -239,7 +247,7 @@ function sameProps<P extends { to: Route }>(a: P, b: P): boolean {
   return keys.every((key) => (key === "to" ? routePath(a.to) === routePath(b.to) : Object.is(a[key], b[key])));
 }
 
-export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, active, to, go, tab, label, prefix, prefixClass, hint, hintFull, host, showState = true, showTodoTag, onMenu, menuLabel = t("sidebar.agent_actions"), endRoom, icon = "chat", workingMark = false, keepTrailing = false }: SessionRowProps) {
+export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, active, to, go, tab, label, prefix, prefixClass, hint, hintFull, host, showState = true, showTodoTag, onMenu, menuLabel = t("sidebar.agent_actions"), endRoom, icon = "chat", workingMark = false, openPlans = 0, keepTrailing = false }: SessionRowProps) {
   // a parent of child sessions in its folded state (#5120): one of them waiting makes it need you, one working makes it
   // work; the rows of the paged list come as the hub sends them, the other lists' folded already (lib/folded-rows.ts)
   // its side sessions' part from their rows when an open chat holds them (#7944): a side seen here shows at once
@@ -251,7 +259,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   // its child sessions' cards wait here too: the row's count holds them (one count per session, DESIGN_SYSTEM 4.8)
   const kidCards = useStore((st) => childCards(st.interactions, given.machine_id, given.session_id));
   const ix = own ?? kidCards[0];
-  const pendingCount = (given.pending_interactions ?? 0) + kidCards.length;
+  const pendingCount = (given.pending_interactions ?? 0) + kidCards.length + openPlans;
   // a card answered here takes its red dot and "Has a question" line away at once, not at the hub's next push (#4286)
   const justAnswered = useStore((st) => lastAnsweredAt(st.answered, given.machine_id, given.session_id));
   const pending = useStore((st) => answerPending(st.answered, given.machine_id, given.session_id));
@@ -353,7 +361,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
     >
       {/* the agent's mark before its state (#6390): what runs there, then how it is doing */}
       {showState && !s.assistant && <SessionMark s={s} size={14} />}
-      <span className="flex size-3.5 shrink-0 items-center justify-center">{showState || st === "working" || leadActive ? <StatusMark state={leadActive ? "working" : usageLimitLabel(s) && st === "unread" ? "idle" : st} awaiting={awaiting} finished={finished} waiting={backgroundWaiting(s)} /> : <Icon name={icon} size={12} className="text-ink-3" />}</span>
+      <span className="flex size-3.5 shrink-0 items-center justify-center">{showState || st === "working" || leadActive || openPlans > 0 ? <StatusMark state={st === "working" || leadActive ? "working" : openPlans > 0 && !showState ? "needs_you" : usageLimitLabel(s) && st === "unread" ? "idle" : st} awaiting={awaiting} finished={finished} waiting={backgroundWaiting(s)} /> : <Icon name={icon} size={12} className="text-ink-3" />}</span>
       {prefix && <span className={prefixClass}>{prefix}</span>}
       {/* with the mark, the title sits in the column whether a second line shows or not: the same element through a
           workflow's start and end, so the mark does not fade in again */}

@@ -233,9 +233,17 @@ type TaskPlan struct {
 	State        string     `json:"state"` // planOpen, planStarted, planDismissed
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
+	// Space: the assistant space this plan's conversation runs in (e.g. "health"); empty for the default space.
+	// Filled in where the apps read or receive the plan, never stored with it.
+	Space string `json:"space,omitempty"`
 	// Suggestion: the owner started this kind of task three times; the open plan's card offers to start it directly
 	// from now on (rule_suggest.go, #4929). Filled in where the apps read the plan, never kept with it.
 	Suggestion *proto.RuleSuggestion `json:"suggestion,omitempty"`
+}
+
+// openTaskPlansStore is optional so fake or legacy stores without it still satisfy Store.
+type openTaskPlansStore interface {
+	TaskPlansOpen(ctx context.Context) ([]db.TaskPlanRow, error)
 }
 
 const (
@@ -474,7 +482,7 @@ func (s *Service) patchPlanTask(ctx context.Context, planID string, i int, chang
 			return errPlanNotFound
 		}
 		if err == nil && row != nil {
-			s.event(ctx, map[string]any{"type": "task_plan", "plan": planFromRow(*row)})
+			s.broadcastPlan(ctx, planFromRow(*row))
 		}
 		return err
 	}
@@ -489,8 +497,30 @@ func (s *Service) patchPlanTask(ctx context.Context, planID string, i int, chang
 	if ok, err := s.movePlan(ctx, p, planStarted); err != nil || !ok {
 		return err
 	}
-	s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
+	s.broadcastPlan(ctx, p)
 	return nil
+}
+
+// planWithSpace returns a shallow copy of p carrying its conversation's assistant space when non-empty (e.g. "health"),
+// so clients can keep non-default space plans out of Main chat's cross-conversation aggregation.
+func (s *Service) planWithSpace(ctx context.Context, p *TaskPlan) *TaskPlan {
+	if p == nil || p.Conversation == "" || p.Space != "" {
+		return p
+	}
+	if s.inHealth(ctx, p.Conversation) {
+		cp := *p
+		cp.Space = SpaceHealth
+		return &cp
+	}
+	return p
+}
+
+// broadcastPlan sends a task_plan event with its conversation's space attached when non-default.
+func (s *Service) broadcastPlan(ctx context.Context, p *TaskPlan) {
+	if p == nil {
+		return
+	}
+	s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, p)})
 }
 
 // appendFeed adds an item to a conversation's feed and tells the clients.
@@ -644,6 +674,85 @@ func (s *Service) feedPlans(ctx context.Context, items []FeedItem) map[string]*T
 		plans[row.ID] = planFromRow(row)
 	}
 	return plans
+}
+
+// openPlansForMain lists every state=open task plan belonging to this manager's default-space conversations
+// (including scheduled routines and side/direction conversations), excluding deleted, archived, task-leader, and
+// non-default space (e.g. health) conversations. Returns ok=false when the store could not be read so callers can
+// degrade without claiming there are zero open plans.
+func (s *Service) openPlansForMain(ctx context.Context, ext bool) ([]*TaskPlan, bool) {
+	var raw []*TaskPlan
+	if st := s.store(); st == nil {
+		s.tasks.mu.Lock()
+		for _, p := range s.tasks.plans {
+			if p.State != planOpen {
+				continue
+			}
+			cp := *p
+			cp.Tasks = append([]PlanTask(nil), p.Tasks...)
+			raw = append(raw, &cp)
+		}
+		s.tasks.mu.Unlock()
+		sort.Slice(raw, func(i, j int) bool {
+			if raw[i].CreatedAt.Equal(raw[j].CreatedAt) {
+				return raw[i].ID < raw[j].ID
+			}
+			return raw[i].CreatedAt.Before(raw[j].CreatedAt)
+		})
+	} else {
+		os, ok := st.(openTaskPlansStore)
+		if !ok {
+			return nil, false
+		}
+		rows, err := os.TaskPlansOpen(ctx)
+		if err != nil {
+			s.logf("feed: read open plans: %v", err)
+			return nil, false
+		}
+		raw = make([]*TaskPlan, 0, len(rows))
+		for _, row := range rows {
+			raw = append(raw, planFromRow(row))
+		}
+	}
+	if len(raw) == 0 {
+		return []*TaskPlan{}, true
+	}
+	var candidates []*TaskPlan
+	var convIDs []string
+	seenConv := make(map[string]bool, len(raw))
+	for _, p := range raw {
+		if p == nil || p.State != planOpen || p.Conversation == "" || s.isLeaderRef(p.Conversation) {
+			continue
+		}
+		if s.conversationIDAvailable(ctx, p.Conversation) != nil || s.isArchived(p.Conversation) {
+			continue
+		}
+		candidates = append(candidates, p)
+		if !seenConv[p.Conversation] {
+			seenConv[p.Conversation] = true
+			convIDs = append(convIDs, p.Conversation)
+		}
+	}
+	if len(candidates) == 0 {
+		return []*TaskPlan{}, true
+	}
+	spaces := s.conversationSpaces(ctx, convIDs)
+	out := make([]*TaskPlan, 0, len(candidates))
+	for _, p := range candidates {
+		sp := spaces[p.Conversation]
+		if sp.space != "" {
+			continue
+		}
+		if ext {
+			if !sp.known || s.feedHiddenFromExtension(ctx, p.Conversation) {
+				continue
+			}
+		} else if s.inHealth(ctx, p.Conversation) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out, true
 }
 
 // planStartsAtOnce: every task only reads, was asked for by the user in this turn (while start_requested_tasks is on),
@@ -837,7 +946,7 @@ func (s *Service) taskRoutes() {
 			planErr(w, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"plan": s.planWithSuggestion(r.Context(), p, s.requestLang(r))})
+		apierr.WriteJSON(w, map[string]any{"plan": s.planWithSpace(r.Context(), s.planWithSuggestion(r.Context(), p, s.requestLang(r)))})
 	})
 	s.handle("POST /api/v1/task-plans/{id}/start", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
@@ -947,13 +1056,30 @@ func (s *Service) taskRoutes() {
 			apierr.Write(w, status, err)
 			return
 		}
+		convID := r.PathValue("id")
 		plans := s.feedPlans(r.Context(), items)
+		if convID != "" && convID == s.settings(r.Context()).Main && query.Get("cursor") == "" {
+			if open, ok := s.openPlansForMain(r.Context(), ext); ok {
+				for _, p := range open {
+					if _, exists := plans[p.ID]; !exists {
+						plans[p.ID] = p
+					}
+				}
+			}
+		}
 		var shown func(TaskCard) bool
 		if ext {
 			items, plans, shown = s.extensionFeed(r.Context(), items, plans)
 		}
+		convHealth := convID != "" && s.inHealth(r.Context(), convID)
 		for id, p := range plans {
-			plans[id] = s.planWithSuggestion(r.Context(), p, s.requestLang(r))
+			enriched := s.planWithSuggestion(r.Context(), p, s.requestLang(r))
+			if convHealth && enriched != nil && enriched.Conversation == convID && enriched.Space == "" {
+				cp := *enriched
+				cp.Space = SpaceHealth
+				enriched = &cp
+			}
+			plans[id] = enriched
 		}
 		if items == nil {
 			items = []FeedItem{}

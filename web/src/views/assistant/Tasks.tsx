@@ -70,7 +70,7 @@ import { feedWake, HandoffCard, HandoffCards, TASK_LINE_SLACK_MS, taskHandoffs }
 import { latestReview, parkedLine, progressLine } from "../../lib/supervision";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
 import { useChosenManager, useLinkManager } from "../../lib/manager-choice";
-import { AnsweredSummary, InteractionCard, underCard } from "../chat/Interactions";
+import { InteractionCard, underCard } from "../chat/Interactions";
 import type { RuleCard } from "../../lib/rule-suggestion";
 import { cardLine } from "../chat/dock";
 import { interactionKicker } from "../../lib/row-line";
@@ -86,6 +86,8 @@ const ParkedTasks = lazyPage(() => import("./ParkedTaskRow").then((m) => m.Parke
 // the Finished tray's rows, seeing one and its empty line come with its first opening, in the Parked rows' chunk (#10922)
 const FinishedTasks = lazyPage(() => import("./ParkedTaskRow").then((m) => m.FinishedTaskRows));
 import { conversationTitle } from "./conversations";
+import { conversationPage } from "../../lib/conversation-page";
+import { useScope } from "../../lib/current-assistant";
 import { TaskWorkspaceEditor, TaskWorkspaceLine } from "./TaskWorkspace";
 import type { TaskWorkspace } from "../../lib/feed";
 import { machineStartBlocked, ULTRACODE_FEATURE } from "../../lib/ultracode";
@@ -687,44 +689,7 @@ function MessageCard({ item }: { item: FeedItem }) {
 // The chat re-renders on every streamed item and hands these only the conversation: they are memo and read the rest
 // from the store and the feed themselves, so an item that changes nothing they show renders none of them.
 
-/** The oldest question the conversation's tasks' agents ask, under its task's name ("N more"). */
-function questionsIn(s: State, conversation: string) {
-  const out: { todo: Todo; ix: Interaction }[] = [];
-  const keys = new Set<string>();
-  for (const t of s.todos) {
-    if (t.origin !== conversation || t.done_at) continue;
-    const mine = (t.agents ?? []).filter((a) => !a.released_at).map((a) => `${a.machine_id}/${a.session_id}`);
-    mine.forEach((k) => keys.add(k));
-    for (const ix of s.interactions) if (mine.includes(`${ix.machine_id}/${ix.session_id}`)) out.push({ todo: t, ix });
-  }
-  // just answered here: shown answered for a moment above the next one
-  const done = Object.values(s.answered).filter((a) => keys.has(`${a.ix.machine_id}/${a.ix.session_id}`));
-  return { asks: out.sort((a, b) => byTime(a.ix.created_at, b.ix.created_at)), answered: done };
-}
-
-export const TaskQuestions = memo(function TaskQuestions({ conversation }: { conversation: string }) {
-  // a card for another agent coming or going leaves these rows as they were: no render
-  const asks = useStoreRows((s) => questionsIn(s, conversation).asks);
-  const answered = useStoreRows((s) => questionsIn(s, conversation).answered);
-  const first = asks[0];
-  if (!first && !answered.length) return null;
-  return (
-    <div className="flex flex-col gap-1">
-      {answered.length > 0 && <AnsweredSummary answered={answered} />}
-      {first && (
-        <>
-          <div className="flex items-center gap-1.5 px-1 text-label font-semibold text-attention">
-            <Icon name="hand" size={13} />
-            <span className="truncate">{first.todo.title}</span>
-            <span className="flex-1" />
-            {asks.length > 1 && <span className="shrink-0">{t("assistant-tasks.more_asks", { count: asks.length - 1 })}</span>}
-          </div>
-          <InteractionCard ix={first.ix} />
-        </>
-      )}
-    </div>
-  );
-});
+export { TaskQuestions } from "./TaskQuestions";
 
 /** The dock's capsule: "All", the task pills and the Assistant's Pending / Progress / Agents entries share one height,
  *  radius, padding and type size, like iOS DockPillLabel (#2999). */
@@ -926,10 +891,10 @@ function isDecision(todo: Todo): boolean {
 
 /** What a Needs you row says folded (#5569): its mark, the title and, under it, what it waits for, with the kind at the
  *  end. None for the rows that are one line already (an Agent with no question, a task that only waits, a failed start). */
-function foldedRow(item: NeedsYouItem): { title: string; line?: string; kicker: string } | undefined {
+function foldedRow(item: NeedsYouItem, sourceLabel?: string): { title: string; line?: string; kicker: string } | undefined {
   if (item.kind === "plan") {
     const first = item.plan.tasks[0]?.title ?? t("assistant-tasks.plan_single");
-    return { title: item.plan.tasks.length > 1 ? t("assistant-tasks.needs_more", { title: first, count: item.plan.tasks.length - 1 }) : first, kicker: t("assistant-tasks.plan_waiting") };
+    return { title: item.plan.tasks.length > 1 ? t("assistant-tasks.needs_more", { title: first, count: item.plan.tasks.length - 1 }) : first, line: sourceLabel, kicker: t("assistant-tasks.plan_waiting") };
   }
   if (item.kind === "message") return { title: [field(item.item, "sender"), field(item.item, "chat")].filter(Boolean).join(" · ") || t("assistant-tasks.task_fallback"), line: field(item.item, "text"), kicker: stateName("needs_you") };
   if (item.kind === "agent") return item.asks.length ? { title: sessionTitle(item.session), line: cardLine(item.asks[0]), kicker: interactionKicker(item.asks[0]) } : undefined;
@@ -950,7 +915,7 @@ function openKey(item: NeedsYouItem): string {
 
 /** A Needs you row. Open the folded line to answer in place; its expanded title opens the asking Agent (or the task
  *  for a task-level decision), while the chevron folds it again. */
-function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boolean; onToggle: () => void }) {
+function NeedsYouRow({ item, open, onToggle, onOpenSource, sourceLabel }: { item: NeedsYouItem; open: boolean; onToggle: () => void; onOpenSource?: () => void; sourceLabel?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const opened = useRef(open);
   useEffect(() => {
@@ -972,7 +937,7 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
     const stop = window.setTimeout(() => growing.disconnect(), 1000);
     return () => { window.clearTimeout(stop); growing.disconnect(); };
   }, [open]);
-  const folded = foldedRow(item);
+  const folded = foldedRow(item, sourceLabel);
   // Whether the To-dos page counts this to-do as open (#3331): no attribute on rows that are no to-do. The chip badge
   // is summed from this same flag, so the trays and the header tell one number.
   const countsOpenAttr = item.kind === "task" ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
@@ -982,7 +947,7 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
       const ask = item.asks[0];
       if (ask) openAgent(ask.machine_id, ask.session_id);
       else openTask(item.todo.id);
-    } : undefined;
+    } : item.kind === "plan" ? onOpenSource : undefined;
   const label = <>
     <StatusMark state="needs_you" />
     <span className="min-w-0 flex-1">
@@ -1018,7 +983,7 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
   return (
     <div ref={ref} data-needs-row={item.key} data-needs-open {...countsOpenAttr} className="flex scroll-m-2 flex-col gap-1">
       {head}
-      <NeedsYouBody item={item} nested />
+      <NeedsYouBody item={item} nested onOpenSource={onOpenSource} sourceLabel={sourceLabel} />
     </div>
   );
 }
@@ -1035,9 +1000,16 @@ function OpenEntry({ title, onOpen }: { title: string; onOpen: () => void }) {
 }
 
 /** The whole card of a Needs you row, or the one line it is. `nested`: inside its opened row, which carries the row's key. */
-export function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nested?: boolean }) {
+export function NeedsYouBody({ item, nested = false, onOpenSource, sourceLabel }: { item: NeedsYouItem; nested?: boolean; onOpenSource?: () => void; sourceLabel?: string }) {
   const rowKey = nested ? undefined : item.key;
-  if (item.kind === "plan") return <PlanCard plan={item.plan} />;
+  if (item.kind === "plan") {
+    return nested && onOpenSource ? (
+      <div className="flex flex-col gap-1">
+        <PlanCard plan={item.plan} />
+        <OpenEntry title={sourceLabel ?? item.plan.conversation} onOpen={onOpenSource} />
+      </div>
+    ) : <PlanCard plan={item.plan} />;
+  }
   if (item.kind === "message") return <MessageCard item={item.item} />;
   if (item.kind === "agent") {
     const { session, asks } = item;
@@ -1129,7 +1101,12 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const [board, setBoard] = useState(false);
   const [showShelved, setShowShelved] = useState(false);
   const trayId = useId();
-  const plans = useFeed((s) => s.plans);
+  const scope = useScope();
+  const allPlans = useFeed((s) => s.plans);
+  const plans = useMemo(
+    () => (scope.several ? Object.fromEntries(Object.entries(allPlans).filter(([, p]) => p.conversation === conversation || !p.manager || scope.has(p.manager))) : allPlans),
+    [allPlans, conversation, scope],
+  );
   const feed = useFeed((s) => s.feeds[conversation] ?? EMPTY_FEED);
   const metadata = useFeed((s) => s.taskCards[conversation] ?? EMPTY_CARDS);
   const deferred = useFeed((s) => s.later);
@@ -1138,6 +1115,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const interactions = useStore((s) => s.interactions);
   const answered = useStore((s) => s.answered);
   const main = useStore((s) => s.assistant?.main);
+  const assistantMachine = useStore((s) => s.assistant?.machine_id);
   const lookup = useTaskLookup();
   const [restored] = useRestoredTodos();
   // a minute's tick moves tasks across the 48 h shelving line while nothing else changes, as on the To-dos page
@@ -1160,9 +1138,23 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const own = groups[0].items;
   const asking = own.filter(isAsking);
   const rest = own.filter((item) => !asking.includes(item));
-  const supervisorTitle = (id: string) => {
+  const supervisorTitle = (id: string, groupItems?: readonly NeedsYouItem[]) => {
     const row = conversations?.find((c) => c.session_id === id);
-    return row ? conversationTitle(row) : t("assistant-tasks.needs_group_another");
+    const sched = groupItems?.find((it) => it.kind === "plan" && planSchedule(it.plan)?.name);
+    const scheduleName = sched?.kind === "plan" ? planSchedule(sched.plan)?.name : undefined;
+    const title = row ? conversationTitle(row) : undefined;
+    return (title && (!scheduleName || title !== t("assistant-conversations.untitled")) ? title : scheduleName) ?? t("assistant-tasks.needs_group_another");
+  };
+  const openConversation = (sid: string, manager?: string) => {
+    const row = conversations?.find((c) => c.session_id === sid);
+    setTray(null);
+    navigate(conversationPage(sid, row?.machine_id ?? assistantMachine, row?.manager ?? manager));
+  };
+  const renderNeedsRow = (item: NeedsYouItem, showFoldedLine = false) => {
+    const src = item.kind === "plan" && item.plan.conversation && item.plan.conversation !== conversation
+      ? { onOpenSource: () => openConversation(item.plan.conversation, item.plan.manager), sourceLabel: showFoldedLine ? supervisorTitle(item.plan.conversation, [item]) : undefined }
+      : undefined;
+    return <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} {...src} />;
   };
   // The badges count by the To-dos page's one rule (#3331): a to-do row adds one only while the page counts it open
   // (lib/todo-triage countsAsOpen via each task row's countsOpen); rows stay visible whatever it says. Things that are
@@ -1272,15 +1264,23 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             {!entries.parked.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_parked")}</p>}
           </div>}
           {tray === "needs" && <div className="flex flex-col gap-2 p-2">
-            {asking.map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} />)}
+            {asking.map((item) => renderNeedsRow(item))}
             {ownAsks.map((ix) => <OwnAskRow key={ix.id} ix={ix} onOpen={() => openOwn(ix.id)} />)}
-            {rest.map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} />)}
-            {groups.slice(1).map((group) => (
-              <section key={group.supervisor} data-needs-supervisor={group.supervisor} aria-label={supervisorTitle(group.supervisor)} className="flex flex-col gap-2">
-                <h3 className="truncate px-1 pt-1 text-xs text-ink-2">{supervisorTitle(group.supervisor)}</h3>
-                {[...group.items.filter(isAsking), ...group.items.filter((item) => !isAsking(item))].map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} />)}
-              </section>
-            ))}
+            {rest.map((item) => renderNeedsRow(item, !foldBackground))}
+            {groups.slice(1).map((group) => {
+              const title = supervisorTitle(group.supervisor, group.items);
+              const mgr = group.items.find((it) => it.kind === "plan" && it.plan.manager);
+              return (
+                <section key={group.supervisor} data-needs-supervisor={group.supervisor} aria-label={title} className="flex flex-col gap-2">
+                  <h3 className="truncate px-1 pt-1 text-xs text-ink-2">
+                    <button type="button" data-needs-supervisor-open={group.supervisor} onClick={() => openConversation(group.supervisor, mgr?.kind === "plan" ? mgr.plan.manager : undefined)} className="max-w-full truncate text-left hover:text-ink hover:underline">
+                      {title}
+                    </button>
+                  </h3>
+                  {[...group.items.filter(isAsking), ...group.items.filter((item) => !isAsking(item))].map((item) => renderNeedsRow(item))}
+                </section>
+              );
+            })}
             {!counts.needs && <p className="px-1 py-2 text-sm text-ink-2">{t("assistant-tasks.tray_empty_pending")}</p>}
           </div>}
           </div>
@@ -1324,7 +1324,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   );
 });
 
-export const TaskDock = memo(function TaskDock({ conversation }: { conversation: string }) {
+export const TaskDock = /* @__PURE__ */ memo(function TaskDock({ conversation }: { conversation: string }) {
   const plans = useFeed((s) => s.plans);
   const [menuFor, setMenuFor] = useState<{ todo: Todo; el: HTMLElement } | null>(null);
   const [board, setBoard] = useState(false);

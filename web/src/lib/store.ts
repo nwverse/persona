@@ -1643,11 +1643,22 @@ export function patchAssistant(patch: Partial<Omit<AssistantInfo, "conversations
   if (a) set({ assistant: { ...a, ...patch } });
 }
 
+type OpenPlansHydrator = {
+  begin: () => number;
+  apply: (plans: NonNullable<AssistantInfo["open_plans"]>, manager: string, startedAt: number) => void;
+};
+let openPlansHydrator: OpenPlansHydrator | null = null;
+/** Registers lib/feed's open-plan hydrator without creating a runtime import cycle from store to feed. */
+export function setOpenPlansHydrator(hydrator: OpenPlansHydrator) {
+  openPlansHydrator = hydrator;
+}
+
 /** Reads the page's assistant again; true when its answer is the one in place now (not one a later answer, or another
  *  manager's page, made old meanwhile). */
 export async function refreshAssistant(): Promise<boolean> {
   const asked = assistantAsked.ask();
   const from = pageOf();
+  const plansAt = openPlansHydrator?.begin() ?? 0;
   try {
     const a = await asked.answer;
     if (!asked.fresh() || from !== pageOf()) return false;
@@ -1661,6 +1672,10 @@ export async function refreshAssistant(): Promise<boolean> {
     const owner = chosenManager() ?? undefined;
     for (const c of assistant.conversations) noteConversation(c.session_id, owner);
     if (assistant.main) noteConversation(assistant.main, owner);
+    if (Array.isArray(assistant.open_plans)) {
+      const manager = (assistant as { manager?: string }).manager || owner || defaultManager();
+      openPlansHydrator?.apply(assistant.open_plans, manager, plansAt);
+    }
     set({ assistant, assistantError: null });
     return true;
   } catch (err) {

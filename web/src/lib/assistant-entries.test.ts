@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../../../spec/fixtures/entries/cases.json";
-import { assistantEntries, decisionLaterKey } from "./assistant-entries";
+import { assistantEntries, decisionLaterKey, needsYouBySupervisor } from "./assistant-entries";
+import { openPlansSummary } from "./feed";
 import { triageTodos } from "./todo-triage";
 import { makeSessionLookup } from "./todos";
 import type { FeedItem, TaskPlan } from "./feed";
@@ -381,5 +382,66 @@ describe("Persona reviewing in the Assistant's entries", () => {
     expect(keys(got.review)).toEqual(["task:with-pr"]);
     expect(got.parked).toEqual([]);
     expect(got.needsYou).toEqual([]);
+  });
+});
+
+describe("cross-conversation open plans in Main chat (#12254)", () => {
+  const at1 = "2026-11-10T08:00:00Z";
+  const at2 = "2026-11-10T08:05:00Z";
+  const at3 = "2026-11-10T08:10:00Z";
+  const mkPlan = (id: string, conversation: string, created_at: string, patch: Partial<TaskPlan> = {}): TaskPlan => ({
+    id, conversation, state: "open", created_at,
+    tasks: [{ title: `Task ${id}`, prompt: "Do work", cwd: "/w", machine: "box" }],
+    ...patch,
+  });
+
+  const plans: Record<string, TaskPlan> = {
+    "p-routine": mkPlan("p-routine", "routine-1", at2, { tasks: [{ title: "Nightly cleanup", prompt: "Clean", cwd: "/w", machine: "box", schedule: "sched-1", schedule_title: "Nightly audit" }] }),
+    "p-main": mkPlan("p-main", "main", at1),
+    "p-side": mkPlan("p-side", "side-1", at3),
+    "p-started": mkPlan("p-started", "routine-1", at1, { state: "started" }),
+    "p-health": mkPlan("p-health", "health-1", at1, { space: "health" }),
+  };
+
+  it("includes all default-space open plans in Main chat and groups them by source conversation", () => {
+    const got = assistantEntries({ conversation: "main", main: "main", todos: [], sessions: [], interactions: [], plans, feed: [], now: Date.parse("2026-11-10T09:00:00Z") });
+    expect(got.needsYou.map((i) => i.key)).toEqual(["plan:p-main", "plan:p-routine", "plan:p-side"]);
+
+    const grouped = needsYouBySupervisor(got.needsYou, "main");
+    expect(grouped.map((g) => [g.supervisor, g.items.map((i) => i.key)])).toEqual([
+      ["main", ["plan:p-main"]],
+      ["routine-1", ["plan:p-routine"]],
+      ["side-1", ["plan:p-side"]],
+    ]);
+  });
+
+  it("keeps non-main conversations scoped strictly to their own open plans", () => {
+    const side = assistantEntries({ conversation: "side-1", main: "main", todos: [], sessions: [], interactions: [], plans, feed: [], now: Date.parse("2026-11-10T09:00:00Z") });
+    expect(side.needsYou.map((i) => i.key)).toEqual(["plan:p-side"]);
+    const health = assistantEntries({ conversation: "health-1", main: "main", todos: [], sessions: [], interactions: [], plans, feed: [], now: Date.parse("2026-11-10T09:00:00Z") });
+    expect(health.needsYou.map((i) => i.key)).toEqual(["plan:p-health"]);
+  });
+
+  it("summarizes open plans for sidebar indicators while respecting space and manager scope", () => {
+    const withOtherManager: Record<string, TaskPlan> = {
+      ...plans,
+      "p-other-mgr": mkPlan("p-other-mgr", "other-routine", at3, { manager: "m-work", tasks: [{ title: "Other", prompt: "p", cwd: "/w", machine: "box", schedule: "s2" }] }),
+      "p-task-origin": mkPlan("p-task-origin", "task-conv", at3, { manager: "assistant" }),
+    };
+    const assistant = {
+      main: "main",
+      conversations: [
+        { machine_id: "box", session_id: "task-conv", title: "Daily sync", cwd: "/w", status: "idle", origin: "task" } as Session,
+      ],
+    };
+    const summary = openPlansSummary(withOtherManager, assistant, { several: true, has: (m) => !m || m === "assistant" });
+    expect(summary.total).toBe(4);
+    expect(summary.nonMain).toBe(3);
+    expect(summary.routines).toBe(2);
+    expect(summary.byConversation.get("routine-1")).toBe(1);
+    expect(summary.byConversation.get("side-1")).toBe(1);
+    expect(summary.byConversation.get("task-conv")).toBe(1);
+    expect(summary.byConversation.has("health-1")).toBe(false);
+    expect(summary.byConversation.has("other-routine")).toBe(false);
   });
 });

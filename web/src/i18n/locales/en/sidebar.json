@@ -160,6 +160,8 @@
   "switcher_count_one": "{count} thing waiting for you",
   "switcher_count_other": "{count} things waiting for you",
   "leader_needs_you": "{count} need you",
+  "open_plans_badge_one": "{count} plan waiting for Start",
+  "open_plans_badge_other": "{count} plans waiting for Start",
   "codex_waiting": "Waiting for its first message",
   "direction_tasks_expand": "Expand the open tasks of {name}",
   "direction_tasks_collapse": "Collapse the open tasks of {name}"

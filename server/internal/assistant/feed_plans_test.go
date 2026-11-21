@@ -9,12 +9,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // seedFeedPlans puts n plan cards, each naming its own plan, into a new conversation of st and returns the conversation
@@ -135,4 +138,204 @@ func TestFeedReadsPlansInOneQuery(t *testing.T) {
 	if err != nil || len(items) != len(ids)+2 || len(plans) != 0 {
 		t.Fatalf("failed plan read: %d items, %d plans, %v", len(items), len(plans), err)
 	}
+}
+
+// Main chat hydrates all default-space state=open plans across this manager's conversations (including scheduled
+// routines and side conversations) on both /feed and /assistant without leaking non-open, health-space, archived,
+// deleted, or extension-hidden plans, while non-main feeds stay scoped to their own plans.
+func TestMainFeedHydratesCrossConversationOpenPlans(t *testing.T) {
+	healthDir := identity.HealthDir("/home/owner")
+	todoStores(t, func(t *testing.T, e *todoEnv, _ *db.DB) {
+		ctx := context.Background()
+		suffix := randomHex(4)
+		mainID := "conv1"
+		routineID := "routine_" + suffix
+		sideID := "side_" + suffix
+		healthID := "health_" + suffix
+		archivedID := "arch_" + suffix
+		deletedID := "del_" + suffix
+
+		sess := func(id, title, cwd, origin string) proto.Session {
+			s := scopeSession(id, title, cwd)
+			s.Assistant = true
+			s.Origin = origin
+			return s
+		}
+		e.sessions("server",
+			sess(mainID, "Persona", "/home/owner/.persona/assistant", "user"),
+			sess(routineID, "Nightly audit", "/home/owner/.persona/assistant", "task"),
+			sess(sideID, "Release prep", "/home/owner/.persona/assistant", "user"),
+			sess(healthID, "Checkup notes", healthDir, "user"),
+			sess(archivedID, "Archived chat", "/home/owner/.persona/assistant", "user"),
+			sess(deletedID, "Deleted chat", "/home/owner/.persona/assistant", "user"),
+		)
+		e.s.noteConversationSpaces(ctx, []db.ConversationSpace{
+			{MachineID: "server", SessionID: healthID, Space: SpaceHealth},
+			{MachineID: "server", SessionID: mainID, Space: ""},
+			{MachineID: "server", SessionID: routineID, Space: ""},
+			{MachineID: "server", SessionID: sideID, Space: ""},
+		})
+		if _, err := e.s.updateSettings(ctx, func(st *Settings) error {
+			st.Main = mainID
+			st.MachineID = "server"
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		makePlan := func(id, conv, state string, task PlanTask, at time.Time) *TaskPlan {
+			t.Helper()
+			p := &TaskPlan{ID: id, Conversation: conv, State: state, CreatedAt: at, UpdatedAt: at, Tasks: []PlanTask{task}}
+			if err := e.s.savePlan(ctx, p); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.s.appendFeedAt(ctx, conv, feedPlan, p.ID, map[string]any{"plan": p}, at); err != nil {
+				t.Fatal(err)
+			}
+			return p
+		}
+
+		pMain := makePlan("plan_main_"+suffix, mainID, planOpen, PlanTask{Title: "Main work", Prompt: "p", Machine: "server", Cwd: "/code/app"}, now)
+		pRoutine := makePlan("plan_routine_"+suffix, routineID, planOpen, PlanTask{Title: "Nightly fix", Prompt: "p", Machine: "server", Cwd: "/code/app", Schedule: "sched_1", ScheduleTitle: "Nightly audit"}, now.Add(time.Second))
+		pRoutineDismissed := makePlan("plan_routine_dismissed_"+suffix, routineID, planDismissed, PlanTask{Title: "Old routine plan", Prompt: "p", Machine: "server", Cwd: "/code/app"}, now.Add(2*time.Second))
+		pSide := makePlan("plan_side_"+suffix, sideID, planOpen, PlanTask{Title: "Side work", Prompt: "p", Machine: "server", Cwd: "/code/app"}, now.Add(3*time.Second))
+		pHealth := makePlan("plan_health_"+suffix, healthID, planOpen, PlanTask{Title: "Health plan", Prompt: "p", Machine: "server", Cwd: "/code/app"}, now.Add(4*time.Second))
+		pArchived := makePlan("plan_arch_"+suffix, archivedID, planOpen, PlanTask{Title: "Archived work", Prompt: "p", Machine: "server", Cwd: "/code/app"}, now.Add(5*time.Second))
+		pDeleted := makePlan("plan_del_"+suffix, deletedID, planOpen, PlanTask{Title: "Deleted work", Prompt: "p", Machine: "server", Cwd: "/code/app"}, now.Add(6*time.Second))
+
+		// Archive archivedID and mark deletedID deleted.
+		e.s.archived.mu.Lock()
+		e.s.archived.loaded = true
+		if e.s.archived.m == nil {
+			e.s.archived.m = map[string]*convArchived{}
+		}
+		e.s.archived.m[archivedID] = &convArchived{MachineID: "server", At: now, By: "user"}
+		e.s.archived.mu.Unlock()
+		tomb := deletedConversation{Machine: "server", ID: deletedID, At: now}
+		if ds, ok := e.s.store().(durableConversationDeletions); ok {
+			raw, _ := json.Marshal(tomb)
+			if err := ds.PutConversationDeletion(ctx, "server", deletedID, raw); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			e.s.deletedConversations.mu.Lock()
+			e.s.deletedConversations.loaded = true
+			if e.s.deletedConversations.rows == nil {
+				e.s.deletedConversations.rows = map[string]deletedConversation{}
+			}
+			e.s.deletedConversations.rows[deletedID] = tomb
+			e.s.deletedConversations.mu.Unlock()
+		}
+
+		// Main chat feed (plain and paginated) hydrates all open default-space plans without altering feed items or task_cards.
+		for _, q := range []string{"", "?paginate=1"} {
+			w := e.must("GET", "/api/v1/assistant/conversations/"+mainID+"/feed"+q, "")
+			var out struct {
+				Items     []FeedItem           `json:"items"`
+				Plans     map[string]*TaskPlan `json:"plans"`
+				TaskCards []TaskCard           `json:"task_cards"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+			for _, wantID := range []string{pMain.ID, pRoutine.ID, pSide.ID} {
+				if out.Plans[wantID] == nil {
+					t.Errorf("%s: missing expected open plan %s in main feed plans: %+v", q, wantID, out.Plans)
+				}
+			}
+			for _, forbidID := range []string{pRoutineDismissed.ID, pHealth.ID, pArchived.ID, pDeleted.ID} {
+				if out.Plans[forbidID] != nil {
+					t.Errorf("%s: unexpected plan %s leaked into main feed plans", q, forbidID)
+				}
+			}
+			for _, it := range out.Items {
+				if it.Conversation != mainID {
+					t.Errorf("%s: foreign item %s (%s) leaked into main feed items", q, it.ID, it.Conversation)
+				}
+			}
+			for _, card := range out.TaskCards {
+				if card.PlanID == pRoutine.ID || card.PlanID == pSide.ID {
+					t.Errorf("%s: cross-conversation open plan %s created a main task_card", q, card.PlanID)
+				}
+			}
+		}
+
+		// Non-main conversation feed stays scoped to its own plans.
+		wSide := e.must("GET", "/api/v1/assistant/conversations/"+sideID+"/feed", "")
+		var sideOut struct {
+			Plans map[string]*TaskPlan `json:"plans"`
+		}
+		if err := json.Unmarshal(wSide.Body.Bytes(), &sideOut); err != nil {
+			t.Fatal(err)
+		}
+		if sideOut.Plans[pSide.ID] == nil || sideOut.Plans[pMain.ID] != nil || sideOut.Plans[pRoutine.ID] != nil {
+			t.Fatalf("non-main feed plans = %+v, want only %s", sideOut.Plans, pSide.ID)
+		}
+
+		// Health conversation feed tags its own plan with space="health" so clients never merge it into Main chat.
+		wHealth := e.must("GET", "/api/v1/assistant/conversations/"+healthID+"/feed", "")
+		var healthOut struct {
+			Plans map[string]*TaskPlan `json:"plans"`
+		}
+		if err := json.Unmarshal(wHealth.Body.Bytes(), &healthOut); err != nil {
+			t.Fatal(err)
+		}
+		if healthOut.Plans[pHealth.ID] == nil || healthOut.Plans[pHealth.ID].Space != SpaceHealth {
+			t.Fatalf("health feed plan = %+v, want space=%q", healthOut.Plans[pHealth.ID], SpaceHealth)
+		}
+
+		// GET /api/v1/assistant hydrates open_plans for default space, omits for health space and extensions.
+		wAssist := e.must("GET", "/api/v1/assistant", "")
+		var assistOut struct {
+			OpenPlans []*TaskPlan `json:"open_plans"`
+		}
+		if err := json.Unmarshal(wAssist.Body.Bytes(), &assistOut); err != nil {
+			t.Fatal(err)
+		}
+		gotOpen := map[string]bool{}
+		for _, p := range assistOut.OpenPlans {
+			gotOpen[p.ID] = true
+		}
+		for _, wantID := range []string{pMain.ID, pRoutine.ID, pSide.ID} {
+			if !gotOpen[wantID] {
+				t.Errorf("GET /api/v1/assistant missing open_plans[%s]: %+v", wantID, gotOpen)
+			}
+		}
+		for _, forbidID := range []string{pRoutineDismissed.ID, pHealth.ID, pArchived.ID, pDeleted.ID} {
+			if gotOpen[forbidID] {
+				t.Errorf("GET /api/v1/assistant leaked %s into open_plans", forbidID)
+			}
+		}
+		if wHealthAssist := e.must("GET", "/api/v1/assistant?space=health", ""); strings.Contains(wHealthAssist.Body.String(), `"open_plans"`) {
+			t.Errorf("GET /api/v1/assistant?space=health unexpectedly included open_plans: %s", wHealthAssist.Body.String())
+		}
+		if wExtAssist := e.doAs(roleExtension, "GET", "/api/v1/assistant", ""); strings.Contains(wExtAssist.Body.String(), `"open_plans"`) {
+			t.Errorf("extension GET /api/v1/assistant unexpectedly included open_plans: %s", wExtAssist.Body.String())
+		}
+
+		// Extension token on Main chat feed does not see health-space plans.
+		wExtFeed := e.doAs(roleExtension, "GET", "/api/v1/assistant/conversations/"+mainID+"/feed", "")
+		if wExtFeed.Code != http.StatusOK {
+			t.Fatalf("extension main feed: %d %s", wExtFeed.Code, wExtFeed.Body.String())
+		}
+		if strings.Contains(wExtFeed.Body.String(), pHealth.ID) {
+			t.Errorf("extension main feed leaked health plan %s", pHealth.ID)
+		}
+
+		// Broadcasting a health plan tags space="health" and emits task_plan.
+		if tagged := e.s.planWithSpace(ctx, pHealth); tagged == nil || tagged.Space != SpaceHealth {
+			t.Errorf("planWithSpace(%s) = %+v, want space=%q", pHealth.ID, tagged, SpaceHealth)
+		}
+		if tagged := e.s.planWithSpace(ctx, pRoutine); tagged == nil || tagged.Space != "" {
+			t.Errorf("planWithSpace(%s) = %+v, want empty space", pRoutine.ID, tagged)
+		}
+		e.s.broadcastPlan(ctx, pHealth)
+		e.f.mu.Lock()
+		sawEvent := slices.Contains(e.f.events, "task_plan")
+		e.f.mu.Unlock()
+		if !sawEvent {
+			t.Errorf("broadcastPlan did not emit task_plan event")
+		}
+	})
 }

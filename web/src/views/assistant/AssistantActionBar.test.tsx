@@ -7,7 +7,7 @@ import { getFeedState, loadFeed, type FeedItem, type TaskPlan } from "../../lib/
 import { setAgentOpenMode } from "../../lib/agent-open";
 import { closePanel, getPanel } from "../../lib/panel";
 import { loadPages } from "../../lib/lazy-page";
-import { getState, putTodo, refresh, refreshTodos, reset, upsertSession } from "../../lib/store";
+import { getState, putTodo, refresh, refreshTodos, reset, upsertSession, connect } from "../../lib/store";
 import type { Todo } from "../../lib/todos";
 import { stateName } from "../../lib/state-labels";
 import { usageLimitLabel } from "../../lib/usage-limit";
@@ -1120,6 +1120,145 @@ describe("Assistant Needs you / In progress trays", () => {
       expect(host.textContent).toContain(t("assistant-tasks.tray_empty_pending"));
     } finally {
       delete getFeedState().plans[waiting.id];
+    }
+  });
+
+  it("surfaces cross-conversation routine open plans in Main chat on reload and live events, supports Start, Dismiss, and source navigation (#12254)", async () => {
+    class FakeSocket {
+      static last: FakeSocket | null = null;
+      readyState = 1;
+      onopen: (() => void) | null = null;
+      onmessage: ((ev: { data: string }) => void) | null = null;
+      constructor() { FakeSocket.last = this; }
+      send() {}
+      close() { this.readyState = 3; }
+    }
+    const routinePlan: TaskPlan = {
+      id: "routine-open-1",
+      conversation: "routine-conv",
+      state: "open",
+      created_at: at,
+      tasks: [{ title: "Rotate stale keys", prompt: "Rotate them", cwd: "/demo", machine: "demo", schedule: "sched-1", schedule_title: "Nightly security audit" }],
+    };
+    const sidePlan: TaskPlan = {
+      id: "side-open-1",
+      conversation: "side-conv",
+      state: "open",
+      created_at: "2026-11-10T08:05:00Z",
+      tasks: [{ title: "Update release notes", prompt: "Update notes", cwd: "/demo", machine: "demo" }],
+    };
+    const healthPlan: TaskPlan = {
+      id: "health-open-1",
+      conversation: "health-conv",
+      state: "open",
+      space: "health",
+      created_at: "2026-11-10T08:02:00Z",
+      tasks: [{ title: "Private checkup", prompt: "Check", cwd: "/demo", machine: "demo" }],
+    };
+    const routineConv: Session = { machine_id: "demo", session_id: "routine-conv", title: "Nightly security audit", cwd: "/demo", status: "idle", state: "idle", assistant: true, origin: "task", updated_at: at };
+    const sideConv: Session = { machine_id: "demo", session_id: "side-conv", title: "Release checklist", cwd: "/demo", status: "idle", state: "idle", assistant: true, origin: "user", updated_at: at };
+
+    mainChat = conversation;
+    const baseFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      const path = String(url);
+      if (init?.method && init.method !== "GET") writes.push(path);
+      if (/\/assistant(\?|$)/.test(path)) {
+        return new Response(JSON.stringify({
+          machine_id: "demo",
+          main: conversation,
+          conversations: [routineConv, sideConv],
+          open_plans: [routinePlan],
+        }), { headers: { "Content-Type": "application/json" } });
+      }
+      if (path.includes(`/task-plans/${routinePlan.id}/start`)) {
+        return new Response(JSON.stringify({ plan: { ...routinePlan, state: "started" } }), { headers: { "Content-Type": "application/json" } });
+      }
+      if (path.includes(`/task-plans/${sidePlan.id}/dismiss`)) {
+        return new Response(JSON.stringify({ plan: { ...sidePlan, state: "dismissed" } }), { headers: { "Content-Type": "application/json" } });
+      }
+      return baseFetch(url, init);
+    });
+
+    try {
+      // Initial load / refresh hydrates routinePlan from /assistant open_plans.
+      await act(async () => {
+        connect();
+        await refresh();
+      });
+      await settleHeldPushRead();
+
+      expect(entry("needs").textContent).toBe(`${label.needs}1`);
+      act(() => entry("needs").click());
+      const routineSection = host.querySelector<HTMLElement>('[data-needs-supervisor="routine-conv"]');
+      expect(routineSection).not.toBeNull();
+      expect(routineSection!.getAttribute("aria-label")).toBe("Nightly security audit");
+      expect(routineSection!.textContent).toContain("Rotate stale keys");
+
+      // Live task_plan event from another Persona conversation arrives, plus a health-space plan that must stay hidden.
+      act(() => {
+        FakeSocket.last!.onmessage?.({ data: JSON.stringify({ type: "task_plan", plan: sidePlan }) });
+        FakeSocket.last!.onmessage?.({ data: JSON.stringify({ type: "task_plan", plan: healthPlan }) });
+      });
+      expect(entry("needs").textContent).toBe(`${label.needs}2`);
+      expect(host.querySelector('[data-needs-supervisor="side-conv"]')?.textContent).toContain("Release checklist");
+      expect(host.querySelector('[data-needs-supervisor="health-conv"]')).toBeNull();
+      expect(host.textContent).not.toContain("Private checkup");
+
+      // Navigating to the source conversation from the supervisor heading works and closes the tray.
+      act(() => host.querySelector<HTMLButtonElement>('[data-needs-supervisor-open="routine-conv"]')!.click());
+      expect(opened()).toBe("/persona/routine-conv");
+      expect(host.querySelector("section")).toBeNull();
+
+      // Re-open tray, expand routine plan, and navigate via its expanded Open entry as well.
+      act(() => entry("needs").click());
+      await openRows(`plan:${routinePlan.id}`);
+      const openBtn = host.querySelector<HTMLButtonElement>('[data-needs-supervisor="routine-conv"] [data-needs-open-entry]')!;
+      expect(openBtn).not.toBeNull();
+
+      // Start the routine plan directly from Main chat's Needs you tray.
+      const startBtn = [...host.querySelectorAll<HTMLButtonElement>('[data-needs-supervisor="routine-conv"] [data-plan-actions] button')]
+        .find((b) => b.textContent?.includes(t("assistant-tasks.plan_start")))!;
+      await act(async () => startBtn.click());
+      expect(writes).toContain(`/api/v1/task-plans/${routinePlan.id}/start`);
+      expect(host.querySelector('[data-needs-supervisor="routine-conv"]')).toBeNull();
+      expect(entry("needs").textContent).toBe(`${label.needs}1`);
+
+      // Dismiss the side conversation's plan directly from Main chat's Needs you tray.
+      await openRows(`plan:${sidePlan.id}`);
+      const dismissBtn = [...host.querySelectorAll<HTMLButtonElement>('[data-needs-supervisor="side-conv"] [data-plan-actions] button')]
+        .find((b) => b.textContent?.includes(t("assistant-tasks.plan_dismiss")))!;
+      await act(async () => dismissBtn.click());
+      expect(writes).toContain(`/api/v1/task-plans/${sidePlan.id}/dismiss`);
+      expect(host.querySelector('[data-needs-supervisor="side-conv"]')).toBeNull();
+      expect(entry("needs").textContent).toBe(label.needs);
+    } finally {
+      delete getFeedState().plans[routinePlan.id];
+      delete getFeedState().plans[sidePlan.id];
+      delete getFeedState().plans[healthPlan.id];
+    }
+  });
+
+  it("keeps non-main conversations scoped to their own plans even when another conversation has an open plan (#12254)", () => {
+    const foreign: TaskPlan = {
+      id: "foreign-open-plan",
+      conversation: "other-routine",
+      state: "open",
+      created_at: at,
+      tasks: [{ title: "Foreign routine work", prompt: "Do it", cwd: "/demo", machine: "demo" }],
+    };
+    act(() => {
+      getFeedState().plans[foreign.id] = foreign;
+      putTodo({ ...todo });
+    });
+    try {
+      // conversation !== main (mainChat is undefined here): foreign plan must not show in this non-main tray.
+      expect(entry("needs").textContent).toBe(label.needs);
+      act(() => entry("needs").click());
+      expect(host.textContent).not.toContain("Foreign routine work");
+    } finally {
+      delete getFeedState().plans[foreign.id];
     }
   });
 });

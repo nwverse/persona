@@ -6,7 +6,7 @@ import { useSyncExternalStore } from "react";
 import { api, ApiError, enc } from "./api";
 import { formatDate, t } from "../i18n";
 import { parseAPIError } from "./api-errors";
-import { getState, onHubEvent, putTodo, refreshTodos, todosPushed } from "./store";
+import { getState, onHubEvent, putTodo, refreshTodos, setOpenPlansHydrator, todosPushed } from "./store";
 import { applySnapshot } from "./assistant-views";
 import type { AssistantView, ViewAction } from "./extension-wire";
 import { isResumed } from "./reconnect";
@@ -17,7 +17,7 @@ import { getInbox, itemPath } from "./inbox";
 import { closePanel, getPanel } from "./panel";
 import { BUILTIN_MANAGER, conversationManager, defaultManager, itemHeaders, MANAGER_HEADER, managerHeaderFor, routedConversationManager } from "./manager-choice";
 import type { ChatLine } from "./turns";
-import type { Item } from "./types";
+import type { AssistantInfo, Item } from "./types";
 import { upsertTaskCards, type TaskCardMetadata } from "./task-cards";
 
 export type TaskWorkspace = "new" | "none" | { existing: string } | { new: { branch?: string } };
@@ -69,6 +69,10 @@ export interface TaskPlan {
   tasks: PlanTask[];
   state: "open" | "started" | "dismissed";
   created_at?: string;
+  /** The assistant space this plan's conversation runs in (e.g. "health"); absent for the default space. */
+  space?: string;
+  /** The manager owning this plan when known from a live event or scoped fetch; absent for default/unscoped fixtures. */
+  manager?: string;
   /** On an open plan: the rule the hub suggests once the owner started this kind of task three times (#4929,
    *  lib/rule-suggestion.ts). Filled in where the plan is read, never stored with it; absent from an older hub. */
   suggestion?: RuleSuggestion;
@@ -426,7 +430,9 @@ interface FeedState {
 
 let st: FeedState = { feeds: {}, plans: {}, taskCards: {}, routes: {}, busy: {}, later: {} };
 let feedRevision = 0;
+let planRevision = 0;
 const itemRevisions = new Map<string, number>();
+const planRevisions = new Map<string, number>();
 const draftOwners = new WeakMap<FeedItem, string>();
 const feedKey = (item: FeedItem) => `${item.conversation}/${item.id}`;
 const currentCard = (card: FeedItem) => st.feeds[card.conversation]?.find((it) => it.id === card.id) ?? card;
@@ -556,14 +562,22 @@ async function readFeedPages(conversation: string) {
   const headers = itemHeaders(owner);
   for (let n = 0; n < FEED_PAGES; n++) {
     const readingAt = feedRevision;
+    const readingPlanAt = planRevision;
     const query = cursor ? `?cursor=${enc(cursor)}` : `?paginate=1${last ? `&since=${enc(last)}` : ""}`;
     const res = await api<{ items: FeedItem[]; next_cursor?: string; plans?: Record<string, TaskPlan>; task_cards?: TaskCardMetadata[] | null; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(endpoint + query, { headers });
     if (scope !== conversationDeletionScope() || deletedConversationID(conversation)) return;
     if (!st.feeds[conversation]) set({ feeds: { ...st.feeds, [conversation]: [] } });
     const items = res.items ?? [];
     if (owner) for (const it of items) draftOwners.set(it, owner);
+    let incomingPlans: Record<string, TaskPlan> | undefined;
+    if (res.plans) {
+      incomingPlans = {};
+      for (const [id, p] of Object.entries(res.plans)) {
+        if (p && !deletedConversationID(p.conversation) && (planRevisions.get(id) ?? 0) <= readingPlanAt) incomingPlans[id] = stampPlan(p, owner);
+      }
+    }
     // A write or push accepted after this read started wins over the captured response.
-    received(items.filter((it) => (itemRevisions.get(feedKey(it)) ?? 0) <= readingAt), res.plans ?? undefined);
+    received(items.filter((it) => (itemRevisions.get(feedKey(it)) ?? 0) <= readingAt), incomingPlans);
     if (res.task_cards?.length) set({ taskCards: { ...st.taskCards, [conversation]: upsertTaskCards(st.taskCards[conversation] ?? [], res.task_cards) } });
     // the cards' snapshot comes whole with every page: what an event missed comes back here
     applySnapshot(conversation, res);
@@ -604,10 +618,68 @@ onHubEvent("hello", (m) => {
   if (isResumed(m)) return;
   for (const c of Object.keys(st.feeds)) void loadFeed(c);
 });
+const stampPlan = (p: TaskPlan, manager?: string): TaskPlan => (manager && !p.manager ? { ...p, manager } : p);
+function recordPlan(p: TaskPlan, manager?: string) {
+  planRevisions.set(p.id, ++planRevision);
+  set({ plans: { ...st.plans, [p.id]: stampPlan(p, manager) } });
+}
+const planHeaders = (p: TaskPlan) => conversationHeaders(p.conversation) ?? itemHeaders(p.manager);
+
 onHubEvent("task_plan", (m) => {
   const p = m.plan as TaskPlan | undefined;
-  if (p && !deletedConversationID(p.conversation)) set({ plans: { ...st.plans, [p.id]: p } });
+  if (p && !deletedConversationID(p.conversation)) recordPlan(p, typeof m.manager === "string" && m.manager ? m.manager : BUILTIN_MANAGER);
 });
+
+/** Hydrates open default-space plans from GET /api/v1/assistant, reconciling stale open entries for that manager. */
+function hydrateOpenPlans(plans: TaskPlan[], manager: string, startedAt: number) {
+  const next = { ...st.plans }, openIds = new Set<string>();
+  let changed = false;
+  for (const p of plans) {
+    if (!p || deletedConversationID(p.conversation)) continue;
+    openIds.add(p.id);
+    if ((planRevisions.get(p.id) ?? 0) <= startedAt) { next[p.id] = stampPlan(p, manager); changed = true; }
+  }
+  for (const [id, p] of Object.entries(next)) {
+    if (p.state === "open" && !p.space && (p.manager ?? defaultManager()) === manager && !openIds.has(id) && (planRevisions.get(id) ?? 0) <= startedAt) {
+      delete next[id]; changed = true;
+    }
+  }
+  if (changed) set({ plans: next });
+}
+
+setOpenPlansHydrator({ begin: () => planRevision, apply: hydrateOpenPlans });
+
+export interface OpenPlansSummary {
+  total: number;
+  nonMain: number;
+  routines: number;
+  byConversation: Map<string, number>;
+}
+
+/** Summarizes open default-space task plans for sidebar indicators, scoped to the current manager. */
+export function openPlansSummary(
+  plans: Readonly<Record<string, TaskPlan>>,
+  assistant: Pick<AssistantInfo, "main" | "background_supervisor" | "conversations"> | null | undefined,
+  scope: { several: boolean; has: (manager: string | undefined) => boolean },
+): OpenPlansSummary {
+  const byConversation = new Map<string, number>();
+  let total = 0, nonMain = 0, routines = 0;
+  const convs = assistant?.conversations;
+  const bg = assistant?.background_supervisor;
+  for (const p of Object.values(plans)) {
+    if (p.state !== "open" || p.space || deletedConversationID(p.conversation)) continue;
+    if (scope.several && p.manager && !scope.has(p.manager)) continue;
+    total++;
+    const cid = p.conversation;
+    if (cid) {
+      if (cid !== assistant?.main) nonMain++;
+      byConversation.set(cid, (byConversation.get(cid) ?? 0) + 1);
+    }
+    const conv = cid ? convs?.find((c) => c.session_id === cid) : undefined;
+    if (p.tasks.some((t) => t.schedule) || (conv && (conv.origin === "task" || (Boolean(bg) && conv.session_id === bg)))) routines++;
+  }
+  return { total, nonMain, routines, byConversation };
+}
 
 // ── actions ──
 
@@ -692,8 +764,8 @@ export async function startPlan(plan: TaskPlan, remember: boolean, edits?: Parti
   set({ busy: { ...st.busy, [plan.id]: true } });
   try {
     const json = { tasks: edits, remember, ...(scheduleGrant ? { schedule_grant: true } : {}) };
-    const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/start`, { method: "POST", json, headers: conversationHeaders(plan.conversation) });
-    set({ plans: { ...st.plans, [res.plan.id]: res.plan } });
+    const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/start`, { method: "POST", json, headers: planHeaders(plan) });
+    recordPlan(res.plan, plan.manager);
     void refreshTodos();
   } finally {
     set({ busy: { ...st.busy, [plan.id]: false } });
@@ -704,8 +776,8 @@ export async function dismissPlan(plan: TaskPlan) {
   if (st.busy[plan.id]) return;
   set({ busy: { ...st.busy, [plan.id]: true } });
   try {
-    const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/dismiss`, { method: "POST", headers: conversationHeaders(plan.conversation) });
-    set({ plans: { ...st.plans, [res.plan.id]: res.plan } });
+    const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/dismiss`, { method: "POST", headers: planHeaders(plan) });
+    recordPlan(res.plan, plan.manager);
   } finally {
     set({ busy: { ...st.busy, [plan.id]: false } });
   }

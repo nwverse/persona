@@ -152,6 +152,7 @@
   "switcher_label_waiting": "{name}、アシスタントを切り替え。ほかのアシスタントに対応待ちがあります",
   "switcher_count": "対応待ち {count} 件",
   "leader_needs_you": "対応待ち {count}",
+  "open_plans_badge": "開始待ちの計画 {count}件",
   "codex_waiting": "最初のメッセージ待ち",
   "direction_tasks_expand": "「{name}」の進行中タスクを開く",
   "direction_tasks_collapse": "「{name}」の進行中タスクを閉じる"

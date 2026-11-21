@@ -20,6 +20,7 @@ import { href, inWorkView, navigate, type Route } from "../lib/router";
 import { useAgentSessions } from "../lib/sessions";
 import { scoped, useScope, useScopedCounts } from "../lib/current-assistant";
 import { useOwnerNeeds } from "../lib/todo-owner-needs";
+import { openPlansSummary, useFeed } from "../lib/feed";
 import { useLarkOn, useStore } from "../lib/store";
 import { connPhase } from "../lib/connection";
 import { useStarredCount } from "../lib/starred-summary";
@@ -94,6 +95,9 @@ export function useNavPages() {
   const online = useStore((s) => scoped(s.machines, scope).filter((m) => m.online).length);
   const total = useStore((s) => scoped(s.machines, scope).length);
   const assistant = useStore((s) => s.assistant);
+  const plans = useFeed((s) => s.plans);
+  const openPlans = useMemo(() => openPlansSummary(plans, assistant, scope), [plans, assistant, scope]);
+  const routinesBadgeLabel = openPlans.routines ? t("sidebar.open_plans_badge", { count: openPlans.routines }) : undefined;
   const todosSupported = useStore((s) => s.todosSupported);
   // The open to-dos that need the owner, not those Agents are on (#11085, lib/todo-triage ownerNeeds); quiet tasks
   // (#1731) are told about in the main conversation, not counted here. The To-dos page's "Not done" counts every open one,
@@ -124,7 +128,7 @@ export function useNavPages() {
     starred: stars != null && { k: "starred", to: { name: "starred" }, icon: "star", label: t("starred.title"), badge: stars || undefined, badgeLabel: t("starred.count", { count: stars }) },
     "workspace-board": boardOn && { k: "workspace-board", to: { name: "workspace-board" }, icon: "layers", label: t("sidebar.nav_board"), short: t("sidebar.nav_board_short") },
     todos: todosSupported !== false && { k: "todos", to: { name: "todos" }, icon: "todo", label: t("sidebar.nav_todos"), badge: todosBadge || undefined, badgeLabel: todosBadgeLabel, title: todosBadgeLabel },
-    routines: { k: "routines", to: { name: "routines" }, icon: "clock", label: t("sidebar.nav_routines"), short: t("sidebar.nav_routines_short") },
+    routines: { k: "routines", to: { name: "routines" }, icon: "clock", label: t("sidebar.nav_routines"), short: t("sidebar.nav_routines_short"), badge: openPlans.routines || undefined, badgeTone: "attention", badgeLabel: routinesBadgeLabel, title: routinesBadgeLabel },
     kb: { k: "kb", to: { name: "kb" }, icon: "book", label: t("sidebar.nav_kb"), short: t("sidebar.nav_kb_short") },
     machines: { k: "machines", to: { name: "machines" }, icon: "machine", label: t("sidebar.nav_machines"), short: t("sidebar.nav_machines_short"), hint: total ? `${online}/${total}` : undefined },
     terminal: false, // History belongs to Agents, not the general Pages grid (#10240).
@@ -149,7 +153,7 @@ export function useNavPages() {
   const starredKnown = stars !== undefined;
   useStartPageCheck((k) => all.some((p) => p.k === k), extensionPages, board !== null, starredKnown);
 
-  return { phase, online, total, main, pages, sections, more, all, starredKnown };
+  return { phase, online, total, main, pages, sections, more, all, starredKnown, openPlans };
 }
 
 /** The pages under "More" as menu rows (the phone's grid, the rail): a choice opens the page, then `onNavigate`

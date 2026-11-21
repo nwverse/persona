@@ -655,6 +655,10 @@ type assistantView struct {
 	// the tasks no leader supervises.
 	MainSupervisesOwnTasks  bool `json:"main_supervises_own_tasks"`
 	SupervisionBatchMinutes int  `json:"supervision_batch_minutes"`
+	// OpenPlans lists this manager's default-space state=open task plans so Main chat and the sidebar can surface
+	// pending confirmations from scheduled routines and side conversations immediately on load/refresh.
+	// Omitted for non-default spaces (e.g. health), extension tokens, or when the store cannot be read.
+	OpenPlans *[]*TaskPlan `json:"open_plans,omitempty"`
 }
 
 // view is GET /api/v1/assistant; withArchived lists archived conversations too (flagged `archived`). It lists the
@@ -720,6 +724,11 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 			out.Conversations = append(out.Conversations, c)
 		}
 	}
+	if sp == "" {
+		if open, ok := s.openPlansForMain(ctx, false); ok {
+			out.OpenPlans = &open
+		}
+	}
 	return out
 }
 
@@ -741,7 +750,15 @@ func (s *Service) profileRoutes() {
 		}
 		if r.Header.Get(RoleHeader) == roleExtension {
 			out.StartDefaults = nil // read with its own scope (GET /api/v1/assistant/start-defaults), not assistant.ask
+			out.OpenPlans = nil
 			out.Conversations = extensionConversations(out.Conversations)
+		} else if out.OpenPlans != nil && len(*out.OpenPlans) > 0 {
+			lang := s.requestLang(r)
+			enriched := make([]*TaskPlan, len(*out.OpenPlans))
+			for i, p := range *out.OpenPlans {
+				enriched[i] = s.planWithSuggestion(r.Context(), p, lang)
+			}
+			out.OpenPlans = &enriched
 		}
 		apierr.WriteJSON(w, out)
 	})

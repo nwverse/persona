@@ -61,7 +61,7 @@ const RAIL_ITEM = "touch-hit relative flex size-9 shrink-0 items-center justify-
  * conversations are what fold away; ⌘K finds any of them.
  */
 export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onSearch: () => void; onNewAgent: () => void }) {
-  const { phase, online, total, main, pages, more } = useNavPages();
+  const { phase, online, total, main, pages, more, openPlans } = useNavPages();
   const hasAssistant = useStore((s) => Boolean(s.assistant));
   const [moreMenu, setMoreMenu] = useState<HTMLElement | null>(null);
   const bindings = useBindings();
@@ -69,7 +69,7 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
   const go = useGo();
   const status = connStatus(phase, online, total);
   const st = main ? stateOf(main) : undefined;
-  const pending = main?.pending_interactions ?? 0;
+  const pending = (main?.pending_interactions ?? 0) + openPlans.total;
   // `color`: a page's icon color (NavPage.color, #10822), kept under the pointer as well
   const link = (k: string, to: Route, label: string, icon: React.ReactNode, dot?: React.ReactNode, title?: string, color?: UIColor) => {
     const active = activeKey === k;
