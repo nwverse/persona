@@ -1554,3 +1554,11 @@ The Assistant picker reserves a short window after shell discovery so fallback c
 A gateway can report `rate_limit` without Claude Code's subscription `quotaLimits`. Its UTC available-again prose belongs to the existing usage-limit wait; temporary account capacity is transient. Classifying the turn alone does not permit restarting a terminal Agent that exited: record narrow, node-owned stop provenance too. Never overwrite explicit user/exit provenance, or reauthorize a consumed recovery attempt from a stale transcript error.
 
 - A gateway error alone cannot prove why a terminal Agent later disappeared (#12095). Require a live observation after the failed turn and the retained original Persona pane, and recheck the pane before supervised resume. Keep cold history and externally closed terminals owner-only; a transcript error must not turn an unknown user closure into recovery permission.
+
+## Auxiliary Assistant context must not become native commands (#12427)
+
+Antigravity ACP expands slash commands in every plain text prompt block. A task title in the Assistant snapshot can
+therefore activate its suffix-command parser and append a command to an unrelated request. Send the snapshot as an
+ACP embedded text resource, keeping the user's own text in its separate text block. Separate text blocks alone are
+insufficient: ACP expands each one. Preserve explicit standalone native commands, and test the captured ACP payload
+for both a new conversation and later messages with command names in the snapshot.

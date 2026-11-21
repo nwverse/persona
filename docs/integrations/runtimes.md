@@ -418,6 +418,10 @@ Lark tokens and gates. node drives it with calls the protocol already has:
 | `session.send {session_id, text, images, client_msg_id, assistant: true, context, mode, memory_dir, supervision_instructions?}` | `context`: a `<persona-context>` block given to the model before the user's text (the live snapshot; the first message of a new chat also has memory and Lark notes), not shown in the chat, and left out of a message that is only a slash command (`/compact`, one line, no picture) so the runtime can run it: the snapshot goes with the next message, and after `/compact` in full; `mode`: Persona's permission mode (`default` / `acceptEdits` / `auto` / `plan` / `bypassPermissions`); `memory_dir`: the memory directory; `client_msg_id`: the id the message came with (the App's, a channel's), absent when it came without one: put it on the message's item, or leave the item without one, never another (`docs/protocol/protocol.md` "Matching pending messages"); `supervision_instructions`: sent only when the runtime declared `caps.supervision_policy` (always present, including explicit `""` to clear a prior role on demotion) |
 | `session.interrupt` | Stop on the phone; closing the assistant chat = stopping the running turn, the chat stays in the runtime |
 
+Antigravity sends `context` as an ACP embedded text resource before the separate user text block. Plain text blocks
+are subject to native slash-command expansion, so auxiliary context must not use that channel, even in its own block.
+An explicit standalone command still uses a plain text block without context.
+
 For sessions it starts, the node restores persisted ownership and launcher metadata before publishing runtime rows.
 The original assistant or health directory identifies the conversation after rediscovery and reconnects. Runtime
 status, model, permissions and capabilities continue to describe the running session.
