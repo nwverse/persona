@@ -188,6 +188,9 @@ struct FeishuBotView: View {
             if model.hubKnowsBoard {
                 feature(\.board, Theme.Icon.pinned, "Waiting-for-You Board in Lark", "/tasks sends one card listing everything waiting for you, then keeps it up to date in place instead of sending a new one")
             }
+            if model.hubKnowsReadGroup {
+                feature(\.readGroup, Theme.Icon.search, "Read the group with /read", "In a group the bot is in, your own \"@bot /read <task>\" reads the last 40 messages (or the range you name), with their images and files, as you, then answers under your message for the whole group to see. Others' messages never trigger it")
+            }
             if model.hubKnowsNudge { nudgePicker }
         } header: {
             Text("What It Can Do")

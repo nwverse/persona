@@ -1,6 +1,52 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Read the group with /read": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the group with /read"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "/read でグループを読む"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在群里用 /read 读群"
+          }
+        }
+      }
+    },
+    "In a group the bot is in, your own \"@bot /read <task>\" reads the last 40 messages (or the range you name), with their images and files, as you, then answers under your message for the whole group to see. Others' messages never trigger it": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In a group the bot is in, your own \"@bot /read <task>\" reads the last 40 messages (or the range you name), with their images and files, as you, then answers under your message for the whole group to see. Others' messages never trigger it"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ボットがいるグループで、あなた自身が「@ボット /read タスク」と送ると、あなたとして直近 40 件（または指定した範囲）のメッセージと画像・添付ファイルを読んでからタスクを行い、グループの全員が見られるようにそのメッセージに返信します。ほかの人のメッセージでは動きません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在机器人所在的群里，你本人发「@机器人 /read 任务」时，先以你的身份读最近 40 条消息（或你说的范围）和其中的图片、附件，再完成任务，回答回复在你那条消息下，群里所有人都看得到。别人的消息不会触发"
+          }
+        }
+      }
+    },
     "%@ · This Device" : {
       "extractionState" : "manual",
       "localizations" : {
