@@ -825,6 +825,9 @@ struct KBHitRow: View {
 
 struct KnowledgeDetailView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.shownAsSheet) private var shownAsSheet
+    /// An Agent this page opens, pushed over it with Back to it (#12006).
+    @State private var pushedAgent: SessionKey?
     @Environment(\.knowledgeSettingsAPI) private var inheritedAPI
     @State private var capturedAPI: APIClient?
     @Environment(\.openURL) private var openURL
@@ -871,6 +874,11 @@ struct KnowledgeDetailView: View {
     /// Search matches shown before Show All.
     static let matchesShown = 5
 
+    /// An Agent of this project, or one started from it: pushed over this page, as any page opens one it links to (#12006).
+    private func openAgent(_ key: SessionKey) {
+        model.openInPage(key, push: pageAgentPush(inSheet: shownAsSheet) { pushedAgent = $0 })
+    }
+
     var body: some View {
         List {
             if !Self.debugLower {
@@ -892,7 +900,7 @@ struct KnowledgeDetailView: View {
                 if !Self.debugLower, let agents = detail?.agents, !agents.isEmpty {
                     Section {
                         ForEach(agents) { s in
-                            Button { model.open(s.key) } label: {
+                            Button { openAgent(s.key) } label: {
                                 SessionRow(session: s, machine: model.machine(s.machineRef))
                             }
                             .buttonStyle(.plain)
@@ -966,6 +974,7 @@ struct KnowledgeDetailView: View {
             KBPointSheet(point: p.point, links: p.links, crumbs: p.crumbs) { e in pushedEntry = e }
         }
         .navigationDestination(item: $pushedEntry) { e in KnowledgeDetailView(entry: e) }
+        .pushedAgentChat($pushedAgent)
         .sheet(item: $unlinking) { relationship in
             KBRemoveLinkSheet(relationship: relationship) { lockLists in
                 Task { await unlink(relationship, lockLists: lockLists) }
@@ -996,7 +1005,7 @@ struct KnowledgeDetailView: View {
         .sheet(isPresented: $newAgent) {
             NewChatView(initialPrompt: agentPrompt) { s in
                 newAgent = false
-                model.open(s.key)
+                openAgent(s.key)
             }
         }
         .task { await load() }
