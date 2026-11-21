@@ -6101,3 +6101,13 @@ Frozen-range backfill and retired-tail appends do not rewrite logical history. A
 Live spans, empty boundary bridges, history pages and reconnect backlog follow the same projection. The manager may
 report `devices.state` machine `transport_for` to retain a bus identity after a source computer is removed; the hub
 validates manager ownership and forwards only, without resolving segments.
+
+The logical-segment client first reads
+`GET /api/v1/assistant/conversations/{id}/segments?machine_id=...` to obtain the
+current epoch and unfinished operation identity. The response exposes no physical
+segment IDs and starts nothing. The explicitly confirmed switch sends its epoch
+and a fresh operation ID to the switch POST. A transport retry must keep the exact
+request, including the original epoch; it must not read a new epoch and silently
+create a second operation. Registered runtime identity is part of a segment's
+opaque engine identity, so two runtimes embedding the same engine are distinct
+execution paths. Unknown engine kinds or identity suffixes are rejected.

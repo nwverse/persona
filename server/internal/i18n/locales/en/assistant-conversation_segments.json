@@ -8,5 +8,6 @@
   "unknown_engine": "This engine could not be identified. Refresh its launcher list and try again.",
   "disabled": "Switching engines is paused.",
   "unsupported_policy": "This engine cannot apply the conversation’s supervision instructions.",
-  "in_doubt": "The result is being reconciled. Do not send it again."
+  "in_doubt": "The result is being reconciled. Do not send it again.",
+  "explicit_switch_required": "Use the conversation’s model panel to confirm a connection switch before continuing on another engine."
 }

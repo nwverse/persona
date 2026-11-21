@@ -49,7 +49,7 @@ type segmentTarget struct {
 // The node resolves a registered native/runtime execution path. An empty or
 // unrecognized path cannot be made valid by guessing from a launcher name.
 func knownSegmentTarget(target segmentTarget) bool {
-	return target.Registered && target.Prepare && strings.TrimSpace(target.Engine) != "" && len(target.Engine) <= 128
+	return target.Registered && target.Prepare && proto.AssistantEngineKind(target.Engine) != ""
 }
 func (s *Service) logicalTarget(ctx context.Context, machine, launcher string) (segmentTarget, error) {
 	var target segmentTarget
@@ -100,6 +100,41 @@ func (s *Service) logicalSwitchRoutes() {
 			return
 		}
 		apierr.WriteJSON(w, p)
+	})
+	s.handle("GET /api/v1/assistant/conversations/{id}/segments", func(w http.ResponseWriter, r *http.Request) {
+		if !fullRole(r) {
+			apierr.Write(w, 403, i18n.Err("assistant-model_pick.err_role"))
+			return
+		}
+		ctx := r.Context()
+		machine, id := r.URL.Query().Get("machine_id"), r.PathValue("id")
+		if machine == "" || !s.keepsPickOn(ctx, id, machine) {
+			apierr.Call(w, logicalRefusal(ctx, "unavailable"))
+			return
+		}
+		st, ok := s.store().(logicalSwitchStore)
+		if !ok {
+			apierr.Call(w, logicalRefusal(ctx, "unavailable"))
+			return
+		}
+		c, err := s.physicalLogicalConversation(ctx, st, machine, id)
+		if err != nil {
+			apierr.Call(w, err)
+			return
+		}
+		epoch := int64(1)
+		var operation any
+		if c != nil {
+			if c.Deleted || c.MachineID != machine || c.SessionID != id {
+				apierr.Call(w, logicalRefusal(ctx, "private_segment"))
+				return
+			}
+			epoch = c.Epoch
+			if c.Switch != nil {
+				operation = map[string]any{"operation_id": c.Switch.OperationID, "phase": c.Switch.Phase}
+			}
+		}
+		apierr.WriteJSON(w, map[string]any{"enabled": s.segmentsEnabled(ctx), "epoch": epoch, "switch": operation})
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/switch", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
@@ -202,7 +237,7 @@ func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p 
 		return nil, logicalRefusal(ctx, "unsupported_policy")
 	}
 	if c == nil {
-		if p.ExpectedEpoch != 1 || strings.TrimSpace(row.Agent) == "" {
+		if p.ExpectedEpoch != 1 || assistantKind(row.Agent) == "" {
 			return nil, logicalRefusal(ctx, "unknown_engine")
 		}
 		var page historyPage
@@ -212,7 +247,11 @@ func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p 
 		if page.History == "" {
 			return nil, logicalRefusal(ctx, "missing_generation")
 		}
-		if err = st.AdoptConversationAliases(ctx, machine, id, randomHex(16), row.Agent, page.History, s.physicalAliases(machine)); err != nil {
+		sourceEngine := proto.AssistantExecutionIdentity(row.Agent, row.SourceKind, row.SourceInstanceID, row.Launcher)
+		if sourceEngine == "" {
+			return nil, logicalRefusal(ctx, "unknown_engine")
+		}
+		if err = st.AdoptConversationAliases(ctx, machine, id, randomHex(16), sourceEngine, page.History, s.physicalAliases(machine)); err != nil {
 			return nil, err
 		}
 		c, err = st.LogicalConversation(ctx, machine, id)

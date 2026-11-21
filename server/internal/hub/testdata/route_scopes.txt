@@ -144,6 +144,7 @@ assistant.ask        GET /api/v1/assistant
 assistant.ask        GET /api/v1/assistant/capabilities
 -                    GET /api/v1/assistant/conversations/{id}/always
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
+-                    GET /api/v1/assistant/conversations/{id}/segments
 -                    GET /api/v1/assistant/conversations/{id}/switch/{operation}
 -                    GET /api/v1/assistant/directions/offers
 -                    GET /api/v1/assistant/directions/tree

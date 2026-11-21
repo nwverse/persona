@@ -218,7 +218,7 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 				return err
 			}
 			if target.Engine != active.Engine {
-				return &launcherOtherKind{conversationAgent: active.Engine, launcher: launcher, launcherAgent: target.Engine}
+				return logicalRefusal(ctx, "explicit_switch_required")
 			}
 		}
 		physical := cloneLogicalParams(p, active)
@@ -379,7 +379,7 @@ func (s *Service) logicalSendModel(ctx context.Context, machine, session string,
 		}
 		engine := target.Engine
 		if engine != a.Engine {
-			return true, &launcherOtherKind{conversationAgent: a.Engine, launcher: launcher, launcherAgent: engine}
+			return true, logicalRefusal(ctx, "explicit_switch_required")
 		}
 	} else {
 		launcher = a.Launcher

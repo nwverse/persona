@@ -71,7 +71,7 @@ func (s *Service) logicalUpdatePick(ctx context.Context, session string, change 
 		}
 		engine := target.Engine
 		if engine != a.Engine {
-			return true, &launcherOtherKind{conversationAgent: a.Engine, launcher: next.Launcher, launcherAgent: engine}
+			return true, logicalRefusal(ctx, "explicit_switch_required")
 		}
 		if err = st.SetConversationPick(ctx, c.MachineID, session, c.Epoch, next.Launcher, next.Model, next.Effort); err != nil {
 			return true, err

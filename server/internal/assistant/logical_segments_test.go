@@ -219,7 +219,7 @@ func TestLogicalUnknownTargetAndPausedSwitchSetting(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.answerNode("assistant.segment.check", func(_ string, _ json.RawMessage) (any, error) {
-		return segmentTarget{Engine: "future-unknown", Prepare: true, SupervisionPolicy: true}, nil
+		return segmentTarget{Registered: true, Engine: "future-unknown", Prepare: true, SupervisionPolicy: true}, nil
 	})
 	_, err := s.beginLogicalSwitch(ctx, "server", "side-chat", logicalSwitchRequest{OperationID: "new", ExpectedEpoch: 1, MachineID: "server", Launcher: "unknown"})
 	if err == nil {
@@ -897,5 +897,32 @@ func TestLogicalInputIdentityDoesNotIncludeAutomaticRole(t *testing.T) {
 	}
 	if string(first) != string(second) || strings.Contains(string(first), "role") {
 		t.Fatalf("automatic policy retained in input identity: %s / %s", first, second)
+	}
+}
+
+func TestSegmentReadExposesEpochWithoutPhysicalIdsOrStartingAnything(t *testing.T) {
+	s, f, d, _ := logicalPair(t, "codex")
+	r := request(s, "GET", "/api/v1/assistant/conversations/side-chat/segments?machine_id=server", "")
+	if r.Code != 200 {
+		t.Fatalf("snapshot: %d %s", r.Code, r.Body.String())
+	}
+	var state struct {
+		Epoch  int64 `json:"epoch"`
+		Switch struct {
+			OperationID string `json:"operation_id"`
+		} `json:"switch"`
+	}
+	if json.Unmarshal(r.Body.Bytes(), &state) != nil || state.Epoch != 1 || state.Switch.OperationID != "operation" || strings.Contains(r.Body.String(), "target-chat") {
+		t.Fatalf("snapshot leaked physical identity: %s", r.Body.String())
+	}
+	activatePair(t, d)
+	r = request(s, "GET", "/api/v1/assistant/conversations/side-chat/segments?machine_id=server", "")
+	if r.Code != 200 || json.Unmarshal(r.Body.Bytes(), &state) != nil || state.Epoch != 2 {
+		t.Fatalf("activation epoch: %d %s", r.Code, r.Body.String())
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.sends) != 0 {
+		t.Fatal("snapshot read sent model input")
 	}
 }

@@ -103,6 +103,7 @@ func (n *Node) assistantSegment(ctx context.Context, method string, raw json.Raw
 				}
 			}
 		}
+		engine := proto.AssistantExecutionIdentity(agent, "", "", launcher)
 		policy := agent == "claude" || agent == "codex"
 		registered := policy
 		if h := n.assistantRuntime(launcher); h != nil {
@@ -118,13 +119,14 @@ func (n *Node) assistantSegment(ctx context.Context, method string, raw json.Raw
 					break
 				}
 			}
+			engine = proto.AssistantExecutionIdentity(agent, proto.SourceRuntime, h.hello.Runtime, launcher)
 			h.mu.Unlock()
 			policy = h.supervisionPolicy()
 		}
-		if agent == "" || !registered {
+		if engine == "" || !registered {
 			return nil, refusal("unknown_engine", i18n.T(i18n.From(ctx), "assistant-conversation_segments.unknown_engine"), nil)
 		}
-		return map[string]any{"engine": agent, "registered": registered, "supervision_policy": policy, "prepare": true}, nil
+		return map[string]any{"engine": engine, "registered": registered, "supervision_policy": policy, "prepare": true}, nil
 	}
 	if operation == "" || len(operation) > 128 {
 		return nil, errors.New("invalid segment operation")
