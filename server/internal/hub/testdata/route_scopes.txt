@@ -103,6 +103,7 @@ todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    DELETE /api/v1/todos/{id}/terminal-cleanup
 -                    DELETE /api/v1/todos/{id}/thread
 -                    DELETE {base}/markets/{mid}
+-                    GET /api/v1/a2a/{mid}/{sid}/.well-known/agent-card.json
 -                    GET /api/v1/admin/devices
 -                    GET /api/v1/admin/devices/{credential_id}/owner
 -                    GET /api/v1/admin/extensions
@@ -399,6 +400,7 @@ inbox.write          PATCH /api/v1/inbox/policies/{id}
 -                    PATCH /api/v1/model-config/purposes/{id}
 todos.write          PATCH /api/v1/todos/{id}
 -                    PATCH /api/v1/todos/{id}/decisions/{did}
+-                    POST /api/v1/a2a/{mid}/{sid}/rpc
 -                    POST /api/v1/admin/devices/pair
 -                    POST /api/v1/admin/doctor
 -                    POST /api/v1/admin/extensions/install
