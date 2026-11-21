@@ -188,11 +188,18 @@ func (s *Service) backgroundLost(ctx context.Context, old, to, web string) []sup
 			if to != "" {
 				msg.OnceID = ""                                                     // another destination is a separate delivery
 				msg.TriedAt, msg.Looks, msg.LookAfter = time.Time{}, 0, time.Time{} // the earlier try was to another conversation
-				r.st.Queue[to] = append(r.st.Queue[to], msg)
 				moved++
 			}
 		}
 		s.handoversMovedLocked(handovers, to, title)
+		if to != "" {
+			for _, msg := range r.st.Queue[old] {
+				if msg.Tool == superviseTool && len(lost) > 0 {
+					continue
+				}
+				r.st.Queue[to] = append(r.st.Queue[to], msg)
+			}
+		}
 		delete(r.st.Queue, old)
 		s.saveRelayLocked()
 	}

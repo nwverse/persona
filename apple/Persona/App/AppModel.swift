@@ -43,6 +43,8 @@ final class AppModel {
     let portPresence = PortPresence()
     /// The hub-level group's socket (its state for the pages about the hub); every group has its own (`links`).
     var live: LiveConnection { hub?.live ?? idleLive }
+    /// What each group's addresses came to when last tried (#11390): Connection Details' lines.
+    let addressBoard = HubAddressBoard()
     @ObservationIgnored private let idleLive = LiveConnection()
     /// What the titles say about the links (Waiting for Network / Connecting… / Updating…).
     let connection: ConnectionStatus
@@ -447,6 +449,11 @@ final class AppModel {
     /// Unit tests: the app's voice call (`VoiceCalls.shared` otherwise), whose call to Persona keeps its group's tunnels
     /// open in the background (`callTunnelGroup`).
     @ObservationIgnored var voiceCallsForTests: VoiceCalls?
+    /// Unit tests: what the route's health probes answer (`HubRoute.healthCheck` otherwise), for the route picker, a
+    /// tunnel group's direct check and its restore race (#11390).
+    @ObservationIgnored var routeCheckForTests: HubRoute.Check?
+    /// Unit tests: what the address lines tell Developing Persona's tally, as if the switch were on (#11390).
+    @ObservationIgnored var tallyForTests: ((DevProbe.Link) -> Void)?
     /// Unit tests: no machines, agents or cards, whatever `init` restored. A simulator paired by an earlier run keeps
     /// its last snapshot, and a test of everything the model holds (the watch summary) would count those too (#1638).
     func forgetRestoredForTests() {
@@ -975,6 +982,7 @@ final class AppModel {
         for gone in links where !out.contains(where: { $0 === gone }) { gone.live.disconnect() }
         links = out
         for link in links where !link.isDemo { link.live.route = routePicker(link.group) }
+        arrangeAddresses()
         if link(hubGroup) == nil, let first = links.first { hubGroup = first.group }
         applyPersonaPalette()
         relabelMachines()
@@ -989,7 +997,11 @@ final class AppModel {
         link.live.onEvent = { [weak self] ev in self?.handle(ev.stamped(group), group: group) }
         link.live.prepareEvent = { Self.prepare($0) }
         link.live.onConnected = { [weak self] in self?.didConnect(group) }
-        link.live.onChange = { [weak self] in self?.connection.update() }
+        link.live.onChange = { [weak self] in
+            self?.connection.update()
+            self?.socketChanged(group)
+        }
+        link.live.onAttempt = { [weak self] config, outcome, since in self?.socketTried(group, config, outcome, since: since) }
         link.live.credential = { [weak self] config in DeviceCredentialTrade.current(config, traded: self?.tradedTokens ?? [:]) }
         #if DEBUG
         if let hooks = linkHooksForTests {

@@ -2537,6 +2537,75 @@
         }
       }
     },
+    "Answers [Hub Address]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Answers"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "応答あり"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有应答"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Certificate Not Trusted [Hub Address]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Certificate Not Trusted"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "証明書を信頼できません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "证书不受信任"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Couldn't Connect [Hub Address]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't Connect"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続できません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连不上"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Hidden Agent Folders" : {
       "localizations" : {
         "en" : {
@@ -2624,6 +2693,52 @@
           }
         }
       }
+    },
+    "Not Tried Yet [Hub Address]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not tried yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まだ試していません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没试过"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Not Your Hub [Hub Address]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not Your Hub"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "別のハブ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不是你的 hub"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Show hidden sessions" : {
       "localizations" : {
@@ -23378,6 +23493,29 @@
       },
       "extractionState" : "manual"
     },
+    "Agents in T3 Code" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agents in T3 Code"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "T3 Codeのエージェント"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "T3 Code 里的 Agent"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Agents in This Space" : {
       "localizations" : {
         "en" : {
@@ -32042,6 +32180,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "待验收"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Awaiting your verification" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Awaiting your verification"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "あなたの確認待ち"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待你验收"
           }
         }
       },
@@ -160816,24 +160977,24 @@
       },
       "extractionState" : "manual"
     },
-    "Start Claude, Codex, or TRAEX in herdr on this machine and it shows up here." : {
+    "Start Claude, Codex, or TRAE CLI in herdr on this machine and it shows up here." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Start Claude, Codex, or TRAEX in herdr on this machine and it shows up here."
+            "value" : "Start Claude, Codex, or TRAE CLI in herdr on this machine and it shows up here."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "このマシンのherdrでClaude、Codex、TRAEXを起動すると、ここに表示されます。"
+            "value" : "このマシンのherdrでClaude、Codex、TRAE CLIを起動すると、ここに表示されます。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在这台机器的 herdr 里启动 Claude、Codex 或 TRAEX，就会出现在这里。"
+            "value" : "在这台机器的 herdr 里启动 Claude、Codex 或 TRAE CLI，就会出现在这里。"
           }
         }
       },
@@ -191356,6 +191517,29 @@
       },
       "extractionState" : "manual"
     },
+    "Tried at %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tried at %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最終試行：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上次尝试：%1$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Tried it: it answers" : {
       "localizations" : {
         "en" : {
@@ -194580,6 +194764,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "状态未知"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Unknown [Hub Address]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unknown"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不明"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知"
           }
         }
       },

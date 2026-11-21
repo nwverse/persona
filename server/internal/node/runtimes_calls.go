@@ -247,7 +247,7 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		n.runtimes.unwatch(p.SessionID)
 		_, err := call("session.unwatch", map[string]any{"session_id": p.SessionID})
 		return okResult(err), err, true
-	case "session.send":
+	case "session.send", proto.MethodSessionSendUnseen:
 		if !caps.Send {
 			return nil, errRuntimeUnsupported(label, "从手机发消息"), true
 		}
@@ -258,8 +258,21 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		}
 		var opts sendOpts
 		_ = json.Unmarshal(params, &opts)
+		var retry *echoRecord
+		var previous *sendRecord
+		if method == proto.MethodSessionSendUnseen {
+			check := n.checkEcho(ctx, p.SessionID, opts.ClientMsgID)
+			switch check.state {
+			case proto.EchoSeen:
+				return map[string]any{"ok": true}, nil, true
+			case proto.EchoKnownUnseen:
+				retry, previous = &check.record, check.previous
+			default:
+				return nil, echoUnconfirmed(), true
+			}
+		}
 		var said json.RawMessage // what the runtime answered: it may say the message only queued behind the turn
-		err := n.sends.once(opts.ClientMsgID, func() error {
+		err := n.sends.onceReplacing(opts.ClientMsgID, previous, func() error {
 			var after echoAfter
 			if opts.ClientMsgID != "" {
 				after = echoAfter{seq: n.runtimes.lastPushed(p.SessionID), in: echoInRuntime}
@@ -267,8 +280,24 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 					after = n.echoBase(p.SessionID)
 				}
 			}
-			return n.sendEchoed(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, func() error { // echo.go
-				out, err := call("session.send", map[string]any{"session_id": p.SessionID, "text": p.Text, "images": p.Images,
+			if retry != nil {
+				// As sendUnseen: another send can start a turn while this retry waits for the input lock.
+				unlock, err := n.inputTurn(ctx, p.SessionID)
+				if err != nil {
+					return echoUnconfirmed()
+				}
+				defer unlock()
+				check := n.readEcho(ctx, p.SessionID, opts.ClientMsgID)
+				if check.state == proto.EchoSeen {
+					return nil
+				}
+				if check.state != proto.EchoKnownUnseen || !check.record.SentAt.Equal(retry.SentAt) {
+					return echoUnconfirmed()
+				}
+				retry, after = &check.record, check.after
+			}
+			return n.sendWithEcho(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, retry, func() error {
+				out, err := call(method, map[string]any{"session_id": p.SessionID, "text": p.Text, "images": p.Images,
 					"client_msg_id": opts.ClientMsgID})
 				said = out
 				return err

@@ -54,6 +54,11 @@ GET /api/v1/machines/{mid}/file
 GET /api/v1/machines/{mid}/file/convert
 GET /api/v1/machines/{mid}/file/download
 GET /api/v1/machines/{mid}/file/thumb
+GET /api/v1/machines/{mid}/files/download
+GET /api/v1/machines/{mid}/files/list
+GET /api/v1/machines/{mid}/files/preview
+GET /api/v1/machines/{mid}/files/roots
+GET /api/v1/machines/{mid}/files/tail
 GET /api/v1/machines/{mid}/fs
 GET /api/v1/machines/{mid}/fs/find
 GET /api/v1/machines/{mid}/git/blob
@@ -65,6 +70,7 @@ GET /api/v1/machines/{mid}/git/review
 GET /api/v1/machines/{mid}/git/show
 GET /api/v1/machines/{mid}/git/status
 GET /api/v1/machines/{mid}/grok-settings
+GET /api/v1/machines/{mid}/network
 GET /api/v1/machines/{mid}/omp-settings
 GET /api/v1/machines/{mid}/panes
 GET /api/v1/machines/{mid}/ports
