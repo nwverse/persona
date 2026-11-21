@@ -22,5 +22,6 @@
   "ttft_ms": "{ms} ms",
   "breakdown_section": "上下文构成",
   "compact_action": "压缩上下文",
-  "compacting": "正在压缩…"
+  "compacting": "正在压缩…",
+  "compact_failed": "无法压缩上下文"
 }

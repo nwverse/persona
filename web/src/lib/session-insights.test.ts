@@ -270,5 +270,9 @@ describe("compactActionSupport", () => {
     expect(compactActionSupport({ ...baseSession, source_kind: "antigravity" }, { hasSendCompact: true }).supported).toBe(false);
     expect(compactActionSupport({ ...baseSession, capabilities: { send: false } }, { hasSendCompact: true }).supported).toBe(false);
     expect(compactActionSupport(baseSession, { hasSendCompact: false }).supported).toBe(false);
+    expect(compactActionSupport(baseSession, { hasSendCompact: true, blocked: true }).supported).toBe(false);
+    expect(compactActionSupport(baseSession, { hasSendCompact: true, routed: true }).supported).toBe(false);
+    expect(compactActionSupport({ ...baseSession, assistant: true }, { assistant: true, hubSupportsAssistantCompact: true, blocked: true }).supported).toBe(false);
+    expect(compactActionSupport({ ...baseSession, assistant: true }, { assistant: true, hubSupportsAssistantCompact: true, routed: true }).supported).toBe(false);
   });
 });

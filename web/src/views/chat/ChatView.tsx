@@ -1293,7 +1293,16 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const sendNow = useRef(onSend);
   sendNow.current = onSend;
   const send = useCallback((out: Outgoing) => sendNow.current(out), []);
-  const compactSession = useCallback(() => send({ text: "/compact", images: [] }), [send]);
+  // Keep one-click /compact aligned with the composer's send preconditions (no active task route, no setup gate block).
+  const hasTaskRoute = useFeed((s) => Boolean(s.routes[sid]));
+  const compactSession = useCallback(async (): Promise<boolean> => {
+    if (blockedRef.current) {
+      blockedRef.current.onClick?.();
+      return false;
+    }
+    if (getFeedState().routes[sid]) return false;
+    return send({ text: "/compact", images: [] });
+  }, [send, sid]);
   // The assistant's tasks (docs/assistant/unified-entry.md): the conversation's feed, and the main one's "Today" card.
   const taskFeed = useFeed((s) => (assistant ? (s.feeds[sid] ?? NO_FEED) : NO_FEED));
   useEffect(() => {
@@ -2106,6 +2115,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     : undefined, [overviewId, overviewOpen, showOverview]);
   // Its background detail takes the side panel's space, rather than squeezing the mounted overview and losing its place.
   const overviewDetail = panelDrawn && backgroundPanelOf(panel, mid, sid)?.from === "overview";
+  const composerDisabled = Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"));
+  const composerBlocked = gate.blocked ?? noRowBlock;
+  const compactBlocked = Boolean(composerDisabled || composerBlocked || hasTaskRoute);
 
   const page = (
     <div className="@container/session flex h-full min-w-0 flex-col">
@@ -2394,7 +2406,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           needsYou={state === "needs_you"}
           onSend={send}
           onSendNow={session && (session.capabilities?.queue_send_now ?? (assistant || (session.agent === "claude" && session.source_kind !== "runtime"))) ? sendQueueNow : undefined}
-          disabled={Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"))}
+          disabled={composerDisabled}
           onEditLastMessage={onEditLastMessage}
           editingLast={editProp}
           loadingDraft={editingLast}
@@ -2408,7 +2420,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           autoFocus
           carryDraft={Boolean(assistant)}
           onFocusChange={setTyping}
-          blocked={gate.blocked ?? noRowBlock}
+          blocked={composerBlocked}
           leading={leading}
           trailing={trailing}
           planMode={planMode}
@@ -2423,7 +2435,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
               session={session}
               assistant={assistant}
               items={earlier.liveItems}
-              onCompact={assistant ? undefined : compactSession}
+              compactBlocked={compactBlocked}
+              onCompact={assistant || compactBlocked ? undefined : compactSession}
               source={sourceSubtitle(session) ? <ComposerSource session={session} assistant /> : undefined}
             />
           </Suspense>

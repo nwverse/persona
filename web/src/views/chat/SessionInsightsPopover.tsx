@@ -7,6 +7,7 @@ import { t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
 import { COMPACT_FEATURE, compactBody, compactPath, formatTokens } from "../../lib/compaction";
 import { contextHint, contextTier, contextTooltip, type ContextTier } from "../../lib/context-usage";
+import { useFeed } from "../../lib/feed";
 import { buildSessionInsights, compactActionSupport, formatHitRate, type ContextBreakdownSlot } from "../../lib/session-insights";
 import { hubHas, useStore } from "../../lib/store";
 import { formatRate, type RateHistory } from "../../lib/token-rate";
@@ -28,7 +29,8 @@ export interface SessionInsightsPopoverProps {
   session: Session;
   items?: readonly Item[];
   assistant?: boolean;
-  onCompact?: () => void | Promise<unknown>;
+  onCompact?: () => boolean | void | Promise<boolean | void | unknown>;
+  compactBlocked?: boolean;
   onClose: () => void;
   /** Optional overrides for tests or future protocol fields. */
   rateHistory?: RateHistory | null;
@@ -36,12 +38,14 @@ export interface SessionInsightsPopoverProps {
   ttftMs?: number | null;
 }
 
-async function requestAssistantCompaction(session: Session) {
+async function requestAssistantCompaction(session: Session): Promise<boolean> {
   try {
     await api(compactPath(session.session_id), { method: "POST", json: compactBody(session.machine_id) });
     window.dispatchEvent(new CustomEvent(COMPACT_REQUESTED, { detail: { mid: session.machine_id, sid: session.session_id } }));
+    return true;
   } catch (e) {
     toast(t("assistant-assistantchat.compact_start_failed", { error: errorText(e) }), "error");
+    return false;
   }
 }
 
@@ -51,6 +55,7 @@ export function SessionInsightsPopover({
   items = EMPTY_ITEMS,
   assistant,
   onCompact,
+  compactBlocked,
   onClose,
   rateHistory,
   breakdown,
@@ -62,6 +67,7 @@ export function SessionInsightsPopover({
   const [place, setPlace] = useState<{ left: number; top: number; width: number } | null>(null);
 
   const hubSupportsAssistantCompact = useStore((s) => hubHas(s.features, COMPACT_FEATURE));
+  const routed = useFeed((s) => Boolean(s.routes[session.session_id]));
   const insights = useMemo(
     () => buildSessionInsights(session, items, {
       ...(rateHistory !== undefined ? { rateHistory } : {}),
@@ -71,8 +77,14 @@ export function SessionInsightsPopover({
     [session, items, rateHistory, breakdown, ttftMs],
   );
   const compact = useMemo(
-    () => compactActionSupport(session, { assistant, hubSupportsAssistantCompact, hasSendCompact: Boolean(onCompact) }),
-    [session, assistant, hubSupportsAssistantCompact, onCompact],
+    () => compactActionSupport(session, {
+      assistant,
+      hubSupportsAssistantCompact,
+      hasSendCompact: Boolean(onCompact),
+      blocked: compactBlocked,
+      routed,
+    }),
+    [session, assistant, hubSupportsAssistantCompact, onCompact, compactBlocked, routed],
   );
 
   useEscapeClose(true, onClose);
@@ -122,9 +134,17 @@ export function SessionInsightsPopover({
     if (!compact.supported || compact.running || compactingNow) return;
     setCompactingNow(true);
     try {
-      if (onCompact) await onCompact();
-      else if (compact.mode === "assistant") await requestAssistantCompaction(session);
-      onClose();
+      let ok = false;
+      if (onCompact) {
+        const res = await onCompact();
+        ok = res !== false;
+        if (!ok) toast(t("chat-sessioninsights.compact_failed"), "error");
+      } else if (compact.mode === "assistant") {
+        ok = await requestAssistantCompaction(session);
+      }
+      if (ok) onClose();
+    } catch (e) {
+      toast(t("assistant-assistantchat.compact_start_failed", { error: errorText(e) }), "error");
     } finally {
       setCompactingNow(false);
     }

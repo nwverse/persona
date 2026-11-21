@@ -359,14 +359,15 @@ export function formatHitRate(rate: number | null): string | null {
 
 /**
  * Determines whether one-click context compaction is supported for the session.
+ * - Blocked (setup gate / offline / read-only composer) or routed (active task route): never offered.
  * - Assistant chats: requires hub `assistant_compact` feature (uses POST …/compact).
  * - Agent chats: requires a terminal-command agent (`!source_kind`), send capability, and a send callback.
  */
 export function compactActionSupport(
   session: Session | undefined,
-  opts: { assistant?: boolean; hubSupportsAssistantCompact?: boolean; hasSendCompact?: boolean },
+  opts: { assistant?: boolean; hubSupportsAssistantCompact?: boolean; hasSendCompact?: boolean; blocked?: boolean; routed?: boolean },
 ): CompactSupport {
-  if (!session) return { supported: false, mode: null, running: false };
+  if (!session || opts.blocked || opts.routed) return { supported: false, mode: null, running: false };
   const isAssistant = Boolean(opts.assistant || session.assistant);
   if (isAssistant) {
     const supported = Boolean(opts.hubSupportsAssistantCompact);

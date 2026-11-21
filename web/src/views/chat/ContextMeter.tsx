@@ -58,10 +58,11 @@ export interface ContextMeterProps {
   compact?: boolean;
   items?: readonly Item[];
   assistant?: boolean;
-  onCompact?: () => void | Promise<unknown>;
+  onCompact?: () => boolean | void | Promise<boolean | void | unknown>;
+  compactBlocked?: boolean;
 }
 
-export function ContextMeter({ session, compact = false, items, assistant, onCompact }: ContextMeterProps) {
+export function ContextMeter({ session, compact = false, items, assistant, onCompact, compactBlocked }: ContextMeterProps) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
@@ -120,6 +121,7 @@ export function ContextMeter({ session, compact = false, items, assistant, onCom
             items={items}
             assistant={assistant}
             onCompact={onCompact}
+            compactBlocked={compactBlocked}
             onClose={close}
           />
         </Suspense>

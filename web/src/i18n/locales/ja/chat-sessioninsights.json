@@ -22,5 +22,6 @@
   "ttft_ms": "{ms} ms",
   "breakdown_section": "コンテキスト内訳",
   "compact_action": "コンテキストを圧縮",
-  "compacting": "圧縮中…"
+  "compacting": "圧縮中…",
+  "compact_failed": "コンテキストを圧縮できませんでした"
 }

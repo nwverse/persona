@@ -37,12 +37,13 @@ export function sessionQuota(accounts: UsageAccount[], session: Session, now: nu
   return windows.length ? { account, windows } : null;
 }
 
-export function AgentStatusLine({ session, source, assistant, items, onCompact }: {
+export function AgentStatusLine({ session, source, assistant, items, onCompact, compactBlocked }: {
   session: Session;
   source?: ReactNode;
   assistant?: boolean;
   items?: readonly Item[];
-  onCompact?: () => void | Promise<unknown>;
+  onCompact?: () => boolean | void | Promise<boolean | void | unknown>;
+  compactBlocked?: boolean;
 }) {
   const isAssistant = Boolean(assistant || session.assistant);
   const place = isAssistant ? null : workingLocation(session);
@@ -83,7 +84,7 @@ export function AgentStatusLine({ session, source, assistant, items, onCompact }
           <span data-composer-source className={placeClass} title={placeLabel || undefined}>{placeContent}</span>
         ))}
         {isAssistant && source}
-        {hasContext && <ContextMeter session={session} items={items} assistant={isAssistant} onCompact={onCompact} />}
+        {hasContext && <ContextMeter session={session} items={items} assistant={isAssistant} onCompact={onCompact} compactBlocked={compactBlocked} />}
         {!isAssistant && source}
         {quota && (
           <a

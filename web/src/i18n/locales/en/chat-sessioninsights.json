@@ -22,5 +22,6 @@
   "ttft_ms": "{ms} ms",
   "breakdown_section": "Context breakdown",
   "compact_action": "Compact context",
-  "compacting": "Compacting…"
+  "compacting": "Compacting…",
+  "compact_failed": "Could not compact context"
 }

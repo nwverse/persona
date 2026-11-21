@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { COMPACT_FEATURE } from "../../lib/compaction";
+import { setRoute } from "../../lib/feed";
 import { clearRateHistories, emptyRateHistory, recordTokens, saveRateHistory } from "../../lib/token-rate";
 import type { Item, Session } from "../../lib/types";
 import { ContextMeter } from "./ContextMeter";
@@ -77,6 +78,7 @@ afterEach(async () => {
     root.unmount();
   });
   host.remove();
+  setRoute("s1", null);
   clearRateHistories();
 });
 
@@ -261,5 +263,53 @@ describe("ContextMeter + lazy SessionInsightsPopover", () => {
       dialog.querySelector<HTMLButtonElement>("[data-insights-close]")!.click();
     });
     expect(document.querySelector("[data-session-insights]")).toBeNull();
+  });
+
+  it("hides /compact when a task route is active or compactBlocked is set", async () => {
+    const anchor = { current: host };
+    const onCompact = vi.fn();
+
+    setRoute("s1", "todo-1");
+    await mount(
+      <SessionInsightsPopover anchor={anchor} session={baseSession} items={sampleItems} onCompact={onCompact} onClose={() => {}} />,
+    );
+    expect(document.querySelector("[data-insights-compact]")).toBeNull();
+
+    setRoute("s1", null);
+    await mount(
+      <SessionInsightsPopover anchor={anchor} session={baseSession} items={sampleItems} onCompact={onCompact} compactBlocked onClose={() => {}} />,
+    );
+    expect(document.querySelector("[data-insights-compact]")).toBeNull();
+  });
+
+  it("toasts and keeps popover open when onCompact resolves false or assistant compaction fails", async () => {
+    const anchor = { current: host };
+    const onClose = vi.fn();
+    const onCompact = vi.fn().mockResolvedValue(false);
+
+    await mount(
+      <SessionInsightsPopover anchor={anchor} session={baseSession} items={sampleItems} onCompact={onCompact} onClose={onClose} />,
+    );
+    const btn = document.querySelector<HTMLButtonElement>("[data-insights-compact]")!;
+    await act(async () => {
+      btn.click();
+    });
+    expect(onCompact).toHaveBeenCalledTimes(1);
+    expect(mocks.toast).toHaveBeenCalledWith(expect.any(String), "error");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.querySelector("[data-session-insights]")).not.toBeNull();
+
+    mocks.toast.mockReset();
+    mocks.features = [COMPACT_FEATURE];
+    mocks.api.mockRejectedValueOnce(new Error("busy"));
+    await mount(
+      <SessionInsightsPopover anchor={anchor} session={{ ...baseSession, assistant: true }} assistant onClose={onClose} />,
+    );
+    const asstBtn = document.querySelector<HTMLButtonElement>("[data-insights-compact]")!;
+    await act(async () => {
+      asstBtn.click();
+    });
+    expect(mocks.toast).toHaveBeenCalledWith(expect.any(String), "error");
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
