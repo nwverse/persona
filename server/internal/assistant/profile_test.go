@@ -422,7 +422,7 @@ func TestBoolSettingsSet(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		def  bool
-	}{{"main_tasks_quiet", true}, {"start_requested_tasks", true}, {"interject_background", false}, {"agent_tasks", false}, {"close_ended_terminals", false}, {"main_background_folded", true}, {"recent_task_chats", false}, {"inbox_signals", false}, {"main_supervises_own_tasks", false}} {
+	}{{"main_tasks_quiet", true}, {"start_requested_tasks", true}, {"interject_background", false}, {"agent_tasks", false}, {"task_lessons", false}, {"close_ended_terminals", false}, {"main_background_folded", true}, {"recent_task_chats", false}, {"inbox_signals", false}, {"main_supervises_own_tasks", false}} {
 		key := "assistant." + c.name
 		get := func() string { out, _ := tool(`{"action":"get","key":"` + key + `"}`); return out }
 		set := func(value string) (string, bool) {

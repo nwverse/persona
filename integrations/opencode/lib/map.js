@@ -98,14 +98,17 @@ const errorText = (e) => (typeof e === 'string' ? e : e?.message ?? '')
  * @param {object} msg - { id, type, time, ...fields }
  * @param {number} seq
  */
-export function messageItems(msg, seq) {
+export function messageItems(msg, seq, { clientMsgIdFor, userOrdinal } = {}) {
   const out = []
   const at = ts(msg?.time?.created)
   const add = (n, it) => out.push({ id: `${seq}#${n}`, seq, ts: at, ...it })
   switch (msg?.type) {
     case 'user': {
       const shown = visibleUserText(msg.text)
-      if (shown) add(0, { role: 'user', kind: 'text', text: shown })
+      if (shown) {
+        const cm = typeof userOrdinal === 'number' ? clientMsgIdFor?.(userOrdinal, shown) : undefined
+        add(0, { role: 'user', kind: 'text', text: shown, ...(cm ? { client_msg_id: cm } : {}) })
+      }
       ;(msg.files ?? []).forEach((f, i) => {
         if (typeof f?.mime === 'string' && f.mime.startsWith('image/')) add(1 + i, { role: 'user', kind: 'image', image: { mime: f.mime, data: '', lazy: true } }) // bytes: session.image
         else add(1 + i, { role: 'user', kind: 'text', text: `［附件 ${f?.name ?? f?.mime ?? ''}］` })
@@ -161,6 +164,31 @@ export function imageOf(msg, index) {
   const f = (msg.files ?? [])[index - 1]
   if (!f || typeof f.mime !== 'string' || !f.mime.startsWith('image/') || typeof f.data !== 'string') return undefined
   return { mime: f.mime, data: f.data }
+}
+
+const MEDIA_REF = /^media:([0-9a-f]{64})$/
+// Base64 takes 4/3 the raw size; leave 1 KiB of the runtime protocol's 64 MiB line for the JSON envelope.
+const MAX_BLOB_BYTES = (64 * 1024 * 1024 - 1024) * 3 / 4
+
+/**
+ * Load an opencode 2.x blob-backed FileRef image (`media:<sha256>`) via `blob_ref` + `blob`,
+ * enforcing session/message/seq scoping and the raw-size limit before base64 encoding.
+ */
+export async function loadBlobImage(queryRows, { sessionId, msg, seq, idx }) {
+  const f = msg?.type === 'user' ? msg.files?.[idx - 1] : undefined
+  const ref = typeof f?.mime === 'string' && f.mime.startsWith('image/') && typeof f.uri === 'string'
+    ? MEDIA_REF.exec(f.uri)
+    : null
+  if (!ref) return undefined
+  const [r] = await queryRows(
+    `select b.data from blob b join blob_ref r on r.hash = b.hash
+     where b.hash = ? and r.session_id = ? and r.message_id = ? and r.seq = ?`,
+    ref[1], sessionId, msg.id, seq,
+  )
+  const data = r?.data
+  if (!(data instanceof Uint8Array) || data.byteLength > MAX_BLOB_BYTES) return undefined
+  const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data.buffer, data.byteOffset, data.byteLength)
+  return { mime: f.mime, data: bytes.toString('base64') }
 }
 
 /** Parse a session_message row (data is JSON) into the message shape messageItems reads. */
@@ -371,5 +399,5 @@ export function v1SessionItems(messages, partsByMessage, { clientMsgIdFor } = {}
     }
   }
 
-  return { items, toSeq: messages.length, lastText: last, model, provider, tokens, hasAssistant }
+  return { items, toSeq: messages.length, lastText: last, model, provider, tokens, hasAssistant, userCount: userOrdinal }
 }
