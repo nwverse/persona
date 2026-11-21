@@ -239,6 +239,11 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			n.mergeOpencodeRow(&s) // its conversation is the plugin's (opencode.go)
 		case a.Agent == cursorAgent || a.Agent == agyAgent:
 			// Herdr drives the pane (agent.prompt, the keys). Agy can also read its verified conversation (workagent.go).
+			// Its mode, effort and model are its start's, so no chips (session.modes refuses, workAgentCalls); every other
+			// operation stays as for a terminal row that says none. Not on a stopped one, which says none (stoppedAgent).
+			if s.Capabilities == nil && s.Status != proto.StatusOffline && s.Status != proto.StatusInterrupted {
+				s.Capabilities = &proto.SessionCapabilities{Read: true, Send: true, Interrupt: true, Approve: true, Terminal: true, Modes: proto.CanModes(false)}
+			}
 			if runtimeID := agyRuntimeIDs[id]; runtimeID != "" {
 				seen[runtimeID] = true
 				if s.Model == "" {
