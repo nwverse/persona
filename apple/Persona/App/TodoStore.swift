@@ -223,6 +223,7 @@ final class TodoStore {
         todos = initial
         byID = initialIndex
         quiet = QuietTasks(initial)
+        taskFollowers = Self.taskFollowers(initial) // as `todos`' didSet would, which a stored initial value skips
         lastPushed = initialIndex
         self.cacheWriter = cacheWriter
         self.hubListChanged = hubListChanged

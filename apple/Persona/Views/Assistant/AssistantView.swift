@@ -740,12 +740,23 @@ struct AssistantView: View {
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
-            leavePlace()
+            // The place or root in front is left as any pick leaves it, and the conversation starts afresh: the page is
+            // the one page over it, never on a path the conversation was left with (an earlier page, an Agent's chat).
+            #if os(iOS)
+            if embedded, let unified {
+                unified.select(.conversation, path: navPath, contentChanged: true)
+            } else {
+                places.leave(with: navPath.wrappedValue)
+            }
+            #else
+            places.leave(with: navPath.wrappedValue)
+            #endif
+            backToRoot()
             if current != ask.lead {
                 directionLanding = ask.lead
                 model.assistantCurrent = ask.lead
             }
-            navPath.wrappedValue.append(route)
+            navPath.wrappedValue = NavigationPath([route])
         }
         activeDrawer.close()
     }

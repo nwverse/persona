@@ -39,19 +39,20 @@ nonisolated struct DirectionPageRoute: Hashable, Sendable {
     }
 }
 
-/// What the page works out, apart from its views (tested in `DirectionPageTests`).
+/// What the page works out, apart from its views (tested in `DirectionFilingsTests`).
 enum DirectionPageLogic {
     /// Added Here shows this many, then Show All N (docs/design/DESIGN_SYSTEM.md 3.4, a long list on a detail page).
     static let firstCount = 5
 
-    /// The rows Added Here shows: the first five unless all are asked for.
-    static func shown<T>(_ rows: [T], all: Bool) -> [T] { all ? rows : Array(rows.prefix(firstCount)) }
+    /// The rows Added Here shows: none while folded, the first five unless all are asked for.
+    static func shown<T>(_ rows: [T], all: Bool, folded: Bool = false) -> [T] {
+        folded ? [] : all ? rows : Array(rows.prefix(firstCount))
+    }
 
-    /// "N need you" over In Progress: the sidebar row's words for the same tree (`DirectionTree.Counts.label`).
-    static func needsYou(_ tree: DirectionTree?, _ id: String) -> String? { tree?.leader(id)?.counts.label }
-
-    /// A filed session's title: the one it was filed with, else its row's, else Agent.
+    /// A filed session's title: the session's own where the app holds its row (renamed since, it is that name
+    /// everywhere), else the one it was filed with, else Agent.
     static func title(_ s: DirectionTree.FiledSession, session: Session?) -> String {
+        if let t = session?.title, !t.isEmpty, t != "Claude Code" { return t }
         if !s.title.isEmpty { return s.title }
         if let t = session?.displayTitle, !t.isEmpty { return t }
         return String(localized: "Agent")
@@ -113,9 +114,12 @@ enum DirectionPageLogic {
     }
 }
 
-/// The page's read of its direction (`GET /api/v1/assistant/directions/{id}`): on open, on reconnect and after a move
-/// made on this device (P7 / P9), never on a `directions` push. What this run read of it is kept, so it still draws
-/// (marked Offline · time) when a later read fails.
+/// The page's read of its direction (`GET /api/v1/assistant/directions/{id}`): on open, on each hello (a reconnect),
+/// after a move made on this device (`DirectionFilings.page`, also while a chat is pushed over the page) and when the
+/// direction leaves the held tree (unpinned while open); never on a tree push otherwise (P7 / P9). The reads belong to
+/// the page, not to a view's task, so a chat pushed over it does not cut one off; they are numbered, and only an answer
+/// newer than the last one taken is drawn (as the tree's, `AppModel.refreshDirectionTree`). What this run read of it is
+/// kept (`DirectionFilings.kept`), so it still draws, marked Offline · time, when a later read fails.
 @MainActor @Observable final class DirectionPageModel {
     nonisolated enum Status: Equatable, Sendable {
         case reading
@@ -127,49 +131,87 @@ enum DirectionPageLogic {
     }
 
     let id: String
+    /// The last read taken, its sessions in the app's order (`DirectionFilings.order`).
     private(set) var read: DirectionRead?
     private(set) var readAt: Date?
     private(set) var status: Status = .reading
     /// Added Here shows them all.
     var showsAll = false
-    /// The hello (`AppModel.hubHellos`) this page last read for.
-    @ObservationIgnored var readFor: Int?
+    /// Added Here folded away (Collapse All); its count stays in its header.
+    var folded = false
 
-    /// What this run read, by direction (memory only).
-    private static var kept: [String: (read: DirectionRead, at: Date)] = [:]
+    /// Numbers the reads as they are asked; `landed` is the newest one whose answer was taken.
+    @ObservationIgnored private var asked = 0
+    @ObservationIgnored private var landed = 0
+    /// The hello (`AppModel.hubHellos`) this page last read for.
+    @ObservationIgnored private var hello: Int?
+    @ObservationIgnored private var registered = false
 
     init(id: String) {
         self.id = id
-        if let k = Self.kept[id] { read = k.read; readAt = k.at }
+        if let k = DirectionFilings.shared.kept(id) { read = k.read; readAt = k.at }
     }
 
-    /// Reads the direction. A read already out is not doubled: this one waits for nothing and lands last.
+    /// On open and on each hello: once per hello, so coming back from a chat pushed over the page reads nothing (P9).
+    func open(hello: Int, api: APIClient?) {
+        register()
+        guard self.hello != hello else { return }
+        self.hello = hello
+        refresh(api)
+    }
+
+    /// Reads it again now (Retry, the direction leaving the tree), in a task of the page's own.
+    func refresh(_ api: APIClient?) {
+        Task { await self.load(api) }
+    }
+
     func load(_ api: APIClient?) async {
-        guard let api else { status = .failed; return }
-        if status != .read { status = .reading }
+        asked += 1
+        let n = asked
+        guard let api else {
+            if status == .reading { status = .failed }
+            return
+        }
+        if status != .read { status = .reading } // rows read before stay drawn while a read is out
         do {
-            let r = try await api.direction(id)
+            var r = try await api.direction(id)
+            guard n > landed else { return } // a newer answer was taken meanwhile
+            landed = n
+            r.sessions = DirectionFilings.order(r.sessions)
             let now = Date.now
             read = r
             readAt = now
-            Self.kept[id] = (r, now)
+            DirectionFilings.shared.keep(id, r, at: now)
             status = .read
-        } catch let e as APIError where e.status == 404 && e.code == "direction_not_found" {
-            status = .gone
-        } catch where DirectionRoutes.missing(error) {
-            DirectionFilings.shared.routesAnsweredMissing()
-            status = .failed
-        } catch is CancellationError {
-            if status == .reading { status = read == nil ? .failed : .read }
         } catch {
-            status = .failed
+            // Only the newest read out decides how a failure shows: an older one's says nothing.
+            guard n > landed, n == asked else { return }
+            if let e = error as? APIError, e.status == 404, e.code == "direction_not_found" {
+                landed = n
+                status = .gone
+            } else if DirectionRoutes.missing(error) {
+                DirectionFilings.shared.routesAnsweredMissing(api.group)
+                status = .failed
+            } else if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                // Not an answer: as it was, and the next open reads again.
+                hello = nil
+                if status == .reading { status = read == nil ? .reading : .read }
+            } else {
+                status = .failed
+            }
         }
     }
 
-    #if DEBUG
-    /// Tests start each page without what an earlier one read.
-    static func forgetForTesting() { kept = [:] }
-    #endif
+    /// Read again after this device's writes, for as long as the page lives (a chat pushed over it included).
+    private func register() {
+        guard !registered else { return }
+        registered = true
+        DirectionFilings.shared.page(id) { [weak self] in
+            guard let self else { return false }
+            await self.load(AppModel.shared.api)
+            return true
+        }
+    }
 }
 
 /// The page (#11516). The name and In Progress come from the held tree, so they draw before the read returns; Added
@@ -200,9 +242,14 @@ struct DirectionPage: View {
                 EmptyStateView(symbol: Theme.Icon.info, title: String(localized: "Not Available [Direction Page]"),
                                message: String(localized: "This page is no longer available. [Direction Page]"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("direction-page-gone")
             } else if direction == nil && page.read == nil {
-                // Neither the tree nor a read has it yet: the page is being read.
-                LoadableContent(state: Loadable<Void>.loading, retry: nil) { _ in EmptyView() }
+                // Neither the tree nor a read has it: being read, or Couldn't read with Retry.
+                LoadableContent(state: page.status == .failed ? Loadable<Void>.failed(String(localized: "Couldn't read [Direction Page]"))
+                                                              : .loading,
+                                retry: { page.refresh(model.api) }) { _ in EmptyView() }
+                    .accessibilityIdentifier("direction-page-unread")
             } else {
                 List {
                     if page.read?.endedAt != nil {
@@ -235,6 +282,7 @@ struct DirectionPage: View {
                             HStack {
                                 Text("In Progress [Direction Page]")
                                 Spacer(minLength: Theme.Space.s)
+                                // The sidebar row's own words for the same tree (`DirectionCountsText`).
                                 if let direction { DirectionCountsLine(direction: direction) }
                             }
                             .accessibilityElement(children: .combine)
@@ -247,23 +295,17 @@ struct DirectionPage: View {
             }
         }
         .pageTitle(DirectionPageTitle.of(id, read: page.read, in: model))
+        // Pushed pages here keep the bar's inline title: a large one draws a second title over the first section.
+        .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $shownTodo) { r in
             NavigationStack {
                 TodoDetailView(todoID: r.id).sheetDone { shownTodo = nil }
             }
         }
-        // On open and on every hello (a reconnect), and after this device's moves (`DirectionFilings.page`); never on
-        // the tree's pushes, which In Progress follows by itself.
-        .task(id: model.hubHellos) {
-            // Coming back from a chat pushed over it is not opening it again (P9): read once per hello.
-            guard page.readFor != model.hubHellos else { return }
-            page.readFor = model.hubHellos
-            await page.load(model.api)
-        }
-        .onAppear {
-            DirectionFilings.shared.page(id) { [weak page = page, weak model = model] in await page?.load(model?.api) }
-        }
-        .onDisappear { DirectionFilings.shared.page(id, read: nil) }
+        // On open and on every hello (a reconnect); after this device's moves through `DirectionFilings.page`.
+        .task(id: model.hubHellos) { page.open(hello: model.hubHellos, api: model.api) }
+        // Unpinned while open: the tree push drops it, and one read says it has ended.
+        .onChange(of: direction == nil) { _, left in if left { page.refresh(model.api) } }
         .accessibilityIdentifier("direction-page")
     }
 }
@@ -277,9 +319,11 @@ enum DirectionPageTitle {
     }
 }
 
-/// Added Here: the sessions placed in the direction, by who placed them, the first five then Show All N; each says
-/// where it stands, opens on a tap and has Move To… in its menu (not once the direction has ended). Its own view, so
-/// the read and the moves out redraw only it (P5).
+/// Added Here: the sessions placed in the direction, by who placed them, in the app's order (needs you, working, the
+/// rest; newest added first in each), the first five then Show All N, with Collapse All / Expand All in its header
+/// (docs/design/DESIGN_SYSTEM.md 3.4, a long list on a detail page); each says where it stands, opens on a tap and has
+/// Move To… in its menu (not once the direction has ended). Its own view, so the read and the moves out redraw only
+/// it (P5).
 private struct DirectionAddedSection: View {
     @Environment(AppModel.self) private var model
     let page: DirectionPageModel
@@ -298,7 +342,7 @@ private struct DirectionAddedSection: View {
             // Never read in this run: reading, or Couldn't read with Retry. Never drawn as empty.
             Section {
                 if page.status == .failed {
-                    retryRow(String(localized: "Couldn't read [Direction Page]"))
+                    retryRow(String(localized: "Couldn't read [Direction Page]"), id: "direction-page-unread")
                 } else {
                     HStack { Spacer(); ProgressView(); Spacer() }
                         .padding(.vertical, Theme.Space.s)
@@ -308,16 +352,17 @@ private struct DirectionAddedSection: View {
             } header: { header(nil) }
         } else if read?.sessionsUnavailable == true {
             Section {
-                retryRow(String(localized: "Couldn't read what was added here. [Direction Page]"))
+                retryRow(String(localized: "Couldn't read what was added here. [Direction Page]"),
+                         id: "direction-page-sessions-unavailable")
             } header: { header(nil) }
         } else if !rows.isEmpty {
             Section {
-                ForEach(DirectionPageLogic.shown(rows, all: page.showsAll)) { row in
+                ForEach(DirectionPageLogic.shown(rows, all: page.showsAll, folded: page.folded)) { row in
                     DirectionAddedRow(row: row, direction: direction, ended: ended, stale: stale ? page.readAt : nil,
                                       pushChat: pushChat)
                         .themedRow()
                 }
-                if rows.count > DirectionPageLogic.firstCount {
+                if !page.folded, rows.count > DirectionPageLogic.firstCount {
                     Button {
                         withAnimation(Theme.Motion.standard) { page.showsAll.toggle() }
                     } label: {
@@ -329,29 +374,53 @@ private struct DirectionAddedSection: View {
                     .themedRow()
                     .accessibilityIdentifier("direction-page-more")
                 }
-            } header: { header(rows.count) }
-        } else if !hasTasks {
+            } header: { header(rows.count, fold: true) }
+        } else if !hasTasks && !ended {
             // Read, and nothing is under it at all: what the page is for, and how something gets here.
             EmptyStateView(symbol: Theme.Icon.list, title: String(localized: "Nothing Here Yet [Direction Page]"),
                            message: String(localized: "Use Move To… on a chat or an Agent to add it here. [Direction Page]"))
                 .frame(maxWidth: .infinity)
                 .listRowBackground(Color.clear)
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("direction-page-empty")
         }
     }
 
-    private func header(_ count: Int?) -> some View {
-        SectionHeader(title: String(localized: "Added Here [Direction Page]"), count: count, tone: StatusPalette.idle)
-            .accessibilityIdentifier("direction-page-added")
+    private func header(_ count: Int?, fold: Bool = false) -> some View {
+        HStack(spacing: Theme.Space.s) {
+            SectionHeader(title: String(localized: "Added Here [Direction Page]"), count: count, tone: StatusPalette.idle)
+                .accessibilityIdentifier("direction-page-added")
+            Spacer(minLength: 0)
+            if fold { foldButton }
+        }
     }
 
-    private func retryRow(_ words: String) -> some View {
+    /// Collapse All while any row shows, Expand All once folded (it then shows them all); the count beside it stays.
+    private var foldButton: some View {
+        let folded = page.folded
+        return Button {
+            withAnimation(Theme.Motion.standard) {
+                if folded { page.folded = false; page.showsAll = true } else { page.folded = true }
+            }
+        } label: {
+            ThemedIcon(folded ? Theme.Icon.expandAll : Theme.Icon.collapseAll)
+                .font(Theme.Font.captionStrong)
+                .foregroundStyle(Theme.accent)
+                .tapTargetFrame()
+                .contentShape(.rect)
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(folded ? String(localized: "Expand All") : String(localized: "Collapse All"))
+        .accessibilityIdentifier("direction-page-fold")
+    }
+
+    private func retryRow(_ words: String, id: String) -> some View {
         HStack(spacing: Theme.Space.m) {
             Label(words, systemImage: Theme.Icon.error)
                 .font(Theme.Font.secondary).foregroundStyle(.secondary)
-                .accessibilityIdentifier("direction-page-unread")
+                .accessibilityIdentifier(id)
             Spacer(minLength: Theme.Space.s)
-            Button { Task { await page.load(model.api) } } label: { Text("Retry").lineLimit(1) }
+            Button { page.refresh(model.api) } label: { Text("Retry").lineLimit(1) }
                 .themedButton()
                 .accessibilityIdentifier("direction-page-retry")
         }
@@ -359,9 +428,11 @@ private struct DirectionAddedSection: View {
     }
 }
 
-/// One session in Added Here: its dot, title and who placed it, and where it stands; a tap opens it.
+/// One session in Added Here: its dot, title and who placed it, and where it stands; a tap opens it. At the
+/// accessibility text sizes the standing takes a line of its own under them, so the title is not cut to a few letters.
 private struct DirectionAddedRow: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.dynamicTypeSize) private var typeSize
     let row: DirectionFilings.Row
     let direction: String
     let ended: Bool
@@ -377,20 +448,17 @@ private struct DirectionAddedRow: View {
         let word = row.moving ? String(localized: "Moving… [Move To]") : standing.map(DirectionPageLogic.words)
         let source = row.session.addedByOwner ? String(localized: "Added by you [Filed Session]")
                                               : String(localized: "Opened from this chat [Filed Session]")
+        let stacked = typeSize.isAccessibilitySize
         Button { openTodoAgentChat(row.key, in: model, push: conversationAgentPush(pushChat)) } label: {
-            HStack(spacing: Theme.Space.s) {
+            HStack(alignment: stacked ? .top : .center, spacing: Theme.Space.s) {
                 StatusDot(state: DirectionPageLogic.dot(standing))
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(title).font(Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(1)
+                    Text(title).font(Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(stacked ? 2 : 1)
                     Text(source).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                    if stacked, let word { standingText(word, standing) }
                 }
                 Spacer(minLength: Theme.Space.xs)
-                if let word {
-                    // Where it stands wins over the title at large text sizes: the title truncates first.
-                    Text(word).font(Theme.Font.caption)
-                        .foregroundStyle(row.moving ? Color.secondary : DirectionPageLogic.tone(standing)).lineLimit(1)
-                        .layoutPriority(1)
-                }
+                if !stacked, let word { standingText(word, standing).layoutPriority(1) }
             }
             .padding(.vertical, Theme.Sidebar.rowPadding)
             .scaledFrame(minHeight: Theme.Sidebar.row)
@@ -409,6 +477,11 @@ private struct DirectionAddedRow: View {
             }
         }
     }
+
+    private func standingText(_ word: String, _ standing: DirectionPageLogic.Standing?) -> some View {
+        Text(word).font(Theme.Font.caption)
+            .foregroundStyle(row.moving ? Color.secondary : DirectionPageLogic.tone(standing)).lineLimit(1)
+    }
 }
 
 /// Move To… in a session's long-press menu (#11516): the current directions by name in the tree's order, then On
@@ -426,8 +499,7 @@ struct MoveToMenu: View {
         let choices = filings.offers(key, in: model)
         if !choices.isEmpty {
             MoveToChoices(choices: choices) { choice in
-                filings.move(key, title: title, state: state, to: choice,
-                             from: from ?? filings.placed(key, in: model.directionTree))
+                filings.move(key, title: title, state: state, to: choice, from: from ?? filings.placed(key))
             }
         }
     }

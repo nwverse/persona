@@ -24,8 +24,61 @@ final class DirectionRowsUITests: XCTestCase {
     @MainActor private func launch(_ extra: [String] = []) {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-newAssistant", "YES", "-dev.openChat", ""] + extra
+        // The hub's default assistant whatever an earlier run left picked (`assistant.manager` outlives a launch; an
+        // argument does not write it).
+        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-newAssistant", "YES", "-dev.openChat", "",
+                               "-assistant.manager", "{}"] + extra
         app.launchPinned()
+    }
+
+    /// Launched straight into an Agent's chat ("machine/session").
+    @MainActor private func launchInAgentChat(_ chat: String) {
+        app = XCUIApplication()
+        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        app.launchArguments = ["-pairURL", pair, "-app.tab", "chats", "-tab", "dev", "-dev.openChat", chat,
+                               "-assistant.manager", "{}"]
+        app.launchPinned()
+    }
+
+    /// Waits (15 s at most) until `done`.
+    private func until(_ what: String, _ done: () throws -> Bool) rethrows -> Bool {
+        let end = Date().addingTimeInterval(15)
+        while Date() < end {
+            if try done() { return true }
+            usleep(300_000)
+        }
+        return try done()
+    }
+
+    /// The book's entry of `key` as the mock holds it (nil: none).
+    private func entry(_ key: String) throws -> [String: Any]? {
+        (try mock("")["book"] as? [String: [String: Any]])?[key]
+    }
+
+    /// The page of the first lead, from its row's All › (the row held open for this launch).
+    @MainActor private func openFirstPage() {
+        openSidebar()
+        openFirstLead()
+        let all = app.buttons["sidebar-direction-all"].firstMatch
+        XCTAssertTrue(reveal(all), "no All › under Persona 产品:\n\(app.debugDescription)")
+        all.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["direction-page"].firstMatch.waitForExistence(timeout: 10))
+    }
+
+    /// A row of the page by the start of its title.
+    @MainActor private func pageRow(_ title: String) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "identifier == 'direction-page-filed' AND label BEGINSWITH %@", title)).firstMatch
+    }
+
+    /// Move To… on a page row, then a choice (a direction's name, or On Its Own's words).
+    @MainActor private func moveRow(_ row: XCUIElement, to choice: String) {
+        row.press(forDuration: 1.2)
+        let move = app.buttons["move-to"].firstMatch
+        XCTAssertTrue(move.waitForExistence(timeout: 5), "no Move To…:\n\(app.debugDescription)")
+        move.tap()
+        let pick = app.buttons[choice].firstMatch
+        XCTAssertTrue(pick.waitForExistence(timeout: 5), "no \(choice):\n\(app.debugDescription)")
+        pick.tap()
     }
 
     /// The drawer's button on the phone (the hittable one of the pager's pages; tapped again while a busy simulator has
@@ -176,6 +229,13 @@ final class DirectionRowsUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["direction-page-in-progress"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons.matching(identifier: "direction-page-filed").firstMatch.waitForExistence(timeout: 10))
         shot("page")
+        // The page's "N need you" is the row's own words for the same tree (`DirectionCountsText`).
+        let rowCounts = app.buttons.matching(identifier: "sidebar-direction-toggle")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "Persona 产品")).firstMatch.label
+            .components(separatedBy: "，").last ?? ""
+        XCTAssertTrue(rowCounts.hasPrefix("等你"), "the row says what waits on you: \(rowCounts)")
+        let header = app.descendants(matching: .any)["direction-page-in-progress"].firstMatch.label
+        XCTAssertTrue(header.contains(rowCounts), "the page says the same: \(header) / \(rowCounts)")
         // ‹ goes back to the lead conversation, not to the drawer
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(page.waitForNonExistence(timeout: 5))
@@ -207,8 +267,124 @@ final class DirectionRowsUITests: XCTestCase {
         let filed = (try mock("")["book"] as? [String: [String: Any]])?[key]?["direction"] as? String
         XCTAssertEqual(filed, "lead0002-0000-4000-8000-000000000002")
         undo.tap()
+        XCTAssertTrue(try until("Undo reached the hub") { try entry(key) == nil }, "Undo of a first filing takes the entry out (null)")
+    }
+
+    // MARK: Criterion 3 shown by the row and the page (#12603 review)
+
+    /// From another direction: an Agent the owner filed leaves the page the moment it is moved, and Undo puts it back on
+    /// the page and in the row, with its filing time.
+    @MainActor func testUndoFromAnotherDirectionShowsOnThePageAndTheRow() throws {
+        try mockReset()
+        let key = "macbook/dirs0001-0000-4000-8000-000000000001"
+        let filed = try XCTUnwrap(try entry(key))
+        launch(Self.firstLeadOpen)
+        openFirstPage()
+        let row = pageRow("整理首页改版的设计稿")
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        moveRow(row, to: "增长")
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5), "moved away: gone from this page at once")
+        let undo = app.buttons["toast-action"].firstMatch
+        XCTAssertTrue(undo.waitForExistence(timeout: 10), "no Undo")
+        undo.tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "Undo puts it back on the page")
+        let back = try XCTUnwrap(try entry(key))
+        XCTAssertEqual(back["at"] as? String, filed["at"] as? String, "with its filing time")
+        app.navigationBars.buttons.firstMatch.tap()
+        openSidebar()
+        let inRow = app.buttons.matching(NSPredicate(format: "identifier == 'sidebar-direction-filed' AND label BEGINSWITH %@",
+                                                     "整理首页改版的设计稿")).firstMatch
+        XCTAssertTrue(reveal(inRow), "and in the row's filed sessions:\n\(app.debugDescription)")
+    }
+
+    /// The chat its leader opened (placed, never filed): moved, it leaves the page; Undo writes null and it is back, as
+    /// opened from that chat.
+    @MainActor func testUndoOfWhatTheLeaderOpenedShowsItBack() throws {
+        try mockReset()
+        launch(Self.firstLeadOpen)
+        openFirstPage()
+        let row = pageRow("写新版引导页的文案")
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        let opened = row.label
+        moveRow(row, to: "增长")
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5))
+        let undo = app.buttons["toast-action"].firstMatch
+        XCTAssertTrue(undo.waitForExistence(timeout: 10))
+        undo.tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "back on the page")
+        XCTAssertTrue(until("the read again") { row.label == opened }, "as opened from that chat: \(row.label)")
+        XCTAssertNil(try entry("studio/dirs0002-0000-4000-8000-000000000002"), "its entry taken out: the leader's placement again")
+    }
+
+    /// From On Its Own: set on its own, it leaves the page; moved under the first direction again from there and undone,
+    /// it is on its own again (not on the page).
+    @MainActor func testUndoFromOnItsOwnLeavesItOnItsOwn() throws {
+        try mockReset()
+        let key = "macbook/a1f3c2d4-0000-4000-8000-000000000007"
+        launch(Self.firstLeadOpen)
+        openFirstPage()
+        let row = pageRow("菜谱网站加搜索")
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        moveRow(row, to: "单独放着")
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(try until("on its own") { (try entry(key))?["direction"] as? String == "" })
+        // From On Its Own back under 「Persona 产品」, through the mock as the Agent's own menu would, then Undo there.
+        app.terminate()
+        launchInAgentChat("macbook/a1f3c2d4-0000-4000-8000-000000000007")
+        let more = app.buttons["chat.more"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 20))
         sleep(2)
-        XCTAssertNil((try mock("")["book"] as? [String: Any])?[key], "Undo of a first filing takes the entry out (null)")
+        more.tap()
+        let move = app.buttons["移到…"].firstMatch
+        XCTAssertTrue(move.waitForExistence(timeout: 5), "no Move To… in the Agent's menu:\n\(app.debugDescription)")
+        move.tap()
+        app.buttons["Persona 产品"].firstMatch.tap()
+        let undo = app.buttons["toast-action"].firstMatch
+        XCTAssertTrue(undo.waitForExistence(timeout: 10))
+        undo.tap()
+        XCTAssertTrue(try until("on its own again") { (try entry(key))?["direction"] as? String == "" }, "Undo: on its own again")
+        app.terminate()
+        launch(Self.firstLeadOpen)
+        openFirstPage()
+        XCTAssertTrue(pageRow("早报").waitForExistence(timeout: 10), "the page is read")
+        XCTAssertFalse(pageRow("菜谱网站加搜索").exists, "not on the page")
+    }
+
+    // MARK: Navigation (#12603 review, A2)
+
+    /// All › of one pinned chat, another place, then All › of another: one page, over the second chat; ‹ is that chat.
+    @MainActor func testAllFromAnotherPlaceOpensOnePageOverItsChat() throws {
+        try mockReset()
+        launch(Self.firstLeadOpen + ["-assistant.direction.open.lead0001-0000-4000-8000-000000000001", "YES"])
+        try allThenInboxThenAll()
+    }
+
+    /// The same in the Sidebar layout, where each page the sidebar opens is a root of its own (the iPad's default).
+    @MainActor func testAllFromAnotherRootInTheSidebarLayout() throws {
+        try mockReset()
+        launch(Self.firstLeadOpen + ["-assistant.direction.open.lead0001-0000-4000-8000-000000000001", "YES",
+                                     "-app.navigation", "sidebar"])
+        try allThenInboxThenAll()
+    }
+
+    @MainActor private func allThenInboxThenAll() throws {
+        openFirstPage()
+        XCTAssertTrue(app.navigationBars["Persona 产品"].waitForExistence(timeout: 5))
+        openSidebar()
+        let inbox = app.buttons["sidebar-inbox"].firstMatch
+        XCTAssertTrue(reveal(inbox))
+        inbox.tap()
+        sleep(2)
+        openSidebar()
+        // Each All › says whose it is (its value: the direction's name).
+        let infra = app.buttons.matching(NSPredicate(format: "identifier == 'sidebar-direction-all' AND value == %@", "基础设施")).firstMatch
+        XCTAssertTrue(reveal(infra), "no All › under 基础设施:\n\(app.debugDescription)")
+        infra.tap()
+        XCTAssertTrue(app.navigationBars["基础设施"].waitForExistence(timeout: 10), "the second page:\n\(app.debugDescription)")
+        app.navigationBars["基础设施"].buttons.firstMatch.tap()
+        sleep(2)
+        XCTAssertFalse(app.descendants(matching: .any)["direction-page"].exists,
+                       "‹ goes to the second chat, not to the first page:\n\(app.debugDescription)")
     }
 
     @MainActor func testTheToDosPinnedSectionsEndAsTheirRowsDo() {

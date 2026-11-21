@@ -9,6 +9,12 @@ Agent filed by the owner, an Agent its leader opened, one stopped on a connected
 MOCK_DIRECTION_SESSIONS=missing lists the feature but answers the routes 404 without their codes, as a manager that
 reconnected at an older version does. Unset: a hub without the feature (the routes are not there).
 
+It answers as the hub does (`server/internal/assistant/direction_sessions*.go`): placed sessions by computer, then session
+id (the app orders them itself); a refusal with the hub's own sentence in the request's language (its locale files);
+a null write decided before any check; Undo putting back exactly the entry the session's last write replaced, title
+and filing time included, without its row; On Its Own without the session's row. Each write publishes `directions`.
+With MOCK_DIRECTION_SESSIONS on, the second manager (工作) has a conversation of its own, so its page has a chat menu.
+
 GET /mock/direction_sessions?… changes how it answers from now on (each optional; GET /mock/reset puts all back):
   routes=missing|on       the routes answer 404 without their codes / as above
   feature=off|on          leave `direction_sessions` out of the hello and /api/v1/health / list it
@@ -16,8 +22,10 @@ GET /mock/direction_sessions?… changes how it answers from now on (each option
                           direction_full, direction_supervised_task, direction_unavailable, …), nothing changed
   read=fail|gone|ok       the single read answers 503 direction_unavailable / 404 direction_not_found / as it is
   delay=<seconds>         the single read waits that long first (the page draws from the tree meanwhile)
+  put_delay=<seconds>     each write waits that long before it answers (Moving… on the rows meanwhile)
   sessions_unavailable=1  the single read says the placed sessions could not be read
-  ended=<id>|""           the single read of that direction has `ended_at`
+  ended=<id>|""           that direction ends (unpinned): out of the leaders and the tree, `directions` pushed, and
+                          its single read has `ended_at`
 The answer is the book as it stands: {"book", "options"}. A lost answer is POST /mock/fault {"fault":"lost_receipt"}.
 """
 import json
@@ -30,27 +38,32 @@ MODE = os.environ.get("MOCK_DIRECTION_SESSIONS", "")
 FEATURE = "direction_sessions"
 MAX_PER_DIRECTION = 50
 
-# The hub's sentences for its refusals, in the request's language (server/internal/i18n/locales, shortened).
-SENTENCES = {  # i18n-ignore: the hub's own refusal sentences, mock data
-    "full_access_required": ("Only a device with full access can do this.", "只有完全访问权限的设备才能这样做。",
-                             "フルアクセスのデバイスだけがこれを行えます。"),
-    "forbidden": ("This device can't make changes.", "这台设备不能做更改。", "このデバイスでは変更できません。"),
-    "session_not_found": ("That session isn't on its computer's list.", "这个会话不在它电脑的列表里。",
-                          "そのセッションはコンピューターの一覧にありません。"),
-    "machine_not_found": ("That computer isn't one of yours.", "这台电脑不是你的电脑。", "そのコンピューターはあなたのものではありません。"),
-    "direction_not_found": ("That no longer exists.", "它已经不在了。", "それはもうありません。"),
-    "direction_ended": ("That has ended.", "它已经结束了。", "それは終了しています。"),
-    "direction_full": ("It already holds 50 sessions.", "那里已经放了 50 个会话。", "すでに 50 件のセッションがあります。"),
-    "direction_supervised_task": ("This Agent follows its task, so it stays with it.", "这个 Agent 跟着它的任务走，不能单独移动。",
-                                  "この Agent はタスクに従うため、移動できません。"),
-    "direction_main_conversation": ("The main chat stays where it is.", "主对话不能移动。", "メインチャットは移動できません。"),
-    "direction_leader_conversation": ("A pinned chat can't be put under another.", "常驻对话不能放到别处。",
-                                      "常駐のチャットは他に入れられません。"),
-    "direction_unavailable": ("Couldn't save that right now. Try again later.", "现在保存不了，请稍后再试。",
-                              "いまは保存できません。あとでもう一度お試しください。"),
-}
+# The hub's own refusal sentences, in its locale files (server/internal/i18n/locales/<lang>/assistant-direction_sessions.json),
+# by the refusal's code; a code the file does not word (the hub's own 403 forbidden) keeps a line of its own.
+LOCALES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "server", "internal", "i18n", "locales")
+LOCALE_KEY = {"direction_supervised_task": "supervised_task", "direction_main_conversation": "main_conversation",
+              "direction_background_supervisor": "background_supervisor",
+              "direction_leader_conversation": "leader_conversation", "direction_space_mismatch": "space_mismatch",
+              "direction_unavailable": "unavailable"}
+FALLBACK = {"forbidden": "This device can only answer requests."}
 STATUS = {"full_access_required": 403, "forbidden": 403, "session_not_found": 404, "machine_not_found": 404,
-          "direction_not_found": 404, "direction_unavailable": 503}
+          "direction_not_found": 404, "direction_unavailable": 503, "bad_request": 400}
+
+
+def _sentences(lang):
+    try:
+        with open(os.path.join(LOCALES, lang, "assistant-direction_sessions.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+SENTENCES = {lang: _sentences(lang) for lang in ("en", "zh-Hans", "ja")}
+
+
+def sentence(code, lang):
+    words = SENTENCES.get(lang, {}).get(LOCALE_KEY.get(code, code)) or SENTENCES["en"].get(LOCALE_KEY.get(code, code))
+    return (words or FALLBACK.get(code) or code).replace("{max}", str(MAX_PER_DIRECTION))
 
 
 def _iso(t):
@@ -117,7 +130,9 @@ def register(d):
         # what the first leader opened: the session the owner did not file
         return {f"studio/{extra[1]['session_id']}": {"leader": first, "title": extra[1]["title"], "at": ago(minutes=30)}} if first else {}
 
-    state = {"book": initial_book(), "origins": initial_origins(), "removed": {}, "options": {}}
+    # replaced: per session, the entry its last write replaced or took out (None: it had none), for that write's Undo.
+    state = {"book": initial_book(), "origins": initial_origins(), "replaced": {}, "options": {}}
+    original_leaders = list(hub.MOCK_LEADERS)
 
     def options():
         return state["options"]
@@ -129,11 +144,10 @@ def register(d):
 
     def lang(h):
         al = (h.headers.get("Accept-Language") or "").lower()
-        return 1 if al.startswith("zh") else 2 if al.startswith("ja") else 0
+        return "zh-Hans" if al.startswith("zh") else "ja" if al.startswith("ja") else "en"
 
     def refuse(h, code, status=None):
-        words = SENTENCES.get(code, ("Refused.", "被拒绝了。", "拒否されました。"))[lang(h)]
-        return h.send_json({"error": words, "code": code}, status or STATUS.get(code, 409))
+        return h.send_json({"error": sentence(code, lang(h)), "code": code}, status or STATUS.get(code, 409))
 
     def leaders_now():
         return list(hub.MOCK_LEADERS)
@@ -195,7 +209,7 @@ def register(d):
             machine, sid = key.split("/", 1)
             rows.append({"machine_id": machine, "session_id": sid, "title": e.get("title", ""), "source": e["source"],
                          "at": e.get("at", ""), "state": standing(key, e)})
-        rows.sort(key=lambda r: r["at"], reverse=True)
+        rows.sort(key=lambda r: (r["machine_id"], r["session_id"])) # the hub's order (direction_sessions_read.go)
         return rows
 
     def tree(h, req):
@@ -255,65 +269,107 @@ def register(d):
             body = json.loads(req.body or b"{}")
         except ValueError:
             return refuse(h, "bad_request", 400)
-        target = body["direction"] if "direction" in body else ""
+        target = body["direction"] if "direction" in body else ""  # no key: on its own
         if target is not None and not isinstance(target, str):
             return refuse(h, "bad_request", 400)
+        if options().get("put_delay"):
+            time.sleep(float(options()["put_delay"]))
         machine, sid = req.match["mid"], req.match["sid"]
         key = f"{machine}/{sid}"
         with lock:
-            book = state["book"]
+            book, replaced = state["book"], state["replaced"]
             before = book.get(key)
             previous = before.get("direction") if before else None
-            if sid == hub.ASSISTANT_CONFIG.get("main"):
-                return refuse(h, "direction_main_conversation")
-            if sid in leaders_now():
-                return refuse(h, "direction_leader_conversation")
-            if key in followers():
-                return refuse(h, "direction_supervised_task")
-            if target and target not in leaders_now():
-                return refuse(h, "direction_not_found", 404)
-            if target is None:  # taken out of the book: the placement before the first filing comes back
+            last = replaced.get(key, False)  # False: no write of this session to undo
+            undo = last is not False and ((last or {}).get("direction") if last else None) == target
+            if target is None and not undo:
+                # Taken out of the book, decided before any check: it asks nothing of the session.
                 if before is not None:
-                    state["removed"][key] = before
+                    replaced[key] = before
                     del book[key]
-                return h.send_json({"direction": None, "previous": previous, "changed": before is not None})
-            if online(machine) is None:
-                return refuse(h, "machine_not_found", 404)
-            undo = state["removed"].pop(key, None)
-            if target and session_row(machine, sid) is None and not (undo and undo.get("direction") == target) \
-                    and not (before and before.get("direction") == target):
-                return refuse(h, "session_not_found", 404)
-            if target and previous != target and sum(1 for e in book.values() if e.get("direction") == target) >= MAX_PER_DIRECTION:
-                return refuse(h, "direction_full")
-            row = session_row(machine, sid) or {}
-            entry = undo if undo and undo.get("direction") == target else {
-                "direction": target, "title": (before or {}).get("title") or row.get("title", ""), "at": _iso(_now())}
-            if before and before.get("standing") and "standing" not in entry:
-                entry["standing"] = before["standing"]
-            book[key] = entry
+                else:
+                    replaced[key] = None
+                answer = {"direction": None, "previous": previous, "changed": before is not None}
+            else:
+                if not undo:
+                    if sid == hub.ASSISTANT_CONFIG.get("main"):
+                        return refuse(h, "direction_main_conversation")
+                    if sid in leaders_now():
+                        return refuse(h, "direction_leader_conversation")
+                    if key in followers():
+                        return refuse(h, "direction_supervised_task")
+                    if target and target not in leaders_now():
+                        return refuse(h, "direction_not_found", 404)
+                    # Into a direction it needs its computer and its row; on its own it needs neither.
+                    if target and online(machine) is None:
+                        return refuse(h, "machine_not_found", 404)
+                    if target and session_row(machine, sid) is None and previous != target:
+                        return refuse(h, "session_not_found", 404)
+                    if target and previous != target and \
+                            sum(1 for e in book.values() if e.get("direction") == target) >= MAX_PER_DIRECTION:
+                        return refuse(h, "direction_full")
+                if undo:
+                    # Exactly the entry the last write replaced (direction, title, filing time), or none.
+                    entry = dict(last) if last else None
+                elif previous == target and before is not None:
+                    entry = before  # the same place again: nothing changes
+                else:
+                    row = session_row(machine, sid) or {}
+                    entry = {"direction": target, "title": (before or {}).get("title") or row.get("title", ""),
+                             "at": _iso(_now())}
+                    if before and before.get("standing"):
+                        entry["standing"] = before["standing"]
+                if entry is before:
+                    answer = {"direction": target, "previous": previous, "changed": False}
+                else:
+                    replaced[key] = before
+                    if entry is None:
+                        book.pop(key, None)
+                    else:
+                        book[key] = entry
+                    now = entry.get("direction") if entry else None
+                    answer = {"direction": now, "previous": previous, "changed": now != previous or entry != before}
         hub.broadcast(hub.from_default({"type": "directions"}))
-        return h.send_json({"direction": target, "previous": previous, "changed": previous != target})
+        return h.send_json(answer)
 
     def control(h, req):
         opts = options()
-        for name in ("routes", "feature", "refuse", "read", "delay", "sessions_unavailable", "ended"):
+        for name in ("routes", "feature", "refuse", "read", "delay", "put_delay", "sessions_unavailable", "ended"):
             if name in req.query:
                 value = req.query[name][0]
                 if value in ("", "on", "ok", "0") and name != "ended":
                     opts.pop(name, None)
                 else:
                     opts[name] = value
-        if "ended" in req.query and not req.query["ended"][0]:
-            opts.pop("ended", None)
+        if "ended" in req.query:
+            ended = req.query["ended"][0]
+            if not ended:
+                opts.pop("ended", None)
+            elif ended in hub.MOCK_LEADERS:
+                # Unpinned: out of the leaders (the tree, /api/v1/assistant/leaders), as the hub's end does.
+                hub.MOCK_LEADERS.remove(ended)
+                hub.broadcast(hub.from_default({"type": "directions"}))
         return h.send_json({"book": state["book"], "options": opts})
 
     def reset():
-        state.update(book=initial_book(), origins=initial_origins(), removed={}, options={})
+        state.update(book=initial_book(), origins=initial_origins(), replaced={}, options={})
+        hub.MOCK_LEADERS[:] = original_leaders
+
+    def other_assistant(h, req):
+        """The second manager (工作) with a conversation of its own, so its page has a chat's menu to compare."""
+        other = hub.assistant_for_manager(h)
+        if other is None or other[1] != 200 or req.query.get("space") or (h.headers.get("X-Persona-Manager") or "") != "m-3fa21c":
+            return False
+        body, status = other
+        chat = dict(hub.assistant_sess("work0001-0000-4000-8000-000000000001", "整理出差报销单", 90,  # i18n-ignore: mock data
+                                       "发票都齐了，明天交。"), origin="user", manager="m-3fa21c")  # i18n-ignore: mock data
+        return h.send_json(dict(body, conversations=[chat]), status)
 
     d.route("GET", r"/api/v1/assistant/directions/tree", tree)
     d.route("GET", r"/api/v1/assistant/directions/(?P<id>[^/]+)", read)
     d.route("PUT", r"/api/v1/assistant/sessions/(?P<mid>[^/]+)/(?P<sid>[^/]+)/direction", file)
     d.route("GET", r"/mock/direction_sessions", control)
+    d.route("GET", r"/api/v1/assistant", other_assistant)
     d.on_reset(reset)
 
 

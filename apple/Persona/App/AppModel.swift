@@ -634,12 +634,12 @@ final class AppModel {
     /// state and Agents, for the sidebar's Pinned rows, the To-dos page and the Agents page. Read with the assistant, on
     /// every connect and on the `directions` event; nil from a hub without it (404) or before it is read.
     private(set) var directionTree: DirectionTree?
-    /// Numbers the tree reads in the order they were asked; `directionTreeLanded` is the newest one whose answer was
-    /// taken. An answer older than that is dropped; a read that fails moves neither, so it never makes an earlier
-    /// good answer count as stale.
     /// Counts the current hub's hellos (its socket connecting again): a page that reads on reconnect follows it, so it
     /// reads on that alone and not on every push (#11516's page).
     private(set) var hubHellos = 0
+    /// Numbers the tree reads in the order they were asked; `directionTreeLanded` is the newest one whose answer was
+    /// taken. An answer older than that is dropped; a read that fails moves neither, so it never makes an earlier
+    /// good answer count as stale.
     @ObservationIgnored private var directionTreeAsk = 0
     @ObservationIgnored private var directionTreeLanded = 0
     @ObservationIgnored private var assistantRetryInFlight: Task<Void, Never>?
@@ -1660,7 +1660,10 @@ final class AppModel {
         do { read = try await api.directionsTree() } catch { return }
         guard ask > directionTreeLanded, assistantShows(nil), showsPage(of: api) else { return }
         directionTreeLanded = ask
-        if read != directionTree { directionTree = read }
+        // The filed sessions (#11516) go to their own boxes: the tree's readers redraw only when the tree they draw
+        // changed, not on a filed session's turn.
+        let taken = read.map { DirectionFilings.shared.takeFiled($0) }
+        if taken != directionTree { directionTree = taken }
         guard let tree = read else { return }
         let names = tree.leaderNames
         if names != directionNames { directionNames = names }
@@ -3096,7 +3099,7 @@ final class AppModel {
             if isHub, let hubAPI = api { Task { await refreshDirectionTree(hubAPI) } }
             // Its features say again whether the filing routes are there (#11516); an open page reads again (`hellos`).
             if isHub {
-                DirectionFilings.shared.hello()
+                DirectionFilings.shared.hello(group)
                 hubHellos += 1
             }
             #if os(iOS)

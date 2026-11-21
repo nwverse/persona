@@ -58,7 +58,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@に追加"
+            "value" : "追加日：%1$@"
           }
         },
         "zh-Hans" : {
@@ -115,25 +115,48 @@
         }
       }
     },
-    "Already there [Move To]" : {
+    "Already in “%@” [Move To]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Already there"
+            "value" : "Already in “%1$@”"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "すでにそこにあります"
+            "value" : "すでに「%1$@」にあります"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本来就在这里"
+            "value" : "已经在「%1$@」下"
+          }
+        }
+      }
+    },
+    "Already on its own [Move To]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Already on its own"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すでに単独です"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本来就单独放着"
           }
         }
       }
@@ -335,7 +358,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "没能读取放进来的会话。"
+            "value" : "没能读取放进来的内容。"
           }
         }
       }
@@ -1074,7 +1097,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "任务和会话"
+            "value" : "任务和对话"
           }
         }
       }
@@ -1407,7 +1430,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在对话或 Agent 上用“移到…”把它放到这里。"
+            "value" : "在对话或 Agent 上用「移到…」把它放到这里。"
           }
         }
       }
@@ -204865,7 +204888,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "放进来的会话会留着。"
+            "value" : "放进来的都会留着。"
           }
         }
       }

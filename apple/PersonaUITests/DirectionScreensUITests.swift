@@ -36,6 +36,33 @@ final class DirectionScreensUITests: XCTestCase {
         return box.data
     }
 
+    /// A POST to the mock (a fault, a direction made), answered or not.
+    private func post(_ path: String, body: String) {
+        var req = URLRequest(url: URL(string: hub + path)!)
+        req.httpMethod = "POST"
+        req.httpBody = Data(body.utf8)
+        req.setValue("Bearer mock", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: req) { _, _, _ in done.signal() }.resume()
+        _ = done.wait(timeout: .now() + 15)
+    }
+
+    /// Waits (15 s at most) until `done`.
+    private func until(_ done: () throws -> Bool) rethrows -> Bool {
+        let end = Date().addingTimeInterval(15)
+        while Date() < end {
+            if try done() { return true }
+            usleep(300_000)
+        }
+        return try done()
+    }
+
+    /// A row of the page by the start of its title.
+    @MainActor private func pageRow(_ title: String) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "identifier == 'direction-page-filed' AND label BEGINSWITH %@", title)).firstMatch
+    }
+
     private func reset(_ query: String = "") {
         get("/mock/down?s=0") // an earlier test's outage never outlives it
         get("/mock/reset")
@@ -51,9 +78,14 @@ final class DirectionScreensUITests: XCTestCase {
     /// A word of the app in the run's language.
     private func word(_ en: String, _ zh: String, _ ja: String) -> String { lang == "en" ? en : lang == "ja" ? ja : zh }
 
+    /// Launches with lead `id`'s row held open too.
+    @MainActor private func launchHolding(_ id: String) {
+        launch(extra: ["-assistant.direction.open.\(id)", "YES"])
+    }
+
     /// Launches on the Assistant page, or (`agentChat`, "machine/session") straight into that Agent's chat. The
     /// assistant picked on this device is the hub's default unless `keepPick` (it outlives a launch, `assistant.manager`).
-    @MainActor private func launch(agentChat: String? = nil, keepPick: Bool = false) {
+    @MainActor private func launch(agentChat: String? = nil, keepPick: Bool = false, extra: [String] = []) {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         let place = agentChat.map { ["-app.tab", "chats", "-tab", "dev", "-dev.openChat", $0] }
@@ -62,6 +94,8 @@ final class DirectionScreensUITests: XCTestCase {
                                // the first lead held open for this launch only (its fold is the device's)
                                "-assistant.direction.open.lead0000-0000-4000-8000-000000000000", "YES",
                                "-AppleLanguages", "(\(lang))", "-AppleLocale", lang == "en" ? "en_US" : lang == "ja" ? "ja_JP" : "zh_CN"]
+            // PERSONA_SHOT_NAV: the layout to pin ("" leaves it to the app: Merged on an iPad, its default).
+            + (ProcessInfo.processInfo.environment["PERSONA_SHOT_NAV"].map { ["-app.navigation", $0] } ?? []) + extra
         app.launchPinned()
     }
 
@@ -265,7 +299,9 @@ final class DirectionScreensUITests: XCTestCase {
         let unpin = app.buttons.matching(NSPredicate(format: "label IN %@", ["Unpin", "取消常驻", "常駐をやめる"])).firstMatch
         XCTAssertTrue(unpin.waitForExistence(timeout: 5), "no Unpin:\n\(app.debugDescription)")
         unpin.tap()
-        sleep(1)
+        let stays = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@",
+            word("What you added to it stays.", "放进来的都会留着。", "追加したものはそのまま残ります。"))).firstMatch
+        XCTAssertTrue(stays.waitForExistence(timeout: 5), "the sentence of its own:\n\(app.debugDescription)")
         shot("unpin")
     }
 
@@ -284,12 +320,14 @@ final class DirectionScreensUITests: XCTestCase {
         reset("read=fail")
         launch()
         openPageFromSidebar()
-        XCTAssertTrue(app.buttons["direction-page-retry"].firstMatch.waitForExistence(timeout: 10), "no Retry")
+        XCTAssertTrue(app.descendants(matching: .any)["direction-page-unread"].firstMatch.waitForExistence(timeout: 10),
+                      "Couldn't read:\n\(app.debugDescription)")
+        XCTAssertTrue(app.buttons["direction-page-retry"].firstMatch.exists, "with Retry")
         shot("unread")
         reset("sessions_unavailable=1")
         app.buttons["direction-page-retry"].firstMatch.tap()
-        sleep(2)
-        XCTAssertTrue(app.buttons["direction-page-retry"].firstMatch.exists)
+        XCTAssertTrue(app.descendants(matching: .any)["direction-page-sessions-unavailable"].firstMatch.waitForExistence(timeout: 10),
+                      "Couldn't read what was added here:\n\(app.debugDescription)")
         shot("sessions-unavailable")
     }
 
@@ -304,24 +342,116 @@ final class DirectionScreensUITests: XCTestCase {
         get("/mock/down?s=90")
         sleep(6)
         openPageFromSidebar()
-        sleep(3)
+        let offline = app.buttons.matching(NSPredicate(format: "identifier == 'direction-page-filed' AND label CONTAINS %@",
+                                                       word("Offline ·", "离线 ·", "オフライン ·"))).firstMatch
+        XCTAssertTrue(offline.waitForExistence(timeout: 20), "rows read before say Offline · time:\n\(app.debugDescription)")
         shot("offline")
         get("/mock/down?s=0")
     }
 
+    /// The hub out of reach on the page's first open in this run: Couldn't read, with Retry (never empty).
+    @MainActor func testFirstOpenWithTheHubOutOfReach() {
+        reset()
+        launch()
+        openSidebar()
+        openFirstLead()
+        addTeardownBlock { [self] in get("/mock/down?s=0") }
+        get("/mock/down?s=90")
+        sleep(6)
+        let all = app.buttons["sidebar-direction-all"].firstMatch
+        XCTAssertTrue(reveal(all))
+        all.tap()
+        XCTAssertTrue(page.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["direction-page-unread"].firstMatch.waitForExistence(timeout: 40),
+                      "Couldn't read:\n\(app.debugDescription)")
+        XCTAssertTrue(app.buttons["direction-page-retry"].firstMatch.exists, "with Retry")
+        shot("unread-offline")
+        get("/mock/down?s=0")
+    }
+
+    /// Unpinned while the page is open (the tree push drops it): one read says it has ended, read-only. Then a page the
+    /// hub no longer has: no longer available.
     @MainActor func testEndedAndGone() {
-        reset("ended=lead0000-0000-4000-8000-000000000000")
+        reset()
         launch()
         openPageFromSidebar()
-        XCTAssertTrue(app.descendants(matching: .any)["direction-page-ended"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons.matching(identifier: "direction-page-filed").firstMatch.waitForExistence(timeout: 10))
+        get("/mock/direction_sessions?ended=lead0000-0000-4000-8000-000000000000")
+        XCTAssertTrue(app.descendants(matching: .any)["direction-page-ended"].firstMatch.waitForExistence(timeout: 15),
+                      "the page did not say it ended:\n\(app.debugDescription)")
+        XCTAssertFalse(app.descendants(matching: .any)["direction-page-in-progress"].exists, "no In Progress once ended")
         sleep(1)
         shot("ended")
         reset("read=gone")
         app.navigationBars.buttons.firstMatch.tap()
         sleep(1)
         openPageFromSidebar()
-        sleep(3)
+        XCTAssertTrue(app.descendants(matching: .any)["direction-page-gone"].firstMatch.waitForExistence(timeout: 10),
+                      "no longer available:\n\(app.debugDescription)")
         shot("gone")
+    }
+
+    /// Moving… while the hub has not answered (the mock holds the write), then the answer for the same place: Already in.
+    @MainActor func testMovingThenAlreadyThere() {
+        reset("put_delay=5")
+        launch()
+        openPageFromSidebar()
+        let row = pageRow("整理首页改版的设计稿")
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.press(forDuration: 1.2)
+        XCTAssertTrue(moveTo.waitForExistence(timeout: 5))
+        moveTo.tap()
+        let here = app.buttons["Persona 产品"].firstMatch
+        XCTAssertTrue(here.waitForExistence(timeout: 5))
+        here.tap()
+        XCTAssertTrue(until { row.label.contains(word("Moving…", "正在移动…", "移動中…")) }, "Moving…: \(row.label)")
+        shot("moving")
+        let toast = app.descendants(matching: .any)["toast"].firstMatch
+        XCTAssertTrue(toast.waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["toast-action"].exists, "the same place offers no Undo")
+        shot("already")
+    }
+
+    /// On Its Own, and an answer that never came back (Couldn't confirm the move).
+    @MainActor func testOnItsOwnAndALostAnswer() {
+        reset()
+        launch()
+        openPageFromSidebar()
+        let recipe = pageRow("菜谱网站加搜索")
+        XCTAssertTrue(recipe.waitForExistence(timeout: 10))
+        recipe.press(forDuration: 1.2)
+        XCTAssertTrue(moveTo.waitForExistence(timeout: 5))
+        moveTo.tap()
+        app.buttons[word("On Its Own", "单独放着", "単独にする")].firstMatch.tap()
+        XCTAssertTrue(app.buttons["toast-action"].firstMatch.waitForExistence(timeout: 10), "Set on its own, with Undo")
+        shot("own")
+        sleep(6) // the toast goes
+        post("/mock/fault", body: #"{"fault":"lost_receipt","enabled":true}"#)
+        let chat = pageRow("早报")
+        XCTAssertTrue(chat.waitForExistence(timeout: 10))
+        chat.press(forDuration: 1.2)
+        XCTAssertTrue(moveTo.waitForExistence(timeout: 5))
+        moveTo.tap()
+        app.buttons["增长"].firstMatch.tap()
+        let toast = app.descendants(matching: .any)["toast"].firstMatch
+        XCTAssertTrue(toast.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["toast-action"].exists, "a lost answer offers no Undo")
+        shot("lost")
+    }
+
+    /// A pinned chat with nothing under it yet: Nothing Here Yet, and how something gets there.
+    @MainActor func testNothingHereYet() {
+        reset()
+        let chat = "b2e4d6f8-0000-4000-8000-000000000003"
+        post("/api/v1/assistant/directions/\(chat)/make", body: "{}")
+        launchHolding(chat)
+        openSidebar()
+        let all = app.buttons.matching(NSPredicate(format: "identifier == 'sidebar-direction-all' AND value BEGINSWITH %@", "帮我约周五")).firstMatch
+        XCTAssertTrue(reveal(all), "no All › for the new one:\n\(app.debugDescription)")
+        all.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["direction-page-empty"].firstMatch.waitForExistence(timeout: 15),
+                      "Nothing Here Yet:\n\(app.debugDescription)")
+        shot("empty")
     }
 
     // MARK: Nothing new where the change is off
@@ -367,15 +497,17 @@ final class DirectionScreensUITests: XCTestCase {
         }
         let toggle = firstLeadToggle()
         if toggle.waitForExistence(timeout: 8), toggle.value as? String != expanded { toggle.tap() }
+        // The first lead's rows to their end, where All › would be, with the next lead under them.
+        if off != "none" && off != "manager" { _ = chat("基础设施") }
         sleep(2)
         shot("off-sidebar-\(off)")
-        let row = off == "manager" ? app.buttons.matching(identifier: "sidebar-conversation").firstMatch : chat("帮我约周五")
-        if row.waitForExistence(timeout: 5) {
-            row.press(forDuration: 1.2)
-            sleep(1)
-            shot("off-chat-menu-\(off)")
-            dismissMenu()
-        }
+        // Every case has a conversation's menu to compare: 工作 has a chat of its own (scripts/mock/direction_sessions_mock.py).
+        let row = off == "manager" ? chat("整理出差报销单") : chat("帮我约周五")
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "no conversation to long-press:\n\(app.debugDescription)")
+        row.press(forDuration: 1.2)
+        sleep(1)
+        shot("off-chat-menu-\(off)")
+        dismissMenu()
         let lead = chat("Persona 产品")
         if lead.exists { lead.tap() } else { app.buttons["sidebar-main"].firstMatch.tap() }
         sleep(2)

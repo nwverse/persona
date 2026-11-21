@@ -189,6 +189,58 @@ class DirectionSessionsMockTests(unittest.TestCase):
         self.assertEqual(placed(first).get(opened), "leader", "back where its leader opened it")
         self.assertNotIn(opened, placed(second))
 
+    def test_the_read_lists_in_the_hubs_order(self):
+        base = self.start()
+        first = get(base, "/api/v1/assistant/directions/tree")["directions"][0]
+        read = get(base, "/api/v1/assistant/directions/" + first["id"])["sessions"]
+        keys = [(s["machine_id"], s["session_id"]) for s in read]
+        self.assertEqual(keys, sorted(keys), "by computer, then session id, as direction_sessions_read.go sorts")
+        live = [(s["machine_id"], s["session_id"]) for s in first["sessions"]]
+        self.assertEqual(live, sorted(live))
+
+    def test_undo_puts_back_the_replaced_entry_with_its_title_and_time(self):
+        base = self.start()
+        first, second = [d["id"] for d in get(base, "/api/v1/assistant/directions/tree")["directions"][:2]]
+        unlisted = "dirs0007-0000-4000-8000-000000000007"  # "Added 3 days ago": its computer does not list it
+
+        def entry(direction):
+            return next((s for s in get(base, "/api/v1/assistant/directions/" + direction)["sessions"]
+                         if s["session_id"] == unlisted), None)
+
+        was = entry(first)
+        status, own = put(base, file_path("macbook", unlisted), {"direction": ""})
+        self.assertEqual((status, own["previous"], own["changed"]), (200, first, True), "On Its Own needs no row")
+        self.assertIsNone(entry(first))
+        status, undone = put(base, file_path("macbook", unlisted), {"direction": own["previous"]})
+        self.assertEqual((status, undone["direction"]), (200, first))
+        back = entry(first)
+        self.assertEqual((back["title"], back["at"], back["state"]), (was["title"], was["at"], was["state"]))
+        status, refused = put(base, file_path("macbook", unlisted), {"direction": second})
+        self.assertEqual((status, refused["code"]), (404, "session_not_found"), "into another one it needs its row")
+
+    def test_a_null_write_is_decided_before_any_check(self):
+        base = self.start()
+        main = get(base, "/api/v1/assistant")["main"]
+        status, out = put(base, file_path("server", main), {"direction": None})
+        self.assertEqual((status, out), (200, {"direction": None, "previous": None, "changed": False}))
+
+    def test_an_ended_direction_leaves_the_tree_and_its_read_says_so(self):
+        base = self.start()
+        first = get(base, "/api/v1/assistant/directions/tree")["directions"][0]["id"]
+        get(base, "/mock/direction_sessions?ended=" + first)
+        self.assertNotIn(first, [d["id"] for d in get(base, "/api/v1/assistant/directions/tree")["directions"]])
+        self.assertNotIn(first, [d["id"] for d in get(base, "/api/v1/assistant/leaders")["leaders"]])
+        self.assertIn("ended_at", get(base, "/api/v1/assistant/directions/" + first))
+        get(base, "/mock/reset")
+        self.assertIn(first, [d["id"] for d in get(base, "/api/v1/assistant/directions/tree")["directions"]])
+
+    def test_refusals_carry_the_hubs_own_sentence(self):
+        base = self.start()
+        get(base, "/mock/direction_sessions?refuse=direction_full")
+        status, body = put(base, file_path("macbook", RECIPE), {"direction": ""})
+        locale = Path(__file__).resolve().parents[2] / "server/internal/i18n/locales/en/assistant-direction_sessions.json"
+        self.assertEqual(body["error"], json.loads(locale.read_text())["direction_full"].replace("{max}", "50"))
+
     def test_refusals_change_nothing_and_say_why_in_the_requests_language(self):
         base = self.start()
         first = get(base, "/api/v1/assistant/directions/tree")["directions"][0]["id"]

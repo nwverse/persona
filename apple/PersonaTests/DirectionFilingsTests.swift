@@ -121,7 +121,7 @@ struct DirectionFilingsTests {
             #expect(probe.toasts.first?.message.hasPrefix(words) == true, "\(code): \(probe.toasts.first?.message ?? "none")")
             #expect(probe.toasts.first?.style == .error && probe.toasts.first?.action == nil)
             #expect(hub.sent("PUT", Self.path).count == 1, "\(code): sent once, never again")
-            #expect(!s.routesMissing, "\(code) is a refusal, not a missing route")
+            #expect(s.routesMissing.isEmpty, "\(code) is a refusal, not a missing route")
             #expect(probe.treeReads == 0)
         }
     }
@@ -140,8 +140,11 @@ struct DirectionFilingsTests {
     /// Connections that never reached the hub put it back; answers lost after sending read the tree again, send
     /// nothing again and offer no Undo.
     @Test func aLostAnswerReadsAgainAndOffersNoUndo() async throws {
+        // A cut link between hub and manager answers 503 assistant_offline (hub/bus_forward.go): the manager may have
+        // saved it, as with a relay cut off on the way.
         let lost: [Error] = [URLError(.timedOut), URLError(.networkConnectionLost),
-                             APIError(status: 502, message: "cut off", fields: ["code": "assistant_in_doubt", "delivered": "unknown"])]
+                             APIError(status: 502, message: "cut off", fields: ["code": "assistant_in_doubt", "delivered": "unknown"]),
+                             APIError(status: 503, message: "offline", fields: ["code": "assistant_offline"])]
         for error in lost {
             let hub = FakeHub(), probe = Probe()
             hub.on("PUT", Self.path) { _ in throw error }
@@ -169,12 +172,13 @@ struct DirectionFilingsTests {
         let s = store(hub, probe)
         s.move(Self.key, title: "Trip", state: .idle, to: Self.product, from: nil)
         try await until("settled") { s.pending.isEmpty }
-        #expect(s.routesMissing)
-        let tree = DirectionTree(directions: [DirectionTree.Direction(id: "lead-a", name: "Product")])
-        let features: Set<String> = [DirectionRoutes.feature]
-        #expect(!DirectionFilings.shows(features: features, tree: tree, routesMissing: s.routesMissing))
-        s.hello()
-        #expect(DirectionFilings.shows(features: features, tree: tree, routesMissing: s.routesMissing))
+        #expect(s.routesMissing == [""], "the hub the write went to, alone")
+        s.hello("other")
+        #expect(s.routesMissing == [""], "another hub's hello says nothing of this one's routes")
+        s.forget()
+        #expect(s.routesMissing == [""], "nor does a switch")
+        s.hello("")
+        #expect(s.routesMissing.isEmpty)
         #expect(DirectionRoutes.missing(APIError(status: 405, message: "")))
         #expect(!DirectionRoutes.missing(refusal(404, "direction_not_found", "gone")))
         #expect(!DirectionRoutes.missing(refusal(404, "machine_not_found", "gone")))
@@ -229,7 +233,8 @@ struct DirectionFilingsTests {
         let quiet = SessionKey(machineID: "m", sessionID: "q")
         s.move(quiet, title: "Quiet", state: .idle, to: Self.product, from: nil)
         #expect(s.rows([], in: "lead-a", group: "", live: true).map(\.id) == ["m/s"], "the tree lists only live ones")
-        #expect(s.rows([], in: "lead-a", group: "", live: false).map(\.id) == ["m/q", "m/s"], "the page lists every one")
+        #expect(s.rows([], in: "lead-a", group: "", live: false).map(\.id) == ["m/s", "m/q"],
+                "the page lists every one, by its state: working before the rest")
     }
 
     // MARK: The page's words
@@ -253,14 +258,112 @@ struct DirectionFilingsTests {
         #expect(DirectionPageLogic.shown(Array(0..<9), all: true).count == 9)
     }
 
-    /// For the same tree the page's "N need you" is the sidebar row's.
-    @Test func thePagesCountIsTheSidebarRows() throws {
-        let tree = try JSON.decoder.decode(DirectionTree.self, from: Data(#"""
-        {"directions":[{"id":"lead-a","name":"Product","counts":{"needs_you":2,"working":1},"tasks":[],
-          "sessions":[{"machine_id":"m","session_id":"f","state":"needs_you"}]}]}
-        """#.utf8))
-        let sidebarRow = tree.leader("lead-a")?.counts.label
-        #expect(DirectionPageLogic.needsYou(tree, "lead-a") == sidebarRow)
-        #expect(sidebarRow == "等你 2", "a filed session waiting on you does not change the count (#5974)")
+    // MARK: Review of #12603
+
+    /// The gate and every exclusion of Move To…, from the facts the app gathers (`DirectionFilings.offers`).
+    @Test func moveToIsOfferedOnlyWhereTheIssueSays() {
+        let choices = [Self.product]
+        func facts(shows: Bool = true, group: String = "", moving: Bool = false, followers: Set<String> = [],
+                   parents: [String: String] = [:]) -> DirectionFilings.Facts {
+            DirectionFilings.Facts(shows: shows, hubGroup: group, main: SessionKey(machineID: "m", sessionID: "main"),
+                                   backgroundSupervisor: { $0 == "bg" }, leaders: ["lead-a", "lead-b"],
+                                   followers: followers, parent: { parents[$0.sessionID] }, moving: moving,
+                                   choices: choices)
+        }
+        let chat = SessionKey(machineID: "m", sessionID: "chat")
+        #expect(DirectionFilings.offers(chat, facts()) == choices, "an ordinary chat or Agent")
+        #expect(DirectionFilings.offers(chat, facts(shows: false)).isEmpty, "no feature, no tree, or missing routes")
+        #expect(DirectionFilings.offers(SessionKey(machineID: "m", sessionID: "main"), facts()).isEmpty, "the main chat")
+        #expect(DirectionFilings.offers(SessionKey(machineID: "m", sessionID: "bg"), facts()).isEmpty, "the background supervisor")
+        #expect(DirectionFilings.offers(SessionKey(machineID: "m", sessionID: "lead-b"), facts()).isEmpty, "a leader conversation")
+        #expect(DirectionFilings.offers(SessionKey(group: "work", machineID: "m", sessionID: "chat"), facts()).isEmpty,
+                "another hub's session")
+        #expect(DirectionFilings.offers(SessionKey(machineID: "m", sessionID: "agent"), facts(followers: ["m/agent"])).isEmpty,
+                "an Agent that follows its supervised to-do")
+        #expect(DirectionFilings.offers(SessionKey(machineID: "m", sessionID: "sub"),
+                                        facts(followers: ["m/agent"], parents: ["sub": "agent"])).isEmpty,
+                "a session under one")
+        #expect(DirectionFilings.offers(SessionKey(machineID: "m", sessionID: "own"), facts(followers: ["m/agent"])) == choices,
+                "an Agent on the owner's own unsupervised to-do")
+        #expect(DirectionFilings.offers(chat, facts(moving: true)).isEmpty, "not while a pick of it is out")
+    }
+
+    /// A switch of hub or assistant drops a move's late answer (no toast, no reread) and its toast's Undo; Undo goes to
+    /// the client the move went out with, not to whatever is current when it is tapped.
+    @Test func undoAndLateAnswersStayWithTheirHub() async throws {
+        let first = FakeHub(url: "https://first.invalid"), second = FakeHub(url: "https://second.invalid"), probe = Probe()
+        for hub in [first, second] {
+            hub.on("PUT", Self.path, json: #"{"direction":"lead-a","previous":"","changed":true}"#)
+        }
+        final class Current { var hub: FakeHub; init(_ hub: FakeHub) { self.hub = hub } }
+        let current = Current(first)
+        let s = DirectionFilings(env: DirectionFilings.Env(api: { current.hub.client }, reachable: { true }, networkUp: { true },
+                                                           toast: { probe.toasts.append($0) },
+                                                           rereadTree: { probe.treeReads += 1 }))
+        s.move(Self.key, title: "Trip", state: .idle, to: Self.product, from: nil)
+        try await until("the answer") { probe.toasts.first?.action != nil }
+        current.hub = second
+        probe.toasts.first?.action?.run()
+        try await until("the Undo's write") { first.sent("PUT", Self.path).count == 2 }
+        #expect(second.sent("PUT", Self.path).isEmpty, "Undo went to the hub the move was sent to")
+
+        let slow = FakeHub(), probe2 = Probe()
+        slow.onAsync("PUT", Self.path) { _ in
+            try await Task.sleep(for: .milliseconds(200))
+            return Data(#"{"direction":"lead-a","previous":null,"changed":true}"#.utf8)
+        }
+        let t = store(slow, probe2)
+        t.move(Self.key, title: "Trip", state: .idle, to: Self.product, from: nil)
+        t.forget() // another assistant while the answer is out
+        #expect(t.pending.isEmpty)
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(probe2.toasts.isEmpty && probe2.treeReads == 0, "the answer of the assistant before says nothing")
+    }
+
+    /// One pick of a session at a time: a second one while the first is out is not sent.
+    @Test func onePickAtATime() async throws {
+        let hub = FakeHub(), probe = Probe()
+        hub.onAsync("PUT", Self.path) { _ in
+            try await Task.sleep(for: .milliseconds(300))
+            return Data(#"{"direction":"lead-a","previous":null,"changed":true}"#.utf8)
+        }
+        let s = store(hub, probe)
+        s.move(Self.key, title: "Trip", state: .idle, to: Self.product, from: nil)
+        s.move(Self.key, title: "Trip", state: .idle, to: nil, from: nil)
+        try await until("settled") { s.pending.isEmpty && !probe.toasts.isEmpty }
+        #expect(hub.sent("PUT", Self.path).count == 1)
+    }
+
+    /// Added Here and the row's filed sessions: what needs you, then what works, then the rest, newest added first in
+    /// each (the hub gives them by computer and session id).
+    @Test func filedSessionsAreInTheAppsOrder() {
+        let day: TimeInterval = 86_400
+        func f(_ id: String, _ state: String, _ ago: TimeInterval?) -> DirectionTree.FiledSession {
+            DirectionTree.FiledSession(machineID: "m", sessionID: id, at: ago.map { Date(timeIntervalSinceNow: -$0) }, state: state)
+        }
+        let hubOrder = [f("a", "idle", 1 * day), f("b", "needs_you", 3 * day), f("c", "working", 2 * day),
+                        f("d", "not_listed", 0.5 * day), f("e", "needs_you", 1 * day), f("f", "offline", nil)]
+        #expect(DirectionFilings.order(hubOrder).map(\.sessionID) == ["e", "b", "c", "d", "a", "f"])
+    }
+
+    /// A filed session's turn changes only its direction's box, never the tree its readers compare (P5).
+    @Test func filedSessionsLeaveTheTreeAlone() throws {
+        func tree(_ state: String) throws -> DirectionTree {
+            try JSON.decoder.decode(DirectionTree.self, from: Data(#"""
+            {"directions":[{"id":"lead-a","name":"Product","counts":{"needs_you":1},"tasks":[{"id":"t","title":"T","state":"needs_you"}],
+              "sessions":[{"machine_id":"m","session_id":"f","state":"\#(state)"}]},
+             {"id":"lead-b","name":"Ops","tasks":[]}]}
+            """#.utf8))
+        }
+        let s = DirectionFilings(env: DirectionFilings.Env(api: { nil }, reachable: { true }, networkUp: { true },
+                                                           toast: { _ in }, rereadTree: {}))
+        let working = s.takeFiled(try tree("working"))
+        #expect(s.filedLive("lead-a").map(\.state) == ["working"])
+        let waiting = s.takeFiled(try tree("needs_you"))
+        #expect(working == waiting, "the tree compares equal: its readers do not redraw")
+        #expect(s.filedLive("lead-a").map(\.state) == ["needs_you"] && s.filedLive("lead-b").isEmpty)
+        #expect(working.leader("lead-a")?.tasks.count == 1, "the rest of the tree is as the hub gave it")
+        _ = s.takeFiled(DirectionTree(directions: [DirectionTree.Direction(id: "lead-b")]))
+        #expect(s.filedLive("lead-a").isEmpty, "a direction gone from the tree lists none")
     }
 }

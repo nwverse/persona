@@ -373,7 +373,7 @@ struct AgentActionMenu: View, Equatable {
             MoveToChoices(choices: facts.moveChoices) { choice in
                 guard let s = now() else { return }
                 DirectionFilings.shared.move(s.key, title: s.displayTitle, state: s.state, to: choice,
-                                             from: DirectionFilings.shared.placed(s.key, in: model.directionTree))
+                                             from: DirectionFilings.shared.placed(s.key))
             }
         case .stopLoop:
             Button(role: .destructive) { model.stopLoop(facts.key) } label: { Label("Stop Loop", systemImage: Theme.Icon.stopLoop) }

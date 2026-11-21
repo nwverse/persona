@@ -65,7 +65,7 @@ struct AssistantSidebarDirection<Head: View>: View {
         if let direction, open {
             // Whether the filed rows and All › are drawn, and so whether "No open to-dos" still shows, is read by
             // `DirectionFiledRows` alone (P5): the tree's `sessions` and the moves out redraw only it.
-            DirectionFiledRows(direction: direction, inset: taskInset, drawer: drawer, lead: lead) {
+            DirectionFiledRows(direction: direction, name: name, inset: taskInset, drawer: drawer, lead: lead) {
                 Text("No open to-dos")
                     .font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1)
                     .padding(.leading, taskInset)
@@ -272,16 +272,21 @@ struct DirectionFoldButton: View {
 /// the moves out are read here alone (P5), not by the row above or the sidebar.
 struct DirectionFiledRows<Empty: View, Tasks: View>: View {
     @Environment(AppModel.self) private var model
+    /// The phone's shell: All › first puts its Assistant page in front, which takes the ask (and is built by it).
+    @Environment(\.shell) private var shell
     let direction: DirectionTree.Direction
+    /// The direction's name as its row says it: All › is spoken as whose it is.
+    var name: String
     var inset: CGFloat
     var drawer: AssistantDrawer?
     var lead: SessionKey?
     let empty: Empty
     let tasks: Tasks
 
-    init(direction: DirectionTree.Direction, inset: CGFloat, drawer: AssistantDrawer?, lead: SessionKey?,
+    init(direction: DirectionTree.Direction, name: String, inset: CGFloat, drawer: AssistantDrawer?, lead: SessionKey?,
          @ViewBuilder empty: () -> Empty, @ViewBuilder tasks: () -> Tasks) {
         self.direction = direction
+        self.name = name
         self.inset = inset
         self.drawer = drawer
         self.lead = lead
@@ -292,7 +297,9 @@ struct DirectionFiledRows<Empty: View, Tasks: View>: View {
     var body: some View {
         let filings = DirectionFilings.shared
         let shows = filings.shows(model)
-        let rows = shows ? filings.rows(direction.sessions, in: direction.id, group: model.hub?.group ?? "", live: true) : []
+        // The tree's filed sessions are kept apart from it (`DirectionFilings.takeFiled`): read here, per direction.
+        let rows = shows ? filings.rows(filings.filedLive(direction.id), in: direction.id, group: model.hub?.group ?? "",
+                                        live: true) : []
         if direction.tasks.isEmpty && rows.isEmpty { empty }
         tasks
         if shows {
@@ -310,6 +317,9 @@ struct DirectionFiledRows<Empty: View, Tasks: View>: View {
     private var allRow: some View {
         Button {
             guard let lead else { return }
+            // As the drawer's other picks (`ShellView`): the Assistant page in front, built if it was not yet, so the
+            // ask is taken now and not when Assistant is next shown.
+            shell?.select(0, animated: false)
             DirectionPages.shared.open(direction.id, over: lead, fromSidebar: true)
         } label: {
             HStack(spacing: Theme.Space.xs) {
@@ -328,6 +338,9 @@ struct DirectionFiledRows<Empty: View, Tasks: View>: View {
         .padding(.trailing, Theme.Space.m)
         .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous))
         .accessibilityLabel(String(localized: "Tasks and Chats [Direction Page]"))
+        .accessibilityValue(name)
+        // Voice Control says what it sees: "Tap All".
+        .accessibilityInputLabels([Text("All"), Text("Tasks and Chats [Direction Page]")])
         .accessibilityIdentifier("sidebar-direction-all")
     }
 }
