@@ -180,7 +180,7 @@ class AppleReadinessTests(unittest.TestCase):
         source = SCRIPT.read_text()
         helpers = source[source.index("simulator_udid() {"):source.index("cleanup() {")]
         helpers += source[source.index("result() {"):source.index('if [ "$LANE" = all ]', source.index("test_batch() {"))]
-        settings = source.index('  if [ "$LANE" = ios18 ]; then', source.index('if [ "$LANE" != packages ]; then'))
+        settings = source.index('  if [ "$LANE" = ios18 ]; then', source.index('if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then'))
         helpers += source[settings:source.index('  IOS_COMMON=(', settings)]
         if regular_only:
             start = source.index("  # The same compiled fixture and compatible runtime as #11289")
@@ -279,7 +279,7 @@ IOS_COMMON=(xcodebuild)
         self.assertIn("native.pixels == shared.pixels", support)
         self.assertIn("try FileManager.default.createDirectory(at: root", support)
         self.assertNotIn('IOS_UNIT_SELECTION+=(-skip-testing:PersonaTests/AboutVersionCompactVisualTests)',
-                         SCRIPT.read_text()[SCRIPT.read_text().index('if [ "$LANE" != packages ]; then'):SCRIPT.read_text().index('if [ "$LANE" = ios18 ]; then', SCRIPT.read_text().index('IOS_FAILED=0'))])
+                         SCRIPT.read_text()[SCRIPT.read_text().index('if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then'):SCRIPT.read_text().index('if [ "$LANE" = ios18 ]; then', SCRIPT.read_text().index('IOS_FAILED=0'))])
 
     def test_cleanup_removes_both_owned_destinations_including_an_unparsed_ipad(self):
         source = SCRIPT.read_text()
