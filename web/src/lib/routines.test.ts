@@ -82,6 +82,15 @@ describe("words", () => {
     expect(taskTitle({ title: "  周报 ", prompt: "x" })).toBe("周报");
   });
 
+  it("titles an untitled follow-up from the text after its selected references", () => {
+    const skill = '<persona-context kind="skill" ref="review">\nproject\n</persona-context>';
+    const file = '<persona-context kind="file" path="report.md">\nreport.md\n</persona-context>';
+    const selected = { title: "", prompt_selections: true };
+    expect(taskTitle({ ...selected, prompt: `${skill}\n${file}\n\n\n 核对周报 \n第二行` })).toBe("核对周报");
+    expect(taskTitle({ ...selected, prompt: file })).toBe("定时跟进");
+    expect(taskTitle({ title: "", prompt: `${skill}\n\n原文` })).toBe(skill.split("\n")[0]);
+  });
+
   it("says the next and the last run", () => {
     expect(nextText(task({ enabled: false, next_run: iso(at(3, 9)) }), now)).toBe("已关闭");
     expect(nextText(task({ next_run: iso(at(3, 9)) }), now)).toBe("下次 明天 09:00 · 23 小时后");
@@ -317,4 +326,16 @@ describe("taskConversations (#2824)", () => {
     expect(taskConversations(tk, [r("1", "own", "2026-11-05T09:00:00Z"), r("2", "own", "2026-11-04T09:00:00Z"), r("3", "old", "2026-11-01T09:00:00Z")]))
       .toEqual([{ sid: "own", at: "2026-11-05T09:00:00Z" }, { sid: "old", at: "2026-11-01T09:00:00Z" }]);
   });
+});
+
+it("writes a selected reference only to the rich prompt field while plain and quoted text remain compatible", () => {
+  const text = '<persona-context kind="skill" ref="opaque">Inbox</persona-context>\n\nReview the receipts';
+  const saved = task({ prompt: text, prompt_selections: true });
+  for (const body of [taskBody(saved), taskBody({ ...saved, enabled: !saved.enabled }, saved)]) {
+    expect(body.structured_prompt).toBe(text);
+    expect(body).not.toHaveProperty("prompt");
+  }
+  // Owner typed identical markup before pickers existed (or a tool authored the plain task).
+  expect(taskBody({ ...saved, prompt_selections: false }, saved)).toHaveProperty("prompt", text);
+  expect(sameTask(saved, { ...saved, prompt_selections: false })).toBe(false);
 });

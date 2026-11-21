@@ -72,5 +72,8 @@
   "todo_wait_cost": "次の実行時間になってもタスクが進まない可能性があります。",
   "todo_change_result": "現在の許可の範囲内で別の方法を提案するよう監督役に依頼します。",
   "todo_wait_result": "承認済みの方法を維持し、次回の定期確認を待ちます。",
+  "selected_file_unavailable": "選択したファイルを利用できないか、実行環境が変わりました。削除して再度選択してください。",
+  "file_runtime_unsupported": "このエージェントはファイル選択に対応していません。テキストを使うか、別のエージェントを選んでください。",
+  "input_context_unavailable": "タスクまたは元の会話を利用できません。タスクを開き直して再試行してください。",
   "execution_antigravity_unavailable": "{machine} の Antigravity が切断されているか、利用できません。そのコンピュータで Antigravity を復旧してから、このタスクを再実行すると既存の会話を続けられます。"
 }

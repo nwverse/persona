@@ -23,7 +23,7 @@ import { COMPACT_COMPOSER, COMPOSER_LINES, lineCount, offersExpand } from "./com
 import { INPUT_MAX } from "./dock";
 import { imagePayload, MAX_IMAGE, releaseAttachments } from "../../lib/attachments";
 import { addFiles as addComposerFiles, filesBusy, MAX_FILES, readyFiles, restoreFiles, splitFileTags, takeReadyFiles, useComposerFiles, withFiles } from "../../lib/composer-files";
-import { activateComposer, addContext, getContexts, newContext, registerComposer, removeContext, useContexts, withContexts, type ComposerHandle } from "../../lib/links";
+import { activateComposer, addContext, getContexts, newContext, registerComposer, removeContext, useContexts, withContexts, type ContextRef, type ComposerHandle } from "../../lib/links";
 import { addQuote, applyDraft, getQuotes, onDraftEvent, parseQuotes, removeQuote, replaceNeedsConfirm, sendDraft, setQuotes, splitQuotes, storeDraft, useQuotes, withQuoteBlock, withUnsent, type DraftImage } from "../../lib/drafts";
 import type { EditedImage } from "../../lib/image-edit";
 import { mentionAt, replaceToken, sessionQuote, workspaceContext, type MentionToken } from "../../lib/mentions";
@@ -34,7 +34,7 @@ import { AttachmentTray } from "../../ui/AttachmentTray";
 import { FileTiles } from "./FileTiles";
 import { cx, EASE, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { ContextChips } from "../link/ContextChips";
+import { ContextChips, ContextChipList } from "../link/ContextChips";
 import { ForwardBars } from "./ForwardCard";
 import { QuoteBars } from "./Quote";
 import type { ComposerPanelHandle, MentionRow, MentionSource, PanelPick } from "./ComposerPanel";
@@ -128,6 +128,7 @@ function fromDraftImage(img: DraftImage, id = uuid(), edited?: EditedImage): Att
 // memo: a chat renders again for each transcript item, and this box takes none of them (ChatView keeps its props stable)
 export const Composer = memo(function Composer({
   draftKey,
+  editor,
   placeholder,
   machineId,
   uploadDest,
@@ -135,7 +136,7 @@ export const Composer = memo(function Composer({
   needsYou,
   disabled,
   commands = AGENT_COMMANDS,
-  onSend,
+  onSend = async () => false,
   onStop,
   onSendNow,
   onEditLastMessage,
@@ -157,6 +158,8 @@ export const Composer = memo(function Composer({
   top,
 }: {
   draftKey: string;
+  /** Prompt editing reuses selection, menus and serialization, without chat sends, uploads, history or stored drafts. */
+  editor?: { text: string; refs: ContextRef[]; onChange: (text: string, refs: ContextRef[]) => void; label: string };
   placeholder: string;
   machineId?: string;
   /** Where a file sent to machineId lands: "health" keeps it in the health space's reports/ (docs/assistant/health.md "Checkup reports"). */
@@ -168,7 +171,7 @@ export const Composer = memo(function Composer({
   commands?: Command[];
   /** False: it did not go and nothing shows it (the chat keeps one that failed as a failed bubble, true), so the words go
    *  back into the box. */
-  onSend: (m: Outgoing) => Promise<boolean>;
+  onSend?: (m: Outgoing) => Promise<boolean>;
   onStop?: () => void;
   /** Ctrl/⌘+Enter while the agent works or waits: after the message is queued, hands the queue over now (the queue panel's
    *  Send now). Absent where the agent cannot take messages now; Ctrl/⌘+Enter then queues as Enter does. */
@@ -218,7 +221,9 @@ export const Composer = memo(function Composer({
     const owner = credentialOwner(), scope = conversationDeletionScope();
     return () => owner === credentialOwner() && scope === conversationDeletionScope() && !conversationKeyDeleted(draftKey);
   }, [draftKey]);
-  const [draft, setDraft] = useState(() => splitSkillDraft(storedValue(`draft:${draftKey}`) ?? "").text);
+  const [chatDraft, setDraft] = useState(() => editor ? "" : splitSkillDraft(storedValue(`draft:${draftKey}`) ?? "").text);
+  const draft = editor?.text ?? chatDraft;
+  const editingPrompt = Boolean(editor);
   const [atts, setAtts] = useState<Attachment[]>([]);
   // The suggestion just sent with its arrow: it stays on the hub until the agent starts, and each tap would be a new message.
   const [sentPill, setSentPill] = useState<string | null>(null);
@@ -270,19 +275,22 @@ export const Composer = memo(function Composer({
   const collapsedSel = useRef<[number, number] | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   // text picked in the link panel waits here (lib/links.ts), and "AI edit" sends through this composer
-  const contexts = useContexts(draftKey);
+  const chatContexts = useContexts(draftKey);
+  const contexts = editor?.refs ?? chatContexts;
+  const changeText = (text: string) => editor ? editor.onChange(text, contexts) : setDraft(text);
   const restoreSkills = (text: string) => {
     const split = splitSkillDraft(text);
     getContexts(draftKey).filter((r) => r.kind === "skill").forEach((r) => removeContext(draftKey, r.id));
     split.skills.forEach((r) => addContext(draftKey, r));
     return split.text;
   };
-  const skillEnvironment = JSON.stringify([machineId, mention?.cwd, mention?.skills]);
+  const skillEnvironment = editingPrompt && !mention ? "" : JSON.stringify([machineId, mention?.cwd, mention?.skills]);
   const catalogMemory = useMemo<import("./useSkillCatalog").CatalogMemory>(() => ({}), [skillEnvironment, draftKey]);
   const previousSkillEnvironment = useRef(skillEnvironment);
   useEffect(() => {
     setActive(0);
-    if (previousSkillEnvironment.current !== skillEnvironment && getContexts(draftKey).some((r) => r.kind === "skill")) {
+    if (editingPrompt && !skillEnvironment) return;
+    if (previousSkillEnvironment.current && previousSkillEnvironment.current !== skillEnvironment && contexts.some((r) => r.kind === "skill")) {
       toast(t("chat-composer.skills_changed"), "error");
     }
     previousSkillEnvironment.current = skillEnvironment;
@@ -292,7 +300,7 @@ export const Composer = memo(function Composer({
   const canTake = useRef(!disabled);
   canTake.current = !disabled && !blocked;
   const handle = useMemo<ComposerHandle>(() => ({ key: draftKey, send: (text) => sendNow.current(text), focus: () => input.current?.focus({ preventScroll: true }), ready: () => canTake.current }), [draftKey]);
-  useEffect(() => registerComposer(handle), [handle]);
+  useEffect(() => editor ? undefined : registerComposer(handle), [handle, editingPrompt]);
 
   const quote = quotes.length > 0;
   // the pictures in the box right now and the conversation shown, read by the cleanups and by a send that finishes
@@ -329,6 +337,7 @@ export const Composer = memo(function Composer({
   // a different conversation: its own draft
   const shownKey = useRef(draftKey);
   useEffect(() => {
+    if (editingPrompt) return;
     const from = shownKey.current;
     shownKey.current = draftKey;
     const held = input.current?.value ?? "";
@@ -357,7 +366,7 @@ export const Composer = memo(function Composer({
   draftNow.current = draft;
   useEffect(
     () =>
-      onDraftEvent(draftKey, (e) => {
+      editingPrompt ? undefined : onDraftEvent(draftKey, (e) => {
         if (!canWriteDraft()) return;
         // a send from an earlier box of this conversation failed: its words come back even while sending is off
         if (e.type === "unsent") {
@@ -439,7 +448,7 @@ export const Composer = memo(function Composer({
           setCaret(next.length);
         });
       }),
-    [draftKey, canWriteDraft],
+    [draftKey, canWriteDraft, editingPrompt],
   );
 
   // What is typed goes into the conversation's stored draft 250 ms after the last key; one still waiting is written at
@@ -457,6 +466,7 @@ export const Composer = memo(function Composer({
   // (the box reads its own next, and this runs again if it differs).
   const savedFor = useRef(draftKey);
   useEffect(() => {
+    if (editingPrompt) return;
     if (savedFor.current !== draftKey) {
       savedFor.current = draftKey;
       return;
@@ -464,7 +474,7 @@ export const Composer = memo(function Composer({
     unsaved.current = { key: draftKey, text: draft, current: canWriteDraft };
     const t = setTimeout(saveDraft, 250);
     return () => clearTimeout(t);
-  }, [draft, draftKey, saveDraft, contexts, canWriteDraft]);
+  }, [draft, draftKey, saveDraft, contexts, canWriteDraft, editingPrompt]);
   useEffect(() => {
     // visibilitychange to hidden reaches mobile WebViews that never fire pagehide; saveDraft is a no-op without unsaved words
     const flushOnHidden = () => {
@@ -545,13 +555,13 @@ export const Composer = memo(function Composer({
   // the "/" palette opens on a lone "/word" wherever there are commands or this chat can offer skills
   // A menu already open stays through a composition; none opens in the middle of one (it would cover the candidates).
   const menusShown = useRef({ slash: false, at: false });
-  const slashOpen = query !== null && (allCommands.length > 0 || !!mention?.skills) && (!ime.composing || menusShown.current.slash);
+  const slashOpen = !disabled && query !== null && (allCommands.length > 0 || !!mention?.skills) && (!ime.composing || menusShown.current.slash);
   const closeSlash = useCallback(() => setDismissed(true), []);
   const rows = useMemo(() => (slashOpen ? rankCommands(allCommands, query) : []), [slashOpen, query, allCommands]);
   useEffect(() => setActive(0), [query]);
 
   // @: the token just before the caret (lib/mentions.ts)
-  const atToken = mention && focused && !dismissed && query === null && caret <= draft.length ? mentionAt(draft, caret) : null;
+  const atToken = !disabled && mention && focused && !dismissed && query === null && caret <= draft.length ? mentionAt(draft, caret) : null;
   const token = atToken && (!ime.composing || menusShown.current.at) ? atToken : null;
   const mOpen = Boolean(token);
   menusShown.current = { slash: slashOpen, at: mOpen };
@@ -581,7 +591,7 @@ export const Composer = memo(function Composer({
     },
     setCaret,
     input,
-    disabled,
+    disabled: disabled || !!editor,
     editing: editStart.current,
   });
   // Esc or × while editing: the box as it was before, empty; nothing was asked of the computer
@@ -614,7 +624,7 @@ export const Composer = memo(function Composer({
     const at = el ? Math.min(el.selectionStart, draft.length) : draft.length;
     const before = draft.slice(0, at);
     const lead = before && !/\s$/.test(before) ? " " : "";
-    setDraft(before + lead + text + draft.slice(at));
+    changeText(before + lead + text + draft.slice(at));
     const caret = at + lead.length + text.length;
     setCaret(caret);
     requestAnimationFrame(() => {
@@ -626,29 +636,39 @@ export const Composer = memo(function Composer({
   // A row of the + / @ panel: a session goes with the message as a quote, not as text (PromptItems.quote), a workspace as
   // a context the hub fills in; a file as `@path `. In place of the typed @ token (`at`), or at the caret from the +.
   const pickRow = (r: MentionRow, at: MentionToken | null) => {
-    if (r.kind === "session" || r.kind === "workspace" || r.kind === "skill") {
-      if (r.kind === "session") {
-        const q = sessionQuote(r.session);
-        addContext(draftKey, newContext("context", q.title, q.url, q.text));
-      } else if (r.kind === "skill") {
-        addContext(draftKey, skillContext(r.skill));
+    let ref: ContextRef | undefined;
+    if (r.kind === "session") {
+      const q = sessionQuote(r.session);
+      ref = newContext("context", q.title, q.url, q.text);
+    } else if (r.kind === "skill") {
+      ref = skillContext(r.skill);
+    } else if (r.kind === "workspace") {
+      const w = workspaceContext(r.workspace, (id) => machineWithHub(id, getState().machines));
+      ref = { ...newContext("workspace", w.title, w.url, w.text), attrs: w.attrs };
+    } else if (!r.dir && mention?.referenceFiles) {
+      const path = r.insert.slice(1, -1);
+      ref = { id: `file:${path}`, kind: "file", title: r.name, url: "", text: path, attrs: { path, ...mention.referenceFiles } };
+    }
+    if (ref) {
+      const out = at ? replaceToken(draft, at, "") : undefined;
+      if (editor) {
+        const refs = contexts.filter((existing) => existing.id !== ref.id);
+        editor.onChange(out?.text ?? draft, [...refs, ref]);
       } else {
-        const w = workspaceContext(r.workspace, (id) => machineWithHub(id, getState().machines));
-        addContext(draftKey, { ...newContext("workspace", w.title, w.url, w.text), attrs: w.attrs });
+        addContext(draftKey, ref);
+        if (out) setDraft(out.text);
       }
-      if (!at) {
-        requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
-        return;
-      }
-      const out = replaceToken(draft, at, "");
-      setDraft(out.text);
-      setCaret(out.caret);
-      requestAnimationFrame(() => input.current?.setSelectionRange(out.caret, out.caret));
+      if (out) setCaret(out.caret);
+      requestAnimationFrame(() => {
+        input.current?.focus({ preventScroll: true });
+        if (out) input.current?.setSelectionRange(out.caret, out.caret);
+      });
       return;
     }
+    if (r.kind !== "file") return;
     if (!at) return insertText(r.insert);
     const out = replaceToken(draft, at, r.insert);
-    setDraft(out.text);
+    changeText(out.text);
     setCaret(out.caret);
     requestAnimationFrame(() => {
       input.current?.focus({ preventScroll: true });
@@ -696,7 +716,7 @@ export const Composer = memo(function Composer({
   const dropEntry = (e: React.DragEvent): boolean => {
     const entry = droppedEntry(e.dataTransfer);
     if (!entry) return false;
-    if (disabled) return true;
+    if (disabled || editor) return true;
     const drop = composerEntryDrop(entry, { mid: machineId, cwd: mention?.cwd });
     if (drop.action === "refuse") {
       toast(drop.toast);
@@ -707,7 +727,7 @@ export const Composer = memo(function Composer({
   };
 
   const addFiles = async (picked: FileList | File[]) => {
-    if (disabled) return;
+    if (disabled || editor) return;
     // at most MAX_IMAGES pictures a message, as on the phone: the ones past it are turned away with a word
     // (the count takes in pictures still being read by an earlier paste or drop)
     let refused = false;
@@ -791,7 +811,7 @@ export const Composer = memo(function Composer({
       return;
     }
     const hasFiles = readyFiles(draftKey).length > 0;
-    if (disabled || blocked || loadingDraft || (!text.trim() && !atts.length && !hasFiles && !refs.length && !q.length)) return;
+    if (editor || disabled || blocked || loadingDraft || (!text.trim() && !atts.length && !hasFiles && !refs.length && !q.length)) return;
     // Any message spends the suggestion shown: it stays on the hub until the agent starts (#4644).
     if (suggestion) setSentPill(suggestion);
     // An edit of the last message: the rewind to before the old one first, the box kept as it is (read-only meanwhile).
@@ -872,7 +892,7 @@ export const Composer = memo(function Composer({
       setDismissed(true);
       return;
     }
-    setDraft(c.text);
+    changeText(c.text);
     setDismissed(true);
     input.current?.focus({ preventScroll: true });
   };
@@ -888,7 +908,7 @@ export const Composer = memo(function Composer({
       className="relative"
       inert={loadingDraft || undefined}
       onDragOver={(e) => {
-        if (e.dataTransfer.types.includes("Files") || dragHasEntry(e.dataTransfer)) {
+        if (!editor && (e.dataTransfer.types.includes("Files") || dragHasEntry(e.dataTransfer))) {
           e.preventDefault();
           setDragging(true);
         }
@@ -919,12 +939,12 @@ export const Composer = memo(function Composer({
 
       {token && (
         <Suspense fallback={null}>
-          <ComposerPanel key={skillEnvironment} memory={catalogMemory} from="at" query={token.query} source={mention} machineId={machineId} attach={disabled ? undefined : machineId ? "files" : "images"} plan={planMode} onPick={(p) => pickPanel(p, token)} onClose={closePlus} handle={panel} />
+          <ComposerPanel key={skillEnvironment} memory={catalogMemory} from="at" query={token.query} source={mention} machineId={machineId} attach={disabled || editor ? undefined : machineId ? "files" : "images"} plan={planMode} onPick={(p) => pickPanel(p, token)} onClose={closePlus} handle={panel} />
         </Suspense>
       )}
       {plusOpen && !disabled && (
         <Suspense fallback={null}>
-          <ComposerPanel key={skillEnvironment} memory={catalogMemory} from="plus" source={mention} machineId={machineId} attach={machineId ? "files" : "images"} plan={planMode} onPick={(p) => pickPanel(p, null)} onClose={closePlus} />
+          <ComposerPanel key={skillEnvironment} memory={catalogMemory} from="plus" source={mention} machineId={machineId} attach={editor ? undefined : machineId ? "files" : "images"} plan={planMode} onPick={(p) => pickPanel(p, null)} onClose={closePlus} />
         </Suspense>
       )}
 
@@ -957,7 +977,7 @@ export const Composer = memo(function Composer({
             </button>
           </div>
         )}
-        <ContextChips draftKey={draftKey} />
+        {editor ? <ContextChipList refs={contexts} onRemove={(id) => editor.onChange(draft, contexts.filter((r) => r.id !== id))} /> : <ContextChips draftKey={draftKey} />}
         <ForwardBars draftKey={draftKey} onRemove={() => input.current?.focus()} />
         {quote && (
           <QuoteBars
@@ -997,7 +1017,7 @@ export const Composer = memo(function Composer({
           readOnly={loadingDraft}
           aria-busy={loadingDraft || undefined}
           onFocus={() => {
-            activateComposer(handle);
+            if (!editor) activateComposer(handle);
             setFocused(true);
             onFocusChange?.(true);
           }}
@@ -1008,7 +1028,7 @@ export const Composer = memo(function Composer({
             onFocusChange?.(false);
           }}
           onChange={(e) => {
-            setDraft(e.target.value);
+            changeText(e.target.value);
             setDismissed(false);
             setCaret(e.target.selectionStart);
           }}
@@ -1035,7 +1055,7 @@ export const Composer = memo(function Composer({
               if (e.key === "Escape") e.stopPropagation();
               return;
             }
-            const send = enterSends(e, hasFinePointer());
+            const send = !editor && enterSends(e, hasFinePointer());
             // Mod+Enter sends rather than choosing a slash/@ row; Mod+Alt/Shift falls through to the window unchanged.
             const modEnter = e.ctrlKey || e.metaKey;
             // a plain Enter picks the highlighted row; Shift+Enter or Alt+Enter is always a new line
@@ -1119,10 +1139,10 @@ export const Composer = memo(function Composer({
             }
           }}
           placeholder={pill && hasFinePointer() ? t("chat-composer.suggestion", { suggestion: pill }) : placeholder}
-          aria-label={t("chat-composer.message")}
-          title={hasFinePointer() ? (onEditLastMessage ? t("composer.history_hint_edit") : t("composer.history_hint")) : undefined}
+          aria-label={editor?.label ?? t("chat-composer.message")}
+          title={!editor && hasFinePointer() ? (onEditLastMessage ? t("composer.history_hint_edit") : t("composer.history_hint")) : undefined}
           style={{ maxHeight: grow.cap ? `min(${grow.cap}px, ${INPUT_MAX})` : INPUT_MAX }}
-          className={cx("min-h-6 w-full resize-none overflow-y-auto bg-transparent px-2 pt-1.5 text-[14px] leading-[21px] text-ink outline-none [@media(pointer:coarse)]:text-[16px] [@media(pointer:coarse)]:leading-[24px] [overflow-wrap:anywhere] placeholder:text-ink-3 disabled:opacity-50", showExpand && "pr-8")}
+          className={cx("min-h-[calc(1lh+var(--spacing)*1.5)] w-full resize-none overflow-y-auto bg-transparent px-2 pt-1.5 text-[14px] leading-[21px] text-ink outline-none [@media(pointer:coarse)]:text-[16px] [@media(pointer:coarse)]:leading-[24px] [overflow-wrap:anywhere] placeholder:text-ink-3 disabled:opacity-50", showExpand && "pr-8")}
         />
         {showExpand && (
           <button
@@ -1161,7 +1181,7 @@ export const Composer = memo(function Composer({
             title={t("chat-composer.more_actions")}
             aria-haspopup="listbox"
             aria-expanded={plusOpen}
-            disabled={disabled}
+            disabled={disabled || Boolean(editor && !mention)}
             onMouseDown={(e) => e.preventDefault()}
             onClick={togglePlus}
             className={cx(TOOL, "text-ink-2 disabled:opacity-50")}
@@ -1187,7 +1207,7 @@ export const Composer = memo(function Composer({
               <Icon name="voice" size={15} stroke={2} />
             </button>
           )}
-          {roundVoice ? (
+          {editor ? null : roundVoice ? (
             <button
               type="button"
               data-testid="composer-voice"
@@ -1234,11 +1254,12 @@ export const Composer = memo(function Composer({
       {expanded && (
         <Suspense fallback={null}>
           <ComposerOverlay
+            editLabel={editor?.label}
             value={draft}
             placeholder={placeholder}
             selection={[input.current?.selectionStart ?? draft.length, input.current?.selectionEnd ?? draft.length]}
             onChange={(v) => {
-              setDraft(v);
+              changeText(v);
               setDismissed(false);
             }}
             onCollapse={(sel) => {

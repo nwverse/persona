@@ -75,5 +75,8 @@
   "todo_wait_cost": "Another scheduled window may pass without advancing the task.",
   "todo_change_result": "Ask the supervisor to propose another approach within the existing permissions.",
   "todo_wait_result": "Keep the approved approach and wait for the next scheduled check.",
+  "selected_file_unavailable": "The selected file is unavailable or its execution context changed. Remove it and choose it again.",
+  "file_runtime_unsupported": "This agent does not support file selection. Use text or choose another agent.",
+  "input_context_unavailable": "The task or its original conversation is unavailable. Reopen the task and try again.",
   "execution_antigravity_unavailable": "Antigravity is disconnected or unavailable on {machine}. Restore Antigravity on that computer, then run this task again to continue its existing conversation."
 }

@@ -413,7 +413,11 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			return proto.Session{}, refusePick(http.StatusBadRequest, err)
 		}
 	}
-	if err := s.validateSkillSelections(ctx, machine, "", params); err != nil {
+	validate := s.validateSkillSelections
+	if p.TaskExecution {
+		validate = s.validateTaskSelections
+	}
+	if err := validate(ctx, machine, "", params); err != nil {
 		return proto.Session{}, err
 	}
 	var res struct {

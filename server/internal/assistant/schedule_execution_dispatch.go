@@ -48,22 +48,28 @@ func taskSourceDefinitelyUnsent(err error, id string) bool {
 }
 
 func (s *Service) taskConversationChanged(t Task, ex TaskExecution, override ModelBinding, run *ScheduleRun) bool {
-	switch {
-	case t.RunExecution != nil && !compatibleTaskExecution(*t.RunExecution, ex):
-		run.ConversationReason = "execution_changed"
-		s.logf("task %s: execution context changed; starting a new conversation", t.ID)
-	case t.RunExecution == nil && (t.Cwd != "" || t.ExecutionMachineID != "" || override != (ModelBinding{})):
-		run.ConversationReason = "legacy_context"
-		s.logf("task %s: previous execution context is unknown; starting a new conversation", t.ID)
-	default:
+	reason := taskExecutionChangeReason(t, ex, override)
+	if reason == "" {
 		return false
 	}
+	run.ConversationReason = reason
+	s.logf("task %s: %s; starting a new conversation", t.ID, run.ConversationReason)
 	return true
+}
+
+func taskExecutionChangeReason(t Task, ex TaskExecution, override ModelBinding) string {
+	switch {
+	case t.RunExecution != nil && !compatibleTaskExecution(*t.RunExecution, ex):
+		return "execution_changed"
+	case t.RunExecution == nil && (t.Cwd != "" || t.ExecutionMachineID != "" || override != (ModelBinding{})):
+		return "legacy_context"
+	}
+	return ""
 }
 
 func (s *Service) failSourceTaskRun(ctx context.Context, t Task, run ScheduleRun, err error) (proto.Session, error) {
 	// ErrNotSent retries this same source after the existing delay; it does not select another conversation.
-	return s.failTaskRun(ctx, t, run, err, !errors.Is(err, rpc.ErrNotSent))
+	return s.failTaskRun(ctx, t, run, err, !errors.Is(err, rpc.ErrNotSent) && nodeDelivered(err) != "none")
 }
 
 func (s *Service) failTaskRun(ctx context.Context, t Task, run ScheduleRun, err error, unknown bool) (proto.Session, error) {
