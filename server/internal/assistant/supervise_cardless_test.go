@@ -140,3 +140,24 @@ func TestReviewCardlessWaitSurvivesRestart(t *testing.T) {
 		t.Fatal("a restart reissued the same card-less hand-back")
 	}
 }
+
+// cardlessWorkersStopped judges only the sessions it is given: a worker still working or starting keeps the review
+// live, a worker holding a card stands for the owner, and only fully stopped, card-less sessions count as settled.
+func TestCardlessWorkersStopped(t *testing.T) {
+	stopped := proto.Session{SessionID: "s1", State: "idle"}
+	if !cardlessWorkersStopped([]proto.Session{stopped}) {
+		t.Error("an idle, card-less worker should count as stopped")
+	}
+	if cardlessWorkersStopped([]proto.Session{stopped, {SessionID: "s2", State: proto.StateWorking}}) {
+		t.Error("a still-working worker should keep the review live")
+	}
+	if cardlessWorkersStopped([]proto.Session{stopped, {SessionID: "s3", Starting: true}}) {
+		t.Error("a starting worker should keep the review live")
+	}
+	if cardlessWorkersStopped([]proto.Session{stopped, {SessionID: "s4", State: proto.StateNeedsYou}}) {
+		t.Error("a worker holding an owner card means the review is not card-less")
+	}
+	if cardlessWorkersStopped([]proto.Session{stopped, {SessionID: "s5", PendingInteractions: 1}}) {
+		t.Error("a worker with a pending interaction means the review is not card-less")
+	}
+}
