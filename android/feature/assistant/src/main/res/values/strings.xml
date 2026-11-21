@@ -208,6 +208,12 @@
     <string name="assistant_tags_hint">Press Enter to add. Up to %1$d tags, each at most %2$d characters.</string>
     <string name="assistant_tag_too_long">Each tag can be at most %1$d characters.</string>
     <string name="assistant_tag_count_limit">A chat can have at most %1$d tags.</string>
+    <string name="assistant_tag_filters_customize">Customize tag filters</string>
+    <string name="assistant_tag_filters_empty">No tag filters</string>
+    <string name="assistant_tag_filters_placeholder">Add a tag filter</string>
+    <string name="assistant_tag_filters_reset">Reset to automatic</string>
+    <string name="assistant_tag_filters_done">Done</string>
+    <string name="assistant_tag_filters_count_limit">You can add up to %1$d tag filters.</string>
     <string name="assistant_tags_saved">Tags saved for %1$s</string>
     <string name="assistant_copy_diagnostics">Copy diagnostics</string>
     <string name="assistant_diagnostics_copied">Diagnostics copied</string>

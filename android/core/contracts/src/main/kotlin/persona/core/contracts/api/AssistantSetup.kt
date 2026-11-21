@@ -1,7 +1,18 @@
+@file:OptIn(kotlinx.serialization.SealedSerializationApi::class)
+
 package persona.core.contracts.api
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.serializer
 
 /**
  * GET /api/v1/assistant without the conversations: which machine the assistant runs on, with which launcher, in
@@ -38,6 +49,8 @@ data class AssistantConfig(
     @SerialName("main_background_folded") val mainBackgroundFolded: Boolean? = null,
     /** Show scheduled task and background-supervisor chats in Recent; null from a hub without the setting. */
     @SerialName("recent_task_chats") val recentTaskChats: Boolean? = null,
+    /** Exact ordered tag filters. [ConversationTagFilters.Unsupported] means the field was absent. */
+    @SerialName("conversation_tag_filters") val conversationTagFilters: ConversationTagFilters = ConversationTagFilters.Unsupported,
     /** Suggest the next message after a reply; null from a hub without the setting, never a local opt-in. */
     @SerialName("next_suggestions") val nextSuggestions: Boolean? = null,
     /**
@@ -99,6 +112,8 @@ data class AssistantConfigUpdate(
     @SerialName("main_tasks_quiet") val mainTasksQuiet: Boolean? = null,
     @SerialName("main_background_folded") val mainBackgroundFolded: Boolean? = null,
     @SerialName("recent_task_chats") val recentTaskChats: Boolean? = null,
+    /** Null on this update object omits the field; a nonnull wrapper with null entries writes JSON null. */
+    @SerialName("conversation_tag_filters") val conversationTagFilters: ConversationTagFilters? = null,
     @SerialName("next_suggestions") val nextSuggestions: Boolean? = null,
     @SerialName("main_supervises_own_tasks") val mainSupervisesOwnTasks: Boolean? = null,
     @SerialName("close_ended_terminals") val closeEndedTerminals: Boolean? = null,
@@ -111,6 +126,39 @@ data class AssistantConfigUpdate(
 ) {
     companion object {
         const val CLEAR_MAIN = "-"
+    }
+}
+
+/**
+ * The hub's exact tag-filter preference (#12018). Absent is [Unsupported], explicit JSON null is supported automatic
+ * behavior, and an array is customized in exactly that order (including an empty array). On an update, a nonnull value
+ * whose [entries] is null is how reset writes explicit JSON null through a codec configured with explicitNulls = false.
+ */
+@Serializable(with = ConversationTagFiltersSerializer::class)
+data class ConversationTagFilters(val entries: List<String>?, val supported: Boolean = true) {
+    val customized: Boolean get() = supported && entries != null
+
+    companion object {
+        val Unsupported = ConversationTagFilters(entries = null, supported = false)
+    }
+}
+
+private object NullableJsonElementDescriptor : kotlinx.serialization.descriptors.SerialDescriptor by JsonElement.serializer().descriptor {
+    override val isNullable: Boolean get() = true
+}
+
+object ConversationTagFiltersSerializer : KSerializer<ConversationTagFilters> {
+    override val descriptor: kotlinx.serialization.descriptors.SerialDescriptor = NullableJsonElementDescriptor
+
+    override fun deserialize(decoder: kotlinx.serialization.encoding.Decoder): ConversationTagFilters {
+        val input = decoder as JsonDecoder
+        val element = input.decodeJsonElement()
+        return ConversationTagFilters(if (element is JsonNull) null else input.json.decodeFromJsonElement(element))
+    }
+
+    override fun serialize(encoder: kotlinx.serialization.encoding.Encoder, value: ConversationTagFilters) {
+        val output = encoder as JsonEncoder
+        output.encodeJsonElement(value.entries?.let { entries -> JsonArray(entries.map { JsonPrimitive(it) }) } ?: JsonNull)
     }
 }
 

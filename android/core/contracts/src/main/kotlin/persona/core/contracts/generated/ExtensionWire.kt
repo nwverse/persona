@@ -1132,6 +1132,11 @@ data class ExtensionChannelItem(
 @Serializable
 data class ExtensionChannelCapabilities(
     @SerialName("images_in") val imagesIn: Boolean? = null,
+    /**
+     * It can send pictures: the hub puts an answer's pictures in channel.send's images instead of leaving them as
+     * Markdown in the text.
+     */
+    @SerialName("images_out") val imagesOut: Boolean? = null,
     @SerialName("files_in") val filesIn: Boolean? = null,
     @SerialName("voice_in") val voiceIn: Boolean? = null,
     val format: String? = null,

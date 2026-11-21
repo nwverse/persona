@@ -527,7 +527,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			// What it ran, with this message's claude_interactive: the manager's switch, sent with every message, not a
 			// model pick (assistant_tui.go). Without it a message that picks no model (a supervision message, a relay)
 			// started claude -p, and restarted a conversation that runs interactive Claude Code.
-			execution = modelExecution{Strict: execution.Strict, Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, SupervisionInstructions: st.SupervisionInstructions, Origin: origin, Interactive: execution.Interactive}
+			execution = modelExecution{Strict: execution.Strict, Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, SupervisionInstructions: st.SupervisionInstructions, Origin: origin, Interactive: execution.Interactive, FollowsSetting: execution.FollowsSetting || st.FollowsSetting}
 		}
 	}
 	if launcher != "" && st.Launcher != "" && launcher != st.Launcher && execution.Fingerprint == "" {
@@ -553,7 +553,19 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if err := n.ensureManaged(ctx, launcher); err != nil { // the conversation's own provider (managed.go)
 		return "", err
 	}
-	if recovery == nil && id != "" && !execution.Strict && !proto.IsExternalLauncher(launcher) {
+	execution.IsMain = isMain && guest == nil
+	protected := strictProtectedExecution(execution) || n.recoveryProtected(id)
+	if recovery == nil && id != "" && protected {
+		// Discard a pre-upgrade fallback hold/marker. The manager's current model choice is authoritative,
+		// even while that model is still quota-limited; do not probe or substitute another execution.
+		n.mu.Lock()
+		legacyHold := n.fallbacks[id] != nil
+		n.mu.Unlock()
+		if legacyHold || n.modelRecovery(id) != nil {
+			n.releaseModelRecovery(id, execution.Model)
+		}
+	}
+	if recovery == nil && id != "" && !protected && !execution.Strict && !proto.IsExternalLauncher(launcher) {
 		askedModel := execution.Model
 		// The fallback that answered (#3788). holdExpired is declared apart: ":=" would shadow execution in this block.
 		var holdExpired bool

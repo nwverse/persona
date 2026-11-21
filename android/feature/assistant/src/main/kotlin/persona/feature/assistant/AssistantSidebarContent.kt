@@ -257,6 +257,23 @@ fun AssistantSidebarContent(
                 onDiagnostics = { copy(conversationDiagnostics(it), resources.getString(R.string.assistant_diagnostics_copied)) },
                 archivedCount = history.shownArchived(openKeys).size, onArchived = { history.archivedOpen = true },
                 tagChoices = tagChoices, activeTag = history.activeTag, onTag = history::selectTag,
+                tagFilterBar = if (management != null && !demo && received.conversationTagFilters.supported) ({
+                    ConversationTagFilterBar(
+                        entries = conversationTagFilterEntries(tagChoices, received.conversationTagFilters),
+                        activeTag = history.activeTag,
+                        customized = received.conversationTagFilters.customized,
+                        editing = history.editingTagFilters,
+                        busy = history.tagFiltersBusy,
+                        onSelect = history::selectTag,
+                        onChange = { next ->
+                            val result = history.saveConversationTagFilters(next)
+                            (result.exceptionOrNull() as? Exception)?.let(::failed)
+                            result.isSuccess
+                        },
+                        onEdit = { history.editingTagFilters = true },
+                        onDone = { history.editingTagFilters = false },
+                    )
+                }) else null,
                 onTodos = onTodos, todoCount = todoCount, showTodos = showTodos,
                 settingsCount = settingsCount, settingsDot = settingsDot, settingsBadge = settingsBadge,
                 pages = pages, onPage = onPage, onOpenTodo = onOpenTodo, onOpenAgent = onOpenAgent, switcher = switcher,
@@ -300,6 +317,7 @@ fun AssistantSidebarContent(
         )
     }
     ConversationHistoryDialogs(history, received.conversations, operationScope, onOpen = onOpen,
+        customizedTagFilters = received.conversationTagFilters.customized,
         notice = { feedback?.notice(it, persona.core.designsystem.FeedbackStyle.Success) }, failure = ::failed)
     ending?.let { (session, target) ->
         JDialog(onDismiss = { if (!busy) ending = null }, title = stringResource(R.string.assistant_end_title),

@@ -1033,6 +1033,8 @@ export interface AssistantInfo {
   owner_reply_approval_phrases?: string[];
   /** User-chosen ordinary conversation order (#12017), shared by every client; absent or empty means activity time. */
   conversation_order?: string[];
+  /** Exact user-chosen tag filter entries (#12018); null or absent means the automatic all-in-use-tag row. */
+  conversation_tag_filters?: string[] | null;
   /** The background supervisor's conversation (#4927, lib/background-supervisor.ts): its session id once the hub made
    *  it; absent before that and from an older hub. Read-only. */
   background_supervisor?: string;

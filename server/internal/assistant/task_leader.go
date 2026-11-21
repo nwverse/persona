@@ -271,11 +271,12 @@ type leaderScope struct {
 	agent TodoAgent
 }
 
-// leaderTaskIn is a worker task as a task leader may plan it: nothing else (no todo_id, role, attachments, project,
-// user_requested…) is read, an unknown field is refused.
+// leaderTaskIn is a worker task as a task leader may plan it: nothing else (no todo_id, attachments, project,
+// user_requested…) is read, an unknown field is refused. Every new worker declares role "worker".
 type leaderTaskIn struct {
 	Title         string   `json:"title"`
 	Prompt        string   `json:"prompt"`
+	Role          string   `json:"role"`
 	Machine       string   `json:"machine"`
 	MachinePolicy string   `json:"machine_policy"`
 	Cwd           string   `json:"cwd"`
@@ -300,12 +301,12 @@ func (l *leaderScope) workerTasks(args json.RawMessage) ([]PlanTask, error) {
 	dec := json.NewDecoder(bytes.NewReader(args))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
-		return nil, fmt.Errorf("a task leader's task_plan takes only the fields its schema lists; todo_id, role, attachments and "+
+		return nil, fmt.Errorf("a task leader's task_plan takes only the fields its schema lists; todo_id, attachments and "+
 			"any other are refused, and workers can only be new tasks beneath your own task (%v)", err)
 	}
 	out := make([]PlanTask, 0, len(in.Tasks))
 	for _, t := range in.Tasks {
-		pt := PlanTask{Title: t.Title, Prompt: t.Prompt, Machine: t.Machine, MachinePolicy: t.MachinePolicy, Cwd: t.Cwd,
+		pt := PlanTask{Title: t.Title, Prompt: t.Prompt, Role: t.Role, Machine: t.Machine, MachinePolicy: t.MachinePolicy, Cwd: t.Cwd,
 			Launcher: t.Launcher, Model: t.Model, Tier: t.Tier, Effort: t.Effort, Speed: t.Speed, Permission: t.Permission, Readonly: t.Readonly,
 			DoneWhen: t.DoneWhen, Goal: t.Goal, ExpectMinutes: t.ExpectMinutes, Why: t.Why, Parent: l.task.ID, Project: l.task.Project}
 		if strings.TrimSpace(pt.Machine) == "" {

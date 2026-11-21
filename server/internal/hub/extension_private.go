@@ -86,3 +86,23 @@ func (h *Hub) extensionReadable(next http.HandlerFunc) http.HandlerFunc {
 		next(w, r)
 	}
 }
+
+// extensionControllable protects controls before they record receipts or forward
+// a request. A history read grant does not authorize changes to that session.
+func (h *Hub) extensionControllable(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if restrictedAgentData(r) {
+			if m := h.localMachine(r.PathValue("mid")); m != nil && !h.publicSessionForControl(m, r.PathValue("sid")) {
+				writeErr(w, http.StatusNotFound, errDeleteUnknown)
+				return
+			}
+		}
+		next(w, r)
+	}
+}
+
+func (h *Hub) publicSessionForControl(m *Machine, id string) bool {
+	s, ok := m.session(id)
+	return ok && !healthSession(&s) && !s.HiddenByDirectory() && !s.IsDeleted() &&
+		!sessionHiddenByDeletion(s, h.deletedAt(m.cfg.ID))
+}

@@ -340,7 +340,7 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 	if latest, ok := s.workEntry(k); !ok || latest.Work.RetiredAt != nil || latest.Work.Deferred || !latest.TurnAt.Equal(e.TurnAt) {
 		return
 	}
-	send := func() error { return s.sendToSession(ctx, k[0], c.SessionID, text) }
+	send := func() error { return s.sendWorkText(ctx, k[0], c.SessionID, text, kind == "limit_continued") }
 	if kind == "continued" {
 		send = func() error { return s.sendModelRetry(ctx, e, text) }
 	}
@@ -541,7 +541,7 @@ func (s *Service) backfillWork(ctx context.Context, v *workView, now time.Time) 
 			if n >= 3 {
 				return
 			}
-			if c.HiddenByDirectory() || c.Assistant && !turnErrorTransient(c) || c.State != proto.StateUnread || c.Work != nil || now.Sub(c.UpdatedAt) > workBackfill ||
+			if c.HiddenByDirectory() || c.Assistant && !turnErrorTransient(c) && !s.protectedQuotaWait(ctx, d.ID, c) || c.State != proto.StateUnread || c.Work != nil || now.Sub(c.UpdatedAt) > workBackfill ||
 				now.Sub(c.UpdatedAt) < settle || !full && (c.TurnError == "" || !turnErrorTransient(c)) {
 				continue
 			}
