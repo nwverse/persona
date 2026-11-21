@@ -387,7 +387,7 @@ func useFakeClaudeUsageCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	cli := filepath.Join(t.TempDir(), "claude")
-	script := "#!/bin/sh\nexec " + shellQuote(binary) + " -test.run='^TestFakeClaudeUsageCLI$' -- \"$@\"\n"
+	script := "#!/bin/sh\nexec " + shellQuote(binary) + " -- \"$@\"\n"
 	if err := os.WriteFile(cli, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -413,26 +413,20 @@ func readProbeCount(t *testing.T, dir string) int {
 	return len(strings.Split(strings.TrimSpace(string(b)), "\n"))
 }
 
-// TestFakeClaudeUsageCLI implements both Claude Code's stream-json control protocol and `-p /usage` for tests.
-func TestFakeClaudeUsageCLI(t *testing.T) {
-	if os.Getenv("PERSONA_TEST_CLAUDE_USAGE_CLI") == "" {
-		return
-	}
+// runFakeClaudeUsageCLI implements both Claude Code's stream-json control protocol and `-p /usage` for tests.
+// Invoked from TestMain before the test harness unsets CLAUDE_CONFIG_DIR.
+func runFakeClaudeUsageCLI() {
 	cfgEnv, set := os.LookupEnv("CLAUDE_CONFIG_DIR")
 	dir := cfgEnv
 	if !set {
-		// In tests, Node.home is not OS HOME; locate the default dir from the test's temp layout via fixture marker.
 		home, _ := os.UserHomeDir()
 		dir = filepath.Join(home, ".claude")
 	}
-	// Resolve the dir for unset CLAUDE_CONFIG_DIR by checking HOME first, then any sibling passed via env.
 	if _, err := os.Stat(filepath.Join(dir, "fixture-control")); err != nil {
-		// Find the test's defaultDir from parent env if HOME wasn't overridden.
 		if h := os.Getenv("PERSONA_TEST_CLAUDE_DEFAULT_DIR"); h != "" {
 			dir = h
 		}
 	}
-	// Record whether CLAUDE_CONFIG_DIR was set.
 	val := "<unset>"
 	if set {
 		val = cfgEnv
@@ -477,7 +471,7 @@ func TestFakeClaudeUsageCLI(t *testing.T) {
 		case "get_usage":
 			body, err := os.ReadFile(filepath.Join(dir, "fixture-control"))
 			if err != nil {
-				t.Fatal(err)
+				os.Exit(1)
 			}
 			switch strings.TrimSpace(string(body)) {
 			case "block":
