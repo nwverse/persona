@@ -1365,8 +1365,18 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	if l == "" {
 		c, known := s.session(ctx, machine, sid)
 		if known && c.SourceKind == proto.SourceRuntime {
-			// The node resumes the session on the runtime that owns it, even for scheduled chats and leaders.
-			return nil
+			// Preserve existing runtime inheritance unless the main chat has its
+			// own binding. That binding still passes the execution identity check.
+			if p["is_main"] != true {
+				return nil
+			}
+			record, err := s.modelRecord(ctx, purposeMain)
+			if err != nil {
+				return err
+			}
+			if record.Binding == (ModelBinding{}) {
+				return nil
+			}
 		}
 		if known && !followsSetting {
 			l = c.Launcher // no launcher picked: the one this conversation runs
