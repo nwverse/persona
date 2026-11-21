@@ -146,7 +146,7 @@ export function Row({ row, second, describes, keepSecond, asButton, blocked, cus
         <span className="flex size-[18px] shrink-0 items-center justify-center text-ink-2">
           <ProviderMark engine={provider.engine} label={provider.engineLabel} size={16} />
         </span>
-        <span ref={nameEl} title={row.kind === "typed" ? model.id : name} className={cx("min-w-0 truncate leading-5 font-medium", model.custom && stars && "font-mono")}>{name}</span>
+        <span ref={nameEl} title={row.kind === "typed" ? model.id : cut ? name : undefined} className={cx("min-w-0 truncate leading-5 font-medium", model.custom && stars && "font-mono")}>{name}</span>
         {row.latest && <span data-row-latest className="shrink-0 text-submeta leading-5 text-ink-3">{t("ui-modelpanel.latest")}</span>}
         {tier && (
           <span data-price-tier={tier} aria-label={t("ui-modelpanel.price_tier", { tier })} title={t("ui-modelpanel.price_tier", { tier })} className="shrink-0 text-[11px] leading-none font-semibold tracking-[0.5px] text-ink-2">

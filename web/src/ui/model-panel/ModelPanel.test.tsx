@@ -636,8 +636,12 @@ describe("launcher-first acceptance #10249", () => {
     expect(document.body.querySelectorAll("[data-panel-launcher]")).toHaveLength(7);
     expect([...document.body.querySelectorAll('[data-panel-launcher][aria-expanded="true"]')].map((el) => el.getAttribute("data-panel-launcher"))).toEqual(["account-2"]);
     expect(launcher("account-6").parentElement!.textContent).toContain("Signed out");
-    for (const header of document.body.querySelectorAll("[data-panel-launcher]")) {
-      expect(header.textContent).toContain("Claude Code · Opus 5.5 · 3 个模型");
+    for (const header of document.body.querySelectorAll<HTMLElement>("[data-panel-launcher]")) {
+      // the launcher the chat runs on says "Current" and not its model again (#12315)
+      if (header.dataset.panelLauncher === "account-2") {
+        expect(header.textContent).toContain("当前");
+        expect(header.textContent).not.toContain("Opus 5.5");
+      } else expect(header.textContent).toContain("Claude Code · Opus 5.5 · 3 个模型");
     }
     act(() => launcher("account-4").click());
     const wanted = document.body.querySelector<HTMLElement>('[data-panel-row="model:account-4\\a sonnet"]')!;

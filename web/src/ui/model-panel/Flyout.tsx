@@ -132,7 +132,7 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
       </div>
       {(slider || model.fast) && (
         <div className="flex items-center gap-2 pt-3.5">
-          {slider && <EffortSlider stops={model.efforts} value={effort} recommended={model.defaultEffort} labelOf={effortTitle} unsetLabel={t("ui-modelpanel.effort_unset")} onChange={onEffort} disabled={disabled} />}
+          {slider && <EffortSlider stops={model.efforts} value={effort} recommended={model.variants ? undefined : model.defaultEffort} labelOf={effortTitle} unsetLabel={t("ui-modelpanel.effort_unset")} onChange={onEffort} disabled={disabled} />}
           {model.fast && (
             <button
               type="button"

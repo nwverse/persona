@@ -7,6 +7,7 @@ import { afterBack, useCloseOnBack } from "../../lib/back-close";
 import {
   engineChoices,
   engineSetup,
+  levelSetup,
   panelSections,
   rowBlock,
   rowCustomizable,
@@ -397,12 +398,26 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
   const edit = async (row: PanelRow, patch: PanelOverride) => {
     if (row.kind === "favorite" && row.favorite) return store.updateFavorite(row.favorite.uid, patch);
     if (row.kind !== "model") return;
+    const variants = row.model.variants;
+    if (variants && patch.effort !== undefined) {
+      // a model listed per level: its effort is another model ID. The one that runs now switches to it, as a pick does;
+      // any other row stands for the level chosen, and the list's first needs no override
+      if (row.current) {
+        const setup = levelSetup(row, patch.effort);
+        if (setup && setup.model !== row.model.id) await apply(() => onPick(setup), setup);
+        return;
+      }
+      store.setOverride(row.provider.id, variants.base, { effort: patch.effort === variants.first ? undefined : patch.effort });
+      return;
+    }
     if (row.current && live && !(await applyLive(row, patch))) return;
-    store.setOverride(row.provider.id, row.model.id, patch);
+    store.setOverride(row.provider.id, variants?.base ?? row.model.id, patch);
   };
 
   const reset = async (row: PanelRow) => {
     if (row.kind !== "model") return;
+    // a folded row's level comes back to the list's first; the one that runs keeps running until another is picked
+    if (row.model.variants) return store.resetOverride(row.provider.id, row.model.variants.base);
     if (row.current && live) {
       const patch: PanelOverride = {};
       // An agy start uses its native default when the request omits effort.

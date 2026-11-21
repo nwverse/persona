@@ -1376,8 +1376,10 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   One shared column in Agent, handover, Assistant and New Agent pickers (#10249): Follow model configuration where
   supported, up to three distinct saved setups (Favorites first, then Recent), then every launcher in catalog order.
   Only the current launcher starts expanded; with no current launcher all start collapsed. Each launcher summary names
-  the launcher, Agent kind, known default model, catalog model count (excluding a synthetic Default row), Current or
-  configured Default status, known weekly quota and any supplied failure reason. No launcher is hidden in another bucket.
+  the launcher, Agent kind, known default model, catalog model count (excluding a synthetic Default row, a model's
+  thinking levels counted once), Current or configured Default status, known weekly quota and any supplied failure
+  reason; the current launcher's summary drops the "Agent kind · model · N models" line, which the pill, the header and
+  its lit row already say (#12315). No launcher is hidden in another bucket.
   Disclosure uses the existing chevron, the launcher's Agent mark (#5497), role colors and text tokens.
   Expanded launchers reuse model Row, family folds and Flyout, including Favorite, effort, Fast and engine controls.
   Search is flat: matching launcher summaries, then matching model rows naming their launcher even on touch screens;
@@ -1385,7 +1387,9 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   and model choices from people comparing several launchers. The single column exposes that information progressively.
   Rows have two lines led by the Agent's mark (16 px, the launcher summaries too; the right side holds only effort and
   Fast) with hover-revealed Favorite and Customize; the model that runs has a static selected fill, no
-  check. Customize opens a 264 px flyout to the panel's left: the effort slider, Fast, the engine, an exact catalog
+  check. One row per model: a model listed once per thinking level (Antigravity) is one row named without the level,
+  its level at the right side and the levels on the flyout's effort slider (#12315). A name has a tooltip only when cut
+  short. Customize opens a 264 px flyout to the panel's left: the effort slider, Fast, the engine, an exact catalog
   reference-price line where known, and a footer that says whether the setup is the recommended one, customized or
   saved. A launcher summary adds its weekly-remaining bar only when the existing launcher quota answer supplies a
   weekly ratio; its tooltip names the window and reset time.

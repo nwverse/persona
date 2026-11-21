@@ -2407,8 +2407,10 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   Follow model configuration stays first where supported. Below it are up to three distinct saved setups, favorites
   first then recent, labeled with launcher and model and preserving their saved effort/speed; a pick is one action.
   Every launcher has a disclosure row in one scrollable list: full name, Agent kind, known default model, model count
-  (catalog entries except the synthetic New Agent Default row), Current/configured Default, known weekly quota and
-  supplied health or unavailable reason. Only the current launcher starts expanded; with no current launcher all start
+  (catalog entries except the synthetic New Agent Default row, a model's thinking levels counted once), Current/configured
+  Default, known weekly quota and supplied health or unavailable reason. The launcher the chat runs on keeps its name,
+  "Current", quota and reason, but not the "Agent kind · model · N models" line: its model is already on the pill, in the
+  header and lit in its list (#12315). A row's name has a tooltip only when it is cut short. Only the current launcher starts expanded; with no current launcher all start
   collapsed. A collapsed launcher takes two actions to pick a model, an expanded one one. There is no separate rail,
   eight-row cutoff or More launchers bucket. The existing model rows, family folds, setup controls and selection gates
   are reused. Unknown model defaults use the existing Default model wording, not an inferred first model.
@@ -2416,6 +2418,18 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   launcher, including on phones and when a long model ID wraps. Selecting a matching launcher clears search and opens
   its models. Typed-ID selection sends exactly its named launcher. Clearing search restores the disclosure state.
   Existing model-ID disclosure on touch screens and clipped names remains, alongside the launcher in search results.
+- **One row per model, its thinking levels inside** (#12315, `lib/model-panel.ts` `variantGroups`): Antigravity lists
+  each thinking level as a model of its own (`gemini-4-neon-high`, "Gemini 4 Neon (High)"; the node marks each with
+  `default_effort`, its ID's last word, and `efforts`, the levels listed). Two levels or more of one model are one row,
+  named without the level ("Gemini 4 Neon"), placed where the list names its first level, counted once and with one
+  family entry. The row stands for one level, shown at its trailing edge: the one that runs, else the one a switch waits
+  for, else the one chosen in its flyout, else the list's first. The flyout's effort slider lists the levels (none marked
+  Recommended: agy names none) and picks another: on the model that runs it is a pick of that level's model, on any other
+  row it changes which level the row stands for (kept like a customization, under the model's ID without its level; Reset
+  goes back to the list's first). A pick sends that level's own model ID, never a second effort beside it, as an Agent's
+  pick of one always did (`lib/session-panel.ts` `pickPlan`); the model that runs keeps what runs. A model with one level
+  listed, an ID typed by hand and saved setups (favorites, Recent) stay as they are; a search folds only the levels it
+  finds. Why: a launcher with seven models showed 27 rows and said "27 models" (the user's ask, 2026-11-21).
 - **Families and earlier versions** (`lib/model-families.ts`): a provider group (and Recommended, after the model that
   runs) keeps each model family together under its name in small type: Claude Fable, Opus, Sonnet and Haiku (in that
   order, by capability), a GPT line per variant ("GPT Sol", "GPT Terra"), a Gemini tier ("Gemini Pro", "Gemini Flash";
