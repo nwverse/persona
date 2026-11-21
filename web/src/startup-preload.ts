@@ -524,12 +524,19 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // load on demand. The bound leaves 37 B above the measured ja size.
 // Merged, the two changes add 25 B + 610 B to their shared 483,143 B ja baseline, giving 483,778 B;
 // #7524's 37 B of room is kept on top.
+// #11979 (in-session model/effort switching in lib/model-switch.ts on main) raised the ja first screen by 80 B
+// (en 481,036 B, ja 483,895 B, zh-Hans 481,759 B).
 // #12038: the sidebar's Starred count/access has a small summary store of its own. Per-message identity and marks
 // belong to the lazy message controls, not the first screen. ja 483,895 B to 483,788 B; the budget stays 483,815 B.
+// #12034's delivery closeout gate row lives in the lazy-loaded Settings page and adds 0 B, so the budget stays too.
 // #12055: an Agent's page opened from inside another page keeps that page's sidebar row lit (lib/persona-nav.ts
 // sidebarRoute), and a briefing's waiting and later rows open their chat in the app: 101 B more in ja on its base.
 // Merged, #12038's 107 B reduction covers #12055's 101 B increase, so main's 483,815 B budget stays.
-export const FIRST_SCREEN_BUDGET = 483_815;
+// #12090: the offline face's own outline and shadow tokens (the dark disc keeps its ink outline) add 48 B in ja
+// (and in en and zh-Hans) against main 86ff5c5259.
+// #11801: stable structural sidebar ordering adds 343 B in ja against main 0009fe34d6 (ja 483,664 B to 484,007 B;
+// en 480,757 B to 481,104 B, zh-Hans 481,491 B to 481,816 B). Keep main's 199 B of room above the new ja size.
+export const FIRST_SCREEN_BUDGET = 484_206;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

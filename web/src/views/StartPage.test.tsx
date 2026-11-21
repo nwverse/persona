@@ -3,6 +3,10 @@
 // not there once the hub has said which pages there are, and Settings › General › Start page lists the pages, saves a
 // choice to the hub and says why a chosen page does not open.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("../ui/atoms", async (original) => ({ ...(await original<typeof import("../ui/atoms")>()), toast: vi.fn() }));
+import { toast } from "../ui/atoms";
+import { ApiError, errorText } from "../lib/api";
+import { t } from "../i18n";
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
@@ -198,6 +202,21 @@ describe("Settings › General › Start page", { timeout: 30_000 }, () => {
     expect(puts).toEqual([{ start: TODAY }]);
     expect(page.startPage()).toBe(TODAY);
     expect(select().value).toBe(TODAY);
+  });
+
+  it("puts the previous choice back and reports a refused save", async () => {
+    navigation = { start: "home" };
+    const { hello, act, page } = await open("home", "settings");
+    await hello();
+    vi.mocked(fetch).mockImplementation(async () => Response.json({ error: "database down" }, { status: 503 }));
+    act(() => {
+      select().value = TODAY;
+      select().dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const error = new ApiError(503, "database down", { error: "database down" });
+    await vi.waitFor(() => expect(vi.mocked(toast)).toHaveBeenCalledWith(t("settings.start_page_failed", { error: errorText(error) }), "error"));
+    expect(page.startPage()).toBe("home");
+    expect(select().value).toBe("home");
   });
 
   it("says why a chosen page does not open, and keeps it chosen", async () => {

@@ -560,6 +560,10 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 	if unheard == "" {
 		// The turn as its transcript has it: read before any receipt, since its end names the turn (task_turns.go).
 		items, read = s.lastTurnItems(cctx, last.MachineID, last.SessionID)
+		if !read {
+			// A failed read cannot identify this turn's prompt or end. A later row or sweep may name it.
+			items = nil
+		}
 		if !s.taskWorkCurrent(t.ID, since) || !s.taskRuntimeSettled(cctx, t) {
 			s.releaseReceipt(ctx, t.ID, machine, sid, reserved)
 			return settleLater

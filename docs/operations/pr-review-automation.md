@@ -84,6 +84,8 @@ The `commands` profile is intended for other trusted repositories and synthetic 
 
 The reviewer uses the local Claude CLI by default. `reviewer.command` may be an executable or trusted argv prefix, `reviewer.model` an optional single model argument, and `reviewer.timeout_seconds` a 30–7200 second bound for the complete review, including all chunks, defaulting to 3600 seconds. `reviewer.repair_timeout_seconds` defaults to 3600 seconds. `reviewer.concurrency` selects 1–20 actual semantic-review workers, defaulting to sixteen; it is independent of lifecycle worker threads and is scheduling-only, so its default does not change the existing evidence fingerprint. A fresh `claude -p` process runs per chunk; it has no persisted session or working Agent transcript. Up to three reviewer attempts are made for an unavailable or timed-out review; the last failure remains retryable with bounded backoff. The prompt follows the existing independent-review design in `server/internal/assistant/supervise_autoreview.go`: judge the change, not the working Agent's claims.
 
+The optional Herdr adapter preserves one prompt per review session. If its five-second lifecycle observation stalls, it waits on the same pane and current-session transcript for a bounded startup grace period rather than resubmitting or treating idle as a pass. Working or blocked state accepts the pending prompt; idle or done requires the invocation's complete, schema-valid marked result. Persistent idle state without that result or an exited scope fails the attempt. The grace period, total review timeout and bounded reviewer slots remain separate limits.
+
 ## Run and inspect
 
 ```sh

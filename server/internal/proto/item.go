@@ -182,6 +182,9 @@ func decimalItemPart(s string) bool {
 
 // Item is one content block of a Claude Code transcript.
 type Item struct {
+	// Stored identifies an incomplete durable copy. Its source can be requested from
+	// the existing full-item/image routes; availability still depends on the runtime.
+	Stored    *StoredItem     `json:"stored,omitempty"`
 	ID        string          `json:"id"`
 	Seq       int             `json:"seq"`
 	TS        time.Time       `json:"ts"`
@@ -251,6 +254,15 @@ type Item struct {
 	// Visualization is set on KindVisualization items: a Codex visualize marker's reference to an HTML fragment on
 	// the node. The bytes are not carried here; the session visualization route serves them after path checks.
 	Visualization *Visualization `json:"visualization,omitempty"`
+}
+
+type StoredItem struct {
+	Complete    bool   `json:"complete"`
+	SourceBytes int    `json:"source_bytes"`
+	MachineID   string `json:"machine_id"`
+	SessionID   string `json:"session_id"`
+	History     string `json:"history"`
+	ItemID      string `json:"item_id"`
 }
 
 // Visualization is one Codex visualize reference (the visualize plugin's in-conversation HTML contract): the

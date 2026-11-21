@@ -173,7 +173,7 @@ function byDate(a: Session, b: Session): number {
 // finished (#9751) → waiting → muted → seen; needs you always wins,
 // even when a session or its project is muted. "By status" is the only grouping built here ("By machine" is
 // lib/herdr-tree.ts); the argument stays for the callers that name it.
-export function buildAgentGroups(all: Session[], machines: Machine[], _grouping: "state", mutes: AgentMutes = { spaces: [], sessions: [] }): AgentGroup[] {
+export function buildAgentGroups(all: Session[], machines: Machine[], _grouping: "state", mutes: AgentMutes = { spaces: [], sessions: [] }, compareSessions: (a: Session, b: Session) => number = byDate): AgentGroup[] {
   const { live } = splitAgentSessions(all, machines);
   const groups: AgentGroup[] = [
     { key: "state:needs", name: stateName("needs_you"), state: "needs_you", sessions: [] },
@@ -194,5 +194,5 @@ export function buildAgentGroups(all: Session[], machines: Machine[], _grouping:
       : justFinished(s, mutes) ? 5 : 8;
     groups[index].sessions.push(s);
   }
-  return groups.filter((g) => g.sessions.length).map((g) => ({ ...g, sessions: g.sessions.sort(byDate) }));
+  return groups.filter((g) => g.sessions.length).map((g) => ({ ...g, sessions: g.sessions.sort(compareSessions) }));
 }
