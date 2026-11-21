@@ -220,15 +220,23 @@ class AppleReadinessTests(unittest.TestCase):
         self.output.mkdir()
         (self.output / "config.json").write_text(json.dumps({"app": {"bundle_id": "org.example.persona.ci"}}))
 
-    def run_preparation(self, regular_only=False, **options):
+    def run_preparation(self, regular_only=False, regression_only=False, **options):
         source = SCRIPT.read_text()
         helpers = source[source.index("simulator_udid() {"):source.index("cleanup() {")]
         helpers += source[source.index("result() {"):source.index('\n  fi', source.index("\ntest_batch() {")) + 8]
+        if regression_only:
+            helpers += source[source.index("test_batch() {"):source.index('\nif [ "$LANE" = all ]')]
         settings = source.index('  if [ "$LANE" = ios18 ]; then',
                                 source.index('if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then'))
         helpers += source[settings:source.index('  IOS_COMMON=(', settings)]
         helpers += source[source.index('  IOS_COMMON=(', settings):source.index('  # Explicit fixture-only exclusions', settings)]
-        if regular_only:
+        if regression_only:
+            start = source.index('  IOS_COMMON=(')
+            end = source.index('\n  fi', source.index('if [ "$LANE" = ios-regressions ]; then',
+                                                        source.index('  IOS_FAILED=0', start))) + len('\n  fi')
+            block = source[start:end]
+            owned_udid = NEW
+        elif regular_only:
             start = source.index("  # The same compiled fixture and compatible runtime as #11289")
             block = source[start:source.index('  ci_run \'Verify token baseline', start)]
             owned_udid = REGULAR_UDID
@@ -251,7 +259,7 @@ XCODE=(xcodebuild)
 TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER=)
 ''' + helpers + block
         env = dict(os.environ, PATH=str(self.fixture.bin) + os.pathsep + os.environ["PATH"],
-                   LANE="ios", CI_ROOT=str(ROOT), SOURCE=str(ROOT), OUTPUT=str(self.output),
+                   LANE="ios-regressions" if regression_only else "ios", CI_ROOT=str(ROOT), SOURCE=str(ROOT), OUTPUT=str(self.output),
                    PERSONA_CONFIG=str(self.output / "config.json"), SIM_NAME="owned readiness fixture",
                    CI_BUNDLE_ID="org.example.persona.ci",
                    IOS_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0", OWNED_UDID=owned_udid,
@@ -330,6 +338,54 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
         self.assertIn("TEST_RUNNER_PERSONA_SHOTS",
                       (self.root / "xcode-env.jsonl").read_text())
 
+    def test_regression_lane_executes_only_both_suites_after_the_shared_probe(self):
+        result, calls = self.run_preparation(regression_only=True,
+                                             FULL_RESULT_SUITE="MainPagesStackTests,PhoneSystemToolsTests")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([call[-1] for call in calls], ["build-for-testing"] + ["test-without-building"] * 2)
+        selectors = lambda args: [a for a in args if a.startswith(("-only-testing:", "-skip-testing:"))]
+        expected = ["-only-testing:PersonaTests/MainPagesStackTests",
+                    "-only-testing:PersonaTests/PhoneSystemToolsTests"]
+        self.assertEqual(selectors(calls[0]), expected)
+        self.assertEqual(selectors(calls[1]), ["-only-testing:PersonaTests/TypeScaleTests"])
+        self.assertEqual(selectors(calls[2]), expected)
+        for call in calls:
+            self.assertEqual(call[call.index("-scheme") + 1], "PersonaOfflineUnitTests")
+        self.assertIn("ios-unit.xcresult: 2 test cases, zero failed/skipped", result.stdout)
+        self.assertEqual((self.root / "calls").read_text().count("simctl create"), 1)
+        self.assertFalse((self.root / "regular-probe-started").exists())
+        self.assertFalse((self.root / "regular-suite-started").exists())
+        self.assertTrue((self.output / "diagnostics/live-readiness/observer.status.txt").is_file())
+        self.assertFalse((self.output / "regular-readiness-context.json").exists())
+        self.assertEqual((self.root / "budgets").read_text().splitlines(), [
+            "Build iOS offline unit tests|1800", "No CallKit in the simulator build|300",
+            "Create stock iOS 26.0 test simulator|100",
+            "Verify hosted iOS test readiness|900", "Grant Reminders access to the owned test app|300",
+            "iOS offline unit and design/token tests|1800", "Inspect test results (ios-unit)|120",
+        ])
+
+    def test_regression_lane_rejects_a_missing_empty_failed_or_skipped_suite(self):
+        cases = (
+            {"FULL_RESULT_SUITE": "MainPagesStackTests"},
+            {"FULL_RESULT_EMPTY": "1"},
+            {"FULL_RESULT": "Failed"},
+            {"FULL_RESULT": "Skipped"},
+            {"FULL_RESULT_SUITE": "MainPagesStackTests,UnrelatedTests"},
+            {"FULL_STATUS": "7"},
+        )
+        for options in cases:
+            with self.subTest(options=options):
+                case = AppleReadinessTests()
+                case.setUp()
+                options.setdefault("FULL_RESULT_SUITE", "MainPagesStackTests,PhoneSystemToolsTests")
+                try:
+                    result, calls = case.run_preparation(regression_only=True, **options)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(len(calls), 3)
+                    self.assertFalse((case.root / "regular-probe-started").exists())
+                    self.assertFalse((case.root / "regular-suite-started").exists())
+                finally:
+                    case.doCleanups()
     def test_readiness_shell_does_not_depend_on_unexported_ci_variables(self):
         source = SCRIPT.read_text()
         marker = "  ci_run 'Verify hosted iOS test readiness'"

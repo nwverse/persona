@@ -468,11 +468,38 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | DSH (`dsh`, configurable) | `integrations/dsh`: a Cordis plugin for `dsh web`; companion process `companion.mjs` (`dsh-files`) for when DSH isn't running | `docs/integrations/dsh.md` |
 | pi (`pi-<pid>`, `pi-web`, `pi-files`) | `integrations/pi`: pi extension (one connection per pi process) + pi-web companion process | `docs/integrations/pi.md` |
 | omp (`omp-<pid>`) | `integrations/omp`: the pi host under omp's identity (agent and name `omp`); no companion and no auto-update | `docs/integrations/omp.md` |
-| opencode (`opencode` / `opencode-<pid>`) | `integrations/opencode`: standalone ACP companion (`companion.mjs`, `start`, `models`, `modes`, `assistant: true` with loopback HTTP MCP proxy, reads 1.x & 2.x `opencode.db`) and opencode server plugin (`index.js`, one connection per `opencode serve` process, merges with herdr TUI panes) | `docs/integrations/opencode.md` |
+| opencode (`opencode` / `opencode-<pid>`) | `integrations/opencode`: embedded `persona-opencode-runtime` ACP companion (`companion.mjs`, auto-supervised by `personad` via `server/internal/node/opencodebridge.go` when `opencode` is installed and no external companion or `opencode serve` plugin is connected; `start`, `models`, `modes`, `assistant: true` with loopback HTTP MCP proxy, lazy/idle ACP cleanup, reads 1.x & 2.x `opencode.db`) and opencode server plugin (`index.js`, one connection per `opencode serve` process, merges with herdr TUI panes) | `docs/integrations/opencode.md` |
 | Grok CLI (`grok-chat`) | `integrations/grok/companion.mjs`: optional standalone ACP companion with assistant tools, permission hooks, native renaming and restart recovery; also lists conversations started in a terminal (read-only while the terminal holds them) | `integrations/grok/README.md` |
 | Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
 | Managed Agents (`managed-agents`, configurable) | `integrations/managed-agents/companion.mjs`: standalone companion for Volcengine Ark Managed Agents and compatible endpoints (cloud or self-hosted, the user's own key); reads sessions over the REST API, sends, interrupts, starts, and answers tool confirmations and question / plan tools on the phone; `--listen` makes it a daemon | `docs/integrations/managed-agents.md` |
 | echo (example) | `integrations/runtime-sdk/examples/echo-runtime.mjs` (with `--listen <port>` it's a daemon) | "Minimal example" in this doc, `docs/integrations/daemons.md` |
+
+### Separate task follow-up instructions
+
+Assistant support and supervision support are independent. A launcher may run an ordinary
+Assistant chat without an authoritative instruction channel; its tasks then use the existing
+compatible-supervisor fallback. Launcher inventory exposes `supervision_policy` only on the
+runtime's primary Assistant launcher after its verification succeeds. An absent capability
+never grants supervision. Inventory is descriptive; the execution path checks again before sending.
+
+| Engine / path | Separate supervision instruction channel |
+| --- | --- |
+| Claude Code / Messages | Node-owned appended system instructions |
+| Codex app-server | Node-owned developer instructions |
+| Antigravity CLI | Isolated worker policy directory; fake runtime tests only |
+| OpenCode ACP companion | Isolated worker; pinned-version startup verification of process instructions, preferring ACP append when advertised |
+| OpenCode plugin | No isolated instruction channel; supervision refused |
+| DSH / Grok | No verified separate channel; supervision refused |
+| Cursor ACP / TRAE ACP | No verified channel or per-session MCP identity contract; supervision refused |
+| Cursor SDK | Optional separate runtime under evaluation; no capability is advertised until account and permission contracts pass |
+| pi / omp / other runtimes | Only an explicitly advertised, verified runtime channel permits supervision; unknown capability is refused |
+
+Refusals list the compatible launchers in the destination computer's inventory, without
+starting a provider or assuming that Claude/Codex are installed. An unreadable/empty inventory
+says that none was detected. `assistant_supervision_account` distinguishes an engine whose
+system instructions are supported but not enabled for the current account; runtimes must use
+that code only after an authoritative account rejection, never infer it from a generic failure.
+Its translated explanation asks the owner to enable the account feature with the engine provider.
 
 ### Antigravity Desktop (macOS, experimental)
 
