@@ -32,13 +32,16 @@ const usageTestMost = 25 * time.Second
 var errAdminOnly = errors.New("the usage sources page is the admin UI's")
 
 type adminUsageSource struct {
-	ID      string        `json:"id"`
-	Name    string        `json:"name"`
-	Type    string        `json:"type"`
-	URL     string        `json:"url"`
-	HasKey  bool          `json:"has_key"`
-	Enabled bool          `json:"enabled"`
-	Status  gatewayStatus `json:"status"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+	URL  string `json:"url"`
+	// Extension and Launcher: for a source of type extension (manager.json only), what it reads and through which launcher.
+	Extension string        `json:"extension,omitempty"`
+	Launcher  string        `json:"launcher,omitempty"`
+	HasKey    bool          `json:"has_key"`
+	Enabled   bool          `json:"enabled"`
+	Status    gatewayStatus `json:"status"`
 }
 
 type adminUsageView struct {
@@ -87,7 +90,7 @@ func (d *Devices) adminUsageView() adminUsageView {
 		HiddenProviders: append([]string{}, cfg.HiddenProviders...)}
 	v.Providers = uniqueSorted(append(append([]string{"claude", "codex"}, cfg.HiddenProviders...), d.usageWin.providers()...))
 	for _, s := range cfg.Sources {
-		v.Sources = append(v.Sources, adminUsageSource{ID: s.ID, Name: s.Name, Type: s.Type, URL: s.URL, HasKey: s.Key != "", Enabled: s.on(), Status: d.usageGW.status(s.ID)})
+		v.Sources = append(v.Sources, adminUsageSource{ID: s.ID, Name: s.Name, Type: s.Type, URL: s.URL, Extension: s.Extension, Launcher: s.Launcher, HasKey: s.Key != "", Enabled: s.on(), Status: d.usageGW.status(s.ID)})
 	}
 	return v
 }
@@ -169,6 +172,23 @@ func validUsageName(n string) bool {
 // "https://pool.example.com/" in manager.json is the same address as the "https://pool.example.com" the page sends,
 // and a request that does not touch the address (the enable switch) never moves it.
 func applyUsageInput(s UsageSourceConfig, in usageSourceInput, isNew bool) (UsageSourceConfig, string, error) {
+	if s.Type == usagesource.TypeExtension && !isNew {
+		// Written in manager.json: here it can be renamed, switched on or off and removed, not re-pointed.
+		if in.Type != nil && strings.TrimSpace(*in.Type) != usagesource.TypeExtension || in.URL != nil || in.Key != nil || in.ClearKey {
+			return s, "invalid_type", i18n.Err("hub-admin_usage.invalid_type")
+		}
+		if in.Name != nil {
+			s.Name = strings.TrimSpace(*in.Name)
+		}
+		if !validUsageName(s.Name) {
+			return s, "invalid_name", i18n.Err("hub-admin_usage.invalid_name")
+		}
+		if in.Enabled != nil {
+			on := *in.Enabled
+			s.Enabled = &on
+		}
+		return s, "", nil
+	}
 	oldURL, oldType := sameUsageURL(s.URL), s.Type
 	if in.Type != nil {
 		s.Type = strings.TrimSpace(*in.Type)

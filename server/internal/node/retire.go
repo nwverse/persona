@@ -4,12 +4,14 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -386,6 +388,9 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 	return uncertain(n.resumeCodex(ctx, launch, id, st, argv, text, ws, tab))
 }
 
+// Resume already knows the thread and only waits for it to reappear in the host. A var for tests.
+var codexResumeWait = 60 * time.Second
+
 // resumeCodex runs `<launcher words> resume <id> -- <message>` (through codex-start, like a new Codex, in the thread's
 // directory) in a new tab and waits until the engine shows that Codex in it. In a pane it was given (adoptedPane: a
 // switch between engines, engine_switch.go) it runs there once its shell is at rest.
@@ -427,7 +432,7 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	}
 	defer done()
 	n.bindPane(pane, id) // the pane runs this thread (kept in its state): no guessing another rollout for it
-	wait, cancel := context.WithTimeout(ctx, codexStartWait)
+	wait, cancel := context.WithTimeout(ctx, codexResumeWait)
 	defer cancel()
 	for {
 		if err := n.refreshHosts(wait); err == nil {
@@ -485,11 +490,16 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 		}
 	} else {
 		created, err = createStartSlot(ctx, launch, ws, cwd, tabLabel(tabName, n.tabLabels(ctx, launch, ws)))
+		var missing *herdr.Error
+		if h, ok := launch.(*herdrHost); ok && ctx.Value(reopenWorktreeWorkspaceKey{}) == true &&
+			errors.As(err, &missing) && missing.Code == "workspace_not_found" {
+			created, err = n.reopenWorktreeTab(ctx, h, ws, cwd, tabName)
+		}
 		if err == nil {
 			if ts != nil && created != nil && created.SpaceID == "" {
 				created.SpaceID = ws
 			}
-			n.closeWorktreeShells(ctx, launch, ws, created.Pane.String()) // the Agent's tab is the worktree's tab now
+			n.closeWorktreeShells(ctx, launch, cmp.Or(created.SpaceID, ws), created.Pane.String()) // the Agent's tab is the worktree's tab now
 		}
 	}
 	if err != nil {
