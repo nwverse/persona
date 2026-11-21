@@ -1,5 +1,7 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Tool-result images use the user role in transcripts (#12573). A held channel run must check an image's `ToolUseID` before treating it as owner input; otherwise reading a screenshot silently discards the continuation answer. Apply that distinction in the shared classifier used by polling and live session items, and retain the unrelated-turn guard for actual owner text and photos, even after a wake or tool image.
+
 - `--allowedTools` and `--disallowedTools` govern approval, not a reliable tool-visibility boundary (#11736). Per-conversation MCP narrowing must filter the actual `sessionMCPTools` response and repeat the same decision at the assistant's call entry (`guardRefusal`). Changing only launch flags can leave stale clients or direct calls with the old tool set; hiding a tool is not a substitute for call admission.
 
 - Automatic-continuation triage and channel mirrors observe the same finished turn concurrently (#11848). The retry wake timestamp is not yet durable when the first mirror runs; gate Feishu and extension mirrors on the session's transient classification and the transient-retry switch instead. Cover several transient attempts, the later terminal error, and delivery with retry disabled.
