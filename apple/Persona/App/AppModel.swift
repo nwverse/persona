@@ -3097,11 +3097,10 @@ final class AppModel {
             if isHub { PersonalAgentSync.shared.received([]) }
             // The direction tree changes while the socket is down: read it again on every (re)connect (#4352).
             if isHub, let hubAPI = api { Task { await refreshDirectionTree(hubAPI) } }
-            // Its features say again whether the filing routes are there (#11516); an open page reads again (`hellos`).
-            if isHub {
-                DirectionFilings.shared.hello(group)
-                hubHellos += 1
-            }
+            // Its features say again whether this hub's filing routes are there (#11516), whichever hub is picked now; a
+            // page open on the current hub reads again (`hubHellos`).
+            DirectionFilings.shared.hello(group)
+            if isHub { hubHellos += 1 }
             #if os(iOS)
             // `meeting_live` events sent while the socket was down are gone: the meetings on screen are read again (#3862).
             if isHub { MeetingConversation.shared.reconnected() }

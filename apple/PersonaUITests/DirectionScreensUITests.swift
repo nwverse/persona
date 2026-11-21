@@ -12,6 +12,13 @@ final class DirectionScreensUITests: XCTestCase {
     private var app: XCUIApplication!
     private var lang: String { ProcessInfo.processInfo.environment["PERSONA_SHOT_LANG"] ?? "en" }
 
+    /// The default assistant again, whatever a case left picked (the "manager" off case picks 工作).
+    override func tearDown() {
+        let hub: String? = self.hub
+        MainActor.assumeIsolated { AssistantUITestReset.toDefaultMain(hub: hub) }
+        super.tearDown()
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
         let env = ProcessInfo.processInfo.environment
@@ -94,7 +101,8 @@ final class DirectionScreensUITests: XCTestCase {
                                // the first lead held open for this launch only (its fold is the device's)
                                "-assistant.direction.open.lead0000-0000-4000-8000-000000000000", "YES",
                                "-AppleLanguages", "(\(lang))", "-AppleLocale", lang == "en" ? "en_US" : lang == "ja" ? "ja_JP" : "zh_CN"]
-            // PERSONA_SHOT_NAV: the layout to pin ("" leaves it to the app: Merged on an iPad, its default).
+            // PERSONA_SHOT_NAV: the layout to pin, `sidebar` or `separate` (`launchPinned`'s own when unset); any
+            // other value ("auto") picks nothing, so the app's default applies: Merged on an iPad.
             + (ProcessInfo.processInfo.environment["PERSONA_SHOT_NAV"].map { ["-app.navigation", $0] } ?? []) + extra
         app.launchPinned()
     }
@@ -165,7 +173,25 @@ final class DirectionScreensUITests: XCTestCase {
         XCTAssertTrue(page.waitForExistence(timeout: 10), "All › did not open the page")
     }
 
-    @MainActor private var page: XCUIElement { app.descendants(matching: .any)["direction-page"].firstMatch }
+    /// The page, in whichever state it is drawn (each carries its own identifier).
+    @MainActor private var page: XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "identifier IN %@", ["direction-page", "direction-page-gone",
+                                                                                          "direction-page-unread", "direction-page-reading"])).firstMatch
+    }
+
+    /// The conversation's title menu: Assistant tapped again on a phone (docs/design/DESIGN_SYSTEM.md 3.5); beside a sidebar
+    /// column (an iPad, either layout) the title pill at the top of the conversation's column.
+    @MainActor private func openTitleMenu() {
+        let shell = app.buttons["shell-assistant"].firstMatch
+        if shell.exists && shell.isHittable { return shell.tap() }
+        let left = sidebarList.exists ? sidebarList.frame.maxX : 0
+        let center = (left + app.frame.width) / 2
+        let pill = app.buttons.allElementsBoundByIndex
+            .filter { $0.frame.minY < 220 && $0.frame.width > 60 && abs($0.frame.midX - center) < 60 && $0.isHittable }
+            .min { $0.frame.minY < $1.frame.minY }
+        XCTAssertNotNil(pill, "no title menu:\n\(app.debugDescription)")
+        pill?.tap()
+    }
 
     /// A conversation row by the start of its title, scrolled into view.
     @MainActor private func chat(_ prefix: String) -> XCUIElement {
@@ -210,17 +236,10 @@ final class DirectionScreensUITests: XCTestCase {
         openSidebar()
         chat("Persona 产品").tap()
         sleep(2)
-        // Assistant tapped again opens the conversation's menu on a phone (docs/design/DESIGN_SYSTEM.md 3.5); beside a
-        // sidebar column (the iPad) the conversation's title pill over it does (the lead's title in the mock).
-        if app.buttons["shell-assistant"].exists {
-            app.buttons["shell-assistant"].firstMatch.tap()
-        } else {
-            app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@ AND NOT (identifier BEGINSWITH 'sidebar')",
-                                             "1110 | 探索")).firstMatch.tap()
-        }
+        openTitleMenu()
         // Items of a Menu carry no identifiers: by its words (not the sidebar's All ›, which says the same).
         let item = app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != 'sidebar-direction-all'",
-                                                    word("Tasks and Chats", "任务和会话", "タスクとチャット"))).firstMatch
+                                                    word("Tasks and Chats", "任务和对话", "タスクとチャット"))).firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 5), "no Tasks and Chats in the lead's title menu:\n\(app.debugDescription)")
         shot("title-menu")
         item.tap()
@@ -298,6 +317,8 @@ final class DirectionScreensUITests: XCTestCase {
         lead.press(forDuration: 1.2)
         let unpin = app.buttons.matching(NSPredicate(format: "label IN %@", ["Unpin", "取消常驻", "常駐をやめる"])).firstMatch
         XCTAssertTrue(unpin.waitForExistence(timeout: 5), "no Unpin:\n\(app.debugDescription)")
+        // A lead conversation files nowhere (`offers` with the model's leaders): its open menu has no Move To….
+        XCTAssertFalse(app.buttons["move-to"].exists, "Move To… on a lead conversation")
         unpin.tap()
         let stays = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@",
             word("What you added to it stays.", "放进来的都会留着。", "追加したものはそのまま残ります。"))).firstMatch
@@ -417,6 +438,11 @@ final class DirectionScreensUITests: XCTestCase {
         reset()
         launch()
         openPageFromSidebar()
+        XCTAssertTrue(pageRow("写新版引导页的文案").waitForExistence(timeout: 10), "the page is read")
+        // Sixth in the app's order: behind Show All 9.
+        let more = app.buttons["direction-page-more"].firstMatch
+        for _ in 0..<6 where !(more.exists && more.isHittable) { app.collectionViews.firstMatch.swipeUp(velocity: .slow) }
+        more.tap()
         let recipe = pageRow("菜谱网站加搜索")
         XCTAssertTrue(recipe.waitForExistence(timeout: 10))
         recipe.press(forDuration: 1.2)
@@ -465,23 +491,17 @@ final class DirectionScreensUITests: XCTestCase {
         guard let off = ProcessInfo.processInfo.environment["PERSONA_OFF_CASE"], !off.isEmpty else {
             throw XCTSkip("PERSONA_OFF_CASE=none|feature|manager|missing")
         }
+        // Another manager's conversations reach its page only with the paged session list: that case runs against the
+        // mock with MOCK_SESSIONS_LIST=1 too (PERSONA_OFF_MANAGER_HUB), where 工作 has a chat of its own.
+        if off == "manager", let paged = ProcessInfo.processInfo.environment["PERSONA_OFF_MANAGER_HUB"] { hub = paged }
         reset(off == "feature" ? "feature=off" : off == "missing" ? "routes=missing" : "")
-        launch()
-        openSidebar()
         if off == "manager" {
-            // The drawer's head (the current assistant, 「助手」 in the mock) opens the switcher; on a phone its rows
-            // inherit the drawer's identifier, so both are found by their words too.
-            let head = app.buttons["assistant-switcher"].exists ? app.buttons["assistant-switcher"].firstMatch
-                : app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "助手")).firstMatch
-            head.tap()
-            let byID = app.buttons["assistant-switcher-row-m-3fa21c"].firstMatch
-            let work = byID.waitForExistence(timeout: 3) ? byID
-                : app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "工作")).firstMatch
-            XCTAssertTrue(work.waitForExistence(timeout: 10), "no 工作 in the switcher:\n\(app.debugDescription)")
-            work.tap()
+            launch(keepPick: true, extra: ["-openAssistantManager", "m-3fa21c"]) // 工作's page, picked at launch
             sleep(3)
-            openSidebar()
+        } else {
+            launch()
         }
+        openSidebar()
         if off == "missing" {
             let row = chat("帮我约周五")
             if row.waitForExistence(timeout: 10) {
@@ -509,9 +529,9 @@ final class DirectionScreensUITests: XCTestCase {
         shot("off-chat-menu-\(off)")
         dismissMenu()
         let lead = chat("Persona 产品")
-        if lead.exists { lead.tap() } else { app.buttons["sidebar-main"].firstMatch.tap() }
+        if lead.exists { lead.tap() } else if app.buttons["sidebar-main"].exists { app.buttons["sidebar-main"].firstMatch.tap() } else { chat("整理出差报销单").tap() }
         sleep(2)
-        app.buttons["shell-assistant"].firstMatch.tap()
+        openTitleMenu()
         sleep(1)
         shot("off-title-menu-\(off)")
         dismissMenu()
@@ -537,24 +557,6 @@ final class DirectionScreensUITests: XCTestCase {
         more.tap()
         sleep(1)
         shot("off-agent-menu-\(off)")
-        if off == "manager" { pickDefaultAssistantAgain() }
-    }
-
-    /// The pick of 工作 is kept on the device (`assistant.manager`): 助手 again, so the next launch, here or in another
-    /// test, starts on the hub's default assistant.
-    @MainActor private func pickDefaultAssistantAgain() {
-        app.terminate()
-        launch(keepPick: true)
-        openSidebar()
-        let head = app.buttons["assistant-switcher"].exists ? app.buttons["assistant-switcher"].firstMatch
-            : app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "工作")).firstMatch
-        head.tap()
-        let byID = app.buttons["assistant-switcher-row-assistant"].firstMatch
-        let main = byID.waitForExistence(timeout: 3) ? byID
-            : app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "助手")).firstMatch
-        XCTAssertTrue(main.waitForExistence(timeout: 10), "no 助手 in the switcher:\n\(app.debugDescription)")
-        main.tap()
-        sleep(2)
     }
 
     /// VoiceOver's Expanded in the run's language.

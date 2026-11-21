@@ -16,6 +16,7 @@ struct DirectionFilingsTests {
     /// A store over `hub`, with what it shows and asks for recorded.
     private final class Probe {
         var toasts: [Toast] = []
+        var dismissed: [UUID] = []
         var treeReads = 0
         var reachable = true
     }
@@ -23,6 +24,7 @@ struct DirectionFilingsTests {
     private func store(_ hub: FakeHub, _ probe: Probe) -> DirectionFilings {
         DirectionFilings(env: DirectionFilings.Env(api: { hub.client }, reachable: { probe.reachable },
                                                    networkUp: { true }, toast: { probe.toasts.append($0) },
+                                                   dismissToast: { probe.dismissed.append($0) },
                                                    rereadTree: { probe.treeReads += 1 }))
     }
 
@@ -152,7 +154,10 @@ struct DirectionFilingsTests {
             s.move(Self.key, title: "Trip", state: .idle, to: Self.product, from: nil)
             try await until("settled") { s.pending.isEmpty && !probe.toasts.isEmpty }
             #expect(probe.toasts.first?.action == nil, "\(error): no Undo")
-            #expect(probe.toasts.first?.message == "没能确认是否移好了，已重新读取它现在的位置。")
+            let offline = (error as? APIError)?.code == "assistant_offline"
+            // assistant_offline is worded by the app for its code (`APIError.businessMessage`), the others alike.
+            #expect(probe.toasts.first?.message == (offline ? "助手不在线或正在重启，请稍后重试。" : "没能确认是否移好了，已重新读取它现在的位置。"),
+                    "\(error): the words for the hub's code when it gave one")
             #expect(probe.treeReads == 1, "\(error): the tree is read again")
             #expect(hub.sent("PUT", Self.path).count == 1, "\(error): never sent again")
         }
@@ -318,6 +323,54 @@ struct DirectionFilingsTests {
         #expect(t.pending.isEmpty)
         try await Task.sleep(for: .milliseconds(500))
         #expect(probe2.toasts.isEmpty && probe2.treeReads == 0, "the answer of the assistant before says nothing")
+    }
+
+    /// The facts `offers` decides from, made of the app's values: every leader conversation (the tree's and the
+    /// settings'), the main chat, the gate for this hub, and the choices in the tree's order by the rows' names.
+    @Test func theFactsAreMadeOfTheAppsValues() {
+        let tree = DirectionTree(directions: [DirectionTree.Direction(id: "lead-b", name: "Ops"),
+                                              DirectionTree.Direction(id: "lead-a", name: ""),
+                                              DirectionTree.Direction(id: "main", secretary: true)])
+        let main = SessionKey(machineID: "m", sessionID: "main")
+        func facts(missing: Set<String> = []) -> DirectionFilings.Facts {
+            DirectionFilings.facts(features: [DirectionRoutes.feature], hubGroup: "", tree: tree, routesMissing: missing,
+                                   main: main, backgroundSupervisor: { $0 == "bg" }, configLeaders: ["lead-c"],
+                                   followers: ["m/agent"], parent: { $0.sessionID == "child" ? "agent" : nil },
+                                   moving: false, name: { $0.name.isEmpty ? "Untitled lead" : $0.name })
+        }
+        let f = facts()
+        #expect(f.shows && f.main == main)
+        #expect(f.leaders == ["lead-a", "lead-b", "lead-c"], "the tree's leaders and the settings' list")
+        #expect(f.choices == [DirectionFilings.Choice(id: "lead-b", name: "Ops"), DirectionFilings.Choice(id: "lead-a", name: "Untitled lead")],
+                "the tree's order, by the names the rows show; never the secretary group")
+        #expect(!facts(missing: [""]).shows, "this hub's routes missing")
+        #expect(facts(missing: ["work"]).shows, "another hub's do not count")
+        for leader in ["lead-a", "lead-c"] {
+            #expect(DirectionFilings.offers(SessionKey(machineID: "m", sessionID: leader), f).isEmpty)
+        }
+        #expect(DirectionFilings.offers(main, f).isEmpty, "the main chat")
+        for (id, what) in [("bg", "the background supervisor"), ("agent", "an Agent of a supervised to-do"),
+                           ("child", "a session under one")] {
+            #expect(DirectionFilings.offers(SessionKey(machineID: "m", sessionID: id), f).isEmpty, "\(what)")
+        }
+        #expect(DirectionFilings.offers(SessionKey(machineID: "m", sessionID: "trip"), f).count == 2, "any other session")
+    }
+
+    /// A toast's Undo that would no longer put back what it says is taken down: on a switch, and when a later pick of
+    /// the same session goes out.
+    @Test func undoToastsGoWhenTheirUndoWouldBeWrong() async throws {
+        let hub = FakeHub(), probe = Probe()
+        hub.on("PUT", Self.path, json: #"{"direction":"lead-a","previous":null,"changed":true}"#)
+        let s = store(hub, probe)
+        s.move(Self.key, title: "Trip", state: .idle, to: Self.product, from: nil)
+        try await until("the answer") { probe.toasts.first?.action != nil && s.pending.isEmpty }
+        let first = try #require(probe.toasts.first)
+        s.move(Self.key, title: "Trip", state: .idle, to: nil, from: "lead-a")
+        #expect(probe.dismissed == [first.id], "a later pick of the session takes the Undo down")
+        try await until("the second answer") { probe.toasts.count == 2 && s.pending.isEmpty }
+        let second = try #require(probe.toasts.last)
+        s.forget()
+        #expect(probe.dismissed == [first.id, second.id], "a switch takes the Undo down")
     }
 
     /// One pick of a session at a time: a second one while the first is out is not sent.

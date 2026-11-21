@@ -51,6 +51,8 @@ import Observation
         var reachable: @MainActor () -> Bool
         var networkUp: @MainActor () -> Bool
         var toast: @MainActor (Toast) -> Void
+        /// Takes down the toast with this id, if it is still up.
+        var dismissToast: @MainActor (UUID) -> Void = { _ in }
         /// Reads the direction tree again.
         var rereadTree: @MainActor () async -> Void
 
@@ -59,6 +61,7 @@ import Observation
                 reachable: { AppModel.shared.isLive },
                 networkUp: { AppModel.shared.connection.networkUp },
                 toast: { AppModel.shared.toast = $0 },
+                dismissToast: { id in if AppModel.shared.toast?.id == id { AppModel.shared.toast = nil } },
                 rereadTree: { await AppModel.shared.refreshDirectionTree() })
         }
     }
@@ -84,6 +87,9 @@ import Observation
     /// What this run read of each direction (memory only), so a page opened again while the hub is out of reach still
     /// draws it (as Offline · time). Dropped after this device's writes, which make it stale.
     @ObservationIgnored private var kept: [String: (read: DirectionRead, at: Date)] = [:]
+    /// The toasts with Undo up now, by session: taken down when that session's next pick goes out (their Undo no longer
+    /// puts back what it says) and on a switch.
+    @ObservationIgnored private var undoToasts: [SessionKey: UUID] = [:]
 
     init(env: Env) { self.env = env }
 
@@ -98,11 +104,6 @@ import Observation
     func shows(_ model: AppModel) -> Bool {
         Self.shows(features: model.hubFeatures, tree: model.directionTree,
                    routesMissing: routesMissing.contains(model.hub?.group ?? ""))
-    }
-
-    /// The choices in the tree's order, each by the name its sidebar row shows.
-    func choices(_ model: AppModel) -> [Choice] {
-        (model.directionTree?.leaders ?? []).map { Choice(id: $0.id, name: model.directionTitle($0)) }
     }
 
     /// What `offers` decides from, gathered from the app (`offers(_:in:)`) or written out by a test.
@@ -134,16 +135,29 @@ import Observation
     }
 
     /// `offers` with the app's facts. The caller reads this when its menu is built, from the smallest view that draws
-    /// it.
+    /// it. Only forwards the model's values: what is made of them is `facts(…)`'s, tested.
     func offers(_ key: SessionKey, in model: AppModel) -> [Choice] {
-        let shows = shows(model)
-        guard shows else { return [] }
-        let leaders = Set((model.directionTree?.leaders ?? []).map(\.id)).union(model.assistantLeaders)
-        return Self.offers(key, Facts(shows: shows, hubGroup: model.hub?.group ?? "", main: model.assistantMain,
-                                      backgroundSupervisor: { model.isBackgroundSupervisor($0) }, leaders: leaders,
-                                      followers: TodoStore.shared.taskFollowers,
-                                      parent: { model.session($0)?.parentSessionID },
-                                      moving: pending[key].map { !$0.answered } ?? false, choices: choices(model)))
+        Self.offers(key, Self.facts(features: model.hubFeatures, hubGroup: model.hub?.group ?? "", tree: model.directionTree,
+                                    routesMissing: routesMissing, main: model.assistantMain,
+                                    backgroundSupervisor: { model.isBackgroundSupervisor($0) },
+                                    configLeaders: model.assistantLeaders, followers: TodoStore.shared.taskFollowers,
+                                    parent: { model.session($0)?.parentSessionID },
+                                    moving: pending[key].map { !$0.answered } ?? false,
+                                    name: { model.directionTitle($0) }))
+    }
+
+    /// The facts `offers` decides from, made of the app's values: the gate for this hub, every leader conversation (the
+    /// tree's and the settings' lists), and the choices in the tree's order by the names the rows show.
+    nonisolated static func facts(features: Set<String>, hubGroup: String, tree: DirectionTree?, routesMissing: Set<String>,
+                                  main: SessionKey?, backgroundSupervisor: @escaping (String) -> Bool,
+                                  configLeaders: [String], followers: Set<String>,
+                                  parent: @escaping (SessionKey) -> String?, moving: Bool,
+                                  name: (DirectionTree.Direction) -> String) -> Facts {
+        let leaders = tree?.leaders ?? []
+        return Facts(shows: shows(features: features, tree: tree, routesMissing: routesMissing.contains(hubGroup)),
+                     hubGroup: hubGroup, main: main, backgroundSupervisor: backgroundSupervisor,
+                     leaders: Set(leaders.map(\.id)).union(configLeaders), followers: followers, parent: parent,
+                     moving: moving, choices: leaders.map { Choice(id: $0.id, name: name($0)) })
     }
 
     /// Whether `key` is an Agent of an open supervised to-do, or a session under one (its `parent_session_id`s, or a
@@ -287,6 +301,7 @@ import Observation
             return
         }
         Haptics.tap()
+        if let shown = undoToasts.removeValue(forKey: key) { env.dismissToast(shown) } // its Undo would not put this back
         serial += 1
         let pick = serial
         let gen = generation
@@ -311,13 +326,16 @@ import Observation
         case .success(let answer):
             if pending[key]?.serial == pick { pending[key]?.answered = true }
             if !undo {
-                env.toast(Self.answered(answer, name: name) { [weak self] in
+                let toast = Self.answered(answer, name: name) { [weak self] in
                     guard let self, self.generation == gen else { return }
+                    self.undoToasts[key] = nil
                     self.undo(key, api: api, answer: answer, title: title, state: state, back: before?.from)
-                })
+                }
+                if toast.action != nil { undoToasts[key] = toast.id }
+                env.toast(toast)
             }
             Haptics.success()
-            await reread()
+            await reread(places: [answer.previous, answer.direction])
             clear()
         case .failure(let error):
             switch Self.failure(error) {
@@ -335,11 +353,14 @@ import Observation
                 env.toast(Toast(env.networkUp() ? String(localized: "Can't reach the hub. That action didn't go through.")
                                                 : String(localized: "No network. That action didn't go through."), style: .info))
                 Haptics.attention()
-            case .lost:
-                // It may have been taken: read where it is now, send nothing again, offer no Undo.
-                env.toast(Toast(String(localized: "Couldn't confirm the move. Showing where it is now."), style: .info))
+            case .lost(let sentence):
+                // It may have been taken: read where it is now, send nothing again, offer no Undo. The words for the
+                // hub's code when it gave one (503 `assistant_offline`, also its answer when nothing was sent: "The
+                // assistant is offline or restarting"; trying again is safe, a move already made answers Already in).
+                env.toast(Toast(sentence ?? String(localized: "Couldn't confirm the move. Showing where it is now."),
+                                style: .info))
                 Haptics.attention()
-                await reread()
+                await reread(places: before.map { [$0.from, $0.to] } ?? [nil])
                 clear()
             }
         }
@@ -376,30 +397,31 @@ import Observation
         /// It never left: no connection to the hub could be made.
         case notSent
         /// It went out and its answer did not come back (cut off, timed out, a 5xx with no code, the manager's link
-        /// cut): it may have been taken.
-        case lost
+        /// cut): it may have been taken. With the hub's sentence when it said one.
+        case lost(String?)
     }
 
     nonisolated static func failure(_ error: Error) -> Failure {
         if DirectionRoutes.missing(error) { return .missingRoutes }
         if let e = error as? APIError {
+            // The link between hub and manager cut: the app's words for that code, and it may have been saved.
+            if e.code == "assistant_offline" { return .lost(e.localizedDescription) }
             // A relay cut off while the manager had it says so (`delivered: "unknown"`): it may have been taken.
-            if e.fields["delivered"] == "unknown" || Self.inDoubt.contains(e.code ?? "") { return .lost }
+            if e.fields["delivered"] == "unknown" || Self.inDoubt.contains(e.code ?? "") { return .lost(nil) }
             if (400..<500).contains(e.status) || (e.status >= 500 && e.code != nil) {
                 return .refused(e.localizedDescription)
             }
-            return .lost
+            return .lost(nil)
         }
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain, Self.neverSent.contains(ns.code) { return .notSent }
-        return .lost
+        return .lost(nil)
     }
 
     /// Codes that say the write may have been taken though its answer did not come back. The hub answers a relay to
     /// the manager cut on the way with 503 `assistant_offline` (`server/internal/hub/bus_forward.go`): the manager may
     /// have saved the move.
-    nonisolated private static let inDoubt: Set<String> = ["assistant_in_doubt", "lost_receipt", "send_in_doubt",
-                                                          "assistant_offline"]
+    nonisolated private static let inDoubt: Set<String> = ["assistant_in_doubt", "lost_receipt", "send_in_doubt"]
 
     /// URL errors that mean no request reached the hub.
     nonisolated private static let neverSent: Set<Int> = [
@@ -409,9 +431,14 @@ import Observation
     ]
 
     /// The tree and every open page, read again (the page reads only on open, on reconnect and after a write of this
-    /// device: P7 / P9). What this run read before is stale now.
-    private func reread() async {
-        kept = [:]
+    /// device: P7 / P9). What this run read of the places the session left and joined is stale now (nil in `places`: a
+    /// place not known, so every one).
+    private func reread(places: [String?]) async {
+        if places.contains(where: { $0 == nil }) {
+            kept = [:]
+        } else {
+            for case let id? in places where !id.isEmpty { kept[id] = nil }
+        }
         for (id, readers) in pages {
             for (n, read) in readers {
                 if !(await read()) { pages[id]?[n] = nil }
@@ -444,6 +471,8 @@ import Observation
     /// were the one before's. Whether a hub's routes are missing stays its own until its hello.
     func forget() {
         generation += 1
+        for id in undoToasts.values { env.dismissToast(id) } // their Undo would go to the one before
+        undoToasts = [:]
         if !pending.isEmpty { pending = [:] }
         kept = [:]
         for b in filed.values where !b.sessions.isEmpty { b.sessions = [] }

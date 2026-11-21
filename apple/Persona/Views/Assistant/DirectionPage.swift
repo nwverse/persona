@@ -146,6 +146,9 @@ enum DirectionPageLogic {
     /// The hello (`AppModel.hubHellos`) this page last read for.
     @ObservationIgnored private var hello: Int?
     @ObservationIgnored private var registered = false
+    /// Reads cut off in a row (a route attempt that restarts cancels the request waiting on it): read again, a few
+    /// times, rather than spin.
+    @ObservationIgnored private var cancelled = 0
 
     init(id: String) {
         self.id = id
@@ -177,6 +180,7 @@ enum DirectionPageLogic {
             var r = try await api.direction(id)
             guard n > landed else { return } // a newer answer was taken meanwhile
             landed = n
+            cancelled = 0
             r.sessions = DirectionFilings.order(r.sessions)
             let now = Date.now
             read = r
@@ -186,17 +190,19 @@ enum DirectionPageLogic {
         } catch {
             // Only the newest read out decides how a failure shows: an older one's says nothing.
             guard n > landed, n == asked else { return }
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                // Not an answer: read again (a few times), the page as it was meanwhile.
+                cancelled += 1
+                if cancelled <= 3 { refresh(api) } else if status == .reading { status = .failed }
+                return
+            }
+            // The newest read's failure takes its number too: an older read landing after it is not drawn as fresh.
+            landed = n
+            cancelled = 0
             if let e = error as? APIError, e.status == 404, e.code == "direction_not_found" {
-                landed = n
                 status = .gone
-            } else if DirectionRoutes.missing(error) {
-                DirectionFilings.shared.routesAnsweredMissing(api.group)
-                status = .failed
-            } else if error is CancellationError || (error as? URLError)?.code == .cancelled {
-                // Not an answer: as it was, and the next open reads again.
-                hello = nil
-                if status == .reading { status = read == nil ? .reading : .read }
             } else {
+                if DirectionRoutes.missing(error) { DirectionFilings.shared.routesAnsweredMissing(api.group) }
                 status = .failed
             }
         }
@@ -237,6 +243,7 @@ struct DirectionPage: View {
         #endif
         let direction = model.directionTree?.leader(id)
         let tasks = direction?.tasks ?? []
+        // Each state carries its own identifier (`direction-page…`); none on the Group, whose identifier would cover them.
         Group {
             if page.status == .gone {
                 EmptyStateView(symbol: Theme.Icon.info, title: String(localized: "Not Available [Direction Page]"),
@@ -249,7 +256,8 @@ struct DirectionPage: View {
                 LoadableContent(state: page.status == .failed ? Loadable<Void>.failed(String(localized: "Couldn't read [Direction Page]"))
                                                               : .loading,
                                 retry: { page.refresh(model.api) }) { _ in EmptyView() }
-                    .accessibilityIdentifier("direction-page-unread")
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier(page.status == .failed ? "direction-page-unread" : "direction-page-reading")
             } else {
                 List {
                     if page.read?.endedAt != nil {
@@ -289,9 +297,11 @@ struct DirectionPage: View {
                             .accessibilityIdentifier("direction-page-in-progress")
                         }
                     }
-                    DirectionAddedSection(page: page, direction: id, hasTasks: !tasks.isEmpty, pushChat: pushChat)
+                    DirectionAddedSection(page: page, direction: id, hasTasks: !tasks.isEmpty, inTree: direction != nil,
+                                          pushChat: pushChat)
                 }
                 .themedPage()
+                .accessibilityIdentifier("direction-page")
             }
         }
         .pageTitle(DirectionPageTitle.of(id, read: page.read, in: model))
@@ -304,9 +314,8 @@ struct DirectionPage: View {
         }
         // On open and on every hello (a reconnect); after this device's moves through `DirectionFilings.page`.
         .task(id: model.hubHellos) { page.open(hello: model.hubHellos, api: model.api) }
-        // Unpinned while open: the tree push drops it, and one read says it has ended.
-        .onChange(of: direction == nil) { _, left in if left { page.refresh(model.api) } }
-        .accessibilityIdentifier("direction-page")
+        // Unpinned while open (the tree push drops it) or pinned again: one read says which.
+        .onChange(of: direction == nil) { page.refresh(model.api) }
     }
 }
 
@@ -330,6 +339,8 @@ private struct DirectionAddedSection: View {
     let direction: String
     /// In Progress has rows: a read with nothing added then says nothing of its own.
     let hasTasks: Bool
+    /// The direction is in the held tree: one that left it (unpinned) says nothing of how to add to it.
+    let inTree: Bool
     let pushChat: ((InboxChatRoute) -> Void)?
 
     var body: some View {
@@ -375,7 +386,7 @@ private struct DirectionAddedSection: View {
                     .accessibilityIdentifier("direction-page-more")
                 }
             } header: { header(rows.count, fold: true) }
-        } else if !hasTasks && !ended {
+        } else if !hasTasks && !ended && inTree {
             // Read, and nothing is under it at all: what the page is for, and how something gets here.
             EmptyStateView(symbol: Theme.Icon.list, title: String(localized: "Nothing Here Yet [Direction Page]"),
                            message: String(localized: "Use Move To… on a chat or an Agent to add it here. [Direction Page]"))
@@ -428,11 +439,11 @@ private struct DirectionAddedSection: View {
     }
 }
 
-/// One session in Added Here: its dot, title and who placed it, and where it stands; a tap opens it. At the
-/// accessibility text sizes the standing takes a line of its own under them, so the title is not cut to a few letters.
+/// One session in Added Here: its dot, title and who placed it, and where it stands; a tap opens it. Where the
+/// standing does not fit beside the title (a long word, a large text size, a narrow column), it goes under the source
+/// line instead of cutting the title (`ViewThatFits`).
 private struct DirectionAddedRow: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dynamicTypeSize) private var typeSize
     let row: DirectionFilings.Row
     let direction: String
     let ended: Bool
@@ -448,17 +459,28 @@ private struct DirectionAddedRow: View {
         let word = row.moving ? String(localized: "Moving… [Move To]") : standing.map(DirectionPageLogic.words)
         let source = row.session.addedByOwner ? String(localized: "Added by you [Filed Session]")
                                               : String(localized: "Opened from this chat [Filed Session]")
-        let stacked = typeSize.isAccessibilitySize
         Button { openTodoAgentChat(row.key, in: model, push: conversationAgentPush(pushChat)) } label: {
-            HStack(alignment: stacked ? .top : .center, spacing: Theme.Space.s) {
+            HStack(alignment: .top, spacing: Theme.Space.s) {
                 StatusDot(state: DirectionPageLogic.dot(standing))
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(title).font(Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(stacked ? 2 : 1)
-                    Text(source).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
-                    if stacked, let word { standingText(word, standing) }
+                    .padding(.top, Theme.Space.xs)
+                // Each candidate measured once (`MeasuredOnce`, P7): a list row's graph asks for its size again on
+                // every frame the page moves.
+                ViewThatFits(in: .horizontal) {
+                    MeasuredOnce {
+                        HStack(spacing: Theme.Space.s) {
+                            lines(title, source).fixedSize(horizontal: true, vertical: false)
+                            Spacer(minLength: Theme.Space.xs)
+                            if let word { standingText(word, standing).fixedSize() }
+                        }
+                    }
+                    MeasuredOnce {
+                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                            lines(title, source)
+                            if let word { standingText(word, standing) }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
-                Spacer(minLength: Theme.Space.xs)
-                if !stacked, let word { standingText(word, standing).layoutPriority(1) }
             }
             .padding(.vertical, Theme.Sidebar.rowPadding)
             .scaledFrame(minHeight: Theme.Sidebar.row)
@@ -475,6 +497,13 @@ private struct DirectionAddedRow: View {
                 MoveToMenu(key: row.key, title: title, state: session?.state ?? row.session.ownState ?? .unknown,
                            from: direction)
             }
+        }
+    }
+
+    private func lines(_ title: String, _ source: String) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+            Text(title).font(Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(2)
+            Text(source).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
         }
     }
 

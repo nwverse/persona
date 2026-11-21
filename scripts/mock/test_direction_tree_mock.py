@@ -234,6 +234,20 @@ class DirectionSessionsMockTests(unittest.TestCase):
         get(base, "/mock/reset")
         self.assertIn(first, [d["id"] for d in get(base, "/api/v1/assistant/directions/tree")["directions"]])
 
+    def test_on_its_own_needs_the_row_of_a_session_never_filed(self):
+        base = self.start()
+        status, body = put(base, file_path("macbook", "never-listed-0000"), {"direction": ""})
+        self.assertEqual((status, body["code"]), (404, "session_not_found"))
+
+    def test_an_ended_direction_refuses_new_filings_and_its_chat(self):
+        base = self.start()
+        first = get(base, "/api/v1/assistant/directions/tree")["directions"][0]["id"]
+        get(base, "/mock/direction_sessions?ended=" + first)
+        status, body = put(base, file_path("macbook", RECIPE), {"direction": first})
+        self.assertEqual((status, body["code"]), (409, "direction_ended"))
+        status, body = put(base, file_path("server", first), {"direction": ""})
+        self.assertEqual((status, body["code"]), (409, "direction_leader_conversation"))
+
     def test_refusals_carry_the_hubs_own_sentence(self):
         base = self.start()
         get(base, "/mock/direction_sessions?refuse=direction_full")

@@ -84,18 +84,29 @@ final class DirectionRowsUITests: XCTestCase {
     /// The drawer's button on the phone (the hittable one of the pager's pages; tapped again while a busy simulator has
     /// not opened the drawer yet); the iPad's column is there already. Open once its To-dos entry shows: with four
     /// leads the All Chats row is below the fold, and the lazy list does not make it.
+    /// The drawer opened a second time keeps where its list was scrolled, which can leave To-dos out of sight: its
+    /// list on screen counts as open too.
     @MainActor private func openSidebar(timeout: TimeInterval = 30) {
         let all = app.buttons["sidebar-todos"].firstMatch
+        let list = sidebarList
+        let open = { (all.exists && all.isHittable) || (list.exists && list.isHittable) }
         let end = Date().addingTimeInterval(timeout)
-        while Date() < end && !(all.exists && all.isHittable) {
+        while Date() < end && !open() {
             if let menu = app.buttons.matching(identifier: "assistant-sidebar-button").allElementsBoundByIndex.first(where: \.isHittable) {
                 menu.tapCenter()
-                if all.waitForExistence(timeout: 5) { break }
+                if all.waitForExistence(timeout: 5) || list.waitForExistence(timeout: 1) { break }
             } else {
                 usleep(500_000)
             }
         }
-        XCTAssertTrue(all.exists, "the sidebar did not open:\n\(app.debugDescription)")
+        XCTAssertTrue(all.exists || list.exists, "the sidebar did not open:\n\(app.debugDescription)")
+    }
+
+    /// The sidebar's list: on a phone it inherits the drawer's identifier; the iPad's column is the list of its rows.
+    @MainActor private var sidebarList: XCUIElement {
+        let byID = app.collectionViews.matching(identifier: "assistant-sidebar").firstMatch
+        if byID.exists { return byID }
+        return app.collectionViews.containing(NSPredicate(format: "identifier BEGINSWITH 'sidebar-'")).firstMatch
     }
 
     @MainActor private func shot(_ name: String) {
@@ -169,17 +180,21 @@ final class DirectionRowsUITests: XCTestCase {
     }
 
     /// Scrolls the sidebar (a lazy list: rows below the fold are not made) until `element` is on screen.
-    @MainActor @discardableResult private func reveal(_ element: XCUIElement, rounds: Int = 12) -> Bool {
-        let anchor = app.buttons["sidebar-todos"].firstMatch
-        let x = anchor.exists ? anchor.frame.midX : app.frame.width * 0.3
-        let origin = app.coordinate(withNormalizedOffset: .zero)
-        for _ in 0..<rounds {
+    @MainActor @discardableResult private func reveal(_ element: XCUIElement, rounds: Int = 8) -> Bool {
+        // Down the list first, then back up: the drawer keeps where it was scrolled.
+        for round in 0..<rounds * 2 {
             if element.exists && element.isHittable { return true }
-            origin.withOffset(CGVector(dx: x, dy: app.frame.height * 0.78))
-                .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: x, dy: app.frame.height * 0.45)))
-            usleep(500_000)
+            if round < rounds { sidebarList.swipeUp(velocity: .slow) } else { sidebarList.swipeDown(velocity: .slow) }
+            usleep(400_000)
         }
         return element.exists && element.isHittable
+    }
+
+    /// Show All N on the page, when the rows are more than five.
+    @MainActor private func showAll() {
+        let more = app.buttons["direction-page-more"].firstMatch
+        for _ in 0..<6 where !(more.exists && more.isHittable) { app.collectionViews.firstMatch.swipeUp(velocity: .slow) }
+        if more.exists { more.tap() }
     }
 
     /// The first lead held open for this launch only (its fold is the device's, `UserDefaults`; a launch argument does
@@ -222,6 +237,10 @@ final class DirectionRowsUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(app.buttons.matching(identifier: "sidebar-direction-filed").count, 2,
                                     "the live filed sessions are listed")
         shot("on-row")
+        // What the row says waits on you, read before All › closes the drawer.
+        let rowCounts = app.buttons.matching(identifier: "sidebar-direction-toggle")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "Persona 产品")).firstMatch.label
+            .components(separatedBy: "，").last ?? ""
         all.tap()
         let page = app.descendants(matching: .any)["direction-page"].firstMatch
         XCTAssertTrue(page.waitForExistence(timeout: 10), "All › did not open the page")
@@ -230,9 +249,6 @@ final class DirectionRowsUITests: XCTestCase {
         XCTAssertTrue(app.buttons.matching(identifier: "direction-page-filed").firstMatch.waitForExistence(timeout: 10))
         shot("page")
         // The page's "N need you" is the row's own words for the same tree (`DirectionCountsText`).
-        let rowCounts = app.buttons.matching(identifier: "sidebar-direction-toggle")
-            .matching(NSPredicate(format: "label BEGINSWITH %@", "Persona 产品")).firstMatch.label
-            .components(separatedBy: "，").last ?? ""
         XCTAssertTrue(rowCounts.hasPrefix("等你"), "the row says what waits on you: \(rowCounts)")
         let header = app.descendants(matching: .any)["direction-page-in-progress"].firstMatch.label
         XCTAssertTrue(header.contains(rowCounts), "the page says the same: \(header) / \(rowCounts)")
@@ -268,6 +284,16 @@ final class DirectionRowsUITests: XCTestCase {
         XCTAssertEqual(filed, "lead0002-0000-4000-8000-000000000002")
         undo.tap()
         XCTAssertTrue(try until("Undo reached the hub") { try entry(key) == nil }, "Undo of a first filing takes the entry out (null)")
+        // As the page shows it: not under 「增长」 (its row held open by a launch of its own).
+        app.terminate()
+        launch(["-assistant.direction.open.lead0002-0000-4000-8000-000000000002", "YES"])
+        openSidebar()
+        let growth = app.buttons.matching(NSPredicate(format: "identifier == 'sidebar-direction-all' AND value == %@", "增长")).firstMatch
+        XCTAssertTrue(reveal(growth), "no All › under 增长:\n\(app.debugDescription)")
+        growth.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["direction-page-in-progress"].firstMatch.waitForExistence(timeout: 10))
+        sleep(3) // the page's read
+        XCTAssertFalse(pageRow("帮我约周五").exists, "not on 增长's page after Undo")
     }
 
     // MARK: Criterion 3 shown by the row and the page (#12603 review)
@@ -302,7 +328,15 @@ final class DirectionRowsUITests: XCTestCase {
     @MainActor func testUndoOfWhatTheLeaderOpenedShowsItBack() throws {
         try mockReset()
         launch(Self.firstLeadOpen)
-        openFirstPage()
+        openSidebar()
+        openFirstLead()
+        let inRow = app.buttons.matching(NSPredicate(format: "identifier == 'sidebar-direction-filed' AND label BEGINSWITH %@",
+                                                     "写新版引导页的文案")).firstMatch
+        XCTAssertTrue(reveal(inRow), "the row lists what its leader opened:\n\(app.debugDescription)")
+        let all = app.buttons["sidebar-direction-all"].firstMatch
+        XCTAssertTrue(reveal(all))
+        all.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["direction-page"].firstMatch.waitForExistence(timeout: 10))
         let row = pageRow("写新版引导页的文案")
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         let opened = row.label
@@ -314,6 +348,9 @@ final class DirectionRowsUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 10), "back on the page")
         XCTAssertTrue(until("the read again") { row.label == opened }, "as opened from that chat: \(row.label)")
         XCTAssertNil(try entry("studio/dirs0002-0000-4000-8000-000000000002"), "its entry taken out: the leader's placement again")
+        app.navigationBars.buttons.firstMatch.tap()
+        openSidebar()
+        XCTAssertTrue(reveal(inRow), "and in the row again:\n\(app.debugDescription)")
     }
 
     /// From On Its Own: set on its own, it leaves the page; moved under the first direction again from there and undone,
@@ -323,8 +360,10 @@ final class DirectionRowsUITests: XCTestCase {
         let key = "macbook/a1f3c2d4-0000-4000-8000-000000000007"
         launch(Self.firstLeadOpen)
         openFirstPage()
+        XCTAssertTrue(pageRow("写新版引导页的文案").waitForExistence(timeout: 10), "the page is read")
+        showAll() // sixth in the app's order, behind Show All 9
         let row = pageRow("菜谱网站加搜索")
-        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "no 菜谱 row:\n\(app.debugDescription)")
         moveRow(row, to: "单独放着")
         XCTAssertTrue(row.waitForNonExistence(timeout: 5))
         XCTAssertTrue(try until("on its own") { (try entry(key))?["direction"] as? String == "" })
@@ -347,6 +386,8 @@ final class DirectionRowsUITests: XCTestCase {
         launch(Self.firstLeadOpen)
         openFirstPage()
         XCTAssertTrue(pageRow("早报").waitForExistence(timeout: 10), "the page is read")
+        showAll()
+        sleep(1)
         XCTAssertFalse(pageRow("菜谱网站加搜索").exists, "not on the page")
     }
 

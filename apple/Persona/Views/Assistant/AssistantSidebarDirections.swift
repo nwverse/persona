@@ -149,7 +149,7 @@ struct DirectionTaskRow: View {
 
     var body: some View {
         let title = task.displayTitle
-        HStack(spacing: Theme.Space.xs) {
+        return HStack(spacing: Theme.Space.xs) {
             Button(action: open) {
                 HStack(spacing: Theme.Space.s) {
                     Text(title).font(Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(1)
@@ -194,7 +194,7 @@ struct DirectionAgentRow: View {
         let state = session?.state ?? line.node.agentState
         let title = !line.node.title.isEmpty ? line.node.title
             : session?.displayTitle ?? (line.node.agent.isEmpty ? String(localized: "Agent") : line.node.agent)
-        HStack(spacing: Theme.Space.xs) {
+        return HStack(spacing: Theme.Space.xs) {
             Button {
                 open(key)
             } label: {

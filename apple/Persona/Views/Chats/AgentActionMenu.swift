@@ -57,6 +57,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
     @MainActor
     fileprivate init(session: Session, model: AppModel, currentPane: SessionPane = .chat, hosted: Bool = false,
                      showsSpace: Bool = true, sides: SideSessions? = nil) {
+        let moveChoices = DirectionFilings.shared.offers(session.key, in: model)
         self.init(session: session,
                   pinned: model.isPinned(session.key), muted: model.isMuted(session.key),
                   panes: AgentMenuFacts.panes(session, git: AgentMenuRouting.shared.gitStatus(session)),
@@ -69,8 +70,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
                   hosted: hosted, showsSpace: showsSpace,
                   terminalResume: session.status == .offline || session.status == .unknown
                     ? session.terminalResume(on: model.machine(session.key.machineRef)) : .hidden,
-                  phone: AgentMenuFacts.isPhone,
-                  moveChoices: DirectionFilings.shared.offers(session.key, in: model))
+                  phone: AgentMenuFacts.isPhone, moveChoices: moveChoices)
     }
 
     /// Test and preview construction needs no live hub. Production uses the model initializer above.
