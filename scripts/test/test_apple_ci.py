@@ -132,7 +132,7 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn('"$OUTPUT/diagnostics/live-regular-readiness" "$REGULAR_SIM"', regular)
         self.assertNotIn('app_host_readiness', script[script.index("test_batch() {"):script.index('if [ "$LANE" = all ]')])
         self.assertNotIn('app_host_readiness', regular)
-        self.assertIn('python3 "$ci_root/scripts/ci/apple_readiness_watch.py"', regular)
+        self.assertIn('bash -c "exec python3 \\"\\$@\\"" -- "$ci_root/scripts/ci/apple_readiness_watch.py"', regular)
         self.assertIn('python3 "$checker" "$bundle" TypeScaleTests', regular)
         self.assertIn("-only-testing:PersonaTests/TypeScaleTests", regular)
         self.assertIn("ci_run 'Verify hosted regular iPad test readiness' 900", regular)

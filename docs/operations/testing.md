@@ -156,7 +156,10 @@ cleanup can shut down the device. The iPad has its own `regular-readiness-contex
 artifact directory; neither scope nor host samples can be borrowed from the iPhone. NDJSON is filtered while it is read;
 launchd lines need not contain both the UDID and bundle ID. An absent process, missing log, Shutdown during cleanup,
 valid signature, or runtime mount alone is not a launch-cause verdict. The observer does not change signing, test selection,
-runtime or the 900-second deadlines.
+runtime or the 900-second deadlines. The iPad observer starts with deterministic unavailable status/host/product records,
+then replaces them atomically as bounded collection completes. Its separate process group gets a short bounded stop drain;
+if collection still cannot finish, the group is reaped without leaking its detached collectors. Probe and result-inspection
+deadline regressions require status and evidence to exist and every recorded watcher PID to be gone.
 A maintainer-approved `gh run rerun --failed` runs the original commit; it cannot acquire diagnostic code added by a later commit.
 
 Deliberate boundaries: web `compatibility.live.test.ts` needs an isolated live hub/token and explicitly skips its one probe without them.

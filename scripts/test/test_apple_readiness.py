@@ -184,6 +184,17 @@ class AppleReadinessTests(unittest.TestCase):
         self.root = self.fixture.dir
         self.fixture.state["bootstatus_hang"] = True
         self.fixture.save()
+        self.watcher_pids = self.root / "watcher-pids"
+        self.watcher_pids.write_text("")
+        python = self.fixture.bin / "python3"
+        python.write_text(textwrap.dedent('''\
+            #!/bin/bash
+            if [[ "$*" == *apple_readiness_watch.py* ]]; then
+              printf '%s\\n' "$$" >> "$FAKE/watcher-pids"
+            fi
+            exec /usr/bin/python3 "$@"
+        '''))
+        python.chmod(0o755)
         for name, body in (("xcodebuild", FAKE_XCODE), ("xcrun", FAKE_XCRUN_WRAPPER),
                            ("fake-simctl", FAKE_XCRUN), ("otool", FAKE_OTOOL),
                            ("file", "#!/bin/bash\nexit 0\n"), ("codesign", "#!/bin/bash\nexit 0\n")):
@@ -419,6 +430,17 @@ cleanup_device "$REGULAR_SIM" "$REGULAR_SIM_NAME" "$REGULAR_SIM_STARTED"
                     self.assertEqual(len(calls), 1)
                     self.assertEqual((case.root / marker).read_text(), "terminated")
                     self.assertFalse((case.root / "regular-suite-started").exists())
+                    observer = case.output / "diagnostics/live-regular-readiness"
+                    self.assertIn("xcodebuild-finished", (observer / "observer.status.txt").read_text())
+                    self.assertTrue((observer / "host-final.json").is_file())
+                    for suffix in ("architecture", "libraries"):
+                        self.assertEqual((observer / f"product-0-{suffix}.txt.status.txt").read_text(), "0\n")
+                    self.assertEqual((observer / "product-0-bundle-signature.txt.status.txt").read_text(), "0\n")
+                    watcher_pids = [int(pid) for pid in case.watcher_pids.read_text().splitlines()]
+                    self.assertTrue(watcher_pids)
+                    for pid in watcher_pids:
+                        with self.assertRaises(ProcessLookupError, msg=f"watcher {pid} survived {key} cleanup"):
+                            os.kill(pid, 0)
                 finally:
                     case.doCleanups()
 

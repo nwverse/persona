@@ -412,7 +412,23 @@ fi
       set -euo pipefail
       checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; shift 8
       mkdir -p "$watch_log"
-      python3 "$ci_root/scripts/ci/apple_readiness_watch.py" \
+      printf "%s\n" "observer incomplete; bounded unavailable final evidence only; no launch cause established" > "$watch_log/observer.status.pending"
+      mv "$watch_log/observer.status.pending" "$watch_log/observer.status.txt"
+      printf "%s\n" "{\"unavailable\":\"observer did not complete; no host-process verdict\"}" > "$watch_log/host-final.pending"
+      mv "$watch_log/host-final.pending" "$watch_log/host-final.json"
+      for product in 0 1 2; do
+        printf "%s\n" "unavailable: product collection incomplete" > "$watch_log/product-$product-architecture.pending"
+        mv "$watch_log/product-$product-architecture.pending" "$watch_log/product-$product-architecture.txt"
+        printf "%s\n" "unavailable: product collection incomplete" > "$watch_log/product-$product-libraries.pending"
+        mv "$watch_log/product-$product-libraries.pending" "$watch_log/product-$product-libraries.txt"
+      done
+      for product in 0 1; do
+        printf "%s\n" "unavailable: bundle signature collection incomplete" > "$watch_log/product-$product-bundle-signature.pending"
+        mv "$watch_log/product-$product-bundle-signature.pending" "$watch_log/product-$product-bundle-signature.txt"
+      done
+      # Give the observer its own group so a probe deadline cannot leave its
+      # detached collectors behind. Both steps use the unchanged budget.
+      bash -c "exec python3 \"\$@\"" -- "$ci_root/scripts/ci/apple_readiness_watch.py" \
         --udid "$udid" --bundle-id "$bundle_id" --scope-root "$output" \
         --app "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona" \
         --test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests" \
@@ -421,13 +437,14 @@ fi
       stop_watcher() {
         local code=$?
         trap - EXIT TERM INT
+        : > "$watch_log/observer.stop"
+        for _ in $(seq 1 50); do
+          kill -0 "$watcher" 2>/dev/null || break
+          sleep 0.1
+        done
         if kill -0 "$watcher" 2>/dev/null; then
-          mkdir -p "$watch_log"
-          : > "$watch_log/observer.stop"
-          kill -TERM "$watcher" 2>/dev/null || true
+          kill -KILL "-$watcher" 2>/dev/null || kill -KILL "$watcher" 2>/dev/null || true
         fi
-        # This wait is inside the original readiness deadline. The outer process
-        # group deadline still bounds a stuck watcher and all its child commands.
         wait "$watcher" || true
         exit "$code"
       }

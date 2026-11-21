@@ -22,7 +22,8 @@ MAX_SAMPLE_BYTES = 128 * 1024
 def bounded_file(command, path, timeout=COMMAND_TIMEOUT, limit=MAX_SAMPLE_BYTES):
     """Run one bounded read-only command; retain only its bounded diagnostic output."""
     try:
-        with path.open("xb") as output:
+        temporary = path.with_suffix(path.suffix + ".command")
+        with temporary.open("wb") as output:
             process = subprocess.Popen(command, stdin=subprocess.DEVNULL, start_new_session=True,
                                        stdout=output, stderr=subprocess.STDOUT)
             try:
@@ -31,6 +32,7 @@ def bounded_file(command, path, timeout=COMMAND_TIMEOUT, limit=MAX_SAMPLE_BYTES)
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
                 code = 124
+        temporary.replace(path)
         path.with_suffix(path.suffix + ".status.txt").write_text(str(code) + "\n")
         if path.stat().st_size > limit:
             path.unlink()
@@ -105,7 +107,13 @@ def observe(udid, bundle, app, test_bundle, destination, seconds, runner=subproc
             sleep(min(POLL_SECONDS, max(0, deadline - FINISH_BEFORE - monotonic())))
     except KeyboardInterrupt:
         stopped = True
-    finally:
+    try:
+        # Preserve a deterministic status and host record even when final
+        # collection is interrupted by the outer readiness deadline.
+        if not (destination / "host-final.json").exists():
+            temporary = destination / "host-final.pending"
+            temporary.write_text(json.dumps({"unavailable": "final host collection incomplete; no host-process verdict"}) + "\n")
+            temporary.replace(destination / "host-final.json")
         # Sample before Xcode timeout cleanup can shut down the device. If Xcode
         # returned, retain its completed probe separately from this observation.
         sample_host(udid, destination, "host-final", runner)
@@ -116,6 +124,10 @@ def observe(udid, bundle, app, test_bundle, destination, seconds, runner=subproc
         (destination / "observer.status.txt").write_text(
             ("xcodebuild-finished" if stopped else "readiness-deadline") +
             "; observation only; no launch cause established\n")
+    finally:
+        if not (destination / "observer.status.txt").exists():
+            (destination / "observer.status.txt").write_text(
+                "final collection incomplete; bounded unavailable evidence retained; no launch cause established\n")
 
 
 def interrupted(signum, _frame):
