@@ -115,7 +115,30 @@ class GenerationTransactionTests(unittest.TestCase):
             self.assertIn("Could not restore", str(caught.exception))
             self.assertNotIn("original reviewed Kotlin restored after generation failure", stderr.getvalue())
 
-    def test_differing_valid_outputs_restore_the_entry_snapshot(self):
+    def test_restore_failure_preserves_the_primary_error_as_secondary_context(self):
+        with tempfile.TemporaryDirectory(prefix="persona-refract-transaction-") as temporary:
+            generated = Path(temporary) / "AboutVersionRow.kt"
+            generated.write_bytes(REVIEWED_KOTLIN)
+
+            def primary_generation_failure(cli, mode, android_out, harmony_out, sources=(pilot.SOURCE,)):
+                if len(sources) == 2:
+                    raise subprocess.CalledProcessError(1, str(cli), stderr=DIAGNOSTIC)
+                generated.write_bytes(b"partial unreviewed output\n")
+                raise subprocess.CalledProcessError(1, str(cli), stderr="primary generator failure\n")
+
+            with mock.patch.object(pilot, "restore_reviewed_output",
+                                   side_effect=ValueError("Could not restore the reviewed Kotlin: fixture restore failure")):
+                result, _, stderr = self.run_generate(generated, primary_generation_failure)
+            self.assertEqual(result, 1)
+            self.assertIn("primary generator failure", stderr)
+            self.assertIn("Command", stderr)
+            self.assertIn("Could not restore", stderr)
+            self.assertIn("fixture restore failure", stderr)
+            self.assertLess(stderr.index("primary generator failure"), stderr.index("Could not restore"))
+            self.assertIn("secondary", stderr.lower())
+            self.assertNotIn("original reviewed Kotlin restored after generation failure", stderr)
+            self.assertEqual(generated.read_bytes(), b"partial unreviewed output\n")
+
         with tempfile.TemporaryDirectory(prefix="persona-refract-transaction-") as temporary:
             generated = Path(temporary) / "AboutVersionRow.kt"
             reviewed = REVIEWED_KOTLIN

@@ -351,8 +351,8 @@ def main() -> int:
             print(f"Refract About Version: FAILED: {error}", file=sys.stderr)
             try:
                 restore_reviewed_output(before)
-            except ValueError as restore_error:
-                print(f"Refract About Version: FAILED: {restore_error}", file=sys.stderr)
+            except (ValueError, OSError) as restore_error:
+                print(f"Refract About Version: secondary restoration failure: {restore_error}", file=sys.stderr)
                 return 1
             print("Refract About Version: original reviewed Kotlin restored after generation failure", file=sys.stderr)
             return 1
