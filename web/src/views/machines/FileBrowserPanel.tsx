@@ -10,7 +10,14 @@ import { BASE } from "../../lib/base";
 import type { Machine } from "../../lib/types";
 import { Button, cx, IconButton, Loading } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { classifySensitivePathClient, computeLineDiff } from "./fileDiff";
+import {
+  classifySensitivePathClient,
+  computeLineDiff,
+  detectLineEnding,
+  normalizeToLF,
+  restoreLineEnding,
+  type LineEnding,
+} from "./fileDiff";
 
 export interface MachineFileRoot {
   id: string;
@@ -229,6 +236,27 @@ function shouldDefaultToTail(entry: MachineFileEntry): boolean {
   return (lower.endsWith(".log") || lower.endsWith(".out") || lower.endsWith(".jsonl")) && entry.size > 32 * 1024;
 }
 
+function joinDisplayPath(dirPath: string, name: string): string {
+  const cleanDir = dirPath.replace(/[\\/]+$/, "");
+  const cleanName = name.trim();
+  if (!cleanName) return cleanDir || dirPath;
+  return `${cleanDir}/${cleanName}`;
+}
+
+function classifyTargetPath(dir: MachineFileListResponse | null, name: string): { sensitive: boolean; reason: string } {
+  const trimmed = name.trim();
+  const candidates = [
+    dir?.path ? joinDisplayPath(dir.path, trimmed) : trimmed,
+    dir?.canonical_path ? joinDisplayPath(dir.canonical_path, trimmed) : "",
+  ];
+  for (const p of candidates) {
+    if (!p) continue;
+    const res = classifySensitivePathClient(p);
+    if (res.sensitive) return res;
+  }
+  return { sensitive: false, reason: "" };
+}
+
 export function FileBrowserPanel({ machines, initialMachineId }: { machines: Machine[]; initialMachineId?: string }) {
   const defaultMid = useMemo(() => {
     if (initialMachineId && machines.some((m) => m.id === initialMachineId)) return initialMachineId;
@@ -259,6 +287,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
   // Lightweight editor + diff confirm + CAS state
   const [editing, setEditing] = useState(false);
   const [draftText, setDraftText] = useState("");
+  const [draftEol, setDraftEol] = useState<LineEnding>("lf");
   const [reviewingDiff, setReviewingDiff] = useState(false);
   const [sensitiveSaveAck, setSensitiveSaveAck] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -270,6 +299,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
   const [createName, setCreateName] = useState("");
   const [createText, setCreateText] = useState("");
   const [createSensitiveAck, setCreateSensitiveAck] = useState(false);
+  const [createServerSensitive, setCreateServerSensitive] = useState<{ reason: string } | null>(null);
   const [creating, setCreating] = useState(false);
 
   // Rename / move state
@@ -300,6 +330,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
 
   const resetEditor = useCallback(() => {
     setEditing(false);
+    setDraftEol("lf");
     setReviewingDiff(false);
     setSensitiveSaveAck(false);
     setSaving(false);
@@ -321,6 +352,8 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
       setDir(res);
       setPathInput(res.path);
       setFilter("");
+      setCreateServerSensitive(null);
+      setCreateSensitiveAck(false);
     } catch (err) {
       if (isAbort(err)) return;
       setDirError(t("machines-files.load_error", { error: errorText(err) }));
@@ -436,7 +469,9 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
 
   const startEdit = useCallback(() => {
     if (!preview || !preview.editable) return;
-    setDraftText(preview.text ?? "");
+    const raw = preview.text ?? "";
+    setDraftEol(detectLineEnding(raw));
+    setDraftText(normalizeToLF(raw));
     setEditing(true);
     setReviewingDiff(false);
     setSensitiveSaveAck(false);
@@ -444,6 +479,11 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     setFileError("");
     setCasConflict(false);
   }, [preview]);
+
+  const saveText = useMemo(
+    () => (editing ? restoreLineEnding(draftText, draftEol) : ""),
+    [editing, draftText, draftEol],
+  );
 
   const confirmSave = useCallback(async () => {
     if (!machine?.online || !preview || !preview.mtime || !preview.sha256) return;
@@ -455,7 +495,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
         method: "PUT",
         json: {
           path: preview.path,
-          text: draftText,
+          text: saveText,
           expected_mtime: preview.mtime,
           expected_sha256: preview.sha256,
           expected_revision: preview.revision,
@@ -464,7 +504,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
       });
       setPreview({
         ...preview,
-        text: draftText,
+        text: saveText,
         size: res.size,
         bytes_read: res.size,
         mode: res.mode,
@@ -476,6 +516,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
         sensitive_reason: res.sensitive_reason ?? preview.sensitive_reason,
       });
       setEditing(false);
+      setDraftEol("lf");
       setReviewingDiff(false);
       setSensitiveSaveAck(false);
       setSavedNotice(t("machines-files.saved_notice"));
@@ -490,11 +531,11 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     } finally {
       setSaving(false);
     }
-  }, [machine?.id, machine?.online, preview, draftText, sensitiveSaveAck, dir?.path, loadDirectory]);
+  }, [machine?.id, machine?.online, preview, saveText, sensitiveSaveAck, dir?.path, loadDirectory]);
 
   const submitCreate = useCallback(async () => {
     if (!machine?.online || !dir?.path || !createKind || !createName.trim()) return;
-    const sens = classifySensitivePathClient(createName);
+    const sens = createServerSensitive ? { sensitive: true, reason: createServerSensitive.reason } : classifyTargetPath(dir, createName);
     setCreating(true);
     setDirError("");
     setDirNotice("");
@@ -513,6 +554,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
       setCreateName("");
       setCreateText("");
       setCreateSensitiveAck(false);
+      setCreateServerSensitive(null);
       await loadDirectory(machine.id, dir.path);
       if (createKind === "file" && res.entry) {
         setSelectedEntry(res.entry);
@@ -520,11 +562,18 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
         void loadFile(machine.id, res.entry.path, "preview", tailLines);
       }
     } catch (err) {
-      setDirError(t("machines-files.action_error", { error: errorText(err) }));
+      if (err instanceof ApiError && (err.status === 412 || err.code === "machine_file_sensitive_confirm") && err.code === "machine_file_sensitive_confirm") {
+        const reason = typeof err.body.sensitive_reason === "string" ? err.body.sensitive_reason : "";
+        setCreateServerSensitive({ reason });
+        setCreateSensitiveAck(false);
+        setDirError("");
+      } else {
+        setDirError(t("machines-files.action_error", { error: errorText(err) }));
+      }
     } finally {
       setCreating(false);
     }
-  }, [machine?.id, machine?.online, dir?.path, createKind, createName, createText, createSensitiveAck, loadDirectory, loadFile, tailLines]);
+  }, [machine?.id, machine?.online, dir, createKind, createName, createText, createSensitiveAck, createServerSensitive, loadDirectory, loadFile, tailLines]);
 
   const submitRename = useCallback(async () => {
     if (!machine?.online || !renameTarget || !renameDest.trim()) return;
@@ -673,14 +722,14 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
       setDirError(t("machines-files.upload_too_large", { max: formatSize(MAX_UPLOAD_BYTES) }));
       return;
     }
-    const sens = classifySensitivePathClient(file.name);
+    const sens = classifyTargetPath(dir, file.name);
     if (sens.sensitive) {
       setUploadSensitiveAck(false);
       setPendingUpload({ file, kind: "sensitive", reason: sens.reason });
       return;
     }
     startStreamingUpload(file);
-  }, [startStreamingUpload]);
+  }, [dir, startStreamingUpload]);
 
   const cancelUpload = useCallback(() => {
     uploadXhrRef.current?.abort();
@@ -694,14 +743,17 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
   }, [dir?.entries, filter]);
 
   const editMaxBytes = preview?.edit_max_bytes ?? DEFAULT_EDIT_MAX_BYTES;
-  const draftBytes = useMemo(() => (editing ? utf8ByteLength(draftText) : 0), [editing, draftText]);
+  const draftBytes = useMemo(() => (editing ? utf8ByteLength(saveText) : 0), [editing, saveText]);
   const draftOversized = editing && draftBytes > editMaxBytes;
   const diffResult = useMemo(
-    () => (reviewingDiff && preview ? computeLineDiff(preview.text ?? "", draftText) : null),
-    [reviewingDiff, preview, draftText],
+    () => (reviewingDiff && preview ? computeLineDiff(preview.text ?? "", saveText) : null),
+    [reviewingDiff, preview, saveText],
   );
 
-  const createSensitive = useMemo(() => classifySensitivePathClient(createName), [createName]);
+  const createSensitive = useMemo(() => {
+    if (createServerSensitive) return { sensitive: true, reason: createServerSensitive.reason };
+    return classifyTargetPath(dir, createName);
+  }, [createServerSensitive, dir, createName]);
   const renameSensitiveInfo = useMemo(() => {
     if (!renameTarget) return { sensitive: false, reason: "" };
     if (renameTarget.sensitive) return { sensitive: true, reason: renameTarget.sensitive_reason ?? "" };
@@ -829,6 +881,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                     setCreateName("");
                     setCreateText("");
                     setCreateSensitiveAck(false);
+                    setCreateServerSensitive(null);
                     setRenameTarget(null);
                     setDeleteTarget(null);
                   }}
@@ -843,6 +896,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                     setCreateName("");
                     setCreateText("");
                     setCreateSensitiveAck(false);
+                    setCreateServerSensitive(null);
                     setRenameTarget(null);
                     setDeleteTarget(null);
                   }}
@@ -883,6 +937,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                   onChange={(e) => {
                     setCreateName(e.target.value);
                     setCreateSensitiveAck(false);
+                    setCreateServerSensitive(null);
                   }}
                   placeholder={t("machines-files.create_name_placeholder")}
                   aria-label={t("machines-files.create_name_placeholder")}
@@ -918,7 +973,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                   >
                     {t("machines-files.create_submit")}
                   </Button>
-                  <Button tone="secondary" disabled={creating} onClick={() => setCreateKind(null)}>
+                  <Button tone="secondary" disabled={creating} onClick={() => { setCreateKind(null); setCreateServerSensitive(null); }}>
                     {t("machines-files.cancel")}
                   </Button>
                 </div>
@@ -1521,7 +1576,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                       <div className="flex flex-wrap items-center gap-2">
                         <Button
                           tone="primary"
-                          disabled={draftOversized || draftText === (preview?.text ?? "")}
+                          disabled={draftOversized || saveText === (preview?.text ?? "")}
                           onClick={() => {
                             setSensitiveSaveAck(false);
                             setReviewingDiff(true);

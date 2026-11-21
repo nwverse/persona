@@ -17,7 +17,13 @@ vi.hoisted(() => {
 
 import { setToken } from "../../lib/api";
 import { FileBrowserPanel, machineFileDownloadURL } from "./FileBrowserPanel";
-import { classifySensitivePathClient, computeLineDiff } from "./fileDiff";
+import {
+  classifySensitivePathClient,
+  computeLineDiff,
+  detectLineEnding,
+  normalizeToLF,
+  restoreLineEnding,
+} from "./fileDiff";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -28,6 +34,8 @@ let root: Root;
 let calls: Array<{ url: string; method: string; body?: string }>;
 let tailCalls = 0;
 let writeMode: "ok" | "conflict" = "ok";
+let listDirPath = "/home/dev";
+let createRequire412Once = false;
 
 const flush = async () => {
   for (let i = 0; i < 6; i++) {
@@ -63,16 +71,36 @@ function stubHub(input: RequestInfo | URL, init?: RequestInit): Promise<Response
   }
   if (url.includes("/files/list")) {
     return Promise.resolve(json({
-      path: "/home/dev",
-      canonical_path: "/home/dev",
+      path: listDirPath,
+      canonical_path: listDirPath,
       parent: "/home",
-      total: 4,
+      total: 5,
       entries: [
-        { name: "logs", path: "/home/dev/logs", kind: "dir", size: 4096, mode: "drwxr-xr-x", perm: 0o755, mtime: "2026-11-20T00:00:00Z" },
-        { name: ".env", path: "/home/dev/.env", kind: "file", size: 12, mode: "-rw-------", perm: 0o600, mtime: "2026-11-20T00:00:00Z", sensitive: true, sensitive_reason: "env" },
-        { name: "app.log", path: "/home/dev/app.log", kind: "file", size: 600000, mode: "-rw-r--r--", perm: 0o644, mtime: "2026-11-20T00:00:00Z" },
-        { name: "image.bin", path: "/home/dev/image.bin", kind: "file", size: 2048, mode: "-rw-r--r--", perm: 0o644, mtime: "2026-11-20T00:00:00Z", binary: true },
+        { name: "logs", path: `${listDirPath}/logs`, kind: "dir", size: 4096, mode: "drwxr-xr-x", perm: 0o755, mtime: "2026-11-20T00:00:00Z" },
+        { name: ".env", path: `${listDirPath}/.env`, kind: "file", size: 12, mode: "-rw-------", perm: 0o600, mtime: "2026-11-20T00:00:00Z", sensitive: true, sensitive_reason: "env" },
+        { name: "win.ini", path: `${listDirPath}/win.ini`, kind: "file", size: 22, mode: "-rw-r--r--", perm: 0o644, mtime: "2026-11-20T00:00:00Z" },
+        { name: "app.log", path: `${listDirPath}/app.log`, kind: "file", size: 600000, mode: "-rw-r--r--", perm: 0o644, mtime: "2026-11-20T00:00:00Z" },
+        { name: "image.bin", path: `${listDirPath}/image.bin`, kind: "file", size: 2048, mode: "-rw-r--r--", perm: 0o644, mtime: "2026-11-20T00:00:00Z", binary: true },
       ],
+    }));
+  }
+  if (url.includes("/files/preview") && url.includes("win.ini")) {
+    return Promise.resolve(json({
+      path: `${listDirPath}/win.ini`,
+      canonical_path: `${listDirPath}/win.ini`,
+      name: "win.ini",
+      size: 22,
+      mode: "-rw-r--r--",
+      perm: 0o644,
+      mtime: "2026-11-20T00:00:00Z",
+      mime: "text/plain; charset=utf-8",
+      revision: "r-win",
+      sha256: "sha-win-1",
+      editable: true,
+      edit_max_bytes: 1048576,
+      text: "alpha\r\nbeta\r\ngamma\r\n",
+      bytes_read: 22,
+      max_bytes: 262144,
     }));
   }
   if (url.includes("/files/preview") && url.includes(".env")) {
@@ -148,10 +176,19 @@ function stubHub(input: RequestInfo | URL, init?: RequestInit): Promise<Response
     }));
   }
   if (url.includes("/files/create") && method === "POST") {
-    const parsed = JSON.parse(body ?? "{}") as { name?: string; kind?: string };
+    const parsed = JSON.parse(body ?? "{}") as { dir?: string; name?: string; kind?: string; confirm_sensitive?: boolean };
+    if (createRequire412Once && !parsed.confirm_sensitive) {
+      createRequire412Once = false;
+      return Promise.resolve(json({
+        code: "machine_file_sensitive_confirm",
+        error: "explicit confirmation is required to modify or delete a sensitive file",
+        sensitive_reason: "protected",
+      }, 412));
+    }
+    const base = parsed.dir ?? listDirPath;
     return Promise.resolve(json({
-      entry: { name: parsed.name, path: `/home/dev/${parsed.name}`, kind: parsed.kind, size: 0, mode: "drwxr-xr-x", perm: 0o755 },
-      canonical_path: `/home/dev/${parsed.name}`,
+      entry: { name: parsed.name, path: `${base}/${parsed.name}`, kind: parsed.kind, size: 0, mode: "drwxr-xr-x", perm: 0o755 },
+      canonical_path: `${base}/${parsed.name}`,
     }));
   }
   if (url.includes("/files/entry") && method === "PATCH") {
@@ -202,6 +239,8 @@ beforeEach(() => {
   calls = [];
   tailCalls = 0;
   writeMode = "ok";
+  listDirPath = "/home/dev";
+  createRequire412Once = false;
   FakeXHR.last = null;
   setToken("tok-test");
   vi.stubGlobal("fetch", vi.fn(stubHub));
@@ -218,16 +257,38 @@ afterEach(() => {
 });
 
 describe("fileDiff helpers", () => {
-  it("computes unified line diff and classifies sensitive paths", () => {
+  it("computes unified line diff, preserves CRLF/CR line endings, and classifies sensitive paths", () => {
     const diff = computeLineDiff("a\nb\nc\n", "a\nb-edited\nc\nd\n");
     expect(diff.changed).toBe(true);
     expect(diff.added).toBe(2);
     expect(diff.removed).toBe(1);
     expect(diff.hunks.length).toBe(1);
+
+    // CRLF line ending detection, normalization, restoration, and minimal diff
+    const crlfOriginal = "alpha\r\nbeta\r\ngamma\r\n";
+    expect(detectLineEnding(crlfOriginal)).toBe("crlf");
+    expect(detectLineEnding("a\rb\r")).toBe("cr");
+    expect(detectLineEnding("a\nb\n")).toBe("lf");
+    const lfDraft = normalizeToLF(crlfOriginal).replace("beta", "beta-2");
+    const crlfRestored = restoreLineEnding(lfDraft, "crlf");
+    expect(crlfRestored).toBe("alpha\r\nbeta-2\r\ngamma\r\n");
+    const crlfDiff = computeLineDiff(crlfOriginal, crlfRestored);
+    expect(crlfDiff.changed).toBe(true);
+    expect(crlfDiff.added).toBe(1);
+    expect(crlfDiff.removed).toBe(1);
+    expect(crlfDiff.hunks[0]?.lines.map((l) => `${l.type}:${l.text}`)).toEqual([
+      "context:alpha",
+      "del:beta",
+      "add:beta-2",
+      "context:gamma",
+    ]);
+
     expect(classifySensitivePathClient(".env")).toEqual({ sensitive: true, reason: "env" });
     expect(classifySensitivePathClient(".env.example").sensitive).toBe(false);
     expect(classifySensitivePathClient("hub.json")).toEqual({ sensitive: true, reason: "hub_config" });
     expect(classifySensitivePathClient("id_rsa")).toEqual({ sensitive: true, reason: "private_key" });
+    expect(classifySensitivePathClient("/home/dev/.aws/config")).toEqual({ sensitive: true, reason: "credentials" });
+    expect(classifySensitivePathClient("/home/dev/.ssh/config")).toEqual({ sensitive: true, reason: "private_key" });
   });
 });
 
@@ -389,6 +450,113 @@ describe("FileBrowserPanel", () => {
     expect(FakeXHR.last?.aborted).toBe(true);
     expect(host.querySelector('[data-testid="upload-progress-panel"]')).toBeNull();
     expect(host.querySelector('[data-testid="dir-notice"]')).not.toBeNull();
+  });
+
+  it("classifies full joined path for sensitive directories on create and falls back on 412 sensitive confirm", async () => {
+    // 1. Inside a sensitive directory (~/.aws), even a plain name like "config" triggers sensitive confirmation.
+    listDirPath = "/home/dev/.aws";
+    act(() => root.render(<FileBrowserPanel machines={onlineMachines} />));
+    await flush();
+
+    await act(async () => { findButton(/新建文件|New file/).click(); });
+    const nameInput = host.querySelector<HTMLInputElement>('[data-testid="create-name-input"]')!;
+    await act(async () => { setNativeValue(nameInput, "config"); });
+
+    const createPanel = host.querySelector('[data-testid="create-entry-panel"]')!;
+    const createBtn = findButton(/^(创建|Create)$/, createPanel);
+    const sensBox = host.querySelector<HTMLInputElement>('[data-testid="create-sensitive-checkbox"]');
+    expect(sensBox).not.toBeNull();
+    expect(createBtn.disabled).toBe(true);
+
+    await act(async () => { sensBox!.click(); });
+    expect(createBtn.disabled).toBe(false);
+    await act(async () => { createBtn.click(); });
+    await flush();
+
+    const firstCreate = calls.filter((c) => c.method === "POST" && c.url.includes("/files/create")).pop();
+    expect(firstCreate).toBeTruthy();
+    expect(JSON.parse(firstCreate!.body ?? "{}")).toMatchObject({
+      dir: "/home/dev/.aws",
+      name: "config",
+      kind: "file",
+      confirm_sensitive: true,
+    });
+
+    // 2. Non-sensitive directory where server responds 412 machine_file_sensitive_confirm surfaces checkbox & retries cleanly.
+    listDirPath = "/home/dev/custom";
+    createRequire412Once = true;
+    await act(async () => {
+      const refreshBtn = host.querySelector<HTMLButtonElement>('button[aria-label*="刷新"], button[aria-label*="Refresh"]');
+      refreshBtn!.click();
+    });
+    await flush();
+
+    await act(async () => { findButton(/新建文件|New file/).click(); });
+    const nameInput2 = host.querySelector<HTMLInputElement>('[data-testid="create-name-input"]')!;
+    await act(async () => { setNativeValue(nameInput2, "vault.txt"); });
+    const createPanel2 = host.querySelector('[data-testid="create-entry-panel"]')!;
+    expect(host.querySelector('[data-testid="create-sensitive-checkbox"]')).toBeNull();
+
+    // First submit triggers 412 -> surfaces confirmation checkbox without leaving a hard error alert.
+    await act(async () => { findButton(/^(创建|Create)$/, createPanel2).click(); });
+    await flush();
+    expect(host.querySelector('[data-testid="dir-error"]')).toBeNull();
+    const fallbackBox = host.querySelector<HTMLInputElement>('[data-testid="create-sensitive-checkbox"]');
+    expect(fallbackBox).not.toBeNull();
+    const retryBtn = findButton(/^(创建|Create)$/, host.querySelector('[data-testid="create-entry-panel"]')!);
+    expect(retryBtn.disabled).toBe(true);
+
+    await act(async () => { fallbackBox!.click(); });
+    expect(retryBtn.disabled).toBe(false);
+    await act(async () => { retryBtn.click(); });
+    await flush();
+
+    const retryCreate = calls.filter((c) => c.method === "POST" && c.url.includes("/files/create")).pop();
+    expect(JSON.parse(retryCreate!.body ?? "{}")).toMatchObject({
+      dir: "/home/dev/custom",
+      name: "vault.txt",
+      kind: "file",
+      confirm_sensitive: true,
+    });
+  });
+
+  it("preserves CRLF line endings across textarea edit, minimal diff preview, and PUT save", async () => {
+    act(() => root.render(<FileBrowserPanel machines={onlineMachines} />));
+    await flush();
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="file-entry-win.ini"]')!.click();
+    });
+    await flush();
+
+    await act(async () => { findButton(/^(编辑|Edit)$/).click(); });
+    const editor = host.querySelector<HTMLTextAreaElement>('[data-testid="machine-file-editor"]')!;
+    // Textarea receives LF-normalized text, and Review diff stays disabled while unchanged.
+    expect(editor.value).toBe("alpha\nbeta\ngamma\n");
+    expect(findButton(/查看差异|Review diff/).disabled).toBe(true);
+
+    // Editing only line 2 produces a +1 / -1 diff (not rewriting all lines) and saves CRLF back to server.
+    await act(async () => { setNativeValue(editor, "alpha\nbeta-2\ngamma\n"); });
+    await act(async () => { findButton(/查看差异|Review diff/).click(); });
+
+    const diffEl = host.querySelector('[data-testid="machine-file-diff"]')!;
+    expect(diffEl.textContent).toContain("+1 / -1");
+    expect(diffEl.textContent).toContain("-beta");
+    expect(diffEl.textContent).toContain("+beta-2");
+    expect(diffEl.textContent).not.toContain("-alpha");
+    expect(diffEl.textContent).not.toContain("-gamma");
+
+    await act(async () => { findButton(/确认保存|Confirm & Save/, diffEl).click(); });
+    await flush();
+
+    const putCall = calls.filter((c) => c.method === "PUT" && c.url.includes("/files/content")).pop();
+    expect(putCall).toBeTruthy();
+    expect(JSON.parse(putCall!.body ?? "{}")).toMatchObject({
+      path: "/home/dev/win.ini",
+      text: "alpha\r\nbeta-2\r\ngamma\r\n",
+      expected_mtime: "2026-11-20T00:00:00Z",
+      expected_sha256: "sha-win-1",
+    });
   });
 
   it("shows offline notice without issuing file requests when selected machine is offline", async () => {

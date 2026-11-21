@@ -24,11 +24,37 @@ export interface DiffResult {
   fallback?: boolean;
 }
 
+export type LineEnding = "lf" | "crlf" | "cr";
+
+/** Detects the line ending style of a UTF-8 text buffer. */
+export function detectLineEnding(text: string): LineEnding {
+  if (text.includes("\r\n")) return "crlf";
+  if (text.includes("\r")) return "cr";
+  return "lf";
+}
+
+/** Normalizes CRLF and lone CR line endings to LF for safe HTML textarea editing. */
+export function normalizeToLF(text: string): string {
+  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+/** Restores an LF-normalized textarea draft back to the file's original line ending. */
+export function restoreLineEnding(lfText: string, eol: LineEnding): string {
+  if (eol === "crlf") return lfText.replace(/\n/g, "\r\n");
+  if (eol === "cr") return lfText.replace(/\n/g, "\r");
+  return lfText;
+}
+
 function splitLines(text: string): string[] {
   if (text === "") return [];
-  const raw = text.split("\n");
+  const sep = !text.includes("\n") && text.includes("\r") ? "\r" : "\n";
+  const raw = text.split(sep);
   if (raw.length > 0 && raw[raw.length - 1] === "") raw.pop();
   return raw;
+}
+
+function stripTrailingCR(line: string): string {
+  return line.endsWith("\r") ? line.slice(0, -1) : line;
 }
 
 const MAX_LCS_CELLS = 250_000;
@@ -54,7 +80,7 @@ export function computeLineDiff(before: string, after: string, contextLines = 3)
 
   const ops: DiffLine[] = [];
   for (let i = 0; i < prefix; i++) {
-    ops.push({ type: "context", oldLine: i + 1, newLine: i + 1, text: a[i] });
+    ops.push({ type: "context", oldLine: i + 1, newLine: i + 1, text: stripTrailingCR(a[i]) });
   }
 
   let fallback = false;
@@ -80,39 +106,39 @@ export function computeLineDiff(before: string, after: string, contextLines = 3)
     let j = 0;
     while (i < m && j < n) {
       if (aMid[i] === bMid[j]) {
-        ops.push({ type: "context", oldLine: prefix + i + 1, newLine: prefix + j + 1, text: aMid[i] });
+        ops.push({ type: "context", oldLine: prefix + i + 1, newLine: prefix + j + 1, text: stripTrailingCR(aMid[i]) });
         i++;
         j++;
       } else if (dp[(i + 1) * cols + j] >= dp[i * cols + (j + 1)]) {
-        ops.push({ type: "del", oldLine: prefix + i + 1, text: aMid[i] });
+        ops.push({ type: "del", oldLine: prefix + i + 1, text: stripTrailingCR(aMid[i]) });
         i++;
       } else {
-        ops.push({ type: "add", newLine: prefix + j + 1, text: bMid[j] });
+        ops.push({ type: "add", newLine: prefix + j + 1, text: stripTrailingCR(bMid[j]) });
         j++;
       }
     }
     while (i < m) {
-      ops.push({ type: "del", oldLine: prefix + i + 1, text: aMid[i] });
+      ops.push({ type: "del", oldLine: prefix + i + 1, text: stripTrailingCR(aMid[i]) });
       i++;
     }
     while (j < n) {
-      ops.push({ type: "add", newLine: prefix + j + 1, text: bMid[j] });
+      ops.push({ type: "add", newLine: prefix + j + 1, text: stripTrailingCR(bMid[j]) });
       j++;
     }
   } else {
     fallback = true;
     for (let i = 0; i < aMid.length; i++) {
-      ops.push({ type: "del", oldLine: prefix + i + 1, text: aMid[i] });
+      ops.push({ type: "del", oldLine: prefix + i + 1, text: stripTrailingCR(aMid[i]) });
     }
     for (let j = 0; j < bMid.length; j++) {
-      ops.push({ type: "add", newLine: prefix + j + 1, text: bMid[j] });
+      ops.push({ type: "add", newLine: prefix + j + 1, text: stripTrailingCR(bMid[j]) });
     }
   }
 
   for (let i = 0; i < suffix; i++) {
     const oi = a.length - suffix + i;
     const ni = b.length - suffix + i;
-    ops.push({ type: "context", oldLine: oi + 1, newLine: ni + 1, text: a[oi] });
+    ops.push({ type: "context", oldLine: oi + 1, newLine: ni + 1, text: stripTrailingCR(a[oi]) });
   }
 
   // Group changed ranges with surrounding context into unified hunks.
