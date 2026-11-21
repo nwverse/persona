@@ -63,6 +63,7 @@ DOMAINS = [
     "link_switch_mock",  # SSH to Persona Link scenarios (/api/v1/machines/{mid}/link-switch), MOCK_LINK_SWITCH
     "starred_mock",  # Starred messages (/api/v1/assistant/starred…), MOCK_STARRED
     "task_skip_mock",  # One scheduled occurrence, MOCK_SKIP_OCCURRENCE
+    "direction_sessions_mock",  # Move To… and one direction's page (#11516), MOCK_DIRECTION_SESSIONS
 ]
 
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
