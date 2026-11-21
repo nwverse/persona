@@ -257,14 +257,26 @@ struct OutsideDirectionsTests {
         hub.on("GET", "/api/v1/assistant/directions/tree", json: #"""
         {"directions":[{"id":"dir-outside","name":"Outside","external":true,"counts":{"needs_you":2},"running":true}]}
         """#)
+        let configA = ServerConfig(url: URL(string: "https://a.invalid")!, token: "a")
+        let configB = ServerConfig(url: URL(string: "https://b.invalid")!, token: "b")
         let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "outside-remove-" + UUID().uuidString))
         model.forgetRestoredForTests() // no assistant pick or hub snapshot from another test on this simulator
-        model.linkHooksForTests = (transport: try #require(hub.client.transport), socket: { SyncSocket() })
+        // A restored default-group link predates this test's hook. buildLinks retains links by group, so this makes
+        // the original network escape deterministic instead of depending on which suites ran first (#8236).
         model.registry = HubRegistry(hubs: [
-            PairedHub(id: "a", config: ServerConfig(url: URL(string: "https://a.invalid")!, token: "a"), group: "", hubID: "A"),
-            PairedHub(id: "b", config: ServerConfig(url: URL(string: "https://b.invalid")!, token: "b"), group: "other", hubID: "B"),
+            PairedHub(id: "a", config: configA, group: "", hubID: "A"),
         ])
         model.buildLinks()
+        #expect(model.link("")?.api.transport == nil)
+        model.linkHooksForTests = (transport: try #require(hub.client.transport), socket: { SyncSocket() })
+        model.registry = HubRegistry(hubs: [
+            PairedHub(id: "a", config: configA, group: "", hubID: "A"),
+            PairedHub(id: "b", config: configB, group: "other", hubID: "B"),
+        ])
+        model.buildLinks()
+        // Hooks apply to links made from now on; backfill a restored link retained for the default group too.
+        for link in model.links { link.transportForTests = hub.client.transport }
+        #expect(model.links.allSatisfy { $0.api.transport != nil })
         model.hubGroup = ""
         await model.refreshAssistant()
         await model.refreshDirectionTree()
