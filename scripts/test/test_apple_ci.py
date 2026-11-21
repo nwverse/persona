@@ -231,7 +231,7 @@ class AppleCIPreparationTests(unittest.TestCase):
         stop = script.rindex('if [ "$LANE" = ios-regressions ]; then', batch, strict)
         finish = script.index('if [ "$LANE" != ios-focused ]; then', strict)
         ordinary = script.index('result ios-unit "$SIM" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests')
-        focused_start = script.index('if [ "$LANE" = ios-focused ]; then', batch)
+        focused_start = script.index('if [ "$LANE" = ios-focused ] || [ "$LANE" = ios-ipad-diagnostic ]; then', batch)
         focused_result = script.index('result ios-unit "$SIM" PageSearchableTests', focused_start)
         focused = script[focused_start:script.index('\n', focused_result) + 1]
         self.assertLess(readiness, batch)
@@ -637,7 +637,7 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
                 observer = output / 'diagnostics' / name
                 observer.mkdir(parents=True)
                 (observer / 'observer.status.txt').write_text(name)
-            (output / 'regular-readiness-context.json').write_text('regular scope')
+            (output / 'regular-readiness-context.json').write_text('{"scope":"regular"}')
             (output / 'simulator-readiness-context.json').write_text('phone scope')
             (output / 'simulator.log').write_text('phone-device')
             apple_diagnostics.collect(output, destination, lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '', ''), scope='regular')
@@ -648,7 +648,7 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
                 'disk-space.txt', 'disk-space.stderr.txt', 'disk-space.status.txt',
             })
             self.assertEqual((destination / 'live-regular-readiness/observer.status.txt').read_text(), 'live-regular-readiness')
-            self.assertEqual((destination / 'regular-readiness-context.json').read_text(), 'regular scope')
+            self.assertEqual(json.loads((destination / 'regular-readiness-context.json').read_text()), {'scope': 'regular'})
 
     def test_regular_diagnostic_scope_is_deterministic_before_context_publication(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,6 +1,7 @@
 """Collect only Apple failure diagnostics, never source/configuration or keys."""
 
 import argparse
+import json
 from pathlib import Path
 import shutil
 import subprocess
