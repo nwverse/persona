@@ -938,6 +938,32 @@ test('session.send_unseen supersedes only a completed in-doubt send', async (t) 
   assert.equal(calls, 2, 'neither retry supersedes the acknowledged attempt')
 })
 
+test('session.send_unseen does not supersede a pending send', async (t) => {
+  const n = await startFakeNode(t)
+  let calls = 0
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  const rt = createRuntime({ ...minimal(), send: async () => {
+    calls++
+    await gate
+    throw new RpcError('send outcome is unknown', 'send_failed', { delivered: 'unknown' })
+  } }, { runtime: 'toy', socketPath: n.path, retryMs: 20, pushDelayMs: 5 })
+  t.after(() => rt.stop())
+  await rt.start()
+  await n.ready
+  const params = { session_id: 's1', text: 'x', client_msg_id: 'm-pending' }
+  const first = n.peer.call('session.send', params)
+  await until('the original driver call', () => calls === 1)
+  const superseding = n.peer.call('session.send_unseen', params)
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  release()
+  await Promise.all([
+    assert.rejects(first, (err) => err.data?.delivered === 'unknown'),
+    assert.rejects(superseding, (err) => err.data?.delivered === 'unknown'),
+  ])
+  assert.equal(calls, 1, 'the checked retry waits for the pending attempt instead of replacing it')
+})
+
 test('an in-doubt send expires after ten minutes', async (t) => {
   t.mock.timers.enable({ apis: ['Date'] })
   const n = await startFakeNode(t)
