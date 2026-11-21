@@ -613,11 +613,10 @@ func TestCCPluginWaitsForARestartedNodesPlugin(t *testing.T) {
 			client := pluginSocket(t, n)
 			var plugin *fakePlugin
 			started := make(chan struct{})
-			go func() {
-				time.Sleep(500 * time.Millisecond) // the plugin comes back after the send started
+			time.AfterFunc(500*time.Millisecond, func() { // the plugin comes back after the send started
 				plugin = startFakePlugin(t, client, sidA, p, "submit")
 				close(started)
-			}()
+			})
 			res, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "carry on", "client_msg_id": "m-1", "owner_input": true})
 			<-started
 			if err != nil {
