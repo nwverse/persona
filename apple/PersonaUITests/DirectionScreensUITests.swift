@@ -102,8 +102,12 @@ final class DirectionScreensUITests: XCTestCase {
         return element.exists && element.isHittable
     }
 
-    /// The drawer's list (its rows inherit the drawer's identifier on a phone).
-    @MainActor private var sidebarList: XCUIElement { app.collectionViews.matching(identifier: "assistant-sidebar").firstMatch }
+    /// The sidebar's list: on a phone it inherits the drawer's identifier; the iPad's column is the list of its rows.
+    @MainActor private var sidebarList: XCUIElement {
+        let byID = app.collectionViews.matching(identifier: "assistant-sidebar").firstMatch
+        if byID.exists { return byID }
+        return app.collectionViews.containing(NSPredicate(format: "identifier BEGINSWITH 'sidebar-'")).firstMatch
+    }
 
     /// The first lead (「Persona 产品」), whose name is mock data in every language.
     @MainActor private func firstLeadToggle() -> XCUIElement {
@@ -172,14 +176,22 @@ final class DirectionScreensUITests: XCTestCase {
         openSidebar()
         chat("Persona 产品").tap()
         sleep(2)
-        // Assistant tapped again opens the conversation's menu (docs/design/DESIGN_SYSTEM.md 3.5).
-        app.buttons["shell-assistant"].firstMatch.tap()
-        // Items of a Menu carry no identifiers: by its words.
-        let item = app.buttons[word("Tasks and Chats", "任务和会话", "タスクとチャット")].firstMatch
+        // Assistant tapped again opens the conversation's menu on a phone (docs/design/DESIGN_SYSTEM.md 3.5); beside a
+        // sidebar column (the iPad) the conversation's title pill over it does (the lead's title in the mock).
+        if app.buttons["shell-assistant"].exists {
+            app.buttons["shell-assistant"].firstMatch.tap()
+        } else {
+            app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@ AND NOT (identifier BEGINSWITH 'sidebar')",
+                                             "1110 | 探索")).firstMatch.tap()
+        }
+        // Items of a Menu carry no identifiers: by its words (not the sidebar's All ›, which says the same).
+        let item = app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != 'sidebar-direction-all'",
+                                                    word("Tasks and Chats", "任务和会话", "タスクとチャット"))).firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 5), "no Tasks and Chats in the lead's title menu:\n\(app.debugDescription)")
         shot("title-menu")
         item.tap()
-        XCTAssertTrue(page.waitForExistence(timeout: 10))
+        if !page.waitForExistence(timeout: 10) { shot("page-from-title-missing") }
+        XCTAssertTrue(page.exists, "Tasks and Chats did not open the page:\n\(app.debugDescription)")
         sleep(2)
         shot("page-from-title")
     }
