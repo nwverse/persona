@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,6 +61,18 @@ func (u *usageWindowsHub) invalidate() {
 	u.mu.Lock()
 	u.at = time.Time{}
 	u.mu.Unlock()
+}
+
+// providers are the providers of the accounts the last poll found (what the usage bars could show), for the admin
+// page's choice of providers to hide.
+func (u *usageWindowsHub) providers() []string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	var out []string
+	for _, a := range u.merged {
+		out = append(out, strings.ToLower(a.Provider))
+	}
+	return out
 }
 
 // usageSources are the machines whose node may be asked: the off switch in hub.json is honoured here as well as by
@@ -524,10 +537,25 @@ func usageRowID(provider, key string) string {
 func (d *Devices) usageWindowRoutes(api *http.ServeMux) {
 	api.HandleFunc("GET /api/v1/usage/windows", func(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
-		accounts := d.usageWin.poll(r.Context(), d.usageSources(), now)
+		accounts := hideUsageProviders(d.usageWin.poll(r.Context(), d.usageSources(), now), d.usageGW.config().HiddenProviders)
 		if accounts == nil {
 			accounts = []proto.UsageAccount{}
 		}
 		writeJSON(w, map[string]any{"accounts": accounts, "checked_at": now.UTC()})
 	})
+}
+
+// hideUsageProviders drops the accounts of the providers the owner chose to hide from the usage bars (#11753). It
+// works on the answer, not on the poll: the scheduler's capacity view reads the same poll and keeps counting them.
+func hideUsageProviders(in []proto.UsageAccount, hidden []string) []proto.UsageAccount {
+	if len(hidden) == 0 || len(in) == 0 {
+		return in
+	}
+	out := make([]proto.UsageAccount, 0, len(in))
+	for _, a := range in {
+		if !slices.Contains(hidden, strings.ToLower(a.Provider)) {
+			out = append(out, a)
+		}
+	}
+	return out
 }

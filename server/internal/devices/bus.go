@@ -320,6 +320,7 @@ func (d *Devices) Handler(next http.Handler) http.Handler {
 	d.usageHistoryRoutes(mux)
 	d.usageWindowRoutes(mux)
 	d.adminUsageRoutes(mux)
+	d.ownerUsageRoutes(mux)
 	d.shareRoutes(mux)
 	route("PUT /api/v1/machines/{mid}/claude-dirs/blocked", d.putClaudeDirsBlocked)
 	mux.Handle("/", next)
