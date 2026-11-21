@@ -88,6 +88,18 @@ tests, rather than inferring runtime from `Sleep` inside fake-clock tests, and e
 PR watcher's report, still says what failed (`scripts/ci/server-shards.py`). The full scripts suite splits complete sorted discovery
 across two independently isolated jobs, scheduled one at a time; each has its own synthetic HOME and mock ports.
 
+**Why tests stay uncached.** check-fast, the CI shards, `scripts/test/test-server.sh` and the bounded runner's
+commands below all pass `-count=1`, so no Go test result comes from Go's test cache; the build cache still serves
+compilation. The test cache reuses a result while the test binary, its flags and the environment variables and files
+the test process itself consulted are unchanged, and it checks those files only inside the module root, `server/`
+(`go help test`). Server tests read inputs outside it (`spec/fixtures/` alone in 19 packages; `schema/`, `sdk/go/`,
+`docs/`, `apple/` and `android/` sources), which are exactly the paths check-fast routes to the packages that read
+them, and guards such as `internal/archguard` read the module through a child `go list`, whose reads are never
+recorded. A cached run then repeats an old `ok` for a change that breaks the test, while a hit saves only seconds per
+package, and only on packages the change did not reach
+(`docs/lessons/testing.md`, "Go's test cache can repeat a pass the change broke").
+A plain `go test` while editing is fine; a result reported as verification comes from `-count=1`.
+
 Android runs two independently isolated lanes, both at once: `lint-build-test-0` (checker tests, all-module lint, the debug APK and
 the first of two disjoint sorted feature-test shards) and `test-1` (core tests, the second feature shard, and platform/app tests).
 The parts are balanced by measured task time, and each lane runs its parts in one Gradle invocation, so the upstream compilation they
@@ -1555,7 +1567,7 @@ Not private: loopback (`127.0.0.0/8`, `::1`, `localhost`, including protocol/por
 backtick paths/commands/config keys in `CLAUDE.local.md` (only ID/host/email/IP-like values count), and `site/` contact/site domain
 (`app_store.feedback_email`, `privacy_url`, already public for App Store/OAuth). Docs say hub machine/another Mac;
 example machine ids `server` / `laptop`. `release.sh` scans before packaging;
-precommit hooks: `git config core.hooksPath scripts/hooks` (`pre-commit` staged content, plus `scripts/assets/gen_tokens.py --check` and the token drift tests when `spec/tokens`, `apple/Shared/Design` or the generated Android tokens are staged; `commit-msg` commit message, `pre-push` changed files/messages against the first of `origin/HEAD`, `origin/main`, `origin/master` that shares history with the pushed commit, every file and message of an orphan branch; `pre-push` also checks the trusted Deno adapter, see "Trusted Deno adapter").
+precommit hooks: `git config core.hooksPath scripts/hooks` (`pre-commit` staged content, plus `scripts/assets/gen_tokens.py --check` and the token drift tests when `spec/tokens`, `apple/Shared/Design` or the generated Android tokens are staged; `commit-msg` commit message, `pre-push` changed files/messages against the first of `origin/HEAD`, `origin/main`, `origin/master` that shares history with the pushed commit, every file and message of an orphan branch; `pre-push` also checks the trusted Deno adapter, see "Trusted Deno adapter", and refuses a branch under `artifacts/` or `pr-assets/`, see `docs/operations/collaboration.md`, "Screenshots in PRs").
 **Message lines** (#1107): `--message <file>` checks every line, Markdown headings included (a PR's title and body become the squash commit's message as they are).
 `commit-msg` passes `--commit-msg`, which checks only what `git commit` records: when git opened an editor it skips the comment lines (hints, branch, paths) and everything from the scissors line down (the `commit -v` diff);
 a `-m` / `-F` message keeps its `#` lines, so they are checked. It follows git's comment string and `commit.cleanup` (`commit_msg_lines`), but cannot see `--cleanup` or `-v` on the command line; `pre-push` still reads every recorded line.
