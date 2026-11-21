@@ -123,6 +123,8 @@ fun TodoDetailScreen(
     val canRetry = failedStart && !todo.origin.isNullOrBlank() && tasks != null
     val plans = tasks?.plans?.collectAsState()?.value.orEmpty()
     val failedTask = if (canRetry) planTaskOf(todo, plans) else null
+    val codedStartFailure = if (failedStart) startFailureCodeLine(failedTask?.errorCode, failedTask?.errorArgs) else null
+    var startFailureDetails by remember(todo.id, todo.startError, failedTask?.errorCode) { mutableStateOf(false) }
     val hubFeatures = tasks?.features?.collectAsState()
     val instead = if (canRetry) retryLauncher(failedTask, hubFeatures?.value.orEmpty()) else null
     val retrying = TasksStore.retryKey(todo.id) in tasks?.busy?.collectAsState()?.value.orEmpty()
@@ -433,10 +435,22 @@ fun TodoDetailScreen(
                 item(key = "start-failure") {
                     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                         JNotice(
-                            stringResource(R.string.agents_todo_start_failed, todo.startError.orEmpty()),
+                            stringResource(R.string.agents_todo_start_failed, codedStartFailure ?: todo.startError.orEmpty()),
                             status = Status.Unknown,
                             icon = PersonaIcons.error,
                         )
+                        if (codedStartFailure != null) {
+                            // The short coded line leads; the raw hub failure remains available only on request.
+                            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                                JTextButton(
+                                    stringResource(if (startFailureDetails) persona.core.designsystem.R.string.designsystem_details_collapse
+                                    else persona.core.designsystem.R.string.designsystem_details_expand),
+                                    { startFailureDetails = !startFailureDetails },
+                                    modifier = Modifier.testTag("todo-start-failure-details"),
+                                )
+                                if (startFailureDetails) JCodeBlock(todo.startError.orEmpty(), small = true)
+                            }
+                        }
                         if (canRetry) tasks?.let { TaskShellQuestion(todo, failedTask, it) }
                     }
                 }

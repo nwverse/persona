@@ -24,6 +24,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -212,6 +213,21 @@ class AssistantTaskRemediesTest {
         rule.onNodeWithText(text, useUnmergedTree = true).assertIsDisplayed()
     }
 
+    private fun assertCodedDetailRevealsRawOnlyAfterDetails(short: String, raw: String) {
+        rule.onNodeWithText(short, useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithText(raw, useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithTag("assistant-task-start-failure-details").assertIsDisplayed().performClick()
+        settle()
+        rule.onNodeWithText(raw, useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText(short, useUnmergedTree = true).assertExists()
+    }
+
+    private fun assertCodedDetailCollapsed(short: String, raw: String) {
+        rule.onNodeWithText(short, useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithText(raw, useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithTag("assistant-task-start-failure-details").assertIsDisplayed()
+    }
+
     /** FlowRow keeps the suggested launcher before plain Retry whether they share a row or wrap at 2x text. */
     private fun assertLauncherBeforeRetry() {
         val launcher = rule.onNodeWithText(USE_LAUNCHER).getUnclippedBoundsInRoot()
@@ -230,24 +246,30 @@ class AssistantTaskRemediesTest {
         assertQuestion(0)
     }
 
-    @Test fun terminalLauncherMissingUsesTheShortNeedsYouLineAndDetailRetainsTheRawFailure() {
+    @Test fun terminalLauncherMissingUsesShortLinesAndDetailHidesRawFailureUntilDetails() {
         val shown = show(launcherFixture(retryWith = null))
         assertNeedsYouShortLine(LAUNCHER_SHORT)
         rule.onNodeWithText(LAUNCHER_RAW, useUnmergedTree = true).assertDoesNotExist()
 
         shown.show(Surface.Detail)
-        rule.onNodeWithText(LAUNCHER_RAW, useUnmergedTree = true).assertIsDisplayed()
-        rule.onNodeWithText(LAUNCHER_SHORT, useUnmergedTree = true).assertDoesNotExist()
+        assertCodedDetailRevealsRawOnlyAfterDetails(LAUNCHER_SHORT, LAUNCHER_RAW)
     }
 
-    @Test fun worktreePathTakenUsesTheShortNeedsYouLineAndDetailRetainsTheRawFailure() {
+    @Test fun worktreePathTakenUsesShortLinesAndDetailHidesRawFailureUntilDetails() {
         val shown = show(failedFixture("worktree_path_taken", mapOf("path" to "/workspace/release-check"), WORKTREE_RAW))
         assertNeedsYouShortLine(WORKTREE_SHORT)
         rule.onNodeWithText(WORKTREE_RAW, useUnmergedTree = true).assertDoesNotExist()
 
         shown.show(Surface.Detail)
-        rule.onNodeWithText(WORKTREE_RAW, useUnmergedTree = true).assertIsDisplayed()
-        rule.onNodeWithText(WORKTREE_SHORT, useUnmergedTree = true).assertDoesNotExist()
+        assertCodedDetailRevealsRawOnlyAfterDetails(WORKTREE_SHORT, WORKTREE_RAW)
+    }
+
+    @Test fun uncodedSharedDetailKeepsTheRawFailureWithoutAddingDetails() {
+        val shown = show(failedFixture("", null, UNCODED_RAW))
+        shown.show(Surface.Detail)
+        rule.onNodeWithText(UNCODED_RAW, useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithTag("assistant-task-start-failure-details").assertDoesNotExist()
+        rule.onNodeWithText(LAUNCHER_SHORT, useUnmergedTree = true).assertDoesNotExist()
     }
 
     @Test fun takenOverTaskWithoutPlanIdUsesTheLivePlanAndGatesTheExactLauncherRetry() {
@@ -350,7 +372,7 @@ class AssistantTaskRemediesTest {
 
         shown.show(Surface.Detail)
         assertQuestion(0)
-        rule.onNodeWithText(LAUNCHER_RAW, useUnmergedTree = true).assertIsDisplayed()
+        assertCodedDetailRevealsRawOnlyAfterDetails(LAUNCHER_SHORT, LAUNCHER_RAW)
         assertTrue(fixture.answers.isEmpty())
     }
 
@@ -377,7 +399,7 @@ class AssistantTaskRemediesTest {
                 else lightNeeds = needs
 
                 shown.show(Surface.Detail, style, dark)
-                rule.onNodeWithText(LAUNCHER_RAW, useUnmergedTree = true).assertIsDisplayed()
+                assertCodedDetailCollapsed(LAUNCHER_SHORT, LAUNCHER_RAW)
                 rule.onNodeWithText(USE_LAUNCHER).assertIsDisplayed()
                 assertLauncherBeforeRetry()
                 assertQuestion(0)
@@ -423,6 +445,8 @@ class AssistantTaskRemediesTest {
         )
         val LAUNCHER_RAW = "launcher_missing: claude could not start in the terminal\n" +
             "missing=/opt/persona/bin/claude\nexit=127"
+        val UNCODED_RAW = "synthetic launcher exited 127: executable was not found\n" +
+            "second line remains visible: /opt/persona/synthetic-agent"
         val WORKTREE_RAW = "worktree_path_taken: /workspace/release-check already exists\n" +
             "choose another workspace path before retrying"
         val SHELL_RAW = "shell_waiting: the terminal is waiting for an update answer\n" +

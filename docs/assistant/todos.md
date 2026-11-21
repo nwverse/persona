@@ -444,7 +444,8 @@ Since #10365 (`assistant/start_retry_launcher.go`):
   workspace left in the way (`worktree_path_taken`), the hub's whole sentence under the details. Their buttons are
   **Use <launcher> instead** (when the hub suggests one and lists the feature), **Retry** and **Remove**; Retry no longer
   needs the to-do's `plan_id`. Web, Apple and Android offer the same coded reasons, alternative launcher and Retry
-  without `plan_id`: they look up the to-do's own plan first, then a non-dismissed plan by `todo_id`, and send only
+  without `plan_id`: they read the code first on the failed row and the detail surfaces, keep the raw failure behind
+  Details, look up the to-do's own plan first, then a non-dismissed plan by `todo_id`, and send only
   `{"launcher":"…"}` on the launcher action (Android on the failed Needs-you row, shared task detail and standalone
   to-do action bar). Ordinary Retry sends no body from Apple and `{}` from Android.
 
