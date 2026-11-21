@@ -126,20 +126,24 @@ func TestPersistentOwnerActionSurvivesFormerDeadlineCallerAndRestart(t *testing.
 
 			// A reconnecting caller must not revive the stale timestamp as a timer.
 			waitCtx, cancelWait := context.WithCancel(context.Background())
+			defer cancelWait()
 			waitDone := make(chan error, 1)
 			go func() {
 				_, err := restarted.waitInteraction(waitCtx, batchIX)
 				waitDone <- err
 			}()
+			observation := 75 * time.Millisecond // let an incorrectly restored past-deadline timer fire
 			if wallClock {
-				time.Sleep(2 * time.Minute)
-			} else {
-				time.Sleep(75 * time.Millisecond) // let an incorrectly restored past-deadline timer fire
+				observation = 2 * time.Minute
 			}
+			timer := time.NewTimer(observation)
+			defer timer.Stop()
 			select {
 			case err := <-waitDone:
 				t.Fatalf("former deadline ended the persistent waiter: %v", err)
-			default:
+			case <-timer.C:
+			case <-t.Context().Done():
+				t.Fatalf("persistent waiter observation: %v", t.Context().Err())
 			}
 			assertPersistentOwnerSurfaces(t, restarted, book, batchIX.ApprovalBatchID, ids)
 			cancelWait()
@@ -156,16 +160,12 @@ func TestPersistentOwnerActionSurvivesFormerDeadlineCallerAndRestart(t *testing.
 			if err := restarted.resolveApproved(context.Background(), batchIX.ID, proto.Resolution{Allow: &finalAllow}, nil); err != nil {
 				t.Fatal(err)
 			}
-			deadline := time.Now().Add(3 * time.Second)
-			for time.Now().Before(deadline) {
+			ownerActionPoll(t, 3*time.Second, func() bool {
 				endedMu.Lock()
 				complete := len(ended) == len(ids)
 				endedMu.Unlock()
-				if complete && len(restarted.pendingInteractions()) == 0 {
-					break
-				}
-				time.Sleep(5 * time.Millisecond)
-			}
+				return complete && len(restarted.pendingInteractions()) == 0
+			})
 			endedMu.Lock()
 			for _, id := range ids {
 				if ended[id] != 2 {

@@ -689,11 +689,11 @@ function OwnerApprovalPhrasesField({ value, disabled, onSave }: { value: string[
     try { await onSave(phrases); } catch { /* the parent shows the confirmed value and the error */ } finally { setSaving(false); }
   };
   return <div className="px-4 py-3">
-    <label className="mb-2 block text-[13px] font-medium text-ink" htmlFor="owner-approval-phrases">{t("settings-assistantsettings.owner_approval_phrases")}</label>
+    <label className="mb-2 block text-meta font-medium text-ink" htmlFor="owner-approval-phrases">{t("settings-assistantsettings.owner_approval_phrases")}</label>
     <textarea id="owner-approval-phrases" aria-label={t("settings-assistantsettings.owner_approval_phrases")} className={cx(textareaClass, "min-h-24 font-mono")}
       value={draft} disabled={disabled || saving} onChange={(e) => setDraft(e.target.value)} />
     <div className="mt-2 flex items-center gap-3">
-      <p className="min-w-0 flex-1 text-[12px] leading-relaxed text-ink-3">{t("settings-assistantsettings.owner_approval_phrases_hint")}</p>
+      <p className="min-w-0 flex-1 text-label leading-relaxed text-ink-3">{t("settings-assistantsettings.owner_approval_phrases_hint")}</p>
       <Button disabled={disabled || saving || !changed || phrases.length === 0} onClick={() => void save()}>{t("settings-assistantsettings.owner_approval_save_phrases")}</Button>
     </div>
   </div>;

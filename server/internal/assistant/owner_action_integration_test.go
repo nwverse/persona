@@ -55,15 +55,35 @@ func (e *ownerActionConnector) executions() []string {
 	return append([]string(nil), e.sent...)
 }
 
+func ownerActionPoll(t *testing.T, timeout time.Duration, check func() bool) bool {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer timer.Stop()
+	defer ticker.Stop()
+	for {
+		if check() {
+			return true
+		}
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("owner-action poll: %v", t.Context().Err())
+			return false
+		case <-timer.C:
+			return check()
+		case <-ticker.C:
+		}
+	}
+}
+
 func waitOwnerActionCards(t *testing.T, s *Service, count int) []proto.Interaction {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		cards := s.pendingInteractions()
-		if len(cards) >= count {
-			return cards
-		}
-		time.Sleep(5 * time.Millisecond)
+	var cards []proto.Interaction
+	if ownerActionPoll(t, 3*time.Second, func() bool {
+		cards = s.pendingInteractions()
+		return len(cards) >= count
+	}) {
+		return cards
 	}
 	t.Fatalf("pending owner-action cards = %+v, want %d", s.pendingInteractions(), count)
 	return nil
@@ -71,18 +91,17 @@ func waitOwnerActionCards(t *testing.T, s *Service, count int) []proto.Interacti
 
 func waitOrdinaryOwnerActionCards(t *testing.T, s *Service, count int) []proto.Interaction {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		var ordinary []proto.Interaction
+	var ordinary []proto.Interaction
+	if ownerActionPoll(t, 3*time.Second, func() bool {
+		ordinary = ordinary[:0]
 		for _, ix := range s.pendingInteractions() {
 			if !ix.OwnerProposal {
 				ordinary = append(ordinary, ix)
 			}
 		}
-		if len(ordinary) >= count {
-			return ordinary
-		}
-		time.Sleep(5 * time.Millisecond)
+		return len(ordinary) >= count
+	}) {
+		return ordinary
 	}
 	t.Fatalf("ordinary pending cards = %+v, want %d", s.pendingInteractions(), count)
 	return nil
