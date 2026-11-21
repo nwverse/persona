@@ -1,5 +1,5 @@
 {
-  "invalid_type": "種類は relay か generic にしてください",
+  "invalid_type": "種類は relay、relay_key、generic のいずれかにしてください",
   "invalid_url": "アドレスは http(s)://ホスト[:ポート][/パス] の形式にしてください。キーをアドレスに含めないでください",
   "invalid_name": "名前は空にできず、40 文字以内で改行を含められません",
   "invalid_key": "キーに空白や制御文字は使えず、512 文字以内にしてください",
