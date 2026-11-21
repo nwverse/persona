@@ -915,7 +915,9 @@ struct AssistantSidebar: View {
         // for another hub's or manager's page.
         .task(id: AssistantTaskChatsStore.readKey(out: out, group: model.hub?.group, manager: model.assistantManagerID,
                                                    conversations: all.count)) { if out { await taskChats.refresh(model.api) } }
+        // Keep the drawer's growing row types out of the sheet/search modifiers (#6735, #12249).
         .modifier(AssistantSidebarPresenters(ui: ui, open: open))
+        .stackSegment()
         .background {
             if let drawer {
                 SidebarClosed(drawer: drawer) {
