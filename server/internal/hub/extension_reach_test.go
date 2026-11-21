@@ -362,9 +362,10 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/machines/{id}/usage":                  "path",
 		"GET /api/v1/machines/{mid}/stat":                  "path",
 		"POST /api/v1/notify":                              "body",    // machine_id, session_id: its manager's (ownsRef)
-		"GET /api/v1/push/intercepts":                      "manager", // only entries with its manager (lnRoutes, TestLnInterceptsHeldToManager)
+		"GET /api/v1/push/intercepts":                      "manager", // only entries with its manager (pushGradingRoutes, TestPushGradingInterceptsHeldToManager)
 		"GET /api/v1/push/ln-mode":                         "own",     // the hub-wide switch state, no manager's data in the answer
-		"GET /api/v1/push/stats/daily":                     "manager", // only its manager's counts (lnRoutes, TestPushDailyStatsHeldToManager)
+		"GET /api/v1/push/grading":                         "own",     // alias of the hub-wide switch state, same answer and authorization
+		"GET /api/v1/push/stats/daily":                     "manager", // only its manager's counts (pushGradingRoutes, TestPushDailyStatsHeldToManager)
 		"GET /api/v1/assistant":                            "manager",
 		"GET /api/v1/assistant/capabilities":               "manager",
 		"POST /api/v1/assistant/conversations":             "manager",
@@ -379,6 +380,7 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/assistant/worker-presets":             "manager",
 		"GET /api/v1/assistant/start-defaults":             "manager",
 		"PUT /api/v1/assistant/start-defaults":             "manager",
+		"POST /api/v1/assistant/start-defaults/preview":    "manager",
 		"GET /api/v1/todos":                                "manager", "GET /api/v1/todos/{id}/decisions": "manager",
 		"GET /api/v1/todos/{id}": "manager", "GET /api/v1/todos/places": "manager", // TestTodoViewRoutesStayOnTheirManager
 		"GET /api/v1/todos/{id}/timeline":                     "manager", // TestTodoViewRoutesStayOnTheirManager

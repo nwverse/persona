@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.content.res.Configuration
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
@@ -59,6 +60,7 @@ import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 import java.io.File
 import java.time.Instant
+import kotlinx.coroutines.runBlocking
 
 /**
  * The Persona tab's history drawer drawn on the JVM with Robolectric's native graphics (no emulator), in every style,
@@ -342,6 +344,7 @@ class AssistantDrawerShotsTest {
         var active by mutableStateOf<SessionKey?>(null)
         var shadedPlace by mutableStateOf<String?>(null)
         var found by mutableStateOf<List<FoundChat>?>(null)
+        var arranger by mutableStateOf<ConversationArranger?>(null)
         val openedChats = mutableListOf<SessionKey>()
         val openedAgents = mutableListOf<SessionKey>()
         rule.setContent {
@@ -351,7 +354,7 @@ class AssistantDrawerShotsTest {
                         AssistantDrawer("", {}, groups, active = active, hasMain = false,
                             onEnd = {}, onMain = {}, onOpen = { openedChats += it }, onInfo = {}, onNew = {}, onSettings = {},
                             onArchive = {}, onRename = {}, onDiagnostics = {}, onLeader = {}, onOpenAgent = { openedAgents += it },
-                            found = found, shadedPlace = shadedPlace)
+                            found = found, shadedPlace = shadedPlace, arranger = arranger)
                     }
                 }
             }
@@ -404,6 +407,52 @@ class AssistantDrawerShotsTest {
         rule.onNodeWithText(targetlessDirectionName).performTouchInput { click(); longClick() }
         assertTrue(openedChats.isEmpty())
         rule.onNodeWithText("拷贝会话 ID").assertDoesNotExist()
+
+        // Main's Arrange mode is a separate direction-row path: outside rows keep the same routing and no-menu contract.
+        found = null
+        openedAgents.clear()
+        val controller = ConversationArranger(prepare = { {} }, write = { null })
+        runBlocking { controller.start(null) }
+        arranger = controller
+        androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+        rule.waitForIdle()
+        rule.onNodeWithTag("conversation-arrange-done").assertExists()
+        rule.onAllNodesWithContentDescription("对话操作").assertCountEquals(1)
+        rule.onNodeWithText(targetlessDirectionName).performTouchInput { click(); longClick() }
+        assertTrue(openedChats.isEmpty())
+        assertTrue(openedAgents.isEmpty())
+        rule.onNodeWithText("拷贝会话 ID").assertDoesNotExist()
+        rule.onNodeWithText(boundDirectionName).performTouchInput { click() }
+        assertEquals(listOf(outsideTarget), openedAgents)
+        assertTrue(openedChats.isEmpty())
+        assertFalse(controller.ui.value.arranging)
+    }
+
+    @Test fun mergedSidebarLeavesAgentSelectionToTheActualAgentRow() {
+        val merged = MergedSidebarContent(
+            list = { state, content, footer, _ ->
+                LazyColumn(state = state) {
+                    content()
+                    item { footer() }
+                }
+            },
+            usage = {}, agents = emptyList(), agentMachines = emptyMap(), pinnedAgents = emptySet(),
+            onSearchAgent = {}, agentsInFront = false, showKnowledge = false,
+        )
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                CompositionLocalProvider(LocalHomeDrawer provides true) {
+                    Box(Modifier.width(400.dp).height(1200.dp).background(PersonaTheme.palette.background)) {
+                        AssistantDrawer("", {}, outsideGroups(), active = null, hasMain = false,
+                            onEnd = null, onMain = {}, onOpen = {}, onInfo = {}, onNew = {}, onSettings = {},
+                            onOpenAgent = {}, shadedPlace = AssistantSidebarShade.agent(outsideTarget), merged = merged)
+                    }
+                }
+            }
+        }
+        // The merged Agents list shades the actual Agent root; the direction must not add a second selected row.
+        rule.onNodeWithText(boundDirectionName).assert(!isSelected())
+        rule.onNodeWithText(targetlessDirectionName).assert(!isSelected())
     }
 
     @Test fun drawsMixedDirectionsInEveryStyleAppearanceAndTextSize() {

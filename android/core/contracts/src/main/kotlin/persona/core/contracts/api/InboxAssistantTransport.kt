@@ -54,6 +54,11 @@ interface InboxAssistantTransport {
      */
     suspend fun doneDays(manager: String?, tz: String): JsonObject = throw UnsupportedOperationException("Done days unavailable")
     suspend fun reply(itemId: String?, feedId: String?, text: String, clientId: String): JsonObject
+    /** A direct Feishu send carries picked recipients; other reply transports keep their text-only contract. */
+    suspend fun reply(itemId: String?, feedId: String?, text: String, clientId: String, mentions: List<LarkMention>): JsonObject {
+        require(mentions.isEmpty()) { "Lark mentions unavailable" }
+        return reply(itemId, feedId, text, clientId)
+    }
     /** Hands an item to its manager's main chat (`POST /api/v1/inbox/{id}/handoff`), answering `{item, session}`. */
     suspend fun handOff(itemId: String, text: String, clientId: String): JsonObject =
         throw UnsupportedOperationException("Inbox hand-off route unavailable")
@@ -158,6 +163,9 @@ interface InboxAssistantTransport {
         throw UnsupportedOperationException("Document comments unavailable")
     /** People to @ in a document's comment, by name (`GET /api/v1/lark/documents/people?url=&q=`, `{members:[…]}`). */
     suspend fun documentPeople(url: String, query: String): JsonObject = throw UnsupportedOperationException("Document people unavailable")
+    /** Group members to @, searched by name (`GET /api/v1/lark/conversations/{feed}/members?q=&limit=`). */
+    suspend fun larkMembers(feedId: String, query: String, limit: Int = 30): JsonObject =
+        throw UnsupportedOperationException("Conversation members unavailable")
     suspend fun momentsPost(postId: String): JsonObject = throw UnsupportedOperationException("Moments post unavailable")
     suspend fun momentsComments(postId: String): JsonObject = throw UnsupportedOperationException("Moments comments unavailable")
     suspend fun urlPreview(messageId: String, url: String): JsonObject = throw UnsupportedOperationException("URL preview unavailable")

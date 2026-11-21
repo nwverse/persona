@@ -31,7 +31,7 @@ struct ChatLines {
         }
     }
 
-    /// The lines without the raw `<closeout …>…</closeout>` block of the last reply (#3612): the card in the chat's
+    /// The lines without the raw closeout of the last reply (#3612): the card in the chat's
     /// header says it, so the reply does not say it again as text. Exactly that block goes (`Closeout.strip`), from
     /// the last exchange's last words only; a reply that was nothing but the block is not drawn at all. An earlier
     /// turn's block stays as it was written: the card is about the turn that just ended.
@@ -42,8 +42,9 @@ struct ChatLines {
         for index in lines.indices.reversed() {
             switch lines[index].content {
             case .row(.assistant(let item)):
-                guard let text = item.text, Closeout.holdsBlock(text) else { return lines }
-                let stripped = Closeout.strip(text)
+                guard let text = item.text else { return lines }
+                let stripped = Closeout.strip(text, complete: item.fullSize == nil)
+                guard stripped != text else { return lines }
                 var out = lines
                 if stripped.isEmpty, item.fullSize == nil {
                     out.remove(at: index)

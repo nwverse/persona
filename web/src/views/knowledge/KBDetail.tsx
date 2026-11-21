@@ -48,6 +48,7 @@ import {
 import { machineWithHub } from "../../lib/mesh";
 import { openPanel } from "../../lib/panel";
 import { href, onLinkClick, type Route } from "../../lib/router";
+import { openedFromHere } from "../../lib/handoff";
 import { conversationRoute } from "../../lib/inbox";
 import { getState, onHubEvent, useStore } from "../../lib/store";
 import type { Session } from "../../lib/types";
@@ -673,11 +674,12 @@ function Agents({ agents }: { agents: Session[] }) {
       <SectionTitle title={t("knowledge-kbdetail.agents")} count={live.length} />
       <Card>
         {live.map((s) => {
+          // a drill-down: Back and the sidebar stay with this project (#12055)
           const to = { name: "session" as const, mid: s.machine_id, sid: s.session_id };
           const st = stateOf(s);
           const preview = plainMarkdown(sessionPreview(s));
           return (
-            <a key={`${s.machine_id}/${s.session_id}`} href={href(to)} onClick={(ev) => onLinkClick(ev, to)} className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-hover">
+            <a key={`${s.machine_id}/${s.session_id}`} href={href(to)} onClick={(ev) => onLinkClick(ev, to, openedFromHere())} className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-hover">
               <span className="flex w-3 shrink-0 justify-center">
                 <StatusMark state={st} />
               </span>

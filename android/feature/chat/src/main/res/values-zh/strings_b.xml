@@ -145,6 +145,7 @@
     <string name="chat_request_collapse_full">收起完整页</string>
     <string name="chat_request_allow">允许</string>
     <string name="chat_request_deny">拒绝</string>
+    <string name="chat_request_owner_reply">回复“%1$s”，仅此一次</string>
     <string name="chat_request_always_allows">总是同意会放行：%1$s</string>
     <string name="chat_request_fill_in_allow">填写并允许</string>
     <string name="chat_request_secret_run_commands">依次运行的命令</string>
@@ -227,6 +228,7 @@
     <string name="chat_link_unsupported_text">这个链接不能在 Persona 里打开。</string>
     <string name="chat_link_ok">知道了</string>
     <string name="chat_link_open">打开</string>
+    <string name="chat_link_open_in_app">在 Persona 中打开</string>
     <string name="chat_link_no_app">没有能打开这个链接的 App</string>
     <string name="chat_links_mail_title">写邮件？</string>
     <string name="chat_links_mail_text">打开邮件 App 写一封邮件。</string>

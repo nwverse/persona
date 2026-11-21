@@ -59,7 +59,9 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/repositories/{id}
 -                    DELETE /api/v1/assistant/saved-prompts/{id}
 -                    DELETE /api/v1/assistant/standing-authorizations/{id}
+-                    DELETE /api/v1/assistant/starred/{id}
 -                    DELETE /api/v1/assistant/tasks/{id}
+-                    DELETE /api/v1/assistant/tasks/{id}/skip-next
 -                    DELETE /api/v1/assistant/tasks/{id}/start-grant
 -                    DELETE /api/v1/auth/tokens/{id}
 -                    DELETE /api/v1/bots/feishu/owner
@@ -148,6 +150,7 @@ dispatch.guard       GET /api/v1/assistant/dispatch-guard
 assistant.dispatch_policy GET /api/v1/assistant/dispatch-policy
 -                    GET /api/v1/assistant/feishu/notices
 -                    GET /api/v1/assistant/followups
+-                    GET /api/v1/assistant/history
 leaders.read         GET /api/v1/assistant/leaders
 -                    GET /api/v1/assistant/memory
 -                    GET /api/v1/assistant/north-star
@@ -163,6 +166,8 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/assistant/search
 -                    GET /api/v1/assistant/skills
 -                    GET /api/v1/assistant/standing-authorizations
+-                    GET /api/v1/assistant/starred
+-                    GET /api/v1/assistant/starred/import
 assistant.start_defaults GET /api/v1/assistant/start-defaults
 -                    GET /api/v1/assistant/tasks
 -                    GET /api/v1/assistant/tasks/cron
@@ -306,6 +311,7 @@ machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/personas/{id}/{file...}
 -                    GET /api/v1/phone/write-queue
 -                    GET /api/v1/pins
+notify               GET /api/v1/push/grading
 notify               GET /api/v1/push/intercepts
 notify               GET /api/v1/push/ln-mode
 notify               GET /api/v1/push/stats/daily
@@ -320,6 +326,7 @@ notify               GET /api/v1/push/stats/daily
 agents.read          GET /api/v1/saved-agent-searches
 agents.read          GET /api/v1/sessions
 agents.read          GET /api/v1/sessions/archived
+-                    GET /api/v1/sessions/{mid}/{sid}/agent-messages
 agents.read          GET /api/v1/sessions/{mid}/{sid}/info
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/full
@@ -443,9 +450,14 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/rule-suggestions/{id}/always
 -                    POST /api/v1/assistant/rule-suggestions/{id}/not-now
 -                    POST /api/v1/assistant/saved-prompts
+-                    POST /api/v1/assistant/starred
+-                    POST /api/v1/assistant/starred/import
+-                    POST /api/v1/assistant/starred/import/preview
+assistant.start_defaults POST /api/v1/assistant/start-defaults/preview
 -                    POST /api/v1/assistant/tasks
 -                    POST /api/v1/assistant/tasks/{id}/fresh
 -                    POST /api/v1/assistant/tasks/{id}/run
+-                    POST /api/v1/assistant/tasks/{id}/skip-next
 -                    POST /api/v1/assistant/urgent-call/test
 -                    POST /api/v1/assistant/warm
 todos.write          POST /api/v1/assistant/workspace-naming/preview
@@ -601,6 +613,7 @@ notify               POST /api/v1/notify
 -                    POST /api/v1/recordings/{id}/segments
 -                    POST /api/v1/saved-agent-searches
 agents.control       POST /api/v1/sessions
+-                    POST /api/v1/sessions/{mid}/{sid}/agent-messages
 -                    POST /api/v1/sessions/{mid}/{sid}/archive
 -                    POST /api/v1/sessions/{mid}/{sid}/attach
 -                    POST /api/v1/sessions/{mid}/{sid}/autoname
@@ -681,6 +694,7 @@ todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
 dispatch.guard       PUT /api/v1/assistant/dispatch-guard
 assistant.dispatch_policy PUT /api/v1/assistant/dispatch-policy
 -                    PUT /api/v1/assistant/feishu/companions
+-                    PUT /api/v1/assistant/history
 -                    PUT /api/v1/assistant/memory/{name}
 -                    PUT /api/v1/assistant/places/{id}
 -                    PUT /api/v1/assistant/repositories/{id}
@@ -737,6 +751,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/mutes
 -                    PUT /api/v1/navigation
 -                    PUT /api/v1/pins
+-                    PUT /api/v1/push/grading
 -                    PUT /api/v1/push/ln-mode
 -                    PUT /api/v1/push/web/{device}
 -                    PUT /api/v1/recordings/{id}

@@ -179,11 +179,12 @@ export function acceptanceStands(todo: { supervision?: Supervision }): boolean {
 }
 
 /** The review state that holds now: a cancelled task reopened goes on again; an accepted one stays accepted while
- *  its acceptance stands (acceptanceStands); a parked one that was closed is no longer parked. */
+ *  its acceptance stands (acceptanceStands); a closed task no longer waits for review or stays parked. */
 export function reviewState(todo: Pick<Todo, "done_at"> & { supervision?: Supervision }): ReviewState {
   const st = todo.supervision?.state ?? "";
   if (!todo.done_at && st === "accepted" && !acceptanceStands(todo)) return "";
   if (!todo.done_at && st === "cancelled") return "";
+  if (todo.done_at && st === "pending_review") return "";
   if (st === "parked" && (todo.done_at || !todo.supervision?.parked)) return "";
   return st;
 }
