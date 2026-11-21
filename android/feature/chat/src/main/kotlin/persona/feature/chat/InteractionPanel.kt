@@ -237,6 +237,8 @@ internal fun InteractionForm(
         return result.allowed && (!stoppedWork || interaction.stoppedWorkResultAllowed(result))
     }
     val questions = interaction.questions.orEmpty()
+    val recommendations = interaction.recommendedLabels()
+    val recommendationOnOptions = recommendations.isNotEmpty() && recommendations.all { it.isNotEmpty() }
     val question = questions.getOrNull(draft.page)
     val fallback = remember(interaction.screen, secret) {
         if (secret) null else ScreenAnswers.parse(interaction.screen.orEmpty())
@@ -370,6 +372,7 @@ internal fun InteractionForm(
         }
     }
     val content: @Composable () -> Unit = {
+        if (interaction.kind == "question") DelegateNotes(interaction, recommendationOnOptions)
         // In the conversation's dock the session is the page itself and the countdown is in the dock's header.
         if (full) Text(interactionSource(interaction, machine), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
         interaction.requestSourceLabel()?.let { Text(it.text(), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
@@ -430,8 +433,10 @@ internal fun InteractionForm(
                 ChatLinkText(question.question, style = PersonaTheme.type.body)
                 question.options.forEachIndexed { index, option ->
                     val display = AnswerBuilder.display(option.label)
+                    val assistantPick = option.label in recommendations.getOrNull(draft.page).orEmpty()
                     DecisionOption(numberedOption("${index + 1}", display.text), { act(AnswerAction.PickOption, draft.copy(optionIndex = index)) },
-                        detail = option.description, recommended = display.recommended,
+                        detail = option.description, recommended = display.recommended || assistantPick,
+                        recommendedText = if (assistantPick) stringResource(R.string.chat_delegate_recommended) else null,
                         selected = option.label in draft.picks[question.question].orEmpty(),
                         enabled = editable && (!stoppedWork || question.isDeferChoice(option.label)),
                         multiSelect = question.multiSelect, position = index + 1 to question.options.size, fullText = full)

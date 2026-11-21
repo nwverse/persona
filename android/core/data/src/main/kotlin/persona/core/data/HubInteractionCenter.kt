@@ -66,10 +66,11 @@ class HubInteractionCenter(
             connection.events.collect { event -> restored.await(); lock.withLock {
                 when (event) {
                     is InteractionEvent -> if (event.interaction.id !in discarded && event.interaction.id !in endedHere) {
-                        // A card that changed (its prompt moved on) is no arrival; only one not showing yet is.
-                        val arrived = mutablePending.value.none { it.id == event.interaction.id }
+                        val previous = mutablePending.value.firstOrNull { it.id == event.interaction.id }
+                        // Looking is quiet. Its first handover is an arrival; any later edit of that copy is not.
+                        val announces = !event.interaction.isDelegating && (previous == null || previous.isDelegating)
                         ended.remove(event.interaction.id); change(event.interaction.id, event.interaction)
-                        if (arrived) mutableArrivals.tryEmit(event.interaction)
+                        if (announces) mutableArrivals.tryEmit(event.interaction)
                     }
                     is InteractionResolvedEvent -> {
                         // The assistant's answer to a question whose card this device had: it stays in its chat.
