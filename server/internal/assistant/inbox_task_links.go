@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
@@ -112,6 +113,18 @@ func (x *inboxTaskIndex) add(t Todo) {
 	}
 }
 
+func (x *inboxTaskIndex) addRepositoryLinks(id string, set repository.TaskSet) {
+	for _, row := range set.Repositories {
+		for _, link := range row.Links {
+			for _, ref := range inboxTaskRefs(link.CanonicalURL) {
+				if !slices.Contains(x.byRef[ref], id) {
+					x.byRef[ref] = append(x.byRef[ref], id)
+				}
+			}
+		}
+	}
+}
+
 // tasksOf are the open tasks naming ref; repo and n, when set, are the GitHub repository and number the ref is, which
 // a bare #N of a task of that repository names too (taskOfRepo, inbox_task_scope.go).
 func (x *inboxTaskIndex) tasksOf(ref, repo string, n uint64) []string {
@@ -204,9 +217,30 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 		if t.DoneAt != nil || t.Cancelled() || isAskTodo(t.ID) {
 			continue
 		}
-		idx.add(*t)
+		idx.add(copyTodoLocked(t))
 	}
 	s.todos.mu.RUnlock()
+	if st, ok := s.store().(todoRepositoryStore); ok {
+		for id, todo := range idx.open {
+			for _, agent := range todo.Agents {
+				if agent.ReleasedAt != nil || agent.DismissedAt != nil {
+					continue
+				}
+				if e, found := s.workEntry([2]string{agent.MachineID, agent.SessionID}); found {
+					// A failed report import remains retryable on the next Inbox pass.
+					if err := s.importTaskRepositoryArtifacts(ctx, e); err != nil {
+						s.logf("task %s: artifact repository links not saved: %v", id, err)
+					}
+				}
+			}
+			set, err := st.TodoRepositories(ctx, id)
+			if err != nil {
+				s.logf("task %s: Inbox repository links not read: %v", id, err)
+				continue
+			}
+			idx.addRepositoryLinks(id, set)
+		}
+	}
 	open := idx.open
 	b := &s.inbox
 	linked := map[*InboxItem]bool{}
@@ -228,7 +262,8 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 		}
 		if a := it.Agent; a != nil && a.TodoID != "" {
 			if sc := inboxScopeOf(it); sc.repo != "" {
-				if t, ok := open[a.TodoID]; ok && t.InboxItem != it.ID && !taskOfRepo(t, sc.repo) {
+				exact := slices.Contains(idx.byRef[githubRef(sc.repo, inboxItemNumber(it))], a.TodoID)
+				if t, ok := open[a.TodoID]; ok && t.InboxItem != it.ID && !taskOfRepo(t, sc.repo) && !exact {
 					w := beginWrite(it)
 					unlinked = append(unlinked, it.ID+" from "+a.TodoID)
 					a.TodoID = ""

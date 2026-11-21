@@ -225,7 +225,7 @@ func TestTodoRepositoryImportCanonicalReceiptAfterRestart(t *testing.T) {
 	if err := d.CreateTodo(ctx, row); err != nil {
 		t.Fatal(err)
 	}
-	raw := "https://gitlab.example.com/team/api/merge_requests/7"
+	raw := "https://gitlab.com/Team/Api/merge_requests/7"
 	set, _, err := d.ImportTodoRepositoryLinks(ctx, row.ID, []string{raw}, "explicit")
 	if err != nil {
 		t.Fatal(err)

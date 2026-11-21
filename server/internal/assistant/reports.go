@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -160,20 +161,75 @@ func stageOf(text string) (stage, pr string) {
 }
 
 // advanceTaskReply handles progress and final answers identically, including the running-hub deploy check.
+// Without a recorded turn, ownership must come from the independent checkout read.
 func (s *Service) advanceTaskReply(ctx context.Context, t Todo, machine, session, text string) bool {
-	if urls := taskRepositoryReportLinks(text); len(urls) > 0 {
-		if err := s.importReportedLinks(ctx, t.ID, urls, "pull_request"); err != nil {
-			s.logf("task %s: repository links not saved: %v", t.ID, err)
-		}
-	}
+	return s.advanceTaskReplyAt(ctx, t, machine, session, text, time.Time{})
+}
+
+func (s *Service) advanceTaskReplyAt(ctx context.Context, t Todo, machine, session, text string, at time.Time) bool {
+	urls := taskRepositoryReportLinks(text)
 	stage, pr := stageOf(text)
 	d, marked := deliveryMark(text)
+	if pr == "" {
+		pr = s.prFromNumber(ctx, t, machine, session, text)
+	}
+	if pr != "" && !slices.Contains(urls, pr) {
+		urls = append(urls, pr)
+	}
+	accepted, err := s.importOwnedTaskRepositoryLinks(ctx, t, machine, session, urls, text, at,
+		func(ctx context.Context, accepted []acceptedReportLink) {
+			link := taskReplyAcceptedPR(pr, accepted)
+			if link.canonical == "" || len(s.taskRepositoryReportTurn(ctx, t, machine, session, text, at)) == 0 {
+				return
+			}
+			current, active := s.openTodoOfAgent(machine, session)
+			if !active || current.ID != t.ID ||
+				!taskRepositoryAgentLinkedAt(current, machine, session).Equal(taskRepositoryAgentLinkedAt(t, machine, session)) ||
+				current.PRURL != t.PRURL && !sameReplyPR(current.PRURL, link.canonical) {
+				return
+			}
+			if s.applyTaskReplyStage(ctx, current, machine, session, text, stage, link, d, marked) {
+				go s.askAcceptance(current, machine, session, text)
+			}
+		})
+	if err != nil {
+		s.logf("task %s: owned repository links not saved: %v", t.ID, err)
+	}
+	return s.applyTaskReplyStage(ctx, t, machine, session, text, stage, taskReplyAcceptedPR(pr, accepted), d, marked)
+}
+
+// Apply the stored spelling, including when the provider supplied it after the report was read.
+func taskReplyAcceptedPR(pr string, accepted []acceptedReportLink) acceptedReportLink {
+	if pr == "" && len(accepted) == 1 {
+		return accepted[0] // a provider-specific URL can be absent from stageOf's syntax
+	}
+	for _, link := range accepted {
+		if sameReplyPR(link.raw, pr) || sameReplyPR(link.canonical, pr) {
+			return link
+		}
+	}
+	return acceptedReportLink{}
+}
+
+func (s *Service) applyTaskReplyStage(ctx context.Context, t Todo, machine, session, text, stage string, link acceptedReportLink,
+	d TodoDelivery, marked bool) bool {
+	pr := link.canonical
+	if pr == "" && (stage == "review" || stage == "merge") {
+		stage = "develop"
+	}
 	if changeSeen(text, d, marked) {
 		s.restage(ctx, t.ID, func(st *todoStage) { st.Change = true }) // a commit, a branch or a held delivery: code work, PR link or not
 	}
 	if pr != "" {
 		s.learnRepoRoot(ctx, machine, session, pr)
-	} else if pr = s.prFromNumber(ctx, t, machine, session, text); pr != "" && stage == "develop" && !marked {
+	}
+	if replyNamesOtherPR(text, cmp.Or(pr, t.PRURL), link.raw) && (!marked || d.State != deliveryNone) {
+		if pr != "" {
+			s.setTaskStage(ctx, t.ID, "review", pr)
+		}
+		return false // the reported merge or deploy is not attributable to this task
+	}
+	if pr != "" && stage == "develop" && !marked {
 		stage = "review" // as stageOf has it for a linked PR (#7921)
 		if said(mergedWords, text) {
 			stage = "merge"
@@ -424,7 +480,7 @@ func (s *Service) setTaskStage(ctx context.Context, id, stage, pr string) {
 
 func (s *Service) setTaskStageKind(ctx context.Context, id, stage, pr, kind string, verified bool) {
 	if pr != "" {
-		if err := s.importReportedLinks(ctx, id, []string{pr}, ""); err != nil {
+		if _, err := s.importReportedLinks(ctx, id, []string{pr}, "", nil, nil); err != nil {
 			s.logf("task %s: repository link not saved: %v", id, err)
 		}
 	}

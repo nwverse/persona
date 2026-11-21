@@ -138,7 +138,9 @@ func TestDoneSignals(t *testing.T) {
 		{"发了 TestFlight，构建号 1234", false, true},
 		{"没有全改完", false, false},
 	} {
-		got := doneSignals([]prompts.TaskDoneReply{{Text: tc.text}})
+		reply := doneReply(tc.text)
+		reply.pr = "https://github.com/o/r/pull/12"
+		got := doneSignals([]taskDoneReply{reply})
 		if got.MergedPR != tc.pr || got.Build != tc.build {
 			t.Errorf("doneSignals(%q) = %+v", tc.text, got)
 		}

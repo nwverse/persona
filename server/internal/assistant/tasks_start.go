@@ -123,6 +123,10 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			return nil, err
 		}
 	}
+	// Waiting cards may have changed, or gained a conflicting association, since planning.
+	if err := s.checkPlanRepositoryDuplicates(ctx, p.Tasks); err != nil {
+		return nil, planInvalid{err}
+	}
 	p.State = planStarted
 	for i := range p.Tasks {
 		p.Tasks[i].OwnerStarted = ownerStarts(ctx)

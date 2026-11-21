@@ -1,14 +1,14 @@
-Use task_plan for code, repository research and work beyond a few tool calls. Make one task per independent piece. Check machines_list, then use the knowledge base, agents_list and user preferences to fill the editable choices and their one-line reasons. Read-only, user_requested and preapproved kinds start at once; other tasks wait for the owner's 开始. A queued receipt is dispatch, so check the to-do outcome and reach its Agent via agent_send. Tool-owned reminders and events are separate.
+Plan code, repository research or work beyond a few calls. Split independent tasks. Check machines_list, then use knowledge, agents_list and preferences for editable choices and brief reasons. Read-only, user_requested and preapproved work starts at once. Other work awaits 开始. A queued receipt confirms dispatch. Check the outcome and use agent_send. Reminders and events are separate.
 
-Default machine_policy=fixed keeps the machine on retries and refuses an unavailable launcher there. Use flexible only for portable work: a failed health check can move it and the reply explains why. A side conversation supervises its work, receives 督办 and closes with task_review. Main delegates a whole plan with supervisor (one of assistant.leaders) or leaves it out. With no leader, the background supervisor handles 督办 and task_review unless assistant.main_supervises_own_tasks puts main in charge. If the caller cannot receive 督办, the same follow-up handles it and sends the caller a short notice and link at the end. Check the returned supervisor and similar running work. Pass todo_id for the caller's existing unassigned to-do, including a Lark topic, task split or failed start.
+machine_policy=fixed keeps the machine on retries and rejects unavailable launchers. For portable tasks, flexible can move after a failed health check and explains why. Side chats receive 督办 and close with task_review. Main may pick a supervisor from assistant.leaders. Otherwise background supervises unless assistant.main_supervises_own_tasks. If the caller cannot receive 督办, follow-up handles it and sends a final notice and link. Check the returned supervisor and similar work. Use todo_id for an existing unassigned to-do. A repository issue/PR URL in the title, goal or prompt blocks duplicates of open work. Reuse via continues or todo_id, or explain each conflict with distinct_from. Other hints are advisory.
 
 Started tasks keep a brief (owner request or started_why). Give goal, done_when, out_of_bounds. Writable work needs done_when (PR/Issue defaults to PR merged + issue closed unless owner asks for PR-only/draft-only); read-only needs goal. Omit expect_minutes for automatic estimation; positive overrides. Manual Agents have no estimate_due. Continue via continues+continues_why; use task_retry for failed starts and task_scope+scope_revision for scope changes.
 
-File changes need readonly=false and explicitly authorized write permission. Replace a read-only Codex process with a writable one for fixes. Use agent_send for live follow-up when permissions stay the same. readonly=true adds the read-only constraint to the assignment. Claude-family uses bypassPermissions for both. Codex uses plan unless assistant.readonly_mode=prompt (normal runtime permissions). pi, cursor and agy refuse readonly in either setting. Set role=worker, or leader to start and review direct workers through restricted task_plan/task_review. Workers cannot delegate.
+Writes require readonly=false and explicit write authorization. Replace a read-only Codex to make fixes. Use agent_send when permissions stay the same. readonly=true constrains the assignment. Claude uses bypassPermissions. Codex uses plan unless assistant.readonly_mode=prompt. pi, cursor and agy reject readonly. role=leader can start and review direct role=worker tasks via restricted task_plan/task_review. Workers cannot delegate.
 
-When repository identity needs resolving, consult repositories_list, and repository_get only when useful. The user's explicit repository URL or path takes precedence. A saved binding is a reference, not authorization or an allowlist; never infer a machine or checkout path from it. Non-repository tasks need no lookup; retrieval is not a mandatory dispatch preflight. Closing the terminal on acceptance is the owner's Start choice; this tool cannot set it.
+Use the user's explicit repository URL or path first. For unresolved identity use repositories_list, then repository_get if needed. A saved binding is a reference. Check authorization, machine and checkout independently. Terminal cleanup on acceptance is the owner's Start choice.
 
-For an existing todo with a saved workspace naming plan, explicitly select {"backend":{"operation_id":"<saved operation ID>"}}. Its selected repositories must all be ready before the session starts at the saved root on its owning computer. An optional backend.host selects a supported engine on that computer.
+For a to-do with a saved workspace plan, select {"backend":{"operation_id":"<saved operation ID>"}}. Every selected repository must be ready. Start uses the saved root and its owning computer. Optional backend.host selects a supported engine.
 
 Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-change"}} names its branch; {"existing":"<cwd or workspace_id>"} selects one; "none" creates nothing. Omitted: readonly uses none; writable Git follows assistant.task_workspace_preference (prefer-existing by default, prefer-new for isolation), and an occupied cwd uses new. Explicit existing never switches silently; refusal names its task owner. For an explicit new branch already checked out, reuse requires a clean checkout, no live Agent and no unfinished-task owner; otherwise refuse with its path and known owner. The machine's engine owns creation, location and registration; never run git worktree add. The card previews the path and is editable before Start. Default branch: task/<todo id>. Creation failure starts no Agent. Workspaces remain after acceptance. Organization read-only policy refusals include their reason: follow it, never retry unchanged.
 
@@ -144,7 +144,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           },
           "continues": {
             "type": "string",
-            "description": "Original todo id. Reuse todo, original brief and effective criteria even on failed Start; never split. Start stops/releases active prior Agents and reopens if closed. Refuse unauthorized takeover, unreachable Agents that cannot be stopped, or open legacy successors."
+            "description": "Original todo id; requires continues_why. Reuse todo, original brief and effective criteria even on failed Start; never split. Start stops/releases active prior Agents and reopens if closed. Refuse unauthorized takeover, unreachable Agents that cannot be stopped, or open legacy successors."
           },
           "scope_revision": {
             "type": "string",
@@ -153,6 +153,27 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           "continues_why": {
             "type": "string",
             "description": "With continues: one-line stop/replacement reason saved on this plan."
+          },
+          "distinct_from": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "todo_id",
+                "reason"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "todo_id": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "description": "new tasks only: give each conflicting open todo ID and why the work is separate. Reasons stay in the brief. Reuse the todo for the same work"
           },
           "started_why": {
             "type": "string",
@@ -192,7 +213,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           },
           "inbox_item": {
             "type": "string",
-            "description": "Exact handed-off Inbox id for related work only. Checked against this conversation and manager; links the task without filing or replying."
+            "description": "Inbox item id; omit for the conversation's sole eligible open handoff. Several require an id; none leaves work unlinked. Never files or replies."
           },
           "tier": {
             "type": "string",

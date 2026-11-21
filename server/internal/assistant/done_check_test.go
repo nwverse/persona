@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -37,13 +38,15 @@ func doneCheck(t *testing.T, s *Service, id, body string) doneCheckAnswer {
 // Re-check (#4867): without apply it only answers, as before; with apply it moves the stage from the agent's last reply
 // (a turn end the hub missed) and writes the verdict: an unsupervised task the judge finds done is closed.
 func TestDoneCheckApplyClosesAFinishedTask(t *testing.T) {
-	s, f := newTaskService(t)
+	s, f := newTaskServiceOn(t, repositorystore.New(todoTestDB(t)))
 	f.judge = `{"verdict":"done","reason":"修好了"}`
 	todo := startedTask(t, s, f)
 	if todo.Supervision != nil {
 		t.Fatalf("supervised: %+v", todo.Supervision)
 	}
-	agentStopped(f, "修好了，PR https://github.com/o/r/pull/9 已合并")
+	reply := "修好了，PR https://github.com/o/r/pull/9 已合并"
+	artifactReportProof(f, todo, reply, "https://github.com/o/r/pull/9")
+	agentStopped(f, reply)
 
 	got := doneCheck(t, s, todo.ID, "")
 	if got.Verdict != verdictDone || !got.WouldClose || got.Applied != nil {

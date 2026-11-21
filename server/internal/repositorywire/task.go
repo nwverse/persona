@@ -513,12 +513,25 @@ func DefaultAlias(identity Identity) string {
 
 // ParseTaskLink derives a credential-free source from an exact issue/PR URL, offline.
 func ParseTaskLink(raw string) (Identity, TaskLink, error) {
-	provider := "github"
-	if strings.Contains(raw, "/merge_requests/") || strings.Contains(raw, "/-/issues/") {
-		provider = "gitlab"
+	u, err := url.Parse(raw)
+	if err != nil {
+		return Identity{}, TaskLink{}, Problem("invalid")
 	}
-	if provider == "gitlab" && !strings.Contains(raw, "/-/") {
-		raw = strings.Replace(raw, "/merge_requests/", "/-/merge_requests/", 1)
+	provider := "github"
+	if end := strings.LastIndexByte(u.Path, '/'); end >= 0 {
+		route := u.Path[:end]
+		switch {
+		case strings.HasSuffix(route, "/-/merge_requests"), strings.HasSuffix(route, "/-/issues"):
+			provider = "gitlab"
+		case strings.EqualFold(u.Hostname(), "gitlab.com") && strings.HasSuffix(route, "/merge_requests"):
+			// The legacy route is an alias on GitLab. A different host may use it as its actual MR address.
+			if u.RawPath != "" {
+				return Identity{}, TaskLink{}, Problem("invalid")
+			}
+			provider = "gitlab"
+			u.Path = strings.TrimSuffix(route, "/merge_requests") + "/-/merge_requests" + u.Path[end:]
+			raw = u.String()
+		}
 	}
 	identity, err := Parse(raw, provider)
 	if err != nil {

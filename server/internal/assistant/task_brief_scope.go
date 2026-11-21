@@ -188,13 +188,14 @@ func (s *Service) rescope(ctx context.Context, t Todo, self, via string, doneWhe
 
 // toolTaskScope is the assistant's task_scope: the supervisor of a task changes what it is to do or what done means,
 // as an entry in its brief's log.
-func (s *Service) toolTaskScope(ctx context.Context, self string, args json.RawMessage) (string, error) {
+func (s *Service) toolTaskScope(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {
 	var a struct {
 		TodoID        string    `json:"todo_id"`
 		Change        string    `json:"change"`
 		Why           string    `json:"why"`
 		DoneWhen      *[]string `json:"done_when"`
 		ExpectMinutes int       `json:"expect_minutes"`
+		InboxItem     string    `json:"inbox_item"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
@@ -222,6 +223,13 @@ func (s *Service) toolTaskScope(ctx context.Context, self string, args json.RawM
 	if supervisor != self && !(s.isMain(ctx, self) && !s.isLeader(ctx, supervisor)) && !s.backgroundSupervises(ctx, self, t) {
 		return "", fmt.Errorf("task %s is supervised by another conversation: only its supervisor changes its scope", t.ID)
 	}
+	source := PlanTask{InboxItem: a.InboxItem}
+	if err := s.planInboxSource(ctx, machine, self, &source); err != nil {
+		return "", err
+	}
+	if err := s.checkExistingTaskInbox(self, source, t); err != nil {
+		return "", err
+	}
 	c := scopeChange{By: self, Change: a.Change, Why: a.Why, Expect: a.ExpectMinutes}
 	if a.DoneWhen != nil {
 		c.DoneWhen = cleanDoneWhen(*a.DoneWhen)
@@ -238,6 +246,15 @@ func (s *Service) toolTaskScope(ctx context.Context, self string, args json.RawM
 	}
 	if err != nil {
 		return "", err
+	}
+	var agents []SessionRef
+	for _, a := range t.Agents {
+		if a.ReleasedAt == nil && a.DismissedAt == nil {
+			agents = append(agents, SessionRef{MachineID: a.MachineID, SessionID: a.SessionID})
+		}
+	}
+	if err := s.linkExistingTaskInbox(ctx, self, source, t.ID, t.ID, agents); err != nil {
+		return "", fmt.Errorf("scope updated on task %s, but its Inbox link was not saved: %w", t.ID, err)
 	}
 	s.clearOverdue(t.ID)
 	var b strings.Builder

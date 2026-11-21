@@ -656,7 +656,7 @@ bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = 
 | --- | --- | --- |
 | 1 Triage | `inbox.triage` (small model) | Triage above, also returning `urgent` |
 | 2 Promote | Code | Triaged Needs you items with triaged content and latest message within `max_age_hours` (default 24) queue a handling chat; `handling.state = looking` (Working; urgent stays Needs you). The task comes from the triage summary and reason |
-| 2′ Link task | `inbox.judge` (small model, only when tasks are active) | Use only its `task_id`, and only with `evidence` quoted from that task: which task the item concerns, among the tasks the item's repository or thread allows (#6424; [unified-entry.md](unified-entry.md), "Message cards link to tasks"). Before it, the deterministic pass links a GitHub item to the one open task naming its number in its repository: a link, `owner/repo#N`, a bare `#N` in a task of that repository, a PR the task's Agents named earlier, or the PR that says it closes the issue (#6507). Its `handle` no longer decides whether to process the item |
+| 2′ Link task | `inbox.judge` (small model, only when tasks are active) | Use only its `task_id`, and only with `evidence` quoted from that task: which task the item concerns, among the tasks the item's repository or thread allows (#6424; [unified-entry.md](unified-entry.md), "Message cards link to tasks"). Before it, the deterministic pass links a GitHub item to the one open task naming its number in its repository: a saved repository issue/PR association (including Agent closeout and work-artifact PRs), a legacy link, `owner/repo#N`, a bare `#N` in a task of that repository, a PR the task's Agents named earlier, or the PR that says it closes the issue (#6507, #9725). Its `handle` no longer decides whether to process the item |
 | 3 Handle | `inbox.agent` (a launcher: Agents' unless set apart, see below) | Headless claude in the assistant directory; investigate, then submit a suggestion and recap through MCP `inbox_suggest` |
 
 - **The twin's model (#4232)**: by default the handling chat runs on **Agents** (`agent.new`): its provider / launcher, model and effort, including later changes there. Because the twin is a high-volume, short-lived job, it can be set apart under **Settings › Model configuration › AI twin runs** to run on a cheaper or faster launcher, model or effort without changing new Agents; **Follow Agents** clears that again. Only new handling chats use a change; running ones keep what they started on. The setting is stored as `model_config.overrides.v1.inbox.agent`; the retired `model_config.inbox.agent` record and the old `inbox.agent.launcher` are never read. It does not touch the twin's switch, its rules or which computer it runs on (`inbox.agent.machine`), and the model does not decide what the twin may do (`docs/assistant/model-config.md`, "AI twin override").
@@ -1138,16 +1138,29 @@ serves: everyone reading the Inbox on the Assistant side; it adds no setting and
   request again sends nothing more), or starts the main conversation with it, and answers `{item, session}`; a work machine is refused, and a failed send records nothing (`apierr.Call`'s status, as for a new conversation).
   The item keeps the hand-off (`handoffs`: `machine_id`, `session_id`, `at`, the latest 5) and its chain gets one `handling` entry per conversation ("Handed to Persona's main chat",
   linked to it). Its processing conversation (`agent`, `handling`) is not touched, so the AI twin's sweep and timeouts never take the main conversation for one of its own.
-  When that conversation dispatches work with `task_plan`, each related task supplies `inbox_item` with the handoff's exact item id.
+  When that conversation dispatches work with `task_plan`, an omitted `inbox_item` uses its sole eligible unarchived handed item
+  on the calling computer. Bot notifications and owner-bot handoffs are excluded before counting candidates; explicitly
+  naming them still fails the link policy. No eligible item leaves the task unlinked; several refuse planning and require an explicit
+  `inbox_item` on each task. Selection uses the manager's persisted handoff ledger, not an ID parsed from a message
+  or the latest item in a shared conversation.
   The manager validates the conversation, machine, open item and link policy, records the handoff operation on the plan, and rechecks it at Start.
   Admission persists the to-do's existing `inbox_item` back-reference and the item's `agent.todo_id`; an explicit handoff replaces an earlier inferred link
   without filing the item, changing its draft or sending a reply. New task rows include their source in the initial insert and stay reserved
   through binding and first start, so another plan cannot adopt a half-admitted task.
-  Unrelated tasks omit the field. Multiple tasks retain their own back-references:
+  Explicit item choices resolve multiple-item ambiguity. Multiple tasks retain their own back-references:
   the web detail lists each task and its current workers, scoped to the item's manager, and one completed task cannot file an item with other unfinished tasks.
   Reusing a to-do preserves its source; assigning it to a different item is refused. A failed item write rolls back the binding before any Agent starts.
   If a newer item write retains that target, admission instead keeps the to-do and its source, reports the failure without starting an Agent,
   and supplies the same `todo_id` for retry rather than deleting a target the newer write still references.
+  An existing task also keeps this context without `task_plan`: `agent_send` (with or without `task`) to one's own task
+  and `task_scope` use the same sole eligible open handoff, or their explicit `inbox_item`. Several eligible items
+  refuse the send or scope change before side effects. A successful send (including queueing) or scope change saves
+  the item's task backlink and session link on its Agent chain; it creates no task or Agent and does not replace the
+  task's original Inbox source or the item's processing conversation. A failed send claims no assignment.
+  An item already linked to another task is refused. Rechecking the exact handoff before saving prevents a filed
+  item from gaining a new link. An association-save failure reports that the message or scope change already
+  succeeded, rather than suggesting that the user resend the message; normal item-write rollback removes the
+  unsaved backlink and chain entry.
   That conversation may then write back with `inbox_suggest` and `item` (above). What the user does with its suggestion is told there, wrapped to name the item
   (`prompts/inbox/handoff_note.md`; a Persona notice sent as a plain `session.send` without a message id, a failure only logged, which the hub marks `injected` (`system` / `inbox`)
   so the apps show one line, "Inbox: an update on “title”", not the model's text as a user bubble): reject, instruct, handback, a confirmed reply sent (which files the item as replied:

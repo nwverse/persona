@@ -638,7 +638,7 @@ func (s *Service) turnAgain(ctx context.Context, t Todo, e taskTurn, last proto.
 		return // no start since: the todo and the ledger are as the judgment left them
 	}
 	s.logf("task %s: its agent's turn %s was handled already: its judgment stands", t.ID, clip(e.Key, 40))
-	s.advanceTaskReply(ctx, t, last.MachineID, last.SessionID, text) // its stage, as its reply left it
+	s.advanceTaskReplyAt(ctx, t, last.MachineID, last.SessionID, text, last.UpdatedAt) // its stage, as its reply left it
 	current, ok := s.todoNow(t.ID)
 	if !ok {
 		return

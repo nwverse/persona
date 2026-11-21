@@ -16,6 +16,20 @@
 
 - A rendered prompt used as a source-snapshot fingerprint must compare with the call's captured language (#6272). Re-reading the current language while committing a valid model answer makes a preference change look like a concurrent source edit. Freeze the wrapper language, keep the source comparison, and test both a locale-only change and real source changes. Audit natural-language parsers too: a conservative Chinese uncertainty check must recognize uncertainty in newly supported English and Japanese outputs. Shared recording inputs must keep their recording-language contract rather than inheriting a non-recording wrapper accidentally.
 - Persist a complete delivery round before its first external send (#10393). Saving only when the call returns handles a returned error but loses the result if the manager exits inside the call, after task acceptance has committed. Keep the original timestamp/key and acceptance metadata on disk while retaining an in-memory claim to block overlapping sends. Every other book save must preserve that prepared record too; retry must not send from memory when its preparation could not be saved. Use a child-process exit at the real provider boundary and a fresh manager on the same disposable database to prove recovery, with the returned-error case as a control.
+
+- Prove a reported PR's ownership before asking its repository provider (#9725). A provider-specific address is eligible when a successful native creation record names that exact plain URL; an unstructured CLI URL is not equivalent proof. Recheck the original address's report turn and active Agent after asynchronous resolution, even when the provider canonicalizes an alias. Share only provider metadata across pending reports, never their authorization.
+
+- A reply can name a dependency's merged or deployed PR (#9725). Use the same ownership proof or the task's recorded PR for progress, delivery judgment, and the receipt's PR field. If a reply describes several PRs, its merge or deploy words cannot establish the task PR's state. A separate check of the task PR can still establish delivery.
+
+- Deterministic task admission must use saved repository links, not advisory duplicate hints (#9725). Check the original title, goal and prompt before clipping, and recheck waiting cards before Start. Read associations without importing legacy metadata; a store failure is not proof that no match exists. A distinct-work override must identify every conflicting to-do and preserve its reason in the brief. Validate original URLs before discarding query parameters: canonicalization must not hide credentials from the repository parser or echo them in an error.
+- Saving an Agent's PR association is only half the feedback path (#9725). Inbox routing must read the same saved links, not only the legacy current PR or transcript preview, and its repository-scope check must retain that exact association. Import explicit work artifacts only for the session's current open task and a turn at or after its Agent link; reuse report receipts so retries cannot resurrect links the user removed. A final closeout's PR artifacts outrank incidental background links in the reply.
+- Inbox handoffs may continue an existing Agent without making a plan (#9725). Apply the same persisted-source inference to `agent_send` and `task_scope`; refuse ambiguity before sending or logging scope. Record the task backlink and Agent chain link, not the coding Agent as the item's processing conversation, and preserve the task's original Inbox source. After delivery or a queued receipt, save the association with a fresh bounded context independent of the send deadline and caller cancellation. Report a real association-save failure as partial success so it cannot cause a blind duplicate send.
+
+- Native PR-create and push records must match the report being processed, not just its Agent link (#9725). Cut at the latest prompt, reject side exchanges, and bind report text and its recorded timestamp or the persisted artifact's turn end. Compare stored timestamps at Postgres microsecond precision. Missing or mismatched turn evidence needs an independent author, branch and commit readback; positive fixtures must provide the same turn identity. Include the turn timestamp in preview deduplication so identical text in a new turn can still prove fresh ownership.
+- Inbox preflight is not a reservation across Agent delivery (#9725). Recheck against the actual adopted task before sending, and reconcile a later conflicting claim by removing only a task just created for that handoff, without stopping its Agent or changing the competing owner. Keep an accurate partial-delivery receipt; a failed rollback must name the task that remains, never invite a resend or claim that nothing happened.
+
+- An omitted Inbox source is resolved from the persisted user handoff, not model text (#9725). Exactly one eligible unarchived item handed to the calling conversation and computer is a safe default; multiple eligible items require `inbox_item`. Filter the existing link policy before counting candidates, so excluded bot handoffs neither block unrelated work nor create false ambiguity. Persist that exact handoff on the plan and keep Start checks; a later handoff must not retarget a waiting card.
+
 - A review wake is not a completion verdict (#8373). PR events and judged-done candidates share the same signal. Keep its wording neutral, preserve the actual reason and criterion evidence, and leave acceptance gates and display grouping unchanged.
 - A parked wait can cite a PR while waiting for a separate deployment or verification (#9775). Enroll the exact PR from an explicit event binding. Keep the source receipt and review transition together and identify the notification by that park. Test both a stage PR with terminal facts and a PR named only in the park.
 
@@ -837,6 +851,21 @@ A failed ledger read or checkpoint is unknown: keep the original queue. Move a c
 remove its source entries in the same saved relay state. Do not change an uncertain send's text or destination: its
 old once-only identity may already have reached the node. Test both an entirely obsolete digest and a mixed one,
 including a real database reload into a new service; the in-memory signal map alone does not survive restart.
+
+An Agent's PR artifact is a claim, not proof of ownership. Deployment reports and
+evidence often name other Agents' PRs, sometimes under the same GitHub account.
+Automatic repository links need a native successful creation record or an
+independent node read matching author, head branch and published commit (a native
+push can establish the actor for a shared PR). Exclude another open to-do's PR in
+the same transaction, including concurrent reports, and apply the result to legacy
+stage PRs too; otherwise feedback routing and deterministic duplicate admission
+inherit the false association (`todo_repository_ownership_test.go`).
+Native CLI evidence must exclude help, web and dry-run modes, including Boolean
+`=true` flags, bundled short options and arguments whose shell expansion is unknown.
+The node's `gh` lookup covers GitHub PRs. A manual review can proceed when another host
+supplies no verified artifact. Any already recorded GitHub PR still goes through the delivery
+gate. Reuse the stored canonical URL after a verified import. Apply GitLab's legacy MR
+alias only on its known host so unclaimed review URLs keep their own meaning.
 
 ## Manual compaction is not a main-only policy (#10064)
 

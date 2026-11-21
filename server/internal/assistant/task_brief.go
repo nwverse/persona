@@ -161,6 +161,7 @@ type briefRecord struct {
 	EstimateSource   string                `json:"estimate_source,omitempty"`
 	EstimateEvidence *TaskEstimateEvidence `json:"estimate_evidence,omitempty"`
 	OutOfBounds      []string              `json:"out_of_bounds,omitempty"`
+	DistinctFrom     []TaskDistinctFrom    `json:"distinct_from,omitempty"`
 	// Reconstructed: made later from what the to-do still had (a task from before briefs): Handover is the prompt its
 	// agent was handed, which is not the owner's words, and nothing else was invented.
 	Reconstructed bool   `json:"reconstructed,omitempty"`
@@ -471,6 +472,7 @@ func (tb *taskBrief) view() TaskBrief {
 		v.ActualMinutes, v.CompletionReported = c.ActualMinutes, &at
 	}
 	v.DoneWhen = slices.Clone(tb.rec.DoneWhen)
+	v.DistinctFrom = slices.Clone(tb.rec.DistinctFrom)
 	if v.DoneWhen == nil {
 		v.DoneWhen = []string{}
 	}
