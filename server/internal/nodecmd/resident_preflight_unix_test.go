@@ -76,6 +76,18 @@ func TestResidentPreflightRejectsLegacyBeforeClosingAttach(t *testing.T) {
 	}
 }
 
+func TestResidentPreflightRequiresTheRunningProgram(t *testing.T) {
+	personad := residentCheckFixture(t, true)
+	if _, err := checkResidentReplacement(t.Context(), personad, "persona-node"); err == nil {
+		t.Fatal("a persona-node resident accepted a personad replacement")
+	}
+	for _, program := range []string{"personad", ""} {
+		if _, err := checkResidentReplacement(t.Context(), personad, program); err != nil {
+			t.Fatalf("resident with program %q rejected personad: %v", program, err)
+		}
+	}
+}
+
 func TestResidentReloadLogsPreflightFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

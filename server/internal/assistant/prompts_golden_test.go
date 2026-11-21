@@ -266,3 +266,9 @@ func TestGoldenBotReadGroup(t *testing.T) {
 	in = readPrompt("", "", "oc_example", "om_example", "omt_example", "")
 	golden(t, "bot_read_group.topic_no_task", prompts.RenderBotReadGroup(in))
 }
+
+func TestGoldenLogicalSegmentHandoff(t *testing.T) {
+	for _, language := range []string{"en", "zh-Hans", "ja"} {
+		golden(t, "segment_handoff_"+language, prompts.RenderSegmentHandoff(prompts.SegmentHandoff{Language: language, Summary: "Earlier work", Recent: []prompts.HandoffTurn{{Role: "user", Text: "Continue the same task"}}, Partial: true, Text: "Next message"}))
+	}
+}

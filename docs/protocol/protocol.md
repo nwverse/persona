@@ -73,6 +73,7 @@ The web client may send `"replaces":"<this browser's previous device id>"`: once
   - `agents.permission_mode` is a separate grant required to change a session's permission mode or specify one
     when starting a session. Resuming a session also requires this grant because resume can retain its permission mode.
     It opens only the permission mode field on the modes endpoint.
+  - `agents.a2a` opens the per-session Agent Card and A2A JSON-RPC endpoint on enrolled machines. See [Agent-to-Agent communication](../integrations/a2a.md).
   - Machine-specific restrictions are unsupported. A request with `machines` returns 400
     `unsupported_machine_restriction`. Files, device administration and other ungranted routes stay closed.
     A scoped credential stays with the hub that issued it. After a mesh center migration, issue a new one at the new center.
@@ -275,6 +276,7 @@ The authenticated WS `hello.features` always lists server capabilities; trusted 
 - Added by the hub:
   - Always: `sessions_list` (see "Bounded Agents lists"), `sessions_lookup` (see "Exact runtime-session detail"), `sessions_search` (see "Ranked runtime search"), `sessions_pane_source` (see "Pane/host origins"), `sessions_manager` (see "One manager's sessions"), `sessions_page_counts` and `agents_page_counts` (see "Counts with the page"), `agents_provider_or` (see "Personal-agent provider OR sets"), `sessions_hierarchy` (see "Session hierarchy"), `sessions_catalog` (see "Projects and spaces"), `sessions_agents_only` (see "Agents-only sessions"), `sessions_todo` (see "Sessions by to-do"), `sessions_quick_filters` (see "Quick filters"), `sessions_just_finished` (see "Just finished rows"), `machine_rename` (see "Renaming a computer").
   - `mcp_wait_v1`: token-bearing MCP calls may opt into ephemeral, enum-only wait updates over the existing node and device channels (see "MCP tools (`personad mcp`)"). The node forwards that opt-in only when this hub feature is present, and reads that feature afresh for each local call. A manager independently names `mcp_wait_v1` in `manager.hello`; the hub sends it hub-mediated approval updates only while its current connection declares that capability. A target node separately names it in `node.info` to promise that `computer.call` preserves `call_id` through a nested `computer.elicit`; without that target capability the manager omits the id and reports `unknown` for the delegated RPC. Missing opt-in, capability or updates otherwise keeps the old single-response behavior and the `Still waiting` fallback.
+  - `assistant_segments` only while the connected default manager names it in `manager.hello`; extension reports cannot add it. This enables the explicit logical assistant conversation switch operation (see "Logical assistant conversation segments"). The default-enabled switch setting controls new switches, while existing segment routing remains active for rollback.
   - `meeting_attendance` only while the default manager (the one recording routes go to) is connected and names it in its `manager.hello` capabilities (an extension's report cannot add it): attending a recorded meeting (the `attendance` / `attending_session` upload fields, `…/live`, `…/ask` and the `meeting_attendance_default` setting, see "Recording sync"). The phone offers a role only when the hub lists it, since an older hub or manager accepts the fields and ignores them.
   - `meeting_conversation` only while the default manager names both `meeting_attendance` and `meeting_conversation` in its `manager.hello` capabilities, the same way: the meeting conversation's phase 1 (the upload's `room` and `private`, the room conversation, `…/ask` answered by it, `…/just-me`, `…/private`, `…/followup`, the origins `meeting` and `meeting_followup`, the `meeting_live` event and the fields phase 1 adds to `GET …/live` and `detail.meta`; see "Meeting conversation (#3862)").
   - `meeting_photos` only while the default manager names `meeting_photos` beside `meeting_conversation` (and so `meeting_attendance`) in its `manager.hello` capabilities, the same way: the meeting conversation's phase 3, its photos (`POST` / `GET …/photos`, `GET` / `DELETE …/photos/{n}`, forwarding them to the room, the room's `meeting_photo_note`, `photo` on minutes items, the `photos` part of `meeting_live` and of `GET …/live`'s `revs`; see "Meeting conversation (#3862)"). The phone sends photos only when the hub lists it.
@@ -4750,6 +4752,7 @@ runtime → node:
 | request `interaction.create {interaction, timeout_seconds?}` → `Resolution` | three kinds: question (`question`), plan (`plan`), permission (`permission`), same shape as `Interaction` above. The node fills in `created_at` / `expires_at` (default 30 minutes, same as hooks; `timeout_seconds` can only shorten it), the session title, the directory, and `agent` / `agent_label` (the Agent the session runs and its name: the session row's own `agent_label` whenever it has one, such as a Paseo provider's label, else the runtime's `name`; not set for runtimes running Claude Code, so the App draws a Claude card), pushes it to the phone via the hub, and blocks until answered. When nobody answers (expired, the phone's "hand back to computer", no hub) it returns `{dismiss: true}`, and the runtime hands over to its own UI. Interactions with an `id` the runtime gives, or with a `tool_use_id`, are `resumable`: the id (the runtime's, or the one the node computes from runtime + session + kind + tool_use_id) stays the same when it asks again; if the node or its hub link goes away midway it returns the error `code: node_gone`, never a dismiss (#8128), and once a hub is back the runtime asks again with the same id (the SDK, for up to 2 minutes from when the node or hub went away), and the hub reattaches the original card. Only an interaction with neither (its id a new one on each ask) is dismissed when the hub link drops |
 | event `interaction.cancel {id}` | this interaction is gone on the runtime side (tool call cancelled): withdraw the card on the phone |
 | request `runtime.package {name}` → `{name, hash, version, files: [{path, data}]}` | auto-update (`docs/integrations/runtimes.md` ("Auto-update")): `package` in hello says what code the runtime runs (package name and hash); when the node carries a package with this name and a different hash, the reply includes `update`, and the runtime fetches the files with this request (`data` is base64), checks the hash itself and swaps them in. Packages live in personad (`internal/runtimepkg`, generated from `integrations/` at build time); daemons can't get them (no `update`, and this request returns `unsupported`); no such package returns `not_found` |
+| request `runtime.a2a_mcp {session_id}` → `{token}` | Local runtimes with `a2a_mcp` in hello's features can give a provider's stdio MCP process a ticket for one session. Run `personad mcp` with `PERSONA_SESSION_ID` and `PERSONA_A2A_TOKEN`. The ticket exposes only A2A tool definitions and requires the requesting runtime to own the exact session before a tool call. Tool discovery can start during session creation. |
 | requests `mcp.tools {assistant?, session_id?, leader_only?}` → `{tools: [{name, description, input_schema, shell?, defer_loading?, work_guide_tool?}]}`, `mcp.call {name, args, session_id, assistant?}` → `ToolResult` | the hub's tools (the phone's `phone_*`, `mail_*`), forwarded to the hub (except `mail_save_attachment`, which the node answers itself and fetches over `mail.attachment`); without a hub `mcp.tools` is empty and `mcp.call` returns an error result. The runtime gives them to its own Agent (DSH: `docs/integrations/dsh.md` ("Phone tools")). `assistant: true` only matters for runtimes that declared `caps.assistant`: `mcp.tools` gains the assistant-only tools and the tools declared by extension command gates; `mcp.call` is handled as an assistant call only when the session belongs to this runtime and is an assistant chat (otherwise as an ordinary call). A named discovery session must belong to the requesting runtime, as must the caller of a session-scoped Agent tool. The `leader_tools` hello feature enables the `leader_only` discovery query. Gate-declared tools are run by the node itself; their `shell` is the word that runs them directly in a shell (command name, skill script path), which the runtime intercepts in the assistant chat's shell (`docs/integrations/runtimes.md` ("Assistant")). `defer_loading: true` marks an assistant tool used too rarely to send in full with every request (Claude Code keeps it behind ToolSearch, #7317); a runtime that cannot load tools on demand attaches it like any other |
 
 node → runtime events: `runtime.hub {connected}`, sent to every runtime when the hub connects / disconnects. `runtime.driven {session_id}`
@@ -4825,7 +4828,7 @@ History rows are only read: they never enter the live list, never make anything 
   - `pane_id`, `resume_argv`, `agent_label` in session rows are dropped, and `features` doesn't tell it about `resume_argv` and `handover`; when it returns `code: handover` for `session.send`, the node turns it into `not_running` and doesn't hand it to another runtime.
 - **What the daemon can't see or use**:
   - When a call's session id lacks its prefix (the node asking "whose session is this"), the node answers `not_found` itself and doesn't send it to the daemon;
-  - `mcp.tools` returns empty, `mcp.call` returns `unsupported`.
+  - `mcp.tools` returns empty and `mcp.call` returns `unsupported` by default. With `"a2a": true` on the daemon's entry, it can discover and call A2A tools with its own listed session ID. The node adds the namespace before forwarding the call.
 - **id conflicts**:
   - A runtime on the local socket saying hello with an id from `daemons.json` gets the error `code: runtime_conflict`;
   - when an id is already taken by a connected runtime, the hello of a daemon with the same id also gets `runtime_conflict`; the node then disconnects it and reconnects later.
@@ -6084,3 +6087,37 @@ With tab naming enabled, automatic naming calls the node's
 `session.rename_tab_if_current` with `session_id`, `tab_id`,
 `expected_tab_name` and `tab_name`. The node checks the live slot and its current
 host label before changing it and replies with `{ok: true}` on success.
+
+### Logical assistant conversation segments
+
+Feature `assistant_segments` advertises an explicit manager-owned operation. A full-access client sends
+`POST /api/v1/assistant/conversations/{id}/switch` with `{source_machine_id, operation_id, expected_epoch,
+machine_id, launcher, model?, effort?, permission_mode?}`. The target machine/launcher is explicit, including when
+forcing another segment on the same engine. The response acknowledges durable `preparing`; it does not mean a model
+turn ran. Reusing an operation ID requires the same request. Query
+`GET /api/v1/assistant/conversations/{id}/switch/{operation}?machine_id=<public machine>` for
+`{operation_id, phase, expected_epoch, error}`. Phases are `preparing`, `prepared`, `active`, `accepted`, `rejected`
+and `in_doubt`. An unfinished operation serializes changes to that conversation. Ordinary model picks never initiate
+this operation; older clients retain the existing cross-engine refusal.
+
+`GET/PUT /api/v1/assistant/segments` reads/writes `{enabled}` (default true). Disabling new switches never disables
+routing of existing segments. Queued inputs retain their original `client_msg_id`; a sending/in-doubt input fences
+later input until reconciled. Definitive first-turn refusal restores the source at a higher epoch. The source is
+closed only after first-turn acceptance. Full/image requests and scoped subscriptions always use public identity.
+
+Logical seq values remain signed-int32-safe integers. Each later segment starts at the previous segment's offset plus
+its frozen physical end. First-segment item IDs and history remain unchanged; later item IDs have a segment namespace.
+Frozen-range backfill and retired-tail appends do not rewrite logical history. A real source-generation rewrite does.
+Live spans, empty boundary bridges, history pages and reconnect backlog follow the same projection. The manager may
+report `devices.state` machine `transport_for` to retain a bus identity after a source computer is removed; the hub
+validates manager ownership and forwards only, without resolving segments.
+
+The logical-segment client first reads
+`GET /api/v1/assistant/conversations/{id}/segments?machine_id=...` to obtain the
+current epoch and unfinished operation identity. The response exposes no physical
+segment IDs and starts nothing. The explicitly confirmed switch sends its epoch
+and a fresh operation ID to the switch POST. A transport retry must keep the exact
+request, including the original epoch; it must not read a new epoch and silently
+create a second operation. Registered runtime identity is part of a segment's
+opaque engine identity, so two runtimes embedding the same engine are distinct
+execution paths. Unknown engine kinds or identity suffixes are rejected.
