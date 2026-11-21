@@ -184,17 +184,18 @@ class XcodegenCallerScanTests(unittest.TestCase):
             self.git('add', '--', path)
 
     def test_preserves_tracked_scope_including_unexpected_callers_and_spaced_paths(self):
-        self.write('scripts/app/known.sh', 'xcodegen generate\n')
+        # Extensionless fixture scripts are not real repository dependencies for the check-fast input inventory.
+        self.write('scripts/app/known', 'xcodegen generate\n')
         self.write('.github/workflows/build.yml', '  run: xcodegen  generate --spec apple/project.yml\n')
         self.write('unexpected/extensionless launcher', 'tool && xcodegen generate\n')
-        self.write('scripts/app/modified.sh', 'echo before\n')
-        (self.root / 'scripts/app/modified.sh').write_text('xcodegen generate\n')
-        for path in ('docs/run.sh', 'guide.md', 'scripts/test/fixture.sh'):
+        self.write('scripts/app/modified', 'echo before\n')
+        (self.root / 'scripts/app/modified').write_text('xcodegen generate\n')
+        for path in ('docs/run', 'guide.md', 'scripts/test/fixture'):
             self.write(path, 'xcodegen generate\n')
         self.write('untracked.sh', 'xcodegen generate\n', tracked=False)
         self.assertEqual(set(xcodegen_callers(self.root)), {
-            'scripts/app/known.sh', '.github/workflows/build.yml',
-            'unexpected/extensionless launcher', 'scripts/app/modified.sh',
+            'scripts/app/known', '.github/workflows/build.yml',
+            'unexpected/extensionless launcher', 'scripts/app/modified',
         })
 
     def test_comments_and_long_unrelated_lines_do_not_become_callers(self):
