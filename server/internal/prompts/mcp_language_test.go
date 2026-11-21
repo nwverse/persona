@@ -10,8 +10,9 @@ import (
 	"testing"
 )
 
-// Recorded from the unlocalized upstream tool inventory. This covers the
-// description and schema of every tool, not only a representative golden.
+// Recorded from the unlocalized upstream tool inventory, plus #5732's explicit
+// task_plan supervision-contract exception. This covers the description and
+// schema of every tool, not only a representative golden.
 func TestMCPLegacyBytes(t *testing.T) {
 	raw, err := os.ReadFile("testdata/mcp_legacy.json")
 	if err != nil {

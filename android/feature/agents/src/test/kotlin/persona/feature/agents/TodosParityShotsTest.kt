@@ -74,13 +74,14 @@ class TodosParityShotsTest {
             prUrl = "https://example.com/pull/2", prStatus = TodoPRStatus(url = "https://example.com/pull/2", state = "open", checkedAt = ago(0)),
             delivery = TodoDelivery("pr", gate = "等你批准合并", unblock = "user", at = ago(20))),
         Todo("t3", title = "轮换 API Key", createdAt = ago(400), spaces = emptyList()),
-        Todo("t5", title = "验证交付状态", createdAt = ago(390), updatedAt = ago(8), spaces = emptyList(), origin = "conv",
+        Todo("delivered", title = "验证交付状态", createdAt = ago(390), updatedAt = ago(8), spaces = emptyList(), origin = "conv",
             supervision = Supervision(supervisor = "main", state = "pending_review"),
             delivery = TodoDelivery("live", at = ago(8))),
         Todo("t4", title = "整理崩溃报告", createdAt = ago(600), doneAt = ago(120), doneBy = "auto", doneReason = "Agent 已经把报告整理好并发到群里",
             spaces = emptyList()),
         // An open PR that is not held for the owner's approval belongs to PR to merge, not Needs you or Shelved.
         Todo("t5", title = "发布补丁", createdAt = ago(80), updatedAt = ago(5), origin = "conv", spaces = emptyList(),
+            prUrl = "https://example.com/pull/5", prStatus = TodoPRStatus(url = "https://example.com/pull/5", state = "open", checkedAt = ago(0)),
             delivery = TodoDelivery("pr", unblock = "agent", at = ago(5))),
     )
 

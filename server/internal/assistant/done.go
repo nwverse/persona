@@ -476,7 +476,7 @@ func directOwnerMarker(text, marker string) bool {
 		before := strings.TrimSpace(lower[:i])
 		afterContrast := ownerMarkerAfterContrast(text, lower, i)
 		direct := before == "" || before == "otherwise" || strings.HasSuffix(before, " otherwise") || afterContrast
-		terminatorBefore := strings.TrimRight(before, "\"”」") // a closing quote does not hide the sentence's own terminator
+		terminatorBefore := strings.TrimRight(before, "\"”」") // i18n-ignore: parser delimiters, not display copy; a closing quote does not hide the sentence's own terminator
 		terminator, _ := utf8.DecodeLastRuneInString(terminatorBefore)
 		direct = direct || strings.ContainsRune(ownerSentenceEnds, terminator)
 		if afterContrast {
