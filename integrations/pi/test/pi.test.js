@@ -815,3 +815,23 @@ test('Assistant native shell gates survive bypass mode and unavailable rules; or
   assert.equal(unavailable.block, true)
   assert.equal(n.toolCalls.length, 0, 'a native permission check never executes a Persona action')
 })
+
+test('Assistant messages wait for a fresh turn context; ordinary steering remains available', async (t) => {
+  const { n, host } = await setup(t, { web: true })
+  const a = piSession('context-turn')
+  host.register(a.pi)
+  await a.fire('session_start')
+  await n.ready
+  await n.peer.call('session.send', { session_id: 'context-turn', assistant: true, text: 'first', context: 'snapshot one', supervision_instructions: 'role', mode: 'default' })
+  await a.fire('agent_start')
+  const count = a.sm.getEntries().length
+  await assert.rejects(n.peer.call('session.send', { session_id: 'context-turn', assistant: true, text: 'second', context: 'snapshot two', supervision_instructions: 'role', mode: 'default' }), (error) => error.code === 'busy' && error.data?.delivered === 'none')
+  assert.equal(a.pi.sent.length, 1)
+  assert.equal(a.sm.getEntries().length, count, 'busy input cannot mutate an active turn’s state')
+  await a.fire('agent_settled')
+  await n.peer.call('session.send', { session_id: 'context-turn', assistant: true, text: 'second', context: 'snapshot two', supervision_instructions: 'role', mode: 'default' })
+  const applied = await a.fire('before_agent_start', { systemPrompt: 'base' })
+  assert.equal(applied.systemPrompt, 'base\n\nrole')
+  assert.equal(applied.message.content, 'snapshot two')
+  assert.equal(a.pi.sent.length, 2)
+})

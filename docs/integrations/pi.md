@@ -201,3 +201,10 @@ commands (including nested shell wrappers), and asks the model to use the scoped
 Persona action tool. Failed rule reads block shell execution; ordinary coding
 Agent sessions retain their existing behavior. Gate parsing is shared with the
 OpenCode companion and covered by its existing contracts plus pi-specific fakes.
+
+A Persona message arriving during an active pi Assistant turn returns retryable
+`busy` with `delivered: none`, leaving role, permissions and hidden context intact.
+The normal durable delivery path waits for idle, so the next `before_agent_start`
+can apply the fresh snapshot and policy together. An answer to the current turn's
+own question may resolve that question without changing its role or permissions.
+Ordinary coding Agent steering is unchanged.

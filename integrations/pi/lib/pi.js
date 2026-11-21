@@ -268,7 +268,16 @@ export function createPiHost(deps, options = {}) {
     if (s) {
       const previous = assistantState(s.ctx.sessionManager)
       if (previous?.closed) throw new RpcError('This execution session is retired', 'conversation_retired')
-      if (s.running && typeof params.supervision_instructions === 'string' && params.supervision_instructions !== (previous?.policy || '')) throw new RpcError('This conversation is busy', 'conversation_busy')
+      if (s.running && (params.assistant === true || previous)) {
+        const policy = typeof params.supervision_instructions === 'string' ? params.supervision_instructions : previous?.policy || ''
+        const mode = params.permission_mode || params.mode || previous?.mode || 'default'
+        // before_agent_start cannot update authoritative context for a steered
+        // message inside an existing turn. Keep it queued until that turn ends.
+        // An answer to this turn's own question can still resolve the question.
+        if (!s.asking || policy !== (previous?.policy || '') || mode !== (previous?.mode || 'default')) {
+          throw new RpcError('This conversation is busy', 'busy', { delivered: 'none' })
+        }
+      }
       recordAssistant(s.ctx.sessionManager, params, previous)
       // The turn waits on the user's answer (ask_user): this message is the answer. Steered, it would wait behind the
       // question for as long as nobody answers it.
