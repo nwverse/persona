@@ -106,7 +106,7 @@ func TestTaskDeliveryTrackingOverTheBus(t *testing.T) {
 	}
 	plan := func(title string, continues string) string {
 		task := map[string]any{"title": title, "prompt": title, "machine": "box", "cwd": "/code/app", "readonly": false,
-			"permission": "bypassPermissions", "user_requested": true, "why": "synthetic dispatch",
+			"permission": "bypassPermissions", "user_requested": true, "why": "synthetic dispatch", "role": "worker",
 			"done_when": []string{"实现并验证"}, "expect_minutes": 10}
 		if continues != "" {
 			task["continues"] = continues
