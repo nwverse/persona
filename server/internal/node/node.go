@@ -874,7 +874,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		Prompt                  string        `json:"prompt"`
 		ResumeSessionID         string        `json:"resume_session_id"`
 		ResumeAutomatic         bool          `json:"resume_automatic"`
-		Host                    string        `json:"host"` // session.start: the enabled host to open in ("" the default host, #2576)
+		ResumeOutsideHealth     bool          `json:"resume_outside_health"` // session.start: an extension's resume the hub does not list (resumeOutsideHealth)
+		Host                    string        `json:"host"`                  // session.start: the enabled host to open in ("" the default host, #2576)
 		TaskID                  string        `json:"task_id"`
 		WorkspaceID             string        `json:"workspace_id"`
 		WorkspaceLabel          string        `json:"workspace_label"`
@@ -967,6 +968,16 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("bad params: %w", err)
 		}
+	}
+	// Before anything else reads the id (a backend session's pin, an alias, a Codex thread, a runtime's session): an
+	// extension's resume of a conversation the hub does not list goes on only for one this computer has outside the
+	// health space (#10941). A refusal that holds for any id comes first (resumeHostRefusal): an engine that is away
+	// may have it, and the owner's resume is told the same, whatever the id.
+	if devicewire.IsSessionStart(method) && p.ResumeOutsideHealth && p.ResumeSessionID != "" && !n.resumeOutsideHealth(ctx, p.ResumeSessionID) {
+		if err := n.resumeHostRefusal(ctx, p.Host); err != nil {
+			return nil, err
+		}
+		return nil, resumeUnknown()
 	}
 	sessionSend := method == "session.send" || method == proto.MethodSessionSendUnseen
 	if backendLaunchFrom(ctx) == nil && (sessionSend || method == "session.start" && p.ResumeSessionID != "") {

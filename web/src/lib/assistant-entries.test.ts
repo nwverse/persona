@@ -316,6 +316,16 @@ describe("Finished in the Assistant's entries", () => {
     expect([...got.needsYou, ...got.running, ...got.shelved, ...got.parked, ...got.review]).toEqual([]);
   });
 
+  it("files closed pending-review tasks as finished only within the completion window", () => {
+    const supervision = { supervisor: "main", state: "pending_review" as const };
+    const got = run([
+      done("recent-review", "2026-11-10T08:30:00Z", { supervision }),
+      done("expired-review", "2026-11-08T08:00:00Z", { supervision }),
+    ]);
+    expect(got.finished.map((item) => item.key)).toEqual(["task:recent-review"]);
+    expect([...got.needsYou, ...got.running, ...got.shelved, ...got.parked, ...got.review]).toEqual([]);
+  });
+
   it("keeps a row once it is opened: seeing it changes only that it is new", () => {
     const task = done("opened", "2026-11-10T08:30:00Z");
     expect(run([task]).finished.map((i) => [i.key, i.fresh])).toEqual([["task:opened", true]]);

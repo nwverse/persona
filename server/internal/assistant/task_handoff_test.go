@@ -56,7 +56,7 @@ func taskHandoffTestStart(t *testing.T, s *Service, f *fakeHub, tool string) str
 	t.Helper()
 	args := json.RawMessage(`{"machine":"box","cwd":"/code/app","prompt":"Inspect the regression"}`)
 	if tool == "task_plan" {
-		args = json.RawMessage(`{"tasks":[{"title":"Inspect","machine":"box","cwd":"/code/app","prompt":"Inspect the regression","permission":"bypassPermissions","user_requested":true}]}`)
+		args = json.RawMessage(`{"tasks":[{"title":"Inspect","machine":"box","cwd":"/code/app","prompt":"Inspect the regression","role":"worker","permission":"bypassPermissions","user_requested":true}]}`)
 	}
 	return taskHandoffTestCall(t, s, f, tool, args)
 }
@@ -250,7 +250,7 @@ func TestTaskHandoffUsesFinalDetourFamilyAndMachine(t *testing.T) {
 			s.healthRound(context.Background(), true)
 			args := json.RawMessage(`{"machine":"l4","cwd":"/home/me/code/app","prompt":"Inspect the regression"}`)
 			if tool == "task_plan" {
-				args = json.RawMessage(`{"tasks":[{"title":"Inspect","machine":"l4","cwd":"/home/me/code/app","prompt":"Inspect the regression","machine_policy":"flexible","user_requested":true}]}`)
+				args = json.RawMessage(`{"tasks":[{"title":"Inspect","machine":"l4","cwd":"/home/me/code/app","prompt":"Inspect the regression","role":"worker","machine_policy":"flexible","user_requested":true}]}`)
 			}
 			prompt := taskHandoffTestCall(t, s, f, tool, args)
 			if machines := taskStartMachines(f); len(machines) != 1 || machines[0] != "server" {
@@ -274,7 +274,7 @@ func TestTaskHandoffDefaultFallbackUsesFittedAlias(t *testing.T) {
 			s.hub = h
 			args := json.RawMessage(`{"machine":"l4","cwd":"/home/me/code","prompt":"Inspect the regression"}`)
 			if tool == "task_plan" {
-				args = json.RawMessage(`{"tasks":[{"title":"Inspect","machine":"l4","cwd":"/home/me/code","prompt":"Inspect the regression","user_requested":true}]}`)
+				args = json.RawMessage(`{"tasks":[{"title":"Inspect","machine":"l4","cwd":"/home/me/code","prompt":"Inspect the regression","role":"worker","user_requested":true}]}`)
 			}
 			prompt := taskHandoffTestCall(t, s, f, tool, args)
 			if st := startsOf(f)[0]; st["launcher"] != "code-alias" || st["model"] != nil {
@@ -328,7 +328,7 @@ func TestTaskHandoffPaseoKeepsBridgedMCP(t *testing.T) {
 			s.hub = h
 			args := json.RawMessage(`{"machine":"pbox","cwd":"/home/me/code","prompt":"Inspect the regression"}`)
 			if tool == "task_plan" {
-				args = json.RawMessage(`{"tasks":[{"title":"Inspect","machine":"pbox","cwd":"/home/me/code","prompt":"Inspect the regression","user_requested":true}]}`)
+				args = json.RawMessage(`{"tasks":[{"title":"Inspect","machine":"pbox","cwd":"/home/me/code","prompt":"Inspect the regression","role":"worker","user_requested":true}]}`)
 			}
 			prompt := taskHandoffTestCall(t, s, f, tool, args)
 			if startsOf(f)[0]["launcher"] != "codex-cpa" {

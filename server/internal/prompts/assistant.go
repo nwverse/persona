@@ -763,6 +763,21 @@ type RelayRefused struct {
 
 func RenderRelayRefused(d RelayRefused) string { return render("assistant/relay_refused", d) }
 
+// RelayLater is what conversation_send with wake: false kept for a conversation (#11614): it goes in, as a context
+// block, at the start of the next message the hub delivers there for any other reason. Language is the owner's
+// (answerLanguage; empty: Chinese).
+type RelayLater struct {
+	Language string
+	Items    []RelayLaterItem
+}
+
+// RelayLaterItem is one kept message: the sending conversation, when it was sent (the owner's local time) and its words.
+type RelayLaterItem struct {
+	FromID, FromTitle, At, Text string
+}
+
+func RenderRelayLater(d RelayLater) string { return render("assistant/relay_later", d) }
+
 // ChatReply tells a conversation that wrote into a Lark chat as the user that others wrote there since (#10777): the
 // chat's name (Group: a group, else a direct chat with that person), when the conversation last wrote there (local
 // "01-02 15:04"), how many new messages and who wrote the newest, whether Context also repeats messages it was told
