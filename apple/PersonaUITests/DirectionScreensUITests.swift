@@ -405,6 +405,24 @@ final class DirectionScreensUITests: XCTestCase {
         more.tap()
         sleep(1)
         shot("off-agent-menu-\(off)")
+        if off == "manager" { pickDefaultAssistantAgain() }
+    }
+
+    /// The pick of 工作 is kept on the device (`assistant.manager`): 助手 again, so the next launch, here or in another
+    /// test, starts on the hub's default assistant.
+    @MainActor private func pickDefaultAssistantAgain() {
+        app.terminate()
+        launch(keepPick: true)
+        openSidebar()
+        let head = app.buttons["assistant-switcher"].exists ? app.buttons["assistant-switcher"].firstMatch
+            : app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "工作")).firstMatch
+        head.tap()
+        let byID = app.buttons["assistant-switcher-row-assistant"].firstMatch
+        let main = byID.waitForExistence(timeout: 3) ? byID
+            : app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "助手")).firstMatch
+        XCTAssertTrue(main.waitForExistence(timeout: 10), "no 助手 in the switcher:\n\(app.debugDescription)")
+        main.tap()
+        sleep(2)
     }
 
     /// VoiceOver's Expanded in the run's language.
