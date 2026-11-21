@@ -505,16 +505,13 @@ func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[st
 	if step == "credentials" && values != nil {
 		id, secret, domain := strings.TrimSpace(values["app_id"]), strings.TrimSpace(values["app_secret"]), strings.TrimSpace(values["domain"])
 		on := true
-		if err := h.updateBot(ctx, &on, &id, &secret, &domain, nil); err != nil {
+		if err := h.applyBotUpdate(ctx, &on, &id, &secret, &domain, nil, false); err != nil {
 			if feishubot.CredentialRejected(err) {
 				h.logf("bots: credentials rejected by the platform: %v", err)
 				return credentials(i18n.T(l, "hub-channels.credentials_rejected")), nil
 			}
 			return credentials(i18n.Localize(err, l)), nil
 		}
-		// Successfully typing credentials replaces the app-registration flow. A queued register poll must not
-		// later finish the old device-code session over the app the user just chose.
-		h.putRegistration(nil)
 		// Best-effort: with the credentials just verified, set the scopes, events and the long-connection mode
 		// and submit the publish, so the console's manual steps are done (docs/extensions/bots.md). Its outcome
 		// is a sentence on the next step, never a failure of the bind.

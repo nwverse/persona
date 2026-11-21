@@ -259,7 +259,7 @@ func (h *Manager) finishFeishuRegistration(ctx context.Context, reg botRegistrat
 	}
 	domain := h.registeredDomain(reg.Region)
 	on := true
-	if err := h.updateBot(ctx, &on, &reg.AppID, &secret, &domain, nil); err != nil {
+	if err := h.applyBotUpdate(ctx, &on, &reg.AppID, &secret, &domain, nil, true); err != nil {
 		return "", err
 	}
 	// Best-effort, as after typed credentials: the template opened the scopes and the callback; this subscribes the

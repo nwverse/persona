@@ -35,10 +35,14 @@ type registrationBindResult struct {
 }
 
 func startRegistrationBind(w *botWorld, ctx context.Context, step string) <-chan registrationBindResult {
+	body, _ := json.Marshal(map[string]any{"step": step, "values": map[string]string{}})
+	return startBotRequest(w, ctx, http.MethodPost, "/api/v1/channels/feishu/bind", string(body))
+}
+
+func startBotRequest(w *botWorld, ctx context.Context, method, path, body string) <-chan registrationBindResult {
 	done := make(chan registrationBindResult, 1)
 	go func() {
-		body, _ := json.Marshal(map[string]any{"step": step, "values": map[string]string{}})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/feishu/bind", strings.NewReader(string(body))).WithContext(ctx)
+		req := httptest.NewRequest(method, path, strings.NewReader(body)).WithContext(ctx)
 		rec := httptest.NewRecorder()
 		w.mux.ServeHTTP(rec, req)
 		var p map[string]any
@@ -303,7 +307,13 @@ func TestBotRegistrationConfirmedSessionSurvivesExpiry(t *testing.T) {
 	w.h.bots.set.Registration.AppID = "cli_confirmed"
 	w.h.bots.mu.Unlock()
 	on, id, secret, domain := true, "cli_confirmed", "fake-secret", w.api.srv.URL
-	if err := w.h.updateBot(w.ctx, &on, &id, &secret, &domain, nil); err != nil {
+	release, err := w.h.acquireFeishuBind(w.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = w.h.applyBotUpdate(w.ctx, &on, &id, &secret, &domain, nil, true)
+	release()
+	if err != nil {
 		t.Fatal(err)
 	}
 	if p := w.bind(t, ""); p["url"] != first["url"] || acc.devices != 1 {
