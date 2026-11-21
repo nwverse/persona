@@ -55,6 +55,8 @@ type chanLive struct {
 	notFound bool      // the last read did not find the message in the conversation yet
 	finished bool
 	done     chan struct{}
+	// stoppedCard is the successfully interrupted progress message; under mu, so redelivered presses act once.
+	stoppedCard string
 	// checking is held by checkChannelRun: the watch loop and a turn's end may both check at once, and two checks
 	// would send the same answer twice.
 	checking chanMutex
