@@ -3,32 +3,20 @@
 // the user (lib/start-page.ts); where the hub has no such route it stays in this browser, and the footer says which. A
 // choice whose page is not there now stays chosen, and the row says the main chat opens until it is back.
 import { t } from "../../i18n";
-import { errorText, api } from "../../lib/api";
+import { errorText } from "../../lib/api";
 import { hasSlots } from "../../lib/extension-slots";
 import { LOCKED, ordered, useSidebarPrefs } from "../../lib/sidebar-pages";
-import { keepStartPage, noteStartPageSynced, startPage, startPageGone, startPageSynced, useExtensionPagesKnown, useStartPage, useStartPageSynced } from "../../lib/start-page";
+import { saveStartPage, startPageGone, useExtensionPagesKnown, useStartPage, useStartPageSynced } from "../../lib/start-page";
 import { useStore } from "../../lib/store";
 import { useWorkspaceBoardSetting } from "../../lib/workspace-board-setting";
 import { toast } from "../../ui/atoms";
 import { useNavPages } from "../Sidebar";
 import { Group, Row } from "./SettingsParts";
 
-/** Chooses `key` ("" for the main chat): shown at once, then the hub's. A hub without the route (404) leaves it in this
- *  browser; any other refusal puts the last one back, with a toast. */
+/** Chooses a page and shows a failed save beside the user's other work, without putting those words in the first screen. */
 export async function chooseStartPage(key: string) {
-  const was = startPage();
-  keepStartPage(key);
-  if (startPageSynced() === false) return; // this browser only
-  try {
-    const r = await api<{ start?: string }>("/navigation", { method: "PUT", json: { start: key } });
-    noteStartPageSynced();
-    if (startPage() === key) keepStartPage(r.start ?? key);
-  } catch (e) {
-    noteStartPageSynced(e);
-    if (startPageSynced() === false) return;
-    if (startPage() === key) keepStartPage(was);
-    toast(t("settings.start_page_failed", { error: errorText(e) }), "error");
-  }
+  const error = await saveStartPage(key);
+  if (error !== undefined) toast(t("settings.start_page_failed", { error: errorText(error) }), "error");
 }
 
 export function StartPageGroup() {

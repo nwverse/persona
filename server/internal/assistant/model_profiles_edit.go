@@ -190,8 +190,30 @@ func profilePermissionModeErr(where, mode string) error {
 	return i18n.Err("assistant-model_profiles.err_permission_mode", i18n.Args{"where": where, "mode": mode, "modes": strings.Join(proto.PermissionModes, " / ")})
 }
 
-func (s *Service) checkTierPermissionModes(ctx context.Context, tiers map[string]ModelTier) error {
-	for _, t := range tiers {
+func (s *Service) checkProfilePermissionModes(ctx context.Context, p ModelProfile) error {
+	for id, b := range p.Purposes {
+		if b.PermissionMode == "" {
+			continue
+		}
+		provider := b.Provider
+		if provider == "" {
+			if eff, err := s.resolveModel(ctx, id); err == nil {
+				provider = eff.Provider
+			}
+		}
+		name, ok := strings.CutPrefix(provider, "launcher.")
+		if !ok || name == "" {
+			continue
+		}
+		machine := ""
+		if id == "assistant" {
+			machine = s.settings(ctx).MachineID
+		}
+		if !slices.Contains(s.permissionModesForLauncher(ctx, machine, name, nil), b.PermissionMode) {
+			return i18n.Err("assistant-models.err_permission_mode_unsupported")
+		}
+	}
+	for _, t := range p.Tiers {
 		if t.PermissionMode == "" {
 			continue
 		}
@@ -247,7 +269,7 @@ func (s *Service) saveModelProfileLocked(ctx context.Context, revision *int64, i
 	if err := checkModelProfile(&p, stored); err != nil {
 		return p, "", err
 	}
-	if err := s.checkTierPermissionModes(ctx, p.Tiers); err != nil {
+	if err := s.checkProfilePermissionModes(ctx, p); err != nil {
 		return p, "", err
 	}
 	for name, t := range p.Tiers {

@@ -34,7 +34,7 @@ func taskInboxArgs(items ...string) json.RawMessage {
 	var tasks []map[string]any
 	for _, item := range items {
 		tasks = append(tasks, map[string]any{
-			"title": "Investigate report", "prompt": "Inspect the reported defect and verify the result",
+			"title": "Investigate report", "prompt": "Inspect the reported defect and verify the result", "role": "worker",
 			"machine": "box", "cwd": "/code/app", "inbox_item": item,
 			"inbox_handoff": "untrusted-operation", "done_when": []string{"Regression verified"}, "expect_minutes": 10,
 		})

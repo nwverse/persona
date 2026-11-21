@@ -13,9 +13,10 @@ Persona collects usage on each computer without reading or handling agent login 
 | Codex app-server | In a bounded background poll, the node asks the official local Codex app-server for `account/rateLimits/read`. Codex makes the authenticated usage read and can return `accountId` with the same snapshot. Persona sends only a digest of a personal account ID to the usage manager | Preferred |
 | Codex rollout | `token_count` events in `~/.codex/sessions/…/rollout-*.jsonl` carry `rate_limits`: `primary` / `secondary` with `used_percent`, `window_minutes`, `resets_at` (seconds), plus `plan_type`, `limit_id`. The node reads the tail (512 KB) of the most recent few rollouts and takes the last event whose `limit_id` is `codex` (or unset). This sample identifies its reporting source only | Fallback |
 | Claude Code status line | Claude Code puts `rate_limits` (`five_hour` / `seven_day`, each with `used_percentage`, `resets_at`) in the **JSON input of the status line command** (see its changelog), and writes it to neither the transcript nor any other file | Yes, but the user has to wire it up (next section) |
+| Antigravity native quota summary | The agy companion asks its ACP process's local native service for `RetrieveUserQuotaSummary` every five minutes, with `forceRefresh: false` so agy's own cache controls upstream reads. Valid buckets and groups become 5-hour / weekly windows using `remainingFraction`, `window` (or a legacy bucket id), `resetTime` and the optional model. No conversation or model request is started, and no status-line email or credential is read | Yes |
 | Codex account usage API (ChatGPT's `wham/usage`) | Needs the login token in `~/.codex/auth.json` | **No**. Moshi uses it; Persona does not read `auth.json` |
 | Claude account usage API (`/api/oauth/usage`) and the `anthropic-ratelimit-*` response headers | Needs Claude's OAuth token (Keychain / `.credentials.json`); the headers also need a request of your own | **No**, same reason |
-| Others (Kimi, Grok, Antigravity, GLM / MiniMax API key plans) | All need an account API or a key | Not doing |
+| Others (Kimi, Grok, GLM / MiniMax API key plans) | All need an account API or a key | Not doing |
 
 The app-server starts no conversation or model request. The account ID applies only to the usage returned in that response, so a saved rollout from a previous login is never assigned to the current account.
 
@@ -44,8 +45,8 @@ The gateway's `rate_limits.spend_limit` (an amount of money) is not a window and
 ## Collection and merging
 
 - **node** (`server/internal/node/usagewindows.go`): refreshes every 5 minutes (the first time 20 seconds after connecting to the hub, so the hub's `node.configure` delivers the switch first).
-  Each source (one Codex home, one `claude*.json`) keeps its last sample, kept even when the source goes quiet, and dropped after 3 days. Windows whose `resets_at` has passed are dropped (those numbers belong to the previous period);
-  a source whose windows have all passed is not listed. `usage.windows` uses the cache or local files without waiting for the Codex app-server.
+  Each source (one Codex home, one `claude*.json`, or one local runtime id) keeps its last sample, kept even when the source goes quiet, and dropped after 3 days. Windows whose `resets_at` has passed are dropped (those numbers belong to the previous period);
+  a source whose windows have all passed is not listed. A local runtime reports through the optional `usage.windows` event when the node advertises `usage_windows`; its runtime id replaces the same source after a companion restart, and a valid empty snapshot clears it. `usage.windows` uses the cache or local files without waiting for the Codex app-server.
 - **Off**: `machines[].usage_windows` in `hub.json` (`docs/operations/config.md`); with `false`, that computer's node stops collection and the manager does not ask it. Unset means on.
   If the node is older than this version (no `usage.windows`), the manager treats it as having no data.
 - **Manager** (`server/internal/devices/usagewindows.go`): on `GET /api/v1/usage/windows` it asks the online machines (in parallel, 8 seconds each; repeated requests within 30 seconds reuse the previous merged result),

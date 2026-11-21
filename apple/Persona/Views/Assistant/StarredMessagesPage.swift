@@ -24,7 +24,7 @@ struct StarredMessagesPage: View {
         .themedPage()
         .overlay { if matches.isEmpty { empty } }
         .pageTitle(String(localized: "Starred"))
-        .searchable(text: $query, prompt: "Search Starred Messages")
+        .pageSearchable(text: $query, prompt: "Search Starred Messages")
         .refreshable { await store.loadIndex(); await store.loadPage() }
         .onAppear { store.startReading() }
         .onDisappear { store.stopReading() }

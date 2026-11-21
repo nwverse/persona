@@ -1217,6 +1217,25 @@ struct NewChatView: View {
             let name = tabName.trimmingCharacters(in: .whitespacesAndNewlines)
             // The first message: a todo's context block (when a todo is handed over), then what was typed.
             let outgoing = contextBlock.map { p.isEmpty ? $0 : "\($0)\n\n\(p)" } ?? p
+            if StartModes.terminalTraex(runEntry) {
+                let first = FirstMessage.text(prompt: prompt, contextBlock: contextBlock, paths: attachments.paths,
+                                              photos: attachments.images.count)
+                if !first.isEmpty && attachments.isEmpty {
+                    // A terminal Traex makes its own session from the inline prompt, as Android and the web start it.
+                    // Do not reuse Claude's pre-assigned id or send the text again as an ordinary message (#1842).
+                    let s = try await api.start(.init(machineID: ref.id, cwd: dir, launcher: runLauncher, agentType: "traex", prompt: first,
+                                                      workspaceID: targetPreset?.workspaceID, host: targetPreset?.host,
+                                                      model: sentModel, tabName: name.isEmpty ? nil : name,
+                                                      nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID))
+                    UserDefaults.standard.set(launcher, forKey: "launcher.\(machineID)")
+                    UserDefaults.standard.set(cwd, forKey: "cwd.\(machineID)")
+                    record(setup)
+                    Haptics.success()
+                    model.adopt(s)
+                    onStarted(s)
+                    return
+                }
+            }
             if inlineFirst {
                 // Codex picks its thread's id once it has the first message: it goes with the start, which answers
                 // with that thread (one session, already working on it). With none, the start answers with Codex

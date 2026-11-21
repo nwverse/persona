@@ -58,6 +58,9 @@ func GatewayAvailableAgain(text string, at time.Time) (time.Time, bool) {
 // owner's auto-switch-and-return rule applies to. The manager marks both through follows_setting (assistant/start.go);
 // worker Agents have neither flag and keep their own fallback behavior.
 func (n *Node) recoveryProtected(id string) bool {
+	if n.state == nil {
+		return false
+	}
 	st, ok := n.state.get(id)
 	return ok && (st.IsMain || st.FollowsSetting)
 }

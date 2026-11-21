@@ -170,6 +170,15 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			return "", err
 		}
 	}
+	// A bare accept must not hide a result that does not settle the task from the owner's Needs-you list (#12026): a
+	// non-done closeout, a blocker only the owner can clear, or an inconclusive / partial result. user_check (the owner
+	// passes the result themselves) and a "cannot be done" outcome are deliberate closures the guard lets through.
+	if verdict == reviewAccepted && !a.UserCheck && a.Outcome != outcomeCannot {
+		evidence := s.acceptGuardEvidence(ctx, t, note, strings.TrimSpace(a.Reason), checks)
+		if matched, _ := acceptGuardBlock(evidence); matched != "" {
+			return "", errors.New(acceptGuardRefusal(matched))
+		}
+	}
 	// A conversation supervises what it handed out (task_plan, quietAgentTask): a task without a ledger
 	// gets none here either, or its signals would go into the main conversation's supervision messages (#4262). It can still
 	// be closed; rework, needs_user and parked are what supervision is for.
@@ -305,7 +314,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
-	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigOrphaned, sigOverdue, sigEstimateDue, sigRecheck, sigUndecidable, sigOwnerCannot, sigParkedDue} {
+	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigOrphaned, sigOverdue, sigEstimateDue, sigRecheck, sigUndecidable, sigOwnerCannot, sigParkedDue} {
 		delete(b.pending, t.ID+"|"+k) // reviewed: what waited is answered
 	}
 	if verdict == reviewAccepted || verdict == reviewCancelled {

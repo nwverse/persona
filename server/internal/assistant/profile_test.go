@@ -211,7 +211,7 @@ func TestRecordingDaysKeepsLastGoodOnReadFailure(t *testing.T) {
 
 	// Never successfully read, and the read fails: there is no good value to keep.
 	expire()
-	st.failSetting = errors.New("database locked")
+	st.setFailSetting(errors.New("database locked"))
 	if _, ok := s.settingsLastGood(ctx); ok {
 		t.Fatal("never read + failure: want !ok")
 	}
@@ -220,10 +220,10 @@ func TestRecordingDaysKeepsLastGoodOnReadFailure(t *testing.T) {
 	}
 
 	// The user picked 365; a failure past the 5s freshness keeps serving 365 instead of falling back to 14.
-	st.failSetting = nil
+	st.setFailSetting(nil)
 	setSettings(t, s, func(v *Settings) { v.RecordingDays = days(365) })
 	expire()
-	st.failSetting = errors.New("database locked")
+	st.setFailSetting(errors.New("database locked"))
 	if v, ok := s.settingsLastGood(ctx); !ok || v.RecordingDays == nil || *v.RecordingDays != 365 {
 		t.Fatalf("failure with last-good: ok=%v days=%v", ok, v.RecordingDays)
 	}
@@ -237,7 +237,7 @@ func TestRecordingDaysKeepsLastGoodOnReadFailure(t *testing.T) {
 	}
 
 	// A successful refresh still picks up a value another hub wrote (the 5s freshness behaviour is unchanged).
-	st.failSetting = nil
+	st.setFailSetting(nil)
 	if err := st.PutSetting(ctx, settingsKey, Settings{RecordingDays: days(30)}); err != nil {
 		t.Fatal(err)
 	}
@@ -248,11 +248,11 @@ func TestRecordingDaysKeepsLastGoodOnReadFailure(t *testing.T) {
 
 	// Failing again serves the new last-good value (30); once the database recovers the read works again.
 	expire()
-	st.failSetting = errors.New("database busy")
+	st.setFailSetting(errors.New("database busy"))
 	if d := s.recordingDaysNow(); d != 30 {
 		t.Fatalf("failure after refresh: days=%d, want 30", d)
 	}
-	st.failSetting = nil
+	st.setFailSetting(nil)
 	expire()
 	if d := s.recordingDaysNow(); d != 30 {
 		t.Fatalf("recovered: days=%d, want 30", d)
@@ -460,6 +460,9 @@ func TestBoolSettingsSet(t *testing.T) {
 		}
 		if out, isErr := set(`"yes"`); !isErr || !strings.Contains(out, "true or false") {
 			t.Fatalf("%s set to a string: %s", key, out)
+		}
+		if out, isErr := set(`null`); !isErr || !strings.Contains(out, "true or false") || len(s.pendingQuestions()) != 0 || s.deliveryGate(ctx) != deliveryGateMerged {
+			t.Fatalf("%s set to null: err=%v out=%q pending=%d gate=%s", key, isErr, out, len(s.pendingQuestions()), s.deliveryGate(ctx))
 		}
 		mergedToOff := i18n.T(i18n.Default, "assistant-settings_tool.change_delivery_gate", i18n.Args{
 			"before": i18n.T(i18n.Default, "assistant-settings_tool.delivery_gate_merged"),

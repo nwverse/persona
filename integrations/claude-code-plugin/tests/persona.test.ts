@@ -11,7 +11,10 @@ type Answer = { status: number; body: unknown } | { fail: true }
 function world(on: On, polls: Answer[], env: Record<string, string> = { HOME: '/home/me' }) {
   const requests: { url: string; socketPath?: string; body: Record<string, unknown> }[] = []
   const submitted: { text: string; origin: unknown }[] = []
+  const aborted: string[] = []
   const steps: { model: string; effort?: string | number; agentId?: string }[] = []
+  let holdSubmit = false
+  let abortError: string | undefined
   let sessionModel = 'claude-sonnet-5-5'
   mock.env(on, env)
   const clock = mock.clock(on, { now: 1_000 })
@@ -21,8 +24,16 @@ function world(on: On, polls: Answer[], env: Record<string, string> = { HOME: '/
   on('session.version', () => ({ value: { version: '2.1.326', base: '2.1.326' } }))
   on('fs.read', () => ({ value: '{"name":"persona","version":"0.2.0"}' }))
   on('ui.log', () => ({ value: undefined }))
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: 'done' }))
+  on('turn.abort', (_$, e) => {
+    if (abortError !== undefined) throw new Error(abortError)
+    aborted.push(e.turnId)
+    return { value: undefined }
+  })
   on('prompt.submit', (_$, e) => {
     submitted.push({ text: e.text, origin: e.origin })
+    if (holdSubmit) return new Promise(() => {})
     return { text: e.text }
   })
   on('turn.step', async function* (_$, e) {
@@ -40,8 +51,15 @@ function world(on: On, polls: Answer[], env: Record<string, string> = { HOME: '/
   return {
     requests,
     submitted,
+    aborted,
     steps,
     clock,
+    setHoldSubmit(v: boolean) {
+      holdSubmit = v
+    },
+    setAbortError(err: string | undefined) {
+      abortError = err
+    },
     setSessionModel(m: string) {
       sessionModel = m
     },
@@ -64,11 +82,36 @@ describe('persona plugin', () => {
       session_id: SESSION,
       plugin_version: '0.2.0',
       engine_version: '2.1.326',
-      capabilities: ['settings'],
+      capabilities: ['busy_input', 'interrupt', 'settings'],
       wait_ms: 25_000,
     })
     expect(ack?.url).toBe('http://persona/claude-plugin/v1/ack')
     expect(ack?.body).toEqual({ session_id: SESSION, id: 'm1', submitted: true })
+  })
+
+  test('queues a busy message without blocking the poll loop and aborts the active main-loop turn on interrupt', async ($, on) => {
+    const w = world(on, [
+      { status: 200, body: { messages: [{ id: 'm-busy', text: 'also check edge cases', deadline_ms: 9_000 }] } },
+      { status: 200, body: { messages: [], interrupt: { id: 'int-1', deadline_ms: 9_000 } } },
+      { status: 200, body: { messages: [], interrupt: { id: 'int-2', deadline_ms: 9_000 } } },
+    ])
+    w.setHoldSubmit(true)
+    await $.turn.start({ text: 'initial task', turnId: 'turn-main-1' })
+    await $.turn.start({ text: 'subagent task', turnId: 'turn-sub-1', agentId: 'sub-1' })
+    await $.session.start(start)
+    await w.clock.settle()
+
+    // While prompt.submit waits behind the running turn, advancing the settle window acks the queued message and polls on.
+    await w.clock.advance(250)
+    await w.clock.settle()
+
+    expect(w.submitted).toEqual([{ text: 'also check edge cases', origin: { kind: 'plugin', name: 'persona', asUser: true } }])
+    expect(w.aborted).toEqual(['turn-main-1'])
+    expect(w.requests.filter(r => r.url.endsWith('/ack')).map(r => r.body)).toEqual([
+      { session_id: SESSION, id: 'm-busy', submitted: true },
+      { session_id: SESSION, id: 'int-1', submitted: true },
+      { session_id: SESSION, id: 'int-2', submitted: false, reason: 'no_turn' },
+    ])
   })
 
   test('applies session-only model and effort switches on main-loop turn.step and yields when desktop changes model', async ($, on) => {
@@ -174,9 +217,10 @@ describe('protocol helpers', () => {
   })
 
   test('poll answers and override helpers', () => {
-    expect(readPoll(200, '{"messages":[{"id":"a","text":"hi","deadline_ms":5}],"settings":{"id":"s1","model":"opus","effort":"high"},"retry_ms":10}')).toEqual({
+    expect(readPoll(200, '{"messages":[{"id":"a","text":"hi","deadline_ms":5}],"interrupt":{"id":"i1","deadline_ms":9},"settings":{"id":"s1","model":"opus","effort":"high"},"retry_ms":10}')).toEqual({
       kind: 'messages',
       messages: [{ id: 'a', text: 'hi', deadlineMs: 5 }],
+      interrupt: { id: 'i1', deadlineMs: 9 },
       settings: { id: 's1', model: 'opus', effort: 'high' },
       retryMs: 10,
     })

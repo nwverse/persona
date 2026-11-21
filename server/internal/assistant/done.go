@@ -100,6 +100,8 @@ func autoDoneSkip(t Todo, work time.Time, worked bool) string {
 		return "cancelled"
 	case t.DoneAt != nil:
 		return "done"
+	case t.Supervision.state(t) == reviewTimedOut || t.Supervision.state(t) == reviewClosing:
+		return "held"
 	case t.ReopenedAt != nil && !(worked && work.After(*t.ReopenedAt)):
 		return "reopened" // no new turn since the user reopened it
 	}

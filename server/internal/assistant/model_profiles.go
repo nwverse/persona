@@ -296,8 +296,7 @@ func (s *Service) captureModels(ctx context.Context) (map[string]ModelBinding, m
 				model = "" // configured before #1644 held models to the rule: the launcher's default, as applyModel runs it
 			}
 			tiers[tier] = ModelTier{Launcher: name, Model: model, Effort: effective.Effort,
-				PermissionMode: effective.PermissionMode,
-				Description:    i18n.T(l, "assistant-model_profiles.tier_"+tier)}
+				Description: i18n.T(l, "assistant-model_profiles.tier_"+tier)}
 		}
 	}
 	launchers := map[string]LauncherModels{}

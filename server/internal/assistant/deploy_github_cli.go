@@ -18,6 +18,27 @@ import (
 	"time"
 )
 
+// hasGitHubCLI positively identifies gh before trusting it with an authenticated request.
+// The probe is deliberately uncached so replacing PATH or the executable cannot leave a stale identity behind.
+func hasGitHubCLI(ctx context.Context) (bool, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(probeCtx, "gh", "--version")
+	cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1", "GH_NO_UPDATE_NOTIFIER=1", "GH_DEBUG=", "NO_COLOR=1")
+	cmd.WaitDelay = time.Second
+	stdout, stderr := githubCLIBuffer{limit: 4096}, githubCLIBuffer{limit: 4096}
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	runErr := cmd.Run()
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	if runErr != nil || stdout.exceeded {
+		return false, nil
+	}
+	// Official releases print the project URL. A matching executable name or version-looking text alone is insufficient.
+	return strings.Contains(stdout.String(), "github.com/cli/cli"), nil
+}
+
 // gh owns its credential lookup and authenticated request. Never export its token or retry anonymously.
 func githubCLIGet(ctx context.Context, path string, out any) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -114,11 +135,26 @@ func isGitHubCLIUnconfigured(runErr error, stderr string) bool {
 		return true
 	}
 	lower := strings.ToLower(stderr)
+	for _, networkErr := range []string{
+		"proxyconnect",
+		"proxy authentication",
+		"407 proxy",
+		"http 407",
+		"dial tcp",
+		"no such host",
+		"tls:",
+		"x509:",
+		"connection refused",
+		"i/o timeout",
+	} {
+		if strings.Contains(lower, networkErr) {
+			return false
+		}
+	}
 	for _, needle := range []string{
 		"gh auth login",
 		"not logged into",
 		"no github authentication",
-		"authentication required",
 		"to authenticate, please run",
 		"no oauth token",
 		"failed to log in",

@@ -457,6 +457,9 @@ func TestDDNSAlidnsValidationAndErrors(t *testing.T) {
 	if err := os.WriteFile(insecureToken, []byte("akid:aksecret\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(insecureToken, 0644); err != nil { // WriteFile's mode is masked by the umask (077 leaves 0600)
+		t.Fatal(err)
+	}
 
 	var responseBody atomic.Value
 	var calls atomic.Int32

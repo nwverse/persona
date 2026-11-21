@@ -788,6 +788,18 @@ func TestDeliveryGateSettingsAndBackwardCompat(t *testing.T) {
 		t.Fatalf("after set, get = %q, want merged", out)
 	}
 
+	// Regression: passing JSON null to legacy assistant.done_needs_delivery must be rejected, create no approval card,
+	// and keep the default merged gate unchanged.
+	if out, isErr := tool(`{"action":"set","key":"assistant.done_needs_delivery","value":null}`); !isErr || !strings.Contains(out, "value must be true or false") {
+		t.Fatalf("legacy done_needs_delivery=null not refused: %v %q", isErr, out)
+	}
+	if len(s.pendingQuestions()) != 0 {
+		t.Fatalf("legacy done_needs_delivery=null created approval card(s): %d", len(s.pendingQuestions()))
+	}
+	if v := s.view(ctx, false); v.DeliveryGate != deliveryGateMerged || v.DoneNeedsDelivery {
+		t.Fatalf("after legacy null, view = %q / %v, want merged / false", v.DeliveryGate, v.DoneNeedsDelivery)
+	}
+
 	// Regression: setting legacy assistant.done_needs_delivery=false from default merged must disable the gate (off),
 	// not return "unchanged", and clearing DeliveryGate persists the off tier.
 	approveNext := func(wantSummary string) {
