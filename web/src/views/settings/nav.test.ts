@@ -10,6 +10,8 @@ describe("settings location", () => {
   });
   it("reads the category and the item its page has open", () => {
     expect(settingsAt("?tab=models&purpose=agent.triage", "#settings-model-config")).toEqual({ tab: "models", sub: "agent.triage", section: "model-config" });
+    expect(settingsAt("?tab=models", "#settings-model-overview")).toEqual({ tab: "models", sub: null, section: "model-overview" });
+    expect(settingsAt("?tab=models", "#settings-model-profiles")).toEqual({ tab: "models", sub: null, section: "model-profiles" });
     expect(settingsAt("?tab=agents", "#settings-codex")).toEqual({ tab: "agents", sub: null, section: "codex" });
     expect(settingsAt("?tab=agents&purpose=x")).toEqual({ tab: "agents", sub: null, section: null });
   });

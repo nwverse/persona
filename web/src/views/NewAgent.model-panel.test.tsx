@@ -29,7 +29,7 @@ vi.mock("../lib/new-agent", async (original) => ({ ...(await original<typeof imp
 
 import { NewAgent } from "./NewAgent";
 import { t } from "../i18n";
-import type { PickerTier } from "../lib/launcher-models";
+import type { LauncherDefault, PickerTier } from "../lib/launcher-models";
 import { resetModelListsForTests } from "../lib/session-models";
 import { refreshWorkspaceCatalog, type HostWorkspace } from "../lib/workspace-catalog";
 
@@ -54,6 +54,7 @@ const LISTS: Record<string, unknown> = {
 // Model settings › New agent: Claude Code's Opus at High
 const PURPOSE = { purpose: { id: "agent.new", effective: { provider: "launcher.claude", model: "opus", effort: "high" } }, providers: [] };
 let effective = PURPOSE.purpose.effective;
+let defaultHere: LauncherDefault["here"];
 let failList = "";
 let failLaunchersOf = "";
 let workspaceRows: HostWorkspace[] = [];
@@ -88,6 +89,7 @@ beforeEach(() => {
   state.machines = [{ id: "mac", name: "Mac", online: true }, { id: "studio", name: "Studio", online: true }];
   launched.length = 0;
   effective = PURPOSE.purpose.effective;
+  defaultHere = undefined;
   failList = "";
   failLaunchersOf = "";
   workspaceRows = [];
@@ -113,7 +115,7 @@ beforeEach(() => {
     if (list) return decodeURIComponent(list[2]) === failList ? json({ error: "节点没有回应" }, 500) : json(LISTS[decodeURIComponent(list[2])] ?? { models: [] });
     const ls = /\/machines\/([^/]+)\/launchers/.exec(url);
     if (ls && decodeURIComponent(ls[1]) === failLaunchersOf) return json({ error: "节点没有回应" }, 500);
-    if (ls) return json({ launchers: LAUNCHERS[decodeURIComponent(ls[1])] ?? [], default: { provider: "claude", model: "opus", effort: "high" }, tiers });
+    if (ls) return json({ launchers: LAUNCHERS[decodeURIComponent(ls[1])] ?? [], default: { ...effective, provider: effective.provider.replace(/^launcher\./, ""), here: defaultHere }, tiers });
     return json({ path: "/code", entries: [] });
   }));
   host = document.createElement("div");
@@ -167,6 +169,7 @@ const start = () => act(() => button("启动").click());
 describe("New agent's model panel (#5104)", () => {
   it("left alone, follows Model settings: nothing of the model is sent, the pill names what they run with the engine's mark", async () => {
     await open();
+    expect(q("[data-testid=new-agent-default-here]")).toBeNull();
     expect(pill().title).toBe("Claude Code · Opus 5.5 · claude · 高");
     expect(pill().querySelector("[data-pill-engine]")!.getAttribute("data-pill-engine")).toBe("claude");
     await openPanel();
@@ -182,6 +185,41 @@ describe("New agent's model panel (#5104)", () => {
     expect(launched[0]).toMatchObject({ machineId: "mac", cwd: "/code/app", launcher: "" });
     expect(launched[0].model).toBeUndefined();
     expect(launched[0].effort).toBeUndefined();
+  });
+
+  it("previews the fallback and leaves the default launch unpinned", async () => {
+    localStorage.setItem("new.machine", "studio");
+    effective = { ...effective, provider: "launcher.only-mac" };
+    const reason = "Studio will use claude because only-mac is unavailable here.";
+    defaultHere = { launcher: "claude", model: "", effort: "", fit: "fallback", instead_of: "only-mac", note: reason };
+    await open();
+    const note = q("[data-testid=new-agent-default-here]")!;
+    expect(note.textContent).toContain(t("newagent.default_here", { setup: `claude · ${t("chat-modelpill.default_model")}` }));
+    expect(note.textContent).toContain(reason);
+    expect(pill().title).toContain("claude");
+    expect(pill().title).not.toContain("Opus 5.5");
+    await openPanel();
+    expect(follow().textContent).toContain("claude");
+    expect(follow().textContent).not.toContain("only-mac");
+    act(() => pill().click());
+    start();
+    expect(launched).toHaveLength(1);
+    expect(launched[0]).toMatchObject({ machineId: "studio", launcher: "" });
+    expect(launched[0].model).toBeUndefined();
+    expect(launched[0].effort).toBeUndefined();
+  });
+
+  it("shows the per-computer model and effort until a setup is picked", async () => {
+    defaultHere = { launcher: "claude", model: "sonnet", effort: "low", fit: "as_set" };
+    await open();
+    const note = q("[data-testid=new-agent-default-here]")!;
+    expect(note.textContent).toContain("Sonnet 5");
+    expect(note.textContent).toContain("低");
+    await pick("model:relay\nglm-5");
+    expect(q("[data-testid=new-agent-default-here]")).toBeNull();
+    expect(pill().title).toContain("GLM 5");
+    start();
+    expect(launched[0]).toMatchObject({ launcher: "relay", model: "glm-5" });
   });
 
   it("a model row sets the launcher, the model and the effort it shows, and unchecks Follow Model settings", async () => {

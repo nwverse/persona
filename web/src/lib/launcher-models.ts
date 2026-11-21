@@ -7,6 +7,7 @@ import { t } from "../i18n";
 import { api, ApiError, enc, pastHub } from "./api";
 import { cleanModelId, validModelId } from "./model-id";
 import type { ModelBinding } from "./model-config";
+import type { OverviewAgentFit } from "./model-overview";
 import type { PanelPrice } from "./model-panel";
 import { EFFORTS } from "./session-actions";
 import { launcherTitle, type Named } from "./provider-names";
@@ -61,6 +62,8 @@ export interface LauncherDefault {
   permission_mode?: string;
   /** Main chat only: cli or agentsdk. */
   runtime?: string;
+  /** New Agent only: what the machine's launcher inventory says its default would use. */
+  here?: OverviewAgentFit;
 }
 
 /** One of "New agent"'s presets (#2225, docs/assistant/model-profiles.md "Agent presets"): a tier of the model profile in use

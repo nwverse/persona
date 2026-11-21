@@ -10,7 +10,7 @@ export type Tab = "general" | "persona" | "prompts" | "notifications" | "models"
 export const TABS: Tab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "channels", "connectors", "sources", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge", "avatar", "labs"];
 export const AGENT_KINDS = ["claude", "codex", "agy", "omp", "grok"] as const;
 export type AgentTab = (typeof AGENT_KINDS)[number];
-export type SettingsSection = "providers" | "model-config" | "translation" | AgentTab;
+export type SettingsSection = "providers" | "model-config" | "model-overview" | "model-profiles" | "translation" | AgentTab;
 // The tab whose page opens one of its items, and the query parameter that names it.
 const SUB: Partial<Record<Tab, string>> = { models: "purpose", channels: "channel", extensions: "extension", connectors: "connector" };
 /** A host-owned secondary page, not a connector ID. */
@@ -112,7 +112,7 @@ export function redirectLegacySettings(search: string, hash: string, path = "/se
 
 function sectionOfHash(hash: string, tab: Tab): SettingsSection | null {
   const section = hash.startsWith("#settings-") ? hash.slice("#settings-".length) : "";
-  if (tab === "models" && (section === "providers" || section === "model-config")) return section;
+  if (tab === "models" && (section === "providers" || section === "model-config" || section === "model-overview" || section === "model-profiles")) return section;
   if (tab === "agents" && (AGENT_KINDS as readonly string[]).includes(section)) return section as AgentTab;
   if (tab === "general" && section === "translation") return "translation";
   return null;

@@ -24,12 +24,27 @@ func (s *Service) launcherRoutes() {
 	s.handle("GET /api/v1/launchers", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), launcherSyncTimeout+5*time.Second)
 		defer cancel()
-		// A last-seen snapshot answers at once; a first-ever list still fills before it answers.
-		zshrc, cached := s.zshrcLaunchersLastSeen(ctx)
-		if cached {
-			s.refreshZshrcLaunchers(r.Context())
+		var zshrc []zshrcLaunchers
+		if r.URL.Query().Get("refresh") == "1" {
+			machine := r.URL.Query().Get("machine")
+			if machine == "" {
+				zshrc = s.zshrcLaunchers(ctx, true)
+			} else {
+				if _, ok := s.device(ctx, machine); !ok {
+					apierr.Write(w, http.StatusNotFound, errUnknownMachine)
+					return
+				}
+				zshrc = s.zshrcLaunchers(ctx, true, machine)
+			}
 		} else {
-			zshrc = s.zshrcLaunchers(ctx, true)
+			// A last-seen snapshot answers at once; a first-ever list still fills before it answers.
+			var cached bool
+			zshrc, cached = s.zshrcLaunchersLastSeen(ctx)
+			if cached {
+				s.refreshZshrcLaunchers(r.Context())
+			} else {
+				zshrc = s.zshrcLaunchers(ctx, true)
+			}
 		}
 		views := s.withKeyMachines(ctx, s.launcherViewsOf(ctx, zshrc))
 		if b, ok := s.builtinClaude(ctx, zshrc); ok {

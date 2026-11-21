@@ -29,8 +29,15 @@ import { ModelPicker, useLauncherModels } from "./ModelBindingPickers";
 import { ModelProfiles } from "./ModelProfiles";
 import { candidateDraft, candidateProblem, candidateProviders, candidateUpdate, type CandidateDraft } from "../../lib/model-candidates";
 import { ExtensionCandidates } from "./ExtensionCandidates";
+import { modelOverviewSourceLabel } from "./ModelOverview";
+import type { ModelOverview, OverviewSource } from "../../lib/model-overview";
 
 const UNVERIFIED_STATUS = "未验证"; // i18n-ignore: stable wire sentinel, not user-facing text.
+
+function purposeStatus(p: ModelPurpose, legacyDirectAPI: boolean) {
+  if (p.status_code === "ok" || ((p.status_code || legacyDirectAPI) && p.status === UNVERIFIED_STATUS)) return "";
+  return p.status;
+}
 
 function agentsOverrideStatus(binding: ModelBinding): string {
   return overridden(binding)
@@ -46,11 +53,20 @@ function categoryStatus(binding: ModelBinding, category: ModelPurpose): string {
     : t("settings-modelconfiguration.follows", { name: category.name });
 }
 
-export function ModelConfiguration({ open, onOpen, onProviders }: { open: string | null; onOpen: (id: string | null) => void; onProviders: () => void }) {
-  return <ConfigurationManager>{(manager) => <ModelConfigurationForManager manager={manager} open={open} onOpen={onOpen} onProviders={onProviders} />}</ConfigurationManager>;
+interface ModelConfigurationProps {
+  open: string | null;
+  onOpen: (id: string | null) => void;
+  onProviders: () => void;
+  overview?: ModelOverview | null;
+  revealProfile?: { id: string; nonce: number } | null;
+  onOverviewChanged?: () => void;
 }
 
-function ModelConfigurationForManager({ manager, open, onOpen, onProviders }: { manager: string; open: string | null; onOpen: (id: string | null) => void; onProviders: () => void }) {
+export function ModelConfiguration(props: ModelConfigurationProps) {
+  return <ConfigurationManager>{(manager) => <ModelConfigurationForManager manager={manager} {...props} />}</ConfigurationManager>;
+}
+
+function ModelConfigurationForManager({ manager, open, onOpen, onProviders, overview, revealProfile, onOverviewChanged }: ModelConfigurationProps & { manager: string }) {
   const [data, setData] = useState<ModelConfigurationBody | null>(null);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
@@ -80,11 +96,22 @@ function ModelConfigurationForManager({ manager, open, onOpen, onProviders }: { 
   const groups = useMemo(() => purposeGroups(data?.purposes ?? [], query, data?.providers), [data, query]);
   const sourceName = (id?: string) => data?.purposes.find((p) => p.id === id)?.name ?? id;
   const categoryOf = (p: ModelPurpose) => data ? followedCategory(p, data.purposes) : undefined;
+  const machineByPurpose = new Map(overview?.purposes.flatMap((purpose) => {
+    const machine = overview.machines.find((m) => m.id === purpose.runs_on);
+    return machine ? [[purpose.id, machine.name] as const] : [];
+  }));
+  const sourceByPurpose = new Map(overview?.machines.flatMap((m) => m.chats.map((chat) => [chat.purpose, chat.source] as const)));
+  const updated = () => {
+    void load();
+    onOverviewChanged?.();
+  };
 
   return (
     <>
       <h2 className="mb-3 px-1 text-[15px] font-semibold text-ink">{t("settings-nav.tab_model_config")}</h2>
-      <ModelProfiles manager={manager} providers={data?.providers} purposes={data?.purposes} onChanged={() => void load()} />
+      <section id="settings-model-profiles" className="scroll-mt-4">
+        <ModelProfiles manager={manager} providers={data?.providers} purposes={data?.purposes} reveal={revealProfile} onChanged={updated} />
+      </section>
       <div className="mb-4 flex items-center gap-2">
         <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-control bg-surface px-3 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
           <Icon name="search" size={13} stroke={2} className="text-ink-3" />
@@ -101,23 +128,30 @@ function ModelConfigurationForManager({ manager, open, onOpen, onProviders }: { 
       {groups.map(([group, purposes]) => (
         <Group key={group} title={group} footer={purposes.some((p) => p.id === "assistant") ? t("settings-modelconfiguration.schedule_default") : undefined}>
           {purposes.map((p) => (
-            <PurposeRow key={p.id} purpose={p} providers={data?.providers ?? []} sourceName={sourceName} category={categoryOf(p)} onOpen={() => onOpen(p.id)} />
+            <PurposeRow key={p.id} purpose={p} providers={data?.providers ?? []} sourceName={sourceName} category={categoryOf(p)}
+              source={p.id === "agent.new" ? overview?.agents.source : sourceByPurpose.get(p.id)}
+              machine={machineByPurpose.get(p.id)} onOpen={() => onOpen(p.id)} />
           ))}
         </Group>
       ))}
       <Button tone="quiet" onClick={onProviders}>{t("settings-modelconfiguration.manage_providers")}</Button>
-      <PurposeEditor manager={manager} key={open} id={open} sourceName={sourceName} catalog={data?.purposes} onClose={() => onOpen(null)} onSaved={() => void load()} />
+      <PurposeEditor manager={manager} key={open} id={open} sourceName={sourceName} catalog={data?.purposes}
+        onClose={() => { onOpen(null); onOverviewChanged?.(); }} onSaved={updated} />
     </>
   );
 }
 
 /** A sibling help button keeps the editing row a single, unnested button.
  * Details expand inside the card so they stay reachable on narrow screens and at larger text sizes. */
-function PurposeRow({ purpose: p, providers, sourceName, category, onOpen }: { purpose: ModelPurpose; providers: ModelProvider[]; sourceName: (id?: string) => string | undefined; category?: ModelPurpose; onOpen: () => void }) {
+function PurposeRow({ purpose: p, providers, sourceName, category, source, machine, onOpen }: {
+  purpose: ModelPurpose; providers: ModelProvider[]; sourceName: (id?: string) => string | undefined;
+  category?: ModelPurpose; source?: OverviewSource; machine?: string; onOpen: () => void;
+}) {
   const machines = useStore((s) => s.machines);
   const form = executionForm(p, providers, machines);
   const directAPI = p.kind === "api" && !ownRecord(p) && providers.find((v) => v.id === p.effective.provider)?.kind === "api";
-  const status = directAPI && p.status === UNVERIFIED_STATUS ? "" : p.status;
+  const status = purposeStatus(p, directAPI);
+  const provenance = source ? modelOverviewSourceLabel(source, sourceName) : "";
   const [help, setHelp] = useState(false);
   const [pinned, setPinned] = useState(false);
   const row = useRef<HTMLDivElement>(null);
@@ -145,13 +179,14 @@ function PurposeRow({ purpose: p, providers, sourceName, category, onOpen }: { p
     onKeyDown={(event) => { if (event.key === "Escape") { setHelp(false); setPinned(false); event.stopPropagation(); } }}>
     <div className="flex items-center pr-1">
       <div className="min-w-0 flex-1">
-        <Row label={p.id === "agent.new" ? t("newagent.title") : p.name} onClick={onOpen} wrapHint hint={<>
+        <Row label={p.id === "agent.new" ? t(source ? "settings-modeloverview.agents" : "newagent.title") : p.name} onClick={onOpen} wrapHint hint={<>
           {/* what the purpose is for, right under its name (#5806); the model and how it runs follow */}
           {description && <div data-testid="purpose-description" className="mb-1 whitespace-normal">{description}</div>}
           <div className="truncate">{p.kind === "launcher" && p.effective?.permission_mode ? `${modelSummary(p, providers)} · ${modeTitle(p.effective.permission_mode)}` : modelSummary(p, providers)}</div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <Pill wrap>{form.label} · {form.backend}</Pill>
-            {inheritance && <span className="whitespace-normal">{inheritance}</span>}
+            {provenance ? <Pill wrap>{provenance}</Pill> : inheritance && <span className="whitespace-normal">{inheritance}</span>}
+            {machine && <span className="whitespace-normal">{t("settings-modeloverview.runs_on", { machine })}</span>}
             {status && <span>{status}</span>}
           </div>
           {usage && <div data-testid="purpose-usage" className="mt-1 truncate" title={usageDetail}>
@@ -379,7 +414,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
           {p.kind === "launcher" && p.effective?.permission_mode && <Row label={t("settings-modelconfiguration.permission_mode")}><span>{modeTitle(p.effective.permission_mode)}</span></Row>}
           {runtimes.length > 0 && <Row label={t("settings-modelconfiguration.runtime")}><span>{runtimeLabel(p.effective?.runtime, effectiveAgent)}</span></Row>}
           {configDirChoices(p, effectiveAgent).length > 0 && <Row label={t("settings-modelconfiguration.config_dir")}><span>{configDirLabel(p.effective?.config_dir)}</span></Row>}
-          {p.status && !(directAPI && p.status === UNVERIFIED_STATUS) && <Row label={t("settings-modelconfiguration.status")}><Pill>{p.status}</Pill></Row>}
+          {purposeStatus(p, directAPI) && <Row label={t("settings-modelconfiguration.status")}><Pill wrap>{purposeStatus(p, directAPI)}</Pill></Row>}
         </Group>
         {supportsField(p, "provider") && <div>
           <label className="block">

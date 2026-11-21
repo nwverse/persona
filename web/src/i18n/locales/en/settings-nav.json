@@ -6,7 +6,7 @@
   "tab_agents": "Agents",
   "hint_persona": "About me, memory, scheduled tasks and session triage",
   "hint_agents": "Claude Code, Codex, Antigravity, omp, and Grok",
-  "tab_model_config": "Model configuration",
+  "tab_model_config": "Model settings",
   "tab_channels": "Channels",
   "tab_connectors": "Connectors",
   "tab_extensions": "Extensions",

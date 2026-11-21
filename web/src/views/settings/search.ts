@@ -112,6 +112,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "models", group: t("settings-nav.tab_providers"), anchor: "settings-providers" },
   // a provider's key is "API Key" in every language, and people call it a key or a secret too
   { tab: "models", group: t("settings.add_provider"), hint: words("API Key", t("settings.search_key_words"), t("settings-providerimport.import")), anchor: "settings-providers" },
+  { tab: "models", group: t("settings-modeloverview.title"), hint: t("settings-modeloverview.search"), anchor: "settings-model-overview" },
   { tab: "models", group: t("settings-nav.tab_model_config"), anchor: "settings-model-config" },
   { tab: "models", group: path(t("settings-nav.tab_model_config"), t("settings-modelconfiguration.effort")), hint: words(t("settings-modelconfiguration.model_provider"), t("settings-modelconfiguration.model")), anchor: "settings-model-config" },
   { tab: "models", group: t("settings-modelprofiles.title"), anchor: "model-profiles" },

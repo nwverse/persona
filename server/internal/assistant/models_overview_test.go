@@ -130,3 +130,51 @@ func TestAgentPickerReportsDefaultHereBesideConfiguredDefault(t *testing.T) {
 		t.Fatalf("default and default here should distinguish configuration from the fit: %+v", got)
 	}
 }
+
+func TestRefreshLauncherInventoryIsScopedToRequestedMachine(t *testing.T) {
+	s, hub, _ := modelService(t)
+	hub.mu.Lock()
+	hub.devices = []Device{
+		{ID: "server", Online: true, Reachable: true},
+		{ID: "laptop", Online: true, Reachable: true},
+	}
+	hub.zshrc = map[string][]proto.Launcher{
+		"server": {{Name: "server-wrapper", Source: "path"}},
+		"laptop": {{Name: "laptop-wrapper", Source: "path"}},
+	}
+	hub.mu.Unlock()
+	if err := s.putSetting(t.Context(), launchersZshrcKey, map[string][]proto.Launcher{
+		"server": {{Name: "saved-server-wrapper", Source: "path"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var calls []DeviceCall
+	ctx := context.WithValue(t.Context(), deviceCallsForTest{}, &calls)
+	run := func(url string) *httptest.ResponseRecorder {
+		r := httptest.NewRecorder()
+		s.ServeHTTP(r, httptest.NewRequest(http.MethodGet, url, nil).WithContext(ctx))
+		return r
+	}
+	result := run("/api/v1/launchers?refresh=1&machine=laptop")
+	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), "laptop-wrapper") ||
+		!strings.Contains(result.Body.String(), "saved-server-wrapper") {
+		t.Fatalf("scoped launcher refresh lost inventory: %d %s", result.Code, result.Body.String())
+	}
+	nodeReads := 0
+	for _, call := range calls {
+		if call.Method == DeviceLaunchersList {
+			nodeReads++
+			if call.Device != "laptop" {
+				t.Fatalf("unexpected probe of %s", call.Device)
+			}
+		}
+	}
+	if nodeReads != 1 {
+		t.Fatalf("wanted one inventory probe, got %d", nodeReads)
+	}
+	result = run("/api/v1/launchers?refresh=1&machine=unrelated")
+	if result.Code != http.StatusNotFound {
+		t.Fatalf("unknown machine refresh: %d %s", result.Code, result.Body.String())
+	}
+}

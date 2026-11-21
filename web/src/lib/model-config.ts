@@ -3,6 +3,7 @@ import { MANAGER_HEADER } from "./manager-choice";
 import { api, enc } from "./api";
 import type { ProviderAPI, ProviderModel } from "./providers";
 import type { ModelCandidates } from "./model-candidates";
+import type { OverviewPurposeStatusCode } from "./model-overview";
 
 export interface ModelBinding {
   provider?: string;
@@ -61,6 +62,7 @@ export interface ModelPurpose {
   revision: number;
   inherited_from?: string;
   status?: string;
+  status_code?: OverviewPurposeStatusCode;
   fields?: string[];
   provider_ids?: string[];
   /** Candidate model settings are offered by an extension's own purpose. */

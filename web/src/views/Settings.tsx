@@ -2,11 +2,11 @@ import { managedProvider } from "../lib/compatibility";
 // Settings (docs/web/web.md): appearance, where the assistant runs, "Models" (every launcher: rc-file and PATH ones synced, the
 // built-in claude, Persona ones kept by the hub — docs/integrations/launchers.md), this browser and the other devices, about. The same data as the app's Settings.
 import { BASE, stripBase } from "../lib/base";
-import { href } from "../lib/router";
+import { href, navigate } from "../lib/router";
 import { takeOverlayEntry } from "../lib/back-close";
 import { useScrollMemory } from "../lib/scroll-memory";
-import { Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, enc, errorText } from "../lib/api";
+import { Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../lib/api";
 import { splitDevices } from "../lib/devices";
 import { ago } from "../lib/format";
 import { install, useInstall, type InstallState } from "../lib/pwa";
@@ -29,6 +29,8 @@ import { SavedPrompts } from "./settings/SavedPrompts";
 import { SourcesUI } from "./subscriptions/SourcesUI";
 import { useInboxSourcesShown } from "../lib/subscriptions";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
+import { ModelOverviewSection, useModelOverview } from "./settings/ModelOverview";
+import type { ModelOverview } from "../lib/model-overview";
 import { HiddenAgentDirs } from "./settings/HiddenAgentDirs";
 import { AgentSettings } from "./settings/AgentSettings";
 import { SidebarPagesGroup } from "./settings/SidebarPages";
@@ -47,7 +49,7 @@ import { ChannelList, ChannelPage } from "./settings/Channels";
 import { ConnectDevice } from "./settings/ConnectDevice";
 import { settingsTarget } from "../lib/channels";
 import { extensionsRoute, routeSub } from "../lib/extension-market";
-import { otherManager, ownedSub, parseOwnedSub, pinManagerAt, useChosenManager } from "../lib/manager-choice";
+import { otherManager, ownedSub, parseOwnedSub, pinManagerAt, sameManager, useChosenManager, useKnownDefault } from "../lib/manager-choice";
 import { HubSettings } from "./settings/HubSettings";
 import { ManagersSettings } from "./settings/ManagersSettings";
 import { LauncherQuota } from "./settings/LauncherQuota";
@@ -352,16 +354,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               {tab === "knowledge" && <KnowledgeSelection />}
               {tab === "prompts" && <SavedPrompts />}
               {tab === "sources" && <SourcesUI title={TAB_INFO.sources.label} onGraph={setSourcesGraph} />}
-              {tab === "models" && <>
-                <section id="settings-providers" className="scroll-mt-4">
-                  <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{TAB_INFO.models.label}</h2>
-                  <Models />
-                </section>
-                <section id="settings-model-config" className="scroll-mt-4">
-                  {/* no section: the row is on the page in view, which stays where it is (#4282) */}
-                  <ModelConfiguration open={sub} onOpen={(id) => pick("models", id)} onProviders={() => pick("models", null, "providers")} />
-                </section>
-              </>}
+              {tab === "models" && <ModelsSettingsPage open={sub} onOpen={(id) => pick("models", id)}
+                onProviders={() => pick("models", null, "providers")} onProfiles={() => pick("models", null, "model-profiles")} />}
               {tab === "agents" && <>
                 <Group title={t("settings.agent_preferences")} anchor="agents-display"><AgentsDisplayRow /></Group>
                 <AgentSections section={at.section} />
@@ -793,7 +787,58 @@ function dropLinkParams() {
   history.replaceState(history.state, "", `${location.pathname}?${q.toString()}`);
 }
 
-function Models() {
+type ModelReveal = { id: string; nonce: number };
+
+function ModelsSettingsPage(props: { open: string | null; onOpen: (id: string | null) => void; onProviders: () => void; onProfiles: () => void }) {
+  const selected = useChosenManager();
+  const known = useKnownDefault();
+  const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
+  const manager = selected ?? known;
+  // Preserve an import wizard opened from the URL while the initial default manager settles.
+  return <ModelsSettingsForOwner key={JSON.stringify([owner, selected])} manager={manager} {...props} />;
+}
+
+function ModelsSettingsForOwner({ manager, open, onOpen, onProviders, onProfiles }: {
+  manager: string;
+  open: string | null;
+  onOpen: (id: string | null) => void;
+  onProviders: () => void;
+  onProfiles: () => void;
+}) {
+  const overview = useModelOverview(manager);
+  const [provider, setProvider] = useState<ModelReveal | null>(null);
+  const [profile, setProfile] = useState<ModelReveal | null>(null);
+  const [providerRevision, setProviderRevision] = useState(0);
+  function onProvider(name?: string) {
+    onProviders();
+    if (name) setProvider((previous) => ({ id: name, nonce: (previous?.nonce ?? 0) + 1 }));
+  }
+  function onProfile(id: string) {
+    onProfiles();
+    setProfile((previous) => ({ id, nonce: (previous?.nonce ?? 0) + 1 }));
+  }
+  return <>
+    <ModelOverviewSection manager={manager} read={overview} onPurpose={onOpen} onProvider={onProvider}
+      onMachine={(id) => navigate({ name: "machine", mid: id })} onProfile={onProfile}
+      onInventoryChanged={() => setProviderRevision((revision) => revision + 1)} />
+    <section id="settings-providers" className="scroll-mt-4">
+      <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{TAB_INFO.models.label}</h2>
+      <Models manager={manager} overview={overview.data} reveal={provider} refreshRevision={providerRevision} onOverviewChanged={overview.reload} />
+    </section>
+    <section id="settings-model-config" className="scroll-mt-4">
+      <ModelConfiguration open={open} onOpen={onOpen} onProviders={onProviders} overview={overview.data}
+        revealProfile={profile} onOverviewChanged={overview.reload} />
+    </section>
+  </>;
+}
+
+function Models({ manager, overview, reveal, refreshRevision, onOverviewChanged }: {
+  manager: string;
+  overview: ModelOverview | null;
+  reveal: ModelReveal | null;
+  refreshRevision: number;
+  onOverviewChanged: () => void;
+}) {
   const machines = useStore((s) => s.machines);
   const [list, setList] = useState<LauncherView[] | null>(null);
   const [sync, setSync] = useState<LauncherSync[]>([]);
@@ -804,7 +849,7 @@ function Models() {
   // (StrictMode runs this twice), then forgotten there once mounted; closing the wizard forgets it here too.
   const [link, setLink] = useState(importLinkHeld);
   // `?add=1` opens the wizard, `?launcher=<name>` one provider: where "Connect a model" / "Change the key" lead (lib/readiness.ts)
-  const [open, setOpen] = useState<string | null>(() => (link ? null : new URLSearchParams(location.search).get("launcher")));
+  const [open, setOpen] = useState<string | null>(() => (link ? null : reveal?.id ?? new URLSearchParams(location.search).get("launcher")));
   const [editing, setEditing] = useState<LauncherView | "new" | null>(() => (link || new URLSearchParams(location.search).get("add") === "1" ? "new" : null));
   // the provider whose import link is being copied (#5420)
   const [copying, setCopying] = useState<LauncherView | null>(null);
@@ -819,6 +864,9 @@ function Models() {
   const wizardOpened = useOpened(editing !== null);
   const busyNow = useRef(busy);
   busyNow.current = busy;
+  useEffect(() => {
+    if (reveal && !busyNow.current) setOpen(reveal.id);
+  }, [reveal]);
   const takeLink = (l: string) => {
     dropImportLink();
     setOpen(null);
@@ -845,7 +893,11 @@ function Models() {
       .catch((e) => setError(errorText(e)))
       .finally(() => setLoading(false));
   };
-  useEffect(() => void load(), []);
+  useEffect(() => void load(), [refreshRevision]);
+  const changed = () => {
+    void load();
+    onOverviewChanged();
+  };
   const found = useMemo(() => foundAliases(list ?? [], machines), [list, machines]);
   const closeWizard = () => (setEditing(null), setEditDraft(null), setLink(null), dropLinkParams());
   // The wizard swaps to a stored provider the paste matched; one added since this list loaded is in a fresh one.
@@ -881,7 +933,16 @@ function Models() {
   const staleMark = (ids?: string[]) =>
     ids?.length ? <Pill tone="orange">{t("settings.stale", { machines: formatList(ids.map(name), { type: "conjunction", style: "narrow" }) })}</Pill> : null;
 
-  const row = (l: LauncherView) => (
+  const row = (l: LauncherView) => {
+    const availability = overview?.providers[`launcher.${l.name}`];
+    const used = availability?.used_by ?? [];
+    const missing = availability?.missing_on ?? [];
+    const failing = availability?.failing_on ?? [];
+    const names = (ids: string[]) => formatList(ids.flatMap((id) => {
+      const machine = machines.find((m) => m.id === id && sameManager(m.manager, manager));
+      return machine ? [machine.name] : overview?.machines.find((m) => m.id === id)?.name ?? [];
+    }), { type: "conjunction", style: "narrow" });
+    return (
     <button key={l.name} type="button" onClick={() => setOpen(l.name)} className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-hover">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
@@ -897,11 +958,23 @@ function Models() {
           {l.model && <span className="truncate font-mono text-ink-2">{l.model}</span>}
           {host(l.base_url) && <span className="truncate">{host(l.base_url)}</span>}
         </div>
+        {availability && (used.length > 0 || missing.length > 0 || failing.length > 0) && <div className="mt-1 flex flex-wrap gap-1.5">
+          {used.includes("agent.new") && <Pill wrap>{t("settings-modeloverview.provider_default_agents")}</Pill>}
+          {used.includes("assistant") && <Pill wrap>{t("settings-modeloverview.provider_default_chat")}</Pill>}
+          {availability.hidden && used.length > 0 && <Pill tone="orange" wrap>{t("settings-modeloverview.provider_hidden_in_use")}</Pill>}
+          {missing.length > 0 && <Pill tone="orange" wrap>{names(missing)
+            ? t("settings-modeloverview.provider_missing", { computers: names(missing) })
+            : t("settings-modeloverview.provider_missing_unknown")}</Pill>}
+          {failing.length > 0 && <Pill tone="red" wrap>{names(failing)
+            ? t("settings-modeloverview.provider_failing", { computers: names(failing) })
+            : t("settings-modeloverview.provider_failing_unknown")}</Pill>}
+        </div>}
       </div>
       {l.machines && l.machines.length > 0 && <span className="hidden max-w-[200px] shrink-0 truncate text-[11.5px] text-ink-3 sm:block">{formatList(l.machines.map(name), { type: "conjunction", style: "narrow" })}</span>}
       <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
     </button>
-  );
+    );
+  };
 
   return (
     <>
@@ -986,7 +1059,7 @@ function Models() {
       <LauncherDetailDialog
         name={open}
         onClose={() => (setOpen(null), dropLinkParams())}
-        onChanged={() => void load()}
+        onChanged={changed}
         onEdit={(l) => {
           setOpen(null);
           setEditing(l);
@@ -996,9 +1069,9 @@ function Models() {
           setCopying(l);
         }}
       />
-      {wizardOpened && <ProviderWizard open={editing !== null} existing={editing} draft={editDraft} link={link} found={found} onClose={closeWizard} onSaved={() => void load()}
+      {wizardOpened && <ProviderWizard open={editing !== null} existing={editing} draft={editDraft} link={link} found={found} onClose={closeWizard} onSaved={changed}
         onImportAlias={(a) => (closeWizard(), setImportAlias(a), setImporting(true))} onEditWith={(name, draft) => void editWith(name, draft)} />}
-      <ProviderImport open={importing} machine={importAlias?.machine} alias={importAlias?.name} onClose={() => setImporting(false)} onImported={() => void load()} />
+      <ProviderImport open={importing} machine={importAlias?.machine} alias={importAlias?.name} onClose={() => setImporting(false)} onImported={changed} />
       <ProviderLinkCopy provider={copying} onClose={() => (setCopying(null), dropLinkParams())} />
       </div>
     </>

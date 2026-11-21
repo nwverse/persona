@@ -10,7 +10,7 @@ import type { ModelBinding } from "../lib/model-config";
 import type { PanelConfig } from "../lib/model-panel";
 import { formChoice, newAgentPanel, newAgentPill, type ModelChoice } from "../lib/new-agent-panel";
 import { launcherBlock } from "../lib/launcher-health";
-import { forgetModel, modelList, readModels, subscribeModelLists, useModelLists, type ModelList } from "../lib/session-models";
+import { forgetModel, modelList, readModels, subscribeModelLists, useModelLists, type ModelList, type PillSetup } from "../lib/session-models";
 import type { Launcher } from "../lib/types";
 import { toast } from "../ui/atoms";
 import { lazyOverlay } from "./LazyOverlay";
@@ -51,6 +51,8 @@ export interface NewAgentModelProps {
   unavailable?: UnavailableLauncher[];
   /** The "Follow Model settings" row; absent without model settings to follow (an older hub). */
   follow?: { active: boolean; detail?: string; warning?: string; label: string };
+  /** An effective default reported for this machine. Only the pill's display uses it. */
+  defaultPreview?: PillSetup;
   /** What the pill says while no launcher is known to run (the model settings run something else, or none is read). */
   fallback: string;
   /** Claude Code's ultracode switch for this start (#3428): in the chosen model's flyout. */
@@ -67,7 +69,7 @@ export interface NewAgentModelProps {
 }
 
 export function NewAgentModel(props: NewAgentModelProps) {
-  const { mid, host, startHost, launchers, ready, onRetry, choice, runs, configured, fallback, ultracodeOn } = props;
+  const { mid, host, startHost, launchers, ready, onRetry, choice, runs, configured, fallback, ultracodeOn, defaultPreview } = props;
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const close = useCallback(() => setAnchor(null), []);
   // a different computer closes it (its providers are another computer's)
@@ -79,13 +81,14 @@ export function NewAgentModel(props: NewAgentModelProps) {
   // the pill follows the one list it names; the panel, mounted only while open, follows every launcher's
   const catalogHost = startCatalogHost(launchers.find((l) => l.name === runs), host, startHost);
   const pill = newAgentPill({ launchers, runs, list: useModelList(mid, runs, catalogHost), choice, configured, fallback, startHost });
+  const shown = defaultPreview ?? pill;
   // no launchers read: no model to name, only that it failed ("Model loading failed" after the warning)
   return (
     <>
       <ModelPill
-        current={onRetry ? { ...pill, model: undefined } : pill}
-        loading={!onRetry && (pill.loading || !ready)}
-        failed={Boolean(onRetry) || pill.failed}
+        current={onRetry ? { ...shown, model: undefined } : shown}
+        loading={!onRetry && (!ready || (!defaultPreview && pill.loading))}
+        failed={Boolean(onRetry) || (!defaultPreview && pill.failed)}
         open={Boolean(anchor)}
         disabled={!ready && !onRetry}
         onOpen={onRetry ? () => onRetry() : (el) => setAnchor((a) => (a ? null : el))}

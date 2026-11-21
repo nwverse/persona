@@ -5,6 +5,7 @@
 // field with one that started an agent before, and never starts.
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { hubLabel } from "../lib/mesh";
+import { agentId, providerAgent } from "../lib/agent-kind";
 import { api, ApiError, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../lib/api";
 import { defaultManager, useKnownDefault } from "../lib/manager-choice";
 import { pickAttachment, releaseAttachments, type LocalAttachment } from "../lib/attachments";
@@ -23,6 +24,7 @@ import { startChoices, startGroups } from "../lib/workspace-start";
 import { WorkspaceChoices } from "./NewAgentWorkspaces";
 import { AttachmentTray } from "../ui/AttachmentTray";
 import { modelPurpose, modelSummary, type ModelBinding } from "../lib/model-config";
+import type { OverviewAgentFit } from "../lib/model-overview";
 import {
   effortChoices, effortRule, fitEffort, followedBinding, inlineTextStart, launcherAgent, listedModes, machineLaunchers, nativeOmpStart, pickerLauncher, startCatalogHost, startPicks, takesEffort, tierLeftOut, type LauncherDefault, type PickerTier,
   type UnavailableLauncher,
@@ -676,6 +678,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     return () => controller.abort();
   }, [open, mid, listing, nearPath, nearPrefix, workspace, manager, credential]);
   useEffect(() => { if (!desktopStart) setNaming(false); }, [desktopStart]);
+  const settled = launchersOf === mid && !loadingModels;
   const defaultRuns = unified && launchersOf === mid ? pickerLauncher("", followedBinding("", configured)) : "";
   const defaultEntry = launchers.find((l) => l.name === defaultRuns);
   const defaultBlock = defaultRuns ? launcherBlock(defaultEntry) : null;
@@ -691,18 +694,33 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // what of the picked preset this launcher can't take, said once its list is in
   const startModelOptions = { agent, list: models.list, followed, launcher: listEntry, nativeOmp };
   const tierMissed = tier && listLauncher === tier.launcher && (models.list !== undefined || (agent === "omp" && models.error)) ? tierLeftOut(tier, startModelOptions) : [];
-  // the follow row's second line: what Model settings › New agent runs (the hub's default, by display names)
-  const defaultList = useModelList(open ? mid : "", defaultRuns, startCatalogHost(defaultEntry, opensIn, startHost)).list;
-  const followDetail = hubDefault
+  // The launcher's list predicts only the machine's default host. The form still follows the hub at Start.
+  const here = mid && settled && !launchersFailed && startHost === hostDefault && !projectDocument ? hubDefault?.here : undefined;
+  const resolvedHere = here?.launcher && (here.fit === "as_set" || here.fit === "fallback" || here.fit === "failing") ? here : undefined;
+  const describedLauncher = resolvedHere?.launcher ?? defaultRuns;
+  const describedEntry = launchers.find((l) => l.name === describedLauncher);
+  const defaultList = useModelList(open ? mid : "", describedLauncher, startCatalogHost(describedEntry, opensIn, startHost)).list;
+  const defaultPreview = resolvedHere && {
+    engine: agentId(providerAgent(resolvedHere.agent || launcherAgent(resolvedHere.launcher, launchers, defaultList), resolvedHere.launcher)),
+    provider: launcherTitle(resolvedHere.launcher, names),
+    model: resolvedHere.model ? modelTitle(defaultList, resolvedHere.model) : t("chat-modelpill.default_model"),
+    effort: resolvedHere.effort || undefined,
+  };
+  const hereDetail = defaultPreview
+    ? [defaultPreview.provider, defaultPreview.model, defaultPreview.effort && effortTitle(defaultPreview.effort)].filter(Boolean).join(" · ")
+    : "";
+  const followDetail = hereDetail || (hubDefault
     ? [hubDefault.provider && launcherTitle(hubDefault.provider, names), hubDefault.model && modelTitle(defaultList, hubDefault.model), hubDefault.effort && effortTitle(hubDefault.effort), hubDefault.permission_mode && modeTitle(hubDefault.permission_mode)].filter(Boolean).join(" · ")
-    : modelDefault;
+    : modelDefault);
+  const hereWarning = defaultHereWarning(here, here?.launcher === defaultRuns ? defaultBlock?.reason : undefined);
+  const followingHere = here && !launcher && !model && !effort;
+  const caution = Boolean(here && here.fit !== "as_set" && here.fit !== "unchecked");
   const ultracodeBlocked = ultracodeShown ? startBlocked(picked?.claude_version) : "";
 
   // The recent setups' cards (#2134): not when another page opened the sheet on a folder of its own (a space's or a
   // knowledge entry's New agent), which a card would replace.
   const cards = useMemo(() => recentCards(recents, machines), [recents, machines]);
   const presetFolder = Boolean(preset?.machineId && preset.cwd);
-  const settled = launchersOf === mid && !loadingModels;
   const pickedCard = pickedSetup ? cards.find((c) => setupKey(c.setup) === pickedSetup) : undefined;
   const pickedShown = pickedCard && (!settled || formHolds(pickedCard.setup, { machine: mid, cwd, launcher, model, mode, effort })) ? pickedSetup : "";
   // A tap fills every field and puts the focus in the first message; Start stays the user's.
@@ -1141,7 +1159,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
                     configured={unified ? configured : null}
                     tiers={tiers}
                     unavailable={skipped}
-                    follow={unified ? { label: t("newagent.follow_row"), active: launcher === "", detail: followDetail, warning: defaultBlock?.reason } : undefined}
+                    follow={unified ? { label: t("newagent.follow_row"), active: launcher === "", detail: followDetail, warning: here ? hereWarning : defaultBlock?.reason } : undefined}
+                    defaultPreview={followingHere ? defaultPreview : undefined}
                     fallback={modelDefault || t("chat-modelpill.default_model")}
                     ultracode={ultracodeShown ? <div data-testid="new-agent-ultracode"><UltracodeStartRow on={ultracode} onChange={setUltracode} blocked={ultracodeBlocked} /></div> : undefined}
                     ultracodeOn={ultracodeShown && !ultracodeBlocked && ultracode}
@@ -1166,6 +1185,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
               </div>
             </div>
             <ModelNotes>
+              {followingHere && (hereDetail || hereWarning) && (
+                <Note data-testid="new-agent-default-here" icon={caution ? "warning" : "info"} tone={caution ? "orange" : undefined}>
+                  {hereDetail && <Pill wrap tone={caution ? "orange" : undefined}>{t("newagent.default_here", { setup: hereDetail })}</Pill>}
+                  {hereDetail && hereWarning ? " " : null}{hereWarning}
+                </Note>
+              )}
               {dropped && (
                 <Note data-testid="new-agent-dropped" icon="info">{t("newagent.carry_dropped", { name: dropped.name, computer: dropped.computer })}</Note>
               )}
@@ -1232,6 +1257,21 @@ function ModelNotes({ children }: { children: React.ReactNode }) {
   const lines = (Array.isArray(children) ? children : [children]).filter(Boolean);
   if (!lines.length) return null;
   return <div aria-live="polite" className="mt-1.5 flex flex-col gap-1">{lines}</div>;
+}
+
+function defaultHereWarning(here: OverviewAgentFit | undefined, defaultBlock?: string): string {
+  if (!here || here.fit === "as_set") return "";
+  if (here.fit === "failing") {
+    return [here.note, defaultBlock || t("newagent.default_here_failing")].filter(Boolean).join(" ");
+  }
+  if (here.note) return here.note;
+  switch (here.fit) {
+    case "fallback": return t("newagent.default_here_fallback");
+    case "refused":
+    case "blocked": return t("newagent.default_here_blocked");
+    case "unchecked": return t("newagent.default_here_unchecked");
+    default: return "";
+  }
 }
 
 function Note({ icon, tone, children, ...rest }: { icon: "info" | "warning" | "layers"; tone?: "orange"; children: React.ReactNode; "data-testid"?: string }) {

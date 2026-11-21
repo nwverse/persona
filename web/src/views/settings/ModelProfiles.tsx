@@ -58,11 +58,13 @@ export function ModelProfiles({
   manager,
   providers,
   purposes,
+  reveal,
   onChanged,
 }: {
   manager?: string;
   providers?: ModelProvider[];
   purposes?: ModelPurpose[];
+  reveal?: { id: string; nonce: number } | null;
   onChanged: () => void;
 }) {
   const context = useSyncExternalStore(subscribeProfileContext, profileContext, profileContext);
@@ -76,6 +78,7 @@ export function ModelProfiles({
       context={context}
       providers={providers}
       purposes={purposes}
+      reveal={reveal}
       onChanged={onChanged}
     />
   );
@@ -87,6 +90,7 @@ function ModelProfilesForOwner({
   context,
   providers,
   purposes,
+  reveal,
   onChanged,
 }: {
   manager: string;
@@ -94,6 +98,7 @@ function ModelProfilesForOwner({
   context: string;
   providers?: ModelProvider[];
   purposes?: ModelPurpose[];
+  reveal?: { id: string; nonce: number } | null;
   onChanged: () => void;
 }) {
   const [data, setData] = useState<Profiles | null>(null);
@@ -101,6 +106,7 @@ function ModelProfilesForOwner({
   const [actionError, setActionError] = useState("");
   const [conflict, setConflict] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const handledReveal = useRef<typeof reveal>(null);
   const [editing, setEditing] = useState(false);
   const [editRevision, setEditRevision] = useState(0);
   const busy = useSyncExternalStore(subscribeWrites, () => pendingWrites.has(manager), () => false);
@@ -219,6 +225,16 @@ function ModelProfilesForOwner({
   };
 
   const clearErrors = () => { interaction.current++; setReadError(""); setActionError(""); setConflict(false); };
+  useEffect(() => {
+    if (!reveal || handledReveal.current === reveal || !data?.profiles.some((p) => p.id === reveal.id)) return;
+    handledReveal.current = reveal;
+    interaction.current++;
+    setReadError("");
+    setActionError("");
+    setConflict(false);
+    setEditing(false);
+    setSelected(reveal.id);
+  }, [reveal, data]);
   const closeDialog = () => {
     if (busy) return;
     setEditing(false);

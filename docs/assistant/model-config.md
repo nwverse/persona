@@ -231,6 +231,16 @@ reports issues with stable codes and links back to the existing editors and acti
 without resolving secret-provider references. The launcher refresh and provider test actions stay available through
 their existing routes.
 
+In Web Settings › Models, the overview shows the configured default, per-computer outcomes and expandable computer
+details. Running Agent groups come from session rows the web app already has, so a bounded list describes the loaded
+rows. An older manager that returns 404 leaves the existing settings and provider editors available. The New Agent
+form displays `default.here` for a machine's ordinary default selection while its launch request continues to follow
+the saved configuration. The profile, purpose and provider actions open the existing editors.
+
+Refreshing one computer uses `GET /api/v1/launchers?refresh=1&machine=<id>`. The manager refreshes the listed
+computer's launcher inventory and keeps the saved inventory for the other computers. Without a machine parameter,
+an explicit refresh covers all of this manager's computers.
+
 ## Editing and inheritance
 
 Each category shows both “In Effect” and “Model Settings”:
