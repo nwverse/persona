@@ -151,6 +151,27 @@ func TestBoundToAnAgent(t *testing.T) {
 	}
 }
 
+func TestBoundToTraeCLI(t *testing.T) {
+	for _, test := range []struct{ label, want string }{
+		{label: "TRAEX", want: "TRAE CLI"},
+		{label: "Workspace agent", want: "Workspace agent"},
+	} {
+		t.Run(test.label, func(t *testing.T) {
+			hub := agentHub(t)
+			hub.sessions["a1"].look = func(s *proto.Session) {
+				s.Agent, s.AgentLabel = "traex", test.label
+			}
+			up := boundUpstream(t, false)
+			pl := testPlugin(t, liveProvider(up), hub.server(t))
+			a := dialApp(t, pl, boundStart("a1", nil))
+			target := a.until(ofType("ready"))["target"].(map[string]any)
+			if target["agent_label"] != test.want {
+				t.Errorf("ready target label = %q, want %q", target["agent_label"], test.want)
+			}
+		})
+	}
+}
+
 // The target is checked before ready: gone, read-only, or bound by another extension are fatal with their code; an
 // offline machine is not.
 func TestBindingRefusals(t *testing.T) {

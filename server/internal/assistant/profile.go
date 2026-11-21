@@ -126,6 +126,9 @@ type Settings struct {
 	// AgentTasks: every agent Persona starts is on a quiet, supervised todo (#3617, agent_tasks.go). nil is off (the
 	// default).
 	AgentTasks *bool `json:"agent_tasks,omitempty"`
+	// TaskLessons: a supervised task accepted after friction teaches its project's next Agents what it learned
+	// (#12295, task_lessons.go). nil is off (the default): no model call, no lesson written, no prompt changed.
+	TaskLessons *bool `json:"task_lessons,omitempty"`
 	// CloseEndedTerminals: when an Agent's session ends (its task is done or cancelled, it quit by itself or was told
 	// to), its terminal tab is closed too, through the "Archive and close" path (#10355, agent_terminal_close.go).
 	// nil is off (the default): the terminal stays, as since #4754.
@@ -344,7 +347,7 @@ func (s *Service) claudeInteractive(ctx context.Context) bool {
 	return v != nil && *v
 }
 
-var defaultOwnerApprovalPhrases = []string{"发", "同意"}
+var defaultOwnerApprovalPhrases = []string{"发", "同意"} // i18n-ignore: exact affirmative owner input, not displayed text
 
 func ownerReplyApprovalOn(v Settings) bool {
 	return v.OwnerReplyApproval != nil && *v.OwnerReplyApproval
@@ -554,6 +557,16 @@ func (s *Service) launcherNow(ctx context.Context) string {
 	return s.settings(ctx).Launcher
 }
 
+// mainLauncherNow resolves the main-only binding without changing new-chat defaults.
+// An unreadable main override must not become permission to probe another launcher.
+func (s *Service) mainLauncherNow(ctx context.Context) string {
+	binding, err := s.resolveModel(ctx, purposeMain)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimPrefix(binding.Provider, "launcher.")
+}
+
 // profile is what the hub's features need of the settings (Snapshot.Profile); tasks are the scheduled tasks and todos
 // the open todos' agents as reported (either nil: unreadable, and Keep is left out, so the nodes keep what they list;
 // Keep is left out too when what places the directions' sessions cannot be read, directionKeep). nil when the
@@ -723,6 +736,8 @@ type assistantView struct {
 	OwnerApprovalPhrases       []string `json:"owner_reply_approval_phrases"`
 	// AgentTasks is in effect, like DoneNeedsDelivery.
 	AgentTasks bool `json:"agent_tasks"`
+	// TaskLessons is in effect, like DoneNeedsDelivery.
+	TaskLessons bool `json:"task_lessons"`
 	// CloseEndedTerminals is in effect, like DoneNeedsDelivery.
 	CloseEndedTerminals          bool `json:"close_ended_terminals"`
 	AgentAutoNaming              bool `json:"agent_auto_naming"`
@@ -774,6 +789,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		PersistentOwnerActionCards:   persistentOwnerActionCardsOn(v),
 		OwnerApprovalPhrases:         ownerApprovalPhrasesForView(v),
 		AgentTasks:                   v.AgentTasks != nil && *v.AgentTasks,
+		TaskLessons:                  v.TaskLessons != nil && *v.TaskLessons,
 		CloseEndedTerminals:          v.CloseEndedTerminals != nil && *v.CloseEndedTerminals,
 		AgentAutoNaming:              quietOn(v.AgentAutoNaming),
 		AgentAutoNamingMax:           agentNamingLimit(v),
@@ -911,7 +927,7 @@ func (s *Service) warm(launcher string) {
 		return // no real session exists for a prewarm's external scope
 	}
 	if launcher == "" && !picked {
-		launcher = s.launcherNow(ctx)
+		launcher = s.mainLauncherNow(ctx)
 	}
 	if _, ok := s.device(ctx, machine); !ok {
 		return
@@ -924,7 +940,7 @@ func (s *Service) warm(launcher string) {
 	if picked {
 		err = s.applyPick(ctx, params, pick)
 	} else {
-		err = s.applyModel(ctx, "assistant", params)
+		err = s.applyModel(ctx, purposeMain, params)
 	}
 	if err != nil {
 		s.logf("warm model: %v", err)

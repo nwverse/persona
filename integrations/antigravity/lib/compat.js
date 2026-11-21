@@ -13,14 +13,21 @@ export function daemonBinary(home, options) {
   return daemonCandidates(home, options).find((p) => p && existsSync(p)) || (options.stateHome ? join(options.stateHome, 'bin', 'personad') : join(defaultStateRoot(home), 'bin', 'personad'))
 }
 const MCP_PROXY = fileURLToPath(new URL('../mcp-proxy.mjs', import.meta.url))
-export function mcpServers(bin, pid, assistant) {
+export function mcpServers(bin, pid, assistant, a2aToken) {
   const env = []
   for (const [name, value] of [['PERSONA_SESSION_ID', pid], ...(assistant ? [['PERSONA_ASSISTANT', '1']] : [])]) {
     env.push({ name, value }, { name: legacyEnvName(name), value })
   }
-  // One server, not one per MCP_SERVER_NAMES: agy counts every declaration against its tool budget. An assistant
-  // chat's tools go through mcp-proxy.mjs, so the ones agy defers stay reachable (#7333).
-  if (!assistant) return [{ name: 'persona', command: bin, args: ['mcp'], env }]
+  // Keep the regular catalog on its existing server. A scoped ticket grants only A2A tools.
+  // Assistant tools go through the proxy so deferred tools remain reachable (#7333).
+  if (!assistant) {
+    const server = { name: 'persona', command: bin, args: ['mcp'], env }
+    if (!a2aToken) return [server]
+    return [
+      { ...server, env: [...env, { name: 'PERSONA_MCP_EXCLUDE_A2A', value: '1' }] },
+      { ...server, name: 'persona_a2a', env: [...env, { name: 'PERSONA_A2A_TOKEN', value: a2aToken }] },
+    ]
+  }
   return [{ name: 'persona', command: process.execPath, args: [MCP_PROXY, bin, 'mcp'], env }]
 }
 export function assistantSearchPaths(home) {
