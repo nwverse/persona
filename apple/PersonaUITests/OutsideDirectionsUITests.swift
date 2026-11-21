@@ -73,6 +73,8 @@ final class OutsideDirectionsUITests: XCTestCase {
     }
 
     @MainActor private func shot(_ name: String) {
+        // The scheme-driven icon change is SpringBoard's; never capture its alert over the direction content.
+        HomeScreen.dismissIconNote()
         let screen = app.screenshot()
         let attachment = XCTAttachment(screenshot: screen)
         attachment.name = name
