@@ -75,9 +75,12 @@ Version values. It captures complete three-row groups: handwritten Version/Build
 native Build/Commit. The pairs must be nonempty and byte-identical, and present/unknown Commit groups must differ;
 the main matrix also checks the injected font scale and a measured text-width difference. A separate synthetic 3x
 text-density probe directly measures native and generated Version-row heights beyond the fixed minimum and requires
-Compact's actual vertical padding to be 10dp smaller than Standard's. This is not a claim about supported font sizes;
-the ordinary 1x/2x matrix does not require the fixed-minimum About row to shrink. A separate gap outside the captured
-group measures the real `Tokens.Space.Standard.l.dense`. The test compares the rows' actual Compose semantics, checks
+Compact's actual vertical padding to be 10dp smaller than Standard's. It checks the actual 3x scale, both above-minimum
+preconditions and native/generated height equality, and repeats at 420dpi. Compose's per-edge integer `roundToPx`
+model determines the exact expected pixel reduction, so fractional dp-to-pixel conversion is not mistaken for a UI
+regression. This is not a claim about supported font sizes; the ordinary 1x/2x matrix does not require the
+fixed-minimum About row to shrink. A separate gap outside the captured group measures the real
+`Tokens.Space.Standard.l.dense`. The test compares the rows' actual Compose semantics, checks
 single-line long-value layout, the native Commit's copy action label, full-value clipboard result and unknown no-op,
 and measures 48dp minimum touch bounds. It also exercises the missing-version fallback,
 the unchanged three-row rollback and the existing native Commit tests. Captures go to build output or
