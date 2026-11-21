@@ -120,7 +120,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `api` (version 1) | `api.` | `id`, `prefix` (one path segment), `features?`, `events?`, `receipts?` (`[{method, path, kind}]`: writes that need send receipts) | `runtime.http`, `on_startup`; with `events`, the process must speak the protocol | A block of App-facing API `/api/v1/<prefix>/…`, see "App API" below |
 | `assistant` (version 1) | `assistant.` | `id`, `skills?` (directories in the package, each with `SKILL.md`), `instructions?` (an `.md` in the package), `gate?` (a `.json` in the package: the gate for one command in a skill) | These files exist in the package; `gate` requires `skills`, and when credentials are needed the process speaks the protocol | The assistant's skills, instructions and command gates, see "Assistant" below |
 | `mcp_servers` (version 1) | `mcp.` | `id` (`a-z0-9_-`, cannot be `persona` or the legacy server name), `command`, `env?`, `args?`, `requires?`, `allow?`, `deny?` | Declarative is enough; the command is installed on the computer that runs the assistant | One more MCP server for the Claude assistant (tool names `mcp__<id>__*`), see "MCP servers" below |
-| `ui` (version 10) | `ui.` | `id`, `title`, `placement` (slot, see "UI slots": `extension_page` (old name `plugin_page`) / `launcher_section` / `nav_page` / `overview_card` / `capsule_card` / `machine_section` / `inbox_item` / `widget`), `hosts?` (only for `launcher_section`: gateway host names, may start with `*.`; omitted means any launcher, the extension decides), `icon?` and `icon_color?` (only `nav_page`), `opens?` (only `overview_card`, `capsule_card` and `widget`), `connector?` (only `inbox_item`, and required: the id of a connector contributed by the same extension), `group?` (only `nav_page`: `{"id", "title"}`, the sidebar group the page goes in, see "UI slots"), `families` / `refresh_minutes?` (only `widget`; `families` is required, see "System-level placements") | Process speaks the protocol; `launcher_section` needs permission `launcher_keys` | A page in the extension's details, a section on the launcher page, main navigation, overview, machine details, the details of an Inbox item, widgets and watch faces outside the App; see "Declarative UI", "UI slots", "System-level placements" below |
+| `ui` (version 11) | `ui.` | `id`, `title`, `placement` (slot, see "UI slots": `extension_page` (old name `plugin_page`) / `launcher_section` / `nav_page` / `overview_card` / `capsule_card` / `machine_section` / `inbox_item` / `widget`), `hosts?` (only for `launcher_section`: gateway host names, may start with `*.`; omitted means any launcher, the extension decides), `icon?` and `icon_color?` (only `nav_page`), `opens?` (only `overview_card`, `capsule_card` and `widget`), `connector?` (only `inbox_item`, and required: the id of a connector contributed by the same extension), `group?` (only `nav_page`: `{"id", "title"}`, the sidebar group the page goes in, see "UI slots"), `families` / `refresh_minutes?` (only `widget`; `families` is required, see "System-level placements") | Process speaks the protocol; `launcher_section` needs permission `launcher_keys` | A page in the extension's details, a section on the launcher page, main navigation, overview, machine details, the details of an Inbox item, widgets and watch faces outside the App; see "Declarative UI", "UI slots", "System-level placements" below |
 | `agent_sources` (version 1) | `agentsrc.` | `id` (`a-z0-9_-`, also the source segment of session ids `<id>:<sessionKey>`), `name`, `providers?` (`a-z0-9_`, e.g. `grok_bot`) | Process speaks the protocol, `on_startup` | Personal Agents on the Agents page (the hub has no sources of its own; all come from extensions), see "Personal Agent sources" below |
 | `channel` (version 1) | `channel.` | `id` (`^[a-z][a-z0-9_]{0,31}$`, cannot be 8 hex digits), `name`, `kind` (`im`), `connector?` (binding and status come from this connector of the same extension), `bind?` (`qr` / `code` / `fields`), `description?`, `capabilities` (receive images / files / voice, `format`, `max_text`, `asks`, `push`, `typing`, `progress`, `threads`) | Process speaks the protocol; `on_startup` when there is no `connector` | A channel for talking to Persona: the hub runs the shared pipeline (into the chat, tracking the turn, sending the answer back, questions), and the extension only talks to the IM; see [channels.md](channels.md) |
 | `events` (version 1) | `event.` | `id`, `subscribe` (a list of event names, see "Events") | Process speaks the protocol, `on_startup` | Only tells the extension what happened on the hub, see "Events" below |
@@ -2308,7 +2308,7 @@ When the app draws a slot, it states in `context` whom it is drawing for and whe
 | --- | --- | --- |
 | `placement` | — | This contribution's slot |
 | `size` | Optional: `compact` / `full` | If not sent, the size from the slot table; `compact` is a card and must be compact (see the limits under "New items") |
-| `ui_version` | The UI version the app can draw: the hub knows `10`; the web sends `10` (its native stream `7`), Android and iOS send `10`; **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
+| `ui_version` | The UI version the app can draw: the hub knows `11`; the web sends `10` (its native stream `7`), Android and iOS send `10`; **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
 | `tz` | The user's time zone (IANA name, `Asia/Shanghai`) | Passed on only if it loads; if not sent or invalid, the user time zone the hub knows (reported by the app, or from assistant settings), empty if neither. "Today" is computed in it |
 | `locale` | The app's language (`zh-Hans-CN`) | Passed on only if it looks like a language tag, otherwise empty |
 | `platform` | `ios` / `mac` / `android` / `web` | Other values are dropped |
@@ -2451,7 +2451,7 @@ If you do not want to see an extension's entries and cards: disable the extensio
 
 ### Compatibility
 
-**UI versions**: 1 is the original eight item types and two slots; 2 adds three slots, `chart` / `stat_grid` / `segmented`, `refresh_after` and context; for 3 see "UI version 3" above; for 4 see "UI version 4: code hosting"; for 5 see "UI version 5: code review"; for 6 see "UI version 6"; 7 is a section's `key` for the native stream (see `schema/extension/README.md`), which needs no downgrade; for 8 see "UI version 8"; for 9 see "UI version 9"; for 10 see "UI version 10". The version of the `ui` extension point changes with it (`hub.extension_points.ui` in `initialize`, currently 10).
+**UI versions**: 1 is the original eight item types and two slots; 2 adds three slots, `chart` / `stat_grid` / `segmented`, `refresh_after` and context; for 3 see "UI version 3" above; for 4 see "UI version 4: code hosting"; for 5 see "UI version 5: code review"; for 6 see "UI version 6"; 7 is a section's `key` for the native stream (see `schema/extension/README.md`), which needs no downgrade; for 8 see "UI version 8"; for 9 see "UI version 9"; for 10 see "UI version 10"; for 11 see "UI version 11". The version of the `ui` extension point changes with it (`hub.extension_points.ui` in `initialize`, currently 11).
 
 `progress.style` is an unversioned drawing hint: an app that does not recognize it keeps drawing a bar, so it needs no UI version bump or downgrade. Native stream does not accept this field.
 
@@ -3097,6 +3097,58 @@ graph key, keeps both across recreation; an untouched canvas takes its opening v
 including badge, subtitle, progress and parent; the graph never enters the native stream's component set, whose clients still
 receive the hub's rows. `ExtensionGraphLayoutTest` replays every shared case, while the Compose tests cover actions, folding,
 restoration, full-screen continuity and compact-preview boundaries.
+
+## UI version 11 (#12544)
+
+A small 3D model the person turns, zooms and taps: a home with its rooms and furniture, each device pinned where it is with
+its state, and a light in the model for each lamp that is on. The app sends `11` in `context.ui_version`;
+`hub.extension_points.ui` is `11`; there is no new `features` entry (an older hub holds the app's version to its own, and the
+extension sees that). One new component, `scene`, authoritative in `schema/extension/view.schema.json` (`SceneComponent` and
+its `Scene*` definitions, `x-since: 11`); the example is `schema/extension/examples/View.v11-scene-flat.json`. **An app sends
+11 only when it draws all of the below** (and all of 10). No app sends 11 yet: the iPhone and iPad are first
+(nwverse/persona#12544); until then every app gets the downgrade below.
+
+Extensions still run no code in the app and send no model file: they say what the shapes are, and each app builds them with
+its own engine. A list of simple shapes is the contract because no 3D file format is drawn by every client (SceneKit reads
+USDZ, the web and Android glTF), because the hub can check every number in it, and because an extension, or the assistant in a
+card, can write it without a 3D toolchain.
+
+**Coordinates**, the same on every app: metres; plan coordinates `[x, y]` with x east and y north; heights up from the floor;
+angles in degrees, counter-clockwise from +x seen from above. A box at `yaw` 0 has `size[0]` along +x and `size[1]` along +y.
+
+| Field | What it does |
+| --- | --- |
+| `alt` (required, 1–200) | What the model shows, in a sentence: read out first, and shown where the model is not drawn |
+| `caption` | A line under the model |
+| `shapes` (1–500) | `SceneShape`, told apart by `kind`. `box`: `center`, `size`, `yaw?`, `round?` (corners rounded seen from above, at most half the smaller size; the app bevels upright edges no more than half the height). `cylinder`: `center`, `radius`. `prism`: `points`, a simple polygon of 3–64 points raised from `bottom` to `top`, a room's floor or an L-shaped counter. Each stands from `bottom` to `top`, at least 0.005 apart, and has an optional `color` (`#RRGGBB`, sRGB) and `material`: `matte` (the default), `glass` (see-through), `metal`, `screen`, `tile` or `wood` (the app's own pattern, in metres, in the shape's color) |
+| `labels` (0–32) | `{text, at, height?}`: quiet names on the floor, a room's. Not tappable, not components of the page; read out after `alt` |
+| `pins` (0–100) | `{id, at, height?, label, state?, icon?, tone? \| color?, light?, action?}`: a device in the model. Each pin counts as one of the page's 300 components. `tone` or a named `color`, never both, colors the pin's dot; `state` is plain words (On, Off, 26 °C) and is **required** whenever the tone is not neutral, a color is set or the light is on, so a state never rides on color or light alone. `light` (`{on?, warmth?: warm \| cool}`, off and warm when left out) lights the model around the pin when on; at most 16 pins of a scene have their light on (a phone lights so many at once). Tapping a pin does its `action`, as a tile's |
+| `camera` | Where the model is first seen from, orthographic, around the centre of the shapes' bounding box (pins and labels left out): `yaw`, the camera's direction from the centre (225, the default, stands south-west looking north-east), `pitch` above the floor plane (10–90, 35 by default, 90 straight down), `zoom` (0.5–4; 1, the default, fits the bounding box) |
+| `poster` | An `ImageSource` (version 6's rules: `ref` only from an extension, never in an assistant card): a picture of the model for an older app and for share as image |
+| `key` | As every component's: keeps the person's camera across redraws |
+
+**Colors.** A scene's shapes are content, like the pixels of an `image`, so their colors are the extension's own: walls, floors
+and sofas need colors no role or named color has. Pins and every control around the model keep the app's: a pin's dot is a
+`tone` or a named `color`, its text the app's ink on the app's surface. Dark mode changes the model's lighting, never its colors.
+
+**The hub's checks** (`sdk/go/wire/viewcheck11.go`; the whole page is refused otherwise): every number finite; a shape at least
+0.005 tall; a box's `round` at most half its smaller size and no field of another kind (a box's `radius`, a prism's
+`center`); a prism's polygon simple (no point twice, no edge shorter than 0.005, no edge folding back, no two edges touching that
+are not neighbours, an area of at least 0.0001 m²) and at most 4000 prism points in a scene; pin ids unique; a pin's tone or
+color, not both; a pin's `state` when its tone, color or light says something; at most 16 lights on; at most one scene in a
+view. A pin's `action` is one of the view's actions (`wire.Actions`, so its `push` is checked like any other, and an
+assistant-only one is taken out of an extension's view, the pin kept); the poster is one of the view's pictures (`ImagesMost`, a
+card's `CompactImages`, `ui.image` signing).
+
+**An older app, and every native stream** (`downgrade11`, `server/internal/extension/ui_v11.go`): with a poster the scene becomes
+an `image` of it with the scene's `key`, `alt` and `caption`, which version 6's downgrade carries further for an older app. A
+native stream's pictures are not signed, so there only a poster with a `url` counts. Without one the scene becomes its
+`caption` as a `text` and a `row` per pin in the pins' order: the label, the state as the value (or as a badge in the pin's
+tone when the tone says something), the icon, color and action; a row's key is the scene's `key` and the pin's id when that
+is free on the page (a native stream's taken or overlong one a digest of the id, as a graph's rows). In a card the rows are cut
+to the card's room, the first kept. A scene with neither poster nor pins becomes its `alt`. An extension that keeps its
+devices' controls elsewhere on the page sends a poster, so an older app does not get them twice. An action's answer that
+replaces a scene in place (`items`) makes an older app draw the whole page again.
 
 ## System-level placements (#1858)
 

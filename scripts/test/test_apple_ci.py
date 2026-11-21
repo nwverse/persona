@@ -129,13 +129,14 @@ class AppleCIPreparationTests(unittest.TestCase):
     def test_explicit_unsigned_build_lane_preserves_the_real_build_and_skips_devices(self):
         script = SCRIPT.read_text()
         workflow = (ROOT / '.github/workflows/apple-test.yml').read_text()
-        self.assertIn('options: [ios, ios18, ios-build, packages, ios-focused]', workflow)
+        self.assertIn('options: [ios, ios18, ios-build, packages, ios-focused, ios-regressions]', workflow)
         self.assertIn("inputs.lane == 'packages' && 'Native package tests (Xcode 26.0)'", workflow)
         self.assertIn("inputs.lane == 'ios-focused' && 'Focused iOS and About tests (Xcode 26.0)'", workflow)
-        self.assertIn('all|ios|ios18|packages|ios-build|ios-focused', script)
-        self.assertIn('[ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ]', script)
+        self.assertIn("inputs.lane == 'ios-regressions' && 'iOS stack and Live Activity regressions (Xcode 26.0)'", workflow)
+        self.assertIn('all|ios|ios18|packages|ios-build|ios-focused|ios-regressions', script)
+        self.assertIn('[ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ] || [ "$LANE" = ios-regressions ]', script)
         self.assertIn('[ "$LANE" != packages ] && [ "$LANE" != ios-build ]', script)
-        start = script.index('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ]')
+        start = script.index('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ] || [ "$LANE" = ios-regressions ]')
         end = script.index('if [ "$LANE" = ios18 ]; then', start)
         device = script[start:end]
         for step in ('Stage resolved packages for Meta configuration',
@@ -169,6 +170,39 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn('Create stock regular-width About test simulator', script)
         self.assertIn('Verify hosted iOS test readiness', script)
 
+    def test_regression_lane_stops_after_two_strict_suites(self):
+        script = SCRIPT.read_text()
+        selection = script[script.index('if [ "$LANE" = ios-regressions ]; then'):script.index('# A generic destination')]
+        self.assertEqual(re.findall(r'-only-testing:PersonaTests/(\w+)', selection), [
+            'MainPagesStackTests', 'PhoneSystemToolsTests',
+        ])
+        self.assertNotIn('IOS_EXCLUSIONS', selection)
+        readiness = script.index("ci_run 'Verify hosted iOS test readiness' 900")
+        batch = script.index("test_batch ios-unit 'iOS offline unit and design/token tests'")
+        strict = script.index('result ios-unit "$SIM" MainPagesStackTests PhoneSystemToolsTests')
+        stop = script.rindex('if [ "$LANE" = ios-regressions ]; then', batch, strict)
+        finish = script.index('if [ "$LANE" != ios-focused ]; then', strict)
+        ordinary = script.index('result ios-unit "$SIM" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests')
+        focused_start = script.index('if [ "$LANE" = ios-focused ]; then', batch)
+        focused_result = script.index('result ios-unit "$SIM" PageSearchableTests', focused_start)
+        focused = script[focused_start:script.index('\n', focused_result) + 1]
+        self.assertLess(readiness, batch)
+        self.assertLess(batch, ordinary)
+        self.assertLess(ordinary, stop)
+        self.assertLess(stop, strict)
+        self.assertEqual(script[stop:finish], '''if [ "$LANE" = ios-regressions ]; then
+    result ios-unit "$SIM" MainPagesStackTests PhoneSystemToolsTests
+    exit "$IOS_FAILED"
+  fi
+  ''')
+        self.assertLess(strict, script.index("test_batch ios-html-card 'iOS HTML card tests"))
+        # The established compact/About branch remains exactly unchanged.
+        self.assertEqual(focused, '''if [ "$LANE" = ios-focused ]; then
+    result ios-unit "$SIM" PageSearchableTests StarredMessagesTests LauncherModelChoiceTests OmpNewAgentTests PaseoPermissionModesTests PaseoProvidersTests AboutVersionCompactVisualTests
+''')
+        self.assertIn('elif [ "$LANE" != ios-regressions ]; then', script[focused_start:ordinary])
+        self.assertIn('if [ "$LANE" != ios-focused ]; then', script[finish:])
+
     def test_regular_ipad_observer_has_an_independent_scope_and_strict_probe(self):
         script = SCRIPT.read_text()
         regular = script[script.index('  REGULAR_SIM=$(simulator_udid'):script.index("  ci_run 'Verify token baseline")]
@@ -186,6 +220,80 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn('--app "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona"', readiness)
         self.assertIn('--test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests"', readiness)
 
+
+    def test_native_ssh_failure_evidence_has_a_timeline_and_a_redacted_server_snapshot(self):
+        package = ROOT / 'apple/Packages/PersonaSSH'
+        diagnostics = (package / 'Sources/PersonaSSH/Diagnostics.swift').read_text()
+        tunnel = (package / 'Sources/PersonaSSH/SSHTunnel.swift').read_text()
+        handlers = (package / 'Sources/PersonaSSH/Handlers.swift').read_text()
+        harness = (package / 'Tests/PersonaSSHTests/Harness.swift').read_text()
+        test = (package / 'Tests/PersonaSSHTests/SSHTunnelTests.swift').read_text()
+        self.assertIn('includingFractionalSeconds: true', diagnostics)
+        self.assertIn('guard let path = ProcessInfo.processInfo.environment["PERSONA_SSH_TRACE"] else { return }', diagnostics)
+        self.assertIn('func trace(_ message: @autoclosure () -> String)', diagnostics)
+        self.assertIn('guard ProcessInfo.processInfo.environment["PERSONA_SSH_TRACE"] != nil else { return nil }', diagnostics)
+        self.assertIn('traceID: "\\(self.traceID) \\(attemptID)"', tunnel)
+        self.assertIn('private func dial(_ attemptID: String?)', tunnel)
+        connection = tunnel.split('private func connection() -> EventLoopFuture<Channel> {', 1)[1].split('private func dial(', 1)[0]
+        self.assertIn('let attemptID = PersonaSSH.traceID("dial")', connection)
+        # Brace-scan the real function body instead of merely forbidding the identifier file-wide.
+        opening = tunnel.index('private func open(on session: Channel, joining inbound: Channel?) -> EventLoopFuture<Void> {')
+        opening = tunnel.index('{', opening)
+        depth, end, quoted, escaped = 0, opening, False, False
+        for index in range(opening, len(tunnel)):
+            char = tunnel[index]
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif char == '\\':
+                    escaped = True
+                elif char == '"':
+                    quoted = False
+                continue
+            if tunnel.startswith('//', index):
+                newline = tunnel.find('\n', index)
+                if newline < 0:
+                    break
+                # Keep newlines in the slice; skip this comment's contents.
+                tunnel = tunnel[:index] + ' ' * (newline - index) + tunnel[newline:]
+                continue
+            if char == '"':
+                quoted = True
+            elif char == '{':
+                depth += 1
+            elif char == '}':
+                depth -= 1
+                if depth == 0:
+                    end = index + 1
+                    break
+        self.assertEqual(depth, 0)
+        opened = tunnel[opening:end]
+        self.assertTrue(opened.endswith('}'))
+        self.assertNotIn('attemptID', opened)
+        self.assertIn('trace("\\(self.traceID) channel open timed out', opened)
+        self.assertIn('result.fail(SSHTunnelError.timedOut)\n            session.close(promise: nil)', opened)
+        for event in ('connection requested', 'dial start', 'session authenticated',
+                      'close observed', 'current owner cleared', 'channel open timed out'):
+            self.assertIn(event, tunnel)
+        for event in ('session viability', 'session error', 'session inactive'):
+            self.assertIn('trace("\\(traceID) ' + event, handlers)
+        forwarding = test.split('@Test func forwardsRequestsToTheHub() async throws {', 1)[1].split('@Test func', 1)[0]
+        self.assertLess(forwarding.index('forwarding test begin'), forwarding.index('forwarding health complete'))
+        self.assertLess(forwarding.index('forwarding health complete'), forwarding.index('forwarding session count'))
+        self.assertIn('if accepted != 1 { sshd.traceFailure() }', forwarding)
+        self.assertIn('#expect(accepted == 1, "unexpected SSH sessions; server log: \\(log)")', forwarding)
+        self.assertNotIn('repeat', forwarding)
+        self.assertIn('let limit = 65_536', harness)
+        self.assertIn('if index == 1000 {', harness)
+        self.assertIn('let size = redacted.utf8.count', harness)
+        self.assertIn('if bytes + size > limit {', harness)
+        self.assertIn('if truncated { trace("sshd failure | snapshot truncated at 1000 lines or \\(limit) bytes") }', harness)
+        self.assertIn('.replacingOccurrences(of: user, with: "<test-user>")', harness)
+        self.assertIn('"SHA256:[A-Za-z0-9+/=]+", with: "<key-id>"', harness)
+        # No new file or upload path: the existing failure collector retains the same opt-in trace.
+        self.assertIn('trace("sshd failure | \\(redacted)")', harness)
+        self.assertIn('ci_run \'PersonaSSH native tunnel integration tests\' 900 env PERSONA_SSH_TRACE="$OUTPUT/native-ssh-trace.log"', SCRIPT.read_text())
+        self.assertIn('"regular-readiness.log", "native-ssh-trace.log",', (ROOT / 'scripts/ci/apple_diagnostics.py').read_text())
 
     def test_native_ssh_tests_run_before_the_app_and_fail_the_lane_on_error(self):
         script = SCRIPT.read_text()
