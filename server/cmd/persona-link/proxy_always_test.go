@@ -264,7 +264,12 @@ func TestPairAndInstallRefuseBeforeSaving(t *testing.T) {
 		noAddresses  = "persona://link?token=jp_x" // cannot be paired: a pairing that starts fails at once
 		loopbackLink = "persona://link?url=http://127.0.0.1:18661&tls=18662&fp=pin&hub=h1&token=jp_x&machine=pi"
 		newProxy     = "http://new.example:8080"
+		badProxy     = "socks5://127.0.0.1:1080" // not a usable http:// or https:// proxy URL
 	)
+	_, errBadProxy := link.ParseProxy(badProxy)
+	if errBadProxy == nil {
+		t.Fatalf("ParseProxy(%q) accepted it", badProxy)
+	}
 	sshAlways := func(c *link.Config) {
 		c.SSH = &link.SSH{Server: "user@example.com", Target: "127.0.0.1:18663", Always: true}
 	}
@@ -290,6 +295,8 @@ func TestPairAndInstallRefuseBeforeSaving(t *testing.T) {
 		{"loopback addresses saved", loopbackOnly, []string{"--ssh", "user@example.com", "--proxy", newProxy, "--proxy-always"}, "", sshDefault},
 		{"saved proxy-only mode", proxyOnly, []string{"--ssh", "user@example.com", "--ssh-always", "--proxy", newProxy}, noAddresses, isErr(link.ErrSSHAlwaysProxyAlways)},
 		{"saved proxy-only mode, loopback link", proxyOnly, []string{"--ssh", "user@example.com", "--proxy", newProxy}, loopbackLink, isErr(link.ErrSSHAlwaysProxyAlways)},
+		// The proxy URL is checked before this line's --no-ssh-always turns the saved Always use SSH off.
+		{"--no-ssh-always, unusable proxy", sshAlways, []string{"--ssh", "user@example.com", "--no-ssh-always", "--proxy", badProxy, "--proxy-always"}, noAddresses, isErr(errBadProxy)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
