@@ -25,6 +25,7 @@ import { FILE_MKDIR_FEATURE, FILE_WRITE_FEATURE } from "../../lib/file-ops";
 const PANE_CWD_FEATURE = "pane_cwd";
 import { hubHas, useStore } from "../../lib/store";
 import { useFsLive } from "../../lib/use-fs-live";
+import { useBackStack } from "../../lib/back-stack";
 import { NARROW, useMedia } from "../../lib/viewport";
 import { Button, copyText, cx, IconButton, Loading, Menu, toast, useMenu } from "../../ui/atoms";
 import type { MenuAt, MenuItem } from "../../ui/menu-model";
@@ -77,6 +78,7 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
   const [gitTick, setGitTick] = useState(0); // the folder's Git status did
   const [git, setGit] = useState<GitStatus | null>(null);
   const [open, setOpen] = useState<string[]>(file ? [file] : []); // files opened from the list, newest last
+  useBackStack(open.length, (n) => setOpen((files) => files.slice(0, n)), narrow);
   // where it is, kept when the page leaves the session so coming back opens it here again (#5150)
   useEffect(() => notePlace({ mid, sid, cwd }, { path: dir === cwd ? undefined : dir, file: open.at(-1) }), [mid, sid, cwd, dir, open]);
   const menu = useMenu();

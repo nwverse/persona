@@ -1,145 +1,190 @@
-// Back (the browser's button, a phone's back gesture) closes what is open over the page before it leaves the page
-// (#1996): the drawer, a full-screen side panel, the picture viewer, a bottom sheet. Opening one pushes an entry with
-// the same URL; going back pops it and closes the overlay; closing it from the page takes its entry back off.
+// Phone overlays have one same-address history entry per visible level (#1996, #11643).
 import { useEffect, useRef } from "react";
 
 const KEY = "personaOverlay";
 const DEPTH = "personaOverlayDepth";
-/** The address the overlay opened on: the entry under its own has it (see settleOverlayEntry). */
 const AT = "personaOverlayAt";
-let next = 0;
-// A close takes its entry off a tick later: an overlay that opens again before then (React's StrictMode runs every
-// effect twice in development; a sheet swapped for another) reuses the entry instead of racing an async history.back()
-// that would pop the new one and close it at once.
-let pending: { id: string; timer: ReturnType<typeof setTimeout> } | null = null;
+const BACK_MS = 500;
 
-/** For a navigation: whether the current entry is an open overlay's, which the new page should replace instead of
- *  stacking on (else Back from the new page lands on a dead copy of the old one). The navigation's replaceState takes
- *  the overlay's marker with it, so the overlay's close finds nothing of it to take off. */
-export function takeOverlayEntry(): boolean {
-  const st = history.state as Record<string, unknown> | null;
-  const id = st && typeof st === "object" ? st[KEY] : undefined;
-  if (typeof id !== "string") return false;
-  if (pending?.id === id) {
-    clearTimeout(pending.timer);
-    pending = null;
+type State = Record<string, unknown>;
+type Close = (navigating: boolean) => void;
+type Slot = { id: string; close?: Close };
+let next = 0;
+let slots: Slot[] = [];
+let timer: ReturnType<typeof setTimeout> | undefined;
+let moving = false;
+let navigation: (() => void) | undefined;
+let replaced: { url: string; origin: string; state: State | null } | undefined;
+
+/** State belonging to the page survives overlay pushes and closes. */
+export function overlayState(base: unknown, id: string): State {
+  return { ...(base && typeof base === "object" ? base : {}), [KEY]: id };
+}
+export function onOverlayEntry(state: unknown = typeof history === "undefined" ? null : history.state): boolean {
+  return typeof (state as State | null)?.[KEY] === "string";
+}
+export function isOverlayEntry(state: unknown, id: string): boolean {
+  return (state as State | null)?.[KEY] === id;
+}
+export function overlayDepth(state: unknown = typeof history === "undefined" ? null : history.state): number {
+  if (!onOverlayEntry(state)) return 0;
+  const n = (state as State)[DEPTH];
+  return typeof n === "number" && Number.isSafeInteger(n) && n > 0 ? n : 1;
+}
+function pageState(state: State | null): State | null {
+  const rest = { ...state };
+  delete rest[KEY];
+  delete rest[DEPTH];
+  delete rest[AT];
+  return Object.keys(rest).length ? rest : null;
+}
+
+function go(n: number) {
+  if (n === 1) history.back();
+  else history.go(-n);
+}
+
+function sweep() {
+  clearTimeout(timer);
+  timer = undefined;
+  if (moving || !slots.length || !isOverlayEntry(history.state, slots.at(-1)!.id)) return;
+  let n = 0;
+  while (n < slots.length && !slots[slots.length - 1 - n].close) n++;
+  if (n) {
+    moving = true;
+    go(n);
+  }
+}
+
+function forget() {
+  removeEventListener("popstate", landed, true);
+  clearTimeout(timer);
+  slots = [];
+  timer = undefined;
+  moving = false;
+  replaced = undefined;
+  navigation = undefined;
+}
+
+function landed(event?: Event) {
+  const depth = overlayDepth();
+  // An Inbox return can traverse both overlays and pages at once. A user Back only removes levels above its target.
+  const removed = slots.splice(depth && slots[depth - 1]?.id === history.state[KEY] ? depth : 0);
+  const target = navigation;
+  const redirect = replaced;
+  navigation = undefined;
+  moving = false;
+  if (redirect && (slots.length || location.href === redirect.origin)) {
+    const state = history.state;
+    history.replaceState(depth ? { ...redirect.state, [KEY]: state[KEY], [AT]: state[AT], [DEPTH]: depth } : redirect.state, "", redirect.url);
+  }
+  if (!slots.length) forget();
+  if (target) event?.stopImmediatePropagation();
+  for (const slot of removed.reverse()) slot.close?.(Boolean(target));
+  if (target) target();
+  else sweep(); // Dismissed lower levels become removable when there is no live overlay above them.
+}
+
+/** Opening again during the same commit reuses the first vacated position in the top suffix (including StrictMode). */
+export function openOverlay(onClose: Close): () => void {
+  if (moving) {
+    let cancelled = false;
+    let close: (() => void) | undefined;
+    afterBack(() => { if (!cancelled) close = openOverlay(onClose); });
+    return () => { cancelled = true; close?.(); };
+  }
+  if (slots.length && !isOverlayEntry(history.state, slots.at(-1)!.id)) forget();
+  let i = slots.length;
+  while (i && !slots[i - 1].close) i--;
+  const slot = slots[i] ?? { id: `o${++next}` };
+  if (i === slots.length) {
+    if (!i) addEventListener("popstate", landed, true);
+    slots.push(slot);
+    const current = history.state;
+    history.pushState({ ...overlayState(current, slot.id), [DEPTH]: overlayDepth(current) + 1, [AT]: current?.[AT] ?? location.href }, "", location.href);
+  }
+  slot.close = onClose;
+  return () => {
+    if (slot.close !== onClose || !slots.includes(slot)) return;
+    slot.close = undefined;
+    // Sibling cleanups and remounts in the same React commit settle before choosing how far to go.
+    timer ??= setTimeout(sweep, 0);
+  };
+}
+
+/** A single entry can be replaced immediately. From deeper stacks return to the real origin and push the destination:
+ * this also drops the old overlay entries from Forward. A replace under open layers follows them back to the base. */
+export function navigateOverlay(to: string, state: State | null, replace: boolean, notify: () => void): boolean {
+  const depth = overlayDepth();
+  if (!depth) return false;
+  // Forward can revisit a stored stack whose UI was already closed. Its return still needs a listener.
+  addEventListener("popstate", landed, true);
+  if (replace) {
+    const st = history.state;
+    replaced = { url: to, origin: st[AT] ?? location.href, state: pageState(state ?? st) };
+    history.replaceState({ ...replaced.state, [KEY]: st[KEY], [DEPTH]: depth, [AT]: st[AT] }, "", to);
+    notify();
+  } else if (depth === 1 && !moving && !replaced) {
+    const removed = slots;
+    forget();
+    history.replaceState(state, "", to);
+    for (const slot of removed.reverse()) slot.close?.(true);
+    notify();
+  } else {
+    // A close can already be traversing history. Finish on its landing and consume whatever layers are left there.
+    navigation = () => {
+      if (!navigateOverlay(to, state, false, notify)) {
+        history.pushState(state, "", to);
+        notify();
+      }
+    };
+    if (!moving) {
+      moving = true;
+      go(depth);
+    }
   }
   return true;
 }
 
-/** The state an overlay's entry carries (kept apart from whatever the page's state is). */
-export function overlayState(base: unknown, id: string): Record<string, unknown> {
-  return { ...(base && typeof base === "object" ? (base as Record<string, unknown>) : {}), [KEY]: id };
-}
-
-/** Whether `state` is an open overlay's entry (any overlay's). */
-export function onOverlayEntry(state: unknown = typeof history !== "undefined" ? history.state : null): boolean {
-  return Boolean(state && typeof state === "object" && typeof (state as Record<string, unknown>)[KEY] === "string");
-}
-
-/** How many overlay entries are stacked at `state`; entries written before the depth field count as one. */
-export function overlayDepth(state: unknown = typeof history !== "undefined" ? history.state : null): number {
-  if (!onOverlayEntry(state)) return 0;
-  const n = (state as Record<string, unknown>)[DEPTH];
-  return typeof n === "number" && Number.isSafeInteger(n) && n > 0 ? n : 1;
-}
-
-/** Whether `state` is the entry the overlay `id` pushed. */
-export function isOverlayEntry(state: unknown, id: string): boolean {
-  return Boolean(state && typeof state === "object" && (state as Record<string, unknown>)[KEY] === id);
-}
-
-/** Removes only overlay metadata, preserving the page's other history state. */
-function clearOverlayMarkers(state: Record<string, unknown>) {
-  const rest = { ...state };
-  delete rest[KEY];
-  delete rest[AT];
-  delete rest[DEPTH];
-  history.replaceState(Object.keys(rest).length ? rest : null, "", location.href);
-}
-
-/** Opens one overlay's history entry: Back calls `onClose`. Returns the close (from the page) that takes it off. */
-export function openOverlay(onClose: () => void): () => void {
-  const id = `o${++next}`;
-  if (pending && isOverlayEntry(history.state, pending.id)) {
-    clearTimeout(pending.timer);
-    pending = null;
-    history.replaceState(overlayState(history.state, id), "", location.href);
-  } else {
-    const depth = overlayDepth(history.state) + 1;
-    history.pushState({ ...overlayState(history.state, id), [AT]: location.href, [DEPTH]: depth }, "", location.href);
+/** Return to an earlier page even if an outside press is already taking a menu off the item. */
+export function backPastOverlays(pages: number) {
+  clearTimeout(timer);
+  timer = undefined;
+  if (moving) {
+    navigation = () => backPastOverlays(pages);
+    return;
   }
-  // where it opened: a replace that moves the page under it (an old link turned into its new one, a delete going
-  // home) keeps the marker, so Back still closes it; closing it from the page then must not go back from the new page
-  const at = location.href;
-  let popped = false;
-  const onPop = () => {
-    // the entry under ours came back: ours is gone, the overlay goes with it
-    if (!isOverlayEntry(history.state, id)) {
-      popped = true;
-      removeEventListener("popstate", onPop);
-      onClose();
-    }
-  };
-  addEventListener("popstate", onPop);
-  return () => {
-    removeEventListener("popstate", onPop);
-    if (popped || !isOverlayEntry(history.state, id)) return; // popped, or a navigation went on top: leave it
-    if (location.href !== at) {
-      // the page moved under it: take its marker off this entry and stay on the new page
-      clearOverlayMarkers(history.state);
-      return;
-    }
-    const p = {
-      id,
-      timer: setTimeout(() => {
-        if (pending !== p) return;
-        pending = null;
-        if (isOverlayEntry(history.state, id)) history.back();
-      }, 0),
-    };
-    pending = p;
-  };
+  moving = slots.length > 0;
+  go(pages + overlayDepth());
 }
 
-/** How long one Back may take to land (its popstate) before what waits for it goes on anyway. */
-const BACK_MS = 500;
-
-/** Runs `then` once the next Back lands (its popstate: true), or after `ms` without one (false). */
+/** Runs once after this traversal, or on timeout if the browser has no entry to return to. */
 export function afterBack(then: (popped: boolean) => void, ms = BACK_MS): void {
   const timer = setTimeout(() => (removeEventListener("popstate", pop), then(false)), ms);
   const pop = () => (clearTimeout(timer), removeEventListener("popstate", pop), then(true));
   addEventListener("popstate", pop);
 }
 
-/** For the page's first load, before anything draws: an entry that still carries an overlay's marker is one the last
- *  load left behind (a reload with the side panel open, #5134). The overlay is gone, so its entry would only make the
- *  first Back do nothing. On the address it opened on, go back off it (more than once for overlays stacked on each
- *  other); on another (the page moved under it), take the marker off and stay. `ms`: how long one Back may take. */
+/** A reload restores the entries but no overlays. Depth allows a single traversal; legacy markers may need another.
+ * A replace under the stack belongs at the base, including its page state. A restored tab can have no reachable base. */
 export async function settleOverlayEntry(ms = BACK_MS): Promise<void> {
-  const marked = () => {
-    const st = history.state as Record<string, unknown> | null;
-    return onOverlayEntry(st) ? st : null;
-  };
-  for (let i = 0; i < 5; i++) {
-    const st = marked();
-    if (!st) return;
-    if (st[AT] !== location.href) break;
+  const first = history.state;
+  if (!onOverlayEntry(first)) return;
+  const url = location.href;
+  const moved = first[AT] !== undefined && first[AT] !== url;
+  while (onOverlayEntry()) {
+    const id = history.state[KEY];
     const popped = await new Promise<boolean>((done) => {
       afterBack(done, ms);
-      history.back();
+      go(overlayDepth());
     });
-    if (!popped) break; // nothing under it (a new tab's only entry): keep the entry, without the marker
+    if (!popped || isOverlayEntry(history.state, id)) break;
   }
-  const st = marked();
-  if (!st) return;
-  clearOverlayMarkers(st);
+  if (moved || onOverlayEntry()) history.replaceState(pageState(moved ? first : history.state), "", moved ? url : location.href);
 }
 
-/** While `open` (and `enabled`, e.g. only on a narrow screen), Back closes it through `onClose`. A navigation away while
- *  it is open leaves its entry under the new page; closing then does not go back (that would undo the navigation). */
-export function useCloseOnBack(open: boolean, onClose: () => void, enabled = true): void {
+export function useCloseOnBack(open: boolean, onClose: Close, enabled = true): void {
   const close = useRef(onClose);
   close.current = onClose;
-  useEffect(() => (open && enabled ? openOverlay(() => close.current()) : undefined), [open, enabled]);
+  useEffect(() => (open && enabled ? openOverlay((navigating) => close.current(navigating)) : undefined), [open, enabled]);
 }
