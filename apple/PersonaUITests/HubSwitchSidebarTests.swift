@@ -149,8 +149,10 @@ final class HubSwitchSidebarTests: XCTestCase {
     /// conversation's name in the Merged layout, the Agents heading's ⋯ further down the Merged sidebar).
     @MainActor private func pickHub(_ name: String, menu: String, _ app: XCUIApplication) {
         let button = app.descendants(matching: .any).matching(identifier: menu).firstMatch
-        // The sidebar's Agents heading, further down the Merged sidebar: a slow swipe at a time, not past it.
+        // The sidebar's Agents heading, further down the Merged sidebar: a slow swipe at a time, not past it; back up
+        // when the list was left scrolled below it.
         for _ in 0..<6 where !(button.exists && button.isHittable) { app.swipeUp(velocity: .slow) }
+        for _ in 0..<8 where !(button.exists && button.isHittable) { app.swipeDown(velocity: .slow) }
         XCTAssertTrue(button.waitForExistence(timeout: 10), "no menu \(menu):\n\(app.debugDescription)")
         button.tap()
         let item = app.buttons[name].firstMatch
@@ -166,7 +168,9 @@ final class HubSwitchSidebarTests: XCTestCase {
     /// title of a hub without a roster (#12594).
     @MainActor private func pickHubInSwitcher(_ name: String, _ app: XCUIApplication) {
         // The Merged sidebar keeps where its list was scrolled to: the header is at the top.
-        let switcher = app.buttons["assistant-switcher"].firstMatch
+        // The drawer's identifier can cover the header's own on a phone (as in AssistantIdentityUITests).
+        let switcher = app.buttons.matching(NSPredicate(format: "identifier == %@ OR (identifier == %@ AND label CONTAINS %@)",
+                                                        "assistant-switcher", "assistant-sidebar", " · ")).firstMatch
         let plain = app.descendants(matching: .any).matching(identifier: "hub.switcher").firstMatch
         for _ in 0..<4 where !(switcher.exists && switcher.isHittable) && !(plain.exists && plain.isHittable) { app.swipeDown() }
         let item: XCUIElement
