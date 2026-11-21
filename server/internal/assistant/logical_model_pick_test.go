@@ -16,11 +16,11 @@ func TestOrdinaryModelPickCannotCrossRuntimeConnectionsOfTheSameKind(t *testing.
 		name, source, instance, current, target, identity string
 		want                                              int
 	}{
-		{"native to runtime", "", "", "claude", "hosted-two", "claude|runtime:runtime-two", http.StatusBadRequest},
-		{"runtime to native", proto.SourceRuntime, "runtime-one", "hosted-one", "claude", "claude", http.StatusBadRequest},
-		{"runtime to another runtime", proto.SourceRuntime, "runtime-one", "hosted-one", "hosted-two", "claude|runtime:runtime-two", http.StatusBadRequest},
-		{"native to unidentified runtime", "", "", "claude", "hosted-unknown", "unknown|runtime:runtime-two", http.StatusBadRequest},
-		{"runtime to unidentified runtime", proto.SourceRuntime, "runtime-one", "hosted-one", "hosted-unknown", "unknown|runtime:runtime-two", http.StatusBadRequest},
+		{"native to runtime", "", "", "claude", "hosted-two", "claude|runtime:runtime-two", http.StatusConflict},
+		{"runtime to native", proto.SourceRuntime, "runtime-one", "hosted-one", "claude", "claude", http.StatusConflict},
+		{"runtime to another runtime", proto.SourceRuntime, "runtime-one", "hosted-one", "hosted-two", "claude|runtime:runtime-two", http.StatusConflict},
+		{"native to unidentified runtime", "", "", "claude", "hosted-unknown", "unknown|runtime:runtime-two", http.StatusConflict},
+		{"runtime to unidentified runtime", proto.SourceRuntime, "runtime-one", "hosted-one", "hosted-unknown", "unknown|runtime:runtime-two", http.StatusConflict},
 		{"same runtime alias", proto.SourceRuntime, "runtime-one", "hosted-one", "hosted-alias", "claude|runtime:runtime-one", http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
