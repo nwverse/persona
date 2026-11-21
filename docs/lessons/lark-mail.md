@@ -2,6 +2,16 @@
 
 Pitfalls, odd behavior and the trade-offs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
 
+## Progress-card actions need current ownership (#12702)
+
+A refused final edit can leave a progress card's Stop button visible after the answer is posted separately.
+The button's conversation identifiers say where it was created, not which turn it still owns. Compare the callback's
+actual message ID with the current watched Feishu run's `Ext["card"]`, then recheck the same run and live objects,
+card, recall and answer/finish state under the lifecycle locks after target resolution. Historical thread routing,
+stored runs awaiting watcher restoration, and runs awaiting final-answer delivery cannot authorize a stop. Keep
+successful-press deduplication with the live progress state and leave failed delivery retryable. Typed `/stop` remains
+a conversation-level request; assistant-side locking cannot provide a node-side atomic turn-generation precondition.
+
 ## Lark system events are not new conversation requests
 
 A new message ID and timestamp do not establish new human activity (#9789). Consume system events and unidentified senders without creating or updating Inbox things, including the direct-chat sweep and history promotion path. Keep real attachments and independently authored bot notifications. When fetching conversation history for triage, retain timestamps and distinguish the incoming batch from background: an empty system event otherwise disappears from flattened context and makes an old request look current. An already collected follow-up remains background; promoting an unindexed follow-up must not rewind Last when another group of the same chat is processed in the same round.
