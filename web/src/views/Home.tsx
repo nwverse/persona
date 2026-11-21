@@ -28,6 +28,7 @@ import { retryAgentList } from "../lib/sessions";
 import { checkOutbox, discardOutbox, entryReason, heldOnComputer, outboxEntry, queueToSession, retryOutbox, retryOutboxEntry } from "../lib/outbox";
 import { homeTasks, type HomeTask } from "../lib/home-tasks";
 import { overviewActions, type ActionableComputer, type ActionableOutbox } from "../lib/overview-actions";
+import { useRoster } from "../lib/managers";
 import { sessionLauncher } from "../lib/model-switch";
 import { effortTitle } from "../lib/session-actions";
 import { modelList, pillView, useModelLists } from "../lib/session-models";
@@ -66,7 +67,8 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   const agentSessions = useScopedAgentSessions();
   const sessions = useMemo(() => answeredSessions(agentSessions, interactions, answered), [agentSessions, interactions, answered]);
   const outbox = useStore((s) => s.outbox);
-  const actionable = useMemo(() => overviewActions({ outbox, sessions: agentSessions, machines }), [outbox, agentSessions, machines]);
+  const roster = useRoster();
+  const actionable = useMemo(() => overviewActions({ outbox, sessions: agentSessions, machines, roster }), [outbox, agentSessions, machines, roster]);
   const needsCount = interactions.length + actionable.count;
   const loaded = useStore((s) => s.loaded);
   // connected, the hub's first answers are still on their way: "Loading", not "Connecting to the hub"
