@@ -440,7 +440,8 @@ class CheckFastScriptsTests(ScriptsRepoTestCase):
     def test_check_fast_and_the_slot_helper_run_every_file_of_its_tests(self):
         # check-fast.sh's tests are three files (#11017); the other two import test_check_fast.py's fixtures, and
         # test_check_fast_inputs.py runs check-fast.sh with heavy_slot.py, so a change to any of them, or to the table
-        # check-fast.sh plans from, runs them.
+        # check-fast.sh plans from, runs them. So does a change to a helper they copy into their throwaway
+        # repositories (CHECK_FAST_FILES), which no name or import leads to.
         # android.sh's own suite does not run for check-fast.sh.
         everything = ("test_check_fast.py", "test_check_fast_guards.py", "test_check_fast_inputs.py")
         for suite in (*everything, "test_heavy_slot.py", "test_android_sh.py"):
@@ -452,6 +453,9 @@ class CheckFastScriptsTests(ScriptsRepoTestCase):
             "scripts/check-fast.sh": everything,
             "scripts/test/test_check_fast.py": everything,
             "scripts/ci/check_fast_map.py": everything,  # the table check-fast plans from (#11535)
+            "scripts/ci/check_fast_compare.py": everything,  # a failure's rerun and the merge base's verdict (#12733)
+            "scripts/test/go_test_partitioned.py": everything,  # every Go group runs through it (#12765)
+            "scripts/test/go_partitions.py": everything,  # what it splits
             # test_android_sh.py runs android.sh with it (#11250).
             "scripts/heavy_slot.py": ("test_heavy_slot.py", "test_check_fast_inputs.py", "test_android_sh.py"),
         }

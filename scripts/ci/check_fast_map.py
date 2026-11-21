@@ -178,7 +178,8 @@ TABLE = (
     # their GOFLAGS; test_check_fast_inputs.py runs check-fast.sh with heavy_slot.py too, and test_android_sh.py runs
     # android.sh with it (#11250). check-fast.sh's tests are three files (#11017): its own name picks
     # test_check_fast.py, and the other two, which import its fixtures, come along. They copy check_fast_compare.py,
-    # which names a failure's rerun and compares it with the merge base (#12733), into their temp repositories too.
+    # which names a failure's rerun and compares it with the merge base (#12733), into their temp repositories too,
+    # and go_test_partitioned.py with the go_partitions.py it imports, which every Go group runs through (#12765).
     (
         (("scripts/hooks/*",), ("scripts/test/test_privacy_check.py", "scripts/test/test_check_deno_adapter_sh.py")),
         (("scripts/gen/deno_adapter.sh",), ("scripts/test/test_check_deno_adapter_sh.py",)),
@@ -192,7 +193,7 @@ TABLE = (
         (("scripts/heavy_slot.py",), ("scripts/test/test_check_fast_inputs.py", "scripts/test/test_android_sh.py")),
         (("scripts/check-fast.sh", "scripts/test/check-fast.sh", "scripts/test/test_check_fast.py"),
          ("scripts/test/test_check_fast_guards.py", "scripts/test/test_check_fast_inputs.py")),
-        (("scripts/ci/check_fast_compare.py",),
+        (("scripts/ci/check_fast_compare.py", "scripts/test/go_test_partitioned.py", "scripts/test/go_partitions.py"),
          ("scripts/test/test_check_fast.py", "scripts/test/test_check_fast_guards.py",
           "scripts/test/test_check_fast_inputs.py")),
     ),
