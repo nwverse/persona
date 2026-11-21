@@ -9,16 +9,17 @@
 //    listing sessions not owned by this companion as `offline` so a live `opencode serve` plugin wins (`prefer_running`)
 //    and herdr TUI rows continue merging cleanly via `mergeOpencodeRow`.
 //
-// Safety boundary (#11220): `opencode acp` advertises `{ close, fork, list, resume }` without `additionalDirectories`,
-// so this companion deliberately omits `caps.supervision_policy` and fails closed (`assistant_supervision_runtime`)
-// if any caller supplies non-empty `supervision_instructions`.
+// Assistant ACP processes and MCP routes are private per session. Process
+// isolation alone does not prove an authoritative policy channel: this version
+// still omits caps.supervision_policy and rejects supervision_instructions.
 
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, relative, resolve } from 'node:path'
 import { createRuntime, interactionId, light, page, RpcError, snippet } from '../../runtime-sdk/index.js'
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
-import { OpencodeAcpClient } from './acp.js'
+import { OpencodeAcpClient, privateAcpArgs } from './acp.js'
+import { createAssistantWorkers } from './assistant-workers.js'
 import { defaultDbPath, openReadOnly } from './db.js'
 import {
   acpPermissionCard,
@@ -47,7 +48,7 @@ import {
   resolveModel,
 } from './models.js'
 
-export const COMPANION_VERSION = '0.2.0'
+export const COMPANION_VERSION = '0.3.0'
 const ROOTS = 200
 const LIST_CACHE = 3000
 const MODELS_EVERY = 5 * 60_000
@@ -104,6 +105,10 @@ export function buildAcpEnv(baseEnv = process.env) {
  *   log?: (msg: string) => void,
  *   now?: () => number,
  *   acp?: OpencodeAcpClient,
+ *   assistantAcpFactory?: (options: object) => OpencodeAcpClient,
+ *   maxAssistantWorkers?: number,
+ *   assistantIdleMs?: number,
+ *   assistantReapMs?: number,
  *   discoverModels?: (opts?: { refresh?: boolean }) => Promise<any[]>,
  * }} [options]
  */
@@ -145,16 +150,41 @@ export function createOpencodeCompanion(options = {}) {
   let listCache = { at: 0, rows: [] }
   let stopped = false
 
-  const acp = options.acp || new OpencodeAcpClient({
-    bin,
-    args: options.args,
-    cwd: home,
-    env: buildAcpEnv(env),
-    log,
-    onPermissionRequest: (params) => handlePermissionRequest(params),
-  })
-  acp.onPermissionRequest = (params) => handlePermissionRequest(params)
-  acp.on('update', (params) => onAcpUpdate(params))
+  let assistantWorkers
+  let assistantReaper
+  const acpOptions = { bin, args: options.args, cwd: home, env: buildAcpEnv(env), log }
+  const sharedAcp = options.acp || new OpencodeAcpClient(acpOptions)
+  const accepts = (client, worker, id) => {
+    const session = live.get(id)
+    return session && !closedSessions.has(id) && (worker
+      ? !worker.retiring && worker.session === session && session.worker === worker
+      : !session.assistant)
+  }
+  function connectAcp(client, worker = null) {
+    client.onPermissionRequest = (params) => accepts(client, worker, params?.sessionId)
+      ? handlePermissionRequest(params)
+      : { outcome: { outcome: 'cancelled' } }
+    client.on('update', (params) => {
+      if (accepts(client, worker, params?.sessionId)) onAcpUpdate(params)
+    })
+    if (worker) client.on('process', (pid) => {
+      const session = worker.session
+      if (!session || worker.retiring || session.worker !== worker) return
+      rt.assistantPid(session.id, pid)
+      if (!pid) {
+        session.loadedGeneration = 0
+        if (session.running || session.asks.size) {
+          session.processFailure = true
+          session.turnError = 'OpenCode execution process exited unexpectedly'
+          session.abort?.abort()
+          for (const ask of session.asks) ask.abort()
+          rt.sessionsChanged(0)
+        }
+      }
+    })
+    return client
+  }
+  connectAcp(sharedAcp)
 
   const mcpProxy = createMcpProxy({
     tools: async (binding) => {
@@ -219,9 +249,42 @@ export function createOpencodeCompanion(options = {}) {
         gateShellRulesReady = false
         return
       }
+      for (const worker of assistantWorkers?.workers ?? []) {
+        if (worker.session && !worker.retiring) rt.assistantPid(worker.session.id, worker.acp.pid)
+      }
       if (assistantEnabled) void refreshGateRules()
     },
   })
+
+  assistantWorkers = createAssistantWorkers({
+    limit: options.maxAssistantWorkers ?? 8,
+    idleMs: options.assistantIdleMs ?? 300_000,
+    now,
+    create(worker) {
+      const config = { ...acpOptions, args: privateAcpArgs(acpOptions.args), processGroup: true }
+      const client = options.assistantAcpFactory ? options.assistantAcpFactory(config) : new OpencodeAcpClient(config)
+      if (client === sharedAcp || [...assistantWorkers.workers].some((other) => other !== worker && other.acp === client)) {
+        throw new Error('Assistant execution needs a dedicated ACP client')
+      }
+      return connectAcp(client, worker)
+    },
+    busy: (session) => session.running || session.queued > 0 || session.asks.size > 0 || session.forking,
+    retiring(worker) {
+      const session = worker.session
+      if (!session || session.worker !== worker) return
+      rt.assistantPid(session.id, 0)
+      session.worker = null
+      session.loadedGeneration = 0
+      session.mcpRoute?.release()
+      session.mcpRoute = null
+    },
+  })
+
+  async function withSessionWorker(session, fn) {
+    if (!session.assistant) return fn(sharedAcp)
+    const worker = await assistantWorkers.acquire(session)
+    try { return await fn(worker.acp) } finally { assistantWorkers.release(worker) }
+  }
 
   function rejectSupervisionPolicy(params) {
     if (typeof params?.supervision_instructions === 'string' && params.supervision_instructions.trim() !== '') {
@@ -441,6 +504,9 @@ export function createOpencodeCompanion(options = {}) {
       memoryDir: '',
       startedByPersona,
       loadedGeneration: 0,
+      worker: null,
+      processFailure: false,
+      interruptVersion: 0,
       running: false,
       queued: 0,
       tail: Promise.resolve(),
@@ -911,18 +977,35 @@ export function createOpencodeCompanion(options = {}) {
 
   // ---- session lifecycle & control ----
 
-  async function ensureLoaded(s) {
+  async function ensureLoaded(s, acp) {
     await acp.ensureStarted()
     if (s.loadedGeneration === acp.generation && acp.loadedSessions.has(s.id)) return
     const desiredMode = s.mode
-    if (!s.mcpRoute) s.mcpRoute = await mcpProxy.forSession(s)
-    const res = await acp.loadSession({
-      sessionId: s.id,
-      cwd: s.cwd,
-      mcpServers: [s.mcpRoute.acpServer],
-    })
-    s.loadedGeneration = acp.generation
+    if (!s.mcpRoute) s.mcpRoute = s.assistant
+      ? await mcpProxy.allocate({ session: s, sessionId: s.id, assistant: true })
+      : await mcpProxy.forSession(s)
+    const desired = { model: s.model, effort: s.effort, permission_mode: desiredMode }
+    const res = await (s.assistant ? acp.resumeSession({
+      sessionId: s.id, cwd: s.cwd, mcpServers: [s.mcpRoute.acpServer],
+    }) : acp.loadSession({
+      sessionId: s.id, cwd: s.cwd, mcpServers: [s.mcpRoute.acpServer],
+    }))
     applyConfigOptions(s, res?.configOptions, { preserveMode: desiredMode !== 'default' })
+    if (s.assistant) {
+      try {
+        await applySessionConfig(s, { ...desired, forceModel: Boolean(desired.model), forceEffort: Boolean(desired.effort), forceMode: true }, acp)
+        s.loadedGeneration = acp.generation
+        rt.assistantPid(s.id, acp.pid)
+        return
+      } catch (err) {
+        s.model = desired.model
+        s.effort = desired.effort
+        s.mode = desiredMode
+        s.loadedGeneration = 0
+        throw err
+      }
+    }
+    s.loadedGeneration = acp.generation
     // Never silently downgrade a user-requested plan mode after an ACP child restart.
     if (desiredMode === 'plan') {
       try {
@@ -937,14 +1020,14 @@ export function createOpencodeCompanion(options = {}) {
     }
   }
 
-  async function applySessionConfig(s, { model, effort, permission_mode, forceModel = false }) {
+  async function applySessionConfig(s, { model, effort, permission_mode, forceModel = false, forceEffort = false, forceMode = false }, acp = s.worker?.acp || sharedAcp) {
     if (permission_mode) {
       if (!VALID_MODES.has(permission_mode)) {
         throw new RpcError(`不支持的权限模式 "${permission_mode}"`, 'bad_request')
       }
       const targetNative = permission_mode === 'plan' ? 'plan' : 'build'
       const prevNative = s.mode === 'plan' ? 'plan' : 'build'
-      if (targetNative !== prevNative || permission_mode === 'plan') {
+      if (forceMode || targetNative !== prevNative || permission_mode === 'plan') {
         try {
           const res = await acp.setConfigOption(s.id, 'mode', targetNative)
           applyConfigOptions(s, res?.configOptions, { preserveMode: true })
@@ -977,7 +1060,7 @@ export function createOpencodeCompanion(options = {}) {
       if (!VALID_EFFORTS.has(normalizedEffort)) {
         throw new RpcError(`不支持的思考深度 "${effort}"`, 'bad_request')
       }
-      if (normalizedEffort !== s.effort) {
+      if (forceEffort || normalizedEffort !== s.effort) {
         const configId = s.effortConfigId || 'variant'
         try {
           const res = await acp.setConfigOption(s.id, configId, normalizedEffort)
@@ -1016,9 +1099,13 @@ export function createOpencodeCompanion(options = {}) {
 
     const isAsst = assistantEnabled && (params.assistant === true || isAssistantDir(cwd, home))
     if (isAsst) await ensureGateRules()
-    const route = await mcpProxy.allocate({ assistant: isAsst, mode: reqMode || 'default' })
+    const worker = isAsst ? await assistantWorkers.reserve() : null
+    const acp = worker?.acp || sharedAcp
+    let route
     let sessionId = ''
+    let createdState
     try {
+      route = await mcpProxy.allocate({ assistant: isAsst, mode: reqMode || 'default' })
       await acp.ensureStarted()
       const created = await acp.newSession({ cwd, mcpServers: [route.acpServer] })
       sessionId = typeof created?.sessionId === 'string' ? created.sessionId.trim() : ''
@@ -1028,6 +1115,7 @@ export function createOpencodeCompanion(options = {}) {
         ? snippet(visibleUserText(params.prompt))
         : ''
       // Leave model empty until ACP reports its actual currentValue or setConfigOption succeeds.
+      if (live.has(sessionId) || closedSessions.has(sessionId)) throw new Error('ACP returned an already-owned session')
       const s = createLiveState(sessionId, cwd, {
         assistant: isAsst,
         title: initialTitle,
@@ -1035,6 +1123,11 @@ export function createOpencodeCompanion(options = {}) {
         mode: reqMode || 'default',
         startedByPersona: true,
       })
+      createdState = s
+      if (worker) {
+        assistantWorkers.bind(worker, s)
+        rt.assistantPid(s.id, acp.pid)
+      }
       s.loadedGeneration = acp.generation
       s.mcpRoute = route
       route.bind(s)
@@ -1076,20 +1169,23 @@ export function createOpencodeCompanion(options = {}) {
       rt.sessionsChanged(0)
       return { session: liveRow(s) }
     } catch (err) {
-      route.release()
-      if (sessionId) {
+      route?.release()
+      if (createdState && live.get(sessionId) === createdState) {
         live.delete(sessionId)
         await acp.closeSession(sessionId).catch(() => {})
       }
+      if (worker) await assistantWorkers.discard(worker)
       if (err instanceof RpcError) throw err
       throw new RpcError(`opencode：${err?.message ?? err}`, 'opencode')
+    } finally {
+      if (worker) assistantWorkers.release(worker)
     }
   }
 
   async function resolveSession(id) {
+    if (closedSessions.has(id)) throw new RpcError('opencode 会话已关闭', 'closed')
     let s = live.get(id)
     if (s) return s
-    if (closedSessions.has(id)) throw new RpcError('opencode 会话已关闭', 'closed')
     const dbData = await readDbItems(id)
     if (!dbData) throw new RpcError(`opencode 里没有这个会话（${id}）`, 'not_found')
     const cwd = dbData.meta.directory || home
@@ -1120,136 +1216,151 @@ export function createOpencodeCompanion(options = {}) {
     }
 
     const isAsst = assistantEnabled && (params.assistant === true || s.assistant)
+    if (isAsst && !s.assistant && (s.running || s.queued || s.asks.size)) throw new RpcError('Wait for the Agent turn to finish before changing its role', 'busy')
+    if (isAsst && !s.assistant && sharedAcp.loadedSessions.has(s.id)) {
+      throw new RpcError('Start a new assistant conversation instead of sharing an Agent execution process', 'busy')
+    }
     s.assistant = isAsst
     if (typeof params.memory_dir === 'string' && params.memory_dir) s.memoryDir = params.memory_dir
     const reqMode = params.mode || params.permission_mode || ''
     const reqEffort = typeof params.effort === 'string' && params.effort.trim() ? params.effort.trim().toLowerCase() : ''
+    const worker = isAsst ? await assistantWorkers.acquire(s) : null
+    const acp = worker?.acp || sharedAcp
     const wasBusy = s.running || s.queued > 0
+    const interruptVersion = s.interruptVersion
     s.queued++
+    let enqueued = false
+    try {
 
-    const promptText = isAsst && typeof params.context === 'string' && params.context.trim()
-      ? promptWithContext(rawText, params.context)
-      : rawText
+      const promptText = isAsst && typeof params.context === 'string' && params.context.trim()
+        ? promptWithContext(rawText, params.context)
+        : rawText
 
-    // Validate model/mode/effort upfront when idle so invalid requests fail immediately instead of asynchronously.
-    if (!wasBusy) {
-      if (reqMode && !VALID_MODES.has(reqMode)) {
-        s.queued--
-        throw new RpcError(`不支持的权限模式 "${reqMode}"`, 'bad_request')
-      }
-      if (reqEffort && !VALID_EFFORTS.has(reqEffort)) {
-        s.queued--
-        throw new RpcError(`不支持的思考深度 "${params.effort}"`, 'bad_request')
-      }
-      if (params.model) {
-        try {
-          if (catalog.length === 0) await models().catch(() => {})
-          resolveModel(params.model, catalog)
-        } catch (err) {
-          s.queued--
-          throw err
+      // Validate model/mode/effort upfront when idle so invalid requests fail immediately instead of asynchronously.
+      if (!wasBusy) {
+        if (reqMode && !VALID_MODES.has(reqMode)) {
+          throw new RpcError(`不支持的权限模式 "${reqMode}"`, 'bad_request')
+        }
+        if (reqEffort && !VALID_EFFORTS.has(reqEffort)) {
+          throw new RpcError(`不支持的思考深度 "${params.effort}"`, 'bad_request')
+        }
+        if (params.model) {
+          try {
+            if (catalog.length === 0) await models().catch(() => {})
+            resolveModel(params.model, catalog)
+          } catch (err) {
+            throw err
+          }
+        }
+        if (isAsst) {
+          try {
+            await ensureGateRules()
+          } catch (err) {
+            throw err
+          }
         }
       }
-      if (isAsst) {
-        try {
-          await ensureGateRules()
-        } catch (err) {
-          s.queued--
-          throw err
-        }
-      }
-    }
 
-    const turnDone = s.tail.catch(() => {}).then(async () => {
-      s.queued = Math.max(0, s.queued - 1)
-      if (stopped || closedSessions.has(id)) return
-      s.running = true
-      s.turnError = ''
-      s.abort = new AbortController()
-      s.activeText = ''
-      s.activeThought = ''
-      s.activeThoughtItem = null
-      s.activeTools.clear()
+      const turnDone = s.tail.catch(() => {}).then(async () => {
+        s.queued = Math.max(0, s.queued - 1)
+        if (stopped || closedSessions.has(id) || isAsst && interruptVersion !== s.interruptVersion) return
+        s.running = true
+        s.turnError = ''
+        s.processFailure = false
+        s.abort = new AbortController()
+        s.activeText = ''
+        s.activeThought = ''
+        s.activeThoughtItem = null
+        s.activeTools.clear()
 
-      const shown = visibleUserText(rawText)
-      s.userInputCount++
-      if (shown) {
-        if (params.client_msg_id) {
-          s.sentClientMsgIds.set(s.userInputCount, { text: shown, id: params.client_msg_id })
-        }
-        appendLiveItem(s, {
-          role: 'user',
-          kind: 'text',
-          text: shown,
-          ...(params.client_msg_id ? { client_msg_id: params.client_msg_id } : {}),
-        })
-      }
-      for (const img of images) {
-        appendLiveItem(s, {
-          role: 'user',
-          kind: 'image',
-          image: { mime: img.mime || img.media_type || 'image/png', data: img.data },
-        })
-      }
-      pushLiveSnapshot(s)
-      rt.sessionsChanged(0)
-
-      try {
-        if (isAsst) await ensureGateRules()
-        await ensureLoaded(s)
-        await applySessionConfig(s, { model: params.model, effort: reqEffort, permission_mode: reqMode })
-        const promptBlocks = []
-        if (promptText) promptBlocks.push({ type: 'text', text: promptText })
-        for (const img of images) {
-          promptBlocks.push({
-            type: 'image',
-            data: img.data,
-            mimeType: img.mime || img.media_type || 'image/png',
+        const shown = visibleUserText(rawText)
+        s.userInputCount++
+        if (shown) {
+          if (params.client_msg_id) {
+            s.sentClientMsgIds.set(s.userInputCount, { text: shown, id: params.client_msg_id })
+          }
+          appendLiveItem(s, {
+            role: 'user',
+            kind: 'text',
+            text: shown,
+            ...(params.client_msg_id ? { client_msg_id: params.client_msg_id } : {}),
           })
         }
-        const res = await acp.prompt(id, promptBlocks, 0)
-        flushLiveText(s)
-        if (res?.stopReason === 'cancelled') {
-          appendLiveItem(s, { role: 'system', kind: 'notice', text: '已中断' })
+        for (const img of images) {
+          appendLiveItem(s, {
+            role: 'user',
+            kind: 'image',
+            image: { mime: img.mime || img.media_type || 'image/png', data: img.data },
+          })
         }
-      } catch (err) {
-        flushLiveText(s)
-        if (s.abort?.signal.aborted) {
-          appendLiveItem(s, { role: 'system', kind: 'notice', text: '已中断' })
-        } else {
-          const msg = snippet(err?.message ?? String(err))
-          s.turnError = msg
-          appendLiveItem(s, { role: 'system', kind: 'notice', text: `出错了：${msg}` })
-        }
-      } finally {
-        rt.streamEnd(id)
-        if (s.thoughtTimer) {
-          clearTimeout(s.thoughtTimer)
-          s.thoughtTimer = null
-        }
-        for (const ac of s.asks) ac.abort()
-        s.asks.clear()
-        s.running = false
-        s.abort = null
-        s.updatedAt = now()
-        listCache.at = 0
         pushLiveSnapshot(s)
         rt.sessionsChanged(0)
+
+        try {
+          if (isAsst) await ensureGateRules()
+          await ensureLoaded(s, acp)
+          await applySessionConfig(s, { model: params.model, effort: reqEffort, permission_mode: reqMode })
+          const promptBlocks = []
+          if (promptText) promptBlocks.push({ type: 'text', text: promptText })
+          for (const img of images) {
+            promptBlocks.push({
+              type: 'image',
+              data: img.data,
+              mimeType: img.mime || img.media_type || 'image/png',
+            })
+          }
+          const res = await acp.prompt(id, promptBlocks, 0)
+          flushLiveText(s)
+          if (res?.stopReason === 'cancelled') {
+            appendLiveItem(s, { role: 'system', kind: 'notice', text: '已中断' })
+          }
+        } catch (err) {
+          flushLiveText(s)
+          if (s.abort?.signal.aborted && !s.processFailure) {
+            appendLiveItem(s, { role: 'system', kind: 'notice', text: '已中断' })
+          } else {
+            const msg = snippet(err?.message ?? String(err))
+            s.turnError = msg
+            appendLiveItem(s, { role: 'system', kind: 'notice', text: `出错了：${msg}` })
+          }
+        } finally {
+          rt.streamEnd(id)
+          if (s.thoughtTimer) {
+            clearTimeout(s.thoughtTimer)
+            s.thoughtTimer = null
+          }
+          for (const ac of s.asks) ac.abort()
+          s.asks.clear()
+          s.running = false
+          s.abort = null
+          s.updatedAt = now()
+          listCache.at = 0
+          pushLiveSnapshot(s)
+          rt.sessionsChanged(0)
+        }
+      }).finally(() => { if (worker) assistantWorkers.release(worker) })
+      s.tail = turnDone
+      s.activeTurnDone = turnDone
+      enqueued = true
+      return wasBusy ? { queued: true } : {}
+    } finally {
+      if (!enqueued) {
+        s.queued = Math.max(0, s.queued - 1)
+        if (worker) assistantWorkers.release(worker)
       }
-    })
-    s.tail = turnDone
-    s.activeTurnDone = turnDone
-    return wasBusy ? { queued: true } : {}
+    }
   }
 
   async function interrupt(params) {
     const id = params.session_id
     const s = live.get(id)
     if (!s) return { settled: true }
+    if (s.assistant) s.interruptVersion++
     s.abort?.abort()
     for (const ac of s.asks) ac.abort()
     s.asks.clear()
-    acp.cancel(id)
+    const acp = s.worker?.acp || (!s.assistant ? sharedAcp : null)
+    acp?.cancel(id)
     if (!s.running) return { settled: true }
     const settled = await Promise.race([
       s.tail.then(() => true, () => true),
@@ -1263,11 +1374,11 @@ export function createOpencodeCompanion(options = {}) {
 
   async function modes(params) {
     const s = await resolveSession(params.session_id)
-    await ensureLoaded(s)
-    await applySessionConfig(s, {
-      model: params.model,
-      effort: params.effort,
-      permission_mode: params.permission_mode,
+    await withSessionWorker(s, async (acp) => {
+      await ensureLoaded(s, acp)
+      await applySessionConfig(s, {
+        model: params.model, effort: params.effort, permission_mode: params.permission_mode,
+      }, acp)
     })
     listCache.at = 0
     rt.sessionsChanged(0)
@@ -1294,8 +1405,15 @@ export function createOpencodeCompanion(options = {}) {
       s.abort?.abort()
       for (const ac of s.asks) ac.abort()
       s.asks.clear()
-      acp.cancel(id)
-      await acp.closeSession(id)
+      if (s.assistant) {
+        s.interruptVersion++
+        const worker = s.worker
+        worker?.acp.cancel(id)
+        if (worker) await assistantWorkers.discard(worker)
+      } else {
+        sharedAcp.cancel(id)
+        await sharedAcp.closeSession(id)
+      }
       s.mcpRoute?.release()
       s.mcpRoute = null
       live.delete(id)
@@ -1307,12 +1425,18 @@ export function createOpencodeCompanion(options = {}) {
 
   async function startCompanion() {
     stopped = false
+    if (!assistantReaper) {
+      assistantReaper = setInterval(() => { void assistantWorkers.reap().catch((err) => log(`opencode worker retirement: ${err.message}`)) }, options.assistantReapMs ?? Math.min(30_000, Math.max(10, (options.assistantIdleMs ?? 300_000) / 2)))
+      assistantReaper.unref?.()
+    }
     rt.start()
     void models().catch((err) => log(`persona: opencode initial models: ${err.message}`))
   }
 
   async function stopCompanion() {
     stopped = true
+    clearInterval(assistantReaper)
+    assistantReaper = null
     for (const s of live.values()) {
       if (s.thoughtTimer) {
         clearTimeout(s.thoughtTimer)
@@ -1323,10 +1447,10 @@ export function createOpencodeCompanion(options = {}) {
       s.asks.clear()
       s.mcpRoute?.release()
     }
+    await Promise.allSettled([assistantWorkers.stop(), sharedAcp.stop()])
     live.clear()
     mcpProxy.stop()
     rt.stop()
-    await acp.stop()
     try { db?.close() } catch {}
     db = undefined
   }
@@ -1335,7 +1459,8 @@ export function createOpencodeCompanion(options = {}) {
     start: startCompanion,
     stop: stopCompanion,
     runtime: rt,
-    acp,
+    acp: sharedAcp,
+    assistantWorkers,
     live,
     models,
   }
