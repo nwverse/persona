@@ -101,8 +101,6 @@
   "closeout_found_deployed_yes": "ハブの確認ではデプロイ済み",
   "closeout_found_deployed_no": "ハブの確認では未デプロイ",
   "stopped_line": "このエージェントは停止しています。会話とターミナルはここに残りますが、メッセージは受け付けません。",
-  "resume": "再開",
-  "resume_failed": "このエージェントを再開できませんでした。{error}",
   "resume_in_terminal": "ターミナルで再開",
   "resume_no_engine": "{computer} ではターミナルエンジンが有効になっていません",
   "codex_waiting": "Codexは「{computer}」で開いています。下で最初のメッセージを送るか、ターミナルに直接入力してください。",
