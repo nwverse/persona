@@ -84,6 +84,18 @@ tests, rather than inferring runtime from `Sleep` inside fake-clock tests, and e
 PR watcher's report, still says what failed (`scripts/ci/server-shards.py`). The full scripts suite splits complete sorted discovery
 across two independently isolated jobs, scheduled one at a time; each has its own synthetic HOME and mock ports.
 
+**Why tests stay uncached.** check-fast, the CI shards, `scripts/test/test-server.sh` and the bounded runner's
+commands below all pass `-count=1`, so no Go test result comes from Go's test cache; the build cache still serves
+compilation. The test cache reuses a result while the test binary, its flags and the environment variables and files
+the test process itself consulted are unchanged, and it checks those files only inside the module root, `server/`
+(`go help test`). Server tests read inputs outside it (`spec/fixtures/` alone in 19 packages; `schema/`, `sdk/go/`,
+`docs/`, `apple/` and `android/` sources), which are exactly the paths check-fast routes to the packages that read
+them, and guards such as `internal/archguard` read the module through a child `go list`, whose reads are never
+recorded. A cached run then repeats an old `ok` for a change that breaks the test, while a hit saves only seconds per
+package, and only on packages the change did not reach
+(`docs/lessons/testing.md`, "Go's test cache can repeat a pass the change broke").
+A plain `go test` while editing is fine; a result reported as verification comes from `-count=1`.
+
 Android runs two independently isolated lanes, both at once: `lint-build-test-0` (checker tests, all-module lint, the debug APK and
 the first of two disjoint sorted feature-test shards) and `test-1` (core tests, the second feature shard, and platform/app tests).
 The parts are balanced by measured task time, and each lane runs its parts in one Gradle invocation, so the upstream compilation they
