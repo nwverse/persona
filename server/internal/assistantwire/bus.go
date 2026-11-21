@@ -204,6 +204,8 @@ const (
 	CodeConversationBusy = "busy"
 	// CodeSupervisionRuntime means the runtime cannot receive separate supervision instructions. Nothing was sent.
 	CodeSupervisionRuntime = "assistant_supervision_runtime"
+	// CodeSupervisionAccount means the engine supports the channel but this account has not enabled it.
+	CodeSupervisionAccount = "assistant_supervision_account"
 	// CodeBodyIncomplete: MethodHTTPStreamed's body did not arrive whole (the relay was not there, broke or carried
 	// another size). Nothing ran: the hub sends the request again as MethodHTTP.
 	CodeBodyIncomplete = "body_incomplete"

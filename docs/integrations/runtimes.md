@@ -474,6 +474,33 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | Managed Agents (`managed-agents`, configurable) | `integrations/managed-agents/companion.mjs`: standalone companion for Volcengine Ark Managed Agents and compatible endpoints (cloud or self-hosted, the user's own key); reads sessions over the REST API, sends, interrupts, starts, and answers tool confirmations and question / plan tools on the phone; `--listen` makes it a daemon | `docs/integrations/managed-agents.md` |
 | echo (example) | `integrations/runtime-sdk/examples/echo-runtime.mjs` (with `--listen <port>` it's a daemon) | "Minimal example" in this doc, `docs/integrations/daemons.md` |
 
+### Separate task follow-up instructions
+
+Assistant support and supervision support are independent. A launcher may run an ordinary
+Assistant chat without an authoritative instruction channel; its tasks then use the existing
+compatible-supervisor fallback. Launcher inventory exposes `supervision_policy` only on the
+runtime's primary Assistant launcher after its verification succeeds. An absent capability
+never grants supervision. Inventory is descriptive; the execution path checks again before sending.
+
+| Engine / path | Separate supervision instruction channel |
+| --- | --- |
+| Claude Code / Messages | Node-owned appended system instructions |
+| Codex app-server | Node-owned developer instructions |
+| Antigravity CLI | Isolated worker policy directory; fake runtime tests only |
+| OpenCode ACP companion | Isolated worker; pinned-version startup verification of process instructions, preferring ACP append when advertised |
+| OpenCode plugin | No isolated instruction channel; supervision refused |
+| DSH / Grok | No verified separate channel; supervision refused |
+| Cursor ACP / TRAE ACP | No verified channel or per-session MCP identity contract; supervision refused |
+| Cursor SDK | Optional separate runtime under evaluation; no capability is advertised until account and permission contracts pass |
+| pi / omp / other runtimes | Only an explicitly advertised, verified runtime channel permits supervision; unknown capability is refused |
+
+Refusals list the compatible launchers in the destination computer's inventory, without
+starting a provider or assuming that Claude/Codex are installed. An unreadable/empty inventory
+says that none was detected. `assistant_supervision_account` distinguishes an engine whose
+system instructions are supported but not enabled for the current account; runtimes must use
+that code only after an authoritative account rejection, never infer it from a generic failure.
+Its translated explanation asks the owner to enable the account feature with the engine provider.
+
 ### Antigravity Desktop (macOS, experimental)
 
 With Antigravity Desktop open and the Persona node running, start the desktop companion from the checkout:
