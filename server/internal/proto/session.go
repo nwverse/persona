@@ -592,6 +592,12 @@ const CodeTurnOverBackground = "turn_over_background"
 // #4754): nothing was typed, and it takes no message until it is resumed (the user's Resume on its terminal page).
 const CodeAgentStopped = "agent_stopped"
 
+// CodeResumeUnknown is what session.start refuses a resume with when the computer has nothing of the conversation to
+// resume (no transcript, start or record of the id), and, for a resume carrying resume_outside_health, also when what
+// it has started or was recorded in a health space or an Agent folder kept out of Persona (#10941): a new
+// conversation would otherwise be listed under the id of another. Nothing was started. 409.
+const CodeResumeUnknown = "resume_unknown"
+
 // PendingSwitch is Session.PendingSwitch: the launcher the Agent moves to, the model and effort to run it with ("":
 // the launcher's own default model; the effort it runs with now), and when the user picked it. Agent is the engine
 // ("claude" or "codex") a switch to another engine moves the conversation to (#5054, docs/protocol/protocol.md

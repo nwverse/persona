@@ -1016,12 +1016,21 @@ type memStore struct {
 	mu   sync.Mutex
 	vals map[string][]byte
 	puts int
-	// failSetting: what reading a setting fails with (nil: it reads).
+	// failSetting: what reading a setting fails with (nil: it reads; set through setFailSetting).
 	failSetting error
 	// failPut: what writing settings fails with (nil: it writes); nothing is written then.
 	failPut error
 	// failKeys: what reading one key fails with, the other keys still reading (set through failKey).
 	failKeys map[string]error
+}
+
+// setFailSetting makes reading every setting fail with err from now on; nil reads them again. It takes the lock, as the
+// manager's own goroutines (the space backfill's read of the to-dos, conversation_space_backfill.go) read settings
+// while a test runs.
+func (m *memStore) setFailSetting(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failSetting = err
 }
 
 // failKey makes reading key fail with err from now on; nil reads it again.
@@ -1070,6 +1079,11 @@ func (noPlans) MarkFeedSent(context.Context, string, string, time.Time, json.Raw
 }
 func (noPlans) FeedByRef(context.Context, string, []string, int) ([]db.FeedRow, error) {
 	return nil, errors.New("no assistant_feed here")
+}
+
+// FeedConversations: none, as no item is ever written here (what an extension is shown of a to-do, todo_scope.go).
+func (noPlans) FeedConversations(context.Context, []string, []string) (map[string][]string, error) {
+	return map[string][]string{}, nil
 }
 
 func (m *memStore) Setting(_ context.Context, key string, out any) (bool, error) {
