@@ -58,7 +58,7 @@ func (s *Service) defaultPlanSupervisor(ctx context.Context, conversation, paren
 	if s.supervises(ctx, conversation) {
 		return "", false // the main conversation and leaders supervise their own (supervises)
 	}
-	if c, ok := s.session(ctx, s.settings(ctx).MachineID, conversation); ok && c.Assistant && !s.isBackground(ctx, conversation) {
+	if c, ok := s.session(ctx, s.settings(ctx).MachineID, conversation); ok && c.Assistant && !s.isBackgroundSession(ctx, conversation) {
 		return conversation, true
 	}
 	main := s.settings(ctx).Main

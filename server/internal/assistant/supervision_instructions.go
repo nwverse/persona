@@ -45,7 +45,7 @@ func (s *Service) supervisionInstructions(ctx context.Context, machine, id strin
 	if known && runtimeSessionLacksSupervisionPolicy(c) {
 		return "", nil
 	}
-	if !main && !(id == cfg.BackgroundSupervisor && cfg.BackgroundSupervisorMachineID == machine) && !slices.Contains(cfg.Leaders, id) {
+	if !main && !(id == cfg.BackgroundSupervisor && cfg.BackgroundSupervisorMachineID == machine) && !s.isBackgroundCallerOn(ctx, machine, id) && !slices.Contains(cfg.Leaders, id) {
 		// Side chats genuinely supervise their own open tasks (#4669). Sharing the
 		// directory, a scheduled purpose, or the ability to plan is not a role.
 		if known && (!c.Assistant || c.Space != "") {
