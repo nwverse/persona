@@ -99,6 +99,8 @@ type Node struct {
 
 	// doctorAt replaces the places node.doctor looks at (tests; doctor_rpc.go).
 	doctorAt func() DoctorOptions
+	// serviceRunner replaces OS command execution for machine.services* RPCs in tests.
+	serviceRunner *machineServiceRunner
 	// fileReadDeps replaces file.read's filesystem operations in tests.
 	fileReadDeps *fileReadDependencies
 
@@ -854,6 +856,14 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return machdiag.Diagnose(ctx, params)
 	case proto.MethodMachineCleanup:
 		return machdiag.Cleanup(ctx, params)
+	}
+	switch method { // the machine page's services and containers (machine_services.go)
+	case proto.MethodMachineServices:
+		return n.machineServices(ctx, params)
+	case proto.MethodMachineServiceLogs:
+		return n.machineServiceLogs(ctx, params)
+	case proto.MethodMachineServiceAction:
+		return n.machineServiceAction(ctx, params)
 	}
 	if method == codexTakeoverPrepare || method == codexTakeoverCommit {
 		return n.codexTakeoverCall(ctx, method, params)
