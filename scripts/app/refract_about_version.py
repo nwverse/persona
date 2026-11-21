@@ -229,6 +229,16 @@ def report_process_failure(error: subprocess.CalledProcessError) -> None:
             sys.stderr.write("\n")
 
 
+def restore_reviewed_output(reviewed: bytes) -> None:
+    try:
+        GENERATED.write_bytes(reviewed)
+        restored = GENERATED.read_bytes() == reviewed
+    except OSError as error:
+        raise ValueError(f"Could not restore the reviewed Kotlin after a generation failure: {error}") from error
+    if not restored:
+        fail("Could not restore the reviewed Kotlin after a generation failure: restored bytes differ")
+
+
 def check_unsupported_input(cli: Path, work: Path) -> None:
     """A valid sibling must not be published when another input has no native-component mapping."""
     unsupported = work / "UnsupportedAboutControl.swift"
@@ -294,7 +304,8 @@ def main() -> int:
             before = GENERATED.read_bytes()
             check_unsupported_input(cli, work / "rejected")
             if GENERATED.read_bytes() != before:
-                fail("Rejected input changed the reviewed generated Kotlin")
+                restore_reviewed_output(before)
+                fail("Rejected input changed the reviewed Kotlin; the original reviewed bytes were restored")
             if args.mode == "generate":
                 # The mapping's own output.directory is not used: this command is run only from Persona's root.
                 # Its second backend is schema validation only and never published as a Persona destination.
@@ -325,16 +336,26 @@ def main() -> int:
                 if "AboutVersionModel" in source or "AboutVersionSnapshot" in source or "generated.AboutVersionRow" in source:
                     fail(f"Ordinary production source must exclude the pilot: {production.relative_to(ROOT)}")
             if args.mode == "generate":
-                # A second real invocation is the deterministic output gate, not a handwritten golden.
-                before = GENERATED.read_bytes()
+                # Compare two invocations, but never confuse the first unreviewed output with the entry snapshot.
+                first_generation = GENERATED.read_bytes()
                 run(cli, "generate", GENERATED.parent, work / "schema-only")
-                if GENERATED.read_bytes() != before:
-                    GENERATED.write_bytes(before)
-                    fail("Pinned generation is not deterministic; the reviewed Kotlin was restored")
+                if GENERATED.read_bytes() != first_generation:
+                    fail("Pinned generation is not deterministic")
                 print(f"Generated {GENERATED.relative_to(ROOT)} with pinned source {lock['commit']}")
             print(f"Refract About Version {args.mode}: PASSED ({lock['commit']}); Android-only, no runtime")
     except (ValueError, OSError, subprocess.SubprocessError, json.JSONDecodeError, tarfile.TarError,
             urllib.error.URLError) as error:
+        if args.mode == "generate" and "before" in locals():
+            if isinstance(error, subprocess.CalledProcessError):
+                report_process_failure(error)
+            print(f"Refract About Version: FAILED: {error}", file=sys.stderr)
+            try:
+                restore_reviewed_output(before)
+            except ValueError as restore_error:
+                print(f"Refract About Version: FAILED: {restore_error}", file=sys.stderr)
+                return 1
+            print("Refract About Version: original reviewed Kotlin restored after generation failure", file=sys.stderr)
+            return 1
         if isinstance(error, subprocess.CalledProcessError):
             report_process_failure(error)
         print(f"Refract About Version: FAILED: {error}", file=sys.stderr)
