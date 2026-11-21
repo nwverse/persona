@@ -388,8 +388,8 @@ export function pendingView(s: Session, listOf: (launcher: string) => ModelList)
   return out;
 }
 
-export function pillView(s: Session, e: ModelList): PillView {
-  const model = pillModel(e.list?.models ?? [], s.model);
+export function pillView(s: Session, e: ModelList, displayModel?: string): PillView {
+  const model = pillModel(e.list?.models ?? [], s.model || displayModel);
   const out: PillView = { engine: sessionEngine(s), provider: sessionLauncher(s), loading: e.list === undefined && Boolean(e.loading), failed: e.list === undefined && Boolean(e.error) };
   if (s.agent_label) out.engineLabel = s.agent_label;
   if (model) out.model = model;
