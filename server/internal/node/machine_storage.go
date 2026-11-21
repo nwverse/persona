@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -46,8 +47,13 @@ const (
 
 var errStorageOutsideRoot = errors.New("path is outside allowed root")
 
+type storageProcEntry struct {
+	comm string
+	args []string
+}
+
 type storageProcSnapshot struct {
-	names map[string]bool
+	procs []storageProcEntry
 	known bool
 	err   error
 }
@@ -62,7 +68,7 @@ type storageDeps struct {
 	available      func(string) (int64, bool)
 	runCmd         func(ctx context.Context, name string, args ...string) ([]byte, error)
 	lookPath       func(string) (string, error)
-	runningProcs   func(ctx context.Context) (map[string]bool, error)
+	runningProcs   func(ctx context.Context) ([]storageProcEntry, error)
 	activeLogFiles func(ctx context.Context, dirs []string) map[string]bool
 	cleanupTimeout time.Duration
 }
@@ -90,8 +96,8 @@ func (n *Node) defaultStorageDeps() storageDeps {
 		available: sysmon.AvailableBytes,
 		runCmd:    runCmd,
 		lookPath:  exec.LookPath,
-		runningProcs: func(ctx context.Context) (map[string]bool, error) {
-			return readRunningProcNamesForOS(ctx, goos, runCmd)
+		runningProcs: func(ctx context.Context) ([]storageProcEntry, error) {
+			return readRunningProcsForOS(ctx, goos, runCmd)
 		},
 		activeLogFiles: func(ctx context.Context, dirs []string) map[string]bool {
 			return n.collectActiveStorageLogFiles(ctx, goos, dirs)
@@ -231,12 +237,7 @@ func storageDirTargets(deps storageDeps) []storageDirTarget {
 			goMod = filepath.Join(home, "go", "pkg", "mod")
 		}
 	}
-	npmCache := ""
-	if v := env("npm_config_cache"); v != "" {
-		npmCache = filepath.Join(v, "_cacache")
-	} else if home != "" {
-		npmCache = filepath.Join(home, ".npm", "_cacache")
-	}
+	npmCache := resolveNpmCacheDir(home, env("npm_config_cache"))
 	pipCache := env("PIP_CACHE_DIR")
 	if pipCache == "" && cacheBase != "" {
 		pipCache = filepath.Join(cacheBase, "pip")
@@ -283,7 +284,7 @@ func storageDirTargets(deps storageDeps) []storageDirTarget {
 			targetID:   proto.StorageTargetNpmCache,
 			roots:      homeRoots,
 			paths:      nonEmptyPaths(npmCache),
-			users:      []string{"npm", "npx", "node"},
+			users:      []string{"npm", "npx"},
 			action:     "empty_dir_contents",
 		},
 		{
@@ -310,6 +311,27 @@ func storageDirTargets(deps storageDeps) []storageDirTarget {
 			action:     "empty_dir_contents",
 		},
 	}
+}
+
+func resolveNpmCacheDir(home, envCache string) string {
+	if v := strings.TrimSpace(envCache); v != "" {
+		clean := filepath.Clean(v)
+		if !filepath.IsAbs(clean) {
+			return ""
+		}
+		if filepath.Base(clean) == "_cacache" {
+			return clean
+		}
+		cacache := filepath.Join(clean, "_cacache")
+		if info, err := os.Lstat(cacache); err == nil && info.Mode()&fs.ModeSymlink == 0 && info.IsDir() {
+			return cacache
+		}
+		return clean
+	}
+	if home != "" {
+		return filepath.Join(home, ".npm", "_cacache")
+	}
+	return ""
 }
 
 func nonEmptyPaths(paths ...string) []string {
@@ -1185,7 +1207,8 @@ func boundedDirSize(ctx context.Context, root string, maxDepth int, budget *int)
 }
 
 func guardStorageDirAnyRoot(roots []string, p string) (string, error) {
-	var lastErr error = errStorageOutsideRoot
+	var notExistErr error
+	var specificErr error
 	for _, r := range roots {
 		if r == "" {
 			continue
@@ -1195,11 +1218,25 @@ func guardStorageDirAnyRoot(roots []string, p string) (string, error) {
 			return real, nil
 		}
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", err
+			if notExistErr == nil {
+				notExistErr = err
+			}
+			continue
 		}
-		lastErr = err
+		if specificErr == nil || errors.Is(specificErr, errStorageOutsideRoot) {
+			specificErr = err
+		}
 	}
-	return "", lastErr
+	if notExistErr != nil {
+		if specificErr != nil && !errors.Is(specificErr, errStorageOutsideRoot) {
+			return "", specificErr
+		}
+		return "", notExistErr
+	}
+	if specificErr != nil {
+		return "", specificErr
+	}
+	return "", errStorageOutsideRoot
 }
 
 // guardStorageDir resolves p and ensures it is a real directory strictly inside root with no symlink traversal.
@@ -1320,14 +1357,16 @@ func readStorageProcs(ctx context.Context, deps storageDeps) storageProcSnapshot
 	if deps.runningProcs == nil {
 		return storageProcSnapshot{err: errors.New("process enumeration unavailable")}
 	}
-	names, err := deps.runningProcs(ctx)
-	if err != nil || names == nil {
+	procs, err := deps.runningProcs(ctx)
+	if err != nil || procs == nil {
 		return storageProcSnapshot{err: cmp.Or(err, errors.New("process enumeration unavailable"))}
 	}
-	return storageProcSnapshot{names: names, known: true}
+	return storageProcSnapshot{procs: procs, known: true}
 }
 
 // storageToolchainInUse reports whether any toolchain executable in users is running.
+// It inspects full process command lines (not just truncated comm names) so npm/npx
+// launched via node are detected accurately without unrelated node servers blocking cleanup.
 // When users is non-empty and process enumeration is unavailable (procs.known == false),
 // it fails closed (inUse=true, unknown=true) so destructive cleanup never proceeds blindly.
 func storageToolchainInUse(users []string, procs storageProcSnapshot) (inUse bool, unknown bool) {
@@ -1337,40 +1376,219 @@ func storageToolchainInUse(users []string, procs storageProcSnapshot) (inUse boo
 	if !procs.known {
 		return true, true
 	}
-	for proc := range procs.names {
-		lp := strings.ToLower(proc)
-		for _, u := range users {
-			rest, ok := strings.CutPrefix(lp, strings.ToLower(u))
-			if ok && strings.Trim(rest, "0123456789.") == "" {
-				return true, false
-			}
+	for _, proc := range procs.procs {
+		if storageProcMatchesAnyUser(proc, users) {
+			return true, false
 		}
 	}
 	return false, false
 }
 
-// readRunningProcNamesForOS enumerates running executable names on Linux (/proc),
-// macOS (/bin/ps -axo comm=), and Windows (tasklist /FO CSV /NH). It returns an error
-// whenever process enumeration is unavailable or unsupported so callers fail closed.
-func readRunningProcNamesForOS(ctx context.Context, goos string, runCmd func(context.Context, string, ...string) ([]byte, error)) (map[string]bool, error) {
+func storageProcMatchesAnyUser(proc storageProcEntry, users []string) bool {
+	if len(proc.args) > 0 {
+		exe, rest := unwrapStorageProcCmd(proc.args)
+		for _, u := range users {
+			if storageExeMatchesTool(exe, u) {
+				return true
+			}
+			lu := strings.ToLower(u)
+			if (lu == "npm" || lu == "npx") && (storageExeMatchesTool(exe, "node") || storageExeMatchesTool(exe, "nodejs")) {
+				if storageNodeArgsInvokeNpmTool(rest, lu) {
+					return true
+				}
+			}
+			if lu == "pip" && storageExeMatchesTool(exe, "python") {
+				if storagePythonArgsInvokePip(rest) {
+					return true
+				}
+			}
+		}
+	}
+	if proc.comm != "" {
+		commExe := storageCmdTokenExe(proc.comm)
+		for _, u := range users {
+			if storageExeMatchesTool(commExe, u) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func unwrapStorageProcCmd(args []string) (string, []string) {
+	if len(args) == 0 {
+		return "", nil
+	}
+	// Handle processes that overwrite argv[0] via process.title (e.g. "npm install").
+	if len(args) == 1 && !strings.ContainsAny(args[0], `/\`) {
+		if fields := strings.Fields(args[0]); len(fields) > 0 {
+			args = fields
+		}
+	}
+	i := 0
+	exe := storageCmdTokenExe(args[0])
+	if exe == "env" {
+		i = 1
+		for i < len(args) {
+			tok := args[i]
+			if tok == "--" {
+				i++
+				break
+			}
+			if tok == "-u" || tok == "--unset" || tok == "-C" || tok == "--chdir" {
+				i += 2
+				continue
+			}
+			if strings.HasPrefix(tok, "-") {
+				i++
+				continue
+			}
+			if strings.Contains(tok, "=") && !strings.ContainsAny(tok, `/\`) {
+				i++
+				continue
+			}
+			break
+		}
+		if i < len(args) {
+			return storageCmdTokenExe(args[i]), args[i+1:]
+		}
+		return "", nil
+	}
+	return exe, args[1:]
+}
+
+func storageCmdTokenExe(tok string) string {
+	tok = strings.TrimSpace(tok)
+	if tok == "" {
+		return ""
+	}
+	// If there is no path separator, a space-separated token (e.g. comm/process.title "npm install")
+	// starts with the executable name.
+	if !strings.ContainsAny(tok, `/\`) {
+		if fields := strings.Fields(tok); len(fields) > 0 {
+			tok = fields[0]
+		}
+	}
+	tok = strings.TrimPrefix(tok, "-")
+	norm := strings.ReplaceAll(tok, "\\", "/")
+	base := path.Base(norm)
+	base = strings.TrimPrefix(base, "-")
+	base = strings.ToLower(strings.TrimSpace(base))
+	base = strings.TrimSuffix(base, ".exe")
+	base = strings.TrimSuffix(base, ".cmd")
+	base = strings.TrimSuffix(base, ".bat")
+	if base == "." || base == "/" {
+		return ""
+	}
+	return base
+}
+
+func storageExeMatchesTool(exe, tool string) bool {
+	exe = strings.ToLower(strings.TrimSpace(exe))
+	tool = strings.ToLower(strings.TrimSpace(tool))
+	if exe == "" || tool == "" {
+		return false
+	}
+	rest, ok := strings.CutPrefix(exe, tool)
+	return ok && strings.Trim(rest, "0123456789.") == ""
+}
+
+func storageNodeFlagTakesArg(flag string) bool {
+	switch flag {
+	case "-r", "--require", "--import", "--loader", "--experimental-loader",
+		"-C", "--conditions", "--env-file", "--env-file-if-exists",
+		"--diagnostic-dir", "--redirect-warnings", "--title",
+		"--cpu-prof-dir", "--cpu-prof-name", "--heap-prof-dir", "--heap-prof-name",
+		"--inspect-port", "--heapsnapshot-signal", "--input-type",
+		"--test-name-pattern", "--test-reporter", "--test-reporter-destination",
+		"--watch-path":
+		return true
+	default:
+		return false
+	}
+}
+
+func storageNodeArgsInvokeNpmTool(args []string, tool string) bool {
+	var script string
+	for i := 0; i < len(args); i++ {
+		tok := args[i]
+		if tok == "" {
+			continue
+		}
+		if tok == "--" {
+			if i+1 < len(args) {
+				script = args[i+1]
+			}
+			break
+		}
+		if tok == "-e" || tok == "--eval" || tok == "-p" || tok == "--print" {
+			return false
+		}
+		if strings.HasPrefix(tok, "-") {
+			if !strings.Contains(tok, "=") && storageNodeFlagTakesArg(tok) {
+				i++
+			}
+			continue
+		}
+		script = tok
+		break
+	}
+	if script == "" {
+		return false
+	}
+	norm := strings.ToLower(strings.ReplaceAll(script, "\\", "/"))
+	base := path.Base(norm)
+	switch tool {
+	case "npm":
+		return base == "npm" || base == "npm.js" || base == "npm-cli.js" || base == "npm-cli.cjs" || base == "npm-cli.mjs" ||
+			strings.Contains(norm, "/node_modules/npm/bin/npm")
+	case "npx":
+		return base == "npx" || base == "npx.js" || base == "npx-cli.js" || base == "npx-cli.cjs" || base == "npx-cli.mjs" ||
+			strings.Contains(norm, "/node_modules/npm/bin/npx")
+	default:
+		return false
+	}
+}
+
+func storagePythonArgsInvokePip(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		tok := args[i]
+		if tok == "-m" && i+1 < len(args) {
+			return storageExeMatchesTool(args[i+1], "pip")
+		}
+		if tok == "-c" {
+			return false
+		}
+		if strings.HasPrefix(tok, "-") {
+			continue
+		}
+		return storageExeMatchesTool(storageCmdTokenExe(tok), "pip")
+	}
+	return false
+}
+
+// readRunningProcsForOS enumerates running processes with full command lines where supported:
+// Linux (/proc/<pid>/cmdline + comm), macOS (/bin/ps -axo args=), and Windows (tasklist /FO CSV /NH).
+// It returns an error whenever process enumeration is unavailable or unsupported so callers fail closed.
+func readRunningProcsForOS(ctx context.Context, goos string, runCmd func(context.Context, string, ...string) ([]byte, error)) ([]storageProcEntry, error) {
 	switch goos {
 	case "linux":
-		return readLinuxProcNames("/proc")
+		return readLinuxProcs("/proc")
 	case "darwin":
 		if runCmd == nil {
 			return nil, errors.New("ps command runner unavailable")
 		}
 		cmdCtx, cancel := context.WithTimeout(ctx, storageProcCmdTimeout)
 		defer cancel()
-		out, err := runCmd(cmdCtx, "/bin/ps", "-axo", "comm=")
+		out, err := runCmd(cmdCtx, "/bin/ps", "-axo", "args=")
 		if err != nil {
 			return nil, fmt.Errorf("ps: %w", err)
 		}
-		names := parsePSCommLines(out)
-		if len(names) == 0 {
+		procs := parsePSArgsLines(out)
+		if len(procs) == 0 {
 			return nil, errors.New("ps returned no processes")
 		}
-		return names, nil
+		return procs, nil
 	case "windows":
 		if runCmd == nil {
 			return nil, errors.New("tasklist command runner unavailable")
@@ -1381,22 +1599,22 @@ func readRunningProcNamesForOS(ctx context.Context, goos string, runCmd func(con
 		if err != nil {
 			return nil, fmt.Errorf("tasklist: %w", err)
 		}
-		names := parseTasklistCSV(out)
-		if len(names) == 0 {
+		procs := parseTasklistCSV(out)
+		if len(procs) == 0 {
 			return nil, errors.New("tasklist returned no processes")
 		}
-		return names, nil
+		return procs, nil
 	default:
 		return nil, fmt.Errorf("process enumeration unsupported on %s", goos)
 	}
 }
 
-func readLinuxProcNames(procRoot string) (map[string]bool, error) {
+func readLinuxProcs(procRoot string) ([]storageProcEntry, error) {
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", procRoot, err)
 	}
-	out := map[string]bool{}
+	var out []storageProcEntry
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -1405,10 +1623,16 @@ func readLinuxProcNames(procRoot string) (map[string]bool, error) {
 		if len(name) == 0 || name[0] < '0' || name[0] > '9' {
 			continue
 		}
-		if b, err := os.ReadFile(filepath.Join(procRoot, name, "comm")); err == nil {
-			if comm := strings.ToLower(strings.TrimSpace(string(b))); comm != "" {
-				out[comm] = true
-			}
+		pidDir := filepath.Join(procRoot, name)
+		var entry storageProcEntry
+		if b, err := os.ReadFile(filepath.Join(pidDir, "comm")); err == nil {
+			entry.comm = strings.TrimSpace(string(b))
+		}
+		if b, err := os.ReadFile(filepath.Join(pidDir, "cmdline")); err == nil && len(b) > 0 {
+			entry.args = parseLinuxCmdline(b)
+		}
+		if entry.comm != "" || len(entry.args) > 0 {
+			out = append(out, entry)
 		}
 	}
 	if len(out) == 0 {
@@ -1417,28 +1641,41 @@ func readLinuxProcNames(procRoot string) (map[string]bool, error) {
 	return out, nil
 }
 
-// parsePSCommLines parses `ps -axo comm=` output (macOS/BSD), normalizing paths to lowercase base executable names.
-func parsePSCommLines(raw []byte) map[string]bool {
-	out := map[string]bool{}
+func parseLinuxCmdline(raw []byte) []string {
+	parts := bytes.Split(raw, []byte{0})
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if s := strings.TrimSpace(string(p)); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// parsePSArgsLines parses `ps -axo args=` output (macOS/BSD) into full command-line entries.
+func parsePSArgsLines(raw []byte) []storageProcEntry {
+	var out []storageProcEntry
 	sc := bufio.NewScanner(bytes.NewReader(raw))
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
 			continue
 		}
-		line = strings.TrimPrefix(line, "-")
-		base := filepath.Base(line)
-		base = strings.TrimPrefix(base, "-")
-		if name := strings.ToLower(strings.TrimSpace(base)); name != "" && name != "." && name != "/" {
-			out[name] = true
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
 		}
+		out = append(out, storageProcEntry{
+			comm: storageCmdTokenExe(fields[0]),
+			args: fields,
+		})
 	}
 	return out
 }
 
 // parseTasklistCSV parses `tasklist /FO CSV /NH` output on Windows, stripping `.exe` suffixes.
-func parseTasklistCSV(raw []byte) map[string]bool {
-	out := map[string]bool{}
+func parseTasklistCSV(raw []byte) []storageProcEntry {
+	var out []storageProcEntry
 	r := csv.NewReader(bytes.NewReader(raw))
 	r.FieldsPerRecord = -1
 	for {
@@ -1449,10 +1686,9 @@ func parseTasklistCSV(raw []byte) map[string]bool {
 		if len(rec) == 0 {
 			continue
 		}
-		name := strings.ToLower(strings.TrimSpace(rec[0]))
-		name = strings.TrimSuffix(name, ".exe")
+		name := storageCmdTokenExe(rec[0])
 		if name != "" {
-			out[name] = true
+			out = append(out, storageProcEntry{comm: name})
 		}
 	}
 	return out

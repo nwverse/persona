@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -39,8 +40,8 @@ func testStorageDeps(t *testing.T) (storageDeps, string, string) {
 		available: func(string) (int64, bool) { return 50 << 30, true },
 		lookPath:  func(string) (string, error) { return "", errors.New("not found") },
 		runCmd:    func(context.Context, string, ...string) ([]byte, error) { return nil, errors.New("not called") },
-		runningProcs: func(context.Context) (map[string]bool, error) {
-			return map[string]bool{}, nil
+		runningProcs: func(context.Context) ([]storageProcEntry, error) {
+			return []storageProcEntry{}, nil
 		},
 		activeLogFiles: func(context.Context, []string) map[string]bool {
 			return map[string]bool{}
@@ -232,7 +233,9 @@ func TestMachineStorageCleanupRefusesSymlinkEscapeAndRespectsInUse(t *testing.T)
 		t.Fatal(err)
 	}
 	writeStorageFile(t, filepath.Join(home, ".cache", "go-build", "build.o"), 1024)
-	deps.runningProcs = func(context.Context) (map[string]bool, error) { return map[string]bool{"go": true}, nil }
+	deps.runningProcs = func(context.Context) ([]storageProcEntry, error) {
+		return []storageProcEntry{{comm: "go", args: []string{"/usr/local/go/bin/go", "test", "./..."}}}, nil
+	}
 
 	res, err := runMachineStorageCleanup(context.Background(), deps, proto.StorageCleanupParams{
 		Targets: []string{proto.StorageTargetPipCache, proto.StorageTargetGoBuild},
@@ -263,7 +266,7 @@ func TestMachineStorageCleanupFailsClosedWhenProcessListUnavailable(t *testing.T
 	writeStorageFile(t, pipFile, 512)
 	writeStorageFile(t, backupFile, 4096)
 
-	deps.runningProcs = func(context.Context) (map[string]bool, error) {
+	deps.runningProcs = func(context.Context) ([]storageProcEntry, error) {
 		return nil, errors.New("procfs unavailable")
 	}
 
@@ -314,31 +317,49 @@ func TestMachineStorageCleanupFailsClosedWhenProcessListUnavailable(t *testing.T
 	}
 }
 
-func TestReadRunningProcNamesCrossPlatformAndUnsupportedFailClosed(t *testing.T) {
-	// Darwin ps output parsing (full paths, login shell dash, mixed case Python)
+func TestReadRunningProcsCrossPlatformAndUnsupportedFailClosed(t *testing.T) {
+	// Darwin ps -axo args= parsing (full paths, login shell dash, mixed case Python, node + npm-cli.js vs unrelated node)
 	darwinRun := func(_ context.Context, name string, args ...string) ([]byte, error) {
-		if name != "/bin/ps" {
+		if name != "/bin/ps" || len(args) != 2 || args[0] != "-axo" || args[1] != "args=" {
 			t.Fatalf("unexpected darwin cmd: %s %v", name, args)
 		}
-		return []byte("/opt/homebrew/bin/go\n-zsh\n/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python\n/usr/local/bin/node\n"), nil
+		return []byte(strings.Join([]string{
+			"/opt/homebrew/bin/go build ./...",
+			"-zsh",
+			"/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python -m pip install foo",
+			"/usr/local/bin/node /app/dist/server.js --port 3000",
+		}, "\n") + "\n"), nil
 	}
-	darwinProcs, err := readRunningProcNamesForOS(context.Background(), "darwin", darwinRun)
+	darwinProcs, err := readRunningProcsForOS(context.Background(), "darwin", darwinRun)
 	if err != nil {
 		t.Fatalf("darwin process enum failed: %v", err)
 	}
-	snap := storageProcSnapshot{names: darwinProcs, known: true}
+	snap := storageProcSnapshot{procs: darwinProcs, known: true}
 	if inUse, unknown := storageToolchainInUse([]string{"go", "gopls"}, snap); !inUse || unknown {
 		t.Errorf("expected go in use on darwin, got inUse=%v unknown=%v", inUse, unknown)
 	}
 	if inUse, unknown := storageToolchainInUse([]string{"pip", "python"}, snap); !inUse || unknown {
-		t.Errorf("expected python in use on darwin, got inUse=%v unknown=%v", inUse, unknown)
+		t.Errorf("expected python/pip in use on darwin, got inUse=%v unknown=%v", inUse, unknown)
 	}
-	if inUse, unknown := storageToolchainInUse([]string{"npm", "node"}, snap); !inUse || unknown {
-		t.Errorf("expected node in use on darwin, got inUse=%v unknown=%v", inUse, unknown)
+	// An unrelated node server must NOT block npm/npx cleanup.
+	if inUse, unknown := storageToolchainInUse([]string{"npm", "npx"}, snap); inUse || unknown {
+		t.Errorf("unrelated node server should not mark npm/npx in use, got inUse=%v unknown=%v", inUse, unknown)
+	}
+
+	// Darwin ps with node invoking npm-cli.js MUST mark npm in use.
+	darwinNpmRun := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte("/usr/local/bin/node --max-old-space-size=4096 /opt/homebrew/lib/node_modules/npm/bin/npm-cli.js install\n"), nil
+	}
+	darwinNpmProcs, err := readRunningProcsForOS(context.Background(), "darwin", darwinNpmRun)
+	if err != nil {
+		t.Fatalf("darwin npm process enum failed: %v", err)
+	}
+	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: darwinNpmProcs, known: true}); !inUse {
+		t.Errorf("expected node running npm-cli.js to mark npm in use on darwin")
 	}
 
 	// Darwin ps failure must fail closed
-	if _, err := readRunningProcNamesForOS(context.Background(), "darwin", func(context.Context, string, ...string) ([]byte, error) {
+	if _, err := readRunningProcsForOS(context.Background(), "darwin", func(context.Context, string, ...string) ([]byte, error) {
 		return nil, errors.New("ps failed")
 	}); err == nil {
 		t.Fatal("expected error when darwin ps fails")
@@ -351,24 +372,244 @@ func TestReadRunningProcNamesCrossPlatformAndUnsupportedFailClosed(t *testing.T)
 		}
 		return []byte("\"go.exe\",\"1234\",\"Console\",\"1\",\"10,000 K\"\n\"python3.12.exe\",\"5678\",\"Console\",\"1\",\"20,000 K\"\n"), nil
 	}
-	winProcs, err := readRunningProcNamesForOS(context.Background(), "windows", winRun)
+	winProcs, err := readRunningProcsForOS(context.Background(), "windows", winRun)
 	if err != nil {
 		t.Fatalf("windows process enum failed: %v", err)
 	}
-	winSnap := storageProcSnapshot{names: winProcs, known: true}
+	winSnap := storageProcSnapshot{procs: winProcs, known: true}
 	if inUse, _ := storageToolchainInUse([]string{"go"}, winSnap); !inUse {
 		t.Errorf("expected go in use on windows")
 	}
 	if inUse, _ := storageToolchainInUse([]string{"python"}, winSnap); !inUse {
 		t.Errorf("expected python3.12 in use on windows")
 	}
-	if inUse, _ := storageToolchainInUse([]string{"npm", "node"}, winSnap); inUse {
-		t.Errorf("expected node not in use on windows")
+	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, winSnap); inUse {
+		t.Errorf("expected npm/npx not in use on windows")
 	}
 
 	// Unsupported OS must return an error so cleanup fails closed
-	if _, err := readRunningProcNamesForOS(context.Background(), "plan9", nil); err == nil {
+	if _, err := readRunningProcsForOS(context.Background(), "plan9", nil); err == nil {
 		t.Fatal("expected unsupported OS to return an error")
+	}
+}
+
+func TestGuardStorageDirAnyRootMultiRootBehavior(t *testing.T) {
+	base := t.TempDir()
+	missingRoot := filepath.Join(base, "missing-root")
+	realRoot := filepath.Join(base, "real-root")
+	target := filepath.Join(realRoot, "backups")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Earlier candidate root missing (or broken symlink) must NOT stop searching later roots.
+	danglingRoot := filepath.Join(base, "dangling-root")
+	if err := os.Symlink(filepath.Join(base, "no-such-dir"), danglingRoot); err != nil {
+		t.Fatal(err)
+	}
+	got, err := guardStorageDirAnyRoot([]string{missingRoot, danglingRoot, realRoot}, target)
+	if err != nil {
+		t.Fatalf("guardStorageDirAnyRoot failed when later root matched: %v", err)
+	}
+	wantReal, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != wantReal {
+		t.Fatalf("got %q, want %q", got, wantReal)
+	}
+
+	// 2. If an earlier root shares a prefix and returns fs.ErrNotExist (e.g. root itself missing)
+	// while a later root matches via symlinked/real parent, the later root still succeeds;
+	// and when a target inside dataDir (outside home) does not exist, ErrNotExist is preserved
+	// instead of being overwritten by home's errStorageOutsideRoot.
+	outsideDataDir := t.TempDir()
+	home := t.TempDir()
+	missingDevBackups := filepath.Join(outsideDataDir, "update", "development-backups")
+	_, err = guardStorageDirAnyRoot([]string{outsideDataDir, home}, missingDevBackups)
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("expected fs.ErrNotExist for missing subdir under dataDir with separate home root, got: %v", err)
+	}
+
+	// End-to-end persona-backups cleanup with dataDir outside home and missing update/development-backups:
+	// existing backups dir must be cleaned without failing on missing sibling path.
+	deps, _, _ := testStorageDeps(t)
+	deps.home = home
+	deps.dataDir = outsideDataDir
+	backupFile := filepath.Join(outsideDataDir, "backups", "snap-2.tar")
+	writeStorageFile(t, backupFile, 2048)
+	res, err := runMachineStorageCleanup(context.Background(), deps, proto.StorageCleanupParams{
+		Targets: []string{proto.StorageTargetPersonaBackups},
+		Confirm: true,
+	})
+	if err != nil {
+		t.Fatalf("persona-backups cleanup returned err: %v", err)
+	}
+	if len(res.Items) != 1 || res.Items[0].Status != proto.StorageCleanupCleaned || res.Items[0].Bytes != 2048 {
+		t.Fatalf("expected persona-backups cleaned with 2048 bytes, got %+v", res.Items)
+	}
+	if _, err := os.Stat(backupFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected backupFile to be removed")
+	}
+
+	// 3. Symlink escape across multiple roots must still return errStorageOutsideRoot (not ErrNotExist).
+	outside := t.TempDir()
+	symTarget := filepath.Join(realRoot, "escape")
+	if err := os.Symlink(outside, symTarget); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := guardStorageDirAnyRoot([]string{missingRoot, realRoot}, symTarget); !errors.Is(err, errStorageOutsideRoot) {
+		t.Fatalf("expected errStorageOutsideRoot for symlink escape, got %v", err)
+	}
+}
+
+func TestNpmCacheResolutionAndCmdlineInUseDetection(t *testing.T) {
+	// 1. npm_config_cache pointing directly to a flat cache root (no _cacache child) is honored directly.
+	deps, home, _ := testStorageDeps(t)
+	flatNpmCache := filepath.Join(home, "custom-npm-cache")
+	flatFile := filepath.Join(flatNpmCache, "content-v2.bin")
+	writeStorageFile(t, flatFile, 4096)
+	deps.getenv = func(k string) string {
+		if k == "npm_config_cache" {
+			return flatNpmCache
+		}
+		return ""
+	}
+	// Unrelated long-running node server must NOT block npm cache cleanup.
+	deps.runningProcs = func(context.Context) ([]storageProcEntry, error) {
+		return []storageProcEntry{
+			{comm: "node", args: []string{"/usr/bin/node", "/srv/app/server.js", "--port", "8080"}},
+		}, nil
+	}
+
+	rep := collectMachineStorageHotspots(context.Background(), deps, proto.StorageHotspotsParams{TimeoutMS: 5000, MaxDepth: 4})
+	var npmCat proto.StorageHotspotCategory
+	for _, c := range rep.Categories {
+		if c.ID == proto.StorageCategoryNpmCache {
+			npmCat = c
+			break
+		}
+	}
+	if npmCat.Bytes != 4096 || npmCat.InUse || !npmCat.Cleanable {
+		t.Fatalf("expected flat npm_config_cache cleanable & not in_use, got %+v", npmCat)
+	}
+
+	res, err := runMachineStorageCleanup(context.Background(), deps, proto.StorageCleanupParams{
+		Targets: []string{proto.StorageTargetNpmCache},
+		Confirm: true,
+	})
+	if err != nil {
+		t.Fatalf("npm cleanup failed: %v", err)
+	}
+	if len(res.Items) != 1 || res.Items[0].Status != proto.StorageCleanupCleaned || res.Items[0].Bytes != 4096 {
+		t.Fatalf("expected flat npm cache cleaned, got %+v", res.Items)
+	}
+	if _, err := os.Stat(flatFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected flat npm cache file to be deleted")
+	}
+
+	// 2. When npm_config_cache has a _cacache subdirectory, target _cacache without wiping sibling files.
+	nestedRoot := filepath.Join(home, "nested-npm")
+	siblingConfig := filepath.Join(nestedRoot, "keep-me.txt")
+	nestedCacheFile := filepath.Join(nestedRoot, "_cacache", "index-v5.json")
+	writeStorageFile(t, siblingConfig, 128)
+	writeStorageFile(t, nestedCacheFile, 2048)
+	deps.getenv = func(k string) string {
+		if k == "npm_config_cache" {
+			return nestedRoot
+		}
+		return ""
+	}
+	res2, err := runMachineStorageCleanup(context.Background(), deps, proto.StorageCleanupParams{
+		Targets: []string{proto.StorageTargetNpmCache},
+		Confirm: true,
+	})
+	if err != nil {
+		t.Fatalf("nested npm cleanup failed: %v", err)
+	}
+	if len(res2.Items) != 1 || res2.Items[0].Status != proto.StorageCleanupCleaned || res2.Items[0].Bytes != 2048 {
+		t.Fatalf("expected nested _cacache cleaned, got %+v", res2.Items)
+	}
+	if _, err := os.Stat(siblingConfig); err != nil {
+		t.Fatalf("sibling file outside _cacache should be preserved: %v", err)
+	}
+	if _, err := os.Stat(nestedCacheFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("nested _cacache file should be deleted")
+	}
+
+	// 3. npm_config_cache already ending in _cacache must not double-append _cacache.
+	directCacache := filepath.Join(home, "explicit-npm", "_cacache")
+	if got := resolveNpmCacheDir(home, directCacache); got != directCacache {
+		t.Fatalf("resolveNpmCacheDir(%q) = %q, want %q", directCacache, got, directCacache)
+	}
+
+	// 4. Linux /proc cmdline parsing: detects node running npm-cli.js / npx-cli.js / env npm / process.title "npm install"
+	// while ignoring unrelated node processes.
+	procDir := t.TempDir()
+	writeProc := func(pid, comm string, cmdline []byte) {
+		t.Helper()
+		dir := filepath.Join(procDir, pid)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "comm"), []byte(comm+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if cmdline != nil {
+			if err := os.WriteFile(filepath.Join(dir, "cmdline"), cmdline, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// Unrelated node process only -> NOT in use
+	writeProc("100", "node", []byte("/usr/bin/node\x00/home/dev/server.js\x00--npm-like-flag\x00"))
+	procs, err := readLinuxProcs(procDir)
+	if err != nil {
+		t.Fatalf("readLinuxProcs failed: %v", err)
+	}
+	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: procs, known: true}); inUse {
+		t.Fatalf("unrelated node process should not mark npm/npx in use")
+	}
+
+	// Add node running npm-cli.js with comm="node" -> MUST be in use
+	writeProc("101", "node", []byte("/usr/bin/node20\x00--max-old-space-size=4096\x00/usr/lib/node_modules/npm/bin/npm-cli.js\x00install\x00"))
+	procs, err = readLinuxProcs(procDir)
+	if err != nil {
+		t.Fatalf("readLinuxProcs failed: %v", err)
+	}
+	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: procs, known: true}); !inUse {
+		t.Fatalf("expected node20 running npm-cli.js to mark npm in use")
+	}
+
+	// Test npx-cli.js via /usr/bin/env node
+	procDir2 := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(procDir2, "201"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(procDir2, "201", "comm"), []byte("env\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(procDir2, "201", "cmdline"), []byte("/usr/bin/env\x00NODE_ENV=dev\x00node\x00/opt/node/lib/node_modules/npm/bin/npx-cli.js\x00tsc\x00"), 0o644)
+	procs2, err := readLinuxProcs(procDir2)
+	if err != nil {
+		t.Fatalf("readLinuxProcs failed: %v", err)
+	}
+	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: procs2, known: true}); !inUse {
+		t.Fatalf("expected env node npx-cli.js to mark npx in use")
+	}
+
+	// Test process.title overwriting argv[0] & truncated 15-char comm ("npm install --n")
+	procDir3 := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(procDir3, "301"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(procDir3, "301", "comm"), []byte("npm install --n\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(procDir3, "301", "cmdline"), []byte("npm install --no-audit\x00"), 0o644)
+	procs3, err := readLinuxProcs(procDir3)
+	if err != nil {
+		t.Fatalf("readLinuxProcs failed: %v", err)
+	}
+	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: procs3, known: true}); !inUse {
+		t.Fatalf("expected npm process.title to mark npm in use")
 	}
 }
 
