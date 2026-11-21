@@ -61,6 +61,7 @@ let defaultSetup: { provider: string; model: string; effort: string };
 let superviseSetup: { provider: string; model: string; effort: string };
 let mainSetup: { provider: string; model: string; effort: string } | null | undefined;
 let sharedPicker = false;
+let runtimeMain = false;
 
 const mid = () => `persona-${machine}`;
 const chat = (x: Partial<Session> = {}): Session =>
@@ -77,6 +78,7 @@ beforeEach(() => {
   mainSetup = undefined;
   superviseSetup = defaultSetup; // the supervisor's own purpose follows Main chat until it is set apart
   sharedPicker = false;
+  runtimeMain = false;
   Object.assign(getState(), { features: ["assistant_model_pick", "assistant_start_service_tier", "typed_models"], sessions: {}, assistant: { machine_id: mid(), launcher: "claude", main: "c1", conversations: [] } });
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -98,7 +100,7 @@ beforeEach(() => {
       default: defaultSetup,
       unavailable: [],
     } : {
-      launchers: [{ name: "claude", source: "builtin" }, { name: "relay", source: "zshrc" }, { name: "codex", source: "builtin", agent: "codex", agent_type: "codex" }],
+      launchers: [{ name: "claude", source: "builtin" }, { name: "relay", source: "zshrc" }, { name: "codex", source: "builtin", agent: "codex", agent_type: "codex" }, ...(runtimeMain ? [{ name: "hosted-claude", source: "runtime-other", agent: "claude", assistant: true }] : [])],
       default: defaultSetup,
       unavailable: [{ name: "gpt-direct", kind: "api", code: "api_protocol", reason: "Responses API" }],
     });
@@ -617,4 +619,24 @@ describe("explicit logical conversation switch", () => {
     expect(calls.filter((c) => c.url.includes("/segments?"))).toHaveLength(2);
     expect(sent("PUT")).toEqual([]);
   });
+});
+
+
+it("keeps the actual engine connection until a same-kind runtime default is explicitly confirmed", async () => {
+  runtimeMain = true;
+  mainSetup = { provider: "hosted-claude", model: "opus", effort: "high" };
+  getState().features.push("assistant_segments");
+  await show(chat());
+  await open();
+  expect(panel.props!.state.current?.provider).toBe("claude");
+  expect(await act(() => panel.props!.onPick(mainSetup!))).toBe(false);
+  expect(calls.some((c) => c.url.endsWith("/switch"))).toBe(false);
+  expect(sent("PUT")).toEqual([]);
+  const confirm = [...document.querySelectorAll<HTMLButtonElement>("[role=dialog] button")].find((b) => b.textContent === t("chat-modelpanel.switch_confirm"))!;
+  await act(async () => confirm.click());
+  await flush();
+  expect(calls.filter((c) => c.url.endsWith("/switch")).map((c) => c.body)).toEqual([expect.objectContaining({ launcher: "hosted-claude", expected_epoch: 4, machine_id: mid() })]);
+  expect(getSession(mid(), "c1")?.launcher).toBe("claude");
+  expect(getSession(mid(), "c1")?.model_pick).toBeUndefined();
+  expect(defaultSetup).toEqual({ provider: "claude", model: "opus", effort: "high" });
 });

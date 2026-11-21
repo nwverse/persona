@@ -1,3 +1,4 @@
+import { assistantSwitchNeeded } from "./assistant-execution";
 // What a Persona chat's model pill says (#5033, docs/web/web.md "Model pill and model panel"; docs/assistant/model-config.md
 // "A conversation's own model"): the launcher, model and effort its next message runs on, and where that comes from.
 // A Persona chat switches models freely: its own pick is kept on the hub (`model_pick`, feature `assistant_model_pick`)
@@ -89,7 +90,7 @@ export function mainChatAgentMismatch(c: AssistantChat, info: AssistantLaunchers
   if (!configured) return undefined;
   const configuredAgent = agentId(configured.agent_type || configured.agent);
   const actualAgent = agentId(sessionAgent(s).agent);
-  if (configuredAgent === actualAgent) return undefined;
+  if (configuredAgent === actualAgent && !assistantSwitchNeeded(s, configured, configuredAgent)) return undefined;
   return { configuredLauncher, configuredAgent, actualLauncher: s.launcher, actualAgent };
 }
 

@@ -1427,6 +1427,11 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			return err
 		}
 	}
+	if purpose == purposeMain {
+		if err := s.mainDefaultExecution(ctx, machine, sid, p); err != nil {
+			return err
+		}
+	}
 	_, err := s.finishMainChatModel(ctx, machine, purpose, p, pickedLauncher)
 	return err
 }
