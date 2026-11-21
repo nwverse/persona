@@ -87,7 +87,9 @@ func TestReportingReportSourceUsesOwnerLanguage(t *testing.T) {
 	} {
 		t.Run(tt.lang, func(t *testing.T) {
 			s, f := reportingWithTask(t)
+			f.mu.Lock()
 			f.hello.Locale = tt.lang
+			f.mu.Unlock()
 			agentTasksOn(t, s)
 			report := json.RawMessage(`{"kind":"done","text":"synthetic completed report"}`)
 			if res := s.agentTool(context.Background(), "box", "s1", "report_to_supervisor", report); res.IsError {
