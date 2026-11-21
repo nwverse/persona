@@ -49,6 +49,12 @@ func TestAssistantCLICallerUsesOnlyVerifiedRuntimeWorkers(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("no local peer process lookup")
 	}
+	for _, engine := range []string{"agy", "opencode"} {
+		t.Run(engine, func(t *testing.T) { testAssistantCLICallerVerifiedRuntimeWorkers(t, engine) })
+	}
+}
+
+func testAssistantCLICallerVerifiedRuntimeWorkers(t *testing.T, engine string) {
 	n, hub := runtimeNode(t)
 	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(t.TempDir(), "s"), Net: "unix"})
 	if err != nil {
@@ -91,10 +97,10 @@ func TestAssistantCLICallerUsesOnlyVerifiedRuntimeWorkers(t *testing.T) {
 		role := strings.TrimSpace(line)
 		peers[role], pids[role] = conn, pid
 	}
-	const assistantID, agentID = "agy-assistant", "agy-agent"
+	assistantID, agentID := engine+"-assistant", engine+"-agent"
 	n.state.put(assistantID, sessionState{Cwd: identity.AssistantDir(n.home)})
 	host := n.runtimes.add(nil)
-	host.ready, host.hello.Runtime, host.hello.Caps.Assistant, host.pid = true, "agy", true, pids["runtime"]
+	host.ready, host.hello.Runtime, host.hello.Caps.Assistant, host.pid = true, engine, true, pids["runtime"]
 	n.runtimes.claim(host, assistantID)
 	n.runtimes.claim(host, agentID)
 	report := func(pids map[string]int) {
@@ -111,6 +117,14 @@ func TestAssistantCLICallerUsesOnlyVerifiedRuntimeWorkers(t *testing.T) {
 		if roots := n.assistantRoots(); len(roots) != 0 {
 			t.Fatalf("accepted non-worker PID %d: %v", pid, roots)
 		}
+	}
+	for _, otherID := range []string{agentID, engine + "-assistant-two"} {
+		if otherID != agentID {
+			n.state.put(otherID, sessionState{Cwd: identity.AssistantDir(n.home)})
+			n.runtimes.claim(host, otherID)
+		}
+		report(map[string]int{assistantID: pids["worker"], otherID: pids["worker"]})
+		check("assistant", "")
 	}
 	report(map[string]int{assistantID: pids["worker"], agentID: pids["agent"]})
 	check("assistant", assistantID)
@@ -796,8 +810,13 @@ func TestMCPAssistantWithoutPeer(t *testing.T) {
 	check := func(cases map[string]bool) {
 		t.Helper()
 		for session, want := range cases {
-			if got, ok := n.mcpAssistantOf(0, errNoPeer, nil, session); ok != want || ok && got != session {
+			got, rt, ok := n.mcpAssistantOf(0, errNoPeer, nil, session)
+			if ok != want || ok && got != session {
 				t.Errorf("%q: %q %v, want %v", session, got, ok, want)
+			}
+			// The runtime that vouches for one of its own conversations, none for one of this node's processes.
+			if onRuntime := strings.HasPrefix(session, "session-"); ok && (rt != nil) != onRuntime {
+				t.Errorf("%q: runtime %v, want one %v", session, rt, onRuntime)
 			}
 		}
 	}
@@ -814,11 +833,15 @@ func TestMCPAssistantWithoutPeer(t *testing.T) {
 	}
 	n.state.put("session-p", sessionState{Cwd: identity.AssistantDir(n.home)})
 	n.runtimes.claim(connect("plain", false), "session-p") // a runtime that runs no assistant
-	n.runtimes.claim(connect("dsh", true), "session-r")
+	dsh := connect("dsh", true)
+	n.runtimes.claim(dsh, "session-r")
 	n.runtimes.claim(connect("dsh2", true), "session-w") // not an assistant conversation
 	check(map[string]bool{"session-r": true, "session-p": false, "session-w": false})
+	if _, rt, _ := n.mcpAssistantOf(0, errNoPeer, nil, "session-r"); rt != dsh {
+		t.Errorf("session-r: runtime %v, want the one that has it", rt)
+	}
 	// Any other reason the peer is not known (not a unix socket) is no assistant's.
-	if got, ok := n.mcpAssistantOf(0, errors.New("not a unix socket"), nil, "s1"); ok {
+	if got, _, ok := n.mcpAssistantOf(0, errors.New("not a unix socket"), nil, "s1"); ok {
 		t.Errorf("a peer not known for another reason: %q", got)
 	}
 }

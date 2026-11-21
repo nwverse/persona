@@ -143,7 +143,7 @@ Needs you is blue on every client (`docs/design/DECISIONS.md`, 11-11). Android r
 | --- | --- | --- |
 | `Fill` | `well` quaternary system fill, `chip` tertiary, `pressed` secondary, `scrim` black 0.45 dark / 0.2 light | `apple/Shared/Design/Theme.swift:229-240` |
 | `Diff` | add `#1D7A4C`/`#4CC38A`, del `#C62B33`/`#FF6369`, changed `#8A6A00`/`#E3B341` | `apple/Shared/Design/Theme.swift:170-176` |
-| `Hue` (categories only) | blue, orange, green, purple, indigo, pink, gray; with red, amber, yellow, teal, also an extension's 11 named colors (UI version 6, `ExtensionUIStyle.color`), on marks only, never text | `apple/Shared/Design/Theme.swift` |
+| `Hue` (categories only) | blue, orange, green, purple, indigo, pink, gray; with red, amber, yellow, teal, also an extension's 11 named colors (UI version 6, `ExtensionUIStyle.color`), on marks only, never text. The one exception is a `scene`'s shapes (UI version 11, #12544): they are content, like a picture's pixels, so the extension colors them (`#RRGGBB`); its pins and every control around the model keep these colors and the app's ink | `apple/Shared/Design/Theme.swift` |
 | `ModeTone` (permission modes, #3719) | asks first: secondary ink; plans: teal `#0E7C86`/`#4FD1C5`; acts within limits (Auto-Edit, Auto): `Hue.purple`; allows everything: `danger`. None is an agent state's color | `apple/Shared/Design/Theme.swift` (`Theme.ModeTone`) |
 | `Shell` (same in every style) | composer `#FFFFFF`/`#1F1F21`, stroke `#E3E3E3`/`#3A3A3C`, ink `#0D0D0D`/`#F2F2F2`, segment `#E6E6E6`/`#3A3A3C`, drawer `#F9F9F9`/`#171717` | `apple/Shared/Design/Theme.swift:840-873` |
 | `ChatBox` | user `#E3EDFD`/`#1C2F47`, persona `#F0F0F3`/`#2A2A2E` | `apple/Shared/Design/ChatLayoutTokens.swift:18-23` |
@@ -713,7 +713,7 @@ on-demand model panel, not the everyday Assistant home (#6887).
 | --- | --- | --- |
 | `.surface(in:)` | floating panels: composer, strips, toasts, notices | `apple/Persona/DesignSystem/Styling.swift:8` |
 | `.card()` | grouped-row card, padding default 14 | `apple/Persona/DesignSystem/Components.swift:429` |
-| `NoticeBanner` | persistent in-page notice, neutral, caution or danger, one action | `apple/Persona/DesignSystem/Notice.swift:7` |
+| `NoticeBanner` | persistent in-page notice, neutral, caution or danger, one action; optional `dismiss` puts the design system's close ✕ at the trailing end (accessibility label Hide, hit as a finger-sized square) for a notice the person may not be able to act on, and its owner decides how long the ✕ is remembered (#12319) | `apple/Persona/DesignSystem/Notice.swift:7` |
 | `ScreenMobileDataCard` | the live screen's one question on mobile data (#6396): a `.surface` card under the bars, covering none of the picture, no wider than `Size.readable`: the network in its title (mobile data or a personal hotspot), one line, two choices with about how much data an hour each takes (prominent Clearer, plain Data Saver; side by side where they fit, stacked at large text, never wrapped) and ✕. A `NoticeBanner` has one action; this is a choice between two. The web's (#6558, `MobileDataCard`) has the same parts under the page's bar, no wider than 420 px, in the stats panel's surface; it stacks the choices where they don't fit side by side (measured, as `ViewThatFits`), and ⋯ holds the choice, since the web has no Settings row for it | `apple/Persona/Screen/ScreenMobileDataCard.swift`, `web/src/screen/VideoPicture.tsx` |
 | `DispatchHandoffCard` | one card per dispatched task in the chat: ↳ well, title, New / Already Active / Resumed badge, last-active time and state, ↗; a failed start says why in red; one tappable element (`dispatch.task.<id>`) | `apple/Persona/Views/Assistant/Tasks/DispatchHandoffCard.swift` |
 | `PlanBriefView` | a plan task's brief before Start: who asked (two lines), one summary line, Show All for the goal, criteria, time and limits | `apple/Persona/Views/Assistant/Tasks/PlanBriefView.swift` |
@@ -1747,6 +1747,20 @@ Watch maps success, failure, notification, stop and retry the same way. A watch 
 
 ### 4.4 Confirmation and undo
 
+For an existing Assistant conversation on a hub with logical-segment switching,
+choosing a different engine or runtime connection in the existing model panel
+opens the shared `Dialog`/sheet with **Switch connection** and Cancel. The audience
+is people deliberately changing an advanced conversation connection. The text
+explains that recent messages and a summary continue while the conversation and
+tasks stay, and the next message activates the new connection. Selection alone
+sends nothing. The underlying model panel is held beneath the confirmation.
+Submit shows a pending action immediately and uses a distinct switch operation;
+it never writes an ordinary model pick across engines. An uncertain response
+keeps the exact operation for retry, says its result is unconfirmed, and labels
+dismissal Close. Actual session updates, rather than an optimistic engine rename,
+confirm activation. Older hubs keep their existing unavailable-engine explanation.
+
+
 Severity ladder to adopt:
 
 1. Reversible: do it and offer Undo in a toast (inbox bulk actions, remove from list, folder trash do this).
@@ -1838,7 +1852,7 @@ loading/retry states and timestamps as other secondary views, and adds no primar
 
 ### 4.5 Push, notifications and reminders
 
-- The system prompt appears right after pairing and at launch, with no in-app explanation first (`apple/Persona/App/PushRegistrar.swift:41-53`, the options at `:174`). Requested options include time-sensitive. When denied, Settings explains and deep-links; allowing it there registers when the app comes back (#1861). A confirmed outage also puts one non-dismissible `NoticeBanner` on Persona's main screen (#9612): plain words for what cannot reach this device and one repair action, with denied permission deep-linking to system Settings and other causes opening Notifications settings. Unknown or unchecked hubs, a healthy route and a route whose only problem is one failed push stay silent; raw relay, APNs, HTTP and credential details remain in Settings.
+- The system prompt appears right after pairing and at launch, with no in-app explanation first (`apple/Persona/App/PushRegistrar.swift:41-53`, the options at `:174`). Requested options include time-sensitive. When denied, Settings explains and deep-links; allowing it there registers when the app comes back (#1861). A confirmed outage also puts one `NoticeBanner` on Persona's main screen (#9612): plain words for what cannot reach this device and one repair action, with denied permission deep-linking to system Settings and other causes opening Notifications settings. Its ✕ hides it on this device (#12319): a build installed straight from Xcode never gets pushes and could not clear it. A closed cause stays hidden, per hub, until pushes reach the device there again; a different cause (notifications turned off, an update needed) or another hub shows its own notice, and Settings › Notifications always shows the status. Unknown or unchecked hubs, a healthy route and a route whose only problem is one failed push stay silent; raw relay, APNs, HTTP and credential details remain in Settings.
 - Foreground: the system banner, suppressed for the visible session. No custom in-app push banner.
 - Actions: Allow (needs unlock) and Deny on permissions; Approve and Send Back on plans; Reply on done (`apple/Persona/App/NotificationActions.swift:19-52`). Failures are posted as local notifications.
 - Live Activity: Allow and Deny buttons; Allow requires authentication. Stale after 15 minutes.
@@ -2026,9 +2040,20 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   share the room the footer leaves above the composer: on Android each takes at most half the page, and with both on
   screen each has at least half of that room, a card that needs less leaving the rest to the other, so the composer
   stays on the page. iOS (#9392) caps the task question as it caps the stack (`FooterRoom.cardsRoom`): alone, as a lone
-  question card (#6277), with the conversation's own cards on screen half of that room each; its card fits itself to its
+  question card (#6277), with the conversation's own cards on screen half of that room each, and with the keyboard down a
+  place that takes less (a folded card, #12306) leaves the rest to the other, as on Android; its card fits itself to its
   share and scrolls inside, its task's name and title row in view. It was uncapped, and on iPad and the open iPhone Duo
-  it took the whole page, its top under the top bar.
+  it took the whole page, its top under the top bar. Before #12306 a folded card kept its half empty, and on the open
+  iPhone Duo held sideways the task's question showed one option and the start of its description.
+  **Card height by hand** (iOS and iPadOS, #12306): with the keyboard down, a lone question card over the composer (the
+  task's question, or the conversation's own lone question; beside each other the task's question) has a grabber on its
+  top edge, the sheets' grabber in a strip the card's width (`interaction-grabber`). Dragged, the card follows the finger
+  between `Theme.Size.cardLeast` (150 pt: its title row and the first lines of what it asks) and the tallest, which
+  leaves the conversation `Theme.Space.xl` under the header as it stands open (`FooterRoom.tallestRoom`), its title row
+  and fold always on the page; a tap goes to the tallest and, from there, back to the default cap above. The choice is
+  kept on the device as a share of that range (`CardHeight`), so it reads the same upright and sideways; VoiceOver
+  adjusts it a quarter at a time and double-tap toggles. The fold still folds the card to one line. Option descriptions
+  always wrap in full; what the card's height cannot show scrolls inside it.
   A question card folds from its title row (the whole row, and the fold button at its end, `interaction-fold`) to one
   line: its title, the question and, for a card of several questions, "N left". Folded, it keeps its page and its picks
   and gives the conversation its room. Where the chat finds the message the card is about (the agent's words before the
@@ -2104,7 +2129,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   surfaces open the app without an approval action.
 - **Task-review decisions (web, #4808)**: reuse the answerable decision row, its recommendation tag, the `Button` action group and the draft's Later / Don't handle labels. The two secondary actions stay on a separate footer so they never displace the recommended choice; the footer follows the tray's scrolling edge and uses the existing 44 px button minimum. Later defers only this browser session and this review round. Don't handle persists a dismissal of this exact review, offers receipt-scoped Undo, leaves the task open and takes no option; a dismissed review cannot take its timed default. A new review is visible again. The web hides the row and updates its count optimistically; a confirmed same-round dismissal stays hidden across reads and reloads, while a failed write restores the row with an error. An old Agent runtime error does not override dismissal or Later for that review; an actual Agent input request keeps its home visible. Old reviews without an acceptance ask initially show their original explanation and these same controls, never invented choices or an acceptance button with a made-up round. Once a stale decision goes back for rechecking, or an undecidable old review goes back for restatement, that round leaves Needs you and cannot be answered until a fresh supervisor review re-issues it; a fixed-response round keeps its existing visibility. This is a requested correction to the existing row, not a new style or setting.
 - **Independent session-review results (web, #1808)**: an advanced Agents action, explicit and progressive: ⋯ reads availability only when opened, and the existing screen is unchanged without the `session_review` feature. Starting gives immediate local feedback before the hub's result. The finished review reuses the pending-card area and question wire shape, with `tool_name: "persona_session_review"` so older clients need no new kind. Its kicker is the number of findings parsed from the reviewer (not the number of changed files); the full report uses the existing Markdown body and one bounded scroll, and the existing `Card` / `Button` patterns provide **Send to agent** (primary) and **Dismiss** (quiet). There is no Other field, notification quick answer, or hand-back action. Send resolves the source card and the manager forwards the persisted report; Dismiss resolves without a message. Failure leaves the same card answerable. The result alone does not disable a later review; another pending answer does.
-- **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request. On iOS, a long assistant `ask_user` or hook question form's choices (or its review) own one vertical scroll while Previous / Next / Submit stay outside it and visible in the actual pending-card area, in both interface styles. One such card never needs a second, outer scroll; that is reserved for moving between several cards. Dragging through choices only scrolls and never picks one. When the interaction advertises `can_cancel`, a visible **Skip** text action with at least a 44 pt target leads that action row, on the review too; it is not the card's fold mark. Skip sends only `{"cancel":true}`, is disabled while an answer or another Skip is in flight, and leaves the card and its picks in place with the error and Retry on failure. Success removes the card and gives the receipt **Question closed without an answer**. Persona's own main-conversation `ask_user` has no terminal handoff; an Agent's question keeps it. Cards without `can_cancel` have no Skip and keep their existing layout.
+- **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request. On iOS, a long assistant `ask_user` or hook question form's choices (or its review) own one vertical scroll while Previous / Next / Submit stay outside it and visible in the actual pending-card area, in both interface styles. One such card never needs a second, outer scroll; that is reserved for moving between several cards. Dragging through choices only scrolls and never picks one. When the interaction advertises `can_cancel`, a visible **Skip** text action with at least a 44 pt target sits in the card's title row on iOS, beside View in Chat, ⋯ and the fold (#12306: on a row of its own under the options it took about 60 pt for one word; its target reaches over the row's margins, so the row is no taller than the fold); while the keyboard moves the title row aside, and in Beautiful UI and on other clients, it leads the action row, on the review too. It is not the card's fold mark. Skip sends only `{"cancel":true}`, is disabled while an answer or another Skip is in flight, and leaves the card and its picks in place with the error and Retry on failure. Success removes the card and gives the receipt **Question closed without an answer**. Persona's own main-conversation `ask_user` has no terminal handoff; an Agent's question keeps it. Cards without `can_cancel` have no Skip and keep their existing layout.
 - **A card this client can't answer** (web #7497, Android `approvalBlockedReason`; iOS in #6868): the session's
   capabilities withhold `approve` (a Codex thread Persona hasn't joined, a subagent its parent drives, an unknown
   session), so the card's answers are disabled. It never greys silently: one line under the card in the attention tone
@@ -3811,3 +3836,18 @@ link explains the independent per-computer inventory switch. The sidebar's
 botmux chip is removed; its Lark group quick filter is absent when its count is
 zero. Complete and paged lists exclude the same hosts before grouping and counts.
 This requested interaction change adds no component, theme or motion pattern.
+
+### Independent main conversation defaults (#11936)
+
+Audience: people choosing the model for their main Assistant conversation. Reuse the existing model-configuration purpose row and editor, with **Conversation defaults** as the category and **Main chat** directly beneath it as its independently editable use. Do not add another primary settings page or put runtime implementation details in the chat flow. Show the inherited effective value and existing reset action; changing Main chat must not modify a new side conversation's defaults.
+
+The existing main model pill and empty main starter read the main purpose's effective launcher/model/effort. A new side-conversation starter reads the shared default. An explicit conversation pick continues to win. Cross-engine changes use the existing explicit switch confirmation; saving a default does not silently start a second execution or optimistically rename the current engine. English, Simplified Chinese and Japanese purpose names and descriptions ship together.
+
+Native main-chat model defaults (#11936): Apple AssistantModelSheet/composer and
+Android ChatModelPill retain the shared eligible-launcher catalog but read the
+independent `assistant.main` default for the main conversation. Its launcher,
+model and next-message effort apply below an explicit conversation pick. Main
+and ordinary-new-chat caches are distinct; no main read writes shared defaults.
+An older hub with no main purpose retains shared defaults; a transient main read
+failure keeps the last good main value. Reuse the existing capsule, panel and
+feedback, without a new control or polling loop.
