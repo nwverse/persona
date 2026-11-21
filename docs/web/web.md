@@ -1525,6 +1525,23 @@ To verify the web flow, run the mock hub with `MOCK_STARRED=1` and follow the co
 `web/e2e/starred-messages.mjs`. It drives two isolated browser contexts and verifies cross-device changes,
 search, copy, Undo, exact links, and a snapshot whose original is absent.
 
+#### Back up starred messages (#12061)
+
+Open **Backup** on the Starred page. Download a JSON backup to restore later or choose
+Markdown for a copy you can read and edit in a text editor. Exports include the selected assistant's
+saved text, title, speaker, source category and timestamps. They omit device and conversation identifiers.
+
+Choose a JSON backup and select **Preview restore** to see how many messages would be added, how many are
+already saved and how much space is available. Select **Restore messages** to save the batch. If another device changed Starred after you
+previewed it, review the current counts and confirm again. A backup that would exceed the 300-message limit
+stays in preview until you make room.
+
+Restored messages are archival snapshots. You can search, copy or remove them. They retain the saved words
+and timestamps independently of the original conversation. An older manager can still supply the snapshots
+for export. Restore appears when the connected manager supports it.
+
+Run the browser test with `MOCK_STARRED=1 MOCK_STARRED_BACKUP=1` and `node web/e2e/starred-backup.mjs`.
+
 ### Exporting a conversation (#7375)
 
 **Export Conversation…** in every chat's ⋯ (Agent chats and Persona conversations) saves the whole conversation as one
@@ -1733,6 +1750,7 @@ Two-column pages (Inbox, Knowledge) switch to one column according to their own 
   - **Check before linking**: message candidates (at most 24) go to `path-presence`; candidates arriving within 60ms are combined by machine + cwd into one `GET /machines/{mid}/stat`. Link file / dir / denied (denied explains permissions on opening); cache presence for 30 minutes, absence for 2 minutes, unanswered requests for 1 minute before retrying.
     Before an answer, with old nodes lacking `stat`, or offline, paths remain plain text. Media / document cards below replies share this cache and do not repeat requests.
   - **The assistant writes paths for this rule** (#5453): its instructions (`server/internal/prompts/assistant/claude_md.md`, and the health space's `health_claude_md.md`) put every path it shows the user in backticks, one path per span with an optional `:line`, a readable name before a file it wants opened, and never in a fenced block, so a path with spaces or Chinese still links.
+- **Local-path Markdown images and file links in chat** (#12288, aligned with iOS #12102; `lib/files.ts`, `ui/Markdown.tsx`, `ui/ReplyImages.tsx`, `ui/reply-images-plugin.ts`): in Agent and Assistant chats with a session machine (`mid`), Markdown images (`![alt](path)`) and file links (`[label](path)`) naming absolute paths (`/…`, `~/…`, Windows drive `C:\…` / `C:/…`) or session `cwd`-relative paths resolve against `cwd`. Local images load inline through authenticated `fileDownloadURL(mid, resolvedPath, cwd, { inline: true })` without triggering the third-party web consent gate, open in the full-screen `ImageViewer` on click for zoom/download, and on load error display a clear failure reason with a manual Retry button (no automatic retry loop, failure state preserved across remounts). Local Markdown file links open in the Files panel (supporting `#L<line>`). `http://`, `https://`, `//…`, `file:`, `data:`, `blob:`, `mailto:`, custom URI schemes, and hub internal routes (`/api/v1/…`) are strictly excluded so third-party `ExternalImageGate` privacy rules and hub attachment images remain unchanged. `lib/turn-images.ts` also recognizes `Path` tool arguments (such as Antigravity `read_file`).
 - **Sheets** (#1310, `session/files/SheetView.tsx`, `lib/sheets.ts`, `lib/sheets.worker.ts`; iOS / Mac #1294): CSV, TSV, xlsx / xlsm / xlsb / xls, ods, numbers open as spreadsheets.
   Column letters and row numbers stay fixed; first row frozen (can disable, stored in browser). Column width estimated from the first 300 rows (uses the file's width if wider), resize by dragging the header's right edge, double-click resets. Render only visible cells, smooth even with hundreds of thousands of rows; the grid redraws when the rows or columns on screen change (every 8 rows or 256 px of scrolling), not on every scrolled pixel, and a drag selection only when it reaches another cell.
   Merged cells, cell-specific number / date formats (SheetJS formatted text); click, drag, Shift-extend, select whole column / row by its letter / number, ⌘A; partial selection of a merged block expands to the whole block.
