@@ -31,6 +31,22 @@ import (
 // botEvent takes one event off the long connection. Messages are handled in the background (Feishu waits 3 s for the
 // answer); card buttons answer right away.
 func (h *Manager) botEvent(ctx context.Context, payload []byte) (any, error) {
+	h.bots.mu.Lock()
+	api := h.bots.api
+	h.bots.mu.Unlock()
+	return h.botEventHandler(api)(ctx, payload)
+}
+
+// Each production connection keeps its source even if its callback runs after
+// restartBot replaces it. A new connection for the same app can still use the
+// stable message references reserved by its predecessor.
+func (h *Manager) botEventHandler(api *feishubot.Client) feishubot.Handler {
+	return func(ctx context.Context, payload []byte) (any, error) {
+		return h.botEventFrom(ctx, payload, api)
+	}
+}
+
+func (h *Manager) botEventFrom(ctx context.Context, payload []byte, api *feishubot.Client) (any, error) {
 	env, err := feishubot.ParseEnvelope(payload)
 	if err != nil {
 		return nil, nil // something else (a 1.0 event, the url check): nothing to do
@@ -43,23 +59,36 @@ func (h *Manager) botEvent(ctx context.Context, payload []byte) (any, error) {
 		}
 		// The chat of the owner's own messages in the DM and in a listed group is kept (before the claim: a redelivery
 		// changes nothing). Nobody else's: a stranger writing to the bot must not push out what a reply goes to.
-		if _, set := h.botAPI(); set.Owner != nil && ev.Sender.SenderID.OpenID == set.Owner.OpenID &&
-			(ev.Message.ChatType == "p2p" || set.topicChat(ev.Message.ChatID)) {
-			h.rememberMessageChat(ev.Message.MessageID, ev.Message.ChatID)
+		b := &h.bots
+		b.mu.Lock()
+		if !b.acceptBotEventLocked(api, env.Header.AppID) {
+			b.mu.Unlock()
+			return nil, nil
 		}
-		if !h.claimBotMessage(ev.Message.MessageID) {
+		set := b.set
+		if set.Owner != nil && ev.Message.MessageID != "" && ev.Message.ChatID != "" && ev.Sender.SenderID.OpenID == set.Owner.OpenID &&
+			(ev.Message.ChatType == "p2p" || set.topicChat(ev.Message.ChatID)) {
+			b.msgChat.put(ev.Message.MessageID, ev.Message.ChatID)
+		}
+		queued, claimed := b.claimBotMessageLocked(ev)
+		if !claimed {
+			b.mu.Unlock()
 			return nil, nil // redelivered
 		}
 		// Its place in line is taken here, as it comes: each handled on its own, a message sent right after another
 		// could be handed to the assistant first, and the conversation read them the wrong way round.
-		b := &h.bots
 		done := make(chan struct{})
-		b.mu.Lock()
 		prev := b.line
 		b.line = done
 		b.mu.Unlock()
-		go h.botMessage(ev, env.Event, time.Now(), prev, done)
+		go h.botMessage(ev, env.Event, time.Now(), prev, done, queued)
 	case feishubot.EventCardAction:
+		h.bots.mu.Lock()
+		current := h.bots.acceptBotEventLocked(api, env.Header.AppID)
+		h.bots.mu.Unlock()
+		if !current {
+			return nil, nil
+		}
 		var a feishubot.CardAction
 		if err := json.Unmarshal(env.Event, &a); err != nil {
 			return nil, err
@@ -68,9 +97,15 @@ func (h *Manager) botEvent(ctx context.Context, payload []byte) (any, error) {
 	case feishubot.EventRecalled:
 		var ev feishubot.Recalled
 		if json.Unmarshal(env.Event, &ev) == nil {
-			h.botRecalled(ev)
+			h.botRecalled(ev, api, env.Header.AppID)
 		}
 	case feishubot.EventP2PEntered:
+		h.bots.mu.Lock()
+		current := h.bots.acceptBotEventLocked(api, env.Header.AppID)
+		h.bots.mu.Unlock()
+		if !current {
+			return nil, nil
+		}
 		var ev feishubot.P2PEntered
 		if json.Unmarshal(env.Event, &ev) == nil {
 			go h.botWelcome(ev.OperatorID.OpenID, ev.ChatID)
@@ -79,21 +114,46 @@ func (h *Manager) botEvent(ctx context.Context, payload []byte) (any, error) {
 	return nil, nil
 }
 
-// botRecalled tells the assistant a message was recalled in a chat the bot is used in (the owner's private chat, a
-// topic group the owner opted in): one not in its conversation yet is not sent. Recalls elsewhere (another group,
-// someone else's chat) and by an admin are not the owner's. In a group the event does not say whose message it was, so
-// only a recall of a message the hub handed to the assistant is passed on (the owner's alone).
-func (h *Manager) botRecalled(ev feishubot.Recalled) {
-	_, set := h.botAPI()
-	if set.Owner == nil || ev.MessageID == "" || !botChatAllowed(set, ev.ChatID) {
+// botRecalled cancels a queued owner message locally, or tells the assistant
+// about a recall after handoff has begun. Group recalls require an exact known
+// owner message because the recall event does not identify its sender.
+func (h *Manager) botRecalled(ev feishubot.Recalled, api *feishubot.Client, appID string) {
+	if ev.MessageID == "" || ev.RecallType != "" && ev.RecallType != "message_owner" {
 		return
 	}
-	if ev.ChatID != set.Owner.ChatID && !h.handedGroupMessage(ev.MessageID) {
-		return // in a group only the owner's messages that were handed over matter; the event does not say whose it was
-	}
-	if ev.RecallType != "" && ev.RecallType != "message_owner" {
+	b := &h.bots
+	b.mu.Lock()
+	set := b.set
+	if !b.acceptBotEventLocked(api, appID) || set.Owner == nil || !botChatAllowed(set, ev.ChatID) {
+		b.mu.Unlock()
 		return
 	}
+	ref := botMessageReference(b.api, set.Owner.OpenID, ev.ChatID, ev.MessageID)
+	state, known := b.recentMessages[ref]
+	queued := b.queuedMessages[ref]
+	if queued != nil && !queued.handed && state != botMessageHandedDM && state != botMessageHandedGroup {
+		queued.recalled = true
+		b.rememberBotMessageLocked(ev.MessageID)
+		b.mu.Unlock()
+		return
+	}
+	if state == botMessageCanceled {
+		b.rememberBotMessageLocked(ev.MessageID)
+		b.mu.Unlock()
+		return
+	}
+	if ev.ChatID != set.Owner.ChatID && state != botMessageHandedGroup ||
+		queued == nil && !known && b.messageInOtherContextLocked(ref) {
+		b.mu.Unlock()
+		return
+	}
+	if queued != nil {
+		queued.recalled = true
+	}
+	if queued != nil || known {
+		b.rememberBotMessageLocked(ev.MessageID)
+	}
+	b.mu.Unlock()
 	if err := h.notifyAssistant(assistantwire.EventFeishuRecalled, assistantwire.FeishuRecalled{MessageID: ev.MessageID}); err != nil {
 		h.logf("bots: tell the assistant of a recall: %v", err)
 	}
@@ -103,19 +163,30 @@ func (h *Manager) botRecalled(ev feishubot.Recalled) {
 // assistant keeps its own (bots.feishu.state), across restarts.
 const botSeenKeep = 300
 
-// claimBotMessage: the first time this message is seen since the hub started.
-func (h *Manager) claimBotMessage(id string) bool {
-	b := &h.bots
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if id == "" || slices.Contains(b.seen, id) {
-		return false
+// claimBotMessageLocked dedupes and reserves pending ownership in the same
+// critical section as the message's queue position. Recent history can evict
+// an id, but cannot make a second handler for the same pending reference.
+func (b *botHub) claimBotMessageLocked(ev feishubot.MessageEvent) (*botQueuedMessage, bool) {
+	id := ev.Message.MessageID
+	ref := botMessageReference(b.api, ev.Sender.SenderID.OpenID, ev.Message.ChatID, id)
+	if b.queuedMessages[ref] != nil || b.recentMessages[ref] == botMessageCanceled {
+		return nil, false
 	}
+	if id == "" || slices.Contains(b.seen, id) {
+		return nil, false
+	}
+	b.rememberBotMessageLocked(id)
+	return b.queueMessageLocked(ev), true
+}
+
+// Refreshing a completed pending id gives immediate redelivery the same bounded
+// protection as a new arrival, without retaining completed pending records.
+func (b *botHub) rememberBotMessageLocked(id string) {
+	b.seen = slices.DeleteFunc(b.seen, func(seen string) bool { return seen == id })
 	b.seen = append(b.seen, id)
 	if len(b.seen) > botSeenKeep {
 		b.seen = b.seen[len(b.seen)-botSeenKeep:]
 	}
-	return true
 }
 
 // feishuMaxUUID is the open platform's uuid length cap on the send/reply message APIs.
@@ -221,7 +292,20 @@ func botTurnWait() time.Duration { return inboundWait + 25*time.Second }
 
 // botMessage handles one message to the bot, which came at since: the owner's go to the assistant, after the one
 // before it (prev; nil for none) is handed over. done is closed once this one is, whatever became of it.
-func (h *Manager) botMessage(ev feishubot.MessageEvent, raw json.RawMessage, since time.Time, prev, done chan struct{}) {
+func (h *Manager) botMessage(ev feishubot.MessageEvent, raw json.RawMessage, since time.Time, prev, done chan struct{}, queued *botQueuedMessage) {
+	if queued != nil {
+		defer func() {
+			h.bots.mu.Lock()
+			if h.bots.queuedMessages[queued.ref] == queued {
+				if queued.recalled && !queued.handed {
+					h.bots.rememberBotMessageSourceLocked(queued.ref, botMessageCanceled)
+				}
+				delete(h.bots.queuedMessages, queued.ref)
+				h.bots.rememberBotMessageLocked(queued.ref.id)
+			}
+			h.bots.mu.Unlock()
+		}()
+	}
 	passed := false
 	pass := func() {
 		if !passed {
@@ -241,7 +325,11 @@ func (h *Manager) botMessage(ev feishubot.MessageEvent, raw json.RawMessage, sin
 	b := &h.bots
 	b.mu.Lock()
 	api, set := b.api, b.set.copy()
+	stop := queued != nil && (queued.recalled || set.Owner == nil || queued.ref != botMessageReference(api, set.Owner.OpenID, ev.Message.ChatID, ev.Message.MessageID))
 	b.mu.Unlock()
+	if stop {
+		return
+	}
 	msg := ev.Message
 	sender := ev.Sender.SenderID.OpenID
 	if api == nil || ev.Sender.SenderType != "user" || sender == "" {
@@ -288,8 +376,8 @@ func (h *Manager) botMessage(ev feishubot.MessageEvent, raw json.RawMessage, sin
 // group that is not opted in, whose note goes under that message and nowhere else.
 func (h *Manager) handToAssistant(api *feishubot.Client, ev feishubot.MessageEvent, raw json.RawMessage, action, from string, since time.Time, pass func(), inThread bool) {
 	msg := ev.Message
-	if inThread {
-		h.rememberHandedGroup(msg.MessageID) // before the handover: a recall during it still counts
+	if !h.beginBotHandoff(api, ev, inThread) {
+		return
 	}
 	err := h.toAssistantSince(assistantwire.MethodFeishuMessage, assistantwire.FeishuMessage{Event: raw, Action: action, From: from}, since)
 	pass() // handed over (or not): the next one need not wait for the note below
@@ -392,7 +480,7 @@ func toast(kind, text string) *feishubot.CardResponse {
 func (h *Manager) botPair(api *feishubot.Client, openID, chatID, text string) {
 	b := &h.bots
 	b.mu.Lock()
-	// Feishu can redeliver the very same message; claimBotMessage drops a repeated id, but a short per-text window
+	// Feishu can redeliver the very same message; claimBotMessageLocked drops a repeated id, but a short per-text window
 	// also covers a duplicate that reached us under another id. It must not swallow a genuine retry: a different
 	// answer (the next code guessed) is a new try, so the key is the person plus the exact text.
 	dupKey := openID + "|" + text

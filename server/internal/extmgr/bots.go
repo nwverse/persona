@@ -149,9 +149,12 @@ type botHub struct {
 	// msgChat is the chat of the messages the bot may use, seen or sent lately (message id -> chat id): what a reply's
 	// parent is checked against (checkReplyParent), memory only.
 	msgChat idRing
-	// handedGroup are the group messages handed to the assistant lately: a recall in a group is only passed on for one
-	// of these (botRecalled), memory only.
-	handedGroup idRing
+	// Pending recalls are tracked separately from bounded recent source history, so a
+	// backlog cannot evict a message that is still waiting for its predecessor.
+	queuedMessages map[botMessageRef]*botQueuedMessage
+	// Recent source evidence distinguishes local cancellation from handoff.
+	recentMessages     map[botMessageRef]botMessageState
+	recentMessageOrder []botMessageRef
 	// answerFiles keeps prepared long replies across retries and hub restarts.
 	answerFiles botAnswerFiles
 	// line is closed once the last message taken has been handed to the assistant (botMessage): they go in the
@@ -249,7 +252,7 @@ func (h *Manager) restartBot() {
 		return
 	}
 	b.api = feishubot.New(appID, secret, domain)
-	b.conn = feishubot.NewConn(b.api, h.botEvent, h.logf)
+	b.conn = feishubot.NewConn(b.api, h.botEventHandler(b.api), h.logf)
 	ctx, cancel := context.WithCancel(b.base)
 	b.stop = cancel
 	conn, api := b.conn, b.api
