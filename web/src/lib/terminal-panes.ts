@@ -16,7 +16,7 @@ export interface Listing {
 const sameLayout = (a: PanesResponse | undefined, b: PanesResponse) => a !== undefined && JSON.stringify(a) === JSON.stringify(b);
 
 /** `enabled` false reads nothing (the sidebar's tree, off). */
-export function usePanes(machines: Machine[], enabled = true) {
+export function usePanes(machines: Machine[], enabled = true, poll = true) {
   const [listing, setListing] = useState<Record<string, Listing>>({});
   const [busy, setBusy] = useState(false);
   const online = enabled ? machines.filter((m) => m.online).map((m) => m.id) : [];
@@ -71,14 +71,14 @@ export function usePanes(machines: Machine[], enabled = true) {
     const ids = key ? key.split("\n") : [];
     if (!ids.length) return;
     void loadBusy(ids);
-    const t = setInterval(() => document.visibilityState === "visible" && void load(ids), REFRESH_MS);
+    const t = poll ? setInterval(() => document.visibilityState === "visible" && void load(ids), REFRESH_MS) : undefined;
     return () => {
       clearInterval(t);
       // the read still out belongs to the old key: it no longer holds `busy` (with no machine left, nothing would clear it)
       busyToken.current++;
       setBusy(false);
     };
-  }, [key, load, loadBusy]);
+  }, [key, load, loadBusy, poll]);
 
   const refresh = useCallback(() => loadBusy(key ? key.split("\n") : []), [key, loadBusy]);
   return { listing, busy, refresh, reload: load };

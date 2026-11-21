@@ -100,7 +100,7 @@ const rows: [string, () => Element | undefined][] = [
   ["a pinned conversation", () => link("Release notes")],
   ["an agent", () => link("Build docs")],
   ["a herdr tab with several panes", () => link("Lead pane")],
-  ["a terminal pane", () => link("Shell pane")],
+  ["a terminal pane", () => link("zsh")],
 ];
 
 describe("a sidebar row's ⋯", () => {

@@ -6,11 +6,13 @@ import {
   isPaneAddress,
   keepOnlyShown,
   keepRecent,
+  liveHerdrPanes,
   paneCwd,
   paneIds,
   paneRow,
   paneState,
   paneTrail,
+  shellsOnly,
   terminalId,
   type PaneDTO,
   type PanesResponse,
@@ -62,6 +64,20 @@ describe("the terminal browser's tree", () => {
     expect(agentTab.panes[0].state).toBe("unread"); // the session knows it is unread; the host said working
     expect(agentTab.panes[1].state).toBe("needs_you"); // no session: blocked is needs you
     expect(shellTab.panes[0]).toMatchObject({ state: "shell", title: "zsh", agent: "" });
+  });
+
+  it("only treats a different live session in this machine's exact herdr pane as its replacement", () => {
+    const layout = buildTerminalTree(res, []);
+    const machine = { id: "m1", name: "Studio", online: true, manager: "studio" };
+    const p = layout[0].tabs[1].panes[0];
+    p.agentSession = "stopped";
+    const current = session({ session_id: "new", space_kind: "herdr", pane_id: p.pane, workspace_id: "w1", tab_id: "w1:t2" });
+    const shells = (rows: Session[]) => paneIds(shellsOnly(layout, { machine, panes: liveHerdrPanes(rows) }));
+    expect(shells([current])).toEqual([]);
+    for (const changes of [
+      { session_id: "stopped" }, { state: "offline" as const }, { machine_id: "other" }, { manager: "other" },
+      { host: "orca" }, { pane_id: undefined }, { pane_id: "w1:p10" }, { workspace_id: "w2" }, { tab_id: "w1:t1" },
+    ]) expect(shells([{ ...current, ...changes }])).toEqual([p.id]);
   });
 
   it("opens an agent by its session (it shares that stream) and anything else by the pane's address", () => {

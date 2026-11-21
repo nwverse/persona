@@ -91,6 +91,8 @@ export interface TermPane {
 export interface TermTab {
   id: string;
   label: string;
+  /** A real name reported by the host; label can also be a fallback tab ID. */
+  name?: string;
   panes: TermPane[];
 }
 export interface TermSpace {
@@ -166,6 +168,7 @@ export function buildTerminalTree(res: PanesResponse | undefined, sessions: read
         .map((t) => ({
           id: t.id,
           label: t.label || t.id,
+          name: listed.has(t.id) ? t.label?.trim() || undefined : undefined,
           // a tab id is unique only within its workspace, and a host with no tabs (botmux) leaves it empty on every pane
           panes: (panesOf.get(t.id) ?? [])
             .filter((p) => p.workspace_id === w.id)
@@ -272,12 +275,5 @@ export function isPaneAddress(id: string): boolean {
   return id.startsWith("pane:");
 }
 
-/** Only the plain shells of a tree (the sidebar lists the agents already): tabs and workspaces left with none are dropped. */
-export function shellsOnly(spaces: readonly TermSpace[]): TermSpace[] {
-  const out: TermSpace[] = [];
-  for (const sp of spaces) {
-    const tabs = sp.tabs.map((t) => ({ ...t, panes: t.panes.filter((p) => p.state === "shell") })).filter((t) => t.panes.length > 0);
-    if (tabs.length) out.push({ ...sp, tabs });
-  }
-  return out;
-}
+// Retain the sidebar projection entry points for consumers of the terminal library.
+export { liveHerdrPanes, shellsOnly, type ShellSpace } from "./sidebar-shells";

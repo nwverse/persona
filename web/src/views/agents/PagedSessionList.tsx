@@ -24,7 +24,7 @@ import { nestUnderParents, type StableRowOrder } from "../../lib/side-sessions";
 import { sameValue } from "../../lib/stable-lines";
 import { lazyPage } from "../../lib/lazy-page";
 import { NeedsCount, ShowMoreRow } from "../SidebarSection";
-import type { GroupedSessionsProps, GroupedSource } from "./GroupedSessions";
+import type { GroupedSessionsProps, GroupedSource, WithGroupTerminals } from "./GroupedSessions";
 import { useSessionGroups } from "./use-session-groups";
 
 // The list drawn by group is a chunk of its own, loaded when a Browse by is chosen (or was, last time): the default
@@ -77,6 +77,8 @@ export interface PagedSessionListProps<T> {
 
 export interface PagedGrouping<T> {
   dimension: GroupDimension; bar: ReactNode; label: string; todos?: TodoNames; quick?: PagedQuickFilters;
+  /** Online computers can have a shell even when the Hub counts no Agents there. */
+  terminals?: { computers: readonly string[]; withGroup: WithGroupTerminals<T> };
   /** The sections follow this scope's fold-all (useFolded). */ foldScope?: string;
   /** Stable structural placement. The transport still uses `compare`, whose newest-first order binds the hub's cursors. */
   rowOrder?: StableRowOrder<T>;
@@ -270,7 +272,17 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     else void root.retry().catch(() => {});
   }, [facetScoped, root]);
   const grouped = useSessionGroups({ dimension, catalog: cataloged, countsPath, scope: groupScope, facets, facetQuery, facetsError: facetsFailure, retryFacets, waiting: sections ? scopeNeeds : 0, event, todos: grouping?.todos, justFinished, machineOrder });
-  const allGroups = grouped.groups;
+  // By machine with the shells shown: an online computer with no Agents still has a section for its shells, after the
+  // hub's computers in their shared order
+  const terminals = dimension === "machine" && !q && !Object.keys(chip).length ? grouping?.terminals : undefined;
+  const allGroups = useMemo(() => {
+    const groups = grouped.groups;
+    if (!groups || !terminals) return groups;
+    const counted = new Set(groups.map(g => g.key));
+    return groups.concat(terminals.computers.filter(id => !counted.has(id)).map(id => ({
+      key: id, name: id, count: 0, needs: 0, places: [], filters: { machine_id: id },
+    })));
+  }, [grouped.groups, terminals]);
   // the picked group follows what the hub says of it now (a project gains a directory); gone from the scope, it stays picked
   useEffect(() => {
     if (!picked || !allGroups) return;
@@ -501,7 +513,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       {sections && <>
         {allGroups && allGroups.length > 0 && <Suspense fallback={loadingLine}>
           <GroupedSessions groups={allGroups} dimension={dimension as GroupDimension} kind={personal ? "personal" : "runtime"} scope={groupScope} source={source}
-            renderRow={renderRow} groupName={groupName} machineName={machineName} open={openPlace} foldScope={grouping?.foldScope} />
+            renderRow={renderRow} groupName={groupName} machineName={machineName} open={openPlace} foldScope={grouping?.foldScope} withTerminals={terminals?.withGroup} />
         </Suspense>}
         {!allGroups && !grouped.error && loadingLine}
         {grouped.error && <ListError text={failureText(grouped.error)} onRetry={grouped.retry} />}
