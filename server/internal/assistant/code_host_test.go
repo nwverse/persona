@@ -79,7 +79,6 @@ func TestAcceptedReadsOtherCodeHosts(t *testing.T) {
 		{name: "provider off", provider: true, state: "open", off: true, pr: acmeMR, note: "provider_off"},
 		{name: "provider fails", provider: true, state: "open", fail: &repository.ProviderError{Code: "not_signed_in", Provider: "Acme Code"}, pr: acmeMR, note: "not_signed_in"},
 		{name: "host no one reads", pr: "https://git.example.test/team/app/merge_requests/3", note: "git.example.test"},
-		{name: "gitlab.com, not read yet", pr: "https://gitlab.com/team/app/-/merge_requests/3", note: "gitlab.com"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var p *mergeRequestProvider
@@ -123,7 +122,8 @@ func TestAcceptedLinkNamesOtherHostRequest(t *testing.T) {
 	}
 }
 
-// codeHostFor routes by host: GitHub pull requests to the built-in, claimed hosts to their provider, the rest to none.
+// codeHostFor routes by host: GitHub pull requests and gitlab.com to the built-ins, claimed hosts to their provider, the
+// rest to none.
 func TestCodeHostRouting(t *testing.T) {
 	s := &Service{}
 	s.deploy.forge = &fakeForge{}
@@ -131,7 +131,7 @@ func TestCodeHostRouting(t *testing.T) {
 	for url, want := range map[string]string{
 		"https://github.com/o/r/pull/9": "GitHub",
 		acmeMR:                          "Acme Code",
-		"https://gitlab.com/g/r/-/merge_requests/1":         "",
+		"https://gitlab.com/g/r/-/merge_requests/1":         "GitLab",
 		"https://github.com/o/r/issues/9":                   "",
 		"https://elsewhere.example.test/g/r/merge_requests": "",
 	} {

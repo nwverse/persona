@@ -18,6 +18,7 @@ const (
 	sigIdle          = "idle"           // its agents stopped, and the work is not finished
 	sigUnjudged      = "unjudged"       // its agents stopped, and the judge could not say whether the work is finished
 	sigNeedsYou      = "needs_you"      // an agent waits for an answer
+	sigTimedOut      = "timed_out"      // terminal agents stopped after unattended lack of progress
 	sigStalled       = "stalled"        // working, but nothing moved for long
 	sigNoProgress    = "no_progress"    // working, its session moves, but only waits and repeats: no real progress (supervise_progress.go)
 	sigAllStopped    = "all_stopped"    // every current participant stopped with nothing scheduled to resume it
@@ -35,6 +36,17 @@ const (
 	// sigLeaderStuck: a leader's task is stuck (leader_reports.go): the main conversation says so in one line, no push
 	// (the owner's ruling after H1, #3609). Detail is the direction's name and where it is stuck.
 	sigLeaderStuck = "leader_stuck"
+	// sigCheck: a recurring schedule linked to the task (schedule_todo.go) has news of it, the hub's and never its
+	// Agent's (#11587). Report says which: its check saw no progress, could not save what it saw, or the owner
+	// answered the decision it raised (checkDecided), which did not go to the Agent.
+	sigCheck = "check"
+)
+
+// sigCheck's kinds of news (superviseSignal.Report).
+const (
+	checkNoProgressReport = "no_progress"
+	checkErrorReport      = "error"
+	checkDecidedReport    = "decided"
 )
 
 var (
@@ -70,8 +82,18 @@ type superviseSignal struct {
 	Unreachable      bool
 	At               time.Time
 	Machine, Session string
-	Detail, Ask      string
-	Minutes          int
+	// Launcher is the actual launcher a failed start used. Recipient is the final conversation or task-leader
+	// destination, and NotBefore holds a repeated failure until its persistent deduplication window expires.
+	Launcher  string
+	Recipient string
+	NotBefore time.Time
+	Remedying bool
+	// Generation identifies a failed-start event independently of its queue position. failedClaim is the local
+	// manager's delivery claim; Claims in the durable batch document carries it between managers.
+	Generation  time.Time `json:"generation,omitzero"`
+	failedClaim string
+	Detail, Ask string
+	Minutes     int
 	// A report's (sigReport): its kind (progress, question, blocked, done), evidence and the step it is on.
 	SourcePermission proto.SourcePermission
 	Report           string
@@ -89,6 +111,8 @@ type superviseSignal struct {
 	// Decision: the decision a recheck or an owner_cannot_answer signal is about, as it was asked (decision.go); for
 	// owner_cannot_answer Detail is the owner's answer (decide_yourself, not_what_i_asked, explain_first).
 	Decision *prompts.SuperviseDecision
+	// Told: a check's decided signal whose answer is already in the task Agent's chat (decisionTold, checkDecided).
+	Told bool
 	// Inbox: the Inbox item an inbox signal names, and how many new messages it tells (supervise_inbox.go).
 	Inbox *prompts.SuperviseInbox
 	// Optional routine batching keeps these in memory only, after routing and before delivery. They are never part of
@@ -116,7 +140,7 @@ func (g superviseSignal) id() string {
 	if g.Kind == sigDraftPR {
 		return g.Todo + "|" + g.Kind + "@" + g.PRURL
 	}
-	if g.Kind == sigReport {
+	if g.Kind == sigReport || g.Kind == sigCheck {
 		return g.Todo + "|" + g.Kind + ":" + g.Report
 	}
 	if g.Kind == sigAsk { // its cards with each rung are an entry of their own
@@ -138,33 +162,41 @@ func (g superviseSignal) id() string {
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
 	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
-		sigRecheck, sigUndecidable, sigOwnerCannot, // the owner waits on a decision they cannot answer as it is
-		sigParkDecided, sigDecisionReply: // the owner answered: what they said is acted on soon
+		sigRecheck, sigUndecidable, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
+		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult:
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
+	case sigCheck: // the owner answered: what they chose is acted on soon
+		return g.Report == checkDecidedReport
 	}
 	return false
 }
 
-// immediate: a signal that does not wait out the gap after the last message, only p.gather. A start that failed is
-// the supervisor's to retry and nobody else's; the gap is shared by every supervisor, so a message just sent to
-// another (the background supervisor) held it back for minutes while the task sat as if finished.
-func (g superviseSignal) immediate() bool { return g.Kind == sigFailed }
+// immediate signals need a decision and wait only for gathering, never the shared spacing or routine cooldown.
+// An explicit NotBefore (a deferred failed-start batch) still applies.
+func (g superviseSignal) immediate() bool { return supervisionBatchImmediate(g) }
 
 type superviseBook struct {
 	mu      sync.Mutex
 	writeMu sync.Mutex // one ledger write at a time (updateSupervision)
 	dedupMu sync.Mutex // serializes digest reservations and delivery
 	dedup   map[string]superviseFingerprint
-	pending map[string]superviseSignal   // by todo|kind
-	sent    map[string]string            // todo|kind → the key last told
-	asks    map[string]string            // todo → what its agent last asked (InteractionRaised)
-	last    time.Time                    // when the last supervision message went out
-	queued  map[string][]superviseSignal // conversation → the signals of the message still waiting in its queue
-	batch   map[string]time.Time         // conversation → its routine batch's first-signal deadline
-	timer   *time.Timer
-	timerAt time.Time
+	// failedBatchMu serializes the durable leader-failure cooldown document. failedBatches is its memory-only
+	// fallback when this manager has no store; failedBatchesLoaded says whether deferred members were restored.
+	failedBatchMu       sync.Mutex
+	failedBatches       failedStartBatchDoc
+	failedBatchesLoaded bool
+	pending             map[string]superviseSignal   // by todo|kind
+	sent                map[string]string            // todo|kind → the key last told
+	asks                map[string]string            // todo → what its agent last asked (InteractionRaised)
+	last                time.Time                    // when the last supervision message went out
+	queued              map[string][]superviseSignal // conversation → the signals of the message still waiting in its queue
+	batch               map[string]time.Time         // conversation → its routine batch's first-signal deadline
+	batchInterval       time.Duration                // last scheduled optional interval, to release it when disabled
+	told                map[string]time.Time         // conversation → last accepted supervision message
+	timer               *time.Timer
+	timerAt             time.Time
 
 	resuming map[[2]string]struct{} // fingerprints of offline leader sends in flight, under dedupMu
 
@@ -197,6 +229,9 @@ func (b *superviseBook) init() {
 // package's superviseGather, superviseEvery or superviseUrgentEvery).
 type superviseTimings struct {
 	gather, every, urgent time.Duration
+	// cooldown: how long routine signals for a conversation wait after a supervision message went to it (zero:
+	// routineCooldown's default).
+	cooldown time.Duration
 }
 
 // superviseTimings are s's own timings, the package's for each one it does not set. Tests set them on their Service,
@@ -221,6 +256,9 @@ func digestWait(now, last time.Time, pending []superviseSignal, p superviseTimin
 	var due time.Time
 	for _, g := range pending {
 		at := g.At.Add(p.gather)
+		if g.NotBefore.After(at) {
+			at = g.NotBefore
+		}
 		if !last.IsZero() && !g.immediate() {
 			gap := p.every
 			if g.urgent() {
@@ -229,6 +267,9 @@ func digestWait(now, last time.Time, pending []superviseSignal, p superviseTimin
 			if next := last.Add(gap); next.After(at) {
 				at = next
 			}
+		}
+		if !supervisionBatchImmediate(g) && g.batchUntil.After(at) {
+			at = g.batchUntil // held for its recipient's routine cooldown (gateDigestBatches)
 		}
 		if due.IsZero() || at.Before(due) {
 			due = at
@@ -250,7 +291,7 @@ func (s *Service) signal(g superviseSignal) {
 		g.At = time.Now()
 	}
 	b := &s.supervise
-	if turnSignalKind(g.Kind) && s.turnSignalled(g) {
+	if turnSignalKind(g) && s.turnSignalled(g) {
 		// How its turn ended was told already, by this manager or by the one before a restart (task_turns.go).
 		b.mu.Lock()
 		b.init()
@@ -277,7 +318,23 @@ func (s *Service) queueSignal(g superviseSignal) {
 		return
 	}
 	if cur, ok := b.pending[g.id()]; ok {
-		g.At = cur.At // still waiting: it keeps its place
+		if g.Kind == sigFailed {
+			if cur.Key != g.Key && newerFailedSignal(cur, g) {
+				b.mu.Unlock()
+				return // a restored or delayed old attempt cannot replace the newer pending one
+			}
+			if cur.Key == g.Key {
+				g.At = cur.At // the same failed attempt keeps its queue position and delivery generation
+				if g.Generation.IsZero() {
+					g.Generation = cur.Generation
+				}
+				if g.NotBefore.IsZero() {
+					g.NotBefore = cur.NotBefore
+				}
+			}
+		} else {
+			g.At = cur.At // still waiting: it keeps its place
+		}
 		if g.Ask == "" {
 			g.Ask = cur.Ask
 		}
@@ -304,11 +361,13 @@ func (s *Service) queueSignal(g superviseSignal) {
 // scheduleDigestLocked sets the timer for when the pending signals are due; s.supervise.mu is held.
 func (s *Service) scheduleDigestLocked(now time.Time) {
 	b := &s.supervise
+	batch := s.supervisionBatchInterval(context.Background())
+	b.syncBatchInterval(batch)
 	list := make([]superviseSignal, 0, len(b.pending))
 	for _, g := range b.pending {
 		list = append(list, g)
 	}
-	wait, ok := digestWaitWithBatch(now, b.last, list, s.superviseTimings(), s.supervisionBatchInterval(context.Background()))
+	wait, ok := digestWaitWithBatch(now, b.last, list, s.superviseTimings(), batch)
 	if !ok {
 		return
 	}
@@ -351,7 +410,17 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 		return nil
 	}
 	switch v.state(t) {
+	case reviewClosing:
+		return nil
+	case reviewTimedOut:
+		return []superviseSignal{{Todo: t.ID, Kind: sigTimedOut, Key: reviewKey(v)}}
 	case reviewPending:
+		if h := v.handoffResult(); h != nil {
+			if h.ToldAt.IsZero() {
+				return []superviseSignal{handoffResultSignal(t.ID, h)}
+			}
+			return nil
+		}
 		return []superviseSignal{{Todo: t.ID, Kind: sigReview, Key: reviewKey(v)}}
 	case reviewParked: // nothing until its time, then that it came (parked.go)
 		if g, ok := parkedDueSignal(t, now); ok {
@@ -406,7 +475,12 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 }
 
 // reviewKey names one review a task waits for: when it began to wait.
-func reviewKey(v *Supervision) string { return "review@" + v.UpdatedAt.UTC().Format(time.RFC3339Nano) }
+func reviewKey(v *Supervision) string {
+	if r := v.externalPRWake(); r != nil {
+		return externalPRReviewPrefix + r.At.UTC().Format(time.RFC3339Nano)
+	}
+	return "review@" + v.UpdatedAt.UTC().Format(time.RFC3339Nano)
+}
 
 // stallAfter is how long without progress counts as stuck for a task that should take expect minutes.
 func stallAfter(expect int) time.Duration {
@@ -461,7 +535,14 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 			continue
 		}
 		s.remedyWatch(ctx, t, now, history) // a failed start's kept tab expired (start_remedy.go)
+		t = s.checkTaskHandoff(ctx, t, now)
 		agents := s.taskAgentsIn(ctx, t, lists)
+		s.closeStalledTask(ctx, t, agents, now)
+		if current, ok := s.todoNow(t.ID); ok {
+			t = current
+		} else {
+			continue
+		}
 		group := s.allStoppedGroup(ctx, t, groups[t.ID], lists)
 		allStopped := false
 		stalled := map[string]bool{}

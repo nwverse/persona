@@ -94,6 +94,16 @@ const (
 	FeishuText = "feishu.text"
 	// FeishuUpdateCard: {message_id, card} → {}.
 	FeishuUpdateCard = "feishu.update_card"
+	// FeishuCardCreate: {card} → {card_id}: a card entity (CardKit) made of the card (JSON 2.0); FeishuPost sends it with
+	// feishubot.CardEntityContent(card_id) as its card, and FeishuUpdateCard still updates that message whole.
+	FeishuCardCreate = "feishu.card_create"
+	// FeishuCardUpdate: {card_id, card, sequence} → {}: the whole card written into an entity. FeishuCardStream:
+	// {card_id, element, text, sequence} → {}: an element's whole text streamed into it (feishubot.StreamClosed tells
+	// one that stopped streaming). FeishuCardSettings: {card_id, streaming, sequence} → {}: its streaming turned on or
+	// off. A write's sequence must be larger than the entity's last; errors carry Feishu's code.
+	FeishuCardUpdate   = "feishu.card_update"
+	FeishuCardStream   = "feishu.card_stream"
+	FeishuCardSettings = "feishu.card_settings"
 	// FeishuPin: {message_id, exclusive?} → {}: one of the bot's messages in the owner's private chat pinned there;
 	// exclusive takes off the other pins the bot made in that chat (never the owner's own) (#1961, the workbench).
 	FeishuPin = "feishu.pin"
@@ -181,13 +191,30 @@ type FeishuMessage struct {
 	Action string          `json:"action,omitempty"`
 	// From says where the hub took the message from when it is not the owner's private chat or a topic of a group the
 	// owner opted in: FeishuFromElsewhere is the owner's "@bot /ai …" in a group that is not opted in (#6146), the only
-	// thing the hub lets through from one. "" for the usual two.
+	// thing the hub lets through from one; FeishuFromRead is the owner's "@bot /read …" from any group (#11803). "" for
+	// the usual two.
 	From string `json:"from,omitempty"`
+}
+
+// OwnerApprovalProof is the hub-authenticated location and exact text of an
+// owner's direct reply. It is returned only after the matching one-use owner
+// action is consumed; the assistant still has to bind ParentID to the exact
+// pending proposal card and compare Text with the configured affirmative word.
+type OwnerApprovalProof struct {
+	MessageID string `json:"message_id"`
+	ParentID  string `json:"parent_id"`
+	ChatID    string `json:"chat_id"`
+	Text      string `json:"text"`
 }
 
 // FeishuFromElsewhere is FeishuMessage.From of a message the hub took from a group chat that is not opted in: the owner's
 // "@bot /ai …" and nothing else. The assistant opens a to-do for it in the home topic group, or in the owner's private chat when there is none (assistant/feishu_elsewhere.go).
 const FeishuFromElsewhere = "elsewhere"
+
+// FeishuFromRead is FeishuMessage.From of the owner's "@bot /read <task>" from a group chat, opted in or not (#11803):
+// the assistant reads the group as the owner, then does the task, and answers under that message
+// (assistant/feishu_read.go). The hub lets it through only with the read_group switch on.
+const FeishuFromRead = "read"
 
 // FeishuAction is feishu.card_action's params: card.action.trigger's event as Feishu sent it (the owner's press), and
 // the owner's action for the card it presses (InteractionsResolve).
@@ -264,6 +291,9 @@ type FeishuFeatures struct {
 	AnswerNewCard bool `json:"answer_new_card"`
 	// TopicCot: a topic run also shows its thinking and tools in a native agent message beside the progress card.
 	TopicCot bool `json:"topic_cot"`
+	// ReadGroup: "@bot /read <task>" from the owner in a group reads the group before the task (#11803,
+	// FeishuFromRead).
+	ReadGroup bool `json:"read_group"`
 }
 
 // FeishuStatus is feishu.status's answer.

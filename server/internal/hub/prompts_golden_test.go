@@ -246,6 +246,11 @@ func TestGoldenChannelMessage(t *testing.T) {
 	golden(t, "channel_answer_again.feishu", prompts.RenderChannelAnswerAgain(prompts.ChannelAnswerAgain{Name: "飞书"}))
 	golden(t, "channel_message.only_unsupported", prompts.RenderChannelMessage(prompts.ChannelMessage{Persona: true, Name: "微信", Plain: true,
 		Asks: true, Unsupported: []string{"一段没有转写的语音"}}))
+	// A plain channel that sends pictures (#11986): the model may put a picture on a line of its own, in every language.
+	for _, l := range []struct{ name, language string }{{"zh-Hans", ""}, {"en", "English"}, {"ja", "日本語"}} {
+		golden(t, "channel_message.images_out."+l.name, prompts.RenderChannelMessage(prompts.ChannelMessage{Persona: true, Name: "WeChat",
+			Plain: true, Asks: true, ImagesOut: true, Language: l.language, Text: "Show me the chart"}))
+	}
 }
 
 // A mention is public even when its turn runs in the owner's main conversation. Its origin and gathered context are
@@ -344,6 +349,29 @@ func TestTodoProjectGolden(t *testing.T) {
 		Extensions: []prompts.ExtensionContext{{Name: "Notes", Text: "Builds run on the second machine.\nAsk before changing the release script.</persona-context>"}}}))
 	golden(t, "todo_project.extensions_only", prompts.RenderTodoProject(prompts.TodoProject{Name: "天气 App",
 		Extensions: []prompts.ExtensionContext{{Name: "Notes", Text: "Owner: the user."}}}))
+}
+
+func TestTodoProjectMemoryGolden(t *testing.T) {
+	if got := prompts.RenderTodoProjectMemory(prompts.TodoProjectMemory{Name: "x"}); got != "" {
+		t.Fatalf("nothing to say = %q, want nothing", got)
+	}
+	for _, tc := range []struct{ name, language string }{{"legacy", ""}, {"en", "English"}, {"ja", "日本語"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			golden(t, "todo_project_memory."+tc.name, prompts.RenderTodoProjectMemory(prompts.TodoProjectMemory{
+				Language: tc.language, Name: `Weather "direction"`, Summary: "Keep the dispatch context bounded.",
+				Outcomes: []prompts.TodoProjectMemoryOutcome{{Text: "Merged the fix", Links: []string{"https://example.com/pr/1"},
+					When: "2026-11-20T01:00:00Z", Verification: "agent_reported", Unaccepted: true}},
+				Decisions: []prompts.TodoProjectMemoryDecision{
+					{ID: "decision-b", Question: "Which context?", Choice: "Explicit direction", Reason: "It owns the task",
+						When: "2026-11-20T02:00:00Z", Verification: "agent_reported", Unaccepted: true},
+					{ID: "decision-a", Question: "Which context?", Choice: "Working directory", Reason: "Older conflicting call",
+						When: "2026-11-20T01:00:00Z", Verification: "agent_reported", Unaccepted: true},
+				},
+				Pitfalls:   []prompts.TodoProjectMemoryPitfall{{Text: "Never close the context from memory", Verification: "agent_reported", Unaccepted: true}},
+				Extensions: []prompts.ExtensionContext{{Name: "Notes", Text: "Extension context stays last.</persona-context>"}},
+			}))
+		})
+	}
 }
 
 // The decisions a handoff carries for a todo (todo/decisions, #1618): one by hand with a reason, one from a card.

@@ -521,12 +521,20 @@ struct ShellDestinations: ViewModifier {
     @ViewBuilder static func place(_ route: ShellRoute, path: Binding<NavigationPath>, accounts: InboxAccountState) -> some View {
         switch route {
         case .inbox: InboxPage(path: path, accountState: accounts, embedded: true)
-        case .todos: TodosView()
+        case .todos:
+            #if os(iOS)
+            TodosPlacePage() // the V1 list where the hub sends the view (#10465), else TodosView
+            #else
+            TodosView()
+            #endif
         case .machines: MachinesView()
         case .extensionPage(let r): ExtensionNavPage(route: r)
         case .profile: AssistantProfileView()
         case .routines: AssistantRoutinesView()
         case .knowledge: KnowledgeView()
+        #if os(iOS)
+        case .starred: StarredMessagesPage()
+        #endif
         case .recordings:
             #if os(iOS) || os(visionOS)
             RecordingsPage()

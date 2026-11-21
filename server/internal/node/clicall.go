@@ -13,15 +13,16 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/assistantskills"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // A connector's command line (personad tool, internal/toolcli) reaches the hub through the node's socket like the MCP
-// server, but the node, not the caller, says whether the assistant is asking: only a process the node started for the assistant,
-// or one of its descendants (its Bash tool), gets the assistant's tools. Any other caller (an agent, a program run by
-// hand) is refused; so is a system where the other end of a socket cannot be known.
+// server, but the node, not the caller, says whether the assistant is asking. Only an assistant's own process or a
+// verified runtime worker, or one of their descendants (its Bash tool), gets the assistant's tools. Any other caller
+// (an agent, a program run by hand) is refused; so is a system where the other end of a socket cannot be known.
 //
-// The MCP server's requests (mcp.tools, mcp.call) are decided the same way (mcpAssistantOf): its PERSONA_ASSISTANT is
+// The MCP server's requests (mcp.tools, mcp.call) have their own process checks (mcpAssistantOf): its PERSONA_ASSISTANT is
 // repeated by every process started with the assistant's environment, an agent in an engine started from the
 // assistant's Bash tool among them. Such an agent still counts as the assistant while its engine stays a descendant of
 // the assistant's process (a server the Bash tool did not detach), as any program run there does.
@@ -43,18 +44,24 @@ func (n *Node) assistantCaller(c net.Conn) (string, bool) {
 
 // assistantOf is the assistant conversation whose process is pid or an ancestor of it (parent gives a process's).
 func (n *Node) assistantOf(pid int, parent func(int) (int, error)) (string, bool) {
-	return n.assistantIn(lineage(pid, parent))
+	return assistantIn(lineage(pid, parent), n.assistantRoots())
 }
 
 // assistantIn is the assistant conversation whose process is one of pids, the first one found.
-func (n *Node) assistantIn(pids []int) (string, bool) {
-	roots := n.assistantRoots()
+func assistantIn(pids []int, roots map[int]string) (string, bool) {
 	for _, p := range pids {
 		if id, ok := roots[p]; ok {
 			return id, true
 		}
 	}
 	return "", false
+}
+
+func strictDescendant(pid, ancestor int, parent func(int) (int, error)) bool {
+	if pid <= 1 || ancestor <= 1 || pid == ancestor {
+		return false
+	}
+	return slices.Contains(lineage(pid, parent)[1:], ancestor)
 }
 
 // lineage is pid and its ancestors, nearest first, as far as parent tells: up to ancestorsMost, init not included.
@@ -75,10 +82,21 @@ func lineage(pid int, parent func(int) (int, error)) []int {
 // process).
 var nodeLineage = func() []int { return lineage(os.Getpid(), parentPID) }
 
-// assistantRoots are the processes this node runs for the assistant, by pid, each with the session its calls go to
+func (n *Node) assistantRoots() map[int]string {
+	roots := n.localAssistantRoots()
+	for _, worker := range n.runtimes.assistantWorkers() {
+		if _, exists := roots[worker.pid]; !exists && strictDescendant(worker.pid, worker.runtimePID, parentPID) &&
+			n.runtimeAssistantChat(worker.host, worker.session) {
+			roots[worker.pid] = worker.session
+		}
+	}
+	return roots
+}
+
+// localAssistantRoots are the processes this node runs for the assistant, by pid, each with the session its calls go to
 // the hub with: a conversation's, the warm spare's (its MCP server lists the tools as it starts, before a conversation
 // adopts it), and a Codex process's key until its thread exists (the key its MCP server says, resolveAssistantKey).
-func (n *Node) assistantRoots() map[int]string {
+func (n *Node) localAssistantRoots() map[int]string {
 	roots := map[int]string{}
 	add := func(id string, p *assistantProc) {
 		if p == nil || p.cmd == nil || p.cmd.Process == nil {
@@ -146,7 +164,7 @@ func (n *Node) mcpAssistantOf(pid int, err error, parent func(int) (int, error),
 		return "", false
 	}
 	line := lineage(pid, parent)
-	if id, ok := n.assistantIn(line); ok {
+	if id, ok := assistantIn(line, n.localAssistantRoots()); ok {
 		return id, true
 	}
 	if h := n.runtimes.assistantIn(line); h != nil && n.runtimeMayName(h, session) {
@@ -157,7 +175,7 @@ func (n *Node) mcpAssistantOf(pid int, err error, parent func(int) (int, error),
 
 // assistantSession: session is the one a process this node runs for the assistant goes to the hub with.
 func (n *Node) assistantSession(session string) bool {
-	for _, id := range n.assistantRoots() {
+	for _, id := range n.localAssistantRoots() {
 		if id == session {
 			return true
 		}
@@ -186,6 +204,7 @@ func (n *Node) runtimeAssistantChat(h *runtimeConn, session string) bool {
 
 type assistantPrepareState struct {
 	connectors []string
+	workGuide  bool
 	clis       map[string]string // command name → connector id
 }
 
@@ -203,26 +222,27 @@ func (n *Node) mayCall(cwd, tool string) bool {
 	return slices.ContainsFunc(n.signedInConnectors(cwd), func(id string) bool { return strings.HasPrefix(tool, id+"_") })
 }
 
-// cliCall runs a scoped task_spawn as the Agent's, or a connector call as the assistant's. No Agent-side exception
-// grants connector access.
+// cliCall runs one of an Agent's own tools (callerTools) as the Agent its pane or Codex thread names, or a connector
+// call as the assistant's. The Agent's tools go to the hub as an Agent's call (assistant false), as `personad mcp`
+// sends them for the same pane (hooks.go mcpCaller): the hub decides each one for that session (a task leader's
+// task_plan, the decisions of the Agent's own to-do, …). A call that names no known Agent session gets the assistant's
+// check below, unchanged; no Agent-side exception grants connector access.
 func (n *Node) cliCall(ctx context.Context, c net.Conn, req sockRequest) proto.ToolResult {
-	if req.Name == "task_spawn" {
-		session := n.paneCaller(req.Pane)
-		if req.CodexThreadID != "" {
-			session = n.taskCodexCaller(req.CodexThreadID)
+	if slices.Contains(callerTools, req.Name) {
+		if session := n.cliAgentCaller(req); session != "" {
+			if n.peer == nil {
+				return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: not connected", 0)
+			}
+			var res proto.ToolResult
+			if err := n.peer.Call(ctx, "mcp.call", map[string]any{"name": req.Name, "args": req.Args, "session_id": session,
+				"assistant": false, "guest": n.guestOf(session) != nil}, &res); err != nil {
+				return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: "+err.Error(), 0)
+			}
+			return res
 		}
-		if session == "" {
+		if req.Name == "task_spawn" {
 			return proto.ErrorResult(proto.ToolErrorUnavailable, "task_spawn is not available: no Agent session is known for this pane or Codex thread", 0)
 		}
-		if n.peer == nil {
-			return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: not connected", 0)
-		}
-		var res proto.ToolResult
-		if err := n.peer.Call(ctx, "mcp.call", map[string]any{"name": req.Name, "args": req.Args, "session_id": session,
-			"assistant": false, "guest": n.guestOf(session) != nil}, &res); err != nil {
-			return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: "+err.Error(), 0)
-		}
-		return res
 	}
 	session, ok := n.assistantCaller(c)
 	if !ok {
@@ -230,10 +250,20 @@ func (n *Node) cliCall(ctx context.Context, c net.Conn, req sockRequest) proto.T
 	}
 	n.mu.Lock()
 	cwd := ""
-	if p := n.procs[session]; p != nil {
+	p := n.procs[session]
+	if p != nil {
 		cwd = p.cwd
 	}
 	n.mu.Unlock()
+	if p == nil {
+		if st, ok := n.state.get(session); ok && st.Cwd != "" {
+			cwd = st.Cwd
+		} else if s, _, ok := n.runtimes.rowOf(session); ok && s.Cwd != "" {
+			cwd = s.Cwd
+		} else if n.runtimeAssistant(session) {
+			cwd = identity.AssistantDir(n.home)
+		}
+	}
 	if !n.mayCall(cwd, req.Name) {
 		return proto.ErrorResult(proto.ToolErrorUnavailable, req.Name+" is not available: the command line calls only the tools of the hub's connectors that are signed in", 0)
 	}
@@ -253,6 +283,16 @@ func (n *Node) cliCall(ctx context.Context, c net.Conn, req sockRequest) proto.T
 		return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: "+err.Error(), 0)
 	}
 	return res
+}
+
+// cliAgentCaller is the Agent session a command line's call of an Agent's own tool comes from: the one its Codex
+// thread names when it names one, else the one in its pane (paneCaller); "" when none is known. The request's own
+// session and assistant fields are never read: the node, not the caller, says whose call it is.
+func (n *Node) cliAgentCaller(req sockRequest) string {
+	if req.CodexThreadID != "" {
+		return n.taskCodexCaller(req.CodexThreadID)
+	}
+	return n.paneCaller(req.Pane)
 }
 
 // Codex's shared daemon can inherit a different pane's environment. A tool's per-turn thread id takes precedence;
@@ -278,27 +318,48 @@ func (n *Node) taskCodexCaller(thread string) string {
 // signedInConnectors are this directory's signed-in connectors as of its last assistant.prepare: whose built-in
 // skills the assistant gets (assistantskills.Requires). An unprepared directory gets none.
 func (n *Node) signedInConnectors(cwd string) []string {
-	key := assistantPrepareDir(cwd)
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return slices.Clone(n.assistantPrepared[key].connectors)
+	return n.skillSelection(cwd).Connectors
 }
 
-// syncAssistantSkills puts the assistant's skills in its directory (cwd): the user's, and the built-in ones whose
-// connector is signed in; a connector's command line is on the assistant's PATH while it is. A runtime's directory (.agents/skills) is
-// kept the same once it is there.
-func (n *Node) syncAssistantSkills(cwd string) {
-	conns := n.signedInConnectors(cwd)
-	dirs := []string{filepath.Join(cwd, ".claude", "skills")}
-	if st, err := os.Stat(filepath.Join(cwd, ".agents", "skills")); err == nil && st.IsDir() {
-		dirs = append(dirs, filepath.Join(cwd, ".agents", "skills"))
+func (n *Node) skillSelection(cwd string) assistantskills.Selection {
+	key := assistantPrepareDir(cwd)
+	n.mu.Lock()
+	state, prepared := n.assistantPrepared[key]
+	n.mu.Unlock()
+	if !prepared {
+		// A resumed process may precede the first prepare after a node restart.
+		// Only Persona's own installation stamp can carry the guide across it.
+		state.workGuide = assistantskills.WorkGuideInstalled(filepath.Join(cwd, ".claude", "skills"))
 	}
+	return assistantskills.Selection{Connectors: slices.Clone(state.connectors), WorkGuide: state.workGuide}
+}
+
+// syncRuntimeSkillDir refreshes one runtime's native skills when an Assistant starts.
+func (n *Node) syncRuntimeSkillDir(cwd, dir string) {
+	n.assistantSkillsMu.Lock()
+	defer n.assistantSkillsMu.Unlock()
+	if err := assistantskills.Sync(dir, assistantskills.UserDir(), n.skillSelection(cwd), n.logger.Printf); err != nil {
+		n.logger.Printf("assistant: skills: %v", err)
+	}
+}
+
+// syncAssistantSkills provisions native skills and connector commands during prepare.
+// Before switching to the compact instructions, both runtimes must have the guide.
+func (n *Node) syncAssistantSkills(cwd string) error {
+	selection := n.skillSelection(cwd)
+	dirs := []string{filepath.Join(cwd, ".claude", "skills")}
+	agentDir := filepath.Join(cwd, ".agents", "skills")
+	if st, err := os.Stat(agentDir); selection.WorkGuide || (err == nil && st.IsDir()) {
+		dirs = append(dirs, agentDir)
+	}
+	var syncErr error
 	for _, d := range dirs {
-		if err := assistantskills.Sync(d, assistantskills.UserDir(), conns, n.logger.Printf); err != nil {
-			n.logger.Printf("assistant: skills: %v", err)
+		if err := assistantskills.Sync(d, assistantskills.UserDir(), selection, n.logger.Printf); err != nil {
+			syncErr = errors.Join(syncErr, err)
 		}
 	}
 	n.writeCLIs(cwd, n.connectorCLIs(cwd))
+	return syncErr
 }
 
 // connectorCLIs are this directory's signed-in connectors' command lines as of its last assistant.prepare.

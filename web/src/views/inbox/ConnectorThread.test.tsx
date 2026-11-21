@@ -65,6 +65,50 @@ afterEach(() => {
 });
 
 describe("连接器会话页", () => {
+  it("opens a Telegram sender's sized avatar on the item's manager and keeps the legacy media fallback", async () => {
+    const path = "/api/v1/avatars/telegram/YS51MS41MDE";
+    pages.newest = {
+      chat: { id: "g", name: "Workshop", kind: "group", avatar_url: "/api/v1/avatars/telegram/Z3JvdXA" },
+      messages: [
+        msg("1", { sender: { name: "Artist", avatar: "a.u1.501", avatar_url: path } }),
+        msg("2", { sender: { name: "Editor", avatar: "legacy:2" } }),
+        msg("3", { sender: { name: "Guest" } }),
+      ],
+    };
+    const face = (id: string) => host.querySelector<HTMLImageElement>(`[data-mid="${id}"] img`);
+    act(() => root.render(<ConnectorBody item={{ ...item, source: "telegram", manager: "studio" }} />));
+    await flush();
+    const first = new URL(face("1")!.src);
+    expect(first.pathname).toBe(path);
+    expect(first.searchParams.get("size")).toBe(String(32 * devicePixelRatio));
+    expect(first.searchParams.get("manager")).toBe("studio");
+    const legacy = new URL(face("2")!.src);
+    expect(legacy.pathname).toBe("/api/v1/connectors/telegram/media");
+    expect(legacy.searchParams.get("ref")).toBe("legacy:2");
+    expect(legacy.searchParams.get("manager")).toBe("studio");
+    expect(face("3")).toBeNull();
+    act(() => face("1")!.dispatchEvent(new Event("error")));
+    expect(face("1")).toBeNull();
+    expect(host.querySelector('[data-mid="1"] [aria-hidden]')?.textContent).toBe("A");
+    act(() => root.render(<ConnectorBody item={{ ...item, source: "telegram", manager: "garden" }} />));
+    await flush();
+    expect(new URL(face("1")!.src).searchParams.get("manager")).toBe("garden");
+  });
+
+  it("uses the GitHub author's and commenter's separate hub pictures", async () => {
+    const author = "/api/v1/avatars/github/YXV0aG9y", reviewer = "/api/v1/avatars/github/cmV2aWV3ZXI";
+    pages.newest = {
+      chat: { id: "demo#1", name: "A change", kind: "pr", body: "Description",
+        author: { name: "Author", avatar: "old-author", avatar_url: author } },
+      messages: [msg("1", { sender: { name: "Reviewer", avatar: "old-reviewer", avatar_url: reviewer } })],
+    };
+    act(() => root.render(<ConnectorBody item={{ ...item, source: "github" }} />));
+    await flush();
+    const pictures = [...host.querySelectorAll<HTMLImageElement>("img")].map((img) => new URL(img.src));
+    expect(pictures.map((url) => url.pathname)).toEqual([author, reviewer]);
+    expect(pictures.every((url) => url.searchParams.get("size") === String(28 * devicePixelRatio) && !url.searchParams.has("manager"))).toBe(true);
+  });
+
   it("keeps own-message quotes, attachment details and focus readable on blue bubbles", async () => {
     pages.newest = {
       chat: { id: "demo", name: "Demo group", kind: "group" },

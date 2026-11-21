@@ -66,7 +66,7 @@ test("Paseo's agents are the engine's sessions: Claude Code's by its session and
   assert.equal(node.hello.runtime, 'paseo')
   assert.equal(node.hello.name, 'Paseo')
   assert.equal(node.hello.version, '0.14.0', "Paseo's version")
-  assert.deepEqual(node.hello.caps, { start: true, send: true, interrupt: true, rename: true, close: true, assistant: false, modes: true, model: true,
+  assert.deepEqual(node.hello.caps, { start: true, send: true, interrupt: true, queue_edit: false, queue_send_now: false, rename: true, close: true, assistant: false, modes: true, model: true,
     models: true, check: true, rewind: true, seen: true, workspaces: true, resume: true, readonly: true, same_kind: true })
   assert.deepEqual(node.hello.launchers.map((l) => [l.name, l.agent, l.prompt_optional]),
     [['my-claude', 'claude', undefined], ['my-codex', 'codex', true], ['grok', 'paseo', undefined]])
@@ -2527,6 +2527,23 @@ test('a direct start does not create an Agent when its explicitly owned director
   fake.handlers['workspace.create.request'] = () => ({ payload: { workspace: null, error: 'Project was archived' } })
   await assert.rejects(call(node, 'session.start', { cwd: f.repo, launcher: 'my-codex' }), /Project was archived/)
   assert.equal(fake.requestsOf('agent.create.request').length, 0)
+})
+
+test('a managed start requires the prepared directory before creating an agent', async (t) => {
+  const f = projectFixture(t)
+  const { fake, node } = await setup(t)
+  fake.handlers['project.list.request'] = () => ({ payload: { projects: [f.project('prj_original', f.alias)] } })
+  const make = (path) => workspaceDescriptor({ workspaceDirectory: path, projectId: 'prj_original', workspaceKind: 'directory' })
+  fake.handlers['workspace.create.request'] = () => ({ payload: { workspace: make(f.dir) } })
+  const params = { cwd: f.repo, launcher: 'my-codex', prompt: 'Check the repository', backend_workspace_root: true }
+  await assert.rejects(call(node, 'session.start', params), /prepared task directory/)
+  assert.equal(fake.requestsOf('agent.create.request').length, 0)
+  fake.handlers['workspace.create.request'] = () => ({ payload: { workspace: make(f.repo) } })
+  const result = await call(node, 'session.start', params)
+  assert.equal(result.session.cwd, f.repo)
+  assert.equal(fake.requestsOf('agent.create.request').at(-1).config.cwd, f.repo)
+  assert.equal(fake.requestsOf('agent.create.request').at(-1).initialPrompt, undefined)
+  assert.equal(fake.requestsOf('send_agent_message_request').at(-1).text, params.prompt)
 })
 
 test('a directory workspace whose reply was lost uses the same creation key before starting one Agent', async (t) => {

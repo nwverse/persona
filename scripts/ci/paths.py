@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import ast
 import fnmatch
 from functools import cached_property
 import json
@@ -300,6 +301,18 @@ SERVER_CLIENT_INPUTS = [
     "apple/LiveActivity/**", "apple/PersonaTests/**", "apple/Packages/PersonaWire/**", "android/core/contracts/**",
 ]
 
+def mock_domain_inputs(root=ROOT):
+    # Parse the registry's literal inventory, not its executable route setup, and only when desktop selection is
+    # requested: minimal Web fixture repositories need not carry the mock hub.
+    registry = ast.parse((Path(root) / "scripts/mock/mock_domains.py").read_text())
+    names = next(ast.literal_eval(node.value) for node in registry.body if isinstance(node, ast.Assign)
+                 and [getattr(target, "id", None) for target in node.targets] == ["DOMAINS"])
+    return [f"scripts/mock/{name}.py" for name in names]
+
+
+# CI's lanes. check-fast's own per-path table, for the checks it runs beyond the web plan above, is beside this file in
+# scripts/ci/check_fast_map.py (#11535): a module of its own, because importing this one scans web/ and check-fast asks
+# the table on every run.
 FILTERS = {
     "server": ["server/**", "sdk/go/**", "sdk/ts/src/**", "schema/**", "spec/**", "integrations/**", "docs/assistant/prompts.md", "docs/protocol/**", "scripts/test/server_test_env.py", "scripts/test/go_trimpath.sh", "scripts/ci/*server*", "scripts/ci/postgres.py", "scripts/ci/gofmt.py", ".github/workflows/server-test.yml"] + SERVER_CLIENT_INPUTS,
     # The files outside web/ that web/src and its tests read are derived, never listed (web_inputs).
@@ -310,8 +323,9 @@ FILTERS = {
                    "harmony/entry/src/main/cpp/types/libpersona_core/**", "harmony/tests/rustcore-*.test.mjs", "harmony/tests/core-host/**",
                    "scripts/ci/core.sh", ".github/workflows/core-test.yml"],
     "runtimes": ["integrations/**", "sdk/ts/**", "schema/**", "spec/**", "scripts/ci/runtimes.sh", ".github/workflows/runtimes-test.yml"],
-    # The lane builds and loads the web client, drives the synthetic hub and compiles the shared bridge type.
-    "desktop": ["desktop/**", "web/**", "scripts/mock/mock_hub.py", "scripts/mock/mock_domains.py", "scripts/mock/desktops_mock.py",
+    # The lane builds and loads the web client, drives the synthetic hub and compiles the shared bridge type. The hub
+    # loads every module of mock_domains.DOMAINS as it starts.
+    "desktop": ["desktop/**", "web/**", "scripts/mock/mock_hub.py", "scripts/mock/mock_domains.py",
                   "scripts/mock/stream_trace.py", "scripts/mock/test_desktops_mock.py", "spec/desktop-bridge.d.ts",
                   # web/scripts/build-pake.mjs compiles these Go sources into the sign-in WebAssembly.
                   "server/cmd/password-wasm/**", "server/internal/passwordpake/**", "server/go.mod", "server/go.sum", "scripts/ci/desktop*.sh", ".github/workflows/desktop-test.yml"],
@@ -323,8 +337,15 @@ SHARED = [".github/workflows/ci.yml", "scripts/ci/common.sh", "scripts/ci/run.py
 
 def select(paths, all_platforms=False):
     shared = all_platforms or any(fnmatch.fnmatchcase(path, pattern) for path in paths for pattern in SHARED)
-    return {platform: shared or any(fnmatch.fnmatchcase(path, pattern) for path in paths for pattern in patterns)
-            for platform, patterns in FILTERS.items()}
+    selected = {platform: shared or any(fnmatch.fnmatchcase(path, pattern) for path in paths for pattern in patterns)
+                for platform, patterns in FILTERS.items()}
+    if not selected["desktop"] and any(path.startswith("scripts/mock/") and path.endswith(".py") for path in paths):
+        # The synthetic minimal repositories used by the Web planner have no mock registry and no desktop input.
+        registry = ROOT / "scripts/mock/mock_domains.py"
+        if registry.is_file():
+            selected["desktop"] = any(fnmatch.fnmatchcase(path, pattern) for path in paths
+                                      for pattern in mock_domain_inputs())
+    return selected
 
 
 LANES = tuple(name for name in FILTERS if name != "image")

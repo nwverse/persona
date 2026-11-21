@@ -199,7 +199,16 @@ struct AssistantView: View {
                                 onMachines: places ? { show(.machines) } : nil,
                                 onOpenExtension: places ? { show(.extensionPage($0)) } : { r in drawer.close(); openedExtension = r },
                                 openHealth: places ? { show(.health) } : { drawer.close(); enterHealth() },
-                                openRecordingsPage: Self.recordingsPage(places ? { show(.recordings) } : { drawer.close(); showRecordings = true }))
+                                openRecordingsPage: Self.recordingsPage(places ? { show(.recordings) } : { drawer.close(); showRecordings = true }),
+                                openStarred: sidebarStars)
+    }
+
+    private var sidebarStars: (() -> Void)? {
+        #if os(iOS)
+        { show(.starred) }
+        #else
+        nil
+        #endif
     }
 
     /// The sidebar's Recordings: `open`s the page, which shows the recording running, else Record to start one.
@@ -320,7 +329,13 @@ struct AssistantView: View {
             #endif
         }
         .navigationDestination(isPresented: $showRoutines) { AssistantRoutinesView() }
-        .navigationDestination(isPresented: $showTodos) { TodosView() }
+        .navigationDestination(isPresented: $showTodos) {
+            #if os(iOS)
+            TodosPlacePage() // the V1 list where the hub sends the view (#10465), else TodosView
+            #else
+            TodosView()
+            #endif
+        }
         .navigationDestination(item: $openedExtension) { ExtensionNavPage(route: $0) }
         .navigationDestination(isPresented: $showHealth) {
             HealthView(disabled: shownStart != nil, launcher: healthLauncherPick, launcherModel: healthModelPick, mode: $starterMode, effort: $starterEffort) { text, images in
@@ -584,6 +599,9 @@ struct AssistantView: View {
             case .profile: if placesByValue { navPath.wrappedValue.append(ShellRoute.profile) } else { showProfile = true }
             case .routines: if placesByValue { navPath.wrappedValue.append(ShellRoute.routines) } else { showRoutines = true }
             case .knowledge: if placesByValue { navPath.wrappedValue.append(ShellRoute.knowledge) } else { showKnowledge = true }
+            #if os(iOS)
+            case .starred: navPath.wrappedValue.append(ShellRoute.starred)
+            #endif
             case .inbox: navPath.wrappedValue.append(ShellRoute.inbox)
             case .todos: navPath.wrappedValue.append(ShellRoute.todos)
             case .machines: navPath.wrappedValue.append(ShellRoute.machines)

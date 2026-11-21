@@ -33,7 +33,7 @@ func leaderPlanArgs(role string) json.RawMessage {
 
 // workerArgs is a task leader's task_plan of one worker.
 func workerArgs(extra map[string]any) json.RawMessage {
-	task := map[string]any{"title": "改登录页", "prompt": "只改登录页的布局，补测试", "readonly": false, "permission": "bypassPermissions",
+	task := map[string]any{"title": "改登录页", "prompt": "只改登录页的布局，补测试", "role": "worker", "readonly": false, "permission": "bypassPermissions",
 		"done_when": []string{"登录页布局改好", "测试通过"}}
 	for k, v := range extra {
 		task[k] = v
@@ -165,7 +165,8 @@ func TestTaskLeaderGetsRestrictedTaskPlanAndWorkersDoNot(t *testing.T) {
 		}
 	}
 	if len(restricted) != 1 || !strings.Contains(restricted[0].Description, "Hand part of your own task to workers") ||
-		strings.Contains(string(restricted[0].InputSchema), "todo_id") || strings.Contains(string(restricted[0].InputSchema), `"role"`) {
+		strings.Contains(string(restricted[0].InputSchema), "todo_id") || !strings.Contains(string(restricted[0].InputSchema), `"role"`) ||
+		!strings.Contains(string(restricted[0].InputSchema), `"worker"`) {
 		t.Fatalf("the leader's tools: %+v", restricted)
 	}
 	if got := leaderToolNames(s.sessionMCPTools(ctx, "box", "someone-else", false, false)); slices.Contains(got, "task_plan") {
@@ -351,7 +352,7 @@ func TestWritableTaskPlanNeedsNoExplicitPermission(t *testing.T) {
 	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
 	ctx := context.Background()
 	plan := func(self string, readonly bool, permission string) (string, error) {
-		task := map[string]any{"title": "修登录崩溃", "prompt": "修好并补测试", "machine": "box", "cwd": "/code/app", "readonly": readonly,
+		task := map[string]any{"title": "修登录崩溃", "prompt": "修好并补测试", "role": "worker", "machine": "box", "cwd": "/code/app", "readonly": readonly,
 			"why": "这个仓库在 box 上"}
 		if permission != "" {
 			task["permission"] = permission
@@ -614,7 +615,7 @@ func TestTaskLeaderSurvivesARestart(t *testing.T) {
 	if p, err := restarted.loadPlan(ctx, todo.PlanID); err != nil || p.Tasks[0].Role != roleLeader || p.Tasks[0].Parent != "" {
 		t.Fatalf("the leader's plan after a restart: %+v %v", p, err)
 	}
-	if p, err := restarted.loadPlan(ctx, w.PlanID); err != nil || p.Conversation != "box/s1" || p.Tasks[0].Role != "" || p.Tasks[0].Parent != todo.ID {
+	if p, err := restarted.loadPlan(ctx, w.PlanID); err != nil || p.Conversation != "box/s1" || p.Tasks[0].Role != "worker" || p.Tasks[0].Parent != todo.ID {
 		t.Fatalf("the worker's plan after a restart: %+v %v", p, err)
 	}
 	// And in the rows the link is read from:
@@ -717,7 +718,7 @@ func TestTaskLeaderListRefreshesAfterItsLink(t *testing.T) {
 // The messages the leader and its workers are given.
 func TestTaskLeaderMessages(t *testing.T) {
 	for _, want := range []string{"you are the leader of this task", "task_plan", "default permission mode", "Persona · supervision", "task_review", "stop and ask the user"} {
-		if !strings.Contains(prompts.RenderTaskLeader(), want) {
+		if !strings.Contains(prompts.RenderTaskLeader(prompts.TaskLeader{}), want) {
 			t.Errorf("the leader's brief lacks %q", want)
 		}
 	}
@@ -1136,7 +1137,11 @@ func TestWorkerAutomaticSignalsGoToLeader(t *testing.T) {
 			s, f := newQuietService(t)
 			ctx := context.Background()
 			startTaskLeader(t, s, f)
-			w := planWorker(t, s, f, nil)
+			var extra map[string]any
+			if kind == sigStalled {
+				extra = map[string]any{"expect_minutes": 10} // an explicit short estimate also exercises estimate_due
+			}
+			w := planWorker(t, s, f, extra)
 			switch kind {
 			case sigIdle, sigInterrupted:
 				s.signal(superviseSignal{Todo: w.ID, Kind: kind, Key: "k1", Machine: "box", Session: w.Agents[0].SessionID, Detail: "停下了"})
@@ -1147,7 +1152,15 @@ func TestWorkerAutomaticSignalsGoToLeader(t *testing.T) {
 				stall := proto.Session{SessionID: w.Agents[0].SessionID, MachineID: "box", Cwd: "/code/app", Agent: "claude",
 					Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now().Add(-superviseStallMin - time.Minute)}
 				f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Agent: "claude", Status: proto.StatusIdle}, stall)
-				s.superviseWatch(ctx, time.Now())
+				f.hello.Locale = "en"
+				s.superviseWatch(ctx, time.Now().Add(11*time.Minute))
+				due := gotMessage(t, f, "Persona · supervision", "改登录页", "automatic estimate reached")
+				if !strings.Contains(due, "not an overdue judgment") {
+					t.Fatalf("leader's estimate_due lacks its fact: %s", due)
+				}
+				if b, ok := s.briefOfTodo(w.ID); !ok || b.EstimateDueToldAt == nil {
+					t.Fatalf("leader delivery did not persist estimate_due: %+v", b)
+				}
 			case sigOrphaned:
 				// A session its computer no longer lists: the orphan pass marks it closed, and the worker's signal goes to the leader.
 				f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Agent: "claude", Status: proto.StatusIdle})
@@ -1156,9 +1169,9 @@ func TestWorkerAutomaticSignalsGoToLeader(t *testing.T) {
 					s.signal(g)
 				}
 			}
-			m := gotMessage(t, f, "Persona · supervision", "改登录页")
 			want := map[string]string{sigIdle: "stopped, but the work is not finished", sigStalled: "no progress for",
 				sigOrphaned: "nobody works on it any more", sigInterrupted: "cut its turn off"}[kind]
+			m := gotMessage(t, f, "Persona · supervision", "改登录页", want)
 			if !strings.Contains(m, want) {
 				t.Errorf("the leader's message for %s lacks %q:\n%s", kind, want, m)
 			}
@@ -1923,19 +1936,20 @@ func TestRehomedWorkerSurvivesARestart(t *testing.T) {
 	}
 }
 
-// A leader's workers are held to the brief rule (goal for a read-only worker, done_when for a writable one, and
-// expect_minutes for both) as any task_plan task is, and the leader's schema can say them.
+// A leader's workers follow the brief rule (goal for read-only, done_when for writable), while the hub supplies an
+// omitted estimate automatically, as for any task_plan task.
 func TestLeaderWorkersNeedABrief(t *testing.T) {
 	s, f := newQuietService(t)
 	startTaskLeader(t, s, f)
 	s.briefsOptional = false
 	call := func(task map[string]any) proto.ToolResult {
+		task["role"] = "worker"
 		raw, _ := json.Marshal(map[string]any{"tasks": []any{task}})
 		return s.mcpCall(context.Background(), "box", "s1", "task_plan", raw, false)
 	}
 	res := call(map[string]any{"title": "改登录页", "prompt": "改", "readonly": false, "permission": "bypassPermissions", "done_when": []string{"测试通过"}})
-	if !res.IsError || !strings.Contains(res.Content[0].Text, "expect_minutes") {
-		t.Fatalf("a writable worker without expect_minutes: %+v", res)
+	if res.IsError {
+		t.Fatalf("a writable worker with criteria and an automatic estimate: %+v", res)
 	}
 	res = call(map[string]any{"title": "查一下", "prompt": "查", "readonly": true, "expect_minutes": 10})
 	if !res.IsError || !strings.Contains(res.Content[0].Text, "goal") {

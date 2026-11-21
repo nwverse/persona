@@ -103,18 +103,22 @@ final class TestHub: @unchecked Sendable {
         let out = Pipe()
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice
+        trace("mock spawn start")
         try p.run()
         process = p
+        trace("mock waiting for banner")
         // "mock hub on 127.0.0.1:<port>"
         var seen = ""
         let deadline = Date.now + 20
         while Date.now < deadline {
             let chunk = out.fileHandleForReading.availableData
             if chunk.isEmpty { break }
+            trace("mock stdout received")
             seen += String(decoding: chunk, as: UTF8.self)
             if let line = seen.split(separator: "\n").first(where: { $0.contains("mock hub on") }),
                let p = Int(line.split(separator: ":").last ?? "") {
                 port = p
+                trace("mock banner received")
                 trace("hub \(p) up")
                 return
             }
@@ -140,6 +144,9 @@ struct TestError: Error, CustomStringConvertible {
 enum Shell {
     @discardableResult
     static func run(_ path: String, _ args: [String], allowFailure: Bool = false) throws -> String {
+        let command = URL(filePath: path).lastPathComponent
+        trace("command \(command) start")
+        defer { trace("command \(command) end") }
         let p = Process()
         p.executableURL = URL(filePath: path)
         p.arguments = args
@@ -191,14 +198,4 @@ enum FreePort {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0 }
         }
     }
-}
-
-/// With PERSONA_SSH_TRACE=<file>: what the fixtures do, line by line (swift test only prints when it is done).
-func trace(_ s: String) {
-    guard let path = ProcessInfo.processInfo.environment["PERSONA_SSH_TRACE"] else { return }
-    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-    guard let h = FileHandle(forWritingAtPath: path) else { return }
-    h.seekToEndOfFile()
-    h.write(Data((s + "\n").utf8))
-    try? h.close()
 }

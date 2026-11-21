@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import io
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_pr as release
 
@@ -118,16 +120,48 @@ class ReleasePRTests(unittest.TestCase):
                     manifest[group].setdefault("persona-node", {})["windows-amd64"] = entry
                 (downloads / name).write_bytes(packed)
             (downloads / "latest.json").write_text(json.dumps(manifest))
+            for name in ("install.sh", "VERSION", "SHA256SUMS"):
+                (downloads / name).write_text(name)
+            for name in ("install.sh", "VERSION", "SHA256SUMS", "latest.json"):
+                path = downloads / name
+                content = path.read_bytes()
+                for kind in ("missing", "empty", "symlink"):
+                    path.unlink()
+                    if kind == "empty":
+                        path.write_bytes(b"")
+                    elif kind == "symlink":
+                        target = root / "bootstrap-target"
+                        target.write_bytes(content)
+                        path.symlink_to(target)
+                    with self.subTest(name=name, kind=kind), self.assertRaisesRegex(release.ReleaseError, "bootstrap"):
+                        release.bind_cli_web(plan_path, downloads)
+                    if path.is_symlink() or path.exists():
+                        path.unlink()
+                    path.write_bytes(content)
             data = release.bind_cli_web(plan_path, downloads)
-            self.assertEqual(len(data["artifacts"]), 4)
+            self.assertEqual(len(data["artifacts"]), 7)
             release.verify_artifacts(plan_path, "nwverse/persona", "beta", COMMIT)
             android = root / "android"
             android.mkdir()
             (android / "Persona-test.apk").write_bytes(b"signed fixture")
             (android / "android.json").write_text('{"version":"0.9.1-beta.3"}')
             data = release.verify_artifacts(plan_path, "nwverse/persona", "beta", COMMIT, (android,))
-            self.assertEqual(len(data["artifacts"]), 6)
+            self.assertEqual(len(data["artifacts"]), 9)
             self.assertIn("android.json", {item["name"] for item in data["artifacts"]})
+            # A platform job sees the CLI/Web install.sh in its download directory as well as in the plan. Presenting
+            # the same bytes again is idempotent, not an ownership conflict; changed bytes still fail closed.
+            repeated = root / "repeated"
+            repeated.mkdir()
+            for item in data["artifacts"]:
+                target = repeated / item["name"]
+                target.write_bytes(Path(item["path"]).read_bytes())
+            count = len(data["artifacts"])
+            self.assertEqual(len(release.verify_artifacts(plan_path, "nwverse/persona", "beta", COMMIT, (repeated,))["artifacts"]), count)
+            (repeated / "install.sh").write_text("different bytes")
+            with self.assertRaises(release.ReleaseError):
+                release.verify_artifacts(plan_path, "nwverse/persona", "beta", COMMIT, (repeated,))
+            (repeated / "install.sh").write_text("install.sh")
+            self.assertEqual(len(release.verify_artifacts(plan_path, "nwverse/persona", "beta", COMMIT, (repeated,))["artifacts"]), count)
             (downloads / "personad-linux-amd64.gz").write_bytes(b"changed")
             with self.assertRaises(release.ReleaseError):
                 release.verify_artifacts(plan_path, "nwverse/persona", "beta", COMMIT)
@@ -154,6 +188,12 @@ class ReleasePRTests(unittest.TestCase):
             self.assertEqual(release.schedule_version("nwverse/persona", "beta", "v0.9.1", COMMIT, OTHER, [],
                 reserved=("0.9.1-beta.10",)), "0.9.1-beta.11")
 
+
+    def test_manifest_digest_is_compatible_with_system_python_and_unchanged(self):
+        self.assertEqual(release.sha256_stream(io.BytesIO(b"release bytes")),
+                         "ff7a5e6429d2c8511521e4abf41cd54a3e525ef4a1f24f8d1c67ede9d17874dd")
+        with patch.object(release.hashlib, "file_digest", create=True, side_effect=AssertionError("Python 3.11+ API used")):
+            release.sha256_stream(io.BytesIO(b"release bytes"))
 
     def test_manifest_size_and_both_digests_must_match_the_download(self):
         with tempfile.TemporaryDirectory() as directory:

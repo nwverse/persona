@@ -171,6 +171,10 @@ const (
 	EventConversationSent = "session.assistant_sent"
 )
 
+// DispatchGuardTools are the assistant tools an opt-in dispatch guard may hide and refuse for an explicitly named
+// conversation. List filtering and call admission use the same names, so a hidden tool is not left callable.
+var DispatchGuardTools = []string{"task_plan", "agent_start", "conversation_new", "conversation_send"}
+
 // Error codes that cross the bus where a Go error would lose its kind (rpc.Error.Code).
 const (
 	CodeNoDevice         = "no_device"         // ErrNoDevice
@@ -191,6 +195,11 @@ const (
 	// conversation (Data: conversation_agent, launcher, launcher_agent, delivered "none"): the hub answers 409, nothing
 	// was sent, and the conversation keeps its agent (docs/assistant/assistant.md, #4662).
 	CodeLauncherOtherKind = "launcher_other_kind"
+	// CodeConversationBusy: an assistant conversation is at work (a turn, background tasks) and its task-follow-up role
+	// changed, so the message would need a new process with the new role while the old one still works. Nothing was
+	// sent. The hub keeps an owner's message with an id (MethodKeepUndelivered); the manager sends it again once the
+	// conversation is idle, resolving the role again, so it starts on the new role and the old one never gets it.
+	CodeConversationBusy = "busy"
 	// CodeSupervisionRuntime means the runtime cannot receive separate supervision instructions. Nothing was sent.
 	CodeSupervisionRuntime = "assistant_supervision_runtime"
 	// CodeBodyIncomplete: MethodHTTPStreamed's body did not arrive whole (the relay was not there, broke or carried
@@ -238,6 +247,12 @@ type HTTPResponse struct {
 	Body           []byte                     `json:"body,omitempty"`
 }
 
+const (
+	StarredImportPath        = "/api/v1/assistant/starred/import"
+	StarredImportPreviewPath = StarredImportPath + "/preview"
+	StarredImportBodyMax     = 8 << 20
+)
+
 // Routes are the routes the assistant answers (net/http patterns): the hub relays the apps' requests on them as
 // http.request. The assistant registers exactly these (assistant.TestRoutesAreTheWireOnes).
 var Routes = []string{
@@ -265,9 +280,12 @@ var Routes = []string{
 	"GET /api/v1/assistant/leaders",
 	"GET /api/v1/assistant/dispatch-policy",
 	"PUT /api/v1/assistant/dispatch-policy",
+	"GET /api/v1/assistant/dispatch-guard",
+	"PUT /api/v1/assistant/dispatch-guard",
 	"GET /api/v1/assistant/worker-presets",
 	"GET /api/v1/assistant/start-defaults",
 	"PUT /api/v1/assistant/start-defaults",
+	"POST /api/v1/assistant/start-defaults/preview",
 	"GET /api/v1/assistant/availability",
 	"GET /api/v1/assistant/directions/tree",
 	"GET /api/v1/assistant/directions/offers",
@@ -292,6 +310,8 @@ var Routes = []string{
 	"PUT /api/v1/assistant/tasks/{id}",
 	"DELETE /api/v1/assistant/tasks/{id}",
 	"POST /api/v1/assistant/tasks/{id}/run",
+	"POST /api/v1/assistant/tasks/{id}/skip-next",
+	"DELETE /api/v1/assistant/tasks/{id}/skip-next",
 	"POST /api/v1/assistant/tasks/{id}/fresh",
 	"DELETE /api/v1/assistant/tasks/{id}/start-grant",
 	"GET /api/v1/assistant/places",
@@ -311,6 +331,12 @@ var Routes = []string{
 	"PUT /api/v1/assistant/saved-prompts/order",
 	"PUT /api/v1/assistant/saved-prompts/{id}",
 	"DELETE /api/v1/assistant/saved-prompts/{id}",
+	"GET /api/v1/assistant/starred",
+	"POST /api/v1/assistant/starred",
+	"DELETE /api/v1/assistant/starred/{id}",
+	"GET " + StarredImportPath,
+	"POST " + StarredImportPreviewPath,
+	"POST " + StarredImportPath,
 	"GET /api/v1/assistant/runs",
 	"GET /api/v1/assistant/routines",
 	"PUT /api/v1/assistant/routines",
@@ -334,6 +360,7 @@ var Routes = []string{
 	"GET /api/v1/todos/{id}/backend-workspace",
 	"GET /api/v1/todos/{id}/backend-workspace/operations/{operation_id}",
 	"POST /api/v1/todos/{id}/backend-workspace/prepare",
+	"POST /api/v1/todos/{id}/backend-workspace/start",
 	"POST /api/v1/todos/{id}/backend-workspace/cancel",
 	"POST /api/v1/todos/{id}/backend-workspace/cleanup",
 	"GET /api/v1/todos/{id}/workspace-rules",
@@ -352,6 +379,9 @@ var Routes = []string{
 	"PUT /api/v1/todos/{id}/agents/{mid}/{sid}",
 	"DELETE /api/v1/todos/{id}/agents/{mid}/{sid}",
 	"GET /api/v1/todos/{id}/decisions",
+	"POST /api/v1/decisions",
+	"GET /api/v1/decisions/{id}",
+	"POST /api/v1/decisions/{id}/withdraw",
 	"GET /api/v1/todos/{id}/timeline", // its conversation's rounds (todo_timeline.go, #10465)
 	"POST /api/v1/todos/{id}/decisions",
 	"PATCH /api/v1/todos/{id}/decisions/{did}",
@@ -418,6 +448,8 @@ var Routes = []string{
 	"GET /api/v1/kb-search",
 	// The assistant's chat search (search_routes.go there, docs/protocol/protocol.md "Assistant chat search", #6282).
 	"GET /api/v1/assistant/search",
+	"GET /api/v1/assistant/history",
+	"PUT /api/v1/assistant/history",
 	// The selection: what the knowledge base brings in and keeps (kb_selection.go there).
 	"GET /api/v1/kb/selection",
 	"PUT /api/v1/kb/selection",
