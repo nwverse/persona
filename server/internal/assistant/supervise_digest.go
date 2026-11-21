@@ -607,6 +607,9 @@ func (s *Service) replaceQueuedSupervise(to string, msg relayMsg) bool {
 	for i := range q {
 		// A withdrawn or doubtful head still owns the outcome of its original send. Let drainRelays check its durable
 		// doubt and remove it before a replacement can replay any of the same signals under a new message id (#5732).
+		if q[i].Tool == superviseTool && (q[i].Withdrawn || !q[i].DoubtedAt.IsZero()) {
+			return false
+		}
 		if q[i].Tool == superviseTool && !q[i].Withdrawn && q[i].DoubtedAt.IsZero() && (i > 0 || !b.draining[to]) {
 			q[i] = msg.replacing(q[i], time.Now()) // it waited since then (relay_presence.go)
 			if signals, structured := decodeDigestSignals(msg.Signals); structured {
