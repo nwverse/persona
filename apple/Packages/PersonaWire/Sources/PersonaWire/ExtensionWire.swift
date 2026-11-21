@@ -1493,12 +1493,16 @@ public nonisolated struct ExtensionRepositoryProviderItem: Codable, Hashable, Se
     /// What it calls the link kinds it names (each at most once; the others keep their usual words). Only relabels:
     /// the kinds stay issue and pull_request.
     public var linkKinds: [ExtensionRepositoryLinkLabel]?
+    /// What else the program answers (#11584): pr_status, the state of a pull request for delivery checks
+    /// (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
+    public var capabilities: [String]?
 
-    public init(id: String = "", name: String = "", hosts: [String] = [], linkKinds: [ExtensionRepositoryLinkLabel]? = nil) {
+    public init(id: String = "", name: String = "", hosts: [String] = [], linkKinds: [ExtensionRepositoryLinkLabel]? = nil, capabilities: [String]? = nil) {
         self.id = id
         self.name = name
         self.hosts = hosts
         self.linkKinds = linkKinds
+        self.capabilities = capabilities
     }
 
     enum CodingKeys: String, CodingKey {
@@ -1506,6 +1510,7 @@ public nonisolated struct ExtensionRepositoryProviderItem: Codable, Hashable, Se
         case name
         case hosts
         case linkKinds = "link_kinds"
+        case capabilities
     }
 
     public init(from decoder: Decoder) throws {
@@ -1514,7 +1519,14 @@ public nonisolated struct ExtensionRepositoryProviderItem: Codable, Hashable, Se
         self.name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? ""
         self.hosts = (try? c.decodeIfPresent([String].self, forKey: .hosts)) ?? []
         self.linkKinds = try? c.decodeIfPresent([ExtensionRepositoryLinkLabel].self, forKey: .linkKinds)
+        self.capabilities = try? c.decodeIfPresent([String].self, forKey: .capabilities)
     }
+}
+
+/// A repository provider's optional answer: pr_status (repo.pr_status).
+public nonisolated enum ExtensionRepositoryCapability {
+    public static let prStatus = "pr_status"
+    public static let all = ["pr_status"]
 }
 
 /// The word a repository provider shows for one kind of its links (MR for a pull_request).
