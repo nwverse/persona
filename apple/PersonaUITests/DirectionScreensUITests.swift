@@ -379,6 +379,17 @@ final class DirectionScreensUITests: XCTestCase {
         let more = app.buttons["chat.more"].firstMatch
         XCTAssertTrue(more.waitForExistence(timeout: 20), "no ⋯ on the Agent's chat:\n\(app.debugDescription)")
         sleep(2)
+        if off == "missing" {
+            // A launch is a new hello, which forgets the missing routes: one Move To… learns them again (main has none).
+            more.tap()
+            if moveTo.waitForExistence(timeout: 3) {
+                moveTo.tap()
+                if app.buttons["增长"].firstMatch.waitForExistence(timeout: 5) { app.buttons["增长"].firstMatch.tap() }
+                sleep(8)
+            } else {
+                dismissMenu(at: CGVector(dx: 0.08, dy: 0.62))
+            }
+        }
         more.tap()
         sleep(1)
         shot("off-agent-menu-\(off)")
@@ -387,8 +398,9 @@ final class DirectionScreensUITests: XCTestCase {
     /// VoiceOver's Expanded in the run's language.
     private var expanded: String { lang == "en" ? "Expanded" : lang == "ja" ? "展開済み" : "已展开" }
 
-    @MainActor private func dismissMenu() {
-        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.04)).tap()
+    /// Closes an open menu with a tap outside it: the dimmed page right of the drawer by default.
+    @MainActor private func dismissMenu(at point: CGVector = CGVector(dx: 0.92, dy: 0.5)) {
+        app.windows.firstMatch.coordinate(withNormalizedOffset: point).tap()
         sleep(1)
     }
 }
