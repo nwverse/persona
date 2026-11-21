@@ -77,7 +77,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
     group: t("settings-assistantsettings.agents_title"),
     hint: words(
       t("settings-assistantsettings.auto_naming"), t("settings-assistantsettings.auto_naming_max"), t("settings-assistantsettings.auto_naming_periodic"),
-      t("settings-assistantsettings.auto_naming_interval"), t("settings-assistantsettings.main_supervises"), t("settings-assistantsettings.agent_tasks"), t("settings-assistantsettings.close_ended_terminals"),
+      t("settings-assistantsettings.auto_naming_interval"), t("settings-assistantsettings.main_supervises"), t("settings-assistantsettings.delivery_gate"), t("settings-assistantsettings.agent_tasks"), t("settings-assistantsettings.close_ended_terminals"),
       t("settings-assistantsettings.inbox_signals"), t("settings-assistantsettings.idle_close"), t("settings-assistantsettings.archive_closed"),
     ),
     anchor: "agents",
@@ -161,6 +161,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "hub", group: t("settings-hubsettings.channel"), hint: words(t("settings-hubsettings.source"), t("settings-hubsettings.web_dev")), anchor: "hub-channel" },
   { tab: "hub", group: t("settings-hubsettings.update"), hint: words(t("settings-hubsettings.update_version"), t("settings-hubsettings.target_commit"), t("settings-hubsettings.backup_created_at")), anchor: "hub-update" },
   { tab: "hub", group: t("settings-hubsettings.auto_update"), hint: t("settings-hubsettings.computer_auto"), anchor: "hub-auto-update" },
+  { tab: "hub", group: t("settings-hubsettings.dev_backup"), hint: words(t("settings-hubsettings.backup_folder"), t("settings-hubsettings.backup_retain")), anchor: "hub-dev-backup" },
   { tab: "agents", group: t("settings.show_botmux"), hint: t("settings.show_botmux_hint"), anchor: "botmux-display" },
   { tab: "agents", group: t("settings.use_herdr_tab_name"), hint: t("settings.use_herdr_tab_name_hint"), anchor: "herdr-tab-session-name" },
   { tab: "hub", group: t("workspace-board.setting_label"), anchor: "workflow-board" },

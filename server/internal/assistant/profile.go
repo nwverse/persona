@@ -74,6 +74,7 @@ type Settings struct {
 	IdleAutoCompact        *bool `json:"idle_auto_compact,omitempty"`
 	IdleAutoCompactMinutes *int  `json:"idle_auto_compact_minutes,omitempty"`
 	IdleAutoCompactTokens  *int  `json:"idle_auto_compact_tokens,omitempty"`
+	IdleReleaseMinutes     *int  `json:"idle_release_minutes,omitempty"` // #12008, idle_compact_settings.go
 	// StartRequestedTasks: a task_plan task the user asked for in so many words starts without the card's "Start"
 	// (#2559). nil is on (the default).
 	StartRequestedTasks     *bool  `json:"start_requested_tasks,omitempty"`
@@ -97,7 +98,13 @@ type Settings struct {
 	// too, by last activity with the others (#8324; since #6228 they are only in All chats). Display only, one value
 	// for every device. nil is off (the default).
 	RecentTaskChats *bool `json:"recent_task_chats,omitempty"`
-	WorkGuide       *bool `json:"work_guide,omitempty"`
+	// ConversationOrder is the user's manual order of ordinary conversation ids (#12017). Empty keeps activity-time
+	// ordering. Clients append ids they do not currently hold so a limited read cannot silently discard the rest.
+	ConversationOrder []string `json:"conversation_order,omitempty"`
+	// ConversationTagFilters is the user's exact filter-entry order above the conversation list (#12018). Nil keeps
+	// the automatic all-in-use-tag row; a non-nil empty list is a deliberately customized empty row.
+	ConversationTagFilters []string `json:"conversation_tag_filters"`
+	WorkGuide              *bool    `json:"work_guide,omitempty"`
 	// MeetingAttendanceDefault: the role a meeting recording pre-selects on the phone (off, listener, participant;
 	// docs/assistant/meeting-minutes.md "Attending a meeting"); nil is off.
 	MeetingAttendanceDefault *string `json:"meeting_attendance_default,omitempty"`
@@ -110,9 +117,11 @@ type Settings struct {
 	// (transcribers.TranscriptionInstall): set with it on every PUT, never by the apps, never shown. Nil for the
 	// built-in contribution (or a choice stored before pins were kept).
 	MeetingTranscriptionInstall *string `json:"meeting_transcription_install,omitempty"`
-	// DoneNeedsDelivery: a finished task closes only once its work is live and checked; stopped at a PR, merged or
-	// off by default it stays open with where it is held, and its agent is told so with its prompt (#3306,
-	// delivery.go). nil is off (the default).
+	// DeliveryGate: three-tier closeout gate for PR/Issue tasks (off, merged, live; delivery.go). nil falls back to
+	// DoneNeedsDelivery (true -> live, explicit false -> off) and otherwise defaults to merged.
+	DeliveryGate *string `json:"delivery_gate,omitempty"`
+	// DoneNeedsDelivery: legacy boolean toggle for live delivery gating (true -> live, false -> off; #3306,
+	// delivery.go). Kept for backward compatibility alongside DeliveryGate.
 	DoneNeedsDelivery *bool `json:"done_needs_delivery,omitempty"`
 	// AgentTasks: every agent Persona starts is on a quiet, supervised todo (#3617, agent_tasks.go). nil is off (the
 	// default).
@@ -483,22 +492,25 @@ func (s *Service) profile(ctx context.Context, tasks []TaskView, todos *TodoRepo
 		if placed, err := s.directionKeep(ctx, v); err != nil {
 			s.logf("assistant: keep: %v", err)
 		} else {
-			p.Keep = keptSessions(v, tasks, todos.Links, s.leadSessions(ctx, v), placed)
+			p.Keep = keptSessions(v, tasks, todos.Links, s.leadSessions(ctx, v), s.spaceKeep(ctx, v), placed)
 		}
 	}
 	return p
 }
 
 // keptSessions are the conversations their machines list however long they have been quiet: the main conversation,
-// the main ones it replaced, scheduled tasks' own, the agents of open todos and the current leaders (leads). Otherwise
-// a busy machine's 80 newest transcripts crowd them out of the list and the Persona tab has no main chat (2026-11-01:
-// the main one, quiet for two days, was gone), a weekly task's conversation drops out in between, with the app's link
-// to it and the check that its last run still goes, an open task whose agent finished and exited shows "Starting
-// Agent" for ever: its todo names a session the list no longer has (#4510), and a direction the owner leaves alone for
-// a week loses its Pinned row and its tasks' supervision messages go to the main chat (#11392). Last come the sessions
-// placed under the current directions (placed, directionKeep), or a quiet one reads not_listed in its direction and can
-// no longer be moved (#11515). Keeping a row listed does not keep its transcript file.
-func keptSessions(v Settings, tasks []TaskView, links []TodoLink, leads, placed []SessionRef) []SessionRef {
+// the main ones it replaced, scheduled tasks' own, the agents of open todos, the current leaders (leads) and those listed
+// for their spaces to be told (convs, spaceKeep: the task leaders' agents of open tasks, and a batch at a time of the
+// conversations to-dos name that were never noted). Otherwise a busy machine's 80 newest transcripts crowd them out of
+// the list and the Persona tab has no main chat (2026-11-01: the main one, quiet for two days, was gone), a weekly
+// task's conversation drops out in between, with the app's link to it and the check that its last run still goes, an
+// open task whose agent finished and exited shows "Starting Agent" for ever: its todo names a session the list no
+// longer has (#4510), a direction the owner leaves alone for a week loses its Pinned row and its tasks' supervision
+// messages go to the main chat (#11392), and the space of a to-do's conversation quiet since before the manager noted
+// spaces could never be told (conversation_space_backfill.go, #10941). Last come the sessions placed under the current
+// directions (placed, directionKeep), or a quiet one reads not_listed in its direction and can no longer be moved
+// (#11515). Keeping a row listed does not keep its transcript file.
+func keptSessions(v Settings, tasks []TaskView, links []TodoLink, leads, convs, placed []SessionRef) []SessionRef {
 	out := []SessionRef{}
 	add := func(machine, id string) {
 		if machine != "" && id != "" && !slices.Contains(out, SessionRef{MachineID: machine, SessionID: id}) {
@@ -519,6 +531,9 @@ func keptSessions(v Settings, tasks []TaskView, links []TodoLink, leads, placed 
 	add(v.BackgroundSupervisorMachineID, v.BackgroundSupervisor)
 	for _, l := range leads {
 		add(l.MachineID, l.SessionID)
+	}
+	for _, c := range convs {
+		add(c.MachineID, c.SessionID)
 	}
 	for _, p := range placed {
 		add(p.MachineID, p.SessionID)
@@ -591,13 +606,15 @@ type assistantView struct {
 	IdleAutoCompact        bool               `json:"idle_auto_compact"`
 	IdleAutoCompactMinutes int                `json:"idle_auto_compact_minutes"`
 	IdleAutoCompactTokens  int                `json:"idle_auto_compact_tokens"`
+	IdleReleaseMinutes     int                `json:"idle_release_minutes"`
 	// StartRequestedTasks is in effect, like MainTasksQuiet.
 	StartRequestedTasks     bool   `json:"start_requested_tasks"`
 	TaskWorkspacePreference string `json:"task_workspace_preference"`
 	ReadonlyMode            string `json:"readonly_mode"`
-	// RecordingDays and DoneNeedsDelivery are in effect, like MainTasksQuiet.
-	RecordingDays     int  `json:"recording_days"`
-	DoneNeedsDelivery bool `json:"done_needs_delivery"`
+	// RecordingDays, DeliveryGate and DoneNeedsDelivery are in effect, like MainTasksQuiet.
+	RecordingDays     int    `json:"recording_days"`
+	DeliveryGate      string `json:"delivery_gate"`
+	DoneNeedsDelivery bool   `json:"done_needs_delivery"`
 	// MinutesDays is in effect: 0 means forever (the default); otherwise never fewer than RecordingDays.
 	MinutesDays int `json:"minutes_days"`
 	// KBTopics is in effect, like MainTasksQuiet.
@@ -658,7 +675,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	out := assistantView{WorkspaceNamingVersion: workspacenaming.Version, EffectiveWorkspaceRules: effectiveRules, Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: recordingDaysOf(v), MinutesDays: kb.MinutesDaysFor(minutesDaysSetting(v), recordingDaysOf(v)),
 		IdleAutoCompact: s.idleAutoCompact(ctx), IdleAutoCompactMinutes: s.idleAutoCompactMinutes(ctx), IdleAutoCompactTokens: s.idleAutoCompactTokens(ctx),
-		MeetingAttendanceDefault: meetingAttendanceOf(v), KBTopics: quietOn(v.KBTopics),
+		IdleReleaseMinutes: s.idleReleaseMinutes(ctx), MeetingAttendanceDefault: meetingAttendanceOf(v), KBTopics: quietOn(v.KBTopics),
 		MeetingTranscriptionDefault: meetingTranscriptionDefaultOf(v), MeetingGlossary: meetingGlossaryOf(v),
 		MeetingTranscriptionExtension: meetingTranscriptionExtensionOf(v), MeetingTranscriptionReady: s.transcriptionReadyNow(),
 		TaskWorkspacePreference: s.taskWorkspacePreference(ctx),
@@ -666,7 +683,8 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		MainBackgroundFolded:    quietOn(v.MainBackgroundFolded),
 		WorkGuide:               v.workGuideOn(),
 		RecentTaskChats:         v.RecentTaskChats != nil && *v.RecentTaskChats,
-		DoneNeedsDelivery:       v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
+		DeliveryGate:            deliveryGateOf(v),
+		DoneNeedsDelivery:       deliveryGateOf(v) == deliveryGateLive, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
 		ArchiveClosedDays:            int(s.archiveClosedAfter(ctx) / (24 * time.Hour)),
 		ReviewSamplePercent:          s.reviewSamplePercent(ctx),
 		InterjectBackground:          v.InterjectBackground != nil && *v.InterjectBackground,
@@ -723,6 +741,7 @@ func (s *Service) profileRoutes() {
 		}
 		if r.Header.Get(RoleHeader) == roleExtension {
 			out.StartDefaults = nil // read with its own scope (GET /api/v1/assistant/start-defaults), not assistant.ask
+			out.Conversations = extensionConversations(out.Conversations)
 		}
 		apierr.WriteJSON(w, out)
 	})

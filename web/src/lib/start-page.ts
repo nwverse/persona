@@ -121,6 +121,25 @@ export function useStartPageCheck(listed: (key: string) => boolean, extensionPag
   });
 }
 
+/** Saves `key` ("" for the main chat) locally, then to the hub. A hub without the route keeps it here; any other
+ *  refusal restores the previous choice and is returned for the caller to report. Kept with the navigation state,
+ *  not with the Settings page's larger UI graph or its error strings. */
+export async function saveStartPage(key: string): Promise<unknown | undefined> {
+  const was = startPage();
+  keepStartPage(key);
+  if (startPageSynced() === false) return; // this browser only
+  try {
+    const r = await api<{ start?: string }>("/navigation", { method: "PUT", json: { start: key } });
+    noteStartPageSynced();
+    if (startPage() === key) keepStartPage(r.start ?? key);
+  } catch (e) {
+    noteStartPageSynced(e);
+    if (startPageSynced() === false) return;
+    if (startPage() === key) keepStartPage(was);
+    return e;
+  }
+}
+
 // The sidebar's arrangement (lib/sidebar-pages.ts) goes the same way: each change made here is sent; while one is on its
 // way the hub's pushes of it are not taken (an older one would undo a newer); one the hub did not take goes again at the
 // next hello instead of being replaced by the hub's.

@@ -9,7 +9,9 @@ import apple_launch_diagnostics
 
 
 LOGS = ("simulator.log", "simulator-boot.log", "simulator-readiness.log",
-        "regular-simulator.log", "regular-simulator-boot.log")
+        "regular-simulator.log", "regular-simulator-boot.log", "native-ssh-trace.log",
+        "ios-unit.log", "ios-html-card.log", "ios-html-security.log",
+        "ios-visual-compact.log", "ios-visual-regular.log")
 
 
 def collect(output, destination, runner=subprocess.run):

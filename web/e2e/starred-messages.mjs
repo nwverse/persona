@@ -261,6 +261,15 @@ try {
   await bubble(replacementWords).locator('[data-star-mark="saved"]').waitFor({ state: "hidden" });
   assert.deepEqual((await onHub("GET", "?index=1")).refs.filter((ref) => ref.item_id === reused).map((ref) => ref.id), [copies[1].id]);
 
+  await sourcePhase("reset");
+  await openStarred();
+  await cardFor(originalWords).getByRole("link", { name: "Open original" }).click();
+  await cardFor(originalWords).getByText("The original message is unavailable.").waitFor();
+  assert.equal(new URL(desktop.page.url()).pathname, "/starred");
+  await desktop.page.goto(new URL(originalHref, web).href);
+  await desktop.page.getByText("The original message is unavailable.").waitFor();
+  assert.equal(await desktop.page.locator("[data-search-hit]").count(), 0);
+
   await sourcePhase("long-user");
   await desktop.page.goto(web + review);
   const longUser = desktop.page.locator('[data-user-bubble][data-items~="fixture-long-user#0"]');
@@ -333,7 +342,7 @@ try {
   }
 
   assert.deepEqual(desktop.errors.concat(mobile.errors, largeWide.errors, largeNarrow.errors, old.errors, startup.errors, ...nestedErrors), []);
-  console.log("ok: both message menus and exact links, two-device push, filter, copy, undo, orphaned snapshot, older assistant, largest text at 320 px, positional-ID reuse, displayed-speaker search, delayed start-page availability, and accurate full user-message snapshots");
+  console.log("ok: both message menus and exact links, two-device push, filter, copy, undo, orphaned snapshot, older assistant, largest text at 320 px, positional-ID reuse and removal, displayed-speaker search, delayed start-page availability, and accurate full user-message snapshots");
 } finally {
   await browser.close();
   if (cleanup) {

@@ -102,6 +102,8 @@ data class Machine(
     @SerialName("error_code") val errorCode: String? = null,
     /** The manager it belongs to (docs/assistant/managers.md「Ownership」); null from an older hub: the default manager. */
     @SerialName("manager") val manager: String? = null,
+    /** The default for new sessions among [engineHosts]. Older hubs describe it with [engine]. */
+    @SerialName("engine_default") val engineDefault: String? = null,
 ) {
     val displayName: String get() = name.ifEmpty { id }
     val pending: Boolean get() = trust == "pending"
@@ -236,6 +238,10 @@ data class BackgroundTask(
     @WireTime @SerialName("expires_at") val expiresAt: String? = null,
     /** A workflow's run (`wf_…`): which of [Session.workflows] it is. */
     @SerialName("run_id") val runId: String? = null,
+    /** Retained results have a terminal status, a stop time and, when observed, an exit code. */
+    val status: String? = null,
+    @WireTime @SerialName("ended_at") val endedAt: String? = null,
+    @SerialName("exit_code") val exitCode: Int? = null,
 ) {
     /** A Workflow run: shown from [Session.workflows] where the hub sends them, never counted twice. */
     val isWorkflow: Boolean get() = kind == "workflow"
@@ -509,6 +515,8 @@ data class Session(
      */
     @SerialName("queued_relayed") val queuedRelayed: Int? = null,
     @SerialName("background") val background: List<BackgroundTask>? = null,
+    /** A short-lived list of shell and Monitor outcomes. Summary rows and older hubs can omit it. */
+    @SerialName("background_ended") val backgroundEnded: List<BackgroundTask>? = null,
     /**
      * Its Workflow runs of the last day, newest first (docs/protocol/agent-states.md "Background workflows and Monitor"): a running one is
      * in [background] too, as kind `workflow`. Older hubs never send it (null).
@@ -1121,6 +1129,19 @@ data class InteractionField(
     val optional: Boolean = false,
 )
 
+/** The context the assistant filled in when it left a question to the user (`proto.Delegate`). */
+@KeepGeneratedSerializer
+@Serializable(with = DelegateSerializer::class)
+data class Delegate(
+    @SerialName("what") val what: String? = null,
+    @SerialName("why_now") val whyNow: String? = null,
+    /** An option's exact label; several questions are joined with a full-width semicolon. */
+    @SerialName("recommend") val recommend: String? = null,
+    @SerialName("cost") val cost: String? = null,
+    @SerialName("reason") val reason: String? = null,
+    @WireTime @SerialName("deadline") val deadline: String? = null,
+)
+
 @KeepGeneratedSerializer
 @Serializable(with = InteractionSerializer::class)
 data class Interaction(
@@ -1186,8 +1207,14 @@ data class Interaction(
     val suggestion: RuleSuggestion? = null,
     /** A prepared approval whose current deadline is authoritative while the hub keeps it pending; absent on older hubs. */
     @SerialName("can_clarify") val canClarify: Boolean = false,
+    /** The assistant is still deciding whether it can answer this question; nothing was pushed yet. */
+    @SerialName("delegating") val delegating: Boolean = false,
+    /** What the assistant filled in when it handed the question to the user. */
+    @SerialName("delegate") val delegate: Delegate? = null,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
+    /** Only questions are delegated; a direct answer while this is true still wins. */
+    val isDelegating: Boolean get() = kind == "question" && delegating
     /** A supported following mode; absent, plan and unknown values keep the legacy approval choices (#3784). */
     val recordedPlanThen: String?
         get() = when (planThen) {
@@ -1356,5 +1383,6 @@ object QuestionOptionSerializer : WireSerializer<QuestionOption>(QuestionOption.
 object QuestionSerializer : WireSerializer<Question>(Question.generatedSerializer())
 object DialogOptionSerializer : WireSerializer<DialogOption>(DialogOption.generatedSerializer())
 object ScreenDialogSerializer : WireSerializer<ScreenDialog>(ScreenDialog.generatedSerializer())
+object DelegateSerializer : WireSerializer<Delegate>(Delegate.generatedSerializer())
 object InteractionSerializer : WireSerializer<Interaction>(Interaction.generatedSerializer())
 object InteractionFieldSerializer : WireSerializer<InteractionField>(InteractionField.generatedSerializer())

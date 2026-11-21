@@ -319,7 +319,13 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 			}
 		}
 		if mid == "" {
-			mid, err = s.botPostTo(ctx, to, r.ReplyTo, c, piece, "")
+			key := ""
+			if read {
+				// A /read has no progress card to write into or to key a new card by: each piece goes out under a key of
+				// its own turn, so a retry after an unreachable failure lands once in the group (#11987).
+				key = readAnswerKey(r.ID, r.WaitFrom(), i)
+			}
+			mid, err = s.botPostTo(ctx, to, r.ReplyTo, c, piece, key)
 		}
 		if err != nil {
 			if i == 0 && unreachable(err) {
@@ -358,6 +364,14 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 func answerKey(id, card string) string {
 	sum := sha256.Sum256([]byte("answer:" + id + "\x00" + card))
 	return "ans-" + hex.EncodeToString(sum[:12])
+}
+
+// readAnswerKey is the key piece i of a /read's answer goes out under: the same for every retry of the turn (a retry
+// keeps the run and its wait's start; its footer's elapsed time changes, so the hub's key from the card's words would
+// not), another for each piece and for a held run's later turn. Hashed to fit Feishu's 50-character uuid.
+func readAnswerKey(id string, turn time.Time, i int) string {
+	sum := sha256.Sum256([]byte("read:" + id + "\x00" + strconv.FormatInt(turn.UnixNano(), 10) + "\x00" + strconv.Itoa(i)))
+	return "rd-" + hex.EncodeToString(sum[:12])
 }
 
 // foldedProgressCard is what a progress card becomes once its answer went out as a new card: the process, folded,
