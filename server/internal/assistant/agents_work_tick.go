@@ -40,13 +40,17 @@ func (s *Service) workTick(ctx context.Context, now time.Time) {
 	full := s.workOn(ctx) // off: only transient errors' "Continue" (transient_retry)
 	s.work.mu.Lock()
 	s.work.init()
-	var due, waits, cards [][2]string
+	var due, quotaDue, waits, cards [][2]string
 	agents := map[[2]string]proto.WorkAgent{}
 	for k, e := range s.work.entries {
 		switch {
 		case !full:
-			if e.WakeAt != nil && !e.WakeAt.After(now) && e.Work.On == proto.WaitTransient && e.Work.CI == nil {
-				due = append(due, k)
+			if e.WakeAt != nil && !e.WakeAt.After(now) && e.Work.CI == nil {
+				if e.Work.On == proto.WaitTransient {
+					due = append(due, k)
+				} else if e.Work.ResetsAt != nil {
+					quotaDue = append(quotaDue, k) // classify outside work.mu; ordinary workers remain untouched
+				}
 			}
 		case e.WakeAt != nil && !e.WakeAt.After(now):
 			due = append(due, k)
@@ -69,6 +73,11 @@ func (s *Service) workTick(ctx context.Context, now time.Time) {
 		s.work.backfillAt = now
 	}
 	s.work.mu.Unlock()
+	for _, k := range quotaDue {
+		if c, ok := v.session(k[0], k[1]); ok && s.protectedQuotaWait(ctx, k[0], c) {
+			due = append(due, k)
+		}
+	}
 	for _, k := range waits {
 		if s.agentStopped(v, agents[k]) {
 			due = append(due, k)
@@ -226,7 +235,7 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 		s.putWork(ctx, e)
 		return
 	}
-	if !sw.wakes(e.Work) {
+	if !sw.wakes(e.Work) && !(!sw.Enabled && sw.transientOn() && e.Work.ResetsAt != nil && s.protectedQuotaWait(ctx, k[0], c)) {
 		before := e
 		e.WakeAt, e.Work.WakeAt = nil, nil // turned off since it was set
 		if before.Work.CI != nil {
@@ -542,7 +551,7 @@ func (s *Service) backfillWork(ctx context.Context, v *workView, now time.Time) 
 				return
 			}
 			if c.HiddenByDirectory() || c.Assistant && !turnErrorTransient(c) && !s.protectedQuotaWait(ctx, d.ID, c) || c.State != proto.StateUnread || c.Work != nil || now.Sub(c.UpdatedAt) > workBackfill ||
-				now.Sub(c.UpdatedAt) < settle || !full && (c.TurnError == "" || !turnErrorTransient(c)) {
+				now.Sub(c.UpdatedAt) < settle || !full && (c.TurnError == "" || !turnErrorTransient(c) && !s.protectedQuotaWait(ctx, d.ID, c)) {
 				continue
 			}
 			k := [2]string{d.ID, c.SessionID}

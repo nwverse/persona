@@ -943,15 +943,20 @@ func TestQueuedProtectedRecoveryCannotSwitch(t *testing.T) {
 func TestProtectedClaudeQuotaClassificationRetainsResetWait(t *testing.T) {
 	const id = "11111111-2222-3333-4444-555555555555"
 	for _, protected := range []bool{false, true} {
-		n, _ := recoveryTestNode(t, id, protected, false)
-		writeRefusalTranscript(t, n, id, `{"type":"assistant","uuid":"quota","timestamp":"2026-11-20T12:00:00Z","isApiErrorMessage":true,"apiErrorStatus":429,"message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"API Error: Request rejected (429) · upstream account quota usage limit has been reached; an account becomes available again at 13:00 UTC (in 60m)"}]}}`)
-		kinds := n.claudeResultKinds(id)
-		want := proto.TurnErrorTransient
-		if protected {
-			want = proto.TurnErrorUsageLimit
-		}
-		if len(kinds) != 2 || kinds[0] != want || kinds[1] != assistantRecordKind {
-			t.Fatalf("protected=%v: classification %v, want %s", protected, kinds, want)
+		for _, strict := range []bool{false, true} {
+			n, _ := recoveryTestNode(t, id, protected, false)
+			st, _ := n.state.get(id)
+			st.TaskExecution = strict
+			n.state.put(id, st)
+			writeRefusalTranscript(t, n, id, `{"type":"assistant","uuid":"quota","timestamp":"2026-11-20T12:00:00Z","isApiErrorMessage":true,"apiErrorStatus":429,"message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"API Error: Request rejected (429) · upstream account quota usage limit has been reached; an account becomes available again at 13:00 UTC (in 60m)"}]}}`)
+			kinds := n.claudeResultKinds(id)
+			want := proto.TurnErrorTransient
+			if protected && !strict {
+				want = proto.TurnErrorUsageLimit
+			}
+			if len(kinds) != 2 || kinds[0] != want || kinds[1] != assistantRecordKind {
+				t.Fatalf("protected=%v strict=%v: classification %v, want %s", protected, strict, kinds, want)
+			}
 		}
 	}
 }
@@ -981,5 +986,43 @@ func TestProtectedSendWithoutLegacyRecoveryKeepsSharedAvailability(t *testing.T)
 	n.mu.Unlock()
 	if !kept {
 		t.Fatal("a protected send without a legacy hold changed shared worker availability")
+	}
+}
+
+func TestProtectedStrictTaskKeepsOneSameModelRetry(t *testing.T) {
+	const id = "11111111-2222-3333-4444-555555555555"
+	for _, main := range []bool{false, true} {
+		for _, failure := range []string{
+			"API Error: 503 unavailable", "API Error: 429 Too many requests",
+			"API Error: Request rejected (429) · upstream account quota usage limit has been reached; an account becomes available again at 23:59 UTC (in 32m)",
+		} {
+			n, sent := recoveryTestNode(t, id, main, !main)
+			execution := modelExecution{Strict: true, Model: "primary-model", IsMain: main, FollowsSetting: !main}
+			p := &assistantProc{id: id, agent: "claude", launcher: "claude", model: execution}
+			n.procs[id] = p
+			if !n.recoverAssistantResult(p, true, failure, proto.TurnErrorTransient, assistantRecordKind) {
+				t.Fatalf("strict protected task lost its same-model retry: %s", failure)
+			}
+			if retry := waitRecoverySend(t, sent); !sameModelChoice(retry, execution) || !retry.Strict {
+				t.Fatalf("strict retry changed execution: %+v", retry)
+			}
+			n.mu.Lock()
+			r := n.recoveries[id]
+			var done chan struct{}
+			if r != nil {
+				done = r.done
+			}
+			n.mu.Unlock()
+			if r == nil {
+				t.Fatal("strict retry lost its budget")
+			}
+			if done != nil {
+				<-done
+			}
+			if n.recoverAssistantResult(p, true, failure, proto.TurnErrorTransient, assistantRecordKind) || len(sent) != 0 {
+				t.Fatal("strict protected task retried again or changed model")
+			}
+			n.clearAssistantRecovery(p, false)
+		}
 	}
 }
