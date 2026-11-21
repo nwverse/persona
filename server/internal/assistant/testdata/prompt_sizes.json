@@ -98,7 +98,7 @@
   "mcp_tools.assistant#task_plan_withdraw": 941,
   "mcp_tools.assistant#task_retry": 878,
   "mcp_tools.assistant#task_review": 9743,
-  "mcp_tools.assistant#task_scope": 1993,
+  "mcp_tools.assistant#task_scope": 1956,
   "mcp_tools.assistant#task_start_keys": 1071,
   "mcp_tools.assistant#task_start_screen": 676,
   "mcp_tools.assistant#todo_complete": 577,
@@ -133,5 +133,5 @@
   "supervise.review_rework": 555,
   "supervise.rework": 396,
   "supervise.task_goal": 111,
-  "supervision_instructions": 15650
+  "supervision_instructions": 15649
 }

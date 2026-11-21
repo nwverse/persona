@@ -46,7 +46,7 @@ func TestTaskScopeRefusedOnACardlessOwnerWait(t *testing.T) {
 	if err == nil {
 		t.Fatalf("the estimate extension was not refused: %s", res)
 	}
-	for _, want := range []string{"no card they can answer", "needs_user", "user_check"} {
+	for _, want := range []string{"no card to answer", "accepted", "rework", "cancelled", "needs_user", "user_check"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal lacks %q:\n%v", want, err)
 		}
@@ -73,6 +73,20 @@ func TestTaskScopeAllowedWhenAWorkerCardIsPending(t *testing.T) {
 	agentTurn(s, f, proto.StatusBlocked, "选哪个方案？", 1)
 	if _, err := runJSON(t, s, "conv1", "task_scope", scopeArgs(todo.ID)); err != nil {
 		t.Fatalf("a task with a pending worker card was refused: %v", err)
+	}
+}
+
+// A worker whose session is already working again (the list changed before the ledger's supervisedWorking ran, the
+// snapshot window the watch's cardlessWorkersStopped guards) means this is not a settled review wait: allow it.
+func TestTaskScopeAllowedWhileAWorkerStillWorks(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	waitsForReview(t, s, f, todo.ID, "做完了。")
+	agePendingReview(t, s, todo.ID)
+	// Set the session directly: taskWorking would move the ledger out of pending_review before the guard sees it.
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now()})
+	if _, err := runJSON(t, s, "conv1", "task_scope", scopeArgs(todo.ID)); err != nil {
+		t.Fatalf("a scope change while a worker still works was refused: %v", err)
 	}
 }
 
