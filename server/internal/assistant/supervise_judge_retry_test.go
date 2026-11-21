@@ -28,7 +28,7 @@ func startJudgeRecovery(t *testing.T, s *Service, f *fakeHub, todo Todo, reply s
 // with the service failure named, only after the bounded retries have all failed.
 func TestSupervisedJudgeServiceErrorRetriesThenReportsOnce(t *testing.T) {
 	fastJudgeRetry(t)
-	shortTurnRetries(t, time.Millisecond)
+	shortTurnRetries(t, 0)
 	s, f, todo := newSupervisedService(t)
 	f.judge = "not-json" // a 200 reply that cannot be parsed as a judgment
 	startJudgeRecovery(t, s, f, todo, "the work is finished")
@@ -39,7 +39,6 @@ func TestSupervisedJudgeServiceErrorRetriesThenReportsOnce(t *testing.T) {
 		if got := stopSignals(s, todo.ID); got != "" {
 			t.Fatalf("before deferred retry %d: told %q instead of waiting", retry+1, got)
 		}
-		time.Sleep(5 * time.Millisecond) // beyond this test's shortened exponential backoff
 		sweeps(t, s, todo.ID, 1)
 	}
 	waitFor(t, "one exhausted judgment-service signal", func() bool { return len(f.notices()) == 1 })
@@ -61,7 +60,7 @@ func TestSupervisedJudgeServiceErrorRetriesThenReportsOnce(t *testing.T) {
 // it is then, rather than judging the snapshot that failed earlier.
 func TestSupervisedJudgeRetryUsesLatestReply(t *testing.T) {
 	fastJudgeRetry(t)
-	shortTurnRetries(t, time.Millisecond)
+	shortTurnRetries(t, 0)
 	s, f, todo := newSupervisedService(t)
 	f.judgeFails = 2 // both calls of the initial pass fail; the deferred pass can answer
 	startJudgeRecovery(t, s, f, todo, "the earlier reply")
@@ -74,7 +73,6 @@ func TestSupervisedJudgeRetryUsesLatestReply(t *testing.T) {
 	s.tasks.mu.Lock()
 	s.tasks.working[todo.ID] = time.Now() // a start heard while the retry was pending: judge that stretch, not e.Work
 	s.tasks.mu.Unlock()
-	time.Sleep(2 * time.Millisecond)
 	s.watchTurn(context.Background(), todo, []proto.Session{row})
 	turnsQuiet(t, s, todo.ID)
 	waitFor(t, "the recovered review", func() bool { return len(f.notices()) == 1 })
@@ -98,7 +96,7 @@ func TestSupervisedJudgeTimeoutUsesDeferredRetry(t *testing.T) {
 	oldTimeout := taskDoneTimeout
 	taskDoneTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { taskDoneTimeout = oldTimeout })
-	shortTurnRetries(t, time.Millisecond)
+	shortTurnRetries(t, 0)
 	s, f, todo := newSupervisedService(t)
 	f.mu.Lock()
 	f.judgeDelay = time.Second // the caller's much shorter context expires first
@@ -112,7 +110,6 @@ func TestSupervisedJudgeTimeoutUsesDeferredRetry(t *testing.T) {
 		if got := stopSignals(s, todo.ID); got != "" {
 			t.Fatalf("before deferred retry %d after timeout: told %q", retry+1, got)
 		}
-		time.Sleep(5 * time.Millisecond)
 		sweeps(t, s, todo.ID, 1)
 	}
 	waitFor(t, "one exhausted timeout signal", func() bool { return len(f.notices()) == 1 })
