@@ -31,6 +31,8 @@ type stateFile struct {
 }
 
 type sessionState struct {
+	SegmentRetired          bool            `json:"segment_retired,omitempty"`
+	SegmentOperation        string          `json:"segment_operation,omitempty"`
 	TaskInstructions        string          `json:"task_instructions,omitempty"`
 	TaskInstructionFile     string          `json:"task_instruction_file,omitempty"`
 	TaskInstructionChannel  string          `json:"task_instruction_channel,omitempty"`
@@ -418,6 +420,10 @@ func (s *stateFile) put(id string, v sessionState) bool {
 	defer s.persistMu.Unlock()
 	s.mu.Lock()
 	if old, ok := s.Sessions[id]; ok {
+		v.SegmentRetired = old.SegmentRetired
+		if old.SegmentOperation != "" {
+			v.SegmentOperation = old.SegmentOperation
+		}
 		// Owned by state.update: a send's earlier copy must not erase a user's newer arrival.
 		v.IdleCompaction = old.IdleCompaction
 		if old.CreationID != "" {
