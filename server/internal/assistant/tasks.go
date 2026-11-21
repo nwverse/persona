@@ -130,9 +130,9 @@ type PlanTask struct {
 	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
 	// plan is made and again when it starts; it is not what the apps send back with an edit.
 	ReuseTodo string `json:"reuse_todo,omitempty"`
-	// Role: "leader" makes the task's agent a task leader that may hand out workers beneath this task (task_leader.go,
-	// #3656); "" is an ordinary worker. Only a supervising conversation's task_plan sets it. Parent: the leader's task
-	// this task is a worker of; the hub's, never what a tool call or an edit says.
+	// Role: every new task declares "worker" or "leader". A leader may hand out workers beneath its task
+	// (task_leader.go, #3656); a role-less task in a legacy stored plan remains an ordinary worker. Parent: the
+	// leader's task this task is a worker of; the hub's, never what a tool call or an edit says.
 	Role   string `json:"role,omitempty"`
 	Parent string `json:"parent,omitempty"`
 	// PartOf and After: the request the task's to-do is a piece of and the pieces of it the to-do waits for
