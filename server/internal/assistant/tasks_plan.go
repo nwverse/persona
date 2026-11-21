@@ -190,7 +190,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 				if t.Permission == "" {
 					t.Permission = configuredMode
 				}
-			case fit.allowAll():
+			case fit.allowAllOver(t.Permission):
 				t.Permission = "bypassPermissions"
 			}
 			// traex, omp…: no mode, no effort (launcher_modes.go). One the call names is refused now, rather than by
