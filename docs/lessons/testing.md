@@ -87,6 +87,8 @@
   proxy connection. Capture the host process and launchd/runtime-mount evidence before Xcode timeout cleanup, and keep
   the app host distinct from the test bundle. Requiring both UDID and bundle ID misses launchd errors; filtering a large
   raw log only after buffering it also discards the evidence. Neither an absent log nor a process presence proves a cause.
+  When an iPhone readiness probe passes but the later iPad launch fails, the iPad needs its own live scope and observer:
+  the iPhone's successful result, host samples and scoped log do not explain the other device's launch.
 
 - Sync replay must wait for its initial session, built transcript and pending-card snapshot before issuing user actions
   (#1112). Fixed startup sleeps can turn a tap on an unloaded card into a silent no-op; accepting a reply with no held

@@ -185,7 +185,8 @@ class AppleReadinessTests(unittest.TestCase):
         self.fixture.state["bootstatus_hang"] = True
         self.fixture.save()
         for name, body in (("xcodebuild", FAKE_XCODE), ("xcrun", FAKE_XCRUN_WRAPPER),
-                           ("fake-simctl", FAKE_XCRUN), ("otool", FAKE_OTOOL)):
+                           ("fake-simctl", FAKE_XCRUN), ("otool", FAKE_OTOOL),
+                           ("file", "#!/bin/bash\nexit 0\n"), ("codesign", "#!/bin/bash\nexit 0\n")):
             if name == "fake-simctl":
                 body = body.replace(
                     'if a[0] == "create":\n',
@@ -210,7 +211,7 @@ class AppleReadinessTests(unittest.TestCase):
     def run_preparation(self, regular_only=False, **options):
         source = SCRIPT.read_text()
         helpers = source[source.index("simulator_udid() {"):source.index("cleanup() {")]
-        helpers += source[source.index("result() {"):source.index('if [ "$LANE" = all ]', source.index("test_batch() {"))]
+        helpers += source[source.index("result() {"):source.index('\n  fi', source.index("\ntest_batch() {")) + 8]
         settings = source.index('  if [ "$LANE" = ios18 ]; then', source.index('if [ "$LANE" != packages ]'))
         helpers += source[settings:source.index('  IOS_COMMON=(', settings)]
         if regular_only:
@@ -240,6 +241,7 @@ IOS_COMMON=(xcodebuild)
         env = dict(os.environ, PATH=str(self.fixture.bin) + os.pathsep + os.environ["PATH"],
                    LANE="ios", CI_ROOT=str(ROOT), SOURCE=str(ROOT), OUTPUT=str(self.output),
                    PERSONA_CONFIG=str(self.output / "config.json"), SIM_NAME="owned readiness fixture",
+                   CI_BUNDLE_ID="org.example.persona.ci",
                    IOS_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0", OWNED_UDID=owned_udid,
                    REGULAR_SIM_NAME="owned regular About fixture",
                    FAKE=str(self.root), TEST_STEP_TIMEOUT="10")
@@ -272,6 +274,19 @@ IOS_COMMON=(xcodebuild)
         self.assertEqual(context["udid"], NEW)
         self.assertEqual(context["bundle_id"], "org.example.persona.ci")
         self.assertEqual(set(context), {"udid", "bundle_id", "started_at"})
+        regular_context = json.loads((self.output / "regular-readiness-context.json").read_text())
+        self.assertEqual(regular_context["udid"], REGULAR_UDID)
+        self.assertEqual(regular_context["bundle_id"], "org.example.persona.ci")
+        self.assertNotEqual(regular_context["udid"], context["udid"])
+        self.assertTrue((self.output / "diagnostics/live-readiness/observer.status.txt").is_file())
+        self.assertTrue((self.output / "diagnostics/live-regular-readiness/observer.status.txt").is_file())
+        for name in ("live-readiness", "live-regular-readiness"):
+            observer = self.output / "diagnostics" / name
+            self.assertIn("xcodebuild-finished", (observer / "observer.status.txt").read_text())
+            self.assertTrue((observer / "simulator-launch.status.txt").is_file())
+            for suffix in ("architecture.txt", "libraries.txt"):
+                self.assertTrue((observer / f"product-0-{suffix}").is_file())
+            self.assertTrue((observer / "product-0-bundle-signature.txt").is_file())
         sim_calls = (self.root / "calls").read_text()
         self.assertNotIn("simctl bootstatus", sim_calls)
         self.assertEqual([line for line in sim_calls.splitlines() if "simctl boot " in line],
@@ -383,6 +398,7 @@ cleanup_device "$REGULAR_SIM" "$REGULAR_SIM_NAME" "$REGULAR_SIM_STARTED"
                     self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertEqual(len(calls), 1)
                     self.assertTrue((case.root / "regular-probe-started").exists())
+                    self.assertTrue((case.output / "diagnostics/live-regular-readiness/observer.stop").exists())
                     self.assertFalse((case.root / "regular-suite-started").exists())
                 finally:
                     case.doCleanups()
@@ -548,7 +564,7 @@ cleanup_device "$REGULAR_SIM" "$REGULAR_SIM_NAME" "$REGULAR_SIM_STARTED"
         sim_boot = tools / "sim-boot-fixture"
         sim_boot.write_text("#!/bin/bash\nexit 0\n")
         sim_boot.chmod(0o755)
-        env = {"PATH": str(tools), "FAKE": str(self.root), "TEST_STEP_TIMEOUT": "3"}
+        env = {"PATH": str(tools) + ":/bin:/usr/bin", "FAKE": str(self.root), "TEST_STEP_TIMEOUT": "3"}
         command = textwrap.dedent('''\
             set -euo pipefail
             unset OUTPUT CI_BUNDLE_ID
@@ -559,6 +575,7 @@ cleanup_device "$REGULAR_SIM" "$REGULAR_SIM_NAME" "$REGULAR_SIM_STARTED"
             CI_ROOT=/fixture-root
             PERSONA_CONFIG=/fixture-config
             OUTPUT=/fixture-output
+            LANE=ios
             SIM=11111111-1111-1111-1111-111111111111
             CI_BUNDLE_ID=org.example.persona.ci
             IOS_TESTS=(xcodebuild)

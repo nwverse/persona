@@ -405,16 +405,40 @@ fi
     about_visual ios-visual-regular AboutVersionRegularVisualTests "$REGULAR_SIM"
   else
     # Exercise the real test host on the fresh iPad before the regular batch.
-    # Keep its strict probe separate from both iPhone readiness and regular results.
+    # Keep its strict probe, launch scope and evidence separate from the iPhone.
+    python3 "$CI_ROOT/scripts/ci/apple_launch_diagnostics.py" \
+      --record "$OUTPUT/regular-readiness-context.json" --udid "$REGULAR_SIM" --bundle-id "$CI_BUNDLE_ID"
     ci_run 'Verify hosted regular iPad test readiness' 900 bash -c '
       set -euo pipefail
-      checker="$1"; bundle="$2"; log="$3"; shift 3
+      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; shift 8
+      mkdir -p "$watch_log"
+      python3 "$ci_root/scripts/ci/apple_readiness_watch.py" \
+        --udid "$udid" --bundle-id "$bundle_id" --scope-root "$output" \
+        --app "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona" \
+        --test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests" \
+        --output "$watch_log" --seconds 900 &
+      watcher=$!
+      stop_watcher() {
+        local code=$?
+        trap - EXIT TERM INT
+        if kill -0 "$watcher" 2>/dev/null; then
+          mkdir -p "$watch_log"
+          : > "$watch_log/observer.stop"
+          kill -TERM "$watcher" 2>/dev/null || true
+        fi
+        # This wait is inside the original readiness deadline. The outer process
+        # group deadline still bounds a stuck watcher and all its child commands.
+        wait "$watcher" || true
+        exit "$code"
+      }
+      trap stop_watcher EXIT TERM INT
       {
         "$@" -only-testing:PersonaTests/TypeScaleTests -resultBundlePath "$bundle" test-without-building
         python3 "$checker" "$bundle" TypeScaleTests
       } 2>&1 | tee "$log"
     ' -- "$CI_ROOT/scripts/ci/apple_result.py" "$OUTPUT/ios-regular-readiness.xcresult" \
-      "$OUTPUT/regular-readiness.log" "${IOS_COMMON[@]}" \
+      "$OUTPUT/regular-readiness.log" "$OUTPUT/diagnostics/live-regular-readiness" "$REGULAR_SIM" \
+      "$CI_ROOT" "$CI_BUNDLE_ID" "$OUTPUT" "${IOS_COMMON[@]}" \
       -destination "platform=iOS Simulator,id=$REGULAR_SIM" -destination-timeout 120
     mkdir -p "$OUTPUT/regular-shots"
     TEST_RUNNER_PERSONA_SHOTS="$OUTPUT/regular-shots" \

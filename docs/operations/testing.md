@@ -149,11 +149,14 @@ On Apple failure, collect the simulator UDID log, boot command/status log, insta
 disk space, and any xcresult bundles before deleting the owned simulator. The workflow uploads the allowlisted diagnostics as
 `apple-<lane>-diagnostics-<run id>-<attempt>` artifacts for seven days. Source/configuration files, keys and result-bundle symlink targets
 are excluded. Do not infer a simulator boot timeout's cause without its diagnostics, add automatic retries, or extend the boot deadline.
-The app-hosted readiness probe also has a bounded live observer. It samples only an app executable under the owned UDID,
-checks the disposable app/test-bundle architecture and ad-hoc signature, and captures scoped launchd/runtime-mount events
-before Xcode timeout cleanup can shut down the device. NDJSON is filtered while it is read; launchd lines need not contain
-both the UDID and bundle ID. An absent process, missing log, Shutdown during cleanup, valid signature, or runtime mount alone
-is not a launch-cause verdict. The observer does not change signing, test selection, runtime or the 900-second deadline.
+The app-hosted readiness probes also have a bounded live observer. On both the ordinary iPhone probe and the separate
+regular-iPad TypeScaleTests probe it samples only an app executable under that probe's owned UDID, checks the disposable
+app/test-bundle architecture and ad-hoc signature, and captures scoped launchd/runtime-mount events before Xcode timeout
+cleanup can shut down the device. The iPad has its own `regular-readiness-context.json` and `live-regular-readiness/`
+artifact directory; neither scope nor host samples can be borrowed from the iPhone. NDJSON is filtered while it is read;
+launchd lines need not contain both the UDID and bundle ID. An absent process, missing log, Shutdown during cleanup,
+valid signature, or runtime mount alone is not a launch-cause verdict. The observer does not change signing, test selection,
+runtime or the 900-second deadlines.
 A maintainer-approved `gh run rerun --failed` runs the original commit; it cannot acquire diagnostic code added by a later commit.
 
 Deliberate boundaries: web `compatibility.live.test.ts` needs an isolated live hub/token and explicitly skips its one probe without them.
