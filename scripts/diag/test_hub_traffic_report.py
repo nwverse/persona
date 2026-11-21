@@ -65,6 +65,21 @@ class TrafficReportTests(unittest.TestCase):
         self.assertEqual(following["completed_in_window_count"], 0)
         self.assertIsNone(following["mean_completed_in_window_seconds"])
 
+    def test_connection_seconds_split_only_overlapping_utc_hours(self):
+        start = report.timestamp("2026-01-01T12:59:55Z")
+        end = report.timestamp("2026-01-31T14:30:00Z")
+        sessions = [
+            {"start": "2026-01-01T13:59:50+01:00", "end": "2026-01-01T14:00:20+01:00"},
+            {"start": "2026-01-31T13:59:45Z", "end": None},
+        ]
+        data = report.connection_report(sessions, start, end)
+        self.assertEqual([(row["hour"], row["connected_seconds"]) for row in data["hourly"]], [
+            ("2026-01-01T12:00:00Z", 5),
+            ("2026-01-01T13:00:00Z", 20),
+            ("2026-01-31T13:00:00Z", 15),
+            ("2026-01-31T14:00:00Z", 1800),
+        ])
+
     def test_boundary_close_preserves_other_window_and_identity_rules(self):
         start, end = report.timestamp("2026-01-02T00:00:00Z"), report.timestamp("2026-01-03T00:00:00Z")
         sessions = [{"identity": "0123456789abcdef", "start": "2026-01-01T23:00:00Z",

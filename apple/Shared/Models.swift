@@ -2853,6 +2853,19 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var foldedAsText: LenientText? = nil
     var foldedSideText: LenientText? = nil
 
+    /// A server-owned exact proposal. These fields never turn another approval into an Always grant.
+    var approvalBatchID: String?
+    var approvalItemID: String?
+    var ownerProposal: Bool?
+    var noExpiry: Bool?
+    var ownerApprovalPhrases: [String]?
+    var ownerApprovalPhrase: String? {
+        guard kind == .permission, ownerProposal == true, let approvalBatchID, !approvalBatchID.isEmpty,
+              !machineID.isEmpty, !sessionID.isEmpty,
+              let phrase = ownerApprovalPhrases?.first, !phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return phrase
+    }
+
     var sessionKey: SessionKey { SessionKey(group: group, machineID: machineID, sessionID: sessionID) }
     /// The session the card is shown on. Answering still uses `id` and `sessionID`.
     var requestHome: String {
@@ -2881,7 +2894,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
              toolTitle = "tool_title", agentLabelHint = "agent_label", hubGroup = "app_hub_group",
              mutedFlag = "muted", elicitation, mcpServerName = "mcp_server_name", mcpConfigSource = "mcp_config_source",
              agentID = "agent_id", agentType = "agent_type", foldedUnderText = "folded_under", foldedAsText = "folded_as",
-             foldedSideText = "folded_side"
+             foldedSideText = "folded_side", approvalBatchID = "approval_batch_id", approvalItemID = "approval_item_id",
+             ownerProposal = "owner_proposal", noExpiry = "no_expiry", ownerApprovalPhrases = "owner_approval_phrases"
     }
 }
 
@@ -2959,6 +2973,8 @@ nonisolated struct Resolution: Codable, Sendable, Equatable {
     /// An MCP form or link (`Elicitation.resolution`): accept, decline or cancel, and with a form's accept what was filled in.
     var action: String?
     var content: [String: JSONValue]?
+    /// Runtime-only exact proposal reply. Excluded from CodingKeys so it can never become an ordinary resolution field.
+    var ownerApprovalPhrase: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case answers, approve, mode, feedback, allow, always, message, keys, text, dismiss, cancel, option, options, values, reason, action, content

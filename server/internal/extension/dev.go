@@ -46,11 +46,15 @@ func (r *Registry) AddDevContext(ctx context.Context, dir string, config json.Ra
 	if len(config) == 0 {
 		config = json.RawMessage("{}")
 	}
-	if err := schema.Check(config); err != nil {
+	candidate := &Extension{Record: Record{ID: m.ID, Config: devIdentityBaseline(schema, config)}, Manifest: m, Full: m, Schema: schema}
+	prepared, err := prepareEntryConfig(candidate, config, false)
+	if err != nil {
 		return nil, fmt.Errorf("配置：%w", err)
 	}
+	config = prepared.raw
+	candidate.Record.Config = config
 	for name := range secrets {
-		if !m.hasSecret(name) {
+		if _, ok := candidate.SecretDeclaration(name); !ok {
 			return nil, fmt.Errorf("清单里没有密钥 %s", name)
 		}
 	}
@@ -120,11 +124,27 @@ func (r *Registry) RemoveDev(id string) error {
 	return nil
 }
 
-func (m *Manifest) hasSecret(name string) bool {
-	for _, s := range m.Secrets {
-		if s.Name == name {
-			return true
-		}
+// devIdentityBaseline trusts IDs already present in a development config as its starting state, while rows without
+// one are new and receive a hub-minted ID in prepareEntryConfig.
+func devIdentityBaseline(schema *Schema, raw json.RawMessage) json.RawMessage {
+	var config map[string]json.RawMessage
+	if json.Unmarshal(compactConfig(raw), &config) != nil {
+		return json.RawMessage(`{}`)
 	}
-	return false
+	for _, f := range schema.EntryListFields() {
+		var rows []map[string]json.RawMessage
+		if json.Unmarshal(config[f.Name], &rows) != nil {
+			continue
+		}
+		kept := rows[:0]
+		for _, row := range rows {
+			var id string
+			if json.Unmarshal(row[entryIDField], &id) == nil && id != "" {
+				kept = append(kept, row)
+			}
+		}
+		config[f.Name], _ = json.Marshal(kept)
+	}
+	out, _ := json.Marshal(config)
+	return out
 }

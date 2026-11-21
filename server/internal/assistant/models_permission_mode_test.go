@@ -673,3 +673,123 @@ func TestModelProfilePermissionModeValidationAndCapture(t *testing.T) {
 		t.Fatalf("captureModels leaked permission_mode into seeded tiers: %+v", tiers)
 	}
 }
+
+func TestHeadlessStartDropsUnsupportedPerMachinePermissionMode(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	f.mu.Lock()
+	f.sessions["mac"] = nil
+	f.zshrc = map[string][]proto.Launcher{
+		"mac": {
+			{Name: "claude", Source: "zshrc"},
+			{Name: "grok", Agent: "paseo", Source: "paseo", Assistant: true, PermissionModes: proto.PermissionModeSetOf("default", "plan", "bypassPermissions")},
+		},
+		"server": {
+			{Name: "claude", Source: "zshrc"},
+			{Name: "grok", Agent: "paseo", Source: "paseo", Assistant: true, PermissionModes: proto.PermissionModeSetOf("default", "bypassPermissions")},
+		},
+	}
+	f.mu.Unlock()
+	// agent.new is machine-agnostic so "plan" is valid via mac's advertised capabilities.
+	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.grok", PermissionMode: "plan"})
+
+	// Headless start on server (where grok only supports default + bypassPermissions) must drop inherited "plan".
+	if _, err := s.startOn(ctx, "server", StartParams{Text: "handle lark", Purpose: purposeLarkAgent}, false); err != nil {
+		t.Fatalf("lark.agent startOn server: %v", err)
+	}
+	last := f.sends[len(f.sends)-1]
+	if _, exists := last["permission_mode"]; exists {
+		t.Fatalf("headless start forwarded unsupported per-machine mode: %v", last)
+	}
+
+	// Supported inherited mode on server is preserved.
+	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.grok", PermissionMode: "bypassPermissions"})
+	if _, err := s.startOn(ctx, "server", StartParams{Text: "handle lark 2", Purpose: purposeLarkAgent}, false); err != nil {
+		t.Fatalf("lark.agent supported startOn server: %v", err)
+	}
+	if got := f.sends[len(f.sends)-1]["permission_mode"]; got != "bypassPermissions" {
+		t.Fatalf("headless start dropped supported per-machine mode: got %v, want bypassPermissions", got)
+	}
+
+	// Explicit caller override is preserved.
+	if _, err := s.startOn(ctx, "server", StartParams{Text: "explicit", Purpose: purposeLarkAgent, PermissionMode: "plan"}, false); err != nil {
+		t.Fatalf("lark.agent explicit startOn server: %v", err)
+	}
+	if got := f.sends[len(f.sends)-1]["permission_mode"]; got != "plan" {
+		t.Fatalf("headless start dropped explicit caller permission_mode: got %v, want plan", got)
+	}
+}
+
+func TestLauncherViewsMergeUnrestrictedPermissionModes(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	restricted := proto.PermissionModeSetOf("default", "bypassPermissions")
+
+	// When any machine reports zero (unrestricted / older node), the cross-machine merged view stays unrestricted (0)
+	// regardless of machine order.
+	for _, tc := range []struct {
+		name  string
+		zshrc []zshrcLaunchers
+	}{
+		{
+			name: "unrestricted first then restricted",
+			zshrc: []zshrcLaunchers{
+				{MachineID: "old-node", Launchers: []proto.Launcher{{Name: "grok", Agent: "paseo", Source: "zshrc"}}},
+				{MachineID: "new-node", Launchers: []proto.Launcher{{Name: "grok", Agent: "paseo", Source: "zshrc", PermissionModes: restricted}}},
+			},
+		},
+		{
+			name: "restricted first then unrestricted",
+			zshrc: []zshrcLaunchers{
+				{MachineID: "new-node", Launchers: []proto.Launcher{{Name: "grok", Agent: "paseo", Source: "zshrc", PermissionModes: restricted}}},
+				{MachineID: "old-node", Launchers: []proto.Launcher{{Name: "grok", Agent: "paseo", Source: "zshrc"}}},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			views := s.launcherViewsFrom(ctx, tc.zshrc, nil)
+			if len(views) != 1 || views[0].Name != "grok" {
+				t.Fatalf("views = %+v", views)
+			}
+			if views[0].PermissionModes != 0 {
+				t.Fatalf("merged PermissionModes = %v, want 0 (unrestricted)", views[0].PermissionModes.List())
+			}
+		})
+	}
+
+	// Machine-agnostic agent.new accepts a standard mode when one machine reports unrestricted (0).
+	f.mu.Lock()
+	f.sessions["mac"] = nil
+	f.zshrc = map[string][]proto.Launcher{
+		"server": {{Name: "grok", Agent: "paseo", Source: "zshrc", PermissionModes: restricted}},
+		"mac":    {{Name: "grok", Agent: "paseo", Source: "zshrc"}},
+	}
+	f.mu.Unlock()
+	if w := modelRequest(s, http.MethodPatch, "agent.new", `{"revision":0,"provider":"launcher.grok","permission_mode":"plan"}`); w.Code != http.StatusOK {
+		t.Fatalf("agent.new rejected mode valid on unrestricted machine: %d %s", w.Code, w.Body.String())
+	}
+
+	// When every machine declares an explicit set, the merged view carries their union.
+	unionViews := s.launcherViewsFrom(ctx, []zshrcLaunchers{
+		{MachineID: "mac", Launchers: []proto.Launcher{{Name: "grok", Agent: "paseo", Source: "zshrc", PermissionModes: proto.PermissionModeSetOf("default", "plan")}}},
+		{MachineID: "server", Launchers: []proto.Launcher{{Name: "grok", Agent: "paseo", Source: "zshrc", PermissionModes: proto.PermissionModeSetOf("default", "bypassPermissions")}}},
+	}, nil)
+	if len(unionViews) != 1 || unionViews[0].PermissionModes != proto.PermissionModeSetOf("default", "plan", "bypassPermissions") {
+		t.Fatalf("explicit union = %+v", unionViews)
+	}
+}
+
+func TestAgentStartConfirmationShowsPermissionMode(t *testing.T) {
+	f := healthHub()
+	f.launcherList = []proto.Launcher{
+		{Name: "claude", Agent: "claude"},
+		{Name: "codex", Agent: "codex"},
+	}
+	s := newTestService(t, f)
+	setSettings(t, s, func(v *Settings) { v.MachineID, v.Main = "server", "main-0000-0000" })
+	answerOutbound(t, s, "sleep-000-0000", "agent_start", " · bypassPermissions", false)
+	out, _ := spaceTool(t, s, "sleep-000-0000", "agent_start", `{"machine":"server","cwd":"/home/me/src/app","prompt":"Check config","launcher":"codex","permission_mode":"bypassPermissions"}`)
+	if !strings.Contains(out, "declined") || len(f.starts) != 0 {
+		t.Fatalf("agent_start: %s, starts %v", out, f.starts)
+	}
+}
