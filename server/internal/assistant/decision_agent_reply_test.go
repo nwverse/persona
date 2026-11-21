@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 func decisionAgentReplyService(t *testing.T) (*Service, *fakeHub, Todo) {
@@ -253,4 +254,54 @@ func TestDecisionAgentReplyPauseSurvivesReload(t *testing.T) {
 	if decisions, err := database.ListTodoDecisions(context.Background(), todo.ID, true); err != nil || len(decisions) != 0 {
 		t.Fatalf("free text was recorded as an inferred choice: %+v %v", decisions, err)
 	}
+}
+
+// A side-conversation agent_send must never settle or withdraw the task's pending decision,
+// even when an older node reports the hook with prompt_source=user. The hub reads the turn's
+// prompt and blocks on its provenance (issue #12369).
+func TestSideConversationHookDoesNotWithdrawDecision(t *testing.T) {
+	s, f, todo := decisionAgentReplyService(t)
+	a := askOf(s, todo.ID)
+	f.items = []proto.Item{
+		{Seq: 1, Role: "user", Kind: proto.KindText, Text: prompts.RenderSideConversation("also check the flaky parser test")},
+		{Seq: 2, Role: "assistant", Kind: proto.KindText, Text: "On it."},
+	}
+	params, _ := json.Marshal(map[string]any{"session_id": a.SessionID, "event": "UserPromptSubmit", "prompt_source": "user"})
+	if !s.NodeEvent(a.MachineID, "hook.event", params) {
+		t.Fatal("hook event was not accepted")
+	}
+	time.Sleep(4 * shortSuperviseTimings.gather) // the ordered decision work would have run by now
+	if got := askOf(s, todo.ID); got == nil || got.AgentReply != nil || !got.DueAt.IsZero() ||
+		got.AcceptedAt.IsZero() == false || got.Chosen != "" {
+		t.Fatalf("the side conversation changed the pending decision: %+v", got)
+	}
+	if strings.Contains(strings.Join(pendingKinds(s, todo.ID), ","), sigDecisionReply) ||
+		signalled(s, f, todo.ID, sigDecisionReply, "task_decided") {
+		t.Fatal("the side conversation emitted a decision_reply withdrawal signal")
+	}
+	if todoNow(s, todo.ID).Supervision.State != reviewNeedsUser {
+		t.Fatal("the pending decision left needs_user")
+	}
+}
+
+// The hub's own user_spoke path can carry text with provenance. A side-conversation or relay
+// envelope there is rejected before the ask is touched, while ordinary owner text still pauses
+// the default (issue #12369).
+func TestSideConversationUserSpokeTextDoesNotWithdrawDecision(t *testing.T) {
+	s, f, todo := decisionAgentReplyService(t)
+	a := askOf(s, todo.ID)
+	s.userSpokeText(context.Background(), SessionRef{MachineID: a.MachineID, SessionID: a.SessionID},
+		prompts.RenderSideConversation("unrelated request from another conversation"))
+	if got := askOf(s, todo.ID); got == nil || got.AgentReply != nil || !got.DueAt.IsZero() || got.Chosen != "" {
+		t.Fatalf("provenance-marked user_spoke changed the pending decision: %+v", got)
+	}
+	if signalled(s, f, todo.ID, sigDecisionReply, "task_decided") {
+		t.Fatal("provenance-marked user_spoke emitted a decision_reply signal")
+	}
+	// A genuine owner message on the same session still pauses and hands back as before.
+	s.userSpokeText(context.Background(), SessionRef{MachineID: a.MachineID, SessionID: a.SessionID}, "let us think it over")
+	waitFor(t, "the owner reply to pause the default", func() bool {
+		got := askOf(s, todo.ID)
+		return got != nil && got.AgentReply != nil && !got.DueAt.IsZero()
+	})
 }
