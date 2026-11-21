@@ -747,8 +747,8 @@ func (s *Service) putTaskBrief(ctx context.Context, rec briefRecord, todoID stri
 
 // continueBriefFor puts a newly adopted agent's card on its previous card's brief. Older tasks without one get a
 // reconstructed brief first, so the source and take-over remain traceable in both directions (#5732). The returned
-// ledger snapshots belong to the other open cards already on that brief; a failed adoption restores them after rescope.
-func (s *Service) continueBriefFor(ctx context.Context, self, supervisor string, previous, todo Todo, reason string, doneWhen []string, expect int) (Supervision, map[string]*Supervision, error) {
+// before/after ledger snapshots let a failed adoption undo only its own rescope, never a concurrent review or scope.
+func (s *Service) continueBriefFor(ctx context.Context, self, supervisor string, previous, todo Todo, reason string, doneWhen []string, expect int) (Supervision, map[string]*Supervision, map[string]*Supervision, error) {
 	if _, ok := s.briefOfTodo(previous.ID); !ok {
 		var criteria []string
 		minutes := 0
@@ -759,21 +759,25 @@ func (s *Service) continueBriefFor(ctx context.Context, self, supervisor string,
 	}
 	brief, ok := s.briefOfTodo(previous.ID)
 	if !ok {
-		return Supervision{}, nil, fmt.Errorf("previous task %s has no brief", previous.ID)
+		return Supervision{}, nil, nil, fmt.Errorf("previous task %s has no brief", previous.ID)
 	}
-	ledgers := map[string]*Supervision{}
-	for _, id := range s.briefTodos(brief.ID) {
-		if t, ok := s.todoNow(id); ok && t.Supervision != nil {
-			ledgers[id] = t.Supervision.clone()
+	snapshots := func() map[string]*Supervision {
+		out := map[string]*Supervision{}
+		for _, id := range s.briefTodos(brief.ID) {
+			if t, ok := s.todoNow(id); ok && t.Supervision != nil {
+				out[id] = t.Supervision.clone()
+			}
 		}
+		return out
 	}
+	before := snapshots()
 	if err := s.linkTaskBrief(ctx, brief.ID, todo.ID, previous.ID, reason); err != nil {
-		return Supervision{}, ledgers, err
+		return Supervision{}, before, before, err
 	}
 	// Rescope also creates the new ledger when no criteria changed, inheriting the linked brief. Its error is fatal:
 	// swallowing it would let a rejected risky takeover proceed with unapproved work (#5732).
 	v, err := s.rescope(ctx, todo, self, supervisor, "agent_takeover", doneWhen, expect)
-	return v, ledgers, err
+	return v, before, snapshots(), err
 }
 
 // linkTaskBrief puts to-do todoID on brief id, continuing to-do continues for reason (a take-over); a to-do already on
