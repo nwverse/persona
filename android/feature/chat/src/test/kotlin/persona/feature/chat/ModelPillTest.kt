@@ -62,6 +62,24 @@ class ModelPillTest {
     private val res = ApplicationProvider.getApplicationContext<Context>().resources
     private val agent = Session("box", "s1", agent = "claude", launcher = "example", status = "idle", state = "idle", paneId = "p1", rev = 7)
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun mainAndSharedCatalogCachesStaySeparateAcrossRefreshFailure() = kotlinx.coroutines.test.runTest {
+        val lists = ModelLists(this) { it.message.orEmpty() }
+        val shared = AssistantLaunchers(default = LauncherDefault("claude", "shared", "low"))
+        val main = AssistantLaunchers(default = LauncherDefault("claude", "main", "high"))
+        lists.readAssistantCatalog("box") { shared }
+        lists.readAssistantCatalog("box", main = true) { main }
+        testScheduler.advanceUntilIdle()
+        assertEquals(shared, (lists.assistantCatalog("box") as JLoadable.Loaded<AssistantLaunchers>).value)
+        assertEquals(main, (lists.assistantCatalog("box", main = true) as JLoadable.Loaded<AssistantLaunchers>).value)
+        lists.readAssistantCatalog("box", main = true) { throw SocketTimeoutException("main temporarily unavailable") }
+        testScheduler.advanceUntilIdle()
+        val retained = lists.assistantCatalog("box", main = true) as JLoadable.Loaded<AssistantLaunchers>
+        assertEquals(main, retained.value)
+        assertTrue(retained.failure != null)
+        assertEquals(shared, (lists.assistantCatalog("box") as JLoadable.Loaded<AssistantLaunchers>).value)
+    }
+
     @Test fun onlyTheUsersMessageOnGlassCarriesAWaitingSwitchOut() {
         val waiting = agent.copy(pendingSwitch = PendingSwitch("work"))
         assertTrue(switchesNext(waiting, on = true))
