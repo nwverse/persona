@@ -307,6 +307,15 @@ func (s *Service) channelResolve(ctx context.Context, ch, id string, r proto.Res
 		return nil, err
 	}
 	r.AnsweredBy, r.Remembered = "", false
+	if ownerActionProposal(ix) {
+		if err := s.resolveOwnerProposal(ctx, ix, r, ownerActionCardProof(ix, ch)); err != nil {
+			if errors.Is(err, errNotPending) {
+				return map[string]any{"ok": false, "status": s.endedStatus(ctx, id, err)}, nil
+			}
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
+	}
 	if err := s.resolve(id, r); err != nil {
 		if errors.Is(err, errNotPending) {
 			return map[string]any{"ok": false, "status": s.endedStatus(ctx, id, err)}, nil

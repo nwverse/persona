@@ -907,6 +907,13 @@ export interface Interaction {
   agent?: string;
   /** Display label supplied by the source (for example a script request). */
   agent_label?: string;
+  /** A manager-owned exact operation or batch. Its reply control supplies the interaction id explicitly; ordinary
+   *  quote replies never acquire approval authority. The phrase list is a display snapshot, not an authorization. */
+  approval_batch_id?: string;
+  approval_item_id?: string;
+  owner_proposal?: boolean;
+  no_expiry?: boolean;
+  owner_approval_phrases?: string[];
   /** What "always allow" allows here; another agent's card offers it only with this. */
   always_label?: string;
   /** Permission scopes remembered by the hub for this conversation. */
@@ -1020,6 +1027,10 @@ export interface AssistantInfo {
   /** "Show scheduled task chats" in the sidebar's Recent (#8324, lib/recent-task-chats.ts): one value on the hub for all
    *  of the user's devices, off by default; absent from an older hub (no switch, and Recent leaves them out). */
   recent_task_chats?: boolean;
+  /** Exact, one-shot owner replies and persistent proposal cards; off by default and absent from an older hub. */
+  owner_reply_approval?: boolean;
+  persistent_owner_action_cards?: boolean;
+  owner_reply_approval_phrases?: string[];
   /** User-chosen ordinary conversation order (#12017), shared by every client; absent or empty means activity time. */
   conversation_order?: string[];
   /** Exact user-chosen tag filter entries (#12018); null or absent means the automatic all-in-use-tag row. */
