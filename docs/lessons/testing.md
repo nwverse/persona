@@ -428,6 +428,45 @@ Gradle then called the tests up to date and skipped them. A deliberately broken 
 
 **To check the setup**, break one rule on purpose and confirm the binding tests fail before trusting them.
 
+## Go's test cache can repeat a pass the change broke (2026-11-22, #12724)
+
+Every Go test command the repository's scripts run passes `-count=1`
+(`docs/operations/testing.md`, "Why tests stay uncached"), and dropping it to save time keeps coming up (#10613).
+The reason: Go reuses a test result while the test binary and what the test process itself recorded opening are
+unchanged, and it rechecks a recorded file only inside the module root (`computeTestInputsID` in `cmd/go`: "Do not
+recheck files outside the module, GOPATH, or GOROOT root"), so for `server/` the rest of the repository is
+invisible. Those inputs are exactly what check-fast sends to the packages that read them (the `spec/fixtures/*` rule in
+`scripts/ci/check_fast_map.py`, and `server_readers` in `scripts/test/check-fast.sh`), and what a child process reads,
+like the `go list` that `internal/archguard` runs, is never recorded at all.
+
+Reproduced on 2026-11-22 with Go 1.27.3 at `origin/main` a133f8cce9, from `server/` (`-run` keeps other tests out of
+it; a package with any failing test is never cached):
+
+```sh
+go test -run '^TestScriptOrStreamGoesByTheBytes$' ./internal/proto/           # ok 0.101s
+cp ../spec/fixtures/file-types/typescript.ts ../spec/fixtures/file-types/segment.ts
+go test -run '^TestScriptOrStreamGoesByTheBytes$' ./internal/proto/           # ok (cached)
+go test -count=1 -run '^TestScriptOrStreamGoesByTheBytes$' ./internal/proto/  # FAIL: segment fixture is 1018 bytes, not whole packets
+git checkout -- ../spec/fixtures/file-types/segment.ts
+```
+
+Inside the module the guards go stale the same way: after `go test -run '^TestContractsArePure$' ./internal/archguard/`
+passed, a new one-line package under `server/internal/` whose name ends in `wire` (which makes it a contract package
+the guard's list must name) still got `ok (cached)`, while `-count=1` failed with "… looks like a contract package but
+testdata/contracts.txt does not list it".
+
+What a hit would save, measured the same day with the build already cached (110 s to warm it on a loaded machine): the
+guard packages check-fast runs on every server change took 12 s uncached and 1 s cached, and its guard tests 10 to
+14 s uncached. Only packages the change did not reach can hit at all: the edited package and every package that imports
+it get a new test binary and run again. Caching also changes the run itself: `go test` passes `-test.testlogfile` only
+when the result may be cached, and `internal/office` failed only in that mode, because a test that lowered the file size
+limit also cut off that log (#8962, fixed by #8968).
+
+- Keep `-count=1` in every command whose result is reported as verification, and in any new entry point. A plain
+  `go test` while editing is fine, but its `ok (cached)` says nothing about the change.
+- A test cannot tell Go's cache about a file outside `server/` or about what a child process read, so a reader of
+  `spec/`, `schema/`, `sdk/go/`, `docs/` or client sources stays correct only while it runs uncached.
+
 ## Running the hosted CI lanes on a Mac (2026-11-09)
 
 The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer machine:

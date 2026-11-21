@@ -211,6 +211,10 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	case "secret.env": // personad launch --ticket (secretenv.go)
 		resp = n.secretEnvFor(req)
 	case "mcp.tools":
+		if req.A2AToken != "" {
+			resp = n.scopedA2AMCP(ctx, req)
+			break
+		}
 		var res map[string]any
 		// The assistant's only when the node says so too (clicall.go mcpSession).
 		session, assistant := n.mcpSession(c, req)
@@ -237,9 +241,20 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	case "cli.call": // personad tg: the node, not the caller, says whether it is the assistant (clicall.go)
 		resp = n.cliCall(ctx, c, req)
 	case "mcp.call":
+		if req.A2AToken != "" {
+			resp = n.scopedA2AMCP(ctx, req)
+			break
+		}
 		var res proto.ToolResult
 		session, assistant := n.mcpSession(c, req)
 		sid := n.mcpCaller(req.Name, session, req.Pane, assistant)
+		if assistantwire.IsA2ATool(req.Name) {
+			sid, assistant = n.a2aCaller(c, req, sid)
+			if sid == "" {
+				resp = proto.TextResult("A2A requires a verified local session", true)
+				break
+			}
+		}
 		if req.Name == toolMailSaveAttachment { // writes on this machine (mailattachment.go)
 			resp = n.saveMailAttachment(ctx, req.Args, sid, assistant, req.Guest || n.guestOf(sid) != nil)
 			break
@@ -955,7 +970,7 @@ func toolSummary(name string, input json.RawMessage) string {
 // leader's task_plan and task_review (assistant/task_leader.go) and task_spawn. The manager's come from the list it
 // reads itself, so a tool it adds there gets its caller here too (#9089: the repository tools were added to one list
 // only, and every agent's call of them reached the hub with no session).
-var callerTools = slices.Concat(assistantwire.AgentToolNames, []string{"dispatch_start", "dispatch_read", "task_plan", "task_review", "task_spawn"})
+var callerTools = slices.Concat(assistantwire.AgentToolNames, assistantwire.A2AToolNames, []string{"dispatch_start", "dispatch_read", "task_plan", "task_review", "task_spawn"})
 
 // mcpCaller is the session an MCP call of tool name goes to the hub with: the one it names, else, for an agent's
 // tools that need to know whose call it is (callerTools), the session its pane runs. The rest go on as before, with
