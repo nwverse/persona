@@ -19,7 +19,7 @@ const FLYOUT_WIDTH = 264;
 
 export type FlyoutMode = "recommended" | "customized" | "favorite";
 
-export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, focusOnOpen, extra, reposition, engines, onEngine, onEffort, onFast, onReset, onStar, onClose }: {
+export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, focusOnOpen, extra, reposition, engines, setupElsewhere, onEngine, onEffort, onFast, onReset, onStar, onClose }: {
   /** The row it belongs to, and the panel it sits beside. */
   rowEl: HTMLElement;
   panelEl: HTMLElement;
@@ -38,6 +38,8 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
   /** The engines the model runs with here (lib/model-panel.ts engineChoices), its own first: more than one draws them as
    *  small pills, the others picked on a click; absent or one: the row's engine as a static block. */
   engines?: EngineChoice[];
+  /** The panel's columns hold the effort and Fast (#12315): the flyout keeps the rarer setup only. */
+  setupElsewhere?: boolean;
   onEngine?: (choice: EngineChoice) => void;
   onEffort: (effort: string) => void;
   onFast: (on: boolean) => void;
@@ -96,7 +98,8 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when it opens
   }, [row.key]);
 
-  const slider = model.efforts.length > 1;
+  const slider = !setupElsewhere && model.efforts.length > 1;
+  const fast = !setupElsewhere && model.fast;
   // none set and no default known (a Claude Code model for a new Agent): the slider says so rather than sit on the lowest
   const effort = shownEffort(setup, model);
   const name = model.name;
@@ -130,10 +133,10 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
         {provider.name}
         {model.context ? ` · ${t("ui-modelpanel.context", { value: contextSize(model.context) })}` : ""}
       </div>
-      {(slider || model.fast) && (
+      {(slider || fast) && (
         <div className="flex items-center gap-2 pt-3.5">
           {slider && <EffortSlider stops={model.efforts} value={effort} recommended={model.variants ? undefined : model.defaultEffort} labelOf={effortTitle} unsetLabel={t("ui-modelpanel.effort_unset")} onChange={onEffort} disabled={disabled} />}
-          {model.fast && (
+          {fast && (
             <button
               type="button"
               data-fast-toggle
@@ -152,7 +155,7 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
           )}
         </div>
       )}
-      {(model.effortUnavailable || model.effortNote) && (
+      {!setupElsewhere && (model.effortUnavailable || model.effortNote) && (
         <p className="pt-2 text-label leading-[1.4] text-ink-3">{model.effortUnavailable || model.effortNote}</p>
       )}
       {extra && <div className="pt-2">{extra}</div>}

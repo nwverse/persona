@@ -204,8 +204,8 @@ describe("the setup a row sends", () => {
     expect(rowSetup(codex(), gpt, state({ current: { provider: "codex", model: "gpt-5.5", effort: "low", fast: true } }))).toEqual({ provider: "codex", model: "gpt-5.5", effort: "low", fast: true });
   });
 
-  it("another model keeps the running effort when it takes it, else its own default", () => {
-    expect(rowSetup(claude(), sonnet, state())).toEqual({ provider: "claude", model: "sonnet", effort: "xhigh" });
+  it("another model opens at its own default, not at the effort running now (#12315)", () => {
+    expect(rowSetup(claude(), sonnet, state())).toEqual({ provider: "claude", model: "sonnet" });
     expect(rowSetup(claude(), haiku, state())).toEqual({ provider: "claude", model: "haiku" });
     expect(rowSetup(codex(), gpt, state({ current: { provider: "claude", model: "opus", effort: "max" } }))).toEqual({ provider: "codex", model: "gpt-5.5" });
   });
@@ -214,7 +214,7 @@ describe("the setup a row sends", () => {
     expect(rowSetup(claude(), sonnet, state(), { effort: "low" })).toEqual({ provider: "claude", model: "sonnet", effort: "low" });
     expect(rowSetup(codex(), gpt, state(), { effort: "high", fast: true })).toEqual({ provider: "codex", model: "gpt-5.5", effort: "high", fast: true });
     // Fast on a model that has none, an effort it doesn't take: left out
-    expect(rowSetup(claude(), sonnet, state(), { effort: "ultra", fast: true })).toEqual({ provider: "claude", model: "sonnet", effort: "xhigh" });
+    expect(rowSetup(claude(), sonnet, state(), { effort: "ultra", fast: true })).toEqual({ provider: "claude", model: "sonnet" });
   });
 
   it("a saved copy drops what the model no longer takes; one whose list isn't read stays as it is", () => {
@@ -404,7 +404,7 @@ describe("a model listed per thinking level (#12315)", () => {
     expect(rows[0].model.efforts).toEqual(LEVELS);
     expect(rows[0].model.variants).toEqual({
       base: "gemini-4-neon",
-      first: "high",
+      first: "medium",
       levels: LEVELS.map((e) => ({ effort: e, id: `gemini-4-neon-${e}` })),
     });
     // a model with one level listed, and a model whose name only looks like one, stay as they are
@@ -425,11 +425,13 @@ describe("a model listed per thinking level (#12315)", () => {
     expect(variantGroups([typed, neon[1]]).map((g) => g.length)).toEqual([1, 1]);
   });
 
-  it("stands for the list's first level and sends that level's ID alone", () => {
+  it("stands for Medium (agy names no default) and sends that level's ID alone; without Medium, the list's first", () => {
     const [row] = rowsOf();
-    expect(row.model.id).toBe("gemini-4-neon-high");
-    expect(row.model.defaultEffort).toBe("high");
-    expect(row.setup).toEqual({ provider: "agy", model: "gemini-4-neon-high" });
+    expect(row.model.id).toBe("gemini-4-neon-medium");
+    expect(row.model.defaultEffort).toBe("medium");
+    expect(row.setup).toEqual({ provider: "agy", model: "gemini-4-neon-medium" });
+    const noMedium = ["high", "xhigh", "low"].map((e) => level("m", "M", e));
+    expect(rowsOf({ providers: [agy({ models: noMedium })] })[0].model.id).toBe("m-high");
     expect(row.current).toBe(false);
   });
 
@@ -443,7 +445,7 @@ describe("a model listed per thinking level (#12315)", () => {
   it("does not carry the running effort into another level's pick", () => {
     const rows = rowsOf({ state: { current: { provider: "agy", model: "gemini-4-neon-xhigh", effort: "xhigh" }, recommended: [] } });
     const flashRow = rows.find((r) => r.model.variants?.base === "gemini-3.8-flash")!;
-    expect(flashRow.setup).toEqual({ provider: "agy", model: "gemini-3.8-flash-high" });
+    expect(flashRow.setup).toEqual({ provider: "agy", model: "gemini-3.8-flash-medium" });
   });
 
   it("stands for the level a switch waits for, else the one chosen in its flyout", () => {
@@ -455,7 +457,7 @@ describe("a model listed per thinking level (#12315)", () => {
     expect(chosen[0].customized).toBe(true);
     // a level the list no longer has: the first again
     const gone = rowsOf({ overrides: { [overrideKey("agy", "gemini-4-neon")]: { effort: "max" } } });
-    expect(gone[0].model.id).toBe("gemini-4-neon-high");
+    expect(gone[0].model.id).toBe("gemini-4-neon-medium");
   });
 
   it("a level picked in the flyout applies that level's model", () => {

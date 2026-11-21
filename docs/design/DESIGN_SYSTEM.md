@@ -1379,7 +1379,8 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   the launcher, Agent kind, known default model, catalog model count (excluding a synthetic Default row, a model's
   thinking levels counted once), Current or configured Default status, known weekly quota and any supplied failure
   reason; the current launcher's summary drops the "Agent kind · model · N models" line, which the pill, the header and
-  its lit row already say (#12315). No launcher is hidden in another bucket.
+  its lit row already say, and a folded launcher's reason is an ⓘ with a tooltip, the line only once it is opened
+  (#12315). No launcher is hidden in another bucket.
   Disclosure uses the existing chevron, the launcher's Agent mark (#5497), role colors and text tokens.
   Expanded launchers reuse model Row, family folds and Flyout, including Favorite, effort, Fast and engine controls.
   Search is flat: matching launcher summaries, then matching model rows naming their launcher even on touch screens;
@@ -1388,8 +1389,14 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   Rows have two lines led by the Agent's mark (16 px, the launcher summaries too; the right side holds only effort and
   Fast) with hover-revealed Favorite and Customize; the model that runs has a static selected fill, no
   check. One row per model: a model listed once per thinking level (Antigravity) is one row named without the level,
-  its level at the right side and the levels on the flyout's effort slider (#12315). A name has a tooltip only when cut
-  short. Customize opens a 264 px flyout to the panel's left: the effort slider, Fast, the engine, an exact catalog
+  its level at the right side and the levels on the effort control (#12315). A name has a tooltip only when cut
+  short. At 768 px and wider the panel is three columns (#12315, `web/src/ui/model-panel/Columns.tsx`): launchers
+  (160 px; entries 32 px high with the mark, the launcher's own name, an accent dot on the current one, the quota
+  percentage and an ⓘ whose tooltip says why one can't take a pick), the models (single-line rows, a check on the one
+  that runs, no effort word), and the thinking efforts of the model picked (156 px; one 32 px button per level, a check
+  on the one in use, "Recommended" after the default). The footer gives that model's speed as a two-segment Standard /
+  Fast control on `--hover-2` and Claude Code's ultracode where offered. A pick there keeps the panel open; outside or
+  Esc closes it. The reason a launcher can't take a pick shows once, above its models, never as a line under each one. Customize opens a 264 px flyout to the panel's left: the effort slider, Fast, the engine, an exact catalog
   reference-price line where known, and a footer that says whether the setup is the recommended one, customized or
   saved. A launcher summary adds its weekly-remaining bar only when the existing launcher quota answer supplies a
   weekly ratio; its tooltip names the window and reset time.

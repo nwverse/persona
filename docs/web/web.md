@@ -2423,13 +2423,29 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   `default_effort`, its ID's last word, and `efforts`, the levels listed). Two levels or more of one model are one row,
   named without the level ("Gemini 4 Neon"), placed where the list names its first level, counted once and with one
   family entry. The row stands for one level, shown at its trailing edge: the one that runs, else the one a switch waits
-  for, else the one chosen in its flyout, else the list's first. The flyout's effort slider lists the levels (none marked
-  Recommended: agy names none) and picks another: on the model that runs it is a pick of that level's model, on any other
-  row it changes which level the row stands for (kept like a customization, under the model's ID without its level; Reset
-  goes back to the list's first). A pick sends that level's own model ID, never a second effort beside it, as an Agent's
+  for, else the one last chosen for it, else Medium (agy names no default), else the list's first. The effort control (the
+  columns' right column, the single column's flyout slider) lists the levels, none marked Recommended, and picks another:
+  on the model that runs it is a pick of that level's model, on any other row it changes which level the row stands for
+  (kept like a customization, under the model's ID without its level; Reset goes back to the default level). A pick sends
+  that level's own model ID, never a second effort beside it, as an Agent's
   pick of one always did (`lib/session-panel.ts` `pickPlan`); the model that runs keeps what runs. A model with one level
   listed, an ID typed by hand and saved setups (favorites, Recent) stay as they are; a search folds only the levels it
   finds. Why: a launcher with seven models showed 27 rows and said "27 models" (the user's ask, 2026-11-21).
+- **Three columns on a wide screen** (#12315, `web/src/ui/model-panel/Columns.tsx`; T3 Code's composer picker the
+  reference): at 768 px and wider the panel is 640 px of three columns under the search. Left: every launcher by its own
+  name (the same name as everywhere else, `lib/provider-names.ts`), its mark, a dot on the one the chat runs on, its
+  weekly quota, and an ⓘ with the reason in its tooltip when it can't take a pick here; Recent and favorites first when
+  there are any. Middle: the chosen launcher's models, one line each (no effort word, a check on the model that runs, a
+  description only in the tooltip), with the family folds; a launcher that can't take a pick says why once, above its
+  models, instead of a line under every such launcher. Right: the thinking efforts of the model picked here (else the one
+  that runs), the one it runs at checked and its default marked Recommended. A footer holds that model's extras: Standard /
+  Fast where it has a priority speed, Claude Code's ultracode on the model that runs where the caller offers it, then
+  Configure models. A click on a model or an effort applies at once and the panel stays open; a click outside or Esc
+  closes it, and Recent records the last setup applied. A model opens at the effort last chosen for it here, else its
+  own default: the effort running now no longer carries over to another model. The flyout keeps engines, price and
+  Reset. Narrower screens keep the single launcher-first column, where a folded launcher's reason is an ⓘ and tooltip
+  too. Why: picking a model and then its effort took several opens of the panel and a hover-only flyout, and the same
+  cross-engine sentence was repeated under every launcher (the user's ask, 2026-11-21).
 - **Families and earlier versions** (`lib/model-families.ts`): a provider group (and Recommended, after the model that
   runs) keeps each model family together under its name in small type: Claude Fable, Opus, Sonnet and Haiku (in that
   order, by capability), a GPT line per variant ("GPT Sol", "GPT Terra"), a Gemini tier ("Gemini Pro", "Gemini Flash";

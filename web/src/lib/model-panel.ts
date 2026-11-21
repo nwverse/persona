@@ -59,7 +59,7 @@ export interface EffortVariants {
   base: string;
   /** Each level and the model ID that runs it, weakest first. */
   levels: { effort: string; id: string }[];
-  /** The level a pick takes when none was chosen: the one the list names first. */
+  /** The level a pick takes when none was chosen: Medium where listed, else the one the list names first. */
   first: string;
 }
 
@@ -222,16 +222,16 @@ const takes = (model: Pick<PanelModel, "efforts">, effort: string | undefined) =
 /**
  * The setup a model's row stands for, and what picking it sends. The model that runs now shows what runs, never a
  * browser override for an unknown session value. An Agent not started yet keeps only supported form values. Any
- * other: its override's effort, else the effort running now when this model takes it, else none (the model's own
- * default). New agy starts use their native effort unless the user picks one. Fast comes from the override when offered.
+ * other: the effort last chosen for it here (its override), else none: the model's own default (#12315; the effort
+ * running now no longer carries over to another model, so a model always opens at what it was left at). New agy starts
+ * use their native effort unless the user picks one. Fast comes from the override when offered.
  */
 export function rowSetup(provider: Pick<PanelProvider, "id" | "models"> & { engine?: string }, model: PanelModel, state: Pick<PanelState, "current" | "currentEffortDisplayOnly" | "starting">, override?: PanelOverride): PanelConfig {
   const current = state.current;
   const now = runsNow(provider, model, current);
   const displayOnly = state.currentEffortDisplayOnly === "all" || (state.currentEffortDisplayOnly === "agy" && provider.engine === "agy");
   const currentEffort = displayOnly ? undefined : current?.effort;
-  const inherited = takes(model, currentEffort);
-  const effort = now ? (state.starting ? takes(model, currentEffort) : currentEffort) : (takes(model, override?.effort) ?? inherited);
+  const effort = now ? (state.starting ? takes(model, currentEffort) : currentEffort) : takes(model, override?.effort);
   // what runs is what runs: an unset Fast on the running model is Standard, not "unknown, take the override"
   const fast = model.fast ? (now ? current?.fast : override?.fast) : undefined;
   return cleanSetup({ provider: provider.id, model: model.id, effort, fast });
@@ -313,6 +313,10 @@ const levelRank = (effort: string) => {
   return i < 0 ? EFFORT_TONES.length : i;
 };
 
+/** The level a model listed per level runs at when none was chosen: Medium where it has one (agy names no default),
+ *  else the one its list names first. */
+const defaultLevel = (levels: PanelModel[]) => (levels.some((m) => m.defaultEffort === "medium") ? "medium" : (levels[0].defaultEffort ?? ""));
+
 /** One row's model for the levels of one model (two or more, from variantGroups), standing for `chosen`: the model's
  *  name without the level ("Gemini 4 Neon (High)" → "Gemini 4 Neon"; the base ID when the names disagree), the levels
  *  as its efforts, and `chosen`'s level as its own. */
@@ -321,17 +325,18 @@ export function foldVariants(levels: PanelModel[], chosen: PanelModel): PanelMod
   const names = new Set(levels.map((m) => m.name.replace(/\s*\([^()]*\)\s*$/, "")));
   const name = names.size === 1 ? [...names][0] || base : base;
   const sorted = levels.map((m) => ({ effort: m.defaultEffort ?? "", id: m.id })).sort((a, b) => levelRank(a.effort) - levelRank(b.effort));
-  return { ...chosen, name, efforts: sorted.map((l) => l.effort), variants: { base, levels: sorted, first: levels[0].defaultEffort ?? "" } };
+  return { ...chosen, name, efforts: sorted.map((l) => l.effort), variants: { base, levels: sorted, first: defaultLevel(levels) } };
 }
 
 /** The level a model's folded row stands for: the one that runs now, else the one a switch waits for, else the one
- *  chosen in its flyout (`override.effort`), else the first listed. */
+ *  last chosen for it (`override.effort`), else its default level (defaultLevel). */
 function chosenLevel(provider: PanelProvider, levels: PanelModel[], state: Pick<PanelState, "current" | "pending">, override: PanelOverride | undefined): PanelModel {
   const now = levels.find((m) => runsNow(provider, m, state.current));
   const pending = state.pending;
   const waiting = pending && pending.provider === provider.id ? levels.find((m) => isCurrentModel(m, pending.model)) : undefined;
   const picked = override?.effort ? levels.find((m) => m.defaultEffort === override.effort) : undefined;
-  return now ?? waiting ?? picked ?? levels[0];
+  const first = defaultLevel(levels);
+  return now ?? waiting ?? picked ?? levels.find((m) => m.defaultEffort === first) ?? levels[0];
 }
 
 /** A provider's model rows (the search applied): one row per model, a model's levels folded into one (#12315). A
