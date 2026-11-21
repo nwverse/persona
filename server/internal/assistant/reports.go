@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -290,6 +291,12 @@ func (s *Service) forgetTaskPR(ctx context.Context, id, pr, replacement string) 
 		return fmt.Errorf("task %s: stages could not be read", id)
 	}
 	cur := b.stages[id]
+	if replacement == "" {
+		if err := s.forgetReportedPRLinks(ctx, id); err != nil {
+			b.mu.Unlock()
+			return err
+		}
+	}
 	removed := cur.PR == pr
 	history := slices.DeleteFunc(slices.Clone(cur.PRs), func(p string) bool { return p == pr })
 	changed := removed || len(history) != len(cur.PRs)
@@ -340,6 +347,39 @@ func (s *Service) forgetTaskPR(ctx context.Context, id, pr, replacement string) 
 	delete(s.deploy.seen, id)
 	s.deploy.mu.Unlock()
 	s.todosChanged(ctx)
+	return nil
+}
+
+// forgetReportedPRLinks removes the pull-request links imported from the task's reports, while preserving issue links
+// and every other kind of evidence. Revision-checked writes fail closed if the catalog changed meanwhile.
+func (s *Service) forgetReportedPRLinks(ctx context.Context, id string) error {
+	st, ok := s.store().(todoRepositoryStore)
+	if !ok {
+		return nil
+	}
+	set, err := st.TodoRepositories(ctx, id)
+	if err != nil {
+		return fmt.Errorf("task %s: read repository links to remove a non-PR: %w", id, err)
+	}
+	for _, row := range set.Repositories {
+		kept := make([]repository.LinkInput, 0, len(row.Links))
+		changed := false
+		for _, link := range row.Links {
+			if link.Kind == "pull_request" {
+				changed = true
+				continue
+			}
+			kept = append(kept, repository.LinkInput{URL: link.CanonicalURL, Kind: link.Kind, Number: link.Number, Title: link.Title})
+		}
+		if !changed {
+			continue
+		}
+		revision := set.Revision
+		if _, err := st.SetTodoRepositoryLinks(ctx, id, row.RepoID, repository.LinksInput{ExpectedRevision: &revision, Links: kept}); err != nil {
+			return fmt.Errorf("task %s: remove non-PR repository links: %w", id, err)
+		}
+		set.Revision++
+	}
 	return nil
 }
 

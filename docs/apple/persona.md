@@ -230,7 +230,7 @@ The built-in Mochi drawing doesn't use bitmaps; `AssistantAvatar` draws the same
 
 - Idle blinks every 3.6 seconds: a periodic TimelineView plus a short phase animation, with no redraws between blinks.
 - Thinking, working, and needs you request a 15 fps Core Animation cadence. On iOS and visionOS their static pieces are drawn once and their transforms and opacities move in the render server, sampled from the same motion functions and aligned to wall-clock phase; the app does not redraw Mochi every frame. `VisibleWork` still owns eligibility, and leaving the screen, Reduce Motion, Low Power Mode or a held call returns to the original still renderer. The Mac keeps its existing timeline.
-- Offline is gray and still.
+- Offline is gray and still. On the dark disc it keeps the dark icon's ink outline, a lighter gray body and a lighter shadow (#11283): a mid-gray outline there made the body's edge two small steps, and the face looked blurred at a glance. The light look keeps its gray outline.
 - Mochi's five states: idle looks like the icon and blinks every 3.6 seconds; thinking raises its eyes to a thought bubble at the top right (three orange dots, motion lines tucked away);
   working scans its eyes side to side, bounces gently, lights its motion lines in turn, and an orange arc runs along the circular edge; needs you has a breathing blue ring around the outside and sways side to side (waving);
   offline turns gray, closes its eyes, and has no motion lines. Frame 0 of each state is recognizable on its own.
