@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/remoteimage"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -323,15 +324,23 @@ func (s *Service) channelForward(ctx context.Context, id string, m channel.Messa
 		Unsupported: slices.Clone(m.Unsupported)}
 	var images []proto.Image
 	for _, img := range m.Images {
-		if len(images) < channel.ImagesMost && len(img.Data) <= channel.ImageMost {
-			mime := img.MIME
-			if !strings.HasPrefix(mime, "image/") {
-				mime = http.DetectContentType(img.Data)
-			}
-			images = append(images, proto.Image{Mime: mime, Data: base64.StdEncoding.EncodeToString(img.Data)})
+		if len(images) >= channel.ImagesMost {
+			in.Unsupported = append(in.Unsupported, i18n.T(lang, "assistant-channels_plugin.extra_images"))
 			continue
 		}
-		in.Unsupported = append(in.Unsupported, i18n.T(lang, "assistant-channels_plugin.extra_images"))
+		data, mime := img.Data, img.MIME
+		if len(data) > channel.ImageMost { // a photo sent as the original: scaled down to fit, not dropped (#11985)
+			fit, err := remoteimage.Fit(data, channel.ImageMost)
+			if err != nil {
+				in.Unsupported = append(in.Unsupported, i18n.T(lang, "assistant-channels_plugin.image_too_large"))
+				continue
+			}
+			data, mime = fit.Data, fit.Type
+		}
+		if !strings.HasPrefix(mime, "image/") {
+			mime = http.DetectContentType(data)
+		}
+		images = append(images, proto.Image{Mime: mime, Data: base64.StdEncoding.EncodeToString(data)})
 	}
 	for _, f := range m.Files {
 		if !caps.FilesIn || len(f.Data) > channel.FileMost || rt.machine == "" {

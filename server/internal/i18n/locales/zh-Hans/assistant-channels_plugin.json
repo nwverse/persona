@@ -1,5 +1,6 @@
 {
   "extra_images": "更多的图片",
+  "image_too_large": "一张太大、没能缩小的图片",
   "image_link": "图片：{alt} {url}",
   "unnamed": "未命名",
   "unsupported_file": "文件「{name}」",

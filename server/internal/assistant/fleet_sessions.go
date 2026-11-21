@@ -503,7 +503,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		list[i].MachineID = machine
 		list[i].PendingInteractions = counts[list[i].SessionID]
 		list[i].Assistant = isAssistantSession(&list[i], dir, m.manager)
-		if list[i].Assistant {
+		if list[i].Assistant && list[i].Space == "" {
 			list[i].Space = identity.SpaceOf(list[i].Cwd)
 		}
 		if t := shown[list[i].SessionID].Title; t != "" && list[i].Assistant {

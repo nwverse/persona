@@ -811,8 +811,11 @@ Whatever scopes it was granted, an extension's token never sees:
 
 - **The health space's conversations** (`docs/assistant/health.md`): not in `GET /api/v1/sessions` (the full list, the paged list, its
   totals and counts) or `/sessions/archived`, and their items, images, info and screen answer 404 as for a chat that does not exist.
-  A chat the hub does not list answers 404 too, as its space cannot be told. `assistant.conversations` and `assistant.messages` leave
-  them out the same way, and `assistant.memory` reads only the assistant's own memory.
+  Sessions started in a health directory or one of its subdirectories keep that protection when their working directory changes.
+  Unlisted sessions also answer 404 unless the caller has a history read grant. Session controls, including queue changes,
+  require a listed session outside the health space. Extension tokens cannot start sessions in the health space.
+  `assistant.conversations` and `assistant.messages` leave health sessions out, and `assistant.memory` reads only the assistant's own
+  memory. The assistant's `agents_list`, `agent_read` and `agent_send` use the calling conversation's space to filter their targets.
 - **Private and health cards**: a card a Just me turn raised (`private`, `docs/assistant/meeting-minutes.md` "Just me"), a card of
   the health space (by its directory or its conversation's space), and a card without a directory whose conversation cannot be found
   are left out of `GET /api/v1/interactions` and `/interactions/history`.

@@ -311,7 +311,7 @@ func (n *Node) assistantHome(id, cwd string) string {
 	if n.state == nil {
 		return cwd
 	}
-	if st, ok := n.state.get(id); ok && identity.IsAssistantDir(st.Cwd) {
+	if st, ok := n.state.get(id); ok && (identity.IsAssistantDir(st.Cwd) || identity.InHealthSpace(st.Cwd)) {
 		return st.Cwd
 	}
 	return cwd

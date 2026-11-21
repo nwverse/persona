@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -326,7 +327,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	case "agents_list":
 		var a struct{ State, Machine, Query string }
 		_ = json.Unmarshal(args, &a)
-		return s.describeAgents(ctx, a.State, a.Machine, a.Query), nil
+		return s.describeAgents(ctx, a.State, a.Machine, a.Query, s.agentCallerSpace(ctx, machine, self)), nil
 	case "agent_read":
 		var a struct {
 			Machine   string `json:"machine"`
@@ -334,7 +335,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			Turns     int    `json:"turns"`
 		}
 		_ = json.Unmarshal(args, &a)
-		return s.toolAgentRead(ctx, a.Machine, a.SessionID, a.Turns)
+		return s.toolAgentRead(ctx, a.Machine, a.SessionID, a.Turns, s.agentCallerSpace(ctx, machine, self))
 	case "agent_send":
 		wait, waitErr := agentWaitDuration(args)
 		if waitErr != nil {
@@ -363,7 +364,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("arguments: %w", err)
 		}
 		a.Task = givenTask(a.RawTask)
-		am, c, err := s.findAgent(ctx, a.Machine, a.SessionID)
+		space := s.agentCallerSpace(ctx, machine, self)
+		am, c, err := s.findAgentInSpace(ctx, a.Machine, a.SessionID, &space)
 		if err != nil {
 			return "", err
 		}
@@ -1439,8 +1441,32 @@ func (s *Service) machineIDs(ctx context.Context) string {
 	return strings.Join(ids, ", ")
 }
 
-// findAgent resolves a session by full id or prefix; an empty machine searches all of them.
+// agentSpace includes health subdirectories for the tools' access boundary.
+func agentSpace(c proto.Session) string {
+	if c.Space == SpaceHealth || identity.InHealthSpace(c.Cwd) {
+		return SpaceHealth
+	}
+	return ""
+}
+
+// agentCallerSpace uses the calling conversation on its own machine. Calls without
+// a known session can reach only the ordinary space, as with knownSpace.
+func (s *Service) agentCallerSpace(ctx context.Context, machine, self string) string {
+	if self != "" && machine != "" {
+		if c, ok := s.session(ctx, machine, self); ok {
+			return agentSpace(c)
+		}
+	}
+	return ""
+}
+
 func (s *Service) findAgent(ctx context.Context, machine, id string) (Device, proto.Session, error) {
+	return s.findAgentInSpace(ctx, machine, id, nil)
+}
+
+// findAgentInSpace resolves a full id or prefix among eligible sessions. An empty
+// machine searches all of them. A nil space preserves the lookup for other callers.
+func (s *Service) findAgentInSpace(ctx context.Context, machine, id string, space *string) (Device, proto.Session, error) {
 	id = strings.TrimSpace(id)
 	if len(id) < 6 {
 		return Device{}, proto.Session{}, fmt.Errorf("session_id is required (at least its first 8 characters)")
@@ -1455,7 +1481,7 @@ func (s *Service) findAgent(ctx context.Context, machine, id string) (Device, pr
 		}
 		list, _ := s.sessions(ctx, m.ID)
 		for _, c := range list {
-			if c.HiddenByDirectory() {
+			if c.HiddenByDirectory() || space != nil && (c.IsDeleted() || agentSpace(c) != *space) {
 				continue
 			}
 			if c.SessionID == id || strings.HasPrefix(c.SessionID, id) {
@@ -1472,7 +1498,11 @@ func (s *Service) findAgent(ctx context.Context, machine, id string) (Device, pr
 	return Device{}, proto.Session{}, fmt.Errorf("no agent %s (use agents_list)", id)
 }
 
-func (s *Service) describeAgents(ctx context.Context, state, machine, query string) string {
+func (s *Service) describeAgents(ctx context.Context, state, machine, query string, spaces ...string) string {
+	space := ""
+	if len(spaces) > 0 {
+		space = spaces[0]
+	}
 	if state == "" {
 		state = "active"
 	}
@@ -1481,8 +1511,17 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		Interactions []proto.Interaction `json:"interactions"`
 	}
 	_ = s.call(ctx, DeviceAll, DeviceInteractionsList, map[string]any{}, &res)
-	pending := map[[2]string][]string{}
+	type pendingCard struct {
+		text   string
+		folded bool
+		source [2]string
+	}
+	pending := map[[2]string][]pendingCard{}
+	folded := map[[2]string]bool{}
 	for _, ix := range res.Interactions {
+		if identity.InHealthSpace(ix.Cwd) && space != SpaceHealth {
+			continue
+		}
 		what := ix.Summary
 		if ix.Kind == proto.IxQuestion && len(ix.Questions) > 0 {
 			what = "提问：" + questionSummary(ix)
@@ -1494,13 +1533,16 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 			what = "终端对话框等你处理"
 		}
 		session := ix.SessionID
-		if ix.FoldedUnder != "" {
+		source := [2]string{ix.MachineID, session}
+		isFolded := ix.FoldedUnder != "" && ix.FoldedUnder != session
+		if isFolded {
+			folded[source] = false // include a folded card only after checking its own session
 			session = ix.FoldedUnder
 		}
 		k := [2]string{ix.MachineID, session}
 		// The id goes after the clip: a long request must not cut it off, or interaction_answer has nothing to answer.
 		id := " (interaction_id=" + ix.ID + ")"
-		pending[k] = append(pending[k], clip(what, max(400-utf8.RuneCountInString(id), 1))+id)
+		pending[k] = append(pending[k], pendingCard{clip(what, max(400-utf8.RuneCountInString(id), 1)) + id, isFolded, source})
 	}
 	type row struct {
 		m Device
@@ -1521,7 +1563,15 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		list, muted, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
-			if c.Assistant || c.HiddenByDirectory() || c.FoldedUnder() != "" {
+			if c.HiddenByDirectory() || c.IsDeleted() || agentSpace(c) != space {
+				continue
+			}
+			if source := [2]string{m.ID, c.SessionID}; c.FoldedUnder() != "" {
+				if _, tracked := folded[source]; tracked {
+					folded[source] = true
+				}
+			}
+			if c.Assistant || c.FoldedUnder() != "" {
 				continue
 			}
 			c.State = c.FoldedState()
@@ -1629,7 +1679,9 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 			fmt.Fprintf(&b, "    后台 workflow 在跑（在等它的结果，没做完）：%s\n", prompts.RenderSnapshotWorkflow(w))
 		}
 		for _, p := range pending[[2]string{r.m.ID, c.SessionID}] {
-			fmt.Fprintf(&b, "    等你：%s\n", p)
+			if !p.folded || folded[p.source] {
+				fmt.Fprintf(&b, "    等你：%s\n", p.text)
+			}
 		}
 		if c.AwaitsReply && c.Asks != "" {
 			fmt.Fprintf(&b, "    在问你、还没回：%s\n", c.Asks) // i18n-ignore: agents_list output for the model, as the lines around it
@@ -1650,8 +1702,8 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 	return b.String()
 }
 
-func (s *Service) toolAgentRead(ctx context.Context, machine, id string, turns int) (string, error) {
-	m, c, err := s.findAgent(ctx, machine, id)
+func (s *Service) toolAgentRead(ctx context.Context, machine, id string, turns int, space string) (string, error) {
+	m, c, err := s.findAgentInSpace(ctx, machine, id, &space)
 	if err != nil {
 		return "", err
 	}

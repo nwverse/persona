@@ -319,6 +319,10 @@ if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
     xcrun simctl privacy "$2" grant reminders "$3"
   ' -- "$SOURCE/scripts/app/sim-boot.sh" "$SIM" "$CI_BUNDLE_ID"
   export TEST_RUNNER_PERSONA_EVENTKIT_ROUNDTRIP=1
+  # The ordinary Persona scheme also runs the compact visual comparisons. Unlike
+  # the dedicated AboutVersionVisualTests scheme, supply their required evidence
+  # directory here, using only this disposable run's output, never a shared one.
+  export TEST_RUNNER_PERSONA_SHOTS="$OUTPUT/shots"
 
   IOS_FAILED=0
   if [ "$LANE" = ios18 ]; then
