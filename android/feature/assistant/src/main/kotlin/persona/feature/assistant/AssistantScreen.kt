@@ -3,6 +3,8 @@ package persona.feature.assistant
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -14,21 +16,31 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import persona.core.contracts.Session
 import persona.core.contracts.Machine
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.AssistantManagement
+import persona.core.contracts.api.AssistantConfigUpdate
 import persona.core.contracts.api.AssistantRefused
 import persona.core.contracts.api.AssistantRepository
 import persona.core.contracts.api.AssistantReadinessFeature
@@ -176,6 +188,8 @@ fun AssistantScreen(
     mentionFiles: persona.core.contracts.api.SessionFiles? = assistantSessionFiles(),
     /** The selected hub group's name while several are paired, which ends the title menu's heading as on iOS; null with one. */
     hubGroup: String? = null,
+    composerUpload: persona.feature.chat.ComposerAttachmentUpload? = null,
+    composerState: persona.feature.chat.ChatComposerState? = null,
 ) = PersonaTheme {
     val receivedSnapshot by repository.assistant.collectAsStateWithLifecycle()
     val conversationsOf = repository as? persona.core.contracts.api.AssistantConversations
@@ -191,6 +205,17 @@ fun AssistantScreen(
     val pageManagement = remember(management, managerChoice.hubId, managerChoice.shown) {
         management?.forManager(managerChoice.shown)
     }
+    val conversationArranger = remember(pageManagement, repository, demo) {
+        pageManagement?.takeUnless { demo }?.let { api ->
+            ConversationArranger(
+                prepare = { repository.conversationOrderUpdater() },
+                write = { order ->
+                    api.updateConfig(AssistantConfigUpdate(conversationOrder = order)).conversationOrder
+                },
+            )
+        }
+    }
+    val conversationArrangeUi = conversationArranger?.ui?.collectAsStateWithLifecycle()?.value ?: ConversationArrangeUi()
     val usageApi = remember(pageManagement, usageHistory) {
         (pageManagement as? persona.core.contracts.api.UsageHistoryApi) ?: usageHistory
     }
@@ -207,6 +232,7 @@ fun AssistantScreen(
             (it.session == receipt.session || (receipt.session == PendingMainConversation && it.clientMessageId == receipt.clientMessageId)) }) }
     val mainMessages = if (managerChoice.manager == null) outbox.filter { (it.mainTarget || it.session == PendingMainConversation) && (it.session == PendingMainConversation || it.session == snapshot.mainSession) } else emptyList()
     val scope = rememberCoroutineScope()
+    val conversationWriteScope = draftScope ?: LocalAssistantHost.current?.coroutineScope ?: scope
     val sharedSidebar = LocalAssistantSidebarHost.current
     val drawerState: MutableState<Boolean> = sharedSidebar?.opened ?: rememberSaveable { mutableStateOf(false) }
     var drawerOpen by drawerState
@@ -232,7 +258,7 @@ fun AssistantScreen(
     val draftError by key(draftEditor) {
         (draftEditor?.error ?: remember { MutableStateFlow<Int?>(null) }).collectAsStateWithLifecycle()
     }
-    val composer = savedComposer ?: transientComposer
+    val composer = savedComposer ?: composerState ?: transientComposer
     val draftRead by key(draftEditor) { (draftEditor?.ready ?: remember { MutableStateFlow(true) }).collectAsStateWithLifecycle() }
     val draftReady = draftEditor == null || draftRead
     LaunchedEffect(draftEditor, savedComposer) {
@@ -368,10 +394,45 @@ fun AssistantScreen(
     // conversation, not the centered start page. This page and assistant only; another main conversation forgets it.
     var clearedMain by mainConversation.clearedMain
     val clearedPage = clearedMain != null && active == null && newChat == null && !viewingMainQueue
-    val groups = remember(snapshot, query, ended, archived, words, history.titles, history.tagEdits, history.activeTag) {
-        conversationGroups(snapshot.copy(conversations = history.tagged(snapshot.conversations.filter { it.key !in archived }.map {
+    val orderedSnapshot = if (conversationArrangeUi.arranging || conversationArrangeUi.pending > 0) {
+        snapshot.copy(conversationOrder = conversationArrangeUi.order)
+    } else snapshot
+    val groups = remember(orderedSnapshot, query, ended, archived, words, history.titles, history.tagEdits, history.activeTag) {
+        conversationGroups(orderedSnapshot.copy(conversations = history.tagged(orderedSnapshot.conversations.filter { it.key !in archived }.map {
             if (it.key in ended) it.copy(status = "offline", state = "offline") else it
         })), query, words, activeTag = history.activeTag)
+    }
+    val latestArrangeActivityIds = rememberUpdatedState(groups.others.map { it.sessionId })
+    val beginArrange: (() -> Unit)? = conversationArranger?.let { controller ->
+        {
+            query = ""
+            history.activeTag?.let(history::selectTag)
+            conversationWriteScope.launch {
+                controller.start(if (conversationArrangeUi.pending > 0) conversationArrangeUi.order else snapshot.conversationOrder)
+            }
+        }
+    }
+    LaunchedEffect(conversationArranger, resources, feedback) {
+        val controller = conversationArranger ?: return@LaunchedEffect
+        controller.events.collect { event ->
+            when (event) {
+                is ConversationArrangeEvent.Failed -> {
+                    if (feedback?.failure(event.error) != true) toast.show(persona.core.designsystem.FeedbackNotice(
+                        resources.getString(R.string.assistant_arrange_save_failed),
+                        style = persona.core.designsystem.FeedbackStyle.Error,
+                    ))
+                }
+                is ConversationArrangeEvent.Reset -> {
+                    val message = resources.getString(R.string.assistant_arrange_reset_done)
+                    val undo = persona.core.designsystem.FeedbackAction(resources.getString(R.string.assistant_arrange_undo)) {
+                        conversationWriteScope.launch { controller.undoReset(event.revision, latestArrangeActivityIds.value) }
+                    }
+                    if (feedback?.notice(message, undo) != true) {
+                        toast.show(persona.core.designsystem.FeedbackNotice(message, undo))
+                    }
+                }
+            }
+        }
     }
     val searchOn = pageManagement != null && !demo && AssistantSearchFeature in LocalHubFeatures.current
     val knownChats = remember(snapshot.conversations, ended, archived, history.titles, history.tagEdits, history.archived, history.restoring) {
@@ -389,7 +450,11 @@ fun AssistantScreen(
     // new-conversation page.
     val faceState = personaState(active?.let { key -> snapshot.conversations.firstOrNull { it.key == key } }, hubOnline,
         machines, assistantMachine)
-    SideEffect { sharedSidebar?.personaState = faceState; sharedSidebar?.active = active }
+    SideEffect {
+        sharedSidebar?.personaState = faceState
+        sharedSidebar?.active = active
+        sharedSidebar?.healthInFront = onHealthChat || healthPage
+    }
     fun openConversation(key: SessionKey) {
         newChat = null
         if (key == PendingMainConversation) {
@@ -792,6 +857,11 @@ fun AssistantScreen(
         }
     }
     val openKeys = remember(snapshot.conversations) { openKeys(snapshot.conversations) }
+    fun historyFailed(error: Throwable) {
+        if (feedback?.failure(error) != true) toast.show(persona.core.designsystem.FeedbackNotice(
+            persona.core.designsystem.operationFeedback(error).text.resolve(resources),
+            style = persona.core.designsystem.FeedbackStyle.Error))
+    }
     val sidebar: @Composable () -> Unit = {
         AssistantDrawer(query, { query = it }, groups, active, snapshot.mainSession != null,
             onEnd = if (pageManagement != null) ({ ending = it }) else null,
@@ -823,22 +893,39 @@ fun AssistantScreen(
             onDiagnostics = ::copyDiagnostics,
             archivedCount = history.shownArchived(openKeys).size, onArchived = { history.archivedOpen = true },
             tagChoices = tagChoices, activeTag = history.activeTag, onTag = history::selectTag,
+            tagFilterBar = if (pageManagement != null && !demo && snapshot.conversationTagFilters.supported) ({
+                ConversationTagFilterBar(
+                    entries = conversationTagFilterEntries(tagChoices, snapshot.conversationTagFilters),
+                    activeTag = history.activeTag,
+                    customized = snapshot.conversationTagFilters.customized,
+                    editing = history.editingTagFilters,
+                    busy = history.tagFiltersBusy,
+                    onSelect = history::selectTag,
+                    onChange = { next ->
+                        val result = history.saveConversationTagFilters(next)
+                        result.exceptionOrNull()?.let(::historyFailed)
+                        result.isSuccess
+                    },
+                    onEdit = { history.editingTagFilters = true },
+                    onDone = { history.editingTagFilters = false },
+                )
+            }) else null,
             onTodos = onTodos?.let { action -> { scope.launch { drawerOpen = false }; action() } },
             todoCount = todoCount,
             showTodos = showTodos,
             onOpenTodo = { id -> scope.launch { drawerOpen = false }; navigator.navigate(TodoDetailRoute(id)) },
             onOpenAgent = { key -> scope.launch { drawerOpen = false }; navigator.navigate(ChatRoute(key.machineId, key.sessionId, ConversationKind.Agent)) },
             found = foundChats, searchPartial = searchPartial,
+            arranger = conversationArranger, arrangeScope = conversationWriteScope, onArrange = beginArrange,
         )
         ConversationHistoryDialogs(history, snapshot.conversations, scope,
+            customizedTagFilters = snapshot.conversationTagFilters.customized,
             onOpen = { openFromList(it); scope.launch { drawerOpen = false } },
             notice = { message ->
                 if (feedback?.notice(message, persona.core.designsystem.FeedbackStyle.Success) != true)
                     toast.show(persona.core.designsystem.FeedbackNotice(message, style = persona.core.designsystem.FeedbackStyle.Success))
             },
-            failure = { error ->
-                if (feedback?.failure(error) != true) toast.show(persona.core.designsystem.FeedbackNotice(persona.core.designsystem.operationFeedback(error).text.resolve(resources), style = persona.core.designsystem.FeedbackStyle.Error))
-            })
+            failure = ::historyFailed)
     }
     // On Glass what needs the user sits over the blank page's composer, as many lines as fit (#4339 C17, iOS ShellNeedsYou);
     // Brief and Board keep "Needs you now" in the page's scroll.
@@ -870,10 +957,12 @@ fun AssistantScreen(
                             // On a health chat (or the health space's new-chat page) New starts another health chat. Off on
                             // the blank page itself, as iOS's (#4339 C18).
                             val health = onHealthChat || healthPage
-                            JIconButton(PhIcons.NotePencil,
-                                stringResource(if (health) R.string.assistant_health_new else R.string.assistant_new_conversation),
-                                { if (health) startHealthConversation() else startNewConversation() },
-                                enabled = !sending && managers.offline == null && (active != null || viewingMainQueue))
+                            if (health || LocalHomeChrome.current?.showSwitch != false) {
+                                JIconButton(PhIcons.NotePencil,
+                                    stringResource(if (health) R.string.assistant_health_new else R.string.assistant_new_conversation),
+                                    { if (health) startHealthConversation() else startNewConversation() },
+                                    enabled = !sending && managers.offline == null && (active != null || viewingMainQueue))
+                            }
                             if (LocalHomeChrome.current == null) JIconButton(PhIcons.UserCircle, stringResource(R.string.assistant_profile), {
                                 if (pageManagement != null) settingsOpen = true else info = AssistantInfo.Settings
                             })
@@ -929,12 +1018,30 @@ fun AssistantScreen(
                         }
                         val mentions = if (mentionsHere) mentionSessions?.collectAsStateWithLifecycle()?.value
                             ?.let { starterMentionSource(it, folders) } else null
-                        // A forward waiting for the new conversation (#3901): its card over the composer, sent with it.
+                        // A forward waiting for the new conversation (#3901): its card and source photos over the composer.
                         val homeForwards = if (active == null) persona.feature.chat.ForwardPlacements.home else emptyList()
+                        val homePhotoHandoffs = if (active == null) persona.feature.chat.ForwardPlacements.homePhotoHandoffs() else emptyMap()
+                        LaunchedEffect(homeForwards, composer, homePhotoHandoffs, composer.attachments.map { it.id }) {
+                            if (homeForwards.isEmpty()) return@LaunchedEffect
+                            val present = composer.attachments.mapTo(mutableSetOf()) { it.id }
+                            val pending = homePhotoHandoffs.mapValues { (_, handoff) ->
+                                handoff.copy(attachments = handoff.attachments.filterNot { it.id in present })
+                            }
+                            val rejected = persona.feature.chat.attachForwardedPhotos(context, composer, pending.values.toList())
+                            val lost = pending.values.sumOf { it.lost } + rejected.size
+                            if (lost > 0) {
+                                val message = persona.feature.chat.forwardedPhotoNotice(resources, lost)
+                                if (feedback?.notice(message) != true) toast.show(persona.core.designsystem.FeedbackNotice(message))
+                            }
+                            if (rejected.isNotEmpty() || pending.values.any { it.lost > 0 }) {
+                                persona.feature.chat.ForwardPlacements.finishHomePhotoHandoffs(rejected.mapTo(mutableSetOf()) { it.id })
+                            }
+                        }
                         ChatComposer(uploadTarget, composer, working = false, sending = sending || !draftReady,
                             // The health page sends no files: an upload goes to the main chat's machine, outside the health space.
                             canClear = false, service = composerService?.takeIf { uploadTarget.machineId.isNotBlank() && !healthPage },
                             uploadDestination = if (onHealthChat) "health" else null,
+                            upload = composerUpload,
                             onSend = { submit() }, onCommand = { composer.insert(it, composer.focused) },
                             onNotice = { message ->
                                 if (feedback?.notice(message) != true) toast.show(persona.core.designsystem.FeedbackNotice(message))
@@ -962,10 +1069,8 @@ fun AssistantScreen(
                             // A new conversation's launcher, for it alone (iOS StarterComposer, web StarterLauncherChip); Glass's is the pill.
                             accessory = if (homeForwards.isNotEmpty() || starterQuotes.isNotEmpty() ||
                                 (active == null && !healthPage && pageManagement != null && startConversationWith != null && !demo)) ({
-                                homeForwards.forEach { ref ->
-                                    persona.feature.chat.ForwardComposerCard(ref, lines = if (homeForwards.size == 1) 2 else 1) {
-                                        persona.feature.chat.ForwardPlacements.home = persona.feature.chat.ForwardPlacements.home.filterNot { it.id == ref.id }
-                                    }
+                                persona.feature.chat.ForwardComposerCards(homeForwards) { removed ->
+                                    persona.feature.chat.ForwardPlacements.home = persona.feature.chat.ForwardPlacements.home - removed.toSet()
                                 }
                                 if (active == null && !healthPage && pageManagement != null && startConversationWith != null && !demo) {
                                     if (mentionsHere) StarterQuoteCards(starterMentions)
@@ -1399,6 +1504,8 @@ internal fun AssistantDrawer(
     archivedCount: Int = 0, onArchived: (() -> Unit)? = null,
     /** Every tag in use across open and archived chats; empty draws no filter strip. */
     tagChoices: List<String> = emptyList(), activeTag: String? = null, onTag: (String) -> Unit = {},
+    /** Parent-controlled customizable filter bar; null keeps the original automatic chip path above. */
+    tagFilterBar: (@Composable () -> Unit)? = null,
     onTodos: (() -> Unit)? = null, todoCount: Int = 0, showTodos: Boolean = true,
     onInbox: (() -> Unit)? = null, inboxCount: Int = 0,
     settingsCount: Int = 0, settingsDot: Boolean = false, settingsBadge: String? = null,
@@ -1421,12 +1528,19 @@ internal fun AssistantDrawer(
     fullWindowSearch: Boolean = false,
     onFullSearch: () -> Unit = {},
     /**
-     * The place row that stays shaded while that place is the page's root (iOS `shownPlace`).
-     * Null: the phone drawer, which shades the open conversation as before.
+     * The row that stays shaded for the visible root (iOS `shownPlace`), including an Agent on either tab.
+     * Null: the compact Persona drawer, which shades the open conversation as before.
      */
     shadedPlace: String? = null,
     /** Folds the sidebar column from its own header while it sits beside the page; null in a drawer or floating overlay. */
     onFoldColumn: (() -> Unit)? = null,
+    merged: MergedSidebarContent? = null,
+    showSchedule: Boolean = true,
+    onAgentSearch: () -> Unit = {},
+    /** Null keeps the drawer without Arrange (demos and hubs without assistant settings). */
+    arranger: ConversationArranger? = null,
+    arrangeScope: CoroutineScope? = null,
+    onArrange: (() -> Unit)? = null,
 ) {
     // iOS UnifiedSidebar.atRoot (UnifiedSidebar.swift:39–41): a place root shades its row, not a conversation.
     val shadeConversations = shadedPlace == null || shadedPlace == AssistantSidebarShade.Conversation
@@ -1438,7 +1552,7 @@ internal fun AssistantDrawer(
     val foldStore = remember { SidebarFoldStore(foldContext) }
     var recentFolded by remember { mutableStateOf(foldStore.recentFolded) }
     // The open conversation's row still shows while folded, so folding never hides where a message lands (iOS holdsCurrent).
-    val holdsCurrent = active != null && groups.recent.any { it.key == active }
+    val holdsCurrent = (merged == null || shadeConversations) && active != null && groups.recent.any { it.key == active }
     val recentOpen = !recentFolded || holdsCurrent
     // The drawer's head and main-conversation row read the same name as the page's top bar and the switcher (#6401):
     // the current manager's name, with the persona pack's name only as the no-roster fallback.
@@ -1448,9 +1562,20 @@ internal fun AssistantDrawer(
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     val drawer = LocalHomeDrawer.current
     // Regular-window column: Search opens the full-window page. Compact Glass drawer: the inline field toggles.
-    val searchInHead = drawer || fullWindowSearch
+    val searchInHead = merged == null && (drawer || fullWindowSearch)
+    var pagesFolded by remember { mutableStateOf(foldStore.pagesFolded) }
+    var chatsFolded by remember { mutableStateOf(foldStore.chatsFolded) }
     val resources = androidx.compose.ui.platform.LocalResources.current
     val haptics = rememberHaptics()
+    val arrangeState = arranger?.ui?.collectAsStateWithLifecycle()
+    val arrangeUi = arrangeState?.value ?: ConversationArrangeUi()
+    val arranging = arranger != null && arrangeUi.arranging
+    val localArrangeScope = rememberCoroutineScope()
+    val writesScope = arrangeScope ?: localArrangeScope
+    val listState = rememberLazyListState()
+    val conversationDrag = arranger?.let { controller ->
+        rememberConversationDrag(listState, controller) { groups.others.map { it.sessionId } }
+    }
     Column(Modifier.fillMaxHeight().padding(horizontal = if (drawer) Tokens.Space.s else 12.dp.dense)) {
         val headPadding = Modifier.padding(horizontal = if (drawer) Tokens.Space.l else Tokens.Space.xs).padding(top = Tokens.Space.s)
         val search: @Composable () -> Unit = {
@@ -1480,7 +1605,7 @@ internal fun AssistantDrawer(
         // The head as it was (the persona's name; only the compact drawer / regular-window Search or fold button has one),
         // where there is no switcher to show.
         val plainHead: @Composable () -> Unit = {
-            if (headTrailing != null) Row(
+            if (headTrailing != null || merged != null) Row(
                 Modifier.fillMaxWidth().then(headPadding),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1490,31 +1615,34 @@ internal fun AssistantDrawer(
                     color = PersonaTheme.palette.ink,
                     modifier = Modifier.weight(1f),
                 )
-                headTrailing()
+                headTrailing?.invoke()
             }
         }
         if (switcher != null) switcher(headPadding, headTrailing, plainHead) else plainHead()
-        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 12.dp.dense)) {
-            // The main conversation is first and listed only once, including during text search.
-            // An exact tag filter also applies to this row.
-            if (activeTag == null || groups.main != null) item(key = "persona") {
-                val mainHit = found?.firstOrNull { it.session.key == groups.main?.key }?.hit
-                MainConversationRow(groups.main, selected = shadeConversations && groups.main != null && groups.main.key == active, hasMain = hasMain,
-                    onMain = {
-                        val main = groups.main
-                        if (main != null && mainHit != null) MessageJumps.request(main.machineId, main.sessionId, mainHit.itemId)
-                        onMain()
-                    }, onEnd = groups.main?.let { m -> onEnd?.let { action -> { action(m) } } },
-                    onCopy = { groups.main?.let(onCopy) },
-                    onEditTags = groups.main?.let { m -> onEditTags?.let { action -> { action(m) } } },
-                    onDiagnostics = groups.main?.let { m -> onDiagnostics?.let { action -> { action(m) } } },
-                    said = mainHit?.let(::markedSnippet))
-                JDivider(Modifier.padding(vertical = Tokens.Space.s))
-            }
-            if (!drawer) item { JSectionHeader(stringResource(R.string.assistant_more)) }
+        val mainRow: @Composable () -> Unit = {
+            val mainHit = found?.firstOrNull { it.session.key == groups.main?.key }?.hit
+            MainConversationRow(groups.main,
+                selected = shadeConversations && groups.main?.key == active && (merged != null || groups.main != null),
+                hasMain = hasMain,
+                onMain = {
+                    if (arranging) arranger?.done()
+                    val main = groups.main
+                    if (main != null && mainHit != null) MessageJumps.request(main.machineId, main.sessionId, mainHit.itemId)
+                    onMain()
+                }, onEnd = groups.main?.let { m -> onEnd?.let { action -> { action(m) } } },
+                onCopy = { groups.main?.let(onCopy) },
+                onEditTags = groups.main?.let { m -> onEditTags?.let { action -> { action(m) } } },
+                onDiagnostics = groups.main?.let { m -> onDiagnostics?.let { action -> { action(m) } } },
+                said = mainHit?.let(::markedSnippet))
+        }
+        if (merged != null) mainRow()
+        val pageRows: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {
+            if (!drawer && merged == null) item { JSectionHeader(stringResource(R.string.assistant_more)) }
             // The compact drawer keeps only iPhone destinations; extra actions remain in the selected Assistant menu.
-            val totalMore = (if (drawer) 2 else 4) + (if (showTodos && onTodos != null) 1 else 0) +
-                (if (onInbox != null) 1 else 0) + (if (onHealth != null) 1 else 0) + pages.size
+            val showKnowledge = merged?.showKnowledge != false
+            val extraPages = !drawer && merged == null
+            val totalMore = listOf(showSchedule, showKnowledge, extraPages, extraPages,
+                showTodos && onTodos != null, onInbox != null, onHealth != null).count { it } + pages.size
             // Each row's place in the group is taken while the list is built: counted inside an item's own content, it
             // was counted again whenever only some rows recomposed, and the group's corners landed on the wrong rows.
             var moreIndex = 0
@@ -1524,10 +1652,15 @@ internal fun AssistantDrawer(
             }
             if (onInbox != null) more { DrawerItem(stringResource(R.string.assistant_origin_inbox), PhIcons.Tray, badge = inboxCount, onClick = onInbox, selected = shadedPlace == AssistantSidebarShade.Inbox) }
             if (showTodos && onTodos != null) more { DrawerItem(stringResource(R.string.assistant_todos), PhIcons.ListChecks, badge = todoCount, onClick = onTodos, selected = shadedPlace == AssistantSidebarShade.Todos) }
-            more { DrawerItem(stringResource(AssistantInfo.Schedule.title), PhIcons.Clock, onClick = { onInfo(AssistantInfo.Schedule) }) }
-            more { DrawerItem(stringResource(AssistantInfo.Knowledge.title), PhIcons.BookOpen, onClick = { onInfo(AssistantInfo.Knowledge) }, selected = shadedPlace == AssistantSidebarShade.Knowledge) }
-            if (onHealth != null) more { DrawerItem(stringResource(R.string.assistant_health), PhIcons.Heart, onHealth) }
-            if (!drawer) {
+            if (showSchedule) more {
+                DrawerItem(stringResource(AssistantInfo.Schedule.title), PhIcons.Clock, onClick = { onInfo(AssistantInfo.Schedule) },
+                    selected = shadedPlace == AssistantSidebarShade.Schedule)
+            }
+            if (showKnowledge) more { DrawerItem(stringResource(AssistantInfo.Knowledge.title), PhIcons.BookOpen, onClick = { onInfo(AssistantInfo.Knowledge) }, selected = shadedPlace == AssistantSidebarShade.Knowledge) }
+            if (onHealth != null) more {
+                DrawerItem(stringResource(R.string.assistant_health), PhIcons.Heart, onHealth, selected = shadedPlace == AssistantSidebarShade.Health)
+            }
+            if (extraPages) {
                 more { DrawerItem(stringResource(AssistantInfo.Session.title), PhIcons.Info, onClick = { onInfo(AssistantInfo.Session) }) }
                 more { DrawerItem(stringResource(AssistantInfo.Launcher.title), PhIcons.RocketLaunch, onClick = { onInfo(AssistantInfo.Launcher) }) }
             }
@@ -1539,21 +1672,79 @@ internal fun AssistantDrawer(
                         else if (page.dot) JStatusDot(Status.NeedsYou, breathes = false)
                     })
             } }
-            if (drawer) item { JDivider(Modifier.padding(vertical = Tokens.Space.s)) }
+        }
+        val chatRows: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {
             // Regular window: the field lives in the full-window search; compact keeps the inline field (and any stale
             // query typed before unfolding remains clearable until blank).
-            if ((!fullWindowSearch && (!drawer || searchVisible)) || query.isNotBlank()) {
+            if (!arranging && merged == null && ((!fullWindowSearch && (!drawer || searchVisible)) || query.isNotBlank())) {
                 item { JSearchField(query, onQuery, stringResource(R.string.assistant_search_chats)) }
             }
-            if (tagChoices.isNotEmpty()) item(key = "conversation-tag-filter") {
-                ConversationTagFilter(tagChoices, activeTag, onTag)
+            if (!arranging) {
+                if (tagFilterBar != null) item(key = "conversation-tag-filter") { tagFilterBar() }
+                else if (tagChoices.isNotEmpty()) item(key = "conversation-tag-filter") {
+                    ConversationTagFilter(tagChoices, activeTag, onTag)
+                }
             }
             if (searchPartial) item {
                 Text(stringResource(R.string.assistant_search_partial),
                     Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s),
                     style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
             }
-            if (found != null) {
+            if (arranging) {
+                val controller = requireNotNull(arranger)
+                val drag = requireNotNull(conversationDrag)
+                val activityIds = groups.others.map { it.sessionId }
+                item(key = "arrange-controls") {
+                    Column(Modifier.fillMaxWidth().padding(bottom = Tokens.Space.s)) {
+                        JSectionHeader(stringResource(R.string.assistant_arrange_chats))
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m),
+                            horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            JButton(stringResource(R.string.assistant_arrange_reset),
+                                { writesScope.launch { controller.reset(activityIds) } },
+                                // Measure Done at its intrinsic width first; at accessibility text sizes the reset label gets the rest.
+                                modifier = Modifier.weight(1f),
+                                kind = JButtonKind.Quiet, size = JButtonSize.Medium,
+                                enabled = arrangeUi.order.isNotEmpty() && arrangeUi.drag == null)
+                            JButton(stringResource(persona.core.designsystem.R.string.designsystem_done), controller::done,
+                                kind = JButtonKind.Primary, size = JButtonSize.Medium,
+                                modifier = Modifier.testTag("conversation-arrange-done"))
+                        }
+                    }
+                }
+                if (groups.directions.isNotEmpty()) item(key = "arrange-directions-header") {
+                    JSectionHeader(stringResource(R.string.assistant_directions), count = groups.directions.size)
+                }
+                itemsIndexed(groups.directions, key = { _, session -> "arrange-direction-" + session.key.path }) { index, session ->
+                    DirectionLeadRows(groups.tree?.direction(session.sessionId)?.takeUnless { it.secretary },
+                        groups.names[session.sessionId] ?: session.conversationTitle(conversationWords()),
+                        GroupPosition.of(index, groups.directions.size), onOpenTodo, onOpenAgent, shadedPlace.takeIf { merged == null }) { position, disclosure ->
+                        ConversationRow(session, selected = shadeConversations && session.key == active,
+                            position = position,
+                            onOpen = { controller.done(); onOpen(session.key) }, onEnd = onEnd?.let { action -> { action(session) } },
+                            onCopy = { onCopy(session) }, onArchive = onArchive?.let { action -> { action(session) } },
+                            onRename = onRename?.let { action -> { action(session) } },
+                            onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
+                            leader = true, onLeader = onLeader?.let { action -> { action(session) } },
+                            counts = leaderCountsLabel(groups.counts[session.sessionId], resources),
+                            working = groups.counts[session.sessionId]?.running == true,
+                            named = groups.names[session.sessionId], disclosure = disclosure)
+                    }
+                }
+                val arranged = orderConversations(groups.others, arrangeUi.drag?.order ?: arrangeUi.order)
+                itemsIndexed(arranged, key = { _, session -> "arrange:" + session.sessionId }) { index, session ->
+                    ArrangeConversationItem(session, GroupPosition.of(index, arranged.size), drag,
+                        canMoveUp = index > 0, canMoveDown = index < arranged.lastIndex,
+                        onMoveUp = { writesScope.launch { controller.moveUp(session.sessionId, activityIds) } },
+                        onMoveDown = { writesScope.launch { controller.moveDown(session.sessionId, activityIds) } },
+                        named = if (session.sessionId == groups.background) stringResource(R.string.assistant_background_supervisor) else null)
+                }
+                if (groups.directions.isEmpty() && arranged.isEmpty() && groups.main == null) item {
+                    JEmptyState(stringResource(R.string.assistant_empty_title), stringResource(R.string.assistant_empty_detail))
+                }
+            } else if (found != null) {
                 val rows = found.filter { groups.main == null || it.session.key != groups.main.key }
                 itemsIndexed(rows, key = { _, row -> "found-" + row.session.key.path }) { index, row ->
                     ConversationRow(row.session, selected = shadeConversations && row.session.key == active,
@@ -1570,6 +1761,7 @@ internal fun AssistantDrawer(
                             else onEditTags?.let { action -> { action(row.session) } },
                         onDiagnostics = onDiagnostics?.let { action -> { action(row.session) } },
                         onLeader = onLeader?.let { action -> { action(row.session) } },
+                        onArrange = onArrange,
                         said = row.hit?.let(::markedSnippet))
                 }
                 if (rows.isEmpty()) item {
@@ -1585,7 +1777,7 @@ internal fun AssistantDrawer(
                 // With the hub's direction tree a lead folds open to its to-dos and their Agents (#4352, DirectionRows.kt).
                 DirectionLeadRows(groups.tree?.direction(session.sessionId)?.takeUnless { it.secretary },
                     groups.names[session.sessionId] ?: session.conversationTitle(conversationWords()),
-                    GroupPosition.of(index, groups.directions.size), onOpenTodo, onOpenAgent) { position, disclosure ->
+                    GroupPosition.of(index, groups.directions.size), onOpenTodo, onOpenAgent, shadedPlace.takeIf { merged == null }) { position, disclosure ->
                     ConversationRow(session, selected = shadeConversations && session.key == active,
                         position = position,
                         onOpen = { onOpen(session.key) }, onEnd = onEnd?.let { action -> { action(session) } },
@@ -1616,6 +1808,7 @@ internal fun AssistantDrawer(
                     onEditTags = onEditTags?.takeUnless { builtIn }?.let { action -> { action(session) } },
                     onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
                     onLeader = onLeader?.takeUnless { builtIn }?.let { action -> { action(session) } },
+                    onArrange = onArrange,
                     named = if (builtIn) stringResource(R.string.assistant_background_supervisor) else null,
                     origin = if (builtIn) AssistantConversationOrigin.Task.id else session.origin)
             }
@@ -1641,6 +1834,7 @@ internal fun AssistantDrawer(
                     onEditTags = onEditTags?.takeUnless { builtIn }?.let { action -> { action(session) } },
                     onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
                     onLeader = onLeader?.takeUnless { builtIn }?.let { action -> { action(session) } },
+                    onArrange = onArrange,
                     named = if (builtIn) stringResource(R.string.assistant_background_supervisor) else null,
                     origin = if (builtIn) AssistantConversationOrigin.Task.id else session.origin)
             }
@@ -1655,23 +1849,136 @@ internal fun AssistantDrawer(
                     stringResource(if (query.isBlank()) R.string.assistant_empty_detail else R.string.assistant_no_match_detail)) }
             }
             }
-
         }
-        Row(Modifier.then(if (drawer) Modifier.padding(horizontal = Tokens.Space.l) else Modifier)
-            .padding(vertical = if (drawer) Tokens.Space.m else Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
-            JSidebarNewChat(stringResource(R.string.assistant_new_conversation), onNew, if (drawer) Modifier else Modifier.weight(1f))
-            if (drawer) Spacer(Modifier.weight(1f))
-            Box {
-                JIconButton(PhIcons.Gear, stringResource(R.string.assistant_open_settings), onSettings, raised = drawer)
-                when {
-                    settingsBadge != null -> JTag(settingsBadge, Modifier.align(Alignment.TopEnd))
-                    settingsCount > 0 -> JBadge(settingsCount, Modifier.align(Alignment.TopEnd))
-                    settingsDot -> JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd), breathes = false) // still, as iOS's `ExtensionSettingsBadge`
+        val assistantRows: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {
+            if (merged == null && (activeTag == null || groups.main != null)) item(key = "persona") {
+                mainRow()
+                JDivider(Modifier.padding(vertical = Tokens.Space.s))
+            }
+            if (merged != null) item(key = "sidebar-pages") {
+                JSidebarSectionHeading(stringResource(R.string.assistant_sidebar_pages), open = !pagesFolded,
+                    onToggle = { pagesFolded = !pagesFolded; foldStore.setPagesFolded(pagesFolded) })
+            }
+            if (merged == null || !pagesFolded) {
+                pageRows()
+            }
+            if (drawer && merged == null) item { JDivider(Modifier.padding(vertical = Tokens.Space.s)) }
+            if (merged != null) item(key = "sidebar-persona-chats") {
+                JSidebarSectionHeading(stringResource(R.string.assistant_sidebar_chats), open = !chatsFolded,
+                    onToggle = { chatsFolded = !chatsFolded; foldStore.setChatsFolded(chatsFolded) })
+            }
+            if (merged == null || !chatsFolded) {
+                chatRows()
+            }
+        }
+        val footer: @Composable () -> Unit = {
+            merged?.usage?.invoke()
+            val footerPadding = Modifier.then(if (drawer) Modifier.padding(horizontal = Tokens.Space.l) else Modifier)
+                .padding(vertical = if (drawer) Tokens.Space.m else Tokens.Space.s)
+            val newChatLabel = stringResource(R.string.assistant_new_conversation)
+            val settings: @Composable () -> Unit = {
+                Box {
+                    JIconButton(PhIcons.Gear, stringResource(R.string.assistant_open_settings), onSettings,
+                        raised = drawer && merged == null)
+                    when {
+                        settingsBadge != null -> JTag(settingsBadge, Modifier.align(Alignment.TopEnd))
+                        settingsCount > 0 -> JBadge(settingsCount, Modifier.align(Alignment.TopEnd))
+                        settingsDot -> JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd), breathes = false)
+                    }
+                }
+            }
+            if (merged != null) {
+                JSidebarFooterActions(newChatLabel, onNew, footerPadding) {
+                    JIconButton(PhIcons.MagnifyingGlass, stringResource(R.string.assistant_sidebar_search), onFullSearch, raised = false)
+                    settings()
+                }
+            } else {
+                Row(footerPadding, verticalAlignment = Alignment.CenterVertically) {
+                    JSidebarNewChat(newChatLabel, onNew, if (drawer) Modifier else Modifier.weight(1f))
+                    if (drawer) Spacer(Modifier.weight(1f))
+                    settings()
                 }
             }
         }
+        if (merged != null) {
+            Box(Modifier.weight(1f)) { merged.list(listState, assistantRows, footer, onAgentSearch) }
+        } else {
+            LazyColumn(Modifier.weight(1f), state = listState, contentPadding = PaddingValues(bottom = 12.dp.dense), content = assistantRows)
+            footer()
+        }
     }
 }
+
+@Composable
+private fun LazyItemScope.ArrangeConversationItem(
+    session: Session,
+    position: GroupPosition,
+    drag: ConversationDragState,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    named: String?,
+) {
+    val id = session.sessionId
+    val lifted = drag.lifted(id)
+    val shape = PersonaTheme.shapes.cardShape
+    val backing = PersonaTheme.palette.surfaceOpaque
+    val elevation = with(androidx.compose.ui.platform.LocalDensity.current) { ConversationLiftElevation.toPx() }
+    val modifier = if (lifted) {
+        Modifier.zIndex(1f).graphicsLayer {
+            val lift = drag.liftOf(id)
+            translationY = drag.translation(id)
+            shadowElevation = elevation * lift
+            scaleX = 1f + ConversationLiftScale * lift
+            scaleY = scaleX
+            this.shape = shape
+            clip = true
+        }.drawBehind {
+            drawOutline(shape.createOutline(size, layoutDirection, this), backing.copy(alpha = backing.alpha * drag.liftOf(id)))
+        }
+    } else Modifier.animateItem(placementSpec = conversationPlacement())
+    Box(modifier.conversationDragAfterLongPress(drag, id)) {
+        JGroupItem(if (lifted) GroupPosition.Single else position) {
+            val up = stringResource(R.string.assistant_arrange_move_up)
+            val down = stringResource(R.string.assistant_arrange_move_down)
+            val dragDescription = stringResource(R.string.assistant_arrange_drag)
+            val moves = listOfNotNull(
+                CustomAccessibilityAction(up) { onMoveUp(); true }.takeIf { canMoveUp },
+                CustomAccessibilityAction(down) { onMoveDown(); true }.takeIf { canMoveDown },
+            )
+            JRow(named ?: session.conversationTitle(conversationWords()),
+                subtitle = session.lastText?.takeIf { it.isNotBlank() },
+                leading = {
+                    Column(
+                        Modifier.width(ConversationHandleWidth).heightIn(min = Tokens.MinTouch.android)
+                            .conversationDragHandle(drag, id)
+                            .testTag("conversation-arrange-handle-$id")
+                            .semantics(mergeDescendants = true) {
+                                contentDescription = dragDescription
+                                customActions = moves
+                            },
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        ConversationGrip(if (drag.dragging == id) PersonaTheme.palette.ink2 else PersonaTheme.palette.ink3)
+                    }
+                },
+                trailing = {
+                    JIconButton(PhIcons.ArrowUp, up, onMoveUp, enabled = canMoveUp,
+                        modifier = Modifier.testTag("conversation-arrange-up-$id"))
+                    JIconButton(PhIcons.ArrowDown, down, onMoveDown, enabled = canMoveDown,
+                        modifier = Modifier.testTag("conversation-arrange-down-$id"))
+                }, chevron = false)
+        }
+    }
+}
+
+@Composable
+private fun conversationPlacement() = if (PersonaTheme.reduceMotion) null else PersonaTheme.motion.enter<IntOffset>()
+private val ConversationHandleWidth = GripWidth + Tokens.Space.Standard.m
+private val ConversationLiftElevation = Tokens.Space.Standard.s
+private const val ConversationLiftScale = 0.02f
 
 /**
  * One conversation of the history (iOS `AssistantSidebar.row`). A swipe left archives it ([onArchive]; not the main one).
@@ -1684,6 +1991,7 @@ private fun ConversationRow(
     session: Session, selected: Boolean, onOpen: () -> Unit, onEnd: (() -> Unit)?,
     modifier: Modifier = Modifier, position: GroupPosition = GroupPosition.Single,
     leader: Boolean = false, onLeader: (() -> Unit)? = null, onCopy: () -> Unit = {}, onArchive: (() -> Unit)? = null,
+    onArrange: (() -> Unit)? = null,
     onRename: (() -> Unit)? = null, onEditTags: (() -> Unit)? = null, onDiagnostics: (() -> Unit)? = null,
     counts: String? = null, named: String? = null, origin: String? = session.origin,
     /** A 常驻 lead's caret that folds its to-dos open (#4352, DirectionRows.kt), before its ⋯; null: none. */
@@ -1757,7 +2065,8 @@ private fun ConversationRow(
     if (menu) JActionSheet(
         title = title, onDismiss = { menu = false },
         actions = conversationActions(androidx.compose.ui.platform.LocalResources.current, leader, session.isLive, onLeader, onCopy, onEnd,
-            onArchive, onRename = onRename, onEditTags = onEditTags, onDiagnostics = onDiagnostics, glass = PersonaTheme.style == AppStyle.Glass),
+            onArchive, onRename = onRename, onEditTags = onEditTags, onDiagnostics = onDiagnostics, onArrange = onArrange,
+            glass = PersonaTheme.style == AppStyle.Glass),
         // The long press's preview (iOS's context menu): what it last said (the row shows only the title) and when.
         preview = session.lastText?.let { persona.core.domain.plainMarkdown(it) }?.takeIf { it.isNotBlank() },
         previewCaption = historyTime(session.updated, resources),
@@ -1770,9 +2079,23 @@ private fun ConversationRow(
  * (#10358, ConversationOpener.kt); until then, and for every fallback, the origin's mark and words stay.
  */
 @Composable
-private fun ConversationOriginMark(source: AssistantConversationOrigin, opener: ConversationOpener? = null) {
+private fun ConversationOriginMark(source: AssistantConversationOrigin, opener: ConversationOpener? = null, withText: Boolean = false) {
     val drawn = rememberDrawnOpener(opener, source)
     val label = originMarkLabel(source, drawn?.name, androidx.compose.ui.platform.LocalResources.current)
+    if (withText) JSourceLine(label) { OriginIcon(source, drawn, label) }
+    else OriginIcon(source, drawn, label)
+}
+
+/** The first user message uses the drawer's exact mark, label, manager and icon fallbacks. */
+fun conversationOpeningSource(session: Session): (@Composable () -> Unit)? {
+    val source = automaticConversationOrigin(session.origin)
+    if (source != AssistantConversationOrigin.LarkAgent && source != AssistantConversationOrigin.Extension) return null
+    val opener = ConversationOpener.of(session)
+    return { ConversationOriginMark(source, opener, withText = true) }
+}
+
+@Composable
+private fun OriginIcon(source: AssistantConversationOrigin, drawn: DrawnOpener?, label: String) {
     if (drawn != null) {
         JSourceMark(label, size = MarkSize.Inline, picture = drawn.picture)
     } else if (source == AssistantConversationOrigin.LarkAgent) {
@@ -1800,11 +2123,13 @@ internal fun conversationActions(
     resources: android.content.res.Resources, leader: Boolean, live: Boolean, onLeader: (() -> Unit)?, onCopy: () -> Unit,
     onEnd: (() -> Unit)?, onArchive: (() -> Unit)? = null, onRename: (() -> Unit)? = null,
     onEditTags: (() -> Unit)? = null, onDiagnostics: (() -> Unit)? = null, glass: Boolean = false,
+    onArrange: (() -> Unit)? = null,
 ): List<JAction> =
     buildList {
         onLeader?.let { add(JAction(resources.getString(if (leader) R.string.assistant_end_leader else R.string.assistant_make_leader), PersonaIcons.pin, onClick = it)) }
         onRename?.let { add(JAction(resources.getString(R.string.assistant_rename_menu), PersonaIcons.edit, onClick = it)) }
         onEditTags?.let { add(JAction(resources.getString(R.string.assistant_edit_tags_menu), PersonaIcons.edit, onClick = it)) }
+        onArrange?.let { add(JAction(resources.getString(R.string.assistant_arrange_chats), PhIcons.ChatsCircle, onClick = it)) }
         onArchive?.let { add(JAction(resources.getString(R.string.assistant_archive), PersonaIcons.archive, onClick = it)) }
         add(JAction(resources.getString(R.string.assistant_copy_session_id), if (glass) PersonaIcons.id else PhIcons.Copy, onClick = onCopy))
         onDiagnostics?.let { add(JAction(resources.getString(R.string.assistant_copy_diagnostics), PersonaIcons.diagnostics, onClick = it)) }

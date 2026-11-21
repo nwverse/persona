@@ -2,10 +2,12 @@ package node
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/identity"
 )
 
@@ -51,6 +53,12 @@ func (n *Node) closeoutStart(parent context.Context, req sockRequest, in hookInp
 		return nil
 	}
 	if identity.IsAssistantDir(in.Cwd) || n.isAssistantSession(in.SessionID) {
+		return nil
+	}
+	// Persistent instructions survive every restart. Fallback instructions arrive in the first message on startup.
+	if st, ok := n.state.get(in.SessionID); ok &&
+		(st.TaskInstructionChannel == "claude" || (st.TaskInstructionChannel == "" && in.Source == "startup")) &&
+		(strings.Contains(st.TaskInstructions, "<closeout") || closeout.HasMarkdownInstructions(st.TaskInstructions)) {
 		return nil
 	}
 	text, ok := n.closeoutBriefs.get(in.SessionID)

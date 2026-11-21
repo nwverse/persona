@@ -177,12 +177,83 @@ on a new transport, through the same relays:
 
 Nothing is stored: tokens live in each process's memory, so a restarted manager or node connects anew.
 
+### Direction session filings (#11463, #11490)
+
+Since #11463 the assistant manager's filing book (settings `assistant.direction_sessions`) keeps three fields per entry
+that a manager from before does not know: `parent` (a Codex sub-agent session's parent, for placement rule 1),
+`was` (the entry the write replaced, for its Undo) and `removed_at` (an entry taken out, kept seven days for its
+Undo). Every manager answers the filing route and keeps its own book: the hub relays a write to the manager the request
+names, else to the default one (`server/internal/hub/assistant_link.go`), so a rollback of any manager meets them in
+the book that manager keeps:
+
+| Case | What happens |
+| --- | --- |
+| A new manager reads a book an older one wrote | Its entries have none of the three fields: the Undo of their last write is only `null` (taking the entry out), and a sub-agent session its computer no longer lists is placed by its filing, as before. Nothing is lost. |
+| An older manager (rolled back) reads a book a new one wrote | It reads an entry taken out (`removed_at`) as a filing: the session shows filed in that direction again and counts toward its 50. It ignores `was` and `parent`. |
+| That older manager writes the book once | It saves every entry without `removed_at`, `was` and `parent`. Rolled forward again, the entries taken out before are filings for good (the owner takes them out again), no write before the rollback can be undone exactly, and a not-listed sub-agent session is placed by its filing until it is listed again. |
+| Answers of an older manager | The write's `previous` is the opener of a chat a leader opened, or `""`, never `null`; a `null` direction is taken as `""` (on its own); every write, `null` and `""` included, needs the session listed on its computer (404 `session_not_found` otherwise), and an Undo into an ended or full direction is refused (409 `direction_ended`, `direction_full`); a session whose computer could not be read is `offline`, one whose computer has given no list `not_listed`, and the read has no `sessions_unavailable`. Both versions name `direction_sessions`, so clients reach the same routes and get the older values. |
+
+What an operator can do: rolling forward again before the older manager's first write to the book loses nothing, as
+it reads the extra fields without saving. After such a write, a copy of the setting that holds the book
+(`assistant.direction_sessions`), taken before the rollback, is the only way to get the entries taken out and the
+`was` of each entry back. A manager from before #11515 also leaves the sessions placed under directions out of the
+profile's `keep`: a quiet one leaves its computer's list again and its automatic archive goes on, while the book stays
+as it was. Rolling forward lists again the ones that only dropped out of a computer's list; one the older manager's
+automatic archive took stays archived until the owner restores it, as nothing restores an archive by itself.
+
+### Resumes a computer has nothing of, and an extension's resumes (#10941)
+
+Since #10941 a node refuses a Claude Code resume of an id it has no transcript, start or record of with
+`resume_unknown`, before any tab opens, and a node that announces `resume_outside_health` also checks an extension's
+resume of a chat its computer does not list (protocol.md `session.start`). The hub, the devices manager, the assistant
+manager and the node may each be older:
+
+| Pair | What happens |
+| --- | --- |
+| New hub, new node | An extension's resume of an unlisted chat goes on marked `resume_outside_health`; the node resumes it only outside the health space, and its `resume_unknown` reaches the extension as the hub's own 404. The owner's resumes are never marked. |
+| New hub, older node | The node does not announce `resume_outside_health`, so the hub resumes for an extension only a chat the computer lists outside the space (404 otherwise; 503 `sessions_not_listed`, retryable, before the hub has had a list of that computer since it started, and while it has no word of the node at all, as after a devices manager restarted without its saved state). The owner's resumes behave as that node always did, including a start under an id it has nothing of. |
+| New devices manager, node older than the hub last heard | A marked start toward a node that does not announce the check is refused `node_outdated` (409) and nothing starts. |
+| Older devices manager, new hub and node | The manager passes a start's params on as they came, so the node gets the mark. |
+| Older hub, new node | The hub never marks a resume and lets an extension resume any id its computer is asked for, as before #10941. The node still refuses an id it has nothing of, so no conversation starts under the id of another; a transcript it has is resumed, health space included. |
+| New node, older hub: the owner's wording | `resume_unknown` comes with the node's own words, in Chinese: an older hub has no wording of that code in the reader's language. A hub since #10941 words it in en, zh-Hans and ja (`rpc-errors.resume_unknown`). |
+| New node, older assistant manager: launcher health | A hub since #10941 does not report a `resume_unknown` refusal to the manager (`StartEnded`). An older hub does, and a manager from before #10941 counts it against the launcher: the launcher shows as failing on that computer until its next check passes (`docs/server/launcher-health.md`). It takes a Resume of an id the computer has nothing of, which the apps offer only for chats a computer listed; updating the hub and its managers before the nodes avoids it. |
+| New node, an Agent an older node started through an engine runtime (Paseo, Cindy) | A node since #10941 keeps its record of every Agent it starts through an engine runtime, the folder the check reads, marked with the engine that started it (`engine_runtime`). An older node kept one only for a start with a creation identity (an owner's start from an app), unmarked, so an extension's Agent it started has none the check takes: once its engine no longer lists it, the extension's resume answers 404 and only the owner resumes it. |
+| New node, older devices manager: the record's `engine_runtime` | The manager stores a node's records as its own type, which has no `engine_runtime` before #10941, so it drops the mark. Until the node restarts nothing changes (the node keeps its records in memory); after a restart its Agents' records come back unmarked, and an extension's resume of one its engine no longer lists answers 404: only the owner resumes it. The mark is written only when an Agent starts, so updating the manager later does not bring it back for those Agents. Update the devices manager with the hub, before the nodes. |
+| Any node: a terminal chat's record | A terminal record alone no longer lets an extension resume a chat its computer does not list (its transcript gone, or a first start that failed): every resume writes the record anew with the folder it names. Nothing is stored for it; the owner's resumes are unchanged. |
+
+The records are the node's own (the hub keeps its copy, as for any start), of the same shape an older node already
+writes for a start with a creation identity, plus `engine_runtime` in the model settings the hub keeps with each one
+(no table changes), so rolling the node back leaves them to be read as those, the mark ignored. Nothing else is
+stored: rolling either side back or forward changes only what the next resume does.
+
 ### Launcher default models (#4663)
 
 A launcher with no explicit model has an empty `model` on the wire; display text is never a model ID. Older nodes and
 shell helpers could send the Chinese placeholder `默认` instead. Every client treats that legacy value exactly like an
 empty model: the launcher's own default applies, its existing localized Default presentation is used, and no placeholder
 is sent as a model pick. Explicit model IDs are unchanged in both directions.
+
+### New omp sessions in herdr (#11964)
+
+Both old and new nodes can return an empty model list for `omp`. New clients request the launcher models for the
+selected host. They offer typed model IDs for native `omp` only when that response includes
+`"supports_start_model": true`. An older node can start `omp` with its own default. Older clients ignore the
+optional field. A registered runtime called `omp` still supplies its own list of supported models.
+
+## Start-defaults field convergence (#11719)
+
+The rule fields of `GET`/`PUT /api/v1/assistant/start-defaults` and of the nested `start_defaults` in `PUT /api/v1/assistant` converge on new names in #11719. This is extension-facing JSON, and the same structure is persisted in the Postgres settings, so dual-read must cover both live requests and already-stored policies.
+
+| Identifier | Old name | New name | New hub / manager behavior |
+| --- | --- | --- | --- |
+| Rule match | `when` | `applies_when` | Dual-read on decode (stored policies included); dual-write the same value on encode; both keys present with different values is a 400, with equal values the current name is read (presence, never an OR). An explicit `null` is present on the wire, so `null` beside a real value is a disagreement, not an absent field. |
+| Candidate list | `then.presets` | `then.candidates` | Same as above; each row gains `priority` (omitted is 0, so a list with no priorities behaves byte-for-byte like the old ordered list). |
+| Read-only preview | none | `POST /api/v1/assistant/start-defaults/preview` | Reuses the `assistant.start_defaults` scope, no new scope. An older hub has no such route, so an extension call gets 404/403 and must not be rewritten to another endpoint and retried. |
+
+- **The two write paths fail differently on an old hub/manager, and a writer must know which it is talking to.** On the dedicated `PUT /api/v1/assistant/start-defaults` route, `DisallowUnknownFields` makes an old hub answer 400 to `applies_when` / `candidates`. On the older nested `start_defaults` of `PUT /api/v1/assistant`, the handler decoded with a plain `json.Decoder`, so an old manager **silently ignores** the new fields instead of failing: it can return 200 while storing an empty match and no candidates, which turns a worker-scoped rule into an all-task rule. There is no capability bit to read, so the safe order is to `GET /api/v1/assistant/start-defaults` first and check whether the answer carries `applies_when` / `candidates` (present means a new peer), then write only the field names that peer understands. Never "try both names" within one write as a fallback.
+- Reads answer both field names, so an old reader that GETs and then PUTs back does not wipe the policy to empty rules. An old reader does not know `priority`: it drops the field when re-encoding, so a prioritized policy does **not** round-trip through an old reader unchanged — every priority comes back as 0 and equal-weight selection order applies.
+- Semantics are not loosened: `assistant.start_defaults` is still granted by name only, an extension's policy still must expire within an hour, unknown fields are still a 400 on the strict route, and the preview writes no state. Aliases are never silently merged; a genuine value conflict must be resolved by the writer.
+- Candidate selection reads one `startCandidateSource` interface (`start_candidates.go`); a future dynamic candidates source implements it and changes none of the fields or compatibility rules in this section.
 
 ## 配置、目录、服务与升级渠道
 
@@ -222,6 +293,24 @@ hello; the hub lists the feature only while every manager that carries Agents na
 | New hub and managers, an older web bundle | Until it reloads it folds by `folded_under` alone: a side is drawn as a child card in its parent's chat and left out of the rows; its parent shows the side's working or needs-you state, not its unseen result (`sides_unread`). |
 | New hub and managers, an older Android app | The same: it folds rows by `folded_under`, so a side is one of its parent's child sessions until the app is updated. |
 | New hub and managers, an older iOS app | From #8010 on it folds rows by `folded_under` too, so a side is one of its parent's child sessions until the app is updated; an app from before #8010 folds by its own child fields, which a side lacks (no `parent_session_id`), and the side stays a plain row of its own. |
+
+### Screen Link close confirmation (#10006)
+
+Screen Link `close_ack` is message type 14 with the same channel and 64-bit final offset as the `close` it confirms. It is
+additive and needs no feature negotiation: a new phone sends it after every `close`, including a repeated close for an
+already ended channel, and an old node skips the unknown type. A final-data `ack` is not a close confirmation, because
+it can cross with a close the phone has not processed. A new node accepts `close_ack` only for the outstanding close's
+channel and exact final offset; duplicate, stale and unknown-channel confirmations are ignored.
+
+| Pair | Behavior |
+| --- | --- |
+| New node, new phone | An unconfirmed close is offered again on a different surviving route. Confirmation stops another copy; a late valid confirmation also cancels a copy not sent yet. |
+| New node, old phone | No `close_ack` arrives. A route change can offer the close again, which the old phone already accepts idempotently. An unconfirmed video close stays recoverable while it has a route; with no route it finishes as before. |
+| Old node, new phone | The old node skips type 14. The phone's data, reset and close behavior is otherwise unchanged. |
+| Old node, old phone | Unchanged. |
+
+RFB keeps its existing completion rule in every combination: the local close finishes the channel and session at the
+next watchdog tick without waiting for `close_ack`.
 
 ## Apple 端交接
 

@@ -29,7 +29,7 @@ const todos: Todo[] = [
 const sessions = [
   s("a", "working", "/code/weather"),
   s("b", "idle", "/code/weather"),
-  s("c", "idle", "/code/weather", { work: { phase: "blocked", on: "external", line: "CI" } }),
+  s("c", "idle", "/code/weather", { work: { phase: "blocked", on: "external", line: "CI", wait: "CI" } }),
   // on no to-do, started elsewhere and waiting on the user
   s("loose", "needs_you", "/code/report", { pane_id: "botmux:x" }),
   // on no to-do, opened by hand in a terminal
@@ -65,7 +65,8 @@ describe("By to-do's rows (#6458)", () => {
     const tree = buildTodoTree(sessions, machines, todos, { spaces: [], sessions: [] }, Date.now(), { keepEmpty: true });
     show(<TodoTreeView tree={tree} machines={machines} activeKey="" {...stable} />);
     const keys = [...host.querySelectorAll("[data-tree-branch]")].map((el) => el.getAttribute("data-tree-branch"));
-    expect(keys).toEqual(["todo:ship", "todo:ci", "todo:none"]);
+    // Stable title order, not the agents' activity rank: Submit for review, Ship 1.3, then no to-do.
+    expect(keys).toEqual(["todo:ci", "todo:ship", "todo:none"]);
     for (const key of keys) {
       // a sticky group heading of the list's top level, never inside another branch
       expect(row(key!).closest("[data-sidebar-group-heading]")).not.toBeNull();
@@ -78,7 +79,9 @@ describe("By to-do's rows (#6458)", () => {
     expect([...host.querySelectorAll("[data-tree-branch-row]")].map((el) => el.textContent).join(" ")).not.toMatch(/weather|report/);
     // count, then state: the to-do's in the To-dos page's word, a group's the most urgent of its agents'
     expect(row("todo:ship").textContent).toMatch(/2 个 Agent工作中$/);
-    expect(row("todo:ci").textContent).toMatch(/1 个 Agent等待中$/);
+    // a waiting one says what it waits on, in the neutral tone: nothing is the owner's (#11090)
+    expect(row("todo:ci").textContent).toMatch(/1 个 Agent等外部$/);
+    expect(row("todo:ci").querySelector("[data-tree-state]")!.className).toContain("text-ink-2");
     expect(row("todo:none").textContent).toMatch(/^没挂待办的.*2 个 Agent需要你$/);
   });
 

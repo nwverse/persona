@@ -456,6 +456,19 @@ describe("Feishu bot dialog", () => {
     expect(calls.update[0].body).toEqual({ features: { answer_new_card: true } });
   });
 
+  it("hides reading a group with /read for a hub from before it", async () => {
+    await open(saved());
+    expect(document.body.querySelector(`[role="switch"][aria-label="${t("settings-feishubot.feature_read_group_title")}"]`)).toBeNull();
+  });
+
+  it("switches reading a group with /read on its own, off by default", async () => {
+    const read = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_read_group_title")}"]`)!;
+    await open(saved({ features: { ...saved().features, read_group: false } }));
+    expect(read().getAttribute("aria-checked")).toBe("false");
+    await act(async () => read().click());
+    expect(calls.update[0].body).toEqual({ features: { read_group: true } });
+  });
+
   it("switches the workbench on its own, off by default", async () => {
     const workbench = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_workbench_title")}"]`)!;
     await open(saved({ features: { ...saved().features, workbench: false } }));
@@ -591,6 +604,25 @@ describe("Feishu bot dialog", () => {
     await act(async () => switches()[0].click());
     await act(async () => calls.update[0].resolve(saved({ enabled: false, app_id: "cli_elsewhere" })));
     expect(input("App ID").value).toBe("cli_elsewhere");
+  });
+
+  // AC5: the native topic process control is visible, on by default, and reversible through the bot-settings API.
+  it("shows native topic process on by default and turns it off and on", async () => {
+    const features = { ...saved().features, topic_cot: true };
+    const nativeProcess = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_topic_cot_title")}"]`);
+    await open(saved({ features }));
+    expect(nativeProcess()).not.toBeNull();
+    expect(nativeProcess()!.getAttribute("aria-checked")).toBe("true");
+
+    await act(async () => nativeProcess()!.click());
+    expect(calls.update[0].body).toEqual({ features: { topic_cot: false } });
+    await act(async () => calls.update[0].resolve(saved({ features: { ...features, topic_cot: false } })));
+    expect(nativeProcess()!.getAttribute("aria-checked")).toBe("false");
+
+    await act(async () => nativeProcess()!.click());
+    expect(calls.update[1].body).toEqual({ features: { topic_cot: true } });
+    await act(async () => calls.update[1].resolve(saved({ features })));
+    expect(nativeProcess()!.getAttribute("aria-checked")).toBe("true");
   });
 });
 

@@ -260,8 +260,9 @@ final class InboxStore {
         save()
     }
 
-    /// The current assistant's open items that still need the user, including ones already read: what the tab's badge
-    /// counts.
+    /// The current assistant's open items that still need the user, including ones already read: the Inbox widget's
+    /// Need You and the dot on the persona's face. The tab's badge and the sidebar's Inbox row count only the unread ones
+    /// (`unreadCount`).
     var actionCount: Int { scopedItems.filter { !$0.isDone && $0.triage == .action }.count }
 
     /// Unread open items in Needs you. Counted once per change of the items or of the current assistant and kept: the
@@ -854,6 +855,7 @@ extension InboxItem {
         guard let l = lark else { return nil }
         var c = LarkConversation(id: l.feedID, name: title, avatar: avatar, isGroup: l.isGroup, isTopic: l.isTopic,
                                  unread: isDone ? 0 : count, atMe: kind == "mention")
+        c.avatarURL = avatarURL
         c.updatedAt = updatedAt
         c.readPosition = l.readPosition
         c.account = l.olAccount
@@ -866,7 +868,7 @@ extension InboxItem {
     /// The newest mail of the thread, for the mail reader.
     var mailSummary: MailSummary? {
         guard let m = mail, let uid = m.uids.last else { return nil }
-        return MailSummary(accountID: m.accountID, mailbox: m.mailbox, uid: uid, messageID: m.messageID, subject: title,
+        return MailSummary(accountID: m.accountID, mailbox: m.sourceMailbox ?? "INBOX", uid: uid, messageID: m.messageID, subject: title,
                            from: m.from, date: updatedAt, snippet: preview, seen: isDone || read == true)
     }
 }

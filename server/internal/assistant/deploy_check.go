@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,6 +62,11 @@ type prForge interface {
 	PRMerge(ctx context.Context, repo string, number int) (merged bool, sha string, err error)
 	// Contains: whether head contains base in repo; found false when either is not a commit of repo.
 	Contains(ctx context.Context, repo, base, head string) (contains, found bool, err error)
+}
+
+// issueStateForge is an optional capability on prForge that reports a GitHub issue's state ("open" or "closed").
+type issueStateForge interface {
+	IssueState(ctx context.Context, repo string, number int) (state string, err error)
 }
 
 // hubBuildReader is a hub that can say what it runs (BusHub: its /api/v1/health).
@@ -592,6 +596,7 @@ func (s *Service) forge() prForge {
 var (
 	errForgeNotFound      = errors.New("not found")
 	errForgeUnprocessable = errors.New("unprocessable entity")
+	errGitHubUnconfigured = errors.New("GitHub authentication unavailable")
 )
 
 // connectorNotFound: the connector's error for a 404 or 422 ("GitHub GET <path>: 404 …").
@@ -613,7 +618,11 @@ func (g githubForge) get(ctx context.Context, path string, out any) error {
 	}
 	token := ""
 	if g.base == "https://api.github.com" {
-		if _, err := exec.LookPath("gh"); err == nil {
+		cli, err := hasGitHubCLI(ctx)
+		if err != nil {
+			return fmt.Errorf("GitHub CLI identification interrupted: %w", err)
+		}
+		if cli {
 			return githubCLIGet(ctx, path, out)
 		}
 		token = strings.TrimSpace(os.Getenv("GH_TOKEN"))
@@ -621,7 +630,7 @@ func (g githubForge) get(ctx context.Context, path string, out any) error {
 			token = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
 		}
 		if token == "" {
-			return fmt.Errorf("authenticated GitHub CLI unavailable and no environment authorization (no anonymous fallback)")
+			return fmt.Errorf("%w: authenticated GitHub CLI unavailable and no environment authorization (no anonymous fallback)", errGitHubUnconfigured)
 		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.base+path, nil)
@@ -699,6 +708,16 @@ func (g githubForge) PRMerge(ctx context.Context, repo string, number int) (bool
 		return false, "", err
 	}
 	return pr.Merged, pr.SHA, nil
+}
+
+func (g githubForge) IssueState(ctx context.Context, repo string, number int) (string, error) {
+	var issue struct {
+		State string `json:"state"`
+	}
+	if err := g.get(ctx, fmt.Sprintf("/repos/%s/issues/%d", repo, number), &issue); err != nil {
+		return "", err
+	}
+	return strings.ToLower(strings.TrimSpace(issue.State)), nil
 }
 
 // compareEmptyPage is a page number well past page 1; GitHub caps a compare at 10,000 commits.

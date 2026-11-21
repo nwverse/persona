@@ -14,10 +14,17 @@ import (
 
 // modelExecution is non-secret per-turn execution metadata supplied by the hub.
 type modelExecution struct {
-	Model  string
-	Effort string
-	// ServiceTier is a one-shot native speed request for a new Codex conversation. It is consumed before the first turn,
-	// never kept as process state or included in the execution fingerprint.
+	Strict           bool   `json:",omitempty"` // scheduled execution never substitutes another model or agent
+	TaskInstructions string `json:"-"`
+	TaskAttachments  string `json:"-"`
+	Model            string
+	Effort           string
+	// Speed is a one-shot Agent start choice, resolved only against the actual terminal dispatch. FastMode is the
+	// Claude Code form. Neither is kept as process state or included in the execution fingerprint.
+	Speed    string `json:"-"`
+	FastMode bool   `json:"-"`
+	// ServiceTier is a one-shot native speed request for a new Codex conversation or Agent start. It is consumed before
+	// the first turn, never kept as process state or included in the execution fingerprint.
 	ServiceTier string `json:"-"`
 	UseEffort   bool
 	Fingerprint string
@@ -31,7 +38,7 @@ type modelExecution struct {
 	StartupContext context.Context `json:"-"`
 	IsMain         bool            `json:",omitempty"`
 	// FollowsSetting: a leader/background supervisor conversation the manager sends with the main chat's model
-	// setting (#7824). With IsMain it identifies the protected conversations whose recovery is visible and reversible;
+	// setting (#7824). With IsMain it identifies conversations that must keep their configured model;
 	// worker Agent conversations have neither flag.
 	FollowsSetting bool   `json:",omitempty"`
 	ConfigDir      string `json:"-"` // a conversation's directory, not its model; retained across process restarts
@@ -54,6 +61,9 @@ type modelExecution struct {
 	// OriginDecisionRequired marks the RPC and autonomous-resume entries that must fail closed on a legacy unknown
 	// origin. Trusted in-process model plumbing may carry an existing execution without setting this per-entry gate.
 	OriginDecisionRequired bool `json:"-"`
+	// Public: this message answers in someone else's chat. Per message, never persisted or included in the execution
+	// fingerprint; assistantSend leaves the owner's live snapshot out of this input.
+	Public bool `json:"-"`
 	// Interject: a message this one carries, sent while the conversation answers, moves its foreground work to the
 	// background (assistant_interject.go). Per message, never part of the fingerprint.
 	Interject bool `json:"-"`
@@ -74,6 +84,8 @@ type modelExecution struct {
 	Goal string `json:"-"`
 	// InPane is session.start's in_pane: a failed start's kept tab to start in (startremedy.go).
 	InPane string `json:"-"`
+	// taskSpace carries task placement into an asynchronous start; it is not execution or model state.
+	taskSpace *taskSpace `json:"-"`
 }
 
 // supervisionDeliveryKey marks a send that is the manager's own supervision message (message_source "supervision").
@@ -186,4 +198,9 @@ func (n *Node) assistantModelDecision(ctx context.Context, id string) (string, m
 		return "", modelExecution{}, false
 	}
 	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, MainCompactWindow: res.MainCompact, External: res.External, Origin: res.Origin, OriginKnown: res.OriginKnown, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions), true
+}
+
+// strictProtectedExecution identifies owner-facing conversations without changing worker/task retry policy.
+func strictProtectedExecution(m modelExecution) bool {
+	return m.IsMain || m.FollowsSetting
 }

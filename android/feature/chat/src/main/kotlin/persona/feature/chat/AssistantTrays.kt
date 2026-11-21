@@ -32,6 +32,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import java.time.Instant
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.time.ZoneId
@@ -45,12 +46,15 @@ import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.answer.*
 import persona.core.domain.tasks.BackgroundWork
 import persona.core.domain.tasks.FinishedEntry
+import persona.core.domain.tasks.HoldUnblock
+import persona.core.domain.tasks.hold
 import persona.core.domain.tasks.TriageStatus
 import persona.core.domain.tasks.NeedsYouEntry
 import persona.core.domain.tasks.NeedsYouGroup
 import persona.core.domain.tasks.needsYouGroups
 import persona.core.domain.tasks.RunningEntry
 import persona.core.domain.tasks.TaskState
+import persona.core.domain.tasks.Interruption
 import persona.core.domain.tasks.notDoneReason
 import persona.core.domain.tasks.orphanedLine
 import persona.core.domain.tasks.TasksStore
@@ -356,11 +360,12 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                 items(deciding.filter(group::has), key = { it.key }) { entry ->
                                     val todo = entry.todo
                                     val row = progressByTodo[todo.id]
+                                    val gate = todo.hold?.takeIf { it.unblock == HoldUnblock.User }?.gate
                                     when {
                                         todo.ask?.outcome == "decide" -> TaskDecisionCard(todo, host, enabled) { openTask(host, todo) }
                                         entry.status == TriageStatus.Failed || entry.status == TriageStatus.Interrupted ->
                                             TrayOutcomeRow(entry, host, enabled, taskBusy)
-                                        else -> TrayDecisionRow(todo.title, todo.ask?.verdict ?: row?.text.orEmpty(), R.string.chat_tray_review,
+                                        else -> TrayDecisionRow(todo.title, todo.ask?.verdict ?: gate ?: row?.text.orEmpty(), R.string.chat_tray_review,
                                             "assistant-review-${row?.id ?: "todo:${todo.id}"}", enabled, onOpen = { openTask(host, todo) }) { openTask(host, todo) }
                                     }
                                 }
@@ -456,8 +461,8 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                             if (schedules.isNotEmpty() || backgroundRecords) item { JSectionHeader(stringResource(R.string.chat_tray_quiet)) }
                             items(schedules, key = { "schedule:${it.id}" }) { schedule ->
                                 JRow(schedule.title, subtitle = schedule.lastError?.takeIf(String::isNotBlank)
-                                    ?: schedule.nextRun?.let { stringResource(R.string.chat_tray_next_run, it) }
-                                    ?: schedule.lastStatus, subtitleLines = 1, onClick = { onSchedule(schedule) },
+                                    ?: schedule.nextRun?.let { stringResource(R.string.chat_tray_next_run, formatTrayScheduleTime(it, currentLocale)) }
+                                    ?: schedule.lastStatus, subtitleLines = 2, onClick = { onSchedule(schedule) },
                                     leading = { AssistantTrayMark(null) }, trailing = {
                                         Text(when (schedule.repeats) {
                                             ScheduledTask.INTERVAL -> stringResource(R.string.chat_tray_interval, schedule.everyMinutes)
@@ -656,6 +661,13 @@ private fun TrayShelvedLine(count: Int, onClick: () -> Unit) {
 internal fun trayPullRequestNumber(reference: String): String? =
     Regex("/(?:pull|merge_requests)/(\\d+)(?:$|[/?#])").find(reference)?.groupValues?.get(1)
 
+/** Formats a wire schedule timestamp for the tray and its detail sheet: clock alone today, month/day + clock on another day. */
+internal fun formatTrayScheduleTime(raw: String, locale: Locale, zone: ZoneId = ZoneId.systemDefault(), now: Instant = Instant.now()): String {
+    val at = parseTime(raw) ?: return raw
+    val today = at.atZone(zone).toLocalDate() == now.atZone(zone).toLocalDate()
+    return LocalizedFormats.format(at, if (today) LocalizedFormats.TIME else LocalizedFormats.MONTH_DAY_TIME, locale, zone)
+}
+
 @Composable
 private fun TrayProgressRow(row: TrayProgress, activity: BackgroundWork? = null, waiting: Boolean = false,
     working: Boolean = false, supervisorReview: Boolean = false, onClick: () -> Unit) {
@@ -747,14 +759,17 @@ private fun TrayOutcomeRow(entry: NeedsYouEntry.Task, host: AssistantTaskHost, e
     val todo = entry.todo
     val failed = entry.status == TriageStatus.Failed
     val lead = host.tasks.lead(todo, host.sessions)
+    val cut = Interruption.of(lead)
     val why = if (failed) startFailureRowLine(todo.startError.orEmpty()) else interruptedWhy(lead?.turnError)
     val retrying = TasksStore.retryKey(todo.id) in taskBusy
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(Tokens.Radius.card)).background(palette.danger.tint)
         .testTag(if (failed) "assistant-tray-failed" else "assistant-tray-interrupted")) {
-        JRow(todo.title, subtitle = why.takeIf { it.isNotBlank() }, onClick = { openTask(host, todo) },
+        JRow(todo.title, subtitle = why.takeIf { it.isNotBlank() }, subtitleLines = if (cut?.invalid == true) Int.MAX_VALUE else 2,
+            onClick = { openTask(host, todo) },
             leading = { JIcon(PhIcons.WarningCircle, decorative = true, size = Tokens.Size.iconXS, tint = palette.danger.dot) },
             trailing = {
-                Text((if (failed) TaskState.Failed else TaskState.Interrupted).label.text(),
+                Text((if (cut?.invalid == true) CoreText.of(CoreText.Key.ApiConversationInvalidLabel)
+                    else (if (failed) TaskState.Failed else TaskState.Interrupted).label).text(),
                     style = PersonaTheme.type.micro, color = palette.ink, maxLines = 1)
             })
         Row(Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.s, bottom = Tokens.Space.s),
@@ -765,7 +780,7 @@ private fun TrayOutcomeRow(entry: NeedsYouEntry.Task, host: AssistantTaskHost, e
                 JButton(stringResource(R.string.chat_tasks_remove), { host.tasks.removeTask(todo, host.onError) },
                     kind = JButtonKind.Destructive, size = JButtonSize.Small, enabled = enabled,
                     modifier = Modifier.testTag("assistant-tray-remove"))
-            } else {
+            } else if (cut?.canContinue != false) {
                 JButton(stringResource(R.string.chat_tasks_continue), { host.tasks.retryTask(todo, host.onError) },
                     size = JButtonSize.Small, enabled = enabled, loading = retrying, modifier = Modifier.testTag("assistant-tray-continue"))
             }

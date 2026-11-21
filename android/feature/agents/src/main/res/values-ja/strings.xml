@@ -299,6 +299,11 @@
     <string name="agents_new_prefill_offline">「%1$s」はオフラインのため、別のマシンを選びました。接続後に戻せます</string>
     <string name="agents_new_reload">オプションを再読み込み</string>
     <string name="agents_new_agent_type">エージェントの種類</string>
+    <string name="agents_new_presets">エージェントプリセット</string>
+    <string name="agents_new_preset_loading">このプリセットのモデル一覧の読み込みが完了するまで開始できません。</string>
+    <string name="agents_new_preset_left_out">このプリセットの一部はここでは適用されません：</string>
+    <string name="agents_new_preset_left_out_model">モデル「%1$s」はここでは使えません。ランチャーのモデルで実行します。</string>
+    <string name="agents_new_preset_left_out_effort">思考の強さ「%1$s」はここでは使えません。ランチャーまたはモデル自身の設定で実行します。</string>
     <string name="agents_new_type_other">その他のエージェント</string>
     <string name="agents_new_launcher_this_time">ランチャー（今回だけ変更）</string>
     <string name="agents_new_launcher">ランチャー</string>
@@ -344,6 +349,8 @@
     <string name="agents_model_retry">再試行</string>
     <string name="agents_model_sheet_note">「%1$s」の%2$sのモデルです。ターミナルで/modelと入力したときと同じです。今回の起動だけに使います。</string>
     <string name="agents_model_sheet_note_provider">「%1$s」で使えるモデルです。今回の起動だけに使います。</string>
+    <string name="agents_model_sheet_note_omp">「%1$s」の今回の起動に使うモデルを選択するか、モデル ID を入力してください。</string>
+    <string name="agents_model_omp_machine_default">このコンピュータの omp のデフォルトモデル</string>
     <string name="agents_model_configured">モデル設定：%1$s</string>
     <string name="agents_new_error_pending">前回の起動結果はまだ確認されていません。結果を確認してください</string>
     <string name="agents_new_error_record">起動記録を読み込めません。閉じてからもう一度お試しください</string>
@@ -500,9 +507,6 @@
     <string name="agents_source_feishu_open">このトピックを Lark で開く</string>
     <string name="agents_filter_feishu">Lark グループ</string>
     <string name="agents_filter_terminal">ターミナル</string>
-    <string name="agents_botmux">botmux</string>
-    <string name="agents_botmux_hide">botmux のセッションを隠す</string>
-    <string name="agents_botmux_show">botmux のセッションを表示</string>
     <string name="agents_menu_sort">並び順：%1$s</string>
     <string name="agents_sort_state">状態優先</string>
     <string name="agents_sort_updated">最近の更新</string>
@@ -617,4 +621,5 @@
     <plurals name="agents_todo_calendar_undated">
         <item quantity="other">期限なし %1$d 件</item>
     </plurals>
+    <string name="agents_sidebar_heading">エージェント</string>
 </resources>

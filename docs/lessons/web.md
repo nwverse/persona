@@ -1114,6 +1114,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 ## Composer Enter yields to the IME first (2026-11-05, #2733)
 
 - **Every composer `onKeyDown` handling Enter / Esc must start with `if (composing(e.nativeEvent)) return;`** (`lib/send-history.ts`, checks `isComposing || keyCode === 229`). Browsers still deliver Enter used to confirm Japanese conversion or commit English through Pinyin. Without a composition check, incomplete text creates to-dos, saves titles, or adds list items. Esc likewise cancels composition and closes the whole row. Test in jsdom with `new KeyboardEvent("keydown", { key: "Enter", isComposing: true })` (`views/ime-enter.test.tsx`).
+- **macOS Safari and WKWebView fire `compositionend` just before the committing Enter's `keydown`**, which then has `isComposing` false (#11237). A field whose Enter sends or picks a row tracks the composition itself: `useComposition` (`lib/ime.ts`) spreads `onCompositionStart` / `onCompositionEnd` on the field and `busy(e.nativeEvent)` also treats a key within `COMPOSITION_TAIL_MS` of the end as the input method's. Native capture listeners use `imeKey` with their own state. Menus that a typed `/` or `@` opens wait for the composition to end, and the chat composer is not collapsed to measure its height mid-composition. Test by dispatching `compositionstart` / `compositionend` and then a plain `keydown` Enter.
 
 ## Pushes are best-effort; pages need their own fallback (2026-11-05, #3139)
 
@@ -1360,6 +1361,10 @@ A workspace row has separate disclosure, selection and action controls. When mer
 
 The first screen also counts startup translations. Keep generic request-owner and uncertain-creation errors in the existing worktree catalog; load the advanced composer catalog with the composer. A pair of eager error labels should not make every advanced-field description part of the first screen.
 
+## Split a sidebar summary from a lazy message index (#12038)
+
+A compact index shared by the sidebar and every message can put the message menu's identity map and per-message subscriptions on the first screen even when its writes are lazy. Give the sidebar a small count/access store and let the lazy message controls own the full index. Do not remove read-only markers or duplicate request logic to save bytes. Measure the production bundle: merely moving translation keys or splitting type files may add bytes instead of reducing them.
+
 ## Archive refusals must roll back optimistic removal (#4277)
 
 A connected delta hub keeps its pushed session rows during REST refresh. Refresh cannot restore a row the page
@@ -1493,3 +1498,13 @@ Full UI retains a machine's xterm feed between surfaces. Reading font family onl
 ## Deep tree rows need space for their counts (#10477)
 
 A shrinking file name cannot protect an end count when the row itself has unbounded indentation padding. Put the indentation and icon inside the name's shrinkable, clipped region; keep the count outside it with no wrapping. Bound deep indentation to a share of that region so the file name still has room for an ellipsis. Measure bounds against the containing panel, not the viewport, and keep the requested width separate from its temporary fitted width. Verify deep rows at minimum width in a real browser: jsdom cannot detect a clipped minus sign.
+
+### A local preference moving to shared settings (#10241)
+
+A read-then-write migration can overwrite a choice another browser just saved.
+Use an insert-if-absent at the database's unique key, not a service mutex or an
+unconditional PUT after a GET. Return the current value even when migration loses.
+Keep the legacy key on read/write failure and guard delayed reads with a save and
+credential generation. Filtering must consume the acknowledged shared value in
+both complete and paged lists before grouping/counts; a quick filter must never
+turn the display preference back on as a side effect.

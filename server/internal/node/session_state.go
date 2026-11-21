@@ -31,6 +31,9 @@ type stateFile struct {
 }
 
 type sessionState struct {
+	TaskInstructions        string          `json:"task_instructions,omitempty"`
+	TaskInstructionFile     string          `json:"task_instruction_file,omitempty"`
+	TaskInstructionChannel  string          `json:"task_instruction_channel,omitempty"`
 	CreationID              string          `json:"creation_id,omitempty"`
 	Incarnation             string          `json:"incarnation,omitempty"`
 	Pane                    string          `json:"pane,omitempty"`
@@ -38,15 +41,22 @@ type sessionState struct {
 	Model                   string          `json:"model,omitempty"`
 	ModelFingerprint        string          `json:"model_fingerprint,omitempty"`
 	ModelEffort             string          `json:"model_effort,omitempty"`
-	Origin                  string          `json:"origin,omitempty"`       // manager-recorded conversation source, for model-call authorization
-	OriginKnown             bool            `json:"origin_known,omitempty"` // manager explicitly decided origin; false on pre-upgrade records
+	TaskExecution           bool            `json:"task_execution,omitempty"` // the last Assistant input used strict scheduled execution
+	Origin                  string          `json:"origin,omitempty"`         // manager-recorded conversation source, for model-call authorization
+	OriginKnown             bool            `json:"origin_known,omitempty"`   // manager explicitly decided origin; false on pre-upgrade records
 	ConfigDir               string          `json:"config_dir,omitempty"`
 	Cwd                     string          `json:"cwd"`
+	TaskID                  string          `json:"task_id,omitempty"`
+	WorkspaceID             string          `json:"workspace_id,omitempty"`
+	WorkspaceLabel          string          `json:"workspace_label,omitempty"`
 	IsMain                  bool            `json:"is_main,omitempty"`
 	SupervisionInstructions string          `json:"supervision_instructions,omitempty"`
 	StartedAt               time.Time       `json:"started_at"`
 	StopCause               proto.StopCause `json:"stop_cause,omitempty"`
 	StopCauseAt             int64           `json:"stop_cause_at,omitempty"`
+	// RanAt: when a node last saw the Agent run (unix seconds, written at most every ranAtEvery). A session whose agent
+	// ran until shortly before this node started and is gone now was stopped by the restart (interrupted.go, #11441).
+	RanAt int64 `json:"ran_at,omitempty"`
 	// AwaitingFirstMessage: an empty start reserved this conversation without sending
 	// a model input. Runtime instructions and the idle state wait for actual delivery.
 	AwaitingFirstMessage bool `json:"awaiting_first_message,omitempty"`
@@ -96,6 +106,12 @@ type sessionState struct {
 	// PendingHandoff: the handoff of a switch to this session whose first message a dialog held back (engine_switch.go
 	// startEngine): put in front of the next message sent to the session, then cleared (send.go).
 	PendingHandoff *pendingHandoff `json:"pending_handoff,omitempty"`
+	// EngineRuntime: the engine runtime (Paseo, Cindy) whose new start wrote this record (recordEngineStart). The
+	// runtime keeps the Agent and none of its resumes writes the record again, so Cwd is where the Agent started; a
+	// terminal start or resume writes a whole new record without it, and a launcher switch carries the switch's. An
+	// extension's resume of a conversation its computer does not list passes on such a record alone, with no transcript
+	// (resumeOutsideHealth, #10941).
+	EngineRuntime string `json:"engine_runtime,omitempty"`
 }
 
 func newState() *stateFile { return &stateFile{Sessions: map[string]sessionState{}} }
@@ -243,9 +259,10 @@ func (s *stateFile) setPendingSwitch(id string, ps *proto.PendingSwitch) bool {
 }
 
 // restoreLaunch puts back what a start that failed to carry out a launcher switch wrote over (start writes a whole new
-// record before the agent is up): the launcher, model, directory, start time and plan mode of prev, the record as it
-// was, with the rest as it is now (an ultracode observation made since stays), and no pending switch: a failed switch
-// is dropped (launcher_switch.go). launcher is the one to put back when there was no record before (the start made one).
+// record before the agent is up): the launcher, model, directory (and whose start it is), start time and plan mode of
+// prev, the record as it was, with the rest as it is now (an ultracode observation made since stays), and no pending
+// switch: a failed switch is dropped (launcher_switch.go). launcher is the one to put back when there was no record
+// before (the start made one).
 func (s *stateFile) restoreLaunch(id string, prev sessionState, had bool, launcher string) {
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
@@ -257,7 +274,7 @@ func (s *stateFile) restoreLaunch(id string, prev sessionState, had bool, launch
 	}
 	if had {
 		v.Launcher, v.Model, v.ModelFingerprint, v.ModelEffort = prev.Launcher, prev.Model, prev.ModelFingerprint, prev.ModelEffort
-		v.Cwd, v.StartedAt, v.PlanThen = prev.Cwd, prev.StartedAt, prev.PlanThen
+		v.Cwd, v.StartedAt, v.PlanThen, v.EngineRuntime = prev.Cwd, prev.StartedAt, prev.PlanThen, prev.EngineRuntime
 	} else {
 		v.Launcher, v.Model, v.ModelFingerprint = launcher, "", ""
 	}
@@ -271,10 +288,10 @@ func (s *stateFile) restoreLaunch(id string, prev sessionState, had bool, launch
 }
 
 // adoptSwitch takes v, what a launcher switch carried out on another Node wrote of session id (switch_share.go), and
-// writes it through this Node's hub: the fields the switch owns (launcher, model, directory, start time, plan mode,
-// pane, pending switch, the conversation's earlier stretches and a handoff waiting for the next message) over this
-// Node's record, the rest of it as this Node has
-// it (an ultracode observation the new claude's hooks made on this connection); v whole when there is no record.
+// writes it through this Node's hub: the fields the switch owns (launcher, model, directory and the engine runtime whose
+// start it is, start time, plan mode, pane, pending switch, the conversation's earlier stretches and a handoff waiting
+// for the next message) over this Node's record, the rest of it as this Node has it (an ultracode observation the new
+// claude's hooks made on this connection); v whole when there is no record.
 func (s *stateFile) adoptSwitch(id string, v sessionState) {
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
@@ -283,6 +300,7 @@ func (s *stateFile) adoptSwitch(id string, v sessionState) {
 		cur.Launcher, cur.Model, cur.ModelFingerprint, cur.ModelEffort = v.Launcher, v.Model, v.ModelFingerprint, v.ModelEffort
 		cur.Cwd, cur.StartedAt, cur.PlanThen, cur.Pane, cur.PendingSwitch = v.Cwd, v.StartedAt, v.PlanThen, v.Pane, v.PendingSwitch
 		cur.EngineHistory, cur.PendingHandoff = v.EngineHistory, v.PendingHandoff // a switch to another engine (engine_switch.go)
+		cur.EngineRuntime = v.EngineRuntime
 		v = cur
 	}
 	s.Sessions[id] = v
@@ -407,6 +425,9 @@ func (s *stateFile) put(id string, v sessionState) bool {
 		}
 		if v.StopCauseAt == 0 && old.StopCauseAt != 0 {
 			v.StopCauseAt = max(time.Now().UnixNano(), old.StopCauseAt+1)
+		}
+		if v.RanAt == 0 {
+			v.RanAt = old.RanAt // owned by recordRunning
 		}
 	}
 	s.Sessions[id] = v

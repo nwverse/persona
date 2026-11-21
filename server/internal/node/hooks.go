@@ -202,6 +202,8 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		resp = n.handleAsk(ctx, req)
 	case "notify": // personad notify (scriptcli.go)
 		resp = n.handleNotify(ctx, req)
+	case assistantwire.MethodDecisionRaise, assistantwire.MethodDecisionGet, assistantwire.MethodDecisionWithdraw:
+		resp = n.handleDecision(ctx, req) // personad decision: non-blocking, never spooled
 	case "launcher.env": // personad launch <name>
 		resp = n.launcherEnvFor(req)
 	case "launcher.pi": // pi's Persona extension: the providers pi can use here (pi_providers.go)
@@ -244,6 +246,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		}
 		params := map[string]any{"name": req.Name, "args": req.Args, "session_id": sid,
 			"assistant": assistant, "guest": req.Guest || n.guestOf(sid) != nil}
+		n.putSourcePermission(c, params, sid, req.Name, req.Args)
 		if origin := n.assistantOrigin(sid); origin != "" {
 			params["origin"] = origin
 		}
@@ -367,6 +370,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		ctx = withHookCall(ctx, req)
 	}
 	defer n.hookFlights.enter(in.SessionID)() // its process waits on this call: not idle (model_restore.go)
+	if n.sessionBlocked(in.SessionID, in.Cwd) {
+		return nil, nil // a blocked Agent folder (agentdirs.go): nothing reported, no card; Claude Code asks itself
+	}
 	if req.ReportOnly && !n.takesReport(in) {
 		return nil, nil // before the counters: a session the plugin reports for would count each prompt twice
 	}
@@ -530,6 +536,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 			return permissionDecision(map[string]any{"behavior": "deny", "message": msg}), nil
 		}
 		mode := cmp.Or(proto.PlanAfterMode(ix.PlanThen), res.Mode, proto.ModeBypass)
+		if n.peer != nil && res.ModeActor != nil {
+			_ = n.peer.Notify(proto.EventModeSet, proto.ModeSetEvent{SessionID: in.SessionID, From: in.PermissionMode, To: mode, Actor: res.ModeActor})
+		}
 		var input map[string]any
 		_ = json.Unmarshal(in.ToolInput, &input)
 		// A bare allow does not close the plan dialog; it needs updatedInput plus a setMode update (2.1.310).

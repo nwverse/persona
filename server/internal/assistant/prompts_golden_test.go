@@ -75,10 +75,15 @@ func TestGoldenRelay(t *testing.T) {
 }
 
 func TestGoldenRelayQuote(t *testing.T) {
-	golden(t, "relay.quote", relayText(relayMsg{From: "b2e4d6f8-0000-4000-8000-000000000001", FromTitle: "Persona",
-		Tool: "conversation_send", Text: "示例消息：这件交给你", Hop: 1, Quote: &BriefRequest{Text: "示例原话：周五前把导出修好",
-			At: time.Date(2026, 11, 17, 4, 52, 0, 0, time.UTC), Conversation: "b2e4d6f8-0000-4000-8000-000000000001", MessageID: "msg-1",
-			Via: []string{"b2e4d6f8-0000-4000-8000-000000000001", "b2e4d6f8-0000-4000-8000-000000000003"}}}))
+	q := relayRequest{BriefRequest: BriefRequest{
+		Text: "示例原话：周五前把导出修好", At: time.Date(2026, 11, 17, 4, 52, 0, 0, time.UTC),
+		Conversation: "b2e4d6f8-0000-4000-8000-000000000001", MessageID: "msg-1",
+		Via: []string{"b2e4d6f8-0000-4000-8000-000000000001", "b2e4d6f8-0000-4000-8000-000000000003"},
+	}}
+	msg := relayMsg{From: q.Conversation, FromTitle: "Persona", Tool: "conversation_send", Text: "示例消息：这件交给你", Hop: 1, Quote: &q}
+	golden(t, "relay.quote", relayText(msg))
+	q.Text, q.Part, q.PartRef = "把导出修好", true, "example-part-id"
+	golden(t, "relay.quote_part", relayText(msg))
 }
 
 func TestGoldenTaskPrompt(t *testing.T) {
@@ -210,4 +215,17 @@ func TestGoldenStandingActions(t *testing.T) {
 		Task: "Merge the current pull request after checks pass; verify locally.", Directory: "/code/app",
 		Card: `{"plan":"Merge PR #123, then run local tests."}`,
 	}))
+}
+
+// What the main conversation gets for the owner's "@bot /read …" in a Lark group (bot/read_group, #11803): in each
+// language, in a topic, and with no words after the command.
+func TestGoldenBotReadGroup(t *testing.T) {
+	in := readPrompt("示例用户", "", "oc_example", "om_example", "", "看下这几条告警是不是同一个原因")
+	golden(t, "bot_read_group", prompts.RenderBotReadGroup(in))
+	in.Language, in.Owner, in.Task = "English", "Example User", "Are these alerts the same cause?"
+	golden(t, "bot_read_group.en", prompts.RenderBotReadGroup(in))
+	in.Language, in.Owner, in.Task = "日本語", "サンプルユーザー", "これらのアラートは同じ原因ですか"
+	golden(t, "bot_read_group.ja", prompts.RenderBotReadGroup(in))
+	in = readPrompt("", "", "oc_example", "om_example", "omt_example", "")
+	golden(t, "bot_read_group.topic_no_task", prompts.RenderBotReadGroup(in))
 }

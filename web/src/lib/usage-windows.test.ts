@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { initI18n } from "../i18n";
-import { countdown, fullest, liveAccounts, pace, planNote, resetLabel, sampleAge, sourceNames, topAccounts, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
+import { balanceAccounts, balanceEmpty, balanceText } from "./usage-balance";
+import { countdown, fullest, isBalanceAccount, liveAccounts, pace, planNote, resetLabel, sampleAge, sourceNames, topAccounts, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
 
 const NOW = new Date(2026, 10, 5, 10, 0, 0).getTime(); // local time, so same-day checks do not depend on the zone
 const at = (ms: number) => new Date(NOW + ms).toISOString();
@@ -154,5 +155,34 @@ describe("accounts with several sources and per-model windows (#2595)", () => {
   });
   it("tells windows of one length apart by model", () => {
     expect(windowKey(win("7d", 10080, 1))).not.toBe(windowKey({ ...win("7d", 10080, 1), model: "Fable" }));
+  });
+});
+
+describe("prepaid balances (#11825)", () => {
+  const bal = (id: string, amount: string, o: Partial<UsageAccount> = {}): UsageAccount => ({ id, provider: "deepseek", name: id, windows: [], sampled_at: at(-60_000), balance: { amount, currency: "CNY" }, ...o });
+  it("keeps a balance account without windows, and it takes no bar place from a window account", () => {
+    const got = liveAccounts([bal("ds", "12.34"), account("ok", 10)], NOW);
+    expect(got.map((a) => a.id)).toEqual(["ds", "ok"]);
+    expect(isBalanceAccount(got[0])).toBe(true);
+    expect(balanceAccounts(got).map((a) => a.id)).toEqual(["ds"]);
+    expect(topAccounts(got).map((a) => a.id)).toEqual(["ok"]);
+    expect(balanceText(got[0].balance!)).toBe("CNY 12.34");
+  });
+  it("leaves a DeepSeek account that reports windows as an ordinary bar account", () => {
+    const gateway: UsageAccount = { id: "ds-window", provider: "deepseek", name: "DeepSeek gateway", windows: [win("7d", 10080, 10, 24 * H)], sampled_at: at(-60_000) };
+    expect(isBalanceAccount(gateway)).toBe(false);
+    expect(balanceAccounts([gateway])).toEqual([]);
+    expect(topAccounts([gateway]).map((a) => a.id)).toEqual(["ds-window"]);
+  });
+  it("keeps a genuine zero apart from a failed read", () => {
+    const zero = bal("ds", "0.00");
+    const failed: UsageAccount = { ...bal("ds", "0.00"), balance: undefined, problem: "unreachable" };
+    expect(balanceEmpty(zero.balance!)).toBe(true);
+    expect(liveAccounts([zero], NOW)[0].balance?.amount).toBe("0.00");
+    const kept = liveAccounts([failed], NOW);
+    expect(kept).toHaveLength(1);
+    expect(kept[0].balance).toBeUndefined();
+    expect(kept[0].problem).toBe("unreachable");
+    expect(isBalanceAccount(kept[0])).toBe(true); // the provider still names a balance row, so the popover can say why
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { agentGroupLabel, agentTreeState, buildTodoTree, groupTodosByProject, nestAgents, projectOf, STALE_MS, todoTreeState, treeStateLabel, worstTreeState } from "./todo-tree";
-import { makeSessionLookup, todoStatus, todoStatusLabel, type Todo } from "./todos";
+import { makeSessionLookup, todoStatus, type Todo } from "./todos";
+import { todoLook, waitOf } from "./todo-wait-reason";
 import { matchesFilter } from "./agent-filter";
 import { sessionSource } from "./agent-groups";
 import type { Machine, Session } from "./types";
@@ -17,13 +18,13 @@ const link = (sid: string, patch: object = {}) => ({ machine_id: "m1", session_i
 const noMutes = { spaces: [], sessions: [] };
 
 describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)", () => {
-  it("lists the to-dos in sortTodos's order with no repository over them, and the agents on no to-do directly under their group", () => {
+  it("lists the to-dos in static sortTodos order with live states in place, and no repository or extra loose-Agent group", () => {
     const all = [s("a", "working", "/code/persona"), s("b", "unread", "/code/persona/.worktrees/x"), s("c", "needs_you", "/code/botmux"), s("loose", "idle", "/code/persona"), s("loose2", "idle", "/code/other")];
     const todos = [todo("t1", [link("a")]), todo("t2", [link("b")]), todo("t3", [link("c")])];
     const tree = buildTodoTree(all, machines, todos, noMutes, NOW);
     expect(tree.projects).toEqual([]);
-    // the task board's order: Needs you (t3), Working (t1), Finished (t2), #4896
-    expect(tree.todos.map((td) => [td.todoId, td.state])).toEqual([["t3", "needs_you"], ["t1", "working"], ["t2", "done"]]);
+    // Live Agent rank does not move a to-do group; each group's state still updates (#11801).
+    expect(tree.todos.map((td) => [td.todoId, td.state])).toEqual([["t1", "working"], ["t2", "done"], ["t3", "needs_you"]]);
     expect(tree.loose.map((g) => [g.key, g.agents.map((a) => a.session.session_id)])).toEqual([["todo:none", ["loose", "loose2"]]]);
   });
 
@@ -85,16 +86,18 @@ describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)",
   });
 
   it("a to-do says the To-dos page's word for its state, ranked as the tree ranks it (#6458)", () => {
-    // its agents ended their turns and one waits on CI: the To-dos page's Waiting, never Done
-    const all = [s("ci", "idle", "/code/p", { work: { phase: "blocked", on: "external", line: "CI" } }), s("seen", "idle", "/code/q"), s("new", "unread", "/code/r")];
+    // its agents ended their turns and one waits on CI: the To-dos page's word for that wait (#11090), never Done
+    const all = [s("ci", "idle", "/code/p", { work: { phase: "blocked", on: "external", line: "CI", wait: "CI" } }), s("seen", "idle", "/code/q"), s("new", "unread", "/code/r")];
     const tree = buildTodoTree(all, machines, [todo("wait", [link("ci")]), todo("follow", [link("seen")]), todo("fresh", [link("new")])], noMutes, NOW);
     const byId = Object.fromEntries(tree.todos.map((td) => [td.todoId, td]));
     const lookup = makeSessionLookup(all);
     for (const id of ["wait", "follow", "fresh"]) {
       const td = todo(id, [link({ wait: "ci", follow: "seen", fresh: "new" }[id]!)]);
-      expect(byId[id]!.statusLabel).toBe(todoStatusLabel(td, todoStatus(td, lookup)));
+      const status = todoStatus(td, lookup);
+      expect(byId[id]!.statusLabel).toBe(todoLook(td, status, waitOf(td, status, lookup)).label);
     }
-    expect([byId.wait!.statusLabel, byId.follow!.statusLabel, byId.fresh!.statusLabel]).toEqual(["等待中", "待跟进", "完成未看"]);
+    expect([byId.wait!.statusLabel, byId.follow!.statusLabel, byId.fresh!.statusLabel]).toEqual(["等外部", "待跟进", "完成未看"]);
+    expect([byId.wait!.wait, byId.follow!.wait]).toEqual(["external", undefined]);
     expect(byId.wait!.state).toBe("bg_waiting");
     expect(todoTreeState("waiting")).toBe("bg_waiting");
   });

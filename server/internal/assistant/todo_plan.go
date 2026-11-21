@@ -179,13 +179,21 @@ func todoPriority(p string) (string, error) {
 // createPlainTodo makes a todo of the user's (no conversation, no plan of tasks) with plan's due date, reminder and
 // priority, and tells the apps.
 func (s *Service) createPlainTodo(ctx context.Context, title, notes string, plan db.TodoEdit, bindings ...*repository.CreateBindings) (Todo, error) {
-	return s.createTodoFrom(ctx, title, notes, "", plan, bindings...)
+	return s.createPlainTodoWithImages(ctx, title, notes, plan, nil, bindings...)
+}
+
+func (s *Service) createPlainTodoWithImages(ctx context.Context, title, notes string, plan db.TodoEdit, images []db.TodoImage, bindings ...*repository.CreateBindings) (Todo, error) {
+	return s.createTodoFromWithImages(ctx, title, notes, "", plan, images, bindings...)
 }
 
 // createTodoFrom is createPlainTodo for a to-do made from an Inbox row (#6480): inboxItem is that row's id, "" for none.
 func (s *Service) createTodoFrom(ctx context.Context, title, notes, inboxItem string, plan db.TodoEdit, bindings ...*repository.CreateBindings) (Todo, error) {
+	return s.createTodoFromWithImages(ctx, title, notes, inboxItem, plan, nil, bindings...)
+}
+
+func (s *Service) createTodoFromWithImages(ctx context.Context, title, notes, inboxItem string, plan db.TodoEdit, images []db.TodoImage, bindings ...*repository.CreateBindings) (Todo, error) {
 	now := time.Now().UTC()
-	row := db.TodoRow{ID: "todo_" + randomHex(8), Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now, InboxItem: inboxItem}
+	row := db.TodoRow{ID: "todo_" + randomHex(8), Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now, InboxItem: inboxItem, Images: images}
 	plan.Title, plan.Notes, plan.Done = nil, nil, nil
 	plan.Apply(&row, now)
 	return s.insertTodo(ctx, row, bindings...)
@@ -232,6 +240,9 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	cur, ok := s.todoNow(id)
 	if !ok {
 		return Todo{}, db.ErrTodoNotFound
+	}
+	if e.Done != nil && *e.Done && cur.DoneAt == nil && s.outsideBackingPending(id) {
+		return Todo{}, errOutsideDecisionPending
 	}
 	if cur.isConcern() && cur.DoneAt == nil && e.Done != nil && *e.Done {
 		return Todo{}, db.ErrConcernUnreported // only its report closes it (concerns.go); the store checks it again
@@ -293,6 +304,9 @@ func (s *Service) deleteTodo(ctx context.Context, id string) error {
 	cur, ok := s.todoNow(id)
 	if !ok {
 		return db.ErrTodoNotFound
+	}
+	if s.outsideBackingPending(id) {
+		return errOutsideDecisionPending
 	}
 	if err := s.removeTodo(ctx, id); err != nil {
 		return err

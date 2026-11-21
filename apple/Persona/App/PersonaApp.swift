@@ -53,7 +53,7 @@ struct PersonaApp: App {
                     #if os(iOS)
                     if let link = FleetLink.session(url) { // tapped the Live Activity
                         // "group|machine" for another group's row (FleetMerge); a row the hub pushed names no group.
-                        if let key = model.resolve(path: link.machine + "/" + link.session) { model.open(key) }
+                        model.openExternal(path: link.machine + "/" + link.session)
                         return
                     }
                     if RecordingLink.matches(url) { MeetingRecorder.openRecordings(askingEnd: RecordingLink.endID(url)); return } // the recording's activity
@@ -61,6 +61,7 @@ struct PersonaApp: App {
                     #endif
                     if let link = ExtensionSystemLink(url: url) { model.openExtension(link); return }
                     if SentSettingsLink.matches(url) { model.openSentRecords(); return }
+                    if let link = ProviderImportLink.text(url) { model.openProviderImport(link); return } // a gateway's or a shared provider import link (#5428)
                     if IPhoneSetupLink.matches(url) { model.openIPhoneSetup(); return }
                     // The web sign-in page's code, read by the Camera app: only the scanner in Settings › Devices
                     // approves a browser (#10293), so a link says where to scan it and does nothing else.
@@ -137,6 +138,9 @@ struct PersonaApp: App {
                 // Closed, the hub knows the phone is away and wakes it with a silent push instead; and nothing opens it
                 // again until the app is back (the network returning, a refresh ending: LiveConnection.suspended).
                 model.suspendLinks()
+                // A refresh still running from the last return to the app stops before its next write to the App Group:
+                // iOS ends an app that is suspended holding that store's lock (0xdead10cc, #11360).
+                ExtensionSurfaceForegroundRefresh.shared.cancel()
                 // All-day recording: a run or request in progress finishes only inside a grant of background time, and a
                 // model download a run started in front stops.
                 RecordingDayTranscriber.shared.background()
@@ -165,6 +169,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         ErrorReports.installExceptionHandler(queue: .shared) // first: a crash while launching is reported too (#5621)
+        ExtensionSurfaceAppLease.install() // background time around the App Group store's lock, before anything writes it (#11360)
         // Developing Persona carries on recording when it was left on (#9460); reads two defaults otherwise.
         DevMode.shared.launch(tab: UserDefaults.standard.string(forKey: "app.tab").flatMap(AppTab.init(rawValue:)) ?? .assistant)
         _ = KeyboardState.shared // watches the keyboard from the start: a card may come while it is already up
@@ -324,14 +329,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         default: break
         }
         // "machine/session", or "group|machine/session" for another group.
-        if let open = d.string(forKey: "openSession"), let key = AppModel.shared.resolve(path: open) {
+        if let open = d.string(forKey: "openSession") {
             // `-openFromDoneNotice YES`: as a tap on its "Done" notification (lands on the latest answer).
-            if d.bool(forKey: "openFromDoneNotice") {
-                AppDelegate.openFromNotification(key, finished: true)
-            } else {
-                AppModel.shared.selectedTab = .chats
-                AppModel.shared.openChat = key
-            }
+            AppModel.shared.openExternal(path: open, latestAnswer: d.bool(forKey: "openFromDoneNotice"))
         }
         if d.string(forKey: "showLark") != nil { AppModel.shared.selectedTab = .mail }
         if let open = d.string(forKey: "openAssistant"), let key = AppModel.shared.resolve(path: open) {
@@ -354,8 +354,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         if let id = d.string(forKey: "openAssistantManager") { AppModel.shared.openAssistantManagerWhenListed(id) }
         AppModel.shared.debugShowNewChat = d.bool(forKey: "showNewChat")
         // `-simulateTap <machine>/<session>`: what tapping a push does, 4 s after launch (on another screen by then).
-        if let tap = d.string(forKey: "simulateTap"), let key = AppModel.shared.resolve(path: tap) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { AppDelegate.openFromNotification(key) }
+        if let tap = d.string(forKey: "simulateTap") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { AppModel.shared.openExternal(path: tap) }
         }
         // `-showTestNotification permission|plan|elicitation`: posts what an interaction push looks like (category, ids),
         // 3 s after the app goes to the background, so the UI test can exercise the notification without APNs.
@@ -638,7 +638,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 }
                 #endif
                 // No interaction: a turn finished ("Done"), opened at its answer like from the list.
-                if action != UNNotificationDismissActionIdentifier { AppDelegate.openFromNotification(key, finished: ixID == nil) }
+                if action != UNNotificationDismissActionIdentifier, let ref {
+                    let model = AppModel.shared
+                    model.openExternal(machineID: ref.machine, sessionID: ref.session, group: ref.sourceGroup(model), latestAnswer: ixID == nil)
+                }
                 done()
             }
         }
@@ -754,12 +757,4 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     nonisolated static func sessionRef(_ info: [AnyHashable: Any]) -> PushRef? { PushRef(info) }
     static func sessionKey(_ ref: PushRef) -> SessionKey { ref.key(AppModel.shared) }
-
-
-    /// Opens the session a notification is about. On a cold launch the tap arrives before the UI exists: `open`
-    /// only sets state (tab + chat to open) that the views pick up when they appear.
-    static func openFromNotification(_ key: SessionKey?, finished: Bool = false) {
-        guard let key else { return }
-        AppModel.shared.open(key, latestAnswer: finished)
-    }
 }

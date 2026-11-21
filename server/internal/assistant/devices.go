@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"net/http"
 	"time"
 
@@ -40,6 +41,9 @@ type Devices interface {
 	// Summary is List's entry for the machine id names (Canonical(id)'s), false when List has none: one machine,
 	// without building the others.
 	Summary(id string) (devices.Summary, bool)
+	// Shown is whether a machine's list is its node's and until when it is shown as before while its node is away
+	// (devices.Shown); false when there is no such machine.
+	Shown(id string) (devices.Shown, bool)
 	// MachineResources returns the retained system and latest sample, including a stale sample's timestamp.
 	MachineResources(id string) (*proto.Machine, *proto.MetricSample, *bool)
 	Canonical(id string) string
@@ -60,6 +64,8 @@ type Devices interface {
 	// subscription accounts of each upstream provider are schedulable now and when the nearest one recovers.
 	// Read-only, from the manager's in-memory caches; the zero value when no pool is configured.
 	CapacitySnapshot(ctx context.Context) proto.CapacitySnapshot
+	// GatewayRetryAt uses a bound, complete gateway inventory with fresh account observations. Zero means no hold.
+	GatewayRetryAt(source, provider string, now time.Time) time.Time
 	// Follow has the node send the manager a session's items and text as they are made (on), or stop.
 	Follow(ctx context.Context, machine, session string, on bool) error
 	// SetAttention hands over Persona Link's "Needs you" summary (fleet_attention.go) on every look; it goes on to the
@@ -86,6 +92,9 @@ func (b *BusHub) localDeviceCall(ctx context.Context, p DeviceCall) (json.RawMes
 	d := b.opts.Devices
 	if d == nil || p.Device == assistantwire.DeviceAll || assistantwire.HubDeviceMethods[p.Method] || !d.Has(p.Device) {
 		return nil, false, nil
+	}
+	if p.Method == DeviceSessionModes && devicewire.ModeActorOf(ctx) == nil {
+		ctx = devicewire.WithModeActor(ctx, devicewire.AssistantModeActor())
 	}
 	out, err := d.CallNode(ctx, p.Device, p.Method, p.Params)
 	return out, true, err
@@ -116,6 +125,39 @@ func (s *Service) NodeAnswer(ctx context.Context, machine, method string, params
 		Ack       []assistantwire.ViewErrorReceipt `json:"ack"`
 	}
 	switch method {
+	case assistantwire.MethodDecisionRaise:
+		var p struct {
+			Decision assistantwire.OutsideDecisionRequest `json:"decision"`
+			Source   string                               `json:"source"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return assistantwire.OutsideDecisionReply{Code: "invalid_decision", Error: err.Error()}, true, nil
+		}
+		caller := &outsideCaller{key: "node:" + machine, kind: "script", name: p.Source}
+		rec, inserted, err := s.raiseOutsideDecision(ctx, caller, p.Decision)
+		if err != nil {
+			return outsideErrorReply(err), true, nil
+		}
+		return outsideReply(rec, inserted), true, nil
+	case assistantwire.MethodDecisionGet, assistantwire.MethodDecisionWithdraw:
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || p.ID == "" {
+			return assistantwire.OutsideDecisionReply{Code: "invalid_decision", Error: "a decision id is required"}, true, nil
+		}
+		caller := &outsideCaller{key: "node:" + machine, kind: "script", name: machine}
+		var rec *outsideDecision
+		var err error
+		if method == assistantwire.MethodDecisionGet {
+			rec, err = s.outsideForCaller(ctx, caller, p.ID)
+		} else {
+			rec, err = s.withdrawOutsideDecision(ctx, caller, p.ID)
+		}
+		if err != nil {
+			return outsideErrorReply(err), true, nil
+		}
+		return outsideReply(rec, false), true, nil
 	case NodeLaunchersPull: // a provider's secrets for this computer (models_launchers_scope.go): the connection's machine decides
 		out, err := s.pullLauncher(ctx, machine, params)
 		return out, true, err

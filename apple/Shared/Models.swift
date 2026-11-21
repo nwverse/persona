@@ -39,6 +39,8 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     /// The set of engine hosts the computer runs (docs/integrations/engines.md "Host sets"); nil from a hub before sets.
     /// `[]` is no terminal engine: `engine` still says herdr then, for older clients.
     var engineHosts: [String]? = nil
+    /// The host for a start without an explicit workspace host when the machine has a host set.
+    var engineDefault: String? = nil
     /// Operating it through Cua Driver; nil while the hub's plugin cua is off or it is not a Mac.
     var computer: MachineComputer? = nil
     /// Its ego lite for the assistant; nil while the hub's plugin ego is off or it is not a Mac.
@@ -70,7 +72,7 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, iphone, clipboard, route, trust, manager
-        case engineHosts = "engine_hosts"
+        case engineHosts = "engine_hosts", engineDefault = "engine_default"
         case errorCode = "error_code"
         case sshHost = "ssh_host", herdrVersion = "herdr_version", claudeVersion = "claude_version", lastSeen = "last_seen"
         case nodeMismatch = "node_mismatch", nodeVersion = "node_version", deploying, deployError = "deploy_error"
@@ -117,6 +119,7 @@ extension Machine {
         engine = try c.decodeIfPresent(MachineEngine.self, forKey: .engine) ?? .herdr
         engines = try c.decodeIfPresent([DetectedEngine].self, forKey: .engines) ?? []
         engineHosts = try? c.decodeIfPresent([String].self, forKey: .engineHosts)
+        engineDefault = try? c.decodeIfPresent(String.self, forKey: .engineDefault)
         computer = try? c.decodeIfPresent(MachineComputer.self, forKey: .computer)
         browser = try? c.decodeIfPresent(MachineBrowser.self, forKey: .browser)
         iphone = try? c.decodeIfPresent(MachineIPhone.self, forKey: .iphone)
@@ -610,6 +613,22 @@ extension Machine {
     var engineName: String {
         engineHosts?.isEmpty == true ? MachineEngine.noEngine.name : engines.first { $0.id == engine.rawValue }?.name ?? engine.name
     }
+
+    /// The host a new session uses without a workspace. Older hubs report only the legacy engine.
+    nonisolated var defaultStartHost: String? {
+        guard engineHosts?.isEmpty != true else { return nil }
+        if let engineDefault, !engineDefault.isEmpty { return engineDefault }
+        return engine == .herdrBoth ? MachineEngine.herdr.rawValue : engine.rawValue
+    }
+
+    /// An explicit workspace host wins over the machine default, provided the machine enables it.
+    nonisolated func startsInHerdr(host: String?) -> Bool {
+        let herdr = MachineEngine.herdr.rawValue
+        let legacyHerdr = engine == .herdr || engine == .herdrBoth
+        guard engineHosts?.contains(herdr) ?? legacyHerdr else { return false }
+        if let host, !host.isEmpty { return host == herdr }
+        return defaultStartHost == herdr
+    }
 }
 
 nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
@@ -657,10 +676,23 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     static let codexAppSource = "codex_app"
     /// A Codex start sends its first message with it and waits for the thread Codex makes.
     var isCodex: Bool { agent == "codex" }
+    /// A CLI launcher discovered on the computer, including the source-less responses of older hubs.
+    private var isMachineLauncher: Bool {
+        source == nil || source == "" || source == "zshrc" || source == "path" || source == "builtin"
+    }
+    /// The node starts Oh My Pi only under its own launcher name.
+    var startsOmp: Bool {
+        guard name == "omp", isMachineLauncher else { return false }
+        guard let kind = runtimeAgent, !kind.isEmpty else { return true }
+        return kind == "omp"
+    }
     /// The hub's configured kind wins when present; an empty or missing value falls back to the node's agent.
     var runtimeAgent: String? { agentType?.isEmpty == false ? agentType : agent }
     /// Starting it needs a first message: a Codex on a computer that cannot open it without one.
     var needsFirstMessage: Bool { isCodex && promptOptional != true }
+    /// It runs omp (docs/integrations/omp.md): omp's own config.yml picks its model and thinking level, so a start on it
+    /// takes no permission mode, effort, ultracode or model, and its first message goes with the start.
+    var isOmp: Bool { runtimeAgent == "omp" }
 
     enum CodingKeys: String, CodingKey {
         case name, model, agent, assistant, health, source
@@ -721,8 +753,7 @@ extension Launcher {
         // Older hubs can ignore purpose=assistant. A runtime's provider is not a shell command, and managed Codex
         // launchers cannot start the assistant's app-server. Keep the shell fallback for hubs without capabilities.
         let managed = source == "persona" || source == LegacyNames.product
-        let machine = source == nil || source == "" || source == "zshrc" || source == "path" || source == "builtin"
-        guard machine || managed, !(managed && agent == "codex") else { return false }
+        guard isMachineLauncher || managed, !(managed && agent == "codex") else { return false }
         return agent == nil || agent == "" || agent == "claude" || agent == "codex"
     }
 }
@@ -771,14 +802,22 @@ nonisolated struct LauncherModels: Codable, Hashable, Sendable {
     /// Model Settings' list (#943): the machine whose CLI answered.
     var machine: String? = nil
 
+    /// The node confirms this launcher and host can honor a model for this start. Absent on older nodes.
+    var supportsStartModel: Bool? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case agent, models, locked, machine
+        case supportsStartModel = "supports_start_model"
+    }
+
     /// The agent takes a model ID typed by hand (#1644): Claude Code's `--model` / `/model` and Codex's `--model` take any
     /// string, and so does a work agent started in herdr (`pi`, the Cursor CLI, the Antigravity CLI: `workagent.go`).
-    /// The hub remembers typed IDs for these. Other agents' lists are empty (no model row).
+    /// New Agent separately supports a typed ID for a native Oh My Pi start.
     static func takesTypedModel(agent: String) -> Bool {
         agent == "claude" || agent == "codex" || agent == "pi" || agent == "cursor" || agent == "agy"
     }
 
-    /// A typed ID can reach the agent: one of those two, and the launcher does not pass its own --model.
+    /// The shared model settings can take a typed ID and the launcher does not pass its own --model.
     var takesTypedModel: Bool { locked == nil && Self.takesTypedModel(agent: agent) }
 }
 
@@ -1073,7 +1112,13 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// a flag that puts that mode in its shift+tab cycle (`bypass_available`, #1379, read off the process by the node).
     /// False while unknown and from older hubs; then Allow Everything is only a start's choice.
     var bypassAvailable: Bool = false
+    /// Allow Everything was picked for this Claude Code while it cannot reach it with shift+tab (`bypassAvailable` false):
+    /// the node restarts it in that mode once its turn is over, resuming the same conversation (`bypass_pending`, #6476).
+    /// Until then `permissionMode` stays the mode it runs in. False from older hubs.
+    var bypassPending: Bool = false
     var effort: String? = nil
+    var pendingEffort: String? = nil
+    var effortChangeFailed: Bool? = nil
     /// The levels `effort` may be set to when they are not Claude Code's (`SessionModes.effortOptions`): a Codex thread
     /// the hub drives through its app-server, where only the effort changes (node/codex_effort.go). Nil elsewhere.
     var efforts: [String]? = nil
@@ -1103,6 +1148,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var assistant: Bool
     /// An assistant conversation moved out of the sidebar (listed under Archived; nothing is deleted).
     var archived: Bool? = nil
+    /// Manager-owned visibility; active supervised tasks are exempt.
+    var hiddenByDirectory: Bool? = nil
     /// The assistant's space it belongs to (the hub's `space`, docs/assistant/health.md): `healthSpace` for a health conversation,
     /// nil for the assistant's own. Not a host's space (`spaceKind` / `spaceID` are herdr's and Orca's).
     var assistantSpace: String? = nil
@@ -1263,6 +1310,18 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// for the lists' order and folds (`AgentListOrder.awaitsReply`) and for every word, color and question a row shows:
     /// a muted one is plain Seen everywhere, so callers say whether it is muted.
     func awaitsYourReply(muted: Bool) -> Bool { state == .idle && awaitsReply && !muted }
+    func isJustFinished(muted: Bool) -> Bool { state == .idle && work?.justFinished == true && !muted }
+
+    /// Group actions check mute preferences only for flagged idle rows.
+    func needsSeen(muted: @autoclosure () -> Bool = false) -> Bool {
+        state == .unread || (isJustFinished(muted: false) && !muted())
+    }
+
+    mutating func markLocallySeen() {
+        if state == .unread { state = .idle }
+        if work?.justFinished == true { work?.justFinished = nil }
+    }
+
     /// Waiting in the background (#6045): working, but all it runs is waiting. Shown apart from Working and lighter, and
     /// left out of Working's counts and filter; whatever acts on a working agent (stop, queue) still treats it as one.
     /// A list copy whose state was rewritten to working because a child is working is not waiting in the background.
@@ -1429,8 +1488,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// The listed modes can be switched now (`POST …/modes`): it runs and takes messages.
     var canSwitchListedModes: Bool { canSend && status.isLive && listedModes != nil }
     /// Only the thinking effort changes from the phone, among `efforts` (the hub says so by listing them): a Codex
-    /// thread driven through its app-server. Claude Code and the assistant change both, the rest neither.
-    var setsEffortOnly: Bool { canSend && !assistant && !isClaude && !(efforts ?? []).isEmpty }
+    /// thread driven through its app-server. Claude Code, the assistant and a runtime that declares `capabilities.modes`
+    /// (such as Antigravity) change both, the rest neither.
+    var setsEffortOnly: Bool { canSend && !assistant && !isClaude && !canChangeModes && !(efforts ?? []).isEmpty }
     /// Who the user talks to in this session: "Claude", "Codex", "TRAEX", or what the hub calls a runtime's agent ("DSH",
     /// a Paseo provider's label such as "Grok"). Never the engine of several providers that runs it: a row that names
     /// only Paseo (no label of its own, or the node's "Paseo") names its provider by its launcher instead (#8144).
@@ -1476,6 +1536,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case listWaiting = "waiting", listBackgroundCount = "background_count", listRunningSubagents = "running_subagents", listRunningWorkflows = "running_workflows"
         case listBackgroundTasksCount = "background_tasks_count", listWorkflowProgress = "workflow_progress"
         case title, cwd, status, launcher, model, agent, effort, efforts, capabilities, attached
+        case pendingEffort = "pending_effort", effortChangeFailed = "effort_change_failed"
+        case hiddenByDirectory = "hidden_by_directory"
         case serviceTier = "service_tier", serviceTiers = "service_tiers"
         case modelPick = "model_pick"
         case canFork = "can_fork"
@@ -1487,7 +1549,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case codexRoute = "codex_route", codexRouteNote = "codex_route_note"
         case agentLabelHint = "agent_label"
         case agentSurface = "agent_surface"
-        case permissionMode = "permission_mode", bypassAvailable = "bypass_available"
+        case permissionMode = "permission_mode", bypassAvailable = "bypass_available", bypassPending = "bypass_pending"
         case contextTokens = "context_tokens", contextWindow = "context_window"
         case ultracode, ultracodeNote = "ultracode_note", ultracodePending = "ultracode_pending", ultracodeLostAt = "ultracode_lost_at"
         case repoRoot = "repo_root", worktree, branch
@@ -1550,7 +1612,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         model = try c.decodeIfPresent(String.self, forKey: .model)
         permissionMode = try c.decodeIfPresent(String.self, forKey: .permissionMode)
         bypassAvailable = (try? c.decodeIfPresent(Bool.self, forKey: .bypassAvailable)).flatMap { $0 } ?? false
+        bypassPending = (try? c.decodeIfPresent(Bool.self, forKey: .bypassPending)).flatMap { $0 } ?? false
         effort = try c.decodeIfPresent(String.self, forKey: .effort)
+        pendingEffort = try c.decodeIfPresent(String.self, forKey: .pendingEffort)
+        effortChangeFailed = try c.decodeIfPresent(Bool.self, forKey: .effortChangeFailed)
         efforts = try c.decodeIfPresent([String].self, forKey: .efforts)
         serviceTier = try c.decodeIfPresent(String.self, forKey: .serviceTier)
         serviceTiers = try c.decodeIfPresent([SessionServiceTier].self, forKey: .serviceTiers)
@@ -1568,6 +1633,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
             ?? legacy.decodeIfPresent(Bool.self, forKey: HubNaming.Field(LegacyNames.startedByField)) ?? false
         assistant = try c.decodeIfPresent(Bool.self, forKey: .assistant) ?? false
         archived = try c.decodeIfPresent(Bool.self, forKey: .archived)
+        hiddenByDirectory = try c.decodeIfPresent(Bool.self, forKey: .hiddenByDirectory)
         assistantSpace = try c.decodeIfPresent(String.self, forKey: .assistantSpace).flatMap { $0.isEmpty ? nil : $0 }
         spaceKind = try c.decodeIfPresent(String.self, forKey: .spaceKind)
         spaceID = try c.decodeIfPresent(String.self, forKey: .spaceID)
@@ -1672,10 +1738,20 @@ nonisolated struct UndeliveredMessage: Codable, Hashable, Sendable, Identifiable
     var nextAt: Date? = nil
     var error: String? = nil
     var deleteOnly: Bool? = nil
+    /// An Agent message held by its computer's manager. Its error is the complete status line.
+    var computer: String? = nil
+
+    static let agentHoldFeature = "agent_message_hold"
+    var heldForComputer: Bool { computer?.isEmpty == false }
+    var heldStatus: String? {
+        guard heldForComputer else { return nil }
+        if let error, !error.isEmpty { return error }
+        return gaveUp ? String(localized: "Delivery status unknown") : String(localized: "Waiting to send")
+    }
 
     /// The hub's names (`proto.UndeliveredMessage`): one enum, #10775 (`delete_only`) and #10440 (`next_at`) each added one.
     private enum CodingKeys: String, CodingKey {
-        case id, text, images, at, state, attempts, error
+        case id, text, images, at, state, attempts, error, computer
         case nextAt = "next_at", deleteOnly = "delete_only"
     }
 
@@ -1709,6 +1785,8 @@ nonisolated struct WorkState: Codable, Hashable, Sendable {
     var resetsAt: Date? = nil
     var attempts: Int? = nil
     var max: Int? = nil
+    /// A recently finished turn nobody has seen. Hubs predating the flag omit it.
+    var justFinished: Bool? = nil
     /// The agent it waits for.
     var agent: WorkAgent? = nil
     /// What the work produced: pull requests, commits, documents, builds (`WorkArtifact`). Nil from a hub without them.
@@ -1719,7 +1797,7 @@ nonisolated struct WorkState: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case phase, on, line, wait, then, attempts, max, agent, artifacts, closeout
-        case wakeAt = "wake_at", resetsAt = "resets_at"
+        case wakeAt = "wake_at", resetsAt = "resets_at", justFinished = "just_finished"
     }
 
     init(from decoder: Decoder) throws {
@@ -1733,6 +1811,7 @@ nonisolated struct WorkState: Codable, Hashable, Sendable {
         resetsAt = try c.decodeIfPresent(Date.self, forKey: .resetsAt)
         attempts = try c.decodeIfPresent(Int.self, forKey: .attempts)
         max = try c.decodeIfPresent(Int.self, forKey: .max)
+        justFinished = try c.decodeIfPresent(Bool.self, forKey: .justFinished)
         agent = try c.decodeIfPresent(WorkAgent.self, forKey: .agent)
         // New (#3612): one that does not decode is as if there were none, never the whole work state failing.
         artifacts = try? c.decodeIfPresent([WorkArtifact].self, forKey: .artifacts)
@@ -2602,10 +2681,13 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var codexHeartbeatQuiet: Bool? = nil
     /// What the model requests this item stands for used (#5426). Older hubs omit it.
     var usage: [TokenUsage]? = nil
+    /// Raw record identity for a text item with a positional ID, stable before clipping. Older nodes omit it.
+    var sourceFingerprint: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage
         case modelRefusal = "model_refusal", narration, codexHeartbeatQuiet = "codex_heartbeat_quiet"
+        case sourceFingerprint = "source_fingerprint"
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
              clientMsgID = "client_msg_id", supervisionUser = "supervision_user"
     }
@@ -2771,6 +2853,19 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var foldedAsText: LenientText? = nil
     var foldedSideText: LenientText? = nil
 
+    /// A server-owned exact proposal. These fields never turn another approval into an Always grant.
+    var approvalBatchID: String?
+    var approvalItemID: String?
+    var ownerProposal: Bool?
+    var noExpiry: Bool?
+    var ownerApprovalPhrases: [String]?
+    var ownerApprovalPhrase: String? {
+        guard kind == .permission, ownerProposal == true, let approvalBatchID, !approvalBatchID.isEmpty,
+              !machineID.isEmpty, !sessionID.isEmpty,
+              let phrase = ownerApprovalPhrases?.first, !phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return phrase
+    }
+
     var sessionKey: SessionKey { SessionKey(group: group, machineID: machineID, sessionID: sessionID) }
     /// The session the card is shown on. Answering still uses `id` and `sessionID`.
     var requestHome: String {
@@ -2799,7 +2894,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
              toolTitle = "tool_title", agentLabelHint = "agent_label", hubGroup = "app_hub_group",
              mutedFlag = "muted", elicitation, mcpServerName = "mcp_server_name", mcpConfigSource = "mcp_config_source",
              agentID = "agent_id", agentType = "agent_type", foldedUnderText = "folded_under", foldedAsText = "folded_as",
-             foldedSideText = "folded_side"
+             foldedSideText = "folded_side", approvalBatchID = "approval_batch_id", approvalItemID = "approval_item_id",
+             ownerProposal = "owner_proposal", noExpiry = "no_expiry", ownerApprovalPhrases = "owner_approval_phrases"
     }
 }
 
@@ -2877,6 +2973,8 @@ nonisolated struct Resolution: Codable, Sendable, Equatable {
     /// An MCP form or link (`Elicitation.resolution`): accept, decline or cancel, and with a form's accept what was filled in.
     var action: String?
     var content: [String: JSONValue]?
+    /// Runtime-only exact proposal reply. Excluded from CodingKeys so it can never become an ordinary resolution field.
+    var ownerApprovalPhrase: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case answers, approve, mode, feedback, allow, always, message, keys, text, dismiss, cancel, option, options, values, reason, action, content

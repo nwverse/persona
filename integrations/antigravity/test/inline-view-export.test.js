@@ -75,6 +75,7 @@ test('unexported settled turn syncs final persisted item id once native transcri
   ]
   writeTranscriptFile(directory, 'transcript_full.jsonl', initial)
   await node.peer.call('session.watch', { session_id: SESSION })
+  const before = (await node.peer.call('session.items', { session_id: SESSION })).history
 
   await node.peer.call('session.send', { session_id: SESSION, text: 'Show me options.', assistant: true })
   await promptCount(1)
@@ -84,7 +85,7 @@ test('unexported settled turn syncs final persisted item id once native transcri
 
   await until('settled unexported turn pushed with temporary item id', () => {
     const batch = node.last('session.items')
-    return batch?.history?.includes(':settled:') &&
+    return batch?.history === before &&
       batch.items?.some((it) => it.role === 'assistant' && it.kind === 'text' && it.text === CARD_REPLY)
   }, 15_000)
   const tempBatch = node.last('session.items')
@@ -98,7 +99,7 @@ test('unexported settled turn syncs final persisted item id once native transcri
   ]
   writeTranscriptFile(directory, 'transcript_full.jsonl', partial)
   const duringPartial = await node.peer.call('session.items', { session_id: SESSION })
-  assert.ok(duringPartial.history.includes(':settled:'))
+  assert.equal(duringPartial.history, before)
   assert.equal(duringPartial.items.at(-1).id, tempReply.id)
 
   // Real flushed transcript has shifted step_index and a thinking block, producing the final stable #1 item id.
@@ -118,7 +119,7 @@ test('unexported settled turn syncs final persisted item id once native transcri
 
   await until('rewritten session.items pushed with final persisted item id', () => {
     const batch = node.last('session.items')
-    return batch && !batch.history?.includes(':settled:') && batch.to_seq === 6 &&
+    return batch && batch.history !== before && batch.to_seq === 6 &&
       batch.items?.some((it) => it.role === 'assistant' && it.kind === 'text' && it.id.startsWith('6@') && it.id.endsWith('#1'))
   }, 15_000)
 
@@ -139,6 +140,7 @@ test('unwatched settled turn clears unexportedTurns and publishes updated rev on
     { step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-01-01T00:00:01Z', content: 'Ready.' },
   ]
   writeTranscriptFile(directory, 'transcript_full.jsonl', initial)
+  const before = (await node.peer.call('session.items', { session_id: SESSION })).history
 
   await node.peer.call('session.send', { session_id: SESSION, text: 'Show options while unwatched.', assistant: true })
   await promptCount(1)
@@ -147,7 +149,7 @@ test('unwatched settled turn clears unexportedTurns and publishes updated rev on
 
   await until('unwatched settled turn exposes temporary item id', async () => {
     const page = await node.peer.call('session.items', { session_id: SESSION })
-    return page.history.includes(':settled:') && page.items.some((it) => it.role === 'assistant' && it.text === CARD_REPLY)
+    return page.history === before && page.items.some((it) => it.role === 'assistant' && it.text === CARD_REPLY)
   }, 15_000)
 
   const flushed = [
@@ -171,21 +173,21 @@ test('unwatched settled turn clears unexportedTurns and publishes updated rev on
   }, 15_000)
 
   const page = await node.peer.call('session.items', { session_id: SESSION })
-  assert.equal(page.history.includes(':settled:'), false)
+  assert.notEqual(page.history, before)
   const reply = page.items.findLast((it) => it.role === 'assistant' && it.kind === 'text')
   assert.ok(reply.id.startsWith('8@') && reply.id.endsWith('#1'), `expected final persisted id, got ${reply.id}`)
   assert.equal(reply.text, CARD_REPLY)
 })
 
 test('compact-to-full transcript transition at the same step_index pushes final item id', { timeout: 20_000 }, async (t) => {
-  const { node, directory, update } = await fixture(t)
+  const { node, directory } = await fixture(t)
   await node.peer.call('session.watch', { session_id: SESSION })
+  await until('initial session is listed', () => node.last('runtime.sessions')?.sessions.some((session) => session.session_id === SESSION))
   const compact = [
     { step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: '2026-01-01T00:00:00Z', content: 'Show card.' },
     { step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-01-01T00:00:01Z', content: CARD_REPLY },
   ]
   writeTranscriptFile(directory, 'transcript.jsonl', compact)
-  update({ sessionUpdate: 'tool_call', toolCallId: 'sync-compact', title: 'Read' })
 
   await until('compact transcript pushed', () => {
     const batch = node.last('session.items')

@@ -1557,6 +1557,7 @@ Use an invalidation revision as the task key and handle the flag after completio
 
 ## System capabilities and page conventions
 
+- `VNDetectBarcodesRequest`'s default revision can fail with Vision error 9, "Could not create inference context", on a simulator while the same code is otherwise valid. Pin `VNDetectBarcodesRequestRevision1` for still-image QR detection and prove valid, blank and two-code generated images; keep image decode and Vision work off the main actor (#11057).
 - Tasks on views that may draw nothing never run (2026-11-04, #1517): Group with empty ForEach or conditional empty content leaves no child
   for modifiers, so loading never starts and list remains empty. Attach loading to an always-present page view (or page-owned model triggered by page task);
   capability-dependent tasks include `features` in `task(id:)`, since direct launch routes can appear before hello.
@@ -3164,3 +3165,20 @@ The lens then jumped on by 33–50 ms of its 0.65 s glide in one frame, by up to
   thousands of methods (1,883 locations for every `_UIContextMenu*` method) slows the app until the test's own steps time out.
 - In a UI test, a held drag that starts on a menu item is the menu's slide-to-choose on a phone: letting go chose the item under
   the finger and closed the menu. Swipe the menu's own list (`app.collectionViews.containing(.button, identifier: <an item>)`).
+
+
+## Foreground SSH recovery owns its route and pending work (#11671)
+
+- Closing an authenticated SSH session is not enough: a pre-authentication TCP channel has not yet become the saved
+  session. Retain and close that channel too, fail the handshake wait immediately, and leave the final phase idle.
+- An unfinished app-level start must be retired by attempt identity. Removing only the tunnel lets the next foreground
+  caller join the old start; clearing an old task unconditionally can erase its replacement. In-app relay cleanup needs
+  the same ownership: one lease per attempt, retained through pairing adoption.
+- A local HTTP refresh can start before foreground route selection installs the tunnel. Resolve the route before
+  building the request URL and authorization; include conditional reads, which drive Inbox and To-dos, and preserve
+  each request's manager, account and operation id. Wait per hub group, not for every group or for a WebSocket hello.
+- Race the last working SSH route only while restoring a closed tunnel. Racing an already-routed tunnel on every
+  attempt lets a fast SSH path always beat a recovered direct address and defeats the periodic return to direct.
+  Cancel the loser by its owner, so a late completion cannot install a route or close the next recovery's tunnel.
+- Test a server that accepts TCP but never sends its SSH greeting, and use controlled route continuations. Killing
+  an established test sshd session alone does not exercise pending-dial cancellation or foreground request ordering.

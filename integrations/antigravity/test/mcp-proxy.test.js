@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -120,13 +120,13 @@ describe('MCP proxy (#7333)', { timeout: 15_000 }, () => {
 })
 
 describe('MCP declaration enums (#9944)', { timeout: 15_000 }, () => {
-  const prompt = readFileSync(new URL('../../../server/internal/prompts/mcp/agents/task_review.md', import.meta.url), 'utf8')
-  const taskSchema = JSON.parse(prompt.match(/```json\s*\n([\s\S]*?)\n```/)[1])
-  const taskTool = { name: 'task_review', description: 'Review a task', inputSchema: taskSchema }
+  // The template has language branches and is not JSON until the server renders it. Use its recorded MCP wire form.
+  const rendered = JSON.parse(readFileSync(new URL('../../../server/internal/hub/testdata/prompts/mcp_tools/assistant/task_review.golden', import.meta.url), 'utf8'))
+  const taskTool = { name: rendered.name, description: rendered.description, inputSchema: rendered.input_schema }
   const catalogTool = { name: 'tool_catalog', inputSchema: { type: 'object' } }
 
   it('projects the real task_review schema without its boolean enum and keeps boolean call arguments', async (t) => {
-    assert.deepEqual(taskSchema.properties.evidence.properties.ready.enum, [true])
+    assert.deepEqual(taskTool.inputSchema.properties.evidence.properties.ready.enum, [true])
     const { call } = proxied(t, [taskTool])
     const listed = await call('tools/list', {})
     const expected = structuredClone(taskTool)
@@ -205,5 +205,92 @@ describe('mcpServers', () => {
     assert.deepEqual(chat.map((s) => [s.name, s.command, s.args]), [['persona', process.execPath, [PROXY, '/bin/personad', 'mcp']]])
     assert.ok(chat[0].env.some((e) => e.name === 'PERSONA_ASSISTANT' && e.value === '1'))
     assert.ok(chat[0].env.some((e) => e.name === 'PERSONA_SESSION_ID' && e.value === 'agy-1'))
+  })
+})
+
+
+describe('MCP proxy process cleanup', { timeout: 15_000 }, () => {
+  async function fixture(t, mode = '') {
+    const dir = mkdtempSync(join(tmpdir(), 'persona-mcp-lifecycle-'))
+    const events = join(dir, 'events')
+    const source = `
+      const fs = require('node:fs');
+      const [events, mode] = process.argv.slice(1);
+      for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {
+        fs.appendFileSync(events, signal + '\\n');
+        process.exit(0);
+      });
+      setInterval(() => {}, 1000);
+      process.stdin.on('data', () => process.stdout.write(JSON.stringify({ result: 'response' }) + '\\n'));
+      if (mode === 'close-input') {
+        process.stdin.once('close', () => {
+          fs.closeSync(0);
+          process.stdout.write(JSON.stringify({ result: { pid: process.pid } }) + '\\n');
+        });
+        process.stdin.destroy();
+      } else process.stdout.write(JSON.stringify({ result: { pid: process.pid } }) + '\\n');
+    `
+    const proc = spawn(process.execPath, [PROXY, process.execPath, '-e', source, events, mode], { stdio: ['pipe', 'pipe', 'pipe'] })
+    let childPid
+    let stderr = ''
+    proc.stderr.on('data', (chunk) => { stderr += chunk })
+    proc.stdin.on('error', () => {})
+    t.after(() => {
+      proc.kill('SIGKILL')
+      if (childPid) { try { process.kill(childPid, 'SIGKILL') } catch {} }
+      rmSync(dir, { recursive: true, force: true })
+    })
+    const [ready] = await once(proc.stdout, 'data')
+    childPid = JSON.parse(String(ready)).result.pid
+    return { proc, childPid, events, stderr: () => stderr }
+  }
+
+  function exited(proc) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('proxy did not exit')), 2000)
+      proc.once('exit', (code, signal) => { clearTimeout(timer); resolve({ code, signal }) })
+    })
+  }
+
+  function assertGone(pid) {
+    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' })
+  }
+
+  for (const signal of ['SIGTERM', 'SIGINT']) {
+    it(`forwards ${signal} and waits for the child to exit`, async (t) => {
+      const { proc, childPid, events } = await fixture(t)
+      const done = exited(proc)
+      proc.kill(signal)
+      await done
+      assert.equal(existsSync(events) && readFileSync(events, 'utf8'), signal + '\n')
+      assertGone(childPid)
+    })
+  }
+
+  it('ends a server that stays alive after stdin closes', async (t) => {
+    const { proc, childPid } = await fixture(t)
+    const done = exited(proc)
+    proc.stdin.end()
+    await done
+    assertGone(childPid)
+  })
+
+  it('handles a broken child input without an uncaught EPIPE or orphan', async (t) => {
+    const { proc, childPid, stderr } = await fixture(t, 'close-input')
+    const done = exited(proc)
+    proc.stdin.write('request\n')
+    await done
+    assert.doesNotMatch(stderr(), /Unhandled 'error' event|throw er;/)
+    assertGone(childPid)
+  })
+
+  it('cleans up when its output consumer closes the pipe', async (t) => {
+    const { proc, childPid, stderr } = await fixture(t)
+    const done = exited(proc)
+    proc.stdout.destroy()
+    proc.stdin.write('request\n')
+    await done
+    assert.doesNotMatch(stderr(), /Unhandled 'error' event|throw er;/)
+    assertGone(childPid)
   })
 })
