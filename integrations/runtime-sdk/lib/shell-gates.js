@@ -1,5 +1,5 @@
-// Shared native-shell gate recognition for Assistant adapters.
-/** Build a regex matching any gated shell command or script path (`tool.shell`). */
+// Mandatory Assistant shell gates.
+// Match declared command names and script paths.
 export function shellWordsRe(words) {
   const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const alts = (Array.isArray(words) ? words : [])
@@ -10,11 +10,7 @@ export function shellWordsRe(words) {
 
 const SHELL_BINARIES = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash'])
 
-/**
- * Tokenize a shell command string into unquoted/unescaped words while splitting on shell
- * operators (`;`, `&&`, `||`, `|`, `&`, `(`, `)`, `<`, `>`, `` ` ``, `$(`, newlines).
- * Also collects embedded `$(...)` / `` `...` `` command-substitution bodies for recursive checks.
- */
+// Parse shell words/operators and retain nested command substitutions.
 function tokenizeShell(command) {
   const tokens = []
   const embedded = []
@@ -31,7 +27,7 @@ function tokenizeShell(command) {
   }
   while (i < n) {
     const ch = command[i]
-    // Whitespace or shell control operators terminate the current token.
+    // Token boundary.
     if (/[\s;&|()<>]/.test(ch)) {
       flush()
       i++
@@ -141,7 +137,7 @@ function basenameOf(token) {
   return idx >= 0 ? norm.slice(idx + 1) : norm
 }
 
-/** Extract command-gate shell matchers from Persona tool descriptors returned by `rt.tools({ assistant: true })`. */
+// Build command gates from the current tool inventory.
 export function extractShellGates(tools) {
   const out = []
   for (const t of Array.isArray(tools) ? tools : []) {
@@ -153,7 +149,7 @@ export function extractShellGates(tools) {
   return out
 }
 
-/** Check whether a shell command string hits a Persona command gate (returns the matching gate or undefined). */
+// Find a gate hit, including nested commands.
 export function matchShellGate(command, gates, depth = 0) {
   if (depth > 4 || typeof command !== 'string' || !command.trim() || !Array.isArray(gates) || gates.length === 0) {
     return undefined
@@ -165,7 +161,7 @@ export function matchShellGate(command, gates, depth = 0) {
       if (words.some((w) => tokenMatchesWord(tok, w))) return g
     }
   }
-  // Inspect nested commands passed to `sh -c ...` / `bash -lc ...` / `eval ...` and command substitutions.
+  // Check eval, nested shells and substitutions.
   for (let i = 0; i < tokens.length; i++) {
     const base = basenameOf(tokens[i])
     if (base === 'eval' && i + 1 < tokens.length) {
