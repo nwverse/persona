@@ -28,6 +28,8 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
+import java.time.Instant
+import java.time.ZoneId
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -73,7 +75,7 @@ class LarkMessagesShotsTest {
             isGroup = true,
             markedUnread = true,
             preview = "A marked chat keeps its unread affordance without inventing a message count.",
-            updatedAt = "2025-12-31T03:04:05Z",
+            updatedAt = "2025-06-15T12:00:00Z",
         ),
     )
 
@@ -152,8 +154,9 @@ class LarkMessagesShotsTest {
             isGroup = true,
             markedUnread = true,
             preview = "An old marked chat keeps its name ahead of its unread tag and full date.",
-            updatedAt = "2025-12-31T03:04:05Z",
+            updatedAt = "2025-06-15T12:00:00Z",
         )
+        val expectedDate = Instant.parse(row.updatedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString()
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
         var run by mutableIntStateOf(0)
@@ -184,7 +187,7 @@ class LarkMessagesShotsTest {
             rule.waitForIdle()
             capture("lark-messages-long-name-unread-old-date-${appearance.name.lowercase()}-${if (night) "dark" else "light"}-text-200")
             rule.onNodeWithText("Unread", useUnmergedTree = true).assertExists()
-            rule.onNodeWithText("2025-12-31", useUnmergedTree = true).assertExists()
+            rule.onNodeWithText(expectedDate, useUnmergedTree = true).assertExists()
             assertVisiblePrefix(longName, characters = 6)
         }
     }
