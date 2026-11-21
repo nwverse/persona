@@ -162,7 +162,11 @@ func stageOf(text string) (stage, pr string) {
 // advanceTaskReply handles progress and final answers identically, including the running-hub deploy check.
 func (s *Service) advanceTaskReply(ctx context.Context, t Todo, machine, session, text string) bool {
 	if urls := taskRepositoryReportLinks(text); len(urls) > 0 {
-		if err := s.importReportedLinks(ctx, t.ID, urls, "pull_request"); err != nil {
+		roleByURL := map[string]string{}
+		for raw := range referenceReportLinks(text, urls) {
+			roleByURL[raw] = repository.LinkRoleReference
+		}
+		if err := s.importReportedLinks(ctx, t.ID, urls, "pull_request", roleByURL); err != nil {
 			s.logf("task %s: repository links not saved: %v", t.ID, err)
 		}
 	}
@@ -424,7 +428,7 @@ func (s *Service) setTaskStage(ctx context.Context, id, stage, pr string) {
 
 func (s *Service) setTaskStageKind(ctx context.Context, id, stage, pr, kind string, verified bool) {
 	if pr != "" {
-		if err := s.importReportedLinks(ctx, id, []string{pr}, ""); err != nil {
+		if err := s.importReportedLinks(ctx, id, []string{pr}, "", nil); err != nil {
 			s.logf("task %s: repository link not saved: %v", id, err)
 		}
 	}
