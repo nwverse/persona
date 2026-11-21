@@ -107,6 +107,9 @@ nonisolated enum ServerEvent: Sendable {
     /// An urgent call moved on (docs/assistant/urgent-call.md): a phone still ringing for one answered or settled
     /// elsewhere stops.
     case urgentCall(id: String, state: String)
+    /// How a send stands at the hub (`message_send_state`, `todo_send_state`): only passed on while this socket's hello
+    /// vouches for its kind (`LiveConnection.receiptTrust`).
+    case sendReceipt(SendReceipt)
     case error(SessionKey?, String)
 
     private struct EventType: Decodable { var type: String }
@@ -246,9 +249,12 @@ nonisolated enum ServerEvent: Sendable {
         guard let e = try? JSON.decoder.decode(Envelope.self, from: data) else { return nil }
         let key = e.machineID.flatMap { m in e.sessionID.map { SessionKey(machineID: m, sessionID: $0) } }
         switch e.type {
+        // The receipt markers are read on their own, so no other event's keys can break the envelope over them.
         case "hello": return .hello(HubHello(features: e.features ?? [], hubID: e.hubID, hubName: e.hubName, mesh: e.mesh?.hubs,
                                              channel: e.channel, build: e.build, protocolVersion: e.protocolVersion,
-                                             minAppBuild: e.minAppBuild, publicURL: e.publicURL.flatMap { URL(string: $0) }))
+                                             minAppBuild: e.minAppBuild, publicURL: e.publicURL.flatMap { URL(string: $0) },
+                                             sendReceipts: SendReceiptTrust.decode(hello: data)))
+        case SendReceipt.messageType, SendReceipt.todoType: return SendReceipt.decode(type: e.type, data).map { .sendReceipt($0) }
         case "hub_update": return e.update.map { .hubUpdate($0) }
         case "extension_operation", "plugin_operation": return e.operation.map { .extensionOperation($0, manager: e.manager?.string) }
         case "extension_auth": return e.extensionID.map { .extensionAuth(extension: $0, e.auth?.value, manager: e.manager?.string) }
@@ -381,6 +387,7 @@ nonisolated extension ServerEvent {
         case .error(let key, let message): return .error(key.map(k), message)
         case .sessionsDelta(let machine, let upsert, let remove):
             return .sessionsDelta(machineID: machine, upsert: upsert.map { var s = $0; s.group = group; return s }, remove: remove)
+        case .sendReceipt(let receipt): var receipt = receipt; receipt.key.group = group; return .sendReceipt(receipt)
         case .sessionsList, .hello, .interactionResolved, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
              .personas, .look, .managers, .directions, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
              .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth, .meetingLive, .urgentCall, .savedPrompts, .starredMessages: return self
@@ -498,6 +505,10 @@ final class LiveConnection {
     @ObservationIgnored private(set) var resumed = false
     /// Only this connection's authenticated hello may enable canonical outbound contracts.
     private(set) var personaContracts = false
+    /// The send receipts this connection's authenticated hello vouches for (docs/protocol/protocol.md "Message feedback
+    /// (#5258)"): none until it comes, and none again as soon as the socket drops, another opens or the credential
+    /// changes. A receipt of a kind it does not vouch for is dropped here, before `onEvent`.
+    @ObservationIgnored private(set) var receiptTrust = SendReceiptTrust.none
     /// Where the app is in the hub's numbered broadcasts: kept across reconnects, cleared with another hub.
     @ObservationIgnored private(set) var cursor = EventCursor()
     /// iOS/Mac list clients opt in; watch/extension consumers retain their existing full-list contract.
@@ -580,6 +591,7 @@ final class LiveConnection {
 
     func disconnect() {
         personaContracts = false
+        receiptTrust = .none
         generation += 1
         cancelRoute()
         task?.cancel(with: .goingAway, reason: nil)
@@ -665,6 +677,7 @@ final class LiveConnection {
     private func open() {
         guard let config, !suspended else { return }
         personaContracts = false
+        receiptTrust = .none
         generation += 1
         cancelRoute()
         attemptBegan = Date()
@@ -814,7 +827,7 @@ final class LiveConnection {
                     let first = self.state != .connected
                     if first { self.endDrop() }
                     if meta.type != "extension_ui_stream" { self.note(meta) } // private sessions have no broadcast cursor
-                    if case .hello(let hello)? = event { self.personaContracts = hello.features.contains(HubNaming.feature) }
+                    if case .hello(let hello)? = event { self.heard(hello) }
                     if first {
                         DevProbe.socket(.connected)
                         if let on = self.config { self.onAttempt?(on, .answers, self.attemptBegan) }
@@ -826,12 +839,13 @@ final class LiveConnection {
                         self.onConnected?()
                     }
                     self.extensionStreamFrame(data, event: event)
-                    if let event { self.onEvent?(event) }
+                    if let event, self.passes(event) { self.onEvent?(event) }
                     self.receive(t, gen)
                 case .failure(let err):
                     DevProbe.socket(.dropped)
                     let attempt = self.state != .connected // not a drop: this attempt never connected
                     self.personaContracts = false
+                    self.receiptTrust = .none
                     let planned = self.restartNotice || (!self.closedQuiet && t.closeCode == .goingAway)
                     self.dropped(restart: planned)
                     // The handshake's answer: 401 is the hub refusing this credential, not the hub being away.
@@ -876,7 +890,7 @@ final class LiveConnection {
             let first = self.state != .connected
             if first { self.endDrop() }
             if meta.type != "extension_ui_stream" { self.note(meta) }
-            if case .hello(let hello)? = event { self.personaContracts = hello.features.contains(HubNaming.feature) }
+            if case .hello(let hello)? = event { self.heard(hello) }
             if first {
                 self.state = .connected
                 self.sayHello()
@@ -884,15 +898,28 @@ final class LiveConnection {
             }
             self.lastHeard = .now
             self.extensionStreamFrame(data, event: event)
-            if let event { self.onEvent?(event) }
+            if let event, self.passes(event) { self.onEvent?(event) }
         }, dropped: { [weak self] in
             guard let self, gen == self.generation else { return }
             self.personaContracts = false
+            self.receiptTrust = .none
             self.dropped(restart: self.restartNotice)
             self.state = .failed(String(localized: "Connection lost"))
             self.stalled = false
             self.scheduleReconnect(gen)
         })
+    }
+
+    /// This socket's authenticated hello: what it may send under the canonical contracts, and which receipts to trust.
+    private func heard(_ hello: HubHello) {
+        personaContracts = hello.features.contains(HubNaming.feature)
+        receiptTrust = hello.sendReceipts
+    }
+
+    /// Whether an event goes on to `onEvent`: a send receipt only while this socket's hello vouches for its kind.
+    private func passes(_ event: ServerEvent) -> Bool {
+        guard case .sendReceipt(let receipt) = event else { return true }
+        return receiptTrust.admits(receipt)
     }
 
     /// What a message says about the connection: the broadcast stream's place, whether this hello resumed it, a
@@ -991,14 +1018,16 @@ final class LiveConnection {
     nonisolated static let larkViaMessagingFeature = "lark_via_messaging"
 
     /// `elicitation` (MCP forms and links, `ElicitationForm`) from the iOS app alone: the frozen Mac app and visionOS
-    /// don't declare it, so the hub hands those cards to the terminal when they are the only apps open.
+    /// don't declare it, so the hub hands those cards to the terminal when they are the only apps open. The iOS app
+    /// alone also asks for `todo_send_state` (`SendReceipt.todoFeature`): the to-do page that writes with an op id is
+    /// its own.
     /// `persona_card_ring` (```persona-card rings, `PersonaCard.swift`) from the apps that build the chat (iOS, Mac,
     /// visionOS), not the watch or the extensions: a client without it gets each ring as a stacked bar (the hub's
     /// card_compat.go), which every build before the ring draws.
     nonisolated static func helloFeatures(_ client: RequestClientMetadata) -> [String] {
         let iOSApp = RequestClientMetadata.Platform.iOS.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue
         let chatApps = [RequestClientMetadata.Platform.iOS, .macOS, .visionOS].map { $0.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue }
-        return [HubNaming.feature] + (client.platform == iOSApp ? ["elicitation", UndeliveredMessage.agentHoldFeature] : []) + (chatApps.contains(client.platform) ? [cardRingFeature, "closeout.markdown.v1"] : [])
+        return [HubNaming.feature] + (client.platform == iOSApp ? ["elicitation", UndeliveredMessage.agentHoldFeature, SendReceipt.todoFeature] : []) + (chatApps.contains(client.platform) ? [cardRingFeature, "closeout.markdown.v1"] : [])
     }
 
     /// The client_hello feature that says this app draws ```persona-card rings (#3068).

@@ -2104,7 +2104,8 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   (`TodosPlacePage`, below); the gate stays a plain value. It is off in every Release build until the switch-on
   (`TodosV1.released`), and on the iPhone and iPad only (`TodosV1.platform`): visionOS keeps today's To-dos. The data
   and model files under `apple/Persona/Features/Todos/` compile on every platform, since `TodoStore` (shared with
-  visionOS) names them; the V1 views are iOS only (`List/`). The hub's `todo_send_state` marker is not read yet.
+  visionOS) names them; the V1 views are iOS only (`List/`). The socket reads the hub's `todo_send_state` marker
+  ("Send receipts", below).
 - **The list** (`apple/Persona/Features/Todos/List/`, iOS only; DESIGN_SYSTEM 3.4 "To-dos list"). `TodosListModel`
   (`Deps`: the store, the hub, the clock, the projects' names) follows the store and lays the list out once per change
   (`TodosListLayout`, pure): the sections for the bar's choice (`TodosBar`, `TodosChoice`), the grouping and the sort,
@@ -2183,6 +2184,23 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   what it draws and whether the gate is on (`probe.todos-page`). The store's one-minute clock for rows filed by the
   app's own rules runs while a counted row is filed so (the drawer's N included, whether or not the list was drawn) and
   follows whatever changes that, another assistant made current included (`TodoCountsSource.byRulesChanged`).
+- **Send receipts** (`apple/Shared/SendReceipts.swift`; `docs/protocol/protocol.md` "Message feedback (#5258)" and its
+  "To-do writes"). The socket decodes `message_send_state` and `todo_send_state` (`ServerEvent.sendReceipt`) and passes
+  one on only while its own authenticated hello carries that kind's top-level version, `message_send_state: 1` or
+  `todo_send_state: 1` (`SendReceiptTrust`; a feature-array entry is not proof). That trust goes the moment the socket
+  drops, another opens or the credential changes (`LiveConnection.receiptTrust`), so a new connection has to say it
+  again. The iOS app alone declares `todo_send_state` in `client_hello` (the hub sends it only to the full devices that
+  ask); `message_send_state` goes to a session's subscribers unasked. `AppModel.sendReceipts` (`SendReceiptStore`) holds
+  the sends the app waits on: before it sends, a sender expects its `client_msg_id` or op id (compared without case: the
+  hub lowercases op ids) with the session or to-do it goes to, and keeps the `SendReceiptCell` it is given. A receipt for
+  another id, session, to-do or hub group is ignored; Processing moves the cell; the final state (`delivered`,
+  `failed`, `unknown`, or `kept` for a session's message) ends the entry, which leaves the table (at most 64: one more
+  lets the oldest go without a state), while the cell keeps what it was told. Each cell is observed on its own, so a
+  burst of other sends' receipts draws nothing. Receipts are feedback only: the HTTP answer, or the op id's receipt,
+  stays authoritative, and the events are not replayed after a reconnect. Nothing reads the cells yet: the to-do
+  page's composer will, and the chats still show Processing after the HTTP answer (`ChatSendFeedback`). `MOCK_TODO_VIEW`
+  sends both (`docs/operations/testing.md`). Tests: `SendReceiptsTests`; `SendReceiptsBurstTests` prints the main
+  thread's time per event under a burst.
 - **404 and 405.** An older hub answers 405 for `GET /api/v1/todos/{id}` and `GET /api/v1/todos/places` (the `PATCH` and
   `DELETE` routes of `/api/v1/todos/{id}` match the path) and 404 for the other new routes: `TodoNotThere` takes both
   as "not there". A 404 with `todo_not_found` is the to-do itself gone. `GET /api/v1/todos` answering 404 still hides
