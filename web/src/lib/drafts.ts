@@ -157,6 +157,8 @@ export interface QuoteState {
   list: readonly DraftQuote[];
   /** The id of the card whose note is open for writing. */
   editing: string | null;
+  /** The active note opens beside its passage. */
+  inline?: boolean;
   /** That card is new: Esc takes it back instead of leaving the note as it was. */
   fresh: boolean;
 }
@@ -196,11 +198,11 @@ export function useQuotes(key: string): QuoteState {
 
 /** A quote joins the list: a message quote takes the place of the last one (first in the list), a comment comes last.
  *  Returns its id. A comment starts open for writing (`write`). */
-export function addQuote(key: string, q: DraftQuote, write = Boolean(q.comment)): string {
+export function addQuote(key: string, q: DraftQuote, write = Boolean(q.comment), inline = false): string {
   const st = getQuotes(key);
   const added: DraftQuote = { ...q, id: uuid() };
   const list = q.comment ? [...st.list, added] : [added, ...st.list.filter((x) => x.comment)];
-  putQuotes(key, { list, editing: write ? added.id! : st.editing && list.some((x) => x.id === st.editing) ? st.editing : null, fresh: write });
+  putQuotes(key, write ? { list, editing: added.id!, fresh: true, inline } : { ...st, list });
   return added.id!;
 }
 
@@ -209,23 +211,34 @@ export function setQuotes(key: string, list: readonly DraftQuote[]) {
   putQuotes(key, { list, editing: null, fresh: false });
 }
 
+/** Return attempted comments after a failed send, keeping anything added while it was in flight. */
+export function restoreQuotes(key: string, attempted: readonly DraftQuote[]) {
+  if (!attempted.length) return;
+  const st = getQuotes(key);
+  const ids = new Set(st.list.map((q) => q.id));
+  const hasQuote = st.list.some((q) => !q.comment);
+  const missing = attempted.filter((q) => !ids.has(q.id) && (q.comment || !hasQuote));
+  const list = [...missing, ...st.list];
+  putQuotes(key, { ...st, list: [...list.filter((q) => !q.comment), ...list.filter((q) => q.comment)] });
+}
+
 export function removeQuote(key: string, id: string) {
   const st = getQuotes(key);
   const list = st.list.filter((q) => q.id !== id);
-  putQuotes(key, { list, editing: st.editing === id ? null : st.editing, fresh: st.editing === id ? false : st.fresh });
+  putQuotes(key, st.editing === id ? { list, editing: null, fresh: false } : { ...st, list });
 }
 
 /** The note of a comment card; `done` closes it for writing. */
 export function setNote(key: string, id: string, body: string, done = false) {
   const st = getQuotes(key);
   const list = st.list.map((q) => (q.id === id && q.comment ? { ...q, comment: { ...q.comment, body: clampComment(body) } } : q));
-  putQuotes(key, done ? { list, editing: null, fresh: false } : { ...st, list });
+  putQuotes(key, done && st.editing === id ? { list, editing: null, fresh: false } : { ...st, list });
 }
 
 /** Opens a card's note for writing again (a click on "Comment"). */
-export function editNote(key: string, id: string) {
+export function editNote(key: string, id: string, inline = false) {
   const st = getQuotes(key);
-  if (st.editing !== id) putQuotes(key, { ...st, editing: id, fresh: false });
+  if (st.editing !== id || Boolean(st.inline) !== inline) putQuotes(key, { ...st, editing: id, fresh: false, inline });
 }
 
 /** Esc in a note: a new card goes, an older one keeps its last note (the caller restores it). */
