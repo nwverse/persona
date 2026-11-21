@@ -86,7 +86,7 @@ func sameAgyFile(a, b os.FileInfo) bool {
 }
 
 func agyStepsHistory(conversation string) agyHistory {
-	return agyHistory{token: "agy-pane:" + conversation + ":steps:lazy-media:checkpoints:wakes"}
+	return agyHistory{token: "agy-pane:" + conversation + ":steps:lazy-media:checkpoints:wakes:file-links"}
 }
 
 // agyRead loads the compact export for pages and live updates. The revision memo

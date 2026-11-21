@@ -7,6 +7,7 @@ import { MCP_SERVER_NAMES } from '../../runtime-sdk/lib/compat.js'
 import { page } from '../../runtime-sdk/index.js'
 import {
   agyModeToPersona,
+  cleanAssistantText,
   cleanGenericOutput,
   cleanUserText,
   mapToolCall,
@@ -363,6 +364,55 @@ describe('antigravity transcript and tool mapping', () => {
     assert.equal(photoOnly.items.length, 1)
     assert.equal(photoOnly.items[0].kind, 'text')
     assert.equal(photoOnly.items[0].text, '<attached_images>\n/tmp/only-photo.png\n</attached_images>')
+  })
+
+  it('normalizes local file:// Markdown links and images in assistant replies only', () => {
+    const cases = [
+      ['unix file link', 'See [notes.md](file:///work/repo/notes.md).', 'See [notes.md](/work/repo/notes.md).'],
+      ['line fragment', 'Check [app.go](file:///work/repo/app.go#L10-L20).', 'Check [app.go](/work/repo/app.go#L10-L20).'],
+      ['localhost authority', '[doc](file://localhost/work/repo/doc.md)', '[doc](/work/repo/doc.md)'],
+      ['uppercase scheme and percent spaces', '[a](FILE:///work/My%20Notes/a.md)', '[a](/work/My%20Notes/a.md)'],
+      ['angle-bracket destination', '[a](<file:///work/My Notes/a.md> "title")', '[a](</work/My Notes/a.md> "title")'],
+      ['balanced parens and title', '[p](file:///work/photo(1).png "shot")', '[p](/work/photo(1).png "shot")'],
+      ['image destination', '![chart](file:///work/repo/chart.png)', '![chart](/work/repo/chart.png)'],
+      ['windows drive', '[win](file:///C:/work/notes.md#L5)', '[win](C:/work/notes.md#L5)'],
+      ['windows encoded colon', '[win](file:///c%3A/work/notes.md)', '[win](c:/work/notes.md)'],
+      ['reference definition', '[ref]: file:///work/repo/notes.md "Ref"', '[ref]: /work/repo/notes.md "Ref"'],
+      ['list continuation', '- item\n    [notes](file:///work/notes.md)', '- item\n    [notes](/work/notes.md)'],
+      ['inline code untouched', 'Use `[notes](file:///work/notes.md)` literally.', 'Use `[notes](file:///work/notes.md)` literally.'],
+      ['fenced code untouched', '```md\n[notes](file:///work/notes.md)\n```\n[live](file:///work/live.md)', '```md\n[notes](file:///work/notes.md)\n```\n[live](/work/live.md)'],
+      ['indented code untouched', 'Example:\n\n    [notes](file:///work/notes.md)\n\n[live](file:///work/live.md)', 'Example:\n\n    [notes](file:///work/notes.md)\n\n[live](/work/live.md)'],
+      ['remote host untouched', '[r](file://other-host/share/notes.md)', '[r](file://other-host/share/notes.md)'],
+      ['unc double slash untouched', '[u](file:////server/share/notes.md)', '[u](file:////server/share/notes.md)'],
+      ['hub route untouched', '[api](file:///api/v1/sessions)', '[api](file:///api/v1/sessions)'],
+      ['query string untouched', '[q](file:///work/notes.md?x=1)', '[q](file:///work/notes.md?x=1)'],
+      ['nul byte untouched', '[n](file:///work/notes%00.md)', '[n](file:///work/notes%00.md)'],
+      ['relative file scheme untouched', '[rel](file:notes.md)', '[rel](file:notes.md)'],
+      ['escaped bracket untouched', 'text \\](file:///work/notes.md)', 'text \\](file:///work/notes.md)'],
+      ['partial streaming link untouched', 'See [notes](file:///work/no', 'See [notes](file:///work/no'],
+    ]
+    for (const [name, input, expected] of cases) {
+      assert.equal(cleanAssistantText(input), expected, name)
+    }
+
+    const { items, lastText } = stepsToItems([
+      { step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', content: 'Open [u](file:///work/u.md)' },
+      {
+        step_index: 1,
+        source: 'MODEL',
+        type: 'PLANNER_RESPONSE',
+        status: 'DONE',
+        thinking: 'Checking [t](file:///work/t.md)',
+        content: 'Opened [notes.md](file:///work/notes.md#L12) and ![img](file:///work/img.png).',
+        tool_calls: [{ name: 'view_file', args: { AbsolutePath: '/work/notes.md' } }],
+      },
+      { step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', content: '[out](file:///work/out.md)' },
+    ])
+    assert.equal(items[0].text, 'Open [u](file:///work/u.md)')
+    assert.equal(items[1].text, 'Checking [t](file:///work/t.md)')
+    assert.equal(items[2].text, 'Opened [notes.md](/work/notes.md#L12) and ![img](/work/img.png).')
+    assert.equal(items[4].text, '[out](file:///work/out.md)')
+    assert.equal(lastText, 'Opened [notes.md](/work/notes.md#L12) and ![img](/work/img.png).')
   })
 
   it('maps modes between Persona and Antigravity ACP', () => {
