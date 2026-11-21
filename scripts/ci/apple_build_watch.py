@@ -15,6 +15,7 @@ SAMPLE_SECONDS = 15
 MAX_PROCESSES = 8
 MAX_OUTPUT_BYTES = 64 * 1024
 MAX_PERIODIC_SAMPLES = 120
+MAX_SECONDS = 3600
 
 
 def output(command, timeout=COMMAND_TIMEOUT, limit=MAX_OUTPUT_BYTES, runner=subprocess.run):
@@ -104,8 +105,8 @@ def main():
     parser.add_argument("--stop", type=Path, required=True)
     parser.add_argument("--seconds", type=float, required=True)
     args = parser.parse_args()
-    if not 0 < args.seconds <= 1800:
-        parser.error("resource observation must fit within the existing build deadline")
+    if not 0 < args.seconds <= MAX_SECONDS:
+        parser.error("resource observation must fit within the selected lane's build deadline")
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, interrupted)
     observe(args.output, args.seconds, args.stop)

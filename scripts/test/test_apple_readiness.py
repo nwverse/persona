@@ -22,6 +22,8 @@ FAKE_XCODE = textwrap.dedent('''\
     root = Path(os.environ["FAKE"])
     with (root / "xcode-calls.jsonl").open("a") as log:
         log.write(json.dumps(args) + "\\n")
+    with (root / "xcode-env.jsonl").open("a") as log:
+        log.write(json.dumps({key: os.environ[key] for key in ("TEST_RUNNER_PERSONA_SHOTS",) if key in os.environ}) + "\\n")
     if "-only-testing:PersonaTests/AboutVersionRegularVisualTests" in args:
         assert "-only-testing:PersonaTests/AboutVersionRegularVisualTests" in args, args
         assert os.environ["TEST_RUNNER_PERSONA_SHOTS"].endswith("/regular-shots")
@@ -177,6 +179,10 @@ class AppleReadinessTests(unittest.TestCase):
     def run_preparation(self, regular_only=False, **options):
         source = SCRIPT.read_text()
         helpers = source[source.index("simulator_udid() {"):source.index("cleanup() {")]
+        helpers += source[source.index("result() {"):source.index('if [ "$LANE" = all ]', source.index("test_batch() {"))]
+        settings = source.index('  if [ "$LANE" = ios18 ]; then',
+                                source.index('if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then'))
+        helpers += source[settings:source.index('  IOS_COMMON=(', settings)]
         if regular_only:
             start = source.index("  # The same compiled fixture and compatible runtime as #11289")
             block = source[start:source.index('  ci_run \'Verify token baseline', start)]
@@ -197,13 +203,9 @@ XCODE=(xcodebuild)
 TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER=)
 ''' + helpers + '''
 IOS_COMMON=(xcodebuild)
-result() {
-  local name="$1"; shift
-  ci_run "Inspect test results ($name)" 120 python3 "$CI_ROOT/scripts/ci/apple_result.py" "$OUTPUT/$name.xcresult" "$@"
-}
 ''' + block
         env = dict(os.environ, PATH=str(self.fixture.bin) + os.pathsep + os.environ["PATH"],
-                   CI_ROOT=str(ROOT), SOURCE=str(ROOT), OUTPUT=str(self.output),
+                   LANE="ios", CI_ROOT=str(ROOT), SOURCE=str(ROOT), OUTPUT=str(self.output),
                    PERSONA_CONFIG=str(self.output / "config.json"), SIM_NAME="owned readiness fixture",
                    IOS_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0", OWNED_UDID=owned_udid,
                    REGULAR_SIM_NAME="owned regular About fixture",
@@ -260,6 +262,25 @@ result() {
             "iOS regular-width About visual test on real iPad|600",
             "Inspect test results (ios-about-regular)|120",
         ])
+        self.assertIn("TEST_RUNNER_PERSONA_SHOTS",
+                      (self.root / "xcode-env.jsonl").read_text())
+
+    def test_compact_visual_output_directory_is_run_specific_and_not_a_skip(self):
+        result, calls = self.run_preparation()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        expected = str(self.output / "shots")
+        environments = [json.loads(line) for line in (self.root / "xcode-env.jsonl").read_text().splitlines()]
+        self.assertEqual(environments[:2], [{}, {}])
+        self.assertEqual(environments[2:], [{"TEST_RUNNER_PERSONA_SHOTS": expected},
+                                           {"TEST_RUNNER_PERSONA_SHOTS": str(self.output / "regular-shots")}])
+        for call in calls:
+            self.assertFalse(any(argument.startswith("PERSONA_SHOTS=") for argument in call))
+        support = (ROOT / "apple/PersonaTests/AboutVersionRefractTests.swift").read_text()
+        self.assertIn('try #require(ProcessInfo.processInfo.environment["PERSONA_SHOTS"])', support)
+        self.assertIn("native.pixels == shared.pixels", support)
+        self.assertIn("try FileManager.default.createDirectory(at: root", support)
+        self.assertNotIn('IOS_UNIT_SELECTION+=(-skip-testing:PersonaTests/AboutVersionCompactVisualTests)',
+                         SCRIPT.read_text()[SCRIPT.read_text().index('if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then'):SCRIPT.read_text().index('if [ "$LANE" = ios18 ]; then', SCRIPT.read_text().index('IOS_FAILED=0'))])
 
     def test_cleanup_removes_both_owned_destinations_including_an_unparsed_ipad(self):
         source = SCRIPT.read_text()

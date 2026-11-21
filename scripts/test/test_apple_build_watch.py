@@ -1,12 +1,16 @@
 """Compiler resource observation must not alter the build or export its arguments."""
 from pathlib import Path
+import io
 import json
+import os
+import shlex
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
 from unittest import mock
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
@@ -25,6 +29,15 @@ class CompilerResourceTests(unittest.TestCase):
         self.assertEqual(parsed["counts"], {"swift-frontend": 1, "swiftc": 1, "xcodebuild": 1, "clang": 1})
         self.assertEqual(parsed["total_rss_kib"], 129156)
         self.assertNotIn("command", json.dumps(parsed["largest"]))
+
+    def test_process_summary_keeps_the_eight_largest_compiler_entries(self):
+        result = subprocess.CompletedProcess([], 0, "\n".join(
+            f"  {pid}  2 1.0 {pid * 1000} /Toolchain/usr/bin/swift-frontend" for pid in range(10, 22)), "")
+        parsed = watch.processes(lambda *args, **kwargs: result)
+        self.assertEqual(watch.MAX_PROCESSES, 8)
+        self.assertEqual(parsed["counts"], {"swift-frontend": 12})
+        self.assertEqual(len(parsed["largest"]), 8)
+        self.assertEqual([entry["pid"] for entry in parsed["largest"]], list(range(21, 13, -1)))
 
     def test_bounded_command_rejects_rather_than_truncates_evidence(self):
         result = subprocess.CompletedProcess([], 0, "x" * (watch.MAX_OUTPUT_BYTES + 1), "")
@@ -49,6 +62,18 @@ class CompilerResourceTests(unittest.TestCase):
             sample.assert_called_once_with(root, "final", mock.ANY)
             self.assertIn("periodic samples", (root / "observer.status.txt").read_text())
 
+    def test_periodic_samples_stop_at_120_and_retain_only_a_bounded_final(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.object(watch, "metadata", return_value={}), \
+                    mock.patch.object(watch, "sample") as sample:
+                watch.observe(root, 3600, root / "stop", monotonic=lambda: 0, sleep=lambda _: None)
+            self.assertEqual(sample.call_count, 121)
+            self.assertEqual(sample.call_args_list[-1], mock.call(root, "final", mock.ANY))
+            self.assertTrue(all(call.args[1] == f"sample-{index:03d}"
+                                for index, call in enumerate(sample.call_args_list[:-1])))
+            self.assertTrue((root / "observer.status.txt").read_text().startswith("120 periodic samples;"))
+
     def test_samples_are_compact_and_count_bounded(self):
         def fake_output(command, **kwargs):
             if command == ["memory_pressure"]:
@@ -68,10 +93,37 @@ class CompilerResourceTests(unittest.TestCase):
             self.assertLessEqual(watch.MAX_PERIODIC_SAMPLES, 120)
             self.assertLessEqual(watch.MAX_OUTPUT_BYTES, 64 * 1024)
 
-    def test_shell_wrapper_preserves_every_xcodebuild_argument_and_budget(self):
+    def test_observer_deadline_accepts_both_lane_budgets_and_rejects_larger_values(self):
+        self.assertEqual(watch.MAX_SECONDS, 3600)
+        for seconds in (1800, 3600):
+            with self.subTest(seconds=seconds), \
+                    patch.object(watch, "observe") as observe, \
+                    patch.object(sys, "argv", ["apple_build_watch.py", "--output", "/tmp/output",
+                                               "--stop", "/tmp/stop", "--seconds", str(seconds)]), \
+                    patch.object(sys, "stderr", new=io.StringIO()):
+                watch.main()
+                observe.assert_called_once_with(Path("/tmp/output"), seconds, Path("/tmp/stop"))
+        for seconds in (0, 3601):
+            with self.subTest(seconds=seconds), \
+                    patch.object(sys, "argv", ["apple_build_watch.py", "--output", "/tmp/output",
+                                               "--stop", "/tmp/stop", "--seconds", str(seconds)]), \
+                    patch.object(sys, "stderr", new=io.StringIO()), \
+                    self.assertRaisesRegex(SystemExit, "2"):
+                watch.main()
+
+    def test_every_lane_scope_and_budget_reaches_the_same_build_and_observer(self):
         source = (ROOT / "scripts/ci/apple.sh").read_text()
-        self.assertIn("ci_run 'Build iOS offline unit tests' 1800 bash -c", source)
-        block = source[source.index("ci_run 'Build iOS offline unit tests'"):source.index("ci_run 'No CallKit in the simulator build'")]
+        start = source.index('if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then')
+        end = source.index("ci_run 'No CallKit in the simulator build'", start)
+        block = source[start:end]
+        self.assertIn('ci_run \'Build iOS offline unit tests\' "$BUILD_SECONDS" bash -c', block)
+        expected_build = {
+            "all": 1800,
+            "ios": 1800,
+            "ios18": 3600,
+            "packages": None,
+            "ios-build": None,
+        }
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory)
             (fixture / "python3").write_text(textwrap.dedent('''\
@@ -85,34 +137,70 @@ class CompilerResourceTests(unittest.TestCase):
             (fixture / "python3").chmod(0o755)
             (fixture / "xcodebuild").write_text(textwrap.dedent('''\
                 #!/bin/bash
-                printf '%s\\n' "$*" >> "$FIXTURE_XCODE_ARGS"
+                printf '%s\\n' "$@" > "$FIXTURE_XCODE_ARGS"
             '''))
             (fixture / "xcodebuild").chmod(0o755)
-            env = {**__import__('os').environ, "PATH": str(fixture) + ":/usr/bin:/bin",
-                   "FIXTURE_WATCH_ARGS": str(fixture / "args"),
-                   "FIXTURE_XCODE_ARGS": str(fixture / "xcode-args")}
-            command = '''set -euo pipefail
-            ci_run() {
-              local label="$1" budget="$2"; shift 2
-              /usr/bin/python3 "$CI_ROOT/scripts/ci/run.py" --label "$label" --timeout 3 -- "$@"
-            }
-            CI_ROOT=/fixture-root
-            OUTPUT=/fixture-output
-            IOS_COMMON=(xcodebuild)
-            IOS_UNIT_SELECTION=(-only-testing:PersonaTests)
-            CI_ROOT=''' + str(ROOT) + '''
-            OUTPUT=''' + str(fixture / "output") + '''
-            ''' + block
-            result = subprocess.run(["/bin/bash", "-c", command], cwd=ROOT, env=env,
-                                    capture_output=True, text=True, timeout=15)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            args = (fixture / "args").read_text()
-            self.assertIn(str(fixture / "output/diagnostics/build-resources"), args)
-            self.assertIn("--seconds 1800", args)
-            self.assertEqual((fixture / "xcode-args").read_text(),
-                             "-destination generic/platform=iOS Simulator ARCHS=" + __import__('os').uname().machine +
-                             " ONLY_ACTIVE_ARCH=YES -only-testing:PersonaTests build-for-testing\n")
-            self.assertNotIn("unbound variable", result.stdout + result.stderr)
+            for lane, budget in expected_build.items():
+                with self.subTest(lane=lane):
+                    output = fixture / ("output " + lane)
+                    watch_args = fixture / ("watch-" + lane)
+                    xcode_args = fixture / ("xcode-" + lane)
+                    calls = fixture / ("calls-" + lane)
+                    env = {**os.environ, "PATH": str(fixture) + ":/usr/bin:/bin",
+                           "FIXTURE_WATCH_ARGS": str(watch_args), "FIXTURE_XCODE_ARGS": str(xcode_args),
+                           "FIXTURE_CALLS": str(calls)}
+                    prefix = '''set -euo pipefail
+                    ci_run() {
+                      local label="$1" budget="$2"; shift 2
+                      printf '%s\\n' "$budget" >> "$FIXTURE_CALLS"
+                      /usr/bin/python3 "$CI_ROOT/scripts/ci/run.py" --label "$label" --timeout "$budget" -- "$@"
+                    }
+                    CI_ROOT=''' + shlex.quote(str(ROOT)) + '''
+                    OUTPUT=''' + shlex.quote(str(output)) + '''
+                    XCODE=(xcodebuild -project /fixture/Persona.xcodeproj -configuration Debug
+                      -clonedSourcePackagesDirPath /fixture/cache)
+                    TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual
+                      DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER=)
+                    LANE=''' + lane + "\n"
+                    result = subprocess.run(["/bin/bash", "-c", prefix + block + "\nfi\n"], cwd=ROOT, env=env,
+                                            capture_output=True, text=True, timeout=15)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    if budget is None:
+                        self.assertFalse(calls.exists())
+                        self.assertFalse(watch_args.exists())
+                        self.assertFalse(xcode_args.exists())
+                        self.assertFalse(output.exists())
+                        continue
+                    self.assertEqual(calls.read_text(), str(budget) + "\n")
+                    self.assertIn(f"--seconds {budget}", watch_args.read_text())
+                    expected_args = [
+                        "-project", "/fixture/Persona.xcodeproj",
+                        "-configuration", "Debug",
+                        "-clonedSourcePackagesDirPath", "/fixture/cache",
+                        "-scheme", "Persona",
+                        "-derivedDataPath", str(output / "ios-tests"),
+                        "-parallel-testing-enabled", "NO",
+                        "-disableAutomaticPackageResolution",
+                        "CODE_SIGNING_ALLOWED=YES", "CODE_SIGN_IDENTITY=-", "CODE_SIGN_STYLE=Manual",
+                        "DEVELOPMENT_TEAM=", "PROVISIONING_PROFILE_SPECIFIER=",
+                        "-destination", "generic/platform=iOS Simulator",
+                        "ARCHS=" + os.uname().machine, "ONLY_ACTIVE_ARCH=YES",
+                        "-skip-testing:PersonaTests/OldHubCompatibilityIntegrationTests",
+                        "-skip-testing:PersonaTests/NotificationServiceTests/opensWhatTheRelayDelivered()",
+                        "-skip-testing:PersonaTests/VideoFileTests/nativeVideoPlaysSeeksAndCleansUp()",
+                        "-skip-testing:PersonaTests/VideoFileResourceTests/realHTTPReadsMiddleTailAndRejectsChangedRevision()",
+                        "-only-testing:PersonaTests",
+                        "-skip-testing:PersonaTests/AboutVersionRegularVisualTests",
+                        "-skip-testing:PersonaTests/AssistantHTMLCardTests",
+                        "-skip-testing:PersonaTests/AssistantHTMLSecurityTests",
+                        "build-for-testing",
+                    ]
+                    self.assertEqual(xcode_args.read_text().splitlines(), expected_args)
+                    self.assertTrue((output / "diagnostics/build-resources/stop").is_file())
+                    self.assertNotIn("unbound variable", result.stdout + result.stderr)
+        self.assertIn('if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then', block)
+        self.assertIn('ci_root="$1"; output="$2"; seconds="$3"; shift 3', block)
+        self.assertIn('\' -- "$CI_ROOT" "$OUTPUT" "$BUILD_SECONDS" "${IOS_COMMON[@]}"', block)
         self.assertIn('"$@"\n', block)
         self.assertIn("-destination 'generic/platform=iOS Simulator'", block)
         self.assertIn('ARCHS="$(uname -m)" ONLY_ACTIVE_ARCH=YES', block)

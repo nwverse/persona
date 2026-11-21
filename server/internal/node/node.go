@@ -43,6 +43,10 @@ import (
 type Node struct {
 	runtimeUsage runtimeUsageReports
 
+	// Only the manager's initial node.info can negotiate source delivery on this connection.
+	managerInfoOnce sync.Once
+	sourceSend      atomic.Bool
+
 	// The assistant's one memory (memory_merge.go), both under memoryMu: per project key, the other profiles' notes
 	// already merged, and when a merge that failed is tried again.
 	memoryMerged     map[string]map[string]bool
@@ -786,6 +790,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	}
 	switch method {
 	case nodeproto.SourceSend:
+		if !n.sourceSend.Load() {
+			return nil, refusal("source_permissions_not_negotiated", "The connected manager did not negotiate source permissions", nil)
+		}
 		method = "session.send"
 		ctx = withSourceDelivery(ctx, params)
 	case nodeproto.OwnerInterrupt:
@@ -798,9 +805,10 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	if method == "session.send" || method == "codex.answer" {
 		ctx = promptLanguageContext(ctx, params)
 	}
+	if method == "sessions.history" {
+		return n.handleSessionsHistory(ctx, method, params)
+	}
 	switch method {
-	case "sessions.history": // sessions active in a time window, inactive ones too (sessions_history.go)
-		return n.sessionsHistory(ctx, params)
 	case "workspace.naming.resolve":
 		return n.resolveWorkspaceNaming(ctx, params)
 	case "session.share_projection":
@@ -866,7 +874,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		Prompt                  string        `json:"prompt"`
 		ResumeSessionID         string        `json:"resume_session_id"`
 		ResumeAutomatic         bool          `json:"resume_automatic"`
-		Host                    string        `json:"host"` // session.start: the enabled host to open in ("" the default host, #2576)
+		ResumeOutsideHealth     bool          `json:"resume_outside_health"` // session.start: an extension's resume the hub does not list (resumeOutsideHealth)
+		Host                    string        `json:"host"`                  // session.start: the enabled host to open in ("" the default host, #2576)
 		TaskID                  string        `json:"task_id"`
 		WorkspaceID             string        `json:"workspace_id"`
 		WorkspaceLabel          string        `json:"workspace_label"`
@@ -959,6 +968,16 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("bad params: %w", err)
 		}
+	}
+	// Before anything else reads the id (a backend session's pin, an alias, a Codex thread, a runtime's session): an
+	// extension's resume of a conversation the hub does not list goes on only for one this computer has outside the
+	// health space (#10941). A refusal that holds for any id comes first (resumeHostRefusal): an engine that is away
+	// may have it, and the owner's resume is told the same, whatever the id.
+	if devicewire.IsSessionStart(method) && p.ResumeOutsideHealth && p.ResumeSessionID != "" && !n.resumeOutsideHealth(ctx, p.ResumeSessionID) {
+		if err := n.resumeHostRefusal(ctx, p.Host); err != nil {
+			return nil, err
+		}
+		return nil, resumeUnknown()
 	}
 	sessionSend := method == "session.send" || method == proto.MethodSessionSendUnseen
 	if backendLaunchFrom(ctx) == nil && (sessionSend || method == "session.start" && p.ResumeSessionID != "") {
@@ -1171,6 +1190,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "ping": // the hub checking a tailcat connection is alive (its userspace TCP has no keepalive)
 		return map[string]any{}, nil
 	case "node.info":
+		n.managerInfoOnce.Do(func() {
+			var p nodeproto.NodeInfoQuery
+			if json.Unmarshal(params, &p) == nil {
+				n.sourceSend.Store(slices.Contains(p.ManagerFeatures, nodeproto.SourcePermissions))
+			}
+		})
 		return n.info(ctx), nil
 	case "herdr.server.start": // the "Start" button beside "herdr is not running" (herdrstart.go)
 		return n.startHerdrServer(ctx)

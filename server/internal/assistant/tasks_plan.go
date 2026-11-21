@@ -177,15 +177,24 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		takesModes := true
 		if _, ok := s.machineByName(ctx, t.Machine); ok {
 			own := t.launchPick()
-			fit, err := s.fitPlanTaskSpeed(ctx, t)
+			fit, configuredMode, err := s.fitPlanTask(ctx, t)
 			if err != nil {
 				return "", fmt.Errorf("task %d: %w", i+1, err)
 			}
-			if fit.allowAll() {
+			switch {
+			case t.Readonly:
+				if fit.allowAll() {
+					t.Permission = "bypassPermissions"
+				}
+			case configuredMode != "" && fit.supportsPermissionMode(configuredMode):
+				if t.Permission == "" {
+					t.Permission = configuredMode
+				}
+			case fit.allowAll():
 				t.Permission = "bypassPermissions"
 			}
 			// traex, omp…: no mode, no effort (launcher_modes.go). One the call names is refused now, rather than by
-			// the computer once the task starts; one a tier filled in is dropped. pi, cursor, agy: dropped either way.
+			// the computer once the task starts; one a tier filled in is dropped. pi, cursor: dropped either way.
 			if takesModes = startTakesModes(fit.agent); !takesModes {
 				if err := startModesRefused(t.Launcher, fit.agent, asked, own.effort); err != nil {
 					return "", fmt.Errorf("task %d: %w", i+1, err)
@@ -469,15 +478,21 @@ func planErr(w http.ResponseWriter, err error) {
 	}
 }
 
-// checkRole refuses a role a plan task may not have, before anything is planned. Any conversation may hand out a
-// leader: its own reports reach the conversation that planned it. A task leader's workers are never one.
+// checkRole requires an explicit role for every newly planned task, before anything is planned. Any conversation may
+// hand out a leader: its own reports reach the conversation that planned it. A task leader may plan only workers.
+// Stored plans do not pass through here, so their legacy empty role still means an ordinary worker.
 func (t *PlanTask) checkRole(byLeader bool) error {
-	switch {
-	case t.Role == "":
-	case byLeader:
-		return errors.New("a task leader plans workers only: role is refused")
-	case t.Role != roleLeader:
-		return fmt.Errorf("role %q is not one: leave it out, or \"leader\"", t.Role)
+	if t.Role == "" {
+		if byLeader {
+			return errors.New(`role is required: "worker"`)
+		}
+		return errors.New(`role is required: "worker" or "leader"`)
+	}
+	if t.Role != "worker" && t.Role != roleLeader {
+		return fmt.Errorf("role %q is not one: \"worker\" or \"leader\"", t.Role)
+	}
+	if byLeader && t.Role != "worker" {
+		return errors.New(`a task leader plans workers only: role must be "worker"`)
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -281,15 +283,13 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if p.Space != "" && p.Space != SpaceHealth {
 		return proto.Session{}, badRequest(fmt.Errorf("space %q: health or none", p.Space))
 	}
+	explicitPermission := strings.TrimSpace(p.PermissionMode)
 	if p.Origin == OriginInbox {
 		// Default keeps the explicit Persona MCP allowlist effective: Plan rejects MCP before consulting it. The
 		// manager/node origin policy, not the launcher's permission mode, prevents externally visible work.
 		p.PermissionMode = "default"
-	} else if p.PermissionMode == "" && p.GuestTools == nil {
-		p.PermissionMode = s.settings(ctx).DefaultPermissionMode
-		if p.PermissionMode == "" {
-			p.PermissionMode = proto.ModeBypass
-		}
+	} else {
+		p.PermissionMode = explicitPermission
 	}
 	var cwd string
 	var err error
@@ -374,6 +374,25 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	// in Persona's profile (#10859).
 	fromSetting := p.GuestTools == nil && purpose != purposeAgent && s.withNewConversationProfile(ctx, machine, params)
 	used, _ := params["launcher"].(string)
+	// Settle permission_mode after model resolution so Model Configuration's permission_mode applies before falling
+	// back to the assistant default / bypassPermissions, while preserving Inbox and guest safety boundaries.
+	switch {
+	case p.Origin == OriginInbox:
+		params["permission_mode"] = "default"
+	case p.GuestTools != nil:
+		params["permission_mode"] = ""
+	default:
+		mode, _ := params["permission_mode"].(string)
+		if mode == "" {
+			mode = cmp.Or(s.settings(ctx).DefaultPermissionMode, proto.ModeBypass)
+			params["permission_mode"] = mode
+		}
+		if explicitPermission == "" && used != "" && used != "claude" {
+			if agent := s.launcherAgent(withUnhidden(ctx, used), machine, used); agent != "" && !permissionModeSupported(agent, 0, mode) {
+				delete(params, "permission_mode")
+			}
+		}
+	}
 	// A profile is Claude Code's: the node refuses a config_dir for any other agent before starting it (#6467). Judged
 	// here, by the launcher the start finally runs on, not the one asked for: the model configuration and a fallback
 	// can both change it. One hidden from the pickers still runs what it runs (withUnhidden, as finishMainChatModel
@@ -414,7 +433,8 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		}
 		return proto.Session{}, err
 	}
-	sess := proto.Session{SessionID: res.SessionID, Cwd: cwd, Status: proto.StatusWorking, Launcher: used, PermissionMode: p.PermissionMode,
+	finalMode, _ := params["permission_mode"].(string)
+	sess := proto.Session{SessionID: res.SessionID, Cwd: cwd, Status: proto.StatusWorking, Launcher: used, PermissionMode: finalMode,
 		Effort: p.Effort, StartedByPersona: true, UpdatedAt: time.Now().UTC()}
 	sess.MachineID, sess.Assistant, sess.State, sess.Space = machine, true, proto.StateWorking, p.Space
 	if strings.TrimSpace(p.Text) == "" && len(p.Images) == 0 {
@@ -489,6 +509,8 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 	}
 	sess.Origin, sess.OriginRef, sess.OpenedBy = firstNonEmpty(p.Origin, OriginUser), p.OriginRef, p.OpenedBy
 	s.originSet(ctx, sess.MachineID, sess.SessionID, sess.Origin, sess.OriginRef, sess.OpenedBy)
+	// Its space, for when no computer lists it (conversation_space.go).
+	s.noteConversationSpaces(ctx, []db.ConversationSpace{{MachineID: sess.MachineID, SessionID: sess.SessionID, Space: p.Space}})
 	return sess, nil
 }
 
@@ -537,6 +559,7 @@ type mainHandoff struct {
 	// A cleared external choice reserves this ID before its start, so retries cannot create another conversation.
 	For     string `json:"for,omitempty"`
 	Summary string `json:"summary,omitempty"`
+	Partial bool   `json:"partial,omitempty"`
 	Recent  []struct {
 		Role string `json:"role"`
 		Text string `json:"text"`
@@ -710,7 +733,7 @@ func (s *Service) newMain(ctx context.Context, carry bool, expect string) (strin
 	now := time.Now().UTC()
 	handoff := mainHandoff{From: old, MachineID: machine, Until: now}
 	carried := false
-	if carry && found {
+	if carry && (found || s.historyKnown(ctx, machine, old)) {
 		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		err := s.call(cctx, machine, DeviceAssistantHandoff, map[string]any{"session_id": old}, &handoff)
 		cancel()
@@ -943,6 +966,10 @@ func (s *Service) startRoutes() {
 		}
 		if in.Space != "" && in.Space != SpaceHealth {
 			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: health or none", in.Space))
+			return
+		}
+		if in.Space == SpaceHealth && r.Header.Get(RoleHeader) == roleExtension {
+			apierr.WriteCode(w, http.StatusForbidden, "permission_denied", i18n.Err("apierr-apierr.health_start_forbidden"))
 			return
 		}
 		if in.Model = strings.TrimSpace(in.Model); checkModelID(in.Model) != nil {
@@ -1254,9 +1281,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine
 	delete(p, "idle_compaction")
 	if p["is_main"] == true {
-		p["idle_compaction"] = assistantwire.IdleCompaction{
-			Enabled: s.idleAutoCompact(ctx), IdleMinutes: s.idleAutoCompactMinutes(ctx), ContextTokens: s.idleAutoCompactTokens(ctx),
-		}
+		p["idle_compaction"] = s.idleCompactionPolicy(ctx)
 	}
 	putMainCompactWindow(cfg, p)
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
@@ -1373,11 +1398,28 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		if err := s.applyPickedModel(ctx, p); err != nil {
 			return err
 		}
-	} else if err := s.applyModel(ctx, purpose, p); err != nil {
-		return err
+	} else {
+		if err := preservePermissionMode(p, func() error { return s.applyModel(ctx, purpose, p) }); err != nil {
+			return err
+		}
 	}
 	_, err := s.finishMainChatModel(ctx, machine, purpose, p, pickedLauncher)
 	return err
+}
+
+// preservePermissionMode runs fn against an existing conversation's send params without letting a purpose's
+// configured permission_mode be injected into or overwrite the session's active permission mode.
+func preservePermissionMode(p map[string]any, fn func() error) error {
+	prevMode, hadMode := p["permission_mode"]
+	if err := fn(); err != nil {
+		return err
+	}
+	if hadMode {
+		p["permission_mode"] = prevMode
+	} else {
+		delete(p, "permission_mode")
+	}
+	return nil
 }
 
 // sendOnPick puts conversation sid's pick into p (sendModel): its launcher, model and effort (an effort sent with the
@@ -1396,7 +1438,7 @@ func (s *Service) sendOnPick(ctx context.Context, machine, sid string, p map[str
 	if err := s.otherKindPick(ctx, machine, sid, pick.Launcher); err != nil {
 		return err
 	}
-	return s.applyPick(ctx, p, pick)
+	return preservePermissionMode(p, func() error { return s.applyPick(ctx, p, pick) })
 }
 
 // startedByTask: sid is a conversation a scheduled task started (origin task), also once it is no task's current
