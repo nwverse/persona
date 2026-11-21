@@ -595,6 +595,15 @@ func (a *autoPrepare) mounted() bool {
 	return len(d) == 1 && bytes.Contains(d[0].Info, []byte(`"ddi_mounted":true`))
 }
 
+// afterChecks waits until n more device_info requests (health checks; after a mount, the read that follows it) have
+// reached the fake: what a count that must not grow is checked after, rather than a fixed while.
+func (a *autoPrepare) afterChecks(n int) {
+	a.t.Helper()
+	checks := func() int { return strings.Count(a.ops(), "device_info") }
+	want := checks() + n
+	waitFor(a.t, func() bool { return checks() >= want })
+}
+
 // connect brings a link up, through a call that needs one.
 func (a *autoPrepare) connect() {
 	a.t.Helper()
@@ -617,7 +626,7 @@ func TestAutoPrepareTriesAgainWhileLocked(t *testing.T) {
 	}
 	a.connect()
 	waitFor(t, func() bool { return a.mounts() >= 1 })
-	time.Sleep(15 * healthEvery)
+	a.afterChecks(5)
 	if n := a.mostOnOneLink(); n != 1 {
 		t.Fatalf("ddi_missing tried %d times on one link: %s", n, a.ops())
 	}
@@ -640,7 +649,7 @@ func TestAutoPrepareTriesAgainWhileLocked(t *testing.T) {
 	}
 	waitFor(t, a.mounted)
 	n := a.mounts()
-	time.Sleep(15 * healthEvery)
+	a.afterChecks(5)
 	if got := a.mounts(); got != n {
 		t.Fatalf("mounted %d more times after it was mounted: %s", got-n, a.ops())
 	}
