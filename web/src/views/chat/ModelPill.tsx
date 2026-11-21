@@ -308,7 +308,7 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session, ma
   useEffect(() => {
     if (!mid) return;
     void readAssistantLaunchers(mid);
-    if (isMain) void readMainDefault(mid);
+    if (isMain) void readMainDefault(mid, { again: true });
     if (supervisor) void readSuperviseDefault(mid);
   }, [mid, scope, supervisor, isMain]);
   // A long-open page must still show the effective Main chat model after a hub-side change (#6542): a push that bumps

@@ -547,6 +547,12 @@ describe("main-only model defaults", () => {
     await show(undefined);
     await open();
     expect(panel.props!.state.current).toEqual(defaultSetup);
+    act(() => root.render(<></>));
+    await flush();
+    mainSetup = { provider: "claude", model: "opus", effort: "high" };
+    await show(chat());
+    await open();
+    expect(panel.props!.state.current).toEqual(mainSetup);
     expect(calls.every((c) => c.method === "GET")).toBe(true);
   });
 
