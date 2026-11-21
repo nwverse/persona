@@ -198,6 +198,12 @@ func runKeyIn(it proto.Item) string {
 	if source := prompts.ItemSource(it); source == nil || source.Kind != proto.SourcePatrol {
 		return ""
 	}
+	if body := stripContext(it.Text); strings.HasPrefix(body, prompts.ScheduleMarkerPrefix) {
+		if run := prompts.ReadScheduledRun(it.Text); run != nil {
+			return run.RunKey
+		}
+		return ""
+	}
 	for line := range strings.SplitSeq(it.Text, "\n") {
 		if rest, ok := strings.CutPrefix(line, taskStateRunHead); ok {
 			if key, ok := strings.CutSuffix(rest, taskStateRunTail); ok && key != "" {

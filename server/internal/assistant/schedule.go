@@ -90,6 +90,7 @@ type Task struct {
 	RunIf  *routineCheck `json:"run_if,omitempty"`
 	// factsText is the run's facts as the model is given them (briefing.go); set on the copy a run is made from, never stored.
 	factsText string
+	runLang   i18n.Lang // owner language captured for this dispatch, never stored
 	// kbDir is the knowledge directory the run's hint names (a daily run with the knowledge base on); set on the copy, never stored.
 	kbDir string
 	// The conversation it came from (on MachineID), runs go into it; empty = the task's own conversation.
@@ -419,8 +420,8 @@ func (sc *schedule) missedRuns(since time.Time) []ScheduleRun {
 func defaultRoutines(l i18n.Lang) []Routine {
 	weekdays := []int{1, 2, 3, 4, 5}
 	return []Routine{
-		{ID: "morning", Title: i18n.T(l, "assistant-schedule.morning"), Time: "09:00", Weekdays: weekdays, Enabled: true, Prompt: prompts.RenderMorningRoutine(), Facts: true},
-		{ID: "evening", Title: i18n.T(l, "assistant-schedule.evening"), Time: "21:30", Weekdays: weekdays, Enabled: false, Prompt: prompts.RenderEveningRoutine(), Facts: true},
+		{ID: "morning", Title: i18n.T(l, "assistant-schedule.morning"), Time: "09:00", Weekdays: weekdays, Enabled: true, Prompt: prompts.RenderMorningRoutine(""), Facts: true},
+		{ID: "evening", Title: i18n.T(l, "assistant-schedule.evening"), Time: "21:30", Weekdays: weekdays, Enabled: false, Prompt: prompts.RenderEveningRoutine(""), Facts: true},
 	}
 }
 
@@ -527,21 +528,34 @@ func upgradeDefaultRoutines(tasks []Task) bool {
 	changed := false
 	for i := range tasks {
 		t := &tasks[i]
-		var cur string
-		var former []string
-		switch t.ID {
-		case "morning":
-			cur, former = prompts.RenderMorningRoutine(), prompts.FormerMorningRoutines()
-		case "evening":
-			cur, former = prompts.RenderEveningRoutine(), prompts.FormerEveningRoutines()
-		default:
-			continue
-		}
-		if t.Prompt != cur && slices.Contains(former, t.Prompt) {
+		if cur := routinePrompt(*t, ""); cur != t.Prompt {
 			t.Prompt, t.Facts, changed = cur, true, true
 		}
 	}
 	return changed
+}
+
+// routinePrompt translates only an exact built-in signature. Keep the stored prompt canonical so a
+// later delivery can change language, and preserve any edit the owner made, including whitespace.
+func routinePrompt(t Task, language string) string {
+	var render func(string) string
+	var former func() []string
+	switch t.ID {
+	case "morning":
+		render, former = prompts.RenderMorningRoutine, prompts.FormerMorningRoutines
+	case "evening":
+		render, former = prompts.RenderEveningRoutine, prompts.FormerEveningRoutines
+	default:
+		return t.Prompt
+	}
+	current := render("")
+	if t.Prompt != current && !slices.Contains(former(), t.Prompt) {
+		return t.Prompt
+	}
+	if language == "" {
+		return current
+	}
+	return render(language)
 }
 
 // lockedSchedule returns the schedule locked, or errScheduleUnavailable (and nothing locked) while it could not be
@@ -724,23 +738,32 @@ func stopsAt(t Task, loc *time.Location) string {
 // "schedule the next one with the same prompt" copies them along; they are dropped so they don't pile up.
 var scheduleHeader = lazyre.New(`^(?:⏰[^\n]*（[^\n]*(?:跟进|定时任务)[^\n]*）|（本该[^\n]*）|（(?:Persona|Persona) 会[^\n]*）|（又到时间了[^\n]*）|（这个任务只在你用 notify_user[^\n]*）|（没有变化就立即结束，不做长汇报。）|（Saved state from this scheduled task[^\n]*）|（At the end of this run, if the task state changed,[^\n]*）)\s*`)
 
-func stripScheduleHeader(p string) string {
-	p = strings.TrimSpace(p)
-	for {
-		loc := scheduleHeader.FindStringIndex(p)
-		if loc == nil {
-			return p
+func stripScheduleHeader(prompt string) string {
+	text := strings.TrimSpace(prompt)
+	for text != "" {
+		if strings.HasPrefix(text, prompts.ScheduleMarkerPrefix) {
+			if run := prompts.ReadScheduledRun(text); run != nil {
+				return run.Prompt
+			}
 		}
-		p = strings.TrimSpace(p[loc[1]:])
+		loc := scheduleHeader.FindStringIndex(text)
+		if loc == nil {
+			return prompt // an ordinary prompt keeps the owner's whitespace
+		}
+		text = strings.TrimSpace(text[loc[1]:])
+		prompt = text
 	}
+	return ""
 }
 
 // everyText: "30 minutes" / "2 hours" (in Chinese).
-func everyText(minutes int) string {
+func everyText(minutes int) string { return everyTextIn(i18n.Default, minutes) }
+
+func everyTextIn(l i18n.Lang, minutes int) string {
 	if minutes%60 == 0 {
-		return fmt.Sprintf("%d 小时", minutes/60)
+		return i18n.T(l, "assistant-feishu_cards.board_wait_hours", i18n.Args{"count": minutes / 60})
 	}
-	return fmt.Sprintf("%d 分钟", minutes)
+	return i18n.T(l, "assistant-feishu_cards.board_wait_minutes", i18n.Args{"count": minutes})
 }
 
 // ruleText is the schedule in words, for the tools' replies and list_followups.
@@ -1080,6 +1103,9 @@ func copiesRun(r ScheduleRun, title, rawPrompt string) bool {
 	if strings.TrimSpace(title) != "" {
 		return sameText(title, r.Title)
 	}
+	if run := prompts.ReadScheduledRun(strings.TrimSpace(rawPrompt)); run != nil {
+		return run.Title == r.Title
+	}
 	first, _, _ := strings.Cut(strings.TrimSpace(rawPrompt), "\n")
 	return scheduleHeader.MatchString(first) && strings.HasPrefix(first, "⏰ "+r.Title+"（")
 }
@@ -1396,8 +1422,8 @@ var launcherName = lazyre.New(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 // checkTask validates what the app or a tool set and tidies it (weekdays sorted, every day = none); the messages
 // are for the app.
 func checkTask(t *Task, now time.Time) error {
-	t.Title, t.Prompt = strings.TrimSpace(t.Title), strings.TrimSpace(t.Prompt)
-	if t.Prompt == "" {
+	t.Title = strings.TrimSpace(t.Title)
+	if strings.TrimSpace(t.Prompt) == "" {
 		return i18n.Err("assistant-schedule.prompt_empty")
 	}
 	if t.Repeat != repeatCron {
@@ -1936,7 +1962,7 @@ func taskMessageSource(t Task) *proto.MessageSource {
 	if t.Repeat == repeatOnce {
 		kind = proto.SourceFollowup
 	}
-	return &proto.MessageSource{Kind: kind, ConversationID: t.SessionID, Title: t.label(), Push: t.Push}
+	return &proto.MessageSource{Kind: kind, ConversationID: t.SessionID, Title: t.labelIn(t.runLang.Or(i18n.Default)), Push: t.Push}
 }
 
 func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (proto.Session, error) {
@@ -1953,7 +1979,9 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	}
 	defer s.sched.end(t.ID)
 	t, model, err := s.taskRunSnapshot(ctx, t)
-	run.Kind, run.Title = t.kind(), t.label()
+	t.runLang = s.lang(ctx)
+	ctx = i18n.With(ctx, t.runLang)
+	run.Kind, run.Title = t.kind(), t.labelIn(t.runLang)
 	if t.TodoID != "" && t.Repeat != repeatOnce {
 		run.TodoProgress = &ScheduleTodoAssessment{TodoID: t.TodoID, State: "pending"}
 	}
@@ -2789,13 +2817,24 @@ func (s *Service) forgetConversation(ctx context.Context, id string) (Task, bool
 // task's own conversation, which has had all that (and the knowledge-base hint) already; it is told the earlier
 // runs are above instead. The task's prompt is always there: it may have been edited, or compacted away.
 func taskPrompt(t Task, due, now time.Time, loc *time.Location, manual, kb, continued bool) string {
-	r := prompts.TaskRun{Label: t.label(), TodoID: t.TodoID, Once: t.Repeat == repeatOnce, Interval: t.Repeat == repeatInterval, Due: due.In(loc),
-		Prompt: t.Prompt, KBHint: kb && t.calendar(), KnowledgeDir: t.kbDir, Continued: continued, PushAsked: t.pushesOnlyAsked(), InboxWorthy: t.inboxWorthy(), InboxEvery: t.inboxEvery(), Facts: t.factsText, State: taskStatePrompt(t)}
+	l := t.runLang.Or(i18n.Default)
+	language := answerLanguage(string(l))
+	r := prompts.TaskRun{Language: language, Label: t.labelIn(l), TodoID: t.TodoID, Once: t.Repeat == repeatOnce, Interval: t.Repeat == repeatInterval, Due: due.In(loc),
+		Prompt: routinePrompt(t, language), KBHint: kb && t.calendar(), KnowledgeDir: t.kbDir, Continued: continued, PushAsked: t.pushesOnlyAsked(), InboxWorthy: t.inboxWorthy(), InboxEvery: t.inboxEvery(), Facts: t.factsText}
+	if language == "" {
+		r.State = taskStatePrompt(t)
+	} else if !r.Once {
+		r.RunKey = t.stateRunKey
+		if t.StateNote != nil && t.StateNote.Text != "" {
+			encoded, _ := json.Marshal(t.StateNote.Text)
+			r.SavedState = string(encoded)
+		}
+	}
 	if r.Interval {
-		r.Every = everyText(t.EveryMinutes)
+		r.Every = everyTextIn(l, t.EveryMinutes)
 	}
 	if late := now.Sub(due); !manual && !t.calendar() && late > 2*time.Minute {
-		r.Late = humanDuration(late)
+		r.Late = humanDurationIn(l, late)
 	}
 	return prompts.RenderTaskRun(r)
 }
@@ -2806,14 +2845,16 @@ func lateness(due, at time.Time) string {
 }
 
 // humanDuration: "25 minutes" / "3 hours" / "2 days" (in Chinese).
-func humanDuration(d time.Duration) string {
+func humanDuration(d time.Duration) string { return humanDurationIn(i18n.Default, d) }
+
+func humanDurationIn(l i18n.Lang, d time.Duration) string {
 	switch {
 	case d < time.Hour:
-		return fmt.Sprintf("%d 分钟", int(d.Minutes()))
+		return i18n.T(l, "assistant-feishu_cards.board_wait_minutes", i18n.Args{"count": int(d.Minutes())})
 	case d < 48*time.Hour:
-		return fmt.Sprintf("%d 小时", int(d.Hours()))
+		return i18n.T(l, "assistant-feishu_cards.board_wait_hours", i18n.Args{"count": int(d.Hours())})
 	}
-	return fmt.Sprintf("%d 天", int(d.Hours()/24))
+	return i18n.T(l, "assistant-feishu_cards.board_wait_days", i18n.Args{"count": int(d.Hours() / 24)})
 }
 
 // broadcastSchedule: the list changed. The scheduler re-reads it, the apps are told (event assistant_schedule) and

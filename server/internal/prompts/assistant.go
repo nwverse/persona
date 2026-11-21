@@ -467,14 +467,16 @@ func RenderAssistantContext(c AssistantContext) string { return render("assistan
 
 // TaskRun is the message a scheduled task's run starts with (assistant/task_run).
 type TaskRun struct {
-	Label          string
-	TodoID         string
-	Once, Interval bool   // neither: daily
-	Every          string // interval: "30 minutes"
-	Late           string // "" when on time; else how late ("25 minutes")
-	Due            time.Time
-	Prompt         string
-	KBHint         bool // daily runs with the knowledge base on
+	Language           string
+	SavedState, RunKey string // JSON-quoted saved state and the key of this run, when present
+	Label              string
+	TodoID             string
+	Once, Interval     bool   // neither: daily
+	Every              string // interval: "30 minutes"
+	Late               string // "" when on time; else how late ("25 minutes")
+	Due                time.Time
+	Prompt             string
+	KBHint             bool // daily runs with the knowledge base on
 	// KnowledgeDir: the knowledge base directory the hint names; "" is the default ~/.persona/data.
 	KnowledgeDir string
 	// Continued: it goes into the task's own conversation, which got the background on the first run.
@@ -494,6 +496,7 @@ func RenderTaskRun(t TaskRun) string { return render("assistant/task_run", t) }
 // BriefFacts are the facts of a morning or evening routine's run, as the model is given them (assistant/routine_facts):
 // the lines are ready to read; the totals count more than the lines when the lists were cut.
 type BriefFacts struct {
+	Language string
 	// NorthStar: the lines the report opens with (the interruptions and the availability today, their change against
 	// yesterday until the same time, and where they come from), ready to read.
 	NorthStar                                                        []string
@@ -664,11 +667,20 @@ func RenderBriefFacts(b BriefFacts) string { return render("assistant/routine_fa
 
 // RenderNorthStarFacts is what a leader or main conversation's daily task opens with when it has no facts of its own
 // (assistant/north_star_facts): the north star's lines, ready to read.
-func RenderNorthStarFacts(lines []string) string { return render("assistant/north_star_facts", lines) }
+func RenderNorthStarFacts(lines []string, language string) string {
+	return render("assistant/north_star_facts", struct {
+		Lines    []string
+		Language string
+	}{lines, language})
+}
 
 // RenderMorningRoutine and RenderEveningRoutine are the default daily tasks' prompts.
-func RenderMorningRoutine() string { return render("assistant/routine_morning", nil) }
-func RenderEveningRoutine() string { return render("assistant/routine_evening", nil) }
+func RenderMorningRoutine(language string) string {
+	return render("assistant/routine_morning", struct{ Language string }{language})
+}
+func RenderEveningRoutine(language string) string {
+	return render("assistant/routine_evening", struct{ Language string }{language})
+}
 
 // FormerMorningRoutines and FormerEveningRoutines are the earlier defaults of those prompts, oldest first: a hub that
 // saved one unchanged gets the current default (assistant: upgradeDefaultRoutines). Never edited: each is what a hub

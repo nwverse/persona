@@ -414,7 +414,7 @@ Descriptions live in iOS `apple/Persona/PhoneTools/*Tool.swift` (collected by `P
    (`GOCMD='env UPDATE_GOLDEN=1 go test -count=1 -run TestGoldenAssistantContextMain' ./scripts/test/test-server.sh ./internal/hub`), then copy the two files back.
 4. A judge's prompt (task done, delegation, triage): run its live check before and after the edit and put both tables in the PR ("Behaviour checks" below).
 
-Note that `scheduleHeader` in `assistant/schedule.go` recognizes copied-back old headers by the first few lines of `assistant/task_run.md`: changing those lines requires updating it too.
+The scheduler renders built-in morning and evening reports in the owner's current language at delivery. An edited schedule keeps the owner's original instructions. For English and Japanese runs, `ReadScheduledRun` in `prompts/scheduled.go` recovers the follow-up kind, original title, instructions and optional run key from the generated header. `scheduleHeader` in `assistant/schedule.go` also recognizes copied-back legacy headers. Changes to this format need coverage through scheduled delivery, transcript readback and copying a run's instructions.
 
 ## Add a prompt
 
