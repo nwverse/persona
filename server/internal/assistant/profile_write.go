@@ -381,6 +381,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.InboxSignals != nil {
 			v.InboxSignals = in.InboxSignals
 		}
+		if in.PREventsRouteToAgent != nil {
+			v.PREventsRouteToAgent = in.PREventsRouteToAgent
+		}
 		if in.InboxPost != nil {
 			v.InboxPost = in.InboxPost
 		}
