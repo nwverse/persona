@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import { RpcError } from '../../runtime-sdk/index.js'
 
 // Persona valid effort levels for non-Codex agents, weakest first (server/internal/proto & node/modes.go).
-const PERSONA_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+export const PERSONA_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 const MAX_MODELS = 200
 const DEFAULT_CLI_TIMEOUT_MS = 25_000
 
@@ -193,6 +193,27 @@ export function parseAcpModelOptions(configOptions) {
   return { models, currentModel }
 }
 
+/** Parse ACP `configOptions` array for a reasoning-effort / variant option. */
+export function parseAcpEffortOptions(configOptions) {
+  if (!Array.isArray(configOptions)) return { configId: '', currentEffort: '', efforts: [] }
+  const opt = configOptions.find((c) => c && (
+    c.id === 'variant' ||
+    c.id === 'reasoning_effort' ||
+    c.id === 'thought_level' ||
+    c.category === 'reasoning' ||
+    c.category === 'effort'
+  ))
+  if (!opt) return { configId: '', currentEffort: '', efforts: [] }
+  const rawCurrent = typeof opt.currentValue === 'string' ? opt.currentValue.trim().toLowerCase() : ''
+  const currentEffort = PERSONA_EFFORTS.includes(rawCurrent) ? rawCurrent : ''
+  const rawValues = (Array.isArray(opt.options) ? opt.options : [])
+    .map((item) => (typeof item?.value === 'string' ? item.value.trim().toLowerCase() : ''))
+    .filter(Boolean)
+  const set = new Set(rawValues)
+  const efforts = PERSONA_EFFORTS.filter((e) => set.has(e))
+  return { configId: typeof opt.id === 'string' ? opt.id : '', currentEffort, efforts }
+}
+
 /**
  * Normalize raw opencode model records (from `ctx.model.list()`, CLI, or ACP) into:
  *  - `models`: Persona `AgentModel[]` (at most 200, default marked)
@@ -245,15 +266,16 @@ export function normalizeModels(rawList, defaultModel = '') {
   // Sort default first, non-deprecated before deprecated, preserving original relative order otherwise.
   entries.sort((a, b) => Number(Boolean(b.default)) - Number(Boolean(a.default)) || Number(a._deprecated) - Number(b._deprecated))
   const models = entries.slice(0, MAX_MODELS).map(({ _deprecated, ...rest }) => rest)
-  const resolvedDefault = models.find((m) => m.default)?.id || wantDefault || models[0]?.id || ''
-  return { models, windows, defaultModel: resolvedDefault }
+  const explicitDefault = models.find((m) => m.default)?.id || wantDefault || ''
+  const resolvedDefault = explicitDefault || models[0]?.id || ''
+  return { models, windows, defaultModel: resolvedDefault, explicitDefault }
 }
 
 /**
  * Resolve a caller-requested model string against the normalized catalog.
  * Returns `{ id, providerID, modelID }` or `null` when input is empty.
- * Throws `RpcError(..., 'bad_request')` when a bare (unqualified) model name is not found in a non-empty catalog
- * or lacks a provider ID.
+ * Throws `RpcError(..., 'bad_request')` when a bare (unqualified) model name is not found or is ambiguous
+ * across multiple providers in the catalog.
  */
 export function resolveModel(input, catalog = []) {
   const raw = typeof input === 'string' ? input.trim() : ''
@@ -267,7 +289,8 @@ export function resolveModel(input, catalog = []) {
     return { id: exact.id, providerID, modelID: modelID || exact.id }
   }
 
-  // 2. Explicit `provider/model` or `provider:model`.
+  // 2. Explicit `provider/model` or `provider:model` when matching the catalog or a known provider.
+  const knownProviders = new Set(list.map((m) => splitModelId(m.id).providerID).filter(Boolean))
   const split = splitModelId(raw)
   if (split.providerID && split.modelID) {
     const canonical = `${split.providerID}/${split.modelID}`
@@ -276,19 +299,30 @@ export function resolveModel(input, catalog = []) {
       const s = splitModelId(match.id)
       return { id: match.id, providerID: s.providerID, modelID: s.modelID }
     }
-    // Allow explicit provider/model strings even when the catalog is stale or empty.
-    return { id: canonical, providerID: split.providerID, modelID: split.modelID }
+    if (list.length === 0 || knownProviders.has(split.providerID)) {
+      return { id: canonical, providerID: split.providerID, modelID: split.modelID }
+    }
   }
 
-  // 3. Bare model ID matched against catalog entries (`<provider>/<bare>`).
+  // 3. Bare model ID matched against catalog entries (`<provider>/<bare>`), including bare IDs containing `:` or `/`.
   const matches = list.filter((m) => {
     const { modelID } = splitModelId(m.id)
     return modelID === raw
   })
-  if (matches.length > 0) {
-    const picked = matches.find((m) => m.default) ?? matches[0]
+  if (matches.length === 1) {
+    const picked = matches[0]
     const s = splitModelId(picked.id)
     return { id: picked.id, providerID: s.providerID, modelID: s.modelID || picked.id }
+  }
+  if (matches.length > 1) {
+    const alts = matches.map((m) => m.id).join(', ')
+    throw new RpcError(`模型 "${raw}" 存在多个 provider 匹配（${alts}），请使用完整的 provider/model 格式`, 'bad_request')
+  }
+
+  // 4. Explicit `provider/model` (with `/`) for a provider not yet in the cached catalog.
+  if (raw.includes('/') && split.providerID && split.modelID) {
+    const canonical = `${split.providerID}/${split.modelID}`
+    return { id: canonical, providerID: split.providerID, modelID: split.modelID }
   }
 
   throw new RpcError(`未知的 opencode 模型 "${raw}"（请使用 provider/model 格式，如 opencode-go/claude-haiku-5-5）`, 'bad_request')
