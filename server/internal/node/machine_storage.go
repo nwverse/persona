@@ -26,20 +26,22 @@ import (
 )
 
 const (
-	storageCodeBadRequest    = "bad_request"
-	storageCodeConfirmNeeded = "confirmation_required"
-	storageDefaultTimeout    = 10 * time.Second
-	storageMaxTimeout        = 20 * time.Second
-	storageMinTimeout        = 500 * time.Millisecond
-	storageDefaultMaxDepth   = 4
-	storageMaxDepthLimit     = 8
-	storageMaxWalkEntries    = 40_000
-	storageDockerCmdTimeout  = 5 * time.Second
-	storageGitCmdTimeout     = 5 * time.Second
-	storageProcCmdTimeout    = 5 * time.Second
-	storageStaleWorktreeAge  = 7 * 24 * time.Hour
-	storageMaxCategoryItems  = 12
-	storageMaxWorktreeScans  = 48
+	storageCodeBadRequest        = "bad_request"
+	storageCodeConfirmNeeded     = "confirmation_required"
+	storageDefaultTimeout        = 10 * time.Second
+	storageMaxTimeout            = 20 * time.Second
+	storageMinTimeout            = 500 * time.Millisecond
+	storageDefaultMaxDepth       = 4
+	storageMaxDepthLimit         = 8
+	storageMaxWalkEntries        = 40_000
+	storageDockerCmdTimeout      = 5 * time.Second
+	storageDockerPruneTimeout    = 45 * time.Second
+	storageGitCmdTimeout         = 5 * time.Second
+	storageProcCmdTimeout        = 5 * time.Second
+	storageCleanupDefaultTimeout = 90 * time.Second // strictly shorter than hub's 120s cleanup RPC timeout
+	storageStaleWorktreeAge      = 7 * 24 * time.Hour
+	storageMaxCategoryItems      = 12
+	storageMaxWorktreeScans      = 48
 )
 
 var errStorageOutsideRoot = errors.New("path is outside allowed root")
@@ -62,6 +64,7 @@ type storageDeps struct {
 	lookPath       func(string) (string, error)
 	runningProcs   func(ctx context.Context) (map[string]bool, error)
 	activeLogFiles func(ctx context.Context, dirs []string) map[string]bool
+	cleanupTimeout time.Duration
 }
 
 func (n *Node) defaultStorageDeps() storageDeps {
@@ -93,6 +96,7 @@ func (n *Node) defaultStorageDeps() storageDeps {
 		activeLogFiles: func(ctx context.Context, dirs []string) map[string]bool {
 			return n.collectActiveStorageLogFiles(ctx, goos, dirs)
 		},
+		cleanupTimeout: storageCleanupDefaultTimeout,
 	}
 }
 
@@ -819,11 +823,18 @@ func runMachineStorageCleanup(ctx context.Context, deps storageDeps, params prot
 		return proto.StorageCleanupResult{}, &rpc.Error{Code: storageCodeConfirmNeeded, Message: "selective cleanup requires dry_run=true or confirm=true"}
 	}
 
+	overallTimeout := deps.cleanupTimeout
+	if overallTimeout <= 0 {
+		overallTimeout = storageCleanupDefaultTimeout
+	}
+	cleanupCtx, cancelCleanup := context.WithTimeout(ctx, overallTimeout)
+	defer cancelCleanup()
+
 	dirTargets := map[string]storageDirTarget{}
 	for _, spec := range storageDirTargets(deps) {
 		dirTargets[spec.targetID] = spec
 	}
-	procs := readStorageProcs(ctx, deps)
+	procs := readStorageProcs(cleanupCtx, deps)
 
 	var before int64
 	if !params.DryRun && deps.home != "" {
@@ -845,18 +856,26 @@ func runMachineStorageCleanup(ctx context.Context, deps storageDeps, params prot
 			continue
 		}
 		seen[id] = true
+		if cleanupCtx.Err() != nil {
+			out.Items = append(out.Items, proto.StorageCleanupItem{
+				TargetID: id,
+				Status:   proto.StorageCleanupSkipped,
+				Error:    "cleanup deadline exceeded",
+			})
+			continue
+		}
 		var item proto.StorageCleanupItem
 		switch id {
 		case proto.StorageTargetDockerBuildCache:
-			item = cleanupDockerBuildCache(ctx, deps, params.DryRun)
+			item = cleanupDockerBuildCache(cleanupCtx, deps, params.DryRun)
 		case proto.StorageTargetGitWorktreesPrune:
-			item = cleanupGitWorktreesPrune(ctx, deps, params.DryRun)
+			item = cleanupGitWorktreesPrune(cleanupCtx, deps, params.DryRun)
 		default:
 			spec, ok := dirTargets[id]
 			if !ok {
 				item = proto.StorageCleanupItem{TargetID: id, Status: proto.StorageCleanupMissing}
 			} else {
-				item = cleanupDirTarget(ctx, deps, spec, procs, params.DryRun)
+				item = cleanupDirTarget(cleanupCtx, deps, spec, procs, params.DryRun)
 			}
 		}
 		if item.Status == proto.StorageCleanupPreview || item.Status == proto.StorageCleanupCleaned {
@@ -1034,7 +1053,7 @@ func cleanupDockerBuildCache(ctx context.Context, deps storageDeps, dryRun bool)
 		item.Status = proto.StorageCleanupPreview
 		return item
 	}
-	pruneCtx, cancelPrune := context.WithTimeout(ctx, 60*time.Second)
+	pruneCtx, cancelPrune := context.WithTimeout(ctx, storageDockerPruneTimeout)
 	out, err := deps.runCmd(pruneCtx, "docker", "builder", "prune", "-f")
 	cancelPrune()
 	if err != nil {

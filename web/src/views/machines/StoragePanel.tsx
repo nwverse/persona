@@ -1,7 +1,7 @@
 // Lazy-loaded Storage & Cleanup panel (#12349): per-mount capacity and inode utilization (fast read-only statfs),
 // on-demand bounded hotspot storage analysis (never automatic background du), and preview + confirmation-gated
 // selective cleanup of allowlisted targets.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, ApiError, enc, errorText, isAbort, pastHub } from "../../lib/api";
 import { bytesBin, percent } from "../../lib/machine-detail";
@@ -231,15 +231,39 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
   const [cleanupResult, setCleanupResult] = useState<StorageCleanupResult | null>(null);
   const [cleanupError, setCleanupError] = useState<StorageError | null>(null);
 
-  // Reset per-machine hotspot & cleanup state when switching machines.
+  // Track active machine ID and in-flight controllers so stale responses from a previous machine are aborted/ignored.
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+  const hotspotsCtrlRef = useRef<AbortController | null>(null);
+  const previewCtrlRef = useRef<AbortController | null>(null);
+  const cleanupCtrlRef = useRef<AbortController | null>(null);
+
+  // Abort in-flight per-machine requests and reset hotspot & cleanup state when switching machines or unmounting.
   useEffect(() => {
+    hotspotsCtrlRef.current?.abort();
+    hotspotsCtrlRef.current = null;
+    previewCtrlRef.current?.abort();
+    previewCtrlRef.current = null;
+    cleanupCtrlRef.current?.abort();
+    cleanupCtrlRef.current = null;
+    setHotspotsLoading(false);
     setHotspotsReport(null);
     setHotspotsError(null);
     setSelectedTargets(new Set());
+    setPreviewBusy(false);
     setPreviewResult(null);
     setConfirmOpen(false);
+    setCleanupBusy(false);
     setCleanupResult(null);
     setCleanupError(null);
+    return () => {
+      hotspotsCtrlRef.current?.abort();
+      hotspotsCtrlRef.current = null;
+      previewCtrlRef.current?.abort();
+      previewCtrlRef.current = null;
+      cleanupCtrlRef.current?.abort();
+      cleanupCtrlRef.current = null;
+    };
   }, [selectedId]);
 
   // Fetch fast per-mount statfs report when machine changes or refresh is clicked.
@@ -275,6 +299,10 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
 
   const scanHotspots = useCallback(async (preserveCleanupResult = false) => {
     if (!machine || !machine.online) return;
+    const mid = machine.id;
+    hotspotsCtrlRef.current?.abort();
+    const ctrl = new AbortController();
+    hotspotsCtrlRef.current = ctrl;
     setHotspotsLoading(true);
     setHotspotsError(null);
     if (!preserveCleanupResult) {
@@ -282,7 +310,11 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
       setCleanupError(null);
     }
     try {
-      const res = await api<MachineStorageHotspotsReport>(`/machines/${enc(machine.id)}/storage/hotspots`, { timeout: pastHub(45_000) });
+      const res = await api<MachineStorageHotspotsReport>(`/machines/${enc(mid)}/storage/hotspots`, {
+        signal: ctrl.signal,
+        timeout: pastHub(45_000),
+      });
+      if (ctrl.signal.aborted || mid !== selectedIdRef.current) return;
       const normalized = { ...res, categories: res.categories ?? [] };
       setHotspotsReport(normalized);
       const nextPicked = new Set<string>();
@@ -293,9 +325,13 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
       }
       setSelectedTargets(nextPicked);
     } catch (e) {
+      if (ctrl.signal.aborted || isAbort(e) || mid !== selectedIdRef.current) return;
       setHotspotsError(classifyStorageError(e));
     } finally {
-      setHotspotsLoading(false);
+      if (hotspotsCtrlRef.current === ctrl) {
+        hotspotsCtrlRef.current = null;
+        setHotspotsLoading(false);
+      }
     }
   }, [machine]);
 
@@ -325,42 +361,62 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
 
   const requestPreview = async () => {
     if (!machine || chosenTargetIds.length === 0) return;
+    const mid = machine.id;
+    previewCtrlRef.current?.abort();
+    const ctrl = new AbortController();
+    previewCtrlRef.current = ctrl;
     setPreviewBusy(true);
     setCleanupError(null);
     try {
-      const res = await api<StorageCleanupResult>(`/machines/${enc(machine.id)}/storage/cleanup`, {
+      const res = await api<StorageCleanupResult>(`/machines/${enc(mid)}/storage/cleanup`, {
         method: "POST",
         json: { targets: chosenTargetIds, dry_run: true },
+        signal: ctrl.signal,
         timeout: pastHub(30_000),
       });
+      if (ctrl.signal.aborted || mid !== selectedIdRef.current) return;
       setPreviewResult({ ...res, items: res.items ?? [] });
       setConfirmOpen(true);
     } catch (e) {
+      if (ctrl.signal.aborted || isAbort(e) || mid !== selectedIdRef.current) return;
       setCleanupError(classifyStorageError(e));
     } finally {
-      setPreviewBusy(false);
+      if (previewCtrlRef.current === ctrl) {
+        previewCtrlRef.current = null;
+        setPreviewBusy(false);
+      }
     }
   };
 
   const confirmCleanup = async () => {
     if (!machine || chosenTargetIds.length === 0) return;
+    const mid = machine.id;
+    cleanupCtrlRef.current?.abort();
+    const ctrl = new AbortController();
+    cleanupCtrlRef.current = ctrl;
     setCleanupBusy(true);
     setCleanupError(null);
     try {
-      const res = await api<StorageCleanupResult>(`/machines/${enc(machine.id)}/storage/cleanup`, {
+      const res = await api<StorageCleanupResult>(`/machines/${enc(mid)}/storage/cleanup`, {
         method: "POST",
         json: { targets: chosenTargetIds, dry_run: false, confirm: true },
+        signal: ctrl.signal,
         timeout: pastHub(120_000),
       });
+      if (ctrl.signal.aborted || mid !== selectedIdRef.current) return;
       setCleanupResult({ ...res, items: res.items ?? [] });
       setConfirmOpen(false);
       setMountRefreshTick((n) => n + 1);
       await scanHotspots(true);
     } catch (e) {
+      if (ctrl.signal.aborted || isAbort(e) || mid !== selectedIdRef.current) return;
       setCleanupError(classifyStorageError(e));
       setConfirmOpen(false);
     } finally {
-      setCleanupBusy(false);
+      if (cleanupCtrlRef.current === ctrl) {
+        cleanupCtrlRef.current = null;
+        setCleanupBusy(false);
+      }
     }
   };
 

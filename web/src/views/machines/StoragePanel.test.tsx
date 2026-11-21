@@ -262,4 +262,158 @@ describe("StoragePanel", () => {
     expect(Object.keys(zhCatalog).sort()).toEqual(enKeys);
     expect(Object.keys(jaCatalog).sort()).toEqual(enKeys);
   });
+
+  it("aborts and ignores stale hotspot scan responses when switching machines", async () => {
+    const twoOnline: Machine[] = [
+      { id: "alpha", name: "AlphaBox", online: true, os: "linux" },
+      { id: "beta", name: "BetaBox", online: true, os: "linux" },
+    ];
+    let resolveHotspots!: (res: Response) => void;
+    let hotspotsSignal: AbortSignal | undefined;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/v1/machines/alpha/storage" || url === "/api/v1/machines/beta/storage") {
+          const mid = url.includes("beta") ? "beta" : "alpha";
+          return Promise.resolve(
+            json({ machine_id: mid, at: 1000, os: "linux", supported: true, collected_ms: 1, mounts: [] }),
+          );
+        }
+        if (url === "/api/v1/machines/alpha/storage/hotspots") {
+          hotspotsSignal = init?.signal ?? undefined;
+          return new Promise<Response>((resolve) => {
+            resolveHotspots = resolve;
+          });
+        }
+        return Promise.resolve(json({ error: "unexpected" }, 500));
+      }),
+    );
+
+    act(() => root.render(<StoragePanel machines={twoOnline} />));
+    await flush();
+
+    // Start scan on alpha (in-flight)
+    click(host.querySelector('[data-testid="storage-scan-hotspots"]'));
+    await flush();
+    expect(hotspotsSignal).toBeDefined();
+    expect(hotspotsSignal?.aborted).toBe(false);
+
+    // Switch to beta while alpha scan is still pending
+    click(host.querySelector('[data-storage-machine="beta"]'));
+    await flush();
+    expect(hotspotsSignal?.aborted).toBe(true);
+
+    // Even if the stale alpha response resolves late, beta must remain clean/idle
+    resolveHotspots(
+      json({
+        machine_id: "alpha",
+        at: 1001,
+        os: "linux",
+        partial: false,
+        duration_ms: 20,
+        categories: [
+          {
+            id: "pip-cache",
+            path: "~/.cache/pip",
+            bytes: 500 * MB,
+            reclaimable_bytes: 500 * MB,
+            status: "ok",
+            cleanable: true,
+            cleanup_target_id: "pip-cache",
+          },
+        ],
+      }),
+    );
+    await flush();
+
+    expect(host.querySelector('[data-testid="storage-hotspots-idle"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="storage-hotspots-list"]')).toBeNull();
+    expect(host.querySelector('[data-target-checkbox="pip-cache"]')).toBeNull();
+  });
+
+  it("aborts and ignores stale cleanup preview responses when switching machines", async () => {
+    const twoOnline: Machine[] = [
+      { id: "alpha", name: "AlphaBox", online: true, os: "linux" },
+      { id: "beta", name: "BetaBox", online: true, os: "linux" },
+    ];
+    let resolvePreview!: (res: Response) => void;
+    let previewSignal: AbortSignal | undefined;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/v1/machines/alpha/storage" || url === "/api/v1/machines/beta/storage") {
+          const mid = url.includes("beta") ? "beta" : "alpha";
+          return Promise.resolve(
+            json({ machine_id: mid, at: 1000, os: "linux", supported: true, collected_ms: 1, mounts: [] }),
+          );
+        }
+        if (url === "/api/v1/machines/alpha/storage/hotspots") {
+          return Promise.resolve(
+            json({
+              machine_id: "alpha",
+              at: 1001,
+              os: "linux",
+              partial: false,
+              duration_ms: 10,
+              categories: [
+                {
+                  id: "pip-cache",
+                  path: "~/.cache/pip",
+                  bytes: 500 * MB,
+                  reclaimable_bytes: 500 * MB,
+                  status: "ok",
+                  cleanable: true,
+                  cleanup_target_id: "pip-cache",
+                },
+              ],
+            }),
+          );
+        }
+        if (url === "/api/v1/machines/alpha/storage/cleanup" && init?.method === "POST") {
+          previewSignal = init.signal ?? undefined;
+          return new Promise<Response>((resolve) => {
+            resolvePreview = resolve;
+          });
+        }
+        return Promise.resolve(json({ error: "unexpected" }, 500));
+      }),
+    );
+
+    act(() => root.render(<StoragePanel machines={twoOnline} />));
+    await flush();
+
+    // Scan hotspots on alpha first
+    click(host.querySelector('[data-testid="storage-scan-hotspots"]'));
+    await flush();
+
+    // Start preview on alpha (in-flight)
+    click(host.querySelector('[data-testid="storage-preview-cleanup"]'));
+    await flush();
+    expect(previewSignal).toBeDefined();
+    expect(previewSignal?.aborted).toBe(false);
+
+    // Switch to beta while preview is still pending
+    click(host.querySelector('[data-storage-machine="beta"]'));
+    await flush();
+    expect(previewSignal?.aborted).toBe(true);
+
+    // Late resolution of alpha preview must not open the confirm dialog on beta
+    resolvePreview(
+      json({
+        machine_id: "alpha",
+        dry_run: true,
+        estimated_bytes: 500 * MB,
+        freed_bytes: 0,
+        items: [{ target_id: "pip-cache", path: "~/.cache/pip", bytes: 500 * MB, status: "preview" }],
+      }),
+    );
+    await flush();
+
+    expect(document.body.querySelector('[data-testid="storage-preview-list"]')).toBeNull();
+    expect(host.querySelector('[data-testid="storage-hotspots-idle"]')).not.toBeNull();
+  });
 });

@@ -458,6 +458,73 @@ func TestMachineStorageCleanupPreservesActiveAndOpenPersonaLogs(t *testing.T) {
 	}
 }
 
+func TestMachineStorageCleanupOverallDeadlineTruncatesRemainingTargets(t *testing.T) {
+	deps, home, dataDir := testStorageDeps(t)
+	pipFile := filepath.Join(home, ".cache", "pip", "wheel.whl")
+	backupFile := filepath.Join(dataDir, "backups", "snap.tar")
+	writeStorageFile(t, pipFile, 2048)
+	writeStorageFile(t, backupFile, 4096)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	deps.lookPath = func(bin string) (string, error) {
+		if bin == "docker" {
+			return "/usr/bin/docker", nil
+		}
+		return "", errors.New("missing")
+	}
+	deps.runCmd = func(cmdCtx context.Context, name string, args ...string) ([]byte, error) {
+		if name != "docker" {
+			return nil, errors.New("unexpected command")
+		}
+		if _, hasDeadline := cmdCtx.Deadline(); !hasDeadline {
+			t.Errorf("expected cleanup command context to carry bounded deadline")
+		}
+		if len(args) >= 2 && args[0] == "system" && args[1] == "df" {
+			return []byte(`{"Type":"Build Cache","TotalCount":"2","Active":"0","Size":"100MB","Reclaimable":"100MB"}` + "\n"), nil
+		}
+		if len(args) >= 2 && args[0] == "builder" && args[1] == "prune" {
+			// Simulate the overall cleanup deadline expiring just as target 1 completes.
+			cancel()
+			return []byte("Total reclaimed space: 100MB\n"), nil
+		}
+		return nil, errors.New("unexpected docker args")
+	}
+
+	res, err := runMachineStorageCleanup(ctx, deps, proto.StorageCleanupParams{
+		Targets: []string{
+			proto.StorageTargetDockerBuildCache,
+			proto.StorageTargetPipCache,
+			proto.StorageTargetPersonaBackups,
+		},
+		Confirm: true,
+	})
+	if err != nil {
+		t.Fatalf("cleanup returned unexpected rpc err: %v", err)
+	}
+	if len(res.Items) != 3 {
+		t.Fatalf("expected 3 items, got %+v", res.Items)
+	}
+	if res.Items[0].TargetID != proto.StorageTargetDockerBuildCache || res.Items[0].Status != proto.StorageCleanupCleaned {
+		t.Errorf("item[0] = %+v, want docker-build-cache cleaned", res.Items[0])
+	}
+	for i, wantID := range []string{proto.StorageTargetPipCache, proto.StorageTargetPersonaBackups} {
+		it := res.Items[i+1]
+		if it.TargetID != wantID || it.Status != proto.StorageCleanupSkipped || !strings.Contains(it.Error, "deadline") {
+			t.Errorf("item[%d] = %+v, want %s skipped with deadline reason", i+1, it, wantID)
+		}
+	}
+	for _, keep := range []string{pipFile, backupFile} {
+		if _, err := os.Stat(keep); err != nil {
+			t.Fatalf("skipped target file %s should remain intact: %v", keep, err)
+		}
+	}
+	if res.FreedBytes != 100_000_000 {
+		t.Errorf("FreedBytes = %d, want 100000000 from completed target", res.FreedBytes)
+	}
+}
+
 func TestParseHumanBytes(t *testing.T) {
 	cases := map[string]int64{
 		"0B":            0,

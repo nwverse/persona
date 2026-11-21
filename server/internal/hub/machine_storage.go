@@ -19,7 +19,9 @@ import (
 const (
 	machineStorageTimeout         = 15 * time.Second
 	machineStorageHotspotsTimeout = 45 * time.Second
-	machineStorageCleanupTimeout  = 120 * time.Second
+	// Must stay comfortably above the node's overall cleanup deadline (90s in internal/node)
+	// so multi-target cleanups always truncate and return per-item results before the hub RPC times out.
+	machineStorageCleanupTimeout = 120 * time.Second
 )
 
 func (h *Hub) machineStorageRoutes(api *http.ServeMux) {
