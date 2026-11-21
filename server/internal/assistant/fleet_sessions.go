@@ -50,6 +50,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 		was, key := before[sess.SessionID], machine+"/"+sess.SessionID
 		s.availSeen(machine, &sess, was, now) // the owner's wait for a reply (availability.go)
 		prev := was.Status
+		s.projectReviewSession(s.runCtx(), sess, prev)
 		// The turn stopped on background work and its report woke it again within one of the node's list ticks: the
 		// stop never showed, only the woken flag turning on. It is held work all the same (#4187, #4419). By the
 		// background seen during the turn, not only in the last list: the list's background and its woken flag are

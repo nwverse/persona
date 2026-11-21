@@ -19,7 +19,8 @@ import (
 // long a card waits. A section manager.json has replaces the hello's; one it has not keeps it (an older hub still
 // sends them).
 type ownConfig struct {
-	Assistant *struct {
+	ProjectReview projectReviewConfig `json:"project_review"`
+	Assistant     *struct {
 		Owner                   *string `json:"owner"`
 		Notes                   *string `json:"notes"`
 		Machine                 *string `json:"machine"`
@@ -62,7 +63,7 @@ func readOwnConfig(file string) (ownConfig, error) {
 	if file == "" {
 		return c, nil
 	}
-	b, err := managerconf.Sections(file)
+	b, err := managerconf.Sections(file, "project_review")
 	if err != nil {
 		if os.IsNotExist(err) {
 			return c, nil
@@ -77,7 +78,7 @@ func readOwnConfig(file string) (ownConfig, error) {
 			return c, fmt.Errorf("assistant.supervision_batch_minutes must be between 0 and %d", maxSupervisionBatchMinutes)
 		}
 	}
-	return c, nil
+	return c, c.ProjectReview.validate()
 }
 
 // validatePlacement rejects a configured assistant machine that the hub classifies as work.
