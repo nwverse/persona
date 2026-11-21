@@ -126,6 +126,11 @@ TABLE = (
         (("server/internal/proto/*", "server/internal/hub/*", "server/internal/extension/*",
           "schema/extension/manifest.schema.json"), ("scripts/test/test_doc_wire.py",)),
     ),
+    # AGENTS.md is CLAUDE.md through a symlink (#12723): the test reads how git records both, so either one's change
+    # runs it, on top of the doc suites above.
+    (
+        (("AGENTS.md", "CLAUDE.md"), ("scripts/test/test_agents_md.py",)),
+    ),
     # Most section names test_doc_sections.py checks sit in code comments under its SOURCE_DIRS (about a second).
     (
         (("server/*", "web/src/*", "web/e2e/*", "scripts/*", "sdk/*", "apple/*", "android/*", "integrations/*",

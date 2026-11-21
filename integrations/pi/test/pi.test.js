@@ -405,6 +405,22 @@ async function askSetup(t, opts = {}) {
   return { ...env, a, tool, status, ask }
 }
 
+test('A2A tools send and report from the active pi session', async (t) => {
+  const { Type } = await import('./typebox-stub.js')
+  const { n, host } = await setup(t)
+  const a = piSession('s-a2a')
+  host.register(a.pi, { A2AType: Type })
+  await a.fire('session_start')
+  await n.ready
+  await until('A2A session listed', () => n.last('runtime.sessions')?.sessions.some(s => s.session_id === 's-a2a'))
+  assert.ok(!a.pi.tools.some(t => t.name === 'ask_user'))
+  const report = a.pi.tools.find(t => t.name === 'a2a_report')
+  const args = { task_id: 'task', message_id: 'report', state: 'completed', text: 'Test result' }
+  const result = await report.execute('call', args, a.ctx.signal, undefined, a.ctx)
+  assert.equal(result.details.error, false)
+  assert.deepEqual(n.toolCalls.at(-1), { name: 'a2a_report', args, session_id: 's-a2a' })
+})
+
 /** A phone that has not answered yet: resolve(answer) answers the card it holds. */
 function heldPhone(n) {
   let answer

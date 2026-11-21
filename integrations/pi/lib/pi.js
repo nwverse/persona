@@ -16,6 +16,7 @@ import { customTypeMatches, legacyCustomType, LEGACY_RELOAD, piHostKind } from '
 import { basename } from 'node:path'
 import { readFileSync, statSync } from 'node:fs'
 import { createRuntime, installCurrent, interactionId, light, page, RpcError, snippet, summaryOf, verifyPackage } from '../../runtime-sdk/index.js'
+import { a2aTools } from '../../runtime-sdk/lib/a2a.js'
 import { ALLOW_ENTRY, alwaysAllowed, branchItems, branchKey, entryItems, firstText, HOST_ENTRY, imageOf, lastHost, lastText, partialText, toolInput, toolName } from './map.js'
 
 export const RUNTIME_VERSION = '0.4.0'
@@ -533,6 +534,27 @@ export function createPiHost(deps, options = {}) {
     })
     pi.on('tool_call', (e, ctx) => approval(track(ctx), e, ctx))
     if (toolDeps?.Type) pi.registerTool(askUserTool(toolDeps.Type, track))
+    if (toolDeps?.A2AType || toolDeps?.Type) {
+      for (const tool of piA2ATools(toolDeps.A2AType ?? toolDeps.Type, track)) pi.registerTool(tool)
+    }
+  }
+
+  function piA2ATools(Type, track) {
+    return a2aTools.map(({ name, description, input }) => ({
+      name,
+      label: name,
+      description,
+      parameters: Type.Object(Object.fromEntries(Object.entries(input.properties).map(([key, property]) => {
+        const schema = property.type === 'boolean' ? Type.Boolean() : Type.String(property.enum ? { enum: property.enum } : undefined)
+        return [key, input.required.includes(key) ? schema : Type.Optional(schema)]
+      }))),
+      executionMode: 'sequential',
+      async execute(_id, args, signal, _onUpdate, ctx) {
+        const session = track(ctx)
+        const res = await rt.callTool({ name, args, session_id: session.id }, { signal })
+        return { content: res.content ?? [], details: { error: res.is_error === true } }
+      },
+    }))
   }
 
   /** Records where the session runs now when that changed (HOST_ENTRY): pi-web, herdr, or a terminal outside it. */

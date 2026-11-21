@@ -174,6 +174,9 @@ func TestLogicalRetiredAuthorityAndRealTimeProjection(t *testing.T) {
 	if err != nil || m != "server" || id != "side-chat" {
 		t.Fatalf("active caller: %s/%s %v", m, id, err)
 	}
+	if !s.NodeEvent("server", "session.echo", json.RawMessage(`{"session_id":"target-chat","client_msg_id":"persona-a2a-task-1"}`)) {
+		t.Fatal("A2A echoes should retain the physical session address")
+	}
 	s.NodeEvent("server", "session.items", json.RawMessage(`{"session_id":"target-chat","history":"h2","from_seq":0,"to_seq":2,"items":[{"id":"line1#0","seq":1,"kind":"text","role":"assistant","text":"live"}]}`))
 	f.mu.Lock()
 	told := append([]told(nil), f.told...)

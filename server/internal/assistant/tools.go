@@ -980,7 +980,8 @@ type completedNodeWriteError struct{ error }
 func (e *completedNodeWriteError) Unwrap() error { return e.error }
 
 func tracksNodeWrite(method string) bool {
-	return method == DeviceSessionSend || method == DeviceSessionStart || method == devicewire.MethodCloseTaskTerminal
+	return method == DeviceSessionSend || method == DeviceSessionStart || method == devicewire.MethodCloseTaskTerminal ||
+		method == "session.a2a.send" || method == "session.a2a.wake"
 }
 
 func beforeNodeWrite(method string, err error) error {

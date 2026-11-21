@@ -369,6 +369,9 @@ func (s *Service) writeConversationJSON(ctx context.Context, w http.ResponseWrit
 }
 
 func conversationWrite(method string) bool {
+	if a2aDeliveryMethod(method) {
+		return true
+	}
 	switch method {
 	case "assistant.send", "session.send", DeviceSessionSendOnce, "session.start", "session.resume", "session.fork", "session.rewind", assistantwire.DeviceAssistantAnswerAgain:
 		return true
