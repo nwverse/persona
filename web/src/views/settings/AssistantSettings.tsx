@@ -88,6 +88,10 @@ interface AssistantState extends AgentAutoNamingState {
   /** "Run Claude chats in interactive Claude Code" (#10058, docs/assistant/assistant.md "Interactive Claude Code"): off
    *  by default; unset from a hub before it. */
   claude_interactive?: boolean;
+  /** Exact owner-reply approval and reconstructable proposal retention: both off by default; absent from an older hub. */
+  owner_reply_approval?: boolean;
+  persistent_owner_action_cards?: boolean;
+  owner_reply_approval_phrases?: string[];
   /** Hours an idle Agent Persona started runs before Persona stops it (#4754, docs/integrations/engines.md "Agents run
    *  in a terminal"); its terminal stays. 0 is never, at most 8760; unset from a hub before it. */
   idle_close_hours?: number;
@@ -231,6 +235,34 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
     } finally {
       setInteractiveBusy(false);
     }
+  };
+
+  const [ownerApprovalBusy, setOwnerApprovalBusy] = useState(false);
+  const setOwnerApproval = async (field: "owner_reply_approval" | "persistent_owner_action_cards", on: boolean) => {
+    const before = info;
+    setOwnerApprovalBusy(true);
+    setInfo((i) => i ? { ...i, [field]: on } : i);
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { [field]: on } });
+      if (r.manager !== manager || r[field] !== on) throw new Error(t("settings-assistantsettings.owner_approval_unconfirmed"));
+      setInfo((i) => i ? { ...i, [field]: r[field] } : i);
+    } catch (e) {
+      setInfo((i) => i && before ? { ...i, [field]: before[field] } : i);
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally { setOwnerApprovalBusy(false); }
+  };
+  const setOwnerApprovalPhrases = async (phrases: string[]) => {
+    setOwnerApprovalBusy(true);
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { owner_reply_approval_phrases: phrases } });
+      if (r.manager !== manager || JSON.stringify(r.owner_reply_approval_phrases) !== JSON.stringify(phrases)) {
+        throw new Error(t("settings-assistantsettings.owner_approval_unconfirmed"));
+      }
+      setInfo((i) => i ? { ...i, owner_reply_approval_phrases: r.owner_reply_approval_phrases } : i);
+    } catch (e) {
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+      throw e;
+    } finally { setOwnerApprovalBusy(false); }
   };
 
   const setFolded = async (on: boolean) => {
@@ -514,6 +546,18 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Row>
       </Group>
 
+      {typeof info?.owner_reply_approval === "boolean" && typeof info.persistent_owner_action_cards === "boolean" && Array.isArray(info.owner_reply_approval_phrases) && (
+        <Group anchor="owner-reply-approval" title={t("settings-assistantsettings.owner_approval_title")} footer={t("settings-assistantsettings.owner_approval_footer")}>
+          <Row label={t("settings-assistantsettings.owner_approval_switch")} hint={t("settings-assistantsettings.owner_approval_switch_hint")} wrapHint>
+            <Switch on={info.owner_reply_approval} onChange={(on) => void setOwnerApproval("owner_reply_approval", on)} disabled={ownerApprovalBusy} label={t("settings-assistantsettings.owner_approval_switch")} />
+          </Row>
+          <Row label={t("settings-assistantsettings.owner_approval_persistent")} hint={t("settings-assistantsettings.owner_approval_persistent_hint")} wrapHint>
+            <Switch on={info.persistent_owner_action_cards} onChange={(on) => void setOwnerApproval("persistent_owner_action_cards", on)} disabled={ownerApprovalBusy} label={t("settings-assistantsettings.owner_approval_persistent")} />
+          </Row>
+          <OwnerApprovalPhrasesField value={info.owner_reply_approval_phrases} disabled={ownerApprovalBusy} onSave={setOwnerApprovalPhrases} />
+        </Group>
+      )}
+
       <PageBoundary page="standing-authorizations">
         <Suspense fallback={<Group anchor="standing-authorizations" title={t("settings-standing.title")}><Loading /></Group>}>
           <StandingAuthorizations manager={manager} />
@@ -634,6 +678,27 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
 
 /** A whole number (days, or hours), 0 to `max` (`MAX_ARCHIVE_DAYS` by default): saved when the field is left or Enter is
  *  pressed, and only when it changed; anything else goes back to the saved value. */
+function OwnerApprovalPhrasesField({ value, disabled, onSave }: { value: string[]; disabled: boolean; onSave: (phrases: string[]) => Promise<void> }) {
+  const [draft, setDraft] = useState(value.join("\n"));
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { if (!saving) setDraft(value.join("\n")); }, [value, saving]);
+  const phrases = draft.split("\n").map((phrase) => phrase.trim()).filter(Boolean);
+  const changed = JSON.stringify(phrases) !== JSON.stringify(value);
+  const save = async () => {
+    setSaving(true);
+    try { await onSave(phrases); } catch { /* the parent shows the confirmed value and the error */ } finally { setSaving(false); }
+  };
+  return <div className="px-4 py-3">
+    <label className="mb-2 block text-meta font-medium text-ink" htmlFor="owner-approval-phrases">{t("settings-assistantsettings.owner_approval_phrases")}</label>
+    <textarea id="owner-approval-phrases" aria-label={t("settings-assistantsettings.owner_approval_phrases")} className={cx(textareaClass, "min-h-24 font-mono")}
+      value={draft} disabled={disabled || saving} onChange={(e) => setDraft(e.target.value)} />
+    <div className="mt-2 flex items-center gap-3">
+      <p className="min-w-0 flex-1 text-label leading-relaxed text-ink-3">{t("settings-assistantsettings.owner_approval_phrases_hint")}</p>
+      <Button disabled={disabled || saving || !changed || phrases.length === 0} onClick={() => void save()}>{t("settings-assistantsettings.owner_approval_save_phrases")}</Button>
+    </div>
+  </div>;
+}
+
 function DaysField({ value, max = MAX_ARCHIVE_DAYS, disabled, label, onCommit }: { value: number; max?: number; disabled?: boolean; label: string; onCommit: (days: number) => void }) {
   const [draft, setDraft] = useState(String(value));
   const [was, setWas] = useState(value);

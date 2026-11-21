@@ -61,8 +61,7 @@ function createFullCache(owner: string) {
   let retry: ReturnType<typeof setTimeout> | undefined;
   let trailing: ReturnType<typeof setTimeout> | undefined;
   let expiry: ReturnType<typeof setTimeout> | undefined;
-  const valid = () => !stopped && getState().loaded && credentialOwner() === owner
-    && getState().features.includes(SESSIONS_LIST_FEATURE);
+  const valid = () => !stopped && credentialOwner() === owner && getState().features.includes(SESSIONS_LIST_FEATURE);
   const read = async (immediate = false) => {
     if (!valid()) return;
     if (!consumers || pending) { dirty = true; urgent ||= immediate; return; }
@@ -182,15 +181,17 @@ function useCompleteAgentSessions(on: boolean): FullAgentSessions {
   const owner = on ? credentialOwner() : "";
   const full = fullCache?.owner === owner ? snapshot : EMPTY_FULL_LIST;
   useEffect(() => {
-    if (!on || !bounded || !loaded) return;
+    // Hello confirms paging support. Fetch the complete list while the rest of the first refresh is in flight.
+    if (!on || !bounded) return;
     if (fullCache && fullCache.owner !== owner) fullCache.dispose();
     fullCache ??= createFullCache(owner);
     return fullCache.retain();
-  }, [on, bounded, loaded, owner, snapshot.epoch]);
+  }, [on, bounded, owner, snapshot.epoch]);
   return useMemo(() => {
     // `on` false: the caller has no use for the list now and asks the hub for nothing
     if (!on) return EMPTY_FULL_LIST;
     if (!bounded) return { sessions: foldRows(directoryVisible(Object.values(by).flat())).filter((s) => !s.assistant), loaded, error: "" };
+    // Wait for the first refresh's pins and grouping inputs before showing the complete snapshot.
     if (!loaded) return EMPTY_FULL_LIST;
     if (by === full.base) return full;
     // Reflect actions on retained details (rename, mark seen) without copying the complete list into the store.

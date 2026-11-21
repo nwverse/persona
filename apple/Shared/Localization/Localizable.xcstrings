@@ -27707,6 +27707,29 @@
       },
       "extractionState" : "manual"
     },
+    "Approval Phrases" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Approval Phrases"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "承認フレーズ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "批准短语"
+          }
+        }
+      }
+    },
     "Approve" : {
       "localizations" : {
         "en" : {
@@ -27937,6 +27960,29 @@
       },
       "extractionState" : "manual"
     },
+    "Approve a Batch with an Exact Reply" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Approve a Batch with an Exact Reply"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完全一致する返信でバッチを承認"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用精确回复批准一批操作"
+          }
+        }
+      }
+    },
     "Approve it by tapping on screen" : {
       "localizations" : {
         "en" : {
@@ -27979,6 +28025,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "请在聊天里的卡片上批准。"
+          }
+        }
+      }
+    },
+    "Approve one displayed batch with an exact reply. No standing permission." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Approve one displayed batch with an exact reply. No standing permission."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "表示された1つのバッチを完全一致する返信で承認します。継続的な権限は付与されません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用精确回复批准当前展示的一批操作，不授予持续权限。"
           }
         }
       }
@@ -70010,6 +70079,29 @@
         }
       }
     },
+    "Exact Approval Replies" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exact Approval Replies"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完全一致する返信での承認"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "精确回复审批"
+          }
+        }
+      }
+    },
     "Example" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -75846,6 +75938,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "终端"
+          }
+        }
+      }
+    },
+    "Off by default. An exact reply approves only the displayed original text, recipients and actions, once. Edits need fresh approval; this never creates an Always rule." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Off by default. An exact reply approves only the displayed original text, recipients and actions, once. Edits need fresh approval; this never creates an Always rule."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デフォルトはオフです。完全一致する返信は、表示された元の本文・宛先・操作だけを1回承認します。変更後は再承認が必要で、「常に許可」ルールは作成されません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认关闭。精确回复只批准当前展示的原始文字、收件人和操作，且只用一次；修改后必须重新批准，绝不会生成“总是允许”规则。"
           }
         }
       }
@@ -88951,6 +89066,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Keep Unanswered Proposals Until Answered" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep Unanswered Proposals Until Answered"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未回答の提案を回答まで保持"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未回复的提议一直保留到处理"
+          }
+        }
+      }
     },
     "Keep Worktree [Agent Worktree]" : {
       "localizations" : {
@@ -119387,6 +119525,29 @@
       },
       "extractionState" : "manual"
     },
+    "One exact phrase per line. The whole reply must match. An empty list disables reply approval; ordinary Allow and Deny still work." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "One exact phrase per line. The whole reply must match. An empty list disables reply approval; ordinary Allow and Deny still work."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1行に1つの完全一致フレーズを入力します。返信全体が一致する必要があります。空にすると返信承認を無効にし、通常の許可と拒否はそのまま使えます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每行一个精确短语，整条回复必须匹配。留空会关闭回复批准，普通允许和拒绝仍可使用。"
+          }
+        }
+      }
+    },
     "One line per agent: its state, title and time." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -141716,6 +141877,29 @@
       },
       "extractionState" : "manual"
     },
+    "Reply “%@” Once" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reply “%@” Once"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」と1回だけ返信"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回复“%@”，仅此一次"
+          }
+        }
+      }
+    },
     "Replying to %@" : {
       "localizations" : {
         "en" : {
@@ -147015,6 +147199,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Save Phrases" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Save Phrases"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フレーズを保存"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存短语"
+          }
+        }
+      }
     },
     "Save QR Code" : {
       "localizations" : {
@@ -172801,6 +173008,75 @@
         }
       }
     },
+    "The hub did not confirm these approval phrases." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub did not confirm these approval phrases."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブがこれらの承認フレーズを確認しませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hub 未确认这些批准短语。"
+          }
+        }
+      }
+    },
+    "The hub did not confirm this approval setting." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub did not confirm this approval setting."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブがこの承認設定を確認しませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hub 未确认这项批准设置。"
+          }
+        }
+      }
+    },
+    "The hub did not confirm this exact approval reply." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub did not confirm this exact approval reply."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブがこの完全一致承認返信を確認しませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hub 未确认这条精确批准回复。"
+          }
+        }
+      }
+    },
     "The hub didn't respond. Try again later." : {
       "localizations" : {
         "en" : {
@@ -180970,6 +181246,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "不能从手机上改这里。只能改个人文件夹里的文件（~/.persona 和 ~/Library 除外）。"
+          }
+        }
+      }
+    },
+    "This card did not advertise that exact reply." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This card did not advertise that exact reply."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このカードにはその完全一致返信の指定がありません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这张卡片没有提供该精确回复。"
           }
         }
       }

@@ -388,7 +388,11 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			params["permission_mode"] = mode
 		}
 		if explicitPermission == "" && used != "" && used != "claude" {
-			if agent := s.launcherAgent(withUnhidden(ctx, used), machine, used); agent != "" && !permissionModeSupported(agent, 0, mode) {
+			if l, ok := s.targetMachineLauncher(ctx, machine, used); ok {
+				if !permissionModeSupported(cmp.Or(l.AgentType, l.Agent), l.PermissionModes, mode) {
+					delete(params, "permission_mode")
+				}
+			} else if agent := s.launcherAgent(withUnhidden(ctx, used), machine, used); agent != "" && !permissionModeSupported(agent, 0, mode) {
 				delete(params, "permission_mode")
 			}
 		}
@@ -1131,6 +1135,8 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 	}
 	delete(p.Params, "source") // app input cannot claim an automated author
 	delete(p.Params, "message_source")
+	approvalTarget, _ := p.Params["approval_reply_to"].(string)
+	delete(p.Params, "approval_reply_to") // approval metadata is never model input, including on a failed send
 	if id, _ := p.Params["client_msg_id"].(string); id != "" {
 		s.availOwnerSent(p.MachineID, p.SessionID, id, time.Now()) // a replay opens no reply wait (availability.go)
 	}
@@ -1162,6 +1168,15 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 		s.humanSent.note(p.SessionID, id, sent)
 	case err == nil:
 		s.humanSent.noteForReply(p.SessionID, id, sent)
+	}
+	if err == nil && approvalTarget != "" && owner && p.Human && !p.ReplyInput && own && !marked {
+		handled, approvalErr := s.resolveAppOwnerReply(ctx, p.MachineID, p.SessionID, id, approvalTarget, text)
+		if approvalErr != nil {
+			return nil, badRequest(approvalErr, s.appLang(ctx, p.Lang))
+		}
+		if handled {
+			return map[string]any{ownerApprovalHandledParam: approvalTarget}, nil
+		}
 	}
 	if err == nil && said && owner {
 		s.endHeldChannelRuns(p.MachineID, p.SessionID)
