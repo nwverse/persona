@@ -562,7 +562,9 @@ const (
 	// effort change only there. Its row's capabilities say modes: false.
 	CodeModesOnComputer = "modes_on_computer"
 	// CodeModesNotRunning: no process or pane runs the session; a message resumes it.
-	CodeModesNotRunning     = "modes_not_running"
+	CodeModesNotRunning = "modes_not_running"
+	// CodeModesUnsupported: an agent in a terminal whose mode, effort and model are its start's (cursor, agy).
+	CodeModesUnsupported    = "modes_unsupported"
 	CodeEffortChangePending = "effort_change_pending"
 )
 

@@ -355,6 +355,9 @@ func handle(ctx context.Context, version string, req request) (any, *rpcError) {
 		if token := os.Getenv("PERSONA_A2A_TOKEN"); token != "" {
 			call["a2a_token"] = token
 		}
+		if set := toolSet(); set != "" {
+			call["tool_set"] = set // the node runs no tool outside the narrower set here (node/hooks.go)
+		}
 		if mcpWaitFrom(ctx) != nil {
 			call["wait_updates"] = true // an older node ignores this and returns only its final line
 		}
