@@ -160954,24 +160954,24 @@
       },
       "extractionState" : "manual"
     },
-    "Start Claude, Codex, or TRAEX in herdr on this machine and it shows up here." : {
+    "Start Claude, Codex, or TRAE CLI in herdr on this machine and it shows up here." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Start Claude, Codex, or TRAEX in herdr on this machine and it shows up here."
+            "value" : "Start Claude, Codex, or TRAE CLI in herdr on this machine and it shows up here."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "このマシンのherdrでClaude、Codex、TRAEXを起動すると、ここに表示されます。"
+            "value" : "このマシンのherdrでClaude、Codex、TRAE CLIを起動すると、ここに表示されます。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在这台机器的 herdr 里启动 Claude、Codex 或 TRAEX，就会出现在这里。"
+            "value" : "在这台机器的 herdr 里启动 Claude、Codex 或 TRAE CLI，就会出现在这里。"
           }
         }
       },

@@ -38,10 +38,13 @@ import persona.core.contracts.PendingSwitch
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
+import persona.core.designsystem.AgentMarkKind
+import persona.core.designsystem.AgentMarkSpec
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.LocalHubFeatures
 import persona.core.designsystem.ModelPillWidth
 import persona.core.designsystem.PersonaTheme
+import persona.core.domain.models.AgentModelPanel
 import persona.core.domain.models.PanelConfig
 import persona.core.domain.models.PanelFavorite
 import persona.core.domain.models.PanelOverride
@@ -115,6 +118,8 @@ class ModelPillTest {
         assertEquals(persona.core.designsystem.AgentMarkSpec(persona.core.designsystem.AgentMarkKind.Grok, "My Grok", null), words.mark("grok"))
         // A provider whose name is a mark the design system has draws it.
         assertEquals(persona.core.designsystem.AgentMarkKind.Trae, words.mark("traecli")?.kind)
+        assertEquals("TRAE CLI", words.engine("traecli"))
+        assertEquals("TRAE CLI", words.engine("traex"))
         assertEquals("Claude Code", words.engine("claude"))
         val (content, spoken) = pillContent(persona.core.domain.models.PillView(persona.core.domain.models.PillSetup("grok", "grok", "Grok 5", null)),
             null, ultracode = false, res, names)
@@ -124,6 +129,20 @@ class ModelPillTest {
         assertEquals("paseo", panelWords(res).engine("paseo"))
         assertEquals(persona.core.designsystem.AgentMarkSpec(null, "custom-provider", null),
             panelWords(res).mark("custom-provider"))
+    }
+
+    @Test fun thePaseoCliUsesItsTitleAndKeepsItsMarkForEveryIdentifier() {
+        val cliKinds = mapOf("traex" to null, "traecli" to AgentMarkKind.Trae, "trae-cli" to AgentMarkKind.Trae)
+        for ((engine, kind) in cliKinds) {
+            for ((title, expected) in listOf(null to "TRAE CLI", "TRAEX" to "TRAE CLI", "My CLI" to "My CLI")) {
+                val launcher = AgentLauncher(engine, agentType = "paseo", displayName = title)
+                val words = panelWords(res, AgentModelPanel.engineNames(agent, listOf(launcher)))
+                assertEquals(AgentMarkSpec(kind, expected, null), words.mark(engine))
+                assertEquals(expected, words.engine(engine))
+            }
+            assertEquals(AgentMarkSpec(kind, "TRAE CLI", null), engineMark(engine, " "))
+        }
+        assertEquals(AgentMarkSpec(AgentMarkKind.Trae, "TRAE", null), engineMark("trae"))
     }
 
     /** Records what the pill asks the hub. */
