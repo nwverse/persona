@@ -503,3 +503,33 @@ func TestTaskPlansMadeSince(t *testing.T) {
 		t.Fatalf("queue candidates = %v", got)
 	}
 }
+
+func TestOpenTaskPlans(t *testing.T) {
+	d := open(t)
+	ctx := context.Background()
+	prefix := fmt.Sprintf("pending_%d", time.Now().UnixNano())
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	for i, state := range []string{"open", "started", "dismissed", "open"} {
+		p := TaskPlanRow{ID: fmt.Sprintf("%s_%d", prefix, i), Conversation: fmt.Sprintf("%s_chat_%d", prefix, i),
+			Tasks: json.RawMessage(`[]`), State: state, CreatedAt: at, UpdatedAt: at}
+		if err := d.CreateTaskPlan(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := d.OpenTaskPlans(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, row := range rows {
+		if strings.HasPrefix(row.ID, prefix) {
+			ids = append(ids, row.ID)
+		}
+		if row.State != "open" {
+			t.Fatalf("closed plan returned: %+v", row)
+		}
+	}
+	if !reflect.DeepEqual(ids, []string{prefix + "_0", prefix + "_3"}) {
+		t.Fatalf("open plans: %v", ids)
+	}
+}

@@ -54,7 +54,10 @@ func (s *Service) toolTaskDecided(ctx context.Context, machine, self string, arg
 	}
 	// The decision it answers: a recurring check's goes to the supervisor, not the Agent (checkDecided), and the reply
 	// says so, so neither conversation takes the choice for one the Agent has.
-	asked, _ := s.askCopy(t.ID)
+	asked, ok := s.askCopy(t.ID)
+	if ok && asked.OutsideID != "" {
+		return "", fmt.Errorf("task %s is an outside decision: only its owner's Needs-you answer may settle it, not task_decided", t.ID)
+	}
 	var result acceptResult
 	var err error
 	if a.ToldAgent {
