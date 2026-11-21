@@ -889,6 +889,10 @@ func (n *Node) codexWaitCalls(method, id string) (any, error, bool) {
 func (n *Node) sendFirstCodexCall(ctx context.Context, w *codexWait, params json.RawMessage, text string, images []proto.Image) (any, error) {
 	var opts sendOpts
 	_ = json.Unmarshal(params, &opts)
+	var meta struct {
+		Source *proto.MessageSource `json:"message_source"`
+	}
+	_ = json.Unmarshal(params, &meta)
 	var s *proto.Session
 	sent := time.Now()
 	err := n.sends.once(opts.ClientMsgID, func() error {
@@ -905,7 +909,7 @@ func (n *Node) sendFirstCodexCall(ctx context.Context, w *codexWait, params json
 				return n.stoppedRefusal(w.id) // Codex left its tab before a first message
 			}
 			// as session.send to the thread: its echo counted from where its transcript is now (node.go)
-			if err := n.sendEchoed(thread, opts.ClientMsgID, text, len(images), n.echoBase(thread), func() error {
+			if err := n.sendWithEcho(thread, opts.ClientMsgID, text, len(images), n.echoBase(thread), meta.Source, nil, func() error {
 				return n.send(ctx, thread, text, images, opts)
 			}); err != nil {
 				return err
@@ -925,7 +929,7 @@ func (n *Node) sendFirstCodexCall(ctx context.Context, w *codexWait, params json
 	out := map[string]any{"ok": true}
 	if s != nil && s.SessionID != w.id {
 		out["session"] = s
-		if opts.ClientMsgID != "" && n.echoes.expect(echoRecord{SessionID: s.SessionID, ClientMsgID: opts.ClientMsgID, Text: text, SentAt: sent}) {
+		if opts.ClientMsgID != "" && n.echoes.expect(echoRecord{SessionID: s.SessionID, ClientMsgID: opts.ClientMsgID, Text: text, Source: meta.Source, SentAt: sent}) {
 			if cur, ok := n.echoes.record(s.SessionID, opts.ClientMsgID); ok {
 				n.notifyEcho(cur)
 			}

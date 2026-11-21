@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/assistantskills"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -229,13 +230,20 @@ func (n *Node) mayCall(cwd, tool string) bool {
 // check below, unchanged; no Agent-side exception grants connector access.
 func (n *Node) cliCall(ctx context.Context, c net.Conn, req sockRequest) proto.ToolResult {
 	if slices.Contains(callerTools, req.Name) {
-		if session := n.cliAgentCaller(req); session != "" {
+		session, assistant := n.cliAgentCaller(req), false
+		if assistantwire.IsA2ATool(req.Name) {
+			session, assistant = n.a2aCaller(c, req, session)
+			if session == "" {
+				return proto.ErrorResult(proto.ToolErrorUnavailable, "A2A requires a verified local session", 0)
+			}
+		}
+		if session != "" {
 			if n.peer == nil {
 				return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: not connected", 0)
 			}
 			var res proto.ToolResult
 			if err := n.peer.Call(ctx, "mcp.call", map[string]any{"name": req.Name, "args": req.Args, "session_id": session,
-				"assistant": false, "guest": n.guestOf(session) != nil}, &res); err != nil {
+				"assistant": assistant, "guest": n.guestOf(session) != nil}, &res); err != nil {
 				return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: "+err.Error(), 0)
 			}
 			return res
@@ -283,6 +291,43 @@ func (n *Node) cliCall(ctx context.Context, c net.Conn, req sockRequest) proto.T
 		return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: "+err.Error(), 0)
 	}
 	return res
+}
+
+// a2aCaller binds a shell or MCP process to a local execution session. The
+// requested session alone is never sufficient to read another agent's mailbox.
+func (n *Node) a2aCaller(c net.Conn, req sockRequest, claimed string) (string, bool) {
+	if id, ok := n.assistantCaller(c); ok {
+		n.mu.Lock()
+		p := n.procs[id]
+		round := p != nil && p.toolSet == roundToolSet
+		n.mu.Unlock()
+		if round {
+			return "", false
+		}
+		return id, true
+	}
+	pid, err := peerPID(c)
+	if err != nil {
+		return "", false
+	}
+	if req.CodexThreadID != "" {
+		if paneEnvOfPID(pid)["CODEX_THREAD_ID"] != req.CodexThreadID {
+			return "", false
+		}
+		return n.taskCodexCaller(req.CodexThreadID), false
+	}
+	for _, ancestor := range lineage(pid, parentPID) {
+		if req.Pane != "" && slices.Contains(n.panesOfPID(ancestor), req.Pane) {
+			id := n.paneCaller(req.Pane)
+			if id != "" && (claimed == "" || claimed == id) {
+				return id, false
+			}
+		}
+		if id := readClaudeSessionID(n.claudeSessionFile(ancestor)); id != "" && (claimed == "" || claimed == id) {
+			return id, false
+		}
+	}
+	return "", false
 }
 
 // cliAgentCaller is the Agent session a command line's call of an Agent's own tool comes from: the one its Codex

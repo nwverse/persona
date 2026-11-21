@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/acceptloop"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -359,7 +360,7 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		// (runtimeworkspaces.go).
 		features := []string{"prefer_running", "resume_argv", "handover", "transcript", "launchers", "start_params", "modes", "resume", "codex_thread", "unlisted_transcripts", "workspaces", "usage"}
 		if !h.isDaemon() {
-			features = append(features, "usage_windows", "leader_tools", "supervision_policy")
+			features = append(features, "usage_windows", "leader_tools", "supervision_policy", "a2a_mcp")
 			if hello.Caps.Assistant {
 				features = append(features, "assistant_pids")
 			}
@@ -372,6 +373,8 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		return res, nil
 	case "runtime.package":
 		return rh.servePackage(h, params)
+	case "runtime.a2a_mcp":
+		return rh.a2aMCPToken(h, params)
 	case "interaction.create":
 		n := rh.current()
 		if n == nil { // no hub to put it in front of the phone: ask again (same id) once one is connected
@@ -379,9 +382,6 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		}
 		return n.runtimeAsk(ctx, h, params)
 	case "mcp.tools":
-		if h.isDaemon() { // its link answers these itself; a daemon gets no phone or Persona tools
-			return nil, errUnsupportedForDaemons("Persona tools")
-		}
 		n := rh.current()
 		if n == nil || n.peer == nil {
 			return map[string]any{"tools": []proto.Tool{}}, nil
@@ -394,7 +394,7 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 			SessionID  string `json:"session_id"`
 		}
 		_ = json.Unmarshal(params, &p)
-		if p.SessionID != "" && !rh.reg.owns(h, p.SessionID) {
+		if p.SessionID != "" && !rh.reg.owns(h, p.SessionID) || h.isDaemon() && p.SessionID == "" {
 			return map[string]any{"tools": []proto.Tool{}}, nil
 		}
 		assistant := p.Assistant && h.assistant()
@@ -415,14 +415,14 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		if assistant && !p.LeaderOnly {
 			res.Tools = append(res.Tools, n.gateTools()...)
 		}
+		if h.isDaemon() {
+			res.Tools = slices.DeleteFunc(res.Tools, func(tool proto.Tool) bool { return !assistantwire.IsA2ATool(tool.Name) })
+		}
 		if res.Tools == nil {
 			res.Tools = []proto.Tool{}
 		}
 		return res, nil
 	case "mcp.call":
-		if h.isDaemon() {
-			return nil, errUnsupportedForDaemons("Persona tools")
-		}
 		n := rh.current()
 		if n == nil || n.peer == nil {
 			return proto.TextResult("Persona hub is not connected", true), nil
@@ -435,6 +435,9 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("bad mcp.call: %w", err)
+		}
+		if h.isDaemon() && !assistantwire.IsA2ATool(p.Name) {
+			return nil, errUnsupportedForDaemons("non-A2A tools")
 		}
 		// As the assistant only for one of the assistant's conversations that this runtime runs.
 		assistant := p.Assistant && h.assistant() && rh.reg.owns(h, p.SessionID) && n.isAssistantSession(p.SessionID)
