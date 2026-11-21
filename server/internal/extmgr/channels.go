@@ -109,10 +109,10 @@ func (h *Manager) feishuChannel(ctx context.Context) channel.View {
 		Enabled: v.Enabled, Bind: channel.BindFields, Capabilities: feishuCapabilities,
 		Description: i18n.T(l, "hub-channels.feishu_description")}
 	switch {
-	case !v.Enabled:
-		out.State = channel.StateDisabled
 	case v.Error != "":
 		out.State, out.Error = channel.StateError, v.Error
+	case !v.Enabled:
+		out.State = channel.StateDisabled
 	case !v.HasSecret:
 		out.State, out.Error = channel.StateNotConnected, i18n.T(l, "hub-channels.no_credentials")
 	case v.Owner == nil:
@@ -362,6 +362,9 @@ func (h *Manager) channelExtensionSet(ctx context.Context, id string, on bool) e
 
 // configureFeishu applies the assistant's changes to the bot's switches (feishu.configure): only what is given.
 func (h *Manager) configureFeishu(ctx context.Context, enabled *bool, features map[string]bool) error {
+	if err := h.loadBotSettings(ctx); err != nil {
+		return err
+	}
 	var fs *BotFeatures
 	if len(features) > 0 {
 		f := h.botFeatures()
@@ -462,6 +465,9 @@ func (h *Manager) bindChannel(ctx context.Context, id, step string, values map[s
 }
 
 func (h *Manager) bindFeishu(ctx context.Context, step string, values map[string]string) (connector.Prompt, error) {
+	if err := h.loadBotSettings(ctx); err != nil {
+		return connector.Prompt{}, err
+	}
 	l := h.botLang(ctx)
 	fields := []connector.Field{
 		{Name: "app_id", Label: "App ID", Placeholder: "cli_…"},
@@ -577,8 +583,7 @@ func feishuConfigureNote(l i18n.Lang, rep feishubot.ConfigureReport, domain, app
 // unbindChannel undoes the binding: a plugin channel's connector signs out, the Feishu bot forgets its owner.
 func (h *Manager) unbindChannel(ctx context.Context, id string) error {
 	if id == channel.Feishu {
-		h.unpairBot(ctx)
-		return nil
+		return h.unpairBot(ctx)
 	}
 	lang := h.botLang(ctx)
 	pc, ok := h.extensionChannel(id)

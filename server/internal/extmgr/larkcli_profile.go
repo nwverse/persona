@@ -91,7 +91,9 @@ func (h *Manager) botAppCredentials(ctx context.Context) (appID, secret, domain 
 	b := &h.bots
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	h.loadBotsLocked(ctx)
+	if err := h.loadBotsLocked(ctx); err != nil {
+		return "", "", ""
+	}
 	appID, secret, domain, _, err := h.botCredentialsLocked()
 	if err != nil {
 		// The app id is still safe and authoritative for profile selection even
@@ -168,7 +170,10 @@ func (h *Manager) setLarkCLIProfile(ctx context.Context, choice string) error {
 	choice = strings.TrimSpace(choice)
 	b := &h.bots
 	b.mu.Lock()
-	h.loadBotsLocked(ctx)
+	if err := h.loadBotsLocked(ctx); err != nil {
+		b.mu.Unlock()
+		return err
+	}
 	if b.set.LarkCLIProfile == choice {
 		b.mu.Unlock()
 		return nil

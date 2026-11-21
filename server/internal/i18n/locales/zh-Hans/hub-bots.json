@@ -1,4 +1,5 @@
 {
+  "settings_unavailable": "暂时无法读取飞书机器人设置，请稍后重试。",
   "no_credentials": "还没填应用凭证",
   "bot_off": "机器人没打开或还没配对",
   "test_title": "测试消息",

@@ -19,6 +19,22 @@ Code: `server/internal/feishubot` (long connection, REST, events and message con
 `server/internal/assistant/feishu*.go` (targets, commands, sending into chats, cards, pushes, sync: Lark's side of the shared pipeline);
 prompt `server/internal/prompts/bot/message.md`; the App page `apple/Persona/Views/Settings/FeishuBotView.swift` (**Settings › Connectors › Lark Bot**). On web Settings › Connectors, the lark-cli status appears in this Lark group.
 
+## Recovering saved settings
+
+The manager treats a missing `bots.feishu` record as a fresh, disabled bot with the existing feature defaults.
+A failed storage read or JSON decode leaves the settings unknown: Settings GET/PUT and pairing requests fail,
+channel binding does not start registration, and `feishu.status` returns an error rather than an empty owner.
+The assistant therefore does not reconcile an unread pairing as an unpairing. Writes are blocked until a complete read succeeds.
+
+Later status, settings and transport lookups retry the read, at most once every five seconds per manager while it fails.
+There is no additional polling loop. A successful read restores the saved credentials, owner, pending pairing and switches
+and starts the enabled bot's connection under the manager's existing context; the owner does not pair again.
+Successful reads, including a genuinely missing record, are cached as before. JSON `null` and `{}` retain the existing
+defaulted-decode behavior; only an actual read/decode error leaves settings unknown. A disabled bot, a member hub or a manager
+whose context has ended keeps the connection closed. Persistently invalid records remain protected and log one failure
+per attempted read; correcting the stored record lets the next eligible lookup recover it. This does not add a reset or
+migration of invalid data, change chat permissions, or change the card-nudge defaults or timing.
+
 ## How it differs from Lark `/agent`
 
 | | Lark bot (this page) | Lark `/agent` (`docs/extensions/lark-agent.md`) |
