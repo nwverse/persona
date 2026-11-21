@@ -13,5 +13,8 @@
   "not_found": "This to-do no longer exists",
   "round_not_found": "That part of the to-do's conversation is no longer there",
   "agent_not_listed": "This Agent isn't listed on its computer yet. Try again in a moment.",
+  "not_told_yet": "This to-do can't be checked right now. Try again in a moment.",
+  "machine_not_found": "This computer isn't one of the hub's computers.",
+  "machine_offline": "This computer is off right now. Try again once it's back.",
   "images_forbidden": "This device can’t read to-do images"
 }

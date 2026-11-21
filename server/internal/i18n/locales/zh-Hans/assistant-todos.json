@@ -13,5 +13,8 @@
   "not_found": "这个待办已不存在",
   "round_not_found": "待办对话里的这一段已经不在了",
   "agent_not_listed": "这台电脑还没有列出这个 Agent，请稍后再试。",
+  "not_told_yet": "暂时无法确认这个待办，请稍后再试。",
+  "machine_not_found": "这台电脑不在 hub 的电脑里。",
+  "machine_offline": "这台电脑现在没有连上，等它回来后再试。",
   "images_forbidden": "此设备无法读取待办图片"
 }

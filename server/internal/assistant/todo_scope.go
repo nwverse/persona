@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -22,7 +23,9 @@ import (
 // space. One rule (todosHidden) decides every way a to-do leaves the manager for an extension: GET /api/v1/todos leaves
 // it out (extensionRows), every route of one to-do (/api/v1/todos/{id}…) answers 404 as for a to-do that does not
 // exist, a write as a read (todoScoped), and neither todo.changed nor todo.decision is sent of it (todoChangedFlush,
-// todoDecisionVerdict); one whose verdict cannot be told yet (todoUntold) waits for it instead. A to-do is hidden
+// todoDecisionVerdict); one whose verdict cannot be told yet (todoUntold) waits for it instead: its events wait, its
+// routes answer 503 to be tried again and the list leaves it out marked partial, so an extension that mirrors the
+// to-dos does not take it for one deleted (#12216); a store that cannot tell answers 503. A to-do is hidden
 // with any of its steps, whose asks and line its row's view carries, and with any to-do on its brief, whose log and
 // lineage its row carries, so every row an extension is shown is a device's, byte for byte; the list's counts are a
 // device's. Nor can an extension take a run in the space, or one off a to-do it is not shown, onto one
@@ -46,6 +49,13 @@ const todoNoticeTimeout = 10 * time.Second
 // todoTakeRetrySeconds is the Retry-After of an extension's take of a run its computer does not list yet: a computer
 // lists a session it just started within a few seconds.
 const todoTakeRetrySeconds = 2
+
+// todoTakeOfflineRetrySeconds is the Retry-After of an extension's take of a run on a computer that is off now.
+const todoTakeOfflineRetrySeconds = 60
+
+// todoUntoldRetrySeconds is the Retry-After of an extension's route of a to-do it cannot be told about yet: what waits
+// for its verdict is judged again after 30 seconds (todoChangedFlush).
+const todoUntoldRetrySeconds = 30
 
 // todoEvidence is what of one to-do todosHidden decides by, copied under the to-dos' lock.
 type todoEvidence struct {
@@ -103,6 +113,14 @@ func (s *Service) todosHidden(ctx context.Context, ids []string, read map[[2]str
 // others its views would read are read in one call a computer, so the verdict is the same whichever route asks, and
 // the conversations are told at once.
 func (s *Service) todoVerdicts(ctx context.Context, ids []string, gone map[string]Todo, read map[[2]string]proto.Session) map[string]todoVerdict {
+	v, _ := s.todoVerdictsRead(ctx, ids, gone, read)
+	return v
+}
+
+// todoVerdictsRead is todoVerdicts, and the error when the store could not tell the conversations of the to-dos'
+// history (todoFeedConversations): a store-wide failure, which leaves every to-do it would have read on todoUntold
+// rather than one to-do's (#12216).
+func (s *Service) todoVerdictsRead(ctx context.Context, ids []string, gone map[string]Todo, read map[[2]string]proto.Session) (map[string]todoVerdict, error) {
 	briefs := s.briefLinksNow()
 	asked := make(map[string]bool, len(ids))
 	for _, id := range ids {
@@ -168,10 +186,12 @@ func (s *Service) todoVerdicts(ctx context.Context, ids []string, gone map[strin
 		return slices.DeleteFunc(slices.Clone(decided), func(id string) bool { return ev[id] == nil || own[id] == todoHidden })
 	}
 	// Then the conversations they came from and those of their history.
+	var storeErr error
 	if todos := open(); len(todos) > 0 {
 		feed, err := s.todoFeedConversations(ctx, todos)
 		if err != nil {
 			s.logf("todos: the conversations of their history: %v", err)
+			storeErr = err
 		}
 		var conversations []string
 		for _, id := range todos {
@@ -261,7 +281,7 @@ func (s *Service) todoVerdicts(ctx context.Context, ids []string, gone map[strin
 			}
 		}
 	}
-	return verdicts
+	return verdicts, storeErr
 }
 
 // unshownConversations are those of conversations (a to-do's origin, supervisor or history; "" the assistant's own)
@@ -307,8 +327,10 @@ func (s *Service) todoFeedConversations(ctx context.Context, ids []string) (map[
 }
 
 // extensionRows are the rows of list (GET /api/v1/todos, p its projection) an extension's token is shown: those of
-// the to-dos todosHidden does not hide, each as a device reads it. The views' sessions are not read again.
-func (s *Service) extensionRows(ctx context.Context, list []listedTodo, p todoProjection) []listedTodo {
+// the to-dos todoVerdicts shows, each as a device reads it, and partial when one it cannot be told about yet
+// (todoUntold) is left out, so a mirror keeps its copy (#12216). An error when the store cannot tell the to-dos'
+// history and that left one out: the list answers 503 rather than drop it. The views' sessions are not read again.
+func (s *Service) extensionRows(ctx context.Context, list []listedTodo, p todoProjection) (rows []listedTodo, partial bool, err error) {
 	read := map[[2]string]proto.Session{}
 	for _, f := range p.facts {
 		for _, c := range f.Sessions {
@@ -319,20 +341,28 @@ func (s *Service) extensionRows(ctx context.Context, list []listedTodo, p todoPr
 	for i := range list {
 		ids[i] = list[i].ID
 	}
-	hidden := s.todosHidden(ctx, ids, read)
+	verdicts, storeErr := s.todoVerdictsRead(ctx, ids, nil, read)
 	out := make([]listedTodo, 0, len(list))
 	for _, t := range list {
-		if !hidden[t.ID] {
+		switch v, decided := verdicts[t.ID]; {
+		case !decided || v == todoHidden:
+		case v == todoUntold:
+			partial = true
+		default:
 			out = append(out, t)
 		}
 	}
-	return out
+	if partial && storeErr != nil {
+		return nil, false, storeErr
+	}
+	return out, partial, nil
 }
 
 // todoScoped is route fn of one to-do (/api/v1/todos/{id}…) as an extension's token reaches it: a to-do it is not
 // shown answers 404 as one that does not exist, a write as a read, before the route reads or changes anything (a
-// health run's title echoed by a write, a link that told its history taken off). s.handle puts every such route
-// behind it, so a route added later is too.
+// health run's title echoed by a write, a link that told its history taken off); one it cannot be told about yet
+// answers 503 todo_not_told_yet with Retry-After, and 503 when the store cannot tell, never 404, so an extension that
+// mirrors the to-dos keeps its copy (#12216). s.handle puts every such route behind it, so a route added later is too.
 func (s *Service) todoScoped(fn http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(RoleHeader) == roleExtension {
@@ -344,9 +374,21 @@ func (s *Service) todoScoped(fn http.HandlerFunc) http.HandlerFunc {
 			s.todos.mu.RLock()
 			_, kept := s.todos.todos[id]
 			s.todos.mu.RUnlock()
-			if kept && s.todosHidden(ctx, []string{id}, nil)[id] {
-				apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", i18n.Err("assistant-todos.not_found"))
-				return
+			if kept {
+				verdicts, storeErr := s.todoVerdictsRead(ctx, []string{id}, nil, nil)
+				switch v, decided := verdicts[id]; {
+				case !decided || v == todoHidden:
+					apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", i18n.Err("assistant-todos.not_found"))
+					return
+				case v == todoShown:
+				case storeErr != nil:
+					apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
+					return
+				default:
+					w.Header().Set("Retry-After", strconv.Itoa(todoUntoldRetrySeconds))
+					apierr.WriteCode(w, http.StatusServiceUnavailable, "todo_not_told_yet", i18n.Err("assistant-todos.not_told_yet"))
+					return
+				}
 			}
 		}
 		fn(w, r)
@@ -397,6 +439,30 @@ func (s *Service) todoTakeRefused(ctx context.Context, mid string, c proto.Sessi
 	s.todos.mu.RUnlock()
 	hidden := s.todosHidden(ctx, holders, nil)
 	return slices.ContainsFunc(holders, func(id string) bool { return hidden[id] })
+}
+
+// takeComputer is how computer mid stands when an extension's take finds no run of it listed (PUT
+// …/agents/{mid}/{sid}), getErr the read of that run: standingComputerRemoved when it is not one of the hub's
+// computers, standingComputerOffline when it is not connected now (or did not answer), "" when it is on (#12216). The
+// manager's own fleet answers a computer that left from what it last listed, so its connection is read, never only
+// the read's error.
+func (s *Service) takeComputer(ctx context.Context, mid string, getErr error) string {
+	switch {
+	case errors.Is(getErr, ErrNoDevice):
+		return standingComputerRemoved
+	case getErr != nil:
+		return standingComputerOffline
+	case s.fleetOn():
+		return s.computerState(mid).state
+	}
+	ctx, cancel := context.WithTimeout(ctx, agentStartListTimeout)
+	defer cancel()
+	for _, d := range s.devices(ctx) {
+		if d.ID == mid && !d.Online && !d.Reachable {
+			return standingComputerOffline
+		}
+	}
+	return ""
 }
 
 // spaceTakeRefused says whether an extension's token may not link space mid/space to to-do id: the space is another

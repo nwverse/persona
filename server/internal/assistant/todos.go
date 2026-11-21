@@ -958,18 +958,22 @@ func (s *Service) todoRoutes() {
 	s.todoTimelineRoutes()
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
 	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go); each its
-	// view, and the list its counts (todo_view_routes.go); to an extension's token without the to-dos it is not shown
-	// (todo_scope.go)
+	// view, and the list its counts (todo_view_routes.go); to an extension's token without the to-dos it is not shown,
+	// marked partial when one it cannot be told about yet is left out, 503 when the store cannot tell (todo_scope.go)
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
 		list, p, err := s.todosViewed(r.Context(), true)
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 			return
 		}
+		partial := false
 		if r.Header.Get(RoleHeader) == roleExtension {
-			list = s.extensionRows(r.Context(), list, p)
+			if list, partial, err = s.extensionRows(r.Context(), list, p); err != nil {
+				apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
+				return
+			}
 		}
-		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts()})
+		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts(), Partial: partial})
 	})
 
 	// POST /api/v1/todos: create todo {title, notes, due_at | due_date, remind_at, priority, project, kind}; kind concern
@@ -1263,17 +1267,27 @@ func (s *Service) todoRoutes() {
 		}
 
 		var title, cwd, agent string
-		c, found := s.session(r.Context(), mid, sid)
+		c, found, getErr := s.sessionNow(r.Context(), mid, sid)
 		if found {
 			title, cwd, agent = c.Title, c.Cwd, c.Agent
 		}
 		// An extension's token takes no run it cannot be shown (todo_scope.go): one in the health space or one off a
-		// to-do it is not shown answers 404; one the computer does not list yet, whose space cannot be told, 409
-		// agent_not_listed, to be tried again (a session just started is answered before its computer lists it).
+		// to-do it is not shown answers 404. One whose computer does not list it, whose space cannot be told, answers
+		// by the computer (#12216): 404 machine_not_found for a computer that is not one of the hub's, 503
+		// machine_offline for one that is off now, and only on one that is on 409 agent_not_listed, to be tried again
+		// (a session just started is answered before its computer lists it).
 		if r.Header.Get(RoleHeader) == roleExtension {
 			if !found {
-				w.Header().Set("Retry-After", strconv.Itoa(todoTakeRetrySeconds))
-				apierr.WriteCode(w, http.StatusConflict, "agent_not_listed", i18n.Err("assistant-todos.agent_not_listed"))
+				switch s.takeComputer(r.Context(), mid, getErr) {
+				case standingComputerRemoved:
+					apierr.WriteCode(w, http.StatusNotFound, "machine_not_found", i18n.Err("assistant-todos.machine_not_found"))
+				case standingComputerOffline:
+					w.Header().Set("Retry-After", strconv.Itoa(todoTakeOfflineRetrySeconds))
+					apierr.WriteCode(w, http.StatusServiceUnavailable, "machine_offline", i18n.Err("assistant-todos.machine_offline"))
+				default:
+					w.Header().Set("Retry-After", strconv.Itoa(todoTakeRetrySeconds))
+					apierr.WriteCode(w, http.StatusConflict, "agent_not_listed", i18n.Err("assistant-todos.agent_not_listed"))
+				}
 				return
 			}
 			if s.todoTakeRefused(r.Context(), mid, c) {

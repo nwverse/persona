@@ -28,6 +28,9 @@ import (
 type todosList struct {
 	Todos  []listedTodo             `json:"todos"`
 	Counts assistantwire.TodoCounts `json:"counts"`
+	// Partial: an extension's list left out a to-do it cannot be told about yet (todoUntold), which is not one that
+	// was deleted: read the list again later (#12216). Never on a device's list.
+	Partial bool `json:"partial,omitempty"`
 }
 
 // listedTodos are the to-dos as GET /api/v1/todos lists them, newest created first: each formatted, with its decision

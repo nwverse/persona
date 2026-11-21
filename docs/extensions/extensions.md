@@ -895,10 +895,14 @@ Whatever scopes it was granted, an extension's token never sees:
   repositories), and `todo.changed` and
   `todo.decision` are not sent of it; one that only cannot be told yet waits rather than being dropped, and is sent once
   it can be told (judged again after 30 seconds, then less often, up to every 10 minutes; at most 512 wait; a manager
-  restart in between drops what waits). Nor can a token take onto a to-do of its own a run of the space, one of such a
-  to-do, or a space such a to-do has or such a run is in (404), nor a run its computer does not list yet (409
-  `agent_not_listed`, with `Retry-After`: an Agent just started is answered before its computer lists it, so try
-  again). Every to-do it is shown reads as a device reads it,
+  restart in between drops what waits). Nor is such a to-do answered as one that does not exist, which an extension
+  that mirrors the to-dos would take as a deletion (#12216): every route of it answers 503 `todo_not_told_yet` with
+  `Retry-After`, `GET /api/v1/todos` leaves it out but says `"partial": true`, so keep your copy and read again later,
+  and a store that cannot tell the to-dos' history answers 503 on the list and on their routes. Nor can a token take onto a to-do of its own a run of the space, one of such a
+  to-do, or a space such a to-do has or such a run is in (404). A run its computer does not list is answered by the
+  computer (#12216): 404 `machine_not_found` for a computer that is not one of the hub's, 503 `machine_offline` with
+  `Retry-After` for one that is off now, and on one that is on 409 `agent_not_listed`, with `Retry-After` (an Agent
+  just started is answered before its computer lists it, so try again). Every to-do it is shown reads as a device reads it,
   and the list's `counts` are a device's, which count, as numbers, the to-dos it is not shown too. What told a to-do's history stays: a run's link keeps a directory in the
   space when the run's shell leaves it, and a space's unlink, move or void releases such a link rather than delete it.
   Such a task's outcome is not written into a knowledge-base project's timeline either, where `kb.read` would read it:
