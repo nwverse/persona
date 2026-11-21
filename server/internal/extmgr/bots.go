@@ -149,9 +149,12 @@ type botHub struct {
 	// msgChat is the chat of the messages the bot may use, seen or sent lately (message id -> chat id): what a reply's
 	// parent is checked against (checkReplyParent), memory only.
 	msgChat idRing
-	// handedGroup are the group messages handed to the assistant lately: a recall in a group is only passed on for one
-	// of these (botRecalled), memory only.
-	handedGroup idRing
+	// Pending recalls are tracked separately from the bounded handed history, so a
+	// backlog cannot evict a message that is still waiting for its predecessor.
+	queuedMessages map[botMessageRef]*botQueuedMessage
+	// The history value says whether the message was admitted for group recall.
+	handedMessages     map[botMessageRef]bool
+	handedMessageOrder []botMessageRef
 	// answerFiles keeps prepared long replies across retries and hub restarts.
 	answerFiles botAnswerFiles
 	// line is closed once the last message taken has been handed to the assistant (botMessage): they go in the

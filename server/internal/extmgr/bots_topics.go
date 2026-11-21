@@ -541,22 +541,6 @@ func (h *Manager) messageChat(id string) string {
 	return b.msgChat.m[id]
 }
 
-// rememberHandedGroup notes a group message handed to the assistant: only a recall of one of these is passed on.
-func (h *Manager) rememberHandedGroup(id string) {
-	b := &h.bots
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.handedGroup.put(id, "")
-}
-
-func (h *Manager) handedGroupMessage(id string) bool {
-	b := &h.bots
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	_, ok := b.handedGroup.m[id]
-	return ok
-}
-
 var errBotReplyChat = &rpc.Error{Code: assistantwire.CodeChatDenied, Message: "feishu: a reply goes into the chat of the message it answers, and that chat is not one the bot may send into"}
 
 // checkReplyParent refuses a reply whose parent message is in a chat the bot may not send into: a reply lands in the
