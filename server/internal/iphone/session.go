@@ -525,9 +525,11 @@ func (s *session) maybePrepare(c *conn) {
 
 // prepareAgain are the failures of an automatic mount that can clear by themselves, so the link's next health check
 // tries again: the phone locked (the bridge asks before it sends anything), no answer in time, Apple's signing server
-// unreachable. The others (no image on this computer, no build for this phone, Developer Mode off, …) need someone to
-// act, and wait for the next link.
-var prepareAgain = map[string]bool{"locked": true, bridgeTimeout: true, "tss_failed": true}
+// unreachable. A mount whose answer never came reaches here as CodeUncertain (Call reports every change it sent without
+// an answer so), and is tried again as well: mount_ddi first looks whether the image is there, and then does nothing.
+// The others (no image on this computer, no build for this phone, Developer Mode off, …) need someone to act, and wait
+// for the next link.
+var prepareAgain = map[string]bool{"locked": true, bridgeTimeout: true, "tss_failed": true, CodeUncertain: true}
 
 // restartLink ends c on purpose: the supervisor connects again at once.
 func (s *session) restartLink(c *conn) {

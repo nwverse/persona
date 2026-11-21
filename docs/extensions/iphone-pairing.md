@@ -58,8 +58,9 @@ iOS 27 phone keeps the cryptex across a restart is not verified, and either way 
 that session can't list the new services, its `device_info` answers `disconnected`, and the link that follows a few seconds later says it.
 Done, the record keeps `auto_prepare`: the owner allowed this computer to mount it again by itself, and from then on a link that comes up
 with `ddi_mounted: false` (after the restart) mounts it in the background, a failure only logged. A failure that can clear by itself (the
-phone locked, no answer in time, Apple's signing server unreachable) is tried again at the link's next health check, about every minute or
-two, and a phone that stays locked is logged once; any other failure waits for the next link (#12556). Before that it was once per link,
+phone locked; no answer in time, which comes back as `uncertain` when the request had been sent; Apple's signing server unreachable) is
+tried again at the link's next health check, about every minute or two, and a phone that stays locked is logged once. Trying a mount
+again is safe: `mount_ddi` first looks whether the image is there, and then does nothing; any other failure waits for the next link (#12556). Before that it was once per link,
 so a link that came up while the phone was locked left it without the image, and the guided setup showing it getting ready, until the
 link happened to restart. Every mount asks Apple's
 signing server for the phone's ticket, which carries the phone's chip ID (ECID); the app says so before the first Prepare. The image comes

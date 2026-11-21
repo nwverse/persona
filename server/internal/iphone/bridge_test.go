@@ -83,6 +83,8 @@ serve)
       exit 1
     fi
     if [ "$op" = "mount_ddi" ]; then
+      # FAKE_MOUNT_SILENT=<file>: while the file is there, mount_ddi gets no answer at all (a mount that hangs).
+      if [ -n "$FAKE_MOUNT_SILENT" ] && [ -e "$FAKE_MOUNT_SILENT" ]; then continue; fi
       # FAKE_MOUNT_FAIL=<file>: while the file is there, mount_ddi fails with the code it holds (locked, ddi_missing, …).
       # Read once: a file removed between a check and the read would give an answer without a code.
       code=""
@@ -532,16 +534,24 @@ func TestPrepareMountsAndThenAgainByItself(t *testing.T) {
 	}
 }
 
-// TestAutoPrepareTriesAgainWhileLocked: a link that comes up without the image while the phone is locked tries to
-// mount it again at its next health checks, and stops once it is mounted; a failure that needs someone (no image on
-// this computer) is tried once per link, however many checks follow (#12556).
-func TestAutoPrepareTriesAgainWhileLocked(t *testing.T) {
+// autoPrepare is a phone paired over the fake bridge, prepared once by its owner (Record.AutoPrepare), whose links come
+// up without the image: what the node mounts again by itself (#12556).
+type autoPrepare struct {
+	t     *testing.T
+	m     *Manager
+	ctx   context.Context
+	log   string // every request's op, in order
+	links string // every request as "<serve pid> <op>"
+}
+
+func newAutoPrepare(t *testing.T) *autoPrepare {
+	t.Helper()
 	m, log := bridgeManager(t)
 	// Both restored by fastTiming. The fake answers slowly, and a check that times out would end the link: every new
-	// link tries to mount once anyway, so the counts below are per link.
+	// link tries to mount once anyway, so the tests count per link.
 	healthEvery, healthTimeout = 20*time.Millisecond, 2*time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 	if _, err := m.Pair(ctx, testUDID, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -550,45 +560,66 @@ func TestAutoPrepareTriesAgainWhileLocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec.AutoPrepare = true // the owner prepared it once
+	rec.AutoPrepare = true
 	if err := m.store.Save(rec); err != nil {
 		t.Fatal(err)
 	}
-	ops := func() string { b, _ := os.ReadFile(log); return strings.Join(strings.Fields(string(b)), ",") }
-	mounts := func() int { return strings.Count(ops(), "mount_ddi") }
 	links := filepath.Join(t.TempDir(), "links")
 	t.Setenv("FAKE_SERVE_PIDLOG", links)
-	// mostOnOneLink: the most mount_ddi requests any one serve process (one link) got.
-	mostOnOneLink := func() int {
-		b, _ := os.ReadFile(links)
-		per, most := map[string]int{}, 0
-		for _, l := range strings.Split(string(b), "\n") {
-			if pid, op, ok := strings.Cut(l, " "); ok && op == "mount_ddi" {
-				per[pid]++
-				most = max(most, per[pid])
-			}
-		}
-		return most
-	}
-	mounted := func() bool {
-		d := m.Devices(ctx)
-		return len(d) == 1 && bytes.Contains(d[0].Info, []byte(`"ddi_mounted":true`))
-	}
-	fail := filepath.Join(t.TempDir(), "mount-fail")
 	t.Setenv("FAKE_DDI_UNMOUNTED", "1")
+	return &autoPrepare{t: t, m: m, ctx: ctx, log: log, links: links}
+}
+
+func (a *autoPrepare) ops() string {
+	b, _ := os.ReadFile(a.log)
+	return strings.Join(strings.Fields(string(b)), ",")
+}
+
+func (a *autoPrepare) mounts() int { return strings.Count(a.ops(), "mount_ddi") }
+
+// mostOnOneLink is the most mount_ddi requests any one serve process (one link) got.
+func (a *autoPrepare) mostOnOneLink() int {
+	b, _ := os.ReadFile(a.links)
+	per, most := map[string]int{}, 0
+	for _, l := range strings.Split(string(b), "\n") {
+		if pid, op, ok := strings.Cut(l, " "); ok && op == "mount_ddi" {
+			per[pid]++
+			most = max(most, per[pid])
+		}
+	}
+	return most
+}
+
+func (a *autoPrepare) mounted() bool {
+	d := a.m.Devices(a.ctx)
+	return len(d) == 1 && bytes.Contains(d[0].Info, []byte(`"ddi_mounted":true`))
+}
+
+// connect brings a link up, through a call that needs one.
+func (a *autoPrepare) connect() {
+	a.t.Helper()
+	if _, err := a.m.Call(a.ctx, testUDID, "screenshot", nil); err != nil {
+		a.t.Fatal(err)
+	}
+}
+
+// TestAutoPrepareTriesAgainWhileLocked: a link that comes up without the image while the phone is locked tries to
+// mount it again at its next health checks, and stops once it is mounted; a failure that needs someone (no image on
+// this computer) is tried once per link, however many checks follow (#12556).
+func TestAutoPrepareTriesAgainWhileLocked(t *testing.T) {
+	a := newAutoPrepare(t)
+	fail := filepath.Join(t.TempDir(), "mount-fail")
 	t.Setenv("FAKE_MOUNT_FAIL", fail)
 
 	// No image on this computer: once on this link, however many checks follow.
 	if err := os.WriteFile(fail, []byte("ddi_missing"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Call(ctx, testUDID, "screenshot", nil); err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, func() bool { return mounts() >= 1 })
+	a.connect()
+	waitFor(t, func() bool { return a.mounts() >= 1 })
 	time.Sleep(15 * healthEvery)
-	if n := mostOnOneLink(); n != 1 {
-		t.Fatalf("ddi_missing tried %d times on one link: %s", n, ops())
+	if n := a.mostOnOneLink(); n != 1 {
+		t.Fatalf("ddi_missing tried %d times on one link: %s", n, a.ops())
 	}
 
 	// A new link while the phone is locked: tried again at the next checks, on that same link. Locked first: the
@@ -596,12 +627,10 @@ func TestAutoPrepareTriesAgainWhileLocked(t *testing.T) {
 	if err := os.WriteFile(fail, []byte("locked"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m.disconnect(testUDID)
-	if _, err := m.Call(ctx, testUDID, "screenshot", nil); err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, func() bool { return mostOnOneLink() >= 3 })
-	if mounted() {
+	a.m.disconnect(testUDID)
+	a.connect()
+	waitFor(t, func() bool { return a.mostOnOneLink() >= 3 })
+	if a.mounted() {
 		t.Fatal("mounted while locked")
 	}
 
@@ -609,12 +638,38 @@ func TestAutoPrepareTriesAgainWhileLocked(t *testing.T) {
 	if err := os.Remove(fail); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, mounted)
-	n := mounts()
+	waitFor(t, a.mounted)
+	n := a.mounts()
 	time.Sleep(15 * healthEvery)
-	if got := mounts(); got != n {
-		t.Fatalf("mounted %d more times after it was mounted: %s", got-n, ops())
+	if got := a.mounts(); got != n {
+		t.Fatalf("mounted %d more times after it was mounted: %s", got-n, a.ops())
 	}
+}
+
+// TestAutoPrepareTriesAgainWhenTheMountNeverAnswers: an automatic mount that gets no answer in time comes back from
+// Call as uncertain, and is tried again at the next checks on the same link rather than waiting for another link; it
+// mounts once the phone answers (#12556).
+func TestAutoPrepareTriesAgainWhenTheMountNeverAnswers(t *testing.T) {
+	saved := prepareTimeout
+	t.Cleanup(func() { prepareTimeout = saved }) // registered first, so it runs after the manager has closed
+	prepareTimeout = 150 * time.Millisecond      // how long an automatic mount waits for its answer
+	a := newAutoPrepare(t)
+	silent := filepath.Join(t.TempDir(), "mount-silent")
+	if err := os.WriteFile(silent, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_MOUNT_SILENT", silent)
+
+	a.connect()
+	waitFor(t, func() bool { return a.mostOnOneLink() >= 2 })
+	if a.mounted() {
+		t.Fatal("mounted without an answer")
+	}
+
+	if err := os.Remove(silent); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, a.mounted)
 }
 
 // TestPairShowsDeveloperModeWhenItIsOff: a phone that paired with Developer Mode off gets its hidden switch shown in
