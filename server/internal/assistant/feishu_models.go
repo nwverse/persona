@@ -37,7 +37,7 @@ func (s *Service) botModels(ctx context.Context, f FeishuFeatures, messageID, cm
 	}
 	machine := cfg.mainRouteMachine()
 	params := map[string]any{}
-	if err := s.sendModel(ctx, machine, cfg.Main, params, l); err != nil {
+	if err := s.botModelParams(ctx, machine, cfg.Main, params, l); err != nil {
 		note("model_error", i18n.Args{"error": err.Error()})
 		return
 	}
@@ -88,4 +88,28 @@ func (s *Service) botModels(ctx context.Context, f FeishuFeatures, messageID, cm
 	}
 	fmt.Fprintf(&b, "\n%s", i18n.T(l, "assistant-feishu_cards.model_list_hint"))
 	s.botNote(ctx, messageID, b.String())
+}
+
+// botModelParams resolves the command's connection without requiring its old external
+// model to remain runnable: listing and an explicit replacement are how the owner recovers
+// when that model is removed. The connection and conversation still have to be usable.
+func (s *Service) botModelParams(ctx context.Context, machine, sid string, params map[string]any, lang i18n.Lang) error {
+	pick, ok, err := s.readModelPick(ctx, machine, sid)
+	if err != nil {
+		return err
+	}
+	if !ok || !proto.IsExternalLauncher(pick.Launcher) {
+		return s.sendModel(ctx, machine, sid, params, lang)
+	}
+	if !s.externalMainScope(ctx, machine, sid) && !s.externalMainStartScope(ctx, machine, sid, pick) {
+		return i18n.Err("external-adapter.scope_required")
+	}
+	if err := s.modelPickRefusal(ctx, machine, pick.Launcher, lang, true); err != nil {
+		return err
+	}
+	if err := s.otherKindPick(ctx, machine, sid, pick.Launcher); err != nil {
+		return err
+	}
+	params["launcher"], params["model"], params["effort"] = pick.Launcher, pick.Model, pick.Effort
+	return nil
 }
