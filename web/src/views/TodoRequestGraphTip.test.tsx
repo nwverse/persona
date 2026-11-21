@@ -48,6 +48,7 @@ describe("the requests graph's hover card", () => {
     expect(tip()).toBeNull();
     act(() => { vi.advanceTimersByTime(1); });
     expect(tip()!.textContent).toBe("first words");
+    expect(a.getAttribute("aria-describedby")).toBe(tip()!.id);
     leave(a);
     expect(tip()).toBeNull();
     // a pointer that left before the delay shows nothing
