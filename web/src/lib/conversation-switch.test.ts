@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
 import { assistantSwitchNeeded, prepareConversationSwitch, submitConversationSwitch } from "./conversation-switch";
 import type { Session } from "./types";

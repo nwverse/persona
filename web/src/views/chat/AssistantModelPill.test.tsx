@@ -559,7 +559,7 @@ describe("explicit logical conversation switch", () => {
     const confirm = () => [...document.querySelectorAll<HTMLButtonElement>("[role=dialog] button")].find((b) => b.textContent === t("chat-modelpanel.switch_confirm"))!;
     await act(async () => confirm().click());
     await flush();
-    expect(document.querySelector("[role=alert]")?.textContent).toContain("response unconfirmed");
+    expect(document.querySelector("[role=alert]")?.textContent).toBe(t("chat-modelpanel.switch_unconfirmed", { error: t("lib-api.computer_timeout") }));
     const first = calls.find((c) => c.url.endsWith("/switch"))!;
     expect(first.body).toMatchObject({ expected_epoch: 4, source_machine_id: mid(), machine_id: mid(), launcher: "codex", model: "gpt-standard", effort: "high" });
     expect(getSession(mid(), "c1")?.model_pick).toBeUndefined();
