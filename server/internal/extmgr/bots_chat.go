@@ -129,15 +129,20 @@ func (h *Manager) botRecalled(ev feishubot.Recalled, api *feishubot.Client, appI
 		return
 	}
 	ref := botMessageReference(b.api, set.Owner.OpenID, ev.ChatID, ev.MessageID)
+	state, known := b.recentMessages[ref]
 	queued := b.queuedMessages[ref]
-	if queued != nil && !queued.handed {
+	if queued != nil && !queued.handed && state != botMessageHandedDM && state != botMessageHandedGroup {
 		queued.recalled = true
 		b.rememberBotMessageLocked(ev.MessageID)
 		b.mu.Unlock()
 		return
 	}
-	groupHanded, known := b.handedMessages[ref]
-	if ev.ChatID != set.Owner.ChatID && !groupHanded ||
+	if state == botMessageCanceled {
+		b.rememberBotMessageLocked(ev.MessageID)
+		b.mu.Unlock()
+		return
+	}
+	if ev.ChatID != set.Owner.ChatID && state != botMessageHandedGroup ||
 		queued == nil && !known && b.messageInOtherContextLocked(ref) {
 		b.mu.Unlock()
 		return
@@ -164,7 +169,7 @@ const botSeenKeep = 300
 func (b *botHub) claimBotMessageLocked(ev feishubot.MessageEvent) (*botQueuedMessage, bool) {
 	id := ev.Message.MessageID
 	ref := botMessageReference(b.api, ev.Sender.SenderID.OpenID, ev.Message.ChatID, id)
-	if b.queuedMessages[ref] != nil {
+	if b.queuedMessages[ref] != nil || b.recentMessages[ref] == botMessageCanceled {
 		return nil, false
 	}
 	if id == "" || slices.Contains(b.seen, id) {
@@ -292,6 +297,9 @@ func (h *Manager) botMessage(ev feishubot.MessageEvent, raw json.RawMessage, sin
 		defer func() {
 			h.bots.mu.Lock()
 			if h.bots.queuedMessages[queued.ref] == queued {
+				if queued.recalled && !queued.handed {
+					h.bots.rememberBotMessageSourceLocked(queued.ref, botMessageCanceled)
+				}
 				delete(h.bots.queuedMessages, queued.ref)
 				h.bots.rememberBotMessageLocked(queued.ref.id)
 			}

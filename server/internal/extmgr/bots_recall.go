@@ -40,7 +40,7 @@ func (b *botHub) messageInOtherContextLocked(ref botMessageRef) bool {
 			return true
 		}
 	}
-	for known := range b.handedMessages {
+	for known := range b.recentMessages {
 		if known.id == ref.id && known != ref {
 			return true
 		}
@@ -74,7 +74,7 @@ func (h *Manager) beginBotHandoff(api *feishubot.Client, ev feishubot.MessageEve
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	ref := botMessageReference(api, ev.Sender.SenderID.OpenID, ev.Message.ChatID, ev.Message.MessageID)
-	if b.api == nil || b.set.Owner == nil || ref != botMessageReference(b.api, b.set.Owner.OpenID, ev.Message.ChatID, ev.Message.MessageID) {
+	if b.api == nil || b.set.Owner == nil || ref != botMessageReference(b.api, b.set.Owner.OpenID, ev.Message.ChatID, ev.Message.MessageID) || b.recentMessages[ref] == botMessageCanceled {
 		return false
 	}
 	if queued := b.queuedMessages[ref]; queued != nil {
@@ -83,18 +83,38 @@ func (h *Manager) beginBotHandoff(api *feishubot.Client, ev feishubot.MessageEve
 		}
 		queued.handed = true
 	}
-	if inThread || ev.Message.ChatType == "p2p" {
-		if b.handedMessages == nil {
-			b.handedMessages = make(map[botMessageRef]bool)
-		}
-		if _, exists := b.handedMessages[ref]; !exists {
-			b.handedMessages[ref] = inThread
-			b.handedMessageOrder = append(b.handedMessageOrder, ref)
-			if len(b.handedMessageOrder) > botMsgChatKeep {
-				delete(b.handedMessages, b.handedMessageOrder[0])
-				b.handedMessageOrder = b.handedMessageOrder[1:]
-			}
-		}
+	if inThread {
+		b.rememberBotMessageSourceLocked(ref, botMessageHandedGroup)
+	} else if ev.Message.ChatType == "p2p" {
+		b.rememberBotMessageSourceLocked(ref, botMessageHandedDM)
 	}
 	return true
+}
+
+// Canceled source evidence never vouches for an assistant handoff or delivery.
+// All completed source evidence shares the existing bounded history, so normal
+// later completions eventually evict canceled entries as well.
+type botMessageState uint8
+
+const (
+	botMessageCanceled botMessageState = iota + 1
+	botMessageHandedDM
+	botMessageHandedGroup
+)
+
+func (b *botHub) rememberBotMessageSourceLocked(ref botMessageRef, state botMessageState) {
+	if previous := b.recentMessages[ref]; state == botMessageCanceled && (previous == botMessageHandedDM || previous == botMessageHandedGroup) {
+		return // canceling a duplicate cannot undo the original message's handoff
+	}
+	if b.recentMessages == nil {
+		b.recentMessages = make(map[botMessageRef]botMessageState)
+	}
+	if _, exists := b.recentMessages[ref]; !exists {
+		b.recentMessageOrder = append(b.recentMessageOrder, ref)
+		if len(b.recentMessageOrder) > botMsgChatKeep {
+			delete(b.recentMessages, b.recentMessageOrder[0])
+			b.recentMessageOrder = b.recentMessageOrder[1:]
+		}
+	}
+	b.recentMessages[ref] = state
 }

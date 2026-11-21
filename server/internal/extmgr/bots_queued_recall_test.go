@@ -74,6 +74,131 @@ func TestBotQueuedRecallStaysRecentAfterCleanup(t *testing.T) {
 	}
 }
 
+func TestBotCanceledSourceSurvivesQueueCleanup(t *testing.T) {
+	for _, refresh := range []bool{false, true} {
+		t.Run(fmt.Sprintf("credential_refresh_%t", refresh), func(t *testing.T) {
+			w := newBotWorld(t)
+			w.pair(t)
+			w.topicsOn(t, topicChat)
+			unblock := blockBotHandoff(t, w, "om_first")
+			event := groupEvent("om_canceled", "ou_me", "obsolete request", topicChat, "omt_example")
+			w.send(t, event)
+			w.send(t, botRecallEvent(topicChat, "om_canceled", "message_owner"))
+			unblock()
+			finishBotQueue(t, w)
+			if refresh {
+				if code, out := w.do(t, "PUT", "/api/v1/bots/feishu", `{"app_secret":"refreshed-secret"}`); code != 200 {
+					t.Fatalf("refresh credentials: %d %v", code, out)
+				}
+			}
+			for i := 0; i < botSeenKeep; i++ {
+				w.send(t, groupEvent(fmt.Sprintf("om_after_cleanup_%d", i), "ou_stranger", "ordinary message", topicChat, "omt_example"))
+			}
+			// No pending handler or handed receipt exists for the canceled topic.
+			// A wrong DM must not turn its id into an unknown-DM recall.
+			w.send(t, botRecallEvent("oc_p2p", "om_canceled", "message_owner"))
+			if w.a.wasTold(assistantwire.EventFeishuRecalled) {
+				t.Error("a wrong DM recall escaped after the canceled source was released")
+			}
+			w.send(t, event)
+			w.send(t, groupEvent("om_after_cancel", "ou_me", "ordinary next request", topicChat, "omt_example"))
+			eventually(t, 5*time.Second, "message after canceled-source checks handed", func() bool {
+				got := w.handed()
+				return len(got) > 0 && got[len(got)-1] == "om_after_cancel"
+			})
+			if got, want := w.handed(), []string{"om_first", "om_marker", "om_after_cancel"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("canceled source was delivered again: %v", got)
+			}
+			w.a.mu.Lock()
+			w.a.told = nil
+			w.a.mu.Unlock()
+			w.send(t, botRecallEvent(topicChat, "om_canceled", "message_owner"))
+			if w.a.wasTold(assistantwire.EventFeishuRecalled) {
+				t.Error("a locally canceled topic acquired a handed-message recall")
+			}
+			api, set := w.h.botAPI()
+			ref := botMessageReference(api, set.Owner.OpenID, topicChat, "om_canceled")
+			w.h.bots.mu.Lock()
+			state := w.h.bots.recentMessages[ref]
+			w.h.bots.mu.Unlock()
+			if state != botMessageCanceled {
+				t.Fatalf("local cancellation acquired a handoff state: %v", state)
+			}
+		})
+	}
+}
+
+func TestBotCanceledSourceHistoryIsBounded(t *testing.T) {
+	w := newBotWorld(t)
+	w.pair(t)
+	w.topicsOn(t, topicChat)
+	unblock := blockBotHandoff(t, w, "om_first")
+	w.send(t, groupEvent("om_canceled", "ou_me", "obsolete request", topicChat, "omt_example"))
+	w.send(t, botRecallEvent(topicChat, "om_canceled", "message_owner"))
+	unblock()
+	finishBotQueue(t, w)
+	api, set := w.h.botAPI()
+	ref := botMessageReference(api, set.Owner.OpenID, topicChat, "om_canceled")
+	for i := 0; i < botMsgChatKeep; i++ {
+		w.send(t, groupEvent(fmt.Sprintf("om_completed_%d", i), "ou_me", "ordinary request", topicChat, "omt_example"))
+	}
+	w.send(t, groupEvent("om_bound_marker", "ou_me", "ordinary next request", topicChat, "omt_example"))
+	eventually(t, 5*time.Second, "source history completion barrier", func() bool {
+		got := w.handed()
+		return len(got) > 0 && got[len(got)-1] == "om_bound_marker"
+	})
+	w.h.bots.mu.Lock()
+	_, retained := w.h.bots.recentMessages[ref]
+	n, ordered := len(w.h.bots.recentMessages), len(w.h.bots.recentMessageOrder)
+	w.h.bots.mu.Unlock()
+	if retained || n > botMsgChatKeep || ordered > botMsgChatKeep {
+		t.Fatalf("completed cancellation was retained beyond bounded history: retained=%t entries=%d order=%d", retained, n, ordered)
+	}
+}
+
+func TestBotHandedSourceSurvivesCanceledRedelivery(t *testing.T) {
+	for _, chat := range []string{topicChat, "oc_p2p"} {
+		t.Run(chat, func(t *testing.T) {
+			w := newBotWorld(t)
+			w.pair(t)
+			w.topicsOn(t, topicChat)
+			event := groupEvent("om_original", "ou_me", "original request", chat, "omt_example")
+			if chat == "oc_p2p" {
+				event = botMessageEvent("om_original", "ou_me", "text", textContent("original request"), nil)
+			}
+			w.send(t, event)
+			finishBotQueue(t, w)
+			for i := 0; i < botSeenKeep; i++ {
+				w.send(t, groupEvent(fmt.Sprintf("om_later_%d", i), "ou_stranger", "ordinary message", topicChat, "omt_example"))
+			}
+			unblock := blockBotHandoff(t, w, "om_hold")
+			w.send(t, event)
+			w.send(t, botRecallEvent(chat, "om_original", "message_owner"))
+			if !w.a.wasTold(assistantwire.EventFeishuRecalled) {
+				t.Error("a pending redelivery hid the original handed message's recall")
+			}
+			unblock()
+			finishBotQueue(t, w)
+			w.a.mu.Lock()
+			w.a.told = nil
+			w.a.mu.Unlock()
+			w.send(t, botRecallEvent(chat, "om_original", "message_owner"))
+			if !w.a.wasTold(assistantwire.EventFeishuRecalled) {
+				t.Error("canceling a redelivery downgraded the original handoff")
+			}
+			n := 0
+			for _, id := range w.handed() {
+				if id == "om_original" {
+					n++
+				}
+			}
+			if n != 1 {
+				t.Fatalf("the original message was handed %d times", n)
+			}
+		})
+	}
+}
+
 func TestBotPendingDedupAndReleaseAfterRecentEviction(t *testing.T) {
 	for _, refused := range []bool{false, true} {
 		t.Run(fmt.Sprintf("refused_%t", refused), func(t *testing.T) {
