@@ -2,6 +2,23 @@
 
 Pitfalls, odd behavior and the trade-offs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
 
+## Folding completion cards
+
+Keep the complete opening Markdown fence when choosing a preview boundary (#12498). A closing line must use the same
+character, have at least as many fence characters, and contain only trailing whitespace. A shorter run or trailing text
+is still code; test the actual card's preview and folded detail, including both backticks and tildes.
+Read raw indentation: a four-space or tab-indented closing lookalike inside a block is still code. Share fence
+tracking with the card's escaping and list adapter, or a correctly folded block can still have its contents rewritten
+as prose after an inner short run. These top-level fence boundaries follow the
+[CommonMark rule](https://spec.commonmark.org/0.31.2/#fenced-code-blocks); the
+[card Markdown reference](https://open.feishu.cn/document/feishu-cards/feishu-card-cardkit/components/markdown)
+also distinguishes fenced and indented code.
+Keep blockquote and list container context when finding fences, and reject backticks in a backtick fence's info
+string. Use the existing parser's source boundaries without re-rendering Markdown; retain that line map across the
+list adapter's indentation changes so a list item's code stays protected. Preserve the existing protection for
+complete inline runs of three or more backticks too: shorter delimiters inside one must not expose its tags to prose
+escaping, while surrounding prose and unmatched runs keep their normal handling.
+
 ## Lark system events are not new conversation requests
 
 A new message ID and timestamp do not establish new human activity (#9789). Consume system events and unidentified senders without creating or updating Inbox things, including the direct-chat sweep and history promotion path. Keep real attachments and independently authored bot notifications. When fetching conversation history for triage, retain timestamps and distinguish the incoming batch from background: an empty system event otherwise disappears from flattened context and makes an old request look current. An already collected follow-up remains background; promoting an unindexed follow-up must not rewind Last when another group of the same chat is processed in the same round.
