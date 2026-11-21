@@ -26,9 +26,10 @@ import (
 //
 //   - Codex app-server can return the limits together with the account ID. The node sends only a digest of that ID.
 //     When the app-server cannot supply windows, read the newest rollout's token_count event without an account ID.
-//   - Claude Code hands the limits to a status line command (the rate_limits field of its JSON input) and keeps them
-//     nowhere else; the API that has them needs the OAuth token, so it is skipped too. The way in is opt-in: a
-//     status line wrapper drops the JSON into <node dir>/usage/claude*.json, which is read here.
+//   - Claude Code: in a bounded background poll (usagewindows_claude.go), the node asks the local Claude Code CLI
+//     for its subscription windows via stream-json `get_usage` (falling back to `-p /usage` for older CLIs) without
+//     touching credentials or making a model request. An opt-in status line drop (<node dir>/usage/claude*.json) keeps
+//     working and wins when fresh.
 //
 // The node polls every usageWindowsEvery, keeps the last sample of every source (a source that goes quiet keeps its
 // number for three days), and answers usage.windows from that. hub.json machines[].usage_windows false turns it off.
@@ -42,11 +43,12 @@ const (
 )
 
 type usageWindowsState struct {
-	mu       sync.Mutex
-	off      bool // the hub said usage_windows false
-	cancel   context.CancelFunc
-	at       time.Time
-	accounts map[string]proto.UsageNodeAccount // by source ("codex:<source digest>", "claude:<file>")
+	mu           sync.Mutex
+	off          bool // the hub said usage_windows false
+	cancel       context.CancelFunc
+	at           time.Time
+	accounts     map[string]proto.UsageNodeAccount // by source ("codex:<source digest>", "claude:<file>", "claude-cli:<dir digest>")
+	claudeProbes map[string]claudeUsageProbe       // by realPath(configDir): last probe time and next reset
 }
 
 // setUsageWindows is the hub's word (node.configure usage_windows): whether the node reads the windows at all. Off
@@ -60,7 +62,7 @@ func (n *Node) setUsageWindows(on bool) {
 		if st.cancel != nil {
 			st.cancel()
 		}
-		st.at, st.accounts = time.Time{}, nil
+		st.at, st.accounts, st.claudeProbes = time.Time{}, nil, nil
 	}
 }
 
@@ -79,8 +81,8 @@ func (n *Node) runUsageWindows(ctx context.Context) {
 	}
 }
 
-// refreshUsageWindows keeps app-server calls outside the lock, so an RPC can still read local files or return the
-// last sample while Codex checks the account. Disabling polling also cancels and discards an in-flight round.
+// refreshUsageWindows keeps CLI / app-server calls outside the lock, so an RPC can still read local files or return the
+// last sample while Codex or Claude checks the account. Disabling polling also cancels and discards an in-flight round.
 func (n *Node) refreshUsageWindows(ctx context.Context) {
 	st := &n.usageWin
 	st.mu.Lock()
@@ -90,19 +92,34 @@ func (n *Node) refreshUsageWindows(ctx context.Context) {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	st.cancel = cancel
+	prevProbes := make(map[string]claudeUsageProbe, len(st.claudeProbes))
+	for k, v := range st.claudeProbes {
+		prevProbes[k] = v
+	}
 	st.mu.Unlock()
 	defer cancel()
 
 	homes := n.usageWindowCodexHomes()
+	claudeDirs := n.usageWindowClaudeDirs()
 	found := n.collectUsageWindows(time.Now(), homes)
 	collectCodexAppUsage(ctx, homes, found)
+	probeUpdates := n.collectClaudeCLIUsage(ctx, claudeDirs, prevProbes, found)
 
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.cancel = nil
 	if ctx.Err() == nil {
 		st.at = time.Now()
+		if len(probeUpdates) > 0 {
+			if st.claudeProbes == nil {
+				st.claudeProbes = map[string]claudeUsageProbe{}
+			}
+			for k, v := range probeUpdates {
+				st.claudeProbes[k] = v
+			}
+		}
 		st.accounts = mergeUsage(st.accounts, found, st.at)
+		dedupeClaudeUsage(st.accounts, st.at)
 	}
 }
 

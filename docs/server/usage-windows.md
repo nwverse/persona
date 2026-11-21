@@ -12,7 +12,8 @@ Persona collects usage on each computer without reading or handling agent login 
 | --- | --- | --- |
 | Codex app-server | In a bounded background poll, the node asks the official local Codex app-server for `account/rateLimits/read`. Codex makes the authenticated usage read and can return `accountId` with the same snapshot. Persona sends only a digest of a personal account ID to the usage manager | Preferred |
 | Codex rollout | `token_count` events in `~/.codex/sessions/…/rollout-*.jsonl` carry `rate_limits`: `primary` / `secondary` with `used_percent`, `window_minutes`, `resets_at` (seconds), plus `plan_type`, `limit_id`. The node reads the tail (512 KB) of the most recent few rollouts and takes the last event whose `limit_id` is `codex` (or unset). This sample identifies its reporting source only | Fallback |
-| Claude Code status line | Claude Code puts `rate_limits` (`five_hour` / `seven_day`, each with `used_percentage`, `resets_at`) in the **JSON input of the status line command** (see its changelog), and writes it to neither the transcript nor any other file | Yes, but the user has to wire it up (next section) |
+| Claude Code CLI (`get_usage` / `/usage`) | In a bounded background poll (`usagewindows_claude.go`), the node asks each local Claude Code config directory's CLI for its subscription windows through the stream-json `get_usage` control request (falling back to `claude -p /usage --output-format json --verbose` for older CLIs). No login credentials are read and no model request is started; after the first poll, each directory is re-read only after Claude Code activity or a window reset (at most once every 5 minutes) | Preferred |
+| Claude Code status line | Claude Code puts `rate_limits` (`five_hour` / `seven_day`, each with `used_percentage`, `resets_at`) in the **JSON input of the status line command**, and writes it to neither the transcript nor any other file. A wrapper dropping it into `~/.persona/usage/claude*.json` still works and wins when fresh (within 15 minutes) | Optional override |
 | Antigravity native quota summary | The agy companion asks its ACP process's local native service for `RetrieveUserQuotaSummary` every five minutes, with `forceRefresh: false` so agy's own cache controls upstream reads. Valid buckets and groups become 5-hour / weekly windows using `remainingFraction`, `window` (or a legacy bucket id), `resetTime` and the optional model. No conversation or model request is started, and no status-line email or credential is read | Yes |
 | Codex account usage API (ChatGPT's `wham/usage`) | Needs the login token in `~/.codex/auth.json` | **No**. Moshi uses it; Persona does not read `auth.json` |
 | Claude account usage API (`/api/oauth/usage`) and the `anthropic-ratelimit-*` response headers | Needs Claude's OAuth token (Keychain / `.credentials.json`); the headers also need a request of your own | **No**, same reason |
@@ -22,8 +23,9 @@ The app-server starts no conversation or model request. The account ID applies o
 
 ### Wiring in Claude Code's usage (optional)
 
-Claude Code only exposes usage in the status line command's input, so Persona cannot read it out of thin air. **Persona never edits your `settings.json`**; if you want to see Claude's usage,
-wrap your status line command so it drops `rate_limits` into the node's directory `~/.persona/usage/claude.json` (for multiple config directories use `claude-<name>.json`; each file counts as one source):
+By default, the node reads Claude Code's subscription windows directly through the local `claude` CLI (`usagewindows_claude.go`, #12412): it starts a short-lived non-persistent process with hooks and settings sources disabled, asks the structured `get_usage` control request (falling back to `claude -p /usage --output-format json --verbose` on older CLIs), and never touches login credentials or starts a model request. Each Claude config directory (`CLAUDE_CONFIG_DIR`) is polled once after startup and then at most every 5 minutes when Claude Code has activity in that directory or a window resets.
+
+If you prefer to feed Claude's usage from a status line hook (or run an older CLI that has neither `get_usage` nor `-p /usage`), **Persona never edits your `settings.json`**; you can still wrap your status line command so it drops `rate_limits` into the node's directory `~/.persona/usage/claude.json` (for multiple config directories use `claude-<name>.json`; each file counts as one source, and a fresh file within 15 minutes wins over the CLI probe for the same account):
 
 ```sh
 #!/bin/sh
@@ -44,9 +46,9 @@ The gateway's `rate_limits.spend_limit` (an amount of money) is not a window and
 
 ## Collection and merging
 
-- **node** (`server/internal/node/usagewindows.go`): refreshes every 5 minutes (the first time 20 seconds after connecting to the hub, so the hub's `node.configure` delivers the switch first).
-  Each source (one Codex home, one `claude*.json`, or one local runtime id) keeps its last sample, kept even when the source goes quiet, and dropped after 3 days. Windows whose `resets_at` has passed are dropped (those numbers belong to the previous period);
-  a source whose windows have all passed is not listed. A local runtime reports through the optional `usage.windows` event when the node advertises `usage_windows`; its runtime id replaces the same source after a companion restart, and a valid empty snapshot clears it. `usage.windows` uses the cache or local files without waiting for the Codex app-server.
+- **node** (`server/internal/node/usagewindows.go`, `usagewindows_codex.go`, `usagewindows_claude.go`): refreshes every 5 minutes (the first time 20 seconds after connecting to the hub, so the hub's `node.configure` delivers the switch first).
+  Each source (one Codex home, one Claude config directory, one `claude*.json`, or one local runtime id) keeps its last sample, kept even when the source goes quiet, and dropped after 3 days. Windows whose `resets_at` has passed are dropped (those numbers belong to the previous period);
+  a source whose windows have all passed is not listed. A local runtime reports through the optional `usage.windows` event when the node advertises `usage_windows`; its runtime id replaces the same source after a companion restart, and a valid empty snapshot clears it. `usage.windows` uses the cache or local files without waiting for the Codex app-server or Claude CLI.
 - **Off**: `machines[].usage_windows` in `hub.json` (`docs/operations/config.md`); with `false`, that computer's node stops collection and the manager does not ask it. Unset means on.
   If the node is older than this version (no `usage.windows`), the manager treats it as having no data.
 - **Manager** (`server/internal/devices/usagewindows.go`): on `GET /api/v1/usage/windows` it asks the online machines (in parallel, 8 seconds each; repeated requests within 30 seconds reuse the previous merged result),
@@ -269,7 +271,7 @@ Same rules as the web (pure functions in `apple/Packages/PersonaWire/Sources/Per
 
 ## Limitations
 
-- Claude's usage requires the user to wire up the status line (above); otherwise only Codex shows.
+- Claude Code's built-in CLI collector depends on the installed `claude` supporting either the stream-json `get_usage` control request or `-p /usage`; API-key and gateway setups report no subscription windows (use an account-pool gateway source or the optional status line wrapper when needed).
 - Codex rollout fallback numbers update when Codex is used. The sample time in the UI shows how old they are.
 - After the manager restarts (it restarts along with the hub), the last answers of machines that have gone offline are lost until they come back online and are asked again; the gateway's last answer is also in memory, so after a restart the sidebar lacks its accounts until the first round (within seconds) reads them.
 - **The different window types have not been verified against a real relay** (no gateway is running on this dev machine): the adapter follows the first connected relay's public API documentation (account read views, access control);
