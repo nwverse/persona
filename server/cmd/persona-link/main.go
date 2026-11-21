@@ -254,13 +254,16 @@ func pairCmd(e *env, args []string) error {
 		if flags.any() {
 			return link.NewTextError("link-cli.pair_listen_ssh", nil)
 		}
-		if flags.proxy.set {
+		if flags.proxy.any() {
 			return link.NewTextError("link-cli.listen_proxy", nil)
 		}
 		if seen || machine != "" {
 			return link.NewTextError("link-cli.pair_listen_machine", nil)
 		}
 		return pairListen(e, listen, addrs)
+	}
+	if err := flags.check(); err != nil {
+		return err
 	}
 	if err := flags.proxy.save(e); err != nil {
 		return err

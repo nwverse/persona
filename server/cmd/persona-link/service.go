@@ -170,8 +170,11 @@ func install(e *env, args []string) error {
 	if flags.any() && (passive || len(addrs) > 0) {
 		return link.NewTextError("link-cli.install_listen_ssh", nil)
 	}
-	if flags.proxy.set && (passive || len(addrs) > 0) {
+	if flags.proxy.any() && (passive || len(addrs) > 0) {
 		return link.NewTextError("link-cli.listen_proxy", nil)
+	}
+	if err := flags.check(); err != nil {
+		return err
 	}
 	switch e.goos {
 	case "linux", "darwin", "windows":

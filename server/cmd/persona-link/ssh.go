@@ -50,6 +50,14 @@ func (f routeFlags) any() bool {
 	return f.server != "" || f.target != "" || f.alwaysSet
 }
 
+// check refuses --ssh-always with --proxy-always before anything is saved: only one route can be the only one.
+func (f routeFlags) check() error {
+	if f.always && f.alwaysSet && f.proxy.always && f.proxy.alwaysSet {
+		return link.ErrSSHAlwaysProxyAlways
+	}
+	return nil
+}
+
 func (f routeFlags) build(rawLink string) (*link.SSH, error) {
 	if !f.any() {
 		return nil, nil
