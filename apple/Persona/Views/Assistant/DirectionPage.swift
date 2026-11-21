@@ -141,6 +141,8 @@ enum DirectionPageLogic {
     var folded = false
 
     /// Numbers the reads as they are asked; `landed` is the newest one whose answer was taken.
+    /// Reads out now. Read only where the page has nothing else to show while one is out (unpinned, nothing added).
+    private(set) var inFlight = 0
     @ObservationIgnored private var asked = 0
     @ObservationIgnored private var landed = 0
     /// The hello (`AppModel.hubHellos`) this page last read for.
@@ -176,6 +178,8 @@ enum DirectionPageLogic {
             return
         }
         if status != .read { status = .reading } // rows read before stay drawn while a read is out
+        inFlight += 1
+        defer { inFlight -= 1 }
         do {
             var r = try await api.direction(id)
             guard n > landed else { return } // a newer answer was taken meanwhile
@@ -394,6 +398,24 @@ private struct DirectionAddedSection: View {
                 .listRowBackground(Color.clear)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("direction-page-empty")
+        } else if !ended && !inTree {
+            // Left the tree (unpinned while open) with nothing added: the read that says it has ended is out, or it
+            // failed. Never blank. A read that still calls it current says only that nothing is here (no Move To…).
+            Section {
+                if page.status == .failed {
+                    retryRow(String(localized: "Couldn't read [Direction Page]"), id: "direction-page-unread")
+                } else if page.inFlight > 0 {
+                    HStack { Spacer(); ProgressView(); Spacer() }
+                        .padding(.vertical, Theme.Space.s)
+                        .themedRow()
+                        .accessibilityIdentifier("direction-page-reading")
+                } else {
+                    Label(String(localized: "Nothing Here Yet [Direction Page]"), systemImage: Theme.Icon.list)
+                        .font(Theme.Font.secondary).foregroundStyle(.secondary)
+                        .themedRow()
+                        .accessibilityIdentifier("direction-page-empty")
+                }
+            } header: { header(nil) }
         }
     }
 
@@ -439,9 +461,9 @@ private struct DirectionAddedSection: View {
     }
 }
 
-/// One session in Added Here: its dot, title and who placed it, and where it stands; a tap opens it. Where the
-/// standing does not fit beside the title (a long word, a large text size, a narrow column), it goes under the source
-/// line instead of cutting the title (`ViewThatFits`).
+/// One session in Added Here: its dot, title and who placed it, and where it stands; a tap opens it. The standing sits
+/// beside the title while the title keeps half the row (the title cut on its line); only a word that would leave it
+/// less goes under the source line (`BesideOrUnder`).
 private struct DirectionAddedRow: View {
     @Environment(AppModel.self) private var model
     let row: DirectionFilings.Row
@@ -463,23 +485,12 @@ private struct DirectionAddedRow: View {
             HStack(alignment: .top, spacing: Theme.Space.s) {
                 StatusDot(state: DirectionPageLogic.dot(standing))
                     .padding(.top, Theme.Space.xs)
-                // Each candidate measured once (`MeasuredOnce`, P7): a list row's graph asks for its size again on
-                // every frame the page moves.
-                ViewThatFits(in: .horizontal) {
-                    MeasuredOnce {
-                        HStack(spacing: Theme.Space.s) {
-                            lines(title, source).fixedSize(horizontal: true, vertical: false)
-                            Spacer(minLength: Theme.Space.xs)
-                            if let word { standingText(word, standing).fixedSize() }
-                        }
-                    }
-                    MeasuredOnce {
-                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                            lines(title, source)
-                            if let word { standingText(word, standing) }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                // The word beside the title while the title keeps half the row, the title cut on its line; only a
+                // word that would leave it less goes under (`BesideOrUnder`, DESIGN_SYSTEM 6.2). By measured widths,
+                // so a long title never stacks the row, and rows keep one height as the In Progress rows above do.
+                BesideOrUnder(alignment: .firstTextBaseline) {
+                    lines(title, source)
+                    if let word { standingText(word, standing) }
                 }
             }
             .padding(.vertical, Theme.Sidebar.rowPadding)
@@ -502,7 +513,7 @@ private struct DirectionAddedRow: View {
 
     private func lines(_ title: String, _ source: String) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-            Text(title).font(Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(2)
+            Text(title).font(Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(1)
             Text(source).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
         }
     }

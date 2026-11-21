@@ -59,6 +59,13 @@ def put(base, path, body, lang=""):
         return e.code, json.load(e)
 
 
+def post(base, path):
+    req = Request(base + path, data=b"{}", method="POST",
+                  headers={"Authorization": "Bearer mock", "Content-Type": "application/json"})
+    with urlopen(req, timeout=3) as response:
+        return json.load(response)
+
+
 def file_path(machine, session):
     return f"/api/v1/assistant/sessions/{machine}/{session}/direction"
 
@@ -117,8 +124,8 @@ class DirectionTreeMockTests(unittest.TestCase):
 
 
 class DirectionSessionsMockTests(unittest.TestCase):
-    def start(self, mode="1"):
-        base, process, log = start({"MOCK_LEADERS": "1", "MOCK_DIRECTION_SESSIONS": mode})
+    def start(self, mode="1", **env):
+        base, process, log = start({"MOCK_LEADERS": "1", "MOCK_DIRECTION_SESSIONS": mode, **env})
         self.addCleanup(stop, process, log)
         return base
 
@@ -247,6 +254,43 @@ class DirectionSessionsMockTests(unittest.TestCase):
         self.assertEqual((status, body["code"]), (409, "direction_ended"))
         status, body = put(base, file_path("server", first), {"direction": ""})
         self.assertEqual((status, body["code"]), (409, "direction_leader_conversation"))
+
+    def test_an_unpin_from_the_app_is_ended_until_pinned_again(self):
+        base = self.start()
+        first = get(base, "/api/v1/assistant/directions/tree")["directions"][0]["id"]
+        self.assertEqual(post(base, f"/api/v1/assistant/directions/{first}/end"), {"ended": True})
+        self.assertIn("ended_at", get(base, "/api/v1/assistant/directions/" + first))
+        status, body = put(base, file_path("macbook", RECIPE), {"direction": first})
+        self.assertEqual((status, body["code"]), (409, "direction_ended"))
+        status, body = put(base, file_path("server", first), {"direction": ""})
+        self.assertEqual((status, body["code"]), (409, "direction_leader_conversation"))
+        post(base, f"/api/v1/assistant/directions/{first}/make")
+        self.assertNotIn("ended_at", get(base, "/api/v1/assistant/directions/" + first))
+        status, _ = put(base, file_path("macbook", RECIPE), {"direction": first})
+        self.assertEqual(status, 200)
+
+    def test_an_unlisted_session_needs_its_row_even_where_it_already_is(self):
+        base = self.start()
+        first = get(base, "/api/v1/assistant/directions/tree")["directions"][0]["id"]
+        status, body = put(base, file_path("macbook", "dirs0007-0000-4000-8000-000000000007"), {"direction": first})
+        self.assertEqual((status, body["code"]), (404, "session_not_found"))
+
+    def test_a_second_null_write_keeps_what_undo_puts_back(self):
+        base = self.start()
+        key = "macbook/" + RECIPE
+        before = get(base, "/mock/direction_sessions")["book"][key]
+        status, first = put(base, file_path("macbook", RECIPE), {"direction": None})
+        self.assertEqual((status, first["changed"]), (200, True))
+        status, second = put(base, file_path("macbook", RECIPE), {"direction": None})
+        self.assertEqual((status, second), (200, {"direction": None, "previous": None, "changed": False}))
+        status, _ = put(base, file_path("macbook", RECIPE), {"direction": first["previous"]})  # the first one's Undo
+        self.assertEqual(status, 200)
+        self.assertEqual(get(base, "/mock/direction_sessions")["book"][key], before, "the same title and filing time")
+
+    def test_the_background_supervisor_is_refused(self):
+        base = self.start(MOCK_BACKGROUND_SUPERVISOR="1")
+        status, body = put(base, file_path("server", "bgsv0000-0000-4000-8000-000000000001"), {"direction": ""})
+        self.assertEqual((status, body["code"]), (409, "direction_background_supervisor"))
 
     def test_refusals_carry_the_hubs_own_sentence(self):
         base = self.start()

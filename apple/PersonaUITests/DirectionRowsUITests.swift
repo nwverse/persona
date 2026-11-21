@@ -106,7 +106,9 @@ final class DirectionRowsUITests: XCTestCase {
     @MainActor private var sidebarList: XCUIElement {
         let byID = app.collectionViews.matching(identifier: "assistant-sidebar").firstMatch
         if byID.exists { return byID }
-        return app.collectionViews.containing(NSPredicate(format: "identifier BEGINSWITH 'sidebar-'")).firstMatch
+        // Never the direction page's list, which draws the sidebar's own to-do and Agent rows (`sidebar-direction-…`).
+        return app.collectionViews.containing(NSPredicate(format: "identifier BEGINSWITH 'sidebar-'"))
+            .matching(NSPredicate(format: "identifier != 'direction-page'")).firstMatch
     }
 
     @MainActor private func shot(_ name: String) {
@@ -351,6 +353,20 @@ final class DirectionRowsUITests: XCTestCase {
         app.navigationBars.buttons.firstMatch.tap()
         openSidebar()
         XCTAssertTrue(reveal(inRow), "and in the row again:\n\(app.debugDescription)")
+        // Right after a move (no Undo this time) the row follows it too: gone from the row while its neighbour, drawn
+        // just under it, is still there.
+        XCTAssertTrue(reveal(all))
+        all.tap()
+        let again = pageRow("写新版引导页的文案")
+        XCTAssertTrue(again.waitForExistence(timeout: 10))
+        moveRow(again, to: "增长")
+        XCTAssertTrue(again.waitForNonExistence(timeout: 5))
+        app.navigationBars.buttons.firstMatch.tap()
+        openSidebar()
+        let neighbour = app.buttons.matching(NSPredicate(format: "identifier == 'sidebar-direction-filed' AND label BEGINSWITH %@",
+                                                         "整理首页改版的设计稿")).firstMatch
+        XCTAssertTrue(reveal(neighbour), "the row's other filed session:\n\(app.debugDescription)")
+        XCTAssertTrue(until("the row follows the move") { !inRow.exists }, "still in the row after the move")
     }
 
     /// From On Its Own: set on its own, it leaves the page; moved under the first direction again from there and undone,
@@ -380,6 +396,8 @@ final class DirectionRowsUITests: XCTestCase {
         app.buttons["Persona 产品"].firstMatch.tap()
         let undo = app.buttons["toast-action"].firstMatch
         XCTAssertTrue(undo.waitForExistence(timeout: 10))
+        // What the Undo then takes back, as the screen says it (the toast with an action keeps its words apart).
+        XCTAssertTrue(app.staticTexts["已移到「Persona 产品」下"].firstMatch.exists, "moved, as the toast says:\n\(app.debugDescription)")
         undo.tap()
         XCTAssertTrue(try until("on its own again") { (try entry(key))?["direction"] as? String == "" }, "Undo: on its own again")
         app.terminate()
@@ -411,9 +429,11 @@ final class DirectionRowsUITests: XCTestCase {
     @MainActor private func allThenInboxThenAll() throws {
         openFirstPage()
         XCTAssertTrue(app.navigationBars["Persona 产品"].waitForExistence(timeout: 5))
+        // A pushed page has only ‹ on a phone (the drawer's button is the conversation's): back to the lead's chat.
+        app.navigationBars["Persona 产品"].buttons.firstMatch.tap()
         openSidebar()
-        let inbox = app.buttons["sidebar-inbox"].firstMatch
-        XCTAssertTrue(reveal(inbox))
+        let inbox = app.descendants(matching: .any).matching(identifier: "sidebar-inbox").firstMatch
+        XCTAssertTrue(reveal(inbox), "no Inbox in the sidebar:\n\(app.debugDescription)")
         inbox.tap()
         sleep(2)
         openSidebar()
@@ -426,6 +446,7 @@ final class DirectionRowsUITests: XCTestCase {
         sleep(2)
         XCTAssertFalse(app.descendants(matching: .any)["direction-page"].exists,
                        "‹ goes to the second chat, not to the first page:\n\(app.debugDescription)")
+        XCTAssertFalse(app.buttons["inbox.more"].firstMatch.exists, "nor to the Inbox:\n\(app.debugDescription)")
     }
 
     @MainActor func testTheToDosPinnedSectionsEndAsTheirRowsDo() {

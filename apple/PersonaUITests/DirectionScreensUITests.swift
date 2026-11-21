@@ -6,7 +6,10 @@ import XCTest
 /// a removed direction, and the Unpin confirmation. Against scripts/mock/mock_hub.py with MOCK_LEADERS=1 and
 /// MOCK_DIRECTION_SESSIONS=1 (PERSONA_LEADERS_HUB). Runs only when asked (PERSONA_DIRECTION_SHOTS=1), in the language
 /// PERSONA_SHOT_LANG names (en by default); SHOT_DIR keeps the screenshots, SHOT_SUFFIX names the run (appearance,
-/// text size, device). The simulator's appearance and text size are the run's (`xcrun simctl ui`).
+/// text size, device). The simulator's appearance and text size are the run's (`xcrun simctl ui`). The off walk's
+/// "manager" case (PERSONA_OFF_CASE=manager) needs a second mock started with MOCK_SESSIONS_LIST=1 as well
+/// (PERSONA_OFF_MANAGER_HUB): only the paged session list brings the other manager's conversation to its page.
+/// PERSONA_SHOT_NAV pins the layout (`sidebar`, `separate`; `auto` leaves the app's default).
 final class DirectionScreensUITests: XCTestCase {
     private var hub: String!
     private var app: XCUIApplication!
@@ -148,7 +151,9 @@ final class DirectionScreensUITests: XCTestCase {
     @MainActor private var sidebarList: XCUIElement {
         let byID = app.collectionViews.matching(identifier: "assistant-sidebar").firstMatch
         if byID.exists { return byID }
-        return app.collectionViews.containing(NSPredicate(format: "identifier BEGINSWITH 'sidebar-'")).firstMatch
+        // Never the direction page's list, which draws the sidebar's own to-do and Agent rows (`sidebar-direction-…`).
+        return app.collectionViews.containing(NSPredicate(format: "identifier BEGINSWITH 'sidebar-'"))
+            .matching(NSPredicate(format: "identifier != 'direction-page'")).firstMatch
     }
 
     /// The first lead (「Persona 产品」), whose name is mock data in every language.
@@ -239,7 +244,7 @@ final class DirectionScreensUITests: XCTestCase {
         openTitleMenu()
         // Items of a Menu carry no identifiers: by its words (not the sidebar's All ›, which says the same).
         let item = app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != 'sidebar-direction-all'",
-                                                    word("Tasks and Chats", "任务和对话", "タスクとチャット"))).firstMatch
+                                                    word("Tasks and Chats", "任务和会话", "タスクとチャット"))).firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 5), "no Tasks and Chats in the lead's title menu:\n\(app.debugDescription)")
         shot("title-menu")
         item.tap()
@@ -321,7 +326,7 @@ final class DirectionScreensUITests: XCTestCase {
         XCTAssertFalse(app.buttons["move-to"].exists, "Move To… on a lead conversation")
         unpin.tap()
         let stays = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@",
-            word("What you added to it stays.", "放进来的都会留着。", "追加したものはそのまま残ります。"))).firstMatch
+            word("What you added to it stays.", "放进来的会话会留着。", "追加したものはそのまま残ります。"))).firstMatch
         XCTAssertTrue(stays.waitForExistence(timeout: 5), "the sentence of its own:\n\(app.debugDescription)")
         shot("unpin")
     }
@@ -430,6 +435,9 @@ final class DirectionScreensUITests: XCTestCase {
         let toast = app.descendants(matching: .any)["toast"].firstMatch
         XCTAssertTrue(toast.waitForExistence(timeout: 15))
         XCTAssertFalse(app.buttons["toast-action"].exists, "the same place offers no Undo")
+        // Without an action the toast is one element, its label the sentence (`Toasts.swift`).
+        let already = word("Already in “Persona 产品”", "已经在「Persona 产品」下", "すでに「Persona 产品」にあります")
+        XCTAssertTrue(toast.label.contains(already), "the sentence says where: \(toast.label)")
         shot("already")
     }
 
@@ -493,7 +501,14 @@ final class DirectionScreensUITests: XCTestCase {
         }
         // Another manager's conversations reach its page only with the paged session list: that case runs against the
         // mock with MOCK_SESSIONS_LIST=1 too (PERSONA_OFF_MANAGER_HUB), where 工作 has a chat of its own.
-        if off == "manager", let paged = ProcessInfo.processInfo.environment["PERSONA_OFF_MANAGER_HUB"] { hub = paged }
+        if off == "manager" {
+            guard let paged = ProcessInfo.processInfo.environment["PERSONA_OFF_MANAGER_HUB"], !paged.isEmpty else {
+                XCTFail("PERSONA_OFF_MANAGER_HUB: the manager case needs a mock with MOCK_LEADERS=1 "
+                        + "MOCK_DIRECTION_SESSIONS=1 MOCK_SESSIONS_LIST=1")
+                return
+            }
+            hub = paged
+        }
         reset(off == "feature" ? "feature=off" : off == "missing" ? "routes=missing" : "")
         if off == "manager" {
             launch(keepPick: true, extra: ["-openAssistantManager", "m-3fa21c"]) // 工作's page, picked at launch

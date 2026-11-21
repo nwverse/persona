@@ -12,9 +12,12 @@ reconnected at an older version does. Unset: a hub without the feature (the rout
 It answers as the hub does (`server/internal/assistant/direction_sessions*.go`): placed sessions by computer, then session
 id (the app orders them itself); a refusal with the hub's own sentence in the request's language (its locale files);
 a null write decided before any check; Undo putting back exactly the entry the session's last write replaced, title
-and filing time included, without its row; On Its Own without the row for a session already filed. A write that
+and filing time included, without its row; On Its Own without the row for a session already filed, every other write
+needing its row; the background supervisor refused; a listed session filed with its row's title. A write that
 changes the book pushes `directions`, as the hub publishes on a change.
-With MOCK_DIRECTION_SESSIONS on, the second manager (工作) has a conversation of its own, so its page has a chat menu.
+With MOCK_DIRECTION_SESSIONS on, the second manager (工作) has a conversation of its own. It reaches the app's sidebar
+only with the paged session list (MOCK_SESSIONS_LIST=1), so DirectionScreensUITests' "manager" off case runs on a
+second mock started that way (PERSONA_OFF_MANAGER_HUB).
 
 GET /mock/direction_sessions?… changes how it answers from now on (each optional; GET /mock/reset puts all back):
   routes=missing|on       the routes answer 404 without their codes / as above
@@ -25,8 +28,9 @@ GET /mock/direction_sessions?… changes how it answers from now on (each option
   delay=<seconds>         the single read waits that long first (the page draws from the tree meanwhile)
   put_delay=<seconds>     each write waits that long before it answers (Moving… on the rows meanwhile)
   sessions_unavailable=1  the single read says the placed sessions could not be read
-  ended=<id>|""           that direction ends (unpinned): out of the leaders and the tree, `directions` pushed, and
-                          its single read has `ended_at`
+  ended=<id>              that direction ends (unpinned), as POST /api/v1/assistant/directions/{id}/end from the app
+                          does: out of the leaders and the tree, `directions` pushed, its single read with `ended_at`,
+                          still known for writes (409 direction_ended); …/make or /mock/reset pins it again
 The answer is the book as it stands: {"book", "options"}. A lost answer is POST /mock/fault {"fault":"lost_receipt"}.
 """
 import json
@@ -114,7 +118,9 @@ def register(d):
             f"{computer}/a1f3c2d4-0000-4000-8000-000000000007": {"direction": first, "title": "菜谱网站加搜索",  # i18n-ignore: mock data
                                                                  "at": ago(days=1)},
             "nas/dirs0005-0000-4000-8000-000000000005": {"direction": first, "title": "备份照片到 NAS", "at": ago(days=2)},  # i18n-ignore: mock data
-            "server/dirs0006-0000-4000-8000-000000000006": {"direction": first, "title": "看一下服务器的磁盘",  # i18n-ignore: mock data
+            # A long title, as real ones often are: the page's row cuts it on its line, its word beside it.
+            "server/dirs0006-0000-4000-8000-000000000006": {"direction": first,  # i18n-ignore: mock data
+                                                            "title": "看一下服务器的磁盘为什么一周就满了，顺便清理旧日志和构建缓存",  # i18n-ignore: mock data
                                                             "at": ago(hours=5), "standing": "list_unknown"},
             f"{computer}/dirs0007-0000-4000-8000-000000000007": {"direction": first, "title": "旧版落地页的截图",  # i18n-ignore: mock data
                                                                  "at": ago(days=3), "standing": "not_listed"},
@@ -132,7 +138,7 @@ def register(d):
         return {f"studio/{extra[1]['session_id']}": {"leader": first, "title": extra[1]["title"], "at": ago(minutes=30)}} if first else {}
 
     # replaced: per session, the entry its last write replaced or took out (None: it had none), for that write's Undo.
-    state = {"book": initial_book(), "origins": initial_origins(), "replaced": {}, "ended": set(), "options": {}}
+    state = {"book": initial_book(), "origins": initial_origins(), "replaced": {}, "options": {}}
     original_leaders = list(hub.MOCK_LEADERS)
 
     def options():
@@ -244,7 +250,7 @@ def register(d):
             time.sleep(float(opts["delay"]))
         if opts.get("read") == "fail":
             return refuse(h, "direction_unavailable", 503)
-        if opts.get("read") == "gone" or (did not in leaders_now() and did != opts.get("ended")):
+        if opts.get("read") == "gone" or (did not in leaders_now() and did not in hub.ENDED_LEADERS):
             return refuse(h, "direction_not_found", 404)
         with lock:
             rows = [] if opts.get("sessions_unavailable") else placed(did)
@@ -252,7 +258,7 @@ def register(d):
                "sessions": rows, "ended_tasks": [], "more": False}
         if opts.get("sessions_unavailable"):
             out["sessions_unavailable"] = True
-        if opts.get("ended") == did:
+        if did in hub.ENDED_LEADERS:
             out["ended_at"] = ago(minutes=1)
         return h.send_json(out)
 
@@ -279,14 +285,14 @@ def register(d):
         machine, sid = req.match["mid"], req.match["sid"]
         key = f"{machine}/{sid}"
         with lock:
-            book, replaced, ended = state["book"], state["replaced"], state["ended"]
+            book, replaced, ended = state["book"], state["replaced"], hub.ENDED_LEADERS
             before = book.get(key)
             previous = before.get("direction") if before else None
             if target is None:
                 # Taken out of the book, decided before any check: it asks nothing of the session. The entry stays,
                 # for its Undo.
-                replaced[key] = before
-                if before is not None:
+                if before is not None:  # a second null write keeps what an Undo of the first puts back
+                    replaced[key] = before
                     del book[key]
                 return publish(h, {"direction": None, "previous": previous, "changed": before is not None})
             last = replaced.get(key, False)  # False: no write of this session to undo
@@ -295,11 +301,13 @@ def register(d):
                 # Its row, unless it is an Undo or a filed session set on its own.
                 if online(machine) is None:
                     return refuse(h, "machine_not_found", 404)
-                if session_row(machine, sid) is None and previous != target:
+                if session_row(machine, sid) is None:
                     return refuse(h, "session_not_found", 404)
             # These hold for every write, an Undo's too.
             if sid == hub.ASSISTANT_CONFIG.get("main"):
                 return refuse(h, "direction_main_conversation")
+            if hub.BACKGROUND_SUPERVISOR and sid == hub.BACKGROUND_SUPERVISOR:
+                return refuse(h, "direction_background_supervisor")
             if sid in leaders_now() or sid in ended:
                 return refuse(h, "direction_leader_conversation")
             if key in followers():
@@ -315,7 +323,8 @@ def register(d):
                 entry = before  # the same place again
             else:
                 row = session_row(machine, sid) or {}
-                entry = {"direction": target, "title": (before or {}).get("title") or row.get("title", ""),
+                # A listed session's title is its row's; one not listed (set on its own) keeps the one it was filed with.
+                entry = {"direction": target, "title": row.get("title") or (before or {}).get("title", ""),
                          "at": _iso(_now())}
                 if before and before.get("standing"):
                     entry["standing"] = before["standing"]
@@ -336,28 +345,26 @@ def register(d):
 
     def control(h, req):
         opts = options()
-        for name in ("routes", "feature", "refuse", "read", "delay", "put_delay", "sessions_unavailable", "ended"):
+        for name in ("routes", "feature", "refuse", "read", "delay", "put_delay", "sessions_unavailable"):
             if name in req.query:
                 value = req.query[name][0]
-                if value in ("", "on", "ok", "0") and name != "ended":
+                if value in ("", "on", "ok", "0"):
                     opts.pop(name, None)
                 else:
                     opts[name] = value
-        if "ended" in req.query:
+        if "ended" in req.query and req.query["ended"][0] in hub.MOCK_LEADERS:
+            # Unpinned: out of the leaders (the tree, /api/v1/assistant/leaders), as the hub's end does; still
+            # known for writes (409 direction_ended) and its chat still a leader conversation for filing.
             ended = req.query["ended"][0]
-            if not ended:
-                opts.pop("ended", None)
-            elif ended in hub.MOCK_LEADERS:
-                # Unpinned: out of the leaders (the tree, /api/v1/assistant/leaders), as the hub's end does; still
-                # known for writes (409 direction_ended) and its chat still a leader conversation for filing.
-                hub.MOCK_LEADERS.remove(ended)
-                state["ended"].add(ended)
-                hub.broadcast(hub.from_default({"type": "directions"}))
+            hub.MOCK_LEADERS.remove(ended)
+            hub.ENDED_LEADERS.add(ended)
+            hub.broadcast(hub.from_default({"type": "directions"}))
         return h.send_json({"book": state["book"], "options": opts})
 
     def reset():
-        state.update(book=initial_book(), origins=initial_origins(), replaced={}, ended=set(), options={})
+        state.update(book=initial_book(), origins=initial_origins(), replaced={}, options={})
         hub.MOCK_LEADERS[:] = original_leaders
+        hub.ENDED_LEADERS.clear()
 
     def other_assistant(h, req):
         """The second manager (工作) with a conversation of its own, so its page has a chat's menu to compare."""

@@ -358,7 +358,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "没能读取放进来的内容。"
+            "value" : "没能读取放进来的会话。"
           }
         }
       }
@@ -1097,7 +1097,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "任务和对话"
+            "value" : "任务和会话"
           }
         }
       }
@@ -204888,7 +204888,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "放进来的都会留着。"
+            "value" : "放进来的会话会留着。"
           }
         }
       }
