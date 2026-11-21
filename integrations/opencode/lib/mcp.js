@@ -251,6 +251,12 @@ export function createMcpProxy({ tools, call, log = () => {} }) {
         }
         chunks.push(chunk)
       }
+      // Retirement can revoke/replace the binding while a slow request body
+      // is arriving. Possession of the former URL is no longer authority.
+      if (closed || routes.get(pathname) !== binding) {
+        res.writeHead(404).end()
+        return
+      }
       const msg = JSON.parse(Buffer.concat(chunks).toString('utf8'))
       if (msg.id === undefined) {
         res.writeHead(202).end()

@@ -194,9 +194,8 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
   const own = sessionLauncher(session);
   const ownHost = sessionModelHost(session);
   const launchModel = useStore((s) => launchModelForSession(s.launches, session));
-  const effectiveSession = launchModel ? { ...session, model: launchModel } : session;
-  const switches = sessionSwitches(effectiveSession);
-  const view = pillView(effectiveSession, modelList(mid, own, undefined, ownHost));
+  const switches = sessionSwitches(session);
+  const view = pillView(session, modelList(mid, own, undefined, ownHost), launchModel);
   const opens = switches.model || switches.effort || view.engine === "codex";
   useEffect(() => {
     if (opens) void readModels(mid, own, { first: true, host: ownHost });
@@ -244,7 +243,7 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
         workflow={workflow}
         buttonRef={button}
       />
-      {shown && anchor && <SessionModelPanel session={effectiveSession} anchor={anchor} onClose={close} />}
+      {shown && anchor && <SessionModelPanel session={session} displayModel={launchModel} anchor={anchor} onClose={close} />}
     </>
   );
 });

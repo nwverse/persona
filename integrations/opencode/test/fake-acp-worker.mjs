@@ -1,6 +1,6 @@
 // A deliberately directory-scoped MCP backend: assistants must use different
 // processes even when their cwd and MCP server name are identical.
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { createInterface } from 'node:readline'
 import { spawn } from 'node:child_process'
@@ -17,7 +17,8 @@ const configOptions = [
   { id: 'variant', category: 'reasoning', currentValue: 'low', options: [{ value: 'low' }, { value: 'high' }] },
 ]
 const optionsOf = (sessionId) => configOptions.map((option) => ({ ...option, currentValue: sessions.get(sessionId)?.[option.id] || option.currentValue }))
-record({ started: true, args: process.argv.slice(2) })
+const processInstructions = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT || '{}').instructions || []
+record({ started: true, args: process.argv.slice(2), instructions: processInstructions.map((file) => ({ file, text: readFileSync(file, 'utf8') })) })
 if (process.env.FAKE_OPENCODE_CHILD === '1') {
   const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
   record({ descendant: descendant.pid })
@@ -32,7 +33,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     record({ method, params })
     let result = {}
     switch (method) {
-      case 'initialize': result = { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: true }, mcpCapabilities: { http: true } }, agentInfo: { name: 'fake-opencode', version: 'test' } }; break
+      case 'initialize': result = { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: true, ...(process.env.FAKE_OPENCODE_SYSTEM_PROMPT === '1' ? { systemPrompt: {} } : {}) }, mcpCapabilities: { http: true } }, agentInfo: { name: 'fake-opencode', version: process.env.FAKE_OPENCODE_VERSION || 'test' } }; break
       case 'session/new': {
         const sessionId = 'ses_' + randomUUID()
         sessions.set(sessionId, { cwd: params.cwd })
