@@ -59,6 +59,7 @@ DOMAINS = [
     "hub_update_mock",  # the hub's own update (/api/v1/hub/update…, GET /mock/hub_update), MOCK_HUB_UPDATE
     "imessage_mock",  # Messages' reader (/api/v1/imessage…), MOCK_IMESSAGE; the connector stays in mock_hub.py
     "saved_prompts_mock",  # Settings › Saved Prompts (/api/v1/assistant/saved-prompts…), MOCK_SAVED_PROMPTS
+    "outside_directions_mock",  # conversationless reporting directions (#8236), MOCK_OUTSIDE_DIRECTIONS
 ]
 
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")

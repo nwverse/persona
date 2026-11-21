@@ -1552,16 +1552,25 @@ extension AssistantSidebar {
         // The leader conversations are the Directions group, in the hub's order, under each direction's name
         // (docs/assistant/unified-entry.md "Leader conversations"); then Recent, the newest few of the other chats,
         // whoever opened them (#4873, #5195); everything else is one tap away in All Chats (#4331).
-        let directions = AssistantSidebarGroups.directions(all, leaders: model.assistantLeaders, main: main)
+        let directions = AssistantSidebarGroups.directions(
+            all, leaders: model.assistantLeaders, main: main, outside: model.outsideDirections)
         if !directions.isEmpty {
             heading(String(localized: "Directions")) { EmptyView() }
-            // Each folds open to its to-dos (#4352, AssistantSidebarDirections.swift). The secretary group has no row
-            // here: the main conversation's own row stands for it (#4331).
-            ForEach(directions) { s in
-                AssistantSidebarDirection(direction: model.directionTree?.leader(s.sessionID), id: s.sessionID,
-                                          name: model.directionNames[s.sessionID] ?? s.title, isShell: isShell, drawer: drawer,
-                                          selected: s.key == current, selectedFill: Self.selectedFill) { shades in
-                    row(s, named: model.directionNames[s.sessionID], drawsShade: shades)
+            // Each tappable direction folds open to its to-dos (#4352). A targetless outside direction is deliberately
+            // plain content: no button, disclosure, conversation menu or swipe (#8236). The secretary group has no row.
+            ForEach(directions) { entry in
+                let selected = entry.session.map { $0.key == current }
+                    ?? entry.target.map { model.inHub($0) == current } ?? false
+                let name = model.directionNames[entry.id] ?? entry.session?.title ?? entry.outside?.name ?? ""
+                AssistantSidebarDirection(
+                    direction: entry.canDisclose ? model.directionTree?.leader(entry.id) : nil,
+                    id: entry.id, name: name, isShell: isShell, drawer: drawer,
+                    selected: selected, selectedFill: Self.selectedFill) { shades in
+                    if let session = entry.session {
+                        row(session, named: model.directionNames[entry.id], drawsShade: shades)
+                    } else {
+                        outsideRow(entry, named: name, selected: selected, drawsShade: shades)
+                    }
                 }
             }
         }
@@ -1787,10 +1796,7 @@ extension AssistantSidebar {
                 ConversationSourceMark(source: source, channels: s.channels, opener: opener) // what opened it, or its latest message's channel
                 Spacer(minLength: Theme.Space.xs)
                 // What waits on you under a direction ("N need you", #4331); what runs is the mark after it (#6626).
-                if let counts {
-                    Text(counts).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
-                }
-                RowStateMark(state: s.state, working: leadWorking)
+                directionStatus(counts, state: s.state, running: leadWorking)
             }
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, Theme.Sidebar.rowPadding)
@@ -1863,6 +1869,62 @@ extension AssistantSidebar {
             .padding(Theme.Space.l)
             .frame(width: Theme.Size.box280, alignment: .leading)
         }
+    }
+
+    /// The direction status shared by conversation-backed and outside rows. `state` is the row's own conversation state;
+    /// an outside row passes idle so its bound Agent's state never replaces the tree's running value (#8236).
+    @ViewBuilder private func directionStatus(_ counts: String?, state: AgentState, running: Bool) -> some View {
+        if let counts {
+            Text(counts).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+        }
+        RowStateMark(state: state, working: running)
+    }
+
+    /// An outside reporting direction. Its label deliberately reuses the conversation row's mark, title, metrics and
+    /// status, but none of `row`'s conversation tag, preview, menu or swipe actions. Only a complete Agent target gets
+    /// a button; targetless content has no button trait and tapping it does nothing.
+    @ViewBuilder private func outsideRow(
+        _ entry: AssistantSidebarGroups.DirectionEntry, named: String, selected: Bool, drawsShade: Bool
+    ) -> some View {
+        if let target = entry.target {
+            Button {
+                drawer?.close()
+                openTodoAgentChat(model.inHub(target), in: model)
+            } label: {
+                outsideLabel(entry, named: named, selected: selected, drawsShade: drawsShade, interactive: true)
+            }
+            .buttonStyle(.plain)
+            .contentShape(.rect)
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            .accessibilityIdentifier("sidebar-outside-direction")
+        } else {
+            outsideLabel(entry, named: named, selected: false, drawsShade: false, interactive: false)
+        }
+    }
+
+    private func outsideLabel(
+        _ entry: AssistantSidebarGroups.DirectionEntry, named: String, selected: Bool, drawsShade: Bool, interactive: Bool
+    ) -> some View {
+        let counts = entry.outside?.counts.label
+        let running = entry.outside?.running ?? false
+        return HStack(spacing: Theme.Space.m) {
+            if !isShell { ConversationMark(id: entry.id) }
+            titleText(named, named: true)
+            Spacer(minLength: Theme.Space.xs)
+            directionStatus(counts, state: .idle, running: running)
+        }
+        .padding(.horizontal, Theme.Space.m)
+        .padding(.vertical, Theme.Sidebar.rowPadding)
+        .scaledFrame(minHeight: Theme.Sidebar.row)
+        .background {
+            if selected && drawsShade { SidebarSelectedShade() }
+        }
+        .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous),
+                       isEnabled: interactive && drawsShade)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([named, counts, running ? AgentState.working.label : nil]
+            .compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+        .accessibilityIdentifier("sidebar-outside-direction")
     }
 
     /// The row's state as VoiceOver says it: its mark's (`RowStateMark`), so a lead that spins for what runs under it
@@ -2112,10 +2174,42 @@ nonisolated enum AssistantSidebarGroups {
         var sessions: [Session]
     }
 
-    /// The sidebar's Directions: the listed leader conversations in `leaders`' order (the hub's), never the main one;
-    /// a leader the list does not hold (archived, another manager's) is left out.
-    static func directions(_ sessions: [Session], leaders: [String], main: SessionKey?) -> [Session] {
-        leaders.compactMap { id in sessions.first { $0.sessionID == id && $0.key != main } }
+    /// One row in Directions, keyed by the hub's opaque direction id. A real conversation wins if both representations
+    /// exist. `target` belongs only to an outside direction and is navigation metadata, never row or fold identity.
+    struct DirectionEntry: Identifiable {
+        var id: String
+        var session: Session?
+        var outside: DirectionTree.Direction?
+
+        init(id: String, session: Session? = nil, outside: DirectionTree.Direction? = nil) {
+            self.id = id
+            self.session = session
+            self.outside = outside
+        }
+
+        var target: SessionKey? { session == nil ? outside?.externalTarget : nil }
+        /// A targetless outside row has no navigation and no disclosure chevron, even if its tree entry lists tasks.
+        var canDisclose: Bool { session != nil || target != nil }
+    }
+
+    /// The sidebar's Directions in `leaders`' order (the hub's), never the main one. Listed conversations come first;
+    /// otherwise a current outside direction can stand on its own. An id described by neither stays omitted (#8236).
+    static func directions(
+        _ sessions: [Session], leaders: [String], main: SessionKey?,
+        outside: [String: DirectionTree.Direction] = [:]
+    ) -> [DirectionEntry] {
+        var conversations: [String: Session] = [:]
+        for session in sessions where conversations[session.sessionID] == nil {
+            conversations[session.sessionID] = session
+        }
+        return leaders.compactMap { id in
+            if id == main?.sessionID { return nil }
+            if let session = conversations[id] { return DirectionEntry(id: id, session: session) }
+            if let direction = outside[id], direction.isExternal {
+                return DirectionEntry(id: id, outside: direction)
+            }
+            return nil
+        }
     }
 
     /// How many conversations the sidebar's Recent lists (#4873); the rest are in All Chats.

@@ -89,11 +89,21 @@ they never set its height and the headings stand evenly apart, folded or not.
 
 ## Pinned directions
 
-The leader conversations (`assistant.leaders`) are the group headed **Pinned** (zh-Hans 常驻, ja 常駐; the catalog key
-is still `Directions`, the owner's renaming of 2026-11-11). With the hub's direction tree (#4352,
+The directions (`assistant.leaders`) are the group headed **Pinned** (zh-Hans 常驻, ja 常駐; the catalog key
+is still `Directions`, the owner's renaming of 2026-11-11). A direction is usually its leader conversation; since #8236
+it can instead be an outside reporting direction with no Persona conversation. Both kinds stay in the hub's order under
+their own stable direction id. With the hub's direction tree (#4352,
 `GET /api/v1/assistant/directions/tree`, `AppModel.directionTree`) each row folds open; without it (an older hub, or
-before the tree is read) the rows are the plain conversation rows they were, and with no leaders the sidebar has no
+before the tree is read) the rows are the plain rows they were, and with no leaders the sidebar has no
 Pinned group at all.
+
+- **Outside directions** keep the same name, "N need you" and running mark from the tree as a conversation-backed row.
+  A complete `machine_id` + `session_id` target opens that existing Agent through `openTodoAgentChat`, never a made-up
+  Persona conversation. A targetless direction is a plain, non-tappable row with no chevron. Neither kind has the
+  conversation's long-press menu, swipe action, rename, notes or end-direction action. The `/assistant/leaders` fallback
+  supplies the outside marker, name and optional target but no counts; if it answers after the tree, the tree's entry
+  wins so the late fallback cannot erase counts or running. An unknown id that is neither a listed conversation nor an
+  outside direction is still left out. External ids do not trigger a missing-conversation reread.
 
 - **Row**: the leader conversation's own row as #4331 drew it (tap, long-press menu, swipe) with what its direction has
   going, read from the same tree (`DirectionTree.leader(_:)`): "N need you" in words, and one activity mark,
@@ -119,7 +129,10 @@ Pinned group at all.
 - **Secretary** (书记官): no row in the sidebar (the main conversation's row stands for it, #4331); its to-dos are in the
   To-dos and Agents pages' Pinned grouping.
 - **Code**: `AssistantSidebarDirections.swift` (`AssistantSidebarDirection`);
-  `AssistantSidebar.swift` only places them where the direction rows were. Tests: `DirectionTreeTests`.
+  `AssistantSidebar.swift` only places them where the direction rows were and resolves conversation-backed versus outside
+  entries by direction id. Tests: `DirectionTreeTests`, `AssistantTopBarTests`, `AssistantLeadersTests` and
+  `OutsideDirectionsTests`; the opt-in mock's real row interactions and sidebar / To-dos / Agents captures are in
+  `OutsideDirectionsUITests` (`MOCK_OUTSIDE_DIRECTIONS=1`).
 
 ## Checks
 

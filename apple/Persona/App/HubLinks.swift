@@ -368,9 +368,12 @@ extension AppModel {
         r.groupNames[group] = nil
         registry = r
         saveRegistry(r)
+        // buildLinks retargets a removed current group to the first remaining one; remember this before it does, or the
+        // old group's assistant and direction metadata survives on the newly selected group's page (#8236).
+        let removedCurrent = hubGroup == group
         buildLinks()
         forgetGroups([group])
-        if hubGroup == group { hubChanged() }
+        if removedCurrent { hubChanged() }
         pushWatchConfigs()
     }
 

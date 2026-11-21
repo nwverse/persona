@@ -67,7 +67,7 @@ Mac's previous / next Agent follows pinned order then recent activity in this mo
 One tree from the hub drives the sidebar, the To-dos page and the Agents page: `GET /api/v1/assistant/directions/tree`
 (`DirectionTree` in `apple/Shared/DirectionTree.swift`, `APIClient.directionsTree`, 404 → nil). It is the app's only copy:
 the sidebar's lead rows (#4331: their "N need you" and, #6626, their spinner from `running`), the directions' names and order come from it too. Each current leader
-conversation (a direction, shown to the owner as Pinned / 常驻 / 常駐) with the open to-dos it supervises, each with its one
+conversation, or outside reporting direction with no Persona conversation (#8236), is a direction (shown to the owner as Pinned / 常驻 / 常駐) with the open to-dos it supervises, each with its one
 state (`needs_you` / `review` / `stuck` / `working`), its Agents and their sub-Agents; the secretary group (书记官, the main
 conversation's id) last. The app neither groups to-dos by supervisor nor works out their state: it draws the tree.
 
@@ -76,8 +76,11 @@ conversation's id) last. The app neither groups to-dos by supervisor nor works o
   nil, another failure keeps what was read. `refreshAssistant` reads it only while none is held, in its own task after
   the settings land (it runs on every page's appear; Couldn't Load Settings does not wait for the tree). Only the default manager's page reads it (the tree is the default
   manager's); cleared when another hub group or manager is picked, and a read already under way is dropped. An answer
-  also updates `directionNames` and the leader order, and a direction the conversations do not list yet reads the
-  assistant again (not when read from `refreshAssistant` itself, `followLeaders: false`).
+  also updates `directionNames`, the outside-direction metadata and the leader order, and a conversation-backed direction the conversations do not list yet reads the
+  assistant again (not when read from `refreshAssistant` itself, `followLeaders: false`). An outside direction's opaque id is not a missing conversation and never
+  causes that reread; when the tree is absent, `/assistant/leaders` supplies its name, outside marker and optional Agent target without counts.
+  A flat answer that arrives after the tree merges only new fallback rows: the tree wins per direction, so a late answer cannot erase its counts or running state.
+  If a later tree read returns 404, the flat metadata immediately replaces those tree entries again, leaving their names and targets but no stale counts or running state.
 - **Words** (`StateName`, `[State Names]` keys): 在做 / 等你 / 卡住 / 待验收 (en Working / Needs you / Stuck / Awaiting
   review, ja 作業中 / 対応待ち / 停滞中 / 検収待ち, the same words as #4331's counts beside them; 待验收 reuses the
   supervision badge's key). What a direction has going reads the same everywhere (#6626): the working spinner
