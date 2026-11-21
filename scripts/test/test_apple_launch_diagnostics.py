@@ -45,7 +45,8 @@ class LaunchDiagnosticsTests(unittest.TestCase):
     def collect(self, entries=None, reader=None):
         def fake(command):
             self.calls.append(command)
-            return json.dumps([self.entry()] if entries is None else entries).encode()
+            return ("\n".join(json.dumps(self.entry() if entries is None else entry)
+                              for entry in ([None] if entries is None else entries)) + "\n").encode()
         launch.collect(self.output, self.destination, reader=reader or fake,
                        now=START + timedelta(minutes=17))
 
@@ -55,12 +56,12 @@ class LaunchDiagnosticsTests(unittest.TestCase):
     def test_exact_owned_identity_and_original_readiness_window(self):
         self.collect()
         command, = self.calls
-        self.assertEqual(command[:7], ["/usr/bin/log", "show", "--style", "json", "--info", "--debug", "--start"])
+        self.assertEqual(command[:7], ["/usr/bin/log", "show", "--style", "ndjson", "--info", "--debug", "--start"])
         self.assertEqual(command[7], "2026-01-01 12:00:00+00:00")
         self.assertEqual(command[command.index("--end") + 1], "2026-01-01 12:15:00+00:00")
         predicate = command[command.index("--predicate") + 1]
-        self.assertIn(f'(eventMessage CONTAINS[c] "{UDID}") AND ', predicate)
-        self.assertIn(f'(eventMessage CONTAINS "{launch.BUNDLE}") AND ', predicate)
+        self.assertIn(f'(eventMessage CONTAINS[c] "{UDID}" OR ', predicate)
+        self.assertIn(f'eventMessage CONTAINS "{launch.BUNDLE}" OR ', predicate)
         self.assertNotIn(OTHER, predicate)
         self.assertNotIn("--last", command)
         exported = json.loads((self.destination / "simulator-launch.json").read_text())
@@ -129,16 +130,76 @@ class LaunchDiagnosticsTests(unittest.TestCase):
 
     def test_output_is_rechecked_and_empty_is_not_evidence(self):
         self.collect(entries=[
-            self.entry(eventMessage=f"launch {launch.BUNDLE} on {OTHER}"),
-            self.entry(eventMessage=f"launch {launch.BUNDLE}.other on {UDID}"),
+            self.entry(eventMessage=f"launch unrelated.example on {OTHER}"),
+            self.entry(eventMessage=f"launch {launch.BUNDLE}.other on {OTHER}"),
+            self.entry(eventMessage=f"launch unrelated.example on {OTHER}"),
+            self.entry(processImagePath="/usr/libexec/launchd_sim",
+                       eventMessage=f"Launch {launch.BUNDLE}.other failed"),
             self.entry(processImagePath="/Applications/UnrelatedApp"),
             self.entry(timestamp="2026-01-01 11:59:59+0000"),
-            self.entry(timestamp="2026-01-01 12:15:01+0000"),
+            self.entry(timestamp="2026-01-01 12:15:02+0000"),
             self.entry(eventMessage=f"launch {launch.BUNDLE} on {UDID} environment SECRET=DO NOT EXPORT"),
         ])
-        self.assertIn("no matching launch metadata; no cause established", self.status())
+        self.assertIn("no scoped launch/runtime events; no cause established", self.status())
         self.assertFalse((self.destination / "simulator-launch.json").exists())
         self.assertEqual(len(self.calls), 1)  # No broader fallback query.
+
+    def test_udid_only_launchd_line_is_retained_but_not_attributed(self):
+        self.collect(entries=[self.entry(processImagePath="/usr/libexec/launchd_sim",
+                                        eventMessage=f"Service for {UDID} exited")])
+        self.assertEqual(len(json.loads((self.destination / "simulator-launch.json").read_text())), 1)
+        self.assertIn("diagnosis still required", self.status())
+
+    def test_launchd_error_without_udid_and_runtime_events_remain_scoped(self):
+        self.collect(entries=[
+            self.entry(processImagePath="/usr/libexec/launchd_sim",
+                       eventMessage=f"Launch of {launch.BUNDLE} failed: ipc/mig server died"),
+            self.entry(processImagePath="/usr/libexec/simdiskimaged",
+                       eventMessage="Performing a cryptex force unmount for iOS 26.0 (23A8464)"),
+            self.entry(processImagePath="/usr/libexec/launchd_sim",
+                       eventMessage="Unrelated application failed"),
+            self.entry(processImagePath="/usr/libexec/cryptexd",
+                       eventMessage="Ordinary runtime inventory"),
+            self.entry(eventMessage=f"Launch {launch.BUNDLE} on {UDID} environment DYLD_PRIVATE=DO NOT EXPORT"),
+        ])
+        exported = json.loads((self.destination / "simulator-launch.json").read_text())
+        self.assertEqual(len(exported), 2)
+        self.assertEqual({item["process"] for item in exported}, {"launchd_sim", "simdiskimaged"})
+        self.assertNotIn("DO NOT EXPORT", json.dumps(exported))
+        self.assertIn("diagnosis still required", self.status())
+
+    def test_streamed_collection_filters_before_the_export_limit(self):
+        path = self.output / "events.ndjson"
+        path.write_text("\n".join([json.dumps(self.entry(eventMessage="unrelated",
+                        privateConfiguration="X" * 5000))] * 750 + [json.dumps(self.entry())]) + "\n")
+        self.assertGreater(path.stat().st_size, launch.MAX_BYTES)
+        self.assertLess(path.stat().st_size, launch.RAW_LOG_BYTES)
+        command = ["/usr/bin/log", "show", "--style", "ndjson", "--info", "--debug",
+                   "--start", START.strftime("%Y-%m-%d %H:%M:%S") + "+00:00",
+                   "--end", (START + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S") + "+00:00",
+                   "--predicate", UDID + " " + launch.BUNDLE]
+        input_value = mock.Mock()
+        input_value.stdout = os.popen("cat " + str(path), "r")
+        input_value.stderr = os.popen("cat /dev/null", "r")
+        input_value.poll.return_value = 0
+        input_value.wait.return_value = 0
+        with mock.patch.object(launch.subprocess, "Popen", return_value=input_value):
+            kept = launch.stream_output(command, START, START + timedelta(minutes=15), UDID, launch.BUNDLE)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(launch.RAW_LOG_BYTES, 4 * 1024 * 1024)
+
+    def test_streamed_large_export_fails_closed(self):
+        entry = self.entry(eventMessage=f"Launch {launch.BUNDLE} " + "x" * (launch.MAX_BYTES + 1))
+        command = [sys.executable, "-c", "import os; os.write(1,b'x'*" + str(launch.MAX_BYTES + 100) + ")"]
+        with self.assertRaisesRegex(ValueError, "single launch event"):
+            launch.stream_output(command, START, START + timedelta(minutes=15), UDID, launch.BUNDLE)
+
+    def test_collection_failures_name_the_boundary_not_a_cause(self):
+        self.collect(reader=lambda command: (_ for _ in ()).throw(TimeoutError()))
+        self.assertIn("log command timed out", self.status())
+        self.collect(reader=lambda command: b"not JSON DO NOT EXPORT")
+        self.assertIn("scoped collection failed", self.status())
+        self.assertNotIn("DO NOT EXPORT", self.status())
 
     def test_bad_output_timeout_and_command_errors_remain_unavailable(self):
         for value in (b"not JSON DO NOT EXPORT", b"{}", b"x" * (launch.MAX_BYTES + 1),

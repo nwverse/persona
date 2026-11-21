@@ -754,6 +754,11 @@ export interface UIItem {
   hosts?: string[];
   /** nav_page only. */
   icon?: NavIcon;
+  /**
+   * nav_page only: the icon's named color in the sidebar, the same colors as a row's icon_color, drawn only while the
+   * owner chose Colored sidebar icons (#10822); without it the icon stays the sidebar's neutral ink.
+   */
+  icon_color?: Color;
   /** overview_card, capsule_card and widget only: a nav_page or extension_page of the same extension. */
   opens?: string;
   /** inbox_item only: one of the extension's own connectors. */
@@ -795,6 +800,11 @@ export interface ChannelItem {
 
 export interface ChannelCapabilities {
   images_in?: boolean;
+  /**
+   * It can send pictures: the hub puts an answer's pictures in channel.send's images instead of leaving them as
+   * Markdown in the text.
+   */
+  images_out?: boolean;
   files_in?: boolean;
   voice_in?: boolean;
   format?: string;
@@ -1144,6 +1154,8 @@ export interface UIPlace {
   connector?: string;
   /** A nav_page's sidebar group, its title in the request's language (#9071). */
   group?: UIGroup;
+  /** A nav_page's icon color as its manifest names it, drawn only with Colored sidebar icons (#10822). */
+  icon_color?: Color;
 }
 
 export interface UIPlaces {
@@ -3697,6 +3709,12 @@ export interface ConnectorTool {
    * list whatever a connector sent.
    */
   defer_loading?: boolean;
+  /**
+   * Set by Persona itself on the tool list of an assistant conversation with the work guide on: the tool is found on
+   * demand through the guide (#11078). A connector does not need to send it; the manager sets it on every list
+   * whatever a connector sent.
+   */
+  work_guide_tool?: boolean;
 }
 
 /**
@@ -4862,6 +4880,12 @@ export interface ChannelMessage {
   forward?: string;
   /** The chat app's id of the message it answers. */
   reply_to?: string;
+  /**
+   * The chat app's thread the message is in, as an opaque key. For a channel with capabilities.threads, each thread
+   * has a conversation of its own: its first message starts a new one (the channel's target stays as it is), later
+   * ones continue it. Without it, or without threads, the message goes to the channel's target.
+   */
+  thread?: string;
   /** What it had that the channel cannot bring, for people (a voice message, a sticker). */
   unsupported?: string[];
 }
@@ -4907,6 +4931,11 @@ export interface ChannelSendParams {
   kind: ChannelSendKind;
   /** The owner's message it answers (ChannelMessage.id). */
   reply_to?: string;
+  /**
+   * Pictures to send after text, in order, to a channel with capabilities.images_out only: JPEG or PNG of at most 3
+   * MB each. text may then be empty. They belong to this ref: sent once with it, like the text.
+   */
+  images?: ChannelBlob[];
 }
 
 /**
@@ -5987,6 +6016,18 @@ export interface StorageClaimResult {
   job?: StorageJob;
 }
 
+/**
+ * Extend only the current run's unexpired lease on this exact key, job and token. The host sets lease_until to the
+ * later of its current value and renewal time plus lease_seconds; job state and attempts do not change.
+ */
+export interface StorageRenewParams {
+  request_id: string;
+  key: string;
+  id: string;
+  lease: string;
+  lease_seconds: number;
+}
+
 export interface StorageSettleParams {
   request_id: string;
   key: string;
@@ -6652,6 +6693,7 @@ export const CALLS: Record<string, Call> = {
   "storage.queue.list": { from: "program", params: "StorageQueueListParams", result: "StorageQueueListResult" },
   "storage.queue.enqueue": { from: "program", params: "StorageEnqueueParams", result: "StorageJobResult" },
   "storage.queue.claim": { from: "program", params: "StorageClaimParams", result: "StorageClaimResult" },
+  "storage.queue.renew": { from: "program", params: "StorageRenewParams", result: "StorageJobResult" },
   "storage.queue.ack": { from: "program", params: "StorageSettleParams", result: "StorageJobResult" },
   "storage.queue.forget": { from: "program", params: "StorageSettleParams", result: "StorageDeleteResult" },
   "storage.queue.retry": { from: "program", params: "StorageRetryParams", result: "StorageJobResult" },

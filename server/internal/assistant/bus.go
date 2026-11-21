@@ -546,7 +546,11 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		defer memtrim.AfterLarge(len(p.Body))
 		return serveHTTP(ctx, b.httpHandler(s), p, s.lang)
 	case assistantwire.MethodTools:
-		return map[string]any{"tools": s.Tools(ctx)}, nil
+		var target SessionRef
+		if err := decode(&target); err != nil {
+			return nil, err
+		}
+		return map[string]any{"tools": s.ToolsFor(ctx, target.MachineID, target.SessionID)}, nil
 	case assistantwire.MethodTool:
 		var p ToolCall
 		if err := decode(&p); err != nil {
@@ -607,6 +611,10 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			s.notesOwnerRefused(ctx, carry)
 			s.appSendRefused(p.MachineID, p.SessionID, err) // the hub sends nothing: no ConversationSent (north_star.go)
 			return nil, err
+		}
+		if target, _ := params[ownerApprovalHandledParam].(string); target != "" {
+			s.notesOwnerRefused(ctx, carry) // an approval is not a model turn or a conversation message
+			return map[string]any{"params": params}, nil
 		}
 		s.notesOwnerSent(ctx, carry, msg)
 		if *note != "" {
@@ -713,6 +721,9 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 				if err := s.conversationParamsAvailable(ctx, d.Canonical(p.MachineID), p.Params); err != nil {
 					return nil, err
 				}
+			}
+			if out, handled, err := s.historyCall(ctx, d.Canonical(p.MachineID), p.Method, p.Params); handled {
+				return out, err
 			}
 		}
 		if out, ok, err := d.Request(ctx, method, params); ok { // devices.* (devices.go)

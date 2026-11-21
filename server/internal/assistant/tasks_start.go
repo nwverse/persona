@@ -259,16 +259,16 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 // supervisePlanTask keeps a continuation's ledger in step with its brief even
 // if the scope changed between accepting the card and preparing dispatch.
 func (s *Service) supervisePlanTask(ctx context.Context, id, supervisor string, t *PlanTask) {
-	if t.Continues == "" {
-		s.superviseTodo(ctx, id, supervisor, t.DoneWhen, t.ExpectMinutes)
-		return
-	}
 	_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+		if t.Continues == "" {
+			v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(t.DoneWhen), t.ExpectMinutes
+			return true
+		}
 		brief, ok := s.briefOfTodo(t.Continues)
 		if !ok {
 			return false
 		}
-		v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(brief.Criteria), brief.ExpectNow
+		v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(brief.Criteria), brief.ExpectMinutes
 		return true
 	})
 	if err != nil {
@@ -641,7 +641,8 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 	t.Permission = strings.TrimSpace(t.Permission)
 	mid, sid, err := s.startTaskAgent(ctx, &t, retry)
 	var lost startLinkLost
-	if t.RequestGate == "" && errors.As(err, &lost) && lost.back {
+	var quota *gatewayQuotaWaitError
+	if !t.startWithoutReplay() && errors.As(err, &lost) && lost.back {
 		// The link took the start's answer and the machine, back, does not show the agent: start it once more, with
 		// a whole start's time of its own (the first may have spent its own on the dead link). Not counted against
 		// the launcher (#7511).
@@ -650,7 +651,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		defer rcancel()
 		ctx = rctx
 		mid, sid, err = s.startTaskAgent(ctx, &t, retry)
-	} else if t.RequestGate == "" && err != nil && ctx.Err() == nil && !startStalled(err) {
+	} else if !t.startWithoutReplay() && err != nil && ctx.Err() == nil && !startStalled(err) && !errors.As(err, &quota) {
 		// The machine's link dropped (a node restarting, a tunnel blinking): try once more after a moment. Any other
 		// launcher failure may move a flexible task, after verifying its directory on the destination.
 		// An unknown result (the wait ran out or the link dropped while the answer was out) already went through
@@ -684,6 +685,23 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 			case <-ctx.Done():
 			}
 		}
+	}
+	if errors.As(err, &quota) {
+		if saveErr := s.persistGatewayWait(ctx, t, quota.queue); saveErr != nil {
+			s.logf("task %s: save gateway quota wait: %v", t.TodoID, saveErr)
+			err = i18n.Err("assistant-tasks.gateway_quota_unsaved")
+		} else {
+			return
+		}
+	}
+	if errors.Is(err, errGatewayTaskHandled) {
+		s.replaceTaskQueue(ctx, t, nil, queueCAS)
+		return
+	}
+	var quotaState *gatewayQueueStateError
+	if errors.As(err, &quotaState) {
+		s.logf("task %s: queued launch eligibility unconfirmed: %v", t.TodoID, quotaState)
+		return
 	}
 	if t.Machine != placed || t.Why != placedWhy || t.Permission != placedPermission { // workspace admission already persisted the actual checkout
 		s.updatePlanTask(ctx, planID, i, t)
@@ -729,10 +747,12 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 			s.requeueRequestStart(ctx, t, blocked.ids)
 			return
 		}
+	}
+	if t.startWithoutReplay() {
 		var remote *rpc.Error
 		if launched || startResultUnknown(err) || errors.As(err, &lost) || nodeMayHaveTaken(err) ||
 			errors.As(err, &remote) && remote.Code == "identity_conflict" {
-			s.logf("task %s: request launch unconfirmed, not replaying: %v", t.TodoID, err)
+			s.logf("task %s: queued launch unconfirmed, not replaying: %v", t.TodoID, err)
 			return
 		}
 	}
@@ -1106,6 +1126,9 @@ var continueHold = 30 * time.Second
 // one is on its way, or before the agent took it up, answer the todo as it is, as does a task with no agent cut off.
 // The agent's machine offline is refused.
 func (s *Service) continueTask(ctx context.Context, cur Todo) (json.RawMessage, error) {
+	if cur.Supervision != nil && cur.Supervision.state(cur) == reviewTimedOut {
+		return s.continueTimedOut(ctx, cur)
+	}
 	cut := cutAgent(s.taskAgents(ctx, cur))
 	if cut.SessionID == "" {
 		return s.todoView(ctx, cur.ID)

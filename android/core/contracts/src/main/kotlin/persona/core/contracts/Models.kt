@@ -102,6 +102,8 @@ data class Machine(
     @SerialName("error_code") val errorCode: String? = null,
     /** The manager it belongs to (docs/assistant/managers.md「Ownership」); null from an older hub: the default manager. */
     @SerialName("manager") val manager: String? = null,
+    /** The default for new sessions among [engineHosts]. Older hubs describe it with [engine]. */
+    @SerialName("engine_default") val engineDefault: String? = null,
 ) {
     val displayName: String get() = name.ifEmpty { id }
     val pending: Boolean get() = trust == "pending"
@@ -236,6 +238,10 @@ data class BackgroundTask(
     @WireTime @SerialName("expires_at") val expiresAt: String? = null,
     /** A workflow's run (`wf_…`): which of [Session.workflows] it is. */
     @SerialName("run_id") val runId: String? = null,
+    /** Retained results have a terminal status, a stop time and, when observed, an exit code. */
+    val status: String? = null,
+    @WireTime @SerialName("ended_at") val endedAt: String? = null,
+    @SerialName("exit_code") val exitCode: Int? = null,
 ) {
     /** A Workflow run: shown from [Session.workflows] where the hub sends them, never counted twice. */
     val isWorkflow: Boolean get() = kind == "workflow"
@@ -509,6 +515,8 @@ data class Session(
      */
     @SerialName("queued_relayed") val queuedRelayed: Int? = null,
     @SerialName("background") val background: List<BackgroundTask>? = null,
+    /** A short-lived list of shell and Monitor outcomes. Summary rows and older hubs can omit it. */
+    @SerialName("background_ended") val backgroundEnded: List<BackgroundTask>? = null,
     /**
      * Its Workflow runs of the last day, newest first (docs/protocol/agent-states.md "Background workflows and Monitor"): a running one is
      * in [background] too, as kind `workflow`. Older hubs never send it (null).
@@ -655,6 +663,8 @@ data class Session(
      * waits. [launcher] stays the one it runs on until then. Summary rows leave it out.
      */
     @SerialName("pending_switch") val pendingSwitch: PendingSwitch? = null,
+    /** Earlier stretches of this conversation, oldest first, after a handoff to the other engine. */
+    @SerialName("engine_history") val engineHistory: List<EngineLeg> = emptyList(),
     /** The manager's current queue. A complete session row without the field has no held messages. */
     val undelivered: List<HeldAgentMessage>? = null,
 ) {
@@ -715,6 +725,14 @@ data class Session(
     val displayTitle: String get() = if (title.isEmpty() || title == "Claude Code") folderName.ifEmpty { sessionId.take(8) } else title
     /** Codex in a terminal, or a thread from a Codex app-server / Codex history. */
     val isCodex: Boolean get() = agent == "codex" || sourceKind == "codex_app_server" || sourceKind == "codex_history"
+
+    /** The launcher's catalog identity when a row omits an explicit launcher. */
+    val effectiveLauncher: String get() = launcher?.takeIf(String::isNotEmpty) ?: when {
+        spaceKind == "codex_app" -> "codex-app"
+        isCodex -> "codex"
+        else -> "claude"
+    }
+
     /** Claude Code, or an older hub that does not name the agent: what Claude-only controls (modes, /model, /clear) need. */
     val isClaude: Boolean get() = !isCodex && (agent.isNullOrEmpty() || agent == "claude")
     /**
@@ -979,6 +997,17 @@ data class PendingSwitch(
 
 object PendingSwitchSerializer : WireSerializer<PendingSwitch>(PendingSwitch.generatedSerializer())
 
+/** The session and cutoff of one earlier stretch of an Agent conversation. */
+@KeepGeneratedSerializer
+@Serializable(with = EngineLegSerializer::class)
+data class EngineLeg(
+    @SerialName("session_id") val sessionId: String = "",
+    val agent: String = "",
+    @WireTime val until: String? = null,
+)
+
+object EngineLegSerializer : WireSerializer<EngineLeg>(EngineLeg.generatedSerializer())
+
 /** A pending "back to the configured model" (server proto.ModelRestore): `next_start`, the next start asks for [to]. */
 @KeepGeneratedSerializer
 @Serializable(with = ModelRestoreSerializer::class)
@@ -1103,6 +1132,19 @@ data class InteractionField(
     val optional: Boolean = false,
 )
 
+/** The context the assistant filled in when it left a question to the user (`proto.Delegate`). */
+@KeepGeneratedSerializer
+@Serializable(with = DelegateSerializer::class)
+data class Delegate(
+    @SerialName("what") val what: String? = null,
+    @SerialName("why_now") val whyNow: String? = null,
+    /** An option's exact label; several questions are joined with a full-width semicolon. */
+    @SerialName("recommend") val recommend: String? = null,
+    @SerialName("cost") val cost: String? = null,
+    @SerialName("reason") val reason: String? = null,
+    @WireTime @SerialName("deadline") val deadline: String? = null,
+)
+
 @KeepGeneratedSerializer
 @Serializable(with = InteractionSerializer::class)
 data class Interaction(
@@ -1168,8 +1210,26 @@ data class Interaction(
     val suggestion: RuleSuggestion? = null,
     /** A prepared approval whose current deadline is authoritative while the hub keeps it pending; absent on older hubs. */
     @SerialName("can_clarify") val canClarify: Boolean = false,
+    /** A server-owned exact proposal; its complete original payload, not an Always rule, is the approval authority. */
+    @SerialName("approval_batch_id") val approvalBatchId: String? = null,
+    @SerialName("approval_item_id") val approvalItemId: String? = null,
+    @SerialName("owner_proposal") val ownerProposal: Boolean? = null,
+    @SerialName("no_expiry") val noExpiry: Boolean? = null,
+    @SerialName("owner_approval_phrases") val ownerApprovalPhrases: List<String>? = null,
+    /** The assistant is still deciding whether it can answer this question; nothing was pushed yet. */
+    @SerialName("delegating") val delegating: Boolean = false,
+    /** What the assistant filled in when it handed the question to the user. */
+    @SerialName("delegate") val delegate: Delegate? = null,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
+    /** The one exact reply this card advertises. Anything else stays an ordinary card action. */
+    val ownerApprovalPhrase: String?
+        get() = ownerApprovalPhrases?.firstOrNull()?.takeIf {
+            kind == "permission" && ownerProposal == true && !approvalBatchId.isNullOrBlank() &&
+                machineId.isNotBlank() && sessionId.isNotBlank() && it.isNotBlank()
+        }
+    /** Only questions are delegated; a direct answer while this is true still wins. */
+    val isDelegating: Boolean get() = kind == "question" && delegating
     /** A supported following mode; absent, plan and unknown values keep the legacy approval choices (#3784). */
     val recordedPlanThen: String?
         get() = when (planThen) {
@@ -1274,6 +1334,8 @@ data class Resolution(
     @SerialName("reason") val reason: String? = null,
     val action: String? = null,
     val content: kotlinx.serialization.json.JsonObject? = null,
+    /** Runtime-only exact proposal reply; deliberately never serialized into an ordinary card resolution. */
+    @kotlinx.serialization.Transient val ownerApprovalPhrase: String? = null,
 )
 
 /** A row of GET /api/v1/interactions/history (iOS `InteractionRecord`): a session's card, how it ended, its answer and when. */
@@ -1338,5 +1400,6 @@ object QuestionOptionSerializer : WireSerializer<QuestionOption>(QuestionOption.
 object QuestionSerializer : WireSerializer<Question>(Question.generatedSerializer())
 object DialogOptionSerializer : WireSerializer<DialogOption>(DialogOption.generatedSerializer())
 object ScreenDialogSerializer : WireSerializer<ScreenDialog>(ScreenDialog.generatedSerializer())
+object DelegateSerializer : WireSerializer<Delegate>(Delegate.generatedSerializer())
 object InteractionSerializer : WireSerializer<Interaction>(Interaction.generatedSerializer())
 object InteractionFieldSerializer : WireSerializer<InteractionField>(InteractionField.generatedSerializer())
