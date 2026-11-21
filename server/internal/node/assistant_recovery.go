@@ -194,10 +194,13 @@ func (n *Node) claudeResultKinds(id string) []string {
 	if f.text == "" {
 		return nil // no failed turn written (yet): the words decide
 	}
-	if f.kind == proto.TurnErrorUsageLimit && assistantwire.GatewayQuotaText(f.text) && !n.recoveryProtected(id) {
-		// Preserve the existing worker recovery policy. Protected conversations retain the quota classification
-		// so the manager can wait for reset without selecting a different model.
-		return []string{proto.TurnErrorTransient, assistantRecordKind}
+	if f.kind == proto.TurnErrorUsageLimit && assistantwire.GatewayQuotaText(f.text) {
+		st, _ := n.state.get(id)
+		if !n.recoveryProtected(id) || st.TaskExecution {
+			// Workers and strict task turns keep their existing bounded same-model retry policy.
+			return []string{proto.TurnErrorTransient, assistantRecordKind}
+		}
+		// Ordinary protected conversations retain the reset wait, without choosing another model.
 	}
 	return []string{f.kind, assistantRecordKind}
 }
@@ -344,7 +347,7 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 	// The owner selected this model for the main/supervisor conversation. Quota and service failures belong to
 	// the manager's durable wait/continuation path; a refusal must not select another model either. Tool search
 	// has one independent same-model restart below, which preserves the selected execution.
-	if !toolSearch && (executionProtected || n.recoveryProtected(p.id)) {
+	if !strict && !toolSearch && (executionProtected || n.recoveryProtected(p.id)) {
 		return false
 	}
 	if !ordinary && !toolSearch {
