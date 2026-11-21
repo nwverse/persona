@@ -40,6 +40,50 @@ func TestLarkLiteralCommandPrefixes(t *testing.T) {
 	}
 }
 
+func TestLarkLiteralPrefixesAcrossIndependentReads(t *testing.T) {
+	for _, tc := range []struct {
+		name, command string
+	}{
+		{"relative assignment after directory change", `cd /tmp; READER=./reader.sh; $READER list`},
+		{"null redirect after assignment", `READER=/tmp/reader.sh; ls /tmp 2>/dev/null; $READER list`},
+		{"descriptor duplication after assignment", `READER=/tmp/reader.sh; ls /tmp 2>&1; $READER list`},
+		{"glob before assignment", `ls /tmp/*/; READER=/tmp/reader.sh; $READER list`},
+		{"scalar parameter before assignment", `ls "$HOME"; READER=/tmp/reader.sh; $READER list`},
+	} {
+		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, 0) })
+	}
+}
+
+func TestLarkLiteralPrefixIndependentReadSafety(t *testing.T) {
+	gate := exampleGate("")
+	for _, tc := range []struct {
+		name, command string
+		cards         int
+	}{
+		{"assignment before directory change", `READER=./reader.sh; cd /tmp; $READER list`, 1},
+		{"assignment before second directory change", `cd /tmp; READER=./reader.sh; cd /var; $READER list`, 1},
+		{"relative directory change stays unknown", `cd /tmp; cd subdirectory; READER=./reader.sh; $READER list`, 1},
+		{"bare executable after directory change", `cd /tmp; READER=reader.sh; $READER list`, 1},
+		{"relative CLI after directory change", `cd /tmp; READER=./lark-cli; $READER docs +fetch --doc-id example`, 1},
+		{"relative gate command after directory change", `cd /tmp; REQUEST=./ex; $REQUEST GET /health`, 1},
+		{"relative gate read after directory change", `cd /tmp; REQUEST=./ex.sh; $REQUEST GET /health`, 1},
+		{"relative gate write after directory change", `cd /tmp; REQUEST=./ex.sh; $REQUEST POST /messages/example/recall`, 1},
+		{"gate write after null redirect", `REQUEST=/tmp/example/scripts/ex.sh; ls /tmp 2>/dev/null; $REQUEST POST /messages/example/recall`, 1},
+		{"gate deletion after read glob", `ls /tmp/*/; REQUEST=/tmp/example/scripts/ex.sh; $REQUEST DELETE /messages/example`, 1},
+		{"command substitution before assignment", `ls $(choose_path); READER=/tmp/reader.sh; $READER list`, 1},
+		{"process substitution before assignment", `cat <(printf example); READER=/tmp/reader.sh; $READER list`, 1},
+		{"arithmetic expansion before assignment", `ls $((1 + 1)); READER=/tmp/reader.sh; $READER list`, 1},
+		{"parameter assignment before assignment", `ls ${OTHER:=/tmp}; READER=/tmp/reader.sh; $READER list`, 1},
+		{"file output clears assignment", `READER=/tmp/reader.sh; ls /tmp > /tmp/listing; $READER list`, 1},
+		{"dynamic redirect clears assignment", `READER=/tmp/reader.sh; ls /tmp 2>$ERROR_FILE; $READER list`, 1},
+		{"environment assignment clears binding", `READER=/tmp/reader.sh; EXAMPLE=value ls /tmp; $READER list`, 1},
+		{"unsupported wrapper stops resolution", `xargs ls /tmp/*/; READER=/tmp/reader.sh; $READER list`, 1},
+		{"dynamic reassignment stays unknown", `READER=/tmp/reader.sh; ls /tmp 2>/dev/null; READER=$(choose_reader); $READER list`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, tc.cards, gate) })
+	}
+}
+
 func TestLarkReadCommandSubstitutions(t *testing.T) {
 	for _, tc := range []struct {
 		name, command string

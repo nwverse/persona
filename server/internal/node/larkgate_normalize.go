@@ -65,7 +65,12 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 		}
 	}
 	vars := map[string]string{}
+	varsDir := map[string]string{}
 	textVars := map[string]string{}
+	currentDir := ""
+	if filepath.IsAbs(cwd) {
+		currentDir = filepath.Clean(cwd)
+	}
 	// A pipe's commands run apart from the shell: its assignments set nothing for the commands after it. The units
 	// here are the straight semicolon prefix only; an unsupported suffix stops later resolutions, not earlier ones.
 	changed, unsafe := false, false
@@ -91,6 +96,7 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 						continue
 					}
 					delete(vars, a.Name.Value)
+					delete(varsDir, a.Name.Value)
 					delete(textVars, a.Name.Value)
 					if a.Append || a.Index != nil || a.Array != nil || a.Value == nil {
 						continue
@@ -103,6 +109,7 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 						textVars[a.Name.Value] = value
 						if _, ok := literalCommandPrefix(value); ok {
 							vars[a.Name.Value] = value
+							varsDir[a.Name.Value] = currentDir
 						}
 					}
 				}
@@ -149,7 +156,7 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 						break
 					}
 				}
-				if dynamicArgs {
+				if dynamicArgs && !larkIndependentRead(call.Args, words, index) {
 					unsafe = true
 					break // do not resolve the executable after another argument can change shell state
 				}
@@ -158,7 +165,17 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 					if p, ok := word.Parts[0].(*syntax.ParamExp); ok && p.Param != nil && !p.Excl && !p.Length && !p.Width && p.Index == nil && p.Slice == nil && p.Repl == nil && p.Exp == nil && p.Names == 0 {
 						if value, ok := vars[p.Param.Value]; ok {
 							prefix, literal := literalCommandPrefix(value)
-							if literal && (!moved || filepath.IsAbs(prefix[0])) {
+							resolvable := literal && (!moved || filepath.IsAbs(prefix[0]))
+							if literal && moved && !filepath.IsAbs(prefix[0]) && strings.Contains(prefix[0], "/") &&
+								currentDir != "" && varsDir[p.Param.Value] == currentDir &&
+								!isLarkCLI(prefix[0]) && !larkRelativeGate(gates, prefix[0]) {
+								absolute := filepath.Join(currentDir, prefix[0])
+								if gateOf(gates, absolute) < 0 {
+									prefix[0] = absolute
+									resolvable = true
+								}
+							}
+							if resolvable {
 								expanded := make([]*syntax.Word, 0, len(call.Args)+len(prefix)-1)
 								expanded = append(expanded, call.Args[:index]...)
 								for _, field := range prefix {
@@ -187,13 +204,17 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 					literal = literal && !dynamic && !wordExpandsToMany(arg)
 				}
 				unchanged, moved = literal, moved || literal
+				if literal {
+					currentDir = larkLiteralDirectory(call.Args, currentDir)
+				}
 			}
 			if !unchanged {
 				unsafe = true
 				break
 			}
-			if len(call.Assigns) != 0 || len(stmt.Redirs) != 0 {
+			if len(call.Assigns) != 0 || !larkBindingRedirects(stmt.Redirs) {
 				clear(vars)
+				clear(varsDir)
 			}
 		}
 	}
@@ -389,6 +410,124 @@ func inertGoDocument(body *syntax.Word) bool {
 			return false
 		}
 	}
+}
+
+// larkLiteralDirectory tracks only a literal cd whose destination is known. An empty result disables relative-prefix
+// expansion until another absolute cd; options, previous-directory syntax and other users' home directories stay unknown.
+func larkLiteralDirectory(args []*syntax.Word, currentDir string) string {
+	to := "~"
+	if len(args) == 2 {
+		to, _ = executionWord(args[1])
+	}
+	if to == "" || strings.HasPrefix(to, "-") {
+		return ""
+	}
+	to = larkHomePath(to)
+	if strings.HasPrefix(to, "~") {
+		return ""
+	}
+	if !filepath.IsAbs(to) && to != "." && to != ".." && !strings.HasPrefix(to, "./") && !strings.HasPrefix(to, "../") {
+		return "" // CDPATH can choose a directory outside currentDir
+	}
+	if !filepath.IsAbs(to) && currentDir != "" {
+		to = filepath.Join(currentDir, to)
+	}
+	if !filepath.IsAbs(to) {
+		return ""
+	}
+	return filepath.Clean(to)
+}
+
+// larkRelativeGate keeps a newly resolved relative prefix from turning a configured gate command or script into an
+// ordinary program merely because the invocation contains a slash. Absolute paths keep gateOf's matching semantics.
+func larkRelativeGate(gates []proto.CommandGate, name string) bool {
+	if gateOf(gates, name) >= 0 {
+		return true
+	}
+	base := filepath.Base(name)
+	for _, gate := range gates {
+		if gate.Command != "" && filepath.Base(gate.Command) == base ||
+			gate.Script != "" && filepath.Base(gate.Script) == base {
+			return true
+		}
+	}
+	return false
+}
+
+// These commands cannot execute another program, write a file through an option, or change shell state. Their output
+// redirections are checked separately. Keep this list narrower than unchanged: wrappers, interpreters, xargs, tee and
+// even general-purpose tools such as find, sed or awk do not belong here.
+var larkIndependentReadCommands = map[string]bool{
+	"echo": true, ":": true, "true": true, "false": true, "pwd": true,
+	"ls": true, "cat": true, "head": true, "tail": true, "grep": true,
+	"cut": true, "tr": true, "uniq": true, "wc": true, "jq": true,
+	"ps": true, "stat": true, "du": true, "df": true,
+}
+
+func larkIndependentRead(args []*syntax.Word, words []string, executable int) bool {
+	if executable != 0 || len(words) == 0 || !larkIndependentReadCommands[words[0]] {
+		return false
+	}
+	for i, arg := range args {
+		if i != executable && !larkReadOnlyWord(arg) {
+			return false
+		}
+	}
+	return true
+}
+
+// larkReadOnlyWord permits literal glob syntax and side-effect-free scalar parameters. Command/process substitution,
+// arithmetic, arrays, brace expansion and parameter operators (including assignment) remain opaque.
+func larkReadOnlyWord(word *syntax.Word) bool {
+	safe := true
+	syntax.Walk(word, func(node syntax.Node) bool {
+		if !safe {
+			return false
+		}
+		switch n := node.(type) {
+		case nil, *syntax.Word, *syntax.Lit, *syntax.DblQuoted:
+			return true
+		case *syntax.SglQuoted:
+			return false
+		case *syntax.ParamExp:
+			safe = scalarParameter(n)
+			return false
+		default:
+			safe = false
+			return false
+		}
+	})
+	return safe
+}
+
+// larkBindingRedirects keeps assignments across descriptor duplication and literal /dev/null input/output. Real file
+// output, here-documents, inherited input descriptors and dynamic targets retain the old invalidation behavior.
+func larkBindingRedirects(redirs []*syntax.Redirect) bool {
+	for _, redirect := range redirs {
+		if redirect == nil || redirect.Word == nil {
+			return false
+		}
+		target, dynamic := executionWord(redirect.Word)
+		if dynamic {
+			return false
+		}
+		switch redirect.Op {
+		case syntax.DplOut:
+			if target != "1" && target != "2" {
+				return false
+			}
+			if redirect.N != nil && redirect.N.Value != "1" && redirect.N.Value != "2" {
+				return false
+			}
+		case syntax.RdrIn, syntax.RdrOut, syntax.AppOut:
+			if target != "/dev/null" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // literalCommandPrefix is the unquoted field splitting of a statically assigned command prefix. Quotes and shell
