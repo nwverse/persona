@@ -65,5 +65,8 @@
   "test_hidden": "Connected, but the relay shares no account allowances with this key. Allow it for this key on the relay, then test again.",
   "test_failed": "Couldn't connect: {reason}",
   "test_note": "A test reads once and saves nothing.",
-  "save": "Save"
+  "save": "Save",
+  "providers_title": "Providers in the usage bars",
+  "providers_footer": "Turn a provider off to leave it out of the sidebar's usage bars. Only the display changes: computers and gateways are still read, and nothing else uses these switches.",
+  "provider_show": "Show {name} in the usage bars"
 }
