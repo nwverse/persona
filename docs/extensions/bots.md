@@ -74,6 +74,13 @@ The two complement each other and have separate switches.
 
 ## What it can do (`features`, one switch each in the App)
 
+`PUT /api/v1/bots/feishu` changes only the feature keys supplied in `features`; omitted keys keep their current values,
+including changes saved by another client while credentials are being validated (#12646). Explicit `false` still turns a
+switch off, and sending every feature key replaces the complete feature set. The `feishu.configure` RPC likewise merges
+only the supplied switches; enabling `all_cards` also enables `cards`. A failed credential check or durable write rolls back
+that single credentials-and-features commit, including its owner changes. Later topic-chat, profile and other settings
+writes are separate operations, outside this transaction. Switch-only saves do not wait for remote validation.
+
 | Switch | What it does |
 | --- | --- |
 | `main` Chat with Persona | Messages go into the main chat; `/new` starts a new chat, `/list` picks a recent chat, `/main` goes back to the main chat |
