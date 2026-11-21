@@ -78,11 +78,12 @@ final class ScreenshotBannerUITests: XCTestCase {
             // The banner's strip: the screenshot's whole width (on its side wider than the app's frame says), down past
             // the bar.
             let strip = CGRect(x: 0, y: 0, width: 10_000, height: max(pill.frame.maxY + 16, 110))
-            let words = try Self.text(in: shot, strip)
-            XCTAssertTrue(words.contains { $0.contains(name) }, "\(scheme): the banner does not say the bar's name \(name): \(words)")
-            XCTAssertTrue(words.contains { $0.contains(Self.repository) }, "\(scheme): no banner in the screenshot: \(words)")
+            let lines = try Self.text(in: shot, strip)
+            let words = lines.map(\.text)
+            let said = try XCTUnwrap(Self.bannerName(lines), "\(scheme): no banner in the screenshot: \(words)")
+            XCTAssertTrue(said.contains(name), "\(scheme): the banner says \(said), the bar \(name): \(words)")
             if name != "Persona" {
-                XCTAssertFalse(words.contains { $0.hasPrefix("Pers") }, "\(scheme): the banner says the persona's name: \(words)")
+                XCTAssertFalse(said.contains("Pers"), "\(scheme): the banner says the persona's name: \(words)")
             }
         }
     }
@@ -100,8 +101,23 @@ final class ScreenshotBannerUITests: XCTestCase {
         return shots.first(where: fits) ?? XCUIScreen.main.screenshot()
     }
 
-    /// The lines Vision reads in `rect` (points) of a screenshot, Chinese and English.
-    private static func text(in shot: XCUIScreenshot, _ rect: CGRect) throws -> [String] {
+    /// What the banner's name reads: the text before the repository on its row (Vision may read the two as one line),
+    /// else the nearest line to the repository's left on that row. Beside the iPad's or the open Duo's column the
+    /// column's head says the assistant's name in the same row, further left: not the banner's.
+    private static func bannerName(_ lines: [(text: String, box: CGRect)]) -> String? {
+        guard let repo = lines.first(where: { $0.text.contains(repository) }),
+              let at = repo.text.range(of: repository) else { return nil }
+        let before = repo.text[..<at.lowerBound].trimmingCharacters(in: .whitespaces)
+        if before.count > 2 { return before }
+        // GitHub's mark alone may read as a letter: not a name.
+        return lines.filter { abs($0.box.midY - repo.box.midY) < repo.box.height && $0.box.maxX <= repo.box.minX + 0.01
+            && $0.text.trimmingCharacters(in: .whitespaces).count > 1 }
+            .max { $0.box.maxX < $1.box.maxX }?.text
+    }
+
+    /// The lines Vision reads in `rect` (points) of a screenshot, Chinese and English, each with its box (Vision's:
+    /// normalized, from the bottom left).
+    private static func text(in shot: XCUIScreenshot, _ rect: CGRect) throws -> [(text: String, box: CGRect)] {
         // Upright first: a screenshot of a display on its side (the open Duo's) keeps its pixels as they were and says
         // how to turn them.
         let raw = shot.image
@@ -117,7 +133,7 @@ final class ScreenshotBannerUITests: XCTestCase {
         request.recognitionLanguages = ["zh-Hans", "en-US"]
         request.usesLanguageCorrection = false
         try VNImageRequestHandler(cgImage: crop).perform([request])
-        return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+        return (request.results ?? []).compactMap { o in o.topCandidates(1).first.map { ($0.string, o.boundingBox) } }
     }
 
     /// Settings › Appearance & Display has the switch (on: the UI tests pass it, a fresh install's default is
