@@ -213,6 +213,12 @@ func (s *Service) sendDigest(ctx context.Context) {
 			wait = append(wait, g)
 			continue
 		}
+		if to == here.BackgroundSupervisor && to != here.Main {
+			to, g = s.applyBackgroundBreaker(ctx, here, to, g, now)
+			if to == "" {
+				continue
+			}
+		}
 		if _, ok := groups[to]; !ok {
 			order = append(order, to)
 		}
@@ -674,6 +680,13 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 			return prompts.SuperviseEntry{}, false // a member resumed or gained a wake/card while queued
 		}
 		g.Detail, g.Minutes = fresh.Detail, fresh.Minutes
+		if g.BreakerNote != "" {
+			if g.Detail != "" {
+				g.Detail = g.BreakerNote + "\n" + g.Detail
+			} else {
+				g.Detail = g.BreakerNote
+			}
+		}
 	case sigNoProgress:
 		if st != "" || !s.noProgressHolds(g) {
 			return prompts.SuperviseEntry{}, false // progress came, or it was parked or reviewed, meanwhile
@@ -726,6 +739,13 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	}
 	e := prompts.SuperviseEntry{ID: t.ID, Title: t.Title, Kind: g.Kind, Detail: g.Detail, Minutes: g.Minutes, DoneWhen: v.DoneWhen,
 		Round: v.Round, Link: todoLink(web, t.ID), Quiet: t.Quiet}
+	if g.BreakerNote != "" && g.Kind != sigAllStopped {
+		if e.Detail != "" {
+			e.Detail = g.BreakerNote + "\n" + e.Detail
+		} else {
+			e.Detail = g.BreakerNote
+		}
+	}
 	if draft != nil {
 		e.Detail = prompts.RenderDraftPR(prompts.DraftPR{Language: answerLanguage(string(s.botLang(ctx))),
 			URL: draft.URL, Head: draft.HeadOID})
