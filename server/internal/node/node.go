@@ -863,6 +863,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return machdiag.Diagnose(ctx, params)
 	case proto.MethodMachineCleanup:
 		return machdiag.Cleanup(ctx, params)
+	case proto.MethodMachineStorage:
+		return n.machineStorage(ctx, params)
+	case proto.MethodMachineStorageHotspots:
+		return n.machineStorageHotspots(ctx, params)
+	case proto.MethodMachineStorageCleanup:
+		return n.machineStorageCleanup(ctx, params)
 	}
 	switch method { // listening port inspector and process management (machine_procs.go)
 	case proto.MethodMachinePorts:
