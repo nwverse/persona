@@ -25,6 +25,13 @@ def collect(output, destination, runner=subprocess.run):
             shutil.copytree(bundle, destination / bundle.name, dirs_exist_ok=True,
                             ignore=lambda directory, names: [name for name in names
                                 if (Path(directory) / name).is_symlink()])
+    for path in sorted((output / "diagnostics").glob("build-resources/*")) if (output / "diagnostics").is_dir() else []:
+        # Bounded compiler metadata and resource samples only, never compiler
+        # arguments, source files or private configuration.
+        if path.is_file() and not path.is_symlink() and path.suffix in {".json", ".txt"}:
+            resources = destination / "build-resources"
+            resources.mkdir(exist_ok=True)
+            shutil.copyfile(path, resources / path.name)
     apple_launch_diagnostics.collect(output, destination)
     commands = [
         ("simctl-list", ["xcrun", "simctl", "list", "--json"], 120, "json"),
