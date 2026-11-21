@@ -102,10 +102,128 @@ func TestUnrelatedChannelEndKeepsNextTurnMirrors(t *testing.T) {
 	}
 }
 
+// A completion can arrive before either the item event or the polling watch ended the old wait.
+func TestUnrelatedChannelEndDiscoveredAtCompletion(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		card    bool
+		pending bool
+	}{
+		{name: "no card"},
+		{name: "existing card", card: true},
+		{name: "another pending run", card: true, pending: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, r, p := unrelatedAnswerService(t, tc.card)
+			if tc.pending {
+				s.chans.mu.Lock()
+				s.chans.st.Runs = append(s.chans.st.Runs, &channel.Run{ID: "pending", Channel: "examplechat",
+					MachineID: r.MachineID, SessionID: r.SessionID, Base: r.Base, Started: time.Now(), MsgIDs: []string{"not-delivered-yet"}})
+				s.chans.live["pending"] = &chanLive{mu: newChanMutex(), checking: newChanMutex(), done: make(chan struct{})}
+				s.chans.mu.Unlock()
+			}
+			s.channelTurnEnded(context.Background(), r.MachineID, r.SessionID)
+			if run, _ := s.channelRunByID(r.ID); run != nil {
+				t.Fatal("completion did not end the old held run")
+			}
+			select {
+			case <-p.done:
+			default:
+				t.Fatal("the old held run did not finish")
+			}
+			wantPosts, wantSends := 1, 2
+			if tc.pending {
+				wantPosts, wantSends = 0, 0
+				if run, _ := s.channelRunByID("pending"); run == nil {
+					t.Fatal("completion removed the valid pending run")
+				}
+			}
+			if posts := f.appParams(AppFeishu, FeishuPost); len(posts) != wantPosts || wantPosts > 0 &&
+				(!strings.Contains(fmt.Sprint(posts), "The new answer") || posts[0]["reply_to"] == r.ReplyTo) {
+				t.Errorf("Lark mirrors after checking ownership = %v, want %d separate new-turn mirrors", posts, wantPosts)
+			}
+			if sends := f.appParams(AppChannels, ChannelsSend); len(sends) != wantSends || wantSends > 0 && !strings.Contains(fmt.Sprint(sends), "The new answer") {
+				t.Errorf("extension mirrors after checking ownership = %v, want %d", sends, wantSends)
+			}
+			updates := f.appParams(AppFeishu, FeishuUpdateCard)
+			wantUpdates := 0
+			if tc.card {
+				wantUpdates = 1
+			}
+			if len(updates) != wantUpdates {
+				t.Fatalf("old-card updates = %v", updates)
+			}
+			for _, update := range updates {
+				if update["message_id"] != "om_old_progress" || strings.Contains(fmt.Sprint(update), "The new") {
+					t.Errorf("old card exposed the new turn: %v", update)
+				}
+			}
+		})
+	}
+}
+
+func TestChannelCompletionKeepsOtherRunEndings(t *testing.T) {
+	for _, ending := range []string{"answer", "pending", "quiet", "recalled", "timeout"} {
+		t.Run(ending, func(t *testing.T) {
+			s, f, r, _ := unrelatedAnswerService(t, false)
+			s.chans.mu.Lock()
+			r.Held = false
+			switch ending {
+			case "pending":
+				r.MsgIDs = []string{"not-delivered-yet"}
+			case "quiet":
+				r.Held, r.HeldAt = true, time.Now().Add(-channel.HeldIdleMost-time.Minute)
+			case "recalled":
+				r.Recalled = true
+			case "timeout":
+				r.Started = time.Now().Add(-channel.RunMost - time.Minute)
+			}
+			s.chans.mu.Unlock()
+			if ending == "quiet" {
+				f.setItems()
+			}
+			s.channelTurnEnded(context.Background(), r.MachineID, r.SessionID)
+			wantPosts := 1
+			if ending == "pending" || ending == "recalled" {
+				wantPosts = 0
+			}
+			if posts := f.appParams(AppFeishu, FeishuPost); len(posts) != wantPosts {
+				t.Errorf("owned ending posted %v, want %d run answers/endings", posts, wantPosts)
+			}
+			if sends := f.appParams(AppChannels, ChannelsSend); len(sends) != 0 {
+				t.Errorf("an owned ending leaked an extra extension mirror: %v", sends)
+			}
+			if run, _ := s.channelRunByID(r.ID); (run != nil) != (ending == "pending") {
+				t.Errorf("ending %s left run %+v", ending, run)
+			}
+		})
+	}
+}
+
+func TestUnrelatedChannelEndCompletionRetriesCardCleanup(t *testing.T) {
+	s, f, r, _ := unrelatedAnswerService(t, true)
+	f.answerApp(AppFeishu, FeishuUpdateCard, func(json.RawMessage) (any, error) { return nil, context.DeadlineExceeded })
+	s.channelTurnEnded(context.Background(), r.MachineID, r.SessionID)
+	if run, _ := s.channelRunByID(r.ID); run == nil {
+		t.Fatal("a failed old-card update did not keep its retry")
+	}
+	if len(f.appParams(AppFeishu, FeishuPost)) != 0 || len(f.appParams(AppChannels, ChannelsSend)) != 0 {
+		t.Fatal("a pending cleanup retry was mirrored")
+	}
+	f.answerApp(AppFeishu, FeishuUpdateCard, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
+	s.channelTurnEnded(context.Background(), r.MachineID, r.SessionID)
+	if run, _ := s.channelRunByID(r.ID); run != nil {
+		t.Fatal("the successful old-card retry did not end its run")
+	}
+	if len(f.appParams(AppFeishu, FeishuPost)) != 1 || len(f.appParams(AppChannels, ChannelsSend)) != 2 {
+		t.Fatal("the completed cleanup retry suppressed the new turn's mirrors")
+	}
+}
+
 func TestUnrelatedChannelEndPreservesMirrorScope(t *testing.T) {
 	for _, scope := range []string{"sync disabled", "health", "ordinary non-main conversation"} {
 		t.Run(scope, func(t *testing.T) {
-			s, f, r, p := unrelatedAnswerService(t, true)
+			s, f, r, _ := unrelatedAnswerService(t, true)
 			switch scope {
 			case "sync disabled":
 				f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
@@ -122,7 +240,6 @@ func TestUnrelatedChannelEndPreservesMirrorScope(t *testing.T) {
 			case "ordinary non-main conversation":
 				setSettings(t, s, func(v *Settings) { v.Main = "another-main" })
 			}
-			endUnrelatedAnswerRun(t, s, f, r, p, "live items", true)
 			s.channelTurnEnded(context.Background(), r.MachineID, r.SessionID)
 			if posts := f.appParams(AppFeishu, FeishuPost); len(posts) != 0 {
 				t.Errorf("Lark mirrored outside its scope: %v", posts)
