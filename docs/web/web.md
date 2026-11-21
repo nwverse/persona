@@ -117,6 +117,15 @@ drives the built client with synthetic data in Chinese, English and Japanese, wi
 Dismiss, Undo, reload, new same-reference progress, and that no reply or task/Agent mutation was requested; `--cdp`
 uses the shared browser and keeps the test pages open.
 
+**Pending plans across conversations (#12254).** Main's Needs you includes every open task plan of the current
+assistant in its ordinary space, including plans made by scheduled routines and side conversations. Health keeps its
+own plans; archived and deleted source conversations are excluded from the Main snapshot. The source conversation labels its group;
+Start and Don't start act on that plan's source, and Open navigates there. Other conversations show only their own plans.
+The Main feed carries the pending-plan snapshot on initial load and reconnect. A newer live update or completed owner
+action wins over an older read. Each open plan counts as one decision, however many tasks it contains. Conversation rows
+add those decisions to their existing needs-you count, and the Persona chats heading keeps the aggregate visible even
+when recent chats or the whole section are collapsed. Managers' plans are counted separately.
+
 **The open tray's room (#4656).** An open Needs you / In progress tray follows the viewport instead of the old
 `min(20rem, 40dvh)` box: while it is open, `styles.css` lets the chat dock (`DOCK_MAX`, 55% of the visible height otherwise)
 take up to `--assistant-dock-open-max` (82% of `--kb-h`), the conversation above giving up the room, and the tray fills only
