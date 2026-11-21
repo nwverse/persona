@@ -893,11 +893,11 @@ func probeDarwinPower(ctx context.Context, deps toolchainDeps, probeEnv []string
 			p.BatteryPercent = &v
 		}
 	}
-	if strings.Contains(lower, "charging;") || strings.Contains(lower, "charged;") || strings.Contains(lower, "finishing charge") {
-		c := true
-		p.Charging = &c
-	} else if strings.Contains(lower, "discharging") {
+	if strings.Contains(lower, "discharging") {
 		c := false
+		p.Charging = &c
+	} else if strings.Contains(lower, "charging;") || strings.Contains(lower, "charged;") || strings.Contains(lower, "finishing charge") {
+		c := true
 		p.Charging = &c
 	}
 
