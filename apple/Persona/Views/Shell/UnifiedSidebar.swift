@@ -195,14 +195,14 @@ struct UnifiedSidebarColumn<Agents: View>: View {
             // The head and the main row take the column's width and no more (#12318): they stand on the rows' line
             // (`rowsLeading`), measured in the list below, so a head that could widen the column moved the list, which
             // moved the line, which moved the head, round and round inside one layout pass.
-            persona(.header).frame(minWidth: 0, maxWidth: .infinity)
+            persona(.header).frame(minWidth: .zero, maxWidth: .infinity)
             switch state.part {
             case .whole:
-                persona(.main).frame(minWidth: 0, maxWidth: .infinity)
+                persona(.main).frame(minWidth: .zero, maxWidth: .infinity)
                 list(persona(.rows))
                 SidebarNeedsJump(state: state)
             case .persona:
-                persona(.main).frame(minWidth: 0, maxWidth: .infinity)
+                persona(.main).frame(minWidth: .zero, maxWidth: .infinity)
                 personaList
             case .agents:
                 list(nil)
