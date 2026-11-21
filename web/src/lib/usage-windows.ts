@@ -13,12 +13,20 @@ export interface UsageWindow {
   /** An allowance a provider keeps for one model next to the plan's own (#2595); absent for the plan's window. */
   model?: string;
 }
+/** A prepaid balance (#11825): the provider's own decimal amount and currency, never turned into a percentage. */
+export interface UsageBalance {
+  amount: string;
+  currency: string;
+}
 export interface UsageAccount {
   id: string;
   provider: string;
   name: string;
   plan?: string;
   windows: UsageWindow[];
+  /** A remaining amount, for a provider with no rate-limit window (the official DeepSeek launcher). Such an account
+   *  may have no windows; a genuine zero is `amount: "0.00"`, not a missing balance. */
+  balance?: UsageBalance;
   sampled_at: string;
   stale?: boolean;
   /** When it turns stale if nothing newer comes (#1905): kept numbers are judged again against it (`liveAccounts`). */
@@ -126,9 +134,15 @@ export function liveAccounts(accounts: UsageAccount[], now = Date.now()): UsageA
     const windows = a.windows.filter((w) => !w.resets_at || Date.parse(w.resets_at) > now);
     const staleAt = a.stale_at ? Date.parse(a.stale_at) : NaN;
     const stale = Boolean(a.stale) || (Number.isFinite(staleAt) && now >= staleAt);
-    if (windows.length) out.push({ ...a, windows, ...(stale ? { stale } : {}) });
+    if (windows.length || isBalanceAccount(a)) out.push({ ...a, windows, ...(stale ? { stale } : {}) });
   }
   return out;
+}
+
+/** A prepaid-balance account (#11825): it has a balance, or is a DeepSeek account with no window whose first read
+ *  failed. A DeepSeek account that does report windows stays an ordinary bar account. */
+export function isBalanceAccount(a: UsageAccount): boolean {
+  return a.balance !== undefined || (a.provider === "deepseek" && a.windows.length === 0);
 }
 
 /** The used percentage of an account's fullest window. A per-model allowance does not count while the plan's own windows
@@ -153,9 +167,13 @@ export function planNote(a: UsageAccount): string {
 
 export const windowKey = (w: UsageWindow) => `${w.label}:${w.window_minutes}:${w.model ?? ""}`;
 
-/** The accounts the sidebar draws bars for: the two with the fullest window, stale ones last. */
+/** The accounts the sidebar draws bars for: the two with the fullest window, stale ones last. A balance account has
+ *  no bar (it is shown as an amount instead), so it never takes one of these places. */
 export function topAccounts(accounts: UsageAccount[], n = 2): UsageAccount[] {
-  return [...accounts].sort((a, b) => Number(!!a.stale) - Number(!!b.stale) || fullest(b) - fullest(a)).slice(0, n);
+  return accounts
+    .filter((a) => !isBalanceAccount(a))
+    .sort((a, b) => Number(!!a.stale) - Number(!!b.stale) || fullest(b) - fullest(a))
+    .slice(0, n);
 }
 
 export const isWarn = (percent: number) => percent >= WARN_PERCENT;
@@ -168,11 +186,13 @@ export interface UnconnectedProvider {
 
 const emptyAccounts: UsageAccount[] = [];
 let usageAccounts = emptyAccounts;
+let usageReady = false;
 let stopPolling: (() => void) | undefined;
 const listeners = new Set<() => void>();
 
-function publishUsage(accounts: UsageAccount[]) {
+function publishUsage(accounts: UsageAccount[], ready = usageReady) {
   usageAccounts = accounts;
+  usageReady = ready;
   for (const listener of listeners) listener();
 }
 
@@ -185,9 +205,11 @@ function pollUsage() {
     const mine = ++seq;
     const current = () => !dead && mine === seq;
     api<{ accounts?: UsageAccount[] }>("/usage/windows")
-      .then((r) => current() && publishUsage(r.accounts ?? emptyAccounts))
+      .then((r) => current() && publishUsage(r.accounts ?? emptyAccounts, true))
       .catch((e: unknown) => {
-        if (current()) publishUsage(e instanceof ApiError && e.status === 404 ? emptyAccounts : usageAccounts.slice());
+        if (!current()) return;
+        const missing = e instanceof ApiError && e.status === 404;
+        publishUsage(missing ? emptyAccounts : usageAccounts.slice(), missing ? false : usageReady);
       });
   };
   load();
@@ -209,6 +231,7 @@ function subscribeUsage(listener: () => void) {
       stopPolling?.();
       stopPolling = undefined;
       usageAccounts = emptyAccounts;
+      usageReady = false;
     }
   };
 }
@@ -216,4 +239,9 @@ function subscribeUsage(listener: () => void) {
 /** The sidebar and Agent status lines share one poll, including while switching chats. */
 export function useUsageWindows(): UsageAccount[] {
   return useSyncExternalStore(subscribeUsage, () => usageAccounts, () => emptyAccounts);
+}
+
+/** True once GET /api/v1/usage/windows has completed a supported (non-404) response. */
+export function useUsageWindowsReady(): boolean {
+  return useSyncExternalStore(subscribeUsage, () => usageReady, () => false);
 }

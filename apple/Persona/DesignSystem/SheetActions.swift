@@ -139,9 +139,15 @@ private struct SheetDone: ViewModifier {
         #if os(macOS)
         content.macSheetDone(done)
         #else
-        if pushed { content } else { content.pageToolbar { SheetClose(action: done) } }
+        if pushed { content } else { content.pageToolbar { SheetClose(action: done) }.environment(\.shownAsSheet, true) }
         #endif
     }
+}
+
+extension EnvironmentValues {
+    /// The page is a sheet's (`sheetDone`, iOS), not pushed on a stack: what it opens on the stack under it closes it
+    /// first (#12006), where a pushed page stays under what it pushes, for Back.
+    @Entry var shownAsSheet = false
 }
 
 private struct SheetCancel: ViewModifier {
@@ -166,7 +172,7 @@ private struct SheetCancel: ViewModifier {
                 }
             }
             // On the content, not on the bar's button: the bar is hosted apart from the page.
-            .confirmationDialog("Discard Unsaved Changes?", isPresented: $asking, titleVisibility: .visible) {
+            .accessibleConfirmationDialog("Discard Unsaved Changes?", isPresented: $asking, titleVisibility: .visible, hasCancel: true) {
                 Button("Discard Changes", role: .destructive, action: cancel)
                 Button("Keep Editing", role: .cancel) {}
             } message: {

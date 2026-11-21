@@ -37,8 +37,7 @@ type quickMeta struct {
 	wfScript     map[string]string      // their script files by run id
 	// cwd: where the session runs. An agent's latest directory (Claude Code writes the shell's directory after each
 	// Bash `cd` into every line), but where it started when that latest one is an assistant or health directory; for
-	// a conversation that started in an assistant or health directory, that directory, wherever its `cd`s took it
-	// since (#2368).
+	// a session started in an assistant directory or inside a health space, the starting directory (#2368).
 	cwd string
 	// start: the first directory the transcript's head names, where the session started ("" when the head has none:
 	// a first prompt bigger than the head read).
@@ -66,6 +65,7 @@ type quickMeta struct {
 	modeAt      time.Time
 	effort      string
 	effortAt    time.Time
+	modelAt     time.Time
 	version     string
 	versionAt   time.Time // when the line that said version was written: a resumed process has written none yet
 	ultracode   *bool
@@ -89,6 +89,8 @@ type quickMeta struct {
 	// turnOpen: a Codex rollout whose tail is inside a turn: the last turn it starts has not finished, or one turn
 	// fills the whole tail (a finished turn's task_complete is within a few KB of the end; real turns write MBs)
 	turnOpen bool
+	// turnActivityAt: newest timestamped line of the current open Codex turn in the tail (never carried from before/head).
+	turnActivityAt time.Time
 	// turnErr: the latest turn failed on the model service, as the agent's record says it (transcript.Meta.TurnError…:
 	// a Codex rollout's task_complete, #2185; Claude Code's own reply for a failed request, #1710).
 	turnErr turnFailure
@@ -256,14 +258,32 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 			whole += int64(len(lines[0]))
 			lines = lines[1:] // first line is partial
 		}
+		var codexTurnAt time.Time
 		for _, line := range lines {
 			if len(line) == 0 {
 				continue
 			}
-			if ts := lineTime(line); ts.After(m.contentAt) {
+			ts := lineTime(line)
+			if ts.After(m.contentAt) {
 				m.contentAt = ts
 			}
+			prevOpen, prevClosed := tm.TurnOpen, tm.TurnClosed
 			quickLine(line, &tm, &tail)
+			if tm.Codex {
+				switch {
+				case tm.TurnClosed && !prevClosed:
+					codexTurnAt = time.Time{}
+				case tm.TurnOpen && !prevOpen:
+					codexTurnAt = ts
+				case tm.TurnOpen || (off > 0 && !tm.TurnClosed):
+					if ts.After(codexTurnAt) {
+						codexTurnAt = ts
+					}
+				}
+			}
+		}
+		if tm.Codex && !tm.TurnClosed && (tm.TurnOpen || off > 0) {
+			m.turnActivityAt = codexTurnAt
 		}
 	}
 	if rest, ok := tail.Revoked(); ok { // Claude went on from a turn the node took for rewound (transcript.File.RewoundAt)
@@ -311,12 +331,12 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 		m.titleSource = "" // a historical custom-title may be outside this bounded read
 	}
 	m.start = start
-	if identity.IsAssistantDir(start) || start != "" && identity.IsAssistantDir(m.cwd) {
+	if identity.IsAssistantDir(start) || identity.InHealthSpace(start) || start != "" && identity.IsAssistantDir(m.cwd) {
 		// An assistant or health conversation is where it started: its space, CLAUDE.md, memory and resume project.
 		// A `cd` into a skill's folder had it listed as an agent there (#2368). The other way round, an agent whose
 		// `cd` landed in an assistant or health directory (one started in the home directory) is not one of their
 		// conversations: listed there at rest, the hub took it for one. An exact assistant or health directory is
-		// only ever where a session started.
+		// only ever where a session started. Health subdirectories also retain their starting directory for privacy.
 		m.cwd = start
 	}
 	m.surface = tm.Surface
@@ -379,7 +399,7 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 		// back (a message typed, a reply, its cancel notice), so what the last read found stands (#1710).
 		m.turnErr.resumes = prev.turnErr.resumes
 	}
-	m.mode, m.modeAt, m.effort, m.effortAt, m.sandbox = tm.PermissionMode, tm.ModeAt, tm.Effort, tm.EffortAt, tm.CodexSandbox
+	m.mode, m.modeAt, m.effort, m.effortAt, m.modelAt, m.sandbox = tm.PermissionMode, tm.ModeAt, tm.Effort, tm.EffortAt, tm.ModelAt, tm.CodexSandbox
 	if m.mode == "" && m.sandbox == "" {
 		// The tail names no mode: the latest one before it, the session's first when none nearer is known.
 		if m.mode, m.modeAt, m.sandbox = before.mode, before.modeAt, before.sandbox; m.mode == "" && m.sandbox == "" {
@@ -413,6 +433,10 @@ func (n *Node) mergeNamingMetadata(path string, m *quickMeta) {
 		return
 	}
 	m.outputTokens = sc.meta.OutputTokens
+	if m.codex && sc.meta.ModelAt.After(m.modelAt) {
+		// A long tool result can push the latest turn_context out of the quick tail.
+		m.model, m.modelAt = sc.meta.Model, sc.meta.ModelAt
+	}
 	if m.codex && sc.meta.EffortAt.After(m.effortAt) {
 		// A long tool result can push the latest turn_context out of the quick tail.
 		m.effort, m.effortAt = sc.meta.Effort, sc.meta.EffortAt

@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,7 +30,7 @@ import (
 
 // Results of a deploy check.
 const (
-	deployIn         = "in"         // the running hub contains the merge commit
+	deployIn         = "in"         // the running hub contains the change, by merge commit or local build receipt
 	deployOut        = "out"        // merged; the running hub does not contain it yet
 	deployUnmerged   = "unmerged"   // the PR is not merged
 	deployUnknown    = "unknown"    // could not tell (network, rate limit): not deployed
@@ -42,10 +41,12 @@ const (
 )
 
 type deployResult struct {
-	State string
-	Hub   string // the running hub's commit
-	Merge string // the PR's merge commit
-	Err   error
+	State     string
+	Hub       string // the running hub's commit
+	Merge     string // the upstream PR's confirmed merge commit
+	Receipt   string // the running build names this PR at this commit
+	NotMerged bool   // the upstream PR was confirmed unmerged, even when the hub runs it
+	Err       error
 }
 
 // held: the result keeps the work short of deployed.
@@ -61,6 +62,11 @@ type prForge interface {
 	PRMerge(ctx context.Context, repo string, number int) (merged bool, sha string, err error)
 	// Contains: whether head contains base in repo; found false when either is not a commit of repo.
 	Contains(ctx context.Context, repo, base, head string) (contains, found bool, err error)
+}
+
+// issueStateForge is an optional capability on prForge that reports a GitHub issue's state ("open" or "closed").
+type issueStateForge interface {
+	IssueState(ctx context.Context, repo string, number int) (state string, err error)
 }
 
 // hubBuildReader is a hub that can say what it runs (BusHub: its /api/v1/health).
@@ -166,21 +172,21 @@ func (s *Service) checkDeployed(ctx context.Context, pr string) deployResult {
 	if hub == "" {
 		return deployResult{State: deployUnverified}
 	}
-	// A repaired receipt is stronger than a cached outage, including during a GitHub pause.
+	// A repaired receipt changes what we know about the running build, including during a GitHub pause.
+	var receipt string
 	if l := s.deployedListFor(hub); l != nil && strings.EqualFold(l.repo, repo) {
-		if sha, ok := l.prs[number]; ok {
-			return deployResult{State: deployIn, Hub: hub, Merge: sha}
-		}
+		receipt = l.prs[number]
 	}
 	key := pr + "\x00" + hub
 	p := &s.deploy
 	p.mu.Lock()
-	if c, ok := p.cache[key]; ok && (c.r.State == deployIn || time.Since(c.at) < deployCacheFor) {
+	if c, ok := p.cache[key]; ok && c.r.Receipt == receipt &&
+		(c.r.State == deployIn && c.r.Merge != "" || time.Since(c.at) < deployCacheFor) {
 		p.mu.Unlock()
 		return c.r
 	}
 	p.mu.Unlock()
-	r := s.compareDeploy(ctx, repo, number, hub)
+	r := s.compareDeploy(ctx, repo, number, hub, receipt)
 	p.mu.Lock()
 	if p.cache == nil || len(p.cache) > 500 {
 		p.cache = map[string]deployCached{}
@@ -193,19 +199,21 @@ func (s *Service) checkDeployed(ctx context.Context, pr string) deployResult {
 // githubPause is how long GitHub is not asked after it failed to answer.
 const githubPause = 10 * time.Minute
 
-// compareDeploy answers with the running hub's deployed-commits file first (no network: deployed_commits.go), and
-// GitHub when the file cannot say (none, another repository, or the PR not named in it).
-func (s *Service) compareDeploy(ctx context.Context, repo string, number int, hub string) deployResult {
+// compareDeploy combines upstream PR status with the running build's receipt. The receipt can establish that the
+// change runs locally even when GitHub is unavailable or the PR is still open.
+func (s *Service) compareDeploy(ctx context.Context, repo string, number int, hub, receipt string) deployResult {
+	r := s.compareGitHub(ctx, repo, number, hub)
+	if receipt != "" {
+		r.Receipt, r.NotMerged = receipt, r.State == deployUnmerged
+		r.State, r.Hub, r.Err = deployIn, hub, nil
+		return r
+	}
 	l := s.deployedListFor(hub)
 	if l == nil || !strings.EqualFold(l.repo, repo) {
-		return s.compareGitHub(ctx, repo, number, hub)
+		return r
 	}
-	if sha, ok := l.prs[number]; ok {
-		return deployResult{State: deployIn, Hub: hub, Merge: sha}
-	}
-	r := s.compareGitHub(ctx, repo, number, hub)
 	if r.State == deployUnknown || r.State == deployUnverified {
-		return deployResult{State: deployNotIn, Hub: hub, Err: r.Err} // as far as the file goes, not deployed
+		r.State, r.Hub = deployNotIn, hub // as far as the file goes, not deployed
 	}
 	return r
 }
@@ -288,9 +296,9 @@ func shortSHA(sha string) string {
 
 // heldDelivery is the delivery of work the check holds short of deployed.
 func (s *Service) heldDelivery(ctx context.Context, r deployResult) TodoDelivery {
-	state := deliveryMerged
-	if r.State == deployUnmerged {
-		state = deliveryPR
+	state := deliveryPR
+	if r.Merge != "" || r.State == deployOut {
+		state = deliveryMerged
 	}
 	return TodoDelivery{State: state, Gate: clip(s.deployGateText(ctx, r), 60), Unblock: unblockOther, At: time.Now()}
 }
@@ -501,7 +509,7 @@ func (s *Service) sweepPRs(ctx context.Context, now time.Time, hub string, watch
 		p.mu.Unlock()
 		switch r.State {
 		case deployIn:
-			s.logf("task %s: %s is merged and in the running hub (%s): deployed", t.ID, t.PRURL, shortSHA(hub))
+			s.logf("task %s: %s is in the running hub (%s): deployed", t.ID, t.PRURL, shortSHA(hub))
 			s.setTaskDelivery(ctx, t.ID, TodoDelivery{State: deliveryLive, At: now})
 		case deployOut:
 			s.logf("task %s: %s is merged, not in the running hub (%s): merged, not deployed", t.ID, t.PRURL, shortSHA(hub))
@@ -553,6 +561,7 @@ func (s *Service) forge() prForge {
 var (
 	errForgeNotFound      = errors.New("not found")
 	errForgeUnprocessable = errors.New("unprocessable entity")
+	errGitHubUnconfigured = errors.New("GitHub authentication unavailable")
 )
 
 // connectorNotFound: the connector's error for a 404 or 422 ("GitHub GET <path>: 404 …").
@@ -574,7 +583,11 @@ func (g githubForge) get(ctx context.Context, path string, out any) error {
 	}
 	token := ""
 	if g.base == "https://api.github.com" {
-		if _, err := exec.LookPath("gh"); err == nil {
+		cli, err := hasGitHubCLI(ctx)
+		if err != nil {
+			return fmt.Errorf("GitHub CLI identification interrupted: %w", err)
+		}
+		if cli {
 			return githubCLIGet(ctx, path, out)
 		}
 		token = strings.TrimSpace(os.Getenv("GH_TOKEN"))
@@ -582,7 +595,7 @@ func (g githubForge) get(ctx context.Context, path string, out any) error {
 			token = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
 		}
 		if token == "" {
-			return fmt.Errorf("authenticated GitHub CLI unavailable and no environment authorization (no anonymous fallback)")
+			return fmt.Errorf("%w: authenticated GitHub CLI unavailable and no environment authorization (no anonymous fallback)", errGitHubUnconfigured)
 		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.base+path, nil)
@@ -660,6 +673,16 @@ func (g githubForge) PRMerge(ctx context.Context, repo string, number int) (bool
 		return false, "", err
 	}
 	return pr.Merged, pr.SHA, nil
+}
+
+func (g githubForge) IssueState(ctx context.Context, repo string, number int) (string, error) {
+	var issue struct {
+		State string `json:"state"`
+	}
+	if err := g.get(ctx, fmt.Sprintf("/repos/%s/issues/%d", repo, number), &issue); err != nil {
+		return "", err
+	}
+	return strings.ToLower(strings.TrimSpace(issue.State)), nil
 }
 
 // compareEmptyPage is a page number well past page 1; GitHub caps a compare at 10,000 commits.

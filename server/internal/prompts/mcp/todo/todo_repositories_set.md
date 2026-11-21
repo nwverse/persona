@@ -1,4 +1,4 @@
-Replace atomically using revisions from todo_repositories_get/repositories_list. [] removes metadata. Frozen source snapshots: remove/reselect to adopt catalog identity changes. Editable after execution. Omit links to keep; [] clears. Omitted/empty titles keep. Reread/reconcile conflicts. No files, progress or completion changes.
+Replace atomically using revisions from todo_repositories_get/repositories_list. [] removes metadata. Frozen source snapshots: remove/reselect to adopt catalog identity changes. Editable after execution. Omit links to keep; [] clears. Omitted/empty titles keep. Reread/reconcile conflicts. No files, progress or completion changes.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -40,6 +40,7 @@ Replace atomically using revisions from todo_repositories_get/repositories_list.
             "type": "object",
             "properties": {
               "kind": {
+                "type": "string",
                 "enum": [
                   "default",
                   "branch",
@@ -59,8 +60,10 @@ Replace atomically using revisions from todo_repositories_get/repositories_list.
             ],
             "oneOf": [
               {
+                "type": "object",
                 "properties": {
                   "kind": {
+                    "type": "string",
                     "const": "default"
                   }
                 }
@@ -82,6 +85,7 @@ Replace atomically using revisions from todo_repositories_get/repositories_list.
                   "minLength": 1
                 },
                 "kind": {
+                  "type": "string",
                   "enum": [
                     "issue",
                     "pull_request"

@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { checkCount, checklist, latestReview, parkedLine, progressLine, reportLine, reportText, reviewBadge, reviewState, reviewVerdictLabel, type Supervision } from "./supervision";
+import { acceptanceStands, checkCount, checklist, latestReview, parkedLine, progressLine, reportLine, reportText, reviewBadge, reviewState, reviewVerdictLabel, type Supervision } from "./supervision";
 import { todoStatusLabel, type Todo } from "./todos";
 
 const base: Todo = { id: "todo_1", title: "部署 hub", created_at: "2026-11-05T08:00:00Z", updated_at: "2026-11-05T08:00:00Z" };
 const sup = (s: Partial<Supervision>): Supervision => ({ supervisor: "main", done_when: ["PR 合并到 master", "截图贴进 PR"], ...s });
 
 describe("supervision", () => {
+  it("clears pending review after completion and restores it when reopened", () => {
+    const supervision = sup({ state: "pending_review" });
+    expect(reviewState({ ...base, supervision })).toBe("pending_review");
+    expect(reviewState({ ...base, supervision, done_at: "2026-11-12T09:00:00Z" })).toBe("");
+    expect(reviewState({ ...base, supervision, done_at: null })).toBe("pending_review");
+  });
+
   it("uses live per-criterion state ahead of stale reviews, in done_when order", () => {
     const s = sup({
       criteria: [
@@ -82,6 +89,20 @@ describe("supervision", () => {
   it("goes on again when the user reopens an accepted task", () => {
     expect(reviewState({ done_at: null, supervision: sup({ state: "accepted" }) })).toBe("");
     expect(reviewState({ done_at: "2026-11-05T09:00:00Z", supervision: sup({ state: "accepted" }) })).toBe("accepted");
+  });
+
+  it("names a continuation's new round, not the acceptance in its history (#11553)", () => {
+    const earlier = { at: "2026-11-20T02:23:57Z", verdict: "accepted" as const, checks: [{ criterion: "PR 合并到 master", met: true }] };
+    // task_plan continues reopened the accepted to-do with a new Agent: the hub keeps the acceptance in the reviews and
+    // puts the ledger back to going on, so the history alone never makes it accepted
+    const continued = { ...base, done_at: null, reopened_at: "2026-11-20T02:35:24Z", supervision: sup({ state: "", round: 0, reviews: [earlier] }) };
+    expect(acceptanceStands(continued)).toBe(false);
+    expect(reviewState(continued)).toBe("");
+    expect(reviewBadge(continued)).toEqual({ label: "督办中", tone: "muted" });
+    // more work sent to the accepted task's Agent (#3156): the ledger still says accepted, and so does the badge
+    const standing = { ...continued, supervision: sup({ state: "accepted", reviews: [earlier] }) };
+    expect(acceptanceStands(standing)).toBe(true);
+    expect(reviewBadge(standing)).toEqual({ label: "已验收", tone: "green" });
   });
 
   it("marks each criterion as its latest review found it", () => {

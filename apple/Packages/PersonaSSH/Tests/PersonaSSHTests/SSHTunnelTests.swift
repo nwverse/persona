@@ -63,7 +63,9 @@ struct SSHTunnelTests {
             for _ in 0..<20 { group.addTask { try await Self.health(port)["ok"] as? Bool == true } }
             for try await ok in group { #expect(ok) }
         }
-        #expect(sshd.log.components(separatedBy: "Accepted publickey").count - 1 == 1)
+        let log = sshd.log
+        let accepted = log.components(separatedBy: "Accepted publickey").count - 1
+        #expect(accepted == 1, "unexpected SSH sessions; server log: \(log)")
     }
 
     @Test func firstConnectionAsksForTheHostKey() async throws {
@@ -198,7 +200,7 @@ struct SSHTunnelTests {
         let t = tunnel(sshd, pinned: sshd.fingerprint)
         let port = try await t.start()
         t.stop()
-        try await Self.until { !FreePort.isListening(port) }
+        try await Self.until { !FreePort.isListening(port) && t.phase == .idle }
         #expect(t.phase == .idle)
     }
 

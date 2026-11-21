@@ -33,6 +33,7 @@ import { PageBoundary } from "../PageBoundary";
 
 const StandingAuthorizations = lazyPage(() => import("./StandingAuthorizations").then((m) => m.StandingAuthorizations));
 const Repositories = lazyPage(() => import("./Repositories").then((m) => m.Repositories));
+const WorkspaceNaming = lazyPage(() => import("../../ui/WorkspaceNaming").then((m) => m.WorkspaceNaming));
 
 interface AssistantState extends AgentAutoNamingState {
   manager?: string;
@@ -76,12 +77,21 @@ interface AssistantState extends AgentAutoNamingState {
    *  off by default, which means the built-in background supervisor follows up the tasks no leader supervises; unset
    *  from a hub before it. */
   main_supervises_own_tasks?: boolean;
+  /** Three-tier PR/Issue delivery closeout gate (#12034): "off", "merged" (default), or "live"; unset from a hub before it. */
+  delivery_gate?: string;
   /** Days a closed session stays listed before it archives itself (#3618, docs/assistant/todos.md "Closed sessions
    *  archive themselves"): 0 is never, at most 3650; unset from a hub before it. */
   archive_closed_days?: number;
   /** "Suggest the next message" (#4644, docs/assistant/assistant.md "Next-message suggestions"): off by default; unset
    *  from a hub before it. */
   next_suggestions?: boolean;
+  /** "Run Claude chats in interactive Claude Code" (#10058, docs/assistant/assistant.md "Interactive Claude Code"): off
+   *  by default; unset from a hub before it. */
+  claude_interactive?: boolean;
+  /** Exact owner-reply approval and reconstructable proposal retention: both off by default; absent from an older hub. */
+  owner_reply_approval?: boolean;
+  persistent_owner_action_cards?: boolean;
+  owner_reply_approval_phrases?: string[];
   /** Hours an idle Agent Persona started runs before Persona stops it (#4754, docs/integrations/engines.md "Agents run
    *  in a terminal"); its terminal stays. 0 is never, at most 8760; unset from a hub before it. */
   idle_close_hours?: number;
@@ -94,6 +104,8 @@ const MAX_IDLE_HOURS = 8760;
 
 /** `meeting_attendance_default`'s values, in the picker's order. */
 const MEETING_ROLES = ["off", "listener", "participant"] as const;
+/** `delivery_gate`'s values, in the picker's order. */
+const DELIVERY_GATES = ["off", "merged", "live"] as const;
 
 /** Finite day bounds (docs/protocol/protocol.md). Minutes also accept 0, selected as Forever rather than typed. */
 const RETENTION = { recording_days: { min: 1, max: 365 }, minutes_days: { min: 1, max: 3650 } } as const;
@@ -156,6 +168,18 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
     } finally { setReadonlyBusy(false); }
   };
+  const [deliveryBusy, setDeliveryBusy] = useState(false);
+  const setDeliveryGate = async (gate: string) => {
+    setDeliveryBusy(true);
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { delivery_gate: gate } });
+      if (r.manager !== manager || r.delivery_gate !== gate) throw new Error(t("settings-assistantsettings.delivery_gate_unconfirmed"));
+      setInfo((i) => i ? { ...i, delivery_gate: r.delivery_gate } : i);
+    } catch (e) {
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally { setDeliveryBusy(false); }
+  };
+
   const [meetingBusy, setMeetingBusy] = useState(false);
   const setMeetingRole = async (role: string) => {
     setMeetingBusy(true);
@@ -196,6 +220,49 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
     } finally {
       setSuggestBusy(false);
     }
+  };
+
+  const [interactiveBusy, setInteractiveBusy] = useState(false);
+  const setInteractive = async (on: boolean) => {
+    setInteractiveBusy(true);
+    setInfo((i) => (i ? { ...i, claude_interactive: on } : i));
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { claude_interactive: on } });
+      setInfo((i) => (i ? { ...i, claude_interactive: r.claude_interactive ?? on } : i));
+    } catch (e) {
+      setInfo((i) => (i ? { ...i, claude_interactive: !on } : i));
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally {
+      setInteractiveBusy(false);
+    }
+  };
+
+  const [ownerApprovalBusy, setOwnerApprovalBusy] = useState(false);
+  const setOwnerApproval = async (field: "owner_reply_approval" | "persistent_owner_action_cards", on: boolean) => {
+    const before = info;
+    setOwnerApprovalBusy(true);
+    setInfo((i) => i ? { ...i, [field]: on } : i);
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { [field]: on } });
+      if (r.manager !== manager || r[field] !== on) throw new Error(t("settings-assistantsettings.owner_approval_unconfirmed"));
+      setInfo((i) => i ? { ...i, [field]: r[field] } : i);
+    } catch (e) {
+      setInfo((i) => i && before ? { ...i, [field]: before[field] } : i);
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally { setOwnerApprovalBusy(false); }
+  };
+  const setOwnerApprovalPhrases = async (phrases: string[]) => {
+    setOwnerApprovalBusy(true);
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { owner_reply_approval_phrases: phrases } });
+      if (r.manager !== manager || JSON.stringify(r.owner_reply_approval_phrases) !== JSON.stringify(phrases)) {
+        throw new Error(t("settings-assistantsettings.owner_approval_unconfirmed"));
+      }
+      setInfo((i) => i ? { ...i, owner_reply_approval_phrases: r.owner_reply_approval_phrases } : i);
+    } catch (e) {
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+      throw e;
+    } finally { setOwnerApprovalBusy(false); }
   };
 
   const setFolded = async (on: boolean) => {
@@ -371,7 +438,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Group>
       )}
 
-      <Group title={t("settings-assistantsettings.start_title")} footer={t("settings-assistantsettings.start_footer")}>
+      <Group anchor="dispatch-tasks" title={t("settings-assistantsettings.start_title")} footer={t("settings-assistantsettings.start_footer")}>
         <Row label={t("settings-assistantsettings.start_requested")} anchor="start-requested">
           <Switch on={info?.start_requested_tasks ?? true} onChange={(on) => void setStartRequested(on)} disabled={!info || startBusy} label={t("settings-assistantsettings.start_requested")} />
         </Row>
@@ -384,17 +451,33 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
             <option value="prefer-new">{t("settings-assistantsettings.workspace_prefer_new")}</option>
           </select>
         </Row>
+        {info?.manager === manager && info.task_workspace_preference === "prefer-new" && <PageBoundary page="workspace-naming">
+          <Suspense fallback={<Loading />}>
+            <WorkspaceNaming manager={manager} owner={owner} />
+          </Suspense>
+        </PageBoundary>}
         <TaskTrust manager={manager} machineName={(id) => machines.find((machine) => machine.id === id)?.name || id} />
       </Group>
 
-      {/* Who follows up the main chat's tasks (#5082), following up agents, their tasks' new messages, stopping idle ones and tidying closed ones (#3617, #4293, #4754, #3618): each row only from a hub that has its setting */}
-      {(supportsAgentAutoNaming(info) || typeof info?.main_supervises_own_tasks === "boolean" || typeof info?.agent_tasks === "boolean" || typeof info?.close_ended_terminals === "boolean" || typeof info?.inbox_signals === "boolean" || typeof info?.idle_close_hours === "number" || typeof info?.archive_closed_days === "number") && info && (
+      {/* Who follows up the main chat's tasks (#5082), delivery closeout gate (#12034), following up agents, their tasks' new messages, stopping idle ones and tidying closed ones (#3617, #4293, #4754, #3618): each row only from a hub that has its setting */}
+      {(supportsAgentAutoNaming(info) || typeof info?.main_supervises_own_tasks === "boolean" || typeof info?.delivery_gate === "string" || typeof info?.agent_tasks === "boolean" || typeof info?.close_ended_terminals === "boolean" || typeof info?.inbox_signals === "boolean" || typeof info?.idle_close_hours === "number" || typeof info?.archive_closed_days === "number") && info && (
         <Group anchor="agents" title={t("settings-assistantsettings.agents_title")}>
           {supportsAgentAutoNaming(info) && <AgentAutoNaming info={info} manager={manager} owner={owner}
             onSaved={(patch) => setInfo((current) => current ? { ...current, ...patch } : current)} />}
           {typeof info.main_supervises_own_tasks === "boolean" && (
             <Row label={t("settings-assistantsettings.main_supervises")} hint={t("settings-assistantsettings.main_supervises_hint")} wrapHint>
               <Switch on={info.main_supervises_own_tasks} onChange={(on) => void setAgents({ main_supervises_own_tasks: on })} disabled={agentsBusy} label={t("settings-assistantsettings.main_supervises")} />
+            </Row>
+          )}
+          {typeof info.delivery_gate === "string" && (
+            <Row label={t("settings-assistantsettings.delivery_gate")} hint={t("settings-assistantsettings.delivery_gate_hint")} wrapHint stackOnNarrow anchor="delivery-gate">
+              <select aria-label={t("settings-assistantsettings.delivery_gate")} value={info.delivery_gate}
+                disabled={info.manager !== manager || deliveryBusy}
+                className="min-w-0 max-w-full rounded-control bg-field px-3 py-2 text-meta text-ink shadow-inset-field pointer-coarse:min-h-11"
+                onChange={(e) => void setDeliveryGate(e.target.value)}>
+                {!(DELIVERY_GATES as readonly string[]).includes(info.delivery_gate) && <option value={info.delivery_gate} disabled>{info.delivery_gate}</option>}
+                {DELIVERY_GATES.map((gate) => <option key={gate} value={gate}>{t(`settings-assistantsettings.delivery_gate_${gate}`)}</option>)}
+              </select>
             </Row>
           )}
           {typeof info.agent_tasks === "boolean" && (
@@ -463,6 +546,18 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Row>
       </Group>
 
+      {typeof info?.owner_reply_approval === "boolean" && typeof info.persistent_owner_action_cards === "boolean" && Array.isArray(info.owner_reply_approval_phrases) && (
+        <Group anchor="owner-reply-approval" title={t("settings-assistantsettings.owner_approval_title")} footer={t("settings-assistantsettings.owner_approval_footer")}>
+          <Row label={t("settings-assistantsettings.owner_approval_switch")} hint={t("settings-assistantsettings.owner_approval_switch_hint")} wrapHint>
+            <Switch on={info.owner_reply_approval} onChange={(on) => void setOwnerApproval("owner_reply_approval", on)} disabled={ownerApprovalBusy} label={t("settings-assistantsettings.owner_approval_switch")} />
+          </Row>
+          <Row label={t("settings-assistantsettings.owner_approval_persistent")} hint={t("settings-assistantsettings.owner_approval_persistent_hint")} wrapHint>
+            <Switch on={info.persistent_owner_action_cards} onChange={(on) => void setOwnerApproval("persistent_owner_action_cards", on)} disabled={ownerApprovalBusy} label={t("settings-assistantsettings.owner_approval_persistent")} />
+          </Row>
+          <OwnerApprovalPhrasesField value={info.owner_reply_approval_phrases} disabled={ownerApprovalBusy} onSave={setOwnerApprovalPhrases} />
+        </Group>
+      )}
+
       <PageBoundary page="standing-authorizations">
         <Suspense fallback={<Group anchor="standing-authorizations" title={t("settings-standing.title")}><Loading /></Group>}>
           <StandingAuthorizations manager={manager} />
@@ -530,6 +625,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Suspense>
       </PageBoundary>
 
+
       <SkillsGroup manager={manager} />
 
       <Group
@@ -546,8 +642,8 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
           </Row>
         )}
         {runtime.runtime && (
-          <Row label={t("settings-assistantsettings.main_runtime")}>
-            <span data-main-runtime-tool className="max-w-[220px] truncate">{runtime.runtime}</span>
+          <Row label={t("settings-assistantsettings.main_runtime")} hint={runtime.note} wrapHint>
+            <span data-main-runtime-tool className="max-w-[220px] truncate" title={runtime.runtime}>{runtime.runtime}</span>
           </Row>
         )}
         <Row label={t("settings-assistantsettings.cwd")} mono anchor="runs-on-cwd">
@@ -555,6 +651,15 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Row>
         {info?.timezone && <Row label={t("settings-assistantsettings.timezone")}>{info.timezone}</Row>}
       </Group>
+
+      {/* Interactive Claude Code instead of claude -p (#10058): an advanced, off-by-default switch, only from a hub that has it */}
+      {typeof info?.claude_interactive === "boolean" && (
+        <Group anchor="claude-interactive" footer={t("settings-assistantsettings.claude_interactive_footer")}>
+          <Row label={t("settings-assistantsettings.claude_interactive")}>
+            <Switch on={info.claude_interactive} onChange={(on) => void setInteractive(on)} disabled={interactiveBusy} label={t("settings-assistantsettings.claude_interactive")} />
+          </Row>
+        </Group>
+      )}
 
       {open && (
         <MemoryDialog
@@ -573,6 +678,27 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
 
 /** A whole number (days, or hours), 0 to `max` (`MAX_ARCHIVE_DAYS` by default): saved when the field is left or Enter is
  *  pressed, and only when it changed; anything else goes back to the saved value. */
+function OwnerApprovalPhrasesField({ value, disabled, onSave }: { value: string[]; disabled: boolean; onSave: (phrases: string[]) => Promise<void> }) {
+  const [draft, setDraft] = useState(value.join("\n"));
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { if (!saving) setDraft(value.join("\n")); }, [value, saving]);
+  const phrases = draft.split("\n").map((phrase) => phrase.trim()).filter(Boolean);
+  const changed = JSON.stringify(phrases) !== JSON.stringify(value);
+  const save = async () => {
+    setSaving(true);
+    try { await onSave(phrases); } catch { /* the parent shows the confirmed value and the error */ } finally { setSaving(false); }
+  };
+  return <div className="px-4 py-3">
+    <label className="mb-2 block text-meta font-medium text-ink" htmlFor="owner-approval-phrases">{t("settings-assistantsettings.owner_approval_phrases")}</label>
+    <textarea id="owner-approval-phrases" aria-label={t("settings-assistantsettings.owner_approval_phrases")} className={cx(textareaClass, "min-h-24 font-mono")}
+      value={draft} disabled={disabled || saving} onChange={(e) => setDraft(e.target.value)} />
+    <div className="mt-2 flex items-center gap-3">
+      <p className="min-w-0 flex-1 text-label leading-relaxed text-ink-3">{t("settings-assistantsettings.owner_approval_phrases_hint")}</p>
+      <Button disabled={disabled || saving || !changed || phrases.length === 0} onClick={() => void save()}>{t("settings-assistantsettings.owner_approval_save_phrases")}</Button>
+    </div>
+  </div>;
+}
+
 function DaysField({ value, max = MAX_ARCHIVE_DAYS, disabled, label, onCommit }: { value: number; max?: number; disabled?: boolean; label: string; onCommit: (days: number) => void }) {
   const [draft, setDraft] = useState(String(value));
   const [was, setWas] = useState(value);

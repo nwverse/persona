@@ -6,12 +6,13 @@
 // A space the host nests under another (Orca's child worktrees, `parent_space_id`) is listed inside its parent, as
 // Orca's sidebar does with "N children"; when the parent has no live agent the child stays at the top (#2073).
 import { splitAgentSessions } from "./agent-groups";
-import { stateOf, tabLabel } from "./format";
+import { backgroundWaiting, stateOf, tabLabel } from "./format";
 import { isSpacePinned, type AgentPins } from "./pins";
 import type { Route, SessionView } from "./router";
 import type { AgentState, Machine, Session } from "./types";
 import { byTime } from "./times";
 import { homeKey } from "./folded-rows";
+import type { StableRowOrder } from "./side-sessions";
 
 // docs/protocol/agent-states.md "Unified states": what a folded row shows for everything under it, and which pane a tab opens on.
 const URGENCY: AgentState[] = ["needs_you", "working", "unread", "idle", "unknown", "offline"];
@@ -49,6 +50,38 @@ export function paneOrder(a: Session, b: Session): number {
   return placeOf(a) - placeOf(b) || paneNumber(a) - paneNumber(b) || a.session_id.localeCompare(b.session_id);
 }
 
+const tabPlace = (s: Session) => s.slot_index ?? Number.MAX_SAFE_INTEGER;
+const spacePlace = (s: Session) => s.space_index ?? Number.MAX_SAFE_INTEGER;
+
+/** The sidebar's deterministic structural presentation (#11801): the hub's computers, then herdr's workspaces, tabs
+ *  and panes. No state, timestamp or previous row position participates. The paged transport keeps its own newest-first
+ *  cursor order. */
+export function machineSessionPresentation(machines: readonly Machine[]): StableRowOrder<Session> {
+  const machinePlace = new Map(machines.map((m, i) => [m.id, i]));
+  const machine = (s: Session) => machinePlace.get(s.machine_id) ?? Number.MAX_SAFE_INTEGER;
+  const placement = (s: Session): readonly (number | string)[] => [
+    machine(s), s.machine_id,
+    // buildMachineTree lists every workspace before Other, including when the host supplies no workspace indices.
+    s.space_id ? 0 : 1, spacePlace(s), s.space_name || s.space_id || "", s.space_id || "",
+    // buildSpace likewise lists every tab before its loose sessions, even when neither has a slot index.
+    s.slot_id ? 0 : 1, tabPlace(s), s.slot_id || "", placeOf(s), paneNumber(s), s.session_id,
+  ];
+  const compare = (a: Session, b: Session): number => {
+    const left = placement(a), right = placement(b);
+    for (let i = 0; i < left.length; i++) {
+      const x = left[i]!, y = right[i]!;
+      const order = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y));
+      if (order) return order;
+    }
+    return 0;
+  };
+  return { compare };
+}
+
+export function machineSessionOrder(machines: readonly Machine[]): (a: Session, b: Session) => number {
+  return machineSessionPresentation(machines).compare;
+}
+
 /** The tab's "Lead" (#2320): the agent in the tab's first pane (`pane_index` 0, top left, the one the others were split
  *  from). None when the tab has one agent, or that pane is a shell or not placed: the agents are then peers. */
 export function launcherOf(panes: readonly Session[]): Session | undefined {
@@ -75,21 +108,24 @@ export function tabGroups(sessions: readonly Session[]): TabGroup[] {
   });
 }
 
-type HomeBucket = "needs" | "working" | "unread";
+type HomeBucket = "needs" | "working" | "waiting" | "unread";
 /** A pending card as the overview places it: on its session, or on the parent a child session folds under (#5120). */
 type CardOf = Parameters<typeof homeKey>[0];
 
 // How the overview orders a bucket's rows (and so which of a tab's equally urgent panes speaks for it): the longest
-// working first, by when it started; the others the latest first, by when they last changed. A negative `before`
-// puts `a` first.
+// working first, by when it started (the longest waiting in the background likewise); the others the latest first, by
+// when they last changed. A negative `before` puts `a` first.
 const BUCKET_ORDER: Record<HomeBucket, (a: Session, b: Session) => number> = {
   working: (a, b) => byTime(a.state_since, b.state_since),
+  waiting: (a, b) => byTime(a.state_since, b.state_since),
   needs: (a, b) => byTime(b.updated_at, a.updated_at),
   unread: (a, b) => byTime(b.updated_at, a.updated_at),
 };
 
 /** The overview's task rows (#2320): the live agents (`sessions` without the offline ones) folded by tab, filed under
  *  the most urgent state among them — needs you, working, done and not seen; a tab where all is seen is not listed.
+ *  A working tab whose working agents all only wait on background commands (#6045, backgroundWaiting) is not Working
+ *  but `waiting` (#10938); with one of them really working it is Working, and that one speaks for it.
  *  An agent waiting on one of `interactions` is that card's (listed above them), so it does not count towards its tab's
  *  state, though the tab still lists it. Each tab's `lead` is, of its panes in that state, the one the bucket orders
  *  first (the longest working, the latest to ask or finish): its time and words are the row's, and the rows are
@@ -98,14 +134,16 @@ export function homeTaskGroups(sessions: readonly Session[], interactions: reado
   // a child session's card is its parent's (#5120): the parent waits in Needs you's cards, not in a row of its own too
   const asked = new Set(interactions.map(homeKey));
   const carded = (s: Session) => stateOf(s) === "needs_you" && asked.has(`${s.machine_id}/${s.session_id}`);
-  const out: Record<HomeBucket, TabGroup[]> = { needs: [], working: [], unread: [] };
+  const out: Record<HomeBucket, TabGroup[]> = { needs: [], working: [], waiting: [], unread: [] };
   for (const g of tabGroups(sessions.filter((s) => !s.assistant && stateOf(s) !== "offline"))) {
     const eligible = g.sessions.filter((s) => !carded(s));
     const state = summaryState(eligible);
-    const bucket: HomeBucket | undefined = state === "needs_you" ? "needs" : state === "working" || state === "unread" ? state : undefined;
+    const inState = eligible.filter((s) => stateOf(s) === state);
+    const busy = state === "working" ? inState.filter((s) => !backgroundWaiting(s)) : inState;
+    const bucket: HomeBucket | undefined = state === "needs_you" ? "needs" : state === "working" ? (busy.length ? "working" : "waiting") : state === "unread" ? state : undefined;
     if (!bucket) continue;
     // stable: among panes with the same time, the first in pane order
-    const lead = eligible.filter((s) => stateOf(s) === state).sort(BUCKET_ORDER[bucket])[0]!;
+    const lead = (busy.length ? busy : inState).sort(BUCKET_ORDER[bucket])[0]!;
     out[bucket].push({ ...g, lead, state: state! });
   }
   for (const b of Object.keys(out) as HomeBucket[]) out[b].sort((x, y) => BUCKET_ORDER[b](x.lead, y.lead));
@@ -120,7 +158,7 @@ export function homeOverview(sessions: readonly Session[], interactions: readonl
   const groups = homeTaskGroups(sessions, interactions);
   const unread = sessions.filter((s) => !s.assistant && stateOf(s) === "unread");
   const markAllAt: "section" | "summary" | undefined = !unread.length ? undefined : groups.unread.length ? "section" : "summary";
-  const quiet = !interactions.length && !groups.needs.length && !groups.working.length && !groups.unread.length;
+  const quiet = !interactions.length && !groups.needs.length && !groups.working.length && !groups.waiting.length && !groups.unread.length;
   return { groups, unread, markAllAt, quiet };
 }
 

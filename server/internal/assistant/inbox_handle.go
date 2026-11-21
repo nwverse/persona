@@ -34,10 +34,15 @@ type inboxNote struct {
 	// Deferred holds this programmatic wake out of every direct delivery path until the unified scheduler admits it.
 	// Pending is persisted but never listed, so this is durable internal bookkeeping rather than client wire state.
 	Deferred bool `json:"deferred,omitempty"`
+	Retry    bool `json:"retry,omitempty"` // held while the retry waits for its linked Agent
 }
 
 func renderNote(n inboxNote, owner string) string {
-	return prompts.RenderInboxHandlingNote(n.Name, prompts.InboxHandlingNote{Owner: owner, Text: n.Text, Edited: n.Edited, Failed: n.Failed,
+	return renderNoteIn(n, owner, "")
+}
+
+func renderNoteIn(n inboxNote, owner, language string) string {
+	return prompts.RenderInboxHandlingNote(n.Name, prompts.InboxHandlingNote{Language: language, Owner: owner, Text: n.Text, Edited: n.Edited, Failed: n.Failed,
 		Context: n.Context, Machine: n.Machine, Session: n.Session, Who: n.Who, Next: n.Next, Checks: n.Checks})
 }
 
@@ -203,7 +208,7 @@ func (b *inboxBook) dropInboxWakes(it *InboxItem) {
 	}
 	kept := a.Pending[:0]
 	for _, n := range a.Pending {
-		if !n.Deferred {
+		if !n.Deferred && !n.Retry {
 			kept = append(kept, n)
 		}
 	}
@@ -232,7 +237,7 @@ func (b *inboxBook) setHandling(it *InboxItem, state, errText string, now time.T
 		a.WakeSlot = false
 	}
 	h.MachineID, h.SessionID = a.MachineID, a.SessionID
-	if g := it.Suggestion; g != nil && g.Kind == SuggestReply && !g.Handback {
+	if g := it.Suggestion; g != nil && g.Kind == SuggestReply && !g.Handback && suggestionAttempt(it, g.Version) == nil {
 		at := g.At
 		a.State, a.Draft, a.Note, a.Changes, a.Error, a.DraftedAt = AgentDrafted, g.Text, g.Note, g.Changes, "", &at
 		return
@@ -306,7 +311,7 @@ func (b *inboxBook) escalate(since, now time.Time, only ...inboxMove) []*inboxWr
 		if it.Source == "larkcli" && it.Kind == "bot_handoff" {
 			continue // the owner's request belongs to the main conversation, never a second processing agent
 		}
-		if !it.open() || it.Context == "" || a != nil && a.Of == it.Last {
+		if !it.open() || it.Context == "" || a != nil && (a.Of == it.Last || a.savingRetry) {
 			continue
 		}
 		handled := it.handled()
@@ -391,7 +396,8 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 	mu.Lock()
 	defer mu.Unlock()
 	enabled := s.inboxConfig(ctx).Agent.Enabled
-	owner := s.owner(ctx)
+	hello := s.hello(ctx)
+	owner, language := inboxPromptOwner(hello), answerLanguage(hello.Locale)
 	b.mu.Lock()
 	if cur := b.items[it.ID]; cur != it {
 		// Forgotten (drop) while this was on its way: nothing goes, and the lock this may have put back goes again. One
@@ -411,7 +417,8 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 		return
 	}
 	a := it.Agent
-	if a == nil || a.SessionID == "" || len(a.Pending) == 0 {
+	if a == nil || a.SessionID == "" || len(a.Pending) == 0 || a.savingRetry ||
+		it.Handling != nil && it.Handling.State == HandlingAgent && a.hasRetryNote() {
 		b.mu.Unlock()
 		return
 	}
@@ -447,16 +454,14 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 	}
 	texts := make([]string, len(notes))
 	for i, n := range notes {
-		texts[i] = renderNote(n, owner)
+		texts[i] = renderNoteIn(n, owner, language)
 	}
 	err := s.sendToSession(ctx, machine, sid, inboxProcessingPrompt(turn, strings.Join(texts, "\n\n---\n\n")))
 	gone := false
 	if err != nil {
 		// Gone only when its machine answers without it (an offline machine is tried again later).
-		if _, known := s.device(ctx, machine); known {
-			_, found := s.session(ctx, machine, sid)
-			gone = !found
-		}
+		_, found, reachable := s.inboxAgentSession(ctx, machine, sid)
+		gone = reachable && !found
 		s.logf("inbox: tell the conversation of %s: %v (gone: %v)", it.ID, err, gone)
 	}
 	now := time.Now()
@@ -582,10 +587,12 @@ func (s *Service) judgeInboxTask(ctx context.Context, it *InboxItem, tasks []pro
 	if tasks = s.scopeInboxTasks(sc, tasks); len(tasks) == 0 {
 		return "", nil
 	}
+	hello := s.hello(ctx)
+	language := answerLanguage(hello.Locale)
 	b.mu.Lock()
-	input := prompts.RenderInboxJudgeInput(prompts.InboxJudgeInput{Summary: it.Summary, Item: b.promptItem(it), Tasks: tasks})
+	input := prompts.RenderInboxJudgeInput(prompts.InboxJudgeInput{Language: language, Summary: it.Summary, Item: b.promptItemIn(it, language), Tasks: tasks})
 	b.mu.Unlock()
-	system := prompts.RenderInboxJudge(prompts.InboxJudge{Owner: s.owner(ctx), Rules: s.inboxConfig(ctx).AgentRules})
+	system := prompts.RenderInboxJudge(prompts.InboxJudge{Language: language, Owner: inboxPromptOwner(hello), Rules: s.inboxConfig(ctx).AgentRules})
 	var out struct {
 		TaskID   string `json:"task_id"`
 		Evidence string `json:"evidence"`

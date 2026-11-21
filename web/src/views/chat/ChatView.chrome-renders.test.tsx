@@ -58,6 +58,9 @@ vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" })
 
 import { applyCompleteSessions, getState, reset, type ItemsEvent } from "../../lib/store";
 import { whenComposer } from "../../lib/links";
+import { closePanel, getPanel, openPanel } from "../../lib/panel";
+import { currentPlatform } from "../../lib/shortcuts";
+import { useShortcuts } from "../../lib/use-shortcuts";
 import type { Item, Session } from "../../lib/types";
 import { t } from "../../i18n";
 import { ChatView } from "./ChatView";
@@ -75,6 +78,7 @@ const zero = () => Object.assign(renders, { info: 0, chips: 0, modes: 0 });
 
 let host: HTMLDivElement;
 let root: Root;
+let opened = "";
 let fetcher: ReturnType<typeof vi.fn>;
 // An agent's header loads its compare menu lazily (ChatView: import("../../lib/compare-runs")) and draws again when it
 // is in. Loaded here first, it is in before a test counts renders: cold, under a full parallel run, it came in during the
@@ -84,6 +88,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  opened = "";
   localStorage.clear();
   // the first page has one reply already, so the assistant's face starts from what the pushes keep showing
   fetcher = vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items: [item(0)], to_seq: 0 } : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
@@ -94,6 +99,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   act(() => root.unmount());
+  act(() => closePanel());
   host.remove();
   live.listeners.clear();
   reset();
@@ -101,10 +107,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function open(view: React.ReactElement, session = row()) {
+async function open(view: React.ReactElement<{ assistant?: boolean }>, session = row()) {
   act(() => applyCompleteSessions([session]));
+  if (opened && opened !== session.session_id) {
+    // A different conversation is a fresh mount: its predecessor's transcript cleanup must not count in this measurement.
+    act(() => root.unmount());
+    root = createRoot(host);
+  }
+  opened = session.session_id;
   act(() => root.render(view));
   for (let i = 0; i < 6; i++) await settle();
+  const title = view.props.assistant && getState().assistant?.main === session.session_id ? "Persona" : "Checks";
+  await vi.waitFor(() => expect(host.querySelector("h1")?.textContent).toBe(title)); // session-derived props are stable
   expect(live.listeners.size).toBeGreaterThan(0);
   expect(renders.info).toBeGreaterThan(0);
   expect(renders.chips).toBeGreaterThan(0);
@@ -362,6 +376,83 @@ it("toggles the session overview and leaves it open while using the chat", async
   expect(trigger.getAttribute("aria-pressed")).toBe("false");
   expect(overview?.isConnected).toBe(false);
   expect(host.querySelector("textarea")).toBe(composer);
+});
+
+function ShortcutChat({ chat = true }: { chat?: boolean }) {
+  const pane = chat ? { mid: "mac", sid: "s1" } : undefined;
+  useShortcuts({ route: chat ? { name: "session", mid: "mac", sid: "s1" } : { name: "home" }, pane, narrow: false, toggleDrawer: () => {} });
+  return chat ? <ChatView mid="mac" sid="s1" inPage /> : null;
+}
+
+const pressB = () => act(() => void dispatchEvent(new KeyboardEvent("keydown", {
+  key: "b", code: "KeyB", bubbles: true, cancelable: true,
+  ...(currentPlatform() === "mac" ? { metaKey: true } : { ctrlKey: true }),
+})));
+const overviewDetail = { kind: "background", mid: "mac", sid: "s1", run: "w1", from: "overview" } as const;
+const filesPanel = { kind: "files", mid: "mac", sid: "s1", cwd: "/code" } as const;
+
+async function openShortcutOverview() {
+  const workflows = [{ task_id: "w1", name: "Overview run", status: "running", running: true, started_at: "2026-11-12T02:00:00Z" }] as Session["workflows"];
+  await open(<ShortcutChat />, row({ workflows }));
+  const trigger = host.querySelector<HTMLButtonElement>("[data-session-overview-trigger]")!;
+  await act(async () => {
+    trigger.click();
+    await import("./SessionOverview");
+  });
+  await settle();
+  return trigger;
+}
+
+function openOverviewRun() {
+  act(() => host.querySelector<HTMLButtonElement>('[data-session-overview] [data-bg-run="w1"] [data-bg-row-button]')!.click());
+  expect(getPanel()).toEqual(overviewDetail);
+}
+
+it("does not reopen a remembered overview detail after its origin closes", async () => {
+  const trigger = await openShortcutOverview();
+  openOverviewRun();
+  pressB();
+  expect(getPanel()).toBeNull();
+  act(() => trigger.click());
+  expect(trigger.getAttribute("aria-pressed")).toBe("false");
+  pressB();
+  expect(getPanel()).toEqual(filesPanel);
+});
+
+it("reopens an overview detail with Cmd+B only while its origin stays open", async () => {
+  const trigger = await openShortcutOverview();
+  openOverviewRun();
+  pressB();
+  expect(getPanel()).toBeNull();
+  pressB();
+  expect(getPanel()).toEqual(overviewDetail);
+  act(() => trigger.click());
+  expect(getPanel()).toBeNull();
+  pressB();
+  expect(getPanel()).toEqual(filesPanel);
+});
+
+it("forgets a remembered overview detail when its conversation unmounts", async () => {
+  await openShortcutOverview();
+  openOverviewRun();
+  pressB();
+  expect(getPanel()).toBeNull();
+  act(() => root.render(<ShortcutChat chat={false} />));
+  pressB();
+  expect(getPanel()).toBeNull();
+});
+
+it("keeps a list-origin detail in Cmd+B memory when the overview closes", async () => {
+  const trigger = await openShortcutOverview();
+  openOverviewRun();
+  const listed = { kind: "background", mid: "mac", sid: "s1", run: "w1" } as const;
+  act(() => openPanel(listed)); // a chat card replaces the overview detail with its list-origin equivalent
+  pressB();
+  expect(getPanel()).toBeNull();
+  act(() => trigger.click());
+  expect(trigger.getAttribute("aria-pressed")).toBe("false");
+  pressB();
+  expect(getPanel()).toEqual(listed);
 });
 
 it("a stop the hub lost track of is not reported as done, and can be pressed again", async () => {

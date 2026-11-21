@@ -2,13 +2,24 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { credentialOwner, errorText } from "./api";
 import { CompleteSessions } from "./complete-sessions";
-import { stateOf } from "./format";
+import { backgroundWaiting, stateOf } from "./format";
 import { foldedState } from "./child-sessions";
 import { foldRows } from "./folded-rows";
-import { getState, onHubEvent, subscribe, useStore } from "./store";
+import { cardSessionRow, getState, onHubEvent, subscribe, useStore } from "./store";
 import { SESSIONS_LIST_FEATURE } from "./session-list";
 import { runtimeAgents, runtimeSessions, supportsPagedAgents } from "./runtime-list";
-import type { Session } from "./types";
+import type { Interaction, Session } from "./types";
+
+/** #8578: a directory-hidden session's pending cards leave the card lists and counts (Needs you, the sidebar, the Inbox,
+ *  the assistants' badges) as its row leaves the lists; they stay answerable on that session's own page. The row comes
+ *  from the lists or from the card's exact lookup (store.ts cardSessionRow), which returns hidden rows too. */
+export function directoryVisibleCards(cards: Interaction[]): Interaction[] {
+  const visible = cards.filter((ix) => !cardSessionRow(ix.machine_id, ix.session_id)?.hidden_by_directory);
+  return visible.length === cards.length ? cards : visible;
+}
+
+// Filter before folding: a hidden parent must not swallow a visible child, or a hidden child raise its parent’s state.
+const directoryVisible = (rows: Session[]) => rows.some((s) => s.hidden_by_directory) ? rows.filter((s) => !s.hidden_by_directory) : rows;
 
 /** The agents the lists show and count: without the child sessions folded under one of them, each parent in its folded
  *  state (lib/folded-rows.ts, #5120). A child's own row is in the store (`sessions`, `sessionSummaries`) for its card. */
@@ -17,7 +28,7 @@ export function useAgentSessions(): Session[] {
   const summaries = useStore((s) => s.sessionSummaries);
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
   // folded before the assistant's conversations go: a child folded under one of them is no Agent of its own either
-  return useMemo(() => foldRows(bounded ? summaries : Object.values(by).flat()).filter((s) => !s.assistant), [by, summaries, bounded]);
+  return useMemo(() => foldRows(directoryVisible(bounded ? summaries : Object.values(by).flat())).filter((s) => !s.assistant), [by, summaries, bounded]);
 }
 
 /** The complete list as its readers get it: `error` says why it has not loaded (its read failed; it is read again in a
@@ -50,8 +61,7 @@ function createFullCache(owner: string) {
   let retry: ReturnType<typeof setTimeout> | undefined;
   let trailing: ReturnType<typeof setTimeout> | undefined;
   let expiry: ReturnType<typeof setTimeout> | undefined;
-  const valid = () => !stopped && getState().loaded && credentialOwner() === owner
-    && getState().features.includes(SESSIONS_LIST_FEATURE);
+  const valid = () => !stopped && credentialOwner() === owner && getState().features.includes(SESSIONS_LIST_FEATURE);
   const read = async (immediate = false) => {
     if (!valid()) return;
     if (!consumers || pending) { dirty = true; urgent ||= immediate; return; }
@@ -73,7 +83,7 @@ function createFullCache(owner: string) {
       const result = await complete.read(controller.signal);
       // An unchanged delta leaves the published snapshot (and its older base, which only widens the overlay) as it is.
       if (valid() && (result.changed || !fullSnapshot.loaded)) {
-        fullSnapshot = { sessions: foldRows(result.sessions).filter((s) => !s.assistant), loaded: true, error: "", base, epoch: fullSnapshot.epoch };
+        fullSnapshot = { sessions: foldRows(directoryVisible(result.sessions)).filter((s) => !s.assistant), loaded: true, error: "", base, epoch: fullSnapshot.epoch };
         fullChanged();
       }
     } catch (e) {
@@ -158,7 +168,7 @@ export function retryFullAgentSessions() {
 export function useFullAgentSessions(on = true): FullAgentSessions {
   const full = useCompleteAgentSessions(on);
   return useMemo(() => {
-    const sessions = foldRows(full.sessions);
+    const sessions = foldRows(directoryVisible(full.sessions));
     return sessions === full.sessions ? full : { sessions, loaded: full.loaded, error: full.error };
   }, [full]);
 }
@@ -171,15 +181,17 @@ function useCompleteAgentSessions(on: boolean): FullAgentSessions {
   const owner = on ? credentialOwner() : "";
   const full = fullCache?.owner === owner ? snapshot : EMPTY_FULL_LIST;
   useEffect(() => {
-    if (!on || !bounded || !loaded) return;
+    // Hello confirms paging support. Fetch the complete list while the rest of the first refresh is in flight.
+    if (!on || !bounded) return;
     if (fullCache && fullCache.owner !== owner) fullCache.dispose();
     fullCache ??= createFullCache(owner);
     return fullCache.retain();
-  }, [on, bounded, loaded, owner, snapshot.epoch]);
+  }, [on, bounded, owner, snapshot.epoch]);
   return useMemo(() => {
     // `on` false: the caller has no use for the list now and asks the hub for nothing
     if (!on) return EMPTY_FULL_LIST;
-    if (!bounded) return { sessions: foldRows(Object.values(by).flat()).filter((s) => !s.assistant), loaded, error: "" };
+    if (!bounded) return { sessions: foldRows(directoryVisible(Object.values(by).flat())).filter((s) => !s.assistant), loaded, error: "" };
+    // Wait for the first refresh's pins and grouping inputs before showing the complete snapshot.
     if (!loaded) return EMPTY_FULL_LIST;
     if (by === full.base) return full;
     // Reflect actions on retained details (rename, mark seen) without copying the complete list into the store.
@@ -197,15 +209,20 @@ function useCompleteAgentSessions(on: boolean): FullAgentSessions {
 
 /** The agents by state. `badge` is the sidebar's "Needs you" count: without quiet tasks' agents, which the main conversation
  * tells about (#1731). */
+/** `waiting`: working, but only waiting on background commands (#6045, backgroundWaiting): not in `working`, as the
+ *  sidebar's quick filters count them (#10938). */
 export function stateCounts(all: Session[]) {
-  const c = { needs: 0, working: 0, unread: 0, badge: 0 };
+  const c = { needs: 0, working: 0, waiting: 0, unread: 0, badge: 0 };
   for (const s of all) {
+    if (s.hidden_by_directory) continue;
     const st = stateOf(s);
     if (st === "needs_you") {
       c.needs++;
       if (!s.quiet) c.badge++;
-    } else if (st === "working") c.working++;
-    else if (st === "unread") c.unread++;
+    } else if (st === "working") {
+      if (backgroundWaiting(s)) c.waiting++;
+      else c.working++;
+    } else if (st === "unread") c.unread++;
   }
   return c;
 }
@@ -213,14 +230,14 @@ export function stateCounts(all: Session[]) {
 /** `badge` without `open`, the agent on screen: it says it is waiting itself, so a count of only it would tell nothing.
  *  `quietCounted`: `badge` is the hub's own count, which has quiet agents in it. */
 export function othersWaiting(badge: number, open: Session | undefined, quietCounted = false): number {
-  return Math.max(0, badge - (open && !open.assistant && (quietCounted || !open.quiet) && foldedState(open) === "needs_you" ? 1 : 0));
+  return Math.max(0, badge - (open && !open.assistant && !open.hidden_by_directory && (quietCounted || !open.quiet) && foldedState(open) === "needs_you" ? 1 : 0));
 }
 
 const scopedAgentCounts = () => runtimeAgents.getSnapshot().counts;
 
 export function useCounts() {
   const all = useAgentSessions();
-  const interactions = useStore((s) => s.interactions.length);
+  const interactions = useStore((s) => directoryVisibleCards(s.interactions).length);
   const { bounded, pagedAgents, aggregate } = useStore((s) => ({
     bounded: s.features.includes(SESSIONS_LIST_FEATURE),
     pagedAgents: supportsPagedAgents(s.features),
@@ -231,7 +248,9 @@ export function useCounts() {
   return useMemo(() => {
     if (!bounded || !counts) return { ...stateCounts(all), interactions, quietCounted: false };
     const needs = counts.state.needs_you ?? 0;
-    return { needs, working: counts.state.working ?? 0, unread: counts.state.unread ?? 0, badge: needs, interactions, quietCounted: true };
+    // the hub leaves the ones that only wait in the background in state.working for older apps (protocol.md "Counts")
+    const waiting = Math.min(counts.background_waiting ?? 0, counts.state.working ?? 0);
+    return { needs, working: (counts.state.working ?? 0) - waiting, waiting, unread: counts.state.unread ?? 0, badge: needs, interactions, quietCounted: true };
   }, [all, interactions, counts, bounded]);
 }
 

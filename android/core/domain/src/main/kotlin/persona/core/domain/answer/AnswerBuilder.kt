@@ -7,7 +7,7 @@ import persona.core.contracts.SecretRunRequest
 
 enum class AnswerAction(val wire: String) {
     ApproveAll("approve_all"), ApproveEdits("approve_edits"), ApproveStepwise("approve_stepwise"), Reject("reject"), Allow("allow"),
-    Deny("deny"), Always("always"), CancelQuestion("cancel_question"), Dismiss("dismiss"), PickOption("pick_option"),
+    Deny("deny"), Always("always"), OwnerReply("owner_reply"), CancelQuestion("cancel_question"), Dismiss("dismiss"), PickOption("pick_option"),
     Advance("advance"), Submit("submit"), ScreenOption("screen_option"), ScreenSubmit("screen_submit"),
     TerminalText("terminal_text"), TerminalKeys("terminal_keys"), SubmitElicitation("submit_elicitation"),
     DeclineElicitation("decline_elicitation"), CancelElicitation("cancel_elicitation"),
@@ -114,6 +114,12 @@ internal object KotlinAnswerBuilder {
                 }
             }
         }
+        if (action == AnswerAction.OwnerReply) {
+            val phrase = interaction.ownerApprovalPhrase
+            if (context.entry != AnswerEntry.Conversation || context.locked || phrase == null ||
+                draft.feedback.isNotEmpty() || draft.message.isNotEmpty() || draft.password.isNotEmpty() || draft.values.isNotEmpty()) return blocked()
+            return resolved(Resolution(allow = true, ownerApprovalPhrase = phrase))
+        }
         if (action == AnswerAction.CancelQuestion) {
             if (interaction.kind != "question" || interaction.canCancel != true ||
                 context.entry != AnswerEntry.Conversation || context.locked) return blocked()
@@ -124,7 +130,7 @@ internal object KotlinAnswerBuilder {
                 if (context.entry == AnswerEntry.Notification) ApprovalAction.ChooseOption else ApprovalAction.Answer
             AnswerAction.ScreenOption, AnswerAction.ScreenSubmit, AnswerAction.TerminalText, AnswerAction.TerminalKeys ->
                 if (context.entry == AnswerEntry.Notification) ApprovalAction.ChooseOption else ApprovalAction.ScreenAnswer
-            AnswerAction.SubmitElicitation, AnswerAction.DeclineElicitation, AnswerAction.CancelElicitation -> return blocked()
+            AnswerAction.SubmitElicitation, AnswerAction.DeclineElicitation, AnswerAction.CancelElicitation, AnswerAction.OwnerReply -> return blocked()
             else -> ApprovalAction.entries.single { it.wire == action.wire }
         }
         val policy = ApprovalPolicy.actions(context.entry, interaction.kind, context.locked)
@@ -139,6 +145,7 @@ internal object KotlinAnswerBuilder {
                 AnswerRequirement.SingleQuestionSingleChoice -> interaction.questions?.let {
                     it.size == 1 && !it.single().multiSelect
                 } != true
+                AnswerRequirement.QuestionNotIrreversible -> interaction.reversible == false
                 AnswerRequirement.PlainDialogOption -> action != AnswerAction.ScreenOption ||
                     screenOptions(interaction).firstOrNull { it.key == draft.option }?.kind != ScreenOptionKind.Plain
                 AnswerRequirement.AlwaysOffered -> !interaction.offersAlways
@@ -178,7 +185,7 @@ internal object KotlinAnswerBuilder {
                 if (policy.input == "none" && draft.message.isNotEmpty()) return blocked()
                 resolved(Resolution(allow = false, message = draft.message.takeIf { it.isNotEmpty() }))
             }
-            AnswerAction.CancelQuestion -> blocked() // handled before the answer policy
+            AnswerAction.CancelQuestion, AnswerAction.OwnerReply -> blocked() // handled before the answer policy
             AnswerAction.Dismiss -> resolved(Resolution(dismiss = true))
             AnswerAction.PickOption, AnswerAction.Advance, AnswerAction.Submit -> question(interaction.questions.orEmpty(), action, draft)
             AnswerAction.ScreenOption -> {

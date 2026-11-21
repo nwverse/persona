@@ -11,9 +11,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/osproc"
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/runtimepkg"
 )
 
@@ -23,8 +25,9 @@ import (
 // Persona assistant and Agents work out of the box without a manual launchd/systemd setup.
 
 const (
-	agyPackage   = "persona-antigravity-runtime"
-	agyRuntimeID = "agy"
+	agyPackage    = "persona-antigravity-runtime"
+	agyRuntimeID  = "agy"
+	agyYieldGrace = 5 * time.Second
 )
 
 var (
@@ -35,10 +38,43 @@ var (
 	agyBridgeStopWait   = 3 * time.Second
 )
 
+var agyInstanceSeq atomic.Uint64
+
 type agyBridge struct {
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	done   chan struct{}
+	mu         sync.Mutex
+	cancel     context.CancelFunc
+	done       chan struct{}
+	instance   string
+	bin        string
+	wakeCh     chan struct{}
+	yieldGrace time.Duration
+	takeover   sync.Mutex
+}
+
+func (rh *RuntimeHost) builtinAgyInstance() string {
+	rh.agy.mu.Lock()
+	defer rh.agy.mu.Unlock()
+	return rh.agy.instance
+}
+
+func (rh *RuntimeHost) builtinAgyExecutable() string {
+	rh.agy.mu.Lock()
+	bin := rh.agy.bin
+	rh.agy.mu.Unlock()
+	if bin != "" {
+		return bin
+	}
+	return findAgyExecutable()
+}
+
+func (rh *RuntimeHost) wakeAgyBridge() {
+	rh.agy.mu.Lock()
+	wake := rh.agy.wakeCh
+	rh.agy.mu.Unlock()
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
 }
 
 // EnableAutoCompanions turns on automatic supervision of built-in CLI companions (Antigravity `agy`) once Listen runs.
@@ -58,6 +94,7 @@ func (rh *RuntimeHost) setAgyBridge(on bool) {
 	if !on {
 		b.cancel()
 		b.cancel = nil
+		b.wakeCh = nil
 		done := b.done
 		b.mu.Unlock()
 		<-done
@@ -70,7 +107,8 @@ func (rh *RuntimeHost) setAgyBridge(on bool) {
 	}
 	ctx, cancel := context.WithCancel(base)
 	b.cancel, b.done = cancel, make(chan struct{})
-	go rh.agyBridgeLoop(ctx, b.done)
+	b.wakeCh = make(chan struct{}, 1)
+	go rh.agyBridgeLoop(ctx, b.done, b.wakeCh)
 }
 
 // findAgyExecutable finds an installed `agy` CLI binary without spawning a login shell.
@@ -150,7 +188,7 @@ func findAgyJSRuntime(ctx context.Context) (jsRuntime, error) {
 	return jsRuntime{}, errors.New("no Node.js found (set PERSONA_NODEJS)")
 }
 
-var agyBridgeCommand = func(ctx context.Context, rh *RuntimeHost, agyBin string) (*exec.Cmd, error) {
+var agyBridgeCommand = func(ctx context.Context, rh *RuntimeHost, agyBin, instance string) (*exec.Cmd, error) {
 	pkg, err := runtimepkg.Load(agyPackage)
 	if err != nil {
 		return nil, err
@@ -166,8 +204,12 @@ var agyBridgeCommand = func(ctx context.Context, rh *RuntimeHost, agyBin string)
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(js.Path, filepath.Join(dir, "antigravity", "companion.mjs"),
-		"--socket", rh.path, "--agy-bin", agyBin, "--no-update", "--parent-stdin")
+	args := []string{filepath.Join(dir, "antigravity", "companion.mjs"),
+		"--socket", rh.path, "--agy-bin", agyBin, "--no-update", "--parent-stdin"}
+	if instance != "" {
+		args = append(args, "--instance", instance)
+	}
+	cmd := exec.Command(js.Path, args...)
 	cmd.Env = js.env(append(os.Environ(), "PERSONA_RUNTIME_SOCKET="+rh.path))
 	cmd.Dir = dir
 	return cmd, nil
@@ -182,7 +224,7 @@ func (rh *RuntimeHost) agyConnected() bool {
 	return rh.reg.byRuntime(agyRuntimeID) != nil
 }
 
-func (rh *RuntimeHost) agyBridgeLoop(ctx context.Context, done chan struct{}) {
+func (rh *RuntimeHost) agyBridgeLoop(ctx context.Context, done chan struct{}, wake <-chan struct{}) {
 	defer close(done)
 	wait := agyBridgeRestartMin
 	loggedMissingJS := false
@@ -192,14 +234,19 @@ func (rh *RuntimeHost) agyBridgeLoop(ctx context.Context, done chan struct{}) {
 			select {
 			case <-ctx.Done():
 				return
+			case <-wake:
 			case <-time.After(agyBridgeProbeEvery):
 			}
 			continue
 		}
 		started := time.Now()
-		err := rh.runAgyBridge(ctx, agyBin)
+		yielded, err := rh.runAgyBridge(ctx, agyBin, wake)
 		if ctx.Err() != nil {
 			return
+		}
+		if yielded {
+			wait = agyBridgeRestartMin
+			continue
 		}
 		if time.Since(started) > agyBridgeSteady {
 			wait = agyBridgeRestartMin
@@ -223,24 +270,38 @@ func (rh *RuntimeHost) agyBridgeLoop(ctx context.Context, done chan struct{}) {
 	}
 }
 
-func (rh *RuntimeHost) runAgyBridge(ctx context.Context, agyBin string) error {
-	cmd, err := agyBridgeCommand(ctx, rh, agyBin)
+func (rh *RuntimeHost) runAgyBridge(ctx context.Context, agyBin string, wake <-chan struct{}) (bool, error) {
+	instance := fmt.Sprintf("builtin-agy-%d-%d", os.Getpid(), agyInstanceSeq.Add(1))
+	rh.agy.mu.Lock()
+	rh.agy.instance = instance
+	rh.agy.bin = agyBin
+	rh.agy.mu.Unlock()
+	defer func() {
+		rh.agy.mu.Lock()
+		if rh.agy.instance == instance {
+			rh.agy.instance = ""
+			rh.agy.bin = ""
+		}
+		rh.agy.mu.Unlock()
+	}()
+
+	cmd, err := agyBridgeCommand(ctx, rh, agyBin, instance)
 	if err != nil {
-		return err
+		return false, err
 	}
 	cmd.SysProcAttr = osproc.GroupAttr()
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return false, err
 	}
 	cmd.Stderr = cmd.Stdout
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer stdin.Close()
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start: %w", err)
+		return false, fmt.Errorf("start: %w", err)
 	}
 	rh.logger.Printf("agy runtime: running (pid %d, agy %s)", cmd.Process.Pid, agyBin)
 	logged := make(chan struct{})
@@ -255,10 +316,7 @@ func (rh *RuntimeHost) runAgyBridge(ctx context.Context, agyBin string) error {
 		<-logged
 		exited <- cmd.Wait()
 	}()
-	select {
-	case err := <-exited:
-		return err
-	case <-ctx.Done():
+	stopChild := func() {
 		_ = osproc.StopGroup(cmd.Process.Pid, false)
 		select {
 		case <-exited:
@@ -266,6 +324,71 @@ func (rh *RuntimeHost) runAgyBridge(ctx context.Context, agyBin string) error {
 			_ = osproc.StopGroup(cmd.Process.Pid, true)
 			<-exited
 		}
-		return ctx.Err()
 	}
+	for {
+		if _, external := rh.agyPeers(instance); external {
+			rh.logger.Printf("agy runtime: yielding to external agy runtime")
+			stopChild()
+			return true, nil
+		}
+		select {
+		case err := <-exited:
+			return false, err
+		case <-wake:
+		case <-ctx.Done():
+			stopChild()
+			return false, ctx.Err()
+		}
+	}
+}
+
+func (rh *RuntimeHost) agyPeers(instance string) (builtin *runtimeConn, external bool) {
+	rh.reg.mu.Lock()
+	defer rh.reg.mu.Unlock()
+	for _, conn := range rh.reg.conns {
+		select {
+		case <-conn.peer.Done():
+			continue
+		default:
+		}
+		conn.mu.Lock()
+		ready, hello := conn.ready, conn.hello
+		conn.mu.Unlock()
+		if ready && hello.Runtime == agyRuntimeID {
+			if hello.Instance != instance {
+				external = true
+			} else if builtin == nil || conn.serial > builtin.serial {
+				builtin = conn
+			}
+		}
+	}
+	return builtin, external
+}
+
+func (h *runtimeConn) waitAgyIdle(ctx context.Context) {
+	if h.peer.WaitPending(ctx) != nil {
+		return
+	}
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for h.agyWorking() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-h.peer.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+func (h *runtimeConn) agyWorking() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, session := range h.sessions {
+		if session.Status == proto.StatusWorking {
+			return true
+		}
+	}
+	return false
 }

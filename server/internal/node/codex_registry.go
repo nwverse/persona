@@ -638,6 +638,9 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 					continue
 				}
 				s.Cwd, s.Model, s.LastText, s.UpdatedAt, s.Rev = m.cwd, m.model, snippet(m.lastText), lastUsed(m, st), st.Size()
+				if m.codex && m.lastText != "" {
+					s.Asks, s.AsksRead = m.asks, true
+				}
 				s.AgentSurface = m.surface
 				s.Effort = m.effort
 				m.turnErr.set(&s)
@@ -682,6 +685,10 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 			}
 			if t.model != "" {
 				s.Model = t.model
+			}
+			if cOwner, tOwner, driven := n.codexEffortThread(id); driven {
+				s.Model = n.codexModelNow(id, cOwner, tOwner, s.Model)
+				s.Capabilities.Model = proto.Bool(true)
 			}
 			s.Capabilities.Send, s.Capabilities.Attach = t.parent == "", t.parent == ""
 			s.Capabilities.Approve, s.Capabilities.Interrupt = t.joined, t.turn != "" && t.parent == ""

@@ -166,8 +166,25 @@ func WithoutImageData(items []Item) []Item {
 	return out
 }
 
+// PositionalItemID identifies the fallback IDs assigned to JSONL records that lack a runtime ID.
+func PositionalItemID(id string) bool {
+	suffix, ok := strings.CutPrefix(id, "line")
+	if !ok {
+		return false
+	}
+	line, block, ok := strings.Cut(suffix, "#")
+	return ok && decimalItemPart(line) && decimalItemPart(block)
+}
+
+func decimalItemPart(s string) bool {
+	return s != "" && !strings.ContainsFunc(s, func(r rune) bool { return r < '0' || r > '9' })
+}
+
 // Item is one content block of a Claude Code transcript.
 type Item struct {
+	// Stored identifies an incomplete durable copy. Its source can be requested from
+	// the existing full-item/image routes; availability still depends on the runtime.
+	Stored    *StoredItem     `json:"stored,omitempty"`
 	ID        string          `json:"id"`
 	Seq       int             `json:"seq"`
 	TS        time.Time       `json:"ts"`
@@ -190,12 +207,14 @@ type Item struct {
 	// FullSize: Text was cut for pages and pushes (it ends in a "truncated, open for the full text" line, in Chinese); the whole of it, this many
 	// bytes, comes from GET /api/v1/sessions/{mid}/{sid}/items/{item id}/full.
 	FullSize int `json:"full_size,omitempty"`
+	// SourceFingerprint identifies the original text record behind a positional item ID. Unlike the line
+	// number, it does not match different content that reuses that position after a rewrite.
+	SourceFingerprint string `json:"source_fingerprint,omitempty"`
 	// Wake marks a background task's notice that started new work after the agent had finished its turn
 	// (not one absorbed mid-turn): the exchange before it is over and its last words are an answer.
 	Wake bool `json:"wake,omitempty"`
-	// Narration is assistant text that belongs to the work summary (Codex commentary). It is internal to the
-	// transcript and FoldWork: on the wire it is ordinary text, so clients need no new item kind or cache migration.
-	Narration bool `json:"-"`
+	// Narration marks assistant text belonging to the work summary (Codex commentary), even if sent unfolded.
+	Narration bool `json:"narration,omitempty"`
 	// From names the Claude session that sent this message (cross-session messaging), not the user.
 	From string `json:"from,omitempty"`
 	// Injected: this user line is a message Persona put into the conversation for the model (a task's notice, a
@@ -235,6 +254,15 @@ type Item struct {
 	// Visualization is set on KindVisualization items: a Codex visualize marker's reference to an HTML fragment on
 	// the node. The bytes are not carried here; the session visualization route serves them after path checks.
 	Visualization *Visualization `json:"visualization,omitempty"`
+}
+
+type StoredItem struct {
+	Complete    bool   `json:"complete"`
+	SourceBytes int    `json:"source_bytes"`
+	MachineID   string `json:"machine_id"`
+	SessionID   string `json:"session_id"`
+	History     string `json:"history"`
+	ItemID      string `json:"item_id"`
 }
 
 // Visualization is one Codex visualize reference (the visualize plugin's in-conversation HTML contract): the
@@ -301,6 +329,15 @@ type ModelRestore struct {
 // ModelRestoreNextStart: the next start of the session's process uses the configured model.
 const ModelRestoreNextStart = "next_start"
 
+// ModelRecoveryChoice is the non-secret execution identity the conversation asked for before a recovery switch.
+// A pointer keeps records written by older nodes distinguishable: nil means no recorded choice, not a zero-valued one.
+type ModelRecoveryChoice struct {
+	Effort      string `json:"effort,omitempty"`
+	UseEffort   bool   `json:"use_effort,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Launcher    string `json:"launcher,omitempty"`
+}
+
 // ModelRecovery records the node's own bounded recovery moving a conversation off its configured model (#7824).
 // It is node-owned state persisted through session state, not a transcript record: the runtime's own refusal fallback
 // has ModelRefusal, while a switch the node drives by restarting the runtime on the next launcher model had no
@@ -311,6 +348,9 @@ type ModelRecovery struct {
 	// To is the model that answers after the switch.
 	From string `json:"from"`
 	To   string `json:"to"`
+	// Choice is the execution identity From had when this chain began, preserved independently of the session's
+	// current model and effort, which recovery sends can overwrite. Nil on records written before this field existed.
+	Choice *ModelRecoveryChoice `json:"choice,omitempty"`
 	// ProbeFrom is the concrete configured default used only for availability probes and unavailable-cache cleanup.
 	// It never replaces From in the execution request, so returning does not pin a launcher default to a concrete model.
 	ProbeFrom string `json:"probe_from,omitempty"`

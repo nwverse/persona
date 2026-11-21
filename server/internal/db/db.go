@@ -150,6 +150,11 @@ func Check(ctx context.Context, url string) error {
 	return nil
 }
 
+// BackendPIDs are the server process ids of this pool's open connections. A
+// process that must tell its own sessions from another writer's (the hub,
+// quiescing its own writers for a snapshot) passes them as the ones to ignore.
+func (d *DB) BackendPIDs() []int32 { return d.pids.list() }
+
 // appName is the application_name a part's connections give Postgres, so a part can tell the other's connections
 // (and ones of a build from before, which give none) on a database they share (managerdb.go).
 func appName(sets Sets) string {
@@ -253,10 +258,14 @@ func (d *DB) migrate(ctx context.Context) error {
 // number now, and run the renumbered one again; so it is moved to the new number first, or dropped when the new number
 // is recorded too. The renumbered migrations are idempotent; the ones that took over the old numbers never ran there.
 var renumbered = []struct{ from, to string }{
-	{"0071_pair_tokens.sql", "0111_pair_tokens.sql"},             // 0071 is sent_messages
-	{"0081_device_push_relay.sql", "0141_device_push_relay.sql"}, // 0081 is device_sessions
-	{"0428_todo_source.sql", "0429_todo_source.sql"},             // 0428 is manager_moved
-	{"0492_client_password.sql", "0505_client_password.sql"},     // 0492 is the manager's agent_shares
+	{"0520_task_workspaces.sql", "20261119163935_task_workspaces.sql"},   // earlier backend preparation builds
+	{"0515_workspace_naming.sql", "20261118234802_workspace_naming.sql"}, // naming branch before timestamped migrations
+	{"0513_todo_repositories.sql", "0516_todo_repositories.sql"},         // 0513 is assistant_search_plain
+	{"0514_todo_repositories.sql", "0516_todo_repositories.sql"},         // 0514 is assistant_search_strong
+	{"0071_pair_tokens.sql", "0111_pair_tokens.sql"},                     // 0071 is sent_messages
+	{"0081_device_push_relay.sql", "0141_device_push_relay.sql"},         // 0081 is device_sessions
+	{"0428_todo_source.sql", "0429_todo_source.sql"},                     // 0428 is manager_moved
+	{"0492_client_password.sql", "0505_client_password.sql"},             // 0492 is the manager's agent_shares
 }
 
 // lastUnified is the last migration from before the split: a NULL-part row up to it stands for both sets.
@@ -531,8 +540,9 @@ func (d *DB) TruncateForTest(ctx context.Context) error {
 	cascade, err := d.truncateCascade(ctx, []string{"workspace_board", "workspace_snapshots", "push_device_retirements", "devices",
 		"device_tokens", "live_activities", "phone_tools", "phone_write_queue", "node_sessions", "mail_accounts", "interactions",
 		"settings", "inbox_items", "kb_entities", "connector_secrets", "machine_systems", "machine_metrics", "sent_messages",
-		"todos", "todo_agents", "assistant_always", "machine_trust", "hub_settings", "manager_outbox", "handed_over",
-		"machine_audit", "sent_as_user", "session_work_events", "hub_push_sent", "urgent_calls", "model_usage"})
+		"todos", "todo_agents", "deleted_request_gates", "assistant_always", "machine_trust", "hub_settings", "manager_outbox", "handed_over",
+		"machine_audit", "sent_as_user", "session_work_events", "hub_push_sent", "urgent_calls", "model_usage", "conversation_histories",
+		"assistant_conversation_spaces"})
 	if err != nil {
 		return err
 	}

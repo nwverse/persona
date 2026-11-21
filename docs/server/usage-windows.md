@@ -4,19 +4,21 @@ Subscriptions like Codex and Claude Code have "5-hour" and "weekly" usage window
 The UI is at the bottom of the web sidebar (`docs/web/web.md` ("Subscription usage")), on the iOS Machines page and at the bottom of the Mac section column ("UI (iOS / Mac)" below). The data comes from the node on each computer, and from account-pool gateways the manager queries (such as relay gateways, see "Account-pool gateways" below, #2595).
 Collection, merging and the gateways all belong to the **manager** (the one that connects computers, the assistant process `personad assistant`, see "Who owns this" below); the hub only forwards the API.
 
-## Read local files only, never touch credentials
+## Read-only collection without access to credentials
 
-Principle: **local first, read-only, never read or send any token**. Sources that need the user's login credentials to query are never used, as spelled out below.
+Persona collects usage on each computer without reading or handling agent login credentials.
 
 | Source | How it is obtained | Used? |
 | --- | --- | --- |
-| Codex rollout | Every `token_count` event in `~/.codex/sessions/…/rollout-*.jsonl` carries `rate_limits`: `primary` / `secondary` each have `used_percent`, `window_minutes`, `resets_at` (seconds), plus `plan_type`, `limit_id`. The node reads the tail (512 KB) of the most recent few rollouts and takes the last event whose `limit_id` is `codex` (or unset). Per-model quotas such as `premium` do not count | Yes |
+| Codex app-server | In a bounded background poll, the node asks the official local Codex app-server for `account/rateLimits/read`. Codex makes the authenticated usage read and can return `accountId` with the same snapshot. Persona sends only a digest of a personal account ID to the usage manager | Preferred |
+| Codex rollout | `token_count` events in `~/.codex/sessions/…/rollout-*.jsonl` carry `rate_limits`: `primary` / `secondary` with `used_percent`, `window_minutes`, `resets_at` (seconds), plus `plan_type`, `limit_id`. The node reads the tail (512 KB) of the most recent few rollouts and takes the last event whose `limit_id` is `codex` (or unset). This sample identifies its reporting source only | Fallback |
 | Claude Code status line | Claude Code puts `rate_limits` (`five_hour` / `seven_day`, each with `used_percentage`, `resets_at`) in the **JSON input of the status line command** (see its changelog), and writes it to neither the transcript nor any other file | Yes, but the user has to wire it up (next section) |
+| Antigravity native quota summary | The agy companion asks its ACP process's local native service for `RetrieveUserQuotaSummary` every five minutes, with `forceRefresh: false` so agy's own cache controls upstream reads. Valid buckets and groups become 5-hour / weekly windows using `remainingFraction`, `window` (or a legacy bucket id), `resetTime` and the optional model. No conversation or model request is started, and no status-line email or credential is read | Yes |
 | Codex account usage API (ChatGPT's `wham/usage`) | Needs the login token in `~/.codex/auth.json` | **No**. Moshi uses it; Persona does not read `auth.json` |
 | Claude account usage API (`/api/oauth/usage`) and the `anthropic-ratelimit-*` response headers | Needs Claude's OAuth token (Keychain / `.credentials.json`); the headers also need a request of your own | **No**, same reason |
-| Others (Kimi, Grok, Antigravity, GLM / MiniMax API key plans) | All need an account API or a key | Not doing |
+| Others (Kimi, Grok, GLM / MiniMax API key plans) | All need an account API or a key | Not doing |
 
-Moshi's approach (`moshi-hook usage`) is local files plus these account APIs, with each machine querying on its own and reporting. Persona takes the local-file half, aggregated by the manager instead, and skips the API half.
+The app-server starts no conversation or model request. The account ID applies only to the usage returned in that response, so a saved rollout from a previous login is never assigned to the current account.
 
 ### Wiring in Claude Code's usage (optional)
 
@@ -42,19 +44,20 @@ The gateway's `rate_limits.spend_limit` (an amount of money) is not a window and
 
 ## Collection and merging
 
-- **node** (`server/internal/node/usagewindows.go`): reads every 5 minutes (the first time 20 seconds after connecting to the hub, so the hub's `node.configure` delivers the switch first).
-  Each source (one Codex home, one `claude*.json`) keeps its last sample, kept even when the source goes quiet, and dropped after 3 days. Windows whose `resets_at` has passed are dropped (those numbers belong to the previous period);
-  a source whose windows have all passed is not listed. `usage.windows` returns this cache directly (reading once if it is missing or expired).
-- **Off**: `machines[].usage_windows` in `hub.json` (`docs/operations/config.md`); with `false`, that computer's node reads no files and the manager does not ask it; unset means on.
+- **node** (`server/internal/node/usagewindows.go`): refreshes every 5 minutes (the first time 20 seconds after connecting to the hub, so the hub's `node.configure` delivers the switch first).
+  Each source (one Codex home, one `claude*.json`, or one local runtime id) keeps its last sample, kept even when the source goes quiet, and dropped after 3 days. Windows whose `resets_at` has passed are dropped (those numbers belong to the previous period);
+  a source whose windows have all passed is not listed. A local runtime reports through the optional `usage.windows` event when the node advertises `usage_windows`; its runtime id replaces the same source after a companion restart, and a valid empty snapshot clears it. `usage.windows` uses the cache or local files without waiting for the Codex app-server.
+- **Off**: `machines[].usage_windows` in `hub.json` (`docs/operations/config.md`); with `false`, that computer's node stops collection and the manager does not ask it. Unset means on.
   If the node is older than this version (no `usage.windows`), the manager treats it as having no data.
 - **Manager** (`server/internal/devices/usagewindows.go`): on `GET /api/v1/usage/windows` it asks the online machines (in parallel, 8 seconds each; repeated requests within 30 seconds reuse the previous merged result),
   remembers each machine's last answer (in memory only, forgotten after 3 days or when the machine is removed from hub.json), then merges:
-  - **Each account appears once**: two samples from the same source (Codex / Claude) are the same account if any one window has "the same length and the same reset time (to the second)". The reset time belongs to the account and reads the same on any computer, so no account id is needed and no credentials are touched.
-  - For several samples of the same account, each window length takes the window from the **newest sample**, so a computer unused for a long time cannot bring back a 5-hour window that has already rolled over.
+  - **Codex**: samples with the same upstream personal account ID form one row, with the newest sample's windows and the names of the computers that reported it. Without a personal account ID, each source gets its own row with its source label. A shared workspace ID does not identify a member's allowance. A reset time describes a window and plays no part in Codex account grouping.
+  - **Other providers**: samples for one provider can merge when they have a plan window with the same length and the same reset second. Each window length takes the newest sample with that window.
+  - **Prepaid balances** (#11825): an official DeepSeek launcher reports money left, not an allowance window. One row per launcher key carries `balance` instead of `windows` (below); it takes no place among the two fullest window bars, and the popover lists it beside them.
   - Samples older than 30 minutes are marked `stale` (sorted last, faded in the UI and labeled "out of date"); windows older than 3 days or past their reset time are dropped.
     Each account also says when it turns stale if nothing newer comes, `stale_at` (the newest sample's time plus its source's threshold: 30 minutes for a computer, 6 hours for a gateway). A client keeping an answer while refreshes fail judges it again with `stale || now >= stale_at`, so old numbers fade and read "out of date" however long ago it last heard from the hub, and no client hard-codes the thresholds (#1905).
-  - **Every account has its own id** (clients use it as the row key, #1904): a digest of the longest plan window's length and reset time, stable within a week. For an account an account-pool gateway reports, its gateway account id goes into the digest too (two accounts of one gateway are never one, even with the same reset time); for an account whose longest window has no reset time, where it was read does (the computer and its place in that computer's answer, or the gateway account). Neither is sent out, only the digest. Two accounts that still share one (only per-model windows, resetting together) get `-2`, `-3`… in the order of where they were read.
-  - Accounts with the same name are numbered by id ("Codex Pro", "Codex Pro 2"), so the numbering does not depend on which computer answered first.
+  - **Every row has its own id** (clients use it as the row key, #1904). Codex row IDs are derived from the account or reporting source and stay stable across resets. Other providers use a digest of the longest plan window with the gateway reference or reporting source where needed. The node's grouping keys and the raw upstream ID stay out of the client response.
+  - Known accounts with the same name are numbered by id. Codex reports without a verified account use the existing source labels and are numbered only when the name and visible sources are identical.
   - Sorted by the fullest window, highest first.
 
 API (read-only, not usable with extension tokens, `testdata/route_scopes.txt`):
@@ -65,10 +68,14 @@ API (read-only, not usable with extension tokens, `testdata/route_scopes.txt`):
   "sampled_at": "2026-11-05T09:08:06Z", "stale": false, "stale_at": "2026-11-05T09:38:06Z",
   "local": true, "machines": ["MacBook"],
   "windows": [{"label": "5h", "window_minutes": 300, "used_percent": 22.0, "resets_at": "2026-11-05T13:08:06Z"}]
+}, {
+  "id": "deepseek-7f2a1c3d", "provider": "deepseek", "name": "DeepSeek",
+  "sampled_at": "2026-11-05T09:08:06Z", "stale": false, "stale_at": "2026-11-05T09:38:06Z",
+  "windows": [], "balance": {"amount": "12.34", "currency": "CNY"}
 }], "checked_at": "2026-11-05T09:08:20Z"}
 ```
 
-`local` says the numbers were read on one of the computers, `machines` names those computers (their names in hub.json now, #1907), `sources` names the account-pool gateways that reported it (below).
+`local` says the numbers were read on one of the computers. `machines` names those computers (their names in hub.json now, #1907), and `sources` names the account-pool gateways that reported it (below).
 
 With no data, `accounts` is `[]`; old hubs lack this route (404), and the web treats that as no data.
 
@@ -83,10 +90,11 @@ The principle in `docs/extensions/extensions.md` is "the open-source repository 
 
 - **The existing `quota` extension point does not fit**: it answers "how much budget does this launcher key have left in the gateway", using the launcher's key and returning `quota.Report`; what we need here is the subscription windows of the **upstream accounts the gateway maintains**, using the gateway's admin key, a completely different shape.
 - **A new extension point needs the whole set**: manifest fields, schema-generated types on four platforms, permissions, a process host, a package in the market. The gateway needs only "one address + one key, read every 5 minutes, map the numbers to windows", a few hundred lines.
-- So: **a source is a very small concept** (`usage.sources[]` in the manager's `manager.json`, one `type` per source), with two built-in adapters (in the manager):
+- So: **a source is a very small concept** (`usage.sources[]` in the manager's `manager.json`, one `type` per source), with three built-in adapters (in the manager):
   - `generic`: **a generic format defined by Persona itself**; any account-pool gateway that implements this one GET can plug in (below).
   - `relay`: **the admin API of an account-pool relay gateway**, with two read-only endpoints ("What is read" below); any relay implementing them can connect, and the adapter just maps them to the same shape.
-    Older files used the name of the first connected relay as the type; they remain readable (every type except `generic` is treated as `relay`), and editing the source in the admin UI writes `relay` next time.
+    Older files used the name of the first connected relay as the type; they remain readable (every type other than these three is treated as `relay`), and editing the source in the admin UI writes `relay` next time.
+  - `relay_key` (#12311): **the same relay's key self-service usage**, one read-only GET with an **ordinary API key** (the kind a launcher uses) instead of a management key. It reports the windows of the accounts that key can use, in the vocabulary `relay` already maps, so it is the same relay family read with less privilege, not a third gateway shape.
 - If a third or fourth gateway with a different shape really shows up, the adapters get pulled out into an extension point then (`usagesource.Fetch` is the single entry, so nothing else changes). **This is a trade-off, not dogma**: the core `relay` adapter is named for its API shape, not a specific service, and works out of the box without installing an extension.
 
 ### Configuration
@@ -99,6 +107,7 @@ The manager's `manager.json` (the built-in manager's `~/.persona/managers/assist
   "poll_minutes": 5,
   "sources": [
     {"id": "src-1a2b3c4d", "name": "Relay", "type": "relay", "url": "https://gateway.example.com", "key": "<admin key>"},
+    {"id": "src-9c0d1e2f", "name": "Shared relay", "type": "relay_key", "url": "https://relay.example.com/v1", "key": "<API key>"},
     {"id": "src-5e6f7a8b", "name": "Team pool", "type": "generic", "url": "https://pool.example.com/persona/usage", "enabled": false}
   ]
 }
@@ -108,7 +117,7 @@ The manager's `manager.json` (the built-in manager's `~/.persona/managers/assist
 | --- | --- |
 | `usage.enabled` | `false` is the master switch: no gateway is queried any more (what computers read themselves is unaffected). Unset means on |
 | `usage.poll_minutes` | How often each source is read, default 5, 1 to 1440 |
-| `usage.sources[]` | At most 8. `id` is assigned by the manager (`src-…`, generated by the admin UI), `name` is the source name in the sidebar (at most 40 characters), `type` is `relay` / `generic`, `url` is an http(s) address (no username or password in it), `key` is sent as `Authorization: Bearer`, `enabled: false` disables this one |
+| `usage.sources[]` | At most 8. `id` is assigned by the manager (`src-…`, generated by the admin UI), `name` is the source name in the sidebar (at most 40 characters), `type` is `relay` / `relay_key` / `generic`, `url` is an http(s) address (no username or password in it), `key` is sent as `Authorization: Bearer` (required for both relay types: a management key for `relay`, an ordinary API key for `relay_key`), `enabled: false` disables this one |
 
 The admin UI (`/admin/usage`, `docs/operations/admin.md`) adds, edits, deletes, toggles and has "Test connection"; changes take effect immediately with no restart. If you edit `manager.json` by hand, the manager adopts the version on disk the next time this page is opened.
 
@@ -120,6 +129,10 @@ The admin UI (`/admin/usage`, `docs/operations/admin.md`) adds, edits, deletes, 
   when the answer carries `next_after_id` / `next_after_priority`, the next page is read with `after_id` / `after_priority`, up to 2000 accounts; older gateways that ignore `view` / `limit` and return the whole list or a bare array are accepted too, taking only these fields),
   then `POST /api/admin/accounts/usage {"ids": […], "refresh": false}` for accounts that are not disabled (at most 100 per call, 500 accounts in total). One read round yields both the sidebar samples and the "gateway's account list" below; the list is not read separately. `refresh` is hard-coded to `false`: the gateway only reads its database and never asks upstream
   (`refresh=true` would make the gateway probe upstream from its single egress address, using up the whole pool's probe quota). No other route is called, let alone any write route.
+- `relay_key`: `GET /me/usage` with the API key, and nothing else: no query parameters (the relay refuses ones it does not know; its optional time zone only shapes the key's own request counts, which are not read), no write route. A trailing `/v1` on the address is dropped, so the base URL a launcher uses can be given as it is; a path prefix in front of it is kept.
+  The answer lists the accounts that key can use (`account_id`, `provider`, `plan`, `plan_raw`, `state`, `windows`, `checked_at`), with the same window fields as the usage call above; the relay answers from its stored snapshot (it caches the document for about 30 seconds per key) and never asks upstream for it. The document carries **no account names, emails or credentials**; the key's own requests, tokens and costs in it are not read, nor are the seats behind another relay (`upstream`).
+  `account_quota_shared: false` means the relay shares no account quota with this key (its accounts are then an empty list): that is a successful read with nothing to draw, and **Test connection** says so instead of "0 accounts". A missing field means shared (an older relay). An answer without an `accounts` list is `bad_response`; a relay without the route gives `not_found` ("This address has no usage document for API keys…").
+  Such a source has no account list for extensions (below): a key cannot see the whole pool.
 - **Prefer a group key**: relay group admin keys (for example `onboarder` / `operator` groups) only see their group's accounts (including `/accounts/usage`, see that relay's access-control docs) and cannot read other groups; far narrower than a deployment key.
   If an account is moved to another group / deleted between the two calls and the usage endpoint returns 404, this round fails (the UI says "This address is not the gateway's management API, or the gateway is too old" and the next round retries).
 - Timeouts (15 seconds per request, 45 seconds per source per round), answers capped at 8 MB, no redirects followed (the key is never carried to another address), errors keep only a code, never the gateway's text, which also never goes into logs (the log writes one line `usage source <id>: <code>` only when the code changes).
@@ -128,8 +141,8 @@ Mapping (`server/internal/usagesource`):
 
 | Gateway | Sidebar |
 | --- | --- |
-| `provider` (`codex`, `claude`, `kimi`…) | The same; `codex` / `claude` can merge with the same account read on a computer |
-| Account `name` | Account name (a name someone gave it in the gateway, easier to recognize than "Codex Pro" from a computer; the gateway's name wins when merging) |
+| `provider` (`codex`, `claude`, `kimi`…) | The same. Codex gateway entries use the gateway's source label because these adapters report gateway-local IDs |
+| Account `name` | Account name (a name someone gave it in the gateway, easier to recognize than "Codex Pro" from a computer; the gateway's name wins when merging). `relay_key` has none: an account is named after its provider and plan, as the computers name theirs ("Claude Max", "Codex Pro"), and same-name accounts are numbered ("Claude Max 2") |
 | `plan_display_name` (or `plan` if missing) | Plan, written next to the name (not repeated if the name already contains it) |
 | Window `kind` | Window length: `five_hour` / `5h` → 5h, `weekly` / `7d` → 7d, `hourly`, `daily`, `monthly` (30 days), `<n>m|h|d|w`; kinds like `weekly_fable`, `gemini_argon_weekly` that use the length as one of their words are recognized too. **Kinds with no readable length (`credits`, `blocked`…) are not time windows and are not drawn** |
 | `scope: "model"` / `scoped_model` | Per-model quota: the model name is shown next to the window of the same length ("7d Fable"); it **does not affect account sorting and is not used to identify the same account** (one model being used up does not mean the account is) |
@@ -144,10 +157,10 @@ The values of each `kind` have not been checked against a real relay: the mappin
 
 ### Merging with what computers read
 
-The manager puts the gateway's accounts together with each computer's samples and merges them by the existing rule ("Collection and merging" above): **same source (provider), same length, and the same reset time to the second** means the same account, with no account id needed.
-A few additions:
+The manager shows gateway accounts alongside each computer's samples using "Collection and merging" above.
 
-- Two accounts in the same gateway (different `id`) are **never merged**, even if their reset times happen to match; the same upstream account seen by two gateways (or a gateway and a computer) is merged.
+- Codex gateway entries stay separate from computer samples. The gateway-local account ID identifies a source entry and cannot identify the upstream Codex account across sources.
+- For other providers, two different accounts in the same gateway stay separate even when their reset times match.
 - A merged account takes the newest sample's numbers and lists its sources: the computers that read it, by name (`machines`), and the gateway's name; the line under the popover title reads "MacBook · Relay"; with only one source, just that one. Never a word like "this computer": the clients run on phones and other computers, where it would point at the wrong device (#1907). Against an older hub that only sends `local`, every client says "Computer" (zh-Hans 电脑, ja コンピューター) instead.
 - When a gateway's **read fails, its last answer is kept and marked out of date**, so accounts do not disappear; dropped after 3 days. `problem` says why, from the source's error code, and the popover words it (the admin page's "Usage sources" gives the exact reason):
   - `rejected` (`unauthorized`, `forbidden`: the gateway turned the key away): "The gateway turned the key away; update it in Admin → Usage sources. These are its last numbers";
@@ -170,7 +183,7 @@ The same read round (above) keeps a list on the side, stored in the manager's me
    "checked_at": "…", "cached": true, "stale": false}]}
 ```
 
-- Only enabled sources of type `relay` are listed; sources not read yet (just added, or the hub just restarted or switched and memory is empty) are listed too, with `checked_at` `null`, no accounts and `error` `pending`: that means "not known yet", not "the gateway has no accounts", and consumers should treat it as no data (the usage extension then falls back to reading each launcher). With no sources it returns `{"sources": [], "accounts": []}`.
+- Only enabled sources of type `relay` are listed (a `relay_key` source reads one key's accounts, not the pool's); sources not read yet (just added, or the hub just restarted or switched and memory is empty) are listed too, with `checked_at` `null`, no accounts and `error` `pending`: that means "not known yet", not "the gateway has no accounts", and consumers should treat it as no data (the usage extension then falls back to reading each launcher). With no sources it returns `{"sources": [], "accounts": []}`.
 - `status` is the relay's as-is (`active`, `cooldown`, `exhausted`, `refresh_required`, `quarantined`, `expired`, `disabled`); when the gateway does not say, `schedulable` is treated as `true`.
 - `reason` is the part of `last_error` before the first `:`, kept **only when it is a short word matching `^[a-z_]{1,32}$`** (`quarantine`, `sign_in_required`, cooldown reasons); the text after it may be upstream's own words (addresses, messages containing accounts) and is neither forwarded nor logged.
 - **Windows are passed through as-is, whatever the `kind`**: `five_hour`, `weekly`, `monthly`, `kiro_bonus`, `kiro_free_trial`, `kiro_overage` (no numbers when uncapped), per-model windows (`scope: "model"`)… Missing numbers are `null`, never 0.
@@ -205,6 +218,16 @@ Besides the sidebar, the same in-memory data feeds Agent scheduling: `devices.Ca
 one unavailable until its reset. It is read-only like everything here — the call performs no gateway or machine read beyond the windows' own short poll cache — and carries no
 credential or gateway-side account id. How the launcher picker consumes it is in `docs/server/launcher-health.md` ("Capacity-aware notes").
 
+
+## Prepaid balances (#11825)
+
+DeepSeek's official API is prepaid: an account has a balance, with no 5-hour or weekly allowance window to draw. Its read-only `GET /user/balance` answers the remaining amount and its currency. `amount` is the provider's own decimal string, kept verbatim, and is never converted into a percentage.
+
+- **Who reads it**: the manager, which already holds the launcher's key sealed (a launcher added in Persona; `docs/integrations/launchers.md`). It asks once every 5 minutes, at most 20 seconds per read, and only when the launcher's base URL is one of the official DeepSeek bases (`officialDeepSeekURL`: HTTPS, `api.deepseek.com` with no user info, query, fragment or extra path). A gateway, another host or a lookalike is never sent the key there. A launcher found in a shell rc file keeps its key on that computer, so it is not read.
+- **Key handling**: unchanged from the launcher's own calls. The sealed key is opened with the manager's `secret.key`, a reference (`op://…`) resolves through its provider extension, and a launcher with no key of its own may use its first per-computer key. The key goes only into the request's `Authorization` (and `x-api-key`, which the launcher also uses) at the official origin; no API answer, log line or stored sample holds it.
+- **One row per key**: two launchers with the same key are one account. The row's `provider` is `deepseek`, its `name` is the launcher's display name (or its name), and its `id` is derived from the launcher, so it stays stable while the amount moves.
+- **Success, zero and failure**: a successful read replaces `balance` and its `sampled_at`. A genuine zero is `"amount": "0.00"` with no `problem`: the account is out of prepaid credit, which the panel shows as an amount in the caution colour. A failed read keeps the last amount with `problem` (`rejected`, `unreachable` or `failed`) and `stale`, and says the amount is the last known one; a launcher whose first read failed has no `balance`, so the strip shows `—` and the popover says "Balance unavailable" and why, rather than zero. A failed balance never hides a window account. When the provider lists more than one currency, the first valid one is shown.
+- **Coexistence**: a balance row has `windows: []` and is merged like any other account, but it is not one of the two fullest window accounts the collapsed strip draws. The strip shows it as name + amount/currency (for example `CNY 12.34`), and the popover lists it with the window accounts.
 
 ## Who owns this (2026-11-05)
 
@@ -247,13 +270,14 @@ Same rules as the web (pure functions in `apple/Packages/PersonaWire/Sources/Per
 ## Limitations
 
 - Claude's usage requires the user to wire up the status line (above); otherwise only Codex shows.
-- Codex numbers only update when Codex is used; if no one on the machine has used it, the numbers stay at the last value. The sample time in the UI shows how old they are.
+- Codex rollout fallback numbers update when Codex is used. The sample time in the UI shows how old they are.
 - After the manager restarts (it restarts along with the hub), the last answers of machines that have gone offline are lost until they come back online and are asked again; the gateway's last answer is also in memory, so after a restart the sidebar lacks its accounts until the first round (within seconds) reads them.
 - **The different window types have not been verified against a real relay** (no gateway is running on this dev machine): the adapter follows the first connected relay's public API documentation (account read views, access control);
   the tests use a fake relay HTTP service (account list, usage, errors, expiry, the group key's 404, an old gateway's bare array). Once it is really connected, use **Test connection** in the admin UI to check the account and window counts.
   On 2026-11-06 (#4576) the account list was checked read-only against a real relay: the paging parameters and the shapes of `quota_summary` and `last_error` match what is written here; all 71 accounts (including 5 disabled ones) were in the list, and Kiro's `monthly` / `kiro_bonus` came through as-is.
+  On 2026-11-21 (#12311) another relay's key self-service document was read once with an ordinary API key: 9 accounts, with `five_hour` and `weekly` (account), `weekly_fable` and `gemini_five_hour` / `partner_weekly` (`scope: "model"`), `daily`, and length-less `balance_cny*`, all read as the mapping table says; its management API turned the same key away (401), and its single-account `/v1/usage` answered `unavailable` for a key that reaches several accounts. The `relay_key` test fixture follows those shapes.
 - The same Claude account on a computer (the status line's `resets_at`, seconds) and in a gateway (time from response headers or the usage endpoint, possibly with fractional seconds) merges into one only if the reset times land on the same second; one second apart, it shows as two accounts. Not checked against real data.
 - Windows whose `kind` in the gateway has no readable length are not drawn (mapping table above); if a relay adds new `kind` words later (e.g. `three_hour`), add them to `usagesource.KindMinutes`.
 - **A current Codex CLI may emit only the weekly window**: on one machine, all 78 rollouts and ~131k `token_count` events (2026-09 to 2026-11) had `rate_limits.secondary` set to `null`, so no 5-hour window exists in the local data and the sidebar can only draw `7d` — this is not a missed sample. The parser still reads both primary and secondary, so the 5-hour window appears automatically if the upstream starts sending it again.
 - The same events carry a `credits` object (`has_credits` / `unlimited` / `balance`): a separate credit balance, not a time window. It can remain unchanged for days while the weekly window is being consumed, so it is not drawn (per the "no readable length" rule above) and must not be used as a sample-freshness signal.
-- **The reset time is owned upstream and can re-anchor or jitter**: the weekly `resets_at` was observed re-anchoring mid-cycle (a fresh window starting early, the percentage resetting and the balance stepping), and adjacent events of one rollout can differ by one second. Persona displays the value as reported without smoothing. On a single machine the jitter only changes the account's id hash; machines that read the same account on different seconds can split it into two under the exact-second merge rule above.
+- **The reset time is owned upstream and can re-anchor or jitter**: the weekly `resets_at` was observed re-anchoring mid-cycle (a fresh window starting early, the percentage resetting and the balance stepping), and adjacent events of one rollout can differ by one second. The displayed countdown uses the newest Codex sample's reset time.

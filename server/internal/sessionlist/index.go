@@ -41,6 +41,8 @@ type Item struct {
 	// Private: a row a reader with Options.NoPrivate is never shown, in its rows, totals or counts (a health-space
 	// conversation, which an extension's token does not see).
 	Private bool
+	// HiddenByDirectory remains indexed for explicit inspection, but is excluded by default.
+	HiddenByDirectory bool
 	// Assistant marks a Persona conversation, excluded from the Agents list and active Agent aggregate.
 	Assistant bool
 	// Fold is the item's optional per-row metadata: its place in the session hierarchy (#5120) and its open to-do
@@ -99,6 +101,11 @@ type Options struct {
 	AllowedMachines                                                                    []string
 	Limit                                                                              int
 	ID, Cursor, Since, State, Machine, Project, Group, Source, Provider, Q, PaneSource string
+	// Providers is the personal-Agent OR-set form of Provider. ParseProviderSets
+	// uses it for every nonempty provider value, including a singleton. Values are
+	// exact and case-sensitive; order and duplicates do not affect matching, cache
+	// keys or cursor bindings. At most 64 supplied values, none empty.
+	Providers []string
 	// Manager selects the rows of the batches replaced with that owner (ReplaceOwned); like the other filters, a
 	// cursor is bound to it. It is the adapter's to set (not a key Parse reads): the adapter knows which owners exist
 	// and who may ask for which.
@@ -113,6 +120,8 @@ type Options struct {
 	// NoPrivate leaves the Private items out of the rows, the totals and every count; like Manager it is the adapter's
 	// to set (who asks), not a key Parse reads, and it binds a cursor as the other filters do.
 	NoPrivate bool
+	// IncludeHidden opts into directory-hidden rows without changing the stored rules.
+	IncludeHidden bool
 	// AgentsOnly excludes assistant and health-space conversations from the filtered view.
 	AgentsOnly bool
 	// Places (place=["<machine>","<project>"], repeatable) selects the items at any of these machine and project
@@ -147,10 +156,13 @@ type Page struct {
 	SearchHits map[string]SearchHit `json:"search_hits,omitempty"`
 	Sessions   []any                `json:"sessions"`
 	Remove     []string             `json:"remove"`
-	HasMore    bool                 `json:"has_more"`
-	NextCursor string               `json:"next_cursor,omitempty"`
-	Revision   string               `json:"revision"`
-	Total      int                  `json:"total"`
+	// Added identifies rows created after a delta's baseline, not existing rows that only changed or entered its filter.
+	// It is always an array so a client can distinguish no creations from an older hub that omits the field (#11801).
+	Added      []string `json:"added"`
+	HasMore    bool     `json:"has_more"`
+	NextCursor string   `json:"next_cursor,omitempty"`
+	Revision   string   `json:"revision"`
+	Total      int      `json:"total"`
 }
 
 // Counts describes the complete filtered membership, ignoring page size.
@@ -211,9 +223,10 @@ type journalEntry struct {
 
 type filters struct {
 	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under, Todo, Waiting, ExcludePaneSource, JustFinished string
-	// Places and Spaces are Options' as placesKey spells them: filters stay comparable.
-	Places, Spaces               string
-	Roots, NoPrivate, AgentsOnly bool
+	// Places and Spaces are Options' as placesKey spells them, Providers as
+	// providersKey spells the set: filters stay comparable.
+	Places, Spaces, Providers                   string
+	Roots, NoPrivate, IncludeHidden, AgentsOnly bool
 }
 
 type binding struct {
@@ -232,6 +245,7 @@ type event struct {
 	id      string
 	updated time.Time
 	value   *record // nil means a removal
+	added   bool    // created after a delta's baseline; full pages and filter entrances leave this false
 }
 
 type result struct {
@@ -361,13 +375,17 @@ func (i *Index) ReplaceOwned(source, owner string, items []Item) {
 	}
 	for id, c := range changes {
 		if c.before != nil {
-			addCount(&i.counts, c.before.item, false, -1)
+			if !c.before.item.HiddenByDirectory {
+				addCount(&i.counts, c.before.item, false, -1)
+			}
 			if c.before.searchDocument == nil {
 				i.undecoded--
 			}
 		}
 		if c.after != nil {
-			addCount(&i.counts, c.after.item, false, 1)
+			if !c.after.item.HiddenByDirectory {
+				addCount(&i.counts, c.after.item, false, 1)
+			}
 			i.undecoded++ // a new record: its document is decoded by the first search that reads it
 		}
 		if c.after == nil {

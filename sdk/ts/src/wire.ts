@@ -46,7 +46,8 @@ export interface Manifest {
    */
   extension_pack?: PackMember[];
   /**
-   * The configuration's JSON Schema, in the subset every app draws as a form (docs "Configuration: the form subset").
+   * The configuration's JSON Schema, in the settings-form subset (docs "Configuration: the form subset"). Capable
+   * clients draw declared entry lists after opting in; other clients receive compatibility projections.
    */
   configuration?: unknown;
   secrets?: SecretSpec[];
@@ -754,6 +755,11 @@ export interface UIItem {
   hosts?: string[];
   /** nav_page only. */
   icon?: NavIcon;
+  /**
+   * nav_page only: the icon's named color in the sidebar, the same colors as a row's icon_color, drawn only while the
+   * owner chose Colored sidebar icons (#10822); without it the icon stays the sidebar's neutral ink.
+   */
+  icon_color?: Color;
   /** overview_card, capsule_card and widget only: a nav_page or extension_page of the same extension. */
   opens?: string;
   /** inbox_item only: one of the extension's own connectors. */
@@ -795,6 +801,11 @@ export interface ChannelItem {
 
 export interface ChannelCapabilities {
   images_in?: boolean;
+  /**
+   * It can send pictures: the hub puts an answer's pictures in channel.send's images instead of leaving them as
+   * Markdown in the text.
+   */
+  images_out?: boolean;
   files_in?: boolean;
   voice_in?: boolean;
   format?: string;
@@ -1144,6 +1155,8 @@ export interface UIPlace {
   connector?: string;
   /** A nav_page's sidebar group, its title in the request's language (#9071). */
   group?: UIGroup;
+  /** A nav_page's icon color as its manifest names it, drawn only with Colored sidebar icons (#10822). */
+  icon_color?: Color;
 }
 
 export interface UIPlaces {
@@ -1619,9 +1632,10 @@ export type Component =
   | ComposerComponent
   | ImageComponent
   | GridComponent
-  | CarouselComponent;
-export const COMPONENT_TYPES = ["text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel"] as const;
-export const COMPONENT_SINCE: Record<string, number> = { text: 1, metric: 1, progress: 1, row: 1, button: 1, link: 1, field: 1, divider: 1, chart: 2, stat_grid: 2, segmented: 2, markdown: 3, table: 3, empty: 3, loading: 3, html: 4, header: 4, breadcrumb: 4, file_tree: 4, code: 4, diff: 4, comment_thread: 4, composer: 4, image: 6, grid: 6, carousel: 6 };
+  | CarouselComponent
+  | GraphComponent;
+export const COMPONENT_TYPES = ["text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph"] as const;
+export const COMPONENT_SINCE: Record<string, number> = { text: 1, metric: 1, progress: 1, row: 1, button: 1, link: 1, field: 1, divider: 1, chart: 2, stat_grid: 2, segmented: 2, markdown: 3, table: 3, empty: 3, loading: 3, html: 4, header: 4, breadcrumb: 4, file_tree: 4, code: 4, diff: 4, comment_thread: 4, composer: 4, image: 6, grid: 6, carousel: 6, graph: 10 };
 
 /**
  * A paragraph.
@@ -2010,6 +2024,95 @@ export interface CarouselComponent {
   tiles: Tile[];
   width?: TileWidth;
 }
+
+/**
+ * Nodes joined by edges, drawn as a canvas the person can pan, zoom, fit and open full screen (UI version 10): work
+ * split into parts, a plan's steps, a family of things. The app lays it out (layout, direction) and draws each node
+ * with its own design system; tapping a node does its action, as a row's (or opens its in-place inspector first on
+ * the web when the node carries facts, detail or links, with the action inside); a node with children folds them.
+ * Each node counts as a component of the page. The hub refuses ids that repeat, an edge naming an unknown node or
+ * itself, a repeated edge, a cycle, a second parent in a tree, and selected or folded naming an unknown node. In a
+ * card it is a still preview that opens full screen. An older app gets a row per node in reading order, indented.
+ */
+export interface GraphComponent {
+  type: "graph";
+  /** Keeps the person's pan, zoom and folding across redraws of the page. */
+  key?: string;
+  nodes: GraphNode[];
+  edges?: GraphEdge[];
+  layout?: GraphLayout;
+  direction?: GraphDirection;
+  /** A node's id: drawn as selected, and the canvas opens centred on it. */
+  selected?: string;
+  /**
+   * Ids of nodes whose children start folded. Once the person folds or unfolds one, the app keeps their choice for
+   * this key.
+   */
+  folded?: string[];
+}
+
+/**
+ * One node of a graph (UI version 10): a box with a title, a state line, a badge, an icon and a progress bar, in
+ * tone's role color or color's named color (never both), with optional timing and inspector details.
+ */
+export interface GraphNode {
+  id: string;
+  title: string;
+  subtitle?: string;
+  badge?: Badge;
+  tone?: Tone;
+  color?: Color;
+  icon?: NavIcon;
+  /** A thin bar along the node's foot, 0 to 1. */
+  progress?: number;
+  /**
+   * Nodes with the same parents and the same group sit next to each other inside one frame titled with it (the same
+   * task tried several ways).
+   */
+  group?: string;
+  action?: Action;
+  /** Unix timestamp in seconds when this node started. */
+  started_at?: number;
+  /** Unix timestamp in seconds when this node ended; omitted while still running. */
+  ended_at?: number;
+  /** Short label/value readings shown in the node inspector. */
+  facts?: Fact[];
+  /** Plain-text summary, verifier feedback or error shown in the node inspector. */
+  detail?: string;
+  /** HTTPS links shown in the node inspector (for example work and verifier sessions across attempts). */
+  links?: GraphNodeLink[];
+}
+
+/**
+ * An https link shown in a graph node's inspector (UI version 10).
+ */
+export interface GraphNodeLink {
+  title: string;
+  url: string;
+}
+
+/**
+ * An edge from one node to another (UI version 10): from is the parent, to the child.
+ */
+export interface GraphEdge {
+  from: string;
+  to: string;
+}
+
+/**
+ * tree (the default): every node has at most one parent, children under it, a parent centred over its children.
+ * layered: a node may have several parents; each node sits one layer past its furthest parent (a plan whose steps
+ * wait for several others).
+ */
+export type GraphLayout = "tree" | "layered" | (string & {});
+export const GRAPH_LAYOUTS = ["tree", "layered"] as const;
+
+/**
+ * right (the default): roots at the start, children after them, so a wide fan-out reads down the screen like an
+ * outline. down: roots at the top, children below.
+ */
+export type GraphDirection = "right" | "down" | (string & {});
+export const GRAPH_DIRECTIONS = ["right", "down"] as const;
 
 /**
  * Where a picture comes from (UI version 6): an https url the app loads without credentials, or a ref the extension
@@ -2721,6 +2824,8 @@ export interface MessagingAccount {
   id: string;
   name?: string;
   avatar?: string;
+  /** Hub-supplied avatar path derived from avatar. Old sources supply only avatar. */
+  avatar_url?: string;
   tenant?: string;
   signed_in: boolean;
   unread?: number;
@@ -2738,6 +2843,8 @@ export interface MessagingConversation {
   id: string;
   name: string;
   avatar?: string;
+  /** Hub-supplied avatar path derived from avatar. Old sources supply only avatar. */
+  avatar_url?: string;
   kind: MessagingConversationKind;
   unread: number;
   marked_unread?: boolean;
@@ -2762,6 +2869,8 @@ export interface MessagingPerson {
   id?: string;
   name: string;
   avatar?: string;
+  /** Hub-supplied avatar path derived from avatar. Old sources supply only avatar. */
+  avatar_url?: string;
   kind?: string;
 }
 
@@ -3175,6 +3284,8 @@ export interface MessagingProfile {
   id: string;
   name: string;
   avatar?: string;
+  /** Hub-supplied avatar path derived from avatar. Old sources supply only avatar. */
+  avatar_url?: string;
   cover?: string;
   kind?: string;
   subtitle?: string;
@@ -3599,6 +3710,12 @@ export interface ConnectorTool {
    * list whatever a connector sent.
    */
   defer_loading?: boolean;
+  /**
+   * Set by Persona itself on the tool list of an assistant conversation with the work guide on: the tool is found on
+   * demand through the guide (#11078). A connector does not need to send it; the manager sets it on every list
+   * whatever a connector sent.
+   */
+  work_guide_tool?: boolean;
 }
 
 /**
@@ -3949,6 +4066,12 @@ export interface ConnectorInboxThing {
   /** Where a reply goes and who sees it. */
   reply_to?: string;
   can_reply?: boolean;
+  /**
+   * The thread's picture: one of the connector's own media refs (thread.media, as a ThreadChat's avatar) or an https
+   * address the hub fetches, either always naming the same bytes (docs "Avatars"). The other person of a private
+   * chat, a group's own. The Inbox row draws it; without one, the initial.
+   */
+  avatar?: string;
   /** ConnectorTier, or empty for the model. */
   tier?: string;
   why?: string;
@@ -4160,6 +4283,8 @@ export interface ConnectorArchiveChat {
   state?: string;
   /** When the conversation got to state; omitted when unknown. */
   state_at?: string;
+  /** Stable HTTP(S) link to the conversation at its source, when available. */
+  source_url?: string;
 }
 
 /**
@@ -4733,6 +4858,20 @@ export interface ChannelMessage {
   /** The chat app's id of the message: the same message delivered again is taken once. */
   id: string;
   text?: string;
+  /** The chat where the owner invoked a mention channel, as display context rather than an instruction. */
+  chat?: string;
+  /** The topic or thread within chat, when the request came from one. */
+  topic?: string;
+  /**
+   * Context the extension gathered for this request, such as nearby chat history. It is data, not owner-authored
+   * instructions.
+   */
+  context?: string;
+  /**
+   * The extension's attestation that this is the owner's own request. A mention channel must send true; false or
+   * omitted is refused. Optional for an im channel's older messages.
+   */
+  owner?: boolean;
   /** At most 4 are kept. */
   images?: ChannelBlob[];
   files?: ChannelBlob[];
@@ -4742,6 +4881,12 @@ export interface ChannelMessage {
   forward?: string;
   /** The chat app's id of the message it answers. */
   reply_to?: string;
+  /**
+   * The chat app's thread the message is in, as an opaque key. For a channel with capabilities.threads, each thread
+   * has a conversation of its own: its first message starts a new one (the channel's target stays as it is), later
+   * ones continue it. Without it, or without threads, the message goes to the channel's target.
+   */
+  thread?: string;
   /** What it had that the channel cannot bring, for people (a voice message, a sticker). */
   unsupported?: string[];
 }
@@ -4787,6 +4932,11 @@ export interface ChannelSendParams {
   kind: ChannelSendKind;
   /** The owner's message it answers (ChannelMessage.id). */
   reply_to?: string;
+  /**
+   * Pictures to send after text, in order, to a channel with capabilities.images_out only: JPEG or PNG of at most 3
+   * MB each. text may then be empty. They belong to this ref: sent once with it, like the text.
+   */
+  images?: ChannelBlob[];
 }
 
 /**
@@ -4908,6 +5058,10 @@ export interface KBEntry {
    * absent on other kinds, before a match and from an older hub.
    */
   meeting_id?: string;
+  /** Reference-only for a project that stores pointers. Omitted means full. */
+  project_mode?: string;
+  freshness?: KBProjectFreshness;
+  sources?: KBProjectSource[];
 }
 
 /**
@@ -4978,6 +5132,57 @@ export interface KBDetail {
    * (docs/assistant/knowledge.md "Person profiles").
    */
   profiles?: Record<string, KBProfileRecord>;
+  /** Reference-only for a project that stores pointers. Omitted means full. */
+  project_mode?: string;
+  freshness?: KBProjectFreshness;
+  sources?: KBProjectSource[];
+}
+
+export interface KBProjectSource {
+  /** Canonical source identity shared across project views. */
+  id: string;
+  url?: string;
+  refs?: string[];
+  /** State observed at the source, such as merged. */
+  delivery_state?: string;
+  delivery_at?: string;
+  /** Unverified when only source delivery facts are available. */
+  environment_verification?: string;
+}
+
+export interface KBProjectFreshness {
+  needs_review: boolean;
+  timeline_end: number;
+  evidence?: KBProjectEvidenceRef[];
+  fields: Record<string, KBProjectFieldFreshness>;
+}
+
+export interface KBProjectFieldFreshness {
+  /** Omitted when historical authorship is unknown. */
+  writer?: string;
+  source?: string;
+  cutoff?: KBProjectCutoff;
+  lock_reason?: string;
+  review_by: string;
+  needs_review: boolean;
+  review_reason?: string;
+  /** Omitted when the gap cannot be counted. */
+  uncovered_evidence_count?: number;
+}
+
+export interface KBProjectCutoff {
+  timeline_from: number;
+  timeline_through: number;
+  /** True if earlier timeline entries were outside this refresh window. */
+  timeline_truncated?: boolean;
+  sources?: KBProjectEvidenceRef[];
+}
+
+export interface KBProjectEvidenceRef {
+  ref: string;
+  /** Opaque revision of this input. */
+  position: string;
+  source_id?: string;
 }
 
 export interface KBProfileRecord {
@@ -5812,6 +6017,18 @@ export interface StorageClaimResult {
   job?: StorageJob;
 }
 
+/**
+ * Extend only the current run's unexpired lease on this exact key, job and token. The host sets lease_until to the
+ * later of its current value and renewal time plus lease_seconds; job state and attempts do not change.
+ */
+export interface StorageRenewParams {
+  request_id: string;
+  key: string;
+  id: string;
+  lease: string;
+  lease_seconds: number;
+}
+
 export interface StorageSettleParams {
   request_id: string;
   key: string;
@@ -6477,6 +6694,7 @@ export const CALLS: Record<string, Call> = {
   "storage.queue.list": { from: "program", params: "StorageQueueListParams", result: "StorageQueueListResult" },
   "storage.queue.enqueue": { from: "program", params: "StorageEnqueueParams", result: "StorageJobResult" },
   "storage.queue.claim": { from: "program", params: "StorageClaimParams", result: "StorageClaimResult" },
+  "storage.queue.renew": { from: "program", params: "StorageRenewParams", result: "StorageJobResult" },
   "storage.queue.ack": { from: "program", params: "StorageSettleParams", result: "StorageJobResult" },
   "storage.queue.forget": { from: "program", params: "StorageSettleParams", result: "StorageDeleteResult" },
   "storage.queue.retry": { from: "program", params: "StorageRetryParams", result: "StorageJobResult" },

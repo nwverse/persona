@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -27,6 +28,7 @@ const runtimeCLITool = "phone_runtime_cli"
 // are ok and give their tools to agents too (mail); for the assistant also its own, then Cua's, ego's and those of
 // the connectors only it gets (Feishu, GitHub…).
 func (s *Service) mcpTools(ctx context.Context, assistant bool) []proto.Tool {
+	ctx = i18n.With(ctx, s.lang(ctx))
 	var agents, assistantOnly []proto.Tool
 	if s.ext != nil {
 		agents, assistantOnly = s.ext.AgentTools(ctx, assistant)
@@ -41,7 +43,7 @@ func (s *Service) mcpTools(ctx context.Context, assistant bool) []proto.Tool {
 		tools = append(tools, s.Tools(ctx)...)
 		tools = append(tools, assistantOnly...)
 	}
-	return tools
+	return localizedMCPTools(tools, s.toolLanguage(ctx))
 }
 
 // phoneToolTries is how many times a tool list asks the hub for the phone's tools, phoneToolRetry apart, before it
@@ -117,7 +119,8 @@ func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, 
 
 // Discovery with a cursor must distinguish a denied/empty list from a failed
 // state read. Otherwise the failed list is cached until an unrelated link changes.
-func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session string, assistant, guestHint bool) ([]proto.Tool, error) {
+func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session string, assistant, guestHint bool) (result []proto.Tool, resultErr error) {
+	defer func() { result = localizedMCPTools(result, s.toolLanguage(ctx)) }()
 	assistant = assistant && s.assistantDiscovery(ctx, machine, session)
 	allowed, guest, err := s.guestOf(ctx, machine, session)
 	if err != nil {
@@ -142,6 +145,9 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 			}
 		}
 		tools := s.mcpTools(ctx, assistant)
+		if assistant {
+			tools = s.guardTools(ctx, machine, session, tools)
+		}
 		if !assistant {
 			tools = append(tools, s.leaderTools(ctx, machine, session)...)
 			tools = append(tools, s.spawnTools(ctx, machine, session)...)
@@ -253,9 +259,53 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 		if err := s.appCall(ctx, assistantwire.AppPhone, assistantwire.PhoneCall, params, &res); err != nil {
 			return proto.TextResult(err.Error(), true)
 		}
-		return res
+		return phoneCreateResultWithSource(name, res)
 	}
 	return proto.TextResult("unknown tool "+name, true)
+}
+
+// phoneCreateResultWithSource carries the hub's executing-device attribution into the JSON that quick-result cards
+// parse. Payload source claims are removed before attested values are added. Failures, malformed responses and
+// unrelated tools keep their original content; legacy and queued payloads without source claims stay byte-identical.
+func phoneCreateResultWithSource(tool string, res proto.ToolResult) proto.ToolResult {
+	if tool != "phone_calendar_create_event" && tool != "phone_reminders_create" || res.IsError {
+		return res
+	}
+	sourceName := strings.TrimSpace(res.SourceDeviceName)
+	sourcePlatform := strings.TrimSpace(res.SourceDevicePlatform)
+	res.SourceDeviceName, res.SourceDevicePlatform = sourceName, sourcePlatform
+	res.Content = slices.Clone(res.Content)
+	for i, content := range res.Content {
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(content.Text), &payload); err != nil || payload == nil {
+			continue
+		}
+		var state string
+		queued := payload["state"] != nil && json.Unmarshal(payload["state"], &state) == nil && state == "queued"
+		_, hasName := payload["source_device_name"]
+		_, hasPlatform := payload["source_device_platform"]
+		if (queued || sourceName == "" && sourcePlatform == "") && !hasName && !hasPlatform {
+			continue
+		}
+		delete(payload, "source_device_name")
+		delete(payload, "source_device_platform")
+		if !queued {
+			if sourceName != "" {
+				raw, _ := json.Marshal(sourceName)
+				payload["source_device_name"] = raw
+			}
+			if sourcePlatform != "" {
+				raw, _ := json.Marshal(sourcePlatform)
+				payload["source_device_platform"] = raw
+			}
+		}
+		text, err := json.Marshal(payload)
+		if err != nil {
+			continue
+		}
+		res.Content[i].Text = string(text)
+	}
+	return res
 }
 
 // mailAttachment answers a node's mail.attachment: the bytes of the attachment mail_save_attachment saves on that
@@ -338,4 +388,23 @@ func (s *Service) assistantSummary(ctx context.Context, tool, summary string) (s
 		return summary, false
 	}
 	return s.ext.AssistantSummary(ctx, tool, summary)
+}
+
+// Localize only fixed built-in definitions, after discovery/permission filtering.
+// The source slices and third-party tool contracts are never rewritten.
+func localizedMCPTools(tools []proto.Tool, lang string) []proto.Tool {
+	out := slices.Clone(tools)
+	for i, t := range out {
+		localized := prompts.LocalizeTool(prompts.MCPTool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}, lang)
+		out[i].Description, out[i].InputSchema = localized.Description, localized.InputSchema
+	}
+	return out
+}
+
+// A zero Service can enumerate its static tools without a configured hub.
+func (s *Service) toolLanguage(ctx context.Context) string {
+	if s.hub == nil {
+		return ""
+	}
+	return string(s.lang(ctx))
 }

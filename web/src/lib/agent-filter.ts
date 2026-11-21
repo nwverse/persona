@@ -8,7 +8,7 @@ import { agentKey, isSpacePinned, type AgentPins } from "./pins";
 import { isMuted } from "./session-actions";
 import { unseen } from "./seen-outbox";
 import type { AgentState, Session } from "./types";
-import { byTime, timeMs } from "./times";
+import { timeMs } from "./times";
 import { stateName } from "./state-labels";
 
 export type AgentFilter = "all" | "needs" | "unread" | "working" | "bg_waiting" | "feishu" | "terminal";
@@ -31,18 +31,7 @@ export function agentFilter(value: string | null): AgentFilter {
   return AGENT_FILTERS.find((f) => f.key === value)?.key ?? "all";
 }
 
-// "botmux" beside the filters (#2786): a show / hide switch for botmux sessions, kept in this browser. It only hides
-// them from this list; the hub's per-machine switch (machine page › "Engine") still decides whether they are listed at all.
-export const BOTMUX_HIDDEN_KEY = "persona.agentHideBotmux";
-
 export const isBotmux = (s: Session) => sessionHost(s) === "botmux";
-
-/** "Lark group" only matches botmux sessions, so it and a hidden botmux cannot both hold: hiding botmux under it goes back to
- * "All", and choosing "Lark group" shows botmux again. Returns the filter and the switch after `change`. */
-export function botmuxAndFilter(filter: AgentFilter, hidden: boolean, change: "filter" | "botmux"): { filter: AgentFilter; hidden: boolean } {
-  if (filter !== "feishu" || !hidden) return { filter, hidden };
-  return change === "botmux" ? { filter: "all", hidden } : { filter, hidden: false };
-}
 
 /** The sessions the list shows: all of them, or all but botmux's while it is hidden. */
 export function withoutBotmux(sessions: Session[], hidden: boolean): Session[] {
@@ -73,7 +62,7 @@ export function filterCounts(sessions: Session[], mutes: AgentMutes): FilterCoun
 
 /** "All", and the states that have agents right now; the chosen one stays while it empties, so it can be left. */
 export function shownFilters(selection: AgentFilter, counts: FilterCounts): AgentFilter[] {
-  return AGENT_FILTERS.map((f) => f.key).filter((k) => k === "all" || k === selection || counts[k] > 0);
+  return AGENT_FILTERS.map((f) => f.key).filter((k) => k === "all" || (k === selection && k !== "feishu") || counts[k] > 0);
 }
 
 /** The agents a filter shows: what matches now, and what it showed when it was chosen (`kept`). */
@@ -112,19 +101,24 @@ export function isSpaceMuted(sp: SpaceLike, mutes: AgentMutes): boolean {
   return mutes.spaces.includes(`${sp.machineId}/${sp.name}`);
 }
 
+export interface SpaceArrangement<T extends SpaceLike> { active: T[]; idle: T[] }
+
 /** Which spaces lead and which fold into "Idle spaces". Pinned spaces (not muted) lead; then the busy ones, the muted
- * busy ones after them, each in the order given (herdr's); quiet ones fold. Under a quick filter every space it leaves is listed, the most
- * recent first, and none folds. */
-export function arrangeSpaces<T extends SpaceLike>(spaces: T[], o: { pins: AgentPins; mutes: AgentMutes; filtered: boolean; busy: (sp: T) => boolean }): { active: T[]; idle: T[] } {
+ * busy ones after them, each in the order given (herdr's); quiet ones fold. Under a quick filter every space it leaves
+ * is listed in that same stable order and none folds. Without stored membership, `busy` derives the current layout.
+ * With `retainedActive`, membership or `busy` keeps a space above Idle; the caller limits `busy` to attention so an
+ * ordinary working transition does not move an Idle workspace (#11801). */
+export function arrangeSpaces<T extends SpaceLike>(spaces: T[], o: { pins: AgentPins; mutes: AgentMutes; filtered: boolean; busy: (sp: T) => boolean; retainedActive?: ReadonlySet<string> }): SpaceArrangement<T> {
   const lead = (sp: T) => isSpacePinned(sp.machineId, sp.name, o.pins) && !isSpaceMuted(sp, o.mutes);
   const pinned = spaces.filter(lead);
   const rest = spaces.filter((sp) => !lead(sp));
   if (o.filtered) {
-    return { active: [...pinned, ...rest.slice().sort((a, b) => byTime(spaceDate(b), spaceDate(a)) || a.key.localeCompare(b.key))], idle: [] };
+    return { active: [...pinned, ...rest], idle: [] };
   }
-  const busy = rest.filter(o.busy);
+  const busyNow = (sp: T) => o.busy(sp) || o.retainedActive?.has(sp.key) === true;
+  const busy = rest.filter(busyNow);
   return {
     active: [...pinned, ...busy.filter((sp) => !isSpaceMuted(sp, o.mutes)), ...busy.filter((sp) => isSpaceMuted(sp, o.mutes))],
-    idle: rest.filter((sp) => !o.busy(sp)),
+    idle: rest.filter((sp) => !busyNow(sp)),
   };
 }

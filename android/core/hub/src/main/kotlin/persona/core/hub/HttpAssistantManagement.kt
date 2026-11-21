@@ -21,7 +21,7 @@ class HttpAssistantManagement private constructor(
     client: OkHttpClient,
     private val isCurrent: () -> Boolean,
     private val pinnedManager: String?,
-) : AssistantManagement {
+) : AssistantManagement, UsageHistoryApi {
     constructor(
         baseUrl: String, token: String, client: OkHttpClient, isCurrent: () -> Boolean = { true },
     ) : this(baseUrl, token, client, isCurrent, null)
@@ -124,10 +124,14 @@ class HttpAssistantManagement private constructor(
             }, compactHttp)
         }
     }
-    override suspend fun assistantLauncherList(machineId: String): AssistantLaunchers {
+    override suspend fun assistantLauncherList(machineId: String): AssistantLaunchers = assistantLauncherList(machineId, refresh = false)
+    override suspend fun assistantLauncherList(machineId: String, refresh: Boolean): AssistantLaunchers {
         require(machineId.isNotBlank())
         return JsonCodec.decodeFromJsonElement(request("GET", listOf("api", "v1", "machines", machineId, "launchers"),
-            query = mapOf("purpose" to "assistant")))
+            query = buildMap {
+                put("purpose", "assistant")
+                if (refresh) put("refresh", "1")
+            }))
     }
     override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick): persona.core.contracts.ModelPick {
         require(session.sessionId.isNotBlank() && pick.launcher.isNotBlank())
@@ -265,5 +269,17 @@ class HttpAssistantManagement private constructor(
         val code = failure.code
         if ((failure.status == 409 || (failure.status ?: 0) >= 500) && !code.isNullOrBlank()) throw AssistantRefused(code, failure.message)
         throw failure
+    }
+
+    override suspend fun usageDays(days: Int): UsageDays {
+        require(days in 1..371) { "days is 1 to 371" }
+        val answer = request("GET", listOf("api", "v1", "usage", "days"), query = mapOf("days" to days.toString()))
+        return JsonCodec.decodeFromJsonElement(answer.getValue("usage"))
+    }
+
+    override suspend fun usageHours(days: Int): UsageHours {
+        require(days in 1..7) { "days is 1 to 7" }
+        val answer = request("GET", listOf("api", "v1", "usage", "hours"), query = mapOf("days" to days.toString()))
+        return JsonCodec.decodeFromJsonElement(answer.getValue("usage"))
     }
 }

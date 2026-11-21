@@ -23,7 +23,10 @@ runtime errors. Shell launchers, managed launchers and older runtimes keep their
   Every computer runs the same probe prompt, and a model gateway can pin the same prompt to one upstream account: without the gap a round sent all computers' identical requests at once and the account served them behind one another until each timed out (2026-11-13). The gap also lets the later computers find the cache the first one wrote.
 - A check that times out is asked once more right away, and only a second timeout in a row is recorded (`probeLauncherWithRetry`). A gateway can leave a single request without a first token while the same upstream account answers its other requests in seconds (2026-11-14: one shared account left a few percent of its requests silent for 90 seconds and longer); one such request used to mark a working launcher `failing` until the next round, half an hour later. Other errors (a 401, a model the gateway refuses) are recorded at once.
 - What is checked: launchers this computer can start (`machineLaunchers`: those from ~/.zshrc minus hidden ones, plus Persona-managed ones; `kind: api` launchers do not run on a computer and are not checked).
-  Runtime launchers (DSH and others, whose `source` is not `zshrc` / `persona`) are not checked.
+  Runtime launchers (DSH, agy and others, whose `source` is the runtime's id) are not checked, with one exception (#10369): the main chat's launcher and the Agents' default launcher.
+  While one of those has a failing record on a computer that lists it (`failing`, `repairing` or `blocked` within 6 hours, or a usage limit in force), the round checks it there like any launcher (once per interval, through the runtime's own `launchers.check`, as the on-demand probe below already does), and so does `POST /api/v1/launchers/health/check`; a failure updates the record's check time, a pass clears it.
+  A runtime launcher of theirs that passed, or never failed there, is not checked again, so no runtime spends a request each interval; its record stays while the computer lists the launcher. Before, nothing rechecked such a record (a round dropped it instead, as a launcher the computer does not have), so the main chat's readiness could stay in setup for up to 6 hours after the cause was fixed.
+  The desktop apps' launchers (`claude_desktop`, `codex_app`), whose check runs no prompt, are never checked.
 - A failed Agent start is recorded too: when `agent_start`, a task plan starting an Agent (`startTaskAgent`) or a repair Agent's start gets an error from `session.start`, it is recorded as a failure (source `start`),
   and a check runs right away to confirm (one network blip should not leave a launcher unavailable; if the check passes, it recovers).
   That follow-up reserves the same single-flight probe used by an immediate detour, including its 30-second throttle, so one failure does not run two checks.
@@ -47,6 +50,12 @@ runtime errors. Shell launchers, managed launchers and older runtimes keep their
   The main chat's conversations count as well (they run the computer's launcher under the same sign-in). Each turn a background task wakes meets the same limit again; it is recorded once.
 - Stored in the settings key `launchers.health` (Postgres), one entry per computer × launcher: success / failure, error text (redacted, truncated), error category,
   check time, consecutive failure count, repair log, state. It survives hub restarts.
+- **Clean error text** (`internal/textfmt`): the check's output and a start's error arrive with the terminal's colour codes and prompt records (iTerm2 shell integration,
+  zsh's `PROMPT_SP`) and with the shell's own startup noise (a gitstatus restart line, `Console output during zsh initialization`). The node strips the escapes before anything
+  reads the text, then redacts and summarizes it to its error line, so a URL or IP that an escape wrapped is still redacted and the category is read off the error, not off a banner
+  (`[oh-my-zsh] Would you like to update?` in front of a 401 stays `auth`, not `cli_outdated`). The manager cleans what it is given too, and `GET /api/v1/launchers/health`,
+  `agents_list`, the launcher lists and the apps' Test strip the escapes from records an older node or hub persisted, so a banner never reaches a reader. The web's
+  `lib/ansi.ts` does the same on the client.
 
 ## Usage-limit record rules
 
@@ -128,6 +137,7 @@ It clears when a start with that launcher on that computer works (any of the sta
 The apps' **Test availability** (web: **Test**, `POST /api/v1/launchers/{name}/check?machine=`) runs the same `launchers.check` on the computer it names, and a pass counts as a passing check there (#1838):
 a record of that launcher failing on that computer returns to `ok`, with the periodic checks off too, so the next start stays on the computer the user picked and a fixed task can be retried.
 A failed Test is not recorded (the checks and the starts judge failures, and testing a launcher still being set up must not move starts off it), a passing one of a launcher with no record keeps none, and `not_in_terminal` still waits for a start.
+The main chat's **Test** (`GET /api/v1/assistant/readiness?probe=1`, `docs/assistant/onboarding.md`) runs the same check on the main chat's computer and launcher, and updates that launcher's record there the same way (#10369): a pass clears a failing record, so the setup card goes at once; a failure updates the check time of a record still in force, so the record says the launcher fails now (a single timeout does not, as in the rounds). Without a failing record it keeps nothing.
 Saving a Persona-managed provider with a new key, base URL, auth, model, headers or environment drops its failure records on every computer: it counts as never checked there until the next check or start.
 A `not_in_terminal` record and a usage limit before its known reset stay; a change that touches none of these (its display name) keeps every record.
 
@@ -154,10 +164,11 @@ Health records can't catch that in time: the periodic checks are off by default,
 Every new Agent is now held to what its target computer can start before anything goes out (`launcher_fit.go`, `fitLauncher`): `task_plan`'s card and its dispatch (`startTaskAgent`, on the computer a flexible task lands on), `agent_start`, the App's New Agent (`agents.start_params`) and a message resuming an Agent started outside Persona (`agents.resume_params`).
 
 - **What the computer has**: `machineLaunchers` (its own list without the hidden ones, plus Persona-managed ones), the launchers `hub.json` names for it, plain `claude` and every managed launcher (both run anywhere). The same answer backs `launcherAvailable`, which keeps the main chat off a launcher that is gone.
-- **A default it lacks** (the caller named no launcher; the `agent.new` binding, a profile or a tier gave it): the start runs on `claude` when the computer has Claude Code (its node reported a version, or its list names `claude`), otherwise on the first launcher in its list that takes a prompt (not a runtime's), otherwise on `claude` anyway.
-  The default's model and effort are dropped (the new launcher runs its own default model; an effort the caller gave stays), and so is a tier that no longer applies.
+- **An implicit default it lacks** (the caller named no launcher or tier; only the `agent.new` binding or a profile gave the launcher): the start runs on `claude` when the computer has Claude Code (its node reported a version, or its list names `claude`), otherwise on the first launcher in its list that takes a prompt (not a runtime's), otherwise on `claude` anyway.
+  The default's model and effort are dropped (the new launcher runs its own default model; an effort the caller gave stays).
   The task's `why` says so in the user's language ("<launcher> isn't on <computer>, so this runs on claude with its default model"), and the plan card names the launcher that will run: the plan is changed when the card is made, or, when the computer's list couldn't be read then, at dispatch (the card updates).
   `agent_start` puts the same line on its confirmation and in its answer (`Note: …`).
+- **An explicit tier whose launcher the computer lacks** (#12032): a tier the caller named is a caller choice, the same as naming the launcher itself, so it is refused rather than swapped — no terminal or process starts, and the tier's model, effort, model fingerprint and speed are preserved on the card instead of being cleared. The same applies to a tier a start-defaults policy selected for that start. The refusal reuses `launcher_not_on_machine` and names the launchers the computer has: `task_plan` fails that task, `agent_start` starts nothing (before the user is asked to confirm), New Agent gets a 400, and a plan whose launcher disappears between the card and `session.start` fails that task at dispatch. When the tier's launcher *is* present, its full preset (launcher, model, effort, speed) reaches the start unchanged. A tier supplied alongside an explicitly named launcher keeps the old precedence: the named launcher wins and the tier contributes nothing.
 - **A launcher the caller named** that the computer lacks: refused before any tab opens, naming the ones the computer has: `task_plan` fails that task, `agent_start` starts nothing (before the user is asked to confirm), New Agent gets a 400. A plan card moved to such a computer fails that task at dispatch the same way.
 - **A list that can't be read** (computer offline, a 10-second timeout, an older node) counts as having the launcher, as `launcherAvailable` always has: nothing is refused or swapped on a guess.
 - **A computer whose start goes to Paseo** (#8140, `docs/integrations/paseo.md` "A launcher Paseo does not have"): Paseo runs only its own providers, so what the computer has is Paseo's list for that host (the node's `launchers.list {host}` answers `host_runtime`), without the managed launchers and plain `claude`, and the rule above changes for it: a launcher the caller named or a default gave that Paseo does not have runs on Paseo's provider of the same kind of agent (its built-in one of that kind first, else the first), the task's `why`, the card, `agent_start`'s confirmation and answer and New Agent's `launcher_note` saying so; the model goes with it only when that provider offers it. With none of that kind it is refused, naming Paseo's providers. What Paseo itself ran in place of what was asked (the session's answer's `instead`: a stand-in, its default model, a lower effort) is said the same way afterwards, and the start's health is recorded under the launcher that ran. Paseo's own refusal (`launcher_kind_missing`) is the request's: it does not count against the launcher.
@@ -171,7 +182,7 @@ Every new Agent is now held to what its target computer can start before anythin
   for anything else it answers "not supported". It does not accept arbitrary commands. Old nodes lack this method, which counts as "cannot upgrade".
 - **Repair Agent**: when `agents.launcher_health.repair` in `manager.json` sets `skill`, it starts an Agent with a healthy launcher on `machine` (default: the computer the assistant runs on) in `cwd` (default home).
   The first message (`server/internal/prompts/agents/launcher_repair.md`) says which launchers on which computer are broken, the raw error and category, which skill to use for the repair, and to self-test with `claude -p` afterwards.
-  It hangs off a **quiet to-do** (`Quiet`, no source chat): the hub sends no pushes for it, but it is visible on the Agents page and in to-dos. When it stops (neither working nor waiting for you) or after 45 minutes,
+  It hangs off a **quiet to-do** (`Quiet`, no source chat): the hub sends no pushes for it, but it is visible on the Agents page and in to-dos. The link keeps the kind reported by the repair Agent's own start answer, or stays empty if the answer omits it. When it stops (neither working nor waiting for you) or after 45 minutes,
   the manager retests this round's launchers: pass means `ok`, fail means `blocked` (the reason includes the repair Agent's last message). Without `skill`, upgrading the CLI is the only repair; everything else goes straight to `blocked`.
   The skill name and the computer used for repair are configuration; the code names no specific tool or gateway.
 
@@ -276,6 +287,45 @@ belongs to at most one group:
   attempts and 30 minutes count from then. `agent_start` on a group launcher is refused at once with the same reason.
 - **Change it** like the other lines: `persona_settings` reads and sets `assistant.admission` with the phone approval card; the next start
   uses the new groups.
+
+### Wait for a gateway's quota recovery
+
+A launcher group can also opt in to a bounded wait before the first background launch of a plan task (#2409).
+Set `quota_pool` on that group through the existing `assistant.admission` setting and its approval card.
+
+```json
+{
+  "launcher_groups": [
+    {
+      "name": "shared-pool",
+      "launchers": ["launcher-a", "launcher-b"],
+      "cap": 4,
+      "quota_pool": {"source": "gateway-source-id", "provider": "claude"}
+    }
+  ]
+}
+```
+
+Use the ID of the configured relay usage source and its provider, `claude` or `codex`. Use this binding only when the
+listed launchers use the same account pool that the usage source can observe across every computer where they run. Persona confirms the selected launcher and
+provider on the computer before queueing. Removing the binding or switching off admission removes the reason to wait.
+A group with no binding only enforces its existing concurrency cap.
+
+The gate uses the latest cached account inventory for that source and provider. It needs a complete read, source and
+enabled account observations no more than ten minutes old, and a known future recovery for every account that can
+take work. It ignores disabled accounts and model-only windows. When an account has several active quota restrictions,
+its latest recovery controls. The pool's estimate is the first account's recovery. Incomplete or stale evidence,
+a working account, and a recovery beyond the wait budget leave the start to ordinary admission.
+
+The task card shows the expected recovery while it waits without occupying an admission slot. The manager checks
+again after at most 90 seconds or at the estimated recovery, whichever is sooner, on its existing minute sweep.
+The 30-minute budget is recorded with the task plan and survives a restart. At the deadline, or sooner if the
+evidence no longer warrants waiting, the manager releases the task to its ordinary start gate. A resource or
+concurrency refusal can still queue it there. It retains the launch claim rules for later retries. Direct Agent starts, explicit task retries and tasks reusing an existing to-do use their ordinary start paths.
+
+When the manager releases a task, it checks the saved to-do while committing a launch claim and again just before sending the start to the computer. A completed,
+cancelled, or already linked task leaves the queue. If a restart or disconnect leaves the launch outcome unknown, the card asks the
+owner to check the computer and Persona does not replay the launch automatically.
 
 ## Not done
 

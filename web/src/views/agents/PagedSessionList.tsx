@@ -5,7 +5,7 @@ import { t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
 import { onShownHint } from "../../lib/shown-hints";
 import { filterQuery, SessionList, type ListCounts, type ListFilters } from "../../lib/session-list";
-import { groupMachines, holdsPlace, type GroupDimension, type SessionGroup, type SessionPlace, type TodoNames } from "../../lib/session-groups";
+import { groupMachines, type GroupDimension, type SessionGroup, type SessionPlace, type TodoNames } from "../../lib/session-groups";
 import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics";
 import { SearchField } from "../../ui/SearchField";
 import { STATE_LABEL } from "../../lib/state-labels";
@@ -20,7 +20,7 @@ import { shortPath } from "../../lib/format";
 import { removeStoredValue, storedValue, storeValue } from "../../lib/compatibility";
 import { ACTIVE_WINDOWS, activeWindow, splitByActivity, windowStart, type ActiveWindow } from "../../lib/session-activity";
 import { useFolded } from "../../lib/use-folded";
-import { nestUnderParents } from "../../lib/side-sessions";
+import { nestUnderParents, type StableRowOrder } from "../../lib/side-sessions";
 import { sameValue } from "../../lib/stable-lines";
 import { lazyPage } from "../../lib/lazy-page";
 import { NeedsCount, ShowMoreRow } from "../SidebarSection";
@@ -43,6 +43,8 @@ export interface PagedSessionListProps<T> {
   renderRow: (row: T, within?: GroupDimension, group?: SessionGroup) => ReactNode;
   personal?: boolean;
   label?: (dimension: string, value: string) => string;
+  /** The hub's computer order, shared with the complete list; count maps alone cannot carry it (#11801). */
+  machineOrder?: readonly string[];
   /** The hub names this collection's projects and spaces (`sessions_catalog`): a repository checked out on several
    *  computers is one project, a space is one computer's. Without it the groups are the count maps' paths and ids. */
   catalog?: boolean;
@@ -65,16 +67,17 @@ export interface PagedSessionListProps<T> {
    *  lists show the same control; this list draws that bar first, then the state chips and what ⌘K put on it, as the
    *  complete list does, with no value pill or search field of its own. A search lists its matches flat. `label` names
    *  the dimension. */
-  grouping?: PagedGrouping;
+  grouping?: PagedGrouping<T>;
   /** The words a failed read of the list's rows or groups is said in, given its reason (the reason alone by default): the
    *  sidebar's says it could not read the Agents list, as its complete list does. */
   failureText?: (reason: string) => string;
 }
 
-export interface PagedGrouping {
+export interface PagedGrouping<T> {
   dimension: GroupDimension; bar: ReactNode; label: string; todos?: TodoNames; quick?: PagedQuickFilters;
   /** The sections follow this scope's fold-all (useFolded). */ foldScope?: string;
-  /** "Recently updated" (the title row's ⋯): the computers' and projects' sections by their newest session. */ byUpdate?: boolean;
+  /** Stable structural placement. The transport still uses `compare`, whose newest-first order binds the hub's cursors. */
+  rowOrder?: StableRowOrder<T>;
   /** The words ⌘K's "Filter Agents list" put on the list (#6589), sent as the search: the sidebar's list has no field of
    *  its own, `chips` says what narrows it where the field was. */
   query?: string; chips?: ReactNode;
@@ -83,7 +86,7 @@ export interface PagedGrouping {
 /** The complete list's quick filters on the paged list (`sessions_quick_filters`, #6662), in place of its state chips:
  *  what the chosen chip selects, what every read leaves out (hidden botmux), and the chips, drawn from the counts of
  *  the list without the chip (one read for every chip's number). The caller keeps the choice, the complete list's. */
-export interface PagedQuickFilters { select: ListFilters; exclude: ListFilters; bar: (counts: FilterCounts | undefined) => ReactNode }
+export interface PagedQuickFilters { select: ListFilters; exclude: ListFilters; bar: (counts: FilterCounts | undefined) => ReactNode; onCounts?: (counts: FilterCounts | undefined) => void }
 
 const NONE: ListFilters = {};
 /** The keys a chip selects by: the scope its numbers are counted in leaves them out. */
@@ -111,7 +114,7 @@ export function scrollParent(el: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
-export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, catalog = false, justFinished = false, placeOf, activeAt, needsYou, isOpen, parentOf, grouping, failureText = sameText }: PagedSessionListProps<T>) {
+export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, machineOrder, catalog = false, justFinished = false, placeOf, activeAt, needsYou, isOpen, parentOf, grouping, failureText = sameText }: PagedSessionListProps<T>) {
   const [query, setQuery] = useState("");
   const [typed, setTyped] = useState("");
   // the sidebar's groupings take ⌘K's words (#6589); every other list its own field's, once typing pauses
@@ -160,7 +163,13 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const rootsMode = root.isRoots();
   const queryPath = `${path}${path.includes("?") ? "&" : "?"}`;
   const countsPath = rootsMode ? `${queryPath}roots=1&` : queryPath;
-  const list = useMemo(() => filtered ? new SessionList<T>(path, identity, compare, undefined, removeIdentity, { summary: summaryMode, roots: rootsMode, pageCounts: () => root.usesPageCounts() }) : root, [filtered, path, identity, compare, removeIdentity, summaryMode, rootsMode, root, filters]);
+  const rowOrder = grouping?.rowOrder;
+  const presentation = useMemo(() => rowOrder ? { ...rowOrder, parentOf } : undefined, [rowOrder, parentOf]);
+  const list = useMemo(() => filtered ? new SessionList<T>(path, identity, compare, undefined, removeIdentity, { summary: summaryMode, roots: rootsMode, pageCounts: () => root.usesPageCounts(), presentation }) : root,
+    [filtered, path, identity, compare, removeIdentity, summaryMode, rootsMode, root, filters, presentation]);
+  // The root is shared with the hub's counts and invalidation. Apply the same retention as a filtered list instead of
+  // letting an activity-only transport prefix displace a flat list's shown rows (#11801).
+  useLayoutEffect(() => { if (presentation) root.setPresentation(presentation); }, [root, presentation]);
   const page = useSyncExternalStore(list.subscribe, list.getSnapshot, list.getSnapshot);
   const [facets, setFacets] = useState<ListCounts | null>(null);
   const [facetError, setFacetError] = useState("");
@@ -258,21 +267,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     if (facetScoped) setFacetAttempt((n) => n + 1);
     else void root.retry().catch(() => {});
   }, [facetScoped, root]);
-  const grouped = useSessionGroups({ dimension, catalog: cataloged, countsPath, scope: groupScope, facets, facetQuery, facetsError: facetsFailure, retryFacets, waiting: sections ? scopeNeeds : 0, event, todos: grouping?.todos, justFinished });
-  // "Recently updated" as the complete list orders its computers and spaces (lib/agent-sort.ts): by their newest session,
-  // as far as the root's newest page tells (the hub reads no group's time); the ones it has none of keep their order
-  // after them, and the sessions on no space stay last. Its to-dos keep the To-dos page's order there too.
-  const byUpdate = Boolean(grouping?.byUpdate) && (dimension === "machine" || dimension === "group");
-  const allGroups = useMemo(() => {
-    if (!byUpdate || !grouped.groups || !placeOf) return grouped.groups;
-    const places = rootPage.rows.map(placeOf);
-    const rank = (g: SessionGroup) => {
-      if (g.rest) return places.length + 1;
-      const at = places.findIndex((p) => holdsPlace(g, dimension as GroupDimension, p));
-      return at < 0 ? places.length : at;
-    };
-    return grouped.groups.map((g) => ({ g, at: rank(g) })).sort((a, b) => a.at - b.at).map(({ g }) => g);
-  }, [byUpdate, grouped.groups, placeOf, rootPage.rows, dimension]);
+  const grouped = useSessionGroups({ dimension, catalog: cataloged, countsPath, scope: groupScope, facets, facetQuery, facetsError: facetsFailure, retryFacets, waiting: sections ? scopeNeeds : 0, event, todos: grouping?.todos, justFinished, machineOrder });
+  const allGroups = grouped.groups;
   // the picked group follows what the hub says of it now (a project gains a directory); gone from the scope, it stays picked
   useEffect(() => {
     if (!picked || !allGroups) return;
@@ -280,12 +276,19 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     if (now && !sameValue(now, picked)) setPicked(now);
   }, [allGroups, picked]);
 
-  // A session started from another one comes under it (#5935): the loaded rows in that order, each group where its most
-  // recent member was. Only the order changes: the rows, the total and every count stay the server's.
-  const nesting = useMemo(() => parentOf ? nestUnderParents(page.rows, identity, parentOf) : null, [page.rows, identity, parentOf]);
+  const transportRows = list.getTransportRows();
+  // Activity totals need their own newest-first transport groups: structural presentation can put an unrelated older
+  // row between a recent side session and its parent, which must not end the transport's recent prefix (#11801).
+  const activityNesting = useMemo(() => activeAt && parentOf ? nestUnderParents(transportRows, identity, parentOf, activeAt) : null, [transportRows, identity, parentOf, activeAt]);
+  const activityRows = activityNesting?.rows ?? transportRows;
+  // SessionList has already applied the one structural presentation order. This separate view draws nested rows and
+  // partitions the retained presentation; its lead never substitutes for the transport's activity lead.
+  const nesting = useMemo(() => parentOf ? nestUnderParents(page.rows, identity, parentOf, activeAt) : null, [page.rows, identity, parentOf, activeAt]);
   const rows = nesting?.rows ?? page.rows;
+  const orderedRows = rows;
   // a group is as recent as its most recent member, so Earlier never splits one
   const groupActiveAt = useMemo(() => activeAt && nesting ? (row: T) => activeAt(nesting.lead.get(row) ?? row) : activeAt, [activeAt, nesting]);
+  const activityActiveAt = useMemo(() => activeAt && activityNesting ? (row: T) => activeAt(activityNesting.lead.get(row) ?? row) : activeAt, [activeAt, activityNesting]);
 
   // "Active within" (#4236): the rows active before the window fold into Earlier, after the recent ones. The split
   // moves with the clock; the list itself, its total and its filters stay the server's.
@@ -299,19 +302,38 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const start = activeAt ? windowStart(win, clock) : null;
   // the Needs you chip's number for this scope: the server's, by the same rule as the chip
   const needsYouTotal = chip.state ? (chip.state === "needs_you" ? page.total : 0) : chip.pane_source ? page.counts?.state?.needs_you : scopeCounts?.state?.needs_you;
-  const split = groupActiveAt && start !== null
-    ? splitByActivity(rows, groupActiveAt, start, { total: page.total, hasMore: page.hasMore, needsYou: needsYou ?? (() => false), needsYouTotal })
+  const rowNeedsYou = needsYou ?? (() => false);
+  const split = activityActiveAt && start !== null
+    ? splitByActivity(activityRows, activityActiveAt, start, { total: page.total, hasMore: page.hasMore, needsYou: rowNeedsYou, needsYouTotal })
     : null;
-  const earlier = split?.reached && split.earlier > 0 ? split : null;
+  // Transport's newest-first split supplies the server totals. Presentation partitions its own retained rows too: an
+  // older retained row needs Earlier even when every row left in the current transport prefix is recent.
+  const presentedRows = useMemo((): readonly T[] => {
+    if (!groupActiveAt || start === null) return orderedRows;
+    return [...orderedRows.filter((row) => groupActiveAt(row) >= start), ...orderedRows.filter((row) => !(groupActiveAt(row) >= start))];
+  }, [groupActiveAt, start, orderedRows]);
+  const firstEarlier = groupActiveAt && start !== null ? presentedRows.findIndex((row) => !(groupActiveAt(row) >= start)) : -1;
+  const recent = firstEarlier === -1 ? presentedRows.length : firstEarlier;
+  const presentedEarlier = presentedRows.length - recent;
+  const hasEarlier = presentedEarlier > 0 || Boolean(split?.reached && split.earlier > 0);
+  // A retained recent row can fall outside the transport prefix while a newly recent transport row is not presented.
+  // Count their identity union: subtracting only the transport's recent rows charges both cases to Earlier (#11801).
+  const loaded = new Set(transportRows.map(identity));
+  const retainedRecent = presentedRows.slice(0, recent).filter((row) => !loaded.has(identity(row)));
+  const earlierCount = hasEarlier && split ? Math.max(0, page.total - split.recent - retainedRecent.length, presentedEarlier) : 0;
+  const recentNeedsYou = activityRows.slice(0, split?.recent ?? 0).filter(rowNeedsYou).length + retainedRecent.filter(rowNeedsYou).length;
+  const earlierNeedsYou = needsYouTotal === undefined ? presentedRows.slice(recent).filter(rowNeedsYou).length
+    : Math.min(earlierCount, Math.max(0, needsYouTotal - recentNeedsYou));
+  const earlier = hasEarlier && earlierCount > 0 ? { recent, reached: true, earlier: earlierCount, earlierNeedsYou } : null;
   const [folded, toggleEarlier] = useFolded(personal ? "personal-sessions-earlier" : "sessions-earlier", true, {
-    holds: Boolean(earlier && isOpen && rows.slice(earlier.recent).some(isOpen)),
+    holds: Boolean(earlier && isOpen && presentedRows.slice(earlier.recent).some(isOpen)),
   });
   // folded, the list stops at its header: no further pages are read until it opens
   const foldedAway = Boolean(earlier && folded);
   const hasMore = page.hasMore && !foldedAway;
   const itemCount = sections ? 0 : (foldedAway ? earlier!.recent : rows.length) + (earlier ? 1 : 0);
   // the Earlier header sits between the recent rows and the earlier ones; null is the header
-  const rowAt = (i: number): T | null => !earlier ? rows[i] : i === earlier.recent ? null : rows[i > earlier.recent ? i - 1 : i];
+  const rowAt = (i: number): T | null => !earlier ? presentedRows[i] : i === earlier.recent ? null : presentedRows[i > earlier.recent ? i - 1 : i];
 
   const container = useRef<HTMLDivElement>(null);
   const [margin, setMargin] = useState(0);
@@ -364,12 +386,14 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     const by = scopeCounts.state ?? {}, waiting = scopeCounts.background_waiting ?? 0, origin = scopeCounts.pane_source ?? {};
     return { needs: by.needs_you ?? 0, unread: by.unread ?? 0, working: Math.max(0, (by.working ?? 0) - waiting), bg_waiting: waiting, feishu: origin.feishu ?? 0, terminal: origin.terminal ?? 0 };
   }, [scopeCounts]);
-  // the most used groups first: the menu lists a bounded number of them, and the picked one whatever its place
+  const onQuickCounts = quick?.onCounts;
+  useEffect(() => { onQuickCounts?.(quickCounts); }, [onQuickCounts, quickCounts]);
+  // the fixed group order: the menu lists a bounded number of them, and the picked one whatever its place
   const groups = useMemo(() => {
     const listed = (allGroups ?? []).slice(0, SESSION_LIST_METRICS.groupOptions);
     return picked && !listed.some((g) => g.key === picked.key) ? [...listed, allGroups?.find((g) => g.key === picked.key) ?? { ...picked, count: 0, needs: 0 }] : listed;
   }, [allGroups, picked]);
-  const machines = useMemo(() => Object.entries(rootPage.counts?.machine ?? {}).filter(([id]) => id).sort(([a, x], [b, y]) => y - x || a.localeCompare(b)), [rootPage.counts]);
+  const machines = useMemo(() => Object.entries(rootPage.counts?.machine ?? {}).filter(([id]) => id).sort(([a], [b]) => a.localeCompare(b)), [rootPage.counts]);
   const dimensions: { key: typeof dimension; label: string }[] = personal
     ? [{ key: "", label: t("paged-agents.recent") }, { key: "group", label: t("paged-agents.account") }]
     : [{ key: "", label: t("paged-agents.recent") }, { key: "machine", label: t("paged-agents.machine") }, { key: "project", label: t("paged-agents.project") }, { key: "group", label: t("paged-agents.group") }];
@@ -393,8 +417,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   };
   const chooseGroup = (key: string) => setPicked(key ? groups.find((g) => g.key === key) ?? null : null);
   // an open section reads the collection as the list above it does
-  const source: GroupedSource<T> = useMemo(() => ({ path, identity, compare, removeIdentity, event, summary: summaryMode, roots: rootsMode, parentOf }),
-    [path, identity, compare, removeIdentity, event, summaryMode, rootsMode, parentOf]);
+  const source: GroupedSource<T> = useMemo(() => ({ path, identity, compare, removeIdentity, event, summary: summaryMode, roots: rootsMode, parentOf, rowOrder }),
+    [path, identity, compare, removeIdentity, event, summaryMode, rootsMode, parentOf, rowOrder]);
   const openRow = sections && isOpen && placeOf ? rootPage.rows.find(isOpen) : undefined;
   const autoMore = useRef(0);
   useEffect(() => {
