@@ -8,7 +8,7 @@ import { connectorState, type HubConnector } from "../../lib/connectors";
 import type { FeishuBotStatus } from "../../lib/feishu-bot";
 
 type Call = { resolve: (s: FeishuBotStatus) => void; reject?: (error: Error) => void };
-const calls = vi.hoisted(() => ({ status: [] as Call[], update: [] as (Call & { body: unknown })[] }));
+const calls = vi.hoisted(() => ({ status: [] as Call[], update: [] as (Call & { body: unknown })[], unpair: [] as Call[] }));
 const connectorList = vi.hoisted(() => ({ value: [] as HubConnector[], calls: 0, pending: null as Promise<HubConnector[]> | null }));
 const connectorLogin = vi.hoisted(() => vi.fn());
 const setConnector = vi.hoisted(() => vi.fn());
@@ -23,6 +23,7 @@ vi.mock("../../lib/feishu-bot", async (original) => ({
   botStatus: () => new Promise<FeishuBotStatus>((resolve, reject) => calls.status.push({ resolve, reject })),
   updateBot: (body: unknown) => new Promise<FeishuBotStatus>((resolve, reject) => calls.update.push({ resolve, reject, body })),
   pairBot: () => new Promise<FeishuBotStatus>(() => {}),
+  unpairBot: () => new Promise<FeishuBotStatus>((resolve, reject) => calls.unpair.push({ resolve, reject })),
 }));
 vi.mock("../../lib/connectors", async (original) => ({
   ...(await original<typeof import("../../lib/connectors")>()),
@@ -85,6 +86,7 @@ async function open(status: FeishuBotStatus) {
 beforeEach(() => {
   calls.status.length = 0;
   calls.update.length = 0;
+  calls.unpair.length = 0;
   connectorList.value = [];
   connectorList.calls = 0;
   connectorList.pending = null;
@@ -315,6 +317,148 @@ describe("Feishu bot dialog", () => {
     await act(async () => calls.status[3].resolve(paired));
     expect(dialog.textContent).toContain("ABC123");
     expect(bindChannel).toHaveBeenCalledTimes(2);
+  });
+
+  describe("confirmed status ordering", () => {
+    const owner = { name: "Current owner", paired_at: 2 };
+    const stale = () => saved({ owner: { name: "Earlier owner", paired_at: 1 } });
+    const dialog = () => document.querySelector<HTMLElement>("[role=dialog]")!;
+    const recheckButton = () => dialog().querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-feishubot.recheck")}"]`);
+    const clickText = (label: string) => act(async () => {
+      const button = [...dialog().querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === label);
+      expect(button).toBeDefined();
+      button!.click();
+    });
+    async function boundWithPendingStatus(connectorFails = true) {
+      vi.useFakeTimers();
+      const larkcli: HubConnector = { id: "larkcli", name: "Lark", status: "not_signed_in", capabilities: ["login"] };
+      act(() => root.render(<FeishuBot larkcli={larkcli} />));
+      await act(async () => calls.status[0].resolve(saved({ app_id: "", has_secret: false, connected: false })));
+      await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+      bindChannel.mockResolvedValueOnce({ step: "register", kind: "qr", interval: 5, qr: { size: 2, rows: ["10", "01"] } });
+      bindChannel.mockResolvedValueOnce({ done: true, account: "Earlier owner" });
+      await clickText(t("settings-feishubot.create_start"));
+      let rejectConnectors!: (error: Error) => void;
+      let resolveConnectors!: (value: HubConnector[]) => void;
+      connectorList.pending = new Promise((resolve, reject) => { resolveConnectors = resolve; rejectConnectors = reject; });
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      if (connectorFails) await act(async () => rejectConnectors(new Error("503 Service Unavailable")));
+      expect(calls.status).toHaveLength(2); // A is pending while the connector fails or waits.
+      await act(async () => recheckButton()!.click());
+      expect(calls.status).toHaveLength(3); // B is the explicit retry.
+      expect(recheckButton()).toBeNull();
+      return () => resolveConnectors([larkcli]);
+    }
+
+    it("keeps the successful recheck when the post-bind status arrives late", async () => {
+      await boundWithPendingStatus();
+      await act(async () => calls.status[2].resolve(saved({ owner })));
+      expect(recheckButton()).not.toBeNull();
+      await act(async () => calls.status[1].resolve(stale()));
+      expect(dialog().textContent).toContain(owner.name);
+      expect(dialog().textContent).not.toContain("Earlier owner");
+      expect(dialog().textContent).not.toContain(t("settings-feishubot.create_start"));
+      expect(connectorLogin).not.toHaveBeenCalled();
+      expect(bindChannel).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(["disable", "unpair"])("keeps a confirmed %s after recheck when the post-bind status arrives late", async (action) => {
+      await boundWithPendingStatus();
+      await act(async () => calls.status[2].resolve(saved({ owner })));
+      if (action === "disable") {
+        await act(async () => dialog().querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.enable")}"]`)!.click());
+        expect(calls.update[0].body).toEqual({ enabled: false });
+        await act(async () => calls.update[0].resolve(saved({ owner, enabled: false })));
+      } else {
+        await clickText(t("settings-feishubot.unpair"));
+        await clickText(t("settings-feishubot.unpair"));
+        await act(async () => calls.unpair[0].resolve(saved({ owner: null })));
+      }
+      await act(async () => calls.status[1].resolve(stale()));
+      if (action === "disable") {
+        expect(dialog().querySelector(`[role="switch"][aria-label="${t("settings-feishubot.enable")}"]`)?.getAttribute("aria-checked")).toBe("false");
+        expect(dialog().textContent).toContain(owner.name);
+      } else {
+        expect(dialog().textContent).not.toContain("Earlier owner");
+        expect(dialog().textContent).not.toContain(owner.name);
+        expect(dialog().textContent).toContain(t("settings-feishubot.pair"));
+      }
+      expect(connectorLogin).not.toHaveBeenCalled();
+      expect(bindChannel).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps recheck loading until it answers and does not authorize superseded setup", async () => {
+      const finishConnectors = await boundWithPendingStatus(false);
+      await act(async () => calls.status[1].resolve(stale()));
+      expect(dialog().textContent).toContain("Earlier owner");
+      expect(recheckButton()).toBeNull(); // A must not clear B's loading feedback.
+      await act(async () => calls.status[2].resolve(saved({ owner, enabled: false })));
+      expect(recheckButton()).not.toBeNull();
+      await act(async () => finishConnectors());
+      expect(dialog().textContent).toContain(owner.name);
+      expect(connectorLogin).not.toHaveBeenCalled();
+      expect(bindChannel).toHaveBeenCalledTimes(2);
+    });
+
+    it("retries a failed recheck and keeps its successful answer over the late setup read", async () => {
+      await boundWithPendingStatus();
+      await act(async () => calls.status[2].reject!(new Error("Synthetic recheck failure")));
+      expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("Synthetic recheck failure");
+      await act(async () => recheckButton()!.click());
+      expect(recheckButton()).toBeNull();
+      await act(async () => calls.status[3].resolve(saved({ owner })));
+      expect(dialog().querySelector('[role="alert"]')).toBeNull();
+      expect(recheckButton()).not.toBeNull();
+      await act(async () => calls.status[1].resolve(stale()));
+      expect(dialog().textContent).toContain(owner.name);
+      expect(connectorLogin).not.toHaveBeenCalled();
+    });
+
+    it.each(["success", "failure"])("ignores late mount %s after a newer dialog refresh", async (outcome) => {
+      const larkcli: HubConnector = { id: "larkcli", name: "Lark", status: "not_signed_in", capabilities: ["login"] };
+      connectorList.value = [larkcli];
+      act(() => root.render(<FeishuBot larkcli={larkcli} />));
+      await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+      connectorLogin.mockResolvedValueOnce({ done: true });
+      await clickText(t("settings-feishubot.read_authorize"));
+      expect(calls.status).toHaveLength(2);
+      expect(recheckButton()).toBeNull();
+      await act(async () => calls.status[1].resolve(saved({ owner })));
+      expect(recheckButton()).not.toBeNull();
+      if (outcome === "success") await act(async () => calls.status[0].resolve(stale()));
+      else await act(async () => calls.status[0].reject!(new Error("Synthetic mount failure")));
+      expect(dialog().textContent).toContain(owner.name);
+      expect(dialog().textContent).not.toContain("Earlier owner");
+      expect(dialog().querySelector('[role="alert"]')).toBeNull();
+      expect(connectorLogin).toHaveBeenCalledTimes(1);
+    });
+
+    it("fences polling reads issued both before and during a successful write", async () => {
+      vi.useFakeTimers();
+      const pairing = { code: "123456", expires_at: Math.floor(Date.now() / 1000) + 600 };
+      await open(saved({ pairing }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      await act(async () => dialog().querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.enable")}"]`)!.click());
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      expect(calls.status).toHaveLength(3);
+      await act(async () => calls.update[0].resolve(saved({ enabled: false })));
+      await act(async () => calls.status[2].resolve(saved({ pairing })));
+      await act(async () => calls.status[1].resolve(saved({ pairing })));
+      expect(dialog().querySelector(`[role="switch"][aria-label="${t("settings-feishubot.enable")}"]`)?.getAttribute("aria-checked")).toBe("false");
+      expect(dialog().textContent).not.toContain(pairing.code);
+    });
+
+    it("accepts the useful post-bind response when the newer recheck fails", async () => {
+      await boundWithPendingStatus();
+      await act(async () => calls.status[2].reject!(new Error("Synthetic recheck failure")));
+      expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("Synthetic recheck failure");
+      expect(recheckButton()).not.toBeNull();
+      await act(async () => calls.status[1].resolve(stale()));
+      expect(dialog().textContent).toContain("Earlier owner");
+      expect(dialog().textContent).not.toContain(t("settings-feishubot.create_start"));
+      expect(dialog().querySelector('[role="alert"]')).toBeNull();
+      expect(connectorLogin).not.toHaveBeenCalled();
+    });
   });
 
   it("keeps the create step and does not authorize when the bot status read fails after binding", async () => {
