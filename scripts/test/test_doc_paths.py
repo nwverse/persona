@@ -31,8 +31,11 @@ old doc up in the docs that took sections out of it, and test_doc_wire.py reads 
 flags. This checks that every moved-from line names an existing doc, and that a named H2 is a heading in both docs. It
 also checks that no line of the moved section is back in the old doc. Such a line comes from a branch cut before the
 move that kept its copy when it resolved the conflict. A line is matched by its first FINGERPRINT characters with its
-spaces collapsed; shorter lines and table rules are too common to tell apart. Moved-from lines count in the current
-docs and in the tracked CLAUDE.md files below the root.
+spaces collapsed; shorter lines and table rules are too common to tell apart. Under the moved H2's pointer heading
+such a line can only be the old copy, and the message says to delete it. Under another heading it may instead be that
+section's own line starting like a moved one (some protocol.md sections repeat a line from a neighbour), which the
+test cannot tell apart, so the message names the matching line in the new doc and says to reword the start of one of
+them when both belong. Moved-from lines count in the current docs and in the tracked CLAUDE.md files below the root.
 """
 from collections import defaultdict, namedtuple
 from pathlib import Path
@@ -371,7 +374,13 @@ class DocMoves:
 
     def moved_back(self):
         """A message for each place a moved H2's text is back in its old doc: more than a pointer under its heading
-        there, the heading a second time, or a line whose fingerprint is one of the moved section's."""
+        there, the heading a second time, or a line whose fingerprint is one of the moved section's.
+
+        Under the pointer heading, or under a copy of it, only the pointer belongs, so such a line is the old copy and
+        the message says to delete it. Under any other heading the line may be the old copy put back somewhere else,
+        or a line of that other section that starts like a moved one (protocol.md's image answers repeat themselves
+        from section to section). The test cannot tell which, so the message names both lines, says which section
+        each is in, and gives both remedies; rewording the start of either line clears it."""
         found = []
         for move in self._valid():
             if move.heading is None:
@@ -391,15 +400,42 @@ class DocMoves:
             elif not self._links(move.source, body, move.doc):
                 found.append(f"{move.source}:{heading}: \"{move.heading}\" moved to {move.doc}: link to it under "
                              "this heading")
-            prints = {fingerprint(line) for _, line in moved[1] if not MOVED_FROM.match(line)} - {None}
-            lines = self._text(move.source).splitlines()
+            prints = {}
+            for number, line in moved[1]:
+                if not MOVED_FROM.match(line):
+                    prints.setdefault(fingerprint(line), number)
+            prints.pop(None, None)
+            under = {number for start, lines in pointers for number in (start, *(n for n, _ in lines))}
+            text = self._text(move.source)
+            lines = text.splitlines()
             hits = [number for number, line in enumerate(lines, 1)
                     if number not in (heading, extra, *copies) and fingerprint(line) in prints]
-            for first, last in self._blocks(hits, lines):
+            for first, last in self._blocks([number for number in hits if number in under], lines):
                 which = "this line is" if first == last else f"lines {first}-{last} are"
                 found.append(f"{move.source}:{first}: {which} in \"{move.heading}\", which moved to {move.doc}: "
                              f"{remedy}")
+            for first, last in self._blocks([number for number in hits if number not in under], lines):
+                match = f"{move.doc}:{prints[fingerprint(lines[first - 1])]}"
+                which, it = (("this line starts", "it is") if first == last else
+                             (f"lines {first}-{last} start", "they are"))
+                here = self._section_of(text, first)
+                place = f'"{here}"' if here else "no heading"
+                found.append(f"{move.source}:{first}: {which} like {match} in \"{move.heading}\", which moved there, "
+                             f"but {it} under {place} here: if {it} the moved text back, {remedy}; if both docs "
+                             f"need their line, reword the first {FINGERPRINT} characters of one of them")
         return found
+
+    @staticmethod
+    def _section_of(text, number):
+        """The name of the nearest H1 or H2 above line number of text, outside code blocks, or None."""
+        name = None
+        for at, line in outside_fences(text):
+            if at >= number:
+                break
+            heading = HEADING_LINE.match(line)
+            if heading and len(heading[1]) <= 2:
+                name = heading[2]
+        return name
 
     def _valid(self):
         return [move for move in self._lines if move.source != move.doc and (self._root / move.source).is_file()]
@@ -770,11 +806,11 @@ class DocPathTests(unittest.TestCase):
                 moved_row, rule, "Short line.", "", "### Endpoints", "", "## Elsewhere in part", "", outside, ""]
         pointer = big.index('Moved to [part.md](part.md#moved-part) ("Moved part").') + 1
 
-        def found(lines, marker=part[0]):
+        def found(lines, marker=part[0], moved=part):
             with tempfile.TemporaryDirectory(prefix="doc-moved-back-") as directory:
                 root = Path(directory)
                 write_tree(root, {"docs/big.md": "\n".join(lines) + "\n",
-                                  "docs/part.md": "\n".join([marker] + part[1:])})
+                                  "docs/part.md": "\n".join([marker] + moved[1:])})
                 moves = DocMoves.read(root, ["docs/big.md", "docs/part.md"])
                 self.assertEqual([], moves.problems())
                 return moves.moved_back()
@@ -810,14 +846,34 @@ class DocPathTests(unittest.TestCase):
                 reported = found(lines)
                 self.assertEqual([f"docs/big.md:{n}:" for n in numbers],
                                  [":".join(finding.split(":", 2)[:2]) + ":" for finding in reported], reported)
+        remedy = "diff the old copy against docs/part.md, port any difference there, then delete the old copy"
+        # Under the pointer heading, or a copy of it, only the pointer belongs: the line is the old copy.
         stale = next(lines for case, lines, _ in cases if case == "the old copy back under the pointer")
         reported = found(stale)
-        self.assertTrue(reported[1].endswith('this line is in "Moved part", which moved to docs/part.md: diff the old '
-                                             'copy against docs/part.md, port any difference there, then delete the '
-                                             'old copy'), reported)
+        self.assertTrue(reported[1].endswith(f'this line is in "Moved part", which moved to docs/part.md: {remedy}'),
+                        reported)
+        copy = at(big, pointer + 1, ["", "## Moved part (`moved_part`, #1)", "", moved_row])
+        self.assertEqual(f'docs/big.md:{pointer + 4}: this line is in "Moved part", which moved to docs/part.md: '
+                         f"{remedy}", found(copy)[1])
+        # Under another heading it may be the old copy put back there or that section's own line: the test cannot
+        # tell, so it names the line in the new doc and both remedies, and never says to delete without the choice.
+        elsewhere = next(lines for case, lines, _ in cases if case == "a moved line back elsewhere in the old doc")
+        self.assertEqual([f'docs/big.md:{len(big) + 1}: this line starts like docs/part.md:7 in "Moved part", which '
+                          f'moved there, but it is under "After" here: if it is the moved text back, {remedy}; if '
+                          "both docs need their line, reword the first 80 characters of one of them"], found(elsewhere))
         together = next(lines for case, lines, _ in cases if case == "moved lines back together")
-        self.assertIn(f"docs/big.md:{len(big) + 1}: lines {len(big) + 1}-{len(big) + 4} are in \"Moved part\"",
-                      found(together)[0])
+        self.assertIn(f'docs/big.md:{len(big) + 1}: lines {len(big) + 1}-{len(big) + 4} start like docs/part.md:6 in '
+                      '"Moved part", which moved there, but they are under "After" here: if they are the moved text '
+                      "back,", found(together)[0])
+        self.assertIn("under no heading here", found(at(big, 1, [moved_row]))[0])
+        # A later edit to the moved section repeats the start of a line that stays in the old doc (protocol.md's
+        # image answers do so from section to section): the line that stayed is named, not called moved text.
+        kept = big[4]
+        later = part[:part.index(moved_row) + 1] + [kept] + part[part.index(moved_row) + 1:]
+        self.assertEqual([f'docs/big.md:5: this line starts like docs/part.md:8 in "Moved part", which moved there, '
+                          f'but it is under "Kept" here: if it is the moved text back, {remedy}; if both docs need '
+                          "their line, reword the first 80 characters of one of them"], found(big, moved=later))
+        self.assertEqual([], found(big, moved=later[:7] + [kept[:40] + " reworded" + kept[40:]] + later[8:]))
         # Only an H2 a moved-from line names is guarded: a line without the name only redirects.
         self.assertEqual([], found(stale, marker="<!-- moved-from: docs/big.md -->"))
 
