@@ -63,6 +63,7 @@
   "cancel": "キャンセル",
   "edit": "編集",
   "edit_disabled_hint": "{max} 以下の非バイナリ UTF-8 テキストファイルのみ編集できます。",
+  "edit_mixed_eol_hint": "改行コード（CRLF/LF/CR）が混在するファイルは、未変更行の改行を書き換えないようオンライン編集を無効にしています。ダウンロードしてローカルで編集してください。",
   "edit_label": "ファイル内容エディター",
   "edit_bytes": "{bytes} / {max}",
   "edit_oversized": "編集後のテキストが上限 {max} を超えています。",

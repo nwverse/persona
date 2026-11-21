@@ -318,6 +318,8 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
   const uploadXhrRef = useRef<XMLHttpRequest | null>(null);
   const [uploadProgress, setUploadProgress] = useState<{ name: string; loaded: number; total: number } | null>(null);
   const [pendingUpload, setPendingUpload] = useState<{
+    mid: string;
+    dir: string;
     file: File;
     kind: "sensitive" | "exists";
     reason?: string;
@@ -325,6 +327,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
   } | null>(null);
   const [uploadSensitiveAck, setUploadSensitiveAck] = useState(false);
 
+  const currentDirRef = useRef<{ mid: string; path: string }>({ mid: "", path: "" });
   const dirAbort = useRef<AbortController | null>(null);
   const fileAbort = useRef<AbortController | null>(null);
 
@@ -340,6 +343,12 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
 
   const loadDirectory = useCallback(async (mid: string, targetPath: string) => {
     if (!mid) return;
+    const prevDir = currentDirRef.current;
+    if (prevDir.mid !== mid || prevDir.path !== targetPath) {
+      setPendingUpload(null);
+      setUploadSensitiveAck(false);
+    }
+    currentDirRef.current = { mid, path: targetPath };
     dirAbort.current?.abort();
     const ctrl = new AbortController();
     dirAbort.current = ctrl;
@@ -349,13 +358,16 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
       const qs = targetPath ? `?path=${enc(targetPath)}` : "";
       const res = await api<MachineFileListResponse>(`/machines/${enc(mid)}/files/list${qs}`, { signal: ctrl.signal });
       if (ctrl.signal.aborted) return;
+      currentDirRef.current = { mid, path: res.path };
       setDir(res);
       setPathInput(res.path);
       setFilter("");
       setCreateServerSensitive(null);
       setCreateSensitiveAck(false);
+      setPendingUpload((cur) => (cur && (cur.mid !== mid || cur.dir !== res.path) ? null : cur));
     } catch (err) {
       if (isAbort(err)) return;
+      currentDirRef.current = prevDir;
       setDirError(t("machines-files.load_error", { error: errorText(err) }));
     } finally {
       if (!ctrl.signal.aborted) setLoadingDir(false);
@@ -410,7 +422,9 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     setRenameTarget(null);
     setDeleteTarget(null);
     setPendingUpload(null);
+    setUploadSensitiveAck(false);
     setUploadProgress(null);
+    currentDirRef.current = { mid: machine?.id ?? "", path: "" };
     resetEditor();
     if (!machine?.online) return;
 
@@ -443,6 +457,8 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
       setPreview(null);
       setTail(null);
       setFileError("");
+      setPendingUpload(null);
+      setUploadSensitiveAck(false);
       resetEditor();
       void loadDirectory(machine.id, entry.path);
       return;
@@ -467,10 +483,16 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     }
   }, [machine?.id, machine?.online, selectedEntry, mode, loadFile]);
 
+  const previewEol = useMemo(
+    () => (preview && !preview.binary ? detectLineEnding(preview.text ?? "") : "lf"),
+    [preview],
+  );
+  const previewMixedEol = Boolean(preview && !preview.binary && previewEol === "mixed");
+
   const startEdit = useCallback(() => {
-    if (!preview || !preview.editable) return;
+    if (!preview || !preview.editable || previewMixedEol) return;
     const raw = preview.text ?? "";
-    setDraftEol(detectLineEnding(raw));
+    setDraftEol(previewEol);
     setDraftText(normalizeToLF(raw));
     setEditing(true);
     setReviewingDiff(false);
@@ -478,7 +500,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     setSavedNotice("");
     setFileError("");
     setCasConflict(false);
-  }, [preview]);
+  }, [preview, previewEol, previewMixedEol]);
 
   const saveText = useMemo(
     () => (editing ? restoreLineEnding(draftText, draftEol) : ""),
@@ -637,87 +659,106 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     }
   }, [machine?.id, machine?.online, deleteTarget, deleteSensitiveAck, selectedEntry?.path, dir?.path, loadDirectory, resetEditor]);
 
-  const startStreamingUpload = useCallback((file: File, opts: { overwrite?: boolean; confirmSensitive?: boolean } = {}) => {
-    if (!machine?.online || !dir?.path) return;
-    if (file.size > MAX_UPLOAD_BYTES) {
-      setDirError(t("machines-files.upload_too_large", { max: formatSize(MAX_UPLOAD_BYTES) }));
-      return;
-    }
-    uploadXhrRef.current?.abort();
-    const xhr = new XMLHttpRequest();
-    uploadXhrRef.current = xhr;
-    setDirError("");
-    setDirNotice("");
-    setPendingUpload(null);
-    setUploadSensitiveAck(false);
-    setUploadProgress({ name: file.name, loaded: 0, total: file.size });
-
-    const url = machineFileUploadURL(machine.id, {
-      dir: dir.path,
-      name: file.name,
-      overwrite: opts.overwrite,
-      confirmSensitive: opts.confirmSensitive,
-    });
-    xhr.open("POST", url);
-    xhr.setRequestHeader("Authorization", `Bearer ${getToken()}`);
-    xhr.setRequestHeader("Accept-Language", currentLanguage());
-    xhr.setRequestHeader("Content-Type", "application/octet-stream");
-
-    xhr.upload.onprogress = (ev) => {
-      const total = ev.lengthComputable ? ev.total : file.size;
-      setUploadProgress({ name: file.name, loaded: ev.loaded, total });
-    };
-
-    xhr.onabort = () => {
-      if (uploadXhrRef.current === xhr) uploadXhrRef.current = null;
-      setUploadProgress(null);
-      setDirNotice(t("machines-files.upload_cancelled"));
-    };
-
-    xhr.onerror = () => {
-      if (uploadXhrRef.current === xhr) uploadXhrRef.current = null;
-      setUploadProgress(null);
-      setDirError(t("machines-files.action_error", { error: t("lib-api.cant_reach_hub") }));
-    };
-
-    xhr.onload = () => {
-      if (uploadXhrRef.current === xhr) uploadXhrRef.current = null;
-      setUploadProgress(null);
-      let body: Record<string, unknown> = {};
-      try {
-        body = xhr.responseText ? JSON.parse(xhr.responseText) : {};
-      } catch {
-        body = {};
-      }
-      if (xhr.status >= 200 && xhr.status < 300) {
-        const done = body as unknown as MachineFileUploadEndResponse;
-        setDirNotice(t("machines-files.upload_complete", { name: file.name, size: formatSize(done.size ?? file.size) }));
-        void loadDirectory(machine.id, dir.path);
-        return;
-      }
-      const code = typeof body.code === "string" ? body.code : "";
-      if (xhr.status === 409 && code === "exists") {
-        setPendingUpload({ file, kind: "exists", confirmedSensitive: opts.confirmSensitive });
-        return;
-      }
-      if (xhr.status === 412 && code === "machine_file_sensitive_confirm") {
-        const reason = typeof body.sensitive_reason === "string" ? body.sensitive_reason : "";
-        setPendingUpload({ file, kind: "sensitive", reason });
-        return;
-      }
-      if (xhr.status === 413 || code === "too_large") {
+  const startStreamingUpload = useCallback(
+    (file: File, opts: { dir?: string; overwrite?: boolean; confirmSensitive?: boolean } = {}) => {
+      const targetMid = machine?.id ?? "";
+      const targetDir = opts.dir ?? dir?.path ?? "";
+      if (!machine?.online || !targetMid || !targetDir) return;
+      if (file.size > MAX_UPLOAD_BYTES) {
         setDirError(t("machines-files.upload_too_large", { max: formatSize(MAX_UPLOAD_BYTES) }));
         return;
       }
-      const msg = typeof body.error === "string" && body.error ? body.error : `HTTP ${xhr.status}`;
-      setDirError(t("machines-files.action_error", { error: msg }));
-    };
+      uploadXhrRef.current?.abort();
+      const xhr = new XMLHttpRequest();
+      uploadXhrRef.current = xhr;
+      setDirError("");
+      setDirNotice("");
+      setPendingUpload(null);
+      setUploadSensitiveAck(false);
+      setUploadProgress({ name: file.name, loaded: 0, total: file.size });
 
-    xhr.send(file);
-  }, [machine?.id, machine?.online, dir?.path, loadDirectory]);
+      const url = machineFileUploadURL(targetMid, {
+        dir: targetDir,
+        name: file.name,
+        overwrite: opts.overwrite,
+        confirmSensitive: opts.confirmSensitive,
+      });
+      xhr.open("POST", url);
+      xhr.setRequestHeader("Authorization", `Bearer ${getToken()}`);
+      xhr.setRequestHeader("Accept-Language", currentLanguage());
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+
+      xhr.upload.onprogress = (ev) => {
+        const total = ev.lengthComputable ? ev.total : file.size;
+        setUploadProgress({ name: file.name, loaded: ev.loaded, total });
+      };
+
+      xhr.onabort = () => {
+        if (uploadXhrRef.current === xhr) uploadXhrRef.current = null;
+        setUploadProgress(null);
+        setDirNotice(t("machines-files.upload_cancelled"));
+      };
+
+      xhr.onerror = () => {
+        if (uploadXhrRef.current === xhr) uploadXhrRef.current = null;
+        setUploadProgress(null);
+        setDirError(t("machines-files.action_error", { error: t("lib-api.cant_reach_hub") }));
+      };
+
+      xhr.onload = () => {
+        if (uploadXhrRef.current === xhr) uploadXhrRef.current = null;
+        setUploadProgress(null);
+        let body: Record<string, unknown> = {};
+        try {
+          body = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+        } catch {
+          body = {};
+        }
+        const stillInTargetDir =
+          currentDirRef.current.mid === targetMid && currentDirRef.current.path === targetDir;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          const done = body as unknown as MachineFileUploadEndResponse;
+          setDirNotice(t("machines-files.upload_complete", { name: file.name, size: formatSize(done.size ?? file.size) }));
+          if (stillInTargetDir) {
+            void loadDirectory(targetMid, targetDir);
+          }
+          return;
+        }
+        const code = typeof body.code === "string" ? body.code : "";
+        if (xhr.status === 409 && code === "exists") {
+          if (stillInTargetDir) {
+            setPendingUpload({ mid: targetMid, dir: targetDir, file, kind: "exists", confirmedSensitive: opts.confirmSensitive });
+          } else {
+            const msg = typeof body.error === "string" && body.error ? body.error : `HTTP ${xhr.status}`;
+            setDirError(t("machines-files.action_error", { error: msg }));
+          }
+          return;
+        }
+        if (xhr.status === 412 && code === "machine_file_sensitive_confirm") {
+          if (stillInTargetDir) {
+            const reason = typeof body.sensitive_reason === "string" ? body.sensitive_reason : "";
+            setPendingUpload({ mid: targetMid, dir: targetDir, file, kind: "sensitive", reason });
+          } else {
+            const msg = typeof body.error === "string" && body.error ? body.error : `HTTP ${xhr.status}`;
+            setDirError(t("machines-files.action_error", { error: msg }));
+          }
+          return;
+        }
+        if (xhr.status === 413 || code === "too_large") {
+          setDirError(t("machines-files.upload_too_large", { max: formatSize(MAX_UPLOAD_BYTES) }));
+          return;
+        }
+        const msg = typeof body.error === "string" && body.error ? body.error : `HTTP ${xhr.status}`;
+        setDirError(t("machines-files.action_error", { error: msg }));
+      };
+
+      xhr.send(file);
+    },
+    [machine?.id, machine?.online, dir?.path, loadDirectory],
+  );
 
   const handleUploadPick = useCallback((file: File | undefined) => {
-    if (!file) return;
+    if (!file || !machine?.online || !dir?.path) return;
     if (file.size > MAX_UPLOAD_BYTES) {
       setDirError(t("machines-files.upload_too_large", { max: formatSize(MAX_UPLOAD_BYTES) }));
       return;
@@ -725,11 +766,11 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     const sens = classifyTargetPath(dir, file.name);
     if (sens.sensitive) {
       setUploadSensitiveAck(false);
-      setPendingUpload({ file, kind: "sensitive", reason: sens.reason });
+      setPendingUpload({ mid: machine.id, dir: dir.path, file, kind: "sensitive", reason: sens.reason });
       return;
     }
-    startStreamingUpload(file);
-  }, [dir, startStreamingUpload]);
+    startStreamingUpload(file, { dir: dir.path });
+  }, [machine?.id, machine?.online, dir, startStreamingUpload]);
 
   const cancelUpload = useCallback(() => {
     uploadXhrRef.current?.abort();
@@ -774,7 +815,16 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
   const activeBinary = Boolean(activeFile?.binary);
   const downloadPath = activeFile?.path ?? selectedEntry?.path ?? "";
   const downloadName = activeFile?.name ?? selectedEntry?.name ?? "";
-  const canEdit = Boolean(mode === "preview" && preview && preview.editable && !preview.binary && !preview.truncated && preview.mtime && preview.sha256);
+  const canEdit = Boolean(
+    mode === "preview" &&
+    preview &&
+    preview.editable &&
+    !preview.binary &&
+    !preview.truncated &&
+    !previewMixedEol &&
+    preview.mtime &&
+    preview.sha256,
+  );
   const uploadPct = uploadProgress && uploadProgress.total > 0
     ? Math.min(100, Math.round((uploadProgress.loaded / uploadProgress.total) * 100))
     : 0;
@@ -1029,7 +1079,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                       <Button
                         tone="primary"
                         disabled={!uploadSensitiveAck}
-                        onClick={() => startStreamingUpload(pendingUpload.file, { confirmSensitive: true })}
+                        onClick={() => startStreamingUpload(pendingUpload.file, { dir: pendingUpload.dir, confirmSensitive: true })}
                       >
                         {t("machines-files.upload_confirm_start")}
                       </Button>
@@ -1048,6 +1098,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                         tone="primary"
                         onClick={() =>
                           startStreamingUpload(pendingUpload.file, {
+                            dir: pendingUpload.dir,
                             overwrite: true,
                             confirmSensitive: pendingUpload.confirmedSensitive,
                           })}
@@ -1350,7 +1401,13 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                         tone="secondary"
                         icon="pencil"
                         disabled={!canEdit || loadingFile}
-                        title={canEdit ? undefined : t("machines-files.edit_disabled_hint", { max: formatSize(editMaxBytes) })}
+                        title={
+                          canEdit
+                            ? undefined
+                            : previewMixedEol
+                              ? t("machines-files.edit_mixed_eol_hint")
+                              : t("machines-files.edit_disabled_hint", { max: formatSize(editMaxBytes) })
+                        }
                         onClick={startEdit}
                       >
                         {t("machines-files.edit")}
@@ -1428,6 +1485,12 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                     >
                       {t("machines-files.reload_latest")}
                     </Button>
+                  </div>
+                )}
+
+                {mode === "preview" && preview?.editable && !preview.binary && !preview.truncated && previewMixedEol && (
+                  <div className="border-b border-line bg-field px-4 py-2 text-xs text-ink-2" data-testid="mixed-eol-notice">
+                    {t("machines-files.edit_mixed_eol_hint")}
                   </div>
                 )}
 

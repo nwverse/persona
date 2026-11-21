@@ -70,18 +70,40 @@ function stubHub(input: RequestInfo | URL, init?: RequestInit): Promise<Response
     }));
   }
   if (url.includes("/files/list")) {
+    const reqPath = new URL(url, "http://localhost").searchParams.get("path") ?? "";
+    const curPath = reqPath.endsWith("/logs") ? reqPath : listDirPath;
     return Promise.resolve(json({
-      path: listDirPath,
-      canonical_path: listDirPath,
+      path: curPath,
+      canonical_path: curPath,
       parent: "/home",
-      total: 5,
+      total: 6,
       entries: [
-        { name: "logs", path: `${listDirPath}/logs`, kind: "dir", size: 4096, mode: "drwxr-xr-x", perm: 0o755, mtime: "2026-11-20T00:00:00Z" },
-        { name: ".env", path: `${listDirPath}/.env`, kind: "file", size: 12, mode: "-rw-------", perm: 0o600, mtime: "2026-11-20T00:00:00Z", sensitive: true, sensitive_reason: "env" },
-        { name: "win.ini", path: `${listDirPath}/win.ini`, kind: "file", size: 22, mode: "-rw-r--r--", perm: 0o644, mtime: "2026-11-20T00:00:00Z" },
-        { name: "app.log", path: `${listDirPath}/app.log`, kind: "file", size: 600000, mode: "-rw-r--r--", perm: 0o644, mtime: "2026-11-20T00:00:00Z" },
-        { name: "image.bin", path: `${listDirPath}/image.bin`, kind: "file", size: 2048, mode: "-rw-r--r--", perm: 0o644, mtime: "2026-11-20T00:00:00Z", binary: true },
+        { name: "logs", path: `${curPath}/logs`, kind: "dir", size: 4096, mode: "drwxr-xr-x", perm: 0o755, mtime: "2026-11-20T00:00:00Z" },
+        { name: ".env", path: `${curPath}/.env`, kind: "file", size: 12, mode: "-rw-------", perm: 0o600, mtime: "2026-11-20T00:00:00Z", sensitive: true, sensitive_reason: "env" },
+        { name: "win.ini", path: `${curPath}/win.ini`, kind: "file", size: 22, mode: "-rw-r--r--", perm: 0o644, mtime: "2026-11-20T00:00:00Z" },
+        { name: "mixed.txt", path: `${curPath}/mixed.txt`, kind: "file", size: 18, mode: "-rw-r--r--", perm: 0o644, mtime: "2026-11-20T00:00:00Z" },
+        { name: "app.log", path: `${curPath}/app.log`, kind: "file", size: 600000, mode: "-rw-r--r--", perm: 0o644, mtime: "2026-11-20T00:00:00Z" },
+        { name: "image.bin", path: `${curPath}/image.bin`, kind: "file", size: 2048, mode: "-rw-r--r--", perm: 0o644, mtime: "2026-11-20T00:00:00Z", binary: true },
       ],
+    }));
+  }
+  if (url.includes("/files/preview") && url.includes("mixed.txt")) {
+    return Promise.resolve(json({
+      path: `${listDirPath}/mixed.txt`,
+      canonical_path: `${listDirPath}/mixed.txt`,
+      name: "mixed.txt",
+      size: 18,
+      mode: "-rw-r--r--",
+      perm: 0o644,
+      mtime: "2026-11-20T00:00:00Z",
+      mime: "text/plain; charset=utf-8",
+      revision: "r-mixed",
+      sha256: "sha-mixed-1",
+      editable: true,
+      edit_max_bytes: 1048576,
+      text: "alpha\r\nbeta\ngamma\n",
+      bytes_read: 18,
+      max_bytes: 262144,
     }));
   }
   if (url.includes("/files/preview") && url.includes("win.ini")) {
@@ -269,6 +291,9 @@ describe("fileDiff helpers", () => {
     expect(detectLineEnding(crlfOriginal)).toBe("crlf");
     expect(detectLineEnding("a\rb\r")).toBe("cr");
     expect(detectLineEnding("a\nb\n")).toBe("lf");
+    expect(detectLineEnding("alpha\r\nbeta\ngamma\n")).toBe("mixed");
+    expect(detectLineEnding("a\rb\nc\n")).toBe("mixed");
+    expect(detectLineEnding("a\r\nb\rc\r")).toBe("mixed");
     const lfDraft = normalizeToLF(crlfOriginal).replace("beta", "beta-2");
     const crlfRestored = restoreLineEnding(lfDraft, "crlf");
     expect(crlfRestored).toBe("alpha\r\nbeta-2\r\ngamma\r\n");
@@ -281,6 +306,15 @@ describe("fileDiff helpers", () => {
       "del:beta",
       "add:beta-2",
       "context:gamma",
+    ]);
+
+    // Line-ending-only changes are shown explicitly instead of hidden as identical lines.
+    const eolOnlyDiff = computeLineDiff("a\r\nb\n", "a\nb\n");
+    expect(eolOnlyDiff.changed).toBe(true);
+    expect(eolOnlyDiff.hunks[0]?.lines.map((l) => `${l.type}:${l.text}`)).toEqual([
+      "del:a\\r",
+      "add:a",
+      "context:b",
     ]);
 
     expect(classifySensitivePathClient(".env")).toEqual({ sensitive: true, reason: "env" });
@@ -557,6 +591,88 @@ describe("FileBrowserPanel", () => {
       expected_mtime: "2026-11-20T00:00:00Z",
       expected_sha256: "sha-win-1",
     });
+  });
+
+  it("disables inline editing and displays a notice for files with mixed line endings", async () => {
+    act(() => root.render(<FileBrowserPanel machines={onlineMachines} />));
+    await flush();
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="file-entry-mixed.txt"]')!.click();
+    });
+    await flush();
+
+    const editBtn = findButton(/^(编辑|Edit)$/);
+    expect(editBtn.disabled).toBe(true);
+    expect(host.querySelector('[data-testid="mixed-eol-notice"]')).not.toBeNull();
+  });
+
+  it("does not hijack directory navigation on upload completion and clears stale pendingUpload on navigation", async () => {
+    act(() => root.render(<FileBrowserPanel machines={onlineMachines} />));
+    await flush();
+
+    // 1. Start upload in /home/dev, navigate into /home/dev/logs before upload completes, then finish XHR.
+    const uploadInput = host.querySelector<HTMLInputElement>('[data-testid="machine-file-upload-input"]')!;
+    const file1 = new File([new Uint8Array(100)], "big.bin", { type: "application/octet-stream" });
+    await act(async () => {
+      Object.defineProperty(uploadInput, "files", { configurable: true, value: [file1] });
+      uploadInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const firstXhr = FakeXHR.last!;
+    expect(firstXhr.url).toContain("dir=%2Fhome%2Fdev");
+
+    // Navigate into /home/dev/logs while upload is still in flight.
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="file-entry-logs"]')!.click();
+    });
+    await flush();
+    const listCallsBeforeDone = calls.filter((c) => c.url.includes("/files/list")).length;
+
+    // Upload completes in the background: must NOT reload /home/dev or snap the user back from /home/dev/logs.
+    await act(async () => {
+      firstXhr.status = 200;
+      firstXhr.responseText = JSON.stringify({ size: 100 });
+      firstXhr.onload?.();
+    });
+    await flush();
+    expect(calls.filter((c) => c.url.includes("/files/list")).length).toBe(listCallsBeforeDone);
+    expect(host.querySelector<HTMLInputElement>('input[aria-label]')?.value).toBe("/home/dev/logs");
+
+    // 2. Trigger 409 exists prompt in /home/dev/logs, confirm overwrite stays pinned to /home/dev/logs.
+    const file2 = new File([new Uint8Array(64)], "dup.txt", { type: "text/plain" });
+    await act(async () => {
+      Object.defineProperty(uploadInput, "files", { configurable: true, value: [file2] });
+      uploadInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const conflictXhr = FakeXHR.last!;
+    await act(async () => {
+      conflictXhr.status = 409;
+      conflictXhr.responseText = JSON.stringify({ code: "exists", error: "already exists" });
+      conflictXhr.onload?.();
+    });
+    const confirmPanel = host.querySelector('[data-testid="upload-confirm-panel"]');
+    expect(confirmPanel).not.toBeNull();
+
+    // Clicking Overwrite while still in /home/dev/logs targets /home/dev/logs with overwrite=1.
+    await act(async () => {
+      findButton(/覆盖上传|Overwrite/, confirmPanel!).click();
+    });
+    expect(FakeXHR.last?.url).toContain("dir=%2Fhome%2Fdev%2Flogs");
+    expect(FakeXHR.last?.url).toContain("overwrite=1");
+
+    // Trigger another 409 prompt, then navigate to another directory: pendingUpload must clear immediately.
+    await act(async () => {
+      FakeXHR.last!.status = 409;
+      FakeXHR.last!.responseText = JSON.stringify({ code: "exists", error: "already exists" });
+      FakeXHR.last!.onload?.();
+    });
+    expect(host.querySelector('[data-testid="upload-confirm-panel"]')).not.toBeNull();
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="file-entry-logs"]')!.click();
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="upload-confirm-panel"]')).toBeNull();
   });
 
   it("shows offline notice without issuing file requests when selected machine is offline", async () => {

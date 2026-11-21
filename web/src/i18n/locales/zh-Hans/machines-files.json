@@ -63,6 +63,7 @@
   "cancel": "取消",
   "edit": "编辑",
   "edit_disabled_hint": "仅支持在线编辑不超过 {max} 的非二进制 UTF-8 文本文件。",
+  "edit_mixed_eol_hint": "该文件包含混合换行符（CRLF/LF/CR），为避免改写未修改行的换行格式，已禁用在线编辑；请下载后在本地编辑。",
   "edit_label": "文件内容编辑器",
   "edit_bytes": "{bytes} / {max}",
   "edit_oversized": "编辑后的文本已超过 {max} 上限。",

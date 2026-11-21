@@ -64,6 +64,7 @@
   "cancel": "Cancel",
   "edit": "Edit",
   "edit_disabled_hint": "Only non-binary UTF-8 files up to {max} can be edited here.",
+  "edit_mixed_eol_hint": "Inline editing is disabled for files with mixed line endings (CRLF/LF/CR) to avoid rewriting untouched lines. Download to edit locally.",
   "edit_label": "File content editor",
   "edit_bytes": "{bytes} / {max}",
   "edit_oversized": "Edited text exceeds the {max} limit.",
