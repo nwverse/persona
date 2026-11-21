@@ -338,6 +338,57 @@ func TestClaudeCLIUsageRefreshProtocolFallbackThrottleAndCancel(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("setUsageWindows(false) did not cancel in-flight Claude probe")
 	}
+	n.usageWin.mu.Lock()
+	accountsAfter, probesAfter := n.usageWin.accounts, n.usageWin.claudeProbes
+	n.usageWin.mu.Unlock()
+	if accountsAfter != nil || probesAfter != nil {
+		t.Fatalf("canceled refresh repopulated cache: accounts=%+v probes=%+v", accountsAfter, probesAfter)
+	}
+}
+
+func TestClaudeCLIUsageKeepsDefaultEnvUnsetWithInheritedNonDefaultDir(t *testing.T) {
+	useFakeClaudeUsageCLI(t)
+	prevCodex := codexUsageCLI
+	codexUsageCLI = func() (string, error) { return "", os.ErrNotExist }
+	t.Cleanup(func() { codexUsageCLI = prevCodex })
+
+	home := t.TempDir()
+	defaultDir := filepath.Join(home, ".claude")
+	inheritedDir := filepath.Join(home, ".claude-inherited")
+	for _, d := range []string{defaultDir, inheritedDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", inheritedDir)
+	t.Setenv("PERSONA_TEST_CLAUDE_DEFAULT_DIR", defaultDir)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	writeClaudeUsageFixture(t, defaultDir, "control", fmt.Sprintf(`{
+		"subscription_type":"pro",
+		"rate_limits_available":true,
+		"rate_limits":{"five_hour":{"utilization":20,"resets_at":%q}}
+	}`, now.Add(2*time.Hour).Format(time.RFC3339)))
+	writeClaudeUsageFixture(t, inheritedDir, "control", fmt.Sprintf(`{
+		"subscription_type":"max",
+		"rate_limits_available":true,
+		"rate_limits":{"five_hour":{"utilization":60,"resets_at":%q}}
+	}`, now.Add(3*time.Hour).Format(time.RFC3339)))
+
+	n := &Node{home: home, dir: t.TempDir(), cdirs: newClaudeDirs()}
+	n.cdirs.scan = func() map[int]procEnv { return nil }
+	n.refreshUsageWindows(t.Context())
+
+	if envSeen, err := os.ReadFile(filepath.Join(defaultDir, "fixture-config-dir-env")); err != nil || string(envSeen) != "<unset>" {
+		t.Errorf("default dir CLAUDE_CONFIG_DIR = %q (err %v), want <unset> even when inherited dir points elsewhere", string(envSeen), err)
+	}
+	if envSeen, err := os.ReadFile(filepath.Join(inheritedDir, "fixture-config-dir-env")); err != nil || string(envSeen) != inheritedDir {
+		t.Errorf("inherited dir CLAUDE_CONFIG_DIR = %q (err %v), want %q", string(envSeen), err, inheritedDir)
+	}
+	if snap := n.usageSnapshot(); len(snap.Accounts) != 2 {
+		t.Fatalf("expected 2 Claude accounts, got %+v", snap.Accounts)
+	}
 }
 
 func TestClaudeCLIUsageSkipsSpawnWhenSingleDirStatusLineIsFresh(t *testing.T) {
@@ -476,7 +527,7 @@ func runFakeClaudeUsageCLI() {
 			switch strings.TrimSpace(string(body)) {
 			case "block":
 				_ = os.WriteFile(filepath.Join(dir, "fixture-started"), nil, 0o600)
-				select {}
+				continue // stay blocked in scanner.Scan() until killed by cancel
 			case "unsupported":
 				_ = out.Encode(map[string]any{
 					"type": "control_response",

@@ -129,6 +129,7 @@ func (n *Node) collectClaudeCLIUsage(ctx context.Context, dirs []string, prevPro
 	}
 	defaultUserDir := realPath(filepath.Join(n.home, ".claude"))
 	inheritedConfigDir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR"))
+	inheritedIsDefault := inheritedConfigDir != "" && realPath(proto.ExpandHome(inheritedConfigDir, n.home)) == defaultUserDir
 
 	type probeResult struct {
 		real    string
@@ -146,7 +147,7 @@ func (n *Node) collectClaudeCLIUsage(ctx context.Context, dirs []string, prevPro
 		reads.Go(func() error {
 			readCtx, cancel := context.WithTimeout(ctx, claudeUsagePollTimeout)
 			defer cancel()
-			env := claudeUsageEnv(cli, t.dir, t.real, defaultUserDir, inheritedConfigDir)
+			env := claudeUsageEnv(cli, t.dir, t.real, defaultUserDir, inheritedIsDefault)
 			sampledAt := claudeUsageNow().UTC()
 			acct, ok := readClaudeCLIUsage(readCtx, cli, env, sampledAt)
 			if readCtx.Err() != nil && ctx.Err() != nil {
@@ -271,15 +272,15 @@ func (n *Node) claudeDirActiveSince(dir, real string, since time.Time) bool {
 //
 // On macOS, Claude Code derives the Keychain service name from CLAUDE_CONFIG_DIR whenever that variable is set, so
 // explicitly setting CLAUDE_CONFIG_DIR=~/.claude misses the default Keychain login. Keep CLAUDE_CONFIG_DIR unset for
-// the default ~/.claude directory unless the node itself inherited CLAUDE_CONFIG_DIR.
-func claudeUsageEnv(cli, dir, real, defaultUserDir, inheritedConfigDir string) []string {
+// the default ~/.claude directory unless the node's own inherited CLAUDE_CONFIG_DIR points at that same directory.
+func claudeUsageEnv(cli, dir, real, defaultUserDir string, inheritedIsDefault bool) []string {
 	env := withoutEnv(desktopSeedEnv(os.Environ()), []string{
 		"CLAUDECODE",
 		"CLAUDE_CODE_ENTRYPOINT",
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
 		"CLAUDE_CONFIG_DIR",
 	})
-	if inheritedConfigDir != "" || real != defaultUserDir {
+	if real != defaultUserDir || inheritedIsDefault {
 		env = append(env, "CLAUDE_CONFIG_DIR="+dir)
 	}
 	if bin := claudeUsageNodeBin(cli); bin != "" {
