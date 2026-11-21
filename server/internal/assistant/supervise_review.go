@@ -632,6 +632,10 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 		if accepted && row.DoneAt != nil {
 			s.goRecordTaskOutcome(before, *row.DoneAt)
 			s.learnAcceptedEstimate(ctx, id)
+			// Post-closure PR lifecycle: keep watching this to-do's own still-open delivery PRs without reopening it (#12371).
+			if cur, ok := s.todoNow(id); ok {
+				s.createPRFollowups(ctx, cur)
+			}
 		}
 		if t, now := s.todoNow(id); ok && now {
 			// A side conversation's task the main conversation supervised: the planning conversation hears it ended (#4669).
