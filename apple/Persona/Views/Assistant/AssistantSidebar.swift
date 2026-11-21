@@ -1509,13 +1509,6 @@ extension AssistantSidebar {
         }
     }
 
-    /// The assistant's name as the sidebar's head says it: the current assistant's own when the hub has a roster (#6401),
-    /// else the look's name; "Persona" only as the last fallback. The top bar names the main conversation by it too
-    /// (#9973); the main conversation's row and search results say "Main Chat" under the head.
-    static func assistantName(_ model: AppModel) -> String {
-        model.currentAssistant?.name ?? model.persona.name
-    }
-
     /// A place to go; `place`: what it shows beside the Sidebar layout's sidebar, its row shaded while it does.
     @ViewBuilder private func action(_ title: String, _ symbol: String, id: String? = nil, count: Int = 0, place: ShellPage? = nil,
                                      run: @escaping () -> Void) -> some View {
