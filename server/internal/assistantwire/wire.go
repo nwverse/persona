@@ -141,13 +141,14 @@ const DeviceAll = "*"
 
 // Device is one of the user's machines as devices.list has it.
 type Device struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Kind    string `json:"kind,omitempty"`     // local (the hub's own) | ssh | link …
-	SSHHost string `json:"ssh_host,omitempty"` // the hub machine's ssh alias for it
-	Home    string `json:"home,omitempty"`     // "" while it has not reported one
-	DataDir string `json:"data_dir,omitempty"` // its node's data directory ("" while not reported, or the default)
-	Online  bool   `json:"online"`
+	ID       string    `json:"id"`
+	Name     string    `json:"name"`
+	Kind     string    `json:"kind,omitempty"`     // local (the hub's own) | ssh | link …
+	SSHHost  string    `json:"ssh_host,omitempty"` // the hub machine's ssh alias for it
+	Home     string    `json:"home,omitempty"`     // "" while it has not reported one
+	DataDir  string    `json:"data_dir,omitempty"` // its node's data directory ("" while not reported, or the default)
+	Online   bool      `json:"online"`
+	LastSeen time.Time `json:"last_seen,omitzero"`
 	// Reachable: a call to it would go out now (its link is up; Online can lag a reconnect).
 	Reachable bool `json:"reachable"`
 	// Version is its node's build ("" while not reported); ModelConfiguration: that node takes a launcher's model

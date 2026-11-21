@@ -168,6 +168,9 @@ func zshrcLauncherSnapshot(devices []Device, seen map[string][]proto.Launcher, s
 // zshrcLaunchersLastSeen answers the persisted snapshot without asking a node, and whether one existed. Sync's state
 // stays empty until a refresh has one, while its persisted shell, rc file and time still describe the last answer.
 func (s *Service) zshrcLaunchersLastSeen(ctx context.Context) ([]zshrcLaunchers, bool) {
+	if overview := overviewReadFrom(ctx); overview != nil && overview.catalogCaptured {
+		return overview.launchers, overview.catalogWasCached
+	}
 	st := &s.models
 	st.zshrcMu.Lock()
 	seen, states := st.zshrc, st.zshrcSync
@@ -240,6 +243,9 @@ func (s *Service) refreshZshrcLaunchers(ctx context.Context, only ...string) {
 // (refresh, or nothing seen since the assistant started; the node caches a minute). Each machine gets
 // launcherSyncTimeout, and its Sync says whether its list came in now.
 func (s *Service) zshrcLaunchers(ctx context.Context, refresh bool, only ...string) []zshrcLaunchers {
+	if overview := overviewReadFrom(ctx); overview != nil {
+		return overview.launchers
+	}
 	st := &s.models
 	st.zshrcMu.Lock()
 	seen, states := st.zshrc, st.zshrcSync

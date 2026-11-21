@@ -217,10 +217,10 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 					continue
 				}
 				m.mu.Lock()
-				online, info := m.online, m.info
+				online, info, lastSeen := m.online, m.info, m.lastSeen
 				m.mu.Unlock()
 				list = append(list, assistantwire.Device{ID: m.cfg.ID, Name: m.name(), Kind: m.kind(), SSHHost: m.cfg.SSHHost, Home: info.Home,
-					HomeReal: info.HomeReal, DataDir: info.DataDir, Online: online, Reachable: m.reachable(), Version: info.Version,
+					HomeReal: info.HomeReal, DataDir: info.DataDir, Online: online, LastSeen: lastSeen, Reachable: m.reachable(), Version: info.Version,
 					ModelConfiguration: info.ModelConfiguration, ClaudeVersion: info.ClaudeVersion, Engine: startEngine(info),
 					TaskInstructions:  info.Protocol > 0 && slices.Contains(info.Capabilities, nodeproto.TaskInstructions),
 					ExternalInventory: info.Protocol > 0 && slices.Contains(info.Capabilities, nodeproto.ExternalLauncherInventory)})

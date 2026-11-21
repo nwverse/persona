@@ -1,0 +1,27 @@
+[
+  {
+    "name": "reported launcher",
+    "session": {"machine_id": "server", "agent": "claude", "launcher": "team-wrapper", "model": "claude-sonnet-4-5", "started_by_persona": true},
+    "group": {"machine_id": "server", "agent": "claude", "launcher": "team-wrapper", "model": "claude-sonnet-4-5"}
+  },
+  {
+    "name": "Persona start with the built-in launcher",
+    "session": {"machine_id": "macbook", "agent": "claude", "model": "claude-sonnet-4-5", "started_by_persona": true},
+    "group": {"machine_id": "macbook", "agent": "claude", "launcher": "claude", "model": "claude-sonnet-4-5"}
+  },
+  {
+    "name": "terminal start with no identified launcher",
+    "session": {"machine_id": "macbook", "agent": "claude", "model": "claude-sonnet-4-5"},
+    "group": {"machine_id": "macbook", "agent": "claude", "launcher": null, "model": "claude-sonnet-4-5"}
+  },
+  {
+    "name": "archived session",
+    "session": {"machine_id": "server", "agent": "claude", "launcher": "team-wrapper", "archived": true},
+    "group": null
+  },
+  {
+    "name": "subagent session",
+    "session": {"machine_id": "server", "agent": "claude", "launcher": "team-wrapper", "is_subagent": true},
+    "group": null
+  }
+]

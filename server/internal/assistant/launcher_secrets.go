@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 
@@ -30,6 +31,8 @@ type launcherSecrets interface {
 }
 
 var _ launcherSecrets = (*extmgr.Manager)(nil)
+
+var errOverviewSecretUnchecked = errors.New("the overview does not resolve secret references")
 
 // keyReference is the reference a sealed key holds; false for a key, no key or one that does not open.
 func (s *Service) keyReference(sealed string) (string, bool) {
@@ -60,6 +63,9 @@ func (s *Service) openLauncherKey(ctx context.Context, sealed, launcher, machine
 	}
 	if s.refs == nil {
 		return "", noSecretProvider(ref)
+	}
+	if overviewReadFrom(ctx) != nil {
+		return "", errOverviewSecretUnchecked
 	}
 	return s.refs.LauncherSecret(ctx, ref, launcher, machine)
 }

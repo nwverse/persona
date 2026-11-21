@@ -492,12 +492,14 @@ func (s *Service) machineLauncherRoutes() {
 		purpose := r.URL.Query().Get("purpose")
 		host := ""
 		if purpose == "" || purpose == "agent.new" {
+			ctx = withSettingsMemo(ctx)
 			host = agentStartHost(d, r.URL.Query().Get("host"))
 		}
 		var list []ConfiguredLauncher
 		var err error
 		var unavailable []unavailableLauncher
 		var all []ConfiguredLauncher
+		var here *modelAgentFit
 		switch purpose {
 		case "assistant":
 			if !d.ExternalInventory {
@@ -514,7 +516,11 @@ func (s *Service) machineLauncherRoutes() {
 				}
 			}
 		default:
-			list, err = s.pickerLaunchersOn(ctx, mid, host)
+			if purpose == "" || purpose == "agent.new" {
+				list, here, err = s.agentPickerLauncherFit(ctx, d, host)
+			} else {
+				list, err = s.pickerLaunchersOn(ctx, mid, host)
+			}
 			list = slices.DeleteFunc(list, func(l ConfiguredLauncher) bool {
 				return proto.IsExternalLauncher(l.Name) || l.Source == proto.ExternalLauncherSource
 			})
@@ -526,6 +532,9 @@ func (s *Service) machineLauncherRoutes() {
 		// A launcher whose latest check failed is left out of the pickers and of the presets that name it; the launcher
 		// the configuration runs with no pick stays, with its record, so the form can still say why this start may fail.
 		def := s.pickerDefault(ctx, r, all)
+		if def != nil && here != nil {
+			def["here"] = here
+		}
 		keep, _ := def["provider"].(string)
 		shown := s.withHealth(ctx, mid, list, keep)
 		// A Persona-managed provider shows its display name over its ID (launcher_auto_name), and a runtime's provider the

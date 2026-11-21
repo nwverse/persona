@@ -1,0 +1,94 @@
+{
+  "revision": "eccdc56cb064bba719d7ff9da2d1b58596110eb204179589cae5f62d7b166083",
+  "generated_at": "2026-01-08T13:20:00Z",
+  "snapshot": {"refreshing": false, "oldest_synced_at": "2026-01-08T13:16:00Z"},
+  "agents": {
+    "provider": "launcher.team-wrapper",
+    "launcher": "team-wrapper",
+    "model": "claude-sonnet-4-5",
+    "effort": "high",
+    "source": {"code": "set"}
+  },
+  "profile": {
+    "id": "balanced",
+    "name": "Balanced",
+    "drift": 0,
+    "changes": [],
+    "tiers": [{"name": "deep", "launcher": "team-wrapper", "on": ["server"]}]
+  },
+  "machines": [
+    {
+      "id": "server",
+      "name": "Server",
+      "online": true,
+      "hub": true,
+      "claude_version": "2.0.0",
+      "node": {"version": "fixture", "model_configuration": true},
+      "sync": {"machine": "server", "name": "Server", "state": "ok", "shell": "zsh", "rc_file": "~/.zshrc", "synced_at": "2026-01-08T13:18:00Z"},
+      "list": "fresh",
+      "roles": ["assistant"],
+      "new_agent": {"launcher": "team-wrapper", "agent": "claude", "model": "claude-sonnet-4-5", "effort": "high", "fit": "as_set"},
+      "chats": [{
+        "purpose": "assistant", "name": "Main chat", "runtime": "cli", "source": {"code": "default"},
+        "launcher": "claude", "agent": "claude", "model": "", "effort": "", "fit": "as_set"
+      }],
+      "providers": [
+        {"name": "claude", "display_name": "Claude Code default", "source": "builtin", "agent": "claude", "hidden": false, "in_scope": true, "in_picker": true, "used_by": ["assistant"]},
+        {"name": "team-wrapper", "display_name": "Team wrapper", "source": "zshrc", "rc_file": "~/.zshrc", "agent": "claude", "hidden": false, "in_scope": true, "in_picker": true, "used_by": ["agent.new", "tier:deep"]}
+      ],
+      "tiers": [{"name": "deep", "available": true}]
+    },
+    {
+      "id": "macbook",
+      "name": "MacBook",
+      "online": true,
+      "hub": false,
+      "claude_version": "2.0.0",
+      "node": {"version": "fixture", "model_configuration": true},
+      "sync": {"machine": "macbook", "name": "MacBook", "state": "ok", "shell": "zsh", "rc_file": "~/.zshrc", "synced_at": "2026-01-08T13:16:00Z"},
+      "list": "fresh",
+      "roles": [],
+      "new_agent": {"launcher": "claude", "agent": "claude", "model": "", "effort": "", "fit": "fallback", "instead_of": "team-wrapper", "note": "MacBook uses claude because team-wrapper is unavailable there."},
+      "chats": [],
+      "providers": [
+        {"name": "claude", "display_name": "Claude Code default", "source": "builtin", "agent": "claude", "hidden": false, "in_scope": true, "in_picker": true, "used_by": ["assistant"]}
+      ],
+      "tiers": [{"name": "deep", "available": false}]
+    },
+    {
+      "id": "studio",
+      "name": "Studio",
+      "online": false,
+      "last_seen": "2026-01-08T12:16:00Z",
+      "hub": false,
+      "node": {"model_configuration": false},
+      "sync": {"machine": "studio", "name": "Studio", "state": "offline"},
+      "list": "none",
+      "roles": [],
+      "new_agent": {"launcher": "team-wrapper", "model": "claude-sonnet-4-5", "effort": "high", "fit": "unchecked"},
+      "chats": [],
+      "providers": [],
+      "tiers": []
+    }
+  ],
+  "purposes": [
+    {"id": "agent.new", "status_code": "ok", "runs_on": "each"},
+    {"id": "assistant", "status_code": "ok", "runs_on": "server"}
+  ],
+  "providers": {
+    "launcher.claude": {"used_by": ["assistant"], "missing_on": [], "failing_on": [], "hidden": false},
+    "launcher.team-wrapper": {"used_by": ["agent.new", "tier:deep"], "missing_on": ["macbook"], "failing_on": [], "hidden": false}
+  },
+  "problems": [
+    {
+      "code": "default_fallback", "severity": "warning", "machine": "macbook", "purpose": "agent.new",
+      "launcher": "team-wrapper", "text": "MacBook uses claude because team-wrapper is unavailable there.",
+      "fixes": [{"action": "change_purpose", "target": "agent.new"}, {"action": "edit_provider", "target": "team-wrapper"}]
+    },
+    {
+      "code": "list_unknown", "severity": "info", "machine": "studio",
+      "text": "Studio has no saved launcher inventory.",
+      "fixes": [{"action": "refresh_list", "target": "studio"}]
+    }
+  ]
+}

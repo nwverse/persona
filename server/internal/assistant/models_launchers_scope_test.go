@@ -483,8 +483,8 @@ func TestModelConfigExplainsAnOutOfScopeProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := purposeOf(t, s, "assistant")
-	if p.MachineID != "server" || !strings.Contains(p.Status, "server") || slices.Contains(p.ProviderIDs, "launcher.box") {
-		t.Fatalf("assistant purpose: machine %q status %q providers %v", p.MachineID, p.Status, p.ProviderIDs)
+	if p.MachineID != "server" || !strings.Contains(p.Status, "server") || p.StatusCode != modelStatusOutOfScope || slices.Contains(p.ProviderIDs, "launcher.box") {
+		t.Fatalf("assistant purpose: machine %q status %q (%s) providers %v", p.MachineID, p.Status, p.StatusCode, p.ProviderIDs)
 	}
 }
 

@@ -273,7 +273,7 @@ func (s *Service) ownService(ctx context.Context, machine, agent string) proto.O
 
 // usableOn: provider l may be listed on machine's pickers (its scope, and its own-service rule as the node says).
 func (s *Service) usableOn(ctx context.Context, l storedLauncher, machine string) bool {
-	return s.usableOnAsking(ctx, l, machine, true)
+	return s.usableOnAsking(ctx, l, machine, overviewReadFrom(ctx) == nil)
 }
 
 // usableOnAsking is usableOn; with ask false its own-service rule goes by what machine's node said before only
@@ -588,27 +588,26 @@ func withoutMachineKeys(keys []machineKey, name string) []machineKey {
 	return slices.DeleteFunc(slices.Clone(keys), func(k machineKey) bool { return k.Launcher == name })
 }
 
-// purposeScopeStatus is Model configuration's word for a launcher purpose bound to machine whose provider is out of
-// that computer's scope ("" when it is not).
-func (s *Service) purposeScopeStatus(ctx context.Context, lang i18n.Lang, provider, machine string) string {
+// purposeScopeStatus explains a launcher purpose that is out of scope or conflicts with the computer's own service.
+func (s *Service) purposeScopeStatus(ctx context.Context, lang i18n.Lang, provider, machine string) (ModelPurposeStatusCode, string) {
 	name, ok := strings.CutPrefix(provider, "launcher.")
 	if !ok || machine == "" {
-		return ""
+		return "", ""
 	}
 	l, ok := s.managedNamed(ctx, name)
 	if !ok {
-		return ""
+		return "", ""
 	}
 	if key := s.scopeReason(l, machine); key != "" {
-		return s.scopeText(ctx, lang, key, l, machine)
+		return modelStatusOutOfScope, s.scopeText(ctx, lang, key, l, machine)
 	}
 	if l.SkipsOwnService() {
 		if st, ok := s.ownServiceCached(machine, l.AgentType()); ok && st.Known && st.Own {
 			var re *rpc.Error
 			if errors.As(s.ownServiceErr(ctx, lang, l, machine), &re) {
-				return re.Message
+				return modelStatusProviderIncompatible, re.Message
 			}
 		}
 	}
-	return ""
+	return "", ""
 }

@@ -155,6 +155,7 @@ const CodeNoGateway = "no_gateway"
 // models_launchers_routes.go there).
 var modelRoutes = []string{
 	"GET /api/v1/model-config",
+	"GET /api/v1/model-config/overview",
 	"GET /api/v1/model-config/purposes/{id}",
 	"GET /api/v1/model-config/providers/{id}/models",
 	"PATCH /api/v1/model-config/purposes/{id}",

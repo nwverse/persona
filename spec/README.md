@@ -76,6 +76,7 @@ spec/
 | attention | [README](fixtures/attention/README.md): Persona Link's "Needs you" summary counts what the web app's badge counts, checked by Go and the web app |
 | counts | [README](fixtures/counts/README.md): the surface table, every place a count is drawn on each client, the count it draws and whether drawing the manager's view would show today's number, held to the code by `scripts/test/test_counts_surfaces.py`; and the agreement report, which compares what the iOS and Android needs-you replays count (`scripts/test/counts_agreement.py`, #11900) |
 | session-search | [README](fixtures/session-search/README.md): ranked runtime-Agent search, explicit query operators and shared local/server matching (#7624) |
+| model-overview | [README](fixtures/model-overview/README.md) covers the saved launcher inventory and running-session grouping (#4664). |
 | chat-export | [README](fixtures/chat-export/README.md): a conversation exported as Markdown (#7375): who wrote each part, merged replies, work steps on and off, cut text and fences, written by the web app |
 | entries | [README](fixtures/entries/README.md): which of the Assistant's two composer entries (Needs you, In progress) each task, Agent, plan and message card goes to, checked by the web app and Android (#3387) |
 | needs-you | [README](fixtures/needs-you/README.md): the Agents tab's Needs you section, one row per session that waits for the user, and what its header, filter and badge count, checked by iOS and Android (#3580) |

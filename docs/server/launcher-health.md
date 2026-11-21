@@ -219,6 +219,9 @@ Decided with the user (2026-11-11): the two model lists offer only what works no
   A successful start does not clear these: `recordStartSuccess` only clears `not_in_terminal`.
 - `not_in_terminal` is the one failure that stays listed (dimmed, with its line, and **Try Anyway** as before): its checks pass — the node's login shell runs the launcher — and only a real start in the terminal clears it, so hiding it would leave no way to make that start.
 - The launcher the running configuration names with no pick (the `default` of the purpose the form follows) stays listed too, with its record: the next Start uses it whether or not it is offered, so the form must be able to say why it may fail — the clients mark the default row and show its line.
+- The [Models overview](../assistant/model-config.md#models-overview-4664) uses the same health rule for the launcher
+  selected by the saved inventory. New Agent's `default.here` fits against the unfiltered picker inventory so a
+  failing launcher can be reported as present and failing.
 - Because the list no longer carries the other failing entries, a client's gray-out with the reason, its **Try Anyway** and the help panel now appear for `not_in_terminal`, for that default, or with an older hub that still sends `health` on a blocked launcher (`LauncherBlockedHelp`, `NewAgent.tsx`). The list itself (iOS / Mac `AppModel.launchersForStart`, the web per dialog) is read fresh each time it opens, so a change behind any cache shows at once.
 - The same route feeds **Run Agent here** and the web's hand-off of a to-do to a new agent, so they follow the same rule; the `not_in_terminal` exception is what keeps a launcher those paths must be able to start.
 - A model configuration that names a hidden launcher is otherwise left alone: an explicit configuration is never silently changed.

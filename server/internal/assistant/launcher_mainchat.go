@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -87,10 +86,7 @@ func (s *Service) mainChatFitState(ctx context.Context, machine, name string, re
 		return mainChatFitResult{fit: mainChatFits, discoveryErr: err} // an ordinary unreadable list is not proof of a miss
 	}
 	fits, fitErr := s.assistantLaunchersOf(cctx, machine, picker)
-	if !slices.ContainsFunc(picker, func(l ConfiguredLauncher) bool {
-		source := compat.Source(l.Source)
-		return l.Source != "" && source != "persona" && source != "builtin"
-	}) {
+	if !mainChatCatalogKnown(picker) {
 		if refresh {
 			// Managed/built-in entries can be valid substitutes, but their presence alone is not evidence that the
 			// requested shell launcher recovered. Older nodes and hidden shell catalogs must not release the send early.
@@ -98,22 +94,19 @@ func (s *Service) mainChatFitState(ctx context.Context, machine, name string, re
 		}
 		return mainChatFitResult{fit: mainChatFits} // the machine's own ordinary list did not come
 	}
-	named := func(l ConfiguredLauncher) bool { return l.Name == name }
 	if fitErr != nil {
 		if refresh {
 			return mainChatFitResult{fit: mainChatGone, transient: true, discoveryErr: fitErr}
 		}
 		return mainChatFitResult{fit: mainChatFits}
 	}
-	switch {
-	case slices.ContainsFunc(fits, named):
-		return mainChatFitResult{fit: mainChatFits, launchers: fits}
-	case slices.ContainsFunc(picker, named):
-		label := launcherLabel(picker[slices.IndexFunc(picker, named)])
+	fit, label := mainChatFitOn(name, picker, fits)
+	r := mainChatFitResult{fit: fit, launchers: fits, transient: fit == mainChatGone}
+	if fit == mainChatRefused {
 		instead, _ := assistantFor(fits, name)
-		return mainChatFitResult{fit: mainChatRefused, refusal: s.mainChatRefusal(ctx, machine, label, launcherLabel(instead)), launchers: fits}
+		r.refusal = s.mainChatRefusal(ctx, machine, label, launcherLabel(instead))
 	}
-	return mainChatFitResult{fit: mainChatGone, transient: true, launchers: fits}
+	return r
 }
 
 const (
@@ -304,26 +297,10 @@ func withLauncherNote(ctx context.Context) (context.Context, *string) {
 // candidate must currently run Assistant on the machine, have the same agent kind, and have no failed health check.
 // In particular, plain claude is not implicitly preferred or eligible. "" when no approved substitute fits.
 func (s *Service) mainChatInstead(ctx context.Context, d Device, name, kind string, launchers []ConfiguredLauncher, names []string) string {
-	if kind == "" {
-		return "" // a disappeared launcher's kind is unknown: no substitute can be proven to be the same agent
-	}
-	for _, n := range names {
-		if n == name || proto.IsExternalLauncher(n) {
-			continue
-		}
-		i := slices.IndexFunc(launchers, func(l ConfiguredLauncher) bool { return l.Name == n })
-		if i < 0 {
-			continue
-		}
-		l := launchers[i]
-		if l.Source == proto.ExternalLauncherSource || agentKind(cmp.Or(l.AgentType, l.Agent)) != kind {
-			continue
-		}
-		if _, bad := s.launcherUnusable(ctx, d.ID, n); !bad {
-			return n
-		}
-	}
-	return ""
+	return mainChatInsteadOn(name, kind, launchers, names, func(n string) bool {
+		_, bad := s.launcherUnusable(ctx, d.ID, n)
+		return bad
+	})
 }
 
 // mainChatLauncherKind keeps the agent identity of a launcher that has just disappeared from discovery. The last

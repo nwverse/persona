@@ -91,6 +91,10 @@ type ModelPurpose struct {
 	Fields        []string     `json:"fields"`
 	ProviderIDs   []string     `json:"provider_ids"`
 	ConfigDirs    []string     `json:"config_dirs,omitempty"` // assistant only: the profiles its new conversations can start in
+
+	// StatusCode describes the same decision as Status independently of the request language.
+	StatusCode ModelPurposeStatusCode `json:"status_code,omitempty"`
+
 	// Candidates (an extension's purpose only, #10398): its candidate models as the extension sends them, and as the
 	// user keeps, switches off or replaces them (model_candidates.go).
 	Candidates *ModelCandidates `json:"candidates,omitempty"`

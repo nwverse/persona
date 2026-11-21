@@ -724,6 +724,9 @@ func (s *Service) session(ctx context.Context, machine, id string) (proto.Sessio
 
 // devices are the user's machines.
 func (s *Service) devices(ctx context.Context) []Device {
+	if overview := overviewReadFrom(ctx); overview != nil {
+		return overview.devices
+	}
 	devices, _, _ := s.devicesAndPhone(ctx)
 	return devices
 }

@@ -242,7 +242,8 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 		return "", startAgent{}, nil
 	}
 	list, known := s.launchersHere(withUnhidden(ctx, name), m.ID) // a hidden default still runs (#4659)
-	if !known {
+	to, fit := fitOn(m, list, known, name, false)
+	if fit == fitUnchecked {
 		return "", s.lastSeenAgent(ctx, m.ID, name), nil
 	}
 	discovered := make([]ConfiguredLauncher, 0, len(list))
@@ -251,7 +252,7 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 	}
 	overrides := s.hello(ctx).Models.Launchers[m.ID]
 	agentOf := configuredStartAgentLookup(discovered, overrides)
-	if slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name }) {
+	if fit == fitAsSet {
 		return "", agentOf(name), nil
 	}
 	if own.launcher != "" {
@@ -259,7 +260,6 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 			"machine": firstNonEmpty(m.Name, m.ID), "launcher": name, "launchers": strings.Join(launcherNamesOn(m, list), ", "),
 		})
 	}
-	to := launcherInstead(m, list)
 	for _, k := range []string{"model", "effort", "model_fingerprint", "speed", "permission_mode"} {
 		delete(params, k)
 	}
@@ -327,19 +327,10 @@ func (s *Service) launchersHere(ctx context.Context, machine string) (list []pro
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	list, err := s.machineLaunchers(cctx, machine)
-	if err != nil || !slices.ContainsFunc(list, func(l proto.Launcher) bool {
-		source := compat.Source(l.Source)
-		return source != "persona" && source != "builtin"
-	}) {
+	if err != nil || !machineLauncherListKnown(list) {
 		return nil, false
 	}
-	for _, c := range s.hello(ctx).Models.Launchers[machine] {
-		if c.Name != "" && !proto.IsExternalLauncher(c.Name) && c.Source != proto.ExternalLauncherSource &&
-			!slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == c.Name }) {
-			list = append(list, c.Launcher)
-		}
-	}
-	return list, true
+	return appendConfiguredLaunchers(list, s.hello(ctx).Models.Launchers[machine]), true
 }
 
 // launcherEverywhere: every machine has name (plain claude; a managed launcher, which the node runs through personad

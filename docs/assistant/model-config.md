@@ -212,6 +212,25 @@ only the prompt and the answer travel.
   "Send through" (#4775) belongs to HTTP connections and is not involved; the upstream rate-limit gate does not apply
   (the CLI's own subscription limits do).
 
+## Models overview (#4664)
+
+`GET /api/v1/model-config/overview` describes what Model settings mean on each of the selected manager's computers.
+It reads the manager's saved launcher inventory, the hub's computer snapshot, existing health records and the active
+profile. The response includes the configured Agents binding, each computer's effective default and chat purposes,
+provider availability and preset eligibility. Snapshot age and fit are separate so an offline computer can still
+show what its saved inventory supports.
+
+Terminal starts and the overview use the same launcher selection rules. When a known launcher list lacks the
+configured default, the replacement uses its own model and effort. A configured hidden launcher that remains in the
+computer's list still runs. A snapshot that cannot establish the choice reports `unchecked`.
+The New Agent launcher picker includes `default.here` alongside the configured default and fits it using that
+picker's current inventory. Shell snapshots cannot establish the selection on an engine with its own catalog.
+
+List and detail responses expose a structured `status_code` alongside the existing `status` text. The overview
+reports issues with stable codes and links back to the existing editors and actions. It reads credential presence
+without resolving secret-provider references. The launcher refresh and provider test actions stay available through
+their existing routes.
+
 ## Editing and inheritance
 
 Each category shows both “In Effect” and “Model Settings”:

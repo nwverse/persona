@@ -6,9 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
-	"strings"
 
-	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -86,54 +84,7 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 		p.Fields = append(p.Fields, "config_dir")
 	}
 	l := s.requestCtxLang(ctx)
-	p.Status = modelUnverified
-	if room := roomNotClaudeStatus(l, p, providers, stored, roomHere); room != "" {
-		p.Status = room // it follows a main chat on Codex, say: no room starts until a Claude Code launcher is picked here
-	} else if scope := s.purposeScopeStatus(ctx, l, p.Effective.Provider, p.MachineID); p.Kind == "launcher" && scope != "" {
-		p.Status = scope // the provider is out of the main chat's computer's scope: why it does not run there
-	} else if !slices.Contains(p.ProviderIDs, p.Effective.Provider) && !s.mainChatOffers(ctx, p) {
-		// The provider list leaves out a runtime's launchers: one the main chat's picker offers on its computer is not
-		// incompatible (#11772); one gone from that computer, or one there that can't run the assistant, still is.
-		p.Status = mc(l, "status_provider_incompatible")
-		if p.Kind == "api" && strings.HasPrefix(p.Effective.Provider, "legacy.") && s.legacyModelConfig(ctx, p.Effective.Provider).BaseURL == "" {
-			p.Status = mc(l, s.noAPIStatus(ctx))
-		}
-	} else if p.Kind == "api" {
-		config, e := s.apiConfig(ctx, p.Effective)
-		switch {
-		case config.RunLauncher != "": // the launcher's own model when none is chosen
-			if e != nil {
-				p.Status = i18n.Localize(e, l) // no main chat computer
-			} else if d, ok := s.device(ctx, config.ViaMachine); ok && !d.Online {
-				p.Status = mc(l, "status_machine_offline")
-			}
-		case p.Effective.Model == "":
-			p.Status = mc(l, "status_no_model")
-		case e != nil:
-			p.Status = i18n.Localize(e, l)
-		case config.APIKey == "" && config.APIKeyFile == "":
-			p.Status = mc(l, "status_no_credentials")
-		default:
-			if pause := ai.Held(config); pause != nil {
-				p.Status, p.Limit = pause.Text(), pause
-			}
-		}
-	} else if p.Kind == "plugin" {
-		for _, provider := range providers {
-			if provider.ID == p.Effective.Provider && provider.Status != "" {
-				p.Status = provider.Status
-				break
-			}
-		}
-	} else if p.Kind == "launcher" && p.MachineID != "" {
-		if d, ok := s.device(ctx, p.MachineID); ok {
-			if !d.Online {
-				p.Status = mc(l, "status_machine_offline")
-			} else if d.Version != "" && !d.ModelConfiguration {
-				p.Status = mc(l, "status_node_outdated")
-			}
-		}
-	}
+	s.setModelPurposeStatus(ctx, l, &p, providers, stored, roomHere)
 	if readOnly {
 		p.Fields = []string{}
 		for _, category := range modelPurposes {
@@ -147,6 +98,7 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 }
 
 func (s *Service) modelConfigRoutes() {
+	s.handle("GET /api/v1/model-config/overview", s.modelOverviewRoute)
 	s.handle("GET /api/v1/model-config", func(w http.ResponseWriter, r *http.Request) {
 		// Every purpose resolves against the same provider list and records: each key is read once (read-only).
 		ctx := withSettingsMemo(r.Context())
