@@ -151,6 +151,7 @@ func (f filters) matches(r *record) bool {
 		(f.JustFinished == "" || (f.JustFinished == "1") == justFinishedOf(v, f.Roots)) &&
 		(f.Manager == "" || f.Manager == r.owner) &&
 		(f.Provider == "" || f.Provider == v.Provider) &&
+		(f.Providers == "" || inProviders(f.Providers, v.Provider)) &&
 		(f.Todo == "" || f.Todo == todo || f.Todo == TodoNone && todo == "") &&
 		(f.Q == "" || strings.Contains(r.search, f.Q))
 }
