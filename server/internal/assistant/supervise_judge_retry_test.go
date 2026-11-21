@@ -100,7 +100,10 @@ func TestSupervisedJudgeTimeoutUsesDeferredRetry(t *testing.T) {
 	t.Cleanup(func() { taskDoneTimeout = oldTimeout })
 	shortTurnRetries(t, time.Millisecond)
 	s, f, todo := newSupervisedService(t)
+	f.mu.Lock()
 	f.judgeDelay = time.Second // the caller's much shorter context expires first
+	f.sessionsContextCheck = true
+	f.mu.Unlock()
 	startJudgeRecovery(t, s, f, todo, "the work is finished")
 	if got := f.judged; got != 1 {
 		t.Fatalf("a timed-out initial call was retried inline: %d calls, want 1", got)
