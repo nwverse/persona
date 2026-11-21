@@ -680,6 +680,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			}
 			a.Effort = ""
 			a.PermissionMode = ""
+			delete(run, "effort")
+			delete(run, "permission_mode")
+		} else if mode, _ := run["permission_mode"].(string); mode != "" && own.permission == "" && !fit.supportsPermissionMode(mode) {
+			delete(run, "permission_mode")
 		}
 		// The admission gate refuses a too-busy computer before the user is asked to approve anything.
 		gated, _ := run["launcher"].(string)
@@ -703,6 +707,11 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
 		case proto.FasterSpeed(a.Speed):
 			where += " · " + a.Speed
+		}
+		if tier == "" {
+			if perm, _ := run["permission_mode"].(string); perm != "" {
+				where += " · " + perm
+			}
 		}
 		if a.Ultracode {
 			where += " · ultracode"

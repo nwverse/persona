@@ -9,7 +9,9 @@ import (
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
-func TestGatewayStoppedProvenance(t *testing.T) {
+// Keep these cases under the existing stop-provenance parent: node's round-robin CI partitions otherwise move
+// thousands of unrelated tests between processes when a new top-level test is inserted this early in the listing.
+func testGatewayStoppedProvenance(t *testing.T) {
 	for _, tc := range []struct {
 		name, text string
 		want       proto.StopCause
@@ -18,7 +20,7 @@ func TestGatewayStoppedProvenance(t *testing.T) {
 		{"capacity", "Request rejected (429) · upstream account capacity is temporarily unavailable", proto.StopTransientError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			n, _, home := herdrNode(t)
+			n, f, home := herdrNode(t)
 			provenanceHerdr(n)
 			cwd := mkdir(t, home+"/project")
 			at := time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
@@ -26,11 +28,27 @@ func TestGatewayStoppedProvenance(t *testing.T) {
 				`{"type":"user","uuid":"u1","timestamp":"`+at.Format(time.RFC3339)+`","cwd":"`+cwd+`","message":{"role":"user","content":"continue"}}`,
 				`{"type":"assistant","uuid":"a1","timestamp":"`+at.Format(time.RFC3339)+`","message":{"role":"assistant","model":"example-model","content":[{"type":"text","text":"`+strings.Repeat("Working. ", 300)+`"}]}}`,
 				`{"type":"assistant","uuid":"e1","timestamp":"`+at.Format(time.RFC3339)+`","isApiErrorMessage":true,"error":"rate_limit","apiErrorStatus":429,"message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"API Error: `+tc.text+`"}]}}`)
-			n.state.put(sidA, sessionState{Launcher: "claude", Cwd: cwd, AppMode: "plan"})
+			n.state.put(sidA, sessionState{Launcher: "claude", Cwd: cwd, AppMode: "plan", Pane: "w1:p1",
+				RanAt: at.Add(-time.Minute).Unix()})
+			pane := shellPane("w1:p1", "w1:t1", "w1", cwd, sidA)
+			f.reply("session.snapshot", snapshot(nil, nil, nil, []any{pane}))
 			offlineCache.Lock()
 			offlineCache.at = time.Time{}
 			offlineCache.Unlock()
 			row := byID(listSessions(t, n))[sidA]
+			if row.Capabilities == nil || row.Capabilities.StopCause != proto.StopUnknown || n.supervisorResumeAllowed(sidA, "", "") == nil {
+				t.Fatal("unobserved gateway history granted recovery")
+			}
+			// Observe the failed turn while its Agent still runs, even within RanAt's normal write interval.
+			f.reply("session.snapshot", snapshot(nil, nil, []any{
+				claudeAgent(sidA, proto.StatusIdle, "w1:p1", "w1:t1", "w1", cwd, ""),
+			}, []any{pane}))
+			listSessions(t, n)
+			if st, _ := n.state.get(sidA); st.RanAt < at.Unix() {
+				t.Fatal("live gateway observation was not recorded")
+			}
+			f.reply("session.snapshot", snapshot(nil, nil, nil, []any{pane}))
+			row = byID(listSessions(t, n))[sidA]
 			if row.Capabilities == nil || row.Capabilities.StopCause != tc.want || row.Capabilities.Send || row.ReadOnlyReason == "" {
 				t.Fatalf("stopped row: status=%q capabilities=%+v reason=%q", row.Status, row.Capabilities, row.ReadOnlyReason)
 			}
@@ -42,6 +60,17 @@ func TestGatewayStoppedProvenance(t *testing.T) {
 			}
 			if tc.want == proto.StopTransientError && row.TurnErrorKind != proto.TurnErrorTransient {
 				t.Fatalf("capacity kind = %q", row.TurnErrorKind)
+			}
+			// Closing the terminal outside Persona also revokes an already listed gateway resume.
+			f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+			listSessions(t, n)
+			if n.supervisorResumeAllowed(sidA, "", "") == nil {
+				t.Fatal("closed terminal retained gateway recovery")
+			}
+			f.reply("session.snapshot", snapshot(nil, nil, nil, []any{pane}))
+			row = byID(listSessions(t, n))[sidA]
+			if err := n.supervisorResumeAllowed(sidA, "", ""); err != nil {
+				t.Fatalf("restored terminal must be eligible before owner-stop checks: %v", err)
 			}
 			// Explicit stops always win, even while the same gateway error remains in history.
 			for _, cause := range []proto.StopCause{proto.StopUser, proto.StopExit} {
@@ -62,6 +91,17 @@ func TestGatewayStoppedProvenance(t *testing.T) {
 			// A reply quoting the error is never recovery provenance.
 			if kind, _ := transcript.GatewayErrorKind("I saw: "+tc.text, at); kind != "" {
 				t.Fatal("ordinary reply classified as a gateway failure")
+			}
+		})
+		t.Run(tc.name+" closed before classification", func(t *testing.T) {
+			n, _, home := herdrNode(t)
+			provenanceHerdr(n)
+			at := time.Now().Add(-time.Minute)
+			n.state.put(sidA, sessionState{Launcher: "claude", Cwd: home, Pane: "w1:p1", RanAt: time.Now().Unix()})
+			row := proto.Session{SessionID: sidA, Agent: "claude", Status: proto.StatusOffline, TurnError: tc.text, UpdatedAt: at}
+			n.markStopped(&row)
+			if row.Capabilities == nil || row.Capabilities.StopCause != proto.StopUnknown || n.supervisorResumeAllowed(sidA, "", "") == nil {
+				t.Fatal("a gateway error authorized a terminal the user closed")
 			}
 		})
 	}

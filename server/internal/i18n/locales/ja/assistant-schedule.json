@@ -1,4 +1,8 @@
 {
+  "skip_next_changed": "次回の実行時刻が変わりました。更新してから再試行してください。",
+  "skip_next_forbidden": "実行予定をスキップできるのはオーナーだけです。",
+  "skip_next_invalid": "有効な実行時刻を入力してください。",
+  "skip_next_owner": "あなたがスキップしました",
   "execution_context_unavailable": "タスクの会話の実行環境を確認できません。Agent を再接続して再試行してください。",
   "followup": "フォローアップ",
   "task_label": "スケジュールタスク",

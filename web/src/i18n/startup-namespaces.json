@@ -326,7 +326,6 @@
   "lib-inbox",
   "lib-inbox-events",
   "lib-injected",
-  "lib-kb",
   "lib-lark-accounts",
   "lib-lark-chats",
   "lib-lark-pins.hub_upgrade",
@@ -504,11 +503,6 @@
   "worktree-actions.checking_access",
   "worktree-actions.worktree",
   "worktree.dialog_title",
-  "worktree.failed",
   "worktree.menu_new",
-  "worktree.needs_update",
-  "worktree.owner_changed",
-  "worktree.path_required",
-  "worktree.read_failed",
   "worktree.reading"
 ]

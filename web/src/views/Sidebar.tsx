@@ -1,3 +1,5 @@
+import { pendingPlanCounts } from "../lib/pending-plan-counts";
+import { loadFeed, useFeed } from "../lib/feed";
 import { useBotmuxHidden } from "../lib/agents-display";
 import { SectionAdd } from "./SectionAdd";
 import { AgentsAdd } from "./agents/AgentsAdd";
@@ -314,8 +316,15 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   const recentLeft = ownChats.length - recent.length;
   const recentLess = recentMore > 0 && ownChats.length > recentCount;
   const directionNames = useDirectionNames(directions.map((c) => `${c.session_id}\u0000${c.title ?? ""}`).join("\u0001"));
-  const counts = useLeaderCounts();
-  const leaderTotal = totalCounts(counts, leaders);
+  const baseCounts = useLeaderCounts();
+  const plans = useFeed((s) => s.plans);
+  useEffect(() => { if (assistant?.main) void loadFeed(assistant.main); }, [assistant?.main, manager]);
+  const counts = useMemo(() => {
+    const owned = new Set((assistant?.conversations ?? []).map((c) => c.session_id));
+    if (assistant?.main) owned.add(assistant.main);
+    return pendingPlanCounts(baseCounts, plans, manager, owned);
+  }, [baseCounts, plans, assistant, manager]);
+  const leaderTotal = totalCounts(counts, [...counts.keys()]);
   // the main row sits above the pages, so"Persona chats"waits for the assistant (a hub without it has none)
   const chats = !!assistant;
   // a conversation row's ⋯ / right click (iOS: its long press)
@@ -337,7 +346,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   );
 
   const recentRow = (c: Session) => (
-    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={conversationTitle(c)} showState={false} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
+    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={conversationTitle(c)} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull keepTrailing showState={false} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
   );
 
   return (
@@ -385,7 +394,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
               <>
                 {/* folded, what the leaders have going stays: the working arc while anything under one runs, and their
                     tasks waiting on you (#6626: the arc, never "在做 N" as well) */}
-                {personaFolded && (leaderTotal.running || countsLabel(leaderTotal, t)) && (
+                {(countsLabel(leaderTotal, t) || (personaFolded && leaderTotal.running)) && (
                   <span data-direction-counts data-running={leaderTotal.running || undefined} className="flex min-w-0 items-center gap-1 text-[11px] tabular-nums text-ink-3">
                     {leaderTotal.running && <StatusMark state="working" size="sm" />}
                     <span className="truncate">{countsLabel(leaderTotal, t)}</span>

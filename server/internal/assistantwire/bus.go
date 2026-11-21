@@ -251,6 +251,12 @@ type HTTPResponse struct {
 	Body           []byte                     `json:"body,omitempty"`
 }
 
+const (
+	StarredImportPath        = "/api/v1/assistant/starred/import"
+	StarredImportPreviewPath = StarredImportPath + "/preview"
+	StarredImportBodyMax     = 8 << 20
+)
+
 // Routes are the routes the assistant answers (net/http patterns): the hub relays the apps' requests on them as
 // http.request. The assistant registers exactly these (assistant.TestRoutesAreTheWireOnes).
 var Routes = []string{
@@ -309,6 +315,8 @@ var Routes = []string{
 	"PUT /api/v1/assistant/tasks/{id}",
 	"DELETE /api/v1/assistant/tasks/{id}",
 	"POST /api/v1/assistant/tasks/{id}/run",
+	"POST /api/v1/assistant/tasks/{id}/skip-next",
+	"DELETE /api/v1/assistant/tasks/{id}/skip-next",
 	"POST /api/v1/assistant/tasks/{id}/fresh",
 	"DELETE /api/v1/assistant/tasks/{id}/start-grant",
 	"GET /api/v1/assistant/places",
@@ -331,6 +339,9 @@ var Routes = []string{
 	"GET /api/v1/assistant/starred",
 	"POST /api/v1/assistant/starred",
 	"DELETE /api/v1/assistant/starred/{id}",
+	"GET " + StarredImportPath,
+	"POST " + StarredImportPreviewPath,
+	"POST " + StarredImportPath,
 	"GET /api/v1/assistant/runs",
 	"GET /api/v1/assistant/routines",
 	"PUT /api/v1/assistant/routines",
@@ -373,6 +384,9 @@ var Routes = []string{
 	"PUT /api/v1/todos/{id}/agents/{mid}/{sid}",
 	"DELETE /api/v1/todos/{id}/agents/{mid}/{sid}",
 	"GET /api/v1/todos/{id}/decisions",
+	"POST /api/v1/decisions",
+	"GET /api/v1/decisions/{id}",
+	"POST /api/v1/decisions/{id}/withdraw",
 	"GET /api/v1/todos/{id}/timeline", // its conversation's rounds (todo_timeline.go, #10465)
 	"POST /api/v1/todos/{id}/decisions",
 	"PATCH /api/v1/todos/{id}/decisions/{did}",
@@ -437,6 +451,10 @@ var Routes = []string{
 	"GET /api/v1/kb/chats/{id}/context",
 	"GET /api/v1/kb/chats/{id}/days/{day}",
 	"GET /api/v1/kb-search",
+	// A project's lessons from accepted tasks (task_lessons_routes.go there, #12295): the owner's apps only.
+	"GET /api/v1/kb/projects/{id}/lessons",
+	"PUT /api/v1/kb/projects/{id}/lessons/{lesson}",
+	"DELETE /api/v1/kb/projects/{id}/lessons/{lesson}",
 	// The assistant's chat search (search_routes.go there, docs/protocol/protocol.md "Assistant chat search", #6282).
 	"GET /api/v1/assistant/search",
 	"GET /api/v1/assistant/history",

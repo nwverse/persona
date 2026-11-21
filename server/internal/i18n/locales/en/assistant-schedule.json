@@ -1,4 +1,8 @@
 {
+  "skip_next_changed": "The next occurrence changed. Refresh the schedule and try again.",
+  "skip_next_forbidden": "Only the owner can skip a scheduled occurrence.",
+  "skip_next_invalid": "Enter a valid occurrence time.",
+  "skip_next_owner": "Skipped by you",
   "execution_context_unavailable": "Cannot verify the task conversation’s execution context. Reconnect its agent and try again.",
   "followup": "Follow-up",
   "task_label": "Scheduled task",
