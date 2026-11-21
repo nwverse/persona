@@ -116,16 +116,16 @@ export function gitPlaceOf(s: Pick<Session, "repo_root" | "worktree">): Repo | u
   return { repo, name: baseName(repo), worktree, main: worktree === repo };
 }
 
-/** The Git working tree a session runs in, when the node says: its reported tree, else the main checkout for a cwd inside
- *  repo_root, else the cwd itself (a linked tree kept outside the repository, such as a desktop app's worktree folder).
- *  Undefined without Git metadata. */
-function gitTreeOf(s: Pick<Session, "repo_root" | "worktree" | "cwd">): string | undefined {
-  const reported = catalogPath(s.worktree);
-  if (reported) return reported;
-  const root = catalogPath(s.repo_root);
-  if (!root) return undefined;
-  const cwd = catalogPath(s.cwd);
-  return cwd && !within(cwd, root) ? cwd : root;
+/** How many folders below the top of its Git working tree a session runs, when the node says. The top is its reported
+ *  tree, else the main checkout for a cwd inside repo_root, else the cwd itself (0: a linked tree kept outside the
+ *  repository, such as a desktop app's worktree folder). Git reports physical paths, so this counts from the
+ *  node-verified physical cwd when there is one; a count, unlike a path, also holds for the cwd as given when a
+ *  symlinked folder leads to it. Undefined without Git metadata. */
+function gitTreeDepth(s: Pick<Session, "repo_root" | "worktree" | "cwd" | "workspace_cwd">): number | undefined {
+  const tree = catalogPath(s.worktree) || catalogPath(s.repo_root);
+  if (!tree) return undefined;
+  const cwd = catalogPath(s.workspace_cwd) || catalogPath(s.cwd);
+  return cwd && within(cwd, tree) ? depthOf(cwd) - depthOf(tree) : 0;
 }
 
 type Placement = Repo & { path: string; spaceId?: string; git?: boolean };
@@ -353,13 +353,13 @@ export function sessionWorkspace(s: Session, catalog: readonly HostWorkspace[], 
     if (exact.length > 1 || s.workspace_id || host !== "codex_app") return undefined;
   }
   if (["herdr", "herdr-core", "botmux", "orca", "paseo"].includes(host)) return undefined;
-  const tree = gitTreeOf(s);
+  const depth = gitTreeDepth(s);
   for (const raw of [s.cwd, s.workspace_cwd]) {
     const cwd = catalogPath(raw);
     if (!cwd) continue;
     const candidates = local.filter((w) => {
       const path = catalogPath(w.cwd);
-      if (!path || !within(cwd, path) || (tree && !within(path, tree))) return false;
+      if (!path || !within(cwd, path) || (depth !== undefined && depthOf(cwd) - depthOf(path) > depth)) return false;
       const below = cwd === path ? "" : cwd.slice(path === "/" ? 1 : path.length + 1);
       return !WORKTREE_SEGMENTS.some(([marker]) => below.startsWith(marker.slice(1)));
     });
@@ -383,6 +383,8 @@ const catalogPath = (value?: string) => {
 };
 /** Whether `path` is `dir` or below it, both already normalized by catalogPath. */
 const within = (path: string, dir: string) => path === dir || (dir === "/" ? path.startsWith("/") : path.startsWith(`${dir}/`));
+/** How many folders deep a path normalized by catalogPath is: 0 at the root. */
+const depthOf = (path: string) => (path === "/" ? 0 : path.split("/").length - 1);
 
 /** Runtime logical spaces share a repository display row at a verified checkout. Action attribution continues
  *  to use sessionWorkspace and its native binding rules. */

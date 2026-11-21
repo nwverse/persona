@@ -283,6 +283,19 @@ describe("catalog-backed By repo projection", () => {
     expect(tree[0].repos.find((r) => r.name === "me")?.count ?? 0).toBe(0);
   });
 
+  it("keeps an Agent inside its working tree when a symlinked folder leads to its cwd", () => {
+    const herdr = { source: "herdr", project_id: undefined, project_name: undefined };
+    const home = workspace("home", { ...herdr, cwd: "/home/me" });
+    const repo = workspace("repo", { ...herdr, cwd: "/home/me/code/app" });
+    const physical = workspace("physical", { ...herdr, cwd: "/data/home/me/code/app" });
+    const chat = session("chat", "codex-project:/data/home/me/code/app", {
+      space_kind: "codex_app", cwd: "/home/me/code/app/web", workspace_cwd: "/data/home/me/code/app/web", repo_root: "/data/home/me/code/app",
+    });
+    expect(sessionWorkspace(chat, [home, repo])).toBe(repo);
+    expect(sessionWorkspace(chat, [physical])).toBe(physical);
+    expect(sessionWorkspace(chat, [home])).toBeUndefined();
+  });
+
   it("retains offline/empty folder workspaces and uses session-only fallback when discovery is absent", () => {
     const offline = workspace("folder", { workspace_kind: "folder", online: false, available: false });
     expect(rows([], options([offline]))[0].target?.workspaceId).toBe("folder");
