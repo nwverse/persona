@@ -85,4 +85,15 @@ func TestAssistantAnswerAgainRequiresTheSameIdleTurn(t *testing.T) {
 	if len(items) != 4 || items[0].Text != "A new question." || prompts.ParseInjected(items[2].Text) == nil {
 		t.Fatalf("reloaded turn lost its original input or the Persona follow-up: %+v", items)
 	}
+
+	last = items[len(items)-1].ID
+	n.state.stopped(id, proto.StopUser)
+	assertChanged(send(last, "explicit-stop"))
+	n.state.stopped(id, proto.StopUnknown)
+	n.stopAssistantProcess(id)
+	err = send(last, "process-gone")
+	var refused *rpc.Error
+	if err == nil || (errors.As(err, &refused) && refused.Code == assistantwire.CodeAnswerAgainChanged) {
+		t.Fatalf("a missing process on an unchanged turn must allow a manual retry notice: %v", err)
+	}
 }

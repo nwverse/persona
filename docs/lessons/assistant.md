@@ -927,3 +927,11 @@ conversation shared with other work, two runs due in the same minute both read t
 to-do's no-progress decision quoted another task. Find the run's own prompt by its run key (`runKeyIn`) and take the
 reply after it, up to the next message that opened a turn. Refuse turns that a queued message mixed. Test with real
 transcript pages (`runChat`), not bare item lists.
+
+## Direct reply recovery across a hub switch (#10427)
+
+A node can lose a live conversation during a hub switch without publishing a normal turn end. Claude can append a
+synthetic placeholder only when the conversation resumes. Keep the latest verified app input ID alongside the
+recovery claim, and check that input when the node lists the conversation again. Read the current transcript,
+since indexed history can predate the echo that identifies the app input. A guarded send that finds the same
+transcript but no process leaves a retry notice. A Stop or later owner input makes the earlier attempt obsolete.
