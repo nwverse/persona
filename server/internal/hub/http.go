@@ -71,6 +71,7 @@ func (h *Hub) routes() http.Handler {
 	h.machineProcRoutes(api)
 	h.machineServicesRoutes(api)
 	h.machineNetworkRoutes(api)
+	h.machineToolchainRoutes(api)
 	h.nodeUpdateRelayRoutes(api)
 	api.HandleFunc("GET /api/v1/interactions", func(w http.ResponseWriter, r *http.Request) {
 		ixs := visibleInteractions(h.pendingInteractions(), h.requestHasElicitation(r))
