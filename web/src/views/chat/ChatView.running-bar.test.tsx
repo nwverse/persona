@@ -7,6 +7,9 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Item, Session } from "../../lib/types";
+import { initI18n } from "../../i18n";
+
+await initI18n("zh-Hans");
 
 vi.hoisted(() => {
   const g = globalThis as Record<string, unknown>;
