@@ -38,7 +38,7 @@ async function fixture(t, { append = false, probeFails = false } = {}) {
   const start = async (params = {}) => (await node.peer.call('session.start', { cwd, ...params })).session.session_id
   const call = (method, id, params = {}) => node.peer.call('session.' + method, { session_id: id, ...params })
   const settled = (id) => until('turn settled', () => !companion.live.get(id).running && !companion.live.get(id).queued)
-  return { home, cwd, companion, node, calls, start, call, settled, refuse(text) { refusedText = text } }
+  return { home, cwd, companion, node, store, calls, start, call, settled, refuse(text) { refusedText = text } }
 }
 
 test('startup effectiveness failure advertises no supervision capability and starts or sends nothing for policy deliveries', async (t) => {
@@ -82,7 +82,7 @@ test('idle policy changes resume without transcript replay, restore options, cle
   assert.equal(f.calls().some((call) => call.method === 'session/load'), false)
   assert.ok(f.calls().some((call) => call.method === 'session/resume' && call.params.sessionId === id))
   const previous = state.policyRecord
-  await assert.rejects(f.call('send', id, { text: 'invalid input', model: 'unknown/model', supervision_instructions: 'must not commit' }), (error) => error.code === 'bad_request')
+  await assert.rejects(f.call('send', id, { text: 'invalid input', model: 'unknown-model', supervision_instructions: 'must not commit' }), (error) => error.code === 'bad_request')
   assert.equal(state.policyRecord, previous)
   assert.equal(state.policy, 'policy B')
   f.refuse('failing policy')
@@ -140,4 +140,29 @@ test('failure to prepare an unwritable policy preserves the existing idle worker
     assert.equal(state.policy, 'original')
     assert.equal(f.calls().some((call) => call.method === 'session/prompt'), false)
   } finally { chmodSync(root, 0o700) }
+})
+
+test('interrupting policy admission restores the previous role even after its old file was removed', async (t) => {
+  const f = await fixture(t)
+  const id = await f.start({ assistant: true, supervision_instructions: 'original' })
+  const state = f.companion.live.get(id), previous = state.policyRecord
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const remove = f.store.remove.bind(f.store)
+  f.store.remove = async (record) => {
+    if (record === previous) { entered.resolve(); await release.promise }
+    return remove(record)
+  }
+  const sending = f.call('send', id, { text: 'cancelled input', supervision_instructions: 'new policy' })
+  const refused = assert.rejects(sending, (error) => error.code === 'busy' && error.data?.delivered === 'none')
+  await entered.promise
+  await f.call('interrupt', id)
+  release.resolve()
+  await refused
+  assert.equal(state.policy, 'original')
+  assert.equal(readFileSync(state.policyRecord.file, 'utf8'), 'original')
+  assert.equal(state.policyFlight, false)
+  assert.equal(f.calls().some((call) => call.method === 'session/prompt'), false)
+  await f.call('send', id, { text: 'valid retry', supervision_instructions: 'original' })
+  await f.settled(id)
+  assert.equal(state.turnError, '')
 })

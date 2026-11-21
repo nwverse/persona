@@ -16,7 +16,9 @@ test('pinned process instructions preserve project/AGENTS instructions, survive 
   const agents = join(cwd, 'AGENTS.md'), project = join(cwd, 'project-policy.md')
   writeFileSync(agents, 'SHARED_AGENTS_SENTINEL')
   writeFileSync(project, 'PROJECT_INSTRUCTIONS_SENTINEL')
-  writeFileSync(join(cwd, 'opencode.json'), JSON.stringify({ instructions: [project] }))
+  const projectConfig = join(cwd, 'opencode.json')
+  const originalConfig = JSON.stringify({ instructions: [project] })
+  writeFileSync(projectConfig, originalConfig)
   const model = await fakeModel(t)
   const env = environment(home, model.url)
   delete env.OPENCODE_DISABLE_PROJECT_CONFIG
@@ -64,6 +66,7 @@ test('pinned process instructions preserve project/AGENTS instructions, survive 
     assert.equal(existsSync(siblingFile), false)
     assert.equal(readFileSync(agents, 'utf8'), 'SHARED_AGENTS_SENTINEL')
     assert.equal(readFileSync(project, 'utf8'), 'PROJECT_INSTRUCTIONS_SENTINEL')
+    assert.equal(readFileSync(projectConfig, 'utf8'), originalConfig)
     assert.deepEqual(model.requests.filter((request) => request.error), [], 'fake model accepts all native request shapes')
   } catch (error) { t.diagnostic(logs.slice(-20).join('\n')); throw error }
 })

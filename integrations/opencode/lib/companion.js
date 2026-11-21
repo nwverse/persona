@@ -337,34 +337,52 @@ export function createOpencodeCompanion(options = {}) {
     }
   }
 
-  async function synchronizePolicy(s, text) {
+  async function synchronizePolicy(s, text, interruptVersion) {
     if (text === undefined || text === s.policy) {
       try { await policyStore.check(s.policyRecord) } catch { throw new RpcError('OpenCode follow-up instructions are unavailable. Nothing was sent.', SUPERVISION_ERROR_CODE) }
-      return
+      return null
     }
     if (s.running || s.queued || s.asks.size || s.admitting > 1 || s.worker?.leases || s.policyFlight) throw new RpcError('Wait for this conversation to finish before changing its follow-up instructions', 'busy')
     s.policyFlight = true
-    const previous = { text: s.policy, record: s.policyRecord, worker: s.worker }
-    let next
+    const previous = { text: s.policy, record: s.policyRecord, worker: s.worker, loadedGeneration: s.loadedGeneration }
+    let next, oldFileRemoved = false
+    const cancelled = () => stopped || closedSessions.has(s.id) || interruptVersion !== s.interruptVersion
+    const rollback = async () => {
+      try {
+        if (s.worker && s.worker !== previous.worker) await assistantWorkers.discard(s.worker)
+        if (stopped || closedSessions.has(s.id)) {
+          s.policy = ''; s.policyRecord = null; s.loadedGeneration = 0
+          await Promise.all([policyStore.remove(previous.record), policyStore.remove(next)])
+          return
+        }
+        s.policy = previous.text
+        s.policyRecord = previous.record
+        s.loadedGeneration = s.worker === previous.worker ? previous.loadedGeneration : 0
+        if (oldFileRemoved && previous.text) s.policyRecord = await policyStore.create(previous.text)
+        await policyStore.remove(next)
+      } finally { s.policyFlight = false }
+    }
     try {
       next = await policyStore.create(text)
-      if (stopped || closedSessions.has(s.id)) throw new Error('Conversation closed')
+      if (cancelled()) throw new Error('Input cancelled')
       if (s.worker) await assistantWorkers.discard(s.worker)
       s.policy = text
       s.policyRecord = next
-      if (stopped || closedSessions.has(s.id)) throw new Error('Conversation closed')
+      if (cancelled()) throw new Error('Input cancelled')
       const worker = await assistantWorkers.acquire(s)
       try { await ensureLoaded(s, worker.acp) } finally { assistantWorkers.release(worker) }
-      if (stopped || closedSessions.has(s.id)) throw new Error('Conversation closed')
-      await policyStore.remove(previous.record)
+      if (cancelled()) throw new Error('Input cancelled')
+      // Keep the role-change lock until the admitting caller either queues its
+      // first input synchronously or restores the old role after interruption.
+      return {
+        async retireOldFile() { await policyStore.remove(previous.record); oldFileRemoved = true },
+        accept() { s.policyFlight = false },
+        rollback,
+      }
     } catch {
-      if (s.worker && s.worker !== previous.worker) await assistantWorkers.discard(s.worker)
-      s.policy = previous.text
-      s.policyRecord = previous.record
-      s.loadedGeneration = 0
-      await policyStore.remove(next)
-      throw new RpcError('OpenCode could not change its follow-up instructions. Nothing was sent.', SUPERVISION_ERROR_CODE)
-    } finally { s.policyFlight = false }
+      await rollback().catch(() => {})
+      throw new RpcError('OpenCode could not change its follow-up instructions. Nothing was sent.', SUPERVISION_ERROR_CODE, { delivered: 'none' })
+    }
   }
 
   async function refreshGateRules({ throwOnError = false } = {}) {
@@ -1316,8 +1334,9 @@ export function createOpencodeCompanion(options = {}) {
     const reqEffort = typeof params.effort === 'string' && params.effort.trim() ? params.effort.trim().toLowerCase() : ''
     if (policy && !isAsst) throw new RpcError('Follow-up instructions require an Assistant conversation', SUPERVISION_ERROR_CODE)
     if (s.policyFlight) throw new RpcError('Follow-up instructions are changing; try again shortly', 'busy')
+    const interruptVersion = s.interruptVersion
     s.admitting++
-    let worker
+    let worker, transition
     try {
       if (policy !== undefined && policy !== s.policy) {
         // Validate the whole input before committing its new process policy.
@@ -1330,12 +1349,14 @@ export function createOpencodeCompanion(options = {}) {
         }
         if (isAsst) await ensureGateRules()
       }
-      await synchronizePolicy(s, policy)
+      transition = await synchronizePolicy(s, policy, interruptVersion)
       worker = isAsst ? await assistantWorkers.acquire(s) : null
+    } catch (error) {
+      await transition?.rollback()
+      throw error
     } finally { s.admitting-- }
     const acp = worker?.acp || sharedAcp
     const wasBusy = s.running || s.queued > 0
-    const interruptVersion = s.interruptVersion
     s.queued++
     let enqueued = false
     try {
@@ -1369,6 +1390,10 @@ export function createOpencodeCompanion(options = {}) {
         }
       }
 
+      await transition?.retireOldFile()
+      if (stopped || closedSessions.has(id) || isAsst && interruptVersion !== s.interruptVersion) {
+        throw new RpcError('Input was interrupted before delivery', 'busy', { delivered: 'none' })
+      }
       const turnDone = s.tail.catch(() => {}).then(async () => {
         s.queued = Math.max(0, s.queued - 1)
         if (stopped || closedSessions.has(id) || isAsst && interruptVersion !== s.interruptVersion) return
@@ -1450,7 +1475,13 @@ export function createOpencodeCompanion(options = {}) {
       s.tail = turnDone
       s.activeTurnDone = turnDone
       enqueued = true
+      transition?.accept()
       return wasBusy ? { queued: true } : {}
+    } catch (error) {
+      try { await transition?.rollback() } catch {
+        throw new RpcError('OpenCode could not restore its follow-up instructions. Nothing was sent.', SUPERVISION_ERROR_CODE, { delivered: 'none' })
+      }
+      throw error
     } finally {
       if (!enqueued) {
         s.queued = Math.max(0, s.queued - 1)
