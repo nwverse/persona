@@ -1,4 +1,4 @@
-Send a text request to another Persona session, start a new Agent, or supply input on an existing A2A task. Use a new message_id for each message and reuse it on retries. Set machine_id and session_id for an existing session. Set machine_id and cwd to start an Agent, with an optional launcher. For a reply set task_id. With wake enabled (the default), questions and results return to your session after your current turn ends. You can stop your turn while waiting.
+Send a text request to another Persona session, start a new Agent, or supply input on an existing A2A task. Use a new message_id for each message and reuse it on retries. Set machine_id and session_id for an existing session. Set machine_id and cwd to start an Agent, with an optional launcher. For a reply set task_id. With wake enabled (the default), questions and results return to your session after your current turn ends. You can stop your turn while waiting.{{template "shared/mcp_language" .}}
 
 ```json
 {
