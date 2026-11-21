@@ -717,6 +717,10 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		if a, ok := s.askCopy(t.ID); ok && !acceptAskStale(&a, t) && a.AcceptedAt.IsZero() {
 			return prompts.SuperviseEntry{}, false // an owner answer now stands
 		}
+		// taskAgents, like taskAgentsIn, omits a machine whose session list cannot be read; a machine that went
+		// unreachable between the signal and delivery therefore still reads as stopped and the entry is delivered,
+		// not dropped. That is the conservative direction (a nudge to review, never a false owner card), and the
+		// watch-side cardlessAgentsReachable gate is what withholds the stamp while a machine is already unknown.
 		if !cardlessWorkersStopped(s.taskAgents(ctx, t)) {
 			return prompts.SuperviseEntry{}, false // a worker holds a card or went back to work meanwhile
 		}
