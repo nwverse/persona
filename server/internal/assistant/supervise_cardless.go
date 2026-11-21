@@ -9,11 +9,11 @@ import (
 
 // A supervised task judged finished waits in pending_review for its supervisor's review, and a supervisor's review is
 // not the owner's: it never enters the owner's Needs you by itself (docs/assistant/unified-entry.md "Needs you and In
-// progress"). When the supervisor decides the owner should review or decide but says so only in chat text — no
-// needs_user conclusion, no accepted user_check, no ask_user card, no pending worker interaction — the owner has
-// nothing to answer and the request can hide indefinitely (#12648). The watch catches that state here once per review
-// round and hands the task back to its supervisor, the same shape as undecidableSignal for a needs_user ledger: it
-// never synthesizes a question from chat text; the supervisor must open the card itself.
+// progress"). When such a review has sat past the settle time with nothing the owner can answer — no needs_user
+// conclusion, no accepted user_check, no ask_user card, no pending worker interaction — it can hide indefinitely
+// (#12648). The watch catches that state here once per review round and hands the task back to its supervisor. It
+// never synthesizes a question from chat text and cannot tell an owner wait from a late review, so the rendered
+// message names the whole review vocabulary; the supervisor picks the verdict the work actually needs.
 
 // sigCardlessWait: a pending_review task has stayed with no card the owner can answer past the settle time.
 const sigCardlessWait = "cardless_wait"
@@ -34,21 +34,19 @@ func cardlessSince(t Todo) time.Time {
 	return v.UpdatedAt
 }
 
-// cardlessWorkersStopped says none of the task's active workers still works or holds a card the owner can answer. A
-// session the watch cannot read is not treated as stopped: as taskWaits does, an unreachable machine must not silence
-// the hand-back, so such a task simply does not qualify on this pass.
-func cardlessWorkersStopped(agents []proto.Session) (stopped, known bool) {
-	known = true
-	live := false
+// cardlessWorkersStopped says none of the task's active workers still works or holds a card the owner can answer.
+// taskAgentsIn already drops a machine whose session list cannot be read (it continues past that machine), so an
+// unreachable worker simply does not appear here: this function judges only the sessions it is given.
+func cardlessWorkersStopped(agents []proto.Session) bool {
 	for _, c := range agents {
-		switch {
-		case c.State == proto.StateNeedsYou || c.PendingInteractions > 0:
-			return false, true // a real pending card stands for the owner
-		case c.State == proto.StateWorking || c.Starting:
-			live = true
+		if c.State == proto.StateNeedsYou || c.PendingInteractions > 0 {
+			return false // a real pending card stands for the owner
+		}
+		if c.State == proto.StateWorking || c.Starting {
+			return false // the work goes on; this is not a settled review wait
 		}
 	}
-	return !live, known
+	return true
 }
 
 // cardlessWaitSignal hands a card-less pending_review task back to its supervisor, once per review round. It changes
@@ -70,7 +68,7 @@ func (s *Service) cardlessWaitSignal(ctx context.Context, t Todo, agents []proto
 	if a, ok := s.askCopy(t.ID); ok && !acceptAskStale(&a, t) && a.AcceptedAt.IsZero() {
 		return superviseSignal{}, false
 	}
-	if stopped, known := cardlessWorkersStopped(agents); !known || !stopped {
+	if !cardlessWorkersStopped(agents) {
 		return superviseSignal{}, false
 	}
 	_, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
