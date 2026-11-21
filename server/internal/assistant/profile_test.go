@@ -422,7 +422,7 @@ func TestBoolSettingsSet(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		def  bool
-	}{{"main_tasks_quiet", true}, {"start_requested_tasks", true}, {"done_needs_delivery", false}, {"interject_background", false}, {"agent_tasks", false}, {"close_ended_terminals", false}, {"main_background_folded", true}, {"recent_task_chats", false}, {"inbox_signals", false}, {"main_supervises_own_tasks", false}} {
+	}{{"main_tasks_quiet", true}, {"start_requested_tasks", true}, {"interject_background", false}, {"agent_tasks", false}, {"close_ended_terminals", false}, {"main_background_folded", true}, {"recent_task_chats", false}, {"inbox_signals", false}, {"main_supervises_own_tasks", false}} {
 		key := "assistant." + c.name
 		get := func() string { out, _ := tool(`{"action":"get","key":"` + key + `"}`); return out }
 		set := func(value string) (string, bool) {
@@ -445,6 +445,44 @@ func TestBoolSettingsSet(t *testing.T) {
 		go answer(true, card)
 		if out, _ := set(fmt.Sprint(!c.def)); !strings.HasPrefix(out, key+" is "+fmt.Sprint(!c.def)) || get() != fmt.Sprint(!c.def) {
 			t.Fatalf("%s approved: %s", key, out)
+		}
+	}
+	// Legacy assistant.done_needs_delivery aliases the 3-tier delivery_gate (true->live, false->off); from the default
+	// merged tier, setting false disables the gate to off instead of reporting unchanged.
+	{
+		const key = "assistant.done_needs_delivery"
+		get := func() string { out, _ := tool(`{"action":"get","key":"` + key + `"}`); return out }
+		set := func(value string) (string, bool) {
+			return tool(`{"action":"set","key":"` + key + `","value":` + value + `}`)
+		}
+		if out := get(); out != "false" {
+			t.Fatalf("%s default: %s", key, out)
+		}
+		if out, isErr := set(`"yes"`); !isErr || !strings.Contains(out, "true or false") {
+			t.Fatalf("%s set to a string: %s", key, out)
+		}
+		if out, isErr := set(`null`); !isErr || !strings.Contains(out, "true or false") || len(s.pendingQuestions()) != 0 || s.deliveryGate(ctx) != deliveryGateMerged {
+			t.Fatalf("%s set to null: err=%v out=%q pending=%d gate=%s", key, isErr, out, len(s.pendingQuestions()), s.deliveryGate(ctx))
+		}
+		mergedToOff := i18n.T(i18n.Default, "assistant-settings_tool.change_delivery_gate", i18n.Args{
+			"before": i18n.T(i18n.Default, "assistant-settings_tool.delivery_gate_merged"),
+			"after":  i18n.T(i18n.Default, "assistant-settings_tool.delivery_gate_off"),
+		})
+		go answer(true, mergedToOff)
+		if out, _ := set("false"); !strings.HasPrefix(out, key+" is false") || s.deliveryGate(ctx) != deliveryGateOff {
+			t.Fatalf("%s disable from merged: %s (gate=%s)", key, out, s.deliveryGate(ctx))
+		}
+		if out, isErr := set("false"); isErr || !strings.Contains(out, "没有变化") || len(s.pendingQuestions()) != 0 {
+			t.Fatalf("%s set to false while already off: %s", key, out)
+		}
+		card := i18n.T(i18n.Default, "assistant-settings_tool.change_done_needs_delivery", i18n.Args{"before": word[false], "after": word[true]})
+		go answer(false, card)
+		if out, _ := set("true"); !strings.Contains(out, "declined") || get() != "false" {
+			t.Fatalf("%s declined: %s", key, out)
+		}
+		go answer(true, card)
+		if out, _ := set("true"); !strings.HasPrefix(out, key+" is true") || get() != "true" || s.deliveryGate(ctx) != deliveryGateLive {
+			t.Fatalf("%s approved: %s (gate=%s)", key, out, s.deliveryGate(ctx))
 		}
 	}
 }

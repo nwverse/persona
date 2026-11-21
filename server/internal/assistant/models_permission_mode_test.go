@@ -482,6 +482,136 @@ func TestPermissionModePerMachineResolution(t *testing.T) {
 	}
 }
 
+func TestPermissionModeManagedShadowingAndHubOverride(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	f.mu.Lock()
+	f.sessions["mac"] = nil
+	f.zshrc = map[string][]proto.Launcher{
+		"server": {
+			// Same-named Claude-like local definition shadowed by an in-scope managed omp provider.
+			{Name: "shadow-omp", Agent: "claude", Source: "zshrc"},
+			// Reverse collision: local omp definition shadowed by an in-scope managed Claude provider.
+			{Name: "shadow-claude", Agent: "omp", Source: "zshrc"},
+			// Scoped managed omp provider is only active on mac, so server keeps its local Claude launcher.
+			{Name: "scoped-omp", Agent: "claude", Source: "zshrc"},
+			// Discovered omp launcher with a partial hub.json override (AgentType/Agent unset).
+			{Name: "override-zshrc-omp", Agent: "omp", Source: "zshrc"},
+			// Local omp launcher shadowed by an in-scope managed Messages API provider + partial hub.json override.
+			{Name: "shadow-api", Agent: "omp", Source: "zshrc"},
+			// Runtime launcher whose AgentType is explicitly overridden to omp in hub.json.
+			{Name: "override-to-omp", Agent: "paseo", Source: "paseo", PermissionModes: proto.PermissionModeSetOf("default", "plan")},
+		},
+		"mac": {
+			{Name: "scoped-omp", Agent: "claude", Source: "zshrc"},
+		},
+	}
+	f.hello.Models.Launchers = map[string][]ConfiguredLauncher{
+		"server": {
+			{Launcher: proto.Launcher{Name: "shadow-omp", BaseURL: "https://override.example"}},
+			{Launcher: proto.Launcher{Name: "override-zshrc-omp", Model: "custom-model"}},
+			{Launcher: proto.Launcher{Name: "shadow-api", BaseURL: "https://api-override.example"}},
+			{Launcher: proto.Launcher{Name: "override-to-omp"}, AgentType: "omp"},
+		},
+	}
+	f.mu.Unlock()
+
+	putLaunchers(t, s,
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "shadow-omp", Agent: "omp", BaseURL: "https://omp.example"}, Share: "all"},
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "shadow-claude", Agent: "claude", BaseURL: "https://claude.example"}, Share: "all"},
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "scoped-omp", Agent: "omp", BaseURL: "https://scoped.example"}, Share: "selected", ScopeMachines: []string{"mac"}},
+		apiProvider(t, s, "shadow-api", "messages"),
+	)
+
+	// In-scope managed omp provider shadows local Claude launcher AND preserves omp across partial hub.json override.
+	if modes := s.permissionModesForLauncher(ctx, "server", "shadow-omp", &ModelProvider{ID: "launcher.shadow-omp", Kind: "launcher", Agent: "omp"}); len(modes) != 0 {
+		t.Fatalf("managed shadow-omp with local claude + partial hub.json override modes = %v, want empty", modes)
+	}
+	// Reverse collision: in-scope managed Claude provider shadows local omp launcher.
+	if modes := s.permissionModesForLauncher(ctx, "server", "shadow-claude", &ModelProvider{ID: "launcher.shadow-claude", Kind: "launcher", Agent: "claude"}); !slices.Contains(modes, "acceptEdits") {
+		t.Fatalf("managed shadow-claude shadowing local omp modes = %v, want standard Claude modes", modes)
+	}
+	if w := modelRequest(s, http.MethodPatch, "assistant", `{"revision":0,"provider":"launcher.shadow-claude","permission_mode":"acceptEdits"}`); w.Code != http.StatusOK {
+		t.Fatalf("assistant rejected valid Claude mode on managed shadow-claude: %d %s", w.Code, w.Body.String())
+	}
+	// Out-of-scope managed omp provider does not shadow server's local Claude launcher, but does shadow mac's.
+	if modes := s.permissionModesForLauncher(ctx, "server", "scoped-omp", &ModelProvider{ID: "launcher.scoped-omp", Kind: "launcher", Agent: "omp"}); !slices.Contains(modes, "acceptEdits") {
+		t.Fatalf("server out-of-scope scoped-omp modes = %v, want local Claude modes", modes)
+	}
+	if modes := s.permissionModesForLauncher(ctx, "mac", "scoped-omp", &ModelProvider{ID: "launcher.scoped-omp", Kind: "launcher", Agent: "omp"}); len(modes) != 0 {
+		t.Fatalf("mac in-scope scoped-omp modes = %v, want empty", modes)
+	}
+	// Partial hub.json override (AgentType and Agent unset) preserves discovered omp agent.
+	if modes := s.permissionModesForLauncher(ctx, "server", "override-zshrc-omp", nil); len(modes) != 0 {
+		t.Fatalf("override-zshrc-omp modes = %v, want empty", modes)
+	}
+	// Managed Messages API provider shadows local omp launcher and survives partial hub.json override.
+	if modes := s.permissionModesForLauncher(ctx, "server", "shadow-api", nil); !slices.Contains(modes, "acceptEdits") {
+		t.Fatalf("shadow-api modes = %v, want standard Claude modes", modes)
+	}
+	// Explicit hub.json AgentType override to omp clears inherited runtime permission modes.
+	if modes := s.permissionModesForLauncher(ctx, "server", "override-to-omp", nil); len(modes) != 0 {
+		t.Fatalf("override-to-omp modes = %v, want empty", modes)
+	}
+}
+
+func TestPermissionModeStaleCacheFallsBackToLiveTargetDiscovery(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	f.mu.Lock()
+	f.sessions["mac"] = nil
+	f.zshrc = map[string][]proto.Launcher{
+		"server": {
+			{Name: "claude", Source: "zshrc"},
+		},
+		"mac": {
+			{Name: "newly-added", Agent: "claude", Source: "zshrc"},
+			{Name: "fresh-grok", Agent: "paseo", Source: "paseo", Assistant: true, PermissionModes: proto.PermissionModeSetOf("default", "plan")},
+		},
+	}
+	f.mu.Unlock()
+
+	// Populate the hub's cached zshrc snapshot for both machines while "server" lacks the newly added launchers.
+	_ = s.zshrcLaunchers(ctx, false)
+
+	// Now the live "server" node advertises both launchers with different capabilities than "mac", plus a partial
+	// hub.json override on "newly-added" (AgentType/Agent unset) that must still preserve live omp.
+	f.mu.Lock()
+	f.zshrc["server"] = []proto.Launcher{
+		{Name: "claude", Source: "zshrc"},
+		{Name: "newly-added", Agent: "omp", Source: "zshrc"},
+		{Name: "fresh-grok", Agent: "paseo", Source: "paseo", Assistant: true, PermissionModes: proto.PermissionModeSetOf("default", "bypassPermissions")},
+	}
+	f.hello.Models.Launchers = map[string][]ConfiguredLauncher{
+		"server": {
+			{Launcher: proto.Launcher{Name: "newly-added", Model: "custom-model"}},
+		},
+	}
+	f.mu.Unlock()
+
+	unionNewlyAdded := &ModelProvider{ID: "launcher.newly-added", Kind: "launcher", Agent: "claude"}
+	if modes := s.permissionModesForLauncher(ctx, "server", "newly-added", unionNewlyAdded); len(modes) != 0 {
+		t.Fatalf("stale cache missed live server omp for newly-added: got %v, want empty", modes)
+	}
+
+	unionFreshGrok := &ModelProvider{
+		ID:              "launcher.fresh-grok",
+		Kind:            "launcher",
+		Agent:           "paseo",
+		PermissionModes: proto.PermissionModeSetOf("default", "plan", "bypassPermissions"),
+	}
+	if modes := s.permissionModesForLauncher(ctx, "server", "fresh-grok", unionFreshGrok); slices.Contains(modes, "plan") || !slices.Contains(modes, "bypassPermissions") {
+		t.Fatalf("stale cache fell back to cross-machine union for fresh-grok: got %v, want [default bypassPermissions]", modes)
+	}
+
+	if w := modelRequest(s, http.MethodPatch, "assistant", `{"revision":0,"provider":"launcher.fresh-grok","permission_mode":"plan"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("assistant on server accepted mac-only plan mode via stale cache: %d %s", w.Code, w.Body.String())
+	}
+	if w := modelRequest(s, http.MethodPatch, "assistant", `{"revision":0,"provider":"launcher.fresh-grok","permission_mode":"bypassPermissions"}`); w.Code != http.StatusOK {
+		t.Fatalf("assistant on server rejected live bypassPermissions mode: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestModelProfilePermissionModeValidationAndCapture(t *testing.T) {
 	s, f, _ := modelService(t)
 	ctx := context.Background()
@@ -541,5 +671,125 @@ func TestModelProfilePermissionModeValidationAndCapture(t *testing.T) {
 	}
 	if tiers["strong"].PermissionMode != "" || tiers["standard"].PermissionMode != "" {
 		t.Fatalf("captureModels leaked permission_mode into seeded tiers: %+v", tiers)
+	}
+}
+
+func TestHeadlessStartDropsUnsupportedPerMachinePermissionMode(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	f.mu.Lock()
+	f.sessions["mac"] = nil
+	f.zshrc = map[string][]proto.Launcher{
+		"mac": {
+			{Name: "claude", Source: "zshrc"},
+			{Name: "grok", Agent: "paseo", Source: "paseo", Assistant: true, PermissionModes: proto.PermissionModeSetOf("default", "plan", "bypassPermissions")},
+		},
+		"server": {
+			{Name: "claude", Source: "zshrc"},
+			{Name: "grok", Agent: "paseo", Source: "paseo", Assistant: true, PermissionModes: proto.PermissionModeSetOf("default", "bypassPermissions")},
+		},
+	}
+	f.mu.Unlock()
+	// agent.new is machine-agnostic so "plan" is valid via mac's advertised capabilities.
+	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.grok", PermissionMode: "plan"})
+
+	// Headless start on server (where grok only supports default + bypassPermissions) must drop inherited "plan".
+	if _, err := s.startOn(ctx, "server", StartParams{Text: "handle lark", Purpose: purposeLarkAgent}, false); err != nil {
+		t.Fatalf("lark.agent startOn server: %v", err)
+	}
+	last := f.sends[len(f.sends)-1]
+	if _, exists := last["permission_mode"]; exists {
+		t.Fatalf("headless start forwarded unsupported per-machine mode: %v", last)
+	}
+
+	// Supported inherited mode on server is preserved.
+	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.grok", PermissionMode: "bypassPermissions"})
+	if _, err := s.startOn(ctx, "server", StartParams{Text: "handle lark 2", Purpose: purposeLarkAgent}, false); err != nil {
+		t.Fatalf("lark.agent supported startOn server: %v", err)
+	}
+	if got := f.sends[len(f.sends)-1]["permission_mode"]; got != "bypassPermissions" {
+		t.Fatalf("headless start dropped supported per-machine mode: got %v, want bypassPermissions", got)
+	}
+
+	// Explicit caller override is preserved.
+	if _, err := s.startOn(ctx, "server", StartParams{Text: "explicit", Purpose: purposeLarkAgent, PermissionMode: "plan"}, false); err != nil {
+		t.Fatalf("lark.agent explicit startOn server: %v", err)
+	}
+	if got := f.sends[len(f.sends)-1]["permission_mode"]; got != "plan" {
+		t.Fatalf("headless start dropped explicit caller permission_mode: got %v, want plan", got)
+	}
+}
+
+func TestLauncherViewsMergeUnrestrictedPermissionModes(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	restricted := proto.PermissionModeSetOf("default", "bypassPermissions")
+
+	// When any machine reports zero (unrestricted / older node), the cross-machine merged view stays unrestricted (0)
+	// regardless of machine order.
+	for _, tc := range []struct {
+		name  string
+		zshrc []zshrcLaunchers
+	}{
+		{
+			name: "unrestricted first then restricted",
+			zshrc: []zshrcLaunchers{
+				{MachineID: "old-node", Launchers: []proto.Launcher{{Name: "grok", Agent: "paseo", Source: "zshrc"}}},
+				{MachineID: "new-node", Launchers: []proto.Launcher{{Name: "grok", Agent: "paseo", Source: "zshrc", PermissionModes: restricted}}},
+			},
+		},
+		{
+			name: "restricted first then unrestricted",
+			zshrc: []zshrcLaunchers{
+				{MachineID: "new-node", Launchers: []proto.Launcher{{Name: "grok", Agent: "paseo", Source: "zshrc", PermissionModes: restricted}}},
+				{MachineID: "old-node", Launchers: []proto.Launcher{{Name: "grok", Agent: "paseo", Source: "zshrc"}}},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			views := s.launcherViewsFrom(ctx, tc.zshrc, nil)
+			if len(views) != 1 || views[0].Name != "grok" {
+				t.Fatalf("views = %+v", views)
+			}
+			if views[0].PermissionModes != 0 {
+				t.Fatalf("merged PermissionModes = %v, want 0 (unrestricted)", views[0].PermissionModes.List())
+			}
+		})
+	}
+
+	// Machine-agnostic agent.new accepts a standard mode when one machine reports unrestricted (0).
+	f.mu.Lock()
+	f.sessions["mac"] = nil
+	f.zshrc = map[string][]proto.Launcher{
+		"server": {{Name: "grok", Agent: "paseo", Source: "zshrc", PermissionModes: restricted}},
+		"mac":    {{Name: "grok", Agent: "paseo", Source: "zshrc"}},
+	}
+	f.mu.Unlock()
+	if w := modelRequest(s, http.MethodPatch, "agent.new", `{"revision":0,"provider":"launcher.grok","permission_mode":"plan"}`); w.Code != http.StatusOK {
+		t.Fatalf("agent.new rejected mode valid on unrestricted machine: %d %s", w.Code, w.Body.String())
+	}
+
+	// When every machine declares an explicit set, the merged view carries their union.
+	unionViews := s.launcherViewsFrom(ctx, []zshrcLaunchers{
+		{MachineID: "mac", Launchers: []proto.Launcher{{Name: "grok", Agent: "paseo", Source: "zshrc", PermissionModes: proto.PermissionModeSetOf("default", "plan")}}},
+		{MachineID: "server", Launchers: []proto.Launcher{{Name: "grok", Agent: "paseo", Source: "zshrc", PermissionModes: proto.PermissionModeSetOf("default", "bypassPermissions")}}},
+	}, nil)
+	if len(unionViews) != 1 || unionViews[0].PermissionModes != proto.PermissionModeSetOf("default", "plan", "bypassPermissions") {
+		t.Fatalf("explicit union = %+v", unionViews)
+	}
+}
+
+func TestAgentStartConfirmationShowsPermissionMode(t *testing.T) {
+	f := healthHub()
+	f.launcherList = []proto.Launcher{
+		{Name: "claude", Agent: "claude"},
+		{Name: "codex", Agent: "codex"},
+	}
+	s := newTestService(t, f)
+	setSettings(t, s, func(v *Settings) { v.MachineID, v.Main = "server", "main-0000-0000" })
+	answerOutbound(t, s, "sleep-000-0000", "agent_start", " · bypassPermissions", false)
+	out, _ := spaceTool(t, s, "sleep-000-0000", "agent_start", `{"machine":"server","cwd":"/home/me/src/app","prompt":"Check config","launcher":"codex","permission_mode":"bypassPermissions"}`)
+	if !strings.Contains(out, "declined") || len(f.starts) != 0 {
+		t.Fatalf("agent_start: %s, starts %v", out, f.starts)
 	}
 }

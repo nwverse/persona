@@ -84,7 +84,7 @@ Changing trust does not erase context already delivered to a computer or termina
 | Dispatch tasks | `task_plan`: hand Agent work to the user, one task per to-do (`origin` = this chat). Read-only and user-remembered tasks start directly; others become plan cards awaiting "Start" without blocking the turn. Progress appears in the live snapshot's "Tasks started from chat"; completion receipts, answered questions, and direct task messages enter chat activity ([unified-entry.md](unified-entry.md), `assistant/tasks.go`) |
 | Telegram | Available only with the Telegram extension (extension market `nwverse/persona-extensions`, #1704, #2057): read-only MCP `telegram_chats` / `telegram_messages` / `telegram_search`; more flexible reads and writes use the bundled telegram skill (Bash `tg …`, i.e. `personad tool --cli telegram`, through hub, writes confirmed on the phone). `tg` is on PATH only while Telegram is logged in (`docs/protocol/connector-protocol.md` ("Command line")) |
 | Lark | The open-source version uses official lark-cli ("Lark: lark-cli" below). With a Lark-gateway extension installed, mainly use its skill (extension commands in Bash, both reads and writes), see "Lark: skill supplied by the Lark extension"; MCP `lark_chats` / `lark_messages` / `lark_search` also come from the extension (since #1571 no Lark gateway client in hub, `docs/plans/plan-extensions.md` ("Step 3")). The old read-only `lark_api` and `lark_send` were removed as duplicates of the skill |
-| Control Persona itself | `persona_settings` (`list` first, an assistant tool, `assistant/settings_tool.go`: About Me, default launcher, and `main_tasks_quiet` are assistant-owned settings, read / written by it with its own phone confirmation cards; other settings belong to hub, listed through `app.call settings.list`, read / written through `app.tool persona_settings`, with hub confirmation): read / write triage rules (global `inbox.rules` and per-plugin-source `inbox.rules.<plugin>` for sources declaring `triage_rules`, overriding global when present), every configurable extension's form settings (`extension.<id>`: `get` lists each field, `set` changes only the fields given, each shown before → after on the card, #2385), inbox task-linking rules (`inbox.agent_rules`: which running task a needs-you item belongs to; what the AI twin takes on is inbox policies. Reading or changing it says when the AI twin is off, #5865), About Me, default launcher, "Main chat tasks notify only in main chat" (`assistant.main_tasks_quiet`), per-machine muted Claude config directories (`agents.blocked_claude_dirs`), push grading for every device (`notifications.low_distraction`, the compatibility key for the hub's push grading switch, #8157; `docs/server/server.md` "Push grading (push urgency filtering, `hub/push_grading.go`)"), and add / remove mail accounts. Changes first show a phone confirmation card; added-account passwords / authorization codes are entered on the phone card, never through the model or chat / interaction history. After approval, hub tests IMAP / SMTP and encrypts / saves only if both work. Gmail requires Google sign-in in the App; launchers are written to unified model configuration while retaining existing model and effort |
+| Control Persona itself | `persona_settings` (`list` first, an assistant tool, `assistant/settings_tool.go`: About Me, direction notes, default launcher, and `main_tasks_quiet` are assistant-owned settings, read / written by it with its own phone confirmation cards; other settings belong to hub, listed through `app.call settings.list`, read / written through `app.tool persona_settings`, with hub confirmation): read / write triage rules (global `inbox.rules` and per-plugin-source `inbox.rules.<plugin>` for sources declaring `triage_rules`, overriding global when present), every configurable extension's form settings (`extension.<id>`: `get` lists each field, `set` changes only the fields given, each shown before → after on the card, #2385), inbox task-linking rules (`inbox.agent_rules`: which running task a needs-you item belongs to; what the AI twin takes on is inbox policies. Reading or changing it says when the AI twin is off, #5865), About Me, direction notes (`direction.<id>.prompt`: readable in any assistant conversation, set only by the main conversation as a whole string or a unique `old` / `new` fragment replacement; `docs/assistant/unified-entry.md` "Direction notes"), default launcher, "Main chat tasks notify only in main chat" (`assistant.main_tasks_quiet`), per-machine muted Claude config directories (`agents.blocked_claude_dirs`), push grading for every device (`notifications.low_distraction`, the compatibility key for the hub's push grading switch, #8157; `docs/server/server.md` "Push grading (push urgency filtering, `hub/push_grading.go`)"), and add / remove mail accounts. Changes first show a phone confirmation card; added-account passwords / authorization codes are entered on the phone card, never through the model or chat / interaction history. After approval, hub tests IMAP / SMTP and encrypts / saves only if both work. Gmail requires Google sign-in in the App; launchers are written to unified model configuration while retaining existing model and effort |
 | Live snapshot | Each message to the assistant starts with `<persona-context>` (not system prompt, see "Live snapshots and prefix caching"): time (phone timezone), online computers, Needs you and Unread Agents plus the count of working ones (`agents_list` lists them on demand, #11261), unread connector chats and @me, today's upcoming meetings, scheduled follow-ups, and up to five open Inbox matters being followed by check time. Agents and tasks include web links: hub `public_url` (default `http://<hostname>:18660` when unset) plus `/s/<machine>/<session id>`, `/todos?id=<to-do id>`; the assistant uses Markdown links when mentioning them. Omit if hub can't supply the address (#2194). The main conversation's task lists (task details, open-task index, waiting to be verified or approved) hold every task; a leader's or side conversation's hold only the ones it handed out or supervises (#8666, `docs/assistant/todos.md`). Include only changes since this chat's previous snapshot (time always included): changed sections, and inside the task details, the Agents section and the unread chats only the rows that changed (#9078). hub gives each source 3 seconds, reuses reads for 45 seconds, and messages wait at most 1.5 seconds for fresh data, not at all while reads take longer than that (#8948) |
 | Faster | When the App displays a new-chat page, `POST /api/v1/assistant/warm` starts a spare node process (`spare`, valid for 10 minutes), used directly by new chats. `personad mcp` marks the Persona tools assistant conversations use often `anthropic/alwaysLoad`; the rest, and other MCP servers' tools, keep Claude Code's ordinary ToolSearch deferral (#5838, #7317): the manager picks them (`coreTools`, `assistant/tool_loading.go`), adding `leader_progress`, `todo_create`, `ask_escalate` and `direction_name` for current leader conversations from their session id; tool loading does not expand caller permissions. `assistant.load_all_tools` (`persona_settings`, off by default) loads every Persona tool up front again, in running conversations too: the change wakes each `personad mcp`'s tool watch (`assistant/mcp_tools_changes.go`), which sends the new list (`notifications/tools/list_changed`); a `personad mcp` older than tool refresh keeps its list until its process restarts. On Anthropic's own API the assistant's processes carry `ENABLE_TOOL_SEARCH=true`, so a conversation that once ran without ToolSearch defers too instead of loading every tool until its next compaction; behind a gateway they carry `false` and load every tool, and a gateway's refusal of tool search is resent once that way and remembered (#10365, `docs/integrations/claude-integration.md` "Tool search behind a gateway (#10365)") |
 | Memory | Claude Code auto memory (`~/.claude/projects/<encoded directory>/memory/*.md`); App Settings can view / edit / delete it (node `assistant.memory`). Codex and DSH read / write the same memory ("Codex", "Agent runtime (DSH)" below), so changing launchers doesn't lose it, and a Claude conversation in any profile is told to use it too ("One memory" below). Health chats have a separate health space and separate memory (`docs/assistant/health.md`) |
@@ -484,7 +484,7 @@ With over ten Agents running, most mid-task questions concern internal choices t
 - **Audit and changing answers**: triage answers sent to Agents explain "The assistant answered for me under my rules (reason: …); I may change my answer later" (`prompts/agents/answer.md`); task chat activity says "Assistant answered: X, because Y". Don't record delegation as to-do decisions (those are the user's). To change: `POST /api/v1/interactions/{id}/reanswer {answers}` (hub forwards to manager; card-answer-only devices can't use it). The Agent has already acted, so send the new answer as a message (`prompts/agents/reanswer.md`, including original assistant answer), broadcast `interaction_reanswered`, and record the user answer in task history / decisions.
 - **Statistics**: each evaluation writes `session_work_events` (`delegate_answered` / `delegate_asked` / `delegate_failed`), shown with triage statistics.
 - **Manager restart while deciding** (#2587): `delegating` and the background decision live in the manager's memory, and a restored card comes back with neither (`restoreInteractions` does not know whether it rang). So `delegate` records `delegate_start` (the card id) in `session_work_events`, and `delegateNow` records `delegate_end` once it has decided: after the assistant's answer, and before the user is told on a hand-over, so a restart right after does not push twice. No migration. As the next manager starts, `resumeDelegations` takes the restored cards whose latest mark is `delegate_start` (within 24 hours) and that do not find a supervisor route again (`restoreRoute`, "Asks go to the supervisor first" in `docs/assistant/unified-entry.md`); a hook that claims its card before the hub's handshake gets the same, from `waitInteraction`. within `timeout_seconds` of that start the assistant decides again for the time left (the card is `delegating` in the hub's first full list); past it, or when delegation is now off or the question repeats, the card goes to the user through the usual push / bot / channel path (`escalate`), recording `delegate_failed` with reason `restart` when it was the time. Restored cards without an open start were told before the restart and are not told again. Only resumable hook cards (Claude Code) are restored this way; a Codex card a node lists again after a restart goes through `announce` again (`codexAnnounced` starts empty), so it is delegated anew.
-- **Client UI**: web has "Assistant is looking", the `delegate` context and "Change answer", plus the delegated answers in **Session info** (#544, `docs/web/web.md` "Pages"); iOS / Mac have the same (`docs/apple/ios.md`, "Information architecture"). **Not done**: Android.
+- **Client UI**: web has "Assistant is looking", the `delegate` context and "Change answer", plus the delegated answers in **Session info** (#544, `docs/web/web.md` "Pages"); iOS / Mac have the same (`docs/apple/ios.md`, "Information architecture"). Android has the same pending-card looking/context presentation (#544, `docs/android/android.md` "Session controls, session origin and capabilities") and already has Change Answer.
 
 ## Asking without holding the turn (#4928)
 
@@ -1686,6 +1686,18 @@ operation then read as accepted and the bubble waited for the transcript and wen
 - **Device signed out** (#10708). The hub gives the manager the sending device's credential ID when it keeps a
   message. Signing out that device fails its kept messages. Their rows say why and offer Delete. Messages kept
   before the hub recorded the sending credential have no device to match.
+- **Messages that need no reply** (#11614, `server/internal/assistant/relay_later.go`). `conversation_send` with
+  `wake: false` is for acknowledgements and information the receiver does not have to act on. The message is kept
+  for the receiver (`relayState.Later`, kept across a restart, at most 20 per conversation and 7 days) and goes in,
+  as a context block in front (`prompts/assistant/relay_later.md`), with the next message the manager delivers to
+  that conversation for anything else: a supervision message, another conversation's message, a scheduled follow-up,
+  a notice. It starts no turn of its own, costs no hop and no place in the relay rate, and is dropped only once the
+  message carrying it went in. Before a send with a `once_id`, its quiet-message context (including an empty one) is
+  saved and reused on retries, including after restart. A retry clears only that original context; later arrivals wait
+  for a new send ID. These reservations expire after seven days, beyond the node's ten-minute send-ID memory.
+  Nothing is guessed from the words: only the explicit argument decides. A `quote` (the
+  owner's request) always wakes, so the two together are refused. A turn the owner starts from an app does not carry
+  it; it shows above the composer meanwhile.
 - **Between conversations.** `conversation_send` to a conversation that cannot take the message now no longer fails:
   the message goes into its relay queue and is tried again under the same `once_id`. A conversation that failed to
   take a relayed message is tried again after `relayRetryGap` (30 s), not on every session list.
@@ -2284,6 +2296,15 @@ machine and session exactly; ordinary Agent start parameters are untouched.
   not proof that a tool is hidden.
 - **Defaults and fallback**: no policy, `enabled:false`, expiry, a non-matching target and an empty target list all
   leave existing behavior unchanged. Untargeted tool lists and other conversations keep their previous contents.
+  Requests must name `dispatch_guard`; duplicate or unknown outer, policy or target fields, a missing/null policy and
+  a non-empty policy without an explicit `enabled` are rejected without touching the Store or publishing a list
+  change. Duplicate keys are rejected while walking the complete JSON, before any `RawMessage` occurrence can be
+  discarded. Field names are case-sensitive: a differently cased alias such as `DISPATCH_GUARD` or `TARGETS`, which
+  `encoding/json` would otherwise match to the same field, is rejected as an unknown field at every level. Only an explicit `enabled:false` or `targets:[]` clears, and empty targets are normalized to disabled
+  with no expiry even when the request leaves `enabled:true`. Validation responses use localized typed errors in
+  English, Simplified Chinese and Japanese. Natural expiry and recovery from a Setting read failure are included in
+  the discovery cursor and rechecked at heartbeat. Each returned list and its revision come from the same captured
+  effective guard decision, so a transient second-read failure cannot bind a fail-closed list to a healthy revision.
   An unreadable or invalid enabled policy fails closed for the four dispatch tools; unrelated tools remain available.
   The localized refusal contains no storage error, target, tool name, arguments, policy or credential.
 - **Scope and expiry**: `GET` / `PUT /api/v1/assistant/dispatch-guard` requires the `dispatch.guard` scope for an
@@ -2608,3 +2629,49 @@ For a hide rule, and for a block rule on a node that does not block yet, the man
 excludes matched ambient sessions from Assistant observations and reminders. Open supervised task agents remain visible, preserving the supervisor's completion and approval
 flow; after supervision ends, the rule applies again. See `docs/protocol/protocol.md` ("Agent directory visibility")
 for matching, persistence, app inspection and the confirmed `persona_settings` contract.
+
+## Durable assistant history (#11936, phase 1)
+
+For people using Assistant, history remains available from the manager's database when a runtime is away. The
+manager stores normalized messages from main, supervisor and side assistant conversations, archived conversations
+included. Ordinary coding-Agent sessions are not enrolled: their project transcripts need a separate retention,
+access and quota decision. Runtime kind does not decide enrollment.
+
+Database-first history is enabled when the `assistant.history` setting is absent. The full-role advanced endpoint
+`GET /api/v1/assistant/history` reports its effective `enabled` value and aggregate `stats`; PUT with
+`{"enabled":false}` is the rollback switch, and `{"enabled":true}` resumes collection and catch-up. This setting
+changes neither a launcher nor a model. An in-flight ingestion transaction may finish during rollback; later pages
+check the setting again. Rollback retains the tables and original runtime files; it never removes runtime history.
+
+The manager pulls unfolded pages after a durable source cursor, woken by session revisions and item notifications,
+without subscribing to every chat or requiring an open app. Each sweep reads at most eight pages of a conversation;
+the next sweep continues a long import. A periodic source probe also detects rewrites with unchanged byte counts.
+Notifications are only hints: replaying an old notification cannot restore an abandoned generation. Covered ranges,
+the known source end and item completeness are distinct. Missing older ranges fall back to the runtime; a cached
+offline page says `partial` when coverage or freshness is uncertain. Source failures never manufacture complete
+empty history. The disposable text-search index can be rebuilt without deleting durable messages.
+Legacy conversations on current nodes are imported lazily using the same source IDs. A node/runtime that omits
+the protocol's history-generation token keeps the runtime read path; the manager does not invent durable coverage
+that could mix a rewritten transcript with an older one. It can be indexed once its normalized source contract is
+available. This is a source-data compatibility fallback, not an engine-kind restriction.
+
+Historical reads and main handoffs prefer covered database content. Handoffs retain the source engine's stored
+compaction summary and bounded recent complete messages; no model is called to populate this store. An incomplete
+cached window or handoff tries the source first; a source failure retains available data marked `partial`.
+Handoffs require both covered history and a verified summary checkpoint before bypassing an available source. Strict source
+exports and user-input position projections still use the runtime. A stale source revision is checked before old
+coverage is reused. Database failures retain the runtime read path.
+
+Each stored item has a 64 KiB serialized JSON limit enforced in the application and database. Raw JSON bytes retain
+tool parameters and output, including escaped NUL. Larger tools/attachments or nested metadata keep bounded
+previews, provenance and a source item reference marked incomplete. Lazy attachments and runtime-truncated text
+are also incomplete; a reference is not a promise of offline access. The existing full-item/image routes recover
+source content when available. Complete stored copies cannot be downgraded by replaying a preview.
+
+`stats.conversations` counts stored runtime histories, `items` counts distinct source item IDs within them,
+`payload_bytes` counts stored normalized-item JSON bytes, `summary_bytes` counts source compaction-summary bytes,
+and `incomplete` counts item references whose complete content is not stored. These are not tokens, physical
+database size, WAL or backups. Phase 2 introduces logical conversations with several runtime segments.
+Deleting an assistant conversation deletes its message rows, coverage, compaction summary and references in the
+same transaction as its deletion marker. Concurrent or late ingestion cannot recreate deleted content, and a read
+that overlaps deletion discards its response before returning it.

@@ -488,11 +488,11 @@ jobs:
           foreach ($path in Get-ChildItem release/downloads -File) {
             $assets += @{path=$path.FullName; name=$path.Name; sha256=(Get-FileHash $path.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
           }
-          $assets += @{path=(Resolve-Path release/downloads/persona-link-windows-amd64.verification.json).Path; name='persona-link-windows-amd64.verification.json'; sha256=(Get-FileHash release/downloads/persona-link-windows-amd64.verification.json -Algorithm SHA256).Hash.ToLowerInvariant()}
-          $assets += @{path=(Resolve-Path release/downloads/personad-windows-amd64.verification.json).Path; name='personad-windows-amd64.verification.json'; sha256=(Get-FileHash release/downloads/personad-windows-amd64.verification.json -Algorithm SHA256).Hash.ToLowerInvariant()}
-          $assets += @{path=(Resolve-Path release/downloads/persona-node-windows-amd64.verification.json).Path; name='persona-node-windows-amd64.verification.json'; sha256=(Get-FileHash release/downloads/persona-node-windows-amd64.verification.json -Algorithm SHA256).Hash.ToLowerInvariant()}
+          # windows_release.py already writes each verification JSON beside its executable. Do not add it a second time.
+          # This windows-latest runner proves amd64 only. ARM64 remains an explicit prerequisite, not a fabricated pass.
+          $architecture = if ($env:PROCESSOR_ARCHITECTURE -eq 'AMD64') { 'amd64' } elseif ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { throw 'Unsupported native Windows architecture' }
           @{commit=$plan.commit; assets=$assets} | ConvertTo-Json -Depth 5 | Set-Content release/receipt.json -NoNewline
-          python -B -c "import sys; sys.path.insert(0, 'scripts/operations'); from windows_release import check_windows_artifacts; import json; data=json.load(open('release/receipt.json')); check_windows_artifacts(data['assets'], '$($plan.version)')"
+          python -B -c "import sys; sys.path.insert(0, 'scripts/operations'); from windows_release import check_windows_artifacts; import json; data=json.load(open('release/receipt.json')); check_windows_artifacts(data['assets'], '$($plan.version)', '$architecture')"
           python scripts/operations/release_pr.py --repository '${{ github.repository }}' --channel '${{ needs.plan.outputs.channel }}' verify-artifacts --plan release/plan.json --commit '${{ needs.plan.outputs.commit }}' --add release/downloads
       - uses: actions/setup-node@v4
         with:

@@ -92,6 +92,9 @@ func ProjectEfforts(levels, vocab []string) []string {
 	return out
 }
 
+// ModeDefault applies the ordinary permission rules.
+const ModeDefault = "default"
+
 // ModeBypass skips every permission prompt; a headless claude only takes it at start (--permission-mode).
 const ModeBypass = "bypassPermissions"
 
@@ -269,8 +272,8 @@ type Session struct {
 	// ServiceTier is the acknowledged native speed, omitted while unknown.
 	ServiceTier  string        `json:"service_tier,omitempty"`
 	ServiceTiers []ServiceTier `json:"service_tiers,omitempty"`
-	// Space is the assistant's space it runs in: "health" for the health space's (docs/assistant/health.md), "" for the
-	// assistant's own. Set by the hub on the assistant's conversations.
+	// Space is "health" for a session in the health space (docs/assistant/health.md), or empty otherwise.
+	// The node can preserve it from the start directory even when a live pane's working directory moves.
 	Space string `json:"space,omitempty"`
 	// ModelPick is the launcher / model / effort picked for one of the assistant's conversations, which its next
 	// messages run on (#5033, docs/assistant/model-config.md "A conversation's own model"); nil follows Model

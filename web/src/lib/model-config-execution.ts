@@ -20,6 +20,16 @@ function executionLabel(form: string): string {
   return form === "api" ? t("settings.direct_api") : form === "plugin" ? t("settings-nav.tab_extensions") : t(`settings-modelconfiguration.${form}`);
 }
 
+/** Whether a launcher provider on an API purpose routes via model.run (CLI) rather than an HTTP Messages gateway.
+ *  A Persona-managed launcher with an empty or "messages" API always uses HTTP Messages regardless of has_key; older
+ *  hubs that omit `source` fall back to `has_key` only when `api` is omitted. */
+export function isModelRunLauncher(provider?: ModelProvider): boolean {
+  if (provider?.kind !== "launcher") return false;
+  if (provider.api === "messages") return false;
+  if (provider.source === "persona") return !!provider.api;
+  return provider.source !== undefined || !!provider.api || !provider.has_key;
+}
+
 export function executionForm(p: ModelPurpose, providers: ModelProvider[] = [], machines: Machine[] = []): { label: string; backend: string } {
   const provider = providers.find((v) => v.id === p.effective?.provider);
   const launch = purposeLaunch(p);
@@ -27,9 +37,8 @@ export function executionForm(p: ModelPurpose, providers: ModelProvider[] = [], 
   let backend: string;
   if (p.kind === "plugin") backend = providerName(p.effective?.provider, providers) ?? "";
   // A launcher picked for an API purpose runs its CLI once per request on the main chat's computer (model.run), unless
-  // it is a managed one with a Messages gateway, called over HTTP (#5823, #12027; the hub decides by protocol, a key
-  // marks a managed one).
-  else if (p.kind === "api" && provider?.kind === "launcher" && ((provider.api && provider.api !== "messages") || !provider.has_key)) {
+  // it is a managed one with a Messages gateway, called over HTTP (#5823, #12027).
+  else if (p.kind === "api" && isModelRunLauncher(provider)) {
     backend = agent === "codex" ? "codex exec" : agent === "agy" ? "agy -p" : "claude -p";
   }
   else if (p.kind === "api") backend = { messages: "Messages", responses: "Responses", chat: "Chat" }[provider?.api || "messages"];

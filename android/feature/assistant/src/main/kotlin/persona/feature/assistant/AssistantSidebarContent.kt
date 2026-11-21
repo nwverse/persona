@@ -2,8 +2,10 @@ package persona.feature.assistant
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
@@ -15,6 +17,7 @@ import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.AssistantManagerChoice
 import persona.core.contracts.api.AssistantManagement
+import persona.core.contracts.api.AssistantConfigUpdate
 import persona.core.contracts.api.AssistantRepository
 import persona.core.contracts.api.AssistantSnapshot
 import persona.core.designsystem.*
@@ -38,7 +41,7 @@ object AssistantSidebarShade {
 
 /** The Agents list supplies the scroll viewport and places the footer below its Needs You jump. */
 class MergedSidebarContent(
-    val list: @Composable (LazyListScope.() -> Unit, @Composable () -> Unit, () -> Unit) -> Unit,
+    val list: @Composable (LazyListState, LazyListScope.() -> Unit, @Composable () -> Unit, () -> Unit) -> Unit,
     val usage: @Composable () -> Unit,
     val agents: List<Session>,
     val agentMachines: Map<String, String>,
@@ -96,9 +99,21 @@ fun AssistantSidebarContent(
         ?: AssistantSnapshot(manager = choice.manager, managerId = choice.shown)
     val base = LocalAssistantHost.current?.management
     val management = remember(base, choice.hubId, choice.shown) { base?.forManager(choice.shown) }
+    val conversationArranger = remember(management, repository, demo) {
+        management?.takeUnless { demo }?.let { api ->
+            ConversationArranger(
+                prepare = { repository.conversationOrderUpdater() },
+                write = { order ->
+                    api.updateConfig(AssistantConfigUpdate(conversationOrder = order)).conversationOrder
+                },
+            )
+        }
+    }
+    val conversationArrangeUi = conversationArranger?.ui?.collectAsStateWithLifecycle()?.value ?: ConversationArrangeUi()
     val resources = LocalResources.current
     val copy = rememberCopy()
     val feedback = LocalAppFeedback.current
+    val toast = rememberToastState()
     val haptics = persona.core.designsystem.rememberHaptics()
     val archivedWords = stringResource(R.string.assistant_archived)
     val words = conversationWords()
@@ -142,10 +157,39 @@ fun AssistantSidebarContent(
             finally { leaderBusy = false }
         }
     }
-    val groups = remember(received, query, ended, archived, words, history.titles, history.tagEdits, history.activeTag) {
-        conversationGroups(received.copy(conversations = history.tagged(received.conversations.filter { it.key !in archived }.map {
+    val orderedSnapshot = if (conversationArrangeUi.arranging || conversationArrangeUi.pending > 0) {
+        received.copy(conversationOrder = conversationArrangeUi.order)
+    } else received
+    val groups = remember(orderedSnapshot, query, ended, archived, words, history.titles, history.tagEdits, history.activeTag) {
+        conversationGroups(orderedSnapshot.copy(conversations = history.tagged(orderedSnapshot.conversations.filter { it.key !in archived }.map {
             if (it.key in ended) it.copy(status = "offline", state = "offline") else it
         })), query, words, activeTag = history.activeTag)
+    }
+    val latestArrangeActivityIds = rememberUpdatedState(groups.others.map { it.sessionId })
+    val beginArrange: (() -> Unit)? = conversationArranger?.let { controller ->
+        {
+            query = ""
+            fullSearchOpen = false
+            history.activeTag?.let(history::selectTag)
+            operationScope.launch {
+                controller.start(if (conversationArrangeUi.pending > 0) conversationArrangeUi.order else received.conversationOrder)
+            }
+        }
+    }
+    LaunchedEffect(conversationArranger, resources, feedback) {
+        val controller = conversationArranger ?: return@LaunchedEffect
+        controller.events.collect { event ->
+            when (event) {
+                is ConversationArrangeEvent.Failed -> failed(event.error)
+                is ConversationArrangeEvent.Reset -> {
+                    val message = resources.getString(R.string.assistant_arrange_reset_done)
+                    val undo = FeedbackAction(resources.getString(R.string.assistant_arrange_undo)) {
+                        operationScope.launch { controller.undoReset(event.revision, latestArrangeActivityIds.value) }
+                    }
+                    if (feedback?.notice(message, undo) != true) toast.show(FeedbackNotice(message, undo))
+                }
+            }
+        }
     }
     val searchOn = management != null && !demo && AssistantSearchFeature in LocalHubFeatures.current
     val openChats = remember(received.conversations, ended, archived, history.titles, history.tagEdits) {
@@ -169,7 +213,8 @@ fun AssistantSidebarContent(
         Box(Modifier.weight(1f)) {
             val visibleGroups = if (merged == null) groups else groups.copy(
                 main = groups.main ?: openChats.firstOrNull { it.key == received.mainSession },
-                others = groups.others.filterNot { chat -> groups.recent.any { it.key == chat.key } },
+                others = if (conversationArrangeUi.arranging) groups.others
+                    else groups.others.filterNot { chat -> groups.recent.any { it.key == chat.key } },
             )
             AssistantDrawer(query, { query = it }, visibleGroups, active = active, hasMain = received.mainSession != null,
                 onEnd = management?.takeUnless { demo }?.let { target -> { session: Session -> ending = session to target } },
@@ -212,6 +257,23 @@ fun AssistantSidebarContent(
                 onDiagnostics = { copy(conversationDiagnostics(it), resources.getString(R.string.assistant_diagnostics_copied)) },
                 archivedCount = history.shownArchived(openKeys).size, onArchived = { history.archivedOpen = true },
                 tagChoices = tagChoices, activeTag = history.activeTag, onTag = history::selectTag,
+                tagFilterBar = if (management != null && !demo && received.conversationTagFilters.supported) ({
+                    ConversationTagFilterBar(
+                        entries = conversationTagFilterEntries(tagChoices, received.conversationTagFilters),
+                        activeTag = history.activeTag,
+                        customized = received.conversationTagFilters.customized,
+                        editing = history.editingTagFilters,
+                        busy = history.tagFiltersBusy,
+                        onSelect = history::selectTag,
+                        onChange = { next ->
+                            val result = history.saveConversationTagFilters(next)
+                            (result.exceptionOrNull() as? Exception)?.let(::failed)
+                            result.isSuccess
+                        },
+                        onEdit = { history.editingTagFilters = true },
+                        onDone = { history.editingTagFilters = false },
+                    )
+                }) else null,
                 onTodos = onTodos, todoCount = todoCount, showTodos = showTodos,
                 settingsCount = settingsCount, settingsDot = settingsDot, settingsBadge = settingsBadge,
                 pages = pages, onPage = onPage, onOpenTodo = onOpenTodo, onOpenAgent = onOpenAgent, switcher = switcher,
@@ -222,7 +284,9 @@ fun AssistantSidebarContent(
                 onFoldColumn = onFoldColumn,
                 merged = merged,
                 showSchedule = merged == null || (management != null && !demo),
-                onAgentSearch = { openSearch(true) })
+                onAgentSearch = { openSearch(true) },
+                arranger = conversationArranger, arrangeScope = operationScope, onArrange = beginArrange)
+            JToastHost(toast, Modifier.align(Alignment.TopCenter))
         }
     }
     if (fullSearchOpen && fullWindowSearch) {
@@ -253,6 +317,7 @@ fun AssistantSidebarContent(
         )
     }
     ConversationHistoryDialogs(history, received.conversations, operationScope, onOpen = onOpen,
+        customizedTagFilters = received.conversationTagFilters.customized,
         notice = { feedback?.notice(it, persona.core.designsystem.FeedbackStyle.Success) }, failure = ::failed)
     ending?.let { (session, target) ->
         JDialog(onDismiss = { if (!busy) ending = null }, title = stringResource(R.string.assistant_end_title),

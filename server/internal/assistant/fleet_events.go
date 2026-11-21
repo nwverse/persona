@@ -22,6 +22,7 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 	if err := s.conversationParamsAvailable(context.Background(), machine, params); err != nil {
 		return false
 	}
+	s.historySignal(machine, event, params)
 	var hook map[string]any
 	if event == "hook.event" && json.Unmarshal(params, &hook) == nil {
 		if sid, _ := hook["session_id"].(string); sid != "" {
