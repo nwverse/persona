@@ -730,7 +730,7 @@ func TestExistingBackgroundStaysBuiltIn(t *testing.T) {
 	if slices.Contains(cfg.Leaders, "bg1") || s.isLeader(ctx, "bg1") || s.supervises(ctx, "bg1") {
 		t.Fatal("the background supervisor is a leader")
 	}
-	if !slices.Contains(keptSessions(cfg, nil, nil, nil, nil), SessionRef{MachineID: "server", SessionID: "bg1"}) {
+	if !slices.Contains(keptSessions(cfg, nil, nil, nil, nil, nil), SessionRef{MachineID: "server", SessionID: "bg1"}) {
 		t.Fatal("the background supervisor is not kept listed")
 	}
 	if _, err := s.setArchived(ctx, "server", "bg1", true, titleByUser); !errors.Is(err, errArchiveBackground) {

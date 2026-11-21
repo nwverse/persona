@@ -385,20 +385,21 @@ func (s *Service) supervisedWorking(ctx context.Context, t Todo) {
 	}
 	b := &s.supervise
 	b.mu.Lock()
-	delete(b.pending, t.ID+"|"+sigReview)
-	delete(b.pending, t.ID+"|"+sigParkedDue)
-	delete(b.pending, t.ID+"|"+sigEstimateDue)
-	s.forgetSupervisePending(t.ID+"|"+sigReview, t.ID+"|"+sigParkedDue, t.ID+"|"+sigEstimateDue)
+	keys := []string{t.ID + "|" + sigReview, t.ID + "|" + sigTimedOut, t.ID + "|" + sigParkedDue, t.ID + "|" + sigEstimateDue}
+	for _, key := range keys {
+		delete(b.pending, key)
+	}
+	s.forgetSupervisePending(keys...)
 	b.mu.Unlock()
-	if st := t.Supervision.state(t); st != reviewPending && st != reviewParked && (t.Supervision == nil || t.Supervision.Waits == nil) {
+	if st := t.Supervision.state(t); st != reviewPending && st != reviewParked && st != reviewTimedOut && st != reviewClosing && (t.Supervision == nil || t.Supervision.Waits == nil) {
 		return
 	}
 	if _, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-		if v.State != reviewPending && v.State != reviewParked && v.Waits == nil {
+		if v.State != reviewPending && v.State != reviewParked && v.State != reviewTimedOut && v.State != reviewClosing && v.Waits == nil {
 			return false
 		}
 		v.Waits = nil // its agent goes on: the owner's answer reached it, or the work changed (#1277)
-		if v.State != reviewPending && v.State != reviewParked && v.State != reviewNeedsUser {
+		if v.State != reviewPending && v.State != reviewParked && v.State != reviewTimedOut && v.State != reviewClosing && v.State != reviewNeedsUser {
 			return true
 		}
 		// A judge-written owner wait ends with this work too. A needs_user review/decision card has no Waits and was

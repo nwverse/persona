@@ -5,6 +5,9 @@ struct TodoDetailView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.tabIsActive) private var inFront
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.shownAsSheet) private var shownAsSheet
+    /// An Agent this page opens, pushed over it with Back to it (#12006).
+    @State private var pushedAgent: SessionKey?
     var todoID: String
     /// In an existing value-based stack, lineage buttons append here. Sheet presentations leave it nil and use their
     /// own NavigationLink destination below.
@@ -77,9 +80,12 @@ struct TodoDetailView: View {
                 }
             }
         }
+        .pushedAgentChat($pushedAgent)
         .sheet(isPresented: $showHandoff) {
             if let todo = currentTodo {
-                TodoHandoffSheet(todo: todo)
+                // The Agent it is handed to is pushed over this page; with nothing to push on, it opens as before (#12006).
+                TodoHandoffSheet(todo: todo, openAgent: onOpenAgent == nil && pageAgentPush(inSheet: shownAsSheet, { _ in }) == nil
+                                 ? nil : { openAgent($0) })
             }
         }
         .sheet(item: $decisions.form) { form in
@@ -438,12 +444,7 @@ struct TodoDetailView: View {
         }()
 
         return Button {
-            if let onOpenAgent {
-                onOpenAgent(key)
-            } else {
-                dismiss()
-                openTodoAgentChat(key, in: model)
-            }
+            openAgent(key)
         } label: {
             HStack(alignment: .top, spacing: Theme.Space.m) {
                 if isFailed {
@@ -654,11 +655,23 @@ private struct TodoLineageSection: View {
     }
 }
 
+extension TodoDetailView {
+    /// An Agent of this to-do (a row, or the one it was just handed to): pushed over this page with Back to it, a drill-down
+    /// (#12006). In a sheet (or on the Mac) the page goes and the Agent opens as before.
+    func openAgent(_ key: SessionKey) {
+        if let onOpenAgent { return onOpenAgent(key) }
+        let push = pageAgentPush(inSheet: shownAsSheet) { pushedAgent = $0 }
+        if push == nil { dismiss() }
+        openTodoAgentChat(key, in: model, push: push)
+    }
+}
+
 /// Opens an Agent's chat from a todo. On Mac the todos section gives way first, as it does for every other way into a
-/// chat (`MacShellState.willOpen`); the hand-off sheet and the todo's Agent rows share this.
-@MainActor func openTodoAgentChat(_ key: SessionKey, in model: AppModel) {
+/// chat (`MacShellState.willOpen`); the hand-off sheet and the todo's Agent rows share this. `push`: the stack of the page
+/// it is opened from, which it goes on top of (`AppModel.openInPage`); nil from the sidebar.
+@MainActor func openTodoAgentChat(_ key: SessionKey, in model: AppModel, push: ((SessionKey) -> Void)? = nil) {
     #if os(macOS)
     MacShellState.shared.willOpen()
     #endif
-    model.open(key)
+    model.openInPage(key, push: push)
 }

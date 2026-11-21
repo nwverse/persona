@@ -447,13 +447,13 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `agents.permission_mode` | Change the permission mode of the chats it started itself | A chat's `modes` with `permission_mode` only, `POST /api/v1/sessions` resuming a chat with a `permission_mode`, approving a plan (`POST /api/v1/interactions/{id}/resolve` with `approve: true`, which sets the chat's mode) and answering a terminal card (`kind: "screen"`, whose keys can change it): only of a chat its extension opened (see below) |
 | `machines.read` | See your computers | `GET /api/v1/machines`, `/machines/{id}/metrics`, `/machines/{mid}/stat` |
 | `notify` | Send notifications to your devices | `POST /api/v1/notify` (see "Sending notifications") |
-| `assistant.ask` | Start chats with Persona and read chat activity | `GET /api/v1/assistant`, `POST /api/v1/assistant/conversations`, `GET …/conversations/{id}/feed` |
-| `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}`, `GET /api/v1/todos/places`, `GET /api/v1/todos/{id}/decisions`, `GET /api/v1/todos/{id}/repositories`, `GET /api/v1/todos/{id}/timeline`. From a manager naming `todo_timeline`, the to-do's conversation too: the timeline, and on `GET /api/v1/todos/{id}` its latest rounds, recap and results (what the owner told its runs and their turn summaries), less what "Never shown to extensions" leaves out |
+| `assistant.ask` | Start chats with Persona and read chat activity | `GET /api/v1/assistant`, `POST /api/v1/assistant/conversations`, `GET …/conversations/{id}/feed`; never the health space's chats, nor what a feed holds of a to-do it is not shown (see "Never shown to extensions") |
+| `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}`, `GET /api/v1/todos/places`, `GET /api/v1/todos/{id}/decisions`, `GET /api/v1/todos/{id}/repositories`, `GET /api/v1/todos/{id}/timeline`. From a manager naming `todo_timeline`, the to-do's conversation too: the timeline, and on `GET /api/v1/todos/{id}` its latest rounds, recap and results (what the owner told its runs and their turn summaries), less what "Never shown to extensions" leaves out. Never a to-do it is not shown (same section): it is not listed, and every route of it answers 404 |
 | `leaders.read` | See leader conversations (directions) and what they report | `GET /api/v1/assistant/leaders`; the events `leader.changed` and `leader.report` (see "Leader events") |
 | `assistant.dispatch_policy` | Read and change the assistant dispatch policy | `GET` / `PUT /api/v1/assistant/dispatch-policy`; a policy written by an extension must expire within one hour (see "Dispatch policy") |
 | `assistant.start_defaults` | Read the Agent presets and set the defaults task Agents start with | `GET /api/v1/assistant/worker-presets`, `GET` / `PUT /api/v1/assistant/start-defaults`, `POST /api/v1/assistant/start-defaults/preview` (read-only: what a policy would do for a task, nothing stored or started); a policy written by an extension must expire within one hour ([assistant.md](../assistant/assistant.md) "Start defaults"). Not covered by the legacy `hub_api` full access: it can raise what task Agents spend (a preset, effort `max`, ultracode), so an extension gets it only by naming it, as `agents.permission_mode` |
 | `dispatch.guard` | Read and change the explicit-target dispatch guard and narrow the affected conversations' tools | `GET` / `PUT /api/v1/assistant/dispatch-guard`; an extension-written enabled policy must expire within one hour ([assistant.md](../assistant/assistant.md) "Explicit dispatch guard"). Granted by name only, not by the legacy every-scope grant |
-| `todos.write` | Create and edit to-dos, attach chats to to-dos | `POST /api/v1/todos`, `PATCH /api/v1/todos/{id}`, a to-do's `agents/{mid}/{sid}` and `spaces/{mid}/{space…}` (`PUT` / `DELETE`), `POST /api/v1/todos/{id}/decisions` (outcome decisions only, see [todos.md](../assistant/todos.md) "API overview"), `PUT /api/v1/todos/{id}/repositories` and `PUT /api/v1/todos/{id}/repositories/{repo_id}/links` (replace repository associations and issue/PR links); creating and editing to-dos and adding decisions not with terminal control characters (see below); deleting to-dos, superseding decisions, completion checks and retries still require full access |
+| `todos.write` | Create and edit to-dos, attach chats to to-dos | `POST /api/v1/todos`, `PATCH /api/v1/todos/{id}`, a to-do's `agents/{mid}/{sid}` and `spaces/{mid}/{space…}` (`PUT` / `DELETE`), `POST /api/v1/todos/{id}/decisions` (outcome decisions only, see [todos.md](../assistant/todos.md) "API overview"), `PUT /api/v1/todos/{id}/repositories` and `PUT /api/v1/todos/{id}/repositories/{repo_id}/links` (replace repository associations and issue/PR links); creating and editing to-dos and adding decisions not with terminal control characters (see below); deleting to-dos, superseding decisions, completion checks and retries still require full access; none of a to-do it is not shown, nor a run or space it may not take onto one (404, see "Never shown to extensions") |
 | `assistant.read` | Read your Persona chats (your messages and its replies) | No HTTP route: the `assistant.conversations` / `assistant.messages` RPC (see "Assistant conversations"). `assistant.ask` does not include it |
 | `assistant.memory.read` | Read what Persona remembers about you (read-only, never the health space) | No HTTP route: the `assistant.memory` RPC (see "Assistant memory"). Writing and deleting memory stay with full credentials; `assistant.read` does not include it |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
@@ -811,28 +811,106 @@ Whatever scopes it was granted, an extension's token never sees:
 
 - **The health space's conversations** (`docs/assistant/health.md`): not in `GET /api/v1/sessions` (the full list, the paged list, its
   totals and counts) or `/sessions/archived`, and their items, images, info and screen answer 404 as for a chat that does not exist.
-  Sessions started in a health directory or one of its subdirectories keep that protection when their working directory changes.
-  Unlisted sessions also answer 404 unless the caller has a history read grant. Session controls, including queue changes,
-  require a listed session outside the health space. Extension tokens cannot start sessions in the health space.
-  `assistant.conversations` and `assistant.messages` leave health sessions out, and `assistant.memory` reads only the assistant's own
-  memory. The assistant's `agents_list`, `agent_read` and `agent_send` use the calling conversation's space to filter their targets.
+  Sessions started in a health directory or one of its subdirectories keep that protection when their working directory
+  changes. A chat the hub does not list answers 404 too, as its space cannot be told, unless the caller has a history
+  read grant. Session controls (a message, interrupt, queue changes, rename, modes, seen) require a listed session outside
+  the health space; a resume is decided as "Resuming a chat" says. Extension tokens cannot start sessions in the health
+  space. `assistant.conversations` and `assistant.messages` leave health sessions out, and `assistant.memory` reads only
+  the assistant's own memory. The assistant's `agents_list`, `agent_read` and `agent_send` use the calling
+  conversation's space to filter their targets. `GET /api/v1/assistant` lists none of them (`?space=health` lists
+  nothing), and a chat's feed (`GET …/conversations/{id}/feed`) answers 404 for one of them, or for one whose space
+  cannot be told. `agent.finished` is not sent of such a chat either.
 - **Private and health cards**: a card a Just me turn raised (`private`, `docs/assistant/meeting-minutes.md` "Just me"), a card of
   the health space (by its directory or its conversation's space), and a card without a directory whose conversation cannot be found
-  are left out of `GET /api/v1/interactions` and `/interactions/history`.
-- **Values typed into a card's fields** (`resolution.values` in the history).
-- **A to-do's answered cards, and the conversation of a to-do that may hold the health space's words**
-  (`GET /api/v1/todos/{id}/timeline` and the rounds on `GET /api/v1/todos/{id}`,
+  are left out of `GET /api/v1/interactions` and `/interactions/history`, and `agent.needs_you` is not sent of them. An extension
+  page's own confirmation card (`confirm` on an action) names no computer or directory, so it is one of them: the page's action
+  already waits for its answer.
+- **Values typed into a card's fields** (`resolution.values` in the history), and the answer to a card: a `resolve` of a card
+  answered already says so (`already`) without its `resolution`.
+- **A to-do that may hold the health space's words, and a to-do's answered cards** (#10941;
   `docs/assistant/todo-status-sop.md` "The to-do's timeline"): the timeline leaves out every answered card, since its
-  record holds what was typed into the card and does not say whose card it was. A to-do has no conversation when it was
-  opened from a health conversation, when a health conversation wrote to it (a hand-off the owner confirmed included), or
-  when any run it ever had works in the space, taken off it or not, done or not. This is decided from what the manager
-  keeps of the to-do (the directory each run's link keeps, the conversations its history was written in, the record of a
-  deleted one), not only from what is live, and it fails closed: a conversation the hub does not list and has no deletion
-  record of, or a run whose link keeps no directory and whose session cannot be read, hides it too. Its timeline then
-  answers 404 as for a to-do that does not exist, and its item leaves out the rounds, recap and results; the row is the
-  one `GET /api/v1/todos` lists.
+  record holds what was typed into the card and does not say whose card it was. A to-do may hold the space's words when
+  it was opened from a health conversation, when a health conversation wrote to it (a hand-off the owner confirmed
+  included), when any run it ever had works in the space (taken off it or not, done or not), and when one of its steps
+  or a to-do on its brief may (its row carries their asks, log and lineage). This is decided from what the manager keeps
+  of the to-do (the directory each run's link keeps, the conversations its history was written in, the record of a
+  deleted one, and the space the manager noted of each conversation when it started it or a computer listed it), not
+  only from what is live, so a chat its computer no longer lists (a quiet chat is listed for a week, and only the 100
+  newest) or has not listed since a restart is told by its noted space. A chat a to-do names (open or done: its
+  origin, its supervisor, a chat its history was written in) that was quiet since before a manager noted spaces is
+  listed again by the computers the assistant ran on and the one it was started on (the assistant's profile `keep`; a
+  chat the Lark agent or the Inbox AI twin ran elsewhere), 50 at a time, until it is noted. One a computer listed is
+  kept until its note is written. One none listed after 3 minutes with every one of those computers on (or removed
+  from the hub) is given up for a week (its transcript is gone); while one of them is off, it waits for that computer
+  and is listed again once all are on. A row a computer lists under a chat's id tells the chat only as an assistant
+  conversation or as one in the space, and a chat noted in the space stays there whatever a computer lists under its
+  id. Nor does a token start a conversation under such an id: a computer refuses a resume of an id it has no
+  transcript, start or record of (`resume_unknown`), and one of a chat its computer does not list goes on only where
+  the computer checks it (see "Resuming a chat"). It fails closed: a conversation no computer lists,
+  never noted and with no deletion record, a history whose conversations cannot be read, or a run whose link keeps no
+  directory and whose session cannot be read, counts too. The one rule decides every way a to-do leaves its manager:
+  such a to-do is not on `GET /api/v1/todos`, every route of it answers 404 `todo_not_found` as for a to-do that does
+  not exist (its item, timeline, decisions and repositories, and every write: `PATCH`, its runs, spaces, decisions and
+  repositories), and `todo.changed` and
+  `todo.decision` are not sent of it; one that only cannot be told yet waits rather than being dropped, and is sent once
+  it can be told (judged again after 30 seconds, then less often, up to every 10 minutes; at most 512 wait; a manager
+  restart in between drops what waits). Nor can a token take onto a to-do of its own a run of the space, one of such a
+  to-do, or a space such a to-do has or such a run is in (404), nor a run its computer does not list yet (409
+  `agent_not_listed`, with `Retry-After`: an Agent just started is answered before its computer lists it, so try
+  again). Every to-do it is shown reads as a device reads it,
+  and the list's `counts` are a device's, which count, as numbers, the to-dos it is not shown too. What told a to-do's history stays: a run's link keeps a directory in the
+  space when the run's shell leaves it, and a space's unlink, move or void releases such a link rather than delete it.
+  Such a task's outcome is not written into a knowledge-base project's timeline either, where `kb.read` would read it:
+  the line of one that only cannot be told yet waits, is written once the task is told outside the space and is
+  dropped once it is told in it (judged again as the events are; a manager restart in between drops it, and the
+  outcome stays in the to-do's decisions).
+  A chat's feed (`assistant.ask`) leaves out the same: the items, plans and task cards of such a to-do, a plan with a task in
+  the space, every answered card, and the digests that gather many to-dos and cards at once (a routine's `brief`, the
+  Today card).
+  A manager from before #10941 lists such a to-do as any other, and the hub cannot tell which manager it relays to.
 
 The apps' and devices' credentials are not affected.
+
+### Resuming a chat
+
+A stopped Agent takes no message (#4754), so `POST /api/v1/sessions` with `resume_session_id` (`agents.control`; with
+a `permission_mode`, also `agents.permission_mode`) is the only way back to one the extension started. What its token
+may resume, on its own manager's computers (#10941):
+
+- **A chat its computer lists** outside the health space, as the owner would. One listed in the space, in a folder set
+  to Hide, or deleted by the owner answers 404 `not_found`, as a chat that does not exist (the rule every session
+  control follows).
+- **A chat its computer no longer lists.** A computer lists a quiet Claude Code chat only for a week, among its 80
+  newest and once its transcript holds 2 KB, so on a busy computer one drops out within two days. Unless the owner
+  deleted it, the hub passes such a resume on, marked `resume_outside_health`, to a computer whose Persona Link
+  announces that check. The computer
+  resumes the chat only when something no resume rewrites says where it started (its transcript or rollout, its omp
+  session file, or for an engine's Agent its record, below) and every folder it knows it by is outside the health
+  space and the Agent folders set to Block: where it started, where it last was, and where its record, a start of it
+  or its running Agent says. Anything else answers the same 404: a chat or run of the space (one whose shell left it
+  since included), an id the computer has nothing of, a transcript whose start cannot be read (a first prompt with a
+  large inline image), and a terminal chat whose transcript is gone (Claude Code removes one after about 30 quiet
+  days). Its record alone is not enough, since every resume writes it anew with the folder the resume names; resumed,
+  such a chat would start empty under its old id anyway, so start a new one instead.
+- **The answer does not tell a health chat from no chat.** The hub decides the resume after every check that holds
+  for any id (the computer's trust, the agent type, the manager's start settings), so a request refused for another
+  reason is answered the same whichever chat it names. Only the time differs: an id the hub does not list is asked of
+  the computer.
+- **On a computer whose engine is Paseo or Cindy**, an Agent the engine runs under the id Persona named it by has no
+  transcript under that id, so the record is what the computer has of it. Persona Link keeps one of every Agent it
+  starts through the engine, with its folder and the engine that started it (the hub keeps both, so a restart of the
+  computer does not lose them); Paseo lists an archived Agent only among its 80 newest archived in the last 7 days,
+  and a resume of one past that goes on through Paseo as the owner's does. An Agent started in the engine's own app,
+  or by a Persona Link from before that record, has none: once it is not listed, only the owner resumes it. While the engine is not connected (closed, or Paseo's bridge restarting), a resume the computer does not
+  know answers `409 engine_missing`, as the owner's does, whatever the id; try again once the engine is back.
+- **On a computer whose Persona Link is older** (it does not announce `resume_outside_health`), only a chat it lists:
+  one it does not list answers 404, and `503 sessions_not_listed` (`retryable: true`, `Retry-After`) while the hub
+  cannot tell yet: it has had no list of that computer's chats since it started, or no word of its Persona Link (a
+  devices manager that restarted without its saved state has none until the computer connects again); try again then.
+
+A resume never starts a new chat under the id it names: a computer that has nothing of the id refuses it with
+`resume_unknown`, worded in the reader's language. A scoped device token resumes only a chat its computer lists
+outside the space (404 otherwise).
 
 ### Sent as the user: `sent.record` (#5278)
 
@@ -3126,10 +3204,10 @@ Extensions contribute `events` to subscribe to things happening on the hub. Thes
 | Event | Parameters |
 | --- | --- |
 | `inbox.changed` | `id`, `source`, `kind`, `title`: new or updated Inbox item (if more than 50 items are stored at once, only the first 50 are sent) |
-| `agent.needs_you` | `machine_id`, `machine`, `session_id`, `interaction_id`, `kind`, `summary`: an Agent is waiting for your answer or approval |
-| `agent.finished` | `machine_id`, `machine`, `session_id`, `title`: an Agent finished |
-| `todo.changed` | `id`, `title`, `thread?`, `done?`, `supervisor?`, `kind?`, `what`: a to-do was created, deleted, or its title, whether it is done, its supervisor, or the thread it is bound to changed (needs `todos.read`, see below) |
-| `todo.decision` | `id`, `title`, `thread?`, `decision`: a decision was written on a to-do (needs `todos.read`, see below) |
+| `agent.needs_you` | `machine_id`, `machine`, `session_id`, `interaction_id`, `kind`, `summary`: an Agent is waiting for your answer or approval (never of a card it is not shown, "Never shown to extensions") |
+| `agent.finished` | `machine_id`, `machine`, `session_id`, `title`: an Agent finished (never of a chat it is not shown) |
+| `todo.changed` | `id`, `title`, `thread?`, `done?`, `supervisor?`, `kind?`, `what`: a to-do was created, deleted, or its title, whether it is done, its supervisor, or the thread it is bound to changed (needs `todos.read`, see below; never of a to-do it is not shown, "Never shown to extensions") |
+| `todo.decision` | `id`, `title`, `thread?`, `decision`: a decision was written on a to-do (needs `todos.read`, see below; never of a to-do it is not shown) |
 | `leader.changed` | `id`, `title`, `project?`, `ended?`: a leader conversation was made, retitled, filed under another project, ended or made a leader again (needs `leaders.read`, see "Leader events") |
 | `leader.report` | `id`, `leader`, `kind`, `todo`, `text`, `link?`, `at`: a leader's task reached its goal, needs the owner's decision or is stuck (needs `leaders.read`) |
 
@@ -3145,8 +3223,8 @@ SDK programs receive them in `Namespaces["event"]` (method name is the event nam
 ```
 
 - **Who is told**: an extension that is enabled, has that contribution on, has its program running, subscribed to the topic **and** was granted `todos.read` (or the legacy full access). Subscribing without the scope is told nothing; `todos.write` alone, or another scope, is not enough. (The user agrees to a manifest's permissions as a whole at install; the grant is what is checked, not the declaration.) Declaring `todos.read` lets the extension read the to-dos and their decisions (`GET /api/v1/todos`, `GET /api/v1/todos/{id}/decisions`) anyway, which is why these events carry the titles and decision text.
-- **`todo.changed {id, title, thread?, done?, supervisor?, kind?, what}`**: sent when a to-do is created (`what: "created"`), deleted (`"deleted"`; `title` and `thread` are the last it had), or its title, whether it is done (including a task that failed to start), its supervisor (the conversation that supervises it: the main conversation or a leader; left out when none does; it changes when the task is moved to another leader, #3484), or its bound thread (bound, rebound, retitled, unbound) changed (`"updated"`). Changes to one to-do (or several) within about a second are told once, as each to-do is at the end of that second; a to-do that is back as it was is not told. Notes, agents, spaces, stage, delivery and decisions changing do not send it. `thread` is `{channel, chat_id, thread_id, title}`, as in `PUT /api/v1/todos/{id}/thread`, and left out when the to-do has none; `done` is `true` while the to-do is done (closed, or its task failed to start) and left out otherwise. `kind` is `concern` for one of the owner's concerns (#3561, `docs/assistant/todos.md` "Concerns"): it is done only once the main conversation reported its outcome to the owner, which also comes as a `todo.decision` with `source: "reported"`; left out for a to-do or a task, and it never changes. To know more, read the to-do again.
-- **`todo.decision {id, title, thread?, decision}`**: sent once for every decision written, at once (not merged). `decision` is `{id, question, choice, reason?, source, supersedes_id?}`; `source` is `manual`, `card`, `outcome`, `agent`, `thread` or `reported` (a concern's outcome as told to the owner, which closes it). A decision that comes from the to-do's own chat thread (`thread`) **is** sent: the extension may forward it elsewhere. One that posts decisions into the thread should skip `source: "thread"` itself, or it echoes the user's reply back (the built-in bot posts do the same). Marking an old decision superseded does not send anything.
+- **`todo.changed {id, title, thread?, done?, supervisor?, kind?, what}`**: sent when a to-do is created (`what: "created"`), deleted (`"deleted"`; `title` and `thread` are the last it had), or its title, whether it is done (including a task that failed to start), its supervisor (the conversation that supervises it: the main conversation or a leader; left out when none does; it changes when the task is moved to another leader, #3484), or its bound thread (bound, rebound, retitled, unbound) changed (`"updated"`). Changes to one to-do (or several) within about a second are told once, as each to-do is at the end of that second; a to-do that is back as it was is not told. Notes, agents, spaces, stage, delivery and decisions changing do not send it. `thread` is `{channel, chat_id, thread_id, title}`, as in `PUT /api/v1/todos/{id}/thread`, and left out when the to-do has none; `done` is `true` while the to-do is done (closed, or its task failed to start) and left out otherwise. `kind` is `concern` for one of the owner's concerns (#3561, `docs/assistant/todos.md` "Concerns"): it is done only once the main conversation reported its outcome to the owner, which also comes as a `todo.decision` with `source: "reported"`; left out for a to-do or a task, and it never changes. To know more, read the to-do again. Nothing is told of a to-do the extension is not shown ("Never shown to extensions"), nor when one stops being shown: the list read next leaves it out.
+- **`todo.decision {id, title, thread?, decision}`**: sent once for every decision written on a to-do the extension is shown ("Never shown to extensions"), at once (not merged). `decision` is `{id, question, choice, reason?, source, supersedes_id?}`; `source` is `manual`, `card`, `outcome`, `agent`, `thread` or `reported` (a concern's outcome as told to the owner, which closes it). A decision that comes from the to-do's own chat thread (`thread`) **is** sent: the extension may forward it elsewhere. One that posts decisions into the thread should skip `source: "thread"` itself, or it echoes the user's reply back (the built-in bot posts do the same). Marking an old decision superseded does not send anything.
 - **No order between the two events**: `todo.decision` and `todo.changed` are separate events, and the extension's handlers may run at once, so a decision can be heard before the `todo.changed` that came earlier (and the reverse). Use each event's own fields, and read the to-do when the order matters.
 - They go through a queue of their own (512; the knowledge base's is another), in which a `todo.changed` for a to-do that has one waiting is merged into it (a backlog is at most one a to-do: a to-do created and deleted before the extension was told is none, one created and then changed stays `created`, with the latest state). Past the limit the oldest is dropped and the log says so. Like `kb.changed` they are not stored for redelivery, and a restarted extension reads the to-dos again first.
 
