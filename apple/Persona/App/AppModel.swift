@@ -1930,6 +1930,31 @@ final class AppModel {
         }
     }
 
+    /// An Agent opened from inside a page (a Brief card, Knowledge, a to-do, a meeting, a card in a conversation): a
+    /// drill-down (#9971, #12006). `push` puts the chat on top of that page, with Back to it, and the sidebar's selection
+    /// stays: the conversation's path (`pushInboxChat`), or a page's own destination (`pushedAgentChat`). A folded child
+    /// opens as its parent with its card shown, as `open` does. With no `push` (the Agents tab's own list, the Mac, the
+    /// sidebar, a sheet), another hub's Agent or a Persona conversation, it opens as `open` does.
+    func openInPage(_ key: SessionKey, push: ((SessionKey) -> Void)?) {
+        guard let push, key.group == (hub?.group ?? ""), session(key)?.assistant != true, key != assistantMain else {
+            open(key)
+            return
+        }
+        provisionalChat = nil
+        var target = key
+        if sideFold.home[key] == nil, let home = localChildHome(key), home.key != key, let child = home.childID {
+            moveDraft(from: key, to: home.key)
+            target = home.key
+            revealToken += 1
+            revealChild = ChildReveal(sessionID: child, token: revealToken)
+        } else {
+            revealChild = nil
+        }
+        clearMissingSessionDetail(target)
+        push(target)
+        if sessionIndex[target] == nil { Task { await refreshSessionDetail(target) } }
+    }
+
     func interactions(for key: SessionKey) -> [Interaction] {
         pendingInteractions.filter { ix in
             if ix.sessionKey == key { return true }
