@@ -67,6 +67,11 @@ func conclusionServiceOn(t *testing.T, st Store, onlyConclusions bool) (s *Servi
 func reviewTask(t *testing.T, s *Service, todo string, args map[string]any) string {
 	t.Helper()
 	args["todo_id"] = todo
+	if args["verdict"] == reviewAccepted {
+		if _, supplied := args["checks"]; !supplied {
+			args["checks"] = completeReviewChecks(todoNow(s, todo))
+		}
+	}
 	asDecision(args)
 	raw, _ := json.Marshal(args)
 	res, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw)

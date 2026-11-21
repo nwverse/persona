@@ -215,8 +215,10 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
       // related to-do finished is history, not news
       const tr = triage(todo, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id));
       const ended = finishedAt(todo, tr);
+      const seenAt = Date.parse(todo.seen_at ?? "");
       if ((tr.section === "just_done" || tr.section === "done") && status !== "failed" && todo.origin && ended > 0 && now - ended < JUST_DONE_MS) {
-        finished.push({ kind: "task", key, card, todo, status, fresh: tr.section === "just_done", at: ended });
+        // Closed and accepted work is already Done on the To-dos page (#5732); Finished has its own unseen marker.
+        finished.push({ kind: "task", key, card, todo, status, fresh: Number.isNaN(seenAt) || seenAt < ended, at: ended });
       }
       continue;
     }

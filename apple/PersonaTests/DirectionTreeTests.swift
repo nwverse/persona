@@ -181,6 +181,13 @@ struct DirectionTreeTests {
         #expect(searched.map(\.id) == ["main"], "a direction the search empties is left out")
     }
 
+    @Test func cancelledTodosStayOutOfDirectionRows() throws {
+        var cancelled = TodoItem(id: "t1", title: "Cancelled")
+        cancelled.cancelledAt = Date()
+        let sections = DirectionTodoSections.build(try Self.tree(), todos: ["t1": cancelled])
+        #expect(sections.isEmpty)
+    }
+
     @Test func todosGroupingFallsBackToStatusWithoutATree() {
         #expect(TodosGrouping.resolved(.direction, hasTree: false) == .status, "kept from another hub, an older one has no tree")
         #expect(TodosGrouping.resolved(.direction, hasTree: true) == .direction)

@@ -1,6 +1,6 @@
 {
   "assistant": {
-    "count": 56,
+    "count": 55,
     "files": [
       "assistant/acceptance.md",
       "assistant/acceptance_input.md",
@@ -44,7 +44,6 @@
       "assistant/supervise.md",
       "assistant/supervise_review_rework.md",
       "assistant/supervise_rework.md",
-      "assistant/supervisor_start.md",
       "assistant/task_attachments.md",
       "assistant/task_delivery.md",
       "assistant/task_done_input.md",

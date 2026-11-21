@@ -72,6 +72,15 @@ struct TodoFilingTests {
         }
     }
 
+    @Test func aCancelledRowUsesTheExistingV1DoneSection() {
+        let placed = TodoFiling.section(legacy: .cancelled)
+        #expect(placed.section == TodoListSection.done && !placed.inactive)
+        let row = TodoItem(id: "cancelled", title: "Cancelled", doneAt: ago(1), createdAt: ago(2), updatedAt: ago(1),
+                           doneBy: "cancelled", cancelledAt: ago(1), cancelledReason: "Not needed")
+        let filed = TodoFiling.file([row], views: [:], now: now)
+        #expect(filed.count == 1 && filed[0].section == TodoListSection.done && filed[0].closed)
+    }
+
     /// A restore kept on the device, or the hub's own, counts as the row moving: an untouched task is not Inactive.
     @Test func aRestoreTakesTheInactiveMarkOff() {
         let row = TodoItem(id: "t", title: "Task", createdAt: ago(72), updatedAt: ago(72), origin: "conv")

@@ -285,7 +285,12 @@ func (s *Service) openTodoIn(ctx context.Context, ev feishubot.MessageEvent, st 
 		s.nameTodoLater(ctx, todo.ID, title, text)
 	}
 	// The main conversation follows up what it hands out (supervise.go), and its feed shows the task as task_plan's do.
-	s.superviseTodo(ctx, todo.ID, origin, nil, 0)
+	if err := s.superviseTodo(ctx, todo.ID, origin, nil, 0); err != nil {
+		if rerr := s.removeTodo(context.WithoutCancel(ctx), todo.ID); rerr != nil {
+			s.logf("todo %s: take back after supervision failure: %v", todo.ID, rerr)
+		}
+		return Todo{}, failed("thread_open_failed", err)
+	}
 	if _, err := s.appendFeed(ctx, origin, feedTask, todo.ID, nil); err != nil {
 		s.logf("task %s: feed: %v", todo.ID, err)
 	}

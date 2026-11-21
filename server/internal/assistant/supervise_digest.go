@@ -32,6 +32,19 @@ func (s *Service) sendDigest(ctx context.Context) {
 	}
 	s.revalidateFailedStartDeferrals(ctx)
 	b := &s.supervise
+	b.digestMu.Lock()
+	defer b.digestMu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		b.mu.Lock()
+		b.init()
+		s.retryDigestLocked(s.superviseTimings().urgent)
+		b.mu.Unlock()
+		return
+	}
+	s.restoreSupervisePending(ctx)
 	batch := s.supervisionBatchInterval(ctx)
 	cooldown := s.superviseTimings().routineCooldown()
 	gating := batch > 0 || cooldown > 0 // a recipient's routine signals may be held (gateDigestBatches)
@@ -163,14 +176,21 @@ func (s *Service) sendDigest(ctx context.Context) {
 	var wait []superviseSignal     // with no main conversation, what nobody else can be told either (routeTo)
 	s.rehomeLeaderlessWorkers(ctx) // a worker whose leader's task closed gets a supervisor that can act, before routing
 	if s.backgroundNeeded(ctx, here, list) {
-		// The background supervisor is made the first time a signal is for it, and again when it is gone. One that
-		// cannot start leaves here as it was: the gone check below sends its signals to the main conversation.
+		// Only an explicitly addressed legacy notice selects the existing background conversation. One that is gone or
+		// cannot start another clean round leaves here as it was: the gone check below moves its unread work to main.
 		id, was := s.ensureBackground(ctx)
 		if id != "" {
 			here = s.settings(ctx)
 		}
 		if lost := s.backgroundLost(ctx, was, cmp.Or(id, here.Main), web); len(lost) > 0 { // what waited for the one that is gone goes out with these
 			list = mergeSignals(lost, list)
+		}
+		if was != "" && id == "" {
+			for i := range list {
+				if list[i].To == was {
+					list[i].To = "" // this digest's explicit legacy target is gone too: regather it for main
+				}
+			}
 		}
 	}
 	var retry []superviseSignal
@@ -188,6 +208,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 	b.last = now
 	b.mu.Unlock()
 	for _, g := range list {
+		original := g
 		if lead, handled, reachable := s.leaderRoute(g); handled { // never digestTo: a session is no conversation
 			if reachable {
 				key := [2]string{lead.MachineID, lead.SessionID}
@@ -201,12 +222,15 @@ func (s *Service) sendDigest(ctx context.Context) {
 			// which has its own delivery target below.
 			worker := g
 			g = s.escalateLeaderSignal(ctx, g)
-			if g.Todo == "" { // nobody above it: it is told again next time
+			if g.Todo == "" { // nobody above it: restore both the durable outbox and this process's retry (#5732)
 				if _, open := s.todoNow(worker.Todo); open && here.Main == "" {
 					wait = append(wait, worker) // nobody above it since the check (toldWithoutMain): it waits as that one would
+				} else {
+					s.restoreDigest([]superviseSignal{original}, now, prev)
 				}
 				continue
 			}
+			s.replaceSupervisePending(original, g)
 		}
 		to := s.routeTo(ctx, here, g, there)
 		if to == "" { // no main conversation, and the one that dispatched it cannot be told either: it waits (#10126)
@@ -336,7 +360,13 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	s.turnsTold(ctx, moot) // what no longer holds is not told after a restart either (task_turns.go)
 	s.discardFailedStartBatches(ctx, moot, now)
 	if len(entries) == 0 {
+		s.ackSupervisePending(list) // every signal no longer holds, as the in-memory digest already decided
 		return false
+	}
+	for i := range kept {
+		if s.noMainOriginFallback(here, to, kept[i]) {
+			kept[i].OriginOnly = true // persist the route's lack of acceptance authority with the signal itself
+		}
 	}
 	holds := kept
 	entries, kept, rollback, err := s.reserveSupervision(ctx, entries, kept, now)
@@ -347,6 +377,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		return false
 	}
 	if len(entries) == 0 {
+		s.ackSupervisePending(list) // already covered by the deduplication history
 		s.agentDecisionRepliesTold(ctx, holds)
 		s.handoffResultsTold(ctx, holds)
 		s.turnsTold(ctx, holds) // said the same within the window: told
@@ -358,6 +389,8 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		b.mu.Unlock()
 		return false
 	}
+	background := to != here.Main && to == here.BackgroundSupervisor // old work only; also scopes its closeout grant
+	delivered := kept
 	accepted := false
 	acceptedIDs := map[[2]string]bool{}
 	for _, g := range kept {
@@ -375,6 +408,19 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			s.releaseFailedStartBatches(ctx, kept)
 			return
 		}
+		if background {
+			// Exclude only the no-main Origin fallback: it tells the dispatcher without making it the acceptance
+			// authority. Older automatic background routes can have an empty To too and keep their grant (#5732).
+			legacy := make([]superviseSignal, 0, len(kept))
+			for _, g := range kept {
+				if !g.OriginOnly && !s.noMainOriginFallback(here, to, g) {
+					legacy = append(legacy, g)
+				}
+			}
+			s.rememberLegacyBackground(to, legacy)
+		}
+		s.ackSupervisePending(list)
+		s.ackSupervisionDedupLocked(ctx, delivered)
 		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
 		s.estimateDueTold(ctx, kept)
 		s.parkDecidedTold(ctx, kept)
@@ -383,7 +429,12 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.turnsTold(ctx, holds) // and how a turn ended: kept went, the rest of them was said the same within the window
 		s.finishFailedStartBatches(ctx, to, kept, settled, now)
 	}()
-	background := to != here.Main && to == here.BackgroundSupervisor // the leader's message, told that the tasks are not its own (supervise_background.go)
+	if !s.supervisePendingDurably(kept) {
+		// The initial outbox write failed or the exact stretch was replaced before this delivery. Restore the in-memory
+		// retry and let restoreDigest retry persistence first; neither a direct send nor queue admission may be acknowledged.
+		s.restoreDigest(kept, now, prev)
+		return false
+	}
 	render := func(list []prompts.SuperviseEntry) string { return s.renderQueuedDigest(ctx, to, list) }
 	queued := s.queuedDigestSignals(to)
 	msg := relayMsg{From: superviseTool, FromTitle: "督办", Tool: superviseTool, At: now.UTC()}
@@ -402,6 +453,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		msg.Text, msg.Urgent = render(allEntries), anyDecision(all)
 		msg.Signals = encodeDigestSignals(all)
 		if s.replaceQueuedSupervise(to, msg) {
+			delivered = all
 			accepted = true
 			b.mu.Lock()
 			b.setQueuedLocked(to, all)
@@ -482,6 +534,7 @@ func (s *Service) queueDigest(to string, msg relayMsg, kept []superviseSignal, a
 		return false
 	}
 	b := &s.supervise
+	msg.Signals = encodeDigestSignals(kept)
 	if n, err := s.queueRelayDurable(to, msg); err == nil && n > 0 {
 		b.mu.Lock()
 		b.setQueuedLocked(to, kept)
@@ -510,6 +563,13 @@ func (s *Service) queueDigest(to string, msg relayMsg, kept []superviseSignal, a
 			b.pending[id] = joinInbox(g, cur) // the newer item, with the messages of both
 		}
 	}
+	s.updateSupervisePending(func(pending map[string]superviseSignal) {
+		for _, g := range kept {
+			if cur, ok := b.pending[g.id()]; ok {
+				pending[g.id()] = cur
+			}
+		}
+	})
 	s.retryDigestLocked(retry)
 	return false
 }
@@ -541,15 +601,27 @@ func (s *Service) replaceQueuedSupervise(to string, msg relayMsg) bool {
 	if !s.relayLocked(context.Background()) {
 		return false
 	}
-	previous := b.st.Queue
-	q := slices.Clone(previous[to])
+	previousQueue := b.st.Queue
+	previousPending := maps.Clone(b.st.SupervisePending)
+	q := slices.Clone(previousQueue[to])
 	for i := range q {
-		if q[i].Tool == superviseTool && (i > 0 || !b.draining[to]) {
+		// A withdrawn or doubtful head still owns the outcome of its original send. Let drainRelays check its durable
+		// doubt and remove it before a replacement can replay any of the same signals under a new message id (#5732).
+		if q[i].Tool == superviseTool && !q[i].Withdrawn && q[i].DoubtedAt.IsZero() && (i > 0 || !b.draining[to]) {
 			q[i] = msg.replacing(q[i], time.Now()) // it waited since then (relay_presence.go)
-			b.st.Queue = maps.Clone(previous)
+			if signals, structured := decodeDigestSignals(msg.Signals); structured {
+				ackSupervisePendingLocked(b.st.SupervisePending, signals)
+				if len(b.st.SupervisePending) == 0 {
+					b.st.SupervisePending = nil
+				}
+			}
+			b.st.Queue = maps.Clone(previousQueue)
 			b.st.Queue[to] = q
 			if err := s.saveRelayLocked(); err != nil {
-				b.st.Queue = previous
+				// Restore the old queue and every outbox predecessor together. The caller's fallback must restore its
+				// reservation instead of finalizing new signals that were never admitted (#5732).
+				b.st.Queue = previousQueue
+				b.st.SupervisePending = previousPending
 				return false
 			}
 			return true
@@ -561,15 +633,15 @@ func (s *Service) replaceQueuedSupervise(to string, msg relayMsg) bool {
 // digestEntry is signal g as the message lists it; false when it no longer holds.
 func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string) (prompts.SuperviseEntry, bool) {
 	t, ok := s.todoNow(g.Todo)
-	if !ok || t.DoneAt != nil && g.Kind != sigFailed {
+	if !ok || t.Supervision == nil && g.Kind != sigFailed && g.Kind != sigReport || t.DoneAt != nil && g.Kind != sigFailed {
 		return prompts.SuperviseEntry{}, false
 	}
 	v := t.Supervision
 	if v == nil {
-		if g.Kind != sigReport {
+		if g.Kind != sigFailed && g.Kind != sigReport {
 			return prompts.SuperviseEntry{}, false
 		}
-		v = &Supervision{} // a reporting conversation's report has no ledger (agent_control.go)
+		v = &Supervision{} // a failed start or reporting conversation has no ledger and grants no acceptance authority
 	}
 	st := v.state(t)
 	var replyAsk acceptAsk

@@ -151,7 +151,7 @@
     },
     {
       "name": "supervisor_review_in_progress",
-      "description": "A task judged finished waits for its supervisor's review, not the owner's: while the review is younger than an hour (pending_since) it is in In progress and not in Needs you. One second short of the hour still is; so is one the owner already looked at (seen_at), which the To-dos page files as Done. The web lists the review rows under its Persona reviewing entry instead (web_review, #8678).",
+      "description": "A task judged finished waits for its supervisor's review, not the owner's: while the review is younger than an hour (pending_since) it is in In progress and not in Needs you. One second short of the hour still is; so is one the owner already looked at, because Seen neither accepts nor files supervised work (#5732). The web lists the review rows under its Persona reviewing entry instead (web_review, #8678).",
       "source": [
         "web/src/lib/assistant-entries.ts assistantEntries",
         "android/core/domain/src/main/kotlin/persona/core/domain/tasks/AssistantEntries.kt assistantEntries",
@@ -281,7 +281,7 @@
     },
     {
       "name": "supervisor_review_with_open_pr",
-      "description": "A task whose fresh, open PR waits for a maintainer (the web's Waiting for merge, #7614) and whose supervisor's review is under way: the review is Persona's own work, so it is in In progress saying its supervisor is reviewing it, not Waiting for merge, even after the owner looked at it (seen_at, which the To-dos page files as Waiting for merge). Once the review is overdue it is the owner's: Needs you wins over the PR. Clients without the Waiting for merge group read the same split. The web lists the review rows under its Persona reviewing entry instead (web_review, #8678).",
+      "description": "A task whose fresh, open PR waits for a maintainer (the web's Waiting for merge, #7614) and whose supervisor's review is under way: the review is Persona's own work, so it is in In progress saying its supervisor is reviewing it, not Waiting for merge, even after the owner looked at it; Seen neither accepts the work nor moves it to Waiting for merge (#5732). Once the review is overdue it is the owner's: Needs you wins over the PR. Clients without the Waiting for merge group read the same split. The web lists the review rows under its Persona reviewing entry instead (web_review, #8678).",
       "source": [
         "web/src/lib/assistant-entries.ts assistantEntries",
         "android/core/domain/src/main/kotlin/persona/core/domain/tasks/AssistantEntries.kt assistantEntries",
@@ -750,8 +750,8 @@
       "expected": {
         "needs_you": [
           "task:t-asks",
-          "task:t-verify",
-          "task:t-user"
+          "task:t-user",
+          "task:t-verify"
         ],
         "running": [
           "task:t-fresh"

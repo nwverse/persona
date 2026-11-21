@@ -213,7 +213,12 @@ func (s *Service) createDirectionTodo(ctx context.Context, leader, title, notes 
 	if err != nil {
 		return Todo{}, err
 	}
-	s.superviseTodo(ctx, t.ID, leader, nil, 0)
+	if err := s.superviseTodo(ctx, t.ID, leader, nil, 0); err != nil {
+		if rerr := s.removeTodo(context.WithoutCancel(ctx), t.ID); rerr != nil {
+			s.logf("todo %s: take back after supervision failure: %v", t.ID, rerr)
+		}
+		return Todo{}, err
+	}
 	if cur, ok := s.todoNow(t.ID); ok {
 		t = cur
 	}
