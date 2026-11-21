@@ -4,11 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"github.com/nwverse/persona/server/internal/db"
-	"log"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -92,71 +88,5 @@ func TestUsageRoutesReachTheManager(t *testing.T) {
 	}
 	if req := <-got; req.Path != "/api/v1/admin/usage-sources" || len(req.Header[assistantwire.AdminHeader]) != 1 || req.Header[assistantwire.AdminHeader][0] != "1" {
 		t.Fatalf("page reached the manager as %+v", req)
-	}
-}
-
-// Owner automation gets exactly two operations, without opening the admin UI.
-func TestOwnerUsageRoutesRejectOtherCredentials(t *testing.T) {
-	h, srv, store := newBusHub(t)
-	got := make(chan assistantwire.HTTPRequest, 4)
-	helloAssistant(t, h, srv, func(_ context.Context, method string, params json.RawMessage) (any, error) {
-		if method == assistantwire.MethodTools {
-			return map[string]any{"tools": []any{}}, nil
-		}
-		var req assistantwire.HTTPRequest
-		if method != assistantwire.MethodHTTP || json.Unmarshal(params, &req) != nil {
-			return nil, errors.New("unexpected method")
-		}
-		got <- req
-		return assistantwire.HTTPResponse{Status: 200, Body: []byte(`{"ok":true,"accounts":2,"windows":3}`)}, nil
-	})
-	const key = "example-source-secret"
-	body := `{"name":"Example","type":"relay","url":"https://gateway.example.com","key":"` + key + `"}`
-	var logs strings.Builder
-	h.logger = log.New(&logs, "", 0)
-	for n, op := range [][2]string{{"POST", "/api/v1/usage-sources/test"}, {"PUT", "/api/v1/usage-sources/src-example"}} {
-		for _, role := range []string{roleFull, roleAnswer, roleLink, roleScoped} {
-			token := fmt.Sprintf("example-%d-%s", n, role)
-			if err := store.CreateDeviceToken(context.Background(), db.DeviceToken{ID: token, Role: role, Kind: "other", Scopes: []string{"agents.read", "agents.control", "agents.permission_mode"}}, hashToken(token)); err != nil {
-				t.Fatal(err)
-			}
-			c := &adminClient{t: t, h: srv.Config.Handler, remote: "127.0.0.1:1", header: http.Header{"Authorization": {"Bearer " + token}, assistantwire.AdminHeader: {"1"}}}
-			status, _, w := c.do(op[0], op[1], body)
-			if status != 403 {
-				t.Fatalf("%s %s accepted %s: %d", op[0], op[1], role, status)
-			}
-			if strings.Contains(w.Body.String(), key) {
-				t.Fatal("response leaked key")
-			}
-			// Avoid minting the same credential twice in the test database.
-			if _, err := store.RevokeDeviceToken(context.Background(), token); err != nil {
-				t.Fatal(err)
-			}
-		}
-		anon := &adminClient{t: t, h: srv.Config.Handler, remote: "127.0.0.1:1"}
-		if status, _, _ := anon.do(op[0], op[1], body); status != 401 {
-			t.Fatalf("anonymous: %d", status)
-		}
-		query := &adminClient{t: t, h: srv.Config.Handler, remote: "127.0.0.1:1"}
-		if status, _, _ := query.do(op[0], op[1]+"?token="+h.cfg.Token, body); status != 403 {
-			t.Fatalf("query token: %d", status)
-		}
-		owner := &adminClient{t: t, h: srv.Config.Handler, remote: "127.0.0.1:1", header: http.Header{"Authorization": {"Bearer " + h.cfg.Token}, assistantwire.AdminHeader: {"0"}}}
-		status, out, w := owner.do(op[0], op[1], body)
-		if status != 200 || out["accounts"] != float64(2) || out["windows"] != float64(3) {
-			t.Fatalf("owner: %d %v", status, out)
-		}
-		if strings.Contains(w.Body.String(), key) || strings.Contains(logs.String(), key) {
-			t.Fatal("secret exposed")
-		}
-		req := <-got
-		if req.Path != op[1] || req.Header[assistantwire.AdminHeader][0] != "1" || req.Header["Authorization"] != nil || string(req.Body) != body {
-			t.Fatal("incorrect owner relay")
-		}
-		select {
-		case <-got:
-			t.Fatal("rejected request reached manager")
-		default:
-		}
 	}
 }
