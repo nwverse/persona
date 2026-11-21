@@ -1990,7 +1990,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			})
 		})
 		if err != nil {
-			return ok(err)
+			return ok(withOwnerRoute(err, owner)) // ccplugin.go: an unconfirmed relay still says why it was relayed
 		}
 		res := map[string]any{"ok": true}
 		if *waits {
