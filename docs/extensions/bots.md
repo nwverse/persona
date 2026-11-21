@@ -27,6 +27,9 @@ channel binding does not start registration, and `feishu.status` returns an erro
 The assistant therefore does not reconcile an unread pairing as an unpairing. Writes are blocked until a complete read succeeds.
 
 Later status, settings and transport lookups retry the read, at most once every five seconds per manager while it fails.
+Each storage read has a five-second deadline, shortened by the caller's earlier cancellation. Only one read runs at a time;
+it releases the bot settings mutex during storage I/O, and concurrent lookups return temporarily unavailable instead of
+waiting behind the read. A timeout starts the same cooldown, and the next eligible lookup can recover.
 There is no additional polling loop. A successful read restores the saved credentials, owner, pending pairing and switches
 and starts the enabled bot's connection under the manager's existing context; the owner does not pair again.
 Successful reads, including a genuinely missing record, are cached as before. JSON `null` and `{}` retain the existing
@@ -34,6 +37,15 @@ defaulted-decode behavior; only an actual read/decode error leaves settings unkn
 whose context has ended keeps the connection closed. Persistently invalid records remain protected and log one failure
 per attempted read; correcting the stored record lets the next eligible lookup recover it. This does not add a reset or
 migration of invalid data, change chat permissions, or change the card-nudge defaults or timing.
+
+The lark-cli connector is registered before connector switches and options are restored, even while its profile is
+unknown. Every CLI execution, including Inbox polling and login, is gated on a known identity. A manager.json profile
+override is already authoritative during a storage outage; a genuinely empty saved configuration still selects the CLI
+default after a successful read. A saved manual profile applies even when the bot itself is disabled.
+On recovery the existing connector refresh path synchronizes the managed profile when needed and replaces the placeholder
+outside the bot settings lock, after startup has restored connector settings. Replacement preserves the connector's own
+enabled/feed switches and current options; retained old connectors refuse calls rather than reuse their Inbox caches
+for a different profile. Assistant configuration and extension host CLI requests also fail closed while identity is unread.
 
 ## How it differs from Lark `/agent`
 

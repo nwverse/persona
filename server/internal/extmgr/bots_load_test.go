@@ -308,12 +308,15 @@ func TestBotInitialReadConcurrentRetry(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if st, err := w.status(); err != nil || !st.Ready {
+			if st, err := w.status(); err != nil && !errors.Is(err, errBotSettingsUnread) || err == nil && !st.Ready {
 				t.Errorf("recovery: %+v %v", st, err)
 			}
 		}()
 	}
 	wg.Wait()
+	if st, err := w.status(); err != nil || !st.Ready {
+		t.Fatalf("completed recovery: %+v %v", st, err)
+	}
 	if reads, writes := w.store.counts(); reads != 3 || writes != 0 {
 		t.Fatalf("reads=%d writes=%d", reads, writes)
 	}

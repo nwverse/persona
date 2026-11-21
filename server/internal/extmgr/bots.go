@@ -136,6 +136,7 @@ const (
 type botHub struct {
 	mu        sync.Mutex
 	loaded    bool
+	loading   bool
 	loadErr   error
 	loadAfter time.Time
 	set       FeishuBotSettings
@@ -174,23 +175,37 @@ func (b *botHub) clock() time.Time {
 	return time.Now()
 }
 
-const botSettingsRetry = 5 * time.Second
+const (
+	botSettingsRetry       = 5 * time.Second
+	botSettingsReadTimeout = 5 * time.Second
+)
 
 var errBotSettingsUnread = i18n.Err("hub-bots.settings_unavailable")
 
-// loadBotsLocked publishes only a complete read; b.mu is held. Failed reads are retried by later lookups,
+// loadBotsLocked publishes only a complete read; b.mu is held on entry and return, released during storage I/O.
+// Concurrent lookups fail closed while the single read runs. Failed reads are retried by later lookups,
 // at most once per cooldown, including records repaired outside the manager. The assistant owns bots.feishu.state.
 func (h *Manager) loadBotsLocked(ctx context.Context) error {
 	b := &h.bots
 	if b.loaded {
 		return nil
 	}
+	if b.loading {
+		return errBotSettingsUnread
+	}
 	if b.loadErr != nil && b.clock().Before(b.loadAfter) {
 		return b.loadErr
 	}
 	next := FeishuBotSettings{Features: defaultBotFeatures}
 	if h.store != nil {
-		if _, err := h.store.Setting(ctx, botSettingsKey, &next); err != nil {
+		readCtx, cancel := context.WithTimeout(ctx, botSettingsReadTimeout)
+		b.loading = true
+		b.mu.Unlock()
+		_, err := h.store.Setting(readCtx, botSettingsKey, &next)
+		cancel()
+		b.mu.Lock()
+		b.loading = false
+		if err != nil {
 			h.logf("bots: load settings: %v", err)
 			b.loadErr, b.loadAfter = errBotSettingsUnread, b.clock().Add(botSettingsRetry)
 			return b.loadErr
@@ -199,6 +214,10 @@ func (h *Manager) loadBotsLocked(ctx context.Context) error {
 	b.set, b.loaded, b.loadErr = next, true, nil
 	if b.base != nil {
 		h.restartBotLocked()
+		if h.cfg.Lark.CLI != nil {
+			// CLI synchronization and registry replacement must run outside bots.mu.
+			go h.refreshLarkCLIConnector(b.base)
+		}
 	}
 	return nil
 }

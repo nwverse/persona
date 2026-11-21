@@ -372,6 +372,10 @@ func (h *Manager) setConnectorOptions(ctx context.Context, id string, raw json.R
 
 // applyConnectorOptions is setConnectorOptions without the mutes.
 func (h *Manager) applyConnectorOptions(ctx context.Context, id string, raw json.RawMessage) error {
+	if id == "larkcli" {
+		h.larkCLIRefreshMu.Lock()
+		defer h.larkCLIRefreshMu.Unlock()
+	}
 	o, ok := connector.As[connector.Options](h.connectors.Get(id))
 	if !ok {
 		return fmt.Errorf("%s has no settings", id)
@@ -595,6 +599,10 @@ func (s connectorSecrets) Delete(ctx context.Context) error {
 
 // startConnectors registers the connectors, applies the user's switches and runs them.
 func (h *Manager) startConnectors(ctx context.Context) {
+	// Recovery cannot replace the placeholder until options and switches have
+	// been restored, before Registry.Start can launch its watchers.
+	h.larkCLIRefreshMu.Lock()
+	defer h.larkCLIRefreshMu.Unlock()
 	h.registerConnectors()
 	h.attachExtensions(ctx) // the plugins' connectors, after the hub's own: those ids are taken
 	h.migrateIMessage(ctx)  // manager.json's imessage.machine into Settings › Extensions › Messages, once (imessage_extension.go)
