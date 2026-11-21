@@ -177,7 +177,7 @@ struct AssistantTopBarTests {
         let all = [try s("main"), try s("mine"), try s("lead-b"), try s("lead-a")]
         let main = all[0].key
         let picked = AssistantSidebarGroups.directions(all, leaders: ["lead-a", "gone", "main", "lead-b"], main: main)
-        #expect(picked.map(\.sessionID) == ["lead-a", "lead-b"])
+        #expect(picked.map(\.id) == ["lead-a", "lead-b"])
         #expect(AssistantSidebarGroups.directions(all, leaders: [], main: main).isEmpty)
     }
 

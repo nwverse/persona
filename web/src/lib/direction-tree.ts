@@ -44,12 +44,31 @@ export interface DirectionTask {
   agents?: DirectionAgent[];
 }
 
+export interface ExternalDirection {
+  /** This direction supervises an outside Agent rather than a Persona conversation. */
+  external: true;
+  /** A complete pair opens that Agent; either one missing leaves the direction without a destination. */
+  machine_id?: string;
+  session_id?: string;
+}
+
+/** The external metadata the hub sent, with fields of another kind or on a conversation-backed direction left out. */
+export function normalizeExternalDirection(d: { external?: unknown; machine_id?: unknown; session_id?: unknown } | null | undefined): ExternalDirection | undefined {
+  if (d?.external !== true) return undefined;
+  const id = (value: unknown) => typeof value === "string" && value.trim() ? value : undefined;
+  return { external: true, machine_id: id(d.machine_id), session_id: id(d.session_id) };
+}
+
 export interface Direction {
-  /** The leader conversation's id; the main conversation's for the secretary's group. */
+  /** The direction's opaque id (its leader conversation's when it has one); the main conversation's for the secretary. */
   id: string;
   /** The direction's name ("" for the secretary's group). */
   name: string;
   secretary?: boolean;
+  /** Outside-Agent metadata (#8236); no Persona conversation is fabricated for it. */
+  external?: true;
+  machine_id?: string;
+  session_id?: string;
   counts: DirectionCounts;
   /** Something under it is at work right now: an Agent of one of its tasks, or one under it, whose session is working,
    *  whatever the task's state (the hub's one rule, #6626). Every direction row's activity mark spins on it, the
@@ -76,6 +95,7 @@ export function normalizeTree(raw: unknown): DirectionTree {
           id: d.id,
           name: typeof d.name === "string" ? d.name : "",
           ...(d.secretary ? { secretary: true } : {}),
+          ...(d.secretary ? {} : normalizeExternalDirection(d)),
           counts,
           running: typeof (d as { running?: unknown }).running === "boolean" ? d.running : counts.working > 0,
           tasks: (Array.isArray(d.tasks) ? d.tasks : [])
