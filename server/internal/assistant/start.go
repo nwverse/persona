@@ -1280,7 +1280,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	if p["is_main"] == true {
 		p["idle_compaction"] = s.idleCompactionPolicy(ctx)
 	}
-	s.putMainCompactWindow(ctx, machine, p)
+	s.putMainCompactWindow(ctx, machine, sid, p)
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
 		p["interject_background"] = true
 	}

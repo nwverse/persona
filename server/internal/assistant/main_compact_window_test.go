@@ -230,7 +230,7 @@ func TestSupervisorCompactWindowDispatch(t *testing.T) {
 	}
 	// A role on the assistant's computer must not cap a working Agent on another computer.
 	p = map[string]any{"session_id": "lead"}
-	s.putMainCompactWindow(ctx, "other", p)
+	s.putMainCompactWindow(ctx, "other", "lead", p)
 	if _, set := p["main_compact_window"]; set {
 		t.Fatal("role leaked across computers")
 	}

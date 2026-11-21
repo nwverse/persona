@@ -35,9 +35,8 @@ func mainCompactWindowOf(v Settings) int {
 
 // putMainCompactWindow authoritatively scopes the existing cap, including a supervisor's first start before its id
 // exists. A shared launcher must retain its larger window for working Agents.
-func (s *Service) putMainCompactWindow(ctx context.Context, machine string, p map[string]any) {
+func (s *Service) putMainCompactWindow(ctx context.Context, machine, id string, p map[string]any) {
 	cfg := s.settings(ctx)
-	id, _ := p["session_id"].(string)
 	main, _ := p["is_main"].(bool)
 	supervisor := machine == cfg.MachineID && (s.isLeader(ctx, id) || s.isBackground(ctx, id) ||
 		id == "" && ctx.Value(supervisionStartup{}) == true && p["guest"] == nil)
