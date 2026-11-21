@@ -1,0 +1,27 @@
+<resources>
+    <string name="extension_widgets">扩展小组件</string>
+    <string name="extension_view_widget">查看组件</string>
+    <string name="extension_preview_widget">预览</string>
+    <string name="extension_empty">此连接暂时没有可用的小组件。</string>
+    <string name="extension_no_content">这个小组件没有可在手表上显示的内容。</string>
+    <string name="extension_read_only">此处仅供查看。请在手机或电脑上使用扩展的操作控件。</string>
+    <string name="extension_stale">已保存的预览 · 刷新以检查更新。</string>
+    <string name="extension_unpaired">请先连接 Persona，再打开小组件。</string>
+    <string name="extension_forbidden">此连接不允许查看小组件预览。</string>
+    <string name="extension_unavailable">此小组件不可用，或此连接不支持小组件。</string>
+    <string name="extension_retryable">小组件未能更新。请检查连接后重试。</string>
+    <string name="extension_invalid_response">无法显示这个小组件，请尝试刷新。</string>
+    <string name="extension_invalid_link">此小组件链接不属于所选连接。</string>
+    <string name="extension_connection_changed">连接已更改，请重新打开小组件。</string>
+    <string name="extension_chart_values">查看图表数值</string>
+    <string name="extension_candle_values">%1$s · 开盘 %2$s · 最高 %3$s · 最低 %4$s · 收盘 %5$s</string>
+    <string name="extension_no_value">—</string>
+    <string name="extension_choose_widget">选择小组件</string>
+    <string name="extension_use_widget">使用此小组件</string>
+    <string name="extension_face_empty">没有小组件支持这个表盘位置。</string>
+    <string name="extension_config_failed">无法保存选择，请重新打开选择器后重试。</string>
+    <string name="extension_face_refresh">更新</string>
+    <string name="extension_face_refresh_detail">点按打开 Persona 并刷新此小组件。</string>
+    <string name="extension_face_preview">示例小组件预览</string>
+    <string name="extension_face_sample">示例</string>
+</resources>

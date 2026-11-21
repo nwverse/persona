@@ -1,0 +1,27 @@
+<resources>
+    <string name="pair_link_or_address">ペアリングリンクまたはHubアドレス</string>
+    <string name="text_photo">[写真]</string>
+    <string name="text_video">[動画]</string>
+    <string name="text_file">[ファイル]</string>
+    <string name="text_card">[カード]</string>
+    <string name="text_context">[コンテキスト]</string>
+    <string name="text_contexts">[コンテキスト %1$d 件]</string>
+    <string name="message_system_source">システム</string>
+    <string name="screen_escape">Esc</string>
+    <string name="screen_enter">現在の選択を確定</string>
+    <string name="screen_enter_body">コンピューター上の現在の選択を確定しますか？</string>
+    <string name="inbox_ai_reply">返信案を作成</string>
+    <string name="inbox_draft_ready">返信案ができました。確認してから送信してください。</string>
+    <string name="inbox_replace_draft_body">未送信の下書きを新しい返信案に置き換えますか？</string>
+    <string name="hub_groups">接続先</string>
+    <string name="hub_add">接続先を追加</string>
+    <string name="hub_name">接続名</string>
+    <string name="hub_primary">メインの接続先</string>
+    <string name="hub_remove">接続先を削除</string>
+    <string name="hub_remove_body">この接続先を時計から削除しますか？他の接続先は保持されます。</string>
+    <string name="hub_partial">一部の接続先を更新できません。保存済みのタスクは閲覧のみ可能です。</string>
+    <string name="hub_added">接続先を追加しました</string>
+    <string name="hub_add_failed">接続先を保存できません。アドレスを確認してください。新しいペアリングリンクが必要な場合があります。</string>
+    <string name="hub_add_pending">保存済みの接続先の変更を完了できません。再試行してください。</string>
+    <string name="hub_duplicate">この接続先は保存済みです。</string>
+</resources>

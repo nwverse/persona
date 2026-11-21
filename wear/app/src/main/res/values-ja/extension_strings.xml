@@ -1,0 +1,27 @@
+<resources>
+    <string name="extension_widgets">拡張ウィジェット</string>
+    <string name="extension_view_widget">表示</string>
+    <string name="extension_preview_widget">プレビュー</string>
+    <string name="extension_empty">この接続先に利用できるウィジェットはありません。</string>
+    <string name="extension_no_content">このウィジェットには時計で表示できる内容がありません。</string>
+    <string name="extension_read_only">閲覧専用です。拡張機能の操作はスマートフォンかコンピューターで行ってください。</string>
+    <string name="extension_stale">保存済みの表示です。更新して最新情報を確認してください。</string>
+    <string name="extension_unpaired">ウィジェットを開く前にPersonaに接続してください。</string>
+    <string name="extension_forbidden">この接続先ではウィジェットの閲覧が許可されていません。</string>
+    <string name="extension_unavailable">このウィジェットは利用できないか、接続先がウィジェットに対応していません。</string>
+    <string name="extension_retryable">ウィジェットを更新できません。接続を確認して再試行してください。</string>
+    <string name="extension_invalid_response">このウィジェットを表示できません。更新してみてください。</string>
+    <string name="extension_invalid_link">このウィジェットのリンクは選択した接続先に属していません。</string>
+    <string name="extension_connection_changed">接続先が変更されました。ウィジェットを開き直してください。</string>
+    <string name="extension_chart_values">グラフの値を見る</string>
+    <string name="extension_candle_values">%1$s · 始値 %2$s · 高値 %3$s · 安値 %4$s · 終値 %5$s</string>
+    <string name="extension_no_value">—</string>
+    <string name="extension_choose_widget">ウィジェットを選択</string>
+    <string name="extension_use_widget">このウィジェットを使う</string>
+    <string name="extension_face_empty">この文字盤の表示枠に対応するウィジェットがありません。</string>
+    <string name="extension_config_failed">選択を保存できません。選択画面を開き直してください。</string>
+    <string name="extension_face_refresh">更新</string>
+    <string name="extension_face_refresh_detail">タップしてPersonaを開き、このウィジェットを更新します。</string>
+    <string name="extension_face_preview">ウィジェットの表示例</string>
+    <string name="extension_face_sample">サンプル</string>
+</resources>

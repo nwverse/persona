@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="pet_title">奶蛙</string>
+    <string name="pet_tap">轻点奶蛙播放动画</string>
+    <string name="pet_needs_you">%1$d 个需要你</string>
+    <string name="pet_working">%1$d 个正在工作</string>
+    <string name="pet_done">%1$d 个已完成</string>
+    <string name="pet_idle">暂时没有任务</string>
+    <string name="pet_sleep">睡着了</string>
+    <string name="pet_offline">无法连接 Hub</string>
+    <string name="pet_unavailable">奶蛙暂不可用</string>
+    <string name="pet_unavailable_body">无法加载奶蛙。Hub 恢复连接后再试。</string>
+    <string name="pet_unsupported">此 Hub 未向手表提供奶蛙资源。</string>
+    <string name="pet_pair_first">请先在设置中连接 Hub。</string>
+    <string name="pet_retry_body">显示的是上次更新，轻点重试以重新连接。</string>
+    <string name="pet_loading">正在加载奶蛙…</string>
+    <string name="pet_updated">更新于 %1$s</string>
+    <string name="pet_short_waiting">待处理</string>
+    <string name="pet_short_working">工作中</string>
+    <string name="pet_short_done">已完成</string>
+    <string name="pet_short_idle">空闲</string>
+    <string name="pet_short_sleep">睡眠中</string>
+    <string name="pet_short_offline">离线</string>
+</resources>

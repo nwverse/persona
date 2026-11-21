@@ -1,0 +1,27 @@
+<resources>
+    <string name="extension_widgets">Extension widgets</string>
+    <string name="extension_view_widget">View widget</string>
+    <string name="extension_preview_widget">Preview</string>
+    <string name="extension_empty">No widgets are available on this connection.</string>
+    <string name="extension_no_content">This widget has no content that can be shown on the watch.</string>
+    <string name="extension_read_only">Read-only preview. Use your phone or computer for extension controls.</string>
+    <string name="extension_stale">Saved preview · refresh to check for updates.</string>
+    <string name="extension_unpaired">Connect Persona before opening widgets.</string>
+    <string name="extension_forbidden">This connection does not allow widget previews.</string>
+    <string name="extension_unavailable">This widget is unavailable or this connection does not support widgets.</string>
+    <string name="extension_retryable">Widgets could not update. Check the connection and retry.</string>
+    <string name="extension_invalid_response">This widget could not be displayed. Try refreshing it.</string>
+    <string name="extension_invalid_link">This widget link does not belong to the selected connection.</string>
+    <string name="extension_connection_changed">The connection changed. Open the widget again.</string>
+    <string name="extension_chart_values">View chart values</string>
+    <string name="extension_candle_values">%1$s · Open %2$s · High %3$s · Low %4$s · Close %5$s</string>
+    <string name="extension_no_value">—</string>
+    <string name="extension_choose_widget">Choose a widget</string>
+    <string name="extension_use_widget">Use this widget</string>
+    <string name="extension_face_empty">No widgets support this watch-face slot.</string>
+    <string name="extension_config_failed">Could not save this selection. Open the picker and try again.</string>
+    <string name="extension_face_refresh">Update</string>
+    <string name="extension_face_refresh_detail">Tap to open Persona and refresh this widget.</string>
+    <string name="extension_face_preview">Sample widget preview</string>
+    <string name="extension_face_sample">Sample</string>
+</resources>

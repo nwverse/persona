@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- QA-only WFF host. Empty slots require explicit selection in the system face editor. -->
+<WatchFace width="480" height="480">
+    <Metadata key="CLOCK_TYPE" value="DIGITAL" />
+    <Scene backgroundColor="#000000">
+        <DigitalClock x="90" y="48" width="300" height="64">
+            <TimeText x="0" y="0" width="300" height="64" format="hh:mm">
+                <Font family="sans-serif" size="48" weight="MEDIUM" color="#FFFFFF" />
+            </TimeText>
+        </DigitalClock>
+        <PartDraw x="60" y="140" width="165" height="130">
+            <RoundRectangle x="1" y="1" width="163" height="128" cornerRadiusX="18" cornerRadiusY="18">
+                <Stroke color="#505057" thickness="2" />
+            </RoundRectangle>
+        </PartDraw>
+        <PartDraw x="255" y="140" width="165" height="130">
+            <RoundRectangle x="1" y="1" width="163" height="128" cornerRadiusX="18" cornerRadiusY="18">
+                <Stroke color="#505057" thickness="2" />
+            </RoundRectangle>
+        </PartDraw>
+        <PartDraw x="70" y="305" width="340" height="98">
+            <RoundRectangle x="1" y="1" width="338" height="96" cornerRadiusX="18" cornerRadiusY="18">
+                <Stroke color="#505057" thickness="2" />
+            </RoundRectangle>
+        </PartDraw>
+        <ComplicationSlot x="60" y="140" width="165" height="130" slotId="1"
+            displayName="slot_short" supportedTypes="SHORT_TEXT EMPTY" isCustomizable="TRUE">
+            <BoundingRoundBox x="0" y="0" width="165" height="130" cornerRadius="18" />
+            <DefaultProviderPolicy defaultSystemProvider="EMPTY" defaultSystemProviderType="EMPTY" />
+            <Complication type="SHORT_TEXT">
+                <PartText x="10" y="12" width="145" height="35">
+                    <Text align="CENTER" maxLines="1" ellipsis="TRUE">
+                        <Font family="sans-serif" size="21" color="#B8B8BF">
+                            <Template>%s<Parameter expression="[COMPLICATION.TITLE]" /></Template>
+                        </Font>
+                    </Text>
+                </PartText>
+                <PartText x="10" y="50" width="145" height="60">
+                    <Text align="CENTER" maxLines="1" ellipsis="TRUE">
+                        <Font family="sans-serif" size="32" color="#FFFFFF">
+                            <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                </PartText>
+            </Complication>
+            <Complication type="EMPTY">
+                <PartText x="10" y="44" width="145" height="60">
+                    <Text align="CENTER"><Font family="sans-serif" size="32" color="#B8B8BF">—</Font></Text>
+                </PartText>
+            </Complication>
+        </ComplicationSlot>
+        <ComplicationSlot x="255" y="140" width="165" height="130" slotId="3"
+            displayName="slot_image" supportedTypes="SMALL_IMAGE EMPTY" isCustomizable="TRUE">
+            <BoundingRoundBox x="0" y="0" width="165" height="130" cornerRadius="18" />
+            <DefaultProviderPolicy defaultSystemProvider="EMPTY" defaultSystemProviderType="EMPTY" />
+            <Complication type="SMALL_IMAGE">
+                <PartImage x="27" y="10" width="110" height="110">
+                    <Image resource="[COMPLICATION.SMALL_IMAGE]" />
+                </PartImage>
+            </Complication>
+            <Complication type="EMPTY">
+                <PartText x="10" y="44" width="145" height="60">
+                    <Text align="CENTER"><Font family="sans-serif" size="32" color="#B8B8BF">—</Font></Text>
+                </PartText>
+            </Complication>
+        </ComplicationSlot>
+        <ComplicationSlot x="70" y="305" width="340" height="98" slotId="2"
+            displayName="slot_long" supportedTypes="LONG_TEXT EMPTY" isCustomizable="TRUE">
+            <BoundingRoundBox x="0" y="0" width="340" height="98" cornerRadius="18" />
+            <DefaultProviderPolicy defaultSystemProvider="EMPTY" defaultSystemProviderType="EMPTY" />
+            <Complication type="LONG_TEXT">
+                <PartText x="12" y="7" width="316" height="29">
+                    <Text align="CENTER" maxLines="1" ellipsis="TRUE">
+                        <Font family="sans-serif" size="20" color="#B8B8BF">
+                            <Template>%s<Parameter expression="[COMPLICATION.TITLE]" /></Template>
+                        </Font>
+                    </Text>
+                </PartText>
+                <PartText x="12" y="37" width="316" height="55">
+                    <Text align="CENTER" maxLines="2" ellipsis="TRUE">
+                        <Font family="sans-serif" size="23" color="#FFFFFF">
+                            <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                </PartText>
+            </Complication>
+            <Complication type="EMPTY">
+                <PartText x="12" y="24" width="316" height="60">
+                    <Text align="CENTER"><Font family="sans-serif" size="32" color="#B8B8BF">—</Font></Text>
+                </PartText>
+            </Complication>
+        </ComplicationSlot>
+    </Scene>
+</WatchFace>
