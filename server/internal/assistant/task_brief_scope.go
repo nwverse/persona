@@ -55,6 +55,7 @@ type scopeChange struct {
 	Expect          int
 	Approval        *BriefRequest
 	eventID         string // in-memory identity of an aborted continuation's own event
+	afterCommit     func() // test synchronization after the brief commit and before ledger propagation; nil in production
 }
 
 // errScopeNothing: the change changes nothing (the same criteria and time, no words).
@@ -66,6 +67,11 @@ func (s *Service) applyScope(ctx context.Context, t Todo, c scopeChange) (TaskBr
 	if t.DoneAt != nil {
 		return TaskBrief{}, fmt.Errorf("task %s is done already: its brief is closed; hand out a new task for what is left", t.ID)
 	}
+	// A scope's brief commit and its ledger propagation are one ordered transition. Otherwise an older writer paused
+	// after its commit can write older criteria after a newer scope has already reached the ledgers.
+	b := &s.tbriefs
+	b.writeMu.Lock()
+	defer b.writeMu.Unlock()
 	brief, err := s.ensureTaskBrief(ctx, t)
 	if err != nil {
 		return TaskBrief{}, err
@@ -126,12 +132,15 @@ func (s *Service) applyScope(ctx context.Context, t Todo, c scopeChange) (TaskBr
 	if len(risk) > 0 { // the owner's message that allowed it stays on the entry
 		ev.Approval = c.Approval
 	}
-	brief, _, err = s.changeBrief(ctx, brief.ID, func(tb *taskBrief) bool {
+	brief, _, err = s.changeBriefLocked(ctx, brief.ID, func(tb *taskBrief) bool {
 		tb.st.Log = append(tb.st.Log, ev)
 		return true
 	})
 	if err != nil {
 		return TaskBrief{}, err
+	}
+	if c.afterCommit != nil {
+		c.afterCommit()
 	}
 	for _, id := range s.briefTodos(brief.ID) {
 		o, ok := s.todoNow(id)

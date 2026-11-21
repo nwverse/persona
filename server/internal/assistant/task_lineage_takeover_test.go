@@ -766,3 +766,55 @@ func TestBriefWritesSerializeDurableCommitOrder(t *testing.T) {
 	}
 	t.Fatalf("brief %s is missing from Postgres", brief.ID)
 }
+
+// Committing a brief and propagating that scope to its ledgers is one ordered transition. An older writer paused after
+// its commit must not write its older criteria after a newer scope has already reached the ledgers.
+func TestScopeLedgerPropagationFollowsBriefCommitOrder(t *testing.T) {
+	s, _, old := newSupervisedServiceOn(t, todoTestDB(t))
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	firstDone := make(chan struct{})
+	go func() {
+		_, _ = s.applyScope(context.Background(), old, scopeChange{DoneWhen: []string{"older propagated scope"}, Change: "older scope", afterCommit: func() {
+			close(entered)
+			<-release
+		}})
+		close(firstDone)
+	}()
+	<-entered
+	secondDone := make(chan struct{})
+	go func() {
+		_, _ = s.applyScope(context.Background(), old, scopeChange{DoneWhen: []string{"newer propagated scope"}, Change: "newer scope"})
+		close(secondDone)
+	}()
+	waitFor(t, "the second scope to finish or wait for the propagation boundary", func() bool {
+		select {
+		case <-secondDone:
+			return true
+		default:
+		}
+		for _, stack := range goroutineStacks() {
+			if strings.Contains(stack, "(*Service).applyScope(") && strings.Contains(stack, "[sync.Mutex.Lock]") {
+				return true
+			}
+		}
+		return false
+	})
+	close(release)
+	<-firstDone
+	<-secondDone
+	got := todoNow(s, old.ID).Supervision
+	if got == nil || !slices.Equal(got.DoneWhen, []string{"newer propagated scope"}) {
+		t.Fatalf("an older scope propagated after the newer scope: %+v", got)
+	}
+	if brief := mustBriefOfTodo(t, s, old.ID); !slices.Equal(brief.Criteria, got.DoneWhen) {
+		t.Fatalf("brief and ledger diverged after ordered propagation: brief %+v, ledger %+v", brief, got)
+	}
+}

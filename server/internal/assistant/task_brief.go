@@ -946,6 +946,13 @@ func (s *Service) changeBrief(ctx context.Context, id string, change func(tb *ta
 	b := &s.tbriefs
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
+	return s.changeBriefLocked(ctx, id, change)
+}
+
+// changeBriefLocked is changeBrief with the caller holding tbriefs.writeMu, so applyScope can include ledger propagation
+// in the same ordered transition.
+func (s *Service) changeBriefLocked(ctx context.Context, id string, change func(tb *taskBrief) bool) (TaskBrief, bool, error) {
+	b := &s.tbriefs
 	b.mu.Lock()
 	b.init()
 	tb := b.briefs[id]
