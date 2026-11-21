@@ -306,7 +306,6 @@
   "lib-auth",
   "lib-channels",
   "lib-compaction",
-  "lib-compare",
   "lib-connection",
   "lib-connectors",
   "lib-disclosure",

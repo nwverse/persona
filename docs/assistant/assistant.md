@@ -2706,3 +2706,46 @@ database size, WAL or backups. Phase 2 introduces logical conversations with sev
 Deleting an assistant conversation deletes its message rows, coverage, compaction summary and references in the
 same transaction as its deletion marker. Concurrent or late ingestion cannot recreate deleted content, and a read
 that overlaps deletion discards its response before returning it.
+
+## Logical assistant conversations
+
+A conversation keeps its public machine/session identity, task origins and supervision role while its execution
+moves between engines. The manager stores physical segments, source generations and frozen physical line ranges in
+Postgres. Integer transcript cursors compose those ranges; only later segments namespace item IDs. Reads, full/image
+references, live events, subscriptions, reconnect backlog, inventory and the derived search index use that same
+logical projection. Retired tails remain physical history and never shift later offsets.
+
+When configured device entries for one computer are absorbed into another entry, authenticated callbacks resolve
+through the current physical fleet aliases. Durable segment/history keys and the public conversation identity stay
+unchanged. Conflicting roots fail closed; absorbed aliases cannot reveal private segments or bypass deletion markers.
+Provider scopes still compare physical computers, independently of retained public transport identities.
+
+The explicit `assistant_segments` operation is separate from ordinary model picks. It prepares an empty execution
+session, freezes the source, and activates the target through a database epoch comparison. Pending approvals or active
+work make a switch retryably busy. Permission mode carries over; unknown engines and unsupported supervision policy
+are refused before preparation. The first queued input carries policy and handoff together, with the original client
+message ID. Source compaction summaries take priority; the fallback uses the manager's existing model chain and waits
+through provider pauses. Bounded or incomplete history is marked partial.
+
+The source stays recoverable until the target accepts its first turn. A definite refusal restores the source at a
+new epoch, invalidates the abandoned target's history projection and releases the unsent queue there; an ambiguous
+start/send requires a positive receipt and is never blindly
+repeated. Retired callers lose manager tool authority immediately. Physical approval/timer work must settle before
+activation; the node's retirement latch prevents recovery and idle-compaction work on that segment. Closure is retried
+when offline nodes reconnect. Deleting a conversation cascades through segment history and queue content, retaining
+only deletion markers and minimal offline closure identities.
+
+`GET/PUT /api/v1/assistant/segments` controls **new switches**, enabled by default. Disabling it keeps segment routing,
+reads and recovery running. A manager binary from before segment routing is **not a safe downgrade after a switch**:
+it could resume the retired first segment and fork the conversation. Roll back with a segment-aware manager and the
+switch setting disabled. The phase-1 history-read setting does not disable logical routing.
+
+Logical-segment queue retention: an accepted input keeps its client ID, SHA-256
+content digest, delivery state and ordering metadata; its duplicate payload and
+transport provenance are removed after the receipt commits. A rejected first
+input that rollback requeues keeps its payload until the restored source accepts
+it. Ambiguous deliveries retain their content for positive-receipt reconciliation.
+Terminal switch records discard their handoff summary. Deleting the logical chat
+cascades to receipts, segments, inputs and switch context. Physical device aliases
+are locked together during first adoption, preventing concurrent managers from
+creating two logical roots for the same physical chat.

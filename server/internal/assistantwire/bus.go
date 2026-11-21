@@ -83,6 +83,8 @@ const (
 	CapabilityAssistantSearch = "assistant_search"
 	// CapabilityTaskInput: the manager validates and saves structured scheduled prompts.
 	CapabilityTaskInput = "task_input"
+	// CapabilityAssistantSegments promises persistent logical routing and explicit switches.
+	CapabilityAssistantSegments = "assistant_segments"
 	// CapabilityDirectionSessions: the manager files sessions under a direction and reads one direction
 	// (PUT /api/v1/assistant/sessions/{mid}/{sid}/direction, GET /api/v1/assistant/directions/{id}, and the tree's
 	// additive sessions; #11391). The hub lists direction_sessions only while the default manager names it.
@@ -461,6 +463,11 @@ var Routes = []string{
 	"GET /api/v1/assistant/search",
 	"GET /api/v1/assistant/history",
 	"PUT /api/v1/assistant/history",
+	"GET /api/v1/assistant/segments",
+	"PUT /api/v1/assistant/segments",
+	"GET /api/v1/assistant/conversations/{id}/segments",
+	"POST /api/v1/assistant/conversations/{id}/switch",
+	"GET /api/v1/assistant/conversations/{id}/switch/{operation}",
 	// The selection: what the knowledge base brings in and keeps (kb_selection.go there).
 	"GET /api/v1/kb/selection",
 	"PUT /api/v1/kb/selection",
