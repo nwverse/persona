@@ -16,32 +16,34 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-type fakeDirEntry struct {
+type toolchainFakeDirEntry struct {
 	name string
 	dir  bool
 }
 
-func (f fakeDirEntry) Name() string               { return f.name }
-func (f fakeDirEntry) IsDir() bool                { return f.dir }
-func (f fakeDirEntry) Type() os.FileMode          { return os.ModeDir }
-func (f fakeDirEntry) Info() (os.FileInfo, error) { return fakeFileInfo{name: f.name, dir: f.dir}, nil }
+func (f toolchainFakeDirEntry) Name() string      { return f.name }
+func (f toolchainFakeDirEntry) IsDir() bool       { return f.dir }
+func (f toolchainFakeDirEntry) Type() os.FileMode { return os.ModeDir }
+func (f toolchainFakeDirEntry) Info() (os.FileInfo, error) {
+	return toolchainFakeFileInfo{name: f.name, dir: f.dir}, nil
+}
 
-type fakeFileInfo struct {
+type toolchainFakeFileInfo struct {
 	name string
 	dir  bool
 }
 
-func (f fakeFileInfo) Name() string { return f.name }
-func (f fakeFileInfo) Size() int64  { return 0 }
-func (f fakeFileInfo) Mode() os.FileMode {
+func (f toolchainFakeFileInfo) Name() string { return f.name }
+func (f toolchainFakeFileInfo) Size() int64  { return 0 }
+func (f toolchainFakeFileInfo) Mode() os.FileMode {
 	if f.dir {
 		return os.ModeDir | 0o755
 	}
 	return 0o755
 }
-func (f fakeFileInfo) ModTime() time.Time { return time.Time{} }
-func (f fakeFileInfo) IsDir() bool        { return f.dir }
-func (f fakeFileInfo) Sys() any           { return nil }
+func (f toolchainFakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (f toolchainFakeFileInfo) IsDir() bool        { return f.dir }
+func (f toolchainFakeFileInfo) Sys() any           { return nil }
 
 func TestMachineToolchainProbeCoreAgentsDockerGHHardwareAndRedaction(t *testing.T) {
 	home := "/home/dev"
@@ -103,10 +105,10 @@ func TestMachineToolchainProbeCoreAgentsDockerGHHardwareAndRedaction(t *testing.
 		now:    func() time.Time { return now },
 		stat: func(p string) (os.FileInfo, error) {
 			if dirs[p] {
-				return fakeFileInfo{name: filepath.Base(p), dir: true}, nil
+				return toolchainFakeFileInfo{name: filepath.Base(p), dir: true}, nil
 			}
 			if p == "/var/run/docker.sock" {
-				return fakeFileInfo{name: "docker.sock", dir: false}, nil
+				return toolchainFakeFileInfo{name: "docker.sock", dir: false}, nil
 			}
 			return nil, os.ErrNotExist
 		},
@@ -114,13 +116,13 @@ func TestMachineToolchainProbeCoreAgentsDockerGHHardwareAndRedaction(t *testing.
 			switch p {
 			case filepath.Join(home, ".nvm", "versions", "node"):
 				return []os.DirEntry{
-					fakeDirEntry{name: "v20.11.0", dir: true},
-					fakeDirEntry{name: "v22.14.0", dir: true},
+					toolchainFakeDirEntry{name: "v20.11.0", dir: true},
+					toolchainFakeDirEntry{name: "v22.14.0", dir: true},
 				}, nil
 			case "/sys/class/power_supply":
 				return []os.DirEntry{
-					fakeDirEntry{name: "BAT0", dir: true},
-					fakeDirEntry{name: "AC", dir: true},
+					toolchainFakeDirEntry{name: "BAT0", dir: true},
+					toolchainFakeDirEntry{name: "AC", dir: true},
 				}, nil
 			default:
 				return nil, os.ErrNotExist
@@ -439,7 +441,7 @@ func TestMachineToolchainDockerPermissionDeniedAndGHUnauthenticated(t *testing.T
 		now: func() time.Time { return time.Date(2026, 11, 21, 13, 0, 0, 0, time.UTC) },
 		stat: func(p string) (os.FileInfo, error) {
 			if p == "/var/run/docker.sock" {
-				return fakeFileInfo{name: "docker.sock"}, nil
+				return toolchainFakeFileInfo{name: "docker.sock"}, nil
 			}
 			return nil, os.ErrNotExist
 		},
@@ -878,7 +880,7 @@ func TestMachineToolchainDockerWindowsNonUnixHostAndContextFallback(t *testing.T
 			now: func() time.Time { return time.Date(2026, 11, 21, 18, 2, 0, 0, time.UTC) },
 			stat: func(p string) (os.FileInfo, error) {
 				if p == "/var/run/docker.sock" {
-					return fakeFileInfo{name: "docker.sock"}, nil
+					return toolchainFakeFileInfo{name: "docker.sock"}, nil
 				}
 				return nil, os.ErrNotExist
 			},
