@@ -1747,6 +1747,20 @@ Watch maps success, failure, notification, stop and retry the same way. A watch 
 
 ### 4.4 Confirmation and undo
 
+For an existing Assistant conversation on a hub with logical-segment switching,
+choosing a different engine or runtime connection in the existing model panel
+opens the shared `Dialog`/sheet with **Switch connection** and Cancel. The audience
+is people deliberately changing an advanced conversation connection. The text
+explains that recent messages and a summary continue while the conversation and
+tasks stay, and the next message activates the new connection. Selection alone
+sends nothing. The underlying model panel is held beneath the confirmation.
+Submit shows a pending action immediately and uses a distinct switch operation;
+it never writes an ordinary model pick across engines. An uncertain response
+keeps the exact operation for retry, says its result is unconfirmed, and labels
+dismissal Close. Actual session updates, rather than an optimistic engine rename,
+confirm activation. Older hubs keep their existing unavailable-engine explanation.
+
+
 Severity ladder to adopt:
 
 1. Reversible: do it and offer Undo in a toast (inbox bulk actions, remove from list, folder trash do this).
@@ -3822,3 +3836,9 @@ link explains the independent per-computer inventory switch. The sidebar's
 botmux chip is removed; its Lark group quick filter is absent when its count is
 zero. Complete and paged lists exclude the same hosts before grouping and counts.
 This requested interaction change adds no component, theme or motion pattern.
+
+### Independent main conversation defaults (#11936)
+
+Audience: people choosing the model for their main Assistant conversation. Reuse the existing model-configuration purpose row and editor, with **Conversation defaults** as the category and **Main chat** directly beneath it as its independently editable use. Do not add another primary settings page or put runtime implementation details in the chat flow. Show the inherited effective value and existing reset action; changing Main chat must not modify a new side conversation's defaults.
+
+The existing main model pill and empty main starter read the main purpose's effective launcher/model/effort. A new side-conversation starter reads the shared default. An explicit conversation pick continues to win. Cross-engine changes use the existing explicit switch confirmation; saving a default does not silently start a second execution or optimistically rename the current engine. English, Simplified Chinese and Japanese purpose names and descriptions ship together.
