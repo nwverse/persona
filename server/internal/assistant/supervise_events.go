@@ -3,6 +3,7 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -162,6 +163,9 @@ func (s *Service) superviseJudged(ctx context.Context, t Todo, work time.Time, c
 		// "stopped short" (#3111). The supervisor reads the agent's reply and decides. No model set up for the judge is
 		// said as such, not as a model error that a retry might mend.
 		detail := "判定模型出错" // i18n-ignore: the supervision message is the assistant's prompt
+		if errors.Is(err, errTaskDoneJudgeExhausted) {
+			detail = fmt.Sprintf("判定服务出错（自动重判 %d 次仍失败）", taskDoneDeferredRetries) // i18n-ignore: supervisor prompt
+		}
 		if ai.IsNotConfigured(err) {
 			detail = "判定模型未配置" // i18n-ignore: the supervision message is the assistant's prompt
 		}

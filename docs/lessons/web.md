@@ -1508,3 +1508,10 @@ Keep the legacy key on read/write failure and guard delayed reads with a save an
 credential generation. Filtering must consume the acknowledged shared value in
 both complete and paged lists before grouping/counts; a quick filter must never
 turn the display preference back on as a side effect.
+
+## Live turn clock ownership stays on the live line (#12446)
+
+A foreground dock timer flag in `ChatContext` invalidates every historical exchange when a turn starts or ends,
+even through memoized rows. Carry it as a prop only on live transcript lines (including live children of an opened
+background round). Compare message-action renders for starting and ending separately against different history
+lengths, and retain the single-timer tests for Agent and Persona chats.

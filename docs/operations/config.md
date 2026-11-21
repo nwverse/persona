@@ -451,7 +451,7 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
 
   Model selection is elsewhere: **Settings › Model Configuration › Question Delegation** (purpose `agent.delegate`). If never selected, it uses the "Information Filtering" connection with Opus 5.5 (`claude-opus-5-5`);
   change provider or model there, or use `PATCH /api/v1/model-config/purposes/agent.delegate` (`{"revision": <current>, "model": "claude-sonnet-5-5"}`); "Restore Defaults" returns to Opus.
-- `agents.dispatch` (#3253): an Agent hands a subtask to a new Agent on another connected computer and reads the result back ([plan-agent-dispatch.md](../plans/plan-agent-dispatch.md)). **Off by default.**
+- `agents.dispatch` (#3253) allows an Agent to start a new Agent on another connected computer. New dispatches use A2A for questions and results. Dispatch is off by default.
   `enabled` (true lists the Agents' `dispatch_start` / `dispatch_read` tools; a dispatched task runs on the target computer's default launcher and model for new Agents, started by an Agent and not by you),
   `max_active` (how many of one Agent's dispatched tasks may be working at a time, default 3). Work computers and guest conversations never get the tools. Restart the hub after changing it. Example:
 
@@ -460,6 +460,9 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
     "dispatch": { "enabled": true }
   }
   ```
+
+- `agents.a2a` defaults to the manager's confirmed personal computers. `machines` limits participation in A2A and new dispatches. An empty list disables both.
+  Set `public_url` to expose Agent Cards and A2A JSON-RPC endpoints with Persona credentials. [Agent-to-Agent communication](../integrations/a2a.md)
 
 - `agents.review` (#2173): the independent review of a supervised task's finished change ([unified-entry.md](../assistant/unified-entry.md) ("Independent review")). **Off by default**, on once `launcher` names a launcher on the working agent's computer (pick one on another model than your agents'; there is no default reviewer).
   `model` and `effort` (optional) override the launcher's own; `permission` is the reviewer's permission mode (default `plan`); `timeout_minutes` bounds one review (default 30). The reviewer works in a disposable copy of the change, so its permission mode is a second guard, not the only one. Example:
@@ -472,7 +475,7 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
 
 - `hook_timeout_minutes` (default 30, 0 or negative also means 30): maximum time Claude Code hooks wait for phone answers (questions, approvals); timeout hands control back to the terminal (`docs/integrations/claude-integration.md`).
 - `usage` (optional): subscription usage sources from an account-pool gateway (such as a relay), merged into the sidebar's usage bar (`docs/server/usage-windows.md` ("Account-pool gateways"), #2595).
-  `usage.sources[]` (at most 8): `id`, `name` (source name in the sidebar), `type` (`relay` / `relay_key` / `generic`; old type names are still read as `relay` and rewritten to the new name the next time this source is edited in the admin UI), `url`, `key` (the gateway's admin Key, or for `relay_key` an ordinary API key of the relay, **a secret: only in `manager.json` (0600)**, unreadable from the admin UI and APIs, absent from logs), `enabled` (false disables this source).
+  `usage.sources[]` (at most 8): `id`, `name` (source name in the sidebar), `type` (`relay` / `relay_key` / `generic`, or `extension` with `extension` and `launcher` instead of `url` and `key`, `docs/server/usage-windows.md` ("Usage extensions"); old type names are still read as `relay` and rewritten to the new name the next time this source is edited in the admin UI), `url`, `key` (the gateway's admin Key, or for `relay_key` an ordinary API key of the relay, **a secret: only in `manager.json` (0600)**, unreadable from the admin UI and APIs, absent from logs), `enabled` (false disables this source).
   `usage.enabled` (false is the master switch), `usage.poll_minutes` (poll interval per source, default 5, 1 to 1440), `usage.hidden_providers` (providers such as `codex` that the usage bars leave out; display only). This section belongs to **the manager** (`personad assistant`, which reads and writes it in its `manager.json`; the hub does not read it): it only reads the gateway's cached numbers (`refresh=false`), requests come from the manager, and nodes never touch the gateway.
   Edit in the admin UI at `/admin/usage` (the hub forwards to the manager) for immediate effect; manual edits require a hub restart (which restarts the manager too), or opening this admin page (the manager adopts the version on disk).
 - `microsoft` (optional): Outlook's "Sign In with Microsoft" (`docs/extensions/mail.md` ("Outlook: Sign In with Microsoft")). `client_id` is the default client ID

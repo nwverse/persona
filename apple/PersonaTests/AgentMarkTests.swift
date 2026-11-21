@@ -94,6 +94,14 @@ struct AgentMarkTests {
         let engine = AgentKind(Self.session(#","agent":"paseo","agent_label":"Paseo","launcher":"grok""#))
         #expect(engine.brand == Theme.Brand.grok && engine.name == "grok")
         #expect(AgentKind(Self.session(#","agent":"paseo","launcher":"kimi""#)).name == "kimi")
+        // TRAE by its label, or by its launcher when the row names only the engine.
+        for label in ["Trae CLI", "TRAEX", "TraeCLI", "Paseo"] {
+            let session = Self.session(",\"agent\":\"paseo\",\"agent_label\":\"\(label)\",\"launcher\":\"traecli\"")
+            let mark = AgentKind(session)
+            #expect(session.agentLabel == "TRAE CLI" && mark.name == "TRAE CLI" && mark.brand == Theme.Brand.trae)
+        }
+        let customTraeCLI = Self.session(#","agent":"paseo","agent_label":"My CLI","launcher":"traecli""#)
+        #expect(customTraeCLI.agentLabel == "My CLI")
         let trae = AgentKind(Self.session(#","agent":"paseo","launcher":"traecli""#))
         #expect(trae.brand == Theme.Brand.trae && trae.name == "TRAE CLI")
         // A runtime's reported agent keeps its own mark even when its launcher names a different product.

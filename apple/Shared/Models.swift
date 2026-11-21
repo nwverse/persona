@@ -651,6 +651,8 @@ nonisolated struct ComputerJob: Codable, Hashable, Sendable {
     var code: String? = nil
     /// An iPhone job's iPhone.
     var device: String? = nil
+    /// The computer's start time, shared by every status for this job.
+    var started: Date? = nil
 
     var running: Bool { state == "running" }
 }

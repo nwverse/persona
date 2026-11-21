@@ -9,6 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/prompts"
 )
 
 const (
@@ -69,6 +70,21 @@ func queuedFollowupTools(s *Service) []string {
 		}
 	}
 	return tools
+}
+
+func TestGoldenPRFollowupLanguages(t *testing.T) {
+	for _, locale := range []string{"zh-Hans", "en", "ja"} {
+		for _, event := range []string{"merged", "closed", "conflict", "changes_requested"} {
+			text := prompts.RenderPRFollowupNotice(prompts.PRFollowupNotice{
+				ID: fupTodo, Title: "Task 原文", PRURL: fupPR, Event: event, Realtime: true,
+				Language: answerLanguage(locale),
+			})
+			if !strings.Contains(text, "Task 原文") || !strings.Contains(text, fupPR) {
+				t.Fatalf("%s/%s lost the source title or PR URL: %s", locale, event, text)
+			}
+			golden(t, "pr_followup."+event+"."+locale, text)
+		}
+	}
 }
 
 func TestPRFollowupTerminalMergedNotifiesAndClears(t *testing.T) {

@@ -756,11 +756,13 @@ func RenderTaskEnded(n TaskEnded) string { return render("assistant/task_ended",
 // PRFollowupNotice tells a closed to-do's original supervisor conversation that a delivery PR it no longer watches
 // through an open to-do changed after acceptance (#12371): merged, closed unmerged, a merge conflict, or a
 // changes-requested review on the current head. Event is one of merged | closed | conflict | changes_requested. The
-// to-do stays closed; this is a record, not a reopen and not an acceptance signal.
+// to-do stays closed; this is a record, not a reopen and not an acceptance signal. Language is the owner's
+// (answerLanguage: empty Chinese, English or Japanese).
 type PRFollowupNotice struct {
 	ID, Title, PRURL string
 	Event            string
 	Realtime         bool
+	Language         string
 }
 
 func RenderPRFollowupNotice(n PRFollowupNotice) string { return render("assistant/pr_followup", n) }
@@ -1348,4 +1350,21 @@ func RenderTodoDirection(d DirectionNotes) string {
 		return ""
 	}
 	return render("todo/direction", d)
+}
+
+// SegmentHandoff continues the same logical conversation on a new engine.
+type SegmentHandoff struct {
+	Language string
+	Summary  string
+	Recent   []HandoffTurn
+	Text     string
+	Partial  bool
+}
+
+func RenderSegmentHandoff(h SegmentHandoff) string { return render("assistant/segment_handoff", h) }
+
+// RenderSegmentSummary accepts the established language display names as well as BCP 47 codes.
+// Empty and Chinese retain the original default bytes; Japanese and English are the other supported branches.
+func RenderSegmentSummary(language string) string {
+	return render("assistant/segment_summary", struct{ Language string }{Language: language})
 }
