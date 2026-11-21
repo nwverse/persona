@@ -45,7 +45,7 @@ Auto Accept (their launcher says `auto_accept`; Grok and Paseo's other ACP provi
 as the owner decided (#8141, `docs/integrations/paseo.md` "Agents Persona starts"). A read-only task's first message adds
 `本任务只读：不改项目文件、不提交、不对外写入` after its own prompt, without changing the saved prompt or duplicating the
 constraint on retries. With the default `assistant.readonly_mode: sandbox`, Codex read-only tasks keep `permission: plan`
-and the hard read-only sandbox. traex and omp take no permission mode or effort, so their tasks start with neither
+and the hard read-only sandbox. TRAE CLI and omp take no permission mode or effort, so their tasks start with neither
 and a read-only one has only the first-message constraint (#7559); one the call names is refused. pi, cursor and agy
 start a writable task the same way, but one the call names is dropped rather than refused, as the node ignores it for
 them (#8151); a read-only task for them is refused (below). Planning, card edits,
@@ -785,6 +785,20 @@ Something the owner raises in the main conversation and wants an answer to is a 
 - **Asked without waiting** (`wait: false`, #4928; `docs/assistant/assistant.md`, "Asking without holding the turn"): its card's expiry makes the same to-do with the same record, deadline handling and briefing row. Since no tool call is waiting to hear it, the asking conversation is told in a message that the question is now this to-do (or that its recommended options were taken by default); the owner's later decision, or closing the to-do, then reaches the conversation as above. Such a card survives a manager restart, and one whose time ran out while no manager ran becomes the to-do when the next one starts. One exception: when the owner wrote in the asking conversation while the card was up, its expiry makes no to-do and takes no default, since what they wrote may have been the answer; the conversation is told and asks again if it still needs one.
 
 ## Waiting for the owner
+
+**Personal verification** (#10047): `task_review` with `verdict: "accepted"` and `user_check: true` records the
+supervisor's review but leaves `done_at` unset, with `supervision.state: "user_check"` (**Awaiting your
+verification**). The task remains open and counted as Waiting on you, even if its delivery is already live or its
+reply has been read. Its existing "Please verify" ask is reused; without a Lark card the same ask stays available in
+the apps. Completed-task retirement does not select this Agent, and personal verification also protects it from the
+ordinary stalled-task idle limit. This does not change the closure policy for tasks that really have completed.
+
+The owner's **Pass** (app, card or approval reply) marks the task verified, closes it by review, and permits normal
+completed-task retirement. Change feedback records a new work round before relaying the words to the same Agent;
+the old Pass can no longer complete that round. Failed delivery is shown as failed, not as successful rework.
+The same applies to the owner's next message from the task card or directly in its Agent chat. A recorded Pass
+interrupted by a hub restart is completed by the acceptance recovery sweep, not left waiting for a second Pass.
+An accepted review without `user_check` still completes the task immediately as before.
 
 (#2056, `assistant/todo_ask.go`.) A to-do whose result waits for the owner carries that ask on itself, so the apps can show it in the to-do list and take it with one tap, not only the briefing and the Lark card.
 

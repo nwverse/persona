@@ -230,6 +230,14 @@ For API purposes (triage, assessment, drafting, translation, knowledge processin
 
 Launchers such as “Claude Code default” are only CLIs on computers, without an API address or key, so automatic selection never picks them. Chosen explicitly, they run each request headless on the main chat's computer (“Running API purposes on a launcher”); `off` / `none` effort then leaves the launcher's own.
 
+## Background model groups in persona_settings
+
+The assistant can read and change the four independently stored background API categories through `persona_settings`: `model_config.kb`, `model_config.inbox.triage`, `model_config.agent.delegate`, and `model_config.translate`. Uses that merely inherit from one of these categories are not separate settings. `list` exposes all four; `get` returns the category's override, effective provider/model/effort, revision, compatible `purpose.provider_ids`, and credential-free provider metadata.
+
+For `set`, `value` is exactly one provider ID string from `purpose.provider_ids`, for example `{"action":"set","key":"model_config.kb","value":"launcher.example"}`. Unknown, unconfigured, and incompatible IDs are rejected before a card is created, and the error lists the valid configured choices. The phone card shows the effective before → after bindings, including the provider default model. Nothing is written before approval. Approval revalidates the record revision, provider catalog, compatibility, and exact proposal under the model-configuration lock; a different provider clears the old model, effort, and permission mode just as Model Settings does. Setting the previous provider again is the rollback path.
+
+`test` takes the same provider ID string, for example `{"action":"test","key":"model_config.kb","value":"launcher.example"}`. It reuses the existing bounded Direct API or computer-launcher connection check and returns its structured result without creating an approval card or changing the model-group record. It is intentionally separate from `set`: Model Settings permits saving an unverified or offline provider, so a successful probe is not a new save requirement. Neither `get` nor `test` returns credentials, sealed credentials, tokens, or secret header values.
+
 ## Lark /agent override (#5921)
 
 `lark.agent` is an editable launcher purpose with `parent: "agent.new"` and `category_id: "agent.new"`, not a sixth default category. It supports the same provider (including launcher providers), model, and effort fields as Agents. Nonempty fields override the Agents binding; choosing a different provider drops the inherited model and effort before applying this purpose's selections. With an empty binding, the next new `/agent` conversation inherits Agents, including subsequent changes to Agents. Saving does not change existing conversations or permissions.

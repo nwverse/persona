@@ -7,6 +7,7 @@
   "detail_rex": "Rexのターミナル",
   "detail_paseo": "Paseoのエージェント",
   "detail_cindy": "Cindyのエージェント",
+  "detail_t3code": "T3 Codeのエージェント",
   "detection_offline": "オフラインのため検出情報がありません",
   "detection_none": "検出情報がありません",
   "detection_not_found": "検出されませんでした",
