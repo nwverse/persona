@@ -109,6 +109,9 @@ func (m *Manifest) Validate() error {
 		if name == "quota" && !m.Permissions.LauncherKeys {
 			bad("contributes.quota needs permissions.launcher_keys (the user agrees that it reads quota with launchers' keys)")
 		}
+		if name == "usage" && !m.Permissions.LauncherKeys {
+			bad("contributes.usage needs permissions.launcher_keys (the user agrees that it reads usage with launchers' keys)")
+		}
 		if name == "api" && !slices.Contains(m.Activation(), OnStartup) {
 			bad("contributes.api: the app's API is there all the time: activation_events on_startup")
 		}

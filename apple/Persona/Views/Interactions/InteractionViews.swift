@@ -85,12 +85,13 @@ extension Interaction {
         return String(localized: "The approved scope remains allowed in this conversation")
     }
 
-    /// The agent's name on a card not from Claude Code: one the node read off a Codex / TRAEX TUI, or an agent
+    /// The agent's name on a card not from Claude Code: one the node read off a Codex / TRAE CLI TUI, or an agent
     /// runtime's own ("DSH", the hub's agent_label; docs/integrations/runtimes.md). Nil for Claude's.
     var agentName: String? {
         switch agent {
         case "codex": "Codex"
-        case "traex": "TRAEX"
+        case "traex", "traecli", "trae-cli": Session.traeCLIName
+        case MachineEngine.paseo.rawValue where agentLabelHint.map(Session.isTraeCLIName) == true: Session.traeCLIName
         case nil, "", "claude": nil
         default: agentLabelHint ?? agent
         }
@@ -1222,7 +1223,7 @@ struct PermissionForm: View {
     }
 }
 
-/// A Codex / TRAEX approval read off its TUI (docs/integrations/codex.md「Questions and approvals」): the command or the edits in full, the agent's
+/// A Codex / TRAE CLI approval read off its TUI (docs/integrations/codex.md「Questions and approvals」): the command or the edits in full, the agent's
 /// reason, Deny / Approve, Always Approve naming what it would allow (only when the TUI offers it), and Deny and Explain: the reason
 /// stops the turn and goes to the agent as its next message.
 struct AgentPermissionForm: View {

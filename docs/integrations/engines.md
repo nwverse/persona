@@ -1,4 +1,4 @@
-# Engines: herdr, Herdr App, Orca, Tern, Rex, Paseo, Cindy
+# Engines: herdr, Herdr App, Orca, Tern, Rex, Paseo, Cindy, T3 Code
 
 **One engine per computer**: Persona sees and drives Claude Code / Codex through an engine. Each computer selects one; Agents shows live sessions only from it.
 Sessions elsewhere (other engines, ordinary terminals) appear only as "Not running" history. Default herdr preserves existing machines without an explicit choice.
@@ -8,11 +8,11 @@ plus Herdr App on another computer opening terminals through remote). Sessions m
 
 On computers with **botmux**, its sessions appear alongside the selected engine ("botmux" below). It is not an engine option and needs no selection.
 
-**Paseo** and **Cindy** are terminal-free: they run Agents through provider SDKs and runtimes, with node connected through a bridge; see `docs/integrations/paseo.md` and `server/internal/node/cindybridge.go`.
+**Paseo**, **Cindy** and **T3 Code** are terminal-free: they run Agents through provider SDKs and runtimes, with node connected through a bridge; see `docs/integrations/paseo.md`, `server/internal/node/cindybridge.go` and "T3 Code" below.
 
 ## Host sets (#2576)
 
-A computer can **enable several engines at once**, any combination of herdr, Herdr App, Orca, Tern, Rex, Paseo and Cindy, or none at all, plus a **default engine**:
+A computer can **enable several engines at once**, any combination of herdr, Herdr App, Orca, Tern, Rex, Paseo, Cindy and T3 Code, or none at all, plus a **default engine**:
 where new sessions started from the phone go. A retired session resumes in its previous terminal host while that host remains enabled;
 an explicit host selection overrides it. Other offline sessions use the default host. Each single choice above is a special case of a set: herdr is `{herdr}`, and
 "herdr + Herdr App" is `{herdr, herdr-core}` with herdr the default. API and storage: `docs/protocol/protocol.md` "Engines" ("Host sets").
@@ -80,6 +80,7 @@ iOS and Android also offer "No Terminal Engine", the empty set, last in Choose E
 | `rex` | Rex | Terminal blocks in Rex's sessions and windows ("Rex" below) | `rex` found (PATH, `~/.local/bin`, macOS Application Support / app bundle) and `rex --autostart=false api call server.status` answering |
 | `paseo` | Paseo | Paseo Agents (desktop app, `paseo` command; Claude Code, Codex, ACP all count) | Paseo daemon running; address in its home's `paseo.pid` responds |
 | `cindy` | Cindy | Cindy Agents (desktop app and `cindy-host`; Claude Code, Codex, Pi) | Cindy installed, running, or its loopback host endpoint / profile database present |
+| `t3code` | T3 Code | T3 Code's threads (desktop app, `t3` server; Codex, Claude Code and its other providers) | `t3` command line found, or a T3 server running on this computer ("T3 Code" below) |
 
 herdr and Herdr App are from the same developer but separate: neither sees the other's sessions. If using only one, select it;
 if both are used and should appear on the phone, choose "herdr + Herdr App (side by side)."
@@ -130,7 +131,7 @@ Unsupported actions explain failure instead of partially acting. Orca rejects se
 there with Claude not in front, saying "Claude is not in foreground (possibly suspended); nothing sent," or asking to reopen on the computer.
 
 Orca New Agent creates terminals inside already-open Orca workspaces or subdirectories, starting in the selected directory. Unopened Git-repository directories attempt automatic registration; any other directory gets a terminal in the first local Orca workspace that `cd`s there (refused only when Orca has no workspace open). The `cd` is typed into the shell's line editor, so a directory whose name holds a control character (a tab, a line break) is refused before any terminal opens (`directory_untypable`). It never takes over an existing terminal.
-Resume of a running session returns it. A Claude session whose agent exited is continued like on herdr (#5548): a new terminal in the Orca workspace holding its directory (the same rules as New Agent), `cd` there, the launcher that started it with `--resume`, then the message. Never a second writer: a session a live claude still has open (Claude's desktop app, another terminal, suspended) is refused (`open_elsewhere`), and so is one whose last pane is still open (its agent may be suspended there; close the pane to resume elsewhere). A session an Orca native chat owns is refused too. Codex, TRAEX and pi sessions are not resumed in Orca. Orca's own `terminal create --agent claude --resume` is not used: it exists only in some Orca builds' CLI, and it starts Orca's claude command, not the session's launcher.
+Resume of a running session returns it. A Claude session whose agent exited is continued like on herdr (#5548): a new terminal in the Orca workspace holding its directory (the same rules as New Agent), `cd` there, the launcher that started it with `--resume`, then the message. Never a second writer: a session a live claude still has open (Claude's desktop app, another terminal, suspended) is refused (`open_elsewhere`), and so is one whose last pane is still open (its agent may be suspended there; close the pane to resume elsewhere). A session an Orca native chat owns is refused too. Codex, TRAE CLI and pi sessions are not resumed in Orca. Orca's own `terminal create --agent claude --resume` is not used: it exists only in some Orca builds' CLI, and it starts Orca's claude command, not the session's launcher.
 
 Herdr App New Agent (#2532) opens a terminal the way the app does (the machine's shell, kept, with the app's terminal identity) as a new tab of
 the Herdr App space whose folder matches the directory, else of a new space for the directory, and adds it to the app's layout document, so the app
@@ -294,6 +295,29 @@ unexpectedly.
   empty session with no attached clients is destroyed via `session.destroy`.
 - **Not yet**: live terminal streaming and phone takeover.
 
+## T3 Code
+
+[T3 Code](https://github.com/pingdotgg/t3code) runs coding agents in threads that its own server owns; its desktop, web and phone clients
+all talk to that server. With T3 Code enabled, the node runs an in-process runtime bridge to it (`server/internal/node/t3codebridge.go`, #11784):
+
+- **Finding the server**: the state file the server writes while it runs, `<T3 home>/userdata/server-runtime.json` (the T3 home is
+  `$T3CODE_HOME`, else `~/.t3`), names its origin, process and version. Only a loopback `http` origin whose process is alive counts.
+- **Signing in**: the bridge issues itself an MCP client session with T3 Code's command line on this computer
+  (`t3 auth session issue --subject mcp-client`, labelled Persona, so it shows in T3 Code's settings), keeps the token in memory only and revokes
+  the session when the bridge stops. A session T3 Code no longer takes ends the bridge, which issues a new one.
+- **Reading**: projects, threads and timelines through the server's `/mcp` endpoint (`t3_project_list`, `t3_thread_list`, `t3_thread_read`),
+  every 2 seconds. A thread is session `t3code-<thread id>`; its project's folder is its space. Messages, reasoning and tool calls are shown;
+  checkpoints and other bookkeeping items are not.
+- **Writing**: a message is `t3 thread send` and a new thread `t3 thread start` (the message on standard input), which run with the machine
+  owner's authority as T3 Code's own clients do. A session the bridge issues has T3 Code's narrowest mode ceiling (approval-required), which
+  would refuse sending to threads in T3 Code's default full-access mode. A new thread goes to the T3 project whose folder is the deepest one holding
+  the chosen directory, with that project's default model and mode; a directory outside every T3 project is refused.
+- **Interrupting and closing**: Stop is `t3_thread_interrupt`, which the session's ceiling allows only for threads at approval-required; a
+  thread above it is refused with a line saying to stop it in T3 Code. Closing archives the thread.
+- **Not supported**: answering approvals and questions (T3 Code's MCP tools cannot; such a thread shows as Needs you and is answered in T3
+  Code), pictures (refused, never dropped), changing modes, choosing the model, worktrees, rewinding. Not yet tested against a live T3 Code
+  install; the tests run a synthetic MCP server and command line.
+
 ## tmux (approvals only)
 
 A Claude Code the user starts by hand in a tmux pane (`tmux new -s work`, then `claude`) is not an engine. It is listed as a session in an ordinary
@@ -314,7 +338,7 @@ when `botmux` is on the computer's PATH, node adds a botmux host alongside the s
 Typical use: work Agents in botmux, personal Agents in herdr, viewed together.
 
 - **Listing and state**: each refresh runs `botmux observe --include-raw` (all sessions from all daemons, reused within 5 seconds, immediately reread after sending; 0.3–0.9 seconds for about 500 local sessions; occasional observe failures retain the previous list). botmux exits 1 when one daemon's probe failed (`unauthorized`, `unreachable`, `daemon_offline`) and still prints every daemon's answer: the sessions of the daemons that answered are listed, a failed daemon's stay as it last listed them, and a message to one of those is refused with its probe error, nothing posted. Only when no daemon answered is the observe a failure (#8949).
-  Lists Claude Code, Codex, and the compatible Codex fork (`cli.id: claude-code / codex / traex`), with identical state rules: running sessions use botmux state (dialog `tuiPromptActive` or botmux Needs you → Needs you; `working` / `starting` / `analyzing` → Working;
+  Lists Claude Code, Codex, and TRAE CLI (`cli.id: claude-code / codex / traex`), with identical state rules: running sessions use botmux state (dialog `tuiPromptActive` or botmux Needs you → Needs you; `working` / `starting` / `analyzing` → Working;
   others → Done). Suspended (`not_running`, not closed, active within 7 days) appear Not running. For Claude Code, botmux session ID is the Claude ID used to start it, so transcript handling is unchanged.
   For Codex / the compatible fork, observe omits CLI session ID (stored in botmux database), but every prompt starts with `<session_id><botmux-session-id></session_id>`.
   Node searches rollout beginnings in the same working directory (first 512 KB, stopping each file after finding the marker). Matching rollout is the thread (newest-written among forks),

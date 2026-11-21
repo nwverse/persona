@@ -3,7 +3,7 @@ import launcherFixture from "../../../spec/fixtures/assistant-launchers/cases.js
 import { assistantInfoText, conversationKey, effectiveLauncher, launcherOffered, NEW_CONVERSATION, pickedLauncher, pickLauncher, runsAssistant, shortModel } from "./assistant-chat";
 
 describe("the assistant's launchers", () => {
-  it("runs on Claude Code or Codex, not TRAEX or other agents", () => {
+  it("runs on Claude Code or Codex, not TRAE CLI or other agents", () => {
     expect(runsAssistant({ name: "claude" })).toBe(true);
     expect(runsAssistant({ name: "claude-fast", agent: "claude" })).toBe(true);
     expect(runsAssistant({ name: "codex", agent: "codex" })).toBe(true);

@@ -753,6 +753,20 @@ type TaskEnded struct {
 
 func RenderTaskEnded(n TaskEnded) string { return render("assistant/task_ended", n) }
 
+// PRFollowupNotice tells a closed to-do's original supervisor conversation that a delivery PR it no longer watches
+// through an open to-do changed after acceptance (#12371): merged, closed unmerged, a merge conflict, or a
+// changes-requested review on the current head. Event is one of merged | closed | conflict | changes_requested. The
+// to-do stays closed; this is a record, not a reopen and not an acceptance signal. Language is the owner's
+// (answerLanguage: empty Chinese, English or Japanese).
+type PRFollowupNotice struct {
+	ID, Title, PRURL string
+	Event            string
+	Realtime         bool
+	Language         string
+}
+
+func RenderPRFollowupNotice(n PRFollowupNotice) string { return render("assistant/pr_followup", n) }
+
 // RelayRefused tells a conversation that the message it sent another with conversation_send or conversation_new (Tool)
 // was refused for good by that conversation (Title, ID) with a refusal Code, and is not tried again (#11393). Excerpt
 // is how the message began. Language is the owner's (answerLanguage: "" Chinese, "English", "日本語").

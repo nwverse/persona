@@ -14,7 +14,7 @@ import (
 )
 
 // The machine of these tests lists plain claude, a ~/.zshrc Codex alias, a Paseo provider, a runtime that runs the
-// assistant, TRAEX, and the managed launchers: one Claude, one Codex.
+// assistant, TRAE CLI, and the managed launchers: one Claude, one Codex.
 func mainChatFixture(t *testing.T) (*Service, *fakeHub) {
 	t.Helper()
 	f := newFakeHub().withMachine()
