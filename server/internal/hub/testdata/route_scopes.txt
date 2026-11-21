@@ -78,6 +78,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 inbox.write          DELETE /api/v1/inbox/mutes/{id}
 inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/kb/projects/{id}
+-                    DELETE /api/v1/kb/projects/{id}/lessons/{lesson}
 -                    DELETE /api/v1/launchers/{name}
 -                    DELETE /api/v1/looks/uploads/{id}
 -                    DELETE /api/v1/machines/{mid}/browser/cookies
@@ -233,6 +234,7 @@ kb.read              GET /api/v1/kb-search
 kb.read              GET /api/v1/kb/chats/{id}/context
 kb.read              GET /api/v1/kb/chats/{id}/days/{day}
 kb.read              GET /api/v1/kb/moments/{id}
+-                    GET /api/v1/kb/projects/{id}/lessons
 -                    GET /api/v1/kb/selection
 -                    GET /api/v1/kb/selection/candidates
 kb.read              GET /api/v1/kb/{kind}
@@ -292,10 +294,12 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/launchers/{name}/start-options
 -                    GET /api/v1/machines/{mid}/omp-settings
 -                    GET /api/v1/machines/{mid}/panes
+-                    GET /api/v1/machines/{mid}/ports
 -                    GET /api/v1/machines/{mid}/ports/{port}
 -                    GET /api/v1/machines/{mid}/ports/{port}/connect
 -                    GET /api/v1/machines/{mid}/preview/connect
 -                    GET /api/v1/machines/{mid}/preview/servers
+-                    GET /api/v1/machines/{mid}/processes
 -                    GET /api/v1/machines/{mid}/screen/video/connect
 machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/managers
@@ -582,6 +586,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/panes/split
 -                    POST /api/v1/machines/{mid}/ports/{port}/open
 -                    POST /api/v1/machines/{mid}/preview/start
+-                    POST /api/v1/machines/{mid}/processes/{pid}/kill
 -                    POST /api/v1/machines/{mid}/reconnect
 -                    POST /api/v1/machines/{mid}/spaces/{wid}/rename
 -                    POST /api/v1/machines/{mid}/tabs/close
@@ -727,6 +732,7 @@ inbox.write          PUT /api/v1/inbox/folders
 inbox.write          PUT /api/v1/inbox/{id}/folder
 inbox.write          PUT /api/v1/inbox/{id}/parent
 -                    PUT /api/v1/iphone/consent
+-                    PUT /api/v1/kb/projects/{id}/lessons/{lesson}
 -                    PUT /api/v1/kb/selection
 kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/launchers/{name}
