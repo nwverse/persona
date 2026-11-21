@@ -1,13 +1,16 @@
-// Lazy-loaded read-only machine file browser (Phase 6A, human-only UI).
+// Lazy-loaded machine file browser (Phase 6A read-only + Phase 6B human-facing write/upload).
 // Single-level directory listing, quick root shortcuts, bounded text preview (<= 2 MiB),
-// large log tail with refresh, binary refusal, sensitive file warnings, and streaming downloads.
+// lightweight UTF-8 editor with mtime+SHA-256 CAS & pre-save unified diff confirmation,
+// sensitive-file warnings, create/rename/move/safe-delete, log tail, streaming download & upload.
+// Strictly human-facing Web UI only — zero AI MCP tools, kept inside the lazy chunk.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { formatDate, t } from "../../i18n";
-import { api, enc, errorText, getToken, isAbort } from "../../lib/api";
+import { currentLanguage, formatDate, t } from "../../i18n";
+import { api, ApiError, enc, errorText, getToken, isAbort } from "../../lib/api";
 import { BASE } from "../../lib/base";
 import type { Machine } from "../../lib/types";
 import { Button, cx, IconButton, Loading } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
+import { classifySensitivePathClient, computeLineDiff } from "./fileDiff";
 
 export interface MachineFileRoot {
   id: string;
@@ -59,6 +62,9 @@ export interface MachineFilePreviewResponse {
   mtime?: string;
   mime: string;
   revision: string;
+  sha256?: string;
+  editable?: boolean;
+  edit_max_bytes?: number;
   symlink?: boolean;
   link_target?: string;
   sensitive?: boolean;
@@ -89,13 +95,71 @@ export interface MachineFileTailResponse {
   truncated?: boolean;
 }
 
+export interface MachineFileWriteResponse {
+  path: string;
+  canonical_path: string;
+  name: string;
+  size: number;
+  mode: string;
+  perm: number;
+  mtime: string;
+  revision: string;
+  sha256: string;
+  sensitive?: boolean;
+  sensitive_reason?: string;
+}
+
+export interface MachineFileCreateResponse {
+  entry: MachineFileEntry;
+  canonical_path: string;
+  revision?: string;
+  sha256?: string;
+}
+
+export interface MachineFileRenameResponse {
+  old_path: string;
+  path: string;
+  canonical_path: string;
+  name: string;
+  entry: MachineFileEntry;
+}
+
+export interface MachineFileDeleteResponse {
+  path: string;
+  canonical_path: string;
+  kind: string;
+  deleted: boolean;
+}
+
+export interface MachineFileUploadEndResponse {
+  entry: MachineFileEntry;
+  canonical_path: string;
+  size: number;
+  sha256: string;
+}
+
 type ViewMode = "preview" | "tail";
+type CreateKind = "file" | "dir";
+
 const TAIL_LINE_OPTIONS = [100, 200, 500, 1000] as const;
 const LARGE_LOG_THRESHOLD = 256 * 1024;
+const DEFAULT_EDIT_MAX_BYTES = 1024 * 1024; // 1 MiB
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MiB
 
 /** Streaming single-file download URL on the authenticated Hub HTTP route. */
 export function machineFileDownloadURL(mid: string, path: string): string {
   return `${BASE}/api/v1/machines/${enc(mid)}/files/download?path=${enc(path)}&token=${enc(getToken())}`;
+}
+
+/** Streaming upload URL on the authenticated Hub HTTP route. */
+export function machineFileUploadURL(
+  mid: string,
+  opts: { dir: string; name: string; overwrite?: boolean; confirmSensitive?: boolean },
+): string {
+  const params = [`dir=${enc(opts.dir)}`, `name=${enc(opts.name)}`];
+  if (opts.overwrite) params.push("overwrite=1");
+  if (opts.confirmSensitive) params.push("confirm_sensitive=1");
+  return `${BASE}/api/v1/machines/${enc(mid)}/files/upload?${params.join("&")}`;
 }
 
 function formatSize(bytes: number): string {
@@ -116,6 +180,10 @@ function formatMtime(iso?: string): string {
   const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return "";
   return formatDate(new Date(ms), { dateStyle: "short", timeStyle: "short" });
+}
+
+function utf8ByteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
 }
 
 function rootKindLabel(kind: string): string {
@@ -177,6 +245,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
   const [filter, setFilter] = useState("");
   const [loadingDir, setLoadingDir] = useState(false);
   const [dirError, setDirError] = useState("");
+  const [dirNotice, setDirNotice] = useState("");
 
   const [selectedEntry, setSelectedEntry] = useState<MachineFileEntry | null>(null);
   const [mode, setMode] = useState<ViewMode>("preview");
@@ -187,8 +256,56 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
   const [loadingFile, setLoadingFile] = useState(false);
   const [fileError, setFileError] = useState("");
 
+  // Lightweight editor + diff confirm + CAS state
+  const [editing, setEditing] = useState(false);
+  const [draftText, setDraftText] = useState("");
+  const [reviewingDiff, setReviewingDiff] = useState(false);
+  const [sensitiveSaveAck, setSensitiveSaveAck] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedNotice, setSavedNotice] = useState("");
+  const [casConflict, setCasConflict] = useState(false);
+
+  // Create file / folder state
+  const [createKind, setCreateKind] = useState<CreateKind | null>(null);
+  const [createName, setCreateName] = useState("");
+  const [createText, setCreateText] = useState("");
+  const [createSensitiveAck, setCreateSensitiveAck] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  // Rename / move state
+  const [renameTarget, setRenameTarget] = useState<MachineFileEntry | null>(null);
+  const [renameDest, setRenameDest] = useState("");
+  const [renameSensitiveAck, setRenameSensitiveAck] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+
+  // Delete confirmation state
+  const [deleteTarget, setDeleteTarget] = useState<MachineFileEntry | null>(null);
+  const [deleteSensitiveAck, setDeleteSensitiveAck] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  // Streaming upload state
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadXhrRef = useRef<XMLHttpRequest | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{ name: string; loaded: number; total: number } | null>(null);
+  const [pendingUpload, setPendingUpload] = useState<{
+    file: File;
+    kind: "sensitive" | "exists";
+    reason?: string;
+    confirmedSensitive?: boolean;
+  } | null>(null);
+  const [uploadSensitiveAck, setUploadSensitiveAck] = useState(false);
+
   const dirAbort = useRef<AbortController | null>(null);
   const fileAbort = useRef<AbortController | null>(null);
+
+  const resetEditor = useCallback(() => {
+    setEditing(false);
+    setReviewingDiff(false);
+    setSensitiveSaveAck(false);
+    setSaving(false);
+    setSavedNotice("");
+    setCasConflict(false);
+  }, []);
 
   const loadDirectory = useCallback(async (mid: string, targetPath: string) => {
     if (!mid) return;
@@ -219,6 +336,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     fileAbort.current = ctrl;
     setLoadingFile(true);
     setFileError("");
+    resetEditor();
     try {
       if (viewMode === "tail") {
         const res = await api<MachineFileTailResponse>(
@@ -243,17 +361,24 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     } finally {
       if (!ctrl.signal.aborted) setLoadingFile(false);
     }
-  }, []);
+  }, [resetEditor]);
 
   // Load roots and initial $HOME listing whenever the active online machine changes.
   useEffect(() => {
     setRoots([]);
     setDir(null);
     setDirError("");
+    setDirNotice("");
     setSelectedEntry(null);
     setPreview(null);
     setTail(null);
     setFileError("");
+    setCreateKind(null);
+    setRenameTarget(null);
+    setDeleteTarget(null);
+    setPendingUpload(null);
+    setUploadProgress(null);
+    resetEditor();
     if (!machine?.online) return;
 
     const ctrl = new AbortController();
@@ -274,8 +399,9 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
       ctrl.abort();
       dirAbort.current?.abort();
       fileAbort.current?.abort();
+      uploadXhrRef.current?.abort();
     };
-  }, [machine?.id, machine?.online, loadDirectory]);
+  }, [machine?.id, machine?.online, loadDirectory, resetEditor]);
 
   const openEntry = useCallback((entry: MachineFileEntry) => {
     if (!machine?.online) return;
@@ -284,6 +410,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
       setPreview(null);
       setTail(null);
       setFileError("");
+      resetEditor();
       void loadDirectory(machine.id, entry.path);
       return;
     }
@@ -291,7 +418,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     setSelectedEntry(entry);
     setMode(nextMode);
     void loadFile(machine.id, entry.path, nextMode, tailLines);
-  }, [machine?.id, machine?.online, loadDirectory, loadFile, tailLines]);
+  }, [machine?.id, machine?.online, loadDirectory, loadFile, tailLines, resetEditor]);
 
   const switchMode = useCallback((nextMode: ViewMode) => {
     setMode(nextMode);
@@ -307,12 +434,279 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     }
   }, [machine?.id, machine?.online, selectedEntry, mode, loadFile]);
 
+  const startEdit = useCallback(() => {
+    if (!preview || !preview.editable) return;
+    setDraftText(preview.text ?? "");
+    setEditing(true);
+    setReviewingDiff(false);
+    setSensitiveSaveAck(false);
+    setSavedNotice("");
+    setFileError("");
+    setCasConflict(false);
+  }, [preview]);
+
+  const confirmSave = useCallback(async () => {
+    if (!machine?.online || !preview || !preview.mtime || !preview.sha256) return;
+    setSaving(true);
+    setFileError("");
+    setCasConflict(false);
+    try {
+      const res = await api<MachineFileWriteResponse>(`/machines/${enc(machine.id)}/files/content`, {
+        method: "PUT",
+        json: {
+          path: preview.path,
+          text: draftText,
+          expected_mtime: preview.mtime,
+          expected_sha256: preview.sha256,
+          expected_revision: preview.revision,
+          confirm_sensitive: preview.sensitive ? sensitiveSaveAck : false,
+        },
+      });
+      setPreview({
+        ...preview,
+        text: draftText,
+        size: res.size,
+        bytes_read: res.size,
+        mode: res.mode,
+        perm: res.perm,
+        mtime: res.mtime,
+        revision: res.revision,
+        sha256: res.sha256,
+        sensitive: res.sensitive ?? preview.sensitive,
+        sensitive_reason: res.sensitive_reason ?? preview.sensitive_reason,
+      });
+      setEditing(false);
+      setReviewingDiff(false);
+      setSensitiveSaveAck(false);
+      setSavedNotice(t("machines-files.saved_notice"));
+      if (dir?.path) void loadDirectory(machine.id, dir.path);
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 409 || err.code === "file_changed") && err.code === "file_changed") {
+        setCasConflict(true);
+        setReviewingDiff(false);
+      } else {
+        setFileError(t("machines-files.action_error", { error: errorText(err) }));
+      }
+    } finally {
+      setSaving(false);
+    }
+  }, [machine?.id, machine?.online, preview, draftText, sensitiveSaveAck, dir?.path, loadDirectory]);
+
+  const submitCreate = useCallback(async () => {
+    if (!machine?.online || !dir?.path || !createKind || !createName.trim()) return;
+    const sens = classifySensitivePathClient(createName);
+    setCreating(true);
+    setDirError("");
+    setDirNotice("");
+    try {
+      const res = await api<MachineFileCreateResponse>(`/machines/${enc(machine.id)}/files/create`, {
+        method: "POST",
+        json: {
+          dir: dir.path,
+          name: createName.trim(),
+          kind: createKind,
+          text: createKind === "file" ? createText : undefined,
+          confirm_sensitive: sens.sensitive ? createSensitiveAck : false,
+        },
+      });
+      setCreateKind(null);
+      setCreateName("");
+      setCreateText("");
+      setCreateSensitiveAck(false);
+      await loadDirectory(machine.id, dir.path);
+      if (createKind === "file" && res.entry) {
+        setSelectedEntry(res.entry);
+        setMode("preview");
+        void loadFile(machine.id, res.entry.path, "preview", tailLines);
+      }
+    } catch (err) {
+      setDirError(t("machines-files.action_error", { error: errorText(err) }));
+    } finally {
+      setCreating(false);
+    }
+  }, [machine?.id, machine?.online, dir?.path, createKind, createName, createText, createSensitiveAck, loadDirectory, loadFile, tailLines]);
+
+  const submitRename = useCallback(async () => {
+    if (!machine?.online || !renameTarget || !renameDest.trim()) return;
+    const destSens = classifySensitivePathClient(renameDest);
+    const needsSensitive = Boolean(renameTarget.sensitive || destSens.sensitive);
+    setRenaming(true);
+    setDirError("");
+    setDirNotice("");
+    try {
+      const res = await api<MachineFileRenameResponse>(`/machines/${enc(machine.id)}/files/entry`, {
+        method: "PATCH",
+        json: {
+          path: renameTarget.path,
+          dest_path: renameDest.trim(),
+          confirm_sensitive: needsSensitive ? renameSensitiveAck : false,
+        },
+      });
+      if (selectedEntry?.path === renameTarget.path) {
+        setSelectedEntry(res.entry);
+        if (preview?.path === renameTarget.path) {
+          void loadFile(machine.id, res.entry.path, mode, tailLines);
+        }
+      }
+      setRenameTarget(null);
+      setRenameDest("");
+      setRenameSensitiveAck(false);
+      if (dir?.path) void loadDirectory(machine.id, dir.path);
+    } catch (err) {
+      setDirError(t("machines-files.action_error", { error: errorText(err) }));
+    } finally {
+      setRenaming(false);
+    }
+  }, [machine?.id, machine?.online, renameTarget, renameDest, renameSensitiveAck, selectedEntry?.path, preview?.path, mode, tailLines, dir?.path, loadDirectory, loadFile]);
+
+  const submitDelete = useCallback(async () => {
+    if (!machine?.online || !deleteTarget) return;
+    setDeleting(true);
+    setDirError("");
+    setDirNotice("");
+    try {
+      await api<MachineFileDeleteResponse>(`/machines/${enc(machine.id)}/files/entry`, {
+        method: "DELETE",
+        json: {
+          path: deleteTarget.path,
+          confirm_sensitive: deleteTarget.sensitive ? deleteSensitiveAck : false,
+        },
+      });
+      if (selectedEntry?.path === deleteTarget.path) {
+        setSelectedEntry(null);
+        setPreview(null);
+        setTail(null);
+        resetEditor();
+      }
+      setDeleteTarget(null);
+      setDeleteSensitiveAck(false);
+      if (dir?.path) void loadDirectory(machine.id, dir.path);
+    } catch (err) {
+      setDirError(t("machines-files.action_error", { error: errorText(err) }));
+    } finally {
+      setDeleting(false);
+    }
+  }, [machine?.id, machine?.online, deleteTarget, deleteSensitiveAck, selectedEntry?.path, dir?.path, loadDirectory, resetEditor]);
+
+  const startStreamingUpload = useCallback((file: File, opts: { overwrite?: boolean; confirmSensitive?: boolean } = {}) => {
+    if (!machine?.online || !dir?.path) return;
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setDirError(t("machines-files.upload_too_large", { max: formatSize(MAX_UPLOAD_BYTES) }));
+      return;
+    }
+    uploadXhrRef.current?.abort();
+    const xhr = new XMLHttpRequest();
+    uploadXhrRef.current = xhr;
+    setDirError("");
+    setDirNotice("");
+    setPendingUpload(null);
+    setUploadSensitiveAck(false);
+    setUploadProgress({ name: file.name, loaded: 0, total: file.size });
+
+    const url = machineFileUploadURL(machine.id, {
+      dir: dir.path,
+      name: file.name,
+      overwrite: opts.overwrite,
+      confirmSensitive: opts.confirmSensitive,
+    });
+    xhr.open("POST", url);
+    xhr.setRequestHeader("Authorization", `Bearer ${getToken()}`);
+    xhr.setRequestHeader("Accept-Language", currentLanguage());
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+
+    xhr.upload.onprogress = (ev) => {
+      const total = ev.lengthComputable ? ev.total : file.size;
+      setUploadProgress({ name: file.name, loaded: ev.loaded, total });
+    };
+
+    xhr.onabort = () => {
+      if (uploadXhrRef.current === xhr) uploadXhrRef.current = null;
+      setUploadProgress(null);
+      setDirNotice(t("machines-files.upload_cancelled"));
+    };
+
+    xhr.onerror = () => {
+      if (uploadXhrRef.current === xhr) uploadXhrRef.current = null;
+      setUploadProgress(null);
+      setDirError(t("machines-files.action_error", { error: t("lib-api.cant_reach_hub") }));
+    };
+
+    xhr.onload = () => {
+      if (uploadXhrRef.current === xhr) uploadXhrRef.current = null;
+      setUploadProgress(null);
+      let body: Record<string, unknown> = {};
+      try {
+        body = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+      } catch {
+        body = {};
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const done = body as unknown as MachineFileUploadEndResponse;
+        setDirNotice(t("machines-files.upload_complete", { name: file.name, size: formatSize(done.size ?? file.size) }));
+        void loadDirectory(machine.id, dir.path);
+        return;
+      }
+      const code = typeof body.code === "string" ? body.code : "";
+      if (xhr.status === 409 && code === "exists") {
+        setPendingUpload({ file, kind: "exists", confirmedSensitive: opts.confirmSensitive });
+        return;
+      }
+      if (xhr.status === 412 && code === "machine_file_sensitive_confirm") {
+        const reason = typeof body.sensitive_reason === "string" ? body.sensitive_reason : "";
+        setPendingUpload({ file, kind: "sensitive", reason });
+        return;
+      }
+      if (xhr.status === 413 || code === "too_large") {
+        setDirError(t("machines-files.upload_too_large", { max: formatSize(MAX_UPLOAD_BYTES) }));
+        return;
+      }
+      const msg = typeof body.error === "string" && body.error ? body.error : `HTTP ${xhr.status}`;
+      setDirError(t("machines-files.action_error", { error: msg }));
+    };
+
+    xhr.send(file);
+  }, [machine?.id, machine?.online, dir?.path, loadDirectory]);
+
+  const handleUploadPick = useCallback((file: File | undefined) => {
+    if (!file) return;
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setDirError(t("machines-files.upload_too_large", { max: formatSize(MAX_UPLOAD_BYTES) }));
+      return;
+    }
+    const sens = classifySensitivePathClient(file.name);
+    if (sens.sensitive) {
+      setUploadSensitiveAck(false);
+      setPendingUpload({ file, kind: "sensitive", reason: sens.reason });
+      return;
+    }
+    startStreamingUpload(file);
+  }, [startStreamingUpload]);
+
+  const cancelUpload = useCallback(() => {
+    uploadXhrRef.current?.abort();
+  }, []);
+
   const visibleEntries = useMemo(() => {
     const list = dir?.entries ?? [];
     const q = filter.trim().toLowerCase();
     if (!q) return list;
     return list.filter((e) => e.name.toLowerCase().includes(q));
   }, [dir?.entries, filter]);
+
+  const editMaxBytes = preview?.edit_max_bytes ?? DEFAULT_EDIT_MAX_BYTES;
+  const draftBytes = useMemo(() => (editing ? utf8ByteLength(draftText) : 0), [editing, draftText]);
+  const draftOversized = editing && draftBytes > editMaxBytes;
+  const diffResult = useMemo(
+    () => (reviewingDiff && preview ? computeLineDiff(preview.text ?? "", draftText) : null),
+    [reviewingDiff, preview, draftText],
+  );
+
+  const createSensitive = useMemo(() => classifySensitivePathClient(createName), [createName]);
+  const renameSensitiveInfo = useMemo(() => {
+    if (!renameTarget) return { sensitive: false, reason: "" };
+    if (renameTarget.sensitive) return { sensitive: true, reason: renameTarget.sensitive_reason ?? "" };
+    return classifySensitivePathClient(renameDest);
+  }, [renameTarget, renameDest]);
 
   if (machines.length === 0) {
     return (
@@ -328,19 +722,19 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
   const activeBinary = Boolean(activeFile?.binary);
   const downloadPath = activeFile?.path ?? selectedEntry?.path ?? "";
   const downloadName = activeFile?.name ?? selectedEntry?.name ?? "";
+  const canEdit = Boolean(mode === "preview" && preview && preview.editable && !preview.binary && !preview.truncated && preview.mtime && preview.sha256);
+  const uploadPct = uploadProgress && uploadProgress.total > 0
+    ? Math.min(100, Math.round((uploadProgress.loaded / uploadProgress.total) * 100))
+    : 0;
 
   return (
     <section className="flex flex-col gap-3" data-testid="machine-file-browser">
-      {/* Top toolbar: machine switcher + read-only badge + quick root shortcuts */}
+      {/* Top toolbar: machine switcher + quick root shortcuts + path navigation */}
       <div className="rounded-card bg-surface p-4 shadow-card">
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2">
             <Icon name="folder" size={16} className="text-ink-2" />
             <h2 className="text-sm font-semibold text-ink">{t("machines-files.title")}</h2>
-            <span className="inline-flex items-center gap-1 rounded-full bg-field px-2 py-0.5 text-xs font-medium text-ink-2">
-              <Icon name="lock" size={11} />
-              {t("machines-files.read_only")}
-            </span>
           </div>
           <div className="flex-1" />
           <label className="flex items-center gap-2 text-xs text-ink-3">
@@ -423,6 +817,289 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                 onClick={() => void loadDirectory(machine.id, dir?.path || pathInput || "~")}
               />
             </form>
+
+            {/* Directory write actions toolbar */}
+            {dir && (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Button
+                  tone="secondary"
+                  icon="file"
+                  onClick={() => {
+                    setCreateKind("file");
+                    setCreateName("");
+                    setCreateText("");
+                    setCreateSensitiveAck(false);
+                    setRenameTarget(null);
+                    setDeleteTarget(null);
+                  }}
+                >
+                  {t("machines-files.new_file")}
+                </Button>
+                <Button
+                  tone="secondary"
+                  icon="folder"
+                  onClick={() => {
+                    setCreateKind("dir");
+                    setCreateName("");
+                    setCreateText("");
+                    setCreateSensitiveAck(false);
+                    setRenameTarget(null);
+                    setDeleteTarget(null);
+                  }}
+                >
+                  {t("machines-files.new_folder")}
+                </Button>
+                <Button
+                  tone="secondary"
+                  icon="upload"
+                  disabled={Boolean(uploadProgress)}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {t("machines-files.upload")}
+                </Button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  data-testid="machine-file-upload-input"
+                  onChange={(e) => {
+                    const picked = e.target.files?.[0];
+                    e.target.value = "";
+                    handleUploadPick(picked);
+                  }}
+                />
+              </div>
+            )}
+
+            {/* Inline Create File / Folder form */}
+            {createKind && dir && (
+              <div className="mt-3 flex flex-col gap-2 rounded-control bg-field p-3 text-xs" data-testid="create-entry-panel">
+                <div className="font-semibold text-ink">
+                  {createKind === "file" ? t("machines-files.create_file_title") : t("machines-files.create_folder_title")}
+                </div>
+                <input
+                  type="text"
+                  value={createName}
+                  onChange={(e) => {
+                    setCreateName(e.target.value);
+                    setCreateSensitiveAck(false);
+                  }}
+                  placeholder={t("machines-files.create_name_placeholder")}
+                  aria-label={t("machines-files.create_name_placeholder")}
+                  data-testid="create-name-input"
+                  className="h-8 rounded-control bg-inset px-2.5 font-mono text-xs text-ink shadow-hairline outline-none placeholder:text-ink-3"
+                />
+                {createKind === "file" && (
+                  <textarea
+                    value={createText}
+                    onChange={(e) => setCreateText(e.target.value)}
+                    placeholder={t("machines-files.create_text_placeholder")}
+                    data-testid="create-text-input"
+                    className="rounded-control bg-inset p-3 font-mono text-xs text-ink shadow-hairline outline-none placeholder:text-ink-3"
+                    style={{ minHeight: "5rem" }}
+                  />
+                )}
+                {createSensitive.sensitive && (
+                  <label className="flex items-start gap-2 rounded-control bg-orange-tint px-3 py-2 text-xs text-ink">
+                    <input
+                      type="checkbox"
+                      checked={createSensitiveAck}
+                      onChange={(e) => setCreateSensitiveAck(e.target.checked)}
+                      data-testid="create-sensitive-checkbox"
+                    />
+                    <span>{t("machines-files.sensitive_confirm_checkbox", { reason: sensitiveReasonLabel(createSensitive.reason) })}</span>
+                  </label>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    tone="primary"
+                    disabled={creating || !createName.trim() || (createSensitive.sensitive && !createSensitiveAck)}
+                    onClick={() => void submitCreate()}
+                  >
+                    {t("machines-files.create_submit")}
+                  </Button>
+                  <Button tone="secondary" disabled={creating} onClick={() => setCreateKind(null)}>
+                    {t("machines-files.cancel")}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Streaming upload progress bar */}
+            {uploadProgress && (
+              <div className="mt-3 flex flex-col gap-2 rounded-control bg-field p-3 text-xs" data-testid="upload-progress-panel">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-mono text-ink">
+                    {t("machines-files.upload_uploading", {
+                      name: uploadProgress.name,
+                      loaded: formatSize(uploadProgress.loaded),
+                      total: formatSize(uploadProgress.total),
+                      percent: uploadPct,
+                    })}
+                  </span>
+                  <Button tone="secondary" onClick={cancelUpload}>
+                    {t("machines-files.upload_cancel")}
+                  </Button>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-inset">
+                  <div className="h-2 bg-ink" style={{ width: `${uploadPct}%`, transition: "width 120ms linear" }} />
+                </div>
+              </div>
+            )}
+
+            {/* Pending upload confirmation (sensitive filename or overwrite conflict) */}
+            {pendingUpload && (
+              <div className="mt-3 flex flex-col gap-2 rounded-control bg-orange-tint p-3 text-xs text-ink" data-testid="upload-confirm-panel">
+                {pendingUpload.kind === "sensitive" ? (
+                  <>
+                    <div className="flex items-center gap-2 font-medium">
+                      <Icon name="shield" size={14} className="shrink-0 text-orange" />
+                      <span>
+                        {t("machines-files.upload_sensitive_prompt", {
+                          name: pendingUpload.file.name,
+                          reason: sensitiveReasonLabel(pendingUpload.reason),
+                        })}
+                      </span>
+                    </div>
+                    <label className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={uploadSensitiveAck}
+                        onChange={(e) => setUploadSensitiveAck(e.target.checked)}
+                        data-testid="upload-sensitive-checkbox"
+                      />
+                      <span>{t("machines-files.sensitive_confirm_checkbox", { reason: sensitiveReasonLabel(pendingUpload.reason) })}</span>
+                    </label>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        tone="primary"
+                        disabled={!uploadSensitiveAck}
+                        onClick={() => startStreamingUpload(pendingUpload.file, { confirmSensitive: true })}
+                      >
+                        {t("machines-files.upload_confirm_start")}
+                      </Button>
+                      <Button tone="secondary" onClick={() => setPendingUpload(null)}>
+                        {t("machines-files.cancel")}
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="font-medium">
+                      {t("machines-files.upload_exists_prompt", { name: pendingUpload.file.name })}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        tone="primary"
+                        onClick={() =>
+                          startStreamingUpload(pendingUpload.file, {
+                            overwrite: true,
+                            confirmSensitive: pendingUpload.confirmedSensitive,
+                          })}
+                      >
+                        {t("machines-files.upload_overwrite")}
+                      </Button>
+                      <Button tone="secondary" onClick={() => setPendingUpload(null)}>
+                        {t("machines-files.cancel")}
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Inline Rename / Move panel */}
+            {renameTarget && (
+              <div className="mt-3 flex flex-col gap-2 rounded-control bg-field p-3 text-xs" data-testid="rename-entry-panel">
+                <div className="font-semibold text-ink">
+                  {t("machines-files.rename_title", { name: renameTarget.name })}
+                </div>
+                <p className="text-ink-3">{t("machines-files.rename_hint")}</p>
+                <input
+                  type="text"
+                  value={renameDest}
+                  onChange={(e) => {
+                    setRenameDest(e.target.value);
+                    setRenameSensitiveAck(false);
+                  }}
+                  placeholder={t("machines-files.rename_dest_placeholder")}
+                  aria-label={t("machines-files.rename_dest_placeholder")}
+                  data-testid="rename-dest-input"
+                  className="h-8 rounded-control bg-inset px-2.5 font-mono text-xs text-ink shadow-hairline outline-none placeholder:text-ink-3"
+                />
+                {renameSensitiveInfo.sensitive && (
+                  <label className="flex items-start gap-2 rounded-control bg-orange-tint px-3 py-2 text-xs text-ink">
+                    <input
+                      type="checkbox"
+                      checked={renameSensitiveAck}
+                      onChange={(e) => setRenameSensitiveAck(e.target.checked)}
+                      data-testid="rename-sensitive-checkbox"
+                    />
+                    <span>{t("machines-files.sensitive_confirm_checkbox", { reason: sensitiveReasonLabel(renameSensitiveInfo.reason) })}</span>
+                  </label>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    tone="primary"
+                    disabled={renaming || !renameDest.trim() || (renameSensitiveInfo.sensitive && !renameSensitiveAck)}
+                    onClick={() => void submitRename()}
+                  >
+                    {t("machines-files.rename_submit")}
+                  </Button>
+                  <Button tone="secondary" disabled={renaming} onClick={() => setRenameTarget(null)}>
+                    {t("machines-files.cancel")}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Explicit Delete confirmation panel */}
+            {deleteTarget && (
+              <div className="mt-3 flex flex-col gap-2 rounded-control bg-red-tint p-3 text-xs text-ink" data-testid="delete-entry-panel">
+                <div className="flex items-center gap-2 font-semibold text-red">
+                  <Icon name="warning" size={14} className="shrink-0" />
+                  <span>{t("machines-files.delete_title", { name: deleteTarget.name })}</span>
+                </div>
+                <p className="font-mono text-ink-2">{t("machines-files.delete_body", { path: deleteTarget.path })}</p>
+                {deleteTarget.kind === "dir" && <p className="text-ink-2">{t("machines-files.delete_dir_note")}</p>}
+                {deleteTarget.symlink && <p className="text-ink-2">{t("machines-files.delete_symlink_note")}</p>}
+                {deleteTarget.sensitive && (
+                  <>
+                    <div className="flex items-center gap-2 rounded-control bg-orange-tint px-3 py-2 font-medium text-ink" data-testid="delete-sensitive-warning">
+                      <Icon name="shield" size={14} className="shrink-0 text-orange" />
+                      <span>{t("machines-files.delete_sensitive_warning", { reason: sensitiveReasonLabel(deleteTarget.sensitive_reason) })}</span>
+                    </div>
+                    <label className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={deleteSensitiveAck}
+                        onChange={(e) => setDeleteSensitiveAck(e.target.checked)}
+                        data-testid="delete-sensitive-checkbox"
+                      />
+                      <span>{t("machines-files.sensitive_confirm_checkbox", { reason: sensitiveReasonLabel(deleteTarget.sensitive_reason) })}</span>
+                    </label>
+                  </>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    tone="primary"
+                    disabled={deleting || (Boolean(deleteTarget.sensitive) && !deleteSensitiveAck)}
+                    onClick={() => void submitDelete()}
+                  >
+                    {t("machines-files.delete_confirm")}
+                  </Button>
+                  <Button tone="secondary" disabled={deleting} onClick={() => setDeleteTarget(null)}>
+                    {t("machines-files.cancel")}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {dirNotice && (
+              <p className="mt-3 rounded-control bg-green-tint px-3 py-2 text-xs text-green" data-testid="dir-notice">
+                {dirNotice}
+              </p>
+            )}
           </>
         )}
       </div>
@@ -455,7 +1132,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
             )}
 
             {dirError && (
-              <p role="alert" className="m-3 rounded-control bg-red-tint px-3 py-2 text-xs text-red">
+              <p role="alert" className="m-3 rounded-control bg-red-tint px-3 py-2 text-xs text-red" data-testid="dir-error">
                 {dirError}
               </p>
             )}
@@ -480,66 +1157,91 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                   const selected = selectedEntry?.path === entry.path;
                   const dirLike = isNavigableDir(entry);
                   return (
-                    <button
+                    <div
                       key={entry.path}
-                      type="button"
-                      onClick={() => openEntry(entry)}
                       className={cx(
-                        "flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-hover",
+                        "flex items-center gap-1 pr-2 transition-colors hover:bg-hover",
                         selected && "bg-accent-tint/60",
                       )}
-                      data-testid={`file-entry-${entry.name}`}
                     >
-                      <Icon
-                        name={entry.symlink ? "link" : dirLike ? "folder" : "file"}
-                        size={14}
-                        className={cx("shrink-0", dirLike ? "text-accent-ink" : "text-ink-3")}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="flex flex-wrap items-center gap-1.5">
-                          <span className="truncate font-medium text-ink" title={`${entryKindLabel(entry)}: ${entry.name}`}>
-                            {entry.name}
+                      <button
+                        type="button"
+                        onClick={() => openEntry(entry)}
+                        className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-xs"
+                        data-testid={`file-entry-${entry.name}`}
+                      >
+                        <Icon
+                          name={entry.symlink ? "link" : dirLike ? "folder" : "file"}
+                          size={14}
+                          className={cx("shrink-0", dirLike ? "text-accent-ink" : "text-ink-3")}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="flex flex-wrap items-center gap-1.5">
+                            <span className="truncate font-medium text-ink" title={`${entryKindLabel(entry)}: ${entry.name}`}>
+                              {entry.name}
+                            </span>
+                            {entry.symlink && (
+                              <span
+                                className={cx(
+                                  "inline-flex items-center rounded px-1 py-0.5 font-mono text-xs",
+                                  entry.link_broken ? "bg-red-tint text-red" : "bg-field text-ink-3",
+                                )}
+                                title={entry.link_target ? t("machines-files.symlink_target", { target: entry.link_target }) : undefined}
+                              >
+                                {entry.link_broken ? t("machines-files.symlink_broken") : `→ ${entry.link_target ?? ""}`}
+                              </span>
+                            )}
+                            {entry.sensitive && (
+                              <span
+                                className="inline-flex items-center gap-1 rounded bg-orange-tint px-1.5 py-0.5 text-xs font-medium text-orange"
+                                title={sensitiveReasonLabel(entry.sensitive_reason)}
+                              >
+                                <Icon name="shield" size={11} />
+                                {t("machines-files.badge_sensitive")}
+                              </span>
+                            )}
+                            {entry.binary && (
+                              <span className="inline-flex items-center rounded bg-field px-1.5 py-0.5 text-xs text-ink-3">
+                                {t("machines-files.badge_binary")}
+                              </span>
+                            )}
                           </span>
-                          {entry.symlink && (
-                            <span
-                              className={cx(
-                                "inline-flex items-center rounded px-1 py-0.5 font-mono text-xs",
-                                entry.link_broken ? "bg-red-tint text-red" : "bg-field text-ink-3",
-                              )}
-                              title={entry.link_target ? t("machines-files.symlink_target", { target: entry.link_target }) : undefined}
-                            >
-                              {entry.link_broken ? t("machines-files.symlink_broken") : `→ ${entry.link_target ?? ""}`}
-                            </span>
-                          )}
-                          {entry.sensitive && (
-                            <span
-                              className="inline-flex items-center gap-1 rounded bg-orange-tint px-1.5 py-0.5 text-xs font-medium text-orange"
-                              title={sensitiveReasonLabel(entry.sensitive_reason)}
-                            >
-                              <Icon name="shield" size={11} />
-                              {t("machines-files.badge_sensitive")}
-                            </span>
-                          )}
-                          {entry.binary && (
-                            <span className="inline-flex items-center rounded bg-field px-1.5 py-0.5 text-xs text-ink-3">
-                              {t("machines-files.badge_binary")}
-                            </span>
-                          )}
+                          <span className="mt-0.5 flex flex-wrap items-center gap-2 font-mono text-xs text-ink-3">
+                            <span>{dirLike ? "—" : formatSize(entry.size)}</span>
+                            <span>{entry.mode}</span>
+                            {entry.mtime && <span>{formatMtime(entry.mtime)}</span>}
+                          </span>
                         </span>
-                        <span className="mt-0.5 flex flex-wrap items-center gap-2 font-mono text-xs text-ink-3">
-                          <span>{dirLike ? "—" : formatSize(entry.size)}</span>
-                          <span>{entry.mode}</span>
-                          {entry.mtime && <span>{formatMtime(entry.mtime)}</span>}
-                        </span>
-                      </span>
-                    </button>
+                      </button>
+                      <IconButton
+                        icon="pencil"
+                        label={`${t("machines-files.rename_move")}: ${entry.name}`}
+                        onClick={() => {
+                          setRenameTarget(entry);
+                          setRenameDest(entry.path);
+                          setRenameSensitiveAck(false);
+                          setCreateKind(null);
+                          setDeleteTarget(null);
+                        }}
+                      />
+                      <IconButton
+                        icon="trash"
+                        label={`${t("machines-files.delete")}: ${entry.name}`}
+                        onClick={() => {
+                          setDeleteTarget(entry);
+                          setDeleteSensitiveAck(false);
+                          setCreateKind(null);
+                          setRenameTarget(null);
+                        }}
+                      />
+                    </div>
                   );
                 })}
               </div>
             )}
           </div>
 
-          {/* Bounded preview, log tail & streaming download pane */}
+          {/* Bounded preview, lightweight UTF-8 editor + diff confirm, log tail & streaming download pane */}
           <div className="flex flex-col overflow-hidden rounded-card bg-surface shadow-card">
             {!selectedEntry ? (
               <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-ink-3" style={{ minHeight: "16rem" }}>
@@ -588,6 +1290,18 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                       </button>
                     </div>
 
+                    {mode === "preview" && !editing && preview && (
+                      <Button
+                        tone="secondary"
+                        icon="pencil"
+                        disabled={!canEdit || loadingFile}
+                        title={canEdit ? undefined : t("machines-files.edit_disabled_hint", { max: formatSize(editMaxBytes) })}
+                        onClick={startEdit}
+                      >
+                        {t("machines-files.edit")}
+                      </Button>
+                    )}
+
                     {mode === "tail" && (
                       <>
                         <select
@@ -613,7 +1327,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                       </>
                     )}
 
-                    {!activeBinary && (
+                    {!activeBinary && !editing && (
                       <Button tone="quiet" onClick={() => setWrap((w) => !w)}>
                         {wrap ? t("machines-files.wrap_on") : t("machines-files.wrap_off")}
                       </Button>
@@ -637,6 +1351,28 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                   <div className="flex items-center gap-2 border-b border-line bg-orange-tint px-4 py-2 text-xs text-ink" data-testid="sensitive-banner">
                     <Icon name="shield" size={14} className="shrink-0 text-orange" />
                     <span>{t("machines-files.sensitive_banner", { reason: sensitiveReasonLabel(activeSensitiveReason) })}</span>
+                  </div>
+                )}
+
+                {savedNotice && (
+                  <div className="border-b border-line bg-green-tint px-4 py-1.5 text-xs text-green" data-testid="saved-notice">
+                    {savedNotice}
+                  </div>
+                )}
+
+                {casConflict && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-red-tint px-4 py-2 text-xs text-ink" role="alert" data-testid="cas-conflict-banner">
+                    <div>
+                      <div className="font-semibold text-red">{t("machines-files.cas_conflict_title")}</div>
+                      <p className="text-ink-2">{t("machines-files.cas_conflict_body")}</p>
+                    </div>
+                    <Button
+                      tone="secondary"
+                      icon="retry"
+                      onClick={() => void loadFile(machine.id, selectedEntry.path, "preview", tailLines)}
+                    >
+                      {t("machines-files.reload_latest")}
+                    </Button>
                   </div>
                 )}
 
@@ -695,6 +1431,109 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                         {t("machines-files.download")}
                       </a>
                     )}
+                  </div>
+                ) : editing && reviewingDiff && diffResult ? (
+                  <div className="flex flex-col gap-3 p-4 text-xs" data-testid="machine-file-diff">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-semibold text-ink">{t("machines-files.diff_title")}</span>
+                      <span className="font-mono text-ink-3">
+                        {t("machines-files.diff_summary", { added: diffResult.added, removed: diffResult.removed })}
+                      </span>
+                    </div>
+
+                    {!diffResult.changed ? (
+                      <p className="rounded-control bg-field px-3 py-2 text-ink-3">{t("machines-files.diff_no_changes")}</p>
+                    ) : (
+                      <div className="overflow-auto rounded-control bg-inset font-mono text-xs" style={{ maxHeight: "22rem" }}>
+                        {diffResult.hunks.map((hunk, hi) => (
+                          <div key={hi}>
+                            <div className="bg-field px-3 py-1 text-ink-3">
+                              {`@@ -${hunk.oldStart},${hunk.oldCount} +${hunk.newStart},${hunk.newCount} @@`}
+                            </div>
+                            {hunk.lines.map((line, li) => (
+                              <div
+                                key={li}
+                                className={cx(
+                                  "whitespace-pre px-3 py-0.5",
+                                  line.type === "add" && "bg-green-tint text-green",
+                                  line.type === "del" && "bg-red-tint text-red",
+                                  line.type === "context" && "text-ink-2",
+                                )}
+                              >
+                                {`${line.type === "add" ? "+" : line.type === "del" ? "-" : " "}${line.text}`}
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {preview?.sensitive && (
+                      <div className="flex flex-col gap-2 rounded-control bg-orange-tint p-3 text-xs text-ink" data-testid="sensitive-write-warning">
+                        <div className="flex items-center gap-2 font-semibold">
+                          <Icon name="shield" size={14} className="shrink-0 text-orange" />
+                          <span>{t("machines-files.sensitive_write_warning", { reason: sensitiveReasonLabel(preview.sensitive_reason) })}</span>
+                        </div>
+                        <label className="flex items-start gap-2">
+                          <input
+                            type="checkbox"
+                            checked={sensitiveSaveAck}
+                            onChange={(e) => setSensitiveSaveAck(e.target.checked)}
+                            data-testid="sensitive-confirm-checkbox"
+                          />
+                          <span>{t("machines-files.sensitive_confirm_checkbox", { reason: sensitiveReasonLabel(preview.sensitive_reason) })}</span>
+                        </label>
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        tone="primary"
+                        disabled={saving || !diffResult.changed || (Boolean(preview?.sensitive) && !sensitiveSaveAck)}
+                        onClick={() => void confirmSave()}
+                      >
+                        {saving ? t("machines-files.saving") : t("machines-files.confirm_save")}
+                      </Button>
+                      <Button tone="secondary" disabled={saving} onClick={() => setReviewingDiff(false)}>
+                        {t("machines-files.back_to_edit")}
+                      </Button>
+                    </div>
+                  </div>
+                ) : editing ? (
+                  <div className="flex flex-1 flex-col gap-2 p-4">
+                    <textarea
+                      value={draftText}
+                      onChange={(e) => setDraftText(e.target.value)}
+                      aria-label={t("machines-files.edit_label")}
+                      data-testid="machine-file-editor"
+                      className="flex-1 rounded-control bg-inset p-3 font-mono text-xs leading-relaxed text-ink shadow-hairline outline-none"
+                      style={{ minHeight: "22rem", maxHeight: "34rem" }}
+                    />
+                    {draftOversized && (
+                      <p role="alert" className="rounded-control bg-red-tint px-3 py-1.5 text-xs text-red">
+                        {t("machines-files.edit_oversized", { max: formatSize(editMaxBytes) })}
+                      </p>
+                    )}
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span className="font-mono text-ink-3 tabular-nums">
+                        {t("machines-files.edit_bytes", { bytes: formatSize(draftBytes), max: formatSize(editMaxBytes) })}
+                      </span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          tone="primary"
+                          disabled={draftOversized || draftText === (preview?.text ?? "")}
+                          onClick={() => {
+                            setSensitiveSaveAck(false);
+                            setReviewingDiff(true);
+                          }}
+                        >
+                          {t("machines-files.review_diff")}
+                        </Button>
+                        <Button tone="secondary" onClick={resetEditor}>
+                          {t("machines-files.cancel")}
+                        </Button>
+                      </div>
+                    </div>
                   </div>
                 ) : activeFile && !(activeFile.text ?? "") ? (
                   <p className="p-6 text-center text-xs text-ink-3">{t("machines-files.empty_file")}</p>
