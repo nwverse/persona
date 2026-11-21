@@ -90,8 +90,9 @@ internal class ChatInteractionController(
         }
     }
 
-    private suspend fun resolve(interaction: Interaction, resolution: Resolution): ResolveOutcome {
-        val phrase = resolution.ownerApprovalPhrase ?: return interactions.resolveOutcome(interaction.id, resolution)
+    private suspend fun resolve(interaction: Interaction, resolution: Resolution, handoffCard: Boolean = false): ResolveOutcome {
+        val phrase = resolution.ownerApprovalPhrase ?:
+            return interactions.resolveOutcome(interaction.id, resolution, handoffCard)
         interactions.replyOwnerApproval(interaction, phrase)
         return ResolveOutcome()
     }
@@ -101,7 +102,8 @@ internal class ChatInteractionController(
         taps.value = taps.value.tapped(interaction.id)
         scope.launch {
             try {
-                val result = submitInteraction { resolve(interaction, resolution) }
+                val result = submitInteraction { resolve(interaction, resolution,
+                    handoffCard = interaction.isSecretHandoff && resolution.allow == true) }
                 result.submission.haptic?.let(haptics)
                 taps.value = taps.value.answered(interaction.id, result.card)
                 if (result.withdraw) {

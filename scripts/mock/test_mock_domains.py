@@ -261,6 +261,8 @@ class RegistryTests(unittest.TestCase):
                     mock_domains.load({}, ["domain_bad"])
                 # A second load runs the module again, as a second run of mock_hub.py makes its globals anew (runpy).
                 Path(tmp, "domain_state.py").write_text("SEEN = []\n\ndef register(d):\n    SEEN.append(d.name)\n")
+                # Earlier imports may have cached this directory before the new module existed.
+                importlib.invalidate_caches()
                 mock_domains.load({}, ["domain_state"])
                 mock_domains.load({}, ["domain_state"])
                 self.assertEqual(sys.modules["domain_state"].SEEN, ["domain_state"])

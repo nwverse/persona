@@ -243,7 +243,7 @@ How many tokens each machine runs, for the Machines page's cards and charts (the
 
 - **Metering** (`node/usage.go`): every 10 seconds the node reads what its agents' records gained. An adapter per agent (`node/usage_adapters.go`, #9923) says which files hold its usage,
   which session a file belongs to and which parser reads it: Claude Code's main and subagent transcripts in every config directory, and the agents of its workflow runs
-  (`<session>/subagents/workflows/<run>/agent-*.jsonl`, which it missed until #9255); the rollouts of Codex (every Codex home: the default and the registered ones) and of the compatible traex CLI, each segment of a
+  (`<session>/subagents/workflows/<run>/agent-*.jsonl`, which it missed until #9255); the rollouts of Codex (every Codex home: the default and the registered ones) and of TRAE CLI, each segment of a
   continued thread (the session list follows a thread's newest), and for a backfill reaching further back than two weeks every rollout on disk, archived ones too (#10002); the sessions of pi and omp
   (`$PI_CODING_AGENT_DIR`, else `~/.pi/agent` and `~/.omp/agent`: `sessions/<cwd>/<time>_<id>.jsonl`, #9992). opencode keeps its steps in a SQLite database (`$PERSONA_OPENCODE_DB`,
   else `$XDG_DATA_HOME/opencode/opencode.db`, default `~/.local/share/opencode/opencode.db`): its adapter queries it with the system `sqlite3` (`node/usage_opencode.go`), the rows added
@@ -317,7 +317,7 @@ The history starts the day the manager began keeping it; the days before are onl
 - **By agent** (#9984): the node names the agents it reads and the manager keeps a record per agent (`usage_backfill.agent`). Claude Code's is the machine's first
   record (`''`): done stays done. Every other agent has its own, so an agent whose adapter a node gains later has its history read (only its files) from the history's start,
   and its hours are stored beside the others: an hour is stored for an agent only when the machine had none of that agent's usage in it, nor, for an agent metered before
-  agents were kept apart (Claude Code, Codex, traex), usage stored then (`''`, which may hold theirs). Codex and traex got records of their own with #10002: the first
+  agents were kept apart (Claude Code, Codex, TRAE CLI), usage stored then (`''`, which may hold theirs). Codex and TRAE CLI got records of their own with #10002: the first
   backfill listed only the rollouts written in the last two weeks, so their older history is read again, and fills the hours that held none of it. A request names the
   agents it read; only their buckets are stored and only their records move on. An older node names none (the first record, as before); an older manager answers its one
   range, which the node then reads for every agent.
@@ -496,6 +496,13 @@ The one other live edit of an entry is its kind, from `ssh` to `link` and back (
 - When the kind changes, the manager replaces the machine (`sameConfig` sees a change), which ends the SSH connection. The new
   machine then waits for Persona Link. Everything kept by id stays: pins, mutes, trust, engine choice, sessions, metrics, usage and
   `node.deploy.<id>`.
+
+The iPhone / iPad client decodes the optional `link_switch` in `apple/Shared/Models.swift` and starts through `APIClient`; an absent
+field is the older-hub gate. `MachineLinkSwitchStore` keeps one attempt per `MachineRef` across detail-page remounts and reconciles
+the accepted answer with pushed/read machine snapshots. Settled attempts expire after two minutes; an uncertain answer never reposts
+automatically, while a new explicit confirmation may follow the hub's unchanged eligibility. `MachineLinkSwitchView` is the
+advanced-detail card; its expected-disconnect guard also suppresses the ordinary offline explanation and Reconnect while the switch
+runs (#10671).
 
 ## API
 

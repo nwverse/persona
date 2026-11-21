@@ -115,5 +115,6 @@ func (c *conversation) dictationLost(down bool, text string, why error) {
 			i18n.Args{"reason": firstNonEmpty(text, codeUpstreamUnavailable)}), true)
 		return
 	}
-	c.failCode(firstNonEmpty(upstreamCode(why), codeUpstreamFailed), "语音连接断了，重连没成功："+why.Error(), true)
+	c.failCode(firstNonEmpty(upstreamCode(why), codeUpstreamFailed), i18n.T(c.language(), "voice-upstream.dictation_lost",
+		i18n.Args{"reason": why.Error()}), true)
 }
