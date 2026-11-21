@@ -171,6 +171,24 @@ class DirectionSessionsMockTests(unittest.TestCase):
         self.assertEqual((status, undone["direction"], undone["changed"]), (200, None, True))
         self.assertNotIn(chat, {s["session_id"] for s in get(base, "/api/v1/assistant/directions/" + second)["sessions"]})
 
+    def test_undo_of_a_first_filing_gives_back_what_its_leader_opened(self):
+        base = self.start()
+        first, second = [d["id"] for d in get(base, "/api/v1/assistant/directions/tree")["directions"][:2]]
+        opened = "dirs0002-0000-4000-8000-000000000002"  # the first leader opened it; the owner never filed it
+
+        def placed(direction):
+            return {s["session_id"]: s["source"] for s in get(base, "/api/v1/assistant/directions/" + direction)["sessions"]}
+
+        self.assertEqual(placed(first).get(opened), "leader")
+        status, filed = put(base, file_path("studio", opened), {"direction": second})
+        self.assertEqual((status, filed["previous"], filed["changed"]), (200, None, True))
+        self.assertNotIn(opened, placed(first))
+        self.assertEqual(placed(second).get(opened), "owner")
+        status, undone = put(base, file_path("studio", opened), {"direction": filed["previous"]})
+        self.assertEqual((status, undone["direction"]), (200, None))
+        self.assertEqual(placed(first).get(opened), "leader", "back where its leader opened it")
+        self.assertNotIn(opened, placed(second))
+
     def test_refusals_change_nothing_and_say_why_in_the_requests_language(self):
         base = self.start()
         first = get(base, "/api/v1/assistant/directions/tree")["directions"][0]["id"]
