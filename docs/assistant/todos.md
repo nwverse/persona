@@ -786,6 +786,20 @@ Something the owner raises in the main conversation and wants an answer to is a 
 
 ## Waiting for the owner
 
+**Personal verification** (#10047): `task_review` with `verdict: "accepted"` and `user_check: true` records the
+supervisor's review but leaves `done_at` unset, with `supervision.state: "user_check"` (**Awaiting your
+verification**). The task remains open and counted as Waiting on you, even if its delivery is already live or its
+reply has been read. Its existing "Please verify" ask is reused; without a Lark card the same ask stays available in
+the apps. Completed-task retirement does not select this Agent, and personal verification also protects it from the
+ordinary stalled-task idle limit. This does not change the closure policy for tasks that really have completed.
+
+The owner's **Pass** (app, card or approval reply) marks the task verified, closes it by review, and permits normal
+completed-task retirement. Change feedback records a new work round before relaying the words to the same Agent;
+the old Pass can no longer complete that round. Failed delivery is shown as failed, not as successful rework.
+The same applies to the owner's next message from the task card or directly in its Agent chat. A recorded Pass
+interrupted by a hub restart is completed by the acceptance recovery sweep, not left waiting for a second Pass.
+An accepted review without `user_check` still completes the task immediately as before.
+
 (#2056, `assistant/todo_ask.go`.) A to-do whose result waits for the owner carries that ask on itself, so the apps can show it in the to-do list and take it with one tap, not only the briefing and the Lark card.
 
 - **`ask` on `GET /api/v1/todos`**: `{"outcome"?, "verdict", "recommend"?, "asked_at", "risk"?}` (a decision carries more, "Decisions the owner can answer" below), the same rows and words as a `brief` item's `accept[]` but for `risk`, which only the list carries (`docs/protocol/protocol.md`, "Tasks and the chat feed"), read from the same acceptance book: a deployed to-do's "Please verify" (no `outcome`), or a supervised task's conclusion (#1226: `outcome` `done`, `cannot` or `decide`). `verdict` is the verdict line as its Lark card says it, in the request's language (the reason is as the review wrote it); `recommend` only on a decision (`decide`) that recommends an option; `asked_at` the round, which `POST /api/v1/todos/{id}/accept` takes; `risk` how risky answering it is, `open` when it cannot be undone or other people will see it, else `safe` (#10465, `docs/assistant/todo-status-sop.md` "The hub's view"), absent from an older manager, which clients read as `open`. A to-do with nothing waiting has no `ask`: never asked, verified, taken, acknowledged, asked before its latest reopen, or a decision the review moved on from (rework, cancelled) or whose task closed. A client that does not know the field ignores it.

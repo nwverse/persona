@@ -4,6 +4,7 @@ import { ApiError, errorText, isAbort, isTransient, sessionPath } from "./api";
 import { parseUserText } from "./turns";
 import { imagePayload, quotePath, releaseAttachments, sendFile, type LocalAttachment } from "./attachments";
 import { uuid } from "./format";
+import { launchHasFirstTurn } from "./launch-handoff";
 import { apiOp } from "./ops";
 import { currentPlatform, modName, type Platform } from "./shortcuts";
 import { href, navigate } from "./router";
@@ -62,6 +63,8 @@ export interface AgentLaunch {
   repeatOnly?: boolean;
   clearable?: string;
   draft?: string;
+  /** Epoch ms when a launch with an initial prompt entered handoff, keeping the session working until the hub reports working (#12380). */
+  handoffAt?: number;
 }
 
 /** `open: false` starts it without opening its conversation (Compare runs starts several and opens their page, #8916). */
@@ -114,6 +117,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
     launch = { ...launch, ...patch };
     if (getState().launches[id]) putLaunch(launch);
   };
+  const hasFirstTurn = launchHasFirstTurn(launch);
   update({ phase: launch.session ? "uploading" : "creating", error: undefined, uncertain: false, clearable: undefined, draft: undefined });
   try {
     const imageBytes = launch.attachments.filter((a) => a.mime.startsWith("image/")).reduce((total, a) => total + Math.ceil(a.file.size / 3) * 4, 0);
@@ -156,7 +160,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
         }
       }
       if (!getState().launches[id]) return;
-      update({ session });
+      update({ session, ...(hasFirstTurn ? { handoffAt: Date.now() } : {}) });
       upsertSession(session);
     }
     if (!launch.outgoing) {
@@ -186,9 +190,8 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
       if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > 32 * 1024 * 1024) throw new Error(t("lib-new-agent.attachments_too_large_retry"));
       await launchOp(`${sessionPath(launch.machineId, launch.session!.session_id)}/messages`, launch.messageId, controller.signal, payload);
     }
-    update({ phase: "ready" });
     releaseAttachments(launch.attachments);
-    update({ attachments: [] });
+    update({ phase: "ready", attachments: [], ...(hasFirstTurn ? { handoffAt: Date.now() } : {}) });
     const local = { name: "session" as const, mid: launch.machineId, sid: launch.id };
     if (location.pathname === href(local)) navigate({ ...local, sid: launch.session!.session_id }, true);
   } catch (e) {
@@ -202,7 +205,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
     // the hub won't start it with ultracode here (an old node, a CLI or engine that can't take it): asking again would
     // get the same answer, so "Retry" starts it without, and the card says so (#3428)
     const noUltracode = creating && launch.ultracode === true && ultracodeRefused(e);
-    update({ phase: "failed", uncertain, repeatOnly: creating && (gap || launch.workSession === true), ...(gap ? {} : launchOpIds()),
+    update({ phase: "failed", handoffAt: undefined, uncertain, repeatOnly: creating && (gap || launch.workSession === true), ...(gap ? {} : launchOpIds()),
       ...(noUltracode ? { ultracode: undefined } : {}),
       error: noUltracode ? t("ultracode.start_refused", { error: ultracodeErrorText(e) }) : t(creating ? "lib-new-agent.start_failed" : sending ? "lib-new-agent.first_message_failed" : "lib-new-agent.attachments_failed", { error: errorText(e) }),
       clearable: e instanceof ApiError && e.code === "input_draft" && typeof e.body.clearable === "string" ? e.body.clearable : undefined,
