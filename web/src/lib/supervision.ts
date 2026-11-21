@@ -12,10 +12,11 @@ export type ReviewState = "" | "pending_review" | "rework" | "needs_user" | "par
 export interface Parked {
   reason: string;
   until: string;
-  waiting_on: "owner_priority" | "someone_else" | "external_event" | "date";
+  waiting_on: "owner_priority" | "someone_else" | "external_event" | "date" | "todo_handoff";
   count: number;
   /** Source-backed account recorded by task_review, not a provider receipt fetched by the hub. */
   evidence?: ParkEvidence;
+  handoff?: { todo_id: string; title: string; check: string };
 }
 
 export interface ParkContact {
@@ -178,11 +179,12 @@ export function acceptanceStands(todo: { supervision?: Supervision }): boolean {
 }
 
 /** The review state that holds now: a cancelled task reopened goes on again; an accepted one stays accepted while
- *  its acceptance stands (acceptanceStands); a parked one that was closed is no longer parked. */
+ *  its acceptance stands (acceptanceStands); a closed task no longer waits for review or stays parked. */
 export function reviewState(todo: Pick<Todo, "done_at"> & { supervision?: Supervision }): ReviewState {
   const st = todo.supervision?.state ?? "";
   if (!todo.done_at && st === "accepted" && !acceptanceStands(todo)) return "";
   if (!todo.done_at && st === "cancelled") return "";
+  if (todo.done_at && st === "pending_review") return "";
   if (st === "parked" && (todo.done_at || !todo.supervision?.parked)) return "";
   return st;
 }

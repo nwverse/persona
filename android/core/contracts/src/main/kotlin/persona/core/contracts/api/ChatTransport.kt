@@ -26,6 +26,9 @@ interface ChatTransport {
         resolve(id, resolution)
         return ResolveOutcome()
     }
+    /** An authenticated exact reply to a server-owned proposal; never an ordinary model message or card resolution. */
+    suspend fun replyOwnerApproval(interaction: Interaction, phrase: String): Unit =
+        throw UnsupportedOperationException("Exact owner replies unavailable")
     suspend fun image(session: SessionKey, itemId: String): ByteArray
     suspend fun fullItem(session: SessionKey, itemId: String): Item
     /**

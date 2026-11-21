@@ -92,6 +92,9 @@ func ProjectEfforts(levels, vocab []string) []string {
 	return out
 }
 
+// ModeDefault applies the ordinary permission rules.
+const ModeDefault = "default"
+
 // ModeBypass skips every permission prompt; a headless claude only takes it at start (--permission-mode).
 const ModeBypass = "bypassPermissions"
 
@@ -236,6 +239,12 @@ type Session struct {
 	// tokens since the last compaction. Omitted when false or the runtime has no request-level evidence.
 	// Kept with EffortChangeFailed so it fits the row's allocation size class.
 	ContextRestartRecommended bool `json:"context_restart_recommended,omitempty"`
+	// OffLauncher: Persona started this Claude Code Agent on Launcher, but the claude that runs it now was not started
+	// by Persona's command (it lacks Persona's --mcp-config): herdr's bare `claude --resume <id>` after a restart on a
+	// herdr older than 0.9.2, or a resume typed by hand (#11792). Launcher's settings, model, MCP and hooks do not
+	// apply to it, and a launcher switch to Launcher itself brings it back there. Beside EffortChangeFailed, in its
+	// padding: a Session stays in its allocation size class.
+	OffLauncher bool `json:"off_launcher,omitempty"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
 	// UltracodePending (beside AsksRead) means a requested change waits for an idle input box; LostAt asks the client
 	// to offer reopening after a resumed process reset an enabled switch. Reopening or dismissing the notice clears
@@ -267,8 +276,8 @@ type Session struct {
 	// ServiceTier is the acknowledged native speed, omitted while unknown.
 	ServiceTier  string        `json:"service_tier,omitempty"`
 	ServiceTiers []ServiceTier `json:"service_tiers,omitempty"`
-	// Space is the assistant's space it runs in: "health" for the health space's (docs/assistant/health.md), "" for the
-	// assistant's own. Set by the hub on the assistant's conversations.
+	// Space is "health" for a session in the health space (docs/assistant/health.md), or empty otherwise.
+	// The node can preserve it from the start directory even when a live pane's working directory moves.
 	Space string `json:"space,omitempty"`
 	// ModelPick is the launcher / model / effort picked for one of the assistant's conversations, which its next
 	// messages run on (#5033, docs/assistant/model-config.md "A conversation's own model"); nil follows Model
@@ -586,6 +595,12 @@ const CodeTurnOverBackground = "turn_over_background"
 // CodeAgentStopped is what session.send refuses with for an Agent that has stopped and is read-only (node/stopped.go,
 // #4754): nothing was typed, and it takes no message until it is resumed (the user's Resume on its terminal page).
 const CodeAgentStopped = "agent_stopped"
+
+// CodeResumeUnknown is what session.start refuses a resume with when the computer has nothing of the conversation to
+// resume (no transcript, start or record of the id), and, for a resume carrying resume_outside_health, also when what
+// it has started or was recorded in a health space or an Agent folder kept out of Persona (#10941): a new
+// conversation would otherwise be listed under the id of another. Nothing was started. 409.
+const CodeResumeUnknown = "resume_unknown"
 
 // PendingSwitch is Session.PendingSwitch: the launcher the Agent moves to, the model and effort to run it with ("":
 // the launcher's own default model; the effort it runs with now), and when the user picked it. Agent is the engine

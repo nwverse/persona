@@ -131,5 +131,6 @@
   "todo_completed_label": "待办（已完成）：{title}",
   "export": "导出对话…",
   "side_sessions_count": "分支会话（{count}）",
-  "side_sessions_needs_you": "有分支会话需要你"
+  "side_sessions_needs_you": "有分支会话需要你",
+  "open_agent_page": "打开 Agent 会话"
 }

@@ -89,7 +89,7 @@
   "source_default": "Default",
   "source_extension_default": "Extension default",
   "source_auto": "Automatic (a connection the hub can call directly)",
-  "status_no_api": "No model is configured for this API purpose. Add a connection with a key or choose a Claude Code launcher in Settings › Model providers",
+  "status_no_api": "No model is configured for this API purpose. Add a connection with a key or choose a Claude Code, Codex, or Antigravity launcher in Settings › Model providers",
   "status_codex_no_api": "No model is configured for this API purpose. Codex can’t run these requests because its tools can’t all be disabled. Add a connection with a key or choose a Claude Code launcher in Settings › Model providers",
   "status_provider_incompatible": "Provider missing or incompatible",
   "status_no_model": "No model set",
@@ -148,5 +148,7 @@
   "err_candidates_not_callable": "{provider} can’t be called directly, so it can’t be a candidate. Choose a direct API provider or a provider with an address and a key",
   "candidate_not_offered": "no provider in Settings › Model providers offers it",
   "candidate_not_direct": "{provider} cannot be called directly",
-  "candidate_provider_gone": "the provider {provider} is gone or cannot be called directly"
+  "candidate_provider_gone": "the provider {provider} is gone or cannot be called directly",
+  "err_permission_mode_launcher_only": "Permission mode can only be set on launcher-backed model uses",
+  "err_permission_mode_unsupported": "This launcher does not support the selected permission mode"
 }
