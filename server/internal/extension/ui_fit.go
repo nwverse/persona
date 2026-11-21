@@ -67,7 +67,10 @@ func fit(v *View, slot UISlot, uiVersion int, native bool, languages ...i18n.Lan
 			return dropped, err
 		}
 	}
-	// a native stream's components never include a graph, even at 10: it gets the rows always
+	// a native stream's components never include a scene or a graph, even at 11: it gets what an older app gets
+	if native || uiVersion < 11 {
+		downgrade11(v, native, compact)
+	}
 	if native || uiVersion < 10 {
 		downgrade10(v, native, compact)
 	}
@@ -164,9 +167,12 @@ func FitResult(res *ActionResult, slot UISlot, uiVersion int, languages ...i18n.
 			return errors.New("items: each has the key of the one it stands for")
 		}
 	}
-	graphBelow10 := uiVersion < 10 && slices.ContainsFunc(res.Items, func(e UIElem) bool { return e.Type == wire.ComponentGraph })
-	if graphBelow10 {
-		uiVersion = 10
+	// a graph below 10 and a scene below 11 become other items, more or fewer: the app draws the whole page again
+	redraw := slices.ContainsFunc(res.Items, func(e UIElem) bool {
+		return uiVersion < 10 && e.Type == wire.ComponentGraph || uiVersion < 11 && e.Type == wire.ComponentScene
+	})
+	if redraw {
+		uiVersion = UIVersion
 	}
 	if _, err := Fit(&v, slot, uiVersion, l); err != nil {
 		return err
@@ -174,7 +180,7 @@ func FitResult(res *ActionResult, slot UISlot, uiVersion int, languages ...i18n.
 	if len(v.Sections) == 0 || len(v.Sections[0].Items) != len(res.Items) {
 		return errors.New("items: of types this app draws")
 	}
-	if graphBelow10 {
+	if redraw {
 		res.Items = nil
 		return nil
 	}

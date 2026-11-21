@@ -144,6 +144,9 @@ func ImageRefs(v *View) []string {
 			if e.Src != nil {
 				add(e.Src.Ref)
 			}
+			if e.Poster != nil {
+				add(e.Poster.Ref)
+			}
 			if e.Thumbnail != nil {
 				add(e.Thumbnail.Ref)
 			}
