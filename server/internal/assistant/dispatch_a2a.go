@@ -165,7 +165,7 @@ func (s *Service) finishDispatchA2A(ctx context.Context, start *dispatchA2AStart
 	for range 5 {
 		task, err := decodeA2A(start.store.A2AGet(ctx, start.task.ID))
 		if err == nil && task != nil && task.Launch.Pending {
-			err = s.a2aLaunched(ctx, start.store, task, session.SessionID, launchErr != nil || session.StartError != "")
+			err = s.a2aLaunched(ctx, start.store, task, session, launchErr != nil || session.StartError != "")
 		}
 		if errors.Is(err, errA2AConflict) {
 			continue
@@ -175,26 +175,6 @@ func (s *Service) finishDispatchA2A(ctx context.Context, start *dispatchA2AStart
 		}
 		return
 	}
-}
-
-func (s *Service) saveDispatchWorktree(ctx context.Context, start *dispatchA2AStart, dir string) error {
-	if start == nil {
-		return nil
-	}
-	for range 5 {
-		task, err := decodeA2A(start.store.A2AGet(ctx, start.task.ID))
-		if err != nil {
-			return err
-		}
-		if task == nil || !task.Launch.Pending || a2aTerminal(task.State) {
-			return errA2AConflict
-		}
-		task.Launch.Worktree = dir
-		if err := s.a2aSave(ctx, start.store, task); !errors.Is(err, errA2AConflict) {
-			return err
-		}
-	}
-	return errA2AConflict
 }
 
 func dispatchA2AStatus(t *a2aTask) string {

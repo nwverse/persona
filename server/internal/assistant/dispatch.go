@@ -245,14 +245,6 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 		}
 		a.Cwd = wt.Path
 		params["cwd"], params["workspace_id"] = wt.Path, wt.WorkspaceID
-		if err := s.saveDispatchWorktree(sctx, tracker, wt.Path); err != nil {
-			cleanup, stop := context.WithTimeout(context.WithoutCancel(sctx), time.Minute)
-			defer stop()
-			if cleanupErr := s.call(cleanup, am.ID, "worktree.remove", map[string]any{"path": wt.Path}, nil); cleanupErr != nil {
-				return "", errors.Join(err, fmt.Errorf("could not remove the unused worktree at %s: %w", wt.Path, cleanupErr))
-			}
-			return "", err
-		}
 		note = fmt.Sprintf(" It runs in a new worktree on branch %s.", wt.Branch)
 	}
 	s.setPlanThen(ctx, am.ID, params)
@@ -270,6 +262,7 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 		}
 		return "", fmt.Errorf("the start on %s failed: %w", am.Name, startErr)
 	}
+	res.Session.Cwd = cmp.Or(res.Session.Cwd, a.Cwd)
 	s.finishDispatchA2A(sctx, tracker, res.Session, true, nil)
 	finished = true
 	title = s.nameStartedAgent(sctx, am.ID, res.Session, title)
@@ -279,7 +272,6 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 	}
 	s.logf("dispatch %s/%s -> %s/%s in %s", machine, short(session), am.ID, short(res.Session.SessionID), a.Cwd)
 	child := res.Session
-	child.Cwd = cmp.Or(child.Cwd, a.Cwd)
 	s.superviseDispatched(ctx, am, child, a.Prompt, cmp.Or(from.From, short(session)), cmp.Or(from.FromMachine, machine))
 	if tracker != nil {
 		return fmt.Sprintf("Started on %s in %s: session %s.%s A2A task %s. Questions and results will be delivered to this session. Read details with dispatch_read or a2a_get.",

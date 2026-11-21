@@ -471,7 +471,8 @@ func TestA2AIsDefaultForTrustedSessionsAndDispatch(t *testing.T) {
 		t.Fatal("a runtime without a bound session could invoke A2A")
 	}
 	fullPrompt := "Run the integration checks.\n" + strings.Repeat("Check a test case.\n", 800) + "Final instruction."
-	request := map[string]string{"machine": "box", "cwd": "/code/app", "prompt": fullPrompt, "message_id": "dispatch-receipt"}
+	request := map[string]any{"machine": "box", "cwd": "/code/app", "prompt": fullPrompt, "message_id": "dispatch-receipt",
+		"worktree": map[string]string{"branch": "fix/linux"}}
 	args, _ := json.Marshal(request)
 	result := dispatchCall(s, parent.Ref.Machine, parent.Ref.Session, "dispatch_start", string(args))
 	if result.IsError || !strings.Contains(resultText(result), "A2A task") {
@@ -480,6 +481,9 @@ func TestA2AIsDefaultForTrustedSessionsAndDispatch(t *testing.T) {
 	task, err := decodeA2A(st.A2ARequest(ctx, parent.Owner, "dispatch-receipt"))
 	if err != nil || task == nil || task.Launch.Pending || !task.Wake || !task.Launch.Dispatch {
 		t.Fatalf("durable dispatch: %+v %v", task, err)
+	}
+	if task.Launch.CWD != "/code/app" || task.Launch.Worktree != "/wt/app/fix-linux" {
+		t.Fatalf("dispatch lost the original directory or the actual worktree: %+v", task.Launch)
 	}
 	if len(h.starts) != 1 || len(s.dispatched(ctx)) != 0 {
 		t.Fatalf("unexpected start or legacy record: %+v", h.starts)

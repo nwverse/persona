@@ -403,10 +403,10 @@ func (s *Service) a2aLaunch(ctx context.Context, st a2aStore, t *a2aTask) error 
 			return nil
 		}
 		if sess, ok, _ := s.sessionNow(ctx, t.TargetMachine, t.TargetSession); ok {
-			return s.a2aLaunched(ctx, st, t, sess.SessionID, sess.StartError != "")
+			return s.a2aLaunched(ctx, st, t, sess, sess.StartError != "")
 		}
 		if time.Since(e.Attempted) > agentStartTimeout+time.Minute {
-			return s.a2aLaunched(ctx, st, t, "", true)
+			return s.a2aLaunched(ctx, st, t, proto.Session{}, true)
 		}
 		return nil
 	}
@@ -440,7 +440,7 @@ func (s *Service) a2aLaunch(ctx context.Context, st a2aStore, t *a2aTask) error 
 		}
 		t, readErr := decodeA2A(st.A2AGet(keep, taskID))
 		if readErr == nil && t != nil && t.Launch.Pending && !a2aTerminal(t.State) {
-			if err := s.a2aLaunched(keep, st, t, out.Session.SessionID, definite); err != nil {
+			if err := s.a2aLaunched(keep, st, t, out.Session, definite); err != nil {
 				s.logf("A2A launch %s: %v", taskID, err)
 			}
 		}
@@ -449,13 +449,16 @@ func (s *Service) a2aLaunch(ctx context.Context, st a2aStore, t *a2aTask) error 
 	return nil
 }
 
-func (s *Service) a2aLaunched(ctx context.Context, st a2aStore, t *a2aTask, sid string, failed bool) error {
+func (s *Service) a2aLaunched(ctx context.Context, st a2aStore, t *a2aTask, session proto.Session, failed bool) error {
 	t.Launch.Pending = false
 	if failed {
 		t.Events[0].Delivery = a2aDiscarded
 		t.append(a2aReturn(t, a2aEvent{ID: randomHex(16), Kind: "status", State: a2aFailed, Text: "Persona could not confirm the Agent started."}))
 	} else {
-		t.TargetSession = sid
+		t.TargetSession = session.SessionID
+		if t.Launch.Branch != "" {
+			t.Launch.Worktree = session.Cwd
+		}
 		// The first prompt may still be queued. Observe its exact message
 		// before treating the child as running.
 		if t.Events[0].Delivery != a2aDelivered {
