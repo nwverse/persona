@@ -260,6 +260,17 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agentTasks(ctx)), nil },
 			set: s.setAgentTasks},
+		{Setting: Setting{Key: "assistant.task_lessons", Title: "Learn from finished tasks", Actions: getSet,
+			About: "off (the default): nothing is learned from accepted tasks. on: when the supervisor accepts a task that needed " +
+				"corrections (a rework round, a criterion not met, the user's answer to one of its questions, a scope change, far " +
+				"more time than estimated), a background model (Information processing) writes up to three lessons for the task's " +
+				"project (a mistake that came back, background the user had to add, a step that wasted time, a better way to work), " +
+				"and every new Agent of that project gets the most repeated ones before its first prompt. A smooth task makes no " +
+				"model call. The user sees, edits and deletes the lessons on the project's page in Knowledge; a deleted one is not " +
+				"learned again. Applies from the next acceptance and the next new Agent",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.taskLessons(ctx)), nil },
+			set: s.setTaskLessons},
 		{Setting: Setting{Key: "assistant.close_ended_terminals", Title: "Close an Agent's terminal when it ends", Actions: getSet,
 			About: "off (the default): an Agent's terminal tab stays open after it stops, with the shell it ran in, until the user " +
 				"closes it. on: when an Agent Persona started ends, Persona closes the tab it opened for it, the way Archive and " +
@@ -358,7 +369,8 @@ func (s *Service) toolPersonaSettings(ctx context.Context, call ToolCall, args j
 	if _, ok := directionPromptSettingID(a.Key); ok && a.Action == "set" && (call.SessionID == "" || call.SessionID != s.settings(ctx).Main) {
 		return proto.TextResult("only the main conversation may change direction prompts", true)
 	}
-	own := append(s.ownSettings(), s.directionOwnSettings(ctx)...)
+	own := append(s.ownSettings(), s.modelGroupOwnSettings()...)
+	own = append(own, s.directionOwnSettings(ctx)...)
 	if a.Action == "" || a.Action == "list" {
 		text, err := s.listSettings(ctx, own)
 		if err != nil {
@@ -496,7 +508,7 @@ var settingTitles = map[string]string{standingAuthorizationsKey: "title_standing
 	"assistant.start_requested_tasks":     "title_start_requested_tasks", "assistant.launcher": "title_launcher",
 	"assistant.recording_days": "title_recording_days", "assistant.delivery_gate": "title_delivery_gate", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context",
-	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", "model_profiles.tiers": "title_model_tiers",
+	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", "model_profiles.tiers": "title_model_tiers",
 	"assistant.load_all_tools":                "title_load_all_tools",
 	"assistant.meeting_transcription_default": "title_meeting_transcription_default",
 	"assistant.meeting_attendance_default":    "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",
@@ -921,6 +933,13 @@ func (s *Service) setAgentTasks(ctx context.Context, v json.RawMessage) (*ownCha
 		return i18n.T(l, "assistant-settings_tool.change_agent_tasks", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.AgentTasks },
 		"assistant.agent_tasks is %v from the next start, turn end and report on (to-dos made before keep what they have).")
+}
+
+func (s *Service) setTaskLessons(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.taskLessons, "assistant.task_lessons is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_task_lessons", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.TaskLessons },
+		"assistant.task_lessons is %v from the next accepted task and the next new Agent on (lessons already learned stay on the project's page).")
 }
 
 func (s *Service) setCloseEndedTerminals(ctx context.Context, v json.RawMessage) (*ownChange, error) {

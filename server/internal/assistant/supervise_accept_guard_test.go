@@ -151,8 +151,8 @@ func TestAcceptGuardAllowsNeedsUserAndUserCheck(t *testing.T) {
 	}
 }
 
-// accepted with user_check: true is the guard's named way out for an inconclusive read-only result. It closes the
-// review but leaves a "Please verify" ask in the owner's queue, so the to-do cannot vanish unread.
+// accepted with user_check: true is the guard's named way out for an inconclusive read-only result. It accepts the
+// review and keeps the to-do open with a "Please verify" ask for the owner.
 func TestAcceptGuardAllowsUserCheck(t *testing.T) {
 	s, _, todo := guardedReviewTask(t, "Inconclusive: the change had no measurable effect; one question still retrieves the wrong page.")
 	ctx := context.Background()
@@ -165,8 +165,8 @@ func TestAcceptGuardAllowsUserCheck(t *testing.T) {
 	if !strings.Contains(res, "user_check") {
 		t.Fatalf("user_check result: %s", res)
 	}
-	if cur := todoNow(s, todo.ID); cur.DoneAt == nil || cur.Supervision.State != reviewAccepted {
-		t.Fatalf("user_check did not accept the task: %+v", cur.Supervision)
+	if cur := todoNow(s, todo.ID); cur.DoneAt != nil || cur.Supervision.State != reviewUserCheck {
+		t.Fatalf("user_check did not keep the task open awaiting verification: %+v", cur.Supervision)
 	}
 	ask, ok := s.askCopy(todo.ID)
 	if !ok || !ask.AcceptedAt.IsZero() {

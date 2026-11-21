@@ -20,7 +20,8 @@ import (
 // answer too long, makes no progress, was cut off or did not start — becomes a signal; the signals of all tasks go to
 // the main conversation as one supervision message (the quiet tasks' notices are among them), at most every few minutes, and
 // the turn it starts is not pushed unless the assistant pushes (notify_user). The assistant answers with task_review:
-// accepted closes the todo (its agents are closed later, tasks_close.go), rework sends the gaps back to the agent (at
+// accepted closes the todo unless personal verification is pending (user_check); its agents close later, tasks_close.go.
+// rework sends the gaps back to the agent (at
 // most maxReworkRounds times), needs_user waits for the user, parked waits for something else until a time
 // (parked.go), cancelled ends it.
 //
@@ -30,6 +31,7 @@ const (
 	reviewClosing   = "timeout_closing"
 	reviewTimedOut  = "timed_out"
 	reviewPending   = "pending_review"
+	reviewUserCheck = "user_check"
 	reviewAccepted  = "accepted"
 	reviewRework    = "rework"
 	reviewNeedsUser = "needs_user"
@@ -210,6 +212,9 @@ func (v *Supervision) state(t Todo) string {
 	if v == nil {
 		return ""
 	}
+	if v.State == reviewUserCheck && t.DoneAt != nil {
+		return reviewAccepted
+	}
 	if v.State == reviewParked && (t.DoneAt != nil || v.parking() == nil) {
 		return ""
 	}
@@ -217,6 +222,25 @@ func (v *Supervision) state(t Todo) string {
 		return ""
 	}
 	return v.State
+}
+
+// resetReopenedUserCheck mirrors the store's reopen and also reads rows written before the ledger reset was atomic.
+// A review written after the reopen starts a fresh check.
+func (t *Todo) resetReopenedUserCheck() {
+	v := t.Supervision
+	if t.DoneAt != nil || t.ReopenedAt == nil || v == nil || v.State != reviewUserCheck {
+		return
+	}
+	reviewedAt := v.UpdatedAt
+	if userCheckAsked(*t) {
+		reviewedAt = v.Reviews[len(v.Reviews)-1].At
+	}
+	if reviewedAt.Before(*t.ReopenedAt) {
+		t.Supervision = v.clone()
+		t.Supervision.State = ""
+		t.Supervision.PendingSince = nil
+		t.Supervision.UpdatedAt = maxTime(v.UpdatedAt, *t.ReopenedAt)
+	}
 }
 
 // supervisionStore is what the ledgers keep in the database; a store without it keeps them in memory only.
@@ -409,6 +433,8 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 		return "", 5
 	}
 	switch v.state(t) {
+	case reviewUserCheck:
+		return "待你验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
 	case reviewNeedsUser:
 		return "等你决定", 0
 	case reviewPending:
