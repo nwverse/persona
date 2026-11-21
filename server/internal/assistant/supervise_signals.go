@@ -187,6 +187,7 @@ func (g superviseSignal) immediate() bool { return supervisionBatchImmediate(g) 
 type superviseBook struct {
 	mu          sync.Mutex
 	writeMu     sync.Mutex          // one ledger write at a time (updateSupervision)
+	roundEpochs map[string]uint64   // by todo, protected by writeMu; distinguishes a new round from a scope's state reset
 	ownerPushMu sync.Mutex          // ownerPushes only; never held across RPC, todo or database calls
 	ownerPushes map[string]struct{} // todo + work currently being pushed and receipted
 	digestMu    sync.Mutex          // one whole digest, including todo and durable-pending restoration; teardown drains it

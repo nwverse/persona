@@ -158,9 +158,10 @@ func TestAgentSendAfterCloseStartsAnIndependentBrief(t *testing.T) {
 
 type failingTakeoverAgentStore struct {
 	*db.DB
-	fail       atomic.Bool
-	failUnlink atomic.Bool
-	onFail     func()
+	fail        atomic.Bool
+	failUnlink  atomic.Bool
+	onFail      func()
+	onBriefLink func()
 }
 
 func (s *failingTakeoverAgentStore) LinkTodoAgentWithSource(ctx context.Context, todoID, machineID, sessionID, title, cwd, agent, startError, source, via string, linkedAt time.Time) ([]string, error) {
@@ -181,6 +182,42 @@ func (s *failingTakeoverAgentStore) UnlinkTaskBriefTodo(ctx context.Context, tod
 		return errors.New("injected brief unlink failure")
 	}
 	return s.DB.UnlinkTaskBriefTodo(ctx, todoID)
+}
+
+func (s *failingTakeoverAgentStore) LinkTaskBriefTodo(ctx context.Context, link db.TaskBriefTodoRow) (bool, error) {
+	linked, err := s.DB.LinkTaskBriefTodo(ctx, link)
+	if err == nil && s.onBriefLink != nil {
+		hook := s.onBriefLink
+		s.onBriefLink = nil
+		hook()
+	}
+	return linked, err
+}
+
+// unstableBriefCommitStore commits the rollback's unlink, then holds a concurrent scope's durable write open until the
+// test releases its failure. The first armed write is the unlink; the second is that concurrent scope.
+type unstableBriefCommitStore struct {
+	*db.DB
+	arm      atomic.Bool
+	calls    atomic.Int32
+	unlinked chan struct{}
+	entered  chan struct{}
+	release  chan struct{}
+}
+
+func (s *unstableBriefCommitStore) PutTaskBriefState(ctx context.Context, id string, state json.RawMessage, at time.Time) (bool, error) {
+	if !s.arm.Load() {
+		return s.DB.PutTaskBriefState(ctx, id, state, at)
+	}
+	if s.calls.Add(1) == 1 {
+		ok, err := s.DB.PutTaskBriefState(ctx, id, state, at)
+		close(s.unlinked)
+		<-s.entered
+		return ok, err
+	}
+	close(s.entered)
+	<-s.release
+	return false, errors.New("injected brief scope commit failure")
 }
 
 // A continuation whose Agent cannot be linked is closed, but it must not remain in the closed task's durable lineage.
@@ -550,4 +587,74 @@ func mustBriefOfTodo(t *testing.T, s *Service, id string) TaskBrief {
 		t.Fatalf("task %s has no brief", id)
 	}
 	return brief
+}
+
+// Starting a new supervision round clears acceptance without changing Round or Reviews at round zero. Rollback must not
+// mistake that independent transition for the failed scope's own state reset.
+func TestFailedTakeoverPreservesConcurrentSupervisionRound(t *testing.T) {
+	st := &failingTakeoverAgentStore{DB: todoTestDB(t)}
+	s, old, failed, sibling, _ := continuationRollbackSetup(t, st)
+	if _, _, err := s.updateSupervision(context.Background(), sibling.ID, func(v *Supervision) bool {
+		v.State = reviewAccepted
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st.onBriefLink = func() { s.startSupervisionRound(context.Background(), sibling.ID) }
+	_, rollback, err := s.continueBriefFor(context.Background(), "conv1", "conv1", old, failed, "test rollback", []string{"criterion from a failed takeover"}, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.dropContinuation(context.Background(), failed.ID, rollback, errors.New("injected Agent link failure"))
+	if got := todoNow(s, sibling.ID).Supervision; got == nil || got.State == reviewAccepted {
+		t.Fatalf("rollback restored acceptance over a concurrent supervision round: %+v", got)
+	}
+}
+
+// A revision read while PutTaskBriefState is still pending is not a committed brief. When that write fails, rollback
+// must observe the reverted brief and realign the ledger instead of retaining the uncommitted scope.
+func TestFailedTakeoverWaitsForBriefCommitToSettle(t *testing.T) {
+	st := &unstableBriefCommitStore{DB: todoTestDB(t), unlinked: make(chan struct{}), entered: make(chan struct{}), release: make(chan struct{})}
+	defer func() {
+		select {
+		case <-st.release:
+		default:
+			close(st.release)
+		}
+	}()
+	s, failed, sibling, brief, rollback := continuationRollbackFixtureOn(t, st)
+	st.arm.Store(true)
+	dropDone := make(chan struct{})
+	go func() {
+		s.dropContinuation(context.Background(), failed.ID, rollback, errors.New("injected Agent link failure"))
+		close(dropDone)
+	}()
+	<-st.unlinked
+	concurrent := []string{"scope whose durable commit fails"}
+	scopeDone := make(chan struct{})
+	go func() {
+		_, _ = s.rescope(context.Background(), sibling, "conv1", "conv1", "concurrent_test_scope", concurrent, 11)
+		close(scopeDone)
+	}()
+	waitFor(t, "rollback to use the pending scope or wait for its commit", func() bool {
+		if got := todoNow(s, sibling.ID).Supervision; got != nil && slices.Equal(got.DoneWhen, concurrent) {
+			return true
+		}
+		for _, stack := range goroutineStacks() {
+			if strings.Contains(stack, "(*Service).briefSnapshotByID(") && strings.Contains(stack, "(*Cond).Wait") {
+				return true
+			}
+		}
+		return false
+	})
+	close(st.release)
+	<-dropDone
+	<-scopeDone
+	got := todoNow(s, sibling.ID).Supervision
+	if got == nil || !slices.Equal(got.DoneWhen, brief.Criteria) || got.ExpectMinutes != brief.ExpectNow {
+		t.Fatalf("failed brief commit left its uncommitted scope on the ledger: %+v", got)
+	}
+	if after, ok := s.briefOfTodo(sibling.ID); !ok || !slices.Equal(after.Criteria, brief.Criteria) || after.ExpectNow != brief.ExpectNow {
+		t.Fatalf("brief and ledger diverged after the failed commit: brief %+v, ledger %+v", after, got)
+	}
 }

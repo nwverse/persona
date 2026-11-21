@@ -626,7 +626,7 @@ func (s *Service) dropContinuation(ctx context.Context, id string, rollback *con
 			_, _, err := s.updateSupervisionGuarded(ctx, todoID, func(t Todo) bool {
 				return t.DoneAt == nil && t.Supervision != nil
 			}, func(v *Supervision) bool {
-				desired := rollback.restoredLedger(todoID, v, brief)
+				desired := rollback.restoredLedger(todoID, v, brief, s.supervise.roundEpochs[todoID])
 				if reflect.DeepEqual(v, desired) {
 					return false
 				}

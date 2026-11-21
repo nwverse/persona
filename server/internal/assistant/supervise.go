@@ -310,6 +310,10 @@ func (s *Service) startSupervisionRound(ctx context.Context, id string) {
 			return false
 		}
 		v.State, v.Round, v.Waits = "", 0, nil
+		if s.supervise.roundEpochs == nil {
+			s.supervise.roundEpochs = map[string]uint64{}
+		}
+		s.supervise.roundEpochs[id]++
 		return true
 	}); err != nil {
 		s.logf("task %s: new supervision round: %v", id, err)
