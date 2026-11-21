@@ -82,7 +82,7 @@ const canonicalLauncher = (name: string) => name.startsWith("launcher.") ? name.
 export function mainChatAgentMismatch(c: AssistantChat, info: AssistantLaunchers | undefined): MainChatAgentMismatch | undefined {
   const s = c.session;
   if (!s || !c.isMain || !s.launcher || !info || assistantPick(c)) return undefined;
-  const configuredLauncher = info.def?.provider || c.config;
+  const configuredLauncher = (c.def === undefined ? info.def : c.def)?.provider || c.config;
   if (!configuredLauncher || canonicalLauncher(configuredLauncher) === canonicalLauncher(s.launcher)) return undefined;
   const configured = info.launchers.find((l) => l.name === configuredLauncher)
     ?? info.launchers.find((l) => canonicalLauncher(l.name) === canonicalLauncher(configuredLauncher));
@@ -104,7 +104,7 @@ export function assistantSetup(c: AssistantChat, info: AssistantLaunchers | unde
   const def = c.def === undefined ? info?.def : c.def;
   if (!s || (c.followsDefault ?? c.isMain)) {
     const provider = def?.provider || c.config || s?.launcher || "claude";
-    return { provider, model: def?.model || (s?.launcher === provider ? s.model : undefined), effort: s?.effort ?? (def?.effort || undefined), ...(fast ? { fast: true } : {}), source: "default" };
+    return { provider, model: def?.model || (s?.launcher === provider ? s.model : undefined), effort: c.isMain ? def?.effort || s?.effort : s?.effort ?? (def?.effort || undefined), ...(fast ? { fast: true } : {}), source: "default" };
   }
   // a launcher the list no longer offers is not what the next message runs on: the hub moves the chat to the assistant's
   const own = launcherOffered(info?.launchers ?? null, s.launcher) ? s.launcher : undefined;

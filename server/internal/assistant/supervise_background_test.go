@@ -615,7 +615,7 @@ func TestBackgroundSupervisorModelPurpose(t *testing.T) {
 		t.Fatalf("catalog: %d %s", r.Code, r.Body.String())
 	}
 	listed := slices.DeleteFunc(slices.Clone(catalog.Purposes), func(p ModelPurpose) bool { return p.ID != purposeSupervise })
-	if len(listed) != 1 || catalog.Purposes[len(catalog.Purposes)-3].ID != purposeSupervise || catalog.Purposes[len(catalog.Purposes)-2].ID != purposeMeetingRoom {
+	if len(listed) != 1 || catalog.Purposes[len(catalog.Purposes)-4].ID != purposeSupervise || catalog.Purposes[len(catalog.Purposes)-3].ID != purposeMeetingRoom {
 		t.Fatalf("the catalog's rows for it: %+v", listed)
 	}
 	if own := purposeOf(t, s, purposeSupervise); !reflect.DeepEqual(listed[0], own) || own.Description == "" || own.Launch != "headless" {
