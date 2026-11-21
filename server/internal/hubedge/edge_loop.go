@@ -12,6 +12,9 @@ import (
 
 var errUpdateRecovery = errors.New("update recovery failed")
 
+// errBusy: the slot that asked for the switch said, right before its release, that it is not idle (Msg.Idle).
+var errBusy = errors.New("the hub is busy")
+
 // startAgain has the loop start binary as the serving slot, after the backoff the failures so far earn.
 func (e *edge) startAgain(binary string) {
 	e.retryBinary = binary
@@ -112,7 +115,7 @@ func (e *edge) fromActive(p *proc, m Msg) error {
 				return err
 			}
 			if p.alive() && e.current() == p {
-				p.send(Msg{T: MsgSwitchFailed, Reason: err.Error()})
+				p.send(Msg{T: MsgSwitchFailed, Reason: err.Error(), Busy: errors.Is(err, errBusy)})
 			}
 		}
 	case MsgConfirmed:
@@ -162,6 +165,15 @@ func (e *edge) switchTo(r switchReq) error {
 		e.logf("hub edge: %s did not start: %v; slot %s goes on", m.Binary, err, nameOf(old))
 		return fmt.Errorf("the new hub did not start: %w", err)
 	}
+	// The slot that asked checked it was idle before it asked; the standby took up to StandbyWait since, and a
+	// conversation may have started meanwhile. Its answer here is the last word before the release (#10826).
+	if m.Idle && r.from != nil && r.from == old {
+		if err := e.askIdle(old); err != nil {
+			e.kill(green)
+			e.logf("hub edge: slot %s is not idle (%v): %s goes, slot %s goes on", old.name, err, m.Binary, old.name)
+			return err
+		}
+	}
 	progress("handing over")
 	e.hold()
 	e.clearConfirm()
@@ -205,6 +217,40 @@ func (e *edge) switchTo(r switchReq) error {
 	}
 	progress("serving")
 	return nil
+}
+
+// askIdle asks p, the slot that asked for the switch, whether it is still idle: nil when it says so. Busy, no answer
+// within IdleWait, or p gone is errBusy: the switch does not go through, and p goes on serving.
+func (e *edge) askIdle(p *proc) error {
+	e.asks++
+	seq := e.asks
+	p.send(Msg{T: MsgAskIdle, Seq: seq})
+	t := time.NewTimer(e.o.IdleWait)
+	defer t.Stop()
+	for {
+		select {
+		case m, ok := <-p.msgs:
+			if !ok {
+				return fmt.Errorf("%w: it exited", errBusy)
+			}
+			switch m.T {
+			case MsgIdle:
+				if m.Seq != seq {
+					continue // the answer to an earlier question, late
+				}
+				if m.OK {
+					return nil
+				}
+				return fmt.Errorf("%w: %s", errBusy, m.Reason)
+			case MsgConfirmed:
+				e.clearConfirm()
+			}
+		case <-t.C:
+			return fmt.Errorf("%w: no answer within %s", errBusy, e.o.IdleWait)
+		case <-e.ctx.Done():
+			return e.ctx.Err()
+		}
+	}
 }
 
 func nameOf(p *proc) string {

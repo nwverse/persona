@@ -30,6 +30,9 @@ const RespawnCode = 75
 // ErrReleased: the edge told the slot to stop (or went away) before it was activated.
 var ErrReleased = errors.New("hubedge: released")
 
+// ErrBusy: the edge dropped the switch because this slot said, right before its release, that it is not idle.
+var ErrBusy = errors.New("hubedge: busy")
+
 // ErrNoSocket: the edge holds no port for that address (it was not in hub.json when the service started, or the edge
 // could not listen on it: a LAN address DHCP has moved).
 var ErrNoSocket = errors.New("hubedge: the edge has no socket for this port")
@@ -43,7 +46,8 @@ type Slot struct {
 	out      *lineWriter
 	activate chan struct{}
 	released chan struct{}
-	failed   chan string // switch_failed reasons
+	failed   chan Msg // switch_failed
+	idle     func() (bool, string)
 
 	mu       sync.Mutex
 	serving  bool
@@ -59,7 +63,7 @@ func FromEnv() (*Slot, error) {
 		return nil, nil
 	}
 	s := &Slot{Name: name, Standby: os.Getenv(EnvRole) == "standby",
-		sockets: map[string]string{}, activate: make(chan struct{}), released: make(chan struct{}), failed: make(chan string, 1)}
+		sockets: map[string]string{}, activate: make(chan struct{}), released: make(chan struct{}), failed: make(chan Msg, 1)}
 	for _, kv := range strings.Split(os.Getenv(EnvSockets), ";") {
 		if port, path, ok := strings.Cut(kv, "="); ok && port != "" && path != "" {
 			s.sockets[port] = path
@@ -88,9 +92,20 @@ func (s *Slot) dispatch(msgs <-chan Msg) {
 			s.release()
 		case MsgSwitchFailed:
 			select {
-			case s.failed <- m.Reason:
+			case s.failed <- m:
 			default:
 			}
+		case MsgAskIdle:
+			go func(seq int64) {
+				ok, why := true, ""
+				s.mu.Lock()
+				idle := s.idle
+				s.mu.Unlock()
+				if idle != nil {
+					ok, why = idle()
+				}
+				s.send(Msg{T: MsgIdle, OK: ok, Reason: why, Seq: seq})
+			}(m.Seq)
 		}
 	}
 	s.release() // the edge is gone: a slot nobody relays to must not go on holding the hub's machines
@@ -146,8 +161,17 @@ func (s *Slot) StandbyReady(ctx context.Context) error {
 	}
 }
 
+// SetIdle has every update switch this slot asks for released only once idle says, right before the release, that
+// the slot is idle (ok), else why it is not; the switch then fails with ErrBusy and this slot goes on serving.
+func (s *Slot) SetIdle(idle func() (ok bool, why string)) {
+	s.mu.Lock()
+	s.idle = idle
+	s.mu.Unlock()
+}
+
 // Switch asks the edge to replace this slot by binary. It returns nil once the edge releases this slot (the new one
-// is taking over: this process stops), or why the new one did not come up (this slot stays active).
+// is taking over: this process stops), or why the new one did not come up (this slot stays active): ErrBusy when an
+// update's switch found this slot busy (SetIdle).
 func (s *Slot) Switch(ctx context.Context, binary, prev, kind string, expect int64) error {
 	s.switchMu.Lock()
 	defer s.switchMu.Unlock()
@@ -155,12 +179,18 @@ func (s *Slot) Switch(ctx context.Context, binary, prev, kind string, expect int
 	case <-s.failed: // an old answer
 	default:
 	}
-	s.send(Msg{T: MsgSwitch, Binary: binary, Prev: prev, Kind: kind, Expect: expect})
+	s.mu.Lock()
+	askIdle := kind == KindUpdate && s.idle != nil
+	s.mu.Unlock()
+	s.send(Msg{T: MsgSwitch, Binary: binary, Prev: prev, Kind: kind, Expect: expect, Idle: askIdle})
 	select {
 	case <-s.released:
 		return nil
-	case why := <-s.failed:
-		return fmt.Errorf("%s", why)
+	case m := <-s.failed:
+		if m.Busy {
+			return fmt.Errorf("%w: %s", ErrBusy, m.Reason)
+		}
+		return fmt.Errorf("%s", m.Reason)
 	case <-ctx.Done():
 		// The release ends the hub's context right after it is closed: that is the switch going through, not
 		// giving up on it (a caller undoing the update now would put the old binary back under the new slot).

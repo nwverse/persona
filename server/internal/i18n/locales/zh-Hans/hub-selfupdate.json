@@ -8,6 +8,7 @@
   "reason_no_start_other": "新版本启动了 {count} 次都没起来",
   "reason_marker_unsaved": "更新标记写不进去，没法发现新版本反复崩溃",
   "rolled_back": "更新到 {to} 没成功，已回到 {from}：{reason}",
+  "rollback_failed": "更新到 {to} 没成功（{reason}），回到 {from} 也没成功：{error}。hub 暂时继续运行 {to}",
   "push_failed_title": "hub 更新没成功",
   "push_failed_body": "{why}。这一版不会再自动装。",
   "reason_no_database": "连不上数据库",

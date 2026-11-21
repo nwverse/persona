@@ -32,11 +32,13 @@ const (
 	MsgFailed    = "failed"    // could not start (Reason); it exits
 	MsgSwitch    = "switch"    // the active slot asks to be replaced by Binary (Kind update or rollback)
 	MsgConfirmed = "confirmed" // the update this slot is the result of is confirmed (selfupdate.go confirm)
+	MsgIdle      = "idle"      // the answer to ask_idle: OK, or Reason (what is busy)
 
 	// edge -> slot
 	MsgActivate     = "activate"      // a standby slot starts serving (its database migrations, the machines…)
 	MsgRelease      = "release"       // stop now, the way a planned stop does; the process exits
-	MsgSwitchFailed = "switch_failed" // the binary asked for did not come up (Reason): this slot stays active
+	MsgSwitchFailed = "switch_failed" // the binary asked for did not come up (Reason), or Busy: this slot stays active
+	MsgAskIdle      = "ask_idle"      // a switch that asked for Idle: is this slot still idle? (its last word before release)
 
 	// hub switch <-> edge
 	MsgStatus   = "status"   // request; the reply carries Proto, Version, Build, Binary, PID, Slot
@@ -67,6 +69,11 @@ type Msg struct {
 	Edge    string `json:"edge,omitempty"` // status: the edge's own version (Version and Build are the serving slot's)
 	OK      bool   `json:"ok,omitempty"`
 	Reason  string `json:"reason,omitempty"`
+	// Idle (switch): release the slot asking only once it says, right before, that it is idle (ask_idle). An edge
+	// that does not know it releases the slot as before. Busy (switch_failed): it was not, so nothing changed.
+	Idle bool  `json:"idle,omitempty"`
+	Busy bool  `json:"busy,omitempty"`
+	Seq  int64 `json:"seq,omitempty"` // ask_idle's number, which its idle answer repeats (a late answer is not the next one's)
 }
 
 // lineWriter writes messages whole, one per line, from any goroutine.
