@@ -117,6 +117,15 @@ drives the built client with synthetic data in Chinese, English and Japanese, wi
 Dismiss, Undo, reload, new same-reference progress, and that no reply or task/Agent mutation was requested; `--cdp`
 uses the shared browser and keeps the test pages open.
 
+**Pending plans across conversations (#12254).** Main's Needs you includes every open task plan of the current
+assistant in its ordinary space, including plans made by scheduled routines and side conversations. Health keeps its
+own plans; archived and deleted source conversations are excluded from the Main snapshot. The source conversation labels its group;
+Start and Don't start act on that plan's source, and Open navigates there. Other conversations show only their own plans.
+The Main feed carries the pending-plan snapshot on initial load and reconnect. A newer live update or completed owner
+action wins over an older read. Each open plan counts as one decision, however many tasks it contains. Conversation rows
+add those decisions to their existing needs-you count, and the Persona chats heading keeps the aggregate visible even
+when recent chats or the whole section are collapsed. Managers' plans are counted separately.
+
 **The open tray's room (#4656).** An open Needs you / In progress tray follows the viewport instead of the old
 `min(20rem, 40dvh)` box: while it is open, `styles.css` lets the chat dock (`DOCK_MAX`, 55% of the visible height otherwise)
 take up to `--assistant-dock-open-max` (82% of `--kb-h`), the conversation above giving up the room, and the tray fills only
@@ -2166,6 +2175,14 @@ all-types example unchanged, `invalid` shows a document whose saved values are m
 its empty, correctable state, `keyboard` refuses the first single-choice save so its Tab stop can be checked, `empty` shows
 a document without groups, `unsupported` shows an unknown kind and a newer schema version, and the failure scenarios show
 only the module they happen in. The page is never built.
+
+## Extension entry-list settings (#9504)
+
+`web/src/views/settings/Extensions.tsx` renders a declared extension entry list inside the existing extension settings page, not through the generic configuration-Document form above. `EntryListControl` uses the existing settings surfaces, field rows, buttons and shared secret/removal dialogs. Saved entry `_id` metadata keys each React entry but is not an input; an unsaved entry carries an enumerable symbol that object spreading preserves across immutable edits and `JSON.stringify` omits. Arrays are atomic when a dirty draft rebases onto a fresh detail, avoiding index-wise merges of different entries.
+
+`web/src/lib/extensions.ts` adds `entry_lists=1` to every detail read and detail-returning extension write, including lifecycle and secret responses. Without it the hub supplies the legacy projection, so a response to a write must not accidentally remove the editor on the next render. Immediate fixed-field saves (the machine switches) add `preserve_entries=1`: a stale page cannot turn its old entry array into removals or secret-clearing rebinds, and the response still contains the capable form. Entry add/edit/remove changes only the raw nested configuration draft; secret values stay exclusively in the existing write-only dialog and API. New entries cannot open that dialog until the hub has saved them and minted an ID. Dynamic secret rows are rendered in their entries, not duplicated in the fixed Secrets group. A required entry list keeps an explicit empty array through compaction, dirty tracking and draft rebasing; an optional one compacts back to absent. The shared helpers cover numeric paths, indexed validation errors (`accounts[0].address`), entry identity and the maximum-entry bound.
+
+The server contract, legacy preservation, egress/consent and fixed-slot migration are in `docs/extensions/extensions.md` ("Entry lists and per-entry secrets") and `docs/protocol/protocol.md` ("Extension entry-list settings"). The interaction rules and accessibility acceptance are in `docs/design/DESIGN_SYSTEM.md` ("Extension entry lists").
 
 ## Labs
 
