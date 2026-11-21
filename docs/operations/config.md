@@ -396,6 +396,11 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   never reopens the knowledge base: the import reads it again before every call, so `enabled: false` stops it before its next call.
   `kb.history` keeps only the switch and the pacing: which chats are read, how much of each and how far back (`history.<source>.back_days`) are the knowledge base's
   selection, which the manager keeps in its settings table, not here,
+  `lark_minutes` (the owner's Lark minutes and document titles through lark-cli, **off unless `enabled` is `true`**; `docs/assistant/knowledge.md` "Lark minutes and documents"):
+  `{"enabled": true, "since_days": 30, "interval_minutes": 60, "binary": "lark-cli", "profile": "", "doc_search": ["<keyword>"]}`. `since_days` is how far back each run searches (default 30),
+  `interval_minutes` the least time between two runs (default 60), `binary` lark-cli's path when the manager's `PATH` cannot find it (the adapter also tries the login shell's `PATH`),
+  `profile` a lark-cli profile (empty: its default), and `doc_search` the keywords that discover documents (empty: off). The import needs the user's own `lark-cli` login on the manager's computer (minutes, docs, drive scopes);
+  a failure is logged and never stops the round. Changing it does not reopen the knowledge base: it is read again every round.
   `ai` (model for compression and tagging, same fields as `ai`; defaults to `inbox.triage_ai`, then `ai`), `extra_dirs` (note directories you maintain on the manager's machine, the hub machine for the built-in manager,
   e.g. a git repo of facts / lessons: `kb_search` also searches Markdown in these directories (read-only, skips dot directories such as `.git`), and the assistant's CLAUDE.md mentions them; `~/` is that machine's home).
   With `enabled: true, read_only: true`, the manager serves existing local archives without collection, model calls,
