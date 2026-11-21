@@ -62,6 +62,7 @@ func (h *Hub) routes() http.Handler {
 	h.deviceRoutesRelayed(api) // the manager's own: reconnect, engine, herdr, deploy, claude-dirs (devices_routes.go)
 	h.sharingRoutes(api)
 	h.fileRoutes(api)
+	h.machineFileRoutes(api)
 	h.gitRoutes(api)
 	h.agentSettingsRoutes(api)
 	h.sessionRoutes(api)

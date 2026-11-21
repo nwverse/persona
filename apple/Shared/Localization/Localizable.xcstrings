@@ -2537,6 +2537,75 @@
         }
       }
     },
+    "Answers [Hub Address]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Answers"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "応答あり"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有应答"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Certificate Not Trusted [Hub Address]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Certificate Not Trusted"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "証明書を信頼できません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "证书不受信任"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Couldn't Connect [Hub Address]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't Connect"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続できません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连不上"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Hidden Agent Folders" : {
       "localizations" : {
         "en" : {
@@ -2624,6 +2693,52 @@
           }
         }
       }
+    },
+    "Not Tried Yet [Hub Address]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not tried yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まだ試していません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没试过"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Not Your Hub [Hub Address]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not Your Hub"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "別のハブ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不是你的 hub"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Show hidden sessions" : {
       "localizations" : {
@@ -26218,6 +26333,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Also renames this session in Rex." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Also renames this session in Rex."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rexのこのセッション名も変更します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同时改 Rex 里这个 session 的名字。"
+          }
+        }
+      }
     },
     "Also renames this session in Tern." : {
       "localizations" : {
@@ -166919,6 +167057,29 @@
       },
       "extractionState" : "manual"
     },
+    "Tab name (Rex tab)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tab name (Rex tab)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タブ名（Rexのタブ）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标签名（Rex tab）"
+          }
+        }
+      }
+    },
     "Tab name (Tern tab)" : {
       "localizations" : {
         "en" : {
@@ -169691,6 +169852,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Terminals in Rex" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Terminals in Rex"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rexのターミナル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rex 里的终端"
+          }
+        }
+      }
     },
     "Terminals in Tern" : {
       "localizations" : {
@@ -178966,6 +179150,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "The tab name syncs to Rex. The session name uses Claude's /rename, so claude --resume on the Mac shows it too." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The tab name syncs to Rex. The session name uses Claude's /rename, so claude --resume on the Mac shows it too."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タブ名はRexに同期されます。セッション名はClaudeの /renameを使うため、Macのclaude --resumeでも表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标签名同步到 Rex；会话名用 Claude 的 /rename，Mac 上 claude --resume 也看得到。"
+          }
+        }
+      }
     },
     "The tab name syncs to Tern. The session name uses Claude's /rename, so claude --resume on the Mac shows it too." : {
       "localizations" : {
@@ -191264,6 +191471,29 @@
       },
       "extractionState" : "manual"
     },
+    "Tried at %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tried at %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最終試行：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上次尝试：%1$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Tried it: it answers" : {
       "localizations" : {
         "en" : {
@@ -194488,6 +194718,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "状态未知"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Unknown [Hub Address]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unknown"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不明"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知"
           }
         }
       },
