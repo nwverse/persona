@@ -36,6 +36,7 @@ import { ariaKeyshortcuts, formatChord } from "../lib/shortcuts";
 import { PagedSessionList } from "./agents/PagedSessionList";
 import { runtimeIdentity } from "../lib/runtime-list";
 import { heldSeen } from "../lib/seen-outbox";
+import { heldLaunchWorking, launchForSession } from "../lib/launch-handoff";
 import { runningChildren } from "../lib/child-sessions";
 import { childCards, foldedRow } from "../lib/folded-rows";
 import { countSides } from "../lib/side-fold";
@@ -256,9 +257,11 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const justAnswered = useStore((st) => lastAnsweredAt(st.answered, given.machine_id, given.session_id));
   const pending = useStore((st) => answerPending(st.answered, given.machine_id, given.session_id));
   // seen on this page and not yet recorded by the hub (lib/seen-outbox.ts): the paged list's rows come from the list
-  // itself, not the store, so the row holds it seen too
+  // itself, not the store, so the row holds it seen too; newly launched first-turn sessions stay working across handoff (#12380)
   const seenMark = useStore((st) => st.seen[runtimeIdentity(given)]);
-  const s = heldSeen(answeredSession(given, Boolean(ix), justAnswered, pending), seenMark, Date.now());
+  const launch = useStore((st) => launchForSession(st.launches, given));
+  const nowHandoff = Date.now();
+  const s = heldLaunchWorking(heldSeen(answeredSession(given, Boolean(ix), justAnswered, pending), seenMark, nowHandoff), launch, nowHandoff);
   const preferTab = useHerdrTabName();
   const title = sessionTitle(s, preferTab);
   const titleDetail = sessionTitleDetail(s, preferTab);

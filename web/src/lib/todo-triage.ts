@@ -44,6 +44,7 @@ export function waitingForMerge(todo: Todo, lookup: SessionLookup | undefined, n
   if (todo.done_at || !openMergePRs(todo, now).length) return false;
   const status = todoStatus(todo, lookup);
   if (status === "failed" || status === "needs_you" || status === "interrupted" || status === "working" || status === "waiting") return false;
+  if (reviewState(todo) === "user_check") return false;
   if (!decisionDismissed(todo) && (reviewState(todo) === "needs_user" || openAsk(todo)?.outcome === "decide" || openAsk(todo)?.outcome === "cannot")) return false;
   return true;
 }
@@ -166,6 +167,8 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
     return at("done", "failed_start");
   }
   if (status === "needs_you" || status === "interrupted") return at("waiting", "agent_asks");
+  if (!todo.done_at && reviewState(todo) === "user_check") return at("waiting", "owner_decides");
+  // a decision the owner chose Don't handle on no longer waits on them (decisionDismissed)
   if (!todo.done_at && !decisionDismissed(todo) && (reviewState(todo) === "needs_user" || ask?.outcome === "decide" || ask?.outcome === "cannot")) return at("waiting", "owner_decides");
   if (heldDelivery(todo)?.unblock === "user") return at("waiting", "delivery_ok");
   // rule 8's signals, read here so rule 9 yields to them: a turn or review nobody has looked at stays Just finished

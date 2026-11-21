@@ -47,27 +47,28 @@ Supported since 2026-11-05 (issue #3070, related #1178); Agent creation and Assi
 Both `companion.mjs` and `index.js` advertise:
 
 - `launcher: "opencode"` and a `launchers` entry `{ name: "opencode", display_name, agent: "opencode", model, models }`
-- `caps`: `start`, `models`, `modes`, `model` (`modelSwitch`), `send`, `interrupt`, `rename`, `assistant` (plus `close` and `readonly` on the ACP companion)
+- `caps`: `start`, `models`, `modes`, `model` (`modelSwitch`), `readonly`, `send`, `interrupt`, `rename`, `assistant` (plus `close` on the ACP companion)
 
 Model discovery (`integrations/opencode/lib/models.js`):
 
-- **ACP companion**: runs `opencode models --verbose` (parsing `providerID`, `id`, `name`, `limit.context`, and `variants` → Persona `efforts` `low` / `medium` / `high` / `xhigh` / `max`), reads the configured default `model` from `<opencode config dir>/opencode.jsonc` / `opencode.json`, and merges `configOptions` returned by ACP `session/new`.
+- **ACP companion**: runs `opencode models --verbose` (parsing `providerID`, `id`, `name`, `limit.context`, and `variants` → Persona `efforts` `low` / `medium` / `high` / `xhigh` / `max`), reads the configured default `model` from `<opencode config dir>/opencode.jsonc` / `opencode.json`, and merges `configOptions` returned by ACP `session/new`. When no default model is explicitly configured or requested, ACP's `currentValue` is preserved rather than overwritten by `models[0]`.
 - **v2 plugin**: reads `ctx.model.list()` and normalizes entries into `provider/model` IDs.
-- **Model resolution**: supports `provider/model` (including `opencode-go/...` and nested slashes such as `openrouter/anthropic/...`), `provider:model`, and unique bare model IDs matching the discovered catalog; unknown bare IDs are rejected with `bad_request`.
+- **Model resolution**: supports `provider/model` (including `opencode-go/...` and nested slashes such as `openrouter/anthropic/...`), `provider:model`, and unique bare model IDs (including bare IDs containing `:` or `/` such as `llama3:8b` or `anthropic/claude-x`). Ambiguous bare IDs matching multiple providers and unknown bare IDs are rejected with `bad_request`.
 
-### Agent sessions (`session.start`)
+### Agent sessions (`session.start`), effort, and modes
 
-- `session.start` accepts `cwd`, optional `prompt`, `images`, `model`, `permission_mode` / `mode`, `client_msg_id`, and `assistant`.
-- In the ACP companion, `session/new` starts the session in `cwd`, applies `mode` (`plan` for read-only, failing closed with `readonly_unsupported` if opencode rejects switching to `plan`) and `model` (`session/set_config_option`) before sending the initial prompt/images, and attaches a per-session loopback HTTP MCP server with ordinary Agent tools (`assistant: false`).
-- In the v2 plugin, `ctx.session.create` (with `ctx.session.switchModel` fallback) creates the session in the matching directory context and records it in `createdSessions` so it is visible before `opencode.db` flushes.
-- Started sessions report `started_by_persona: true` and `launcher: "opencode"`.
+- `session.start` accepts `cwd`, optional `prompt`, `images`, `model`, `effort` (`low` / `medium` / `high` / `xhigh` / `max`), `permission_mode` / `mode`, `client_msg_id`, and `assistant`.
+- In the ACP companion, `session/new` starts the session in `cwd`, applies `mode` (`plan` for read-only, failing closed with `readonly_unsupported` if opencode rejects switching to `plan`, and re-applying `plan` across ACP child restarts), `model`, and `effort` (`variant` / ACP reasoning config option) via `session/set_config_option` before sending the initial prompt/images, and attaches a per-session loopback HTTP MCP server with ordinary Agent tools (`assistant: false`). The companion launches `opencode acp` with `OPENCODE_PERMISSION` requiring `ask` for `bash`, `edit`, and `write` so mode and command-gate checks always run.
+- In the v2 plugin, `ctx.session.create` (with `ctx.session.switchModel` fallback) creates the session in the matching directory context, supports `effort`-only `session.modes` updates, fails closed with `readonly_unsupported` when `plan` start/switch is rejected, and records created sessions in `createdSessions` so they are visible before `opencode.db` flushes.
+- Permission modes enforced in both runtimes: `default` (ask), `acceptEdits` (auto-allow `write`/`edit`), `plan` (reject `write`/`edit`/`bash`/`shell`), and `bypassPermissions` (auto-allow except Assistant command gates).
+- Started sessions report `started_by_persona: true`, `launcher: "opencode"`, `permission_mode`, `effort`, and `efforts`.
 
 ### Persona Assistant (`assistant: true`) and safety boundary (#11220)
 
 - **Workspace instructions (`AGENTS.md`)**: when Persona starts an Assistant chat in `~/.persona/assistant`, opencode natively loads `<cwd>/AGENTS.md` into its system prompt.
-- **Persona MCP tools (`integrations/opencode/lib/mcp.js`)**: a private loopback HTTP MCP server (`127.0.0.1:0`, 32-byte random Bearer token checked with `timingSafeEqual`, one route per session) proxies `tools/list` and `tools/call` through `rt.tools` / `rt.callTool` over `~/.persona/runtime.sock`. Hub credentials are never passed to opencode. During ACP `session/new` (before `session.start` returns to node), `tools/list` calls `rt.tools({ assistant })` without `session_id`; once created and bound, `tools/call` supplies `session_id` and `assistant`.
+- **Persona MCP tools (`integrations/opencode/lib/mcp.js`)**: a private loopback HTTP MCP server (`127.0.0.1:0`, 32-byte random Bearer token checked with `timingSafeEqual`) proxies `tools/list` and `tools/call` through `rt.tools` / `rt.callTool` over `~/.persona/runtime.sock`. Hub credentials are never passed to opencode. The ACP companion allocates one route per session (`tools/list` calls `rt.tools({ assistant })` during `session/new`, then `tools/call` supplies `session_id` and `assistant`). The v2 plugin resolves directory-scoped routes dynamically against the active Assistant session for that directory and releases the route when the directory's Assistant sessions are deleted.
 - **Live context snapshot**: on `session.send` with `context`, the runtime prepends `<persona-context>\n...\n</persona-context>\n\n` for the model and strips attribute-less `<persona-context>` / `<jarvis-context>` blocks when mapping user messages back to Persona (`visibleUserText`), while keeping `<persona-context kind="forward">` blocks visible.
-- **Permissions, memory writes, and command gates**: Assistant chats route approvals to the phone (`answerFirst` overridden for assistant sessions), auto-allow `write`/`edit` inside `memory_dir` outside `plan` mode, reject writes/shell in `plan` mode, and always reject shell commands matching Persona tool command gates (`tool.shell`) even under `bypassPermissions`.
+- **Permissions, memory writes, and command gates**: Assistant chats route approvals to the phone (`answerFirst` overridden for assistant sessions), auto-allow `write`/`edit` inside `memory_dir` (resolving relative paths against session `cwd`, never `memory_dir`) outside `plan` mode, reject writes/shell in `plan` mode, await command-gate tool rules before the first prompt, fail closed if gate rules cannot be loaded, and always reject shell commands matching Persona tool command gates (`tool.shell`) on the full unclipped command using shell-aware token matching (covering `;`, `&&`, `||`, `|`, quotes, escapes, paths, `sh -c`, `eval`, and command substitutions) even under `bypassPermissions`.
 - **No `caps.supervision_policy` (fail-closed per #11220)**: `opencode acp` advertises `{ close, fork, list, resume }` without `additionalDirectories`, so opencode cannot load an isolated per-session rule file outside `~/.persona/assistant/AGENTS.md`. Therefore `integrations/opencode` **deliberately omits `caps.supervision_policy`**, and both the node (`server/internal/node/assistant_runtime.go`) and the runtime itself fail closed with `assistant_supervision_runtime` if any non-empty `supervision_instructions` is supplied. Shared `~/.persona/assistant/AGENTS.md` is never rewritten and supervision rules are never concatenated into user prompts.
 
 ## Terminal rows for other agents
@@ -133,7 +134,7 @@ Requires Node 22+ and `opencode` on `PATH` (or `PERSONA_OPENCODE_BIN` / `--bin`)
 node <Persona repo>/integrations/opencode/companion.mjs
 ```
 
-Options: `--bin <path>`, `--db <path>`, `--socket <path>`, `--config-dir <dir>`, `--launcher <name>`, `--name <label>`, `--model <provider/model>`, `--no-assistant`.
+Options (strictly validated; unknown flags exit with an error): `--bin <path>` (alias `--opencode-bin`), `--db <path>`, `--socket <path>`, `--config-dir <dir>`, `--launcher <name>`, `--name <label>` (alias `--display-name`), `--model <provider/model>`, `--runtime <id>`, `--instance <id>`, `--no-assistant`, `--parent-stdin`.
 
 ### Option B: opencode server plugin (for `opencode serve` and herdr TUI sessions)
 
@@ -158,7 +159,7 @@ Both Option A and Option B can run at the same time on the same machine.
 | `maxSessions` | `80` | Maximum list length |
 | `socket` | `~/.persona/runtime.sock` | node's runtime socket; `PERSONA_RUNTIME_SOCKET` also works |
 
-Environment variables: `PERSONA_OPENCODE_BIN` (companion `opencode` binary path), `PERSONA_OPENCODE_DB` (location of `opencode.db`), `PERSONA_OPENCODE_DEBUG=1` (debug logs to stderr).
+Environment variables: `PERSONA_OPENCODE_BIN` (alias `OPENCODE_BIN`; companion `opencode` binary path), `PERSONA_OPENCODE_DB` (location of `opencode.db`), `PERSONA_OPENCODE_DEBUG=1` (debug logs to stderr).
 
 ## Token usage
 
@@ -184,12 +185,13 @@ The node meters opencode's token usage from its database (the same file this run
 ## Verification
 
 - `cd integrations/opencode && npm test`:
-  - `test/models.test.js`: JSONC config parsing, `opencode models --verbose` & plain CLI parsing, ACP `configOptions`, catalog normalization/efforts/windows/cap, `resolveModel` (`opencode-go/...`, nested slashes, `provider:model`, bare matching, error branches), `buildLauncher`.
-  - `test/mcp.test.js`: loopback HTTP MCP proxy Bearer auth, route isolation, `allocate` + `bind`, `tools/list`, `tools/call` (text + image), `extractShellGates` / `matchShellGate`.
+  - `test/acp.test.js`: `OpencodeAcpClient` stale permission reply dropping across process restarts, stdin `EPIPE` handling, and orphan child cleanup on `initialize` failure/timeout.
+  - `test/models.test.js`: JSONC config parsing, `opencode models --verbose` & plain CLI parsing, ACP `configOptions` (models + effort/variant), catalog normalization/efforts/windows/cap/`explicitDefault`, `resolveModel` (`opencode-go/...`, nested slashes, `provider:model`, bare matching including `:`/`/` IDs, strict ambiguity rejection, error branches), `buildLauncher`.
+  - `test/mcp.test.js`: loopback HTTP MCP proxy Bearer auth, route isolation, `allocate` + `bind`, `tools/list`, `tools/call` (text + image), `extractShellGates` / `matchShellGate` (shell operators, quotes, escapes, paths, `sh -c`, `eval`, command substitution, long prefixes).
   - `test/map.test.js`: tool names & inputs, user/assistant items, hidden attribute-less `<persona-context>` vs visible `<persona-context kind="forward">`, 1.x `v1SessionItems` / `v1ImageOf`, `acpPermissionCard`.
-  - `test/opencode.test.js`: v2 plugin listing, pagination, blob images, streaming, permissions, subagents, `hello` capabilities (without `supervision_policy`), `launchers.models`, `session.start` (Agent & Assistant), MCP registration, `memory_dir`, `plan`, command gates, `modes`, fail-closed `supervision_instructions`.
-  - `test/companion.test.js`: standalone ACP companion `hello` (without `supervision_policy`), 1.x DB `offline` listing + `session/load` resume, `launchers.models`, Agent `session.start` + streaming + tool calls + permissions + `modes` + `rename` + `close` + `interrupt`, Assistant `session.start` + end-to-end HTTP MCP round-trip + context hiding + `memory_dir` + `plan` (`readonly_unsupported`) + command gates + fail-closed `supervision_instructions`.
+  - `test/opencode.test.js`: v2 plugin listing, pagination, blob images, streaming, permissions, subagents, `hello` capabilities (with `readonly` and without `supervision_policy`), `launchers.models`, `session.start` (Agent & Assistant), multi-Assistant dynamic MCP routing & cleanup on `forget`, `memory_dir` relative path enforcement, `plan`, `acceptEdits`, effort-only `modes`, command gates, fail-closed `supervision_instructions`.
+  - `test/companion.test.js`: standalone ACP companion `hello` (without `supervision_policy`), CLI flag & env parsing (`parseCompanionArgs`, `buildAcpEnv`), 1.x/2.x DB `offline` listing + blob images + `session/load` resume + `client_msg_id` reconciliation, `launchers.models`, Agent `session.start` + default model preservation + model switch without `configOptions` + effort switching + live thinking/tool streaming + permissions (`acceptEdits`, `plan` across ACP restart) + `modes` + `rename` + `close` + `interrupt`, Assistant `session.start` + end-to-end HTTP MCP round-trip + context hiding + `memory_dir` + `plan` (`readonly_unsupported`) + unclipped raw command gates + fail-closed `supervision_instructions`.
   - `test/install.test.js`: shim installation and uninstall.
-- node: `server/internal/node/opencode_test.go`: herdr TUI merge, blocked state, plugin-less & unknown-agent terminal rows, `launchers.list` (`Assistant: true`) & `launchers.models` & `session.start` alongside herdr merge, and Assistant `assistant.send` + MCP authorization + fail-closed `assistant_supervision_runtime` without `caps.supervision_policy`.
+- node: `server/internal/node/opencode_test.go` and `server/internal/node/runtimes_test.go`: herdr TUI merge (including `permission_mode`, `effort`, `efforts`, `launcher`), per-process `opencode-<pid>` `modes`/`model`/`AgentLabel` capabilities, blocked state, plugin-less & unknown-agent terminal rows, `launchers.list` (`Assistant: true`) & `launchers.models` & `session.start` alongside herdr merge, and Assistant `assistant.send` + MCP authorization + fail-closed `assistant_supervision_runtime` without `caps.supervision_policy`.
 - End to end (v2 server plugin): `PERSONAD=<personad> node integrations/opencode/e2e/run.mjs` (previously verified 16/16 against opencode 2.0.32).
 - Web: fake hub with `MOCK_OPENCODE=1` + `scripts/test/web_opencode_e2e.py`.

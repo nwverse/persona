@@ -311,6 +311,25 @@ func TestOutsideDecisionAttachedAndAnswerForms(t *testing.T) {
 	}
 }
 
+func TestOutsideDecisionFeishuReply(t *testing.T) {
+	e := newTodoEnv(t, nil)
+	d := raiseOutside(t, e, "release-script", outsideFixture())
+	const cardID = "om_outside_decision"
+	e.s.accept.mu.Lock()
+	a := e.s.accept.asks[d.AskTodoID]
+	a.MessageID, a.Messages = cardID, []string{cardID}
+	e.s.accept.mu.Unlock()
+
+	const answer = "Hold until the notes are checked"
+	if !e.s.acceptReply(t.Context(), "om_outside_reply", answer, false, cardID) {
+		t.Fatal("the Feishu reply was not matched to the outside decision")
+	}
+	got := pollOutside(t, e, "release-script", d.ID)
+	if got.State != assistantwire.OutsideDecisionAnswered || got.Answer == nil || got.Answer.Text != answer || got.Answer.AnsweredBy != "owner" {
+		t.Fatalf("Feishu answer: %+v", got)
+	}
+}
+
 func TestOutsideDecisionWithdrawFencesAnswers(t *testing.T) {
 	e := newTodoEnv(t, nil)
 	d := raiseOutside(t, e, "nightly", outsideFixture())
