@@ -456,19 +456,30 @@ type Item struct {
 		Content string `json:"content"`
 	} `json:"body"`
 	Mentions []struct {
-		Key  string `json:"key"`
-		Name string `json:"name"`
+		Key    string `json:"key"`
+		ID     string `json:"id"`
+		IDType string `json:"id_type"`
+		Name   string `json:"name"`
 	} `json:"mentions"`
 }
 
 // At is when the message was sent.
 func (it Item) At() time.Time { return msTime(it.CreateTime) }
 
-// MentionList is the message's mentions, for ParseContent to turn its @_user_N keys back into names.
+// MentionList preserves names and typed IDs so ParseContent can resolve both placeholder keys and rich-text at nodes.
 func (it Item) MentionList() []Mention {
 	var out []Mention
 	for _, m := range it.Mentions {
-		out = append(out, Mention{Key: m.Key, Name: m.Name})
+		mention := Mention{Key: m.Key, Name: m.Name}
+		switch m.IDType {
+		case "open_id":
+			mention.ID.OpenID = m.ID
+		case "union_id":
+			mention.ID.UnionID = m.ID
+		case "user_id":
+			mention.ID.UserID = m.ID
+		}
+		out = append(out, mention)
 	}
 	return out
 }
