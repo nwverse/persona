@@ -94,6 +94,7 @@ openLauncherDetails
 openLauncherEditor
 openLauncherPage
 openLauncherPicker
+openLinkSwitch
 openLinkURL
 openLiveScreenSettings
 openLocalProxy
