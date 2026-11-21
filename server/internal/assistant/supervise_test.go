@@ -501,3 +501,39 @@ func TestGoldenSupervise(t *testing.T) {
 		{ID: "todo_8", Title: "跑回归", State: "停着", Orphan: orphanOffline},
 	}}))
 }
+
+func TestStalledTimeExcludesParkedIntervals(t *testing.T) {
+	s, _, task := newSupervisedService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	firstPark := now.Add(-10 * time.Hour)
+	secondPark := now.Add(-5 * time.Hour)
+	_, _, err := s.updateSupervision(ctx, task.ID, func(v *Supervision) bool {
+		v.State, v.ExpectMinutes = reviewParked, 0
+		v.Reviews = []TaskReview{
+			{At: firstPark, Verdict: reviewParked, ParkEndedAt: secondPark.Add(-3 * time.Minute)},
+			{At: secondPark, Verdict: reviewParked},
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, _ = s.todoNow(task.ID)
+	s.supervisedWorking(ctx, task)
+	task, _ = s.todoNow(task.ID)
+	v := task.Supervision
+	resumed := v.Reviews[1].ParkEndedAt
+	if resumed.IsZero() || v.parking() != nil {
+		t.Fatalf("did not track the end of the park: %+v", v)
+	}
+	// A later ledger edit must not move the recorded resume time.
+	v.UpdatedAt = resumed.Add(time.Hour)
+	c := proto.Session{MachineID: "box", SessionID: "s1", State: proto.StateWorking, UpdatedAt: firstPark.Add(-2 * time.Minute)}
+	if got := watchSignals(task, []proto.Session{c}, resumed.Add(5*time.Minute)); len(got) != 0 {
+		t.Fatalf("stalled after ten active minutes: %+v", got)
+	}
+	if got := watchSignals(task, []proto.Session{c}, resumed.Add(17*time.Minute)); len(got) != 1 || got[0].Kind != sigStalled || got[0].Minutes != 22 {
+		t.Fatalf("want 22 active minutes, got %+v", got)
+	}
+}

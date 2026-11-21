@@ -413,7 +413,8 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	if status.State == "open" && status.Draft && status.Own && status.HeadOID != "" && t.Supervision != nil {
 		s.signal(superviseSignal{Todo: t.ID, Kind: sigDraftPR, PRURL: status.URL, Key: status.URL + "@" + status.HeadOID})
 	}
-	if status.URL == cur.PR && status.State == "open" && status.Conflicts && status.HeadOID != "" && t.Supervision != nil {
+	if status.URL == cur.PR && status.State == "open" && status.Conflicts && status.HeadOID != "" && t.Supervision != nil &&
+		!parkWaitsOnPR(t.Supervision.parking(), status.URL) {
 		// Only the current PR raises a conflict signal: the digest revalidates against the task/stage PR, so an
 		// earlier PR's conflict would be dropped there anyway.
 		s.signal(superviseSignal{Todo: t.ID, Kind: sigPRConflict, Key: status.URL + "@" + status.HeadOID,

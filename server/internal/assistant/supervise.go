@@ -115,6 +115,8 @@ type TaskReview struct {
 	WaitingOn string    `json:"waiting_on,omitempty"`
 	Parks     int       `json:"parks,omitempty"`
 	DueAt     time.Time `json:"due_at,omitzero"`
+	// ParkEndedAt is recorded when this wait is replaced or resolved, so its time is excluded from stalled checks.
+	ParkEndedAt time.Time `json:"park_ended_at,omitzero"`
 	// Evidence is absent on legacy parks. A new park records its external wait, inspected source receipt and
 	// recording conversation here, in the existing Reviews JSON; it needs no new state store.
 	Evidence *ParkEvidence `json:"evidence,omitempty"`
@@ -352,12 +354,28 @@ func (s *Service) updateSupervisionLockedAt(ctx context.Context, id string, now 
 		v = (&Supervision{}).clone()
 	}
 	before := v.State
+	var parkedAt time.Time
+	if p := v.parking(); p != nil {
+		parkedAt = p.At
+	}
 	park := v.parking()
 	if !change(v) {
 		return *v, false, nil
 	}
 	v.Criteria = db.AlignTodoCriteria(v.DoneWhen, v.Criteria)
 	v.UpdatedAt = now.UTC()
+	if p := v.parking(); !parkedAt.IsZero() && (p == nil || !p.At.Equal(parkedAt)) {
+		for i := len(v.Reviews) - 1; i >= 0; i-- {
+			r := &v.Reviews[i]
+			if r.Verdict == reviewParked && r.At.Equal(parkedAt) {
+				r.ParkEndedAt = v.UpdatedAt
+				if i+1 < len(v.Reviews) {
+					r.ParkEndedAt = v.Reviews[i+1].At
+				}
+				break
+			}
+		}
+	}
 	v.PendingSince = pendingSince(before, v.State, v.PendingSince, v.UpdatedAt)
 	if park != nil && v.State == reviewPending && park.ExternalPR != nil && park.ExternalPR.wakes(park) {
 		// Match the review period after a reload. Postgres stores PendingSince to microsecond precision.

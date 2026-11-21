@@ -797,3 +797,39 @@ func TestPRStatusConflictSignalsOnlyForTheCurrentPR(t *testing.T) {
 		t.Fatalf("the current PR's conflict = %+v, %v", g, ok)
 	}
 }
+
+func TestPRStatusConflictStaysQuietDuringItsMergePark(t *testing.T) {
+	for _, parkFirst := range []bool{true, false} {
+		t.Run(fmt.Sprintf("park first %t", parkFirst), func(t *testing.T) {
+			s, f, task := newPRConflictTask(t, nil)
+			ctx := context.Background()
+			park := func() {
+				t.Helper()
+				if _, err := reviewErr(s, task.ID, mergePark(task.PRURL)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if parkFirst {
+				park()
+			}
+			task, _ = s.todoNow(task.ID)
+			status := TodoPRStatus{URL: task.PRURL, State: "open", HeadOID: "conflicting-head", Conflicts: true, CheckedAt: time.Now()}
+			if err := s.applyPRStatus(ctx, task, status); err != nil {
+				t.Fatal(err)
+			}
+			if !parkFirst {
+				if _, ok := pendingPRConflict(s, task.ID); !ok {
+					t.Fatal("ordinary conflict was not queued before the park")
+				}
+				park()
+			} else if _, ok := pendingPRConflict(s, task.ID); ok {
+				t.Fatal("parked conflict queued a standalone signal")
+			}
+			sendPendingPRConflicts(s)
+			task, _ = s.todoNow(task.ID)
+			if task.PRStatus == nil || !task.PRStatus.Conflicts || task.Supervision.parking() == nil || len(f.notices()) != 0 {
+				t.Fatalf("fact=%+v park=%+v notices=%v", task.PRStatus, task.Supervision.parking(), f.notices())
+			}
+		})
+	}
+}

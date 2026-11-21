@@ -463,7 +463,7 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 			if c.State == proto.StateWorking {
 				after = stallAfter(v.ExpectMinutes)
 			}
-			if still := now.Sub(moved); !moved.IsZero() && still >= after {
+			if still := v.activeTimeSince(moved, now); !moved.IsZero() && still >= after {
 				g := base
 				g.Kind, g.Key, g.Minutes = sigStalled, c.SessionID+"@"+moved.UTC().Format(time.RFC3339), int(still.Minutes())
 				g.Detail = strings.TrimSpace(c.Activity)
