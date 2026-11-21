@@ -24,26 +24,31 @@ const (
 	ScopeNotify                  = extwire.ScopeNotify
 	ScopeTodosRead               = extwire.ScopeTodosRead
 	ScopeTodosWrite              = extwire.ScopeTodosWrite
+	ScopeDecisionsRaise          = extwire.ScopeDecisionsRaise
 	ScopeLeadersRead             = extwire.ScopeLeadersRead
 	ScopeAssistantDispatchPolicy = extwire.ScopeAssistantDispatchPolicy
 	ScopeAssistantStartDefaults  = extwire.ScopeAssistantStartDefaults
+	ScopeDispatchGuard           = extwire.ScopeDispatchGuard
 	ScopeModels                  = extwire.ScopeModels
 	ScopeAssistantRead           = extwire.ScopeAssistantRead
 	ScopeAssistantMemoryRead     = extwire.ScopeAssistantMemoryRead
 	ScopeTranscription           = extwire.ScopeTranscription
+	ScopeMarketRefreshOwn        = extwire.ScopeMarketRefreshOwn
 )
 
 // HubScopes are the scopes, in the order the install screen lists them.
 var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeSentRead, ScopeInboxRead, ScopeInboxWrite, ScopeAgentsRead, ScopeAgentsControl,
 	ScopeAgentsPermissionMode, ScopeMachinesRead, ScopeNotify, ScopeAssistantAsk, ScopeAssistantRead, ScopeAssistantMemoryRead,
-	ScopeTodosRead, ScopeTodosWrite, ScopeLeadersRead, ScopeAssistantDispatchPolicy, ScopeAssistantStartDefaults, ScopeModels, ScopeTranscription}
+	ScopeTodosRead, ScopeTodosWrite, ScopeDecisionsRaise, ScopeLeadersRead, ScopeAssistantDispatchPolicy, ScopeAssistantStartDefaults, ScopeDispatchGuard, ScopeModels,
+	ScopeTranscription, ScopeMarketRefreshOwn}
 
 // InEveryScope says whether a token of every scope (an extension granted the hub's full token the old way, hub_api,
-// that gets one of every scope instead) has scope s: all but the ones an extension gets only when its manifest names
-// them, agents.permission_mode and assistant.start_defaults (which can raise what task Agents spend: a preset, effort
-// max, ultracode), so neither comes to an extension installed the old way without the owner agreeing to it.
+// that gets one of every scope instead) has scope s. Scopes whose authority must be agreed to by name are left out:
+// agents.permission_mode, assistant.start_defaults (which can raise what task Agents spend), decisions.raise (which can
+// interrupt the owner with a new decision), dispatch.guard (which changes which conversations may hand work out), and
+// market.refresh_own (which spends the source marketplace's API quota).
 func InEveryScope(s string) bool {
-	return s != ScopeAgentsPermissionMode && s != ScopeAssistantStartDefaults
+	return s != ScopeAgentsPermissionMode && s != ScopeAssistantStartDefaults && s != ScopeDecisionsRaise && s != ScopeDispatchGuard && s != ScopeMarketRefreshOwn
 }
 
 // EveryScope is the scopes of a token of every scope (InEveryScope), in HubScopes' order.
@@ -65,13 +70,16 @@ var scopeTitles = map[string]string{
 	ScopeAssistantAsk:            "scope_assistant_ask",
 	ScopeTodosRead:               "scope_todos_read",
 	ScopeTodosWrite:              "scope_todos_write",
+	ScopeDecisionsRaise:          "scope_decisions_raise",
 	ScopeLeadersRead:             "scope_leaders_read",
 	ScopeAssistantDispatchPolicy: "scope_assistant_dispatch_policy",
 	ScopeAssistantStartDefaults:  "scope_assistant_start_defaults",
+	ScopeDispatchGuard:           "scope_dispatch_guard",
 	ScopeModels:                  "scope_models",
 	ScopeAssistantRead:           "scope_assistant_read",
 	ScopeAssistantMemoryRead:     "scope_assistant_memory_read",
 	ScopeTranscription:           "scope_transcription",
+	ScopeMarketRefreshOwn:        "scope_market_refresh_own",
 }
 
 // ScopeTitle is how the install screen says scope s; ok false for what is not a scope.

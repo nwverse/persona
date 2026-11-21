@@ -52,7 +52,7 @@ interface AssistantAppWiring {
 }
 
 @Composable
-internal fun AssistantAppHost(navigator: Navigator, content: @Composable () -> Unit) {
+fun AssistantAppHost(navigator: Navigator, content: @Composable () -> Unit) {
     if (LocalAssistantHost.current != null) { content(); return }
     val context = LocalContext.current.applicationContext
     val dependencies = remember(context) { EntryPointAccessors.fromApplication(context, AssistantEntryPoint::class.java) }

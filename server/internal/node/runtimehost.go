@@ -215,8 +215,10 @@ func (rh *RuntimeHost) serveConn(ctx context.Context, c io.ReadWriteCloser, daem
 
 func (rh *RuntimeHost) registerRuntime(ctx context.Context, h *runtimeConn, hello runtimeHello) error {
 	var preempt func(*runtimeConn, runtimeHello) bool
+	isBuiltinAgy := false
 	if hello.Runtime == agyRuntimeID && !h.isDaemon() {
 		instance := rh.builtinAgyInstance()
+		isBuiltinAgy = instance != "" && hello.Instance == instance
 		if instance != "" && hello.Instance != instance {
 			if !rh.agy.takeover.TryLock() {
 				return &rpc.Error{Code: "runtime_conflict", Message: "another agy runtime is taking over"}
@@ -247,6 +249,9 @@ func (rh *RuntimeHost) registerRuntime(ctx context.Context, h *runtimeConn, hell
 	if err != nil {
 		return err
 	}
+	h.mu.Lock()
+	h.builtinAgy = isBuiltinAgy
+	h.mu.Unlock()
 	for _, old := range stale {
 		old.mu.Lock()
 		drop := old.drop
@@ -307,7 +312,7 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		// (runtimeworkspaces.go).
 		features := []string{"prefer_running", "resume_argv", "handover", "transcript", "launchers", "start_params", "modes", "resume", "codex_thread", "unlisted_transcripts", "workspaces", "usage"}
 		if !h.isDaemon() {
-			features = append(features, "leader_tools", "supervision_policy")
+			features = append(features, "usage_windows", "leader_tools", "supervision_policy")
 			if hello.Caps.Assistant {
 				features = append(features, "assistant_pids")
 			}

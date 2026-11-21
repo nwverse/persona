@@ -92,6 +92,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			codexWaitRow(&s, a)
 			if w := n.codexWaitByID(id); w != nil {
 				s.UpdatedAt = w.began.UTC()
+				if w.manual && s.HerdrTabName() != "" {
+					s.Title = s.HerdrTabName()
+				}
 			}
 			n.decorateIn(&s, pass)
 			out = append(out, s)
@@ -157,6 +160,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		if p := n.transcriptPath(id); p != "" {
 			if st, err := os.Stat(p); err == nil {
 				m := n.meta(p, st)
+				if identity.InHealthSpace(m.cwd) {
+					s.Space = identity.SpaceHealth
+				}
 				rolloutPath = p
 				textAt = m.lastTextAt
 				rollout = m
@@ -216,9 +222,13 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			if _, thread, err := n.codexOwner(id); err == nil && thread.model != "" {
 				s.Model = thread.model
 			}
+			n.codexRewindRow(id, &s)
+			if c, thread, driven := n.codexEffortThread(id); driven {
+				s.Model = n.codexModelNow(id, c, thread, s.Model)
+				s.Capabilities.Model = proto.Bool(true)
+			}
 			n.codexEffortRow(id, &s.Efforts, &s.Effort, rollout) // joined on its app-server: its effort (codex_effort.go)
 			n.codexSpeedRow(&s)
-			n.codexRewindRow(id, &s)
 		}
 		if piFamily(a.Agent) {
 			n.mergePiRow(&s) // its conversation is the extension's (pi.go)
@@ -449,9 +459,13 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 // decorateState restores metadata recorded when Persona started the session.
 func (n *Node) decorateState(s *proto.Session, managesModel bool) (sessionState, bool) {
 	st, ok := n.state.get(s.SessionID)
+	if ok && isCodexWaitID(s.SessionID) && st.Launcher == "" {
+		return sessionState{}, false // a manually discovered waiting row's pane binding is not an app start
+	}
 	if ok {
 		s.StartedByPersona = true
 		s.Launcher = st.Launcher
+		s.OffLauncher = n.offLauncher(s.SessionID) // its claude not started by Persona's command (offlauncher.go)
 		if st.TaskExecution {
 			classifyTaskTurnFailure(s)
 		}
@@ -461,6 +475,9 @@ func (n *Node) decorateState(s *proto.Session, managesModel bool) (sessionState,
 		}
 		// A row without a pane is listed where its record says it started, when that is an assistant or health
 		// directory: not where a `cd` in its transcript left it (#2368). A pane's directory is its host's.
+		if identity.InHealthSpace(st.Cwd) {
+			s.Space = identity.SpaceHealth
+		}
 		if s.Cwd == "" || s.PaneID == "" && identity.IsAssistantDir(st.Cwd) {
 			s.Cwd = st.Cwd
 		}

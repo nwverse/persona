@@ -56,7 +56,7 @@ func (i *Index) Query(options Options) (Page, error) {
 		}
 	}
 	end := min(offset+o.Limit, len(r.events))
-	p := Page{Sessions: make([]any, 0, end-offset), Remove: make([]string, 0), Revision: r.counts.Revision, Total: r.counts.Total, HasMore: end < len(r.events)}
+	p := Page{Sessions: make([]any, 0, end-offset), Remove: make([]string, 0), Added: make([]string, 0), Revision: r.counts.Revision, Total: r.counts.Total, HasMore: end < len(r.events)}
 	if o.Search != "" {
 		p.SearchHits = make(map[string]SearchHit, end-offset)
 	}
@@ -70,6 +70,9 @@ func (i *Index) Query(options Options) (Page, error) {
 			value = e.value.item.Summary
 		}
 		p.Sessions = append(p.Sessions, clone(value))
+		if e.added {
+			p.Added = append(p.Added, e.id)
+		}
 		if o.Search != "" {
 			ranked := r.searchHits[e.id]
 			hit := ranked.SearchHit
@@ -148,6 +151,7 @@ func (f filters) matches(r *record) bool {
 		(f.JustFinished == "" || (f.JustFinished == "1") == justFinishedOf(v, f.Roots)) &&
 		(f.Manager == "" || f.Manager == r.owner) &&
 		(f.Provider == "" || f.Provider == v.Provider) &&
+		(f.Providers == "" || inProviders(f.Providers, v.Provider)) &&
 		(f.Todo == "" || f.Todo == todo || f.Todo == TodoNone && todo == "") &&
 		(f.Q == "" || strings.Contains(r.search, f.Q))
 }
@@ -336,7 +340,7 @@ func (i *Index) queryResult(o Options) *result {
 			if before && reflect.DeepEqual(c.before.item, c.after.item) {
 				continue
 			}
-			r.events = append(r.events, event{id: id, updated: c.after.item.UpdatedAt, value: c.after})
+			r.events = append(r.events, event{id: id, updated: c.after.item.UpdatedAt, value: c.after, added: c.before == nil})
 		} else if before {
 			updated := c.before.item.UpdatedAt
 			if c.after != nil {

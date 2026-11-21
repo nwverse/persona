@@ -330,7 +330,7 @@ Chat page:
 - A new agent's own worktree (#6115, web #6301, `AgentWorktree.swift`): New Agent asks `POST /machines/{mid}/worktree/status` `{cwd}` for the picked folder; when it is in a Git repository (`path` set) a Worktree section offers In a New Worktree, an optional branch (placeholder `persona/<first message or folder>`, as the node names it) and Checks out to `<checkouts>/<slug>`. Start then calls `worktree/add` and starts the agent in the `path` it returns; a refusal shows next to the start button and nothing starts. Close Agent (`CloseAgentSheet`) and Delete Chat ask the same status for the agent's folder; one Persona made (`ours`) adds Keep Worktree (default) / Remove, Delete the branch too, the counts it loses (`dirty`, and `unmerged` with the branch) and I understand these changes will be lost, which the button waits for. `worktree/remove` runs only after the close / delete succeeded, retries `worktree_in_use` for a few seconds, and sends `force` only for a confirmed loss. Delete Chat stays the system alert unless the agent is in one of ours (the computer is asked first, 4 s at most); then it is a sheet with the section. Mock: `MOCK_WORKTREES=1 MOCK_AGENT_WORKTREE=1`; UI test `AgentWorktreeUITests`.
 - New Agent in one of the computer's workspaces (#7259, `WorkspaceStart.swift`, `WorkspaceStartPicker.swift`; the web's `lib/workspace-start.ts` has the same rule): when the chosen computer's catalog lists workspaces of an engine that keeps checkouts (`source` `orca` or `paseo`, `available` and `online`), a Workspace row above Folder opens Choose Workspace: Choose by Folder on top, then the workspaces grouped by project (`projectName`, else the last element of `projectPath`; none: Other Workspaces, last), main checkout first, then worktrees, then folders, each with its title (else branch, else folder name), Main checkout / Worktree / Folder with the branch when the title doesn't say it, and the folder. A pick hides the folder rows and the worktree switch, says the kind and folder under the row, and the start sends `workspace_id` and `host` = the row's source; a Git one offers New Child Worktree… (Orca) or New Worktree… (Paseo, made by Paseo through `worktree/prepare`/`create` with `kind`). Nothing is preselected (the folder stays remembered per computer); no such workspace (an offline computer, Paseo not enabled) shows no row. The groups are derived when the computer or the catalog's `revision` changes, not in `body` (P4); the catalog is read when the computer changes. Tests `WorkspaceStartTests`.
 - New Agent in Claude's desktop app (#5480, `DesktopStart.swift`; the computer's side: `docs/integrations/claude-integration.md`, "New sessions in the desktop app"): with the launcher whose `source` is `claude_desktop` (`Launcher.startsInDesktopApp`), a folder not picked on the sheet (the one filled in from the last start does not count, `cwdPicked`) is a temporary session: the Folder row reads Temporary Session, Start Chat is ready, and the start carries no folder, which the computer turns into the app's scratch folder. A folder picked (a row, the browser, a card, a workspace) is used; Use a Temporary Session goes back; a space's sheet keeps its folder; a recent-setup card shows a temporary session as one. The directory browser starts in the folder that holds most of this computer's Claude desktop app sessions' folders (`DesktopStart.projectsFolder`, the computer's rule for the scratch folder, worked out when the computer or launcher changes) and offers New Folder…, a name in the folder browsed that the computer makes when the session starts. Run Agent Here does not offer the launcher. The Codex App's launcher `codex-app` (`source` `codex_app`, #5726) works the same way: no folder picked is a chat among the App's chats in no project (the computer gives it a folder where the App keeps those), still with its first message as any Codex start; browsing starts in the folder of the App's projects, its own folders for chats in no project (`<home>/Documents/Codex/<date>/<name>`, `AppGroups.isCodexChatFolder`) left out. Mock: `MOCK_DESKTOP_APPS=1` (the MacBook offers `claude-desktop` and `codex-app`); UI test `DesktopStartUITests`.
-- Attachments in New Agent (#2321, web `NewAgent.tsx`, `NewAgentAttachments.swift`): under First Message, Add Images or Files offers the composer's sources (Photos, Take Photo where there is a camera, Files). Photos stay in the sheet as image attachments (at most 4, `MessagePhotos`, shared with the composer) and go with the first message; files upload to the chosen computer when picked (`FileUploads`, a row each with progress and ×) and their paths follow what was typed, one per line, as the web sends them (`FirstMessage`). Start Chat waits while an upload runs and says so. A file is on the computer it was uploaded to: picking another computer takes the uploaded files out, stops uploads still going, and a note under First Message says so; nothing is uploaded again and photos stay. A Codex launcher takes no attachments, as on the web: no add menu, and attachments picked before hold Start Chat back (Codex takes no attachments) with the web's sentence under them until they are removed. A to-do handed to a new Agent (`TodoHandoffSheet`) gets the same row, its context block still first. DEBUG `-openNewAgentAttachments photo,<file name>,…` attaches the made-up photo and uploads 3 MB made-up files once the computer's launchers are in. UI test `NewAgentAttachmentsTests`.
+- Attachments in New Agent (#2321, web `NewAgent.tsx`, `NewAgentAttachments.swift`): under First Message, Add Images or Files offers the composer's sources (Photos, Take Photo where there is a camera, Files). Photos stay in the sheet as image attachments (at most 4, `MessagePhotos`, shared with the composer) and go with the first message; files upload to the chosen computer when picked (`FileUploads`, a row each with progress and ×) and their paths follow what was typed, one per line, as the web sends them (`FirstMessage`). Start Chat waits while an upload runs and says so. A file is on the computer it was uploaded to: picking another computer takes the uploaded files out, stops uploads still going, and a note under First Message says so; nothing is uploaded again and photos stay. A Codex launcher takes no attachments, as on the web: no add menu, and attachments picked before hold Start Chat back (Codex takes no attachments) with the web's sentence under them until they are removed; so does an omp launcher (omp takes no attachments), whose first message also goes with the start (`docs/integrations/omp.md` "Starting from the apps"). A to-do handed to a new Agent (`TodoHandoffSheet`) gets the same row, its context block still first. DEBUG `-openNewAgentAttachments photo,<file name>,…` attaches the made-up photo and uploads 3 MB made-up files once the computer's launchers are in. UI test `NewAgentAttachmentsTests`.
   Reuses `session.close`: mark local copy Not running only after remote confirmation (history/title/content retained); failure keeps confirmation with error, retry/cancel; no false success without hub.
   List directly observes active same-space sessions; closing others neither exits list nor switches current; closing current selects next active tab, otherwise previous, returns when all closed. Actions remain with one tab.
   On 10-29 changed to one-button `SiblingMenu`, hiding tabs/states; user disliked it.
@@ -842,9 +842,11 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
     With the list folded, the chat's leading button brings it back (#963): the sidebar's button (`Theme.Icon.sidebar`, "Show Sidebar", with how many Agents need the user), as on the
     main conversation, not a ‹ (#8603). What the button shows follows how the page was reached, not what it is: a chat picked in the list is a root and has the sidebar's button; the
     same chat pushed from inside another page (a waiting Agent on the main conversation, Inbox's) has ‹, which goes back to that page. On iPhone Duo open on its side the chat has
-    neither (#3680): its actions are in the system's side bars, whose Show Sidebar at the top left brings the list back, and the side column has no second one
-    (`ChatView.systemShowsList`). That button sits in a row of the bar of its own, so the chat's page starts `Theme.Space.xl` from the top whatever the bar holds
-    (`ChatView.pinsSideTop`): folded or out, the header and the chat stay where they are, and the button lies on the title's line, as on a place.
+    neither (#3680): its actions are in the system's side bars, and the side column's first item, where Back is on a sub-page, is the sidebar's button
+    (`ChatView.sideBarItems`, #11636), as on a place (`ListButtonItem`). Not the system's Show Sidebar, removed on the roots' column there too: iOS draws it in the bar's
+    title row, which the chat removes while its header shows its own title, so an Agent's chat picked in the sidebar had no way back to it, and on a place it was not
+    drawn again after a drill-down was popped. The chat's page starts `Theme.Space.xl` from the top whatever the bar holds (`ChatView.pinsSideTop`): folded or out, the
+    header and the chat stay where they are.
   - The Separate layout's tabs at regular width (#8596): the split makes the floating tab bar's room in its columns, and UIKit held it a second time in the tab's own top safe
     area for a tab first shown after a switch (the Agents tab's column head 64 pt lower). `TabBarRoomOnce` (ChatsView) takes the tab's top beyond the window's own back off.
   - Split chat pages do not hide the tab bar (single-column pages do, to fill the screen).
@@ -1343,6 +1345,10 @@ never picks it. The form says the line under the launcher row when the launcher 
 Both read the list with `AppModel.launchersForStart` (fresh, not the cache). Add Provider is offered only for a computer in the hub-level group (the wizard saves there).
 A Persona-managed provider whose own-service rule leaves it out on the computer (`own_service: skip` where Claude Code or Codex has a sign-in of its own, #8109) comes in the hub's `unavailable`, kept with the list (`AppModel.launcherUnavailable`). `LauncherPicker` lists it after the launchers under "Unavailable here", in the main chat model sheet's row (`UnavailableLauncherRow`, `Views/Chat/UnavailableLauncherRow.swift`: a lock, the name, the hub's reason), never picked; How to Fix under the reason pushes the provider's page (`ModelLauncherDetailView`, Settings › Model providers), whose Edit › Computers has the switch, and saving it reads the list again. As Add Provider, only for a computer in the hub-level group (Settings' pages read that hub); elsewhere the row says the reason only. Tests: `NewAgentUnavailableTests`, `NewAgentUnavailableUITests` (`MOCK_OWN_SERVICE_SKIP=1`).
 `StartingNote` shows a coded start failure (`Session.startErrorCode`) as Didn't Start over the hub's whole sentence. Screenshots: `docs/operations/testing.md` ("Mock-data screenshots").
+
+## Terminal Traex text starts in New Agent (#1842)
+
+A known terminal Traex launcher (its `runtimeAgent` is `traex`, discovered in `zshrc` or explicitly typed without another runtime source) offers none of Claude Code's permission mode, thinking effort or ultracode choices. With a nonempty `FirstMessage.text` (the to-do context, then the typed text) and no attachments, Start makes one synchronous `POST /sessions` with the resolved launcher alias, `agent_type: traex` and that text as `prompt`, then opens the returned session without a separate ordinary message. Empty starts, attachments, unknown launchers and other runtime sources keep their existing negotiation and delivery paths. `StartModes` owns the control rule; `NewChatView.start` owns the narrow inline-start branch. Regressions: `PaseoPermissionModesTests`, `NewChatCheckTests`, `NewAgentAttachmentsTests`, and `MachinePagesTests/testNewTraexSessionStartsWithItsFirstMessage` against `MOCK_MACHINES=1 MOCK_TRAEX=1`.
 
 ## Recent setups in New Agent (#2134)
 
@@ -2034,7 +2040,8 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   does not refresh the watch or the widgets. A 304 applies the views and counts read with that tag again. Views and
   counts are read whether V1 is on or not (V1 coming on in a run has them); everything else is done only while it is on:
   - the `todo-view` StateCache entry beside `todo-items`: the views, counts and places, with the numbers the pages
-    showed, so the first frame draws them. It is written at most every 15 s while a run's line moves (`Throttle`) and
+    showed, so the first frame draws them, and when the hub last answered a read of the list (`readAt`, said while it
+    is out of reach). It is written at most every 15 s while a run's line moves (`Throttle`) and
     at once when the scene leaves the front; forgetting the hub removes it whether V1 is on or not, and an entry none
     of whose views is for the kept rows is not used at all;
   - the first V1 launch without it: `viewsRead` stays false until the first read ends, so the list does not file its
@@ -2102,6 +2109,50 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   place's list came to rest, written only while the scene is active and only from the tree the window shows; a page
   made anew puts its list back there once, and a page a to-do popped back to keeps its own place. The grouping and the
   sort are kept on the device (`todos.v1.grouping`, `todos.v1.sort`); the bar's choice is not.
+- **The rows' writes** (`TodoListActions.swift`, `TodoOutbox`; DESIGN_SYSTEM 3.4 "To-dos list"). The tick, the trailing
+  swipe (Done, Someday; Reopen on a closed row), the long-press menu (Today, Date…, Project, Someday, Copy Link,
+  Delete…) and New To-Do; which a row offers is `TodoRowActionList`'s, so the swipe, the menu and VoiceOver's actions
+  agree. A row (`TodoListCell`) takes its cell and the list's model, never closures, so a list update that leaves it
+  alone skips it (P6); its confirmations are presented from it. A tick, Someday and a delete are held in `TodoOutbox`
+  (`apple/Persona/App/TodoOutbox.swift`) for `Theme.Motion.todoUndo` (`todoUndoAssistive` while VoiceOver or Switch
+  Control runs) and only then sent, so Undo sends nothing; a reopen, Remove from Someday and a new to-do go at once,
+  and Remove from Someday inside Someday's window takes that write back instead. Each write keeps its op id
+  (`X-Persona-Op-Id`) from the tap. The outbox is the StateCache entry `todo-outbox`, read off the main actor and
+  written in order by `TodoOutboxFile` (numbered snapshots, so a late older one never wins); it is made only once V1
+  is (`TodoStore.V1.answered` is called only while V1 is on), and forgetting a hub or unpairing drops its writes
+  (`TodoOutbox.forgetHubs`, only while the build may show V1, so a Release build before the switch-on never makes it;
+  a write a DEBUG launch with `-showTodosV1` kept for a hub forgotten without it goes only to that hub, and expires).
+  - **Sending.** The writes whose window ended go; the shown hub's every write goes at once when the app leaves the
+    foreground, under a background task that lasts until every send under way is answered. How an answer is read
+    (`TodoOutbox.outcome`): a 404 on a to-do's own route (`not_found` or `todo_not_found`; not the hub's `no_manager`)
+    is a to-do already gone, which is what a change to it comes to; nothing reached the hub (no connection made, no hub,
+    `assistant_offline`, 408, 425, 429, `delivered: "none"`) sends it again when the hub next answers a read; another
+    4xx is a refusal, dropped and said in a toast (a new to-do's with **Edit**, which reopens its sheet with what was
+    typed); anything else may have been done. A tick, Someday or a delete of unknown outcome is sent again, being the
+    same write twice, at most `TodoOutbox.tries` times, then said. A new to-do is never sent twice on its own: the hub
+    keeps no receipt for a create without images (`server/internal/hub/todo_receipts.go`), so one of unknown outcome,
+    or one the app was ended with while it was out, is "Not sure it was saved" until a read lists a to-do with its
+    title and notes made since (then the hub's row is its row), with Try Again and Remove.
+  - **Sent again.** A write the app was ended with, or one that could not reach the hub, goes once the hub answers a
+    read of the list, and only if its to-do's `updated_at` is still the one the list had at the tap (`Entry.base`):
+    one whose to-do changed meanwhile is let go, and said unless the to-do is already as it asked; one whose to-do is
+    gone is let go quietly. A change older than 12 hours, or a new to-do that never reached the hub after a week, is let
+    go.
+  - **Drawn until it shows.** The hub's answer is kept on disk as answered (never sent again) the moment it comes,
+    before the list is read again; the write stays until a read of the list begun after that answer has landed
+    (`TodoStore.readsBegun`, `hubAnswered(read:)`): until then the list draws it (the tick struck through, a new to-do
+    "Saving…", first in To do) and `TodoCountsSource` counts it (`TodoStore.V1.pending`: a deleted to-do out of every
+    number, one put in Someday counted there, a new one in To do), so the numbers and the rows never disagree. A change
+    that could not reach the hub says "Not on your hub yet" on line 2. Undo while a write is being sent draws it taken
+    back at once and sends its reverse once the hub has it; Undo on one the hub has, or may have, sends its reverse,
+    to the hub it was made on. A new to-do's own row takes the place of the one drawn for it in the same step, without
+    fading in. Today, Date… and Project are the to-do's plan, drawn at once and saved as its page saves it
+    (`reschedule`, `refile`); Today and Date… keep a timed due's time of day.
+  - **Offline.** While the titles say the hub is out of reach (`ConnectionStatus.shown`) the list keeps the last read,
+    under "Can't reach your hub · showing what was saved ‹time›", the time the hub last answered (`TodoStore.readAt`,
+    kept with the views at least once a minute); the line registers with `titleSaysLink()`, so the shell's pill stays
+    away. Tests: `TodoOutboxTests`, `TodosListWritesTests`, the UI suite's `testTickAndUndo`, `testSwipeSomeday`,
+    `testDeleteAndUndo` and `testOfflineIsSaidOnce` against `MOCK_TODO_VIEW=1`.
 - **Which page.** `TodosPlacePage` draws the V1 list while the gate is on, else today's `TodosView` (frozen), deciding
   once, when the page is made (`TodosPageChoice`): a hello that turns the gate on while To-dos is up (a manager that
   connects late), or while a to-do is pushed over it, never swaps it; the next time To-dos opens it is the V1 list. The
@@ -2157,8 +2208,10 @@ a follow-up's prompt (`injected.detail`, or the raw input) is never shown while 
 visible one; its block shows only the one-line `injected.line` (`ChatLine.hidesPrompt`). A round stays shown by exactly
 the supervision rule (`Supervision.visible`): a successful `ask_user` / `notify_user`, a pending live `ask_user`, an
 accepted / needs-user `task_review`, a `supervision_finish` receipt with user visibility, or `fold.supervision_user`.
-A completed round with a nonblank final reply also stays visible unless it successfully finished silent. The reply
-uses the usual bubble and the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
+A completed round with a nonblank final reply also stays visible unless it successfully finished silent, except for a
+routine cross-conversation report to the main conversation: that reply stays inside the expandable background record,
+just as on the web. Explicit owner-visibility actions above still open and notify. The reply uses the usual bubble and
+the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
 
 While folding is on, the main chat's Needs You tray groups task rows by the conversation that supervises them (the
 to-do's `origin`) when they come from more than one: the conversation's own group first without a header, then each
@@ -2457,12 +2510,12 @@ When a device cannot reach the hub address, connect through an SSH server. For t
   `ServerConfig`, the pairing registry, `currentConfig` and all comparisons still use the hub's own address, so multi-hub grouping, routing and credential upgrades need no tunnel awareness.
   `HubRoute.healthProbe` uses `direct: true`, always probing the direct route.
 - **Routing**: with usable SSH settings in a group (host, user, confirmed fingerprint), `routePicker` always has a value: before every connection, `HubRoute.answering` probes direct routes (even a single address),
-  and only if none answer calls `SSHTunnels.open`; "Always use SSH" opens the tunnel first. While tunneled, `watchDirect` probes direct routes every 2 minutes and calls `reroute()` when they work again.
+  and only if none answer calls `SSHTunnels.open`; "Always use SSH" opens the tunnel first. When restoring a closed SSH tunnel used last time, that tunnel races the direct probes and the first success is used (#11671); an already-routed tunnel keeps direct-first selection so `watchDirect` can still move back. While tunneled, `watchDirect` probes direct routes every 2 minutes and calls `reroute()` when they work again.
 - **Configuration** lives in `PairedHub.ssh` (per-hub pairing registry in Keychain); private keys are separate in Keychain (`ssh.identity`, `AfterFirstUnlockThisDeviceOnly`).
   SSH settings entered on the pairing page are saved with the newly paired hub; the tunnel opened for pairing is handed directly to it (`SSHTunnels.adopt`), and device-credential upgrading continues through it.
 - **Status** (consistent with existing wording): connection details add "Route: Direct / Via SSH tunnel (user@host)"; tunnel startup failures show "SSH tunnel: <reason>";
   Settings top says "Hub connected · Via SSH tunnel"; the active hub in Settings › hub has an "SSH" tag and footer "Connected (via SSH tunnel)", with the SSH tunnel row showing Not configured / Fallback / Always / In use.
-- **Background**: `suspendLinks` closes every tunnel (`SSHTunnels.closeAll`); foregrounding reroutes and rebuilds each group (about 1 second measured in the simulator).
+- **Background**: `suspendLinks` closes tunnels unless a call or an outside action still owns them (`closeTunnelsForBackground`). Closing SSH also cancels pending authentication and removes its start immediately; late completion cannot affect a newer start or relay lease. Foregrounding reroutes and rebuilds each group. `HubLink.api` requests await `LiveConnection.waitForRoute` before resolving their outgoing address, independently per group and without waiting for the socket hello. Cancelled route attempts cancel their waiting requests. Actual recovery latency is network-dependent; the old approximately one-second observation was simulator-only.
 - **Debugging**: `-seedSSHTunnel <base64 SSHRoute JSON>` seeds SSH settings for the first hub; `-seedSSHKey <base64 32-byte seed>` uses a supplied test key (DEBUG only),
   `-tab settings -openSSHTunnel YES` opens the first hub's SSH tunnel page. End-to-end test setup is in `docs/operations/testing.md` ("SSH tunnels").
 
@@ -2748,7 +2801,7 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
 - **Push grading** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
   push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`, the legacy wire route); its footer says it holds
   for every device and what still notifies. A hub without the route, or one that does not answer, shows no section; a change
-  shows at once, and a refusal puts it back and says why. `docs/server/server.md` "Push grading (push urgency filtering, `hub/lnmode.go`)".
+  shows at once, and a refusal puts it back and says why. `docs/server/server.md` "Push grading (push urgency filtering, `hub/push_grading.go`)".
 - **Quiet hours**: Settings › Notifications has this device's quiet hours (a switch, then From / Until), only when the prefs answer
   has `quiet`; each change sends `quiet` alone with this device's time zone (`APIClient.setQuietHours`), as the web does. Hours set
   in another zone: the section's footer names that zone instead of this device's (`QuietHours.elsewhere`) until they are changed here.
@@ -2763,6 +2816,17 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
 - **Tests**: `InboxManagersTests`, `ManagerPushTests`, `ManagerGroupsTests.aComputerIsOfflineWithItsManager` and
   `.aPushIsThePagesOwnUnlessAnotherManagerSentIt`,
   `ExtensionOperationsTests.anotherManagersOperationIsKeptApart`, `MacAttentionTests.aManagerSwitchedOffHereRingsNoBanner`.
+
+## Starred messages (#11993)
+
+On iPhone and iPad, touch and hold a user message or reply in an Assistant or Agent conversation and choose **Star**.
+The same row shows the saved mark, and **Unstar** offers Undo. **Pages › Starred** searches the current assistant's
+snapshots by words, conversation title and speaker. The list is shared with the Web app through the existing Assistant
+manager API. Chats use compact references. The saved text is read while the Starred page is open.
+
+**Open Original** checks the exact transcript and highlights the saved message when it is still present. Positional
+messages also need a matching record fingerprint. A deleted conversation or original leaves the words available for
+Copy. A failed connection offers a retry. Older assistants that do not offer the API have no Starred entry or menu action.
 
 ## Saved prompts (#9436)
 
@@ -2852,7 +2916,7 @@ is listed), and a hub that answers it has no roster filters nothing (`AppModel.m
   default's conversations name none, and with one installed manager or no roster nothing is named.
 - **Counts**: the tab badges, the app icon's number (their sum), the sidebar's Inbox and To-dos counts, the home page's
   Needs You and the main conversation's dock count the current assistant's (`AppModel.countBadges`,
-  `InboxStore.actionCount`, `TodoStore.badgeCount`). The
+  `InboxStore.unreadCount` for the Inbox's badge and row, `TodoStore.badgeCount`). The
   switcher shows beside every other assistant what waits there (`AssistantBadges`, `AppModel.assistantBadges`): its agents
   waiting (a session with a pending card or in Needs You once, quiet and muted ones left out, a card on no session by
   itself; Persona's own conversations by their cards only) plus `inbox_needs_you`. The header's face carries a mark while
@@ -2962,6 +3026,7 @@ Requested 2026-11-17 (#9508): a screenshot of a chat carries Persona's brand whe
 
 - **Where**: the Assistant chat's bar in all its forms (the shell's row, the Sidebar layout's drawer row, the iPad's bar; `AssistantTopBar`) and the Agent chat's header, open and folded (`ChromeHeader` in `ChatView`). Not the iPhone Duo's side rail or side-bar header, and not Inbox, Knowledge or Settings: those use the system's navigation bar, which cannot be moved into the layer below, and the Inbox mostly shows other people's messages.
 - **How** (`apple/Persona/DesignSystem/ScreenshotBanner.swift`): iOS leaves a secure text field's drawing view out of screenshots, screen recordings and mirroring (AirPlay and the like) and keeps it on screen: what keeps passwords out of pictures. `screenshotBanner` hosts the bar in its own `UIHostingController` inside that view, taken from a `UITextField` with `isSecureTextEntry` (public API only: the field's first subview), and draws the banner's hosting controller under it, both over an opaque backdrop that carries on to the screen's edges where the bar meets them (behind the status bar). On screen the bar covers the banner; in a capture the bar's layer is gone and the banner shows. The field stays alive: switching its `isSecureTextEntry` turns the layer off and on (`ScreenshotBanner.beginReveal()` / `endReveal()`). No such view on some future system: the bar is drawn as before and screenshots show it (`ScreenshotBanner.isAvailable`, which also hides the switch).
+- **The name**: the one the top bar says for whose page it is (`AppModel.assistantTitleName`, #12243): the named manager on a hub with several, else the current assistant (with one too, as the sidebar's head and the bar show it), else the persona's name; in the Assistant chat the bar hands its own (another assistant's conversation names its own; a side conversation's banner keeps the assistant's name, not the conversation's title). Before #12243 the banner read `assistantShownName`, which keeps the persona's name with one assistant, so a screenshot said "Persona" (cut to "Pers…" on a narrow display) where the screen said the assistant's name.
 - **The banner**: `PersonaBrandLockup` `.banner` (`PersonaBannerRow`): `PersonaAvatar` at `Theme.Size.avatarM` and the name in `Theme.Font.display` at the leading page margin, so the avatar sits where the bar's own face is; at the trailing margin GitHub's mark (`BrandMark`, `Theme.Brand.github`: Primer Octicons' `mark-github` as published, a one-color template) and `PersonaBrandLockup.repository` (`nwverse/persona`, spelled out nowhere else in the app) in `Theme.Font.title`, mark and words in the secondary color, centred on the name. The slim row has the name in `heading` and the repository in `secondaryStrong`. In the bar's row of buttons (the Assistant chat) or centred in the header (the Agent chat). It grows with the text size to the bar's cap (`Theme.Shell.topBarLargestTypeSize`). The repository is why the banner is there, so it goes last: `ViewThatFits` over the large row with it, the slim row with it (a folded header, the bar's largest text sizes, the narrowest iPad split), and the slim row with the mark alone. In a row with the repository the name asks for no more than its first two characters and the ellipsis, so a long name is cut at its tail and the repository stays whole; the mark stands alone only where not even the slim row has that much room. A picture, never a link: it takes no touches. The same component signs exported pictures (`.mark`, #9468, still with "(Persona)").
 - **On screen** the bar is unchanged at rest; what scrolls under its strip no longer shows faintly through, since the backdrop under the bar is opaque: the page's color down to where the Assistant bar's fog starts to fade (`AssistantTopBar.fogSolid`, then out over `Theme.Space.m`; `BarFog` under both carries the fade on as before), the page's color and the header's material under the Agent header (the banner over the page's color alone, so no second blur). The bar takes the touches in its strip, as a hosting view does (a pass-through also lost the bar's own buttons, measured on a prototype).
 - **Settings › Appearance & Display › Persona Banner in Screenshots** (`ui.screenshotBanner`, on by default, this device only). Off, the bar is drawn as it always was, on screen and in screenshots.
