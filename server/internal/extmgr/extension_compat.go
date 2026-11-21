@@ -191,8 +191,17 @@ type legacyDetail struct {
 	UI []legacyUIPlace `json:"ui,omitempty"`
 }
 
-// detailOut is d for r: the old keys under an old path.
+// detailOut is d for r: the old keys under an old path. Entry-list editors require an explicit capability opt-in;
+// raw configuration stays intact, but older clients cannot turn object entries into destructive string-list controls.
 func detailOut(r *http.Request, d ExtensionDetail) any {
+	if r.URL.Query().Get("entry_lists") != "1" {
+		if d.Form != nil {
+			form := *d.Form
+			form.Fields = slices.DeleteFunc(slices.Clone(d.Form.Fields), func(f extension.Field) bool { return f.EntryList() })
+			d.Form = &form
+		}
+		d.Secrets = slices.DeleteFunc(slices.Clone(d.Secrets), func(s ExtensionSecretView) bool { return s.List != "" })
+	}
 	if !legacyExtensionRequest(r) {
 		return d
 	}
