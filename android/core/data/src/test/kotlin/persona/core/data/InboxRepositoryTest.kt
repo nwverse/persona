@@ -47,6 +47,18 @@ class InboxRepositoryTest {
         } finally { directory.deleteRecursively() }
     }
 
+    @Test fun anApprovalDisplayCopyDoesNotBecomeASecondInboxRow() = runTest {
+        val directory = Files.createTempDirectory("inbox-approval-mirror-test").toFile()
+        try {
+            val original = Interaction("original", "box", "side", kind = "permission")
+            val mirror = original.copy(id = "display", sessionId = "main", mirrorOf = original.id)
+            val repository = repository(FakeTransport(), directory, backgroundScope, FakeHub(),
+                pending = listOf(original, mirror))
+            val shown = repository.snapshot.first { it.interactions.isNotEmpty() }.interactions
+            assertEquals(listOf("original"), shown.map { it.id })
+        } finally { directory.deleteRecursively() }
+    }
+
     @Test fun persistentSnapshotSubscribersDoNotPollAHubButInboxEventsStillRefresh() = runTest {
         val directory = Files.createTempDirectory("inbox-no-poll-test").toFile()
         try {
@@ -1792,7 +1804,7 @@ class InboxRepositoryTest {
 
     private fun repository(transport: FakeTransport, directory: java.io.File, owner: CoroutineScope,
         hub: FakeHub, snapshots: ListSnapshotStore? = null, sender: MainConversationSender? = null,
-        refreshWindowMillis: Long = 1_000): RealInboxRepository = RealInboxRepository(
+        pending: List<Interaction> = emptyList(), refreshWindowMillis: Long = 1_000): RealInboxRepository = RealInboxRepository(
         object : InboxAssistantConnection { override val current = MutableStateFlow<InboxAssistantTransport?>(transport) },
         InboxReplyJournal(directory, "hub/generation"),
         object : SessionsRepository {
@@ -1801,7 +1813,7 @@ class InboxRepositoryTest {
             override suspend fun refresh() = Unit
         },
         object : InteractionCenter {
-            override val pending = MutableStateFlow<List<Interaction>>(emptyList())
+            override val pending = MutableStateFlow(pending)
             override suspend fun refresh() = Unit
             override suspend fun resolve(id: String, resolution: Resolution) = Unit
         }, owner, snapshots = snapshots, hubConnection = hub, mainConversationSender = sender,

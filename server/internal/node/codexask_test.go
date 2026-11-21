@@ -304,6 +304,30 @@ func TestCodexAnswerApproval(t *testing.T) {
 	})
 }
 
+func TestCodexAnswerRejectsAnEarlierOccurrence(t *testing.T) {
+	n, f, _ := codexNode(t, proto.StatusBlocked)
+	approval := screenFixture(t, "codex-0.163.0-exec-approval-120.txt")
+	f.setScreen(cxPane, approval)
+	first := onlyCard(t, n)
+	f.setScreen(cxPane, cxEmpty)
+	if cards := n.codexCardsNow(context.Background(), cxID); len(cards) != 0 {
+		t.Fatalf("empty-screen transition left cards: %+v", cards)
+	}
+	f.setScreen(cxPane, approval)
+	replacement := onlyCard(t, n)
+	if replacement.ix.ID != first.ix.ID || !replacement.ix.CreatedAt.After(first.ix.CreatedAt) {
+		t.Fatalf("fixture did not create a later same-ID occurrence: first=%+v replacement=%+v", first.ix, replacement.ix)
+	}
+	allow := true
+	_, err := request(t, n, "codex.answer", map[string]any{
+		"session_id": cxID, "id": first.ix.ID, "created_at": first.ix.CreatedAt,
+		"resolution": proto.Resolution{Allow: &allow},
+	})
+	if refusalCode(err) != screen.PromptChanged || len(f.trace("pane.send_keys", "pane.send_text")) != 0 {
+		t.Fatalf("earlier occurrence answered its replacement: err=%v actions=%v", err, f.trace("pane.send_keys", "pane.send_text"))
+	}
+}
+
 // cxOverlay is request_user_input's second question, the cursor on option sel, its notes field open with notes.
 func cxOverlay(sel int, notes *string) string {
 	rows := []string{"Small              one line", "Large              two lines", "None of the above  Optionally, add details in notes (tab)"}
@@ -489,6 +513,39 @@ func TestCodexCardsOfJoinedThreads(t *testing.T) {
 	}
 	if route, note := n.codexRoute(cxID); route != codexRouteTerminal || note == "" {
 		t.Errorf("route %q %q", route, note)
+	}
+}
+
+func TestCodexSyncListsSameIDReplacementWithoutAnEmptySync(t *testing.T) {
+	n, f, _ := codexNode(t, proto.StatusBlocked)
+	hub := newScriptHub(t, answerWith(proto.Resolution{}), notifyOK)
+	n.peer = hub.n.peer
+	approval := screenFixture(t, "codex-0.163.0-exec-approval-120.txt")
+	f.setScreen(cxPane, approval)
+	first := onlyCard(t, n).ix
+	n.syncCodexCards(context.Background())
+	waitFor(t, "the first Codex interaction list", func() bool {
+		hub.mu.Lock()
+		defer hub.mu.Unlock()
+		return len(hub.codexLists) == 1
+	})
+	// A targeted answer scan observed A gone, but no empty full sync ran before B
+	// appeared. Only A's occurrence cache is cleared; its ID remains in cx.sent.
+	n.cx.mu.Lock()
+	delete(n.cx.created, first.ID)
+	n.cx.mu.Unlock()
+	f.setScreen(cxPane, approval)
+	n.syncCodexCards(context.Background())
+	waitFor(t, "the same-ID replacement Codex interaction list", func() bool {
+		hub.mu.Lock()
+		defer hub.mu.Unlock()
+		return len(hub.codexLists) == 2
+	})
+	hub.mu.Lock()
+	got := append([]proto.Interaction(nil), hub.codexLists[1]...)
+	hub.mu.Unlock()
+	if len(got) != 1 || got[0].ID != first.ID || !got[0].CreatedAt.After(first.CreatedAt) {
+		t.Fatalf("replacement list = %+v, want the same ID with a later occurrence than %s", got, first.CreatedAt)
 	}
 }
 

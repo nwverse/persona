@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, CLIENT_FEATURES } from "./api";
+import { clientInstance } from "./device-id";
 import { answerLines } from "./answered";
 import { defaults, dropElicitationDraft, elicitationDraft, elicitationResolution, elicitationSource, fields, numberInputMode, saveElicitationDraft, supported, urlHost, urlTarget, validate } from "./elicitation";
 import { interactionAsk, interactionTitle } from "./inbox";
@@ -184,6 +185,7 @@ describe("声明能力", () => {
     await api("/interactions", { token: "t" });
     const headers = fetcher.mock.calls[0][1].headers as Headers;
     expect(headers.get("X-Persona-Client")).toBe("web/1");
+    expect(headers.get("X-Persona-Client-Instance")).toBe(clientInstance);
     expect(CLIENT_FEATURES).toContain("elicitation");
   });
 });

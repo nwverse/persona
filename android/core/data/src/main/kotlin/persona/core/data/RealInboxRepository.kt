@@ -207,7 +207,7 @@ class RealInboxRepository(
         }
         scope.launch {
             combine(sessions.sessions, interactions.pending, sessions.listStatus) { agents, waiting, status ->
-                Triple(agents.map { AgentSession(it) }, waiting.map {
+                Triple(agents.map { AgentSession(it) }, waiting.filterNot { it.isDisplayMirror }.map {
                     InboxInteraction(it.id, it.machineId, it.sessionId, it.createdAt,
                         agents.firstOrNull { agent -> agent.key == it.sessionKey }?.displayTitle.orEmpty(), it.summary, it.headline.shown,
                         manager = it.manager)

@@ -107,8 +107,9 @@ type botCardRef struct {
 	Kind            string    `json:"kind,omitempty"`
 	MachineID       string    `json:"machine_id,omitempty"`
 	SessionID       string    `json:"session_id,omitempty"`
-	Thread          string    `json:"thread,omitempty"`  // the topic it was posted into (botCard.Thread)
-	ChatID          string    `json:"chat_id,omitempty"` // the group chat of that topic (botCard.ChatID); "" in the owner's DM
+	CreatedAt       time.Time `json:"created_at,omitzero"` // occurrence this message asks, for safe same-ID replacement handling
+	Thread          string    `json:"thread,omitempty"`    // the topic it was posted into (botCard.Thread)
+	ChatID          string    `json:"chat_id,omitempty"`   // the group chat of that topic (botCard.ChatID); "" in the owner's DM
 	At              time.Time `json:"at"`
 	ExpiresAt       time.Time `json:"expires_at,omitzero"` // the decision deadline when posted; a live prepared card may extend it
 	ApprovalBatchID string    `json:"approval_batch_id,omitempty"`
@@ -290,7 +291,7 @@ func (s *Service) loadBotLocked(ctx context.Context) {
 			}
 			b.cards[id] = botCard{MessageID: ref.MessageID, Thread: ref.Thread, ChatID: ref.ChatID, At: ref.At, NudgedAt: ref.NudgedAt, SkippedAt: ref.SkippedAt, Tries: ref.Tries, TriedAt: ref.TriedAt,
 				DeadlineNudge: ref.DeadlineNudge,
-				Ix: proto.Interaction{ID: id, Kind: ref.Kind, MachineID: ref.MachineID, SessionID: ref.SessionID, ExpiresAt: ref.ExpiresAt,
+				Ix: proto.Interaction{ID: id, Kind: ref.Kind, MachineID: ref.MachineID, SessionID: ref.SessionID, CreatedAt: ref.CreatedAt, ExpiresAt: ref.ExpiresAt,
 					ApprovalBatchID: ref.ApprovalBatchID, ApprovalItemID: ref.ApprovalItemID, OwnerProposal: ref.OwnerProposal, Resumable: ref.Resumable, NoExpiry: ref.NoExpiry}}
 		}
 	}
@@ -349,7 +350,7 @@ func (s *Service) keepBotCardLocked(id string, card *botCard) {
 	if at.IsZero() {
 		at = b.clock()
 	}
-	b.st.Cards[id] = &botCardRef{MessageID: card.MessageID, Kind: card.Ix.Kind, MachineID: card.Ix.MachineID, SessionID: card.Ix.SessionID,
+	b.st.Cards[id] = &botCardRef{MessageID: card.MessageID, Kind: card.Ix.Kind, MachineID: card.Ix.MachineID, SessionID: card.Ix.SessionID, CreatedAt: card.Ix.CreatedAt.UTC(),
 		Thread: card.Thread, ChatID: card.ChatID, At: at.UTC(), ExpiresAt: card.Ix.ExpiresAt.UTC(), NudgedAt: card.NudgedAt.UTC(),
 		ApprovalBatchID: card.Ix.ApprovalBatchID, ApprovalItemID: card.Ix.ApprovalItemID, OwnerProposal: card.Ix.OwnerProposal,
 		Resumable: card.Ix.Resumable, NoExpiry: card.Ix.NoExpiry,

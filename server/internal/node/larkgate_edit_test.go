@@ -33,12 +33,18 @@ func newLarkEditRig(t *testing.T, answer func(proto.Interaction) proto.Resolutio
 // only path that may declare editable_text; the shared larkCheck used by Codex and the runtimes is tested separately.
 func runLarkEditHook(t *testing.T, r *spaceRig, cwd, command string, extra map[string]any) map[string]any {
 	t.Helper()
+	return runLarkEditHookForToolUse(t, r, cwd, command, "toolu_lark_edit", extra)
+}
+
+// runLarkEditHookForToolUse lets a detached retry arrive as a fresh runtime tool call.
+func runLarkEditHookForToolUse(t *testing.T, r *spaceRig, cwd, command, toolUseID string, extra map[string]any) map[string]any {
+	t.Helper()
 	input := map[string]any{"command": command}
 	for key, value := range extra {
 		input[key] = value
 	}
 	raw, err := json.Marshal(hookInput{HookEventName: "PreToolUse", SessionID: testThread, ToolName: "Bash",
-		ToolUseID: "toolu_lark_edit", Cwd: cwd, ToolInput: mustRaw(input)})
+		ToolUseID: toolUseID, Cwd: cwd, ToolInput: mustRaw(input)})
 	if err != nil {
 		t.Fatal(err)
 	}

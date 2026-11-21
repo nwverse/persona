@@ -1,9 +1,12 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -15,13 +18,49 @@ import (
 
 // ---- interactions ----
 
+// interactionOccurrenceTimeSQL preserves the full RFC3339Nano occurrence time
+// retained in the payload. PostgreSQL's created_at column has only microseconds,
+// which is not enough to distinguish two occurrences under a reused ID. The
+// epoch-second and padded-fraction tuple also avoids nanosecond integer overflow.
+func interactionOccurrenceTimeSQL(value string) string {
+	return `(EXTRACT(EPOCH FROM DATE_TRUNC('second', (` + value + `)::timestamptz)), COALESCE(RPAD(SUBSTRING(` + value + ` FROM '\.([0-9]+)'), 9, '0'), '000000000'))`
+}
+
+// InsertInteraction records a pending occurrence. Replaying the same timestamp
+// is idempotent, except that a non-resumable occurrence cancelled by startup
+// cleanup (cancelled with no owner resolution) can be listed as pending again.
+// A later timestamp is a genuinely reused runtime ID, so its new pending payload
+// and occurrence replace the older terminal row. An older replay cannot overwrite
+// the latest occurrence, and an owner-resolved occurrence never reopens.
 func (d *DB) InsertInteraction(ctx context.Context, ix proto.Interaction) error {
 	payload, err := json.Marshal(ix)
 	if err != nil {
 		return err
 	}
 	_, err = d.pool.Exec(ctx, `INSERT INTO interactions (id, machine_id, session_id, kind, payload, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING`,
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (id) DO UPDATE SET
+			machine_id = EXCLUDED.machine_id,
+			session_id = EXCLUDED.session_id,
+			kind = EXCLUDED.kind,
+			payload = EXCLUDED.payload,
+			status = 'pending',
+			resolution = NULL,
+			created_at = EXCLUDED.created_at,
+			resolved_at = NULL,
+			user_notified_at = NULL,
+			auto_authorized_at = NULL,
+			authorization_id = '',
+			todo_id = ''
+		WHERE (`+interactionOccurrenceTimeSQL("EXCLUDED.payload->>'created_at'")+` > `+
+		interactionOccurrenceTimeSQL("interactions.payload->>'created_at'")+`) OR (
+			`+interactionOccurrenceTimeSQL("EXCLUDED.payload->>'created_at'")+` = `+
+		interactionOccurrenceTimeSQL("interactions.payload->>'created_at'")+`
+			AND interactions.status = 'cancelled' AND interactions.resolution IS NULL
+			AND NOT COALESCE((EXCLUDED.payload->>'resumable')::boolean, false)
+			AND interactions.machine_id = EXCLUDED.machine_id
+			AND interactions.session_id = EXCLUDED.session_id
+		)`,
 		ix.ID, ix.MachineID, ix.SessionID, ix.Kind, payload, ix.CreatedAt)
 	return err
 }
@@ -47,6 +86,99 @@ func (d *DB) FinishInteraction(ctx context.Context, id, status string, res *prot
 	_, err := d.pool.Exec(ctx, `UPDATE interactions SET status = $2, resolution = $3, resolved_at = now()
 		WHERE id = $1 AND status = 'pending'`, id, status, raw)
 	return err
+}
+
+// FinishInteractionOccurrence finalizes only the specified occurrence. It first
+// inserts a missing pending row (needed after an earlier best-effort insert
+// failed), then conditionally finishes that exact machine/session/timestamp and,
+// for a detachable command, its exact call fields. matched is false when the ID
+// now belongs to another occurrence; currentTerminal reports that other row's
+// state so recovery never cancels it or forgets its own journal while it is
+// still pending.
+func (d *DB) FinishInteractionOccurrence(ctx context.Context, ix proto.Interaction, status string, res *proto.Resolution) (matched, currentTerminal bool, err error) {
+	if err := d.InsertInteraction(ctx, ix); err != nil {
+		return false, false, err
+	}
+	var raw []byte
+	if res != nil {
+		raw, _ = json.Marshal(res)
+	}
+	var input []byte
+	if ix.Detachable {
+		input, err = json.Marshal(ix.ToolInput)
+		if err != nil {
+			return false, false, err
+		}
+	}
+	tag, err := d.pool.Exec(ctx, `UPDATE interactions SET status = $2, resolution = $3, resolved_at = now()
+		WHERE id = $1 AND status = 'pending' AND machine_id = $4 AND session_id = $5 AND created_at = $6
+		AND COALESCE((payload->>'detachable')::boolean, false) = $7
+		AND (NOT $7 OR (kind = $8 AND COALESCE(payload->>'tool_name', '') = $9
+			AND COALESCE(payload->>'execution_cwd', '') = $10
+			AND COALESCE(payload->'tool_input', 'null'::jsonb) = COALESCE($11::jsonb, 'null'::jsonb)))
+		AND `+interactionOccurrenceTimeSQL("interactions.payload->>'created_at'")+` = `+
+		interactionOccurrenceTimeSQL("$12::text"),
+		ix.ID, status, raw, ix.MachineID, ix.SessionID, ix.CreatedAt, ix.Detachable, ix.Kind, ix.ToolName, ix.ExecutionCwd, input,
+		ix.CreatedAt.Format(time.RFC3339Nano))
+	if err != nil {
+		return false, false, err
+	}
+	if tag.RowsAffected() == 1 {
+		return true, true, nil
+	}
+	rec, err := d.InteractionRecord(ctx, ix.ID)
+	if err != nil {
+		return false, false, err
+	}
+	if rec == nil {
+		return false, false, errors.New("interaction occurrence is missing after its insert")
+	}
+	if !sameInteractionOccurrence(ix, rec.Interaction) {
+		return false, rec.Status != "pending", nil
+	}
+	if rec.Status == "pending" {
+		return false, false, errors.New("interaction occurrence remained pending after its terminal write")
+	}
+	if rec.Status != status {
+		return false, true, errors.New("interaction occurrence already has a different terminal status")
+	}
+	return true, true, nil
+}
+
+func sameInteractionOccurrence(a, b proto.Interaction) bool {
+	if a.ID != b.ID || a.MachineID != b.MachineID || a.SessionID != b.SessionID || !a.CreatedAt.Equal(b.CreatedAt) {
+		return false
+	}
+	if a.Detachable || b.Detachable {
+		return a.Detachable && b.Detachable && a.Kind == b.Kind && a.ToolName == b.ToolName &&
+			a.ExecutionCwd == b.ExecutionCwd && sameJSONDocument(a.ToolInput, b.ToolInput)
+	}
+	return true
+}
+
+// sameJSONDocument compares JSON values without making PostgreSQL JSONB's key
+// ordering part of an occurrence's identity. Invalid documents retain the old
+// exact-byte fallback and therefore fail closed.
+func sameJSONDocument(a, b json.RawMessage) bool {
+	decode := func(raw json.RawMessage) (any, bool) {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		var value any
+		if err := dec.Decode(&value); err != nil {
+			return nil, false
+		}
+		var extra any
+		if err := dec.Decode(&extra); err != io.EOF {
+			return nil, false
+		}
+		return value, true
+	}
+	av, aok := decode(a)
+	bv, bok := decode(b)
+	if !aok || !bok {
+		return string(a) == string(b)
+	}
+	return reflect.DeepEqual(av, bv)
 }
 
 // LateAnswer records on expired card id an answer that came after it expired (proto.Resolution.Late): answers (by
@@ -272,16 +404,47 @@ const (
 			jsonb_array_elements(CASE WHEN jsonb_typeof(value) = 'array' THEN value ELSE '[]'::jsonb END) AS item,
 			LATERAL unnest(ARRAY[item->'card'->>'id', item->>'expired_id']) AS protected(id)
 			WHERE key = 'agents.tool_loops' AND protected.id IS NOT NULL)
-		RETURNING id`
+		RETURNING payload`
 )
+
+// ResumableInteractions returns the pending, unexpired cards that may be
+// restored after a manager restart. Unlike ExpireStaleInteractions it never
+// writes, so a delayed retry cannot cancel a current-process card.
+func (d *DB) ResumableInteractions(ctx context.Context) ([]proto.Interaction, error) {
+	rows, err := d.pool.Query(ctx, resumablePendingSQL)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (proto.Interaction, error) {
+		var payload []byte
+		var ix proto.Interaction
+		if err := r.Scan(&payload); err != nil {
+			return ix, err
+		}
+		return ix, json.Unmarshal(payload, &ix)
+	})
+}
 
 // ExpireStaleInteractions marks interactions left pending by a previous hub process cancelled, and returns the
 // resumable ones not yet expired instead: their hooks reconnect and claim them again. The manager's cards about a
 // turn (session_work's interaction_id) and loop cards in the manager's settings stay pending too. The manager restores
-// them under the same id and ends cards it no longer needs. cancelled are the ids it marked: the apps may still show
-// them (#4568).
-func (d *DB) ExpireStaleInteractions(ctx context.Context) (kept []proto.Interaction, cancelled []string, err error) {
-	rows, err := d.pool.Query(ctx, resumablePendingSQL)
+// them under the same id and ends cards it no longer needs. cancelled carries the
+// payloads it marked: the apps may still show them (#4568), and their occurrence
+// timestamps prevent a delayed withdrawal from ending a reused interaction ID.
+func (d *DB) ExpireStaleInteractions(ctx context.Context) (kept []proto.Interaction, cancelled []proto.Interaction, err error) {
+	return d.expireStaleInteractions(ctx, nil)
+}
+
+func (d *DB) expireStaleInteractions(ctx context.Context, beforeCancel func()) (kept []proto.Interaction, cancelled []proto.Interaction, err error) {
+	// One repeatable-read snapshot covers both statements. A current-process card
+	// inserted after the resumable lookup is invisible to the cancellation lookup
+	// too, instead of being cancelled merely because it missed the first query.
+	tx, err := d.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	rows, err := tx.Query(ctx, resumablePendingSQL)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -300,12 +463,28 @@ func (d *DB) ExpireStaleInteractions(ctx context.Context) (kept []proto.Interact
 	for i, ix := range kept {
 		ids[i] = ix.ID
 	}
-	rows, err = d.pool.Query(ctx, cancelPendingSQL, ids)
+	if beforeCancel != nil {
+		beforeCancel()
+	}
+	rows, err = tx.Query(ctx, cancelPendingSQL, ids)
 	if err != nil {
 		return nil, nil, err
 	}
-	cancelled, err = pgx.CollectRows(rows, pgx.RowTo[string])
-	return kept, cancelled, err
+	cancelled, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (proto.Interaction, error) {
+		var payload []byte
+		var ix proto.Interaction
+		if err := r.Scan(&payload); err != nil {
+			return ix, err
+		}
+		return ix, json.Unmarshal(payload, &ix)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, err
+	}
+	return kept, cancelled, nil
 }
 
 // InteractionOutcome returns an interaction's status and resolution; an empty status when there is no such row.

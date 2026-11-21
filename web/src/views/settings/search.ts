@@ -84,6 +84,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   },
   { tab: "persona", group: t("settings-assistantsettings.default_permissions"), anchor: "default-permissions" },
   { tab: "persona", group: t("settings-assistantsettings.readonly_mode"), anchor: "readonly-mode" },
+  { tab: "persona", group: t("settings-assistantsettings.approval_mirror_main"), anchor: "approval-mirror-main" },
   {
     tab: "persona",
     group: t("settings-assistantsettings.owner_approval_title"),

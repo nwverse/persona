@@ -190,7 +190,7 @@ func TestFeishuReadDropsEverythingElse(t *testing.T) {
 func TestFeishuReadKeepsCardsAndPrivateRunsOutOfTheGroup(t *testing.T) {
 	e := readEnv(t)
 	e.read(readEvent("om_r4", "/read 看下", ""))
-	reply, to, note := e.s.interactionPlace(proto.Interaction{MachineID: "server", SessionID: "m1"})
+	reply, to, note := e.s.interactionPlace(context.Background(), proto.Interaction{MachineID: "server", SessionID: "m1"})
 	if reply != "" || to.ChatID != "" || note != nil {
 		t.Fatalf("a question would go to %q in %+v (note %v)", reply, to, note)
 	}
@@ -204,7 +204,7 @@ func TestFeishuReadKeepsCardsAndPrivateRunsOutOfTheGroup(t *testing.T) {
 			t.Fatalf("a run was folded into another: %+v", r)
 		}
 	}
-	reply, to, _ = e.s.interactionPlace(proto.Interaction{MachineID: "server", SessionID: "m1"})
+	reply, to, _ = e.s.interactionPlace(context.Background(), proto.Interaction{MachineID: "server", SessionID: "m1"})
 	if reply != "om_p1" || to.ChatID != "" {
 		t.Fatalf("a question would go to %q in %+v", reply, to)
 	}
@@ -228,7 +228,7 @@ func TestFeishuReadCardsSkipAConcurrentTopic(t *testing.T) {
 	}
 	ix := proto.Interaction{ID: "ix_q", Kind: proto.IxQuestion, MachineID: "server", SessionID: "m1",
 		Questions: []proto.Question{{Question: "看哪段？", Options: []proto.QuestionOption{{Label: "今天"}, {Label: "昨天"}}}}}
-	reply, to, note := e.s.interactionPlace(ix)
+	reply, to, note := e.s.interactionPlace(context.Background(), ix)
 	if reply != "" || to.ChatID != "" || note != nil {
 		t.Fatalf("a question would go to %q in %+v (note %v)", reply, to, note)
 	}

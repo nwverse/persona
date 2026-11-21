@@ -56,7 +56,7 @@ func (s *Service) feishuInteraction(ix proto.Interaction) {
 }
 
 // feishuCardWanted: the bot posts a card for ix (feishuInteraction): it is on with the cards switch, and the chat
-// drives the conversation or "all cards" is on (not for a health conversation's).
+// drives the conversation, it is an eligible non-main assistant permission, or "all cards" is on (not for health).
 func (s *Service) feishuCardWanted(ctx context.Context, ix proto.Interaction) bool {
 	f, ready := s.feishuFeatures(ctx)
 	if !ready || !f.Cards {
@@ -65,11 +65,14 @@ func (s *Service) feishuCardWanted(ctx context.Context, ix proto.Interaction) bo
 	if ix.Private {
 		return false // a Just me turn's card: never on Lark (meeting_justme.go)
 	}
-	// "All cards" does not take a health conversation's: only one the chat drives itself (health.go).
-	if drives := s.botDrives(ctx, ix.MachineID, ix.SessionID); !drives && (!f.AllCards || s.ixInHealth(ctx, ix)) {
-		return false
+	if s.botDrives(ctx, ix.MachineID, ix.SessionID) {
+		return true
 	}
-	return true
+	if s.nonMainAssistantPermission(ctx, ix) {
+		return true // the owner's direct chat, independently of all_cards
+	}
+	// "All cards" keeps its existing meaning and never takes a health conversation's card.
+	return f.AllCards && !s.ixInHealth(ctx, ix)
 }
 
 // feishuInteractionAlways posts ix's card whatever the cards switches say: a task's decision the report put on top
@@ -128,19 +131,40 @@ func finalStatus(status string) bool {
 
 // postInteractionCard posts ix's card once, unless it ended meanwhile.
 func (s *Service) postInteractionCard(ctx context.Context, ix proto.Interaction) {
-	if s.interactionEnded(ix.ID) { // ended while this looked at the bot: not asked (s.chans before s.fbot, never in it)
+	if s.interactionEndedFor(ix) { // ended while this looked at the bot: not asked (s.chans before s.fbot, never in it)
 		return
+	}
+	if s.postCardHook != nil {
+		s.postCardHook(ix)
 	}
 	b := &s.fbot
 	b.mu.Lock()
 	s.loadBotLocked(ctx)
-	if _, ok := b.cards[ix.ID]; ok {
-		b.mu.Unlock()
-		return
+	var replaced *botCard
+	if current, ok := b.cards[ix.ID]; ok {
+		if !current.Ix.CreatedAt.IsZero() && !ix.CreatedAt.IsZero() && ix.CreatedAt.Before(current.Ix.CreatedAt) {
+			b.mu.Unlock()
+			return // a newer post won while this older occurrence was in flight
+		}
+		if !differentBotCardOccurrence(current.Ix, ix) {
+			b.mu.Unlock()
+			return
+		}
+		old := current
+		replaced = &old
 	}
-	s.keepBotCardLocked(ix.ID, &botCard{}) // claimed: a second announce of the same card does not post twice
+	// The in-flight claim carries the occurrence too. An old terminal event or
+	// callback can no longer delete a replacement's placeholder by ID alone.
+	s.keepBotCardLocked(ix.ID, &botCard{Ix: ix})
 	b.mu.Unlock()
-	reply, to, topic := s.interactionPlace(ix)
+	if replaced != nil && replaced.MessageID != "" {
+		go func(old botCard) {
+			closeCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			s.botCardDone(closeCtx, old.MessageID, old.Ix, i18n.T(s.botLang(closeCtx), "assistant-feishu_cards.handled"))
+		}(*replaced)
+	}
+	reply, to, topic := s.interactionPlace(ctx, ix)
 	ctx = feishuSendAs(ctx, string(ix.Kind), ix.MachineID, ix.SessionID)
 	fallback := ""
 	switch ix.Kind {
@@ -157,12 +181,10 @@ func (s *Service) postInteractionCard(ctx context.Context, ix proto.Interaction)
 		}
 	}
 	card := s.interactionCard(ctx, ix)
-	if s.interactionEnded(ix.ID) {
+	if s.interactionEndedFor(ix) {
 		// Answered while its card was being made (a program that answers cards at once): nobody needs to look at it,
-		// so nothing is posted and the claim goes (#5430). One that ends during the post is closed after it, below.
-		b.mu.Lock()
-		s.keepBotCardLocked(ix.ID, nil)
-		b.mu.Unlock()
+		// so nothing is posted and only this occurrence's claim goes (#5430). One that ends during the post is closed after it, below.
+		s.takeBotCardOccurrence(ix.ID, ix)
 		return
 	}
 	// A card for a topic is a reply to its run's message and belongs under it: if that message is gone it would be a
@@ -180,16 +202,19 @@ func (s *Service) postInteractionCard(ctx context.Context, ix proto.Interaction)
 		reply, to = "", feishuTarget{}
 		mid, err = s.botPostTo(ctx, to, "", card, fallback, "")
 	}
-	ended := s.interactionEnded(ix.ID)
-	b.mu.Lock()
+	ended := s.interactionEndedFor(ix)
 	if err != nil {
 		s.logf("bots: card for %s: %v", ix.ID, err)
-		s.keepBotCardLocked(ix.ID, nil)
-		b.mu.Unlock()
+		s.takeBotCardOccurrence(ix.ID, ix)
 		return
 	}
-	if _, still := b.cards[ix.ID]; !still || ended { // answered while it was being posted
-		s.keepBotCardLocked(ix.ID, nil)
+	b.mu.Lock()
+	current, still := b.cards[ix.ID]
+	same := still && !differentBotCardOccurrence(current.Ix, ix)
+	if !same || ended { // answered or replaced while this occurrence was being posted
+		if same {
+			s.keepBotCardLocked(ix.ID, nil)
+		}
 		b.mu.Unlock()
 		s.botCardDone(ctx, mid, ix, i18n.T(s.botLang(ctx), "assistant-feishu_cards.handled"))
 		return
@@ -216,8 +241,13 @@ func chatRefused(err error) bool {
 // run was asked in one. A conversation can have a private chat's run and a topic's at once (they are not folded into
 // one); then the owner's DM wins, where only the owner sees the card (an approval or a plan must not be shown to a
 // group), and of several runs of one place the one asked last decides.
-func (s *Service) interactionPlace(ix proto.Interaction) (reply string, to feishuTarget, note *topicNote) {
+func (s *Service) interactionPlace(ctx context.Context, ix proto.Interaction) (reply string, to feishuTarget, note *topicNote) {
 	private, topic := s.interactionRuns(ix)
+	// An eligible Assistant approval always goes to the owner directly, even
+	// when its only existing run is in a topic.
+	if private == nil && topic != nil && s.nonMainAssistantPermission(ctx, ix) {
+		return "", feishuTarget{}, &topicNote{reply: topic.ReplyTo, to: runTo(s.runExts(topic, "chat", "thread"))}
+	}
 	switch {
 	case private != nil && topic != nil:
 		// The card is not in the topic that asked: a short line there says it went to the DM.
@@ -309,6 +339,12 @@ func (s *Service) feishuInteractionEnded(ix proto.Interaction, how string, inCha
 	b.mu.Lock()
 	s.loadBotLocked(context.Background()) // a card posted before a restart is in the chat's state
 	c, ok := b.cards[ix.ID]
+	if ok && differentBotCardOccurrence(c.Ix, ix) {
+		// The terminal event belongs to an earlier same-ID occurrence. Its old
+		// message must not remove or close the replacement's ledger entry.
+		b.mu.Unlock()
+		return
+	}
 	s.keepBotCardLocked(ix.ID, nil)
 	if ok && typedAnswerable(c) && !inChat {
 		b.noteEndedLocked(c)
@@ -499,6 +535,9 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 	where := feishubot.EscapeMarkdown(place)
 	val := func(extra map[string]any) map[string]any {
 		v := map[string]any{"a": "ix", "id": ix.ID}
+		if !ix.CreatedAt.IsZero() {
+			v["created_at"] = ix.CreatedAt.Format(time.RFC3339Nano)
+		}
 		for k, x := range extra {
 			v[k] = x
 		}

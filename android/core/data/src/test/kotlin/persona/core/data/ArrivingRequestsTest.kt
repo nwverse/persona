@@ -58,6 +58,23 @@ class ArrivingRequestsTest {
         assertEquals(emptyList<Interaction>(), center.pending.value)
     }
 
+    @Test fun aDisplayCopyStaysInConversationsWithoutASecondArrival() = runTest {
+        val original = Interaction("original", "mac", "side", kind = "permission")
+        val mirror = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"display","machine_id":"mac","session_id":"main","kind":"permission","mirror_of":"original"}""",
+        )
+        val connection = Connection()
+        val center = HubInteractionCenter(Transport(emptyList()), connection, backgroundScope)
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { center.arrivals.collect { arrived += it.id } }
+        connection.events.emit(InteractionEvent(original))
+        connection.events.emit(InteractionEvent(mirror))
+        runCurrent()
+        assertEquals(listOf("original", "display"), center.pending.value.map { it.id })
+        assertEquals(listOf("original"), arrived)
+        assertEquals("original", mirror.mirrorOf)
+    }
+
     @Test fun aDelegatingCardIsSilentUntilItsHandoverReplacesItById() = runTest {
         fun card(delegating: Boolean, delegate: String? = null) = JsonCodec.decodeFromString<Interaction>(
             """{"id":"ix1","machine_id":"mac","session_id":"a","kind":"question","delegating":$delegating,""" +

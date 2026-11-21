@@ -9,6 +9,7 @@ import { currentLanguage, t } from "../i18n";
 import type { Item } from "./types";
 import { clearFeedCache } from "./feed-cache";
 import { credentialEpoch, renewCredentialEpoch } from "./credential-epoch";
+import { clientInstance } from "./device-id";
 
 let ownerToken: string | undefined;
 let ownerEpoch: string | undefined;
@@ -111,7 +112,8 @@ export function handleUnauthorized(fn: () => void): () => void {
 
 /**
  * Who this page is to the hub: the platform and version its socket's client_hello names, and every request's
- * X-Persona-Client. The hub answers a request with what this page's socket declared (MCP forms and links: only to a
+ * X-Persona-Client; X-Persona-Client-Instance names this tab and matches client_hello.instance, so a capability such as
+ * approval_mirrors cannot be borrowed from another tab. The hub answers a request with what this page's socket declared
  * request whose platform and version match a connection that declared them, docs/protocol/protocol.md "MCP elicitation").
  */
 export const CLIENT_PLATFORM = "web";
@@ -128,7 +130,7 @@ export const CLIENT_VERSION = "1";
  * limit, so a dead link is still dropped. Only the timeout is asked for: the 20 s interval stays the hub's.
  */
 export const CLIENT_PONG_TIMEOUT = 45;
-export const CLIENT_FEATURES = ["elicitation", "extension_operations", "extension_auth", "managers", "extension_ui_stream_v1", "persona_contracts_v1", "persona_card_ring", "closeout.markdown.v1", "agent_message_hold"];
+export const CLIENT_FEATURES = ["elicitation", "extension_operations", "extension_auth", "managers", "extension_ui_stream_v1", "persona_contracts_v1", "persona_card_ring", "closeout.markdown.v1", "agent_message_hold", "approval_mirrors"];
 
 // A read the hub has not answered by then fails instead of loading forever (#4492): a restarting hub, a stuck node or a
 // half-dead network. Longer than the hub's own cut-offs for asking a computer (30–40 s), so when the hub has an error
@@ -219,6 +221,7 @@ async function request<T>(path: string, init: ApiOptions, binary = false): Promi
   // the hub writes its error and status text in the interface language (docs/protocol/i18n.md "Protocol")
   if (!headers.has("Accept-Language")) headers.set("Accept-Language", currentLanguage());
   CLIENT_HEADERS.forEach(name => headers.set(name, `${CLIENT_PLATFORM}/${CLIENT_VERSION}`));
+  headers.set("X-Persona-Client-Instance", clientInstance);
   const op = OP_HEADERS.map(name => headers.get(name)).find(Boolean);
   if (op) OP_HEADERS.forEach(name => headers.set(name, op));
   // the manager the assistant page shows, on the assistant's requests (lib/manager-choice.ts); none for the default

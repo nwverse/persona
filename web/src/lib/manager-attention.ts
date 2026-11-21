@@ -33,6 +33,7 @@ export function waitingAgents(list: ManagerList, sessions: readonly Session[], i
   const counted = (s: Session) => !s.quiet && !isMuted(s, mutes);
   for (const s of sessions) if (!s.assistant && counted(s) && stateOf(s) === "needs_you") add(s.manager, keyOf(s.machine_id, s.session_id));
   for (const ix of interactions) {
+    if (ix.mirror_of) continue;
     if (!ix.session_id) {
       add(ix.manager, `card:${ix.id}`);
       continue;

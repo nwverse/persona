@@ -51,7 +51,7 @@ internal class NotificationDelivery(
             is InteractionEvent -> {
                 // A current snapshot is not a new arrival. Only redraw a notification this device already delivered,
                 // with the server's latest deadline and without notifying again for an unseen card.
-                if (!event.interaction.canClarify || event.interaction.id !in showing()) return
+                if (event.interaction.isDisplayMirror || !event.interaction.canClarify || event.interaction.id !in showing()) return
                 interactions.refresh()
                 val current = interactions.pending.value.firstOrNull { it.id == event.interaction.id } ?: return
                 if (NotificationPolicy.expired(current)) { retract(current.id); return }
@@ -74,6 +74,7 @@ internal class NotificationDelivery(
                     // is found by the event's own ids, and with no conversation of its own to be looking at, never held back.
                     val key = SessionKey(event.machineId, event.sessionId)
                     val ix = interactions.pending.value.firstOrNull { it.id == id && it.sessionKey == key } ?: return
+                    if (ix.isDisplayMirror) return
                     if (NotificationPolicy.expired(ix)) { retract(id); return }
                     if (session == null || !suppressed(session)) postInteraction(ix, event.quiet, null)
                 } else if (session == null || !suppressed(session)) postNotify(event)
@@ -93,7 +94,7 @@ internal class NotificationDelivery(
         sessions.refresh()
         interactions.refresh()
         val currentTime = now()
-        val pending = interactions.pending.value.map { ix ->
+        val pending = interactions.pending.value.filterNot { it.isDisplayMirror }.map { ix ->
             ix to checkNotNull(settings[GroupKeys.namespaceOf(ix.machineId)]) {
                 "Notification preferences are not ready for the request's hub group"
             }

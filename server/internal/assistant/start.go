@@ -1137,6 +1137,8 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 	delete(p.Params, "message_source")
 	approvalTarget, _ := p.Params["approval_reply_to"].(string)
 	delete(p.Params, "approval_reply_to") // approval metadata is never model input, including on a failed send
+	approvalCreatedAt, _ := p.Params["approval_reply_created_at"].(string)
+	delete(p.Params, "approval_reply_created_at")
 	if id, _ := p.Params["client_msg_id"].(string); id != "" {
 		s.availOwnerSent(p.MachineID, p.SessionID, id, time.Now()) // a replay opens no reply wait (availability.go)
 	}
@@ -1170,7 +1172,7 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 		s.humanSent.noteForReply(p.SessionID, id, sent)
 	}
 	if err == nil && approvalTarget != "" && owner && p.Human && !p.ReplyInput && own && !marked {
-		handled, approvalErr := s.resolveAppOwnerReply(ctx, p.MachineID, p.SessionID, id, approvalTarget, text)
+		handled, approvalErr := s.resolveAppOwnerReply(ctx, p.MachineID, p.SessionID, id, approvalTarget, text, approvalCreatedAt)
 		if approvalErr != nil {
 			return nil, badRequest(approvalErr, s.appLang(ctx, p.Lang))
 		}

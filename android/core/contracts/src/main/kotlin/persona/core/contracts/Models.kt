@@ -1249,8 +1249,12 @@ data class Interaction(
     @SerialName("delegating") val delegating: Boolean = false,
     /** What the assistant filled in when it handed the question to the user. */
     @SerialName("delegate") val delegate: Delegate? = null,
+    /** The authoritative interaction whose display-only copy this is; absent on the authoritative card. Last to keep positional callers source-compatible. */
+    @SerialName("mirror_of") val mirrorOf: String? = null,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
+    /** Aggregate surfaces count the authoritative request; conversation views still show both cards. */
+    val isDisplayMirror: Boolean get() = !mirrorOf.isNullOrEmpty()
     /** The one exact reply this card advertises. Anything else stays an ordinary card action. */
     val ownerApprovalPhrase: String?
         get() = ownerApprovalPhrases?.firstOrNull()?.takeIf {

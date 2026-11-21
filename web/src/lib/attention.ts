@@ -126,7 +126,7 @@ export const FORGET_CARD_MS = 10 * 60_000;
 export function detectNewCards(known: ReadonlyMap<string, number> | undefined, interactions: readonly Interaction[], was: ReadonlyMap<string, AgentState>, next: ReadonlyMap<string, AgentState>, sessions: readonly Session[], bare: ReadonlySet<string>, now: number, grading = false): { ids: Map<string, number>; events: CardEvent[] } {
   const ids = new Map<string, number>();
   for (const [id, at] of known ?? []) if (now - at < FORGET_CARD_MS) ids.set(id, at);
-  const waiting = interactions.filter((ix) => !isDelegating(ix));
+  const waiting = interactions.filter((ix) => !ix.mirror_of && !isDelegating(ix));
   for (const ix of waiting) ids.set(ix.id, now);
   if (!known) return { ids, events: [] };
   const quiet = new Set(sessions.filter((s) => s.quiet).map(agentKey));

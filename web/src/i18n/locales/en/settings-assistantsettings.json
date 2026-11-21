@@ -31,6 +31,8 @@
   "notifications_title": "Notifications",
   "notifications_footer": "When on, tasks sent from the main chat don't get their own notifications, Dynamic Island, or badge. Persona tells you in the main chat when they finish, need an answer, or fail. Only affects tasks sent from now on.",
   "quiet_tasks": "Notify main chat tasks in the main chat only",
+  "approval_mirror_main": "Show approvals in the main chat",
+  "approval_mirror_main_hint": "Approvals for changes from your other Assistant chats also appear here. Read-only requests stay in their original chat. Allow or Deny in either place answers the same request. Private chats stay private.",
   "start_title": "Starting tasks",
   "start_requested": "Start what I asked for in the chat right away",
   "trust_title": "Remembered auto-start rules",

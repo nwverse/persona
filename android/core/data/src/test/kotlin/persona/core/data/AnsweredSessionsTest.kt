@@ -181,6 +181,38 @@ class AnsweredSessionsTest {
         assertEquals(AgentState.Working, f.state("b"))
     }
 
+    @Test fun aLateAnswerResponseKeepsASameIdReplacement() = runTest {
+        val f = fixture()
+        val first = card.copy(createdAt = "2026-11-06T08:00:00.000000001Z")
+        val replacement = card.copy(createdAt = "2026-11-06T08:00:00.000000002Z", summary = "replacement")
+        f.transport.pending = listOf(first)
+        f.center.refresh()
+        f.transport.answering = {
+            f.connection.events.emit(InteractionEvent(replacement))
+            delay(10)
+        }
+        f.center.resolve(first.id, Resolution(allow = true))
+        runCurrent()
+        assertEquals(listOf(replacement), f.center.pending.value)
+        f.transport.pending = listOf(replacement)
+        f.center.refresh()
+        assertEquals(listOf(replacement), f.center.pending.value)
+    }
+
+    @Test fun anEarlierResolvedEventKeepsASameIdReplacement() = runTest {
+        val f = fixture()
+        val replacement = card.copy(createdAt = "2026-11-06T08:00:00.000000002Z", summary = "replacement")
+        f.connection.events.emit(InteractionEvent(replacement))
+        val event = ServerEvent.decode("""{"type":"interaction_resolved","id":"ix1","created_at":"2026-11-06T08:00:00.000000001Z"}""")
+        assertNotNull(event)
+        f.connection.events.emit(event!!)
+        runCurrent()
+        assertEquals(listOf(replacement), f.center.pending.value.filter { it.id == card.id })
+        f.transport.pending = listOf(replacement)
+        f.center.refresh()
+        assertEquals(listOf(replacement), f.center.pending.value.filter { it.id == card.id })
+    }
+
     @Test fun theRepositoryViewShowsTheAnsweredListAndRefreshesTheHubs() = runTest {
         val f = fixture()
         val view = f.repository.showing(f.shown)

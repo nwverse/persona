@@ -136,7 +136,7 @@ function PagePermission({ adapter, ix }: { adapter: AppUIStreamPage; ix: NativeP
       // The existing hub endpoint routes this pending ID to its owning manager and rechecks auth.
       // Do not manufacture an Agent session or bypass the generic Agent approval guard.
       await apiOp(`/interactions/${enc(ix.id)}/resolve`, { method: "POST", json: { allow } });
-      endInteraction(ix.id);
+      endInteraction(ix.id, undefined, ix.created_at);
     } catch (error) { toast(t("settings-extensionview.action_failed", { error: errorText(error) }), "error"); }
     finally { setBusy(false); }
   };

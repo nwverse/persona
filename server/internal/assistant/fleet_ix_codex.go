@@ -39,27 +39,48 @@ func (s *Service) syncCodexInteractions(machine string, params json.RawMessage) 
 	}
 	listed := map[string]proto.Interaction{}
 	for _, ix := range p.Interactions {
+		// Display-copy identity is manager-owned at every node-controlled ingress.
+		ix.MirrorOf, ix.MirrorMain = "", false
 		if reservedCard(ix) {
 			s.logf("[%s] codex card %s: %v", machine, ix.ID, errReservedCard)
 			continue
 		}
 		ix.MachineID = machine
 		ix = cleanTitle(ix)
+		// Node-listed cards do not pass through waitInteractionPrepared, so apply
+		// the turn's privacy before either display or direct-chat routing reads it.
+		ix.Private = ix.Private || s.justMeNow(ix.MachineID, ix.SessionID)
+		// Codex cards do not pass through waitInteractionPrepared. Restore the
+		// same pending occurrence's intent after a restart; only a new occurrence
+		// uses the current preference. Record it before history and publication.
+		if intent, at, found := s.recordedApprovalMirrorIntent(context.Background(), ix); found {
+			ix.MirrorMain, ix.CreatedAt = intent, at
+		} else if _, ok := s.mainApprovalMirror(context.Background(), ix); ok {
+			ix.MirrorMain = true
+		}
 		listed[ix.ID] = ix
 	}
 	s.fleet.mu.Lock()
 	m := s.ixMapLocked()
-	var gone []string
+	var gone []*pending
 	var screens []*pending
+	replaced := map[string]bool{}
 	for id, pd := range m {
 		if !pd.codex || pd.ix.MachineID != machine {
 			continue
 		}
-		if _, ok := listed[id]; ok {
-			delete(listed, id) // already a card
-		} else {
-			gone = append(gone, id)
+		if next, ok := listed[id]; ok && sameDurableApprovalOccurrence(pd.ix, next) {
+			delete(listed, id) // already this exact occurrence
+			continue
 		}
+		if _, ok := listed[id]; ok {
+			replaced[id] = true
+		}
+		// Either the card is gone or this is a same-ID replacement. Remove the
+		// old pointer before the replacement is installed; its finalization below
+		// is occurrence-qualified and can never remove the new pending card.
+		gone = append(gone, pd)
+		delete(m, id)
 	}
 	var added []proto.Interaction
 	for _, ix := range listed {
@@ -96,14 +117,14 @@ func (s *Service) syncCodexInteractions(machine string, params json.RawMessage) 
 			delete(s.fleet.codexEnded, id)
 		}
 	}
-	for _, id := range gone {
-		s.fleet.codexEnded[id] = now
+	for _, old := range gone {
+		s.fleet.codexEnded[old.ix.ID] = now
 	}
 	for _, ix := range added {
 		_, announced := s.fleet.codexAnnounced[ix.ID]
 		ended, wasEnded := s.fleet.codexEnded[ix.ID]
 		delete(s.fleet.codexEnded, ix.ID)
-		if announced && !(wasEnded && now.Sub(ended) >= codexAskedAgain) {
+		if announced && !replaced[ix.ID] && !(wasEnded && now.Sub(ended) >= codexAskedAgain) {
 			quiet[ix.ID] = true
 		}
 		s.fleet.codexAnnounced[ix.ID] = now
@@ -113,9 +134,11 @@ func (s *Service) syncCodexInteractions(machine string, params json.RawMessage) 
 		s.recordEnd(old.ix.ID, "cancelled", nil)
 		s.finished(old)
 	}
-	for _, id := range gone {
-		s.recordEnd(id, "cancelled", nil)
-		s.finishInteraction(id)
+	for _, old := range gone {
+		if err := s.recordEndOccurrenceStrict(old.ix, "cancelled", nil); err != nil {
+			s.logf("record Codex occurrence outcome: %v", err)
+		}
+		s.finished(old)
 	}
 	for _, ix := range added {
 		s.record(ix)
@@ -143,7 +166,7 @@ func (s *Service) codexPending(machine string, ix proto.Interaction) *pending {
 		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(answerCtx), codexAnswerTimeout)
 		defer cancel()
-		err := s.nodeCall(ctx, machine, "codex.answer", map[string]any{"session_id": ix.SessionID, "id": ix.ID, "resolution": r}, nil)
+		err := s.nodeCall(ctx, machine, "codex.answer", map[string]any{"session_id": ix.SessionID, "id": ix.ID, "created_at": ix.CreatedAt, "resolution": r}, nil)
 		var re *rpc.Error
 		changed := errors.As(err, &re) && re.Code == screen.PromptChanged
 		if (err == nil || changed) && !r.Dismiss {
@@ -158,19 +181,26 @@ func (s *Service) codexPending(machine string, ix proto.Interaction) *pending {
 				ended = ended.Add(-codexAskedAgain)
 			}
 			s.fleet.mu.Lock()
-			if s.fleet.codexEnded == nil {
-				s.fleet.codexEnded = map[string]time.Time{}
+			current := s.ixMapLocked()[ix.ID]
+			if current == nil || sameDurableApprovalOccurrence(current.ix, ix) {
+				if s.fleet.codexEnded == nil {
+					s.fleet.codexEnded = map[string]time.Time{}
+				}
+				s.fleet.codexEnded[ix.ID] = ended
 			}
-			s.fleet.codexEnded[ix.ID] = ended
 			s.fleet.mu.Unlock()
 		}
 		if err != nil && !r.Dismiss && !changed {
 			s.fleet.mu.Lock()
+			reopened := false
 			if m := s.ixMapLocked(); m[ix.ID] == nil {
 				m[ix.ID] = p
+				reopened = true
 			}
 			s.fleet.mu.Unlock()
-			s.show(ix)
+			if reopened {
+				s.show(ix)
+			}
 		}
 		return err
 	}

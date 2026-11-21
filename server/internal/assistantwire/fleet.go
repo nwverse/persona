@@ -1,6 +1,8 @@
 package assistantwire
 
 import (
+	"time"
+
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -108,10 +110,16 @@ type FleetInteraction struct {
 	Interaction proto.Interaction `json:"interaction"`
 }
 
+// InteractionCreatedAtHeader carries the hub-observed occurrence on a relayed
+// interaction action. It is internal transport metadata, not an owner-supplied
+// authorization field; older hubs and managers simply omit or ignore it.
+const InteractionCreatedAtHeader = "X-Persona-Interaction-Created-At"
+
 // FleetResolved is EventFleetResolved's params; AnsweredBy says the assistant answered it, Reason why and Answers
 // with what (docs/assistant/assistant.md "Assistant answers questions first").
 type FleetResolved struct {
 	ID         string            `json:"id"`
+	CreatedAt  time.Time         `json:"created_at,omitempty"`
 	AnsweredBy string            `json:"answered_by,omitempty"`
 	Reason     string            `json:"reason,omitempty"`
 	Answers    map[string]string `json:"answers,omitempty"`

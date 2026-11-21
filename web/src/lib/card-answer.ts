@@ -184,7 +184,7 @@ async function send(ix: Interaction, body: Resolution, headers?: Record<string, 
     return { ok: true, already };
   } catch (e) {
     if (e instanceof ApiError && e.status === 410) {
-      endInteraction(ix.id); // over (expired, withdrawn, handed back): nothing left to answer
+      endInteraction(ix.id, undefined, ix.created_at); // over (expired, withdrawn, handed back): nothing left to answer
       return { ok: false, error: endedText(e.body.status) };
     }
     if (e instanceof ApiError && e.code === "prompt_changed") return { ok: false, error: t("chat-interactions.prompt_changed") };

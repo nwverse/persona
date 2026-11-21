@@ -12,6 +12,7 @@ import (
 // All access is protected by client.mu; identity here never replaces the authenticated device or role.
 type clientMeta struct {
 	DeviceID string          `json:"device_id"`
+	Instance string          `json:"instance"`
 	Platform string          `json:"platform"`
 	Version  string          `json:"version"`
 	Build    json.RawMessage `json:"build"`
@@ -66,6 +67,7 @@ func (h *Hub) onClientHello(c *client, data []byte) {
 		return
 	}
 	wasElicitation := c.has("elicitation")
+	wasApprovalMirrors := c.wants(featureApprovalMirrors)
 	wasDesktopsLink := c.wants(featureDesktopsLink)
 	wasLang := c.lang()
 	c.mu.Lock()
@@ -110,6 +112,9 @@ func (h *Hub) onClientHello(c *client, data []byte) {
 	}
 	if !wasElicitation && c.has("elicitation") {
 		defer h.sendPendingInteractions(c, true)
+	}
+	if !wasApprovalMirrors && c.wants(featureApprovalMirrors) {
+		defer h.sendPendingMirrorInteractions(c)
 	}
 	if wasDesktopsLink != c.wants(featureDesktopsLink) {
 		// The list it has left the Persona Link desktops out, or holds ones it will not hear end.

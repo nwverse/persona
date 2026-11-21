@@ -44,12 +44,12 @@ func keepOwnerReplyCard(s *Service, ix proto.Interaction, messageID string) {
 
 func ownerReplyBatchIX(batch ownerActionBatch) proto.Interaction {
 	return proto.Interaction{ID: ownerActionInteractionID(batch.ID, ""), MachineID: batch.MachineID, SessionID: batch.SessionID,
-		Kind: proto.IxPermission, ToolName: ownerActionBatchTool, ApprovalBatchID: batch.ID, OwnerProposal: true, Resumable: true, NoExpiry: true}
+		Kind: proto.IxPermission, ToolName: ownerActionBatchTool, ApprovalBatchID: batch.ID, OwnerProposal: true, Resumable: true, NoExpiry: true, CreatedAt: batch.CreatedAt}
 }
 
 func ownerReplyItemIX(batch ownerActionBatch, item ownerActionItem) proto.Interaction {
 	return proto.Interaction{ID: ownerActionInteractionID(batch.ID, item.ID), MachineID: batch.MachineID, SessionID: batch.SessionID,
-		Kind: proto.IxPermission, ToolName: item.Tool, ApprovalBatchID: batch.ID, ApprovalItemID: item.ID, OwnerProposal: true, Resumable: true, NoExpiry: true}
+		Kind: proto.IxPermission, ToolName: item.Tool, ApprovalBatchID: batch.ID, ApprovalItemID: item.ID, OwnerProposal: true, Resumable: true, NoExpiry: true, CreatedAt: batch.CreatedAt}
 }
 
 func ownerReplyEvent(parent string) feishubot.MessageEvent {

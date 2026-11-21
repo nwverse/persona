@@ -163,7 +163,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 		if bypass && safe {
 			return "allow", "Conversation permission mode allows these classified calls.", nil
 		}
-		g, write := gateWrite(cfg.Gates, analysisCommand)
+		g, write, knownGateWrite := gateWriteDepth(cfg.Gates, analysisCommand, 0)
 		// Text naming lark-cli in a command with no call is not one: classifyLark marks unknown what could run it
 		// (larkgate_text.go), so a grep pattern or a note written to a file is no card (#8119).
 		if write || boundary || v.cliWrite || v.unknown || larkCLIRe.MatchString(analysisCommand) && !classified {
@@ -180,6 +180,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 				// which could be anything, the CLI included. Still asked, as the ordinary Bash card it is (#4890).
 				ix.ToolName, ix.Summary = cmp.Or(ix.ToolName, "Bash"), prettyBody(command)
 			}
+			ix.WriteOperation = knownGateWrite || slices.ContainsFunc(v.calls, larkKnownWrite)
 			decision, reason, _, err := n.confirmLark(ctx, session, ix, nil, health, title)
 			return decision, reason, err
 		}
@@ -229,6 +230,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	}
 	ix.Kind, ix.ToolName, ix.Summary = proto.IxPermission, callTitle(cfg.Gates, ask[0]),
 		larkSummaryWithContext(cfg.Gates, ask, n.larkCardContexts(ctx, cfg, ask), i18n.From(ctx))
+	ix.WriteOperation = slices.ContainsFunc(ask, larkKnownWrite)
 	// The hub remembers these routes for assistant conversations and checks them again on every call.
 	ix.AlwaysKeys = nil
 	for _, c := range ask {
@@ -263,12 +265,43 @@ func (n *Node) grantGateCalls(cfg proto.AssistantLark, session string, calls []l
 	}
 }
 
-// gateWrite: a gated command (or its script) called with a method that is not a read, anywhere in a command.
-func gateWrite(gates []proto.CommandGate, command string) (proto.CommandGate, bool) {
-	return gateWriteDepth(gates, command, 0)
+// larkKnownWrite is display-routing metadata, not the execution gate's
+// conservative "not known to be a read" classification. Unknown CLI risk and a
+// variable HTTP method still require confirmation, but never opt into the
+// write-only owner routes.
+func larkKnownWrite(c larkCall) bool {
+	if c.CLI && c.Method == "CLI" {
+		if c.Risk == "write" || c.Risk == "high-risk-write" {
+			return true
+		}
+		if c.Risk != "" {
+			return false
+		}
+		// Risk discovery can be unavailable. Only an exact registered command
+		// path is a fallback; a verb-like suffix on an unknown command is not
+		// evidence that the operation is a known write.
+		return larkCLIKnownWrites[strings.Trim(c.Path, "/")]
+	}
+	switch strings.ToUpper(c.Method) {
+	case "POST", "PUT", "PATCH", "DELETE":
+		return true
+	default:
+		return false
+	}
 }
 
-func gateWriteDepth(gates []proto.CommandGate, command string, depth int) (proto.CommandGate, bool) {
+var (
+	larkCLIKnownWrites     = map[string]bool{"im/+messages-send": true, "im/+messages-reply": true}
+	gateLiteralWriteMethod = regexp.MustCompile(`(?i)(POST|PUT|PATCH|DELETE)\b`)
+)
+
+// gateWrite: a gated command (or its script) called with a method that is not a read, anywhere in a command.
+func gateWrite(gates []proto.CommandGate, command string) (proto.CommandGate, bool) {
+	g, write, _ := gateWriteDepth(gates, command, 0)
+	return g, write
+}
+
+func gateWriteDepth(gates []proto.CommandGate, command string, depth int) (proto.CommandGate, bool, bool) {
 	if depth < 16 {
 		if segments, ok := shellcmd.Split(command); ok {
 			for _, segment := range segments {
@@ -288,8 +321,8 @@ func gateWriteDepth(gates []proto.CommandGate, command string, depth int) (proto
 					script = strings.Join(words[1:], " ")
 				}
 				if script != "" {
-					if g, write := gateWriteDepth(gates, script, depth+1); write {
-						return g, true
+					if g, write, known := gateWriteDepth(gates, script, depth+1); write {
+						return g, true, known
 					}
 				}
 			}
@@ -306,11 +339,14 @@ func gateWriteDepth(gates []proto.CommandGate, command string, depth int) (proto
 		if len(names) == 0 {
 			continue
 		}
-		if gateWriteRe(strings.Join(names, "|")).MatchString(command) {
-			return g, true
+		matches := gateWriteRe(strings.Join(names, "|")).FindAllString(command, -1)
+		if len(matches) == 0 {
+			continue
 		}
+		known := slices.ContainsFunc(matches, gateLiteralWriteMethod.MatchString)
+		return g, true, known
 	}
-	return proto.CommandGate{}, false
+	return proto.CommandGate{}, false, false
 }
 
 // gateWriteRes caches gateWrite's regexp by its alternation of names: gates come from config, so there are few.
@@ -321,7 +357,7 @@ func gateWriteRe(names string) *regexp.Regexp {
 	if re, ok := gateWriteRes.Load(names); ok {
 		return re.(*regexp.Regexp)
 	}
-	re := regexp.MustCompile("(?i)(^|[\\s;&|(`])(" + names + ")\\s+(POST|PUT|PATCH|DELETE|\"?\\$)")
+	re := regexp.MustCompile("(?i)(^|[\\s;&|(`])(" + names + ")\\s+((POST|PUT|PATCH|DELETE)\\b|\"?\\$)")
 	gateWriteRes.Store(names, re)
 	return re
 }

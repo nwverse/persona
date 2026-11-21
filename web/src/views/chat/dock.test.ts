@@ -68,6 +68,12 @@ describe("nextWaiting (#4091)", () => {
   it("tells the same session id on another computer apart", () => {
     expect(nextWaiting([ix("a", "n", "s")], "m", "s")?.ix.id).toBe("a");
   });
+  it("counts and opens only the authoritative request when a display copy exists", () => {
+    const original = ix("original", "m", "side");
+    const mirror = { ...ix("display", "m", "main"), mirror_of: original.id };
+    expect(nextWaiting([original, mirror], "m", "third")).toEqual({ ix: original, count: 1 });
+    expect(nextWaiting([original, mirror], "m", "side")).toBeNull();
+  });
   it("is nothing when only this chat has cards, or none does", () => {
     expect(nextWaiting([ix("a", "m", "s")], "m", "s")).toBeNull();
     expect(nextWaiting([], "m", "s")).toBeNull();

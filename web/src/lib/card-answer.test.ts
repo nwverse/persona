@@ -13,7 +13,7 @@ vi.mock("./store", () => ({ getSession: () => session, endInteraction: (...a: un
 const { answerCard } = await import("./card-answer");
 const { allowBody, denyBody } = await import("./quick-answers");
 
-const ix: Interaction = { id: "p1", machine_id: "m", session_id: "a", kind: "permission", tool_name: "Bash" };
+const ix: Interaction = { id: "p1", machine_id: "m", session_id: "a", kind: "permission", tool_name: "Bash", created_at: "2026-01-02T03:04:05.000000001Z" };
 
 beforeEach(() => {
   session = { machine_id: "m", session_id: "a" } as Session;
@@ -72,7 +72,7 @@ describe("answerCard", () => {
     apiOp.mockRejectedValue(new ApiError(410, "gone", { status: "expired" }));
     const r = await answerCard(ix, allowBody());
     expect(r.ok).toBe(false);
-    expect(ended).toEqual([["p1"]]);
+    expect(ended).toEqual([["p1", undefined, ix.created_at]]);
   });
 
   it("prompt_changed 和别的错误：不收卡，说原因", async () => {

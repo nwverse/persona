@@ -13,6 +13,11 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+type larkEditedAnswer struct {
+	text       string
+	approvalID string
+}
+
 // larkGateWithEdit keeps the ordinary gate untouched for ineligible commands. An eligible Claude Code Lark
 // send/reply gets editable_text; after the answer, the original grant is consumed before a new command is classified
 // and granted. That keeps an old Claude unable to execute the original command when the user changed the text.
@@ -34,14 +39,18 @@ func (n *Node) larkGateWithEdit(ctx context.Context, in hookInput, ix proto.Inte
 		return nil, err
 	}
 	edited, _ := n.editedAnswers.LoadAndDelete(ix.ID)
-	editedText, _ := edited.(string)
-	if editedText == "" || editedText == original {
+	answer, _ := edited.(larkEditedAnswer)
+	if answer.text == "" || answer.text == original {
 		return preToolDecision(decision, reason), nil
 	}
 	if decision != "allow" {
 		return preToolDecision(decision, reason), nil
 	}
-	updated, err := n.applyLarkEdit(ctx, cfg, in.SessionID, ix.ID, a.Command, in.Cwd, call, span, editedText)
+	approvalID := answer.approvalID
+	if approvalID == "" {
+		approvalID = ix.ID
+	}
+	updated, err := n.applyLarkEdit(ctx, cfg, in.SessionID, approvalID, a.Command, in.Cwd, call, span, answer.text)
 	if err != nil {
 		return preToolDecision("deny", err.Error()), nil
 	}

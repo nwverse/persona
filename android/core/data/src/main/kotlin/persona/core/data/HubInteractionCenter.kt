@@ -38,15 +38,16 @@ class HubInteractionCenter(
     private val changes = mutableMapOf<String, Pair<Long, Interaction?>>()
     /**
      * Requests that ended here (answered, gone, resolved by an event): a snapshot that still lists one, fetched or
-     * served before the hub caught up, does not bring its card back (#1688). Only a live event for the id does.
+     * served before the hub caught up, does not bring its card back (#1688). A live event for the id does. Local
+     * answers retain the occurrence's full RFC3339 timestamp so a later same-id replacement is not filtered (#11310).
      */
-    private val ended = LinkedHashSet<String>()
+    private val ended = LinkedHashMap<String, String?>()
     /**
      * Of those, the ones this device ended (answered, found over): the hub still lists one until the node ends it, and
      * the pending-card snapshot after a hello that resumes sends it again as an `interaction` frame (#2767). A frame for
-     * one never brings it back; one the hub withdrew may be raised again under the same id (as the web's `endedHere`).
+     * the same occurrence never brings it back; a strictly later occurrence may be raised again under the same id.
      */
-    private val endedHere = LinkedHashSet<String>()
+    private val endedHere = LinkedHashMap<String, String?>()
     /** Cards the hub withdrew (interaction_resolved), newest last: the event often comes before the answer's own reply. */
     private val withdrawn = LinkedHashSet<String>()
     private var discarded = emptySet<String>()
@@ -65,18 +66,22 @@ class HubInteractionCenter(
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             connection.events.collect { event -> restored.await(); lock.withLock {
                 when (event) {
-                    is InteractionEvent -> if (event.interaction.id !in discarded && event.interaction.id !in endedHere) {
+                    is InteractionEvent -> if (event.interaction.id !in discarded && !endedOccurrence(event.interaction, endedHere)) {
                         val previous = mutablePending.value.firstOrNull { it.id == event.interaction.id }
                         // Looking is quiet. Its first handover is an arrival; any later edit of that copy is not.
                         val announces = !event.interaction.isDelegating && (previous == null || previous.isDelegating)
                         ended.remove(event.interaction.id); change(event.interaction.id, event.interaction)
-                        if (announces) mutableArrivals.tryEmit(event.interaction)
+                        if (announces && !event.interaction.isDisplayMirror) mutableArrivals.tryEmit(event.interaction)
                     }
                     is InteractionResolvedEvent -> {
-                        // The assistant's answer to a question whose card this device had: it stays in its chat.
-                        if (event.byAssistant) mutablePending.value.firstOrNull { it.id == event.id }
-                            ?.let { keepDelegated(it, event.answers, event.reason.orEmpty()) }
-                        withdrew(event.id); end(event.id)
+                        val current = mutablePending.value.firstOrNull { it.id == event.id }
+                        if (current != null && event.createdAt != null && laterTime(current.createdAt, event.createdAt)) {
+                            // A delayed resolution for an earlier occurrence cannot withdraw its replacement.
+                        } else {
+                            // The assistant's answer to a question whose card this device had: it stays in its chat.
+                            if (event.byAssistant) current?.let { keepDelegated(it, event.answers, event.reason.orEmpty()) }
+                            withdrew(event.id); end(event.id, occurrence = event.createdAt)
+                        }
                     }
                     is InteractionReansweredEvent -> noteReanswer(event.id, event.answers)
                     else -> Unit
@@ -94,7 +99,7 @@ class HubInteractionCenter(
         val before = lock.withLock { revision }
         val fetched = transport.interactions()
         lock.withLock {
-            val merged = fetched.filterNot { it.id in ended || it.id in discarded }.associateBy { it.id }.toMutableMap()
+            val merged = fetched.filterNot { endedOccurrence(it, ended) || it.id in discarded }.associateBy { it.id }.toMutableMap()
             changes.filterValues { it.first > before }.forEach { (id, change) ->
                 if (change.second == null) merged.remove(id) else merged[id] = change.second!!
             }
@@ -131,11 +136,11 @@ class HubInteractionCenter(
             if (marked) transport.resolveOutcome(id, resolution, handoffCard = true)
             else transport.resolveOutcome(id, resolution)
         } catch (gone: InteractionGoneException) {
-            lock.withLock { end(id, here = true) }
+            lock.withLock { end(id, here = true, occurrence = card?.createdAt) }
             throw gone
         }
         val seen = lock.withLock {
-            end(id, here = true)
+            end(id, here = true, occurrence = card?.createdAt)
             // The assistant answered first: its answer shows in the chat, where the user may change it (iOS `resolve`).
             val effective = outcome.resolution
             if (outcome.already && card != null && effective?.answeredBy == DelegatedAnswer.ASSISTANT) {
@@ -154,7 +159,7 @@ class HubInteractionCenter(
     override suspend fun replyOwnerApproval(interaction: Interaction, phrase: String) {
         restored.await()
         transport.replyOwnerApproval(interaction, phrase)
-        lock.withLock { end(interaction.id, here = true) }
+        lock.withLock { end(interaction.id, here = true, occurrence = interaction.createdAt) }
     }
 
     override fun dropDelegated(id: String) = mutableDelegated.update { list -> list.filterNot { it.id == id } }
@@ -198,17 +203,32 @@ class HubInteractionCenter(
         }
     }
 
-    private suspend fun end(id: String, here: Boolean = false) {
-        ended.remove(id)
-        ended.add(id)
-        // The bound only keeps a long-running app from holding every answer it ever gave.
-        while (ended.size > ENDED_LIMIT) ended.remove(ended.first())
-        if (here) {
-            endedHere.remove(id)
-            endedHere.add(id)
-            while (endedHere.size > ENDED_LIMIT) endedHere.remove(endedHere.first())
-        }
-        change(id, null)
+    private fun laterTime(candidate: String?, ended: String?): Boolean {
+        val left = parseTime(candidate) ?: return false
+        val right = parseTime(ended) ?: return false
+        return left > right
+    }
+
+    private fun endedOccurrence(interaction: Interaction, markers: Map<String, String?>): Boolean {
+        if (!markers.containsKey(interaction.id)) return false
+        val ended = markers[interaction.id]
+        return ended == null || !laterTime(interaction.createdAt, ended)
+    }
+
+    private fun rememberEnded(markers: LinkedHashMap<String, String?>, id: String, occurrence: String?) {
+        val previous = markers[id]
+        // An id-only hub withdrawal stays id-only. Otherwise an old completion must not downgrade a newer occurrence.
+        if (markers.containsKey(id) && occurrence != null && (previous == null || !laterTime(occurrence, previous))) return
+        markers.remove(id)
+        markers[id] = occurrence
+        while (markers.size > ENDED_LIMIT) markers.remove(markers.keys.first())
+    }
+
+    private suspend fun end(id: String, here: Boolean = false, occurrence: String? = null) {
+        rememberEnded(ended, id, occurrence)
+        if (here) rememberEnded(endedHere, id, occurrence)
+        val current = mutablePending.value.firstOrNull { it.id == id }
+        if (current == null || !laterTime(current.createdAt, occurrence)) change(id, null)
     }
 
     private suspend fun change(id: String, interaction: Interaction?) {

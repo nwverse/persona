@@ -35,10 +35,11 @@ type pending struct {
 	// Clarification releases only its original caller; the card and this operation stay pending.
 	prepared *preparedApproval
 	// resolved broadcasts a claimed answer to every overlapping resumable waiter.
-	resolved       chan struct{}
-	resolution     *proto.Resolution
-	persisting     *questionPersistence
-	persistenceErr error
+	resolved        chan struct{}
+	resolution      *proto.Resolution
+	persisting      *questionPersistence
+	persistenceWake chan struct{}
+	persistenceErr  error
 	// local is set for interactions the manager resolves itself (screen dialogs, Codex cards): it acts on the answer,
 	// and an error goes back to whoever answered (prompt_changed: nothing was pressed).
 	local func(context.Context, proto.Resolution) error
@@ -195,11 +196,30 @@ func (s *Service) tellCard(ix proto.Interaction) {
 	if err := s.hub.Tell(assistantwire.EventFleetInteraction, assistantwire.FleetInteraction{Interaction: ix}); err != nil {
 		return // the hub did not get it: nothing of it to take back (its handshake gets the pending cards again)
 	}
-	s.fleet.mu.Lock()
-	_, held := s.fleet.interactions[ix.ID]
-	s.fleet.mu.Unlock()
-	if !held {
-		s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: ix.ID})
+	held := func() bool {
+		s.fleet.mu.Lock()
+		defer s.fleet.mu.Unlock()
+		_, ok := s.fleet.interactions[ix.ID]
+		return ok
+	}
+	if !held() {
+		s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: ix.ID, CreatedAt: ix.CreatedAt})
+		return
+	}
+	if !ix.MirrorMain {
+		return // display intent is created before publication, never inferred here
+	}
+	mirror, ok := s.mainApprovalMirror(context.Background(), ix)
+	if !ok {
+		return
+	}
+	if err := s.hub.Tell(assistantwire.EventFleetInteraction, assistantwire.FleetInteraction{Interaction: mirror}); err != nil {
+		return
+	}
+	// A mirror is held only through its authoritative interaction. Recheck after
+	// publishing it so a concurrent resolution cannot leave an orphaned copy.
+	if !held() {
+		s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: mirror.ID, CreatedAt: mirror.CreatedAt})
 	}
 }
 
@@ -218,8 +238,9 @@ func (s *Service) markTold(ix proto.Interaction) {
 // nodeInteraction is a node's interaction.create: allowed right away when "Always allow in this session" already covers it, else
 // shown and waited for.
 func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) {
-	// These capabilities are manager-minted only. A node cannot turn its card
-	// into an exact owner-action proposal or exempt it from expiry.
+	// Display-copy and exact-proposal identity are manager-owned. A runtime
+	// cannot redirect its waiter, forge an owner-action proposal or waive expiry.
+	ix.MirrorOf, ix.MirrorMain = "", false
 	ix.ApprovalBatchID, ix.ApprovalItemID = "", ""
 	ix.OwnerProposal, ix.NoExpiry = false, false
 	ix.OwnerApprovalPhrases = nil
@@ -271,6 +292,14 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	ix.Detachable = ix.Detachable && ix.Kind == proto.IxPermission && ix.SessionID != "" && inAssistant &&
 		len(ix.ToolInput) > 0 && ix.ExecutionCwd != ""
 	if ix.Detachable && ix.Resumable {
+		// A journaled original is already an outcome, never a new operation. Do
+		// this before detachedOriginalReplay, Always and new-card registration so
+		// even a replay ahead of restoreInteractions fails closed.
+		if r, ok, err := s.journaledDetachedReplay(ctx, ix); err != nil {
+			return proto.Resolution{}, err
+		} else if ok {
+			return r, nil
+		}
 		// The original request is never its own continuation. In particular it
 		// must not spend its unused grant or re-enter through a newly stored
 		// Always rule. A late outcome carries ApprovalID and waitDetachedCard
@@ -291,8 +320,11 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 		}
 	}
 	if r, ok := s.alwaysAllowed(ctx, ix); ok {
-		if ix.Resumable { // its hook's earlier attempt left the card pending: it is answered too
-			_ = s.resolveRemembered(ix.ID, r, false)
+		if ix.Resumable { // its hook's earlier attempt left the card pending: only that same occurrence is answered too
+			if err := s.checkRememberedInteractionOccurrence(ctx, ix); err != nil {
+				return proto.Resolution{}, err
+			}
+			_ = s.resolveRememberedOccurrence(ix, r)
 		}
 		return r, nil
 	}
@@ -300,6 +332,35 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 		return s.waitDetachedCard(ctx, ix)
 	}
 	return s.waitInteraction(ctx, ix)
+}
+
+// lockInteractionAdmission orders duplicate detection, durable-history checks
+// and live-map installation for one ID. The returned release runs after
+// registration, before announcements or waits; a completed occurrence can then
+// be replayed from its durable outcome instead of displacing its successor.
+func (s *Service) lockInteractionAdmission(id string) func() {
+	s.fleet.mu.Lock()
+	if s.fleet.admissions == nil {
+		s.fleet.admissions = map[string]*interactionAdmission{}
+	}
+	gate := s.fleet.admissions[id]
+	if gate == nil {
+		gate = &interactionAdmission{}
+		s.fleet.admissions[id] = gate
+	}
+	gate.refs++
+	s.fleet.mu.Unlock()
+
+	gate.mu.Lock()
+	return func() {
+		gate.mu.Unlock()
+		s.fleet.mu.Lock()
+		gate.refs--
+		if gate.refs == 0 && s.fleet.admissions[id] == gate {
+			delete(s.fleet.admissions, id)
+		}
+		s.fleet.mu.Unlock()
+	}
 }
 
 // waitInteraction registers a hook interaction and blocks until it is resolved, cancelled or expires.
@@ -315,9 +376,36 @@ func (s *Service) waitInteractionPrepared(ctx context.Context, ix proto.Interact
 }
 
 // waitInteractionReady is waitInteractionPrepared with an optional registration
-// notification for server-owned proposal groups. The notification is closed
-// after the pending entry and its announcement exist, before this waiter blocks.
-func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction, prepared *preparedApproval, ready chan<- struct{}) (proto.Resolution, error) {
+// notification for server-owned proposal groups. It reports success only after
+// the pending entry and its announcement exist, before this waiter blocks.
+func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction, prepared *preparedApproval, ready chan<- error) (result proto.Resolution, resultErr error) {
+	readySent := false
+	notifyReady := func(err error) {
+		if ready != nil && !readySent {
+			ready <- err
+			readySent = true
+		}
+	}
+	// Every early return reports its registration error. Successful joins and
+	// new registrations report nil before the waiter blocks on an answer. A nil
+	// early return (an already-ended or unreachable interaction) is not a
+	// successful registration and must not start the proposal's tool waiter.
+	defer func() {
+		if resultErr == nil {
+			notifyReady(errNotPending)
+			return
+		}
+		notifyReady(resultErr)
+	}()
+	unlockAdmission := s.lockInteractionAdmission(ix.ID)
+	admissionHeld := true
+	releaseAdmission := func() {
+		if admissionHeld {
+			admissionHeld = false
+			unlockAdmission()
+		}
+	}
+	defer releaseAdmission()
 	ix = cleanTitle(ix)
 	// Only an operation registered by this process can advertise clarification.
 	ix.CanClarify = prepared != nil
@@ -327,53 +415,107 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 	if ix.ExpiresAt.IsZero() && !persistentOwnerProposal(ix) {
 		ix.ExpiresAt = time.Now().Add(s.notifyTimings().hookTimeout()).UTC()
 	}
+	// Restore this exact pending occurrence before considering the current
+	// preference. A resumable node hook carries no manager-owned display fields.
+	if intent, at, found := s.recordedApprovalMirrorIntent(ctx, ix); found {
+		ix.MirrorMain, ix.CreatedAt = intent, at
+	} else if !ix.MirrorMain {
+		if _, ok := s.mainApprovalMirror(ctx, ix); ok {
+			ix.MirrorMain = true
+		}
+	}
+	var recovered *approvalJournalEntry
+	if ix.Resumable && ix.Detachable {
+		entry, found, err := s.approvalJournalRecord(ctx, ix)
+		if err != nil {
+			return proto.Resolution{}, err
+		}
+		if found {
+			recovered = &entry
+		}
+	}
 	if !ownerActionProposal(ix) {
 		ix.NoExpiry = false
 	}
 	again := false
-	if ix.Resumable {
-		restartPrepared := false
-		s.fleet.mu.Lock()
-		if p := s.fleet.interactions[ix.ID]; p != nil && p.local == nil {
-			if p.prepared != nil {
-				// The reconnecting hook is now the caller whose lifetime governs the
-				// initial wait. The disconnected context must not expire a card its
-				// resumable request has already reclaimed.
-				p.prepared.caller = ctx
-			}
-			if p.graceEnded {
-				// The grace period ended and the card is being ended outside the lock (the history, the apps): the
-				// hook hands over, as one back just after would (#5043's kind of gap).
-				s.fleet.mu.Unlock()
-				return proto.Resolution{Dismiss: true}, nil
-			}
-			if p.orphaned != nil {
-				p.orphaned.Stop() // fired but not decided yet: it finds p.orphaned nil and leaves the card to the hook
-				p.orphaned = nil
-			}
-			if a := p.prepared; a != nil && !a.clarified && !a.terminal {
-				// The initial timer may have fired while the card was orphaned and
-				// deliberately done nothing. Reclaiming starts a fresh initial wait.
-				if a.decisionTimer != nil {
-					a.decisionTimer.Stop()
-				}
-				restartPrepared = true
-			}
+	restartPrepared := false
+	s.fleet.mu.Lock()
+	if p := s.fleet.interactions[ix.ID]; p != nil {
+		if p.local != nil {
 			s.fleet.mu.Unlock()
-			if restartPrepared {
-				s.startPreparedTimer(p)
+			return proto.Resolution{}, fmt.Errorf("%w: %s", errInteractionIDReused, ix.ID)
+		}
+		// Detachable original replays use exact call identity; ordinary
+		// resumable cards use their creation timestamp. Legacy zero-time
+		// non-resumable duplicates retain ID-only joining. A persistent owner
+		// proposal may rejoin only the same durable batch/item after restart
+		// normalization changed its timestamp; decisions remain occurrence-bound.
+		sameOwnerOperation := persistentOwnerProposal(ix) && persistentOwnerProposal(p.ix) &&
+			ix.MachineID == p.ix.MachineID && ix.SessionID == p.ix.SessionID &&
+			ix.ApprovalBatchID == p.ix.ApprovalBatchID && ix.ApprovalItemID == p.ix.ApprovalItemID
+		if (ix.Detachable || !ix.CreatedAt.IsZero()) && !sameApprovalOccurrence(ix, p.ix) && !sameOwnerOperation {
+			s.fleet.mu.Unlock()
+			return proto.Resolution{}, fmt.Errorf("%w: %s", errInteractionIDReused, ix.ID)
+		}
+		if p.prepared == nil && recovered != nil {
+			// A restored process has no executable operation. Close a journaled
+			// occurrence before its replay can attach an ordinary waiter and
+			// before an owner answer can turn recovery into an execution Allow.
+			s.fleet.mu.Unlock()
+			releaseAdmission()
+			if err := s.finishRecoveredApproval(*recovered); err != nil {
+				return proto.Resolution{}, err
 			}
 			if ix.Kind == proto.IxElicitation && !s.elicitationReachable(ix) {
 				_ = s.resolve(ix.ID, proto.Resolution{Dismiss: true})
 			}
-			if ready != nil {
-				close(ready)
-			}
+			notifyReady(nil)
 			// Resumable node cards reconnect through reporter-less interaction.create requests; MCP elicitation cards
 			// are not resumable, so this branch never has a wait reporter to restore.
 			return s.await(ctx, p)
 		}
+		if ix.Resumable && p.prepared != nil {
+			// The reconnecting hook is now the caller whose lifetime governs the
+			// initial wait. The disconnected context must not expire a card its
+			// resumable request has already reclaimed.
+			p.prepared.caller = ctx
+		}
+		if p.graceEnded {
+			// The grace period ended and the card is being ended outside the lock (the history, the apps): the
+			// hook hands over, as one back just after would (#5043's kind of gap).
+			s.fleet.mu.Unlock()
+			return proto.Resolution{Dismiss: true}, nil
+		}
+		if p.orphaned != nil {
+			p.orphaned.Stop() // fired but not decided yet: it finds p.orphaned nil and leaves the card to the hook
+			p.orphaned = nil
+		}
+		if a := p.prepared; ix.Resumable && a != nil && !a.clarified && !a.terminal {
+			// The initial timer may have fired while the card was orphaned and
+			// deliberately done nothing. Reclaiming starts a fresh initial wait.
+			if a.decisionTimer != nil {
+				a.decisionTimer.Stop()
+			}
+			restartPrepared = true
+		}
 		s.fleet.mu.Unlock()
+		releaseAdmission()
+		if restartPrepared {
+			s.startPreparedTimer(p)
+		}
+		if ix.Kind == proto.IxElicitation && !s.elicitationReachable(ix) {
+			_ = s.resolve(ix.ID, proto.Resolution{Dismiss: true})
+		}
+		notifyReady(nil)
+		// Resumable node cards reconnect through reporter-less interaction.create requests; MCP elicitation cards
+		// are not resumable, so this branch never has a wait reporter to restore.
+		return s.await(ctx, p)
+	}
+	s.fleet.mu.Unlock()
+	if ix.Resumable {
+		if err := s.checkRecordedInteractionOccurrence(ctx, ix); err != nil {
+			return proto.Resolution{}, err
+		}
 		status, r, ended := s.outcome(ix.ID)
 		if ended {
 			return r, nil
@@ -435,6 +577,7 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 		}
 		m[ix.ID] = p
 		s.fleet.mu.Unlock()
+		releaseAdmission()
 		break
 	}
 	if replaced != nil {
@@ -459,25 +602,44 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 	if prepared != nil {
 		s.startPreparedTimer(p)
 	}
-	if ready != nil {
-		close(ready)
-	}
+	notifyReady(nil)
 	resume := pushMCPInteraction(ctx, ix)
 	defer resume()
 	return s.await(ctx, p)
 }
 
+var errAwaitRetry = errors.New("interaction answer claim was released")
+
 // await blocks on a registered interaction. When ctx ends — the node's connection is gone — a resumable
-// interaction stays pending for its hook to claim again.
+// interaction stays pending for its hook to claim again. A rejected owner
+// decision releases only its temporary claim; the waiter then arbitrates again.
 func (s *Service) await(ctx context.Context, p *pending) (proto.Resolution, error) {
+	for {
+		r, err := s.awaitOnce(ctx, p)
+		if !errors.Is(err, errAwaitRetry) {
+			return r, err
+		}
+	}
+}
+
+func (s *Service) awaitOnce(ctx context.Context, p *pending) (proto.Resolution, error) {
 	if p.prepared != nil {
 		return s.awaitPrepared(ctx, p)
 	}
 	s.fleet.mu.Lock()
+	if ownerActionProposal(p.ix) && p.persistenceErr != nil {
+		err := p.persistenceErr
+		s.fleet.mu.Unlock()
+		return proto.Resolution{}, err
+	}
 	if p.resolved == nil {
 		p.resolved = make(chan struct{})
 	}
 	resolved := p.resolved
+	var persistenceWake <-chan struct{}
+	if ownerActionProposal(p.ix) {
+		persistenceWake = persistenceWakeLocked(p)
+	}
 	id := p.ix.ID
 	expiresAt := p.ix.ExpiresAt
 	persistent := persistentOwnerProposal(p.ix)
@@ -492,13 +654,15 @@ func (s *Service) await(ctx context.Context, p *pending) (proto.Resolution, erro
 	status := "cancelled"
 	select {
 	case <-resolved:
-		s.finishInteraction(id)
+		s.finishPending(p)
 		return *p.resolution, nil
 	case r := <-p.done:
-		s.finishInteraction(id)
+		s.finishPending(p)
 		return r, nil
 	case <-timeout:
 		status = "expired"
+	case <-persistenceWake:
+		return proto.Resolution{}, errAwaitRetry
 	case <-ctx.Done():
 	}
 	// Decide under the same lock as resolve: an answer already claimed must be
@@ -508,11 +672,14 @@ func (s *Service) await(ctx context.Context, p *pending) (proto.Resolution, erro
 		attempt := p.persisting
 		s.fleet.mu.Unlock()
 		<-attempt.done
+		if attempt.retry {
+			return proto.Resolution{}, errAwaitRetry
+		}
 		if attempt.err != nil {
 			return proto.Resolution{}, attempt.err
 		}
 		<-resolved
-		s.finishInteraction(id)
+		s.finishPending(p)
 		return *p.resolution, nil
 	}
 	if p.persistenceErr != nil {
@@ -525,7 +692,7 @@ func (s *Service) await(ctx context.Context, p *pending) (proto.Resolution, erro
 		s.fleet.mu.Unlock()
 		if hasAnswer {
 			<-resolved
-			s.finishInteraction(id)
+			s.finishPending(p)
 			return *p.resolution, nil
 		}
 		return proto.Resolution{Dismiss: true}, nil
@@ -548,7 +715,7 @@ func (s *Service) await(ctx context.Context, p *pending) (proto.Resolution, erro
 	p.expired = status == "expired"
 	s.fleet.mu.Unlock()
 	s.recordEnd(id, status, nil)
-	s.finishInteraction(id)
+	s.finishPending(p)
 	return proto.Resolution{Dismiss: true}, nil
 }
 
@@ -576,10 +743,53 @@ func (s *Service) orphanLocked(p *pending) bool {
 		s.fleet.mu.Unlock()
 		if still {
 			s.recordEnd(p.ix.ID, "cancelled", nil)
-			s.finishInteraction(p.ix.ID)
+			s.finishPending(p)
 		}
 	})
 	return true
+}
+
+// checkRecordedInteractionOccurrence keeps a runtime's reused id from taking
+// an earlier operation's pending state or answer. Ordinary zero creation times
+// retain the legacy id-only resume behavior. Detachable original replays use
+// exact call identity, and a late approval still never becomes permission to
+// replay that original hook.
+func (s *Service) checkRecordedInteractionOccurrence(ctx context.Context, ix proto.Interaction) error {
+	if !ix.Detachable && ix.CreatedAt.IsZero() {
+		return nil
+	}
+	st, ok := s.store().(interactionRecorder)
+	if !ok {
+		return nil
+	}
+	readCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+	defer cancel()
+	rec, err := st.InteractionRecord(readCtx, ix.ID)
+	if err != nil {
+		return err
+	}
+	if rec != nil && !sameApprovalOccurrence(ix, rec.Interaction) {
+		return fmt.Errorf("%w: %s", errInteractionIDReused, ix.ID)
+	}
+	return nil
+}
+
+// checkRememberedInteractionOccurrence keeps an Always rule for a new request
+// from resolving an older pending card with the same ID. A matching live card
+// is the occurrence to answer; otherwise durable history makes the same check.
+func (s *Service) checkRememberedInteractionOccurrence(ctx context.Context, ix proto.Interaction) error {
+	s.fleet.mu.Lock()
+	p := s.fleet.interactions[ix.ID]
+	if p != nil {
+		mismatch := (ix.Detachable || !ix.CreatedAt.IsZero()) && !sameApprovalOccurrence(ix, p.ix)
+		s.fleet.mu.Unlock()
+		if mismatch {
+			return fmt.Errorf("%w: %s", errInteractionIDReused, ix.ID)
+		}
+		return nil
+	}
+	s.fleet.mu.Unlock()
+	return s.checkRecordedInteractionOccurrence(ctx, ix)
 }
 
 // outcome reports how a resumable interaction no longer pending here ended: the answer given before its hook could
@@ -621,16 +831,43 @@ func (s *Service) record(ix proto.Interaction) {
 }
 
 func (s *Service) recordEnd(id, status string, r *proto.Resolution) {
-	st := s.fleetStore()
-	if st == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), historyTimeout)
-	defer cancel()
-	if err := st.FinishInteraction(ctx, id, status, r); err != nil {
+	if err := s.recordEndStrict(id, status, r); err != nil {
 		s.logf("record interaction outcome: %v", err)
 	}
 }
+
+func (s *Service) recordEndStrict(id, status string, r *proto.Resolution) error {
+	st := s.fleetStore()
+	if st == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), historyTimeout)
+	defer cancel()
+	return st.FinishInteraction(ctx, id, status, r)
+}
+
+// recordEndOccurrenceStrict requires a durable terminal record for this exact
+// occurrence. A different pending occurrence under the same ID is left alone
+// and keeps the journal undelivered; once that occurrence is terminal, its row
+// itself prevents the older original from replaying through an Always rule.
+func (s *Service) recordEndOccurrenceStrict(ix proto.Interaction, status string, r *proto.Resolution) error {
+	st := s.fleetStore()
+	if st == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), historyTimeout)
+	defer cancel()
+	matched, currentTerminal, err := st.FinishInteractionOccurrence(ctx, ix, status, r)
+	if err != nil {
+		return err
+	}
+	if !matched && !currentTerminal {
+		return fmt.Errorf("interaction %s now belongs to a different pending occurrence", ix.ID)
+	}
+	return nil
+}
+
+var errInteractionIDReused = errors.New("interaction id belongs to a different occurrence")
 
 // errNotPending: the interaction was answered, withdrawn or expired already.
 var errNotPending = errors.New("no longer pending")
@@ -678,9 +915,35 @@ func (s *Service) resolve(id string, r proto.Resolution) error {
 	return s.resolveRemembered(id, r, true)
 }
 
+// interactionExpectation is checked under the same claim lock as resolution.
+// Automatic remembered answers carry the whole occurrence because a detachable
+// call can be replaced even when its timestamp changes; legacy zero-time
+// non-detachable requests retain their old ID-only behavior.
+type interactionExpectation struct {
+	createdAt  *time.Time
+	occurrence *proto.Interaction
+}
+
+func (e *interactionExpectation) matches(ix proto.Interaction) bool {
+	if e == nil {
+		return true
+	}
+	if e.occurrence != nil {
+		if !e.occurrence.Detachable && e.occurrence.CreatedAt.IsZero() {
+			return true
+		}
+		return sameApprovalOccurrence(*e.occurrence, ix)
+	}
+	return e.createdAt == nil || ix.CreatedAt.Equal(*e.createdAt)
+}
+
 // Automatically replayed grants must not write themselves back after a concurrent revocation.
 func (s *Service) resolveRemembered(id string, r proto.Resolution, remember bool) error {
 	return s.resolveWithStanding(id, r, remember, nil)
+}
+
+func (s *Service) resolveRememberedOccurrence(ix proto.Interaction, r proto.Resolution) error {
+	return s.resolveAnswerAt(context.Background(), ix.ID, r, false, nil, nil, &interactionExpectation{occurrence: &ix})
 }
 
 func (s *Service) resolveWithStanding(id string, r proto.Resolution, remember bool, authorization *standingResolution) error {
@@ -690,6 +953,10 @@ func (s *Service) resolveWithStanding(id string, r proto.Resolution, remember bo
 // resolveApproved is resolve for an app's answer the hub relayed, with the device it vouched may approve a hand-off
 // card (nil: none). Only this way does a hand-off card take more than a no (secret_handoff.go).
 func (s *Service) resolveApproved(ctx context.Context, id string, r proto.Resolution, approver *assistantwire.HandoffApprover) error {
+	return s.resolveApprovedAt(ctx, id, r, approver, nil)
+}
+
+func (s *Service) resolveApprovedAt(ctx context.Context, id string, r proto.Resolution, approver *assistantwire.HandoffApprover, expected *time.Time) error {
 	if mine, err := s.sessionReviewResolve(ctx, id, r, approver); mine {
 		return err
 	}
@@ -700,26 +967,35 @@ func (s *Service) resolveApproved(ctx context.Context, id string, r proto.Resolu
 		ownerSession = prepared.ix.SessionID
 	}
 	s.fleet.mu.Unlock()
+	var expectation *interactionExpectation
+	if expected != nil {
+		expectation = &interactionExpectation{createdAt: expected}
+	}
 	if prepared != nil && ownerActionProposal(prepared.ix) {
-		return s.resolveOwnerProposal(ctx, prepared.ix, r, ownerActionCardProof(prepared.ix, "app"))
+		return s.resolveOwnerProposalAt(ctx, prepared.ix, r, ownerActionCardProof(prepared.ix, "app"), expectation)
 	}
 	if ownerSession != "" {
 		// The web route resolves prepared cards directly instead of through Action;
 		// preserve the same owner-activity notification as every other answer path.
 		s.ownerHeard(ownerSession)
 	}
-	return s.resolveAnswer(ctx, id, r, true, nil, approver)
+	return s.resolveAnswerAt(ctx, id, r, true, nil, approver, expectation)
 }
 
 func (s *Service) resolveAnswer(ctx context.Context, id string, r proto.Resolution, remember bool, authorization *standingResolution,
 	approver *assistantwire.HandoffApprover) error {
+	return s.resolveAnswerAt(ctx, id, r, remember, authorization, approver, nil)
+}
+
+func (s *Service) resolveAnswerAt(ctx context.Context, id string, r proto.Resolution, remember bool, authorization *standingResolution,
+	approver *assistantwire.HandoffApprover, expected *interactionExpectation) error {
 	r.ModeActor = nil // provenance is never taken from an answer body
 	s.fleet.mu.Lock()
 	prepared := s.fleet.interactions[id]
 	isPrepared := prepared != nil && prepared.prepared != nil
 	s.fleet.mu.Unlock()
 	if isPrepared {
-		return s.resolvePreparedAnswer(ctx, prepared, r, remember, authorization)
+		return s.resolvePreparedAnswerAt(ctx, prepared, r, remember, authorization, expected)
 	}
 	// A manager work card is answered in the manager, not by the stopped agent. Its local dismiss/defer choices remain
 	// valid, but an answer that would send text must be refused before the card is claimed and its answer is retried.
@@ -730,6 +1006,10 @@ func (s *Service) resolveAnswer(ctx context.Context, id string, r proto.Resoluti
 	}
 	s.fleet.mu.Lock()
 	p := s.fleet.interactions[id]
+	if p != nil && !expected.matches(p.ix) {
+		s.fleet.mu.Unlock()
+		return fmt.Errorf("interaction %s is %w", id, errNotPending)
+	}
 	handoff := p != nil && p.ix.ToolName == proto.SecretHandoffTool
 	if handoff && !proto.SecretHandoffDeclines(r) && (approver == nil || approver.DeviceID == "" || authorization != nil) {
 		s.fleet.mu.Unlock()
@@ -770,6 +1050,9 @@ func (s *Service) resolveAnswer(ctx context.Context, id string, r proto.Resoluti
 		attempt := p.persisting
 		s.fleet.mu.Unlock()
 		<-attempt.done
+		if attempt.retry {
+			return errOwnerActionConflict
+		}
 		if attempt.err != nil {
 			return attempt.err
 		}
@@ -852,7 +1135,9 @@ func (s *Service) resolveAnswer(ctx context.Context, id string, r proto.Resoluti
 		if kept.Text != "" {
 			kept.Text = redactedValue
 		}
-		s.recordEnd(id, status, &kept)
+		if err := s.recordEndOccurrenceStrict(p.ix, status, &kept); err != nil {
+			s.logf("record local interaction occurrence outcome: %v", err)
+		}
 		s.finished(p)
 		go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
 		return err
@@ -878,7 +1163,7 @@ func (s *Service) resolveAnswer(ctx context.Context, id string, r proto.Resoluti
 	case p.done <- r:
 	default:
 	}
-	s.finishInteraction(id)
+	s.finishPending(p)
 	return nil
 }
 
@@ -966,6 +1251,27 @@ func hasSecretField(ix proto.Interaction) bool {
 	return false
 }
 
+// finishPending removes only the exact occurrence the caller finished. A stale
+// waiter, orphan timer or prepared finalizer must not delete a same-ID
+// replacement that has already been admitted.
+func (s *Service) finishPending(expected *pending) {
+	s.fleet.mu.Lock()
+	p := s.fleet.interactions[expected.ix.ID]
+	ok := p == expected
+	if ok {
+		delete(s.fleet.interactions, expected.ix.ID)
+		if p.orphaned != nil {
+			p.orphaned.Stop()
+		}
+	}
+	s.fleet.mu.Unlock()
+	if ok {
+		s.finished(p)
+	}
+}
+
+// finishInteraction is for lifecycle callers that genuinely have only an ID.
+// Occurrence-holding waiters and finalizers use finishPending instead.
 func (s *Service) finishInteraction(id string) {
 	s.fleet.mu.Lock()
 	p, ok := s.fleet.interactions[id]
@@ -984,7 +1290,7 @@ func (s *Service) finished(p *pending) {
 	s.taskPlanApproval()
 	go s.urgentCardDone(p.ix.ID) // a call about it stops ringing (urgent_call_loop.go)
 	s.fleet.mu.Lock()
-	done := assistantwire.FleetResolved{ID: p.ix.ID, AnsweredBy: p.answeredBy}
+	done := assistantwire.FleetResolved{ID: p.ix.ID, CreatedAt: p.ix.CreatedAt, AnsweredBy: p.answeredBy}
 	if done.AnsweredBy != "" {
 		done.Reason, done.Answers = p.answeredReason, p.answeredWith
 	}
@@ -1154,15 +1460,15 @@ func (s *Service) expireLoop(ctx context.Context) {
 	}
 }
 
-// errReservedCard: a card from a node (a hook, a runtime, a daemon, a Codex list) or an extension may not pass for the
-// password card or the hand-off card: only the assistant's secret_run tool makes the one (secret_run.go) and only the
-// manager's Agent start the other, and the clients show them as those cards, the password card with no Agent's name on it.
+// errReservedCard: a node, runtime or extension may not pass for a manager-owned
+// password, hand-off or approval-display identity.
 var errReservedCard = errors.New("the tool names " + proto.SecretRunTool + " and " + proto.SecretHandoffTool +
-	" are reserved for the manager's password and hand-off cards")
+	" and approval display IDs are reserved for manager-owned cards")
 
-// reservedCard: ix calls itself the password card or the hand-off card.
+// reservedCard: ix calls itself the password card, the hand-off card, or an
+// authoritative operation inside the display-copy ID namespace.
 func reservedCard(ix proto.Interaction) bool {
-	return ix.ToolName == proto.SecretRunTool || ix.ToolName == proto.SecretHandoffTool
+	return ix.ToolName == proto.SecretRunTool || ix.ToolName == proto.SecretHandoffTool || strings.HasPrefix(ix.ID, proto.ApprovalMirrorIDPrefix)
 }
 
 // askHub is fleet.ask: a card one of the hub's own features asks (a mail send, Cua's apps, persona_settings),
@@ -1233,7 +1539,9 @@ func (s *Service) ixInAssistant(ctx context.Context, ix proto.Interaction) bool 
 	}
 	sess := proto.Session{SessionID: ix.SessionID, Cwd: ix.Cwd}
 	if sess.Cwd == "" {
-		if c, ok := s.session(ctx, ix.MachineID, ix.SessionID); ok {
+		if c, ok := s.nodeSession(ix.MachineID, ix.SessionID); ok {
+			sess = c
+		} else if c, ok := s.session(ctx, ix.MachineID, ix.SessionID); ok {
 			sess = c
 		}
 	}
@@ -1368,7 +1676,7 @@ func (s *Service) keepAlways(ix proto.Interaction, r proto.Resolution) {
 		res, ok := s.alwaysAllowed(ctx, w)
 		cancel()
 		if ok {
-			_ = s.resolveRemembered(w.ID, res, false)
+			_ = s.resolveRememberedOccurrence(w, res)
 		}
 	}
 }
@@ -1420,18 +1728,20 @@ func (s *Service) cancelMachineInteractions(machineID string) {
 // question asked again (#4568). A card that was on its way up to the user finds its route again (restoreRoute); one
 // the assistant was deciding on goes on (resumeDelegations). Both before the hub gets the full list (FleetUp).
 func (s *Service) restoreInteractions(ctx context.Context) {
-	st, ok := s.store().(interface {
-		ExpireStaleInteractions(ctx context.Context) ([]proto.Interaction, []string, error)
+	store := s.store()
+	st, ok := store.(interface {
+		ExpireStaleInteractions(ctx context.Context) ([]proto.Interaction, []proto.Interaction, error)
 	})
 	if !ok {
 		return
 	}
-	resumable, cancelled, err := func() (out []proto.Interaction, cancelled []string, err error) {
+	resumable, cancelled, err := func() (out []proto.Interaction, cancelled []proto.Interaction, err error) {
 		defer guard(&err) // a test's store may not keep the table
 		return st.ExpireStaleInteractions(ctx)
 	}()
 	if err != nil {
 		s.logf("expire stale interactions: %v", err)
+		s.retryRestoreInteractionRead(store)
 		return
 	}
 	// The database has now retained exactly the explicitly persistent proposal
@@ -1442,27 +1752,114 @@ func (s *Service) restoreInteractions(ctx context.Context) {
 			s.logf("reconcile owner-action proposals after restart: %v", err)
 		}
 	}
-	for _, id := range cancelled {
-		s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: id})
+	for _, ix := range cancelled {
+		s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: ix.ID, CreatedAt: ix.CreatedAt})
 	}
-	var back []proto.Interaction
-	s.fleet.mu.Lock()
-	m := s.ixMapLocked()
-	for _, ix := range resumable {
-		if m[ix.ID] == nil {
-			m[ix.ID] = &pending{ix: ix, done: make(chan proto.Resolution, 1)} // not told: whether it rang is not kept
-			s.orphanLocked(m[ix.ID])
+	s.restoreInteractionSnapshots(ctx, store, resumable, false)
+}
+
+// resumableInteractionReader is the non-mutating half of startup expiration.
+// A retry must never cancel cards created by the current process.
+type resumableInteractionReader interface {
+	ResumableInteractions(ctx context.Context) ([]proto.Interaction, error)
+}
+
+func (s *Service) retryRestoreInteractionRead(store Store) {
+	reader, ok := store.(resumableInteractionReader)
+	if !ok {
+		s.logf("retry restored interactions without a read-only resumable query is unavailable")
+		return
+	}
+	time.AfterFunc(time.Minute, func() {
+		if s.runCtx().Err() != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(s.runCtx(), historyTimeout)
+		snapshot, err := reader.ResumableInteractions(ctx)
+		cancel()
+		if err != nil {
+			s.logf("read resumable interactions for restore retry: %v", err)
+			s.retryRestoreInteractionRead(store)
+			return
+		}
+		s.restoreInteractionSnapshots(s.runCtx(), store, snapshot, true)
+	})
+}
+
+// restoreInteractionSnapshots installs only rows that are still the same pending
+// occurrence. A transient per-row read schedules another snapshot pass, never a
+// second ExpireStaleInteractions call: expiring again could cancel cards created
+// after startup. The fleet mutex keeps each revalidation serialized with journal
+// recovery, including on retries.
+func (s *Service) restoreInteractionSnapshots(ctx context.Context, store Store, snapshot []proto.Interaction, publish bool) {
+	recorder, canValidate := store.(interactionRecorder)
+	if !canValidate {
+		s.fleet.mu.Lock()
+		for _, ix := range snapshot {
+			if s.ixMapLocked()[ix.ID] == nil {
+				s.fleet.mu.Unlock()
+				s.logf("restore interaction %s without occurrence validation is unavailable", ix.ID)
+				s.fleet.mu.Lock()
+			}
+		}
+		s.fleet.mu.Unlock()
+		return
+	}
+	var back, retry []proto.Interaction
+	for _, ix := range snapshot {
+		releaseAdmission := s.lockInteractionAdmission(ix.ID)
+		s.fleet.mu.Lock()
+		m := s.ixMapLocked()
+		if m[ix.ID] != nil {
+			s.fleet.mu.Unlock()
+			releaseAdmission()
+			continue
+		}
+		readCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+		rec, err := recorder.InteractionRecord(readCtx, ix.ID)
+		cancel()
+		if err != nil {
+			retry = append(retry, ix)
+			s.logf("revalidate restored interaction %s: %v", ix.ID, err)
+			s.fleet.mu.Unlock()
+			releaseAdmission()
+			continue
+		}
+		if rec != nil && rec.Status == "pending" && sameDurableApprovalOccurrence(ix, rec.Interaction) {
+			p := &pending{ix: ix, done: make(chan proto.Resolution, 1)} // not told: whether it rang is not kept
+			m[ix.ID] = p
+			s.orphanLocked(p)
 			back = append(back, ix)
 		}
+		s.fleet.mu.Unlock()
+		releaseAdmission()
 	}
-	s.fleet.mu.Unlock()
 	var unrouted []proto.Interaction
 	for _, ix := range back {
-		if !s.restoreRoute(ctx, ix) {
+		if s.restoreRoute(ctx, ix) {
+			continue
+		}
+		if publish {
+			// A delayed retry can run after the hub's initial full snapshot. Match
+			// an ordinary reconnect: an unrouted restored card must become visible.
+			if !s.resumeDelegations(ctx, ix) {
+				s.show(ix)
+			}
+		} else {
 			unrouted = append(unrouted, ix)
 		}
 	}
-	s.resumeDelegations(ctx, unrouted...)
+	if !publish {
+		s.resumeDelegations(ctx, unrouted...)
+	}
+	if len(retry) > 0 {
+		time.AfterFunc(time.Minute, func() {
+			if s.runCtx().Err() != nil {
+				return
+			}
+			s.restoreInteractionSnapshots(s.runCtx(), store, retry, true)
+		})
+	}
 }
 
 // restoreRoute puts card ix, restored after a restart, back on its way to the supervisor of the task it belongs to:
@@ -1497,7 +1894,12 @@ func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) bool {
 		// Detaching ended the earlier instance of this dialog. The first
 		// explicit escalation after reconnect must still be able to post it.
 		s.chans.mu.Lock()
-		if ended, ok := s.chans.ended[ix.ID]; ok && ended.Before(ix.CreatedAt) {
+		if endedAt, ok := s.chans.endedOccurrence[ix.ID]; ok {
+			if !endedAt.Equal(ix.CreatedAt) {
+				delete(s.chans.ended, ix.ID)
+				delete(s.chans.endedOccurrence, ix.ID)
+			}
+		} else if ended, ok := s.chans.ended[ix.ID]; ok && ended.Before(ix.CreatedAt) {
 			delete(s.chans.ended, ix.ID)
 		}
 		s.chans.mu.Unlock()

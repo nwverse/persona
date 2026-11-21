@@ -67,15 +67,48 @@ type codexCard struct {
 }
 
 type codexCards struct {
-	mu        sync.Mutex
-	tails     map[string]*codexTail     // session id → its rollout
-	sent      string                    // the card ids last listed to the hub
-	held      map[string]time.Time      // card id → answered from the phone: not listed again until then
-	heldIn    map[string]string         // card id → the session of a held card
-	dismissed map[string]dismissedCard  // card id → handed back to the computer from the phone
-	approvals map[string]bool           // session id → last screen scan saw a Codex approval dialog
-	pagerAt   map[string]time.Time      // pane → when its transcript pager was last closed to show a dialog
-	joins     map[string]codexJoinState // session id → joining it on its app-server (codex_daemon.go)
+	mu              sync.Mutex
+	tails           map[string]*codexTail              // session id → its rollout
+	sent            string                             // sorted card ids last listed to the hub
+	sentOccurrences string                             // sorted card ids plus occurrence times used for change detection
+	held            map[string]time.Time               // card id → answered from the phone: not listed again until then
+	heldIn          map[string]string                  // card id → the session of a held card
+	dismissed       map[string]dismissedCard           // card id → handed back to the computer from the phone
+	approvals       map[string]bool                    // session id → last screen scan saw a Codex approval dialog
+	created         map[string]codexApprovalOccurrence // approval card id → its first-seen occurrence while open
+	pagerAt         map[string]time.Time               // pane → when its transcript pager was last closed to show a dialog
+	joins           map[string]codexJoinState          // session id → joining it on its app-server (codex_daemon.go)
+}
+
+type codexApprovalOccurrence struct {
+	session string
+	at      time.Time
+}
+
+// approvalOccurrenceCard keeps one open dialog's identity stable across screen
+// scans. approvalGone / setApproval(false) clear it, so a later dialog with the
+// same node ID is a new occurrence rather than a continuation of this card.
+func (c *codexCards) approvalOccurrenceCard(session string, a codexAgent, title string, d *screen.CodexApprovalDialog) proto.Interaction {
+	ix := approvalCard(session, a, title, d)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.created == nil {
+		c.created = map[string]codexApprovalOccurrence{}
+	}
+	occurrence, ok := c.created[ix.ID]
+	if !ok || occurrence.session != session {
+		occurrence = codexApprovalOccurrence{session: session, at: ix.CreatedAt}
+		c.created[ix.ID] = occurrence
+	}
+	ix.CreatedAt = occurrence.at
+	return ix
+}
+
+func (c *codexCards) approvalOccurrenceMatches(session, id string, at time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	occurrence, ok := c.created[id]
+	return ok && occurrence.session == session && occurrence.at.Equal(at)
 }
 
 // watchCodexCards lists the open Codex questions and approvals to the hub whenever they change.
@@ -105,6 +138,7 @@ func (n *Node) syncCodexCards(ctx context.Context) {
 	n.cx.mu.Lock()
 	var list []proto.Interaction
 	var ids []string
+	var occurrences []string
 	for _, ix := range cards {
 		if n.sessionBlocked(ix.SessionID, ix.Cwd) {
 			continue // a blocked Agent folder (agentdirs.go): the card stays on the computer's own screen
@@ -119,11 +153,14 @@ func (n *Node) syncCodexCards(ctx context.Context) {
 		}
 		list = append(list, ix)
 		ids = append(ids, ix.ID)
+		occurrences = append(occurrences, ix.ID+"\x00"+ix.CreatedAt.UTC().Format(time.RFC3339Nano))
 	}
 	sort.Strings(ids)
-	key := strings.Join(ids, ",")
-	changed := key != n.cx.sent
-	n.cx.sent = key
+	sort.Strings(occurrences)
+	key := strings.Join(occurrences, ",")
+	changed := key != n.cx.sentOccurrences
+	n.cx.sent = strings.Join(ids, ",")
+	n.cx.sentOccurrences = key
 	n.cx.mu.Unlock()
 	if changed && n.peer != nil {
 		if list == nil {
@@ -187,7 +224,7 @@ func (n *Node) codexCardsNow(ctx context.Context, only string) []codexCard {
 			if only == "" {
 				n.cx.setApproval(id, true)
 			}
-			out = append(out, codexCard{ix: approvalCard(id, a, title, d), pane: a.pane, approval: d})
+			out = append(out, codexCard{ix: n.cx.approvalOccurrenceCard(id, a, title, d), pane: a.pane, approval: d})
 		} else if read {
 			if only == "" {
 				n.cx.setApproval(id, false)
@@ -221,6 +258,11 @@ func (c *codexCards) forget(live map[string]codexAgent) {
 			delete(c.tails, id)
 		}
 	}
+	for id, occurrence := range c.created {
+		if _, ok := live[occurrence.session]; !ok {
+			delete(c.created, id)
+		}
+	}
 	for id, until := range c.held {
 		if time.Now().After(until) {
 			delete(c.held, id)
@@ -248,6 +290,11 @@ type dismissedCard struct {
 func (c *codexCards) approvalGone(session string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	for id, occurrence := range c.created {
+		if occurrence.session == session {
+			delete(c.created, id)
+		}
+	}
 	for id, d := range c.dismissed {
 		if d.session == session && strings.HasPrefix(id, "cxa_") {
 			delete(c.dismissed, id)
@@ -314,6 +361,11 @@ func (c *codexCards) setApproval(id string, on bool) {
 	defer c.mu.Unlock()
 	if !on {
 		delete(c.approvals, id)
+		for card, occurrence := range c.created {
+			if occurrence.session == id {
+				delete(c.created, card)
+			}
+		}
 		return
 	}
 	if c.approvals == nil {
@@ -506,22 +558,55 @@ func (n *Node) codexApprovalOn(ctx context.Context, pane string) (d *screen.Code
 // codexAnswer answers a card from the phone: only into the question or approval it was made from, as it is on screen
 // and in the rollout now. A refusal (rpc error with a code) typed nothing.
 func (n *Node) codexAnswer(ctx context.Context, session, id string, r proto.Resolution) error {
+	return n.codexAnswerAt(ctx, session, id, time.Time{}, r)
+}
+
+// codexAnswerAt additionally pins a newer manager's answer to the occurrence it
+// saw. A zero timestamp is the legacy ID-only contract for older peers.
+func (n *Node) codexAnswerAt(ctx context.Context, session, id string, createdAt time.Time, r proto.Resolution) error {
 	if strings.HasPrefix(id, outsideAskPrefix) {
+		if !createdAt.IsZero() {
+			found := false
+			for _, ix := range n.outsideAskCards() {
+				if ix.ID == id && ix.CreatedAt.Equal(createdAt) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return refusal(screen.PromptChanged, "Codex 已经不在等这个回答了（可能在电脑上答过了，或者这一轮被中断了），这次什么都没输入。", nil)
+			}
+		}
 		return n.outsideAnswer(ctx, session, id, r) // a Claude session's question outside Persona's terminals
 	}
 	if r.Cancel {
 		return fmt.Errorf("question cancellation is unavailable for terminal-only questions")
 	}
+	defer n.typing.lock(session)()
+	var card *codexCard
+	if !createdAt.IsZero() {
+		for _, c := range n.codexCardsNow(ctx, session) {
+			if c.ix.ID == id {
+				if c.ix.CreatedAt.Equal(createdAt) {
+					card = &c
+				}
+				break
+			}
+		}
+		if card == nil {
+			return refusal(screen.PromptChanged, "Codex 已经不在等这个回答了（可能在电脑上答过了，或者这一轮被中断了），这次什么都没输入。", nil)
+		}
+	}
 	if r.Dismiss {
 		n.cx.dismiss(session, id)
 		return nil
 	}
-	defer n.typing.lock(session)()
-	var card *codexCard
-	for _, c := range n.codexCardsNow(ctx, session) {
-		if c.ix.ID == id {
-			card = &c
-			break
+	if card == nil {
+		for _, c := range n.codexCardsNow(ctx, session) {
+			if c.ix.ID == id {
+				card = &c
+				break
+			}
 		}
 	}
 	if card == nil {
@@ -851,6 +936,9 @@ func (n *Node) codexApprove(ctx context.Context, card *codexCard, r proto.Resolu
 	if opt == nil {
 		return fmt.Errorf("这个审批没有对应的选项")
 	}
+	if !n.cx.approvalOccurrenceMatches(card.ix.SessionID, card.ix.ID, card.ix.CreatedAt) {
+		return refusal(screen.PromptChanged, "电脑上的审批已经变了（可能在电脑上答过了），这次什么都没按。", nil)
+	}
 	s, err := n.codexScreen(ctx, card.pane)
 	if err == nil && s.View == screen.CodexTranscript {
 		_ = n.sendKeys(ctx, card.pane, "q")
@@ -861,6 +949,9 @@ func (n *Node) codexApprove(ctx context.Context, card *codexCard, r proto.Resolu
 		return err
 	}
 	if s.Approval == nil || s.Approval.Rev != d.Rev {
+		return refusal(screen.PromptChanged, "电脑上的审批已经变了（可能在电脑上答过了），这次什么都没按。", nil)
+	}
+	if !n.cx.approvalOccurrenceMatches(card.ix.SessionID, card.ix.ID, card.ix.CreatedAt) {
 		return refusal(screen.PromptChanged, "电脑上的审批已经变了（可能在电脑上答过了），这次什么都没按。", nil)
 	}
 	if err := n.sendKeys(ctx, card.pane, opt.Key); err != nil {

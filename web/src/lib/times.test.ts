@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { byTime, timeMs } from "./times";
+import { byTime, timeMs, timeNs } from "./times";
 
 describe("times compared as times (#3638)", () => {
   it("reads what the hub writes: a fraction of any length, Z or an offset", () => {
@@ -17,5 +17,15 @@ describe("times compared as times (#3638)", () => {
     expect(latestFirst(["2026-11-06T18:00:00+08:00", "2026-11-06T10:30:00Z"])).toEqual(["2026-11-06T10:30:00Z", "2026-11-06T18:00:00+08:00"]);
     expect(latestFirst(["", "2026-11-06T10:00:00Z"])).toEqual(["2026-11-06T10:00:00Z", ""]);
     expect(byTime("2026-11-06T10:00:00Z", "2026-11-06T18:00:00+08:00")).toBe(0);
+  });
+
+  it("keeps occurrence identity at nanosecond precision, including offsets", () => {
+    const first = timeNs("2026-11-06T10:00:05.000000001Z");
+    expect(first).not.toBeNull();
+    expect(timeNs("2026-11-06T10:00:05.000000002Z")).toBe(first! + 1n);
+    expect(timeNs("2026-11-06T18:00:05+08:00")).toBe(first! - 1n);
+    expect(timeNs("2026-11-06T18:00:05.000000001+08:00")).toBe(first);
+    expect(timeNs("not a time")).toBeNull();
+    expect(timeNs(undefined)).toBeNull();
   });
 });

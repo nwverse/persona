@@ -78,16 +78,16 @@ func (h *Hub) forgetManagerState(id string) {
 	f := &h.reported
 	f.mu.Lock()
 	delete(f.lives, id)
-	var gone []string
+	var gone []proto.Interaction
 	for ixID, ix := range f.interactions {
 		if ix.Manager == id {
-			gone = append(gone, ixID)
+			gone = append(gone, ix)
 			delete(f.interactions, ixID)
 		}
 	}
 	f.mu.Unlock()
-	for _, ixID := range gone {
-		h.broadcast(map[string]any{"type": "interaction_resolved", "id": ixID})
+	for _, ix := range gone {
+		h.broadcast(interactionResolvedEvent(ix))
 	}
 	h.forgetMachineEntries(id) // what it reported of its machines (machine_entries.go)
 }

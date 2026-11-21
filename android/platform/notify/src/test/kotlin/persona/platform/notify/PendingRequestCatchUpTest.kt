@@ -108,7 +108,8 @@ class PendingRequestCatchUpTest {
         val already = request.copy(id = "already")
         val fixture = Fixture(
             listOf(request, expired, expiredAlready, muted, quietTask, already,
-                request.copy(id = "visible", sessionId = "visible")),
+                request.copy(id = "visible", sessionId = "visible"),
+                request.copy(id = "display", sessionId = "main", mirrorOf = request.id)),
             listOf(Session(machineId = "machine", sessionId = "session"),
                 Session(machineId = "machine", sessionId = "quiet", quiet = true),
                 Session(machineId = "machine", sessionId = "visible")),

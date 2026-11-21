@@ -39,6 +39,7 @@ nonisolated enum ServerEvent: Sendable {
     case interaction(Interaction)
     /// assistant: what the assistant answered and why, when it answered the question for the user (#544).
     case interactionResolved(String, assistant: AssistantAnswer?)
+    case interactionResolvedOccurrence(String, assistant: AssistantAnswer?, createdAt: String)
     /// The user changed the assistant's answer, on this device or another: only the questions that changed (#544).
     case interactionReanswered(id: String, answers: [String: String])
     case toolCall(callID: String, name: String, args: JSONValue)
@@ -192,6 +193,7 @@ nonisolated enum ServerEvent: Sendable {
         var git: Bool?
         /// interaction_resolved's, for a question the assistant answered; raw so no other event's keys can break the envelope.
         var answeredBy: JSONValue?
+        var createdAt: String?
         var reason: JSONValue?
         var answers: JSONValue?
         /// interaction_reanswered's.
@@ -211,7 +213,7 @@ nonisolated enum ServerEvent: Sendable {
             case features, epoch, seq, full, cols, rows, data, unsupported, state, desktops, mesh, channel, build, update, item, view, action, key, conversation, plan
             case plugin, badge, invalidate, cwd, dirs, git, operation, auth, source, conversations, account, reason, answers, resolution, manager
             case effective, changed, since
-            case answeredBy = "answered_by", recordingID = "recording_id"
+            case answeredBy = "answered_by", createdAt = "created_at", recordingID = "recording_id"
             case extensionID = "extension"
             case hubID = "hub_id", hubName = "hub_name", protocolVersion = "protocol", minAppBuild = "min_app_build", publicURL = "public_url"
             case settingsChanged = "settings_changed", olAccount = "ol_account"
@@ -278,6 +280,9 @@ nonisolated enum ServerEvent: Sendable {
             guard let id = e.id else { return nil }
             let assistant = e.answeredBy?.string == AssistantAnswer.assistant
                 ? AssistantAnswer(answers: Delegated.answers(in: e.answers), reason: e.reason?.string ?? "") : nil
+            if let createdAt = e.createdAt {
+                return .interactionResolvedOccurrence(id, assistant: assistant, createdAt: createdAt)
+            }
             return .interactionResolved(id, assistant: assistant)
         case "interaction_reanswered":
             guard let id = e.id else { return nil }
@@ -381,7 +386,7 @@ nonisolated extension ServerEvent {
         case .error(let key, let message): return .error(key.map(k), message)
         case .sessionsDelta(let machine, let upsert, let remove):
             return .sessionsDelta(machineID: machine, upsert: upsert.map { var s = $0; s.group = group; return s }, remove: remove)
-        case .sessionsList, .hello, .interactionResolved, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
+        case .sessionsList, .hello, .interactionResolved, .interactionResolvedOccurrence, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
              .personas, .look, .managers, .directions, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
              .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth, .meetingLive, .urgentCall, .savedPrompts, .starredMessages: return self
         }
@@ -732,7 +737,8 @@ final class LiveConnection {
     /// docs/assistant/managers.md), Persona Link entries in the `desktops` event (`desktops_link`, `DesktopDevice`),
     /// Claude's live status (`session_live`), and where to resume the broadcasts from once a hello gave a stream.
     static func queryItems(_ cursor: EventCursor, sessionList: Bool = false, extensionStream: Bool = false, sessionLive: Bool = false) -> [URLQueryItem] {
-        [URLQueryItem(name: "features", value: (extensionStream ? "extension_ui_stream_v1," : "") + (sessionLive ? "session_live," : "") + (sessionList ? "sessions_list," + SessionListChanges.feature + "," : "") + "sessions_delta,extension_operations,managers,desktops_link," + HubNaming.feature)] + cursor.queryItems
+        let approvalMirrors = helloFeatures(RequestClientMetadata.current).contains(approvalMirrorsFeature) ? "," + approvalMirrorsFeature : ""
+        return [URLQueryItem(name: "features", value: (extensionStream ? "extension_ui_stream_v1," : "") + (sessionLive ? "session_live," : "") + (sessionList ? "sessions_list," + SessionListChanges.feature + "," : "") + "sessions_delta,extension_operations,managers,desktops_link," + HubNaming.feature + approvalMirrors)] + cursor.queryItems
     }
 
     private func heartbeat(_ t: URLSessionWebSocketTask, _ gen: Int) {
@@ -998,11 +1004,14 @@ final class LiveConnection {
     nonisolated static func helloFeatures(_ client: RequestClientMetadata) -> [String] {
         let iOSApp = RequestClientMetadata.Platform.iOS.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue
         let chatApps = [RequestClientMetadata.Platform.iOS, .macOS, .visionOS].map { $0.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue }
-        return [HubNaming.feature] + (client.platform == iOSApp ? ["elicitation", UndeliveredMessage.agentHoldFeature] : []) + (chatApps.contains(client.platform) ? [cardRingFeature, "closeout.markdown.v1"] : [])
+        return [HubNaming.feature] + (client.platform == iOSApp ? ["elicitation", UndeliveredMessage.agentHoldFeature] : []) + (chatApps.contains(client.platform) ? [cardRingFeature, "closeout.markdown.v1", approvalMirrorsFeature] : [])
     }
 
     /// The client_hello feature that says this app draws ```persona-card rings (#3068).
     nonisolated static let cardRingFeature = "persona_card_ring"
+
+    /// Main-conversation display copies are sent only to clients that deduplicate their aggregate views.
+    nonisolated static let approvalMirrorsFeature = "approval_mirrors"
 
     func send(_ object: [String: Any]) {
         if let local {

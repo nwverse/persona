@@ -342,10 +342,20 @@ func (m *fleetMem) InsertInteraction(ctx context.Context, ix proto.Interaction) 
 	}
 	m.fmu.Lock()
 	defer m.fmu.Unlock()
-	if _, ok := m.status[ix.ID]; !ok {
-		m.status[ix.ID] = "pending"
-		m.recs = append(m.recs, db.InteractionRecord{Interaction: ix, Status: "pending"})
+	for i := range m.recs {
+		if m.recs[i].Interaction.ID != ix.ID {
+			continue
+		}
+		same := sameDurableApprovalOccurrence(ix, m.recs[i].Interaction)
+		startupRelist := same && !ix.Resumable && m.recs[i].Status == "cancelled" && m.recs[i].Resolution == nil
+		if ix.CreatedAt.After(m.recs[i].Interaction.CreatedAt) || startupRelist {
+			m.recs[i] = db.InteractionRecord{Interaction: ix, Status: "pending"}
+			m.status[ix.ID], m.res[ix.ID] = "pending", nil
+		}
+		return nil
 	}
+	m.status[ix.ID] = "pending"
+	m.recs = append(m.recs, db.InteractionRecord{Interaction: ix, Status: "pending"})
 	return nil
 }
 
@@ -375,6 +385,31 @@ func (m *fleetMem) FinishInteraction(_ context.Context, id, status string, res *
 		}
 	}
 	return nil
+}
+
+func (m *fleetMem) FinishInteractionOccurrence(ctx context.Context, ix proto.Interaction, status string, res *proto.Resolution) (bool, bool, error) {
+	if err := m.InsertInteraction(ctx, ix); err != nil {
+		return false, false, err
+	}
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	for i := range m.recs {
+		if m.recs[i].Interaction.ID != ix.ID {
+			continue
+		}
+		if !sameDurableApprovalOccurrence(ix, m.recs[i].Interaction) {
+			return false, m.status[ix.ID] != "pending", nil
+		}
+		if m.status[ix.ID] == "pending" {
+			m.status[ix.ID], m.res[ix.ID] = status, res
+			m.recs[i].Status, m.recs[i].Resolution = status, res
+		}
+		if m.status[ix.ID] != status {
+			return false, true, errors.New("interaction occurrence already has a different terminal status")
+		}
+		return true, true, nil
+	}
+	return false, false, errors.New("interaction occurrence is missing after its insert")
 }
 
 func (m *fleetMem) InteractionOutcome(_ context.Context, id string) (string, *proto.Resolution, error) {

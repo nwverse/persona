@@ -190,6 +190,14 @@ var cardAnswerWait = 1500 * time.Millisecond
 func (s *Service) answerFromCard(ctx context.Context, a *feishubot.CardAction, action string) *feishubot.CardResponse {
 	l := s.botLang(ctx)
 	id := a.Str("id")
+	var expected *time.Time
+	if raw := strings.TrimSpace(a.Str("created_at")); raw != "" {
+		at, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return toast("info", i18n.T(l, "assistant-feishu_cards.card_expired"))
+		}
+		expected = &at
+	}
 	var got struct {
 		Interaction proto.Interaction `json:"interaction"`
 		OK          bool              `json:"ok"`
@@ -205,14 +213,15 @@ func (s *Service) answerFromCard(ctx context.Context, a *feishubot.CardAction, a
 	}
 	if !got.OK {
 		// Over for good (answered elsewhere, maybe while the assistant was away): this card is closed as such, its
-		// buttons gone.
-		b := &s.fbot
-		b.mu.Lock()
-		s.loadBotLocked(ctx)
-		card, had := b.cards[id]
-		s.keepBotCardLocked(id, nil)
-		b.mu.Unlock()
+		// buttons gone. A same-ID replacement already in the ledger is not the occurrence pressed here.
 		ix := proto.Interaction{ID: id}
+		if expected != nil {
+			ix.CreatedAt = *expected
+		}
+		card, had, same := s.takeBotCardOccurrence(id, ix)
+		if !same {
+			return toast("info", i18n.T(l, "assistant-feishu_cards.already_handled"))
+		}
 		if had {
 			ix = card.Ix
 		}
@@ -221,6 +230,11 @@ func (s *Service) answerFromCard(ctx context.Context, a *feishubot.CardAction, a
 			Card: s.answeredCard(ctx, ix, ended).Raw()}
 	}
 	ix := got.Interaction
+	if expected != nil && !ix.CreatedAt.Equal(*expected) {
+		// The live card is a same-ID replacement, not the operation pressed here.
+		// Reject before consuming an owner action or mutating either bot card.
+		return toast("info", i18n.T(l, "assistant-feishu_cards.already_handled"))
+	}
 	type outcome struct {
 		ok  bool
 		err error
@@ -249,7 +263,7 @@ func (s *Service) answerFromCard(ctx context.Context, a *feishubot.CardAction, a
 		go func() {
 			rctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
-			ok, err := s.clarifyInteraction(rctx, channel.Feishu, id, question, clientMsgID, action, a.Context.ChatID, a.Context.MessageID)
+			ok, err := s.clarifyInteractionAt(rctx, channel.Feishu, id, question, clientMsgID, action, a.Context.ChatID, a.Context.MessageID, expected)
 			done <- outcome{ok, err}
 		}()
 		select {
@@ -338,11 +352,12 @@ func (s *Service) answerFromCard(ctx context.Context, a *feishubot.CardAction, a
 		return toast("error", i18n.T(l, "assistant-feishu_cards.unknown_action"))
 	}
 	// This card is closed by the answer below, not again when the interaction ends.
-	b := &s.fbot
-	b.mu.Lock()
-	card, had := b.cards[id]
-	s.keepBotCardLocked(id, nil)
-	b.mu.Unlock()
+	// The occurrence check makes the optimistic removal a compare-and-swap: a
+	// replacement announced after the lookup must stay answerable.
+	card, had, same := s.takeBotCardOccurrence(id, ix)
+	if !same {
+		return toast("info", i18n.T(l, "assistant-feishu_cards.already_handled"))
+	}
 	restore := func(ctx context.Context) bool {
 		if had {
 			return s.botRestoreCard(ctx, id, card)
@@ -355,7 +370,7 @@ func (s *Service) answerFromCard(ctx context.Context, a *feishubot.CardAction, a
 	go func() {
 		rctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		ok, err := s.resolveInteraction(rctx, channel.Feishu, id, r, action)
+		ok, err := s.resolveInteractionAt(rctx, channel.Feishu, id, r, action, expected)
 		done <- outcome{ok, err}
 	}()
 	select {
@@ -408,21 +423,52 @@ func (s *Service) answerFromCard(ctx context.Context, a *feishubot.CardAction, a
 	}
 }
 
+// differentBotCardOccurrence distinguishes two occurrence-bearing cards under
+// one runtime ID. A zero timestamp is the legacy ID-only form and retains its
+// old behavior; newly written ledger entries always carry the timestamp.
+func differentBotCardOccurrence(a, b proto.Interaction) bool {
+	return !a.CreatedAt.IsZero() && !b.CreatedAt.IsZero() &&
+		(!a.CreatedAt.Equal(b.CreatedAt) || a.MachineID != b.MachineID || a.SessionID != b.SessionID)
+}
+
+// takeBotCardOccurrence removes id's ledger entry only if it still represents
+// expected. same is false when a same-ID replacement arrived after the lookup.
+func (s *Service) takeBotCardOccurrence(id string, expected proto.Interaction) (card botCard, had, same bool) {
+	b := &s.fbot
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s.loadBotLocked(context.Background())
+	card, had = b.cards[id]
+	if had && differentBotCardOccurrence(card.Ix, expected) {
+		return card, true, false
+	}
+	s.keepBotCardLocked(id, nil)
+	return card, had, true
+}
+
 // botRestoreCard puts back the card of interaction id, closed optimistically for an answer that did not go through,
 // unless the hub says it is no longer pending: it ended while the answer was out, and its interaction.ended found no
 // card to close, so putting it back would leave a card waiting that nothing answers (#5012). When that cannot be
-// asked either, the card is put back, as before. It reports whether the card waits again.
+// asked either, the card is put back, as before. A different occurrence, live or already in the ledger, is never
+// overwritten. It reports whether the card waits again.
 func (s *Service) botRestoreCard(ctx context.Context, id string, card botCard) bool {
 	var got struct {
-		OK bool `json:"ok"`
+		OK          bool              `json:"ok"`
+		Interaction proto.Interaction `json:"interaction"`
 	}
-	if err := s.appCall(ctx, AppInteractions, InteractionsGet, map[string]any{"interaction_id": id}, &got); err == nil && !got.OK {
-		return false
+	if err := s.appCall(ctx, AppInteractions, InteractionsGet, map[string]any{"interaction_id": id}, &got); err == nil {
+		if !got.OK || differentBotCardOccurrence(card.Ix, got.Interaction) {
+			return false
+		}
 	}
 	b := &s.fbot
 	b.mu.Lock()
+	defer b.mu.Unlock()
+	s.loadBotLocked(ctx)
+	if current, ok := b.cards[id]; ok && differentBotCardOccurrence(card.Ix, current.Ix) {
+		return false
+	}
 	s.keepBotCardLocked(id, &card)
-	b.mu.Unlock()
 	return true
 }
 

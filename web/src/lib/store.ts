@@ -20,10 +20,10 @@ import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSna
 import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, seenCopy, unansweredMarks, unseen, type SeenMark, type SeenMarks } from "./seen-outbox";
 import { probeEdge } from "./edge-auth";
 import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, credentialOwner, sessionPath } from "./api";
-import { helloDeviceId } from "./device-id";
+import { clientInstance, helloDeviceId } from "./device-id";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
-import { timeMs } from "./times";
+import { timeMs, timeNs } from "./times";
 import { NO_PINS, pinsOf, type AgentPins } from "./pins";
 import type { AssistantInfo, Interaction, Item, Machine, MeshHub, Session } from "./types";
 import type { Resolution } from "./answered";
@@ -799,7 +799,7 @@ function sendHello(sock: WebSocket) {
   // the interface language: this connection's text, and the user's language for pushes and the assistant (docs/protocol/i18n.md)
   // and what it can render: MCP forms and links come only to a socket that says so
   // device_id: this browser's (lib/device-id.ts), so the hub pushes nothing to it while a page is open (#7459)
-  sock.send(JSON.stringify({ type: "client_hello", platform: CLIENT_PLATFORM, version: CLIENT_VERSION, features: [...CLIENT_FEATURES, ...helloExtras()], locale: currentLanguage(), device_id: helloDeviceId(), heartbeat: { pong_timeout: CLIENT_PONG_TIMEOUT } }));
+  sock.send(JSON.stringify({ type: "client_hello", platform: CLIENT_PLATFORM, version: CLIENT_VERSION, instance: clientInstance, features: [...CLIENT_FEATURES, ...helloExtras()], locale: currentLanguage(), device_id: helloDeviceId(), heartbeat: { pong_timeout: CLIENT_PONG_TIMEOUT } }));
 }
 
 /** Sets what client_hello declares beyond CLIENT_FEATURES, from the next hello on. */
@@ -832,7 +832,7 @@ export function connect() {
     }, 250);
   }
   directionTreeAwaitsHello(true); // its hello reads the direction tree: the screens wait for that read
-  const sock = new WebSocket(`${proto}//${location.host}${BASE}/api/v1/ws?${wsQuery(socketToken, cursor, [SESSIONS_LIST_FEATURE, SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_DELTA_FEATURE, SESSION_LIVE_FEATURE, "extension_ui_stream_v1", "persona_contracts_v1"])}`);
+  const sock = new WebSocket(`${proto}//${location.host}${BASE}/api/v1/ws?${wsQuery(socketToken, cursor, [SESSIONS_LIST_FEATURE, SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_DELTA_FEATURE, SESSION_LIVE_FEATURE, "extension_ui_stream_v1", "persona_contracts_v1", "approval_mirrors"])}`);
   ws = sock;
   restartNotice = false;
   // an attempt does not move offline back to connecting: the pill stays on one phase while the hub is down instead of
@@ -1119,7 +1119,7 @@ function onMessage(msg: Record<string, unknown>) {
     case "interaction": {
       const ix = msg.interaction as Interaction;
       const prev = state.interactions.find((i) => i.id === ix.id);
-      if (!endedHere.has(ix.id)) {
+      if (!endedOccurrence(ix)) {
         changeInteraction(ix.id, ix);
         refreshCountsForCard(prev, ix);
       }
@@ -1127,11 +1127,13 @@ function onMessage(msg: Record<string, unknown>) {
     }
     case "interaction_resolved": {
       const id = msg.id as string;
-      const prev = state.interactions.find((i) => i.id === id);
+      const current = state.interactions.find((ix) => ix.id === id);
+      const endedAt = typeof msg.created_at === "string" ? msg.created_at : undefined;
+      if (current && endedAt !== undefined && laterTime(current.created_at, endedAt)) break;
       if (msg.answered_by === "assistant") answeredForUser(msg);
       changeInteraction(id, null);
-      cardWithdrawn(id);
-      refreshCountsForCard(prev, undefined);
+      cardWithdrawn(id, endedAt);
+      refreshCountsForCard(current, undefined);
       break;
     }
     case "push_grading":
@@ -1446,7 +1448,7 @@ function changeInteraction(id: string, ix: Interaction | null) {
 
 /** The pending interactions from a snapshot asked for at revision `before`, with what changed since. */
 export function mergeInteractions(snapshot: Interaction[], before: number): Interaction[] {
-  const out = new Map(snapshot.filter((i) => !endedHere.has(i.id)).map((i) => [i.id, i]));
+  const out = new Map(snapshot.filter((i) => !endedOccurrence(i)).map((i) => [i.id, i]));
   for (const [id, c] of ixChanges) {
     if (c.rev <= before) continue;
     out.delete(id);
@@ -1457,39 +1459,61 @@ export function mergeInteractions(snapshot: Interaction[], before: number): Inte
 
 const ANSWERED_MS = 20_000;
 
-// Cards this page ended (answered, found over, handed back), newest last. Until the node ends one, the hub's pending
-// cards still list it: the snapshot after a hello that resumes the stream sends it again as an `interaction` frame, and
-// a full list read after the answer has it too. It is never answerable here again (#1541). A failed answer does not end
-// its card, so nothing has to come off this list.
-const endedHere = new Set<string>();
+// Cards this page ended (answered, found over, handed back), keyed by the occurrence's creation time. Until the node
+// ends one, the hub's pending cards still list it. A later occurrence may reuse the id and must remain answerable;
+// an absent timestamp keeps the legacy id-only behavior (#1541, #11310). A failed answer does not end its card.
+const endedHere = new Map<string, string | undefined>();
 const ENDED_KEPT = 500;
 
+function laterTime(a: string | undefined, b: string | undefined): boolean {
+  const left = timeNs(a), right = timeNs(b);
+  return left !== null && right !== null && left > right;
+}
+
+function rememberOccurrence(markers: Map<string, string | undefined>, id: string, occurrence: string | undefined, kept: number) {
+  const previous = markers.get(id);
+  if (markers.has(id) && (previous === undefined || !laterTime(occurrence, previous))) return;
+  markers.delete(id);
+  markers.set(id, occurrence);
+  if (markers.size > kept) markers.delete(markers.keys().next().value!);
+}
+
+function occurrenceCovered(markers: Map<string, string | undefined>, ix: Interaction): boolean {
+  if (!markers.has(ix.id)) return false;
+  const ended = markers.get(ix.id);
+  return ended === undefined || !laterTime(ix.created_at, ended);
+}
+
+function endedOccurrence(ix: Interaction): boolean {
+  return occurrenceCovered(endedHere, ix);
+}
+
 /**
- * An interaction this page answered (or found over when it tried): its card goes at once, without waiting for the
- * hub's interaction_resolved, which may be late or lost with a socket. With `answer` it shows answered for a while.
+ * An interaction this page answered (or found over when it tried): its occurrence goes at once, without waiting for
+ * the hub's interaction_resolved, which may be late or lost with a socket. A delayed response for an older occurrence
+ * does not remove its same-id replacement. With `answer` it shows answered for a while.
  */
-export function endInteraction(id: string, answer?: AnsweredCard) {
-  endedHere.delete(id);
-  endedHere.add(id);
-  if (endedHere.size > ENDED_KEPT) endedHere.delete(endedHere.values().next().value!);
-  changeInteraction(id, null);
-  if (!answer) return;
-  const card = { ...answer, at: answer.at ?? Date.now(), withdrawn: answer.withdrawn || answer.already === true || resolvedSeen.has(id) };
+export function endInteraction(id: string, answer?: AnsweredCard, occurrence?: string) {
+  occurrence = answer?.ix.created_at ?? occurrence;
+  rememberOccurrence(endedHere, id, occurrence, ENDED_KEPT);
+  const current = state.interactions.find((ix) => ix.id === id);
+  const replaced = current !== undefined && laterTime(current.created_at, occurrence);
+  if (!replaced) changeInteraction(id, null);
+  if (!answer || replaced) return;
+  const card = { ...answer, at: answer.at ?? Date.now(), withdrawn: answer.withdrawn || answer.already === true || occurrenceCovered(resolvedSeen, answer.ix) };
   set({ answered: { ...state.answered, [id]: card } });
   setTimeout(() => dropAnswered(id, card), ANSWERED_MS);
 }
 
-// Cards the hub has withdrawn (interaction_resolved), newest last: the event often comes before the answer's own reply.
-const resolvedSeen = new Set<string>();
+// Cards the hub has withdrawn (interaction_resolved), keyed by occurrence when the hub supplies it.
+const resolvedSeen = new Map<string, string | undefined>();
 const RESOLVED_KEPT = 200;
 
 /** The hub withdrew a card (interaction_resolved, on the same socket as the sessions pushes). */
-export function cardWithdrawn(id: string) {
-  resolvedSeen.delete(id);
-  resolvedSeen.add(id);
-  if (resolvedSeen.size > RESOLVED_KEPT) resolvedSeen.delete(resolvedSeen.values().next().value!);
+export function cardWithdrawn(id: string, occurrence?: string) {
+  rememberOccurrence(resolvedSeen, id, occurrence, RESOLVED_KEPT);
   const cur = state.answered[id];
-  if (!cur || cur.withdrawn) return;
+  if (!cur || cur.withdrawn || (occurrence !== undefined && laterTime(cur.ix.created_at, occurrence))) return;
   set({ answered: { ...state.answered, [id]: { ...cur, withdrawn: true } } });
 }
 
@@ -1520,9 +1544,10 @@ const DELEGATED_KEPT = 50;
  *  page's own answer lost, so its "Answered" card goes. */
 export function keepDelegated(ix: Interaction, r: Record<string, unknown>) {
   if (ix.kind !== "question") return;
-  changeInteraction(ix.id, null);
+  const current = state.interactions.find((candidate) => candidate.id === ix.id);
+  if (!current || !laterTime(current.created_at, ix.created_at)) changeInteraction(ix.id, null);
   const answered = { ...state.answered };
-  delete answered[ix.id];
+  if (!state.answered[ix.id] || !laterTime(state.answered[ix.id].ix.created_at, ix.created_at)) delete answered[ix.id];
   const card: DelegatedAnswer = state.delegated[ix.id] ?? { ix, answers: answersIn(r.answers), reason: typeof r.reason === "string" ? r.reason : "", at: Date.now() };
   const delegated = { ...state.delegated, [ix.id]: card };
   const ids = Object.keys(delegated);

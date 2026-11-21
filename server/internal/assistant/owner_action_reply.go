@@ -2,7 +2,7 @@ package assistant
 
 import (
 	"context"
-	"errors"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
@@ -16,9 +16,19 @@ const ownerApprovalHandledParam = "owner_approval_handled"
 // resolveAppOwnerReply consumes an authenticated app send's explicit proposal
 // target. Human, own-words and via checks are completed by messageParams before
 // this call; clientMsgID is the stable owner event, never a model-provided ID.
-func (s *Service) resolveAppOwnerReply(ctx context.Context, machine, session, clientMsgID, target, text string) (bool, error) {
+func (s *Service) resolveAppOwnerReply(ctx context.Context, machine, session, clientMsgID, target, text, rawCreatedAt string) (bool, error) {
 	if clientMsgID == "" || target == "" || !ownerApprovalPhrase(s.settings(ctx), text) {
 		return false, nil
+	}
+	var expected *interactionExpectation
+	var expectedAt *time.Time
+	if rawCreatedAt != "" {
+		at, err := time.Parse(time.RFC3339Nano, rawCreatedAt)
+		if err != nil {
+			return false, errOwnerActionProof
+		}
+		expectedAt = &at
+		expected = &interactionExpectation{createdAt: &at}
 	}
 	ix, pending := s.pendingIx(target)
 	if !pending {
@@ -26,11 +36,19 @@ func (s *Service) resolveAppOwnerReply(ctx context.Context, machine, session, cl
 		if err != nil {
 			return false, err
 		}
-		m, sess, found, err := book.targetOrigin(ctx, target)
+		origin, found, err := book.targetOrigin(ctx, target)
 		if err != nil {
 			return false, err
 		}
-		if found && m == machine && sess == session {
+		if found && origin.MachineID == machine && origin.SessionID == session {
+			if expectedAt != nil && !origin.CreatedAt.Equal(*expectedAt) {
+				return false, errOwnerActionProof
+			}
+			if !origin.Terminal {
+				// A restart can leave a durable unanswered proposal unrestored.
+				// Never turn that state into a successful approval receipt.
+				return false, errNotPending
+			}
 			return true, nil // the first terminal decision already won; a retry has no new effect
 		}
 		return false, errOwnerActionProof
@@ -39,12 +57,12 @@ func (s *Service) resolveAppOwnerReply(ctx context.Context, machine, session, cl
 		return false, errOwnerActionProof
 	}
 	allow := true
-	if err := s.resolveOwnerProposal(ctx, ix, proto.Resolution{Allow: &allow}, ownerReplyProof{
+	if err := s.resolveOwnerProposalAt(ctx, ix, proto.Resolution{Allow: &allow}, ownerReplyProof{
 		AuthenticatedOwner: true,
 		DirectParent:       true,
 		ExactPhrase:        true,
 		EventID:            "app:" + machine + ":" + session + ":" + clientMsgID,
-	}); err != nil && !errors.Is(err, errNotPending) {
+	}, expected); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -85,8 +103,26 @@ func (s *Service) botApproveOwnerAction(ctx context.Context, ev feishubot.Messag
 			i18n.Args{"error": clip(oneLine(err.Error()), 200)}))
 	}
 	ix, pending := s.pendingIx(id)
+	b.mu.Lock()
+	ref := b.st.Cards[id]
+	b.mu.Unlock()
 	if !pending {
-		s.botNote(ctx, msg.MessageID, i18n.T(s.botLang(ctx), "assistant-channels_plugin.answered_elsewhere"))
+		book, err := s.ownerActions()
+		if err != nil {
+			fail(err)
+			return true
+		}
+		origin, found, err := book.targetOrigin(ctx, id)
+		if err != nil {
+			fail(err)
+			return true
+		}
+		if found && origin.Terminal && ref != nil && origin.MachineID == ref.MachineID && origin.SessionID == ref.SessionID &&
+			(ref.CreatedAt.IsZero() || origin.CreatedAt.Equal(ref.CreatedAt)) {
+			s.botNote(ctx, msg.MessageID, i18n.T(s.botLang(ctx), "assistant-channels_plugin.answered_elsewhere"))
+		} else {
+			fail(errNotPending)
+		}
 		return true
 	}
 	// ChatID is empty only for the owner's DM. The pending interaction, rather
@@ -95,12 +131,10 @@ func (s *Service) botApproveOwnerAction(ctx context.Context, ev feishubot.Messag
 		fail(errOwnerActionProof)
 		return true
 	}
-	b.mu.Lock()
-	ref := b.st.Cards[id]
 	validLocation := ref != nil && ref.ChatID == "" && ref.MessageID == msg.ParentID &&
 		ref.ApprovalBatchID == ix.ApprovalBatchID && ref.ApprovalItemID == ix.ApprovalItemID &&
-		ref.MachineID == ix.MachineID && ref.SessionID == ix.SessionID
-	b.mu.Unlock()
+		ref.MachineID == ix.MachineID && ref.SessionID == ix.SessionID &&
+		(ref.CreatedAt.IsZero() || ix.CreatedAt.IsZero() || ref.CreatedAt.Equal(ix.CreatedAt))
 	if !validLocation {
 		fail(errOwnerActionProof)
 		return true
@@ -110,11 +144,15 @@ func (s *Service) botApproveOwnerAction(ctx context.Context, ev feishubot.Messag
 	var got struct {
 		Proof assistantwire.OwnerApprovalProof `json:"owner_approval_proof"`
 	}
-	if err := s.appCall(ctx, AppInteractions, assistantwire.InteractionsOwnerAction, map[string]any{
+	params := map[string]any{
 		"interaction_id": id, "action": action, "channel": channel.Feishu, "kind": ix.Kind,
 		"approval_reply": true, "message_id": expected.MessageID, "parent_id": expected.ParentID,
 		"chat_id": expected.ChatID, "text": expected.Text,
-	}, &got); err != nil {
+	}
+	if !ref.CreatedAt.IsZero() {
+		params["created_at"] = ref.CreatedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if err := s.appCall(ctx, AppInteractions, assistantwire.InteractionsOwnerAction, params, &got); err != nil {
 		fail(err)
 		return true
 	}
@@ -123,18 +161,14 @@ func (s *Service) botApproveOwnerAction(ctx context.Context, ev feishubot.Messag
 		return true
 	}
 	allow := true
-	err := s.resolveOwnerProposal(ctx, ix, proto.Resolution{Allow: &allow}, ownerReplyProof{
+	err := s.resolveOwnerProposalAt(ctx, ix, proto.Resolution{Allow: &allow}, ownerReplyProof{
 		AuthenticatedOwner: true,
 		DirectParent:       true,
 		ExactPhrase:        true,
 		EventID:            "feishu:" + got.Proof.MessageID,
-	})
+	}, &interactionExpectation{occurrence: &ix})
 	if err != nil {
-		if errors.Is(err, errNotPending) {
-			s.botNote(ctx, msg.MessageID, i18n.T(s.botLang(ctx), "assistant-channels_plugin.answered_elsewhere"))
-		} else {
-			fail(err)
-		}
+		fail(err)
 	}
 	return true
 }

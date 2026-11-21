@@ -6,6 +6,15 @@ export function timeMs(at?: string | null): number {
   return Number.isNaN(ms) ? 0 : ms;
 }
 
+/** An RFC3339 instant at the wire's full nanosecond precision; null when it is absent or malformed. */
+export function timeNs(at?: string | null): bigint | null {
+  const match = at ? /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)$/.exec(at) : null;
+  if (!match) return null;
+  const seconds = Date.parse(match[1] + match[3]) / 1000;
+  if (!Number.isInteger(seconds)) return null;
+  return BigInt(seconds) * 1_000_000_000n + BigInt((match[2] ?? "").padEnd(9, "0") || "0");
+}
+
 /** Compares two times for a sort: the earlier first (swap the arguments for the latest first); none is the earliest. */
 export function byTime(a?: string | null, b?: string | null): number {
   return timeMs(a) - timeMs(b);
