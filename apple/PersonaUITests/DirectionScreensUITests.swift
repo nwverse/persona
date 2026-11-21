@@ -44,6 +44,8 @@ final class DirectionScreensUITests: XCTestCase {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-newAssistant", "YES", "-dev.openChat", "",
+                               // the first lead held open for this launch only (its fold is the device's)
+                               "-assistant.direction.open.lead0000-0000-4000-8000-000000000000", "YES",
                                "-AppleLanguages", "(\(lang))", "-AppleLocale", lang == "en" ? "en_US" : lang == "ja" ? "ja_JP" : "zh_CN"]
         app.launchPinned()
     }
@@ -73,6 +75,20 @@ final class DirectionScreensUITests: XCTestCase {
         XCTAssertTrue(todos.exists, "the sidebar did not open:\n\(app.debugDescription)")
     }
 
+    /// Scrolls the sidebar (a lazy list: rows below the fold are not made) until `element` is on screen.
+    @MainActor @discardableResult private func reveal(_ element: XCUIElement, rounds: Int = 12) -> Bool {
+        let anchor = app.buttons["sidebar-todos"].firstMatch
+        let x = anchor.exists ? anchor.frame.midX : app.frame.width * 0.3
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        for _ in 0..<rounds {
+            if element.exists && element.isHittable { return true }
+            origin.withOffset(CGVector(dx: x, dy: app.frame.height * 0.78))
+                .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: x, dy: app.frame.height * 0.45)))
+            usleep(500_000)
+        }
+        return element.exists && element.isHittable
+    }
+
     /// The first lead (「Persona 产品」), whose name is mock data in every language.
     @MainActor private func firstLeadToggle() -> XCUIElement {
         app.buttons.matching(identifier: "sidebar-direction-toggle")
@@ -82,8 +98,8 @@ final class DirectionScreensUITests: XCTestCase {
     @MainActor private func openFirstLead() {
         let toggle = firstLeadToggle()
         XCTAssertTrue(toggle.waitForExistence(timeout: 20), "no fold for Persona 产品:\n\(app.debugDescription)")
-        if !app.buttons["sidebar-direction-all"].exists { toggle.tap() }
-        XCTAssertTrue(app.buttons["sidebar-direction-all"].firstMatch.waitForExistence(timeout: 10),
+        if toggle.value as? String != expanded { toggle.tap() }
+        XCTAssertTrue(reveal(app.buttons["sidebar-direction-all"].firstMatch),
                       "no All › under the open row:\n\(app.debugDescription)")
     }
 
@@ -96,8 +112,11 @@ final class DirectionScreensUITests: XCTestCase {
 
     @MainActor private var page: XCUIElement { app.descendants(matching: .any)["direction-page"].firstMatch }
 
+    /// A conversation row by the start of its title, scrolled into view.
     @MainActor private func chat(_ prefix: String) -> XCUIElement {
-        app.buttons.matching(identifier: "sidebar-conversation").matching(NSPredicate(format: "label BEGINSWITH %@", prefix)).firstMatch
+        let row = app.buttons.matching(identifier: "sidebar-conversation").matching(NSPredicate(format: "label BEGINSWITH %@", prefix)).firstMatch
+        if !(row.exists && row.isHittable) { reveal(row) }
+        return row
     }
 
     // MARK: The row, the page and the standings
@@ -151,7 +170,7 @@ final class DirectionScreensUITests: XCTestCase {
         reset()
         launch()
         openSidebar()
-        let row = chat("早报")
+        let row = chat("帮我约周五")
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         row.press(forDuration: 1.2)
         let move = app.buttons["move-to"].firstMatch
@@ -171,7 +190,7 @@ final class DirectionScreensUITests: XCTestCase {
         reset("refuse=direction_full")
         launch()
         openSidebar()
-        let row = chat("早报")
+        let row = chat("帮我约周五")
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         row.press(forDuration: 1.2)
         app.buttons["move-to"].firstMatch.tap()
@@ -284,7 +303,7 @@ final class DirectionScreensUITests: XCTestCase {
             openSidebar()
         }
         if off == "missing" {
-            let row = chat("早报")
+            let row = chat("帮我约周五")
             if row.waitForExistence(timeout: 10) {
                 row.press(forDuration: 1.2)
                 if app.buttons["move-to"].firstMatch.waitForExistence(timeout: 3) {
@@ -300,7 +319,7 @@ final class DirectionScreensUITests: XCTestCase {
         if toggle.waitForExistence(timeout: 8), toggle.value as? String != expanded { toggle.tap() }
         sleep(2)
         shot("off-sidebar-\(off)")
-        let row = off == "manager" ? app.buttons.matching(identifier: "sidebar-conversation").firstMatch : chat("早报")
+        let row = off == "manager" ? app.buttons.matching(identifier: "sidebar-conversation").firstMatch : chat("帮我约周五")
         if row.waitForExistence(timeout: 5) {
             row.press(forDuration: 1.2)
             sleep(1)

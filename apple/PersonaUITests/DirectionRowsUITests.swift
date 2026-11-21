@@ -115,6 +115,24 @@ final class DirectionRowsUITests: XCTestCase {
         try mock(query)
     }
 
+    /// Scrolls the sidebar (a lazy list: rows below the fold are not made) until `element` is on screen.
+    @MainActor @discardableResult private func reveal(_ element: XCUIElement, rounds: Int = 12) -> Bool {
+        let anchor = app.buttons["sidebar-todos"].firstMatch
+        let x = anchor.exists ? anchor.frame.midX : app.frame.width * 0.3
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        for _ in 0..<rounds {
+            if element.exists && element.isHittable { return true }
+            origin.withOffset(CGVector(dx: x, dy: app.frame.height * 0.78))
+                .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: x, dy: app.frame.height * 0.45)))
+            usleep(500_000)
+        }
+        return element.exists && element.isHittable
+    }
+
+    /// The first lead held open for this launch only (its fold is the device's, `UserDefaults`; a launch argument does
+    /// not write it), so the other tests here still find the leads below it on screen.
+    static let firstLeadOpen = ["-assistant.direction.open.lead0000-0000-4000-8000-000000000000", "YES"]
+
     /// Opens the first lead's row (「Persona 产品」), which the mock files sessions under.
     @MainActor private func openFirstLead() {
         let toggle = app.buttons.matching(identifier: "sidebar-direction-toggle")
@@ -126,7 +144,7 @@ final class DirectionRowsUITests: XCTestCase {
 
     @MainActor func testWithoutTheFeatureTheRowAndTheMenusAreAsBefore() throws {
         try mockReset("feature=off")
-        launch()
+        launch(Self.firstLeadOpen)
         openSidebar()
         openFirstLead()
         shot("off-row")
@@ -134,20 +152,20 @@ final class DirectionRowsUITests: XCTestCase {
         XCTAssertFalse(app.buttons["sidebar-direction-filed"].exists, "filed rows without direction_sessions")
         let chat = app.buttons.matching(identifier: "sidebar-conversation")
             .matching(NSPredicate(format: "label BEGINSWITH %@", "帮我约周五")).firstMatch
-        XCTAssertTrue(chat.waitForExistence(timeout: 10))
+        XCTAssertTrue(reveal(chat), "no 帮我约周五 chat:\n\(app.debugDescription)")
         chat.press(forDuration: 1.2)
-        XCTAssertTrue(app.buttons["Copy Diagnostics"].waitForExistence(timeout: 5) || app.buttons["复制诊断信息"].exists)
+        XCTAssertTrue(app.buttons["拷贝诊断"].waitForExistence(timeout: 5), "the menu did not open:\n\(app.debugDescription)")
         shot("off-menu")
         XCTAssertFalse(app.buttons["move-to"].exists, "Move To… without direction_sessions")
     }
 
     @MainActor func testTheRowListsItsFiledSessionsAndAllOpensThePage() throws {
         try mockReset()
-        launch()
+        launch(Self.firstLeadOpen)
         openSidebar()
         openFirstLead()
         let all = app.buttons["sidebar-direction-all"].firstMatch
-        XCTAssertTrue(all.waitForExistence(timeout: 10), "no All › under Persona 产品:\n\(app.debugDescription)")
+        XCTAssertTrue(reveal(all), "no All › under Persona 产品:\n\(app.debugDescription)")
         XCTAssertGreaterThanOrEqual(app.buttons.matching(identifier: "sidebar-direction-filed").count, 2,
                                     "the live filed sessions are listed")
         shot("on-row")
@@ -166,14 +184,14 @@ final class DirectionRowsUITests: XCTestCase {
 
     @MainActor func testMoveToThenUndoRestoresTheBook() throws {
         try mockReset()
-        let key = "server/b2e4d6f8-0000-4000-8000-000000000002" // 「早报 · 周三」, in no direction
+        let key = "server/b2e4d6f8-0000-4000-8000-000000000003" // 「帮我约周五…」, in no direction
         let before = (try mock("")["book"] as? [String: Any])?[key]
         XCTAssertNil(before, "the chat starts in no direction")
         launch()
         openSidebar()
         let chat = app.buttons.matching(identifier: "sidebar-conversation")
-            .matching(NSPredicate(format: "label BEGINSWITH %@", "早报")).firstMatch
-        XCTAssertTrue(chat.waitForExistence(timeout: 10), "no 早报 chat:\n\(app.debugDescription)")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "帮我约周五")).firstMatch
+        XCTAssertTrue(reveal(chat), "no 帮我约周五 chat:\n\(app.debugDescription)")
         chat.press(forDuration: 1.2)
         let move = app.buttons["move-to"].firstMatch
         XCTAssertTrue(move.waitForExistence(timeout: 5), "no Move To…:\n\(app.debugDescription)")

@@ -164,7 +164,7 @@ class DirectionSessionsMockTests(unittest.TestCase):
         placed = {s["session_id"] for s in get(base, "/api/v1/assistant/directions/" + first)["sessions"]}
         self.assertIn(RECIPE, placed)
         # a first filing's Undo writes null: the placement before it (none) comes back
-        chat = "b2e4d6f8-0000-4000-8000-000000000002"
+        chat = "b2e4d6f8-0000-4000-8000-000000000003"  # in no direction
         status, filed = put(base, file_path("server", chat), {"direction": second})
         self.assertEqual(filed["previous"], None)
         status, undone = put(base, file_path("server", chat), {"direction": None})

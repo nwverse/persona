@@ -107,7 +107,7 @@ def register(d):
             "old-laptop/dirs0008-0000-4000-8000-000000000008": {"direction": first, "title": "旧电脑上的草稿",  # i18n-ignore: mock data
                                                                 "at": ago(days=12), "standing": "computer_removed"},
         }
-        for i, sid in enumerate(chats[1:3]):  # two everyday chats the owner put here
+        for i, sid in enumerate(chats[0:3:2]):  # two everyday chats the owner put here (帮我约周五 stays in none)
             title = next((c.get("title", "") for c in hub.ASSISTANT if c["session_id"] == sid), "")
             book[f"{hub.ASSISTANT_CONFIG.get('machine_id') or 'server'}/{sid}"] = {"direction": first, "title": title,
                                                                                   "at": ago(hours=20 + i)}
