@@ -121,12 +121,18 @@ struct DispatchHandoffCardBody: View, Equatable {
     var disambiguate = false
     private var store: TasksStore { .shared }
 
-    /// "3 min. ago": minutes are enough for when an Agent last moved.
+    private static let justNow = String(localized: "Just now")
     private static let relative: RelativeDateTimeFormatter = {
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .short
         return f
     }()
+
+    static func activityTime(_ at: Date, now: Date) -> String {
+        // Match the web hand-off card's recent window, including timestamps ahead of the device clock.
+        if now.timeIntervalSince(at) < 45 { return justNow }
+        return relative.localizedString(for: at, relativeTo: now)
+    }
 
     var body: some View {
         let card = HStack(spacing: Theme.Space.m) {
@@ -195,7 +201,7 @@ struct DispatchHandoffCardBody: View, Equatable {
                 if let at {
                     ThemedIcon(Theme.Icon.recent).font(Theme.Font.label).foregroundStyle(.secondary)
                     VisibleTimelineView(interval: 60) { now in
-                        Text(Self.relative.localizedString(for: min(at, now), relativeTo: now)).lineLimit(1)
+                        Text(Self.activityTime(at, now: now)).lineLimit(1)
                     }
                 } else {
                     Text("No activity yet").lineLimit(1).foregroundStyle(.tertiary)
@@ -217,7 +223,7 @@ struct DispatchHandoffCardBody: View, Equatable {
                 if let at {
                     ThemedIcon(Theme.Icon.recent).font(Theme.Font.label).foregroundStyle(.secondary)
                     VisibleTimelineView(interval: 60) { now in
-                        Text(Self.relative.localizedString(for: min(at, now), relativeTo: now)).lineLimit(1).foregroundStyle(.secondary)
+                        Text(Self.activityTime(at, now: now)).lineLimit(1).foregroundStyle(.secondary)
                     }
                     Text(verbatim: "·").foregroundStyle(.tertiary)
                 }
