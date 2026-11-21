@@ -109,13 +109,20 @@ func TestTaskExecutionSavedLauncherCatalogAuthority(t *testing.T) {
 }
 
 func TestTaskPickerDefaultDoesNotChangeAssistantPicker(t *testing.T) {
+	fastLauncherRecovery(t)
 	f := newFakeHub().withMachine()
 	f.sessions["remote"] = nil
 	f.zshrc = map[string][]proto.Launcher{
 		"server": {{Name: "main", Source: "zshrc"}},
-		"remote": {{Name: "remote", Agent: "codex", Source: "zshrc"}, {Name: "interactive", Agent: "dsh", Source: "dsh"}},
+		"remote": {{Name: "remote", Source: "zshrc"}, {Name: "interactive", Agent: "dsh", Source: "dsh"}},
 	}
 	s := newTestService(t, f)
+	// The last successful discovery on the source computer establishes the inherited launcher's agent kind.
+	s.models.zshrc = map[string][]proto.Launcher{"server": {{Name: "main", Source: "zshrc"}}}
+	s.models.zshrcSync = map[string]LauncherSync{}
+	f.hello.Models.LauncherRecovery = map[string]LauncherRecovery{
+		"remote": {WaitSeconds: 1, Fallbacks: map[string][]string{"main": {"remote"}}},
+	}
 	main := ModelBinding{Provider: "launcher.main", Model: "main-model", Effort: "high"}
 	setModel(t, s, "assistant", main)
 	for _, purpose := range []string{"assistant", "task", "assistant"} {

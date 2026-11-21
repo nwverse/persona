@@ -483,6 +483,7 @@ internal fun PlanCard(given: TaskPlan, host: AssistantTaskHost) {
                             JChip(if (t.readonly == true) stringResource(R.string.chat_tasks_read_only) else permissionLabel(t.permission), selected = t.readonly == true)
                         }
                         t.why?.takeIf(String::isNotBlank)?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
+                        t.brief?.let { PlanTaskBrief(it, t.title) }
                     }
                 }
                 Row(Modifier.clickable { remember = !remember }, verticalAlignment = Alignment.CenterVertically) {

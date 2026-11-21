@@ -184,9 +184,10 @@ export function readModels(mid: string, launcher: string, o: { again?: boolean; 
       }
       lists.set(key, { list: r && hidden.size ? { ...r, models: r.models.filter((m) => !(m.custom && hidden.has(m.id))) } : r });
     } catch (e) {
-      // a list already shown stays (and says nothing): a newer one just didn't come
-      const now = lists.get(key);
-      lists.set(key, now?.list !== undefined ? { list: now.list } : { error: errorText(e) });
+      // Keep the catalog on a failed refresh. A new omp start still needs the node to confirm its capability.
+      const list = lists.get(key)?.list;
+      lists.set(key, list === undefined ? { error: errorText(e) } :
+        { list: list?.supports_start_model ? { ...list, supports_start_model: false } : list });
     } finally {
       done();
       reads.delete(key);

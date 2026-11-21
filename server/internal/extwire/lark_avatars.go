@@ -2,18 +2,24 @@ package extwire
 
 import (
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
-
-	"github.com/nwverse/persona/server/internal/lark"
-	"github.com/nwverse/persona/server/internal/lazyre"
+	"sync"
 )
 
-var larkMediaKey = lazyre.New(`^[a-zA-Z0-9_./:+-]{1,500}$`)
+// LarkMaxAccount is the largest gateway account number, the same as lark.MaxAccount (internal/lark pins the two
+// together). A contract imports no business package, so it keeps its own copy (#11793).
+const LarkMaxAccount = 999999999
+
+// Compiled on first use with the standard library: a contract imports no internal/lazyre (#11793, as #5239).
+var larkMediaKey = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[a-zA-Z0-9_./:+-]{1,500}$`)
+})
 
 // LarkMediaKey accepts one gateway resource key, including slashes within the key.
 func LarkMediaKey(key string) bool {
-	if !larkMediaKey.MatchString(key) {
+	if !larkMediaKey().MatchString(key) {
 		return false
 	}
 	for part := range strings.SplitSeq(key, "/") {
@@ -79,7 +85,7 @@ func LarkAvatarURL(ref string, account int) string {
 		account = 1
 	}
 	path := AvatarURL("lark", value)
-	if path == "" || account < 1 || account > lark.MaxAccount {
+	if path == "" || account < 1 || account > LarkMaxAccount {
 		return ""
 	}
 	return path + "?lark_account=" + strconv.Itoa(account)

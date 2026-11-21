@@ -42,7 +42,12 @@ func (h *Hub) startPhoneWrites(ctx context.Context) error {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
-			h.deliverPhoneWrites(ctx)
+			// A snapshot pauses the hub's writers; what is due is delivered
+			// after resume (quiesce.go).
+			if h.quiesce.begin() {
+				h.deliverPhoneWrites(ctx)
+				h.quiesce.end()
+			}
 			select {
 			case <-ctx.Done():
 				return

@@ -101,6 +101,29 @@ class PersonaModelPanelTest {
         assertEquals(PanelReason.ProviderGone, first.unavailable)
     }
 
+    @Test fun anUnavailableDefaultKeepsItsNameAndReasonFromTheHub() {
+        for (id in listOf("team", "claude")) {
+            val unavailableOnly = AssistantLaunchers(
+                default = LauncherDefault(id, "sonnet", "high"),
+                unavailable = listOf(UnavailableLauncher(id, displayName = "Team API", kind = "api",
+                    code = "api_protocol", reason = "Speaks Responses")),
+            )
+            val setup = PersonaModelPanel.setup(of(chat, main = true), unavailableOnly)
+            val panel = PersonaModelPanel.panel(setup, unavailableOnly, ::read, typed = true, running = true)
+            val provider = panel.providers.single()
+            assertEquals(id, provider.id)
+            assertEquals("Team API", provider.name)
+            assertEquals(PanelReason.Hub("Speaks Responses"), provider.unavailable)
+            assertEquals(PanelConfig(id, "sonnet", "high"), panel.state.current)
+            assertTrue(panel.state.recommended.isEmpty())
+
+            val section = ModelPanel.sections(panel.providers, panel.state, PanelView.All, "", PanelPrefs()).single()
+            assertEquals(provider, section.provider)
+            assertFalse(section.loading)
+            assertTrue(section.rows.isEmpty())
+        }
+    }
+
     @Test fun whatAPickKeeps() {
         val current = PanelConfig("claude", "opus", "high")
         assertEquals(ModelPick("team", "sonnet"), PersonaModelPanel.pickOf(PanelConfig("team", "sonnet"), lists["team"], current))

@@ -85,7 +85,7 @@ func TestQuoteRequiresCurrentTurn(t *testing.T) {
 	t.Run("queued choice", func(t *testing.T) {
 		d := newDispatchPolicyHarness(t)
 		d.f.setItems(owner, queued, notice, wake)
-		checkQuoteRefusal(t, d, "latest", owner.ID, owner.Text, queued.ID, queued.Text, "exact words")
+		checkQuoteRefusal(t, d, "latest", owner.ID, owner.Text, queued.ID, queued.Text, "copy the id")
 		for _, selector := range []string{queued.ID, queued.Text} {
 			r, err := d.s.resolveQuote(context.Background(), d.mainID, selector)
 			if err != nil || r == nil || r.MessageID != queued.ID || r.Text != queued.Text {

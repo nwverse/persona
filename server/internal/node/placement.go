@@ -35,12 +35,24 @@ type layout struct {
 // the agents it gave last. A host that is not running (host.ErrNotRunning: herdr-core without its socket) answered: it
 // has no agents.
 func (n *Node) refreshHosts(ctx context.Context, only ...host.Host) error {
-	return n.refreshHostInventory(ctx, false, only...)
+	return n.refreshHostInventoryWithFailures(ctx, false, nil, only...)
+}
+
+// refreshHostsWithFailures refreshes only (or every host when empty) and reports which host kinds failed to answer.
+// host.ErrNotRunning counts as an answer (not a failure).
+func (n *Node) refreshHostsWithFailures(ctx context.Context, only ...host.Host) (map[string]bool, error) {
+	failed := map[string]bool{}
+	err := n.refreshHostInventoryWithFailures(ctx, false, failed, only...)
+	return failed, err
 }
 
 // refreshHostInventory retains the display's tolerant refresh by default. An
 // update evidence producer must request every host and reject cached fallbacks.
 func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...host.Host) error {
+	return n.refreshHostInventoryWithFailures(ctx, strict, nil, only...)
+}
+
+func (n *Node) refreshHostInventoryWithFailures(ctx context.Context, strict bool, failed map[string]bool, only ...host.Host) error {
 	if n.sessionScope != nil {
 		if strict {
 			return errors.New("scoped node cannot attest complete host inventory")
@@ -118,6 +130,9 @@ func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...ho
 		if o.err != nil {
 			if firstErr == nil {
 				firstErr = o.err
+			}
+			if failed != nil {
+				failed[o.kind] = true
 			}
 			o.agents = n.hostAgents[o.kind]
 		} else {
@@ -485,9 +500,8 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 	}
 	n.resolve(m, contested) // the owner of every session live in two hosts (ownership.go)
 	// Codex panes: the thread named in the title (what the pane shows now: a /resume in Codex changes it), else what
-	// herdr's codex integration or our own start said; only then, after every pane that could be told has its
-	// thread, the newest rollout in the directory nobody else has.
-	var unnamed []host.Agent
+	// herdr's Codex integration or our own start said. An unidentified Codex in a herdr tab has its own waiting row.
+	var unnamed, manual []host.Agent
 	for _, a := range codex {
 		if w := n.codexWaitOf(a.PaneID); w != nil {
 			// Opened with no first message (codex_waiting.go): its row until its thread is attached, which only the look
@@ -510,10 +524,16 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 			id = mainThread(home, id) // a subagent's id stands for its conversation
 		}
 		sub := id != reported
+		var bound string
 		if id == "" {
 			n.mu.Lock()
-			id = n.panes[a.PaneID]
+			bound = n.panes[a.PaneID]
 			n.mu.Unlock()
+			if isCodexWaitID(bound) {
+				m[bound] = a // a concurrent refresh just opened the row; its watcher identifies the thread
+				continue
+			}
+			id = bound
 		}
 		if named, claimed := n.codexByTitle(a, id, m); named != "" {
 			id = named
@@ -533,7 +553,14 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 			id = n.codexPublicID(home, id)
 		}
 		if _, taken := m[id]; id == "" || taken {
-			unnamed = append(unnamed, a)
+			kind := host.ParsePane(a.PaneID).Kind
+			if kind == host.Herdr || kind == host.HerdrCore {
+				if a.PaneID != "" && reported == "" && bound == "" && a.AgentStatus != proto.StatusOffline {
+					manual = append(manual, a)
+				}
+			} else {
+				unnamed = append(unnamed, a)
+			}
 			continue
 		}
 		m[id] = a
@@ -569,6 +596,29 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 	defer n.mu.Unlock()
 	if n.engEpoch != epoch {
 		return false
+	}
+	for id, a := range m {
+		if isCodexWaitID(id) && n.panes[a.PaneID] != id {
+			// The look for threads won a concurrent refresh. Follow the current binding, including a pane that left.
+			delete(m, id)
+			if bound := n.panes[a.PaneID]; bound != "" && !liveTaken(m, bound) {
+				m[bound] = a
+			}
+		}
+	}
+	for _, a := range manual {
+		if n.codexStarting[a.PaneID] || n.state.isLoading() {
+			continue // the app's start, or the manager's stored binding, has the identity for this pane
+		}
+		if bound := n.panes[a.PaneID]; bound != "" {
+			if !liveTaken(m, bound) {
+				m[bound] = a // another refresh already created its row or attached its thread
+			}
+			continue
+		}
+		w := n.watchManualCodexLocked(a)
+		m[w.id] = a
+		moved = append(moved, func() { n.saveManualCodexWait(w) })
 	}
 	// A pane that now runs another session than it did: rare, and the first thing to look at when a session drops off
 	// the live list while its agent runs (#5463: a tmux worker took its manager's pane).
@@ -606,6 +656,14 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 			if l, ok := n.launches[a.PaneID]; ok && l.ID == old {
 				l.ID = id
 				n.launches[a.PaneID] = l
+			}
+		}
+	}
+	for pane, thread := range n.codexManual {
+		if m[thread].PaneID != pane {
+			delete(n.codexManual, pane)
+			if n.panes[pane] == thread {
+				delete(n.panes, pane)
 			}
 		}
 	}

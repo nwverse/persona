@@ -96,10 +96,9 @@ func TestCallNotFoundReason(t *testing.T) {
 	}
 }
 
-// A start the node refused on its request, with nothing to name: a launcher that cannot be read-only, a directory whose
-// name cannot be typed into a terminal. The hub words both, for a session's start_error and an HTTP answer.
+// The hub localizes start refusals with no parameters for both a session's start_error and the HTTP response.
 func TestPlainStartRefusalLocalization(t *testing.T) {
-	for _, code := range []string{"readonly_unsupported", "directory_untypable"} {
+	for _, code := range []string{"readonly_unsupported", "directory_untypable", "omp_options"} {
 		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 			want := i18n.T(lang, "rpc-errors."+code)
 			if got := Sentence(lang, code, nil); got != want || got == "" || got == "rpc-errors."+code {

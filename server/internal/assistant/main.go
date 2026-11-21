@@ -378,7 +378,9 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 			return bus.DialAt(ctx, hub, token, httpClient, devicewire.RelayPath, query)
 		},
 		Connected: func() bool { return bh.Client().Peer() != nil },
-		Hub:       lazyHost{c: func() *bus.Client { return bh.Client() }}})
+		// The official DeepSeek launchers' prepaid balances (#11825): the manager holds their sealed keys.
+		LauncherBalances: func(ctx context.Context) ([]proto.UsageAccount, bool) { return svc.LauncherBalances(ctx) },
+		Hub:              lazyHost{c: func() *bus.Client { return bh.Client() }}})
 	// The extensions, connectors and bots (internal/extmgr): the data directory here, its own sections in manager.json
 	// (as moveConfig read and checked them) and its own secret.key.
 	ext = extmgr.New(extmgr.Options{Dir: home, ConfigFile: o.ConfigFile, Config: o.ExtConfig, SecretKey: o.SecretKey,

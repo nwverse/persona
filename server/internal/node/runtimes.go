@@ -64,13 +64,15 @@ type runtimeHello struct {
 		Hash string `json:"hash"`
 	} `json:"package,omitempty"`
 	Caps struct {
-		Start     bool `json:"start"`
-		Send      bool `json:"send"`
-		Interrupt bool `json:"interrupt"`
-		Rename    bool `json:"rename"`
-		Close     bool `json:"close"`
-		Rewind    bool `json:"rewind"`
-		Fork      bool `json:"fork"`
+		Start        bool `json:"start"`
+		Send         bool `json:"send"`
+		Interrupt    bool `json:"interrupt"`
+		Rename       bool `json:"rename"`
+		Close        bool `json:"close"`
+		Rewind       bool `json:"rewind"`
+		Fork         bool `json:"fork"`
+		QueueEdit    bool `json:"queue_edit"`
+		QueueSendNow bool `json:"queue_send_now"`
 		// Assistant: its launcher may run the Persona assistant (assistant_runtime.go; docs/integrations/runtimes.md "Assistant").
 		Assistant bool `json:"assistant"`
 		// SupervisionPolicy: the runtime carries manager-owned supervision_instructions on its own authoritative
@@ -155,6 +157,9 @@ type runtimeConn struct {
 	workspacesSaid bool
 	// daemon is its id in daemons.json when the node dialed it (daemons.go), "" for a runtime on the socket.
 	daemon string
+	// builtinAgy is true only when RuntimeHost.registerRuntime verified this connection matches the built-in
+	// Antigravity companion instance it spawned (agybridge.go).
+	builtinAgy bool
 	// pid is the process at the other end of the runtime socket; 0 when not known (a daemon's link, the Orca bridge,
 	// a system that does not tell). A runtime running the assistant vouches for its descendants' MCP servers
 	// (mcpAssistantOf).

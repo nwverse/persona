@@ -51,6 +51,8 @@ type usageWindowsHub struct {
 	loading   chan struct{} // closed when the poll in flight is done
 	// gateways gives the samples of the account-pool gateways (usagegateways.go, #2595); nil: none.
 	gateways func(now time.Time) []proto.UsageAccount
+	// balances gives the launchers' prepaid balances (usagebalance.go, #11825); nil: none.
+	balances func(now time.Time) []proto.UsageAccount
 }
 
 // invalidate drops the merged list so that the next read builds it again (a gateway answered or was edited).
@@ -167,6 +169,9 @@ func (u *usageWindowsHub) poll(ctx context.Context, sources []usageSource, now t
 	if u.gateways != nil {
 		all = append(all, u.gateways(now)...)
 	}
+	if u.balances != nil {
+		all = append(all, u.balances(now)...)
+	}
 	u.merged, u.at = mergeUsageAccounts(all, now), now
 	u.loading = nil
 	close(done)
@@ -196,8 +201,9 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 			wins = append(wins, w)
 		}
 		// Keep an identified Codex snapshot for grouping even with no live windows. Its expiry must not revive an
-		// older snapshot of that account.
-		if len(wins) == 0 && (a.Provider != "codex" || a.CodexAccountKey == "") {
+		// older snapshot of that account. A prepaid balance has no window at all: keep it unless it has also aged out
+		// above (a failed first read has no Balance but is still a balance sample, so its row can say so).
+		if len(wins) == 0 && (a.Provider != "codex" || a.CodexAccountKey == "") && !isBalanceSample(a) {
 			continue
 		}
 		a.Windows = wins
@@ -230,6 +236,18 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 	for i, a := range live {
 		if a.Ref != "" {
 			refs[i] = []string{a.Ref}
+		}
+	}
+	// One launcher's balance samples are one row, whatever their amounts and sample times (#11825).
+	balanceRefs := map[string]int{}
+	for i, a := range live {
+		if !isBalanceSample(a) || a.Ref == "" {
+			continue
+		}
+		if j, ok := balanceRefs[a.Ref]; ok {
+			parent[find(i)] = find(j)
+		} else {
+			balanceRefs[a.Ref] = i
 		}
 	}
 	for i, a := range live {
@@ -294,10 +312,11 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 			return a.SampledAt.After(b.SampledAt)
 		})
 		newest := members[0]
-		if len(newest.Windows) == 0 {
+		if len(newest.Windows) == 0 && !isBalanceSample(newest) {
 			continue
 		}
-		acct := proto.UsageAccount{Provider: newest.Provider, Name: newest.Name, Plan: newest.Plan, SampledAt: newest.SampledAt, Problem: newest.Problem, CodexAccountKey: newest.CodexAccountKey}
+		acct := proto.UsageAccount{Provider: newest.Provider, Name: newest.Name, Plan: newest.Plan, SampledAt: newest.SampledAt,
+			Problem: newest.Problem, CodexAccountKey: newest.CodexAccountKey, Balance: newest.Balance}
 		// A gateway's name is one somebody gave the account; the machines only know "Codex Pro".
 		naming := -1
 		for i, m := range members {
@@ -345,6 +364,17 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 			}
 			return a.Model < b.Model
 		})
+		if acct.Balance == nil {
+			for _, m := range members { // the newest sample that has an amount (a failed read keeps the previous one)
+				if m.Balance != nil {
+					acct.Balance = m.Balance
+					break
+				}
+			}
+		}
+		if acct.Windows == nil {
+			acct.Windows = []proto.UsageWindow{} // a JSON list, not null: clients filter it as one
+		}
 		acct.Sources, acct.Machines = uniqueSorted(sources), uniqueSorted(machines)
 		acct.Ref, acct.Origin = firstOf(members, func(m proto.UsageAccount) string { return m.Ref }), firstOf(members, func(m proto.UsageAccount) string { return m.Origin })
 		acct.ID = usageAccountID(acct)
@@ -353,8 +383,8 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 		if gateway {
 			after = usageGatewayStaleAfter
 		}
-		// stale now (a gateway may say so itself), and when it will be if nothing newer comes (#1905)
-		acct.Stale = now.Sub(acct.SampledAt) > after || gateway && newest.Stale
+		// stale now (a gateway or a balance source may say so itself), and when it will be if nothing newer comes (#1905)
+		acct.Stale = now.Sub(acct.SampledAt) > after || (gateway || isBalanceSample(newest)) && (newest.Stale || newest.Problem != "")
 		staleAt := acct.SampledAt.Add(after)
 		acct.StaleAt = &staleAt
 		out = append(out, acct)
@@ -406,6 +436,12 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 	return out
 }
 
+// isBalanceSample: a sample of a provider that reports a prepaid balance instead of rate-limit windows (#11825). The
+// balance poller marks its samples' Ref "balance:<launcher>", so a failed first read (no Balance yet) is still one.
+func isBalanceSample(a proto.UsageAccount) bool {
+	return a.Balance != nil || strings.HasPrefix(a.Ref, "balance:")
+}
+
 // sameSourceOtherAccount: both refs name an account of one gateway ("<source id>:<account id>") and they are not the
 // same account. A gateway knows its accounts apart, whatever their reset times look like.
 func sameSourceOtherAccount(a, b string) bool {
@@ -446,6 +482,9 @@ func firstOf(members []proto.UsageAccount, field func(proto.UsageAccount) string
 // usageAccountID gives Codex rows a key independent of quota windows. For other providers the longest plan window,
 // along with the gateway ref or the origin when needed, identifies the row (#1904).
 func usageAccountID(a proto.UsageAccount) string {
+	if len(a.Windows) == 0 { // a balance-only row: the launcher, not a window, names it
+		return usageRowID(a.Provider, "balance|"+cmp.Or(a.Ref, a.Name))
+	}
 	if a.Provider == "codex" {
 		key := "codex|source|" + cmp.Or(a.Ref, a.Origin)
 		if a.CodexAccountKey != "" {

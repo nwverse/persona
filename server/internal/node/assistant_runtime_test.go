@@ -85,6 +85,133 @@ func startedAssistant(t *testing.T, n *Node, host *fakeRuntime) string {
 	return res.SessionID
 }
 
+func TestRuntimeAssistantFirstMessageIsVerbatimWithoutAutomaticCommands(t *testing.T) {
+	for _, engine := range []string{"agy", "cursor", "dsh"} {
+		t.Run(engine, func(t *testing.T) {
+			n, hub := runtimeNode(t)
+			assistantHub(hub)
+			hello := assistantRuntimeHello()
+			hello["runtime"], hello["launcher"] = engine, engine
+			host := dialRuntime(t, n, hello)
+			id := engine + "-first-message"
+			cwd := filepath.Join(n.home, ".persona", "assistant")
+			host.answer = func(method string, _ json.RawMessage) (any, error) {
+				if method == "session.start" {
+					return map[string]any{"session": proto.Session{SessionID: id, Cwd: cwd, Status: proto.StatusIdle}}, nil
+				}
+				return map[string]bool{"ok": true}, nil
+			}
+			const first = "Check this provider's usage source.\nKeep the original configuration."
+			if _, err := nodeCall(t, n, "assistant.send", map[string]any{"launcher": engine, "cwd": cwd, "text": first}); err != nil {
+				t.Fatal(err)
+			}
+			// These transports have no compact-before-send implementation, even if a caller asks for it.
+			if compactable, why := n.compactableRuntime(id); compactable {
+				t.Fatalf("unexpected automatic compaction support: %s", why)
+			}
+			row := proto.Session{SessionID: id, Cwd: cwd, Status: proto.StatusIdle, Rev: 2, ContextTokens: 190000, ContextWindow: 200000}
+			if err := host.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{row}}); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "nearly full runtime row", func() bool {
+				got, _, ok := n.runtimes.rowOf(id)
+				return ok && proto.ContextNearlyFull(int(got.ContextTokens), int(got.ContextWindow))
+			})
+			const next = "Continue with the same request."
+			if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": id, "text": next, "compact_if_full": true}); err != nil {
+				t.Fatal(err)
+			}
+			sends := host.got("session.send")
+			if len(sends) != 2 {
+				t.Fatalf("unexpected command or duplicate send: %s", sends)
+			}
+			for i, want := range []string{first, next} {
+				var sent struct {
+					Text string `json:"text"`
+				}
+				if err := json.Unmarshal(sends[i], &sent); err != nil {
+					t.Fatal(err)
+				}
+				if sent.Text != want || strings.Contains(sent.Text, "/compact") {
+					t.Fatalf("message changed: %q, want %q", sent.Text, want)
+				}
+			}
+			starts := host.got("session.start")
+			if len(starts) != 1 || strings.Contains(string(starts[0]), `"prompt"`) || strings.Contains(string(starts[0]), "/compact") {
+				t.Fatalf("allocation sent unexpected input: %s", starts)
+			}
+		})
+	}
+}
+
+func TestRuntimeAssistantQueue(t *testing.T) {
+	n, hub := runtimeNode(t)
+	assistantHub(hub)
+	hello := assistantRuntimeHello()
+	hello["caps"].(map[string]any)["queue_edit"] = true
+	hello["caps"].(map[string]any)["queue_send_now"] = true
+	host := dialRuntime(t, n, hello)
+	id := startedAssistant(t, n, host)
+	const child = "queue-child"
+	image := proto.Image{Mime: "image/png", Data: "aW1hZ2U="}
+	host.mu.Lock()
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		switch method {
+		case "session.send":
+			return map[string]bool{"queued": true}, nil
+		case "session.queue.edit":
+			return proto.QueueEdit{Queue: []string{"first", ""}, Images: [][]proto.Image{nil, {image}}}, nil
+		case "session.queue.send_now":
+			return map[string]bool{"sent": true}, nil
+		}
+		return nil, fmt.Errorf("unexpected %s", method)
+	}
+	host.mu.Unlock()
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{
+		{SessionID: id, Status: proto.StatusWorking, Queued: []string{"first", ""}}, {SessionID: child, IsSubagent: true},
+	}})
+	waitFor(t, "runtime queue listed", func() bool {
+		rows := listed(t, n)
+		return len(rows[id].Queued) == 2 && rows[child].Capabilities != nil
+	})
+	for sid, want := range map[string]bool{id: true, child: false} {
+		caps := listed(t, n)[sid].Capabilities
+		if caps == nil || caps.QueueEdit == nil || caps.QueueSendNow == nil || *caps.QueueEdit != want || *caps.QueueSendNow != want {
+			t.Fatalf("queue capabilities for %s: %+v", sid, caps)
+		}
+	}
+	if out, err := nodeCall(t, n, "session.send", map[string]any{"session_id": id, "text": "next"}); err != nil || string(out) != `{"ok":true,"queued":true}` {
+		t.Fatalf("assistant send: %s, %v", out, err)
+	}
+	edit := "session.queue.edit"
+	sendNow := "session.queue.send_now"
+	out, err := nodeCall(t, n, edit, map[string]any{"session_id": id, "keep": []int{1}})
+	if err != nil || string(out) != `{"queue":["first",""],"images":[null,[{"mime":"image/png","data":"aW1hZ2U="}]]}` {
+		t.Fatalf("assistant queue edit: %s, %v", out, err)
+	}
+	if calls := host.got(edit); len(calls) != 1 || string(calls[0]) != `{"keep":[1],"session_id":"`+id+`"}` {
+		t.Fatalf("forwarded edit: %s", calls)
+	}
+	if out, err := nodeCall(t, n, sendNow, map[string]any{"session_id": id}); err != nil || string(out) != `{"sent":true}` {
+		t.Fatalf("assistant send-now: %s, %v", out, err)
+	}
+	for _, method := range []string{edit, sendNow} {
+		if _, err := nodeCall(t, n, method, map[string]any{"session_id": id + subagentSep + child}); rpcCode(err) != "unsupported" || len(host.got(method)) != 1 {
+			t.Fatalf("%s forwarded to subagent: %v", method, err)
+		}
+	}
+	_ = host.conn.Close()
+	waitFor(t, "runtime disconnected", func() bool {
+		conn, _, _ := n.runtimes.belongs(id)
+		return conn == nil
+	})
+	for _, method := range []string{edit, sendNow} {
+		if _, err := nodeCall(t, n, method, map[string]any{"session_id": id}); rpcCode(err) != "runtime_away" {
+			t.Fatalf("%s offline: %v", method, err)
+		}
+	}
+}
+
 func TestRuntimeAssistantModeForwardsAssistant(t *testing.T) {
 	n, hub := runtimeNode(t)
 	assistantHub(hub)
@@ -728,5 +855,39 @@ func TestAssistantOnARuntimeSendsASlashCommandOnItsOwn(t *testing.T) {
 	}
 	if _, ctx := sentText(6); !strings.Contains(ctx, "测试时间") {
 		t.Fatalf("a /status with a picture went without context: %q", ctx)
+	}
+}
+
+func TestAssistantRuntimeStartPropagatesPermissionMode(t *testing.T) {
+	n, hub := runtimeNode(t)
+	assistantHub(hub)
+	host := dialRuntime(t, n, assistantRuntimeHello())
+	cwd := t.TempDir()
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		if method == "session.start" {
+			return map[string]any{"session": map[string]any{"session_id": "session-perm-1", "cwd": cwd, "status": "idle"}}, nil
+		}
+		return map[string]any{"ok": true}, nil
+	}
+	if _, err := nodeCall(t, n, "assistant.send", map[string]any{
+		"cwd":             cwd,
+		"launcher":        "dsh",
+		"text":            "hello",
+		"permission_mode": "acceptEdits",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	starts := host.got("session.start")
+	if len(starts) != 1 {
+		t.Fatalf("starts = %d, want 1", len(starts))
+	}
+	var start struct {
+		PermissionMode string `json:"permission_mode"`
+	}
+	if err := json.Unmarshal(starts[0], &start); err != nil {
+		t.Fatal(err)
+	}
+	if start.PermissionMode != "acceptEdits" {
+		t.Fatalf("session.start permission_mode = %q, want acceptEdits (%s)", start.PermissionMode, starts[0])
 	}
 }

@@ -28,8 +28,12 @@ object PersonaIcons {
     val attachment: PhIcon get() = PhIcons.Paperclip
     /** SF Symbol `chevron.left`. */
     val back: PhIcon get() = PhIcons.CaretLeft
+    /** SF Symbol `display`. */
+    val backgroundMonitor: PhIcon get() = PhIcons.Monitor
     /** SF Symbol `gearshape.2`. */
     val backgroundTask: PhIcon get() = PhIcons.GearSix
+    /** SF Symbol `list.clipboard`. */
+    val backgroundTasks: PhIcon get() = PhIcons.ListChecks
     /** SF Symbol `clock.fill`. */
     val backgroundWaiting: PhIcon get() = PhIcons.Clock
     /** SF Symbol `macwindow`. */
@@ -318,6 +322,8 @@ object PersonaIcons {
     val sidebar: PhIcon get() = PhIcons.SidebarSimple
     /** SF Symbol `puzzlepiece.extension`. */
     val skills: PhIcon get() = PhIcons.PuzzlePiece
+    /** SF Symbol `moon.stars.fill`. */
+    val someday: PhIcon get() = PhIcons.Couch
     /** SF Symbol `square.stack.3d.up`. */
     val space: PhIcon get() = PhIcons.Stack
     /** SF Symbol `square.stack.3d.up.fill`. */

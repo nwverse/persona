@@ -342,12 +342,7 @@ func codexOnRemote(argv []string) bool {
 func (n *Node) claimCodexThread(pane, id string) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	for p, bound := range n.panes {
-		if bound == id && p != pane {
-			return false
-		}
-	}
-	if owner, ok := n.codexClaims[id]; ok && owner != pane {
+	if !n.codexThreadAvailableLocked(pane, id, n.panes) {
 		return false
 	}
 	if n.codexClaims == nil {
@@ -355,6 +350,18 @@ func (n *Node) claimCodexThread(pane, id string) bool {
 	}
 	n.codexClaims[id] = pane
 	return true
+}
+
+// codexThreadAvailableLocked checks both the caller's bindings and a start that has claimed the thread but has
+// yet to bind its pane. The caller holds n.mu through the claim or binding.
+func (n *Node) codexThreadAvailableLocked(pane, id string, bindings map[string]string) bool {
+	for p, bound := range bindings {
+		if bound == id && p != pane {
+			return false
+		}
+	}
+	owner, claimed := n.codexClaims[id]
+	return !claimed || owner == pane
 }
 
 func (n *Node) unclaimCodexThread(id string) {

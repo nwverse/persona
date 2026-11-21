@@ -786,6 +786,7 @@ struct AssistantSidebar: View {
     /// The Sidebar layout (#6332): Messages (the Lark chats, the Separate layout's third page) among the places while
     /// it is turned on; nil leaves it out.
     var openMessages: (() -> Void)? = nil
+    var openStarred: (() -> Void)? = nil
     private var isShell: Bool { openInbox != nil }
     /// Which part this draws (#6332): the whole sidebar, or one piece of the Sidebar layout's column, which lays the
     /// rows inside the Agents list and puts the head, the main conversation and the foot around it
@@ -1321,6 +1322,7 @@ extension AssistantSidebar {
             VStack(alignment: .leading, spacing: 0) {
                 meetingRow
                 action(String(localized: "Inbox"), Theme.Icon.inbox, id: "sidebar-inbox", count: InboxStore.shared.unreadCount, place: .inbox, run: openInbox)
+                starredRow
                 if TodoStore.shared.isSupported {
                     action(String(localized: "To-dos"), Theme.Icon.todo, id: "sidebar-todos", count: TodoStore.shared.sidebarCount, place: .todos, run: { (openTodos ?? openInbox)() })
                 }
@@ -1353,11 +1355,20 @@ extension AssistantSidebar {
         VStack(alignment: .leading, spacing: 0) {
             action(String(localized: "New Chat [Quick Actions ea4b29]"), Theme.Icon.conversation, id: "sidebar-new", run: newConversation)
             meetingRow
+            starredRow
             action(String(localized: "Scheduled Tasks"), Theme.Icon.schedule, run: openRoutines)
             action(String(localized: "Knowledge"), Theme.Icon.knowledge, run: openKnowledge)
             if let openHealth { action(String(localized: "Health"), Theme.Icon.health, id: "sidebar-health", run: openHealth) }
             extensionRows
         }
+    }
+
+    @ViewBuilder private var starredRow: some View {
+        #if os(iOS)
+        if let openStarred, let count = StarredStore.shared.count {
+            action(String(localized: "Starred"), Theme.Icon.starredMessage, id: "sidebar-starred", count: count, place: .starred, run: openStarred)
+        }
+        #endif
     }
 
     /// First among the places: Meetings (#8731; Recordings before), a place like the rows under it, so a tap opens the page
@@ -1496,13 +1507,6 @@ extension AssistantSidebar {
                 }
             }
         }
-    }
-
-    /// The assistant's name as the sidebar's head says it: the current assistant's own when the hub has a roster (#6401),
-    /// else the look's name; "Persona" only as the last fallback. The top bar names the main conversation by it too
-    /// (#9973); the main conversation's row and search results say "Main Chat" under the head.
-    static func assistantName(_ model: AppModel) -> String {
-        model.currentAssistant?.name ?? model.persona.name
     }
 
     /// A place to go; `place`: what it shows beside the Sidebar layout's sidebar, its row shaded while it does.

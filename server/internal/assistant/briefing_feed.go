@@ -204,17 +204,27 @@ func (s *Service) briefRoutes() {
 			return
 		}
 		var in struct {
-			AskedAt  string `json:"asked_at"`
-			Option   string `json:"option"`
-			Response string `json:"response"`
+			AskedAt  string            `json:"asked_at"`
+			Option   string            `json:"option"`
+			Response string            `json:"response"`
+			Answers  map[string]string `json:"answers"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.AskedAt == "" {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in); err != nil || in.AskedAt == "" {
 			apierr.Write(w, http.StatusBadRequest, errors.New("asked_at is required"))
 			return
 		}
 		var result acceptResult
 		var err error
 		switch {
+		case isAskTodo(r.PathValue("id")):
+			if in.Response != "" {
+				apierr.Write(w, http.StatusBadRequest, errDecisionOption)
+				return
+			}
+			result, err = s.chooseExpiredQuestion(r.Context(), r.PathValue("id"), in.AskedAt, in.Option, in.Answers)
+		case in.Answers != nil:
+			apierr.Write(w, http.StatusBadRequest, errDecisionOption)
+			return
 		case in.Response != "" && in.Option != "":
 			apierr.Write(w, http.StatusBadRequest, errors.New("give option or response, not both"))
 			return

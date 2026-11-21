@@ -64,6 +64,8 @@ type Devices interface {
 	// subscription accounts of each upstream provider are schedulable now and when the nearest one recovers.
 	// Read-only, from the manager's in-memory caches; the zero value when no pool is configured.
 	CapacitySnapshot(ctx context.Context) proto.CapacitySnapshot
+	// GatewayRetryAt uses a bound, complete gateway inventory with fresh account observations. Zero means no hold.
+	GatewayRetryAt(source, provider string, now time.Time) time.Time
 	// Follow has the node send the manager a session's items and text as they are made (on), or stop.
 	Follow(ctx context.Context, machine, session string, on bool) error
 	// SetAttention hands over Persona Link's "Needs you" summary (fleet_attention.go) on every look; it goes on to the
@@ -123,6 +125,39 @@ func (s *Service) NodeAnswer(ctx context.Context, machine, method string, params
 		Ack       []assistantwire.ViewErrorReceipt `json:"ack"`
 	}
 	switch method {
+	case assistantwire.MethodDecisionRaise:
+		var p struct {
+			Decision assistantwire.OutsideDecisionRequest `json:"decision"`
+			Source   string                               `json:"source"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return assistantwire.OutsideDecisionReply{Code: "invalid_decision", Error: err.Error()}, true, nil
+		}
+		caller := &outsideCaller{key: "node:" + machine, kind: "script", name: p.Source}
+		rec, inserted, err := s.raiseOutsideDecision(ctx, caller, p.Decision)
+		if err != nil {
+			return outsideErrorReply(err), true, nil
+		}
+		return outsideReply(rec, inserted), true, nil
+	case assistantwire.MethodDecisionGet, assistantwire.MethodDecisionWithdraw:
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || p.ID == "" {
+			return assistantwire.OutsideDecisionReply{Code: "invalid_decision", Error: "a decision id is required"}, true, nil
+		}
+		caller := &outsideCaller{key: "node:" + machine, kind: "script", name: machine}
+		var rec *outsideDecision
+		var err error
+		if method == assistantwire.MethodDecisionGet {
+			rec, err = s.outsideForCaller(ctx, caller, p.ID)
+		} else {
+			rec, err = s.withdrawOutsideDecision(ctx, caller, p.ID)
+		}
+		if err != nil {
+			return outsideErrorReply(err), true, nil
+		}
+		return outsideReply(rec, false), true, nil
 	case NodeLaunchersPull: // a provider's secrets for this computer (models_launchers_scope.go): the connection's machine decides
 		out, err := s.pullLauncher(ctx, machine, params)
 		return out, true, err

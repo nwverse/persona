@@ -89,12 +89,16 @@ func codexStartHerdr(t *testing.T, delay time.Duration) (*Node, *fakeHerdr, stri
 func withCodexLaunchers(t *testing.T, launchers map[string][]string) {
 	t.Helper()
 	launcherCache.Lock()
-	old, oldAt := launcherCache.codex, launcherCache.at
-	launcherCache.codex, launcherCache.at = launchers, time.Now()
+	old, oldAt, oldAliases := launcherCache.codex, launcherCache.at, launcherCache.codexAliases
+	aliases := make(map[string]bool, len(launchers))
+	for name := range launchers {
+		aliases[name] = true
+	}
+	launcherCache.codex, launcherCache.at, launcherCache.codexAliases = launchers, time.Now(), aliases
 	launcherCache.Unlock()
 	t.Cleanup(func() {
 		launcherCache.Lock()
-		launcherCache.codex, launcherCache.at = old, oldAt
+		launcherCache.codex, launcherCache.at, launcherCache.codexAliases = old, oldAt, oldAliases
 		launcherCache.Unlock()
 	})
 }

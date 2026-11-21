@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/nodeclient"
 
 	"github.com/nwverse/persona/server/internal/assistantskills"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -122,7 +123,7 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		policy = ""
 	}
 	if supportsPolicy && id != "" && known && st.SupervisionInstructions != policy && n.runtimeStatus(h, id) == proto.StatusWorking {
-		return "", refusal("busy", i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
+		return "", refusal(assistantwire.CodeConversationBusy, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
 	}
 	if n.assistantDirectoryPrepared(cwd) {
 		n.assistantRuntimeSkills(cwd)
@@ -143,6 +144,9 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		}
 		if pickedEffort != "" {
 			startParams["effort"] = pickedEffort
+		}
+		if mode != "" {
+			startParams["permission_mode"] = mode
 		}
 		if supportsPolicy && policy != "" {
 			startParams["supervision_instructions"] = policy
@@ -215,11 +219,15 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	}
 	cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
 	defer cancel()
-	if err := h.peer.Call(cctx, "session.send", params, nil); err != nil {
+	var said json.RawMessage
+	if err := h.peer.Call(cctx, "session.send", params, &said); err != nil {
 		if isRPCError(err) {
 			return "", err
 		}
 		return "", fmt.Errorf("%s: %w", h.label(), err)
+	}
+	if runtimeAnswerFlag(said, "queued") {
+		markSendQueued(ctx)
 	}
 	if st.AwaitingFirstMessage || beforeSend != nil {
 		n.noteRuntimeWorking(h, id, beforeSend)

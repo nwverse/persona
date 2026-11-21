@@ -48,6 +48,15 @@ enum class GlassLevel { Liquid, Frosted, Solid }
 internal fun restoredPersonaId(id: String?): String =
     id?.takeUnless { it.isBlank() || it in PersonaManifest.RETIRED_IDS } ?: PersonaDesign.Default.id
 
+enum class SidebarLayout(val key: String) {
+    Separate("separate"),
+    Merged("merged");
+
+    companion object {
+        fun fromKey(key: String?): SidebarLayout = entries.firstOrNull { it.key == key } ?: Separate
+    }
+}
+
 /** Device-wide appearance choices; not tied to a hub, so they survive re-pairing. */
 class AppStyleStore(context: Context) {
     private val app = context.applicationContext
@@ -62,6 +71,14 @@ class AppStyleStore(context: Context) {
         preferences.edit().putBoolean(KEY_NATIVE_INBOX_CHATS, enabled).apply()
         currentNativeInboxChats.value = enabled
     }
+    private val currentSidebar = MutableStateFlow(SidebarLayout.fromKey(preferences.getString(KEY_SIDEBAR, null)))
+    val sidebar: StateFlow<SidebarLayout> = currentSidebar.asStateFlow()
+
+    fun setSidebar(layout: SidebarLayout) {
+        preferences.edit().putString(KEY_SIDEBAR, layout.key).apply()
+        currentSidebar.value = layout
+    }
+
     private val currentTheme = MutableStateFlow(preferences.getString(KEY_THEME, null))
     val themeKey: StateFlow<String?> = currentTheme.asStateFlow()
     fun setTheme(key: String?) {
@@ -142,6 +159,7 @@ class AppStyleStore(context: Context) {
     }
 
     private companion object {
+        const val KEY_SIDEBAR = "sidebar-layout"
         const val KEY_STYLE = "style"
         const val KEY_GLASS = "glass"
         const val KEY_PERSONA = "persona"

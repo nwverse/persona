@@ -20,14 +20,18 @@ import (
 // answer too long, makes no progress, was cut off or did not start — becomes a signal; the signals of all tasks go to
 // the main conversation as one supervision message (the quiet tasks' notices are among them), at most every few minutes, and
 // the turn it starts is not pushed unless the assistant pushes (notify_user). The assistant answers with task_review:
-// accepted closes the todo (its agents are closed later, tasks_close.go), rework sends the gaps back to the agent (at
+// accepted closes the todo unless personal verification is pending (user_check); its agents close later, tasks_close.go.
+// rework sends the gaps back to the agent (at
 // most maxReworkRounds times), needs_user waits for the user, parked waits for something else until a time
 // (parked.go), cancelled ends it.
 //
 // A supervised todo is never closed by the hub's judge (done.go): a finished stretch of work waits for review instead.
 
 const (
+	reviewClosing   = "timeout_closing"
+	reviewTimedOut  = "timed_out"
 	reviewPending   = "pending_review"
+	reviewUserCheck = "user_check"
 	reviewAccepted  = "accepted"
 	reviewRework    = "rework"
 	reviewNeedsUser = "needs_user"
@@ -118,6 +122,8 @@ type TaskReview struct {
 	Evidence *ParkEvidence `json:"evidence,omitempty"`
 	// Reply is the source receipt that ended this exact park, committed with the pending-review transition.
 	Reply *connectorwire.LarkReplyObservation `json:"reply,omitempty"`
+	// ExternalPR is this external-event park's observed object, independent of the task's PR associations.
+	ExternalPR *externalPRObservation `json:"external_pr,omitempty"`
 	// Decided: the owner's decision (its id) that ended this park before its time (parkDecided, parked.go), and
 	// DecidedTold: when a supervision message carried that to the supervisor.
 	Decided     string    `json:"decided,omitempty"`
@@ -133,6 +139,8 @@ type TaskReview struct {
 	OwnerResponse   string    `json:"owner_response,omitempty"`
 	OwnerResponseAt time.Time `json:"owner_response_at,omitzero"`
 	HoldReleased    bool      `json:"hold_released,omitempty"`
+	// Handoff is an internal wait recorded after session.send was acknowledged.
+	Handoff *taskHandoff `json:"handoff,omitempty"`
 }
 
 // OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
@@ -159,12 +167,20 @@ func (v *Supervision) clone() *Supervision {
 	out.Reviews = make([]TaskReview, len(v.Reviews))
 	for i, r := range v.Reviews {
 		out.Reviews[i] = r
+		if r.Handoff != nil {
+			handoff := *r.Handoff
+			out.Reviews[i].Handoff = &handoff
+		}
 		out.Reviews[i].Checks = slices.Clone(r.Checks)
 		out.Reviews[i].Options = slices.Clone(r.Options)
 		out.Reviews[i].Evidence = r.Evidence.clone()
 		if r.Reply != nil {
 			receipt := *r.Reply
 			out.Reviews[i].Reply = &receipt
+		}
+		if r.ExternalPR != nil {
+			observation := *r.ExternalPR
+			out.Reviews[i].ExternalPR = &observation
 		}
 	}
 	if out.DoneWhen == nil {
@@ -196,6 +212,9 @@ func (v *Supervision) state(t Todo) string {
 	if v == nil {
 		return ""
 	}
+	if v.State == reviewUserCheck && t.DoneAt != nil {
+		return reviewAccepted
+	}
 	if v.State == reviewParked && (t.DoneAt != nil || v.parking() == nil) {
 		return ""
 	}
@@ -203,6 +222,25 @@ func (v *Supervision) state(t Todo) string {
 		return ""
 	}
 	return v.State
+}
+
+// resetReopenedUserCheck mirrors the store's reopen and also reads rows written before the ledger reset was atomic.
+// A review written after the reopen starts a fresh check.
+func (t *Todo) resetReopenedUserCheck() {
+	v := t.Supervision
+	if t.DoneAt != nil || t.ReopenedAt == nil || v == nil || v.State != reviewUserCheck {
+		return
+	}
+	reviewedAt := v.UpdatedAt
+	if userCheckAsked(*t) {
+		reviewedAt = v.Reviews[len(v.Reviews)-1].At
+	}
+	if reviewedAt.Before(*t.ReopenedAt) {
+		t.Supervision = v.clone()
+		t.Supervision.State = ""
+		t.Supervision.PendingSince = nil
+		t.Supervision.UpdatedAt = maxTime(v.UpdatedAt, *t.ReopenedAt)
+	}
 }
 
 // supervisionStore is what the ledgers keep in the database; a store without it keeps them in memory only.
@@ -316,9 +354,19 @@ func pendingSince(before, after string, since *time.Time, now time.Time) *time.T
 // updateSupervision changes todo id's ledger (a new one when it has none) with change, which says whether it changed
 // anything; the ledger as it is then. Writes are one at a time.
 func (s *Service) updateSupervision(ctx context.Context, id string, change func(*Supervision) bool) (Supervision, bool, error) {
+	return s.updateSupervisionAt(ctx, id, time.Now().UTC(), change)
+}
+
+// updateSupervisionAt is updateSupervision at the caller's supervision-pass time.
+func (s *Service) updateSupervisionAt(ctx context.Context, id string, now time.Time, change func(*Supervision) bool) (Supervision, bool, error) {
 	b := &s.supervise
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
+	return s.updateSupervisionLockedAt(ctx, id, now, change)
+}
+
+// updateSupervisionLockedAt is updateSupervisionAt with supervise.writeMu already held.
+func (s *Service) updateSupervisionLockedAt(ctx context.Context, id string, now time.Time, change func(*Supervision) bool) (Supervision, bool, error) {
 	t, ok := s.todoNow(id)
 	if !ok {
 		return Supervision{}, false, db.ErrTodoNotFound
@@ -328,12 +376,17 @@ func (s *Service) updateSupervision(ctx context.Context, id string, change func(
 		v = (&Supervision{}).clone()
 	}
 	before := v.State
+	park := v.parking()
 	if !change(v) {
 		return *v, false, nil
 	}
 	v.Criteria = db.AlignTodoCriteria(v.DoneWhen, v.Criteria)
-	v.UpdatedAt = time.Now().UTC()
+	v.UpdatedAt = now.UTC()
 	v.PendingSince = pendingSince(before, v.State, v.PendingSince, v.UpdatedAt)
+	if park != nil && v.State == reviewPending && park.ExternalPR != nil && park.ExternalPR.wakes(park) {
+		// Match the review period after a reload. Postgres stores PendingSince to microsecond precision.
+		park.ExternalPR.PendingSince = v.UpdatedAt.Truncate(time.Microsecond)
+	}
 	if st := s.supervisionDB(); st != nil && s.todoDB() != nil {
 		if err := st.PutTodoSupervision(ctx, v.row(id)); err != nil {
 			return Supervision{}, false, err
@@ -380,6 +433,8 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 		return "", 5
 	}
 	switch v.state(t) {
+	case reviewUserCheck:
+		return "待你验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
 	case reviewNeedsUser:
 		if triageReviewState(t) == reviewNeedsUser {
 			return "等你决定", 0

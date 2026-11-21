@@ -162,6 +162,9 @@ extension ShellPage {
     var isSidebarPlace: Bool {
         switch self {
         case .inbox, .todos, .routines, .knowledge, .machines, .health, .recordings, .extensionPage, .messages: true
+        #if os(iOS)
+        case .starred: true
+        #endif
         case .newConversation, .profile, .conversation: false
         }
     }
@@ -243,6 +246,7 @@ struct UnifiedSidebarColumn<Agents: View>: View {
                          openHealth: { show(.health) },
                          openRecordingsPage: { show(.recordings) },
                          openMessages: LarkHomePreference.shared.shows ? { show(.messages) } : nil,
+                         openStarred: { show(.starred) },
                          part: part, shared: state.ui, shownPlace: state.shownPlace,
                          foldColumn: inDrawer ? nil : showList?.hide)
     }

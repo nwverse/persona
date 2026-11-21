@@ -215,7 +215,7 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 	}
 	title := s.tabName(sctx, a.Prompt)
 	params := map[string]any{"cwd": a.Cwd, "launcher": strings.TrimSpace(a.Launcher), "model": "", "effort": "",
-		"tab_name": title, "title": title, "prompt": s.withCloseoutBrief(sctx, prompts.RenderDispatchTask(from), false)}
+		"tab_name": title, "title": title, "prompt": s.withCloseoutBrief(sctx, am.ID, prompts.RenderDispatchTask(from), false)}
 	if err := s.applyModel(sctx, "agent.new", params); err != nil {
 		return "", fmt.Errorf("%w; nothing was started", err)
 	}

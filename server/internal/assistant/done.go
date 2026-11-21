@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/textfmt"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
@@ -99,6 +100,8 @@ func autoDoneSkip(t Todo, work time.Time, worked bool) string {
 		return "cancelled"
 	case t.DoneAt != nil:
 		return "done"
+	case t.Supervision.state(t) == reviewTimedOut || t.Supervision.state(t) == reviewClosing:
+		return "held"
 	case t.ReopenedAt != nil && !(worked && work.After(*t.ReopenedAt)):
 		return "reopened" // no new turn since the user reopened it
 	}
@@ -216,10 +219,24 @@ func turnExchange(items []proto.Item) (ask, answer string) {
 	}
 	for i := len(items) - 1; i >= 0; i-- {
 		if it := items[i]; it.Kind == proto.KindText && it.Role == "assistant" && strings.TrimSpace(it.Text) != "" {
-			return ask, strings.TrimSpace(it.Text)
+			return ask, turnReplyText(it.Text, it.FullSize > 0)
 		}
 	}
 	return ask, ""
+}
+
+// Indentation is significant in a Markdown report. A clipped excerpt ending exactly at its rule
+// still has more text after it and cannot be read as the final report.
+func turnReplyText(text string, clipped bool) string {
+	if !strings.Contains(text, "### Persona ") {
+		return strings.TrimSpace(text)
+	}
+	if clipped {
+		if _, ok := textfmt.FinalWorkReport(text); ok {
+			return text + "\n…"
+		}
+	}
+	return text
 }
 
 // userStoppedNotice is the notice the transcript reader puts where the user stopped a turn (Claude Code's "[Request

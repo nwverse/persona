@@ -101,15 +101,18 @@ func (s *Service) overviewTodos(ctx context.Context, l i18n.Lang, web string, ad
 	}
 	for _, t := range open {
 		var bs []feishubot.Button
-		btn := func(key, u string) {
+		btn := func(key, u string, page bool) {
 			if b := safeLinkButton(i18n.T(l, key), u); b != nil { // nil for an empty/non-http(s) URL
+				if page { // a page of the web app: Feishu's sidebar on the desktop
+					b = feishubot.PageBtn(i18n.T(l, key), u)
+				}
 				bs = append(bs, b)
 			}
 		}
-		btn("assistant-reports.open_task", todoLink(web, t.ID))
-		btn("assistant-reports.open_pr", t.PRURL)
+		btn("assistant-reports.open_task", todoLink(web, t.ID), true)
+		btn("assistant-reports.open_pr", t.PRURL, false)
 		for _, x := range sessions[t.ID] {
-			btn("assistant-reports.open_agent", sessionLink(web, x[0], x[1], false))
+			btn("assistant-reports.open_agent", sessionLink(web, x[0], x[1], false), true)
 		}
 		md := "**" + feishubot.EscapeMarkdown(clip(oneLine(t.Title), 40)) + "**"
 		if t.StageKind != "general" { // general work has no strip, as on the other cards and in the apps (#11590)

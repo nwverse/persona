@@ -72,7 +72,9 @@ func (h *Hub) notifyDoneUnder(owner, kind, machineID, machine, sessionID, title,
 		}
 		return p
 	}
-	h.emitToExtensions(owner, "agent.finished", map[string]any{"machine_id": machineID, "machine": machine, "session_id": sessionID, "title": title})
+	if !h.sessionHiddenFromExtensions(machineID, sessionID) { // only of a session the extensions are shown (extension_private.go)
+		h.emitToExtensions(owner, "agent.finished", map[string]any{"machine_id": machineID, "machine": machine, "session_id": sessionID, "title": title})
+	}
 	policy.manager, policy.title, policy.body = owner, title, text
 	pushSelected, pushReachable, heldReason := h.push.sendFromPolicy(owner, policy, build, collapseID, wants.fn(), wants.quiet(), nil, nil)
 	ws := h.notifyWSFrom(owner, kind, build, wants.fn(), wants.quiet())
@@ -169,8 +171,10 @@ func (h *Hub) notifyInteractionAt(owner string, ix proto.Interaction, machine st
 	if ix.Private { // a Just me turn's card: what it asks stays in the app
 		summary = ""
 	}
-	h.emitToExtensions(owner, "agent.needs_you", map[string]any{"machine_id": ix.MachineID, "machine": machine, "session_id": ix.SessionID,
-		"interaction_id": ix.ID, "kind": ix.Kind, "summary": summary})
+	if !h.hiddenFromExtensions(ix) { // only of a card the extensions are shown (extension_private.go)
+		h.emitToExtensions(owner, "agent.needs_you", map[string]any{"machine_id": ix.MachineID, "machine": machine, "session_id": ix.SessionID,
+			"interaction_id": ix.ID, "kind": ix.Kind, "summary": summary})
+	}
 	wants := pushWants{Kind: "input"}
 	if ix.Kind == proto.IxElicitation {
 		// Only what can show an MCP form or link: the phones that registered for one (#2433; a tap opens the card,

@@ -5,6 +5,7 @@ import { CompleteSessions } from "./complete-sessions";
 import { backgroundWaiting, stateOf } from "./format";
 import { foldedState } from "./child-sessions";
 import { foldRows } from "./folded-rows";
+import { heldLaunchRows, observeLaunchRows } from "./launch-handoff";
 import { cardSessionRow, getState, onHubEvent, subscribe, useStore } from "./store";
 import { SESSIONS_LIST_FEATURE } from "./session-list";
 import { runtimeAgents, runtimeSessions, supportsPagedAgents } from "./runtime-list";
@@ -27,8 +28,9 @@ export function useAgentSessions(): Session[] {
   const by = useStore((s) => s.sessions);
   const summaries = useStore((s) => s.sessionSummaries);
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
+  const launches = useStore((s) => s.launches);
   // folded before the assistant's conversations go: a child folded under one of them is no Agent of its own either
-  return useMemo(() => foldRows(directoryVisible(bounded ? summaries : Object.values(by).flat())).filter((s) => !s.assistant), [by, summaries, bounded]);
+  return useMemo(() => heldLaunchRows(foldRows(directoryVisible(bounded ? summaries : Object.values(by).flat())).filter((s) => !s.assistant), launches, Date.now()), [by, summaries, bounded, launches]);
 }
 
 /** The complete list as its readers get it: `error` says why it has not loaded (its read failed; it is read again in a
@@ -61,8 +63,7 @@ function createFullCache(owner: string) {
   let retry: ReturnType<typeof setTimeout> | undefined;
   let trailing: ReturnType<typeof setTimeout> | undefined;
   let expiry: ReturnType<typeof setTimeout> | undefined;
-  const valid = () => !stopped && getState().loaded && credentialOwner() === owner
-    && getState().features.includes(SESSIONS_LIST_FEATURE);
+  const valid = () => !stopped && credentialOwner() === owner && getState().features.includes(SESSIONS_LIST_FEATURE);
   const read = async (immediate = false) => {
     if (!valid()) return;
     if (!consumers || pending) { dirty = true; urgent ||= immediate; return; }
@@ -82,6 +83,7 @@ function createFullCache(owner: string) {
     const base = getState().sessions;
     try {
       const result = await complete.read(controller.signal);
+      if (valid()) observeLaunchRows(result.sessions);
       // An unchanged delta leaves the published snapshot (and its older base, which only widens the overlay) as it is.
       if (valid() && (result.changed || !fullSnapshot.loaded)) {
         fullSnapshot = { sessions: foldRows(directoryVisible(result.sessions)).filter((s) => !s.assistant), loaded: true, error: "", base, epoch: fullSnapshot.epoch };
@@ -176,34 +178,40 @@ export function useFullAgentSessions(on = true): FullAgentSessions {
 
 function useCompleteAgentSessions(on: boolean): FullAgentSessions {
   const by = useStore((s) => s.sessions);
+  const launches = useStore((s) => s.launches);
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
   const loaded = useStore((s) => s.loaded);
   const snapshot = useSyncExternalStore(subscribeFull, getFullSnapshot, getFullSnapshot);
   const owner = on ? credentialOwner() : "";
   const full = fullCache?.owner === owner ? snapshot : EMPTY_FULL_LIST;
   useEffect(() => {
-    if (!on || !bounded || !loaded) return;
+    // Hello confirms paging support. Fetch the complete list while the rest of the first refresh is in flight.
+    if (!on || !bounded) return;
     if (fullCache && fullCache.owner !== owner) fullCache.dispose();
     fullCache ??= createFullCache(owner);
     return fullCache.retain();
-  }, [on, bounded, loaded, owner, snapshot.epoch]);
+  }, [on, bounded, owner, snapshot.epoch]);
   return useMemo(() => {
     // `on` false: the caller has no use for the list now and asks the hub for nothing
     if (!on) return EMPTY_FULL_LIST;
-    if (!bounded) return { sessions: foldRows(directoryVisible(Object.values(by).flat())).filter((s) => !s.assistant), loaded, error: "" };
+    if (!bounded) return { sessions: heldLaunchRows(foldRows(directoryVisible(Object.values(by).flat())).filter((s) => !s.assistant), launches, Date.now()), loaded, error: "" };
+    // Wait for the first refresh's pins and grouping inputs before showing the complete snapshot.
     if (!loaded) return EMPTY_FULL_LIST;
-    if (by === full.base) return full;
+    if (by === full.base) {
+      const held = heldLaunchRows(full.sessions, launches, Date.now());
+      return held === full.sessions ? full : { sessions: held, loaded: full.loaded, error: full.error };
+    }
     // Reflect actions on retained details (rename, mark seen) without copying the complete list into the store.
     // Unchanged cached details may predate this HTTP snapshot, so only apply rows changed since its request.
     const key = (s: Session) => JSON.stringify([s.machine_id, s.session_id]);
     const before = new Map(Object.values(full.base).flat().map((s) => [key(s), s]));
     const current = new Map(Object.values(by).flat().map((s) => [key(s), s]));
-    const sessions = full.sessions.filter((s) => !before.has(key(s)) || current.has(key(s))).map((s) => {
+    const sessions = heldLaunchRows(full.sessions.filter((s) => !before.has(key(s)) || current.has(key(s))).map((s) => {
       const next = current.get(key(s));
       return next && next !== before.get(key(s)) ? next : s;
-    });
+    }), launches, Date.now());
     return { sessions, loaded: full.loaded, error: full.error };
-  }, [on, bounded, loaded, full, by]);
+  }, [on, bounded, loaded, full, by, launches]);
 }
 
 /** The agents by state. `badge` is the sidebar's "Needs you" count: without quiet tasks' agents, which the main conversation

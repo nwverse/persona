@@ -228,8 +228,12 @@ func (m *Manifest) Validate() error {
 	for _, msg := range m.offByDefaultProblems() {
 		bad("%s", msg)
 	}
-	if len(m.Secrets) > SecretsMost {
-		bad("secrets: more than %d", SecretsMost)
+	var entryLists []Field
+	if schema, err := ParseSchema(m.Configuration); err == nil {
+		entryLists = schema.EntryListFields()
+	}
+	if len(m.Secrets)+len(entryLists) > SecretsMost {
+		bad("secrets: more than %d fixed and entry-list declarations", SecretsMost)
 	}
 	seen := map[string]bool{}
 	for _, s := range m.Secrets {
@@ -243,6 +247,13 @@ func (m *Manifest) Validate() error {
 		if strings.TrimSpace(s.Title) == "" {
 			bad("secrets: %q has no title", s.Name)
 		}
+	}
+	for _, f := range entryLists {
+		name := f.Secret.Name
+		if seen[name] {
+			bad("secrets: %q is declared by both a fixed secret and an entry list (or by two lists)", name)
+		}
+		seen[name] = true
 	}
 	errs = append(errs, m.checkConfigured()...)
 	if err := m.Permissions.validate(); err != nil {
@@ -405,6 +416,13 @@ func (m *Manifest) Lint() []string {
 		for _, f := range s.Fields {
 			if looksSecret(f.Name) {
 				out = append(out, i18n.T(i18n.En, "extension-status.plaintext_secret", i18n.Args{"name": f.Name}))
+			}
+			if f.EntryList() {
+				for _, sub := range f.Items.Fields {
+					if looksSecret(sub.Name) {
+						out = append(out, i18n.T(i18n.En, "extension-status.plaintext_secret", i18n.Args{"name": f.Name + "[]." + sub.Name}))
+					}
+				}
 			}
 		}
 	}

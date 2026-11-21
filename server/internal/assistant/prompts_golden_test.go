@@ -216,3 +216,16 @@ func TestGoldenStandingActions(t *testing.T) {
 		Card: `{"plan":"Merge PR #123, then run local tests."}`,
 	}))
 }
+
+// What the main conversation gets for the owner's "@bot /read …" in a Lark group (bot/read_group, #11803): in each
+// language, in a topic, and with no words after the command.
+func TestGoldenBotReadGroup(t *testing.T) {
+	in := readPrompt("示例用户", "", "oc_example", "om_example", "", "看下这几条告警是不是同一个原因")
+	golden(t, "bot_read_group", prompts.RenderBotReadGroup(in))
+	in.Language, in.Owner, in.Task = "English", "Example User", "Are these alerts the same cause?"
+	golden(t, "bot_read_group.en", prompts.RenderBotReadGroup(in))
+	in.Language, in.Owner, in.Task = "日本語", "サンプルユーザー", "これらのアラートは同じ原因ですか"
+	golden(t, "bot_read_group.ja", prompts.RenderBotReadGroup(in))
+	in = readPrompt("", "", "oc_example", "om_example", "omt_example", "")
+	golden(t, "bot_read_group.topic_no_task", prompts.RenderBotReadGroup(in))
+}

@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -290,6 +291,12 @@ func (s *Service) forgetTaskPR(ctx context.Context, id, pr, replacement string) 
 		return fmt.Errorf("task %s: stages could not be read", id)
 	}
 	cur := b.stages[id]
+	if replacement == "" {
+		if err := s.forgetReportedPRLinks(ctx, id); err != nil {
+			b.mu.Unlock()
+			return err
+		}
+	}
 	removed := cur.PR == pr
 	history := slices.DeleteFunc(slices.Clone(cur.PRs), func(p string) bool { return p == pr })
 	changed := removed || len(history) != len(cur.PRs)
@@ -340,6 +347,39 @@ func (s *Service) forgetTaskPR(ctx context.Context, id, pr, replacement string) 
 	delete(s.deploy.seen, id)
 	s.deploy.mu.Unlock()
 	s.todosChanged(ctx)
+	return nil
+}
+
+// forgetReportedPRLinks removes the pull-request links imported from the task's reports, while preserving issue links
+// and every other kind of evidence. Revision-checked writes fail closed if the catalog changed meanwhile.
+func (s *Service) forgetReportedPRLinks(ctx context.Context, id string) error {
+	st, ok := s.store().(todoRepositoryStore)
+	if !ok {
+		return nil
+	}
+	set, err := st.TodoRepositories(ctx, id)
+	if err != nil {
+		return fmt.Errorf("task %s: read repository links to remove a non-PR: %w", id, err)
+	}
+	for _, row := range set.Repositories {
+		kept := make([]repository.LinkInput, 0, len(row.Links))
+		changed := false
+		for _, link := range row.Links {
+			if link.Kind == "pull_request" {
+				changed = true
+				continue
+			}
+			kept = append(kept, repository.LinkInput{URL: link.CanonicalURL, Kind: link.Kind, Number: link.Number, Title: link.Title})
+		}
+		if !changed {
+			continue
+		}
+		revision := set.Revision
+		if _, err := st.SetTodoRepositoryLinks(ctx, id, row.RepoID, repository.LinksInput{ExpectedRevision: &revision, Links: kept}); err != nil {
+			return fmt.Errorf("task %s: remove non-PR repository links: %w", id, err)
+		}
+		set.Revision++
+	}
 	return nil
 }
 
@@ -670,7 +710,7 @@ func (s *Service) goalCard(ctx context.Context, items []*reportItem) (*feishubot
 	}
 	status := i18n.T(l, "assistant-reports.goal_stuck_title", i18n.Args{"n": len(items)})
 	title := reportTitle(l, titles, status)
-	c := feishubot.NewCard("🎯 "+title, feishubot.Red, title)
+	c := feishubot.NewCard(title, feishubot.Red, title).Tag(i18n.T(l, "assistant-reports.tag_stuck"), feishubot.Red)
 	for i, line := range lines {
 		if i > 0 {
 			c.HR()
@@ -843,11 +883,11 @@ func reportCardHeads(l i18n.Lang, needs, total int) (head1, headN int) {
 	if needs > 0 {
 		first = i18n.T(l, "assistant-reports.title_needs", i18n.Args{"n": needs}) + part
 	}
-	c1 := feishubot.NewCard("📋 "+first, feishubot.Orange, first)
+	c1 := reportCardStart(l, first, feishubot.Orange)
 	c1.Markdown("**" + i18n.T(l, "assistant-reports.decide") + "**")
 	c1.Markdown("**" + i18n.T(l, "assistant-reports.progress") + "**")
 	plain := i18n.T(l, "assistant-reports.title", i18n.Args{"n": total}) + part
-	cN := feishubot.NewCard("📋 "+plain, feishubot.Blue, plain)         // suffix measured with the longest part too
+	cN := reportCardStart(l, plain, feishubot.Blue)                    // suffix measured with the longest part too
 	cN.Markdown("**" + i18n.T(l, "assistant-reports.progress") + "**") // a progress label may land past card 1
 	// Each escaped rune in the new header and its 60-rune chat preview costs
 	// at most six JSON bytes (e.g. a control character).
@@ -891,7 +931,7 @@ func reportCardOne(l i18n.Lang, seg []reportEntry, k, n, off, needs, total int) 
 		titles[i] = e.title
 	}
 	header := reportTitle(l, titles, title)
-	c := feishubot.NewCard("📋 "+header, template, header)
+	c := reportCardStart(l, header, template)
 	for i, e := range seg {
 		if i > 0 {
 			c.HR()
@@ -909,10 +949,24 @@ func reportCardOne(l i18n.Lang, seg []reportEntry, k, n, off, needs, total int) 
 	return c, title + "：" + clip(strings.Join(titles, i18n.T(l, "assistant-tasks.list_sep")), reportFallbackMax)
 }
 
+// reportCardStart is a report card's header: its title, its colour (orange while it carries decisions) and its kind.
+func reportCardStart(l i18n.Lang, title, template string) *feishubot.Card {
+	return feishubot.NewCard(title, template, title).Tag(i18n.T(l, "assistant-reports.tag_report"), feishubot.Neutral)
+}
+
+// reportStateColors are the colours of an item's state tag: waiting for the owner orange, failed or cut off red, a
+// turn finished blue (the task goes on), done green.
+var reportStateColors = map[string]string{reportNeeds: feishubot.Orange, reportFailed: feishubot.Red,
+	reportInterrupted: feishubot.Red, reportDone: feishubot.Blue, reportClosed: feishubot.Green}
+
 // reportItemView renders one item's Markdown body and its link buttons (task page, PR, agent chat).
 func (s *Service) reportItemView(l i18n.Lang, web string, stages map[string]todoStage, t Todo, it *reportItem, direction string) (string, []feishubot.Button) {
 	var md strings.Builder
-	md.WriteString(i18n.T(l, "assistant-reports.state_"+it.state) + " **" + feishubot.EscapeMarkdown(direction+clip(oneLine(t.Title), 40)) + "**")
+	color := reportStateColors[it.state]
+	if color == "" {
+		color = feishubot.Neutral
+	}
+	md.WriteString(feishubot.InlineTag(i18n.T(l, "assistant-reports.state_"+it.state), color) + " **" + feishubot.EscapeMarkdown(direction+clip(oneLine(t.Title), 40)) + "**")
 	if it.machine != "" {
 		md.WriteString(" · " + feishubot.EscapeMarkdown(it.machine))
 	}
@@ -932,13 +986,13 @@ func (s *Service) reportItemView(l i18n.Lang, web string, stages map[string]todo
 	}
 	var bs []feishubot.Button
 	if link := todoLink(web, t.ID); link != "" {
-		bs = append(bs, feishubot.LinkBtn(i18n.T(l, "assistant-reports.open_task"), link))
+		bs = append(bs, feishubot.PageBtn(i18n.T(l, "assistant-reports.open_task"), link))
 	}
 	if pr := stages[t.ID].PR; pr != "" {
 		bs = append(bs, feishubot.LinkBtn(i18n.T(l, "assistant-reports.open_pr"), pr))
 	}
 	if it.session[1] != "" && web != "" {
-		bs = append(bs, feishubot.LinkBtn(i18n.T(l, "assistant-reports.open_agent"), sessionLink(web, it.session[0], it.session[1], false)))
+		bs = append(bs, feishubot.PageBtn(i18n.T(l, "assistant-reports.open_agent"), sessionLink(web, it.session[0], it.session[1], false)))
 	}
 	return md.String(), bs
 }
