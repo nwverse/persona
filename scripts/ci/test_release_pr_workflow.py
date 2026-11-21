@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import unittest
 
 import yaml
@@ -26,13 +27,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", text)
         self.assertIn("github.event.pull_request.user.login == 'chyroc'", text)
         self.assertIn("github.event.pull_request.merge_commit_sha", text)
-        self.assertEqual(self.pr["permissions"], {"contents": "read"})
+        self.assertEqual(self.pr["permissions"], {"contents": "read", "checks": "write"})
 
     def test_all_platforms_feed_the_one_verified_plan(self):
         jobs = self.pr["jobs"]
         self.assertEqual(jobs["verify"]["needs"], ["plan", "cli-web", "android", "apple", "windows"])
         self.assertEqual(jobs["apple"]["needs"], ["plan", "cli-web", "android"])
-        self.assertEqual(jobs["windows"]["needs"], ["plan", "cli-web", "android", "apple"])
+        self.assertEqual(jobs["windows"]["needs"], ["plan", "cli-web", "android"])
         self.assertEqual(jobs["android"]["environment"], "persona-release")
         self.assertEqual(jobs["apple"]["environment"], "persona-release")
         self.assertEqual(jobs["windows"]["environment"], "persona-release")
@@ -40,6 +41,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn("release-pr-" + name + "-", str(jobs[name]))
         self.assertNotIn("cli-web", jobs["cli-web"].get("environment", ""))
         self.assertNotIn("secrets.", str(jobs["cli-web"]))
+        upload = next(step for step in jobs["cli-web"]["steps"] if step.get("uses") == "actions/upload-artifact@v4")
+        self.assertEqual(upload["if"], "always()")
+        self.assertIn("unverified artifacts are diagnostic only", str(jobs["cli-web"]))
         self.assertEqual(jobs["android"]["steps"][2]["with"]["packages"], "platform-tools")
         self.assertEqual(jobs["cli-web"]["steps"][5]["env"]["NODE_OPTIONS"], "--max-old-space-size=4096")
         self.assertIn('--receipt "$RUNNER_TEMP/android-receipt.json"', str(jobs["android"]))
@@ -47,9 +51,82 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('RUNNER_TEMP', str(jobs["android"]))
         self.assertNotIn("Path('release/plan.json')", str(jobs["android"]))
         self.assertIn('release-pr-plan-${{ needs.plan.outputs.pr }}', str(jobs))
-        self.assertIn('release-pr-plan-${{ github.event.pull_request.number || 0 }}', str(jobs["plan"]))
+        self.assertIn('release-pr-plan-${{ steps.source.outputs.number }}', str(jobs["plan"]))
         self.assertNotIn('release-pr-plan-${{ steps.plan.outputs.pr }}-${{ steps.plan.outputs.commit }}', str(jobs["plan"]))
         self.assertNotIn('release-pr-plan-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}', str(jobs))
+
+    def test_exact_merge_result_check_and_failure_propagation(self):
+        jobs = self.pr["jobs"]
+        self.assertEqual(jobs["plan"]["outputs"]["check_run_id"], "${{ steps.merge-check.outputs.id }}")
+        plan_script = str(jobs["plan"]["steps"])
+        self.assertIn("release_merge_check.py", plan_script)
+        self.assertIn('test "$COMMIT" = "${{ github.event.pull_request.merge_commit_sha || github.sha }}"', plan_script)
+        verify_script = str(jobs["verify"]["steps"])
+        self.assertEqual(jobs["verify"]["steps"][0]["uses"], "actions/checkout@v4")
+        gate = next(step for step in jobs["verify"]["steps"]
+                    if step.get("name") == "Require every platform job to succeed before verification")
+        self.assertEqual(gate["env"], {
+            "CLI_WEB": "${{ needs.cli-web.result }}",
+            "ANDROID": "${{ needs.android.result }}",
+            "APPLE": "${{ needs.apple.result }}",
+            "WINDOWS": "${{ needs.windows.result }}",
+        })
+        for failed in ("failure", "skipped", "cancelled"):
+            with self.subTest(platform_result=failed):
+                result = subprocess.run(["bash", "-c", gate["run"]],
+                                        env=dict(os.environ, CLI_WEB=failed, ANDROID="success", APPLE="success", WINDOWS="success"),
+                                        capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(subprocess.run(["bash", "-c", gate["run"]],
+                                        env=dict(os.environ, CLI_WEB="success", ANDROID="success", APPLE="success", WINDOWS="success"),
+                                        capture_output=True, text=True, timeout=10).returncode, 0)
+        self.assertIn('test "$result" = success', verify_script)
+        self.assertIn("--conclusion success", verify_script)
+        # GitHub skips the whole aggregate after a failed or skipped dependency by default. That would also skip
+        # its failure-conclusion step and leave the exact merge-result check in_progress forever.
+        self.assertEqual(jobs["verify"]["if"],
+                         "always() && needs.plan.outputs.pr != '0' && needs.plan.outputs.version != ''")
+        self.assertTrue(any(step.get("if") == "failure()" and "--conclusion failure" in step["run"]
+                            for step in jobs["verify"]["steps"]))
+        verified_upload = next(step for step in jobs["verify"]["steps"]
+                               if step.get("uses") == "actions/upload-artifact@v4")
+        self.assertEqual(verified_upload["if"], "success()")
+
+    def test_cli_web_collection_uses_the_rendered_installer_and_stops_on_missing_outputs(self):
+        step = next(step for step in self.pr["jobs"]["cli-web"]["steps"]
+                    if step.get("name") == "Bind the verified downloads to the release plan")
+        script = re.sub(r"\$\{\{.*?\}\}", "fixture", step["run"])
+        required = ("install.sh", "bin/personad-linux-amd64.gz", "bin/VERSION",
+                    "bin/SHA256SUMS", "bin/latest.json")
+        for missing in (None, *required):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                build = root / "build-publish"
+                (build / "bin").mkdir(parents=True)
+                for name in required:
+                    if name != missing:
+                        (build / name).write_text("rendered installer" if name == "install.sh" else name)
+                # A stale file in bin must never replace the rendered build-root installer.
+                (build / "bin/install.sh").write_text("stale installer")
+                commands = root / "commands"
+                commands.mkdir()
+                python = commands / "python3"
+                python.write_text('#!/bin/sh\nprintf called > bind-called\nexit "${BIND_EXIT:-0}"\n')
+                python.chmod(0o755)
+                env = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"])
+                result = subprocess.run(["bash", "-c", script], cwd=root, env=env,
+                                        capture_output=True, text=True, timeout=20)
+                if missing:
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertFalse((root / "bind-called").exists())
+                    continue
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual((root / "release/downloads/install.sh").read_text(), "rendered installer")
+                self.assertTrue((root / "bind-called").exists())
+                failed = subprocess.run(["bash", "-c", script], cwd=root, env=dict(env, BIND_EXIT="37"),
+                                        capture_output=True, text=True, timeout=20)
+                self.assertEqual(failed.returncode, 37)
+                self.assertIn("unverified artifacts are diagnostic only", failed.stderr)
 
     def test_windows_requires_native_execution_and_authenticode(self):
         text = PR.read_text()
@@ -59,6 +136,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("Get-AuthenticodeSignature", text)
         self.assertIn("beta.yml", text)
         self.assertIn("latest.yml", text)
+        # Native Windows checks must still run when Apple signing fails. Apple is a separate dependency of the
+        # final aggregate, not an input to the Windows executables or desktop package.
+        windows = self.pr["jobs"]["windows"]
+        self.assertNotIn("apple", windows["needs"])
+        self.assertNotIn("release-pr-apple", str(windows))
+        self.assertEqual(self.pr["jobs"]["verify"]["needs"], ["plan", "cli-web", "android", "apple", "windows"])
 
     def test_pr_metadata_survives_the_clean_source_checkout(self):
         text = PR.read_text()
@@ -90,12 +173,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
         text = PUBLISH.read_text()
         self.assertIn("github.event.workflow_run.conclusion == 'success'", text)
         self.assertIn("github.event.workflow_run.head_sha", text)
+        self.assertIn('git fetch --no-tags origin main', text)
+        self.assertIn('git merge-base --is-ancestor "$COMMIT" FETCH_HEAD', text)
+        self.assertNotIn('refs/heads/main | cut -f1', text)
         self.assertIn("release/merged-pr.json", text)
         self.assertIn("mergeCommit", text)
         self.assertIn("github.actor == 'chyroc'", text)
         self.assertIn("github.triggering_actor == 'chyroc'", text)
         self.assertIn("verify-merged-pr", text)
-        self.assertIn("refs/heads/main", text)
+        self.assertIn("github.event.workflow_run.head_branch == 'main'", text)
         self.assertEqual(self.publish["jobs"]["authorize"]["environment"], "persona-release")
         self.assertEqual(self.publish["jobs"]["cli-web"]["environment"], "persona-release")
         source = self.publish["jobs"]["source"]
@@ -126,14 +212,89 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("RELEASE_PR_TOKEN", text)
         self.assertIn("missing RELEASE_PR_TOKEN", text)
         self.assertIn("git diff --cached --quiet", text)
+        schedule = yaml.load(text, Loader=yaml.BaseLoader)
+        self.assertEqual(schedule["jobs"]["plan"]["needs"], "channel")
+        for step in schedule["jobs"]["plan"]["steps"]:
+            if "env" in step and "CHANNEL" in step["env"]:
+                self.assertEqual(step["env"]["CHANNEL"], "${{ needs.channel.outputs.name }}")
+        channel_script = schedule["jobs"]["channel"]["steps"][0]["run"]
+        self.assertIn('channel="$REQUESTED"', channel_script)
+        self.assertIn('[[ "$EVENT" = schedule ]]', channel_script)
+        self.assertNotIn("inputs.channel || (github.event.schedule", text)
+        self.assertIn("git config user.email", text)
+        self.assertIn('git switch -C "$BRANCH"', text)
+        self.assertIn('candidate="$branch-r$suffix"', text)
+        select = next(step for step in yaml.load(text, Loader=yaml.BaseLoader)["jobs"]["plan"]["steps"]
+                      if step.get("id") == "select")["run"]
+        self.assertLess(select.index("git fetch --no-tags origin main"), select.index('commit="$(git rev-parse HEAD)"'))
+        self.assertLess(select.index("git switch --detach FETCH_HEAD"), select.index('commit="$(git rev-parse HEAD)"'))
         self.assertNotIn("gh pr create", text)
         self.assertIn("refs/heads/$branch", text)
         self.assertIn("preserve its failed source", text)
         self.assertIn("release-reserved.txt", text)
-        self.assertIn("--reserved $(tr '\\n' ' ' < release-reserved.txt)", text)
+        self.assertIn("--reserved", text)
+        self.assertLess(text.index('refs/heads/release/*'), text.index('schedule-version'))
+        self.assertIn('releases/latest', text)
+        self.assertIn(r'select(.head.ref == \$branch)', text)
         self.assertNotIn("--force", text)
         self.assertNotIn('refs/tags/$TAG', text)
         self.assertNotIn("gh release create", text)
+
+    def test_schedule_replacement_candidates_keep_the_old_source_and_allocate_a_fresh_branch(self):
+        schedule = yaml.load(SCHEDULE.read_text(), Loader=yaml.BaseLoader)
+        lines = schedule["jobs"]["plan"]["steps"][1]["run"].splitlines()
+        start = next(index for index, line in enumerate(lines) if line.strip() == "suffix=0")
+        end = next(index for index in range(start, len(lines)) if lines[index].strip() == 'branch="$candidate"')
+        fragment = "\n".join(lines[start:end + 1]) + '\nprintf \'%s\\n\' "$branch"\n'
+        for refs, expected in (("", "release/0.10.0"),
+                               ("a" * 40 + "\trefs/heads/release/0.10.0\n", "release/0.10.0-r1"),
+                               ("a" * 40 + "\trefs/heads/release/0.10.0\n"
+                                + "b" * 40 + "\trefs/heads/release/0.10.0-r1\n", "release/0.10.0-r2")):
+            with self.subTest(branch=expected), tempfile.TemporaryDirectory() as directory:
+                fixture = Path(directory)
+                fake = fixture / "git"
+                fake.write_text("#!/bin/sh\n"
+                                "[ \"$1\" = ls-remote ] || exit 2\n"
+                                "case \"$REFS\" in *\"$4\"*) exit 0 ;; *) exit 1 ;; esac\n")
+                fake.chmod(0o755)
+                result = subprocess.run(["bash", "-c", fragment], cwd=fixture,
+                                        env=dict(os.environ, PATH=str(fixture) + os.pathsep + os.environ["PATH"],
+                                                 branch="release/0.10.0", REFS=refs, REPOSITORY="nwverse/persona"), capture_output=True, text=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+                # A failed candidate's old ref is never overwritten: -rN advances until no remote branch owns it.
+
+    def test_schedule_reserved_versions_are_safe_and_remain_separate_arguments(self):
+        text = SCHEDULE.read_text()
+        schedule = yaml.load(text, Loader=yaml.BaseLoader)
+        lines = schedule["jobs"]["plan"]["steps"][1]["run"].splitlines()
+        first = next(index for index, line in enumerate(lines) if "version_command=(python3" in line)
+        end = next(index for index in range(first, len(lines)) if lines[index].strip() == 'version="$("${version_command[@]}")"')
+        fragment = "\n".join(lines[first:end + 1])
+        prefix = ["scripts/operations/release_pr.py", "--repository", "nwverse/persona", "--channel", "beta",
+                  "schedule-version", "--stable-tag", "v0.9.1", "--commit", "c" * 40, "--previous-commit",
+                  "d" * 40, "--subjects", "release-subjects.txt", "--reserved"]
+        for name, refs, expected in (("multiple", "0.9.1-beta.9\n0.9.1-beta.10\n", ["0.9.1-beta.9", "0.9.1-beta.10"]),
+                                     ("unterminated", "0.9.1-beta.9\n0.9.1-beta.10", ["0.9.1-beta.9", "0.9.1-beta.10"]),
+                                     ("empty", "", [])):
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                fixture = Path(directory)
+                (fixture / "release-reserved.txt").write_text(refs)
+                (fixture / "release-subjects.txt").write_text("fix: example\n")
+                python = fixture / "python3"
+                python.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$PYTHON_ARGV_LOG\"\nprintf '0.9.1-beta.11\\n'\n")
+                python.chmod(0o755)
+                argv_log = fixture / "python-argv.txt"
+                env = {"PATH": str(fixture) + os.pathsep + os.environ["PATH"], "PYTHON_ARGV_LOG": str(argv_log),
+                       "REPOSITORY": "nwverse/persona", "CHANNEL": "beta", "stable": "v0.9.1",
+                       "commit": "c" * 40, "previous": "d" * 40}
+                result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + fragment], cwd=fixture, env=env,
+                                        capture_output=True, text=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(argv_log.read_text().splitlines(), prefix + expected)
+        reserved_command = next(line for line in lines if "--reserved" in line)
+        self.assertNotRegex(reserved_command, r"--reserved\s+\$\(",
+                            "reserved versions must not use an unquoted command substitution (SC2046)")
 
     def test_verified_pr_merges_then_main_is_reverified_before_publication(self):
         text = PR.read_text()
@@ -141,10 +302,23 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("needs: [plan, verify]", text)
         self.assertIn("needs.plan.outputs.source_commit", text)
         self.assertIn("--match-head-commit \"$HEAD\"", text)
+        merge = self.pr["jobs"]["merge"]
+        self.assertEqual(merge["environment"], "persona-release")
+        self.assertEqual(merge["if"], "needs.plan.outputs.pr != '0' && needs.plan.outputs.version != '' && github.event_name == 'pull_request'")
+        self.assertEqual(merge["steps"][1]["env"]["GH_TOKEN"], "${{ secrets.RELEASE_PR_TOKEN }}")
+        self.assertIn("missing RELEASE_PR_TOKEN", merge["steps"][1]["run"])
+        self.assertIn('merged_by != "chyroc"', (ROOT / 'scripts/operations/release_pr.py').read_text())
         self.assertIn("github.event.workflow_run.conclusion == 'success'", PUBLISH.read_text())
         self.assertIn("github.event.workflow_run.head_branch == 'main'", PUBLISH.read_text())
         self.assertIn("verify-merged-pr", PUBLISH.read_text())
         self.assertIn("Create the immutable tag only after the merged source passed every platform check", PUBLISH.read_text())
+        tag = next(step for step in self.publish["jobs"]["authorize"]["steps"]
+                   if step.get("name") == "Create the immutable tag only after the merged source passed every platform check")
+        self.assertEqual(tag["env"]["GH_TOKEN"], "${{ secrets.RELEASE_PR_TOKEN }}")
+        self.assertIn("missing RELEASE_PR_TOKEN", tag["run"])
+        marker = next(step for step in self.publish["jobs"]["authorize"]["steps"]
+                      if step.get("name") == "Mark the Release as owned by this verified release PR")
+        self.assertEqual(marker["env"]["GH_TOKEN"], "${{ secrets.RELEASE_PR_TOKEN }}")
 
     def test_review_regressions_checkout_sources_and_upload_order(self):
         pr = PR.read_text()

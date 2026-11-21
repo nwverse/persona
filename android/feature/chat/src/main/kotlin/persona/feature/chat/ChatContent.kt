@@ -56,6 +56,7 @@ import com.mikepenz.markdown.model.MarkdownColors
 import com.mikepenz.markdown.model.MarkdownDimens
 import com.mikepenz.markdown.model.MarkdownPadding
 import com.mikepenz.markdown.model.MarkdownTypography
+import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
 import com.mikepenz.markdown.model.State as MarkdownResult
 import persona.core.contracts.Item
@@ -87,7 +88,11 @@ internal val LocalChatMarkdownCache = staticCompositionLocalOf<ChatMarkdownCache
 internal fun ChatMarkdown(text: String, id: String = text,
     bodyStyle: TextStyle = PersonaTheme.type.body, color: Color = PersonaTheme.palette.ink, selectable: Boolean = true,
     viewKeys: ((Int) -> String)? = null, streaming: Boolean? = null) {
-    if (selectable) SelectionContainer { ChatMarkdownBody(text, id, bodyStyle, color, viewKeys, streaming) }
+    if (selectable) SelectionContainer {
+        CompositionLocalProvider(LocalChatLinkMenu provides null) {
+            ChatMarkdownBody(text, id, bodyStyle, color, viewKeys, streaming)
+        }
+    }
     else ChatMarkdownBody(text, id, bodyStyle, color, viewKeys, streaming)
 }
 
@@ -171,6 +176,15 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
     val inlinePictures = rememberInlineReplyPictures(gallery, bodyStyle)
     val components = remember(color, bodyStyle, palette, type, gallery) {
         markdownComponents(
+            paragraph = { model -> LinkAwareMarkdownText(model.content, model.node, model.typography.paragraph) },
+            heading1 = { model -> LinkAwareMarkdownText(model.content, model.node, model.typography.h1, contentChildType = MarkdownTokenTypes.ATX_CONTENT, isHeading = true) },
+            heading2 = { model -> LinkAwareMarkdownText(model.content, model.node, model.typography.h2, contentChildType = MarkdownTokenTypes.ATX_CONTENT, isHeading = true) },
+            heading3 = { model -> LinkAwareMarkdownText(model.content, model.node, model.typography.h3, contentChildType = MarkdownTokenTypes.ATX_CONTENT, isHeading = true) },
+            heading4 = { model -> LinkAwareMarkdownText(model.content, model.node, model.typography.h4, contentChildType = MarkdownTokenTypes.ATX_CONTENT, isHeading = true) },
+            heading5 = { model -> LinkAwareMarkdownText(model.content, model.node, model.typography.h5, contentChildType = MarkdownTokenTypes.ATX_CONTENT, isHeading = true) },
+            heading6 = { model -> LinkAwareMarkdownText(model.content, model.node, model.typography.h6, contentChildType = MarkdownTokenTypes.ATX_CONTENT, isHeading = true) },
+            setextHeading1 = { model -> LinkAwareMarkdownText(model.content, model.node, model.typography.h1, contentChildType = MarkdownTokenTypes.SETEXT_CONTENT, isHeading = true) },
+            setextHeading2 = { model -> LinkAwareMarkdownText(model.content, model.node, model.typography.h2, contentChildType = MarkdownTokenTypes.SETEXT_CONTENT, isHeading = true) },
             orderedList = { model -> MarkdownOrderedList(model.content, model.node, depth = model.listDepth,
                 markerModifier = { firstBaselineAligned().padding(end = 8.dp.dense) },
                 listModifier = { firstBaselineAligned(Modifier.weight(1f)) }) },
@@ -393,6 +407,7 @@ internal fun ChatLineContent(
     streamingItemIds: Set<String> = emptySet(),
     userImages: List<Item> = emptyList(),
     imagesInUserBubble: Boolean = false,
+    openingSource: (@Composable () -> Unit)? = null,
     workRunning: Boolean = false,
     lastWorkStep: Boolean = false,
     plan: LinePlan? = null,
@@ -427,7 +442,7 @@ internal fun ChatLineContent(
                         images = userPictures(userImages, session, loader), hidePrompt = hideTaskPrompts)
                     line.row.item?.injected != null -> InjectedLine(line.row.id, line.row.item!!.injected!!, showDetail = !hideTaskPrompts)
                     else -> MergedUserBubble(listOf(item), textUpdates, onLastLine.takeIf { line.row.id == lastUserId },
-                        images = userPictures(userImages, session, loader))
+                        images = userPictures(userImages, session, loader), openingSource = openingSource)
                 }
             }
             "reply" -> line.row.item?.item?.let { item ->
@@ -455,6 +470,7 @@ internal fun ChatLineContent(
         is ChatLine.Recaps -> RecapLine(line.items.map { it.item })
         is ChatLine.Viewed -> ViewedImagesRow(line.images, session, loader)
         is ChatLine.ModeChange -> ModeChangeDivider(line.change, agentSession)
+        is ChatLine.EngineChanged -> EngineChangeDivider(line.change)
         // Glass: where the replies' model changed (#5055, ModelChanges.mark), as the transcript names both.
         is ChatLine.ModelChange -> {
             val from = persona.core.domain.lines.ModelChanges.replyModelName(line.from)
@@ -474,7 +490,7 @@ internal fun ChatLineContent(
                     info = persona.core.domain.lines.ApiErrorInfo.parse(text) ?: line.info))
             }
         }
-        is ChatLine.UserImages -> if (!imagesInUserBubble) UserBubbleFrame {
+        is ChatLine.UserImages -> if (!imagesInUserBubble) UserBubbleFrame(footer = openingSource) {
             line.images.forEach { ChatPicture(session, it.item, loader, alignEnd = true) }
         }
         is ChatLine.Work -> Column(Modifier.fillMaxWidth()) {
@@ -551,7 +567,12 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
             // A Workflow call whose run the session lists draws the run's card (#3435); otherwise the row it always was.
             if (call.name == "Workflow") LocalChatWorkflows.current?.let { workflows ->
                 call.use.item.toolUseId?.let(workflows.runs::get)?.let { run ->
-                    JWorkflowCallCard(run, folds = workflows.folds, onOpenAgent = workflows.open)
+                    Column {
+                        JWorkflowCallCard(run, folds = workflows.folds, onOpenAgent = workflows.open)
+                        workflows.openBackground?.let { open ->
+                            JTextButton(stringResource(R.string.chat_background_open_workflow), onClick = { open(run) })
+                        }
+                    }
                     return
                 }
             }

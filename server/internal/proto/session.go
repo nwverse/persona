@@ -92,6 +92,9 @@ func ProjectEfforts(levels, vocab []string) []string {
 	return out
 }
 
+// ModeDefault applies the ordinary permission rules.
+const ModeDefault = "default"
+
 // ModeBypass skips every permission prompt; a headless claude only takes it at start (--permission-mode).
 const ModeBypass = "bypassPermissions"
 
@@ -158,7 +161,7 @@ type Session struct {
 	Capabilities     *SessionCapabilities `json:"capabilities,omitempty"`
 	IsSubagent       bool                 `json:"is_subagent,omitempty"`
 	Attached         bool                 `json:"attached,omitempty"`
-	// CanFork: "Branch to new chat" works for it (a Claude Code conversation the node can copy, node/fork.go); older nodes
+	// CanFork: "Branch to new chat" works for it (node/fork.go); older nodes
 	// never say so, and the clients hide it.
 	CanFork          bool `json:"can_fork,omitempty"`
 	StartedByPersona bool `json:"started_by_persona"`
@@ -227,6 +230,17 @@ type Session struct {
 	// drives through its app-server has an Effort too (Codex's levels, see Efforts) but never a PermissionMode.
 	PermissionMode string `json:"permission_mode,omitempty"`
 	Effort         string `json:"effort,omitempty"`
+	// PendingEffort is a terminal change waiting for this Claude Code turn to end. If the attempt fails, the
+	// target stays visible and messages remain held until the user chooses an effort again. A pointer keeps
+	// optional effort metadata within the row size budget.
+	PendingEffort      *string `json:"pending_effort,omitempty"`
+	EffortChangeFailed bool    `json:"effort_change_failed,omitempty"`
+	// OffLauncher: Persona started this Claude Code Agent on Launcher, but the claude that runs it now was not started
+	// by Persona's command (it lacks Persona's --mcp-config): herdr's bare `claude --resume <id>` after a restart on a
+	// herdr older than 0.9.2, or a resume typed by hand (#11792). Launcher's settings, model, MCP and hooks do not
+	// apply to it, and a launcher switch to Launcher itself brings it back there. Beside EffortChangeFailed, in its
+	// padding: a Session stays in its allocation size class.
+	OffLauncher bool `json:"off_launcher,omitempty"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
 	// UltracodePending (beside AsksRead) means a requested change waits for an idle input box; LostAt asks the client
 	// to offer reopening after a resumed process reset an enabled switch. Reopening or dismissing the notice clears
@@ -258,8 +272,8 @@ type Session struct {
 	// ServiceTier is the acknowledged native speed, omitted while unknown.
 	ServiceTier  string        `json:"service_tier,omitempty"`
 	ServiceTiers []ServiceTier `json:"service_tiers,omitempty"`
-	// Space is the assistant's space it runs in: "health" for the health space's (docs/assistant/health.md), "" for the
-	// assistant's own. Set by the hub on the assistant's conversations.
+	// Space is "health" for a session in the health space (docs/assistant/health.md), or empty otherwise.
+	// The node can preserve it from the start directory even when a live pane's working directory moves.
 	Space string `json:"space,omitempty"`
 	// ModelPick is the launcher / model / effort picked for one of the assistant's conversations, which its next
 	// messages run on (#5033, docs/assistant/model-config.md "A conversation's own model"); nil follows Model
@@ -548,7 +562,8 @@ const (
 	// effort change only there. Its row's capabilities say modes: false.
 	CodeModesOnComputer = "modes_on_computer"
 	// CodeModesNotRunning: no process or pane runs the session; a message resumes it.
-	CodeModesNotRunning = "modes_not_running"
+	CodeModesNotRunning     = "modes_not_running"
+	CodeEffortChangePending = "effort_change_pending"
 )
 
 // CodeNotLoaded is what session.items and session.item refuse with when reading the session would start its agent: an
@@ -576,6 +591,12 @@ const CodeTurnOverBackground = "turn_over_background"
 // CodeAgentStopped is what session.send refuses with for an Agent that has stopped and is read-only (node/stopped.go,
 // #4754): nothing was typed, and it takes no message until it is resumed (the user's Resume on its terminal page).
 const CodeAgentStopped = "agent_stopped"
+
+// CodeResumeUnknown is what session.start refuses a resume with when the computer has nothing of the conversation to
+// resume (no transcript, start or record of the id), and, for a resume carrying resume_outside_health, also when what
+// it has started or was recorded in a health space or an Agent folder kept out of Persona (#10941): a new
+// conversation would otherwise be listed under the id of another. Nothing was started. 409.
+const CodeResumeUnknown = "resume_unknown"
 
 // PendingSwitch is Session.PendingSwitch: the launcher the Agent moves to, the model and effort to run it with ("":
 // the launcher's own default model; the effort it runs with now), and when the user picked it. Agent is the engine

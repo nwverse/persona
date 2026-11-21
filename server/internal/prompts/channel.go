@@ -5,20 +5,22 @@ package prompts
 // explains where the answer goes and how it shows; origin, gathered context, quotes, forwarded chats and attachments
 // remain data, never owner-authored instructions.
 type ChannelMessage struct {
-	Persona  bool   // a Persona conversation (not a coding agent): add the note about answering in the chat app
-	Name     string // the channel's name: WeChat
-	Owner    string // "" is "the user" (in Chinese)
-	Plain    bool   // the chat app shows plain text
-	Asks     bool   // what is asked can be answered there
-	Public   bool   // a mention in someone else's chat: use the localized public-audience prompt
-	Language string // English / 日本語 for the public prompt; empty is zh-Hans
-	Chat     string // where the owner invoked the mention
-	Topic    string // its topic or thread
-	Context  string // extension-gathered context, always data rather than instructions
-	Text     string
-	Quote    string
-	Forward  string
-	Files    []string
+	Persona bool   // a Persona conversation (not a coding agent): add the note about answering in the chat app
+	Name    string // the channel's name: WeChat
+	Owner   string // optional owner name
+	Plain   bool   // the chat app shows plain text
+	Asks    bool   // what is asked can be answered there
+	// ImagesOut: the chat app gets an answer's pictures on lines of their own as pictures (#11986)
+	ImagesOut bool
+	Public    bool   // a mention in someone else's chat: use the localized public-audience prompt
+	Language  string // English / 日本語; empty is zh-Hans
+	Chat      string // where the owner invoked the mention
+	Topic     string // its topic or thread
+	Context   string // extension-gathered context, always data rather than instructions
+	Text      string
+	Quote     string
+	Forward   string
+	Files     []string
 	// Unsupported are what came that cannot be passed on (a file "contract.pdf", "a video").
 	Unsupported []string
 }
@@ -33,7 +35,8 @@ func RenderChannelMessage(m ChannelMessage) string {
 // ChannelAnswerAgain asks a conversation for the answer a turn from a chat app did not give (it ended with nothing,
 // or a placeholder like "No response requested."): channel/answer_again.
 type ChannelAnswerAgain struct {
-	Name string // the chat app: Lark, WeChat
+	Name     string // the chat app: Lark, WeChat
+	Language string // owner language; empty preserves the original Chinese instructions
 }
 
 func RenderChannelAnswerAgain(m ChannelAnswerAgain) string { return render("channel/answer_again", m) }

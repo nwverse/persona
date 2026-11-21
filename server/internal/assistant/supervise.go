@@ -27,6 +27,8 @@ import (
 // A supervised todo is never closed by the hub's judge (done.go): a finished stretch of work waits for review instead.
 
 const (
+	reviewClosing   = "timeout_closing"
+	reviewTimedOut  = "timed_out"
 	reviewPending   = "pending_review"
 	reviewAccepted  = "accepted"
 	reviewRework    = "rework"
@@ -118,6 +120,8 @@ type TaskReview struct {
 	Evidence *ParkEvidence `json:"evidence,omitempty"`
 	// Reply is the source receipt that ended this exact park, committed with the pending-review transition.
 	Reply *connectorwire.LarkReplyObservation `json:"reply,omitempty"`
+	// ExternalPR is this external-event park's observed object, independent of the task's PR associations.
+	ExternalPR *externalPRObservation `json:"external_pr,omitempty"`
 	// Decided: the owner's decision (its id) that ended this park before its time (parkDecided, parked.go), and
 	// DecidedTold: when a supervision message carried that to the supervisor.
 	Decided     string    `json:"decided,omitempty"`
@@ -133,6 +137,8 @@ type TaskReview struct {
 	OwnerResponse   string    `json:"owner_response,omitempty"`
 	OwnerResponseAt time.Time `json:"owner_response_at,omitzero"`
 	HoldReleased    bool      `json:"hold_released,omitempty"`
+	// Handoff is an internal wait recorded after session.send was acknowledged.
+	Handoff *taskHandoff `json:"handoff,omitempty"`
 }
 
 // OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
@@ -159,12 +165,20 @@ func (v *Supervision) clone() *Supervision {
 	out.Reviews = make([]TaskReview, len(v.Reviews))
 	for i, r := range v.Reviews {
 		out.Reviews[i] = r
+		if r.Handoff != nil {
+			handoff := *r.Handoff
+			out.Reviews[i].Handoff = &handoff
+		}
 		out.Reviews[i].Checks = slices.Clone(r.Checks)
 		out.Reviews[i].Options = slices.Clone(r.Options)
 		out.Reviews[i].Evidence = r.Evidence.clone()
 		if r.Reply != nil {
 			receipt := *r.Reply
 			out.Reviews[i].Reply = &receipt
+		}
+		if r.ExternalPR != nil {
+			observation := *r.ExternalPR
+			out.Reviews[i].ExternalPR = &observation
 		}
 	}
 	if out.DoneWhen == nil {
@@ -275,6 +289,30 @@ func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, done
 	}
 }
 
+// startSupervisionRound: a plan's task took todo id over to start a new Agent on it (task_plan continues, or its
+// todo_id; takeTodoForTask), so the work from here is a new round of its supervision (#11553). A terminal review of the
+// work before it (accepted or cancelled) stays in the ledger's reviews, as history, and no longer decides the to-do's
+// state: the ledger goes back to going on, with no reworks and no owner wait yet. Otherwise every client (web
+// acceptanceStands, Apple, Android and the hub's triage alike) went on showing the earlier round's acceptance on the
+// new work, filed the to-do under Just finished or Done whenever its new Agent stopped, and superviseJudged dropped the
+// new round's stops as more work sent after an acceptance. That rule stays for what it was made for (#3156, #7539):
+// more work sent to an accepted task's Agent, a message on its card, a Reopen by hand. A to-do with no ledger gets
+// none here, and a ledger in any other state is the current round's already.
+func (s *Service) startSupervisionRound(ctx context.Context, id string) {
+	if t, ok := s.todoNow(id); !ok || t.Supervision == nil {
+		return
+	}
+	if _, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+		if v.State != reviewAccepted && v.State != reviewCancelled {
+			return false
+		}
+		v.State, v.Round, v.Waits = "", 0, nil
+		return true
+	}); err != nil {
+		s.logf("task %s: new supervision round: %v", id, err)
+	}
+}
+
 // pendingSince is a ledger's PendingSince after a write at now that took its stored state from before to after, given
 // the one it held (since): now on the way into pending_review, unchanged while the review waits (whatever else the write
 // changed: a criterion's report, a new supervisor), nil in every other state. A review that already waited with no
@@ -292,9 +330,19 @@ func pendingSince(before, after string, since *time.Time, now time.Time) *time.T
 // updateSupervision changes todo id's ledger (a new one when it has none) with change, which says whether it changed
 // anything; the ledger as it is then. Writes are one at a time.
 func (s *Service) updateSupervision(ctx context.Context, id string, change func(*Supervision) bool) (Supervision, bool, error) {
+	return s.updateSupervisionAt(ctx, id, time.Now().UTC(), change)
+}
+
+// updateSupervisionAt is updateSupervision at the caller's supervision-pass time.
+func (s *Service) updateSupervisionAt(ctx context.Context, id string, now time.Time, change func(*Supervision) bool) (Supervision, bool, error) {
 	b := &s.supervise
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
+	return s.updateSupervisionLockedAt(ctx, id, now, change)
+}
+
+// updateSupervisionLockedAt is updateSupervisionAt with supervise.writeMu already held.
+func (s *Service) updateSupervisionLockedAt(ctx context.Context, id string, now time.Time, change func(*Supervision) bool) (Supervision, bool, error) {
 	t, ok := s.todoNow(id)
 	if !ok {
 		return Supervision{}, false, db.ErrTodoNotFound
@@ -304,12 +352,17 @@ func (s *Service) updateSupervision(ctx context.Context, id string, change func(
 		v = (&Supervision{}).clone()
 	}
 	before := v.State
+	park := v.parking()
 	if !change(v) {
 		return *v, false, nil
 	}
 	v.Criteria = db.AlignTodoCriteria(v.DoneWhen, v.Criteria)
-	v.UpdatedAt = time.Now().UTC()
+	v.UpdatedAt = now.UTC()
 	v.PendingSince = pendingSince(before, v.State, v.PendingSince, v.UpdatedAt)
+	if park != nil && v.State == reviewPending && park.ExternalPR != nil && park.ExternalPR.wakes(park) {
+		// Match the review period after a reload. Postgres stores PendingSince to microsecond precision.
+		park.ExternalPR.PendingSince = v.UpdatedAt.Truncate(time.Microsecond)
+	}
 	if st := s.supervisionDB(); st != nil && s.todoDB() != nil {
 		if err := st.PutTodoSupervision(ctx, v.row(id)); err != nil {
 			return Supervision{}, false, err

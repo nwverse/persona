@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 from pathlib import Path
@@ -67,10 +68,20 @@ class PathTests(unittest.TestCase):
 
     def test_desktop_inputs_select_the_desktop_lane(self):
         for filename in ["desktop/src/main.ts", "web/src/main.tsx", "scripts/mock/mock_hub.py", "scripts/mock/mock_domains.py",
-                         "scripts/mock/desktops_mock.py", "scripts/mock/test_desktops_mock.py", "scripts/mock/stream_trace.py", "spec/desktop-bridge.d.ts",
+                         "scripts/mock/desktops_mock.py", "scripts/mock/github_mock.py", "scripts/mock/kb_selection_mock.py",
+                         "scripts/mock/mail_mock.py", "scripts/mock/hub_update_mock.py", "scripts/mock/imessage_mock.py",
+                         "scripts/mock/saved_prompts_mock.py", "scripts/mock/test_desktops_mock.py", "scripts/mock/stream_trace.py",
+                         "spec/desktop-bridge.d.ts",
                          "server/cmd/password-wasm/main.go", "server/internal/passwordpake/pake.go", "server/go.mod", "server/go.sum"]:
             self.assertTrue(paths.select([filename])["desktop"], filename)
         self.assertFalse(paths.select(["server/internal/hub/hub.go"])["desktop"])
+        # The synthetic hub loads every module of mock_domains.DOMAINS as it starts, so each one is a lane input too.
+        registry = ast.parse((Path(paths.ROOT) / "scripts/mock/mock_domains.py").read_text())
+        domains = next(ast.literal_eval(node.value) for node in registry.body if isinstance(node, ast.Assign)
+                       and [getattr(t, "id", None) for t in node.targets] == ["DOMAINS"])
+        self.assertIn("desktops_mock", domains)
+        for name in domains:
+            self.assertTrue(paths.select(["scripts/mock/%s.py" % name])["desktop"], name)
 
     def test_sdk_ts_sources_also_select_the_server_lane(self):
         # The trusted Deno adapter and the extension page tests bundle sdk/ts/src (#4221); the rest of sdk/ts is not.
@@ -78,7 +89,7 @@ class PathTests(unittest.TestCase):
         self.assertTrue(paths.select(["sdk/ts/src/wire.ts"])["runtimes"])
         # The shared Rust core: its own lane, and Android, whose tests load it.
         for filename in ["native/app-core/crates/persona-core/src/lib.rs", "spec/fixtures/continuity/append_and_gaps.json",
-                         "scripts/ci/core.sh"]:
+                         "spec/fixtures/sync-driver/lifecycle.json", "scripts/ci/core.sh"]:
             self.assertTrue(paths.select([filename])["core"], filename)
         self.assertTrue(paths.select(["native/app-core/Cargo.lock"])["android"])
         # The generated ArkTS codec and its host tests run in the same lane as the core they encode for (#7450).
@@ -280,6 +291,14 @@ class ManualWorkflowTests(unittest.TestCase):
         self.assertIn('run: python3 scripts/ci/required.py', gate)
         self.assertNotIn('continue-on-error:', ci)
         self.assertNotIn('pull_request', ci)
+
+    def test_standalone_scripts_checkout_can_merge_base_origin_main(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = yaml.load((root / '.github/workflows/scripts-tests.yml').read_text(), Loader=yaml.BaseLoader)
+        checkout = next(step for step in workflow['jobs']['scripts']['steps']
+                        if step.get('uses') == 'actions/checkout@v4')
+        self.assertEqual(checkout.get('with', {}).get('fetch-depth'), '0',
+                         'standalone non-main dispatches need origin/main and shared history for git merge-base')
 
     def test_version_tag_publishes_a_release_after_the_image(self):
         root = Path(__file__).resolve().parents[2]
@@ -496,7 +515,12 @@ class AppleWorkflowTests(unittest.TestCase):
     def test_reusable_lane_uses_quoted_environment_not_script_interpolation(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / '.github/workflows/apple-test.yml').read_text()
-        self.assertIn('options: [ios]', workflow)
+        self.assertIn('options: [ios, ios18, ios-build, packages, ios-focused]', workflow)
+        self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.lane == 'ios18'", workflow)
+        floor = workflow.split('\n  ios18:\n', 1)[1]
+        for required in ('runs-on: macos-15', '/Applications/Xcode_26.3.app/Contents/Developer',
+                         'run: scripts/ci/apple.sh ios18', 'timeout-minutes: 150'):
+            self.assertIn(required, floor)
         self.assertIn('APPLE_CI_LANE: ${{ inputs.lane }}', workflow)
         self.assertIn('run: scripts/ci/apple.sh "$APPLE_CI_LANE"', workflow)
         self.assertNotIn('continue-on-error:', workflow)
@@ -508,6 +532,15 @@ class AppleWorkflowTests(unittest.TestCase):
                                'iOS HTML card tests (separate batch)',
                                'iOS bounded HTML security tests (separate batch)'):
             self.assertIn(required_batch, script)
+
+    def test_resolved_variant_is_staged_only_in_the_disposable_source(self):
+        root = Path(__file__).resolve().parents[2]
+        script = (root / 'scripts/ci/apple.sh').read_text()
+        for required in ('scripts/ci/apple_resolved.py',
+                         '--tracked "$CI_ROOT/apple/Packages/PersonaSSH/Package.resolved"',
+                         '--staged "$SOURCE/apple/Packages/PersonaSSH/Package.resolved"',
+                         '--meta "$PERSONA_META_WEARABLES"'):
+            self.assertIn(required, script)
 
 
 class PostgresCleanupTests(unittest.TestCase):

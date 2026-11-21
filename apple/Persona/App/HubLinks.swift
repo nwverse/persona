@@ -47,6 +47,7 @@ final class HubLink: Identifiable {
     var config: ServerConfig { live.currentConfig ?? fallback }
     var api: APIClient {
         var c = APIClient(config: config, group: group)
+        c.requestRoute = { [weak live] in try await live?.waitForRoute() }
         c.extensionsAPI = hello.features.isEmpty ? Self.remembersExtensions(group) : features.contains("extensions")
         c.personaNaming = live.personaContracts
         c.sessionLookup = features.contains("sessions_lookup")
@@ -486,7 +487,7 @@ extension AppModel {
         guard let hub = registry.hubs.first(where: { $0.id == id }) else { return }
         guard registry.members(hub.group).count > 1 else { removeGroup(hub.group); return }
         closeTunnels(id)
-        heldRetryReceipts = heldRetryReceipts.filter { $0.target.pairing != id }
+        updateHeldRetryReceipts { receipts in receipts.filter { $0.target.pairing != id } }
         var r = registry
         r.hubs.removeAll { $0.id == id }
         registry = r

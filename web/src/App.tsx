@@ -8,6 +8,7 @@ import { PerAssistant } from "./views/PerAssistant";
 import { lazyDialog, OverlayBoundary, useOpened } from "./views/LazyOverlay";
 import { navigationCrumb } from "./lib/error-reports";
 import { lazyPage, preloadPages } from "./lib/lazy-page";
+import type { ToastLiftProps } from "./ui/toast-lift";
 import { drawerA11y, focusBack, useDrawerDrag } from "./lib/drawer";
 import { acceptHubs, here, rememberHub, takeHubs } from "./lib/hubs";
 import { holdImportLink, takeImportLink } from "./lib/import-link";
@@ -82,6 +83,7 @@ const History = lazyPage(() => import("./views/assistant/History").then((m) => m
 const Profile = lazyPage(() => import("./views/assistant/Profile").then((m) => m.Profile), { routes: ["profile"] });
 const Routines = lazyPage(() => import("./views/assistant/Routines").then((m) => m.Routines), { routes: ["routines"] });
 const Inbox = lazyPage(() => import("./views/inbox/Inbox").then((m) => m.Inbox), { routes: ["inbox"] });
+const StarredMessages = lazyPage(() => import("./views/StarredMessages").then((m) => m.StarredMessages), { routes: ["starred"] });
 const Messages = lazyPage(() => import("./views/messages/Messages").then((m) => m.Messages), { routes: ["messages"] });
 const Knowledge = lazyPage(() => import("./views/knowledge/Knowledge").then((m) => m.Knowledge), { routes: ["kb"] });
 const TodosView = lazyPage(() => import("./views/Todos").then((m) => m.TodosView), { routes: ["todos"] });
@@ -89,6 +91,17 @@ const TodosView = lazyPage(() => import("./views/Todos").then((m) => m.TodosView
 const NotFound = lazyPage(() => import("./views/NotFound").then((m) => m.NotFound));
 // Keep the shortcut palette warm. The new-agent dialog loads only when opened.
 const Palette = lazyPage(() => import("./views/Palette").then((m) => m.Palette), { idle: true });
+// Where the toasts sit on a narrow screen (ui/toast-lift.tsx): off the first screen and out of the idle tier, which a
+// wide screen loads too; Shell loads it once the screen is narrow. A load that fails leaves the toasts at the bottom of
+// the page until the next toast tries again.
+const ToastLift = lazyPage(() => import("./ui/toast-lift").then((m) => m.ToastLift));
+function PhoneToasts(props: ToastLiftProps) {
+  return (
+    <OverlayBoundary open onClose={() => {}}>
+      <ToastLift {...props} />
+    </OverlayBoundary>
+  );
+}
 const NewAgent = lazyPage(() => import("./views/NewAgent").then((m) => m.NewAgent));
 const StartingAgent = lazyPage(() => import("./views/StartingAgent").then((m) => m.StartingAgent));
 const ShortcutHelpDialog = lazyDialog(() => import("./views/ShortcutHelp").then((m) => m.ShortcutHelp));
@@ -199,7 +212,7 @@ export function App() {
           </Suspense>
         </PageBoundary>
       )}
-      <Toasts />
+      <Toasts lift={PhoneToasts} />
     </>
   );
 }
@@ -284,9 +297,11 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
     return { link: undefined, to: "", mid: route.mid, sid: pane?.sid };
   }
   if (route.name !== "session") return undefined;
+  // A compact card or another engine's conversation cannot land on this transcript's message.
+  const exact = (): PageTarget => ({ link: "exact", to: "", mid: route.mid, sid: route.sid });
   // a link to a subagent's own conversation (#5030): its parent's chat, which shows the subagent's card (lib/subagent-link.ts)
   const sub = splitSubagentLink(route.sid);
-  if (sub) return { link: undefined, to: routePath({ ...route, sid: sub.parent }), mid: route.mid, sid: undefined };
+  if (sub) return route.at ? exact() : { link: undefined, to: routePath({ ...route, sid: sub.parent }), mid: route.mid, sid: undefined };
   const rows = pageRows(s, route.mid);
   const row = rows.find((r) => r.session_id === route.sid);
   // a lead's worker's (#5180): the lead's page, the worker in its Team panel
@@ -294,22 +309,23 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
   if (worker) return worker;
   // a side session's (#7944): its parent's page, the side in its Side sessions panel
   const side = sideTarget(rows, route.mid, row, inWorkView(route));
-  if (side) return side;
+  if (side) return route.at && side.child ? exact() : side;
   // a child session's (#5120): its parent's chat, which shows the child's card; known once its row is (a listed one, or
   // the lookup of an unlisted chat), the session itself until then
   const parent = row ? foldsUnder(row) : undefined;
-  if (parent && parent !== route.sid) return { link: undefined, to: routePath(withWorkView({ name: "session", mid: route.mid, sid: parent }, inWorkView(route))), mid: route.mid, sid: undefined, parent };
+  if (parent && parent !== route.sid) return route.at ? exact() : { link: undefined, to: routePath(withWorkView({ name: "session", mid: route.mid, sid: parent }, inWorkView(route))), mid: route.mid, sid: undefined, parent };
   // an earlier session of a conversation that moved between Claude Code and Codex (#5054): the conversation's own row,
   // whose chat reads that session's stretch in its place
   const home = engineSwitchHome(rows, route.sid);
-  if (home) return { link: undefined, to: routePath(withWorkView({ name: "session", mid: route.mid, sid: home.session_id }, inWorkView(route))), mid: route.mid, sid: undefined };
+  if (home) return route.at ? exact() : { link: undefined, to: routePath(withWorkView({ name: "session", mid: route.mid, sid: home.session_id }, inWorkView(route))), mid: route.mid, sid: undefined };
   // an old `/s/…` link of a pane in a tab becomes that tab's `/t/…`
   const tab = tabOfSessionLink(rows, route);
   // a `/s/…` link with only the front of an id (the 8-character ones shown everywhere, #2464): the whole id's link;
   // several sessions starting with it are listed to pick from (SessionChoices)
   const link = resolveSessionLink(rows, route.mid, route.sid, s.loaded);
   const resolved = tab ?? (link.kind === "prefix" ? sessionLinkRoute(rows, link.session, route.view) : undefined);
-  const to = resolved ? routePath(withWorkView(resolved, inWorkView(route))) : "";
+  const landing = resolved && (resolved.name === "session" || resolved.name === "tab") && route.at ? { ...resolved, at: route.at } : resolved;
+  const to = landing ? routePath(withWorkView(landing, inWorkView(route))) : "";
   const shown = link.kind === "exact" || link.kind === "unlisted";
   return { link: link.kind, to, mid: route.mid, sid: shown ? route.sid : undefined };
 }
@@ -328,6 +344,7 @@ function Shell() {
   const tabLinkPath = target?.to ?? "";
   const linkMid = route.name === "session" ? route.mid : "";
   const linkSid = route.name === "session" ? route.sid : "";
+  const linkAt = route.name === "session" || route.name === "tab" ? route.at : undefined;
   const linkParent = target?.parent;
   const linkWorker = target?.worker;
   const linkSide = target?.side;
@@ -335,14 +352,14 @@ function Shell() {
   const targetMid = target?.mid ?? "";
   useEffect(() => {
     if (!tabLinkPath) return;
-    if (linkWorker && linkParent) askTeamWorker(targetMid, linkParent, linkWorker);
+    if (linkWorker && linkParent) askTeamWorker(targetMid, linkParent, linkWorker, linkAt);
     else if (linkSide && linkParent) {
-      askSide(targetMid, linkParent, linkSide);
+      askSide(targetMid, linkParent, linkSide, linkAt);
       // a row of the side's own (its Codex child): the side's chat opens at its card
       if (linkChild) followChildSession(targetMid, linkChild, linkSide);
     } else if (linkSid) followSubagentLink(linkMid, linkSid, linkParent);
     navigate(tabLinkPath, true);
-  }, [tabLinkPath, linkMid, linkSid, linkParent, linkWorker, linkSide, linkChild, targetMid]);
+  }, [tabLinkPath, linkMid, linkSid, linkAt, linkParent, linkWorker, linkSide, linkChild, targetMid]);
   // a tab not among the page's rows (a paged hub lists only active and pinned ones): asked of the hub before it is gone
   const tabRoute = route.name === "tab" ? route : undefined;
   const lookup = useTabLookup(tabRoute, !!tabRoute && loaded && !target?.sid);
@@ -382,6 +399,10 @@ function Shell() {
 
   // ── the sidebar: a column on a wide screen, a drawer over the page on a narrow one (#1996) ──
   const narrow = useMedia(NARROW);
+  // the toasts' placement, in before the first toast in practice
+  useEffect(() => {
+    if (narrow) void ToastLift.preload().catch(() => {});
+  }, [narrow]);
   const [drawer, setDrawer] = useState(false);
   const toggle = useCallback(() => setDrawer((d) => !d), []);
   const close = useCallback(() => setDrawer(false), []);
@@ -410,6 +431,13 @@ function Shell() {
   });
   // Back closes it first
   useCloseOnBack(drawer, close, narrow);
+  // Its Search hands over to the palette: closed in the same commit, the drawer's history entry becomes the palette's
+  // (lib/back-close.ts), so one Back closes the palette, and a pick's page replaces it with no copy of this page left under.
+  // (A wide screen has no drawer open to close.)
+  const searchFromSidebar = useCallback(() => {
+    close();
+    openPalette("jump");
+  }, [close]);
   // Esc closes it (a menu or a dialog over it closes first); Tab stays in it, like a dialog's
   useEffect(() => {
     if (!a11y.modal) return;
@@ -468,7 +496,7 @@ function Shell() {
 
   const extensionTitle = useExtensionPlace(route.name === "extension" ? route.extension : "", route.name === "extension" ? route.ui : "")?.title;
   const title =
-    inWorkView(route) || route.name === "terminal" ? t("work-entry.title") : pane ? agentTitle || "Agent" : route.name === "persona" ? "Persona" : route.name === "persona-new" ? t("app.title_new_chat") : route.name === "history" ? t("app.title_history") : route.name === "health" ? t("app.title_health") : route.name === "profile" ? t("app.title_profile") : route.name === "inbox" ? t("app.title_inbox") : route.name === "messages" ? t("app.title_messages")
+    inWorkView(route) || route.name === "terminal" ? t("work-entry.title") : pane ? agentTitle || "Agent" : route.name === "persona" ? "Persona" : route.name === "persona-new" ? t("app.title_new_chat") : route.name === "history" ? t("app.title_history") : route.name === "health" ? t("app.title_health") : route.name === "profile" ? t("app.title_profile") : route.name === "inbox" ? t("app.title_inbox") : route.name === "messages" ? t("app.title_messages") : route.name === "starred" ? t("starred.title")
       : route.name === "request" ? t("app.title_request") : route.name === "routines" ? t("app.title_routines") : route.name === "kb" ? t("app.title_kb") : route.name === "workspace-board" ? t("app.title_workspace_board") : route.name === "todos" ? t("app.title_todos") : route.name === "machines" || route.name === "machine" ? t("app.title_machines") : route.name === "space" ? route.space : route.name === "settings" ? t("app.title_settings")
       : route.name === "agents" ? t("app.title_agents") : route.name === "agent-list" ? "Agents" : route.name === "agent-archives" ? t("app.title_agent_archives") : route.name === "compare" ? t("app.title_compare_runs") : route.name === "extension" ? extensionTitle || t("app.title_extension") : route.name === "subscriptions" ? t("app.title_subscriptions") : route.name === "not-found" ? t("app.title_not_found") : t("app.title_home");
 
@@ -513,6 +541,9 @@ function Shell() {
       break;
     case "messages":
       main = <Messages id={route.id} onToggleSidebar={toggle} />;
+      break;
+    case "starred":
+      main = <StarredMessages onToggleSidebar={toggle} />;
       break;
     case "routines":
       main = <Routines onToggleSidebar={toggle} />;
@@ -587,7 +618,7 @@ function Shell() {
         )}
         style={{ transitionTimingFunction: EASE }}
       >
-        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
+        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
         {!narrow && !rail && <SidebarResize column={sidebarId} />}
       </div>
       {/* the scrim fades out as well as in; a drag sets its opacity as it goes (lib/drawer.ts) */}
@@ -662,9 +693,21 @@ function Offline({ onToggleSidebar, trying }: { onToggleSidebar: () => void; try
 // A tab link whose tab is gone (closed, or herdr restarted with new ids) and no pane to fall back to.
 function TabGone({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+    <NoticePage onToggleSidebar={onToggleSidebar}>
       <p className="text-[13px] text-ink-2">{t("app.tab_gone")}</p>
-      <button type="button" onClick={onToggleSidebar} className="whitespace-nowrap rounded-control px-2.5 py-1.5 text-[12.5px] font-medium text-accent-ink hover:bg-hover lg:hidden">{t("app.open_sidebar")}</button>
+    </NoticePage>
+  );
+}
+
+// A notice in the middle of a page with no header of its own, under Offline's: the sidebar button where every page has
+// it. A wide screen shows the sidebar itself, and the notice stays as it was there.
+function NoticePage({ onToggleSidebar, children }: { onToggleSidebar: () => void; children: React.ReactNode }) {
+  return (
+    <div className="flex h-full flex-col">
+      <header className="flex h-14 shrink-0 items-center px-3 sm:px-4 lg:hidden">
+        <IconButton icon="sidebar" label={t("app.sidebar")} onClick={onToggleSidebar} />
+      </header>
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">{children}</div>
     </div>
   );
 }
@@ -677,7 +720,7 @@ function SessionChoices({ mid, sid, onToggleSidebar }: { mid: string; sid: strin
   const link = resolveSessionLink(all, mid, sid, loaded);
   const candidates = link.kind === "ambiguous" ? link.candidates : [];
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+    <NoticePage onToggleSidebar={onToggleSidebar}>
       <p className="text-[13px] text-ink-2">{t("app.session_choices", { count: candidates.length, sid })}</p>
       <ul className="flex w-full max-w-96 flex-col gap-1">
         {candidates.map((s) => {
@@ -695,8 +738,7 @@ function SessionChoices({ mid, sid, onToggleSidebar }: { mid: string; sid: strin
           );
         })}
       </ul>
-      <button type="button" onClick={onToggleSidebar} className="whitespace-nowrap rounded-control px-2.5 py-1.5 text-[12.5px] font-medium text-accent-ink hover:bg-hover lg:hidden">{t("app.open_sidebar")}</button>
-    </div>
+    </NoticePage>
   );
 }
 

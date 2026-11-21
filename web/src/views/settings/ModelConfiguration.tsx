@@ -6,30 +6,29 @@ import {
   type ModelBinding, type ModelConfigurationBody, type ModelDraft, type ModelProvider, type ModelPurpose, type ModelPurposeBody,
 } from "../../lib/model-config";
 import {
-  agentsOverride, catalogLists, chooseProvider, claudeCodeOnly, configDirChoices, configDirLabel, draftFor, effortOffered, executionForm, followedCategory, modelConfiguration, modelPatch, overridden,
-  ownRecord, parentCategory, providersFor, purposeDescription, purposeGroups, purposeLaunch, resetPatch, runtimeChoices, saveModelPurpose, supportsField, withPurposeAfter,
+  agentsOverride, catalogLists, chooseProvider, claudeCodeOnly, configDirChoices, configDirLabel, draftFor, effortOffered, executionForm, followedCategory, isModelRunLauncher, modelConfiguration, modelPatch, overridden,
+  ownRecord, parentCategory, permissionModesForProvider, providersFor, purposeDescription, purposeGroups, purposeLaunch, resetPatch, runtimeChoices, saveModelPurpose, supportsField, withPurposeAfter,
   withUsesAfterCategories,
 } from "../../lib/model-config-execution";
+import { BYPASS_MODE, BYPASS_WARNING, modeTitle } from "../../lib/session-actions";
 import { ASSISTANT_MODEL_PICK_FEATURE, mainChatAgentMismatch } from "../../lib/assistant-models";
 import { SUPERVISE_PURPOSE } from "../../lib/background-supervisor";
 import type { AssistantLaunchers } from "../../lib/session-models";
-import { effortChoices, providerModels, takesEffort } from "../../lib/launcher-models";
+import { effortChoices, takesEffort } from "../../lib/launcher-models";
 import { useStore } from "../../lib/store";
 import { formatTokens } from "../../lib/tokens";
 import { formatNumber, t } from "../../i18n";
 import { Button, Dialog, IconButton, Loading, toast } from "../../ui/atoms";
 import { Segmented } from "../assistant/parts";
 import { Icon } from "../../ui/icons";
-import type { ModelList } from "../../ui/ModelPicker";
-import { lazyPage } from "../../lib/lazy-page";
 import { Group, Pill, Row } from "./SettingsParts";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { ConfigurationManager } from "./ConfigurationManager";
 import { DirectAPIEditor, DirectEffortSelect, directEffortState } from "./DirectAPIEditor";
+import { ModelPicker, useLauncherModels } from "./ModelBindingPickers";
 import { ModelProfiles } from "./ModelProfiles";
-
-// The picker is shared with task execution; load it when editing a model, outside Settings' preload dependencies.
-const ModelPicker = lazyPage(() => import("../../ui/ModelPicker").then((m) => m.ModelPicker));
+import { candidateDraft, candidateProblem, candidateProviders, candidateUpdate, type CandidateDraft } from "../../lib/model-candidates";
+import { ExtensionCandidates } from "./ExtensionCandidates";
 
 const UNVERIFIED_STATUS = "未验证"; // i18n-ignore: stable wire sentinel, not user-facing text.
 
@@ -85,7 +84,7 @@ function ModelConfigurationForManager({ manager, open, onOpen, onProviders }: { 
   return (
     <>
       <h2 className="mb-3 px-1 text-[15px] font-semibold text-ink">{t("settings-nav.tab_model_config")}</h2>
-      <ModelProfiles manager={manager} providers={data?.providers} onChanged={() => void load()} />
+      <ModelProfiles manager={manager} providers={data?.providers} purposes={data?.purposes} onChanged={() => void load()} />
       <div className="mb-4 flex items-center gap-2">
         <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-control bg-surface px-3 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
           <Icon name="search" size={13} stroke={2} className="text-ink-3" />
@@ -149,7 +148,7 @@ function PurposeRow({ purpose: p, providers, sourceName, category, onOpen }: { p
         <Row label={p.id === "agent.new" ? t("newagent.title") : p.name} onClick={onOpen} wrapHint hint={<>
           {/* what the purpose is for, right under its name (#5806); the model and how it runs follow */}
           {description && <div data-testid="purpose-description" className="mb-1 whitespace-normal">{description}</div>}
-          <div className="truncate">{modelSummary(p, providers)}</div>
+          <div className="truncate">{p.kind === "launcher" && p.effective?.permission_mode ? `${modelSummary(p, providers)} · ${modeTitle(p.effective.permission_mode)}` : modelSummary(p, providers)}</div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <Pill wrap>{form.label} · {form.backend}</Pill>
             {inheritance && <span className="whitespace-normal">{inheritance}</span>}
@@ -191,18 +190,14 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const [data, setData] = useState<ModelPurposeBody | null>(null);
   const [linkedParent, setLinkedParent] = useState<ModelPurpose>();
   const [draft, setDraft] = useState<ModelDraft>({ provider: "", model: "", effort: "", runtime: "" });
+  const [candidateEdits, setCandidateEdits] = useState<CandidateDraft>();
   const [error, setError] = useState("");
   const [conflict, setConflict] = useState(false);
   const [busy, setBusy] = useState(false);
   const [models, setModels] = useState<{ id: string; name?: string }[]>([]);
   const [modelsError, setModelsError] = useState("");
-  // A launcher provider's /model list (#943), from a machine that has it (`machine`), and the picker over it.
-  const [launcherList, setLauncherList] = useState<ModelList & { machine?: string; provider?: string }>({ status: "idle" });
   const [picking, setPicking] = useState(false);
   const [query, setQuery] = useState("");
-  // "Retry" / "Reload": the next load asks the CLI again (refresh) and keeps showing the list meanwhile, once.
-  const [reload, setReload] = useState(0);
-  const refreshNext = useRef(false);
   const search = useRef<HTMLInputElement>(null);
   const machines = useStore((s) => s.machines);
   const mainSession = useStore((s) => {
@@ -226,6 +221,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
       setLinkedParent(parent);
       setData(r);
       setDraft(draftFor(r.purpose));
+      setCandidateEdits(candidateDraft(r.purpose));
       setError("");
       setConflict(false);
     } catch (e) {
@@ -245,6 +241,9 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
 
   const p = data?.purpose;
   const candidates = p ? providersFor(p, data.providers) : [];
+  const directCandidates = p && candidateEdits ? candidateProviders(p, data.providers) : [];
+  const candidateChange = p?.candidates && candidateEdits && candidateUpdate(p.candidates, candidateEdits);
+  const candidateError = p?.candidates && candidateEdits ? candidateProblem(p.candidates, candidateEdits, directCandidates) : "";
   // The draft names no provider of its own: once saved it runs on what it follows. While nothing is overridden that is
   // what is in effect; with an override, the binding of the category a use with a record of its own follows (from the
   // page's catalog), as the reset makes it (#7980). Without that, what is in effect, as before.
@@ -258,7 +257,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const category = p && !followsAgents && catalog ? followedCategory(p, catalog) : undefined;
   const follow = followsAgents ? t("settings-modelconfiguration.follow_agents") : category ? t("settings-modelconfiguration.follow_category", { name: category.name }) : "";
   const onlyClaudeID = useId();
-  const writable = p && (["provider", "model", "effort"] as const).some((field) => supportsField(p, field));
+  const writable = p && (["provider", "model", "effort", "permission_mode"] as const).some((field) => supportsField(p, field));
   // The Direct API editor (model discovery, efforts by model, draft test: #6887) is for a direct API category's own
   // binding. A use with a record of its own under a category (ownRecord: Meeting minutes, an extension's purpose) keeps
   // the shared editor, whose empty draft follows that category's binding and whose effort goes by effortOffered (#7980).
@@ -268,22 +267,11 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const effortAllowed = !!p && effortOffered(p, chosen, effectiveProvider, followsAgents,
     !!data?.providers.some((provider) => provider.chat_effort === true));
   const listProvider = p?.kind !== "plugin" && chosen?.kind === "launcher" && supportsField(p!, "model") ? chosen.id : "";
-  useEffect(() => {
-    const refresh = refreshNext.current;
-    refreshNext.current = false;
-    if (!refresh) { setPicking(false); setQuery(""); } // another provider: start closed; a refresh keeps the list open
-    if (!listProvider) { setLauncherList({ status: "idle" }); return; }
-    const controller = new AbortController();
-    // Another provider's list never stays up while this one's loads (a pick would be the other provider's id).
-    setLauncherList((l) => ({ status: "loading", provider: listProvider, list: refresh && l.provider === listProvider ? l.list : undefined }));
-    providerModels(listProvider, { manager, refresh, machine: p?.machine_id, signal: controller.signal })
-      .then((list) => setLauncherList({ status: "ready", list, machine: list?.machine, provider: listProvider }))
-      .catch((e) => { if (!controller.signal.aborted) setLauncherList({ status: "error", error: errorText(e), provider: listProvider }); });
-    return () => controller.abort();
-  }, [listProvider, reload, p?.machine_id]);
-  const reloadList = () => { refreshNext.current = true; setReload((n) => n + 1); };
-  // The picker while there is a list (or one coming); the plain field without one: an older hub, a failure.
-  const picker = launcherList.status === "loading" || (launcherList.status === "ready" && !!launcherList.list?.models.length);
+  const { list: launcherList, reload: reloadList, hasPicker: picker } = useLauncherModels(listProvider, {
+    manager,
+    machine: p?.machine_id,
+    onProviderChange: () => { setPicking(false); setQuery(""); },
+  });
   // Left empty, the model is inherited while the provider is too (what runs now when nothing here is set; with an
   // override, the category's); with a provider picked here it is that provider's default (the list's "Default").
   // An own record that names its parent's provider still inherits an empty model or effort from that parent. Another
@@ -300,10 +288,20 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
     : sameEffectiveProvider && !p?.override.effort ? p?.effective?.effort : undefined;
   const chatEffort = !directAPI && chosen?.kind === "api" && chosen.api === "chat"
     ? directEffortState(chosen, [], effortModel) : undefined;
-  const listedEfforts = launcherList.status === "ready" && launcherList.list && takesEffort(launcherList.list.agent)
-    ? effortChoices(launcherList.list, draft.model, inherited) : (p?.id === "inbox.triage" || p?.kind === "api" ? ["off", "low", "medium", "high", "xhigh", "max"] : ["low", "medium", "high", "xhigh", "max"]);
   const effectiveAgent = providerAgent(effectiveProvider, p?.effective?.provider);
   const chosenAgent = (launcherList.provider === listProvider && launcherList.list?.agent) || providerAgent(chosen, runsOn);
+  const permissionModes = p ? permissionModesForProvider(p, chosen, chosenAgent) : [];
+  const inheritedPermissionMode = following
+    ? sameParentProvider ? parent?.effective?.permission_mode : undefined
+    : sameEffectiveProvider && !p?.override?.permission_mode ? p?.effective?.permission_mode : undefined;
+  const codexRunLauncher = p?.kind === "api" && isModelRunLauncher(chosen) && chosenAgent === "codex";
+  const listedEfforts = launcherList.status === "ready" && launcherList.list && takesEffort(launcherList.list.agent)
+    ? effortChoices(launcherList.list, draft.model, inherited)
+    : (codexRunLauncher
+      ? ["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+      : p?.id === "inbox.triage" || p?.kind === "api"
+        ? ["off", "low", "medium", "high", "xhigh", "max"]
+        : ["low", "medium", "high", "xhigh", "max"]);
   const mainDefaultProvider = draft.provider || p?.effective?.provider;
   const mainInfo: AssistantLaunchers = {
     launchers: (data?.providers ?? []).map((v) => ({ name: v.id, display_name: v.name, agent: providerAgent(v) })),
@@ -324,16 +322,23 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const configDirs = p ? configDirChoices(p, chosenAgent) : [];
   const previewForm = p ? executionForm({ ...p, effective: { ...p.effective, provider: runsOn, runtime: draft.runtime || p.effective?.runtime } }, data?.providers, machines) : undefined;
   const listMachine = machines.find((m) => m.id === launcherList.machine)?.name ?? launcherList.machine;
+  const canSave = !!(writable || candidateChange) && !conflict && !(candidateChange && candidateError);
+  // The binding reset saves immediately. Keep a pending candidate draft until Save or Cancel.
+  const canReset = writable && !conflict && !candidateChange;
   const save = async (restore = false) => {
-    if (!p || !writable || busy || conflict) return;
+    if (!p || busy || !(restore ? canReset : canSave)) return;
     setBusy(true);
     setError("");
     try {
       // one patch: the reset's, keeping the runtime and the profile (a use with a record of its own clears all three
       // whatever this page grouped it under),
       // else the draft's fields, effort with them where the provider it runs on takes one
-      const patch = restore ? resetPatch(p, draft.runtime, draft.config_dir) : modelPatch(p, draft, effortAllowed);
-      const r = await saveModelPurpose(p, patch, manager);
+      const permissionAllowed = permissionModes.length > 0;
+      const patch = restore ? resetPatch(p, draft.runtime, draft.config_dir) : modelPatch(p, draft, effortAllowed, permissionAllowed);
+      // Editing only the candidate order must not rewrite an independently inherited binding.
+      const bindingUnchanged = !restore && candidateChange && JSON.stringify(patch) === JSON.stringify(modelPatch(p, draftFor(p), effortAllowed, permissionAllowed));
+      const changes = !restore && candidateChange ? { ...(bindingUnchanged ? { revision: p.revision } : patch), candidates: candidateChange } : patch;
+      const r = await saveModelPurpose(p, changes, manager);
       if (!alive.current) return;
       setData(r);
       setDraft(draftFor(r.purpose));
@@ -349,10 +354,10 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
     }
   };
 
-  const reset = <Button tone="quiet" disabled={busy || !writable || conflict} onClick={() => void save(true)}>{follow || t("settings-modelconfiguration.restore")}</Button>;
+  const reset = <Button tone="quiet" disabled={busy || !canReset} onClick={() => void save(true)}>{follow || t("settings-modelconfiguration.restore")}</Button>;
   const actions = <>
     <Button tone="quiet" disabled={busy} onClick={onClose}>{t("common.cancel")}</Button>
-    <Button tone="primary" busy={busy} disabled={!writable || conflict} onClick={() => void save()}>{t("common.save")}</Button>
+    <Button tone="primary" busy={busy} disabled={!canSave} onClick={() => void save()}>{t("common.save")}</Button>
   </>;
   return (
     <Dialog open={id !== null} onClose={() => { if (!busy) onClose(); }} width={480} title={p?.name ?? t("settings-modelconfiguration.dialog_title")}
@@ -366,9 +371,12 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
       {p && <div className="flex flex-col gap-4">
         {followsAgents && <p className="text-[12px] text-ink-3">{agentsOverrideStatus(p.override)}</p>}
         {category && <p className="text-label text-ink-3">{categoryStatus(p.override, category)}</p>}
+        {p.candidates && candidateEdits && <ExtensionCandidates setting={p.candidates} draft={candidateEdits} providers={directCandidates}
+          busy={busy} problem={candidateError} onChange={setCandidateEdits} />}
         <Group title={t("settings-modelconfiguration.effective")} footer={p.inherited_from ? t("settings-modelconfiguration.inherited_from", { name: sourceName(p.inherited_from) ?? "" }) : t("settings-modelconfiguration.effective_footer")}>
           <Row label={t("settings-modelconfiguration.provider")} mono><span className="max-w-[220px] truncate">{providerName(p.effective?.provider, data?.providers) ?? t("settings-modelconfiguration.not_configured")}</span></Row>
           <Row label={t("settings-modelconfiguration.model")} mono><span className="max-w-[220px] truncate">{p.effective?.model || t("settings-modelconfiguration.provider_default")}</span></Row>
+          {p.kind === "launcher" && p.effective?.permission_mode && <Row label={t("settings-modelconfiguration.permission_mode")}><span>{modeTitle(p.effective.permission_mode)}</span></Row>}
           {runtimes.length > 0 && <Row label={t("settings-modelconfiguration.runtime")}><span>{runtimeLabel(p.effective?.runtime, effectiveAgent)}</span></Row>}
           {configDirChoices(p, effectiveAgent).length > 0 && <Row label={t("settings-modelconfiguration.config_dir")}><span>{configDirLabel(p.effective?.config_dir)}</span></Row>}
           {p.status && !(directAPI && p.status === UNVERIFIED_STATUS) && <Row label={t("settings-modelconfiguration.status")}><Pill>{p.status}</Pill></Row>}
@@ -434,6 +442,22 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
             onChange={(e) => setDraft((d) => ({ ...d, effort: e.target.value }))} />
           <datalist id="model-efforts">{listedEfforts.map((v) => <option key={v} value={v} />)}</datalist>
         </label>)}
+        {!directAPI && permissionModes.length > 0 && <label className="block">
+          <span className="mb-1 block text-label font-medium text-ink-2">{t("settings-modelconfiguration.permission_mode")}</span>
+          <select data-permission-mode-select className={inputClass} value={draft.permission_mode ?? ""} disabled={busy}
+            onChange={(e) => setDraft((d) => ({ ...d, permission_mode: e.target.value }))}>
+            <option value="">{inheritedPermissionMode ? t("settings-modelconfiguration.permission_mode_inherit", { mode: modeTitle(inheritedPermissionMode) }) : t("settings-modelconfiguration.follow_default")}</option>
+            {draft.permission_mode && !permissionModes.some((m) => m.id === draft.permission_mode) && (
+              <option value={draft.permission_mode}>{modeTitle(draft.permission_mode)}</option>
+            )}
+            {permissionModes.map((m) => <option key={m.id} value={m.id}>{m.title}</option>)}
+          </select>
+          <span className={`mt-1 block text-submeta ${draft.permission_mode === BYPASS_MODE ? "text-red" : "text-ink-3"}`}>
+            {draft.permission_mode === BYPASS_MODE
+              ? BYPASS_WARNING
+              : permissionModes.find((m) => m.id === draft.permission_mode)?.detail ?? t("settings-modelconfiguration.permission_mode_hint")}
+          </span>
+        </label>}
         {runtimes.length > 0 && <div className="block">
           <span className="mb-1 block text-[12px] font-medium text-ink-2">{t("settings-modelconfiguration.runtime")}</span>
           <Segmented label={t("settings-modelconfiguration.runtime")} value={chosenAgent === "claude" ? draft.runtime : "cli"} options={runtimes.map((r) => ({ v: r.id, label: r.label }))}

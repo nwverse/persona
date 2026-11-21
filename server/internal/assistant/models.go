@@ -41,20 +41,25 @@ type modelRecord struct {
 
 // ModelProvider is one provider as Settings › Model configuration offers it: never its key.
 type ModelProvider struct {
-	ID           string                `json:"id"`
-	Name         string                `json:"name"`
-	Kind         string                `json:"kind"`
-	Agent        string                `json:"agent,omitempty"`
-	API          string                `json:"api,omitempty"`
-	ChatEffort   bool                  `json:"chat_effort,omitempty"`
-	Effort       string                `json:"effort,omitempty"`
-	Model        string                `json:"model,omitempty"`
-	Machines     []string              `json:"machines,omitempty"`
-	Hidden       bool                  `json:"hidden,omitempty"`
-	HasKey       bool                  `json:"has_key,omitempty"`
-	Models       []proto.ProviderModel `json:"models,omitempty"`
-	ModelAliases map[string]string     `json:"model_aliases,omitempty"`
-	Status       string                `json:"status,omitempty"`
+	ID              string                  `json:"id"`
+	Name            string                  `json:"name"`
+	Kind            string                  `json:"kind"`
+	Source          string                  `json:"source,omitempty"`
+	Agent           string                  `json:"agent,omitempty"`
+	API             string                  `json:"api,omitempty"`
+	ChatEffort      bool                    `json:"chat_effort,omitempty"`
+	Effort          string                  `json:"effort,omitempty"`
+	Model           string                  `json:"model,omitempty"`
+	Machines        []string                `json:"machines,omitempty"`
+	Hidden          bool                    `json:"hidden,omitempty"`
+	HasKey          bool                    `json:"has_key,omitempty"`
+	PermissionModes proto.PermissionModeSet `json:"permission_modes,omitempty"`
+	Models          []proto.ProviderModel   `json:"models,omitempty"`
+	ModelAliases    map[string]string       `json:"model_aliases,omitempty"`
+	Status          string                  `json:"status,omitempty"`
+	// Internal provenance for model.run compatibility checks (never serialized).
+	builtinCompanion bool
+	modelRunMachines []string
 }
 
 type ModelChoice = assistantwire.ModelChoice
@@ -148,7 +153,7 @@ var modelPurposes = []ModelPurpose{
 	{ID: "kb.moments", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "kb.topics", Group: "group_processing", Kind: "api", Parent: "kb"}, // knowledge points by topic (kb/topics.go)
 	{ID: "assistant.title", Group: "group_processing", Kind: "api", Parent: "kb"},
-	{ID: "assistant.route", Group: "group_processing", Kind: "api", Parent: "kb"}, // New chat: a direction or a quick chat (route.go)
+	{ID: "assistant.route", Group: "group_processing", Kind: "api", Parent: "kb"}, // Suggest a supervisor for a new agent (agent_route.go).
 	{ID: "agent.title", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "todo.title", Group: "group_processing", Kind: "api", Parent: "kb"}, // a task's todo (assistant/todo_titles.go)
 	// A meeting or note named while it records (kb/recording_title.go, #8873): a few short calls a recording.
@@ -488,10 +493,10 @@ func (s *Service) modelProviders(ctx context.Context) []ModelProvider {
 				}
 			}
 		}
-		out = append(out, ModelProvider{ID: "launcher." + v.Name, Name: cmp.Or(v.DisplayName, v.Name), Kind: kind, Agent: agent, API: apiName, ChatEffort: kind == "api" && apiName == "chat", Effort: v.Effort, Model: v.Model, Machines: v.Machines, Hidden: v.Hidden, HasKey: v.HasKey, Models: v.Models, ModelAliases: aliases})
+		out = append(out, ModelProvider{ID: "launcher." + v.Name, Name: cmp.Or(v.DisplayName, v.Name), Kind: kind, Source: v.Source, Agent: agent, API: apiName, ChatEffort: kind == "api" && apiName == "chat", Effort: v.Effort, Model: v.Model, Machines: v.Machines, Hidden: v.Hidden, HasKey: v.HasKey, PermissionModes: v.PermissionModes, Models: v.Models, ModelAliases: aliases, builtinCompanion: v.builtinCompanion, modelRunMachines: v.modelRunMachines})
 	}
 	if !slices.ContainsFunc(out, func(p ModelProvider) bool { return p.ID == "launcher.claude" }) {
-		p := ModelProvider{ID: "launcher.claude", Name: mc(l, "provider_claude_default"), Kind: "launcher", Agent: "claude"}
+		p := ModelProvider{ID: "launcher.claude", Name: mc(l, "provider_claude_default"), Kind: "launcher", Source: "builtin", Agent: "claude"}
 		if b, ok := s.builtinClaude(ctx, s.zshrcLaunchers(ctx, false)); ok {
 			p.Machines = b.Machines // where plain claude is: Settings › Model Providers lists it by machine
 		}
