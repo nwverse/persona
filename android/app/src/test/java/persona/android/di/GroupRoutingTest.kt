@@ -87,6 +87,26 @@ class GroupRoutingTest {
         } finally { scope.coroutineContext[kotlinx.coroutines.Job]?.cancel() }
     }
 
+    @Test fun assistantOutsideTargetsUseTheirGroupsMergedMachineIds() = runBlocking<Unit> {
+        val snapshot = AssistantSnapshot(
+            directionTree = DirectionTree(listOf(Direction("dir-tree", external = ExternalDirection("work", "tree-agent")))),
+            externalDirections = mapOf("dir-fallback" to ExternalDirection("work", "fallback-agent")),
+        )
+        val source = object : AssistantConversations {
+            override val assistant = MutableStateFlow(snapshot)
+            override val pinned = MutableStateFlow(emptySet<SessionKey>())
+            override suspend fun refresh() = Unit
+            override suspend fun startConversation() = SessionKey("work", "main")
+        }
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Unconfined)
+        try {
+            val translated = source.inGroup(other, scope).assistant.value
+            assertEquals(SessionKey("work~g0a1b2c3d", "tree-agent"), translated.directionTree?.direction("dir-tree")?.external?.target)
+            assertEquals(SessionKey("work~g0a1b2c3d", "fallback-agent"), translated.externalDirections["dir-fallback"]?.target)
+            assertEquals(listOf("dir-tree"), translated.directionTree?.ids)
+        } finally { scope.coroutineContext[kotlinx.coroutines.Job]?.cancel() }
+    }
+
     @Test fun anotherGroupsFilesReachItsMachineByThePlainId() = runBlocking<Unit> {
         val calls = mutableListOf<String>()
         val files = object : SessionFiles {

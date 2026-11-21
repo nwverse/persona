@@ -208,6 +208,9 @@ fun AssistantSidebarContent(
         query, remember(groups) { (groups.directions + groups.others).distinctBy { it.sessionId } },
         knownChats.withConversationTag(history.activeTag), searchOn, management, "${choice.hubId.orEmpty()}|${choice.shown}",
         activeTag = history.activeTag)
+    val fullSearchChats = remember(openChats, groups.directions, groups.externalDirections) {
+        openChats + groups.directions.filter { it.sessionId in groups.externalDirections }
+    }
     Column(Modifier.fillMaxHeight()) {
         failure?.let { JNotice(it, status = Status.NeedsYou) }
         Box(Modifier.weight(1f)) {
@@ -291,13 +294,14 @@ fun AssistantSidebarContent(
     }
     if (fullSearchOpen && fullWindowSearch) {
         AssistantFullSearch(
-            chats = openChats,
+            chats = fullSearchChats,
             known = knownChats,
             searchOn = searchOn,
             management = management,
             hubKey = "${choice.hubId.orEmpty()}|${choice.shown}",
             words = words,
             names = received.directionNames,
+            externalDirections = groups.externalDirections,
             backgroundId = received.backgroundSupervisor,
             activeTag = history.activeTag,
             mainKey = received.mainSession,
@@ -310,10 +314,10 @@ fun AssistantSidebarContent(
             agentMachines = merged?.agentMachines.orEmpty(),
             pinnedAgents = merged?.pinnedAgents.orEmpty(),
             agentsFirst = searchAgentsFirst,
-            onOpenAgent = { key ->
+            onOpenAgent = if (merged == null && onOpenAgent == null) null else ({ key ->
                 fullSearchOpen = false
-                merged?.onSearchAgent?.invoke(key)
-            },
+                if (merged != null) merged.onSearchAgent(key) else onOpenAgent?.invoke(key)
+            }),
         )
     }
     ConversationHistoryDialogs(history, received.conversations, operationScope, onOpen = onOpen,
