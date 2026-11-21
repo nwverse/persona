@@ -26,6 +26,31 @@ SECRET = re.compile(r"environment|DYLD_|bearer\s|token=|password|secret|credenti
 COLLECTION_ERRORS = (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError)
 
 
+class ScopeValidationError(ValueError):
+    """A fixed non-sensitive scope category, never the rejected value or raw error."""
+
+    category = "scope-validation"
+
+    def __init__(self):
+        super().__init__(self.category)
+
+
+class ScopeContextFieldsError(ScopeValidationError):
+    category = "scope-context-fields"
+
+
+class ScopeIdentityError(ScopeValidationError):
+    category = "scope-identity"
+
+
+class ScopeOwnedSimulatorError(ScopeValidationError):
+    category = "scope-owned-simulator"
+
+
+class ScopeContextTimeError(ScopeValidationError):
+    category = "scope-context-time"
+
+
 class StreamParseError(ValueError):
     """Malformed NDJSON; its raw content must never become an exported status."""
 
@@ -76,8 +101,12 @@ def unavailable(status, category):
 
 
 def identity(udid, bundle):
-    if str(uuid.UUID(udid)).upper() != udid or bundle != BUNDLE:
-        raise ValueError("invalid CI identity")
+    try:
+        owned = str(uuid.UUID(udid)).upper() == udid and bundle == BUNDLE
+    except (ValueError, TypeError, AttributeError):
+        owned = False
+    if not owned:
+        raise ScopeIdentityError() from None
 
 
 def record(path, udid, bundle):
@@ -86,33 +115,45 @@ def record(path, udid, bundle):
                                "started_at": datetime.now(timezone.utc).isoformat()}))
 
 
-def read_scope_file(path):
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+def read_scope_file(path, error_type=ScopeContextFieldsError):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except OSError:
+        raise error_type() from None
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_size > 1024:
-            raise ValueError("invalid scope file")
+            raise error_type()
         data = os.read(fd, 1025)
         if len(data) > 1024:
-            raise ValueError("scope file exceeded byte limit")
+            raise error_type()
         return data.decode()
+    except (OSError, UnicodeDecodeError):
+        raise error_type() from None
     finally:
         os.close(fd)
 
 
 def scope(output, now):
-    context = json.loads(read_scope_file(output / CONTEXT))
-    if set(context) != {"udid", "bundle_id", "started_at"}:
-        raise ValueError("invalid context fields")
+    try:
+        context = json.loads(read_scope_file(output / CONTEXT))
+        if not isinstance(context, dict) or set(context) != {"udid", "bundle_id", "started_at"}:
+            raise ScopeContextFieldsError()
+    except (json.JSONDecodeError, TypeError, ValueError):
+        raise ScopeContextFieldsError() from None
     identity(context["udid"], context["bundle_id"])
-    if read_scope_file(output / "simulator.log").strip() != context["udid"]:
-        raise ValueError("owned simulator does not match")
-    start = datetime.fromisoformat(context["started_at"])
+    if read_scope_file(output / "simulator.log", ScopeOwnedSimulatorError).strip() != context["udid"]:
+        raise ScopeOwnedSimulatorError()
+    try:
+        start = datetime.fromisoformat(context["started_at"])
+    except (TypeError, ValueError):
+        raise ScopeContextTimeError() from None
     if start.utcoffset() != timedelta(0) or start > now or now - start > timedelta(hours=2):
-        raise ValueError("invalid context time")
+        raise ScopeContextTimeError()
+    # Never widen to the rest of the job, even if a later full-suite phase fails.
     end = min(now, start + timedelta(seconds=READINESS_SECONDS))
     if end <= start:
-        raise ValueError("empty context time window")
+        raise ScopeContextTimeError()
     return context, start, end
 
 
@@ -299,7 +340,9 @@ def collect(output, destination, reader=bounded_output, now=None, stream_reader=
         raise
     except COLLECTION_ERRORS as error:
         invalidate(status, evidence, context)
-        if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+        if isinstance(error, ScopeValidationError):
+            unavailable(status, error.category)
+        elif isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
             # Preserve the established command-deadline category, including the default stream.
             publish_status(status, "unavailable: scoped log command timed out\n")
         elif isinstance(error, OutputLimitError):

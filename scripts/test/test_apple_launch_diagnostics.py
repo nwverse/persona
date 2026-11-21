@@ -70,27 +70,55 @@ class LaunchDiagnosticsTests(unittest.TestCase):
         self.assertNotIn("DO NOT EXPORT", json.dumps(exported))
         self.assertIn("captured 1 scoped events", self.status())
 
-    def test_missing_invalid_or_mismatched_context_never_runs_a_command(self):
-        cases = [None, {**self.context, "udid": OTHER}, {**self.context, "udid": '" OR TRUE'},
-                 {**self.context, "bundle_id": "org.example.someone.else"},
-                 {**self.context, "started_at": "invalid"},
-                 {**self.context, "started_at": "2026-01-01T12:00:00"},
-                 {**self.context, "started_at": "2026-01-01T13:00:00+00:00"},
-                 {**self.context, "started_at": "2025-12-31T12:00:00+00:00"},
-                 {**self.context, "credentials": "DO NOT EXPORT"}, {}]
-        for context in cases:
-            with self.subTest(context=context):
+    def test_scope_rejections_expose_only_fixed_prerequisite_subtypes(self):
+        cases = [("missing", None, "scope-context-fields"),
+                 ("invalid UDID", {**self.context, "udid": '" OR TRUE'}, "scope-identity"),
+                 ("non-string UDID", {**self.context, "udid": None}, "scope-identity"),
+                 ("lowercase UDID", {**self.context,
+                                    "udid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}, "scope-identity"),
+                 ("other bundle", {**self.context, "bundle_id": "org.example.someone.else"}, "scope-identity"),
+                 ("invalid time", {**self.context, "started_at": "invalid"}, "scope-context-time"),
+                 ("naive time", {**self.context, "started_at": "2026-01-01T12:00:00"}, "scope-context-time"),
+                 ("non-UTC time", {**self.context, "started_at": "2026-01-01T13:00:00+01:00"}, "scope-context-time"),
+                 ("future time", {**self.context, "started_at": "2026-01-01T13:00:00+00:00"}, "scope-context-time"),
+                 ("expired time", {**self.context, "started_at": "2025-12-31T12:00:00+00:00"}, "scope-context-time"),
+                 ("extra credential", {**self.context, "credentials": "DO NOT EXPORT"}, "scope-context-fields"),
+                 ("missing fields", {}, "scope-context-fields"),
+                 ("non-object context", [], "scope-context-fields")]
+        for label, context, category in cases:
+            with self.subTest(case=label):
                 path = self.output / launch.CONTEXT
                 if context is None:
                     path.unlink()
                 else:
                     path.write_text(json.dumps(context))
+                (self.output / "simulator.log").write_text(UDID + "\n")
                 self.collect()
-                self.assertEqual(self.calls, [])
+                self.assertEqual(self.calls, [], label)
                 self.assertEqual(self.status(),
-                                 "unavailable: scope-validation-failure; no launch cause established\n")
+                                 f"unavailable: {category}-failure; no launch cause established\n")
+                self.assertNotIn("DO NOT EXPORT", self.status())
                 self.assertFalse((self.destination / "simulator-launch.json").exists())
                 self.assertFalse((self.destination / launch.CONTEXT).exists())
+
+    def test_scope_io_errors_expose_no_raw_error_or_private_path(self):
+        real_open = launch.os.open
+        for name, category in ((launch.CONTEXT, "scope-context-fields"),
+                               ("simulator.log", "scope-owned-simulator")):
+            with self.subTest(name=name):
+                def fail_private_file(path, *args, **kwargs):
+                    if Path(path).name == name:
+                        raise OSError("credential=DO NOT EXPORT /private/context.json")
+                    return real_open(path, *args, **kwargs)
+                with mock.patch.object(launch.os, "open", side_effect=fail_private_file):
+                    self.collect()
+                self.assertFalse(self.calls)
+                self.assertEqual(self.status(),
+                                 f"unavailable: {category}-failure; no launch cause established\n")
+                self.assertNotIn("DO NOT EXPORT", self.status())
+                self.assertNotIn("/private/", self.status())
+                self.assertEqual({path.name for path in self.destination.iterdir()},
+                                 {"simulator-launch.status.txt"})
 
     def test_context_symlink_is_not_read_or_copied(self):
         path = self.output / launch.CONTEXT
@@ -101,11 +129,12 @@ class LaunchDiagnosticsTests(unittest.TestCase):
         self.collect()
         self.assertFalse(self.calls)
         self.assertEqual(self.status(),
-                         "unavailable: scope-validation-failure; no launch cause established\n")
+                         "unavailable: scope-context-fields-failure; no launch cause established\n")
         self.assertEqual({p.name for p in self.destination.iterdir()}, {"simulator-launch.status.txt"})
 
     def test_both_scope_files_reject_links_large_files_and_fifos(self):
-        for name in (launch.CONTEXT, "simulator.log"):
+        for name, category in ((launch.CONTEXT, "scope-context-fields"),
+                               ("simulator.log", "scope-owned-simulator")):
             for kind in ("symlink", "large", "fifo", "directory"):
                 with self.subTest(name=name, kind=kind):
                     path = self.output / name
@@ -124,13 +153,21 @@ class LaunchDiagnosticsTests(unittest.TestCase):
                     self.collect()
                     self.assertFalse(self.calls)
                     self.assertEqual(self.status(),
-                                     "unavailable: scope-validation-failure; no launch cause established\n")
+                                     f"unavailable: {category}-failure; no launch cause established\n")
                     self.assertFalse((self.destination / "simulator-launch.json").exists())
                     if kind == "directory":
                         path.rmdir()
                     else:
                         path.unlink()
                     path.write_bytes(original)
+
+    def test_owned_simulator_mismatch_is_distinct_from_identity(self):
+        (self.output / "simulator.log").write_text(OTHER + "\n")
+        self.collect()
+        self.assertFalse(self.calls)
+        self.assertEqual(self.status(),
+                         "unavailable: scope-owned-simulator-failure; no launch cause established\n")
+        self.assertNotIn(OTHER, self.status())
 
     def test_output_is_rechecked_and_empty_is_not_evidence(self):
         self.collect(entries=[
