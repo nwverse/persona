@@ -33,7 +33,7 @@ import PersonaWire
         #expect(!EngineSelectionModel.canSelect(future, on: m))
         m.engines = []
         #expect(!EngineSelectionModel.canSelect(future, on: m))
-        #expect(EngineSelectionModel.options(m).map(\.id) == ["herdr", "herdr-core", "herdr-both", "orca", "tern", "paseo", "cindy"])
+        #expect(EngineSelectionModel.options(m).map(\.id) == ["herdr", "herdr-core", "herdr-both", "orca", "tern", "paseo", "cindy", "t3code"])
     }
 
     @Test func combinedEngineIsAKnownChoice() throws {
@@ -77,6 +77,15 @@ import PersonaWire
         #expect(EngineSelectionModel.canSelect(cindy, on: try machine()), "selectable offline, as the other engines")
         let m = try machine(",\"engine\":\"cindy\",\"engines\":[{\"id\":\"cindy\",\"name\":\"Cindy\",\"available\":true,\"version\":\"0.1.128\"}]")
         #expect(m.engine == .cindy && m.engines.first?.version == "0.1.128")
+    }
+
+    @Test func t3codeIsAKnownChoice() throws {
+        let t3 = MachineEngine.t3code
+        #expect(t3.rawValue == "t3code" && t3.name == "T3 Code")
+        #expect(t3.detail == "T3 Code 里的 Agent")
+        #expect(EngineSelectionModel.canSelect(t3, on: try machine()), "selectable offline, as the other engines")
+        let m = try machine(",\"engine\":\"t3code\",\"engines\":[{\"id\":\"t3code\",\"name\":\"T3 Code\",\"available\":true,\"version\":\"0.1.11\"}]")
+        #expect(m.engine == .t3code && m.engines.first?.version == "0.1.11")
     }
 
     @Test func noTerminalEngineIsTheEmptyHostSet() throws {

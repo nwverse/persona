@@ -72,6 +72,8 @@ def run(browser, base, hub, token, size, theme, shots):
     expect(section.locator('[data-engine="tern"]')).to_contain_text("Tern 里的终端")
     expect(box("cindy")).to_have_attribute("aria-checked", "false")
     expect(section.locator('[data-engine="cindy"]')).to_contain_text("Cindy 里的 Agent")
+    expect(box("t3code")).to_have_attribute("aria-checked", "false")
+    expect(section.locator('[data-engine="t3code"]')).to_contain_text("T3 Code 里的 Agent")
     expect(section.locator('[data-engine="herdr"]')).to_contain_text("默认")
     shot("machine")
     ok(f"{tag}: the machine page lists the set, herdr the default")

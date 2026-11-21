@@ -1,4 +1,4 @@
-# Engines: herdr, Herdr App, Orca, Tern, Paseo, Cindy
+# Engines: herdr, Herdr App, Orca, Tern, Paseo, Cindy, T3 Code
 
 **One engine per computer**: Persona sees and drives Claude Code / Codex through an engine. Each computer selects one; Agents shows live sessions only from it.
 Sessions elsewhere (other engines, ordinary terminals) appear only as "Not running" history. Default herdr preserves existing machines without an explicit choice.
@@ -8,11 +8,11 @@ plus Herdr App on another computer opening terminals through remote). Sessions m
 
 On computers with **botmux**, its sessions appear alongside the selected engine ("botmux" below). It is not an engine option and needs no selection.
 
-**Paseo** and **Cindy** are terminal-free: they run Agents through provider SDKs and runtimes, with node connected through a bridge; see `docs/integrations/paseo.md` and `server/internal/node/cindybridge.go`.
+**Paseo**, **Cindy** and **T3 Code** are terminal-free: they run Agents through provider SDKs and runtimes, with node connected through a bridge; see `docs/integrations/paseo.md`, `server/internal/node/cindybridge.go` and "T3 Code" below.
 
 ## Host sets (#2576)
 
-A computer can **enable several engines at once**, any combination of herdr, Herdr App, Orca, Tern, Paseo and Cindy, or none at all, plus a **default engine**:
+A computer can **enable several engines at once**, any combination of herdr, Herdr App, Orca, Tern, Paseo, Cindy and T3 Code, or none at all, plus a **default engine**:
 where new sessions started from the phone go. A retired session resumes in its previous terminal host while that host remains enabled;
 an explicit host selection overrides it. Other offline sessions use the default host. Each single choice above is a special case of a set: herdr is `{herdr}`, and
 "herdr + Herdr App" is `{herdr, herdr-core}` with herdr the default. API and storage: `docs/protocol/protocol.md` "Engines" ("Host sets").
@@ -79,6 +79,7 @@ iOS and Android also offer "No Terminal Engine", the empty set, last in Choose E
 | `tern` | Tern | Terminal blocks in Tern's sessions, in any of its windows ("Tern" below) | `tern` found (PATH, `~/.local/bin`, the app bundle) and its session daemon answering `tern inspect` |
 | `paseo` | Paseo | Paseo Agents (desktop app, `paseo` command; Claude Code, Codex, ACP all count) | Paseo daemon running; address in its home's `paseo.pid` responds |
 | `cindy` | Cindy | Cindy Agents (desktop app and `cindy-host`; Claude Code, Codex, Pi) | Cindy installed, running, or its loopback host endpoint / profile database present |
+| `t3code` | T3 Code | T3 Code's threads (desktop app, `t3` server; Codex, Claude Code and its other providers) | `t3` command line found, or a T3 server running on this computer ("T3 Code" below) |
 
 herdr and Herdr App are from the same developer but separate: neither sees the other's sessions. If using only one, select it;
 if both are used and should appear on the phone, choose "herdr + Herdr App (side by side)."
@@ -262,6 +263,29 @@ workspace behavior.
 - **Not yet**: live terminal and phone takeover (no stream), new worktrees, events from windows other than the first.
 - **Live test**: `go test -tags ternlive -run TernLive ./internal/node/ -v` opens a hidden session of its own, drives it and closes it again;
   the user's own sessions are only counted. Pitfalls: `docs/lessons/tern.md`.
+
+## T3 Code
+
+[T3 Code](https://github.com/pingdotgg/t3code) runs coding agents in threads that its own server owns; its desktop, web and phone clients
+all talk to that server. With T3 Code enabled, the node runs an in-process runtime bridge to it (`server/internal/node/t3codebridge.go`, #11784):
+
+- **Finding the server**: the state file the server writes while it runs, `<T3 home>/userdata/server-runtime.json` (the T3 home is
+  `$T3CODE_HOME`, else `~/.t3`), names its origin, process and version. Only a loopback `http` origin whose process is alive counts.
+- **Signing in**: the bridge issues itself an MCP client session with T3 Code's command line on this computer
+  (`t3 auth session issue --subject mcp-client`, labelled Persona, so it shows in T3 Code's settings), keeps the token in memory only and revokes
+  the session when the bridge stops. A session T3 Code no longer takes ends the bridge, which issues a new one.
+- **Reading**: projects, threads and timelines through the server's `/mcp` endpoint (`t3_project_list`, `t3_thread_list`, `t3_thread_read`),
+  every 2 seconds. A thread is session `t3code-<thread id>`; its project's folder is its space. Messages, reasoning and tool calls are shown;
+  checkpoints and other bookkeeping items are not.
+- **Writing**: a message is `t3 thread send` and a new thread `t3 thread start` (the message on standard input), which run with the machine
+  owner's authority as T3 Code's own clients do. A session the bridge issues has T3 Code's narrowest mode ceiling (approval-required), which
+  would refuse sending to threads in T3 Code's default full-access mode. A new thread goes to the T3 project whose folder is the deepest one holding
+  the chosen directory, with that project's default model and mode; a directory outside every T3 project is refused.
+- **Interrupting and closing**: Stop is `t3_thread_interrupt`, which the session's ceiling allows only for threads at approval-required; a
+  thread above it is refused with a line saying to stop it in T3 Code. Closing archives the thread.
+- **Not supported**: answering approvals and questions (T3 Code's MCP tools cannot; such a thread shows as Needs you and is answered in T3
+  Code), pictures (refused, never dropped), changing modes, choosing the model, worktrees, rewinding. Not yet tested against a live T3 Code
+  install; the tests run a synthetic MCP server and command line.
 
 ## tmux (approvals only)
 

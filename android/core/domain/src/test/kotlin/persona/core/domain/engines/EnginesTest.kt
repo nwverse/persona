@@ -45,8 +45,8 @@ class EnginesTest {
         val future = DetectedEngine("future", "Future", available = true)
         assertEquals(listOf("herdr", "future"), (Engines.options(machine(engines = listOf(herdr, future))).map { it.id }).zhAny())
         val fallback = Engines.options(machine())
-        assertEquals(listOf("herdr", "herdr-core", "orca", "tern", "paseo", "cindy"), (fallback.map { it.id }).zhAny())
-        assertEquals(listOf("herdr", "Herdr App", "Orca", "Tern", "Paseo", "Cindy"), (fallback.map { it.name }).zhAny())
+        assertEquals(listOf("herdr", "herdr-core", "orca", "tern", "paseo", "cindy", "t3code"), (fallback.map { it.id }).zhAny())
+        assertEquals(listOf("herdr", "Herdr App", "Orca", "Tern", "Paseo", "Cindy", "T3 Code"), (fallback.map { it.name }).zhAny())
         assertTrue(fallback.none { it.available })
     }
 
@@ -63,6 +63,8 @@ class EnginesTest {
         assertEquals("Paseo 里的 Agent", (Engines.detail("paseo")).zhAny())
         assertEquals("Tern 里的终端", (Engines.detail("tern")).zhAny())
         assertEquals("Cindy 里的 Agent", (Engines.detail("cindy")).zhAny())
+        assertTrue(Engines.canSelect("t3code", machine(online = false)))
+        assertEquals("T3 Code 里的 Agent", (Engines.detail("t3code")).zhAny())
     }
 
     @Test fun detectionNamesAndNotes() {
@@ -110,7 +112,7 @@ class EnginesTest {
 
     @Test fun noTerminalEngineIsListedLastAndOnlyForAHubWithHostSets() {
         assertEquals(listOf("herdr", "herdr-core", "none"), Engines.options(withHosts(listOf("herdr"), engines = listOf(herdr, core))).map { it.id })
-        assertEquals(listOf("herdr", "herdr-core", "orca", "tern", "paseo", "cindy", "none"), Engines.options(withHosts(listOf("herdr"), engines = emptyList())).map { it.id })
+        assertEquals(listOf("herdr", "herdr-core", "orca", "tern", "paseo", "cindy", "t3code", "none"), Engines.options(withHosts(listOf("herdr"), engines = emptyList())).map { it.id })
         assertEquals(listOf("herdr"), Engines.options(withHosts(null)).map { it.id })
         assertFalse(Engines.options(withHosts(null, engines = emptyList())).any { it.id == Engines.NONE })
         assertTrue(Engines.options(withHosts(emptyList())).last().available)

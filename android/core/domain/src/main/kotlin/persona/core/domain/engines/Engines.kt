@@ -28,6 +28,7 @@ object Engines {
         Known("tern", "Tern", CoreText.of(Key.EngineTern)),
         Known("paseo", "Paseo", CoreText.of(Key.EnginePaseo)),
         Known("cindy", "Cindy", CoreText.of(Key.EngineCindy)),
+        Known("t3code", "T3 Code", CoreText.of(Key.EngineT3Code)),
     )
 
     fun detail(id: String): CoreText? =

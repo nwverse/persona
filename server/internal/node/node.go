@@ -1236,6 +1236,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			n.runtimeHost.setOrcaBridge(n.hostEnabled(proto.EngineOrca))
 			// Cindy's agents come through its bridge (cindybridge.go).
 			n.runtimeHost.setCindyBridge(n.hostEnabled(proto.EngineCindy))
+			// T3 Code's threads come through its bridge (t3codebridge.go).
+			n.runtimeHost.setT3CodeBridge(n.hostEnabled(proto.EngineT3Code))
 		}
 		n.configured()
 		c := n.engineChoice()

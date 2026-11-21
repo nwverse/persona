@@ -217,10 +217,12 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
     static let paseo = Self(rawValue: "paseo")
     /// Cindy's agents (docs/integrations/engines.md): no terminal; the node runs a bridge to Cindy.
     static let cindy = Self(rawValue: "cindy")
+    /// T3 Code's threads (docs/integrations/engines.md "T3 Code"): no terminal; the node runs a bridge to T3 Code's server.
+    static let t3code = Self(rawValue: "t3code")
     /// No terminal engine: the empty host set (docs/integrations/engines.md "Host sets"), for a computer whose sessions
     /// are only the desktop apps' (#3302). Not a hub engine id: saved as `{"hosts": []}`, and not in `allCases`.
     static let noEngine = Self(rawValue: "none")
-    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .tern, .paseo, .cindy]
+    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .tern, .paseo, .cindy, .t3code]
     var id: String { rawValue }
     var name: String {
         switch self {
@@ -231,6 +233,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .tern: "Tern"
         case .paseo: "Paseo"
         case .cindy: "Cindy"
+        case .t3code: "T3 Code"
         case .noEngine: String(localized: "No Terminal Engine")
         default: rawValue
         }
@@ -244,6 +247,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .tern: String(localized: "Terminals in Tern")
         case .paseo: String(localized: "Agents in Paseo")
         case .cindy: String(localized: "Agents in Cindy")
+        case .t3code: String(localized: "Agents in T3 Code")
         case .noEngine: String(localized: "Sessions of the desktop apps only")
         default: nil
         }

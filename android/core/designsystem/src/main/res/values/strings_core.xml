@@ -257,6 +257,7 @@
     <string name="designsystem_core_engine_tern">Terminals in Tern</string>
     <string name="designsystem_core_engine_paseo">Agents in Paseo</string>
     <string name="designsystem_core_engine_cindy">Agents in Cindy</string>
+    <string name="designsystem_core_engine_t3code">Agents in T3 Code</string>
     <string name="designsystem_core_engine_none">No terminal engine</string>
     <string name="designsystem_core_engine_none_detail">Sessions of the desktop apps only</string>
     <string name="designsystem_core_engine_offline">Offline, no detection info yet</string>
