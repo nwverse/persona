@@ -212,6 +212,15 @@ func (d *DB) AdoptConversationAliases(ctx context.Context, machine, session, seg
 // The shared database lock fences activation/deletion across overlapping managers,
 // including the actual bounded send or tool action, not just a cached lookup.
 func (d *DB) WithConversationEpoch(ctx context.Context, machine, session string, epoch int64, fn func(*LogicalConversation) error) error {
+	return d.withConversationEpoch(ctx, machine, session, epoch, false, fn)
+}
+
+// WithDrainedConversationEpoch runs a background delivery after earlier owner input has settled.
+func (d *DB) WithDrainedConversationEpoch(ctx context.Context, machine, session string, epoch int64, fn func(*LogicalConversation) error) error {
+	return d.withConversationEpoch(ctx, machine, session, epoch, true, fn)
+}
+
+func (d *DB) withConversationEpoch(ctx context.Context, machine, session string, epoch int64, requireDrained bool, fn func(*LogicalConversation) error) error {
 	return conversationTransaction(ctx, d, func(tx pgx.Tx) error {
 		var current int64
 		var deleted bool
@@ -228,6 +237,15 @@ func (d *DB) WithConversationEpoch(ctx context.Context, machine, session string,
 		c, err := readLogicalConversation(ctx, tx, machine, session)
 		if err != nil {
 			return err
+		}
+		if requireDrained {
+			pending, err := conversationInputPending(ctx, tx, machine, session)
+			if err != nil {
+				return err
+			}
+			if c.Switch != nil || pending {
+				return ErrConversationSwitchBusy
+			}
 		}
 		return fn(c)
 	})
@@ -780,8 +798,12 @@ func (d *DB) ConversationClosureDone(ctx context.Context, machine, session strin
 }
 
 func (d *DB) ConversationInputPending(ctx context.Context, machine, session string) (bool, error) {
+	return conversationInputPending(ctx, d.pool, machine, session)
+}
+
+func conversationInputPending(ctx context.Context, q conversationQuerier, machine, session string) (bool, error) {
 	var pending bool
-	err := d.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM conversation_inputs WHERE logical_machine=$1 AND logical_session=$2 AND state IN ('queued','sending','in_doubt'))`, machine, session).Scan(&pending)
+	err := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM conversation_inputs WHERE logical_machine=$1 AND logical_session=$2 AND state IN ('queued','sending','in_doubt'))`, machine, session).Scan(&pending)
 	return pending, err
 }
 

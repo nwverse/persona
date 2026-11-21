@@ -19,6 +19,7 @@ type logicalConversationStore interface {
 	LogicalConversations(context.Context) ([]db.LogicalConversation, error)
 	AdoptConversationAliases(context.Context, string, string, string, string, string, []string) error
 	WithConversationEpoch(context.Context, string, string, int64, func(*db.LogicalConversation) error) error
+	WithDrainedConversationEpoch(context.Context, string, string, int64, func(*db.LogicalConversation) error) error
 	BeginConversationSwitch(context.Context, string, string, db.ConversationSwitch) error
 	PrepareConversationSegment(context.Context, string, string, string, conversationlog.Segment, int) error
 	ActivateConversationSegment(context.Context, string, string, string, int64) error

@@ -246,6 +246,11 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 		a.Cwd = wt.Path
 		params["cwd"], params["workspace_id"] = wt.Path, wt.WorkspaceID
 		if err := s.saveDispatchWorktree(sctx, tracker, wt.Path); err != nil {
+			cleanup, stop := context.WithTimeout(context.WithoutCancel(sctx), time.Minute)
+			defer stop()
+			if cleanupErr := s.call(cleanup, am.ID, "worktree.remove", map[string]any{"path": wt.Path}, nil); cleanupErr != nil {
+				return "", errors.Join(err, fmt.Errorf("could not remove the unused worktree at %s: %w", wt.Path, cleanupErr))
+			}
 			return "", err
 		}
 		note = fmt.Sprintf(" It runs in a new worktree on branch %s.", wt.Branch)

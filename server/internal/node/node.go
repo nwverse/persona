@@ -1120,6 +1120,10 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		input := idleCompactionInput{
 			At: time.Now(), Policy: p.IdleCompaction, Source: source,
 		}
+		if _, a2a := ctx.Value(a2aIdleKey{}).(bool); a2a {
+			// The Manager's short delivery attempt cannot wait for a compaction round.
+			input.Policy = nil
+		}
 		ctx = context.WithValue(ctx, idleCompactionInputKey{}, input)
 		n.noteIdleCompactionInput(p.SessionID, input)
 	}

@@ -71,7 +71,9 @@ func (s *Service) a2aSignal() {
 	}
 }
 
-func a2aDeliveryID(task string, seq int) string { return fmt.Sprintf("persona-a2a-%s-%d", task, seq) }
+func a2aDeliveryID(task string, seq int) string {
+	return fmt.Sprintf("%s%s-%d", proto.A2ADeliveryPrefix, task, seq)
+}
 
 func (s *Service) a2aItems(ctx context.Context, ref a2aRef) ([]proto.Item, error) {
 	var res struct{ Items []proto.Item }
