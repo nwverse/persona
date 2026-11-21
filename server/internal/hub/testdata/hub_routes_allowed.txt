@@ -73,6 +73,7 @@ GET /api/v1/machines/{mid}/preview/connect
 GET /api/v1/machines/{mid}/preview/servers
 GET /api/v1/machines/{mid}/screen/video/connect
 GET /api/v1/machines/{mid}/stat
+GET /api/v1/machines/{mid}/toolchain # on-demand read-only node relay (machine_toolchain.go)
 GET /api/v1/managers
 GET /api/v1/mutes
 GET /api/v1/ops/{id}
