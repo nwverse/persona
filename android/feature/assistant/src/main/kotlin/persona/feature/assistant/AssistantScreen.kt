@@ -189,6 +189,7 @@ fun AssistantScreen(
     /** The selected hub group's name while several are paired, which ends the title menu's heading as on iOS; null with one. */
     hubGroup: String? = null,
     composerUpload: persona.feature.chat.ComposerAttachmentUpload? = null,
+    composerState: persona.feature.chat.ChatComposerState? = null,
 ) = PersonaTheme {
     val receivedSnapshot by repository.assistant.collectAsStateWithLifecycle()
     val conversationsOf = repository as? persona.core.contracts.api.AssistantConversations
@@ -257,7 +258,7 @@ fun AssistantScreen(
     val draftError by key(draftEditor) {
         (draftEditor?.error ?: remember { MutableStateFlow<Int?>(null) }).collectAsStateWithLifecycle()
     }
-    val composer = savedComposer ?: transientComposer
+    val composer = savedComposer ?: composerState ?: transientComposer
     val draftRead by key(draftEditor) { (draftEditor?.ready ?: remember { MutableStateFlow(true) }).collectAsStateWithLifecycle() }
     val draftReady = draftEditor == null || draftRead
     LaunchedEffect(draftEditor, savedComposer) {

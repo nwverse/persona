@@ -196,6 +196,17 @@ type FeishuMessage struct {
 	From string `json:"from,omitempty"`
 }
 
+// OwnerApprovalProof is the hub-authenticated location and exact text of an
+// owner's direct reply. It is returned only after the matching one-use owner
+// action is consumed; the assistant still has to bind ParentID to the exact
+// pending proposal card and compare Text with the configured affirmative word.
+type OwnerApprovalProof struct {
+	MessageID string `json:"message_id"`
+	ParentID  string `json:"parent_id"`
+	ChatID    string `json:"chat_id"`
+	Text      string `json:"text"`
+}
+
 // FeishuFromElsewhere is FeishuMessage.From of a message the hub took from a group chat that is not opted in: the owner's
 // "@bot /ai …" and nothing else. The assistant opens a to-do for it in the home topic group, or in the owner's private chat when there is none (assistant/feishu_elsewhere.go).
 const FeishuFromElsewhere = "elsewhere"

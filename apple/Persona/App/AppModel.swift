@@ -1930,6 +1930,31 @@ final class AppModel {
         }
     }
 
+    /// An Agent opened from inside a page (a Brief card, Knowledge, a to-do, a meeting, a card in a conversation): a
+    /// drill-down (#9971, #12006). `push` puts the chat on top of that page, with Back to it, and the sidebar's selection
+    /// stays: the conversation's path (`pushInboxChat`), or a page's own destination (`pushedAgentChat`). A folded child
+    /// opens as its parent with its card shown, as `open` does. With no `push` (the Agents tab's own list, the Mac, the
+    /// sidebar, a sheet), another hub's Agent or a Persona conversation, it opens as `open` does.
+    func openInPage(_ key: SessionKey, push: ((SessionKey) -> Void)?) {
+        guard let push, key.group == (hub?.group ?? ""), session(key)?.assistant != true, key != assistantMain else {
+            open(key)
+            return
+        }
+        provisionalChat = nil
+        var target = key
+        if sideFold.home[key] == nil, let home = localChildHome(key), home.key != key, let child = home.childID {
+            moveDraft(from: key, to: home.key)
+            target = home.key
+            revealToken += 1
+            revealChild = ChildReveal(sessionID: child, token: revealToken)
+        } else {
+            revealChild = nil
+        }
+        clearMissingSessionDetail(target)
+        push(target)
+        if sessionIndex[target] == nil { Task { await refreshSessionDetail(target) } }
+    }
+
     func interactions(for key: SessionKey) -> [Interaction] {
         pendingInteractions.filter { ix in
             if ix.sessionKey == key { return true }
@@ -3426,6 +3451,9 @@ final class AppModel {
         // To the hub of the interaction's own group (docs/protocol/multi-hub.md「Connections and routing」).
         // A stopped Agent's work card still takes the answers that send it nothing: put off, or dismissed (#6839).
         guard canAnswer(ix) || ix.isLocalResolution(r), let api = api(ix.group) else { return }
+        if let phrase = r.ownerApprovalPhrase {
+            guard ix.ownerApprovalPhrase == phrase else { return }
+        }
         let handoff = ix.isSecretHandoff && r.allow == true
         if handoff && !handoffCard {
             toast = Toast(String(localized: "Approve it on its card in the chat."), style: .error)
@@ -3435,7 +3463,7 @@ final class AppModel {
         guard connection.networkUp else { notDone(); return }
         // A question's card stays where it is, greyed and marked "Sending…", until the hub has the answer: its picks and
         // text stay for a retry (#6279). Every other card goes at once and comes back if its answer fails.
-        let keepsCard = ix.kind == .question
+        let keepsCard = ix.kind == .question || r.ownerApprovalPhrase != nil
         guard let op = answerAttempts.begin(ix.uid, r) else { return } // its answer is on the way: a second tap sends nothing
         if !keepsCard {
             interactions[ix.uid] = nil
@@ -3453,6 +3481,15 @@ final class AppModel {
             endedInteractionIDs.insert(ix.uid)
         }
         do {
+            if let phrase = r.ownerApprovalPhrase {
+                _ = try await OpRetry.untilDelivered { () async throws -> Bool in
+                    try await api.replyOwnerApproval(ix, phrase: phrase, opID: op)
+                    return true
+                }
+                over()
+                Haptics.success()
+                return
+            }
             let res = try await OpRetry.untilDelivered { try await api.resolve(ix.id, r, opID: op, handoffCard: handoff) }
             if res.already == true, let existing = res.resolution, existing.answeredBy == AssistantAnswer.assistant, ix.kind == .question {
                 // The assistant answered first: its answer shows in the chat, where the user may change it.

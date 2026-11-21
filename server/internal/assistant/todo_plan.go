@@ -241,6 +241,9 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	if !ok {
 		return Todo{}, db.ErrTodoNotFound
 	}
+	if e.Done != nil && *e.Done && cur.DoneAt == nil && s.outsideBackingPending(id) {
+		return Todo{}, errOutsideDecisionPending
+	}
 	if cur.isConcern() && cur.DoneAt == nil && e.Done != nil && *e.Done {
 		return Todo{}, db.ErrConcernUnreported // only its report closes it (concerns.go); the store checks it again
 	}
@@ -312,6 +315,9 @@ func (s *Service) deleteTodo(ctx context.Context, id string) error {
 	cur, ok := s.todoNow(id)
 	if !ok {
 		return db.ErrTodoNotFound
+	}
+	if s.outsideBackingPending(id) {
+		return errOutsideDecisionPending
 	}
 	if err := s.removeTodo(ctx, id); err != nil {
 		return err

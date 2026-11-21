@@ -81,6 +81,21 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 		}
 		return true
 	}
+	// Outside decision replies take the task's action lock in answerDecisionText.
+	if decideAsk(&ask) && ask.OutsideID != "" {
+		result, err := s.answerDecisionText(ctx, id, ask.AskedAt.UTC().Format(timeKeyLayout), text)
+		switch {
+		case errors.Is(err, errAcceptStore):
+			s.botNote(ctx, messageID, i18n.T(l, "http-status.unavailable"))
+		case err != nil:
+			s.botNote(ctx, messageID, i18n.T(l, "assistant-reports.accept_not_taken", i18n.Args{"error": clip(oneLine(i18n.Localize(err, l)), 120)}))
+		case !result.taken:
+			s.botNote(ctx, messageID, i18n.T(l, "assistant-feishu_cards.already_handled"))
+		default:
+			s.botNote(ctx, messageID, i18n.T(l, "assistant-reports.outside_answered"))
+		}
+		return true
+	}
 	s.reviewDismissals.actions.acquire(id)
 	t, ok = s.todoNow(id)
 	if !ok {
@@ -249,6 +264,12 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 		return acceptResult{}, nil
 	}
 	completeDismissal := func() {}
+	if a.OutsideID != "" {
+		asked := a.AskedAt.UTC().Format(timeKeyLayout)
+		recommend := a.Recommend
+		b.mu.Unlock()
+		return s.answerOutside(ctx, id, asked, outsideAnswer{Option: recommend}, byDefault)
+	}
 	if todoOK && !byDefault {
 		var err error
 		completeDismissal, err = s.prepareDismissalForAnswer(ctx, t)
