@@ -344,7 +344,7 @@ func (s *Service) claudeInteractive(ctx context.Context) bool {
 	return v != nil && *v
 }
 
-var defaultOwnerApprovalPhrases = []string{"发", "同意"}
+var defaultOwnerApprovalPhrases = []string{"发", "同意"} // i18n-ignore: exact affirmative owner input, not displayed text
 
 func ownerReplyApprovalOn(v Settings) bool {
 	return v.OwnerReplyApproval != nil && *v.OwnerReplyApproval
