@@ -318,8 +318,8 @@ export class OpencodeAcpClient extends EventEmitter {
     }
   }
 
-  async newSession({ cwd, mcpServers = [] }, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
-    const res = await this.call('session/new', { cwd, mcpServers }, timeoutMs)
+  async newSession({ cwd, mcpServers = [], systemPrompt }, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
+    const res = await this.call('session/new', { cwd, mcpServers, ...(systemPrompt === undefined ? {} : { systemPrompt }) }, timeoutMs)
     if (res?.sessionId) this.loadedSessions.add(res.sessionId)
     return res
   }
@@ -330,9 +330,9 @@ export class OpencodeAcpClient extends EventEmitter {
     return res
   }
 
-  async resumeSession({ sessionId, cwd, mcpServers = [] }, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
+  async resumeSession({ sessionId, cwd, mcpServers = [], systemPrompt }, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
     // resume reconnects without replaying the transcript as session/update.
-    const res = await this.call('session/resume', { sessionId, cwd, mcpServers }, timeoutMs)
+    const res = await this.call('session/resume', { sessionId, cwd, mcpServers, ...(systemPrompt === undefined ? {} : { systemPrompt }) }, timeoutMs)
     this.loadedSessions.add(sessionId)
     return res
   }

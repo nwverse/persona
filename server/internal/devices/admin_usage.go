@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"reflect"
-	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/usagesource"
 )
@@ -516,7 +516,7 @@ func (d *Devices) respondUsageSource(w http.ResponseWriter, id string) {
 
 const hiddenProvidersMost = 16
 
-var providerName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+var providerName = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
 // cleanHiddenProviders lowercases, drops repeats and sorts the providers to hide; false when one is not a provider
 // name or there are too many.
