@@ -77,6 +77,10 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return "", fmt.Errorf("todos are unavailable: %v", err)
 	}
+	// Inspect the original fields before goal clipping or any workspace/brief side effects.
+	if err := s.checkPlanRepositoryDuplicates(ctx, a.Tasks); err != nil {
+		return "", err
+	}
 	reused := map[string]bool{}
 	modes := map[string]string{} // each computer's Claude Code default mode, read once for this plan
 	for i := range a.Tasks {

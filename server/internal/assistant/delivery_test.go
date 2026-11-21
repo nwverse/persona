@@ -31,12 +31,12 @@ func TestDeliveryMark(t *testing.T) {
 }
 
 func TestJudgedDelivery(t *testing.T) {
-	reply := func(text string) []prompts.TaskDoneReply { return []prompts.TaskDoneReply{{Text: text}} }
+	reply := func(text string) []taskDoneReply { return []taskDoneReply{doneReply(text)} }
 	pr := "开了 https://github.com/o/r/pull/12"
 	for _, tc := range []struct {
 		name                  string
 		state, gate, unblock  string
-		replies               []prompts.TaskDoneReply
+		replies               []taskDoneReply
 		wantState, wantUnhold string
 	}{
 		{"the judge's hold", "pr", "等用户批准合并", "user", reply(pr), deliveryPR, unblockUser},
@@ -76,10 +76,9 @@ func TestAutoFinishHoldsUndeliveredWork(t *testing.T) {
 	deliveryOn(t, s)
 	now := time.Now()
 	putTodo(s, Todo{ID: "todo_d", Title: "修登录", Origin: "conv1", CreatedAt: now.Add(-time.Hour),
-		Agents: []TodoAgent{{MachineID: "box", SessionID: "s9"}}})
+		Agents: []TodoAgent{{MachineID: "box", SessionID: "s9", LinkedAt: now.Add(-time.Minute)}}})
 	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s9", Status: proto.StatusDone})
-	f.setItems(proto.Item{Kind: proto.KindText, Role: "assistant",
-		Text: "修好了，https://github.com/o/r/pull/7\n交付：停在 PR；卡点：等用户批准合并；谁来解：用户"})
+	artifactReportProof(f, todoNow(s, "todo_d"), "修好了，https://github.com/o/r/pull/7\n交付：停在 PR；卡点：等用户批准合并；谁来解：用户", "https://github.com/o/r/pull/7")
 	f.judge = `{"verdict":"done","reason":"开了 PR","delivery":"pr","gate":"等用户批准合并","unblock":"user"}`
 	s.autoFinishTask(todoNow(s, "todo_d"), now, true)
 	got := todoNow(s, "todo_d")
@@ -156,6 +155,7 @@ func TestSupervisedUndeliveredTellsWhereItIsHeld(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	deliveryOn(t, s)
 	f.judge = `{"verdict":"done","reason":"开了 PR","delivery":"pr","gate":"等用户批准合并","unblock":"user"}`
+	artifactNodeProof(f, "https://github.com/o/r/pull/901", "contributor", "contributor", "fix/work", "fix/work", "abc", "abc")
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "做完了，https://github.com/o/r/pull/901 等合并\n交付：停在 PR；卡点：等用户批准合并；谁来解：用户", 0)
 	waitFor(t, "the message", func() bool { return len(f.notices()) == 1 })

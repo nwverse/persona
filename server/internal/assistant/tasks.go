@@ -115,11 +115,12 @@ type PlanTask struct {
 	// round), for ContinuesWhy: it keeps that to-do and its brief instead of creating another. Brief is
 	// the hub's: the brief as it will be kept, shown on the plan card so that "Start" confirms it; never what the tool
 	// call or a card's edit says.
-	Goal          string   `json:"goal,omitempty"`
-	OutOfBounds   []string `json:"out_of_bounds,omitempty"`
-	Continues     string   `json:"continues,omitempty"`
-	ContinuesWhy  string   `json:"continues_why,omitempty"`
-	ScopeRevision string   `json:"scope_revision,omitempty"`
+	Goal          string             `json:"goal,omitempty"`
+	OutOfBounds   []string           `json:"out_of_bounds,omitempty"`
+	Continues     string             `json:"continues,omitempty"`
+	ContinuesWhy  string             `json:"continues_why,omitempty"`
+	ScopeRevision string             `json:"scope_revision,omitempty"`
+	DistinctFrom  []TaskDistinctFrom `json:"distinct_from,omitempty"`
 	// StartedWhy: why the assistant starts this on its own, when the owner did not just ask for it.
 	StartedWhy string     `json:"started_why,omitempty"`
 	Brief      *TaskBrief `json:"brief,omitempty"`
@@ -292,7 +293,7 @@ type tasksState struct {
 	// receipt is due when the task settles after working since the last one.
 	working      map[string]time.Time
 	receipted    map[string]time.Time
-	stageReplies map[SessionRef][2]string // task id and last snippet; unchanged list rows do not repeat stage work
+	stageReplies map[SessionRef][3]string // task id, last snippet and turn time; a new turn must recheck its evidence
 	// awaitingAnswer remembers a stopped status whose transcript still ends in a tool.
 	awaitingAnswer map[SessionRef]bool
 	// limitLooks: when a task agent's usage-limit wait is looked at again (taskTurnEndedAfter), one look per agent
