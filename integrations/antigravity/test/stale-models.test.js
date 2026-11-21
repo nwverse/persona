@@ -28,14 +28,7 @@ async function fixture(t, models, configured = 'Gemini Carbon (High)') {
   chmodSync(bin, 0o755)
   const n = await startFakeNode(t)
   const logs = []
-  // Candidate discovery also honors the outer PERSONA_HOME, so isolate it for the whole fixture.
-  const stateHome = process.env.PERSONA_HOME
-  process.env.PERSONA_HOME = join(home, '.persona')
-  t.after(() => {
-    if (stateHome === undefined) delete process.env.PERSONA_HOME
-    else process.env.PERSONA_HOME = stateHome
-  })
-  const runtime = createAgyRuntime({ home, agyDir, agyBin: bin, personadBin: join(home, 'no-personad'), jarvisdBin: join(home, 'no-jarvisd'), socketPath: n.path, log: (m) => logs.push(m) })
+  const runtime = createAgyRuntime({ home, agyDir, agyBin: bin, personadBin: join(home, 'no-personad'), jarvisdBin: join(home, 'no-jarvisd'), stateHome: join(home, '.persona'), socketPath: n.path, log: (m) => logs.push(m) })
   t.after(() => runtime.stop())
   runtime.start()
   await n.ready
