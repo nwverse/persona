@@ -10,6 +10,23 @@ import { homedir } from 'node:os'
 const DEFAULT_RPC_TIMEOUT_MS = 60_000
 const STOP_GRACE_MS = 3_000
 
+// Dedicated workers must not inherit a user's fixed/public server listener.
+// Keep ordinary ACP arguments untouched, and never mutate the supplied array.
+export function privateAcpArgs(args = ['acp']) {
+  const result = []
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]
+    if (arg === '--port' || arg === '--hostname') { index++; continue }
+    if (arg === '--mdns' || arg === '--no-mdns') {
+      if (args[index + 1] === 'true' || args[index + 1] === 'false') index++
+      continue
+    }
+    if (/^--(?:port|hostname|mdns)=/.test(arg)) continue
+    result.push(arg)
+  }
+  return [...result, '--port', '0', '--hostname', '127.0.0.1', '--no-mdns']
+}
+
 export class OpencodeAcpClient extends EventEmitter {
   /**
    * @param {{
@@ -301,8 +318,8 @@ export class OpencodeAcpClient extends EventEmitter {
     }
   }
 
-  async newSession({ cwd, mcpServers = [] }, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
-    const res = await this.call('session/new', { cwd, mcpServers }, timeoutMs)
+  async newSession({ cwd, mcpServers = [], systemPrompt }, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
+    const res = await this.call('session/new', { cwd, mcpServers, ...(systemPrompt === undefined ? {} : { systemPrompt }) }, timeoutMs)
     if (res?.sessionId) this.loadedSessions.add(res.sessionId)
     return res
   }
@@ -313,9 +330,9 @@ export class OpencodeAcpClient extends EventEmitter {
     return res
   }
 
-  async resumeSession({ sessionId, cwd, mcpServers = [] }, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
+  async resumeSession({ sessionId, cwd, mcpServers = [], systemPrompt }, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
     // resume reconnects without replaying the transcript as session/update.
-    const res = await this.call('session/resume', { sessionId, cwd, mcpServers }, timeoutMs)
+    const res = await this.call('session/resume', { sessionId, cwd, mcpServers, ...(systemPrompt === undefined ? {} : { systemPrompt }) }, timeoutMs)
     this.loadedSessions.add(sessionId)
     return res
   }

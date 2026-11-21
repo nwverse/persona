@@ -47,6 +47,13 @@ test('same-directory assistants have independent processes/MCP identities; ordin
   assert.equal(created.length, 4)
   assert.equal(created[2].worker, created[3].worker)
   assert.ok(!Object.values(f.pids()).includes(created[2].worker))
+  const spawned = f.calls().filter((r) => r.started)
+  for (const worker of spawned.slice(0, 2)) {
+    assert.equal(worker.args[worker.args.indexOf('--port') + 1], '0')
+    assert.equal(worker.args[worker.args.indexOf('--hostname') + 1], '127.0.0.1')
+    assert.ok(worker.args.includes('--no-mdns'))
+  }
+  assert.equal(spawned[2].args.includes('--port'), false, 'ordinary shared-process arguments retain their prior behavior')
   assert.equal(f.node.hello.caps.supervision_policy, undefined)
   await Promise.all([f.call('send', a, { text: 'probe' }), f.call('send', b, { text: 'probe' })])
   await until('both MCP calls', () => f.node.toolCalls.length === 2)
@@ -75,7 +82,7 @@ test('crashing a worker fails its active turn, withdraws its card and PID, and s
   assert.equal(f.pids()[b], stable)
   await until('permission withdrawn', () => f.node.all('interaction.cancel').some((r) => r.id === f.node.asked[0].id))
   await f.call('send', a, { text: 'resume' })
-  await until('replacement', () => f.pids()[a] && f.pids()[a] !== pid)
+  await until('replacement resumed', () => f.pids()[a] && f.pids()[a] !== pid && f.calls().some((r) => r.method === 'session/resume' && r.params.sessionId === a && r.worker === f.pids()[a]))
   const resumed = f.calls().findLast((r) => r.method === 'session/resume' && r.params.sessionId === a)
   assert.equal(resumed.worker, f.pids()[a])
   assert.equal(f.calls().some((r) => r.method === 'session/load' && r.params.sessionId === a), false)
@@ -141,6 +148,7 @@ test('admission reserves a slot before a native session id exists and an in-flig
   const leased = await pool.acquire(first.session)
   await pool.reap(); assert.equal(count, 1)
   pool.release(leased)
+  timestamp += 2 // idle time starts when the final lease is released
   await pool.reap(); assert.equal(count, 0)
   await pool.stop()
 })
