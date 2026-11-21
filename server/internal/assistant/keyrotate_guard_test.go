@@ -88,6 +88,7 @@ func TestPlacesThatSealAreKnown(t *testing.T) {
 		"internal/mail/oauth.go":                       1, // the OAuth state, in the sign-in URL only
 		"internal/mail/microsoft.go":                   1, // mail.microsoft_client
 		// other keys
+		"internal/devices/owner_usage.go":   2, // dedicated usage-source.key: sealed_key in manager.json, outside database rotation
 		"internal/assistant/kb_owner.go":    1, // handles.key's cipher for the owner record
 		"internal/hub/secretkey.go":         3, // the hub's own secret.key
 		"internal/hub/peer_pair.go":         2, // the hub's key: linked hubs' tokens

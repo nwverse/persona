@@ -62,8 +62,7 @@ func (h *Hub) usageRoutesRelayed(api *http.ServeMux) {
 				h.securityError(w, r, http.StatusForbidden, "forbidden", 0)
 				return
 			}
-			_ = h.waitDevices(r.Context())
-			if id, ok := h.owner(w, r, h.byRequest); ok {
+			if id, ok := h.awaitOwner(w, r, h.byRequest); ok {
 				h.forwardAdminHTTP(w, r, id)
 			}
 		})

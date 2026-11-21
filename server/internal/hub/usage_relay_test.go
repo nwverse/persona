@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/nwverse/persona/server/internal/db"
 	"log"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 )
 
 // The usage windows and the usage sources page are the manager's (internal/devices, docs/server/usage-windows.md); the hub

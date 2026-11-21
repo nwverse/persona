@@ -45,8 +45,8 @@ func (h *Hub) forwardHTTP(w http.ResponseWriter, r *http.Request, id string) {
 	h.relayHTTP(w, r, id, false, false)
 }
 
-// forwardAdminHTTP is forwardHTTP for one of the admin UI's routes, with a signed-in admin session: the manager is
-// told so (assistantwire.AdminHeader).
+// forwardAdminHTTP relays a verified admin UI request, or an explicitly owner-gated usage-source operation.
+// The hub supplies assistantwire.AdminHeader only after the route's authentication check.
 func (h *Hub) forwardAdminHTTP(w http.ResponseWriter, r *http.Request, id string) {
 	h.relayHTTP(w, r, id, false, true)
 }
