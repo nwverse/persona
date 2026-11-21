@@ -14,7 +14,7 @@ import (
 
 // testParkEvidence is a source-backed park fixture for admission tests. Its receipt was sent before the test starts.
 func testParkEvidence(kind, target, sourceURL, wake string) map[string]any {
-	evidence := map[string]any{"kind": kind, "target": target, "wake": wake}
+	evidence := map[string]any{"kind": kind, "next_actor": "external", "target": target, "wake": wake}
 	switch kind {
 	case "person_reply":
 		evidence["contact"] = map[string]any{"channel": "GitHub discussion", "url": "https://example.com/messages/42", "sender": "task supervisor",

@@ -1,8 +1,8 @@
-accepted closes work after the delivery gate (default delivery_gate=merged: park verified open PRs; linked issues must close). user_check keeps the task and Agent open until owner Pass and routes feedback to that Agent. If opted in at Start, accepted done cleans up the idle tab unless user_check. Report closed/skipped/pending; never close the tab yourself. rework allows two rounds before a full owner decision. Replace stopped Agents via agent_start. Use parked with evidence for external waits and needs_user for owner decisions.
+accepted closes work after the delivery gate (default merged: park verified open PRs; linked issues must close). user_check keeps the task and Agent open until owner Pass and routes feedback to the Agent. Start opt-in cleans idle tabs on accepted done unless user_check. Report closed/skipped/pending; never close tabs yourself. rework allows two rounds before a full owner decision. Replace stopped Agents with agent_start. Use needs_user if only the owner can contact, approve, or trigger work.
 
 accepted (outcome=done) with done_when needs every criterion once in checks (met=true + nonblank evidence); user_check cannot bypass. outcome=cannot, cancelled and no-criteria tasks are unchanged. Other verdicts may omit checks without losing progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief, not a handover or Agent claims.
 
-Give accepted's outcome/reason/link. The hub handles conclusion cards and passes “Please verify” on acceptance unless user_check. needs_user can default to recommend at 24h/deadline; irreversible or visible_to_others only reminds. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or taking irreversible/external action.
+Give accepted's outcome/reason/link. The hub sends the card and passes verification unless user_check. needs_user can default at 24h/deadline; irreversible and visible_to_others only remind. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or taking irreversible/external action.
 
 A non-main conversation reviewing another supervisor's task may only accept/cancel; send gaps with agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and waiting cards end.{{template "shared/mcp_language" .}}
 
@@ -48,7 +48,7 @@ A non-main conversation reviewing another supervisor's task may only accept/canc
     "waiting_on": {
       "type": "string",
       "enum": ["someone_else", "external_event", "date"],
-      "description": "parked (required): the external wait. someone_else: another person must act or answer; external_event: an outside event must happen; date: wait only until a date. New owner decisions use needs_user; legacy owner_priority parks remain readable and retain their digest behavior"
+      "description": "parked (required): someone_else for another person's action or reply, external_event for an outside event, date for time alone. Owner action uses needs_user"
     },
     "until": {
       "type": "string",
@@ -113,7 +113,7 @@ A non-main conversation reviewing another supervisor's task may only accept/canc
     },
     "evidence": {
       "type": "object",
-      "required": ["kind", "target", "wake"],
+      "required": ["kind", "target", "wake", "next_actor"],
       "properties": {
         "kind": {
           "type": "string",
@@ -122,6 +122,7 @@ A non-main conversation reviewing another supervisor's task may only accept/canc
         },
         "target": {"type": "string", "maxLength": 200, "description": "The person or external object"},
         "wake": {"type": "string", "maxLength": 600, "description": "Observable change that ends the wait"},
+        "next_actor": {"type": "string", "enum": ["external", "owner"], "description": "external: third party, system or time, with no owner step needed first. owner: use needs_user"},
         "url": {"type": "string", "maxLength": 2000, "description": "Required for merge_review (ready PR/MR) and external_event"},
         "interaction_id": {"type": "string", "maxLength": 200, "description": "external_event only. This worker's exact pending owner request ID from agents_list. Shows the existing request"},
         "pr_event": {
