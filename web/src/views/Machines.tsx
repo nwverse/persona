@@ -37,6 +37,8 @@ import { addTokens, formatTokens, hitRate, percentText, totalTokens, type UsageT
 
 // Lazy-loaded on demand when the user switches to the Ports & Processes view (#12352).
 const PortsProcessesPanel = lazyPage(() => import("./machines/PortsProcessesPanel").then((m) => m.PortsProcessesPanel));
+// Lazy-loaded read-only file browser chunk (keeps Machines initial bundle and first-screen budget untouched).
+const FileBrowserPanel = lazyPage(() => import("./machines/FileBrowserPanel").then((m) => m.FileBrowserPanel));
 
 export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // with several assistants, the current one's computers (docs/assistant/managers.md "Clients"); one: as before
@@ -56,7 +58,10 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const full = useFullAgentSessions();
   const agents = useMemo(() => agentCounts(full.sessions), [full.sessions]);
   const known: AgentsKnown = full.loaded ? "yes" : full.error ? "failed" : "loading";
-  const [view, setView] = useState<MachinesView>(() => (storedValue(VIEW_KEY) === "capabilities" ? "capabilities" : "cards"));
+  const [view, setView] = useState<MachinesView>(() => {
+    const saved = storedValue(VIEW_KEY);
+    return saved === "capabilities" || saved === "files" ? saved : "cards";
+  });
   const chooseView = (v: MachinesView) => {
     if (v !== "procs") storeValue(VIEW_KEY, v);
     setView(v);
@@ -145,7 +150,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         <IconButton icon="sidebar" label={t("machines.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
         <h1 className="text-[14px] font-semibold text-ink">{t("machines.title")}</h1>
         <div className="flex-1" />
-        {machines.length > 0 && <Segmented compact value={view} onChange={chooseView} label={t("machines.view_label")} options={[{ v: "cards", label: t("machines.view_cards") }, { v: "capabilities", label: t("machines.view_capabilities") }, { v: "procs", label: t("machines.view_procs") }]} />}
+        {machines.length > 0 && <Segmented compact value={view} onChange={chooseView} label={t("machines.view_label")} options={[{ v: "cards", label: t("machines.view_cards") }, { v: "capabilities", label: t("machines.view_capabilities") }, { v: "procs", label: t("machines.view_procs") }, { v: "files", label: t("machines.view_files") }]} />}
         <span className="text-[11.5px] text-ink-3 max-sm:hidden">{t("machines.refresh_interval", { seconds: 10 })}</span>
         {machines.length > 0 && canAdd && add}
       </header>
@@ -177,6 +182,13 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
             <div className="col-span-full">
               <Suspense fallback={<Loading />}>
                 <PortsProcessesPanel machines={machines} />
+              </Suspense>
+            </div>
+          )}
+          {view === "files" && machines.length > 0 && (
+            <div className="col-span-full">
+              <Suspense fallback={<Loading />}>
+                <FileBrowserPanel machines={machines} />
               </Suspense>
             </div>
           )}
@@ -365,7 +377,7 @@ function agentCounts(list: readonly Session[]): Map<string, readonly [number, nu
   return by;
 }
 
-type MachinesView = "cards" | "capabilities" | "procs";
+type MachinesView = "cards" | "capabilities" | "procs" | "files";
 const VIEW_KEY = "persona.machines.view";
 
 /** The launcher health records (GET /api/v1/launchers/health), kept current by the hub's `launcher_health` events and
