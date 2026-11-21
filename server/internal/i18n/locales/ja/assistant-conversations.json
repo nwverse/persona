@@ -1,6 +1,7 @@
 {
   "archive_main": "メインチャットはアーカイブできません",
   "archive_background_supervisor": "バックグラウンド監督のチャットはアーカイブできません",
+  "supervision_source": "監督",
   "background_supervisor": "バックグラウンド監督",
   "background_supervisor_former": "バックグラウンド監督 · {month}月{day}日まで",
   "notice_delivery_refused": "このチャットが、タスクまたはチャットに関する Persona からの更新を受け取りませんでした。届いておらず、自動では再送しません。",
