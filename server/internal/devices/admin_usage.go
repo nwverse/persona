@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -31,13 +32,16 @@ const usageTestMost = 25 * time.Second
 var errAdminOnly = errors.New("the usage sources page is the admin UI's")
 
 type adminUsageSource struct {
-	ID      string        `json:"id"`
-	Name    string        `json:"name"`
-	Type    string        `json:"type"`
-	URL     string        `json:"url"`
-	HasKey  bool          `json:"has_key"`
-	Enabled bool          `json:"enabled"`
-	Status  gatewayStatus `json:"status"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+	URL  string `json:"url"`
+	// Extension and Launcher: for a source of type extension (manager.json only), what it reads and through which launcher.
+	Extension string        `json:"extension,omitempty"`
+	Launcher  string        `json:"launcher,omitempty"`
+	HasKey    bool          `json:"has_key"`
+	Enabled   bool          `json:"enabled"`
+	Status    gatewayStatus `json:"status"`
 }
 
 type adminUsageView struct {
@@ -45,6 +49,10 @@ type adminUsageView struct {
 	PollMinutes int                `json:"poll_minutes"` // in effect
 	Sources     []adminUsageSource `json:"sources"`
 	Limit       int                `json:"limit"`
+	// HiddenProviders are left out of the usage bars (display only); Providers are the ones to choose from: the usual
+	// two, what the bars last showed and what is hidden already (#11753).
+	HiddenProviders []string `json:"hidden_providers"`
+	Providers       []string `json:"providers"`
 }
 
 // usageConfigNow is manager.json's usage as it is on disk now; the running config follows it (a hand edit is taken up the
@@ -78,9 +86,11 @@ func (d *Devices) diskUsage() (UsageConfig, error) {
 
 func (d *Devices) adminUsageView() adminUsageView {
 	cfg := d.usageConfigNow()
-	v := adminUsageView{Enabled: cfg.on(), PollMinutes: int(cfg.interval() / time.Minute), Sources: []adminUsageSource{}, Limit: usageSourcesMost}
+	v := adminUsageView{Enabled: cfg.on(), PollMinutes: int(cfg.interval() / time.Minute), Sources: []adminUsageSource{}, Limit: usageSourcesMost,
+		HiddenProviders: append([]string{}, cfg.HiddenProviders...)}
+	v.Providers = uniqueSorted(append(append([]string{"claude", "codex"}, cfg.HiddenProviders...), d.usageWin.providers()...))
 	for _, s := range cfg.Sources {
-		v.Sources = append(v.Sources, adminUsageSource{ID: s.ID, Name: s.Name, Type: s.Type, URL: s.URL, HasKey: s.Key != "", Enabled: s.on(), Status: d.usageGW.status(s.ID)})
+		v.Sources = append(v.Sources, adminUsageSource{ID: s.ID, Name: s.Name, Type: s.Type, URL: s.URL, Extension: s.Extension, Launcher: s.Launcher, HasKey: s.Key != "", Enabled: s.on(), Status: d.usageGW.status(s.ID)})
 	}
 	return v
 }
@@ -162,6 +172,23 @@ func validUsageName(n string) bool {
 // "https://pool.example.com/" in manager.json is the same address as the "https://pool.example.com" the page sends,
 // and a request that does not touch the address (the enable switch) never moves it.
 func applyUsageInput(s UsageSourceConfig, in usageSourceInput, isNew bool) (UsageSourceConfig, string, error) {
+	if s.Type == usagesource.TypeExtension && !isNew {
+		// Written in manager.json: here it can be renamed, switched on or off and removed, not re-pointed.
+		if in.Type != nil && strings.TrimSpace(*in.Type) != usagesource.TypeExtension || in.URL != nil || in.Key != nil || in.ClearKey {
+			return s, "invalid_type", i18n.Err("hub-admin_usage.invalid_type")
+		}
+		if in.Name != nil {
+			s.Name = strings.TrimSpace(*in.Name)
+		}
+		if !validUsageName(s.Name) {
+			return s, "invalid_name", i18n.Err("hub-admin_usage.invalid_name")
+		}
+		if in.Enabled != nil {
+			on := *in.Enabled
+			s.Enabled = &on
+		}
+		return s, "", nil
+	}
 	oldURL, oldType := sameUsageURL(s.URL), s.Type
 	if in.Type != nil {
 		s.Type = strings.TrimSpace(*in.Type)
@@ -246,8 +273,9 @@ func (d *Devices) adminUsageRoutes(mux *http.ServeMux) {
 	// The two settings of all of them: the off switch and how often each is asked.
 	handle("PUT /api/v1/admin/usage-sources", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Enabled     *bool `json:"enabled"`
-			PollMinutes *int  `json:"poll_minutes"`
+			Enabled         *bool     `json:"enabled"`
+			PollMinutes     *int      `json:"poll_minutes"`
+			HiddenProviders *[]string `json:"hidden_providers"`
 		}
 		if !readAdminJSON(w, r, &in) {
 			return
@@ -256,7 +284,22 @@ func (d *Devices) adminUsageRoutes(mux *http.ServeMux) {
 			writeErrCode(w, http.StatusBadRequest, "invalid_poll", i18n.Err("hub-admin_usage.invalid_poll"))
 			return
 		}
+		var hidden []string
+		if in.HiddenProviders != nil {
+			var ok bool
+			if hidden, ok = cleanHiddenProviders(*in.HiddenProviders); !ok {
+				writeErrCode(w, http.StatusBadRequest, "invalid_providers", i18n.Err("hub-admin_usage.invalid_providers"))
+				return
+			}
+		}
 		err := d.editUsage(func(u *managerconf.Object, list []json.RawMessage) (*managerconf.Object, []json.RawMessage, error) {
+			if in.HiddenProviders != nil {
+				if len(hidden) == 0 {
+					u.Del("hidden_providers")
+				} else if err := u.Set("hidden_providers", hidden); err != nil {
+					return u, list, err
+				}
+			}
 			if in.Enabled != nil {
 				if *in.Enabled {
 					u.Del("enabled") // on is the default
@@ -469,4 +512,25 @@ func (d *Devices) respondUsageSource(w http.ResponseWriter, id string) {
 		}
 	}
 	writeJSON(w, map[string]any{"source": nil})
+}
+
+const hiddenProvidersMost = 16
+
+var providerName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+
+// cleanHiddenProviders lowercases, drops repeats and sorts the providers to hide; false when one is not a provider
+// name or there are too many.
+func cleanHiddenProviders(in []string) ([]string, bool) {
+	if len(in) > hiddenProvidersMost {
+		return nil, false
+	}
+	var out []string
+	for _, p := range in {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if !providerName.MatchString(p) {
+			return nil, false
+		}
+		out = append(out, p)
+	}
+	return uniqueSorted(out), true
 }

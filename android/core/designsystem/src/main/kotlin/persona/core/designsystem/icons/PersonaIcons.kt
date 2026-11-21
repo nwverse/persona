@@ -218,6 +218,8 @@ object PersonaIcons {
     val moreMenu: PhIcon get() = PhIcons.DotsThree
     /** SF Symbol `music.note`. */
     val music: PhIcon get() = PhIcons.MusicNote
+    /** SF Symbol `bell.slash.fill`. */
+    val muted: PhIcon get() = PhIcons.Prohibit
     /** SF Symbol `plus.bubble`. */
     val newConversation: PhIcon get() = PhIcons.ChatCircleDots
     /** SF Symbol `minus`. */

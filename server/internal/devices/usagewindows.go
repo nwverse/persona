@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,6 +61,18 @@ func (u *usageWindowsHub) invalidate() {
 	u.mu.Lock()
 	u.at = time.Time{}
 	u.mu.Unlock()
+}
+
+// providers are the providers of the accounts the last poll found (what the usage bars could show), for the admin
+// page's choice of providers to hide.
+func (u *usageWindowsHub) providers() []string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	var out []string
+	for _, a := range u.merged {
+		out = append(out, strings.ToLower(a.Provider))
+	}
+	return out
 }
 
 // usageSources are the machines whose node may be asked: the off switch in hub.json is honoured here as well as by
@@ -188,9 +201,20 @@ func (u *usageWindowsHub) poll(ctx context.Context, sources []usageSource, now t
 // samples are marked stale according to their source. Accounts show where they were seen and the gateway's name when
 // available. The most used accounts come first, stale ones last.
 func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAccount {
-	var live []proto.UsageAccount
+	var live, passed []proto.UsageAccount
 	for _, a := range in {
 		if now.Sub(a.SampledAt) > usageHubMaxAge {
+			continue
+		}
+		if a.Pass { // an extension's row stands as it was sent
+			if a.Windows == nil {
+				a.Windows = []proto.UsageWindow{}
+			}
+			a.ID = usageRowID(a.Provider, "extension|"+a.Origin)
+			staleAt := a.SampledAt.Add(usageGatewayStaleAfter)
+			a.StaleAt = &staleAt
+			a.Stale = a.Stale || now.After(staleAt)
+			passed = append(passed, a)
 			continue
 		}
 		var wins []proto.UsageWindow
@@ -433,7 +457,7 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 		}
 		return out[i].ID < out[j].ID
 	})
-	return out
+	return append(out, passed...) // an extension's rows last, in the order it gave them
 }
 
 // isBalanceSample: a sample of a provider that reports a prepaid balance instead of rate-limit windows (#11825). The
@@ -524,10 +548,25 @@ func usageRowID(provider, key string) string {
 func (d *Devices) usageWindowRoutes(api *http.ServeMux) {
 	api.HandleFunc("GET /api/v1/usage/windows", func(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
-		accounts := d.usageWin.poll(r.Context(), d.usageSources(), now)
+		accounts := hideUsageProviders(d.usageWin.poll(r.Context(), d.usageSources(), now), d.usageGW.config().HiddenProviders)
 		if accounts == nil {
 			accounts = []proto.UsageAccount{}
 		}
 		writeJSON(w, map[string]any{"accounts": accounts, "checked_at": now.UTC()})
 	})
+}
+
+// hideUsageProviders drops the accounts of the providers the owner chose to hide from the usage bars (#11753). It
+// works on the answer, not on the poll: the scheduler's capacity view reads the same poll and keeps counting them.
+func hideUsageProviders(in []proto.UsageAccount, hidden []string) []proto.UsageAccount {
+	if len(hidden) == 0 || len(in) == 0 {
+		return in
+	}
+	out := make([]proto.UsageAccount, 0, len(in))
+	for _, a := range in {
+		if !slices.Contains(hidden, strings.ToLower(a.Provider)) {
+			out = append(out, a)
+		}
+	}
+	return out
 }

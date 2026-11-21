@@ -791,6 +791,7 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
     public var browser: [ExtensionNamedItem]?
     public var iphone: [ExtensionNamedItem]?
     public var quota: [ExtensionQuotaItem]?
+    public var usage: [ExtensionUsageItem]?
     public var providers: [ExtensionProviderItem]?
     public var api: [ExtensionAPIItem]?
     public var assistant: [ExtensionAssistantItem]?
@@ -815,7 +816,7 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
     /// Extra keys stay at this object's level on the wire; declared fields always win.
     public var additionalProperties: [String: JSONValue]
 
-    public init(connectors: [ExtensionConnectorItem]? = nil, voice: [ExtensionNamedItem]? = nil, transcription: [ExtensionNamedItem]? = nil, speech: [ExtensionNamedItem]? = nil, computer: [ExtensionNamedItem]? = nil, browser: [ExtensionNamedItem]? = nil, iphone: [ExtensionNamedItem]? = nil, quota: [ExtensionQuotaItem]? = nil, providers: [ExtensionProviderItem]? = nil, api: [ExtensionAPIItem]? = nil, assistant: [ExtensionAssistantItem]? = nil, mcpServers: [ExtensionMCPServerItem]? = nil, ui: [ExtensionUIItem]? = nil, agentSources: [ExtensionAgentSourceItem]? = nil, channel: [ExtensionChannelItem]? = nil, events: [ExtensionEventsItem]? = nil, shortcuts: [ExtensionShortcutItem]? = nil, skills: [ExtensionSkillItem]? = nil, prompts: [ExtensionPromptItem]? = nil, themes: [ExtensionThemeItem]? = nil, looks: [ExtensionLookItem]? = nil, triageTemplates: [ExtensionTriageTemplateItem]? = nil, agentFilters: [ExtensionAgentFilterItem]? = nil, tunnels: [ExtensionTunnelItem]? = nil, errorReports: [ExtensionErrorReportsItem]? = nil, authRelay: [ExtensionAuthRelayItem]? = nil, secretProviders: [ExtensionSecretProviderItem]? = nil, repositoryProviders: [ExtensionRepositoryProviderItem]? = nil, messaging: [ExtensionMessagingItem]? = nil, additionalProperties: [String: JSONValue] = [:]) {
+    public init(connectors: [ExtensionConnectorItem]? = nil, voice: [ExtensionNamedItem]? = nil, transcription: [ExtensionNamedItem]? = nil, speech: [ExtensionNamedItem]? = nil, computer: [ExtensionNamedItem]? = nil, browser: [ExtensionNamedItem]? = nil, iphone: [ExtensionNamedItem]? = nil, quota: [ExtensionQuotaItem]? = nil, usage: [ExtensionUsageItem]? = nil, providers: [ExtensionProviderItem]? = nil, api: [ExtensionAPIItem]? = nil, assistant: [ExtensionAssistantItem]? = nil, mcpServers: [ExtensionMCPServerItem]? = nil, ui: [ExtensionUIItem]? = nil, agentSources: [ExtensionAgentSourceItem]? = nil, channel: [ExtensionChannelItem]? = nil, events: [ExtensionEventsItem]? = nil, shortcuts: [ExtensionShortcutItem]? = nil, skills: [ExtensionSkillItem]? = nil, prompts: [ExtensionPromptItem]? = nil, themes: [ExtensionThemeItem]? = nil, looks: [ExtensionLookItem]? = nil, triageTemplates: [ExtensionTriageTemplateItem]? = nil, agentFilters: [ExtensionAgentFilterItem]? = nil, tunnels: [ExtensionTunnelItem]? = nil, errorReports: [ExtensionErrorReportsItem]? = nil, authRelay: [ExtensionAuthRelayItem]? = nil, secretProviders: [ExtensionSecretProviderItem]? = nil, repositoryProviders: [ExtensionRepositoryProviderItem]? = nil, messaging: [ExtensionMessagingItem]? = nil, additionalProperties: [String: JSONValue] = [:]) {
         self.connectors = connectors
         self.voice = voice
         self.transcription = transcription
@@ -824,6 +825,7 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         self.browser = browser
         self.iphone = iphone
         self.quota = quota
+        self.usage = usage
         self.providers = providers
         self.api = api
         self.assistant = assistant
@@ -857,6 +859,7 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         case browser
         case iphone
         case quota
+        case usage
         case providers
         case api
         case assistant
@@ -890,6 +893,7 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         self.browser = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["browser"])
         self.iphone = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["iphone"])
         self.quota = ExtensionWireJSON.decode([ExtensionQuotaItem].self, from: raw["quota"])
+        self.usage = ExtensionWireJSON.decode([ExtensionUsageItem].self, from: raw["usage"])
         self.providers = ExtensionWireJSON.decode([ExtensionProviderItem].self, from: raw["providers"])
         self.api = ExtensionWireJSON.decode([ExtensionAPIItem].self, from: raw["api"])
         self.assistant = ExtensionWireJSON.decode([ExtensionAssistantItem].self, from: raw["assistant"])
@@ -911,12 +915,12 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         self.secretProviders = ExtensionWireJSON.decode([ExtensionSecretProviderItem].self, from: raw["secret_providers"])
         self.repositoryProviders = ExtensionWireJSON.decode([ExtensionRepositoryProviderItem].self, from: raw["repository_providers"])
         self.messaging = ExtensionWireJSON.decode([ExtensionMessagingItem].self, from: raw["messaging"])
-        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging"]
+        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging"]
         additionalProperties = raw.filter { !known.contains($0.key) }
     }
 
     public func encode(to encoder: Encoder) throws {
-        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging"]
+        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging"]
         var fields = additionalProperties.filter { !known.contains($0.key) }
         if let value = connectors { fields["connectors"] = try ExtensionWireJSON.encode(value) }
         if let value = voice { fields["voice"] = try ExtensionWireJSON.encode(value) }
@@ -926,6 +930,7 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         if let value = browser { fields["browser"] = try ExtensionWireJSON.encode(value) }
         if let value = iphone { fields["iphone"] = try ExtensionWireJSON.encode(value) }
         if let value = quota { fields["quota"] = try ExtensionWireJSON.encode(value) }
+        if let value = usage { fields["usage"] = try ExtensionWireJSON.encode(value) }
         if let value = providers { fields["providers"] = try ExtensionWireJSON.encode(value) }
         if let value = api { fields["api"] = try ExtensionWireJSON.encode(value) }
         if let value = assistant { fields["assistant"] = try ExtensionWireJSON.encode(value) }
@@ -1493,12 +1498,16 @@ public nonisolated struct ExtensionRepositoryProviderItem: Codable, Hashable, Se
     /// What it calls the link kinds it names (each at most once; the others keep their usual words). Only relabels:
     /// the kinds stay issue and pull_request.
     public var linkKinds: [ExtensionRepositoryLinkLabel]?
+    /// What else the program answers (#11584): pr_status, the state of a pull request for delivery checks
+    /// (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
+    public var capabilities: [String]?
 
-    public init(id: String = "", name: String = "", hosts: [String] = [], linkKinds: [ExtensionRepositoryLinkLabel]? = nil) {
+    public init(id: String = "", name: String = "", hosts: [String] = [], linkKinds: [ExtensionRepositoryLinkLabel]? = nil, capabilities: [String]? = nil) {
         self.id = id
         self.name = name
         self.hosts = hosts
         self.linkKinds = linkKinds
+        self.capabilities = capabilities
     }
 
     enum CodingKeys: String, CodingKey {
@@ -1506,6 +1515,7 @@ public nonisolated struct ExtensionRepositoryProviderItem: Codable, Hashable, Se
         case name
         case hosts
         case linkKinds = "link_kinds"
+        case capabilities
     }
 
     public init(from decoder: Decoder) throws {
@@ -1514,7 +1524,14 @@ public nonisolated struct ExtensionRepositoryProviderItem: Codable, Hashable, Se
         self.name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? ""
         self.hosts = (try? c.decodeIfPresent([String].self, forKey: .hosts)) ?? []
         self.linkKinds = try? c.decodeIfPresent([ExtensionRepositoryLinkLabel].self, forKey: .linkKinds)
+        self.capabilities = try? c.decodeIfPresent([String].self, forKey: .capabilities)
     }
+}
+
+/// A repository provider's optional answer: pr_status (repo.pr_status).
+public nonisolated enum ExtensionRepositoryCapability {
+    public static let prStatus = "pr_status"
+    public static let all = ["pr_status"]
 }
 
 /// The word a repository provider shows for one kind of its links (MR for a pull_request).
@@ -1743,6 +1760,31 @@ public nonisolated struct ExtensionNamedItem: Codable, Hashable, Sendable {
 }
 
 public nonisolated struct ExtensionQuotaItem: Codable, Hashable, Sendable {
+    public var id: String
+    public var name: String
+    public var hosts: [String]?
+
+    public init(id: String = "", name: String = "", hosts: [String]? = nil) {
+        self.id = id
+        self.name = name
+        self.hosts = hosts
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case hosts
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? ""
+        self.name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? ""
+        self.hosts = try? c.decodeIfPresent([String].self, forKey: .hosts)
+    }
+}
+
+public nonisolated struct ExtensionUsageItem: Codable, Hashable, Sendable {
     public var id: String
     public var name: String
     public var hosts: [String]?
