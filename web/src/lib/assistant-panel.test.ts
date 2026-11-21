@@ -240,3 +240,18 @@ describe("what a pick keeps", () => {
     expect(assistantPickOf({ provider: "claude", model: "opus", effort: "max" }, claudeList, now)).toEqual({ launcher: "claude", model: "opus", effort: "max" });
   });
 });
+
+it("keeps unsupported supervision connections visible with a reason", () => {
+  const catalog: AssistantLaunchers = { ...info, launchers: [
+    { name: "claude", source: "builtin" },
+    { name: "opencode", source: "opencode", agent: "opencode", assistant: true, supervision_policy: true },
+    { name: "plugin", source: "opencode", agent: "opencode", assistant: true },
+    { name: "grok", source: "grok", agent: "grok", assistant: true },
+  ] };
+  const setup = assistantSetup(chat({ isMain: true }), catalog);
+  const supervised = assistantPanel(setup, catalog, listOf, { running: true, switching: true, supervision: true }).providers;
+  expect(supervised.find((p) => p.id === "opencode")?.unavailable).toBeUndefined();
+  for (const name of ["plugin", "grok"]) expect(supervised.find((p) => p.id === name)?.unavailable).toBe(t("chat-modelpanel.supervision_unavailable"));
+  const ordinary = assistantPanel(setup, catalog, listOf, { running: true, switching: true }).providers;
+  expect(ordinary.find((p) => p.id === "plugin")?.unavailable).toBeUndefined();
+});

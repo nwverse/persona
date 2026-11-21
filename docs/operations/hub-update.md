@@ -425,20 +425,21 @@ must remain intact during a Hub-only rollout. The publisher rejects unmanaged
 `bin/nodes` contents and never writes Android artifacts.
 
 Set `publish_nodes: true` in both private worker and SSH publisher configs to
-continuously publish matching `personad` packages for `linux-amd64` and
-`darwin-arm64`. This is package publication only: the publisher never requests
+continuously publish matching `personad` and `persona-node` packages for
+`linux-amd64` and `darwin-arm64`. This is package publication only: the publisher never requests
 computer deployment and `auto_update_nodes` remains false. Users choose when
 to update each computer in the client.
 
-Both binaries are built from the same fixed clean commit with the same version,
+All four binaries are built from the same fixed clean commit with the same version,
 release channel and build flags, after the full validation gates. The standard
 release manifest binds compressed and executable SHA-256 hashes to that source
-and build; the Linux descriptor must equal the Hub descriptor. Before promoting
-the Hub manifest, publication verifies both archives, executable platforms, Go
-main package, clean VCS commit and hashes, and runs the Linux self-check. Go
+and build. The Linux `personad` descriptor must equal the Hub descriptor. Before
+promoting the Hub manifest, publication verifies all archives, executable platforms,
+Go main packages, clean VCS commits and hashes, and runs both Linux self-checks. Go
 `-trimpath` omits linker flags from build info, so foreign runtime version values
 are established by this controlled build manifest rather than a `.version` file.
 An old Hub-only cache does not satisfy an enabled node publication requirement.
+Existing `personad`-only node manifests remain valid for their original versions.
 
 Verified executables and version sidecars are staged under the immutable
 `releases/nodes/<version>/` directory. Once the matching Hub is healthy and
@@ -452,12 +453,13 @@ missing-package result may remain cached for ten minutes.
 The same publisher also retains a consumer download mirror under the selected
 `releases/<release_namespace>/node-packages/` (the private feed stays separate from
 `releases/hub`). Each immutable `<version>/` has `manifest.json`,
-`personad-linux-amd64.gz` and `personad-darwin-arm64.gz`. These are byte-for-byte
-copies of the verified compressed archives, with canonical consumer names; their
-sizes, compressed and native hashes, source, version, build and protocol metadata
-stay unchanged. `source-manifest.json` retains the original producer descriptors.
-Existing qualified Linux native packages are reused, not rebuilt. Versioned
-mirrors are retained independently of native-cache pruning and upload cleanup.
+`personad-linux-amd64.gz`, `personad-darwin-arm64.gz`,
+`persona-node-linux-amd64.gz` and `persona-node-darwin-arm64.gz`. The manifest lists
+the dedicated packages under `nodes.persona-node`. The mirror copies the verified
+archives byte for byte and preserves their sizes, hashes and release metadata.
+`source-manifest.json` retains the original producer descriptors. The publisher
+reuses verified native packages. Versioned mirrors outlive native-cache pruning
+and upload cleanup.
 
 Download preparation runs inside the original `.publish.lock`, before Hub
 promotion. The version directory and download `latest.json` become public only
@@ -467,13 +469,13 @@ fail closed. Publishing these files never deploys a node or enables node updates
 
 A directory on disk is not a working remote package source. The configured
 HTTPS provider must mount **only** this mirror as a read-only static root and map
-`<base>/<version>/manifest.json`, its two canonical archives and
+`<base>/<version>/manifest.json`, its listed archives and
 `<base>/latest.json` to it. An installation may expose only these privacy-checked
 release artifacts anonymously over HTTPS. If its provider requires authentication,
 the consumer supports credentials in `node_packages.url` through HTTP Basic;
 it does not inject the Hub API token or arbitrary custom headers. Never put
 credentials in artifact files. Allow only `latest.json`, valid versioned
-`manifest.json` and the two canonical archives. Return 404 for the release root,
+`manifest.json` and the listed canonical archives. Return 404 for the release root,
 directory listings, hidden staging directories, the producer's
 `source-manifest.json`, unlisted paths and missing versions/files. A
 reverse-proxy-only route does not serve these files. Select the formal
@@ -481,11 +483,11 @@ reverse-proxy-only route does not serve these files. Select the formal
 `off` setting remains off until that owner changes it. This helper never rewrites
 Caddy, mounts, credentials or a running Hub configuration.
 
-Before reporting a remote source ready, fetch the versioned manifest and **both**
-archives through the configured HTTPS provider, compare the manifest's
-source/version/build to the confirmed running Hub and verify both compressed
-size/hash and decompressed native hashes. Check 404 for an absent version, and
-authentication failure without credentials when the provider is private. Local
+Before reporting a remote source ready, fetch the versioned manifest and each listed
+archive through the configured HTTPS provider, compare the manifest's
+source, version and build to the confirmed running Hub, and verify each archive's
+size, compressed hash and executable hash. Check that an absent version returns
+404 and that a private provider rejects requests without credentials. Local
 mirror tests and Hub confirmation do not establish remote reachability or
 consumer installation. The publisher's confirmed receipt reports the relative
 mirror directory and consumer manifest hash for this separate read-only check.

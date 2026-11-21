@@ -539,15 +539,20 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 			id = named
 		} else if claimed {
 			id = "" // the title names another pane's thread: keeping the stale reported one would misroute this row
-		} else if _, match, ok := codexTitleName(a.Title); ok && (reported == "" ||
-			(!sub && threadTitle(home, id) != "" && !threadFormerlyNamed(home, id, match))) {
-			// An unrecognised current title must not reuse a stale pane binding either, nor a thread the host named
-			// that the index knows under another name (a /resume in Codex since). A reported thread the index has no
-			// name for is not contradicted by a name the index lacks, so the host's word stands: left out, the pane
-			// was listed nowhere and its thread only as its app-server's row, with no terminal (#7538). Nor is a
-			// reported subagent contradicted by its conversation's name, which is not the name of the thread reported,
-			// nor a renamed thread by the name the index gave it before (a rename on the app-server the title missed).
-			id = ""
+		} else if _, match, ok := codexTitleName(a.Title); ok {
+			moved := false
+			if reported == "" && bound != "" && n.state != nil {
+				if st, exists := n.state.get(bound); exists && st.Pane != "" && st.Pane != a.PaneID {
+					moved = true
+				}
+			}
+			if moved || (!sub && id != "" && threadTitle(home, id) != "" && !threadFormerlyNamed(home, id, match)) {
+				// A moved pane binding or a thread the index knows under another name must not be reused on an
+				// unrecognised title (a /resume or new thread in Codex since). An uncontradicted reported thread or
+				// pane binding whose title the index lacks stands: left out, a Persona-started pane whose host omits
+				// reported IDs was dropped completely and only listed as read-only codex_history (#7538, #12389).
+				id = ""
+			}
 		}
 		if id != "" {
 			id = n.codexPublicID(home, id)
