@@ -87,6 +87,16 @@ func TestConnectorConfirmAlways(t *testing.T) {
 	}
 }
 
+func manifestEntryListForValidation(secret string) map[string]any {
+	return map[string]any{
+		"type": "array", "maxItems": 2,
+		"x-secret": map[string]any{"name": secret, "title": "Account key"},
+		"items": map[string]any{"type": "object", "properties": map[string]any{
+			"name": map[string]any{"type": "string"},
+		}},
+	}
+}
+
 func TestParseRefuses(t *testing.T) {
 	cases := map[string]func(m map[string]any){
 		"unknown top-level field": func(m map[string]any) { m["permission"] = map[string]any{} },
@@ -152,9 +162,26 @@ func TestParseRefuses(t *testing.T) {
 			m["secrets"] = []any{s, s}
 		},
 		"secret without title": func(m map[string]any) { m["secrets"] = []any{map[string]any{"name": "k"}} },
-		"network with scheme":  func(m map[string]any) { m["permissions"] = map[string]any{"network": []any{"https://example.com"}} },
-		"unknown permission":   func(m map[string]any) { m["permissions"] = map[string]any{"files": true} },
-		"unknown hub scope":    func(m map[string]any) { m["permissions"] = map[string]any{"hub": []any{"kb.delete"}} },
+		"fixed and entry secret with one name": func(m map[string]any) {
+			m["secrets"] = []any{map[string]any{"name": "account_key", "title": "Fixed key"}}
+			m["configuration"] = map[string]any{"type": "object", "properties": map[string]any{"accounts": manifestEntryListForValidation("account_key")}}
+		},
+		"entry secret declared by two lists": func(m map[string]any) {
+			m["configuration"] = map[string]any{"type": "object", "properties": map[string]any{
+				"accounts": manifestEntryListForValidation("account_key"), "other": manifestEntryListForValidation("account_key"),
+			}}
+		},
+		"fixed and entry secrets beyond the shared limit": func(m map[string]any) {
+			secrets := make([]any, 0, SecretsMost)
+			for i := range SecretsMost {
+				secrets = append(secrets, map[string]any{"name": fmt.Sprintf("key_%02d", i), "title": "Key"})
+			}
+			m["secrets"] = secrets
+			m["configuration"] = map[string]any{"type": "object", "properties": map[string]any{"accounts": manifestEntryListForValidation("account_key")}}
+		},
+		"network with scheme": func(m map[string]any) { m["permissions"] = map[string]any{"network": []any{"https://example.com"}} },
+		"unknown permission":  func(m map[string]any) { m["permissions"] = map[string]any{"files": true} },
+		"unknown hub scope":   func(m map[string]any) { m["permissions"] = map[string]any{"hub": []any{"kb.delete"}} },
 		"bad extension to call": func(m map[string]any) {
 			m["permissions"] = map[string]any{"hub": []any{"extensions.call:Bad ID"}}
 		},
