@@ -22,8 +22,7 @@ import (
 // source in memory; the sidebar's merge (usagewindows.go) puts those accounts next to the ones the machines read and
 // shows an account both saw once. The key is only ever in the manager's manager.json (0600; its usage section, beside the
 // extensions' sections, docs/operations/config.md "manager.json") and in the request's Authorization header:
-// not in a log line, an error or an API answer. Owner API requests cross the authenticated bus once;
-// their keys are sealed before the manager writes the config.
+// not in a log line, an error, an API answer, the bus or the database.
 
 const (
 	usagePollDefault = 5 // minutes
@@ -58,10 +57,9 @@ type UsageSourceConfig struct {
 	Type string `json:"type"`
 	URL  string `json:"url"`
 	// Key is the gateway's management key, for relay_key an ordinary API key of the gateway (a secret either way:
-	// legacy manager.json is 0600; owner writes use SealedKey. No API answer or log ever has it).
-	Key       string `json:"key,omitempty"`
-	SealedKey string `json:"sealed_key,omitempty"`
-	Enabled   *bool  `json:"enabled,omitempty"`
+	// manager.json is 0600; no API answer or log ever has it).
+	Key     string `json:"key,omitempty"`
+	Enabled *bool  `json:"enabled,omitempty"`
 }
 
 // UnmarshalJSON reads a source as manager.json has it, older type names included (usagesource.StoredType): a section
