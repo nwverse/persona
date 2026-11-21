@@ -202,6 +202,8 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		resp = n.handleAsk(ctx, req)
 	case "notify": // personad notify (scriptcli.go)
 		resp = n.handleNotify(ctx, req)
+	case assistantwire.MethodDecisionRaise, assistantwire.MethodDecisionGet, assistantwire.MethodDecisionWithdraw:
+		resp = n.handleDecision(ctx, req) // personad decision: non-blocking, never spooled
 	case "launcher.env": // personad launch <name>
 		resp = n.launcherEnvFor(req)
 	case "launcher.pi": // pi's Persona extension: the providers pi can use here (pi_providers.go)
@@ -707,6 +709,8 @@ func paneKindOK(n *Node, pane string) bool {
 		return n.hostEnabled(proto.EngineOrca)
 	case host.Tern:
 		return n.hostEnabled(proto.EngineTern)
+	case host.Rex:
+		return n.hostEnabled(proto.EngineRex)
 	}
 	return true
 }

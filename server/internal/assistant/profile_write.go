@@ -363,6 +363,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.AgentTasks != nil {
 			v.AgentTasks = in.AgentTasks
 		}
+		if in.TaskLessons != nil {
+			v.TaskLessons = in.TaskLessons
+		}
 		if in.CloseEndedTerminals != nil {
 			v.CloseEndedTerminals = in.CloseEndedTerminals
 		}

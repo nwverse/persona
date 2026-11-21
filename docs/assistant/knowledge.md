@@ -142,7 +142,7 @@ Exclusions are case-insensitive. Directory paths are relative to the configured 
     meta.json               # Name, type (short requirement / long mission), status, members, related chats / docs / meetings / Agent directories
     summary.md              # Goal, current state, next steps, risks, my role
     log.md                  # Timeline: append an entry for each update (date · source · one line)
-    memory.jsonl            # Typed worker outcomes, decisions with reasons, and pitfalls; provenance/time/supersession (not searched)
+    memory.jsonl            # Typed worker outcomes, decisions with reasons, pitfalls, and lessons from accepted tasks (todos.md "Lessons from accepted tasks"); provenance/time/supersession (not searched)
     .topics.json            # How far the knowledge points curation read the timeline ("Topics"; bookkeeping, not searched; a chat has one too)
   topics/<slug>/            # One directory per topic of knowledge points ("Topics" below, #3783)
     meta.json               # Name, one line, aliases, how many points, the projects and chats they came from, tags
