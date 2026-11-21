@@ -62,6 +62,7 @@ type Options struct {
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	history conversationHistoryBook
 	// agentDirs keeps each computer's hidden Agent folders (hidden_agent_dirs.go); nil: none.
 	agentDirs AgentDirs
 	// remoteImages fetches the pictures replies name by address for the apps (remote_image.go).
@@ -400,6 +401,7 @@ func New(o Options) *Service {
 	s.kbInit(o.KB)
 	s.kbRoutes()
 	s.searchRoutes()
+	s.historyRoutes()
 	s.inboxRoutes()
 	s.modelConfigRoutes()
 	s.modelProfileRoutes()
@@ -484,6 +486,18 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if method != DeviceSessionGet && method != "session.unwatch" {
 		if err := s.conversationParamsAvailable(ctx, device, params); err != nil {
 			return beforeNodeWrite(method, err)
+		}
+	}
+	if method == DeviceSessionItems || method == DeviceAssistantHandoff || method == "session.item" || method == "session.image" {
+		raw, err := json.Marshal(params)
+		if err != nil {
+			return err
+		}
+		if result, handled, err := s.historyCall(ctx, device, method, raw); handled {
+			if err != nil || out == nil {
+				return err
+			}
+			return json.Unmarshal(result, out)
 		}
 	}
 	taken := false // the node took this send (or may have): a direction's notes block it carried counts as given

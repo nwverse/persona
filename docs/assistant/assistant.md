@@ -2629,3 +2629,49 @@ For a hide rule, and for a block rule on a node that does not block yet, the man
 excludes matched ambient sessions from Assistant observations and reminders. Open supervised task agents remain visible, preserving the supervisor's completion and approval
 flow; after supervision ends, the rule applies again. See `docs/protocol/protocol.md` ("Agent directory visibility")
 for matching, persistence, app inspection and the confirmed `persona_settings` contract.
+
+## Durable assistant history (#11936, phase 1)
+
+For people using Assistant, history remains available from the manager's database when a runtime is away. The
+manager stores normalized messages from main, supervisor and side assistant conversations, archived conversations
+included. Ordinary coding-Agent sessions are not enrolled: their project transcripts need a separate retention,
+access and quota decision. Runtime kind does not decide enrollment.
+
+Database-first history is enabled when the `assistant.history` setting is absent. The full-role advanced endpoint
+`GET /api/v1/assistant/history` reports its effective `enabled` value and aggregate `stats`; PUT with
+`{"enabled":false}` is the rollback switch, and `{"enabled":true}` resumes collection and catch-up. This setting
+changes neither a launcher nor a model. An in-flight ingestion transaction may finish during rollback; later pages
+check the setting again. Rollback retains the tables and original runtime files; it never removes runtime history.
+
+The manager pulls unfolded pages after a durable source cursor, woken by session revisions and item notifications,
+without subscribing to every chat or requiring an open app. Each sweep reads at most eight pages of a conversation;
+the next sweep continues a long import. A periodic source probe also detects rewrites with unchanged byte counts.
+Notifications are only hints: replaying an old notification cannot restore an abandoned generation. Covered ranges,
+the known source end and item completeness are distinct. Missing older ranges fall back to the runtime; a cached
+offline page says `partial` when coverage or freshness is uncertain. Source failures never manufacture complete
+empty history. The disposable text-search index can be rebuilt without deleting durable messages.
+Legacy conversations on current nodes are imported lazily using the same source IDs. A node/runtime that omits
+the protocol's history-generation token keeps the runtime read path; the manager does not invent durable coverage
+that could mix a rewritten transcript with an older one. It can be indexed once its normalized source contract is
+available. This is a source-data compatibility fallback, not an engine-kind restriction.
+
+Historical reads and main handoffs prefer covered database content. Handoffs retain the source engine's stored
+compaction summary and bounded recent complete messages; no model is called to populate this store. An incomplete
+cached window or handoff tries the source first; a source failure retains available data marked `partial`.
+Handoffs require both covered history and a verified summary checkpoint before bypassing an available source. Strict source
+exports and user-input position projections still use the runtime. A stale source revision is checked before old
+coverage is reused. Database failures retain the runtime read path.
+
+Each stored item has a 64 KiB serialized JSON limit enforced in the application and database. Raw JSON bytes retain
+tool parameters and output, including escaped NUL. Larger tools/attachments or nested metadata keep bounded
+previews, provenance and a source item reference marked incomplete. Lazy attachments and runtime-truncated text
+are also incomplete; a reference is not a promise of offline access. The existing full-item/image routes recover
+source content when available. Complete stored copies cannot be downgraded by replaying a preview.
+
+`stats.conversations` counts stored runtime histories, `items` counts distinct source item IDs within them,
+`payload_bytes` counts stored normalized-item JSON bytes, `summary_bytes` counts source compaction-summary bytes,
+and `incomplete` counts item references whose complete content is not stored. These are not tokens, physical
+database size, WAL or backups. Phase 2 introduces logical conversations with several runtime segments.
+Deleting an assistant conversation deletes its message rows, coverage, compaction summary and references in the
+same transaction as its deletion marker. Concurrent or late ingestion cannot recreate deleted content, and a read
+that overlaps deletion discards its response before returning it.

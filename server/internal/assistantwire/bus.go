@@ -434,6 +434,8 @@ var Routes = []string{
 	"GET /api/v1/kb-search",
 	// The assistant's chat search (search_routes.go there, docs/protocol/protocol.md "Assistant chat search", #6282).
 	"GET /api/v1/assistant/search",
+	"GET /api/v1/assistant/history",
+	"PUT /api/v1/assistant/history",
 	// The selection: what the knowledge base brings in and keeps (kb_selection.go there).
 	"GET /api/v1/kb/selection",
 	"PUT /api/v1/kb/selection",

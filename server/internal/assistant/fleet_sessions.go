@@ -119,6 +119,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	s.ownerRoundsSeen(list) // the owner-turn gates end with their rounds (relay_presence.go, #6394)
 	s.sessionsChanged(machine)
 	s.searchWake() // the chat search index reads what changed (search_index.go)
+	s.historyWake()
 	// Messages from other conversations, for those no longer running; the todos' links and herdr marks.
 	d := DeviceSessions{MachineID: machine, Sessions: list, Connected: connected}
 	s.inOrder(func() { s.SessionsChanged(context.Background(), d) })
