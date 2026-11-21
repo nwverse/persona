@@ -120,6 +120,7 @@ Review follow-up: the optional projection isn't a required field for a whole pag
 
 ## Lark Open Platform bots (`docs/extensions/bots.md`)
 
+- A claimed to-do reminder and delivery of each channel copy are separate outcomes (#12609). Retrying the whole reminder would repeat the phone notification; recover only the failed Feishu copy with the existing finite retry policy. Key every card by the original reminder occurrence and index, so replaying a long reminder also covers an accepted continuation whose receipt was lost. Treat unknown status as temporary without sending, and stop on a confirmed disabled channel, refusal or obsolete reminder. Process-local retries do not survive restart; the durable reminder claim remains consumed.
 - With card JSON 2.0, **one unknown extra field rejects the whole card** (1.0 ignores it): 2.0 has no `action` module and no `note` (lay buttons out horizontally with `column_set` + `flex_mode: flow`,
   small text with `div` + `text_size: notation`), and button callbacks go in `behaviors`; a new card returned from a card callback must also be 2.0, otherwise you get 200830. Before writing, check every field against the 2.0 component docs.
 - 1.0's Markdown doesn't support headings, tables or quotes, so a model answer dropped straight in shows raw symbols; use 2.0. Cards treat things like `<at>` and `<font>` as their own tags: escape `<` in the body first.

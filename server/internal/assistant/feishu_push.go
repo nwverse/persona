@@ -37,17 +37,39 @@ func (s *Service) feishuPushTold(ctx context.Context, machine, session, title, b
 	return s.feishuPushToldTodo(ctx, machine, session, title, body, key, r, nil)
 }
 
-// feishuTodoReminder sends a reminder in its own bounded background context, as feishuPush does for notify_user.
+// feishuTodoReminder keeps the claimed reminder's Feishu copy alive within the mirror's existing retry bounds.
+// Each attempt rechecks readiness in feishuTodoPush; the phone push and reminder claim are never repeated.
 func (s *Service) feishuTodoReminder(machine, session, title, body string, todo Todo) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	_ = s.feishuTodoPush(ctx, machine, session, title, body, todo)
+	for attempt := 0; ; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := s.feishuTodoPush(ctx, machine, session, title, body, todo)
+		cancel()
+		if err == nil || feishubot.Refused(err) {
+			return
+		}
+		if attempt >= feishuMirrorRetries || todo.RemindAt == nil {
+			s.logf("bots: todo reminder: given up after %d tries: %v", attempt+1, err)
+			return
+		}
+		<-time.After(feishuMirrorRetry)
+		cur, ok := s.todoNow(todo.ID)
+		if !ok || cur.DoneAt != nil || cur.RemindAt == nil || !cur.RemindAt.Equal(*todo.RemindAt) {
+			return // completed, deleted or re-armed while this occurrence waited
+		}
+	}
 }
 
 // feishuTodoPush is a to-do reminder's Feishu copy. Its body has the complete stored notes (answerCards still applies
 // the card budget), its button opens that to-do, and a reply carries its id back into the same main conversation.
 func (s *Service) feishuTodoPush(ctx context.Context, machine, session, title, body string, todo Todo) error {
-	return s.feishuPushToldTodo(ctx, machine, session, title, body, "", nil, &todo)
+	key := ""
+	if todo.RemindAt != nil {
+		// Identity is the occurrence, not its text: retrying an accepted send with a lost receipt must land once.
+		// The shared sender adds the card index; a later reminder time or another to-do gets independent keys.
+		sum := sha256.Sum256([]byte(todo.ID + "\x00" + todo.RemindAt.UTC().Format(time.RFC3339Nano)))
+		key = "t" + hex.EncodeToString(sum[:16]) + ":"
+	}
+	return s.feishuPushToldTodo(ctx, machine, session, title, body, key, nil, &todo)
 }
 
 // feishuPushToldTodo is feishuPushTold, with a to-do only on the reminder path. Ordinary notify_user passes nil and
