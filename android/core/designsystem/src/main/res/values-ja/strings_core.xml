@@ -231,6 +231,7 @@
     <string name="designsystem_core_engine_rex">Rexのターミナル</string>
     <string name="designsystem_core_engine_paseo">Paseoのエージェント</string>
     <string name="designsystem_core_engine_cindy">Cindyのエージェント</string>
+    <string name="designsystem_core_engine_t3code">T3 Codeのエージェント</string>
     <string name="designsystem_core_engine_none">ターミナルエンジンなし</string>
     <string name="designsystem_core_engine_none_detail">デスクトップアプリのセッションのみ</string>
     <string name="designsystem_core_engine_offline">オフラインのため検出情報がありません</string>
