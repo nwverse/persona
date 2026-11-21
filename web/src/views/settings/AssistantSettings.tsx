@@ -69,6 +69,9 @@ interface AssistantState extends AgentAutoNamingState {
   /** "Follow up every agent Persona starts" (#3617, docs/assistant/unified-entry.md "Agent tasks"): off by default; unset
    *  from a hub before it. */
   agent_tasks?: boolean;
+  /** "Learn from finished tasks" (#12295, docs/assistant/todos.md "Lessons from accepted tasks"): off by default;
+   *  unset from a hub before it. */
+  task_lessons?: boolean;
   close_ended_terminals?: boolean;
   /** "Tell supervisors about new messages" (#4293, docs/assistant/unified-entry.md "Supervision (#3124)"): off
    *  by default; unset from a hub before it. */
@@ -276,6 +279,22 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
     } finally {
       setQuietBusy(false);
+    }
+  };
+
+  const [lessonsBusy, setLessonsBusy] = useState(false);
+  // "Learn from finished tasks" (#12295): shown as chosen at once, taken back with the reason when the hub refuses.
+  const setTaskLessons = async (on: boolean) => {
+    setLessonsBusy(true);
+    setInfo((i) => (i ? { ...i, task_lessons: on } : i));
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { task_lessons: on } });
+      setInfo((i) => (i ? { ...i, task_lessons: r.task_lessons ?? on } : i));
+    } catch (e) {
+      setInfo((i) => (i ? { ...i, task_lessons: !on } : i));
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally {
+      setLessonsBusy(false);
     }
   };
 
@@ -574,6 +593,16 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       </Group>
 
       <DirectionNotes deps={directionNotes} />
+
+      {/* Learning from finished tasks (#12295): off by default, only from a hub that has it; the lessons are on each
+          project's page in Knowledge */}
+      {typeof info?.task_lessons === "boolean" && (
+        <Group anchor="task-lessons" footer={t("settings-assistantsettings.task_lessons_footer")}>
+          <Row label={t("settings-assistantsettings.task_lessons")} hint={t("settings-assistantsettings.task_lessons_hint")} wrapHint>
+            <Switch on={info.task_lessons} onChange={(on) => void setTaskLessons(on)} disabled={lessonsBusy || info.manager !== manager} label={t("settings-assistantsettings.task_lessons")} />
+          </Row>
+        </Group>
+      )}
 
       <PageBoundary page="repositories">
         <Suspense fallback={<Group title={t("settings-repositories.title")}><Loading /></Group>}>
