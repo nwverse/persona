@@ -232,10 +232,11 @@ type taskBriefLink struct {
 
 // taskBriefBook holds the briefs and each to-do's link to one. Its lock is never held across a call into the to-dos.
 type taskBriefBook struct {
-	mu     sync.Mutex
-	cond   *sync.Cond // signalled when a brief's pending durable writes settle; uses mu
-	briefs map[string]*taskBrief
-	links  map[string]taskBriefLink // by to-do id
+	writeMu sync.Mutex // one complete brief state transition, including its durable write, at a time
+	mu      sync.Mutex
+	cond    *sync.Cond // signalled when a brief's pending durable writes settle; uses mu
+	briefs  map[string]*taskBrief
+	links   map[string]taskBriefLink // by to-do id
 	// digestAt: when a briefing last told the briefs, without a store (task_brief_digest.go).
 	digestAt time.Time
 }
@@ -939,9 +940,12 @@ func (s *Service) unlinkTaskBrief(ctx context.Context, todoID, eventID string) e
 }
 
 // changeBrief changes brief id's state with change (which says whether it changed anything) and writes it; the brief
-// as it is then. The record itself is never touched.
+// as it is then. The record itself is never touched. The whole read-before / mutate / durable-write transition is
+// serialized so an older writer cannot finish after and overwrite a newer state.
 func (s *Service) changeBrief(ctx context.Context, id string, change func(tb *taskBrief) bool) (TaskBrief, bool, error) {
 	b := &s.tbriefs
+	b.writeMu.Lock()
+	defer b.writeMu.Unlock()
 	b.mu.Lock()
 	b.init()
 	tb := b.briefs[id]

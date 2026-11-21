@@ -306,15 +306,18 @@ func (s *Service) startSupervisionRound(ctx context.Context, id string) {
 		return
 	}
 	if _, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
-		if v.State != reviewAccepted && v.State != reviewCancelled {
-			return false
+		changed := false
+		if v.State == reviewAccepted || v.State == reviewCancelled {
+			v.State, v.Round, v.Waits = "", 0, nil
+			changed = true
 		}
-		v.State, v.Round, v.Waits = "", 0, nil
+		// A new Agent round is distinct evidence even when a scope already cleared the terminal state, so there is no
+		// database field left to change. This process-local epoch still prevents a failed takeover restoring acceptance.
 		if s.supervise.roundEpochs == nil {
 			s.supervise.roundEpochs = map[string]uint64{}
 		}
 		s.supervise.roundEpochs[id]++
-		return true
+		return changed
 	}); err != nil {
 		s.logf("task %s: new supervision round: %v", id, err)
 	}

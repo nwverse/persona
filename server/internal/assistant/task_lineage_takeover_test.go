@@ -194,30 +194,45 @@ func (s *failingTakeoverAgentStore) LinkTaskBriefTodo(ctx context.Context, link 
 	return linked, err
 }
 
-// unstableBriefCommitStore commits the rollback's unlink, then holds a concurrent scope's durable write open until the
-// test releases its failure. The first armed write is the unlink; the second is that concurrent scope.
-type unstableBriefCommitStore struct {
+// failingPendingBriefStore holds a scope's durable write open until the test releases its failure.
+type failingPendingBriefStore struct {
 	*db.DB
-	arm      atomic.Bool
-	calls    atomic.Int32
-	unlinked chan struct{}
-	entered  chan struct{}
-	release  chan struct{}
+	arm     atomic.Bool
+	entered chan struct{}
+	release chan struct{}
 }
 
-func (s *unstableBriefCommitStore) PutTaskBriefState(ctx context.Context, id string, state json.RawMessage, at time.Time) (bool, error) {
+func (s *failingPendingBriefStore) PutTaskBriefState(ctx context.Context, id string, state json.RawMessage, at time.Time) (bool, error) {
 	if !s.arm.Load() {
 		return s.DB.PutTaskBriefState(ctx, id, state, at)
-	}
-	if s.calls.Add(1) == 1 {
-		ok, err := s.DB.PutTaskBriefState(ctx, id, state, at)
-		close(s.unlinked)
-		<-s.entered
-		return ok, err
 	}
 	close(s.entered)
 	<-s.release
 	return false, errors.New("injected brief scope commit failure")
+}
+
+// outOfOrderBriefStore holds the first armed durable write while the second one completes, exposing whether changeBrief
+// allows an older writer to overwrite a newer committed state.
+type outOfOrderBriefStore struct {
+	*db.DB
+	arm     atomic.Bool
+	calls   atomic.Int32
+	first   chan struct{}
+	second  chan struct{}
+	release chan struct{}
+}
+
+func (s *outOfOrderBriefStore) PutTaskBriefState(ctx context.Context, id string, state json.RawMessage, at time.Time) (bool, error) {
+	if !s.arm.Load() {
+		return s.DB.PutTaskBriefState(ctx, id, state, at)
+	}
+	if s.calls.Add(1) == 1 {
+		close(s.first)
+		<-s.release
+	} else {
+		close(s.second)
+	}
+	return s.DB.PutTaskBriefState(ctx, id, state, at)
 }
 
 // A continuation whose Agent cannot be linked is closed, but it must not remain in the closed task's durable lineage.
@@ -614,7 +629,7 @@ func TestFailedTakeoverPreservesConcurrentSupervisionRound(t *testing.T) {
 // A revision read while PutTaskBriefState is still pending is not a committed brief. When that write fails, rollback
 // must observe the reverted brief and realign the ledger instead of retaining the uncommitted scope.
 func TestFailedTakeoverWaitsForBriefCommitToSettle(t *testing.T) {
-	st := &unstableBriefCommitStore{DB: todoTestDB(t), unlinked: make(chan struct{}), entered: make(chan struct{}), release: make(chan struct{})}
+	st := &failingPendingBriefStore{DB: todoTestDB(t), entered: make(chan struct{}), release: make(chan struct{})}
 	defer func() {
 		select {
 		case <-st.release:
@@ -623,18 +638,23 @@ func TestFailedTakeoverWaitsForBriefCommitToSettle(t *testing.T) {
 		}
 	}()
 	s, failed, sibling, brief, rollback := continuationRollbackFixtureOn(t, st)
+	// Establish the post-unlink stage explicitly. The second unlink below is idempotent and does not need the brief
+	// write lock, so the pending scope is the only writer and the test cannot deadlock its own fault injection.
+	if err := s.unlinkTaskBrief(context.Background(), failed.ID, rollback.eventID); err != nil {
+		t.Fatal(err)
+	}
 	st.arm.Store(true)
-	dropDone := make(chan struct{})
-	go func() {
-		s.dropContinuation(context.Background(), failed.ID, rollback, errors.New("injected Agent link failure"))
-		close(dropDone)
-	}()
-	<-st.unlinked
 	concurrent := []string{"scope whose durable commit fails"}
 	scopeDone := make(chan struct{})
 	go func() {
 		_, _ = s.rescope(context.Background(), sibling, "conv1", "conv1", "concurrent_test_scope", concurrent, 11)
 		close(scopeDone)
+	}()
+	<-st.entered
+	dropDone := make(chan struct{})
+	go func() {
+		s.dropContinuation(context.Background(), failed.ID, rollback, errors.New("injected Agent link failure"))
+		close(dropDone)
 	}()
 	waitFor(t, "rollback to use the pending scope or wait for its commit", func() bool {
 		if got := todoNow(s, sibling.ID).Supervision; got != nil && slices.Equal(got.DoneWhen, concurrent) {
@@ -657,4 +677,92 @@ func TestFailedTakeoverWaitsForBriefCommitToSettle(t *testing.T) {
 	if after, ok := s.briefOfTodo(sibling.ID); !ok || !slices.Equal(after.Criteria, brief.Criteria) || after.ExpectNow != brief.ExpectNow {
 		t.Fatalf("brief and ledger diverged after the failed commit: brief %+v, ledger %+v", after, got)
 	}
+}
+
+// A new round started after the failed scope already cleared acceptance is still a new round. Its epoch must advance
+// even though startSupervisionRound has no further Supervision field to change.
+func TestFailedTakeoverPreservesRoundStartedAfterScopeReset(t *testing.T) {
+	s, old, failed, sibling, _ := continuationRollbackSetup(t, todoTestDB(t))
+	if _, _, err := s.updateSupervision(context.Background(), sibling.ID, func(v *Supervision) bool {
+		v.State = reviewAccepted
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, rollback, err := s.continueBriefFor(context.Background(), "conv1", "conv1", old, failed, "test rollback", []string{"criterion from a failed takeover"}, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.startSupervisionRound(context.Background(), sibling.ID)
+	s.dropContinuation(context.Background(), failed.ID, rollback, errors.New("injected Agent link failure"))
+	if got := todoNow(s, sibling.ID).Supervision; got == nil || got.State == reviewAccepted {
+		t.Fatalf("rollback restored acceptance over a round started after the scope reset: %+v", got)
+	}
+}
+
+// The durable write is part of a brief state's ordered transition, not something an older concurrent writer may finish
+// after a newer one. The last committed memory and Postgres state must both be the second scope.
+func TestBriefWritesSerializeDurableCommitOrder(t *testing.T) {
+	st := &outOfOrderBriefStore{DB: todoTestDB(t), first: make(chan struct{}), second: make(chan struct{}), release: make(chan struct{})}
+	defer func() {
+		select {
+		case <-st.release:
+		default:
+			close(st.release)
+		}
+	}()
+	s, _, old := newSupervisedServiceOn(t, st)
+	brief := mustBriefOfTodo(t, s, old.ID)
+	st.arm.Store(true)
+	firstDone := make(chan struct{})
+	go func() {
+		_, _, _ = s.changeBrief(context.Background(), brief.ID, func(tb *taskBrief) bool {
+			tb.st.Log = append(tb.st.Log, BriefEvent{At: time.Now().UTC(), Kind: briefEventScope, Todo: old.ID, DoneWhen: []string{"older blocked scope"}})
+			return true
+		})
+		close(firstDone)
+	}()
+	<-st.first
+	secondDone := make(chan struct{})
+	go func() {
+		_, _, _ = s.changeBrief(context.Background(), brief.ID, func(tb *taskBrief) bool {
+			tb.st.Log = append(tb.st.Log, BriefEvent{At: time.Now().UTC(), Kind: briefEventScope, Todo: old.ID, DoneWhen: []string{"newer committed scope"}})
+			return true
+		})
+		close(secondDone)
+	}()
+	waitFor(t, "the second writer to enter Postgres or wait for the brief write lock", func() bool {
+		select {
+		case <-st.second:
+			return true
+		default:
+		}
+		for _, stack := range goroutineStacks() {
+			if strings.Contains(stack, "(*Service).changeBrief(") && strings.Contains(stack, "[sync.Mutex.Lock]") {
+				return true
+			}
+		}
+		return false
+	})
+	close(st.release)
+	<-firstDone
+	<-secondDone
+	rows, _, err := st.ListTaskBriefs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.ID != brief.ID {
+			continue
+		}
+		var stored briefState
+		if err := json.Unmarshal(row.State, &stored); err != nil {
+			t.Fatal(err)
+		}
+		if len(stored.Log) == 0 || !slices.Equal(stored.Log[len(stored.Log)-1].DoneWhen, []string{"newer committed scope"}) {
+			t.Fatalf("an older writer overwrote the newer durable scope: %+v", stored.Log)
+		}
+		return
+	}
+	t.Fatalf("brief %s is missing from Postgres", brief.ID)
 }
