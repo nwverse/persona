@@ -33,6 +33,7 @@ this working tree, each on its own; and with --tip the ones that also fail at th
   UNKNOWN   not compared, and why (no named test, a web step that needs its own npm ci, a timeout, no such test)
   TIP-PASS  passes at the tip: main fixed it after the merge base; merging the base ref brings the fix
   TIP-FAIL  also fails at the tip
+  TIP-?     not compared at the tip, and why (a timeout, no such test there)
 
 then one line that counts them. The rules are the PR watcher's (main_failure_comparison in
 scripts/operations/pr_watch_repair.py): only named tests are compared, and a test whose files the change edits is not
@@ -96,7 +97,7 @@ def ref_name(ref):
 class Verdict:
     """What a rerun says about one failing test, suite or command."""
 
-    KINDS = ("ALREADY", "NEW", "FLAKY", "EDITED", "UNKNOWN", "TIP-PASS", "TIP-FAIL")
+    KINDS = ("ALREADY", "NEW", "FLAKY", "EDITED", "UNKNOWN", "TIP-PASS", "TIP-FAIL", "TIP-?")
 
     def __init__(self, kind, subject, text):
         if kind not in self.KINDS:
@@ -660,7 +661,8 @@ class Comparison:
                                                         "%s brings the fix" % (self.tip, self.tip.ref))
         if verdict.kind == "ALREADY":
             return Verdict("TIP-FAIL", verdict.subject, verdict.text)
-        return verdict
+        # Not counted with the base's verdicts: the failure already has one.
+        return Verdict("TIP-?", verdict.subject, verdict.text)
 
     def summary(self):
         counts = {kind: sum(1 for verdict in self.verdicts if verdict.kind == kind) for kind in Verdict.KINDS}
@@ -670,9 +672,9 @@ class Comparison:
                 "%d EDITED (not attributable), %d UNKNOWN (not compared)"
                 % (total, short(self.base.sha), counts["ALREADY"], counts["NEW"], counts["FLAKY"], counts["EDITED"],
                    counts["UNKNOWN"]))
-        if self.tip and self.tip.sha != self.base.sha and (counts["TIP-PASS"] or counts["TIP-FAIL"]):
-            line += "; at the tip %s: %d TIP-PASS (fixed since), %d TIP-FAIL (still failing)" % (
-                short(self.tip.sha), counts["TIP-PASS"], counts["TIP-FAIL"])
+        if self.tip and self.tip.sha != self.base.sha and (counts["TIP-PASS"] or counts["TIP-FAIL"] or counts["TIP-?"]):
+            line += "; at the tip %s: %d TIP-PASS (fixed since), %d TIP-FAIL (still failing), %d TIP-? (not compared)" % (
+                short(self.tip.sha), counts["TIP-PASS"], counts["TIP-FAIL"], counts["TIP-?"])
         self.say(line)
         return counts
 

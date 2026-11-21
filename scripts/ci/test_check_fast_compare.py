@@ -386,8 +386,21 @@ class CompareTests(HelperTestCase):
                           ["go", "test", "-count=1", "-v", "-timeout", "290s", "-run", "^(TestOther)$",
                            "./internal/other"]], at_tip)
         self.assertEqual((1, 1), (counts["TIP-PASS"], counts["TIP-FAIL"]))
-        self.assertIn("at the tip cccccccccc: 1 TIP-PASS (fixed since), 1 TIP-FAIL (still failing)", lines[-1])
+        self.assertIn("at the tip cccccccccc: 1 TIP-PASS (fixed since), 1 TIP-FAIL (still failing), 0 TIP-?", lines[-1])
         self.assertFalse((self.work / "compare/tip").exists())
+
+    def test_a_tip_that_gives_no_answer_is_not_counted_again(self):
+        def answer(argv, cwd):
+            if "tip" in cwd.parts:
+                return 124, ""
+            return 1, "--- FAIL: TestRedOnMain (0.0s)\n--- FAIL: TestMine (0.0s)\n--- FAIL: TestOther (0.0s)\n"
+        runner = FakeRunner(answer, files=("server/internal/assistant/a.go", "server/internal/other/o.go"))
+        counts = self.comparison([self.go_step()], runner, tip="c" * 40).compare()
+        self.assertEqual((3, 1, 3), (counts["ALREADY"], counts["UNKNOWN"], counts["TIP-?"]))
+        self.assertIn("TIP-?    server/internal/other TestOther: not compared: the rerun at cccccccccc (tip of "
+                      "origin/main) timed out", self.out.getvalue())
+        self.assertIn("4 failure(s) against bbbbbbbbbb", self.lines()[-1])
+        self.assertIn("0 TIP-PASS (fixed since), 0 TIP-FAIL (still failing), 3 TIP-? (not compared)", self.lines()[-1])
 
     def test_the_checkout_is_removed_by_its_path_when_a_rerun_breaks(self):
         def answer(argv, cwd):

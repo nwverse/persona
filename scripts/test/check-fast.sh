@@ -82,7 +82,7 @@
 # FLAKY (passes there and rerun here on its own), EDITED (not attributable: the change edits that test's files) or
 # UNKNOWN (not compared, and why). The rules are the PR watcher's: named tests only, no attribution when the change
 # edits the test. --compare-tip also reruns the ALREADY ones at the base ref's tip
-# (TIP-PASS: main fixed it since; TIP-FAIL: it still fails). The exit code stays the run's: a failure main already has
+# (TIP-PASS: main fixed it since; TIP-FAIL: it still fails; TIP-?: no answer there). The exit code stays the run's: a failure main already has
 # is still a failure here. With --all the merge base and the change's files are found as in diff mode.
 #
 # Exit codes: 0 all checks passed, skipped or not needed; 1 one or more checks FAILED; 124 no failure but at least
