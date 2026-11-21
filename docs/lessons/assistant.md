@@ -1,5 +1,7 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- The node process's PATH is not the assistant's shell PATH (#12483, 2026-11-21). A node started by a service manager has a minimal PATH, while the assistant's Bash runs through the user's login shell, whose PATH restores version-manager directories. `trustedPATH` then saw every `export PATH="<version manager>/bin:$PATH"; lark-cli …` as replacing the executable and asked for a whole-command card, one per call, even for `--help` reads. Ask the login shell for its PATH once (a marked line, cached; retried after a failed ask) and trust those directories; a directory outside that set and every write still ask. Tests seed the Node's login-shell directories instead of starting a shell.
+
 - `--allowedTools` and `--disallowedTools` govern approval, not a reliable tool-visibility boundary (#11736). Per-conversation MCP narrowing must filter the actual `sessionMCPTools` response and repeat the same decision at the assistant's call entry (`guardRefusal`). Changing only launch flags can leave stale clients or direct calls with the old tool set; hiding a tool is not a substitute for call admission.
 
 - Automatic-continuation triage and channel mirrors observe the same finished turn concurrently (#11848). The retry wake timestamp is not yet durable when the first mirror runs; gate Feishu and extension mirrors on the session's transient classification and the transient-retry switch instead. Cover several transient attempts, the later terminal error, and delivery with retry disabled.
@@ -827,6 +829,34 @@ as delivered instead of moving to the replacement. A check that a resource is fr
 mark the conversation as being replaced under that same lock (`relayBook.replacing`), have every drain and every direct
 delivery respect the mark (the direct ones queue), and clear it only where what waited has moved or the replacement
 failed, draining it again then (`TestNothingGoesIntoABackgroundSupervisorBeingReplaced`).
+
+## Personal verification is unfinished work (#10047)
+
+A supervisor's accepted review is not the owner's personal verification. Keep an explicit `user_check` task open
+until Pass, so both completed-task and ordinary idle retirement leave its Agent available. Feedback starts a new
+work round even though the task was already open: otherwise its old Pass can verify rework. Test open counts and
+the actual retirement passes as well as the card; a still-pending card alone never proves its task is open.
+The acceptance record and completion are separate durable writes: recover a saved owner Pass after a restart,
+including the verified stage if the todo was already closed.
+Recovery follows the current round's owner Pass, not only a `user_check` ledger: completion and the ledger's
+transition to `accepted` can each precede a crash before verification. Retry only unfinished steps, keep ledger
+write failures recoverable, and do not repeat completion or verification notifications on subsequent sweeps.
+Serialize the round change, not an ordinary message's Agent-start wait: a second message must still join the
+Agent already starting (`TestStoppedTaskSecondMessageGoesToTheStartingAgent`), rather than wait behind the
+first sender's action lock.
+Cover the real database too: an ordinary `done: false` edit of an already-open todo intentionally does not advance
+`reopened_at`. Personal-verification feedback must explicitly restart that work round in the store; an in-memory
+timestamp alone lets an old Pass verify the rework after a manager restart.
+Reset the raw `user_check` ledger on every reopen, including a closed task's PATCH, since its effective state
+already reads accepted while closed. A fresh personal-verification review reopens before writing its new ledger.
+Commit the reopen and ledger reset together: a partial write leaves the task waiting on a Pass it can no longer use.
+On startup and the acceptance sweep, rebuild a missing ask from its saved review. Save the ask before posting the
+card, and check the round after taking the task action lock so a queued Pass cannot complete a newer check.
+Do not restart a waiting verification until its replacement review passed validation and was saved. Release the
+round's action lock before feedback delivery, and bind the eventual reply receipt to that ask's timestamp so a slow
+delivery cannot swallow a newer verification.
+An ordinary edit that repeats `done: false` is not a reopen. A saved replacement review also makes the old Pass
+stale if a later work-round write fails, so a restart cannot verify rework through that old card.
 
 ## A queued supervision digest is not a snapshot of work that still needs review (#10424)
 

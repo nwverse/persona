@@ -70,27 +70,55 @@ class LaunchDiagnosticsTests(unittest.TestCase):
         self.assertNotIn("DO NOT EXPORT", json.dumps(exported))
         self.assertIn("captured 1 scoped events", self.status())
 
-    def test_missing_invalid_or_mismatched_context_never_runs_a_command(self):
-        cases = [None, {**self.context, "udid": OTHER}, {**self.context, "udid": '" OR TRUE'},
-                 {**self.context, "bundle_id": "org.example.someone.else"},
-                 {**self.context, "started_at": "invalid"},
-                 {**self.context, "started_at": "2026-01-01T12:00:00"},
-                 {**self.context, "started_at": "2026-01-01T13:00:00+00:00"},
-                 {**self.context, "started_at": "2025-12-31T12:00:00+00:00"},
-                 {**self.context, "credentials": "DO NOT EXPORT"}, {}]
-        for context in cases:
-            with self.subTest(context=context):
+    def test_scope_rejections_expose_only_fixed_prerequisite_subtypes(self):
+        cases = [("missing", None, "scope-context-fields"),
+                 ("invalid UDID", {**self.context, "udid": '" OR TRUE'}, "scope-identity"),
+                 ("non-string UDID", {**self.context, "udid": None}, "scope-identity"),
+                 ("lowercase UDID", {**self.context,
+                                    "udid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}, "scope-identity"),
+                 ("other bundle", {**self.context, "bundle_id": "org.example.someone.else"}, "scope-identity"),
+                 ("invalid time", {**self.context, "started_at": "invalid"}, "scope-context-time"),
+                 ("naive time", {**self.context, "started_at": "2026-01-01T12:00:00"}, "scope-context-time"),
+                 ("non-UTC time", {**self.context, "started_at": "2026-01-01T13:00:00+01:00"}, "scope-context-time"),
+                 ("future time", {**self.context, "started_at": "2026-01-01T13:00:00+00:00"}, "scope-context-time"),
+                 ("expired time", {**self.context, "started_at": "2025-12-31T12:00:00+00:00"}, "scope-context-time"),
+                 ("extra credential", {**self.context, "credentials": "DO NOT EXPORT"}, "scope-context-fields"),
+                 ("missing fields", {}, "scope-context-fields"),
+                 ("non-object context", [], "scope-context-fields")]
+        for label, context, category in cases:
+            with self.subTest(case=label):
                 path = self.output / launch.CONTEXT
                 if context is None:
                     path.unlink()
                 else:
                     path.write_text(json.dumps(context))
+                (self.output / "simulator.log").write_text(UDID + "\n")
                 self.collect()
-                self.assertEqual(self.calls, [])
+                self.assertEqual(self.calls, [], label)
                 self.assertEqual(self.status(),
-                                 "unavailable: scope-validation-failure; no launch cause established\n")
+                                 f"unavailable: {category}-failure; no launch cause established\n")
+                self.assertNotIn("DO NOT EXPORT", self.status())
                 self.assertFalse((self.destination / "simulator-launch.json").exists())
                 self.assertFalse((self.destination / launch.CONTEXT).exists())
+
+    def test_scope_io_errors_expose_no_raw_error_or_private_path(self):
+        real_open = launch.os.open
+        for name, category in ((launch.CONTEXT, "scope-context-fields"),
+                               ("simulator.log", "scope-owned-simulator")):
+            with self.subTest(name=name):
+                def fail_private_file(path, *args, **kwargs):
+                    if Path(path).name == name:
+                        raise OSError("credential=DO NOT EXPORT /private/context.json")
+                    return real_open(path, *args, **kwargs)
+                with mock.patch.object(launch.os, "open", side_effect=fail_private_file):
+                    self.collect()
+                self.assertFalse(self.calls)
+                self.assertEqual(self.status(),
+                                 f"unavailable: {category}-failure; no launch cause established\n")
+                self.assertNotIn("DO NOT EXPORT", self.status())
+                self.assertNotIn("/private/", self.status())
+                self.assertEqual({path.name for path in self.destination.iterdir()},
+                                 {"simulator-launch.status.txt"})
 
     def test_context_symlink_is_not_read_or_copied(self):
         path = self.output / launch.CONTEXT
@@ -101,11 +129,12 @@ class LaunchDiagnosticsTests(unittest.TestCase):
         self.collect()
         self.assertFalse(self.calls)
         self.assertEqual(self.status(),
-                         "unavailable: scope-validation-failure; no launch cause established\n")
+                         "unavailable: scope-context-fields-failure; no launch cause established\n")
         self.assertEqual({p.name for p in self.destination.iterdir()}, {"simulator-launch.status.txt"})
 
     def test_both_scope_files_reject_links_large_files_and_fifos(self):
-        for name in (launch.CONTEXT, "simulator.log"):
+        for name, category in ((launch.CONTEXT, "scope-context-fields"),
+                               ("simulator.log", "scope-owned-simulator")):
             for kind in ("symlink", "large", "fifo", "directory"):
                 with self.subTest(name=name, kind=kind):
                     path = self.output / name
@@ -124,13 +153,21 @@ class LaunchDiagnosticsTests(unittest.TestCase):
                     self.collect()
                     self.assertFalse(self.calls)
                     self.assertEqual(self.status(),
-                                     "unavailable: scope-validation-failure; no launch cause established\n")
+                                     f"unavailable: {category}-failure; no launch cause established\n")
                     self.assertFalse((self.destination / "simulator-launch.json").exists())
                     if kind == "directory":
                         path.rmdir()
                     else:
                         path.unlink()
                     path.write_bytes(original)
+
+    def test_owned_simulator_mismatch_is_distinct_from_identity(self):
+        (self.output / "simulator.log").write_text(OTHER + "\n")
+        self.collect()
+        self.assertFalse(self.calls)
+        self.assertEqual(self.status(),
+                         "unavailable: scope-owned-simulator-failure; no launch cause established\n")
+        self.assertNotIn(OTHER, self.status())
 
     def test_output_is_rechecked_and_empty_is_not_evidence(self):
         self.collect(entries=[
@@ -274,18 +311,154 @@ class LaunchDiagnosticsTests(unittest.TestCase):
             launch.collect(self.output, self.destination, now=START + timedelta(minutes=17))
         self.assertEqual(self.status(), "unavailable: scoped log command timed out\n")
 
+    def test_partial_evidence_and_context_writes_leave_no_bundle(self):
+        evidence = self.destination / "simulator-launch.json"
+        context = self.destination / launch.CONTEXT
+        status = self.destination / "simulator-launch.status.txt"
+        stale = b"stale evidence DO NOT EXPORT"
+        for name in (evidence.name, launch.CONTEXT):
+            with self.subTest(name=name, failure="partial-write"):
+                evidence.write_bytes(stale)
+                context.write_bytes(stale)
+                status.write_text("stale status")
+                real_fdopen = launch.os.fdopen
+                descriptors = {}
+
+                def fixture_temporary(dir, prefix, suffix):
+                    path = Path(dir) / (prefix + "partial" + suffix)
+                    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+                    descriptors[fd] = path
+                    return fd, str(path)
+
+                partial_paths = []
+
+                class PartialWriter:
+                    def __init__(self, stream):
+                        self.stream = stream
+
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *args):
+                        return self.stream.__exit__(*args)
+
+                    def write(self, data):
+                        self.stream.write(data[:1])
+                        raise OSError("private partial write DO NOT EXPORT")
+
+                def partial_fdopen(fd, mode, buffering=-1):
+                    stream = real_fdopen(fd, mode, buffering=buffering)
+                    if mode == "wb" and buffering == 0 and descriptors.pop(fd).name.startswith(name + "."):
+                        partial_paths.append(name)
+                        return PartialWriter(stream)
+                    return stream
+
+                with mock.patch.object(launch.tempfile, "mkstemp", fixture_temporary), \
+                        mock.patch.object(launch.os, "fdopen", partial_fdopen):
+                    self.collect()
+                self.assertEqual(partial_paths, [name])
+                self.assertEqual(self.status(),
+                                 "unavailable: publication-failure; no launch cause established\n")
+                self.assertFalse(evidence.exists())
+                self.assertFalse(context.exists())
+                self.assertEqual(descriptors, {})
+                self.assertFalse(any(path.suffix == ".tmp" for path in self.destination.iterdir()))
+
+            with self.subTest(name=name, failure="replacement"):
+                evidence.write_bytes(stale)
+                context.write_bytes(stale)
+                status.write_text("stale status")
+                real_replace = launch.os.replace
+
+                def fail_replace(source, destination):
+                    if Path(destination).name == name:
+                        raise OSError("private replacement DO NOT EXPORT")
+                    real_replace(source, destination)
+
+                with mock.patch.object(launch.os, "replace", fail_replace):
+                    self.collect()
+                self.assertEqual(self.status(),
+                                 "unavailable: publication-failure; no launch cause established\n")
+                self.assertFalse(evidence.exists())
+                self.assertFalse(context.exists())
+                self.assertFalse(any(path.suffix == ".tmp" for path in self.destination.iterdir()))
+
+    def test_status_failure_propagates_the_fixed_intended_text_and_invalidates_bundle(self):
+        evidence = self.destination / "simulator-launch.json"
+        context = self.destination / launch.CONTEXT
+        status = self.destination / "simulator-launch.status.txt"
+        cases = ((None, "captured 1 scoped events; diagnosis still required\n"),
+                 ([], "unavailable: no scoped launch/runtime events; no cause established\n"))
+        for entries, intended in cases:
+            with self.subTest(intended=intended):
+                evidence.write_text("stale evidence")
+                context.write_text("stale context")
+                status.write_text("stale status")
+                real_replace = launch.os.replace
+
+                def fail_status(source, destination):
+                    real_replace(source, destination)
+                    if Path(destination) == status:
+                        raise OSError("private status path credential DO NOT EXPORT")
+
+                with mock.patch.object(launch.os, "replace", fail_status), \
+                        self.assertRaises(launch.StatusPublicationError) as raised:
+                    self.collect(entries=entries)
+                self.assertEqual(str(raised.exception), intended)
+                self.assertIsNone(raised.exception.__cause__)
+                self.assertNotIn("DO NOT EXPORT", str(raised.exception))
+                self.assertFalse(status.exists())
+                self.assertFalse(evidence.exists())
+                self.assertFalse(context.exists())
+                self.assertFalse(any(path.suffix == ".tmp" for path in self.destination.iterdir()))
+
+    def test_publication_replaces_complete_files_in_the_artifact_directory(self):
+        self.collect()
+        real_replace = launch.os.replace
+        replacements = []
+
+        def same_directory_replace(source, destination):
+            replacements.append((source, destination))
+            self.assertEqual(Path(source).parent, Path(destination).parent)
+            self.assertTrue(Path(source).name.endswith(".tmp"))
+            real_replace(source, destination)
+
+        self.collect()
+        with mock.patch.object(launch.os, "replace", same_directory_replace):
+            self.collect()
+        self.assertEqual([Path(destination).name for _, destination in replacements],
+                         [launch.CONTEXT, "simulator-launch.json", "simulator-launch.status.txt"])
+        self.assertFalse(any(path.suffix == ".tmp" for path in self.destination.iterdir()))
+
     def test_publication_failure_does_not_export_paths_or_hide_behind_stream_parse(self):
-        original = launch.Path.write_bytes
-        def fail_evidence(path, data):
-            if path.name == "simulator-launch.json":
-                raise OSError("/private/output-path credential DO NOT EXPORT")
-            return original(path, data)
-        with mock.patch.object(launch.Path, "write_bytes", fail_evidence):
+        real_replace = launch.os.replace
+        with mock.patch.object(launch.os, "replace",
+                               side_effect=lambda source, destination: real_replace(source, destination)
+                               if Path(destination).name != "simulator-launch.json"
+                               else (_ for _ in ()).throw(OSError("private evidence DO NOT EXPORT"))):
             self.collect()
         self.assertEqual(self.status(),
                          "unavailable: publication-failure; no launch cause established\n")
         self.assertNotIn("DO NOT EXPORT", self.status())
         self.assertNotIn("/private/", self.status())
+        self.assertFalse((self.destination / "simulator-launch.json").exists())
+        self.assertFalse((self.destination / launch.CONTEXT).exists())
+
+    def test_status_failure_does_not_mask_an_existing_collection_category(self):
+        status = self.destination / "simulator-launch.status.txt"
+        intended = "unavailable: log-command-failure; no launch cause established\n"
+
+        def reader(command):
+            raise OSError("private command failure DO NOT EXPORT")
+
+        with mock.patch.object(launch, "publish_status",
+                               side_effect=launch.StatusPublicationError(intended)) as publish_status, \
+                self.assertRaises(launch.StatusPublicationError) as raised:
+            self.collect(reader=reader)
+        publish_status.assert_called_once_with(status, intended)
+        self.assertEqual(str(raised.exception), intended)
+        self.assertNotIn("publication-failure", str(raised.exception))
+        self.assertNotIn("DO NOT EXPORT", str(raised.exception))
         self.assertFalse((self.destination / "simulator-launch.json").exists())
         self.assertFalse((self.destination / launch.CONTEXT).exists())
 

@@ -52,6 +52,7 @@ import type { VoiceOffer } from "./voice/VoiceParts";
 const ImageEditor = lazyPage(() => import("./ImageEditor").then((m) => m.ImageEditor), { idle: true });
 // The + / @ panel, drawn only while it is open: its own chunk and words, fetched by the idle preload or the first opening.
 const ComposerPanel = lazyPage(() => import("./ComposerPanel").then((m) => m.ComposerPanel), { idle: true });
+const AssistantComposerPanel = lazyPage(() => import("./AssistantComposerPanel").then((m) => m.AssistantComposerPanel));
 const ComposerOverlay = lazyPage(() => import("./ComposerOverlays").then((m) => m.ComposerOverlay));
 const preloadComposerOverlay = () => void ComposerOverlay.preload().catch(() => {});
 const SlashSkillEntry = lazyPage(() => import("./SlashSkillView").then((m) => m.SlashSkillEntry));
@@ -645,6 +646,9 @@ export const Composer = memo(function Composer({
     } else if (r.kind === "workspace") {
       const w = workspaceContext(r.workspace, (id) => machineWithHub(id, getState().machines));
       ref = { ...newContext("workspace", w.title, w.url, w.text), attrs: w.attrs };
+    } else if (r.kind === "repository") {
+      const c = r.context;
+      ref = { ...newContext("repository", c.title, c.url, c.text), attrs: c.attrs };
     } else if (r.kind === "file" && !r.dir && mention?.referenceFiles) {
       const path = r.insert.slice(1, -1);
       ref = { id: `file:${path}`, kind: "file", title: r.name, url: "", text: path, attrs: { path, ...mention.referenceFiles } };
@@ -897,6 +901,7 @@ export const Composer = memo(function Composer({
     input.current?.focus({ preventScroll: true });
   };
 
+  const MentionPanel = mention?.workspaces || mention?.repositories ? AssistantComposerPanel : ComposerPanel;
   const slashProps = {
     rows, active, onHover: setActive, onPick: pick, onClose: closeSlash,
     query, source: mention, machineId, within: box, memory: catalogMemory, ime: ime.tracker,
@@ -939,12 +944,12 @@ export const Composer = memo(function Composer({
 
       {token && (
         <Suspense fallback={null}>
-          <ComposerPanel key={skillEnvironment} memory={catalogMemory} from="at" query={token.query} source={mention} machineId={machineId} attach={disabled || editor ? undefined : machineId ? "files" : "images"} plan={planMode} onPick={(p) => pickPanel(p, token)} onClose={closePlus} handle={panel} />
+          <MentionPanel key={skillEnvironment} memory={catalogMemory} from="at" query={token.query} source={mention} machineId={machineId} attach={disabled || editor ? undefined : machineId ? "files" : "images"} plan={planMode} onPick={(p) => pickPanel(p, token)} onClose={closePlus} handle={panel} />
         </Suspense>
       )}
       {plusOpen && !disabled && (
         <Suspense fallback={null}>
-          <ComposerPanel key={skillEnvironment} memory={catalogMemory} from="plus" source={mention} machineId={machineId} attach={editor ? undefined : machineId ? "files" : "images"} plan={planMode} onPick={(p) => pickPanel(p, null)} onClose={closePlus} />
+          <MentionPanel key={skillEnvironment} memory={catalogMemory} from="plus" source={mention} machineId={machineId} attach={editor ? undefined : machineId ? "files" : "images"} plan={planMode} onPick={(p) => pickPanel(p, null)} onClose={closePlus} />
         </Suspense>
       )}
 

@@ -369,7 +369,8 @@ func (s *Service) toolPersonaSettings(ctx context.Context, call ToolCall, args j
 	if _, ok := directionPromptSettingID(a.Key); ok && a.Action == "set" && (call.SessionID == "" || call.SessionID != s.settings(ctx).Main) {
 		return proto.TextResult("only the main conversation may change direction prompts", true)
 	}
-	own := append(s.ownSettings(), s.directionOwnSettings(ctx)...)
+	own := append(s.ownSettings(), s.modelGroupOwnSettings()...)
+	own = append(own, s.directionOwnSettings(ctx)...)
 	if a.Action == "" || a.Action == "list" {
 		text, err := s.listSettings(ctx, own)
 		if err != nil {

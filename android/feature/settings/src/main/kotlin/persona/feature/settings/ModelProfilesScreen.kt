@@ -11,7 +11,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
-import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 
 /**
  * Model profiles section rendered inside Settings › Model configuration (aligned with Web's `ModelProfiles`).
@@ -80,7 +80,7 @@ internal fun LazyListScope.modelProfilesSection(
                 JRow(
                     title = stringResource(R.string.settings_model_profiles_rollback),
                     subtitle = targetName,
-                    leadingIcon = PhIcons.ArrowUUpLeft,
+                    leadingIcon = PersonaIcons.undo,
                     chevron = false,
                     modifier = Modifier.testTag("model-profile-rollback"),
                     trailing = {

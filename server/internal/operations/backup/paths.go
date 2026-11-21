@@ -19,10 +19,10 @@ func RecommendedDevelopmentBackupDir(home string) string {
 // ValidateOutputDirectory checks and prepares a snapshot directory chosen in
 // the Web UI and returns the canonical absolute path. It applies the same rules
 // as Create's --output: the directory may not be inside a tree a snapshot
-// collects (the knowledge base, managers/assistant, extensions, skills or
-// hub.machines_kept), nor contain the runtime directory or the knowledge base
-// (the archive leaves the store out, so such a store would drop what the
-// snapshot is for). Snapshots hold database dumps, configuration and encryption
+// collects (the knowledge base, managers/assistant, extensions, skills,
+// hub.machines_kept or tls), nor contain the runtime directory or the
+// knowledge base (the archive leaves the store out, so such a store would drop
+// what the snapshot is for). Snapshots hold database dumps, configuration and encryption
 // keys, so the directory is created with 0700 permissions and must already be
 // private when it exists; it may not be a symbolic link.
 func ValidateOutputDirectory(home, dir string) (string, error) {

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -290,6 +291,8 @@ var rpcFailureKeys = map[string]string{
 	"agent_speed_model":                  "rpc-errors.agent_speed_model",
 	"agent_speed_invalid":                "rpc-errors.agent_speed_invalid",
 	"readonly_unsupported":               "rpc-errors.readonly_unsupported",
+	"assistant_supervision_runtime":      "rpc-errors.assistant_supervision_runtime",
+	"assistant_supervision_account":      "rpc-errors.assistant_supervision_account",
 	// a start whose engine runs only its own launchers and has none of the launcher's kind (#8140); the engine's own
 	// words, naming the launcher, stay in detail
 	proto.CodeLauncherKindMissing: "rpc-errors.launcher_kind_missing",
@@ -391,6 +394,36 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	}
 	code, _ := body["code"].(string)
 	key := rpcFailureKeys[code]
+	args := i18n.Args{"reason": original}
+	if code == "assistant_supervision_runtime" {
+		var names []string
+		if values, ok := body["launchers"].([]any); ok {
+			for _, v := range values {
+				if name, ok := v.(string); ok && name != "" {
+					names = append(names, name)
+				}
+			}
+		}
+		label := strings.Join(names, ", ")
+		if label == "" {
+			label = i18n.T(l, "rpc-errors.assistant_supervision_none")
+		}
+		args["launchers"] = label
+	}
+	if code == "codex_no_box" || code == "codex_no_box_here" {
+		var re *rpc.Error
+		var detail struct {
+			Seconds float64 `json:"seconds"`
+		}
+		if errors.As(err, &re) && json.Unmarshal(re.Data, &detail) == nil && detail.Seconds > 0 {
+			args["seconds"] = detail.Seconds
+			if code == "codex_no_box_here" {
+				key = "node-codex-start.no_box_here"
+			} else {
+				key = "node-codex-start.no_box"
+			}
+		}
+	}
 	if code == "open_elsewhere" {
 		where, _ := body["where"].(string)
 		key = openElsewhereKeys[where]
@@ -407,7 +440,7 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 		return
 	}
 	// a summary that names {reason} carries the original words (git's, for a failed pull or push)
-	body["error"] = i18n.T(l, key, i18n.Args{"reason": original})
+	body["error"] = i18n.T(l, key, args)
 	switch code {
 	case "assistant_launcher_profile_switch", "assistant_service_tier_start_only", "assistant_service_tier_unsupported", "assistant_service_tier_refused":
 		// The native diagnostic is not a person-facing instruction; the stable, translated refusal says what to do.

@@ -253,7 +253,7 @@ class CompilerResourceTests(unittest.TestCase):
                         "-project", "/fixture/Persona.xcodeproj",
                         "-configuration", "Debug",
                         "-clonedSourcePackagesDirPath", "/fixture/cache",
-                        "-scheme", "Persona",
+                        "-scheme", "PersonaOfflineUnitTests",
                         "-derivedDataPath", str(output / "ios-tests"),
                         "-parallel-testing-enabled", "NO",
                         "-disableAutomaticPackageResolution",

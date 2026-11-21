@@ -15,6 +15,10 @@ const (
 	CodeRestarting  = "node_restarting"
 )
 
+// RPCReadLimit is the inbound message budget on both ends of an established node RPC connection.
+// Whole snapshots can exceed 64 MiB even on a link that splits them into small frames.
+const RPCReadLimit = 128 << 20
+
 // TaskInstructions separates delegated framework rules from the first user message.
 const TaskInstructions = "task_instructions_v1"
 
