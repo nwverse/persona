@@ -274,6 +274,8 @@ Apple has no shadow tokens. Shadows are inline literals:
 
 The Glass style relies on Liquid Glass and has no shadow. The vendored BeautifulUI package has real elevation tokens that Persona does not read. Web has seven shadow tokens (`web/src/styles.css:68-74`) plus `--shadow-knob` for the switch knob. Android has four literals. See DS-08.
 
+The built-in Mochi face on Android uses `Tokens.Mochi.DarkOffline` for the body gradient on the dark offline disc (#12090). It keeps the online dark outline and uses a lighter shadow, while the eyes, cheek and all other appearance and state combinations keep their colors. See `docs/apple/persona.md`.
+
 ### 2.7 Motion
 
 `Theme.Motion` (`apple/Shared/Design/Theme.swift:612-722`).

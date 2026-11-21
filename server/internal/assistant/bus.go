@@ -718,6 +718,9 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 					return nil, err
 				}
 			}
+			if out, handled, err := s.historyCall(ctx, d.Canonical(p.MachineID), p.Method, p.Params); handled {
+				return out, err
+			}
 		}
 		if out, ok, err := d.Request(ctx, method, params); ok { // devices.* (devices.go)
 			if err == nil && method == devicewire.MethodCall {

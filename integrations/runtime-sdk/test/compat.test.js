@@ -135,4 +135,6 @@ test('compat context only strips bare live snapshots and MCP aliases keep sessio
   const bin = join(home,'.jarvis','bin','jarvisd')
   mkdirSync(dirname(bin),{recursive:true}); writeFileSync(bin,'binary')
   assert.equal(daemonBinary(home,{}),bin)
+  const stateHome = join(home, 'fixture-state')
+  assert.equal(daemonBinary(home, { personadBin: join(home, 'no-personad'), jarvisdBin: join(home, 'no-jarvisd'), stateHome }), join(stateHome, 'bin', 'personad'))
 })
