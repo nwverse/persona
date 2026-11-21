@@ -620,6 +620,12 @@ final class AppModel {
     /// The directions' names by leader conversation id (`GET /api/v1/assistant/leaders`): the sidebar's Directions group
     /// shows these instead of the conversations' titles. Read again with the assistant; empty without leaders.
     private(set) var directionNames: [String: String] = [:]
+    /// Outside reporting directions by opaque direction id (#8236). The tree is authoritative when present; the flat
+    /// leaders endpoint supplies names and navigation targets on older hubs without a tree. Runtime-only, and cleared
+    /// with the assistant scope so one hub or manager's directions never appear on another's page.
+    private(set) var outsideDirections: [String: DirectionTree.Direction] = [:]
+    /// The flat endpoint's metadata-only copy, retained so a tree 404 can drop tree counts without dropping the rows.
+    @ObservationIgnored private var outsideDirectionFallback: [String: DirectionTree.Direction] = [:]
     /// The hub's direction tree (#4352, `GET /api/v1/assistant/directions/tree`): the directions' open to-dos with their
     /// state and Agents, for the sidebar's Pinned rows, the To-dos page and the Agents page. Read with the assistant, on
     /// every connect and on the `directions` event; nil from a hub without it (404) or before it is read.
@@ -1587,16 +1593,24 @@ final class AppModel {
         }
     }
 
-    /// The directions' names for `leaders`: none without leaders; a hub that cannot list them keeps what is held (or
-    /// none), and the sidebar shows those conversations' titles. The counts come from the direction tree alone.
+    /// The directions' names and outside metadata for `leaders`: none without leaders; a hub that cannot list them
+    /// keeps what is held (or none), and the sidebar shows those conversations' titles. Counts come from the tree alone.
     private func refreshDirectionInfo(_ api: APIClient, leaders: [String]) async {
         guard !leaders.isEmpty else {
             if !directionNames.isEmpty { directionNames = [:] }
+            outsideDirectionFallback = [:]
+            let outside = directionTree?.outsideDirections ?? [:]
+            if outside != outsideDirections { outsideDirections = outside }
             return
         }
         guard let list = try? await api.leaders(), showsPage(of: api) else { return }
         let names = APIClient.directionNames(list)
         if names != directionNames { directionNames = names }
+        // This response may land after the tree. Keep newly announced flat rows, but never replace a tree row's counts
+        // and running state with the flat endpoint's metadata-only fallback (#8236).
+        outsideDirectionFallback = APIClient.outsideDirections(list)
+        let outside = outsideDirectionFallback.merging(directionTree?.outsideDirections ?? [:]) { _, tree in tree }
+        if outside != outsideDirections { outsideDirections = outside }
     }
 
     /// What the To-dos and Agents pages' headers call direction `d`: its name, Secretary for the secretary group, else
@@ -1643,6 +1657,9 @@ final class AppModel {
         guard ask > directionTreeLanded, assistantShows(nil), showsPage(of: api) else { return }
         directionTreeLanded = ask
         if read != directionTree { directionTree = read }
+        let outside = outsideDirectionFallback.merging(read?.outsideDirections ?? [:]) { _, tree in tree }
+        if outside != outsideDirections { outsideDirections = outside }
+        // A 404 rolls back to the flat endpoint's names and targets only; a transport failure above keeps both copies.
         guard let tree = read else { return }
         let names = tree.leaderNames
         if names != directionNames { directionNames = names }
@@ -1651,10 +1668,11 @@ final class AppModel {
             cfg.leaders = ids
             assistantConfig = cfg
         }
-        // A direction the page's conversations do not list yet: the whole settings are read, so its row appears
-        // without a relaunch.
+        // An unlisted conversation-backed direction needs the whole settings read so its row appears without a relaunch.
+        // An outside direction is already complete here: treating its opaque id as a missing conversation would reread
+        // the assistant after every tree push (#8236).
         let known = Set((assistantConfig?.conversations ?? []).map(\.sessionID))
-        if followLeaders, ids.contains(where: { !known.contains($0) }) { await refreshAssistant() }
+        if followLeaders, tree.hasUnlistedConversation(known: known) { await refreshAssistant() }
     }
 
     /// The Couldn't Load Settings retry: the page flips back to Reading at once, and repeated taps share the one request (#4200).
@@ -4774,6 +4792,8 @@ final class AppModel {
             assistantConfig = heldAssistant(g)
         }
         directionTree = nil // the other hub's to-dos and sessions; `refreshAssistant` below reads this one's
+        outsideDirections = [:]
+        outsideDirectionFallback = [:]
         directionTreeLanded = directionTreeAsk // and a read already under way answers for the other one
         // The picked group's settings are read again: until that read finishes, the page shows its loading state.
         assistantConfigLoadFailed = false
@@ -4817,6 +4837,8 @@ final class AppModel {
         // The tree is the default manager's: kept through a re-read of it, dropped for any other.
         if switched || !assistantShows(nil) {
             directionTree = nil // the other manager's; `refreshAssistant` below reads this one's
+            outsideDirections = [:]
+            outsideDirectionFallback = [:]
             directionTreeLanded = directionTreeAsk // and a read already under way answers for the other one
         }
         assistantConfigLoadFailed = false

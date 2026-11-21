@@ -61,6 +61,7 @@ DOMAINS = [
     "saved_prompts_mock",  # Settings › Saved Prompts (/api/v1/assistant/saved-prompts…), MOCK_SAVED_PROMPTS
     "starred_mock",  # Starred messages (/api/v1/assistant/starred…), MOCK_STARRED
     "task_skip_mock",  # One scheduled occurrence, MOCK_SKIP_OCCURRENCE
+    "outside_directions_mock",  # conversationless reporting directions (#8236), MOCK_OUTSIDE_DIRECTIONS
 ]
 
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")

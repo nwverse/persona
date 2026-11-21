@@ -808,6 +808,15 @@ the names it took in that test's `MOVED`: a branch from before the move that kep
 then fails there, with the module to edit instead
 (`docs/lessons/testing.md`, "A moved file or block needs a test that fails when the old copy comes back").
 
+`MOCK_OUTSIDE_DIRECTIONS=1` (`scripts/mock/outside_directions_mock.py`, #8236) is a read-only, three-row direction
+fixture: one existing conversation, one outside direction bound to an existing coding Agent, and one targetless outside
+direction with a long name. The two outside ids are not Persona conversations; `/assistant`, `/leaders` and
+`/directions/tree` keep the same order and metadata. The bound Agent's own to-do stays under Secretary and its idle state
+does not drive the direction's running mark. It is off by default and composes with `MOCK_LEGACY_HUB=1` by leaving the
+legacy 404 intact. `python3 -I scripts/mock/test_direction_tree_mock.py` checks the fixture and its reset behavior.
+`OutsideDirectionsUITests` uses it through `PERSONA_OUTSIDE_DIRECTIONS_HUB` for the mixed sidebar's interactions and for
+sidebar / To-dos / Agents captures in light and dark, at default and AX5 text (`PERSONA_SHOTS` saves them).
+
 ### Readiness scenarios (`MOCK_READINESS`, #287)
 
 New-user onboarding states ([onboarding.md](../assistant/onboarding.md) 4.4–4.6, section 5) share these fixtures across web Playwright, Android and iOS / Mac screenshots. Start with `MOCK_READINESS=<scenario>`:

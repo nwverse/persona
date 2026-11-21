@@ -86,6 +86,71 @@ class DirectionTreeMockTests(unittest.TestCase):
         self.assertEqual(len(tree), 1)
         self.assertTrue(tree[0]["secretary"])
 
+    def test_outside_directions_fixture(self):
+        base, process, log = start({"MOCK_OUTSIDE_DIRECTIONS": "1"})
+        self.addCleanup(stop, process, log)
+        conversation = "b2e4d6f8-0000-4000-8000-000000000002"
+        bound = "dir_mock_bound_8236"
+        targetless = "dir_mock_targetless_8236"
+        order = [conversation, bound, targetless]
+
+        assistant = get(base, "/api/v1/assistant")
+        self.assertEqual(assistant["leaders"], order)
+        self.assertFalse({bound, targetless} & {c["session_id"] for c in assistant["conversations"]})
+
+        leaders = get(base, "/api/v1/assistant/leaders")["leaders"]
+        self.assertEqual([row["id"] for row in leaders], order)
+        by_id = {row["id"]: row for row in leaders}
+        for sid in (bound, targetless):
+            self.assertIs(by_id[sid]["external"], True)
+            self.assertEqual(by_id[sid]["title"], by_id[sid]["name"])
+        self.assertEqual(by_id[bound]["machine_id"], "server")
+        self.assertEqual(by_id[bound]["session_id"], "a1f3c2d4-0000-4000-8000-000000000004")
+        self.assertNotIn("machine_id", by_id[targetless])
+        self.assertNotIn("session_id", by_id[targetless])
+        self.assertNotIn("external", by_id[conversation])
+
+        tree = get(base, "/api/v1/assistant/directions/tree")["directions"]
+        self.assertEqual([row["id"] for row in tree[:-1]], order)
+        self.assertTrue(tree[-1]["secretary"])
+        by_id = {row["id"]: row for row in tree}
+        self.assertEqual(by_id[bound]["machine_id"], "server")
+        self.assertEqual(by_id[bound]["session_id"], "a1f3c2d4-0000-4000-8000-000000000004")
+        self.assertNotIn("machine_id", by_id[targetless])
+        self.assertNotIn("session_id", by_id[targetless])
+        self.assertEqual(by_id[bound]["counts"],
+                         {"working": 1, "needs_you": 2, "stuck": 0, "review": 0, "planned": 0})
+        self.assertIs(by_id[bound]["running"], True)
+        self.assertEqual(by_id[targetless]["counts"],
+                         {"working": 0, "needs_you": 0, "stuck": 0, "review": 0, "planned": 0})
+        self.assertIs(by_id[targetless]["running"], False)
+        self.assertEqual(by_id[conversation]["counts"]["needs_you"], 1)
+        self.assertIn("todo_orders", {task["id"] for task in tree[-1]["tasks"]})
+        self.assertNotIn("todo_orders", {task["id"] for task in by_id[bound]["tasks"]})
+
+        sessions = get(base, "/api/v1/sessions")["sessions"]
+        target = next(s for s in sessions if s["session_id"] == "a1f3c2d4-0000-4000-8000-000000000004")
+        self.assertEqual(target["state"], "idle", "the direction's running mark must not come from its target")
+
+        get(base, "/mock/session_state?mid=macbook&sid=outside-running-0001&state=idle")
+        changed_tree = get(base, "/api/v1/assistant/directions/tree")["directions"]
+        self.assertFalse(next(row for row in changed_tree if row["id"] == bound)["running"])
+
+        get(base, "/mock/reset")
+        reset_tree = get(base, "/api/v1/assistant/directions/tree")["directions"]
+        self.assertEqual([row["id"] for row in reset_tree[:-1]], order)
+        self.assertTrue(next(row for row in reset_tree if row["id"] == bound)["running"],
+                        "reset restores the synthetic running Agent too")
+        task_ids = [task["id"] for row in reset_tree for task in row["tasks"]]
+        self.assertEqual(len(task_ids), len(set(task_ids)))
+
+    def test_an_older_hub_has_none_with_the_outside_fixture_too(self):
+        base, process, log = start({"MOCK_LEGACY_HUB": "1", "MOCK_OUTSIDE_DIRECTIONS": "1"})
+        self.addCleanup(stop, process, log)
+        with self.assertRaises(HTTPError) as err:
+            get(base, "/api/v1/assistant/directions/tree")
+        self.assertEqual(err.exception.code, 404)
+
     def test_an_older_hub_has_none(self):
         base, process, log = start({"MOCK_LEGACY_HUB": "1"})
         self.addCleanup(stop, process, log)

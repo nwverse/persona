@@ -146,10 +146,11 @@ nonisolated struct DirectionTree: Codable, Hashable, Sendable {
         var displayTitle: String { title.isEmpty ? String(localized: "Untitled To-do") : title }
     }
 
-    /// A direction: a current leader conversation, or (`secretary`) the group of to-dos no leader supervises, whose id is
-    /// the main conversation's.
+    /// A direction: a current leader conversation, an outside reporting direction (#8236), or (`secretary`) the group
+    /// of to-dos no leader supervises, whose id is the main conversation's.
     nonisolated struct Direction: Codable, Hashable, Sendable, Identifiable {
-        /// The leader conversation's session id; the main conversation's for the secretary group.
+        /// The direction's opaque id. For a conversation-backed direction this is also its leader conversation's id;
+        /// an outside direction's id never becomes a conversation route.
         var id: String
         /// From the same names as `GET /api/v1/assistant/leaders`; "" for the secretary group.
         var name: String
@@ -160,15 +161,24 @@ nonisolated struct DirectionTree: Codable, Hashable, Sendable {
         /// it; the working count is not shown. From a hub without it: whether it counts a working to-do, as before.
         var running: Bool
         var tasks: [TaskNode]
+        /// An outside direction reports through the tree without owning a Persona conversation. Missing or malformed
+        /// on an older hub, where every direction is conversation-backed.
+        var external: Bool?
+        /// Navigation-only coding-Agent target. Only a complete, nonblank pair on an outside direction is usable.
+        var machineID: String?
+        var sessionID: String?
 
         init(id: String, name: String = "", secretary: Bool = false, counts: Counts = Counts(), running: Bool = false,
-             tasks: [TaskNode] = []) {
+             tasks: [TaskNode] = [], external: Bool? = nil, machineID: String? = nil, sessionID: String? = nil) {
             self.id = id
             self.name = name
             self.secretary = secretary
             self.counts = counts
             self.running = running
             self.tasks = tasks
+            self.external = external
+            self.machineID = machineID
+            self.sessionID = sessionID
         }
 
         init(from decoder: Decoder) throws {
@@ -179,9 +189,28 @@ nonisolated struct DirectionTree: Codable, Hashable, Sendable {
             counts = try c.decodeIfPresent(Counts.self, forKey: .counts) ?? Counts()
             running = try c.decodeIfPresent(Bool.self, forKey: .running) ?? (counts.working > 0)
             tasks = try c.decodeIfPresent([TaskNode].self, forKey: .tasks) ?? []
+            // The new optional values are independently lossy: one bad value must not reject the whole tree (#8236).
+            external = (try? c.decodeIfPresent(Bool.self, forKey: .external)) ?? nil
+            machineID = (try? c.decodeIfPresent(String.self, forKey: .machineID)) ?? nil
+            sessionID = (try? c.decodeIfPresent(String.self, forKey: .sessionID)) ?? nil
         }
 
-        private enum CodingKeys: String, CodingKey { case id, name, secretary, counts, running, tasks }
+        private enum CodingKeys: String, CodingKey {
+            case id, name, secretary, counts, running, tasks, external
+            case machineID = "machine_id", sessionID = "session_id"
+        }
+
+        var isExternal: Bool { external == true }
+
+        /// The existing Agent an outside direction opens, or nil when either half is absent or blank. The direction's
+        /// own id remains its row identity and is never substituted for either half.
+        var externalTarget: SessionKey? {
+            guard isExternal, let machineID, let sessionID else { return nil }
+            let machine = machineID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let session = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !machine.isEmpty, !session.isEmpty else { return nil }
+            return SessionKey(machineID: machine, sessionID: session)
+        }
 
         /// What a header calls it: its name, Secretary for the secretary group (`fallback` for a leader the hub gave no
         /// name).
@@ -202,7 +231,7 @@ nonisolated extension DirectionTree {
     /// secretary's to-dos stay in the To-dos and Agents groupings; the main conversation's own row stands for it there).
     var leaders: [Direction] { directions.filter { !$0.secretary && !$0.id.isEmpty } }
 
-    /// The directions' names by leader conversation id, those with one.
+    /// The directions' names by direction id, those with one.
     var leaderNames: [String: String] {
         var out: [String: String] = [:]
         for d in leaders {
@@ -210,6 +239,19 @@ nonisolated extension DirectionTree {
             if !name.isEmpty { out[d.id] = name }
         }
         return out
+    }
+
+    /// Outside reporting directions by their opaque direction id. The target, when present, is navigation metadata only.
+    var outsideDirections: [String: Direction] {
+        var out: [String: Direction] = [:]
+        for d in leaders where d.isExternal { out[d.id] = d }
+        return out
+    }
+
+    /// Whether a conversation-backed leader is absent from the page's conversations and needs one assistant reread.
+    /// Outside ids are complete directions in their own right, not temporarily missing conversations (#8236).
+    func hasUnlistedConversation(known: Set<String>) -> Bool {
+        leaders.contains { !$0.isExternal && !known.contains($0.id) }
     }
 
     /// The directions with a to-do, in the tree's order: the To-dos page's and the Agents page's sections.
