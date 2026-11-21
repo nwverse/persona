@@ -7,18 +7,18 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
-	"regexp"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/secretkey"
 	"github.com/nwverse/persona/server/internal/usagesource"
 )
 
 var errUsageStorage = errors.New("usage source storage unavailable")
-var usageSourceID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
+var usageSourceID = lazyre.New(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 // A dedicated box uses the existing AES-GCM implementation. It is separate from the
 // manager's database key: that key's rotation only re-seals values in Postgres.
