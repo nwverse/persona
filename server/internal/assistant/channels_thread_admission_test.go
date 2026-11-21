@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -268,5 +270,163 @@ func TestChannelReceiveSameThreadKeyInOtherChannelDoesNotWait(t *testing.T) {
 	other := s.channelThreadOf(context.Background(), "otherchat", "same-key")
 	if other == nil || other.SessionID == boundThread(s, "same-key") {
 		t.Fatal("channels with equal thread keys share a conversation")
+	}
+}
+
+type admissionClaimStore struct {
+	Store
+	once     sync.Once
+	observed chan bool
+	release  chan struct{}
+	s        *Service
+}
+
+func (st *admissionClaimStore) PutSetting(ctx context.Context, key string, value any) error {
+	if state, ok := value.(channelsState); ok && key == channelsStateKey && slices.Contains(state.Seen["examplechat"], "first") {
+		st.once.Do(func() {
+			// saveChannelStateLocked holds the book lock: the durable claim must already have its queue position.
+			st.observed <- len(st.s.chans.receiving) == 1
+			<-st.release
+		})
+	}
+	return st.Store.PutSetting(ctx, key, value)
+}
+
+func TestChannelReceiveClaimReservesBeforePersistence(t *testing.T) {
+	s, f, _ := threadsChannelService(t, true)
+	s.chans.mu.Lock()
+	s.loadChannelStateLocked(context.Background())
+	s.chans.mu.Unlock()
+	st := &admissionClaimStore{Store: s.store(), observed: make(chan bool, 1), release: make(chan struct{}), s: s}
+	s.store = func() Store { return st }
+	h := &threadAdmissionHub{fakeHub: f, entered: make(chan struct{}), release: make(chan struct{}), second: make(chan struct{})}
+	s.hub = h
+	var claimRelease, startRelease sync.Once
+	defer claimRelease.Do(func() { close(st.release) })
+	defer startRelease.Do(func() { close(h.release) })
+	receive := func(id, text string) <-chan error {
+		done := make(chan error, 1)
+		go func() {
+			raw, _ := json.Marshal(map[string]string{"id": id, "text": text, "thread": "topic"})
+			done <- s.ChannelReceive(context.Background(), ChannelReceive{Channel: "examplechat", Message: raw})
+		}()
+		return done
+	}
+	first := receive("first", "first request")
+	select {
+	case reserved := <-st.observed:
+		if !reserved {
+			t.Error("seen claim persisted before thread admission was reserved")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("claim never reached persistence")
+	}
+	later := receive("reset", "/new")
+	claimRelease.Do(func() { close(st.release) })
+	for _, done := range []<-chan error{first, later} {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("receipt blocked after claim persistence")
+		}
+	}
+	select {
+	case <-h.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first request never started")
+	}
+	startRelease.Do(func() { close(h.release) })
+	waitAdmissionDrained(t, s)
+	if got := boundThread(s, "topic"); got != "" {
+		t.Fatalf("later /new was overtaken by the accepted request: %q", got)
+	}
+}
+
+func TestChannelReceiveFailedClaimCanBeRedelivered(t *testing.T) {
+	s, f, _ := threadsChannelService(t, true)
+	st := s.store().(*memStore)
+	st.setFailPut(errors.New("synthetic claim write failure"))
+	raw := []byte(`{"id":"retryable","text":"request","thread":"topic"}`)
+	if err := s.ChannelReceive(context.Background(), ChannelReceive{Channel: "examplechat", Message: raw}); err == nil {
+		t.Fatal("failed durable claim was acknowledged")
+	}
+	s.chans.mu.Lock()
+	reserved := len(s.chans.receiving)
+	seen := slices.Contains(s.chans.st.Seen["examplechat"], "retryable")
+	s.chans.mu.Unlock()
+	if reserved != 0 || seen || f.sent() != 0 {
+		t.Fatalf("failed claim left admission state: reserved=%d seen=%v starts=%d", reserved, seen, f.sent())
+	}
+	st.setFailPut(nil)
+	if err := s.ChannelReceive(context.Background(), ChannelReceive{Channel: "examplechat", Message: raw}); err != nil {
+		t.Fatal(err)
+	}
+	waitAdmissionDrained(t, s)
+	if err := s.ChannelReceive(context.Background(), ChannelReceive{Channel: "examplechat", Message: raw}); err != nil {
+		t.Fatal(err)
+	}
+	waitAdmissionDrained(t, s)
+	if f.sent() != 1 || boundThread(s, "topic") == "" {
+		t.Fatal("redelivery did not start exactly one conversation")
+	}
+}
+
+func TestChannelReceiveOldStartCannotBindNewGeneration(t *testing.T) {
+	for _, threads := range []bool{true, false} {
+		t.Run(fmt.Sprintf("threads=%v", threads), func(t *testing.T) {
+			s, f, _ := threadsChannelService(t, threads)
+			if !threads {
+				s.chans.mu.Lock()
+				s.loadChannelsLocked(context.Background())
+				s.channelPrefLocked("examplechat").Target = &channel.Target{Kind: channel.TargetNew}
+				s.saveChannelsLocked()
+				s.chans.mu.Unlock()
+			}
+			h := &threadAdmissionHub{fakeHub: f, entered: make(chan struct{}), release: make(chan struct{}), second: make(chan struct{})}
+			s.hub = h
+			var release sync.Once
+			defer release.Do(func() { close(h.release) })
+			receiveAdmissionMessage(t, s, "old", "old account request", "same-key")
+			select {
+			case <-h.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("old start never reached node")
+			}
+			if err := s.ChannelUnbound(context.Background(), ChannelUnbound{Channel: "examplechat"}); err != nil {
+				t.Fatal(err)
+			}
+			receiveAdmissionMessage(t, s, "fresh", "new account request", "same-key")
+			select {
+			case <-h.second:
+			case <-time.After(5 * time.Second):
+				t.Fatal("new generation waited for the old node RPC")
+			}
+			binding := func() string {
+				if threads {
+					return boundThread(s, "same-key")
+				}
+				s.chans.mu.Lock()
+				defer s.chans.mu.Unlock()
+				target := s.channelPrefLocked("examplechat").Target
+				if target != nil && target.Kind == channel.TargetConversation {
+					return target.SessionID
+				}
+				return ""
+			}
+			waitUntil(t, func() bool { return binding() != "" })
+			fresh := binding()
+			release.Do(func() { close(h.release) })
+			waitAdmissionDrained(t, s)
+			if got := binding(); got != fresh {
+				t.Fatalf("late old start replaced the new binding: got %q want %q", got, fresh)
+			}
+			runs := s.channelRuns("examplechat")
+			if len(runs) != 1 || runs[0].SessionID != fresh || runs[0].ReplyTo != "fresh" {
+				t.Fatalf("late old start restored channel run state: %+v", runs)
+			}
+		})
 	}
 }
