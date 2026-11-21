@@ -42,8 +42,8 @@ type modelExecution struct {
 	// worker Agent conversations have neither flag.
 	FollowsSetting bool   `json:",omitempty"`
 	ConfigDir      string `json:"-"` // a conversation's directory, not its model; retained across process restarts
-	// MainCompactWindow: the compaction window the manager holds the main conversation to (assistant.main_compact_window,
-	// #7314), sent with is_main; 0 (another conversation, a launcher Persona does not manage, an older manager, the
+	// MainCompactWindow: the compaction window the manager holds main/lead/background conversations to (assistant.main_compact_window,
+	// #7314); the existing wire name also carries supervisor caps. 0 (an uncapped conversation, an older manager, the
 	// setting at 0) leaves the launcher's (assistantCompactionPolicy). Omitted when 0, so a fingerprint from before it
 	// stays the same.
 	MainCompactWindow int `json:",omitempty"`

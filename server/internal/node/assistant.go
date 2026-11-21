@@ -575,7 +575,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	execution.IsMain = isMain && guest == nil
 	// Only a managed launcher's start applies the main conversation's window (capMain): on another one it would only
 	// change the fingerprint and restart the main conversation for nothing.
-	execution.MainCompactWindow = n.mainWindowOn(launcher, execution.IsMain, mainWindow)
+	execution.MainCompactWindow = n.mainWindowOn(launcher, mainWindow)
 	execution.SupervisionInstructions = st.SupervisionInstructions
 	if policyResolved {
 		execution.SupervisionInstructions = policy

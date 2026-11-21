@@ -9,12 +9,9 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// assistant.main_compact_window (#7314): the main conversation is compacted at about this many tokens instead of its
-// model's whole window. It runs all day, so every turn re-reads its context and a start after the prompt cache expired
-// rewrites all of it; on a 1M model it was compacted only at 750K when idle, or near 1M by Claude Code. The manager
-// sends the window with the main conversation's starts and messages next to is_main; the node applies it only there,
-// and only on a managed launcher whose declared window is larger (node/assistant_compaction_policy.go capMain). Every
-// other conversation and every Agent keeps its launcher's window.
+// assistant.main_compact_window caps main, direction-lead and background-supervision conversations on managed
+// launchers. Working Agents and ordinary conversations keep their launcher's window. The wire key retains its name
+// for rolling upgrades; older nodes apply it only to main conversations.
 const (
 	defaultMainCompactWindow = 400_000
 	// minMainCompactWindow: the main conversation's fixed part (instructions, tools, the snapshot) is tens of thousands of
@@ -36,10 +33,15 @@ func mainCompactWindowOf(v Settings) int {
 	return defaultMainCompactWindow
 }
 
-// putMainCompactWindow puts the window in effect into p, a start or message for the main conversation (its is_main);
-// another conversation's carries none.
-func putMainCompactWindow(cfg Settings, p map[string]any) {
-	if main, _ := p["is_main"].(bool); main {
+// putMainCompactWindow authoritatively scopes the existing cap, including a supervisor's first start before its id
+// exists. A shared launcher must retain its larger window for working Agents.
+func (s *Service) putMainCompactWindow(ctx context.Context, machine string, p map[string]any) {
+	cfg := s.settings(ctx)
+	id, _ := p["session_id"].(string)
+	main, _ := p["is_main"].(bool)
+	supervisor := machine == cfg.MachineID && (s.isLeader(ctx, id) || s.isBackground(ctx, id) ||
+		id == "" && ctx.Value(supervisionStartup{}) == true && p["guest"] == nil)
+	if main || supervisor {
 		p["main_compact_window"] = mainCompactWindowOf(cfg)
 	} else {
 		delete(p, "main_compact_window")

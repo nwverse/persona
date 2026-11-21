@@ -180,3 +180,58 @@ func TestMainCompactWindowSetting(t *testing.T) {
 		t.Fatalf("an out-of-range saved value: %d", got)
 	}
 }
+
+// The assistant cap follows its supervising roles, not the shared launcher or arbitrary caller input.
+func TestSupervisorCompactWindowDispatch(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeHub().withMachine()
+	s := newTestService(t, f)
+	setSettings(t, s, func(v *Settings) {
+		v.Main, v.Leaders = "main", []string{"lead"}
+		v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "background", "server"
+		v.MainCompactWindow = ptr(420000)
+	})
+	f.setSessions("server", proto.Session{SessionID: "main", Assistant: true},
+		proto.Session{SessionID: "lead", Assistant: true}, proto.Session{SessionID: "background", Assistant: true},
+		proto.Session{SessionID: "worker"}, proto.Session{SessionID: "ordinary", Assistant: true})
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{{"main", true}, {"lead", true}, {"background", true}, {"worker", false}, {"ordinary", false}} {
+		t.Run(tc.id, func(t *testing.T) {
+			for _, method := range []string{DeviceAssistantSend, DeviceSessionSend, DeviceSessionSendOnce} {
+				p := map[string]any{"session_id": tc.id, "text": "check", "main_compact_window": 1}
+				if err := s.call(ctx, "server", method, p, nil); err != nil {
+					t.Fatal(err)
+				}
+				got, set := p["main_compact_window"]
+				if set != tc.want || set && got != 420000 {
+					t.Fatalf("%s: cap %v, present %v", method, got, set)
+				}
+			}
+			p, err := s.SendParams(ctx, SendParams{MachineID: "server", SessionID: tc.id, Params: map[string]any{"text": "check", "main_compact_window": 1}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, set := p["main_compact_window"]
+			if set != tc.want || set && got != 420000 {
+				t.Fatalf("resolved cap %v, present %v", got, set)
+			}
+		})
+	}
+	// A new background supervisor is not in settings until its first start returns.
+	startup := context.WithValue(ctx, supervisionStartup{}, true)
+	p := map[string]any{"text": "start"}
+	if err := s.call(startup, "server", DeviceAssistantSend, p, nil); err != nil {
+		t.Fatal(err)
+	}
+	if p["main_compact_window"] != 420000 {
+		t.Fatalf("first supervisor start: %v", p["main_compact_window"])
+	}
+	// A role on the assistant's computer must not cap a working Agent on another computer.
+	p = map[string]any{"session_id": "lead"}
+	s.putMainCompactWindow(ctx, "other", p)
+	if _, set := p["main_compact_window"]; set {
+		t.Fatal("role leaked across computers")
+	}
+}

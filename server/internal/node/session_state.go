@@ -60,7 +60,7 @@ type sessionState struct {
 	// AwaitingFirstMessage: an empty start reserved this conversation without sending
 	// a model input. Runtime instructions and the idle state wait for actual delivery.
 	AwaitingFirstMessage bool `json:"awaiting_first_message,omitempty"`
-	// MainCompactWindow: the window the main conversation last ran with (modelExecution.MainCompactWindow), kept like
+	// MainCompactWindow: the cap the assistant conversation last ran with (modelExecution.MainCompactWindow), kept like
 	// IsMain (the hub's copy keeps neither, so until the node restarts) for a start that carries no execution: a manual
 	// compaction with no process running (assistant_compact.go).
 	MainCompactWindow int `json:"main_compact_window,omitempty"`

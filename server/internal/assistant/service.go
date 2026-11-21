@@ -590,12 +590,8 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		p["idle_compaction"] = s.idleCompactionPolicy(ctx)
 	}
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
-		// The window the main conversation is held to (main_compact_window.go), as sendModel puts it: a start, a relay,
-		// an internal message and the spare warmed for its next start carry it with is_main, or the node starts it again
-		// on its launcher's window (and never adopts the spare).
-		if _, set := p["main_compact_window"]; !set && p["is_main"] == true {
-			putMainCompactWindow(s.settings(ctx), p)
-		}
+		// Starts, relays, internal messages and warm spares all use the manager's authoritative role and cap.
+		s.putMainCompactWindow(ctx, device, p)
 		// Interactive Claude Code (#10058) is part of what a process runs: every send and warm carries it, or the node
 		// restarts a conversation between the two kinds as messages without it come.
 		if _, set := p["claude_interactive"]; !set && s.claudeInteractive(ctx) {

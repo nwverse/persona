@@ -16,7 +16,7 @@ import (
 )
 
 // assistantCompaction is what a conversation's launcher declares about compaction (#3066). Persona sets no target of
-// its own but one: the main conversation on a managed launcher is held to the manager's assistant.main_compact_window
+// its own but one: an assistant conversation on a managed launcher is held to the manager's assistant.main_compact_window
 // (#7314) when the launcher declares a larger window. What is not declared is left to the agent, Claude Code by the
 // model's own window, Codex by its model's default.
 type assistantCompaction struct {
@@ -280,23 +280,23 @@ func claudeEndpoint(p Probe, own, configDir, cwd, home string) (endpoint string,
 	return base, ownToolSearch
 }
 
-// capMain holds the main conversation on a managed launcher (pin: Persona writes its values) to the window the manager
+// capMain holds an assistant conversation on a managed launcher (pin: Persona writes its values) to the window the manager
 // sent with it (execution.MainCompactWindow, #7314) when the launcher declares a larger one: its compaction window, or
 // its context window when it declares only that. The context window stays as declared; Claude Code compacts by the
 // smaller of the two, Codex by codexLimit, and the idle threshold is 75% of it (idle). Nothing declared invents
-// nothing, and 0 (another conversation, an older manager, the setting at 0) changes nothing.
+// nothing, and 0 (a working Agent, an older manager, the setting at 0) changes nothing.
 func (c *assistantCompaction) capMain(execution modelExecution) {
-	if limit := execution.MainCompactWindow; execution.IsMain && c.pin && limit > 0 && c.declared() > limit {
+	if limit := execution.MainCompactWindow; c.pin && limit > 0 && c.declared() > limit {
 		c.window = limit
 	}
 }
 
-// mainWindowOn is the window the manager sent with a main conversation's start (window) as that start on launcher
+// mainWindowOn is the window the manager sent with an assistant conversation's start (window) as that start on launcher
 // carries it (modelExecution.MainCompactWindow): only a managed launcher applies it (capMain), so anywhere else it is
 // 0, or it would change the fingerprint and restart the conversation, or miss the spare warmed for it, for nothing.
 // assistantSend and assistantWarm both read it, so the main chat's spare matches its next start.
-func (n *Node) mainWindowOn(launcher string, isMain bool, window int) int {
-	if _, managed := n.managedLauncher(launcher); isMain && window > 0 && managed {
+func (n *Node) mainWindowOn(launcher string, window int) int {
+	if _, managed := n.managedLauncher(launcher); window > 0 && managed {
 		return window
 	}
 	return 0
