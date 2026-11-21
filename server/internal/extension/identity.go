@@ -62,12 +62,12 @@ func (r *Registry) SnapshotExactWithSettingsEpoch(id string) (*Extension, uint64
 	return snapshotExtension(r.extensions[id]), r.settingsEpoch[id]
 }
 
-// SettingsMoved reports whether id changed after a SnapshotExactWithSettingsEpoch call.
+// SettingsMoved reports whether id was already changing at an odd captured epoch, disappeared, or changed since capture.
 func (r *Registry) SettingsMoved(id string, epoch uint64) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	_, ok := r.extensions[id]
-	return !ok || r.settingsEpoch[id] != epoch
+	return !ok || epoch&1 != 0 || r.settingsEpoch[id] != epoch
 }
 
 func (r *Registry) storageKey(id string) string {

@@ -538,6 +538,7 @@ type blockingInitSecretStore struct {
 	armed, blocked bool
 	started        chan struct{}
 	release        chan struct{}
+	audits         map[string]*initAuditBlock
 }
 
 func (s *blockingInitSecretStore) arm() {
@@ -562,6 +563,40 @@ func (s *blockingInitSecretStore) ExtensionSecrets(ctx context.Context, id strin
 		}
 	}
 	return s.extensionStore.ExtensionSecrets(ctx, id)
+}
+
+type initAuditBlock struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *initAuditBlock) unblock() {
+	if b != nil {
+		b.once.Do(func() { close(b.release) })
+	}
+}
+
+func (s *blockingInitSecretStore) blockAudit(action string) *initAuditBlock {
+	if s.audits == nil {
+		s.audits = map[string]*initAuditBlock{}
+	}
+	b := &initAuditBlock{started: make(chan struct{}), release: make(chan struct{})}
+	s.audits[action] = b
+	return b
+}
+
+func (s *blockingInitSecretStore) AddExtensionAudit(ctx context.Context, id, action, actor string, detail json.RawMessage) error {
+	err := s.extensionStore.AddExtensionAudit(ctx, id, action, actor, detail)
+	if b := s.audits[action]; b != nil {
+		close(b.started)
+		select {
+		case <-b.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return err
 }
 
 type initSettingsSealer struct{}
@@ -711,6 +746,146 @@ func TestExtensionInitSettingsMovedDuringSecretResolution(t *testing.T) {
 				t.Fatalf("retry returned config %s with %q (err %v)", config, credential, got.err)
 			}
 		})
+	}
+}
+
+type initHandoffResult struct {
+	params extension.InitializeParams
+	env    []string
+	err    error
+}
+
+func runInitHandoff(ctx context.Context, ps *extensions, rpc bool) initHandoffResult {
+	s, err := ps.specOf(ctx, ps.reg.Get("example-gateway"), &hubExtension{id: "example-gateway"})
+	if err != nil {
+		return initHandoffResult{err: err}
+	}
+	if rpc {
+		params, err := s.Init(ctx)
+		return initHandoffResult{params: params, err: err}
+	}
+	return initHandoffResult{env: s.Env}
+}
+
+func initHandoffValues(got initHandoffResult, rpc bool) (string, string) {
+	config, credential := string(got.params.Config), got.params.Secrets["api_key"]
+	if !rpc {
+		for _, entry := range got.env {
+			if value, ok := strings.CutPrefix(entry, "PERSONA_PLUGIN_CONFIG="); ok {
+				config = value
+			}
+			if value, ok := strings.CutPrefix(entry, "PERSONA_PLUGIN_SECRETS="); ok {
+				var secrets map[string]string
+				_ = json.Unmarshal([]byte(value), &secrets)
+				credential = secrets["api_key"]
+			}
+		}
+	}
+	return config, credential
+}
+
+// A committed save is already visible to secret reads before its audit and change notification finish. The hand-off
+// must see the write in progress even when the post-commit notification has not advanced any generation yet.
+func TestExtensionInitSettingsMovedBeforeChangeNotification(t *testing.T) {
+	for _, mutation := range []string{"config_and_secret", "secret"} {
+		for _, tc := range []struct {
+			name string
+			rpc  bool
+		}{{"rpc", true}, {"environment", false}} {
+			t.Run(mutation+"/"+tc.name, func(t *testing.T) {
+				ctx := context.Background()
+				ps := newExtensions(t.TempDir(), nil, func(string, ...any) {})
+				store := &blockingInitSecretStore{extensionStore: newExtensionStore(), started: make(chan struct{}), release: make(chan struct{})}
+				ps.reg = extension.NewRegistry(ps.root, store, initSettingsSealer{}, 0)
+				reg := ps.reg
+				pv, err := reg.Preview(ctx, "dir:"+initSettingsPackage(t, tc.rpc), "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := reg.Install(ctx, pv.ID, pv.Digest, "test"); err != nil {
+					t.Fatal(err)
+				}
+				reg.BoundSecrets = func(_ *extension.Extension, old, next json.RawMessage) []string {
+					if string(old) != string(next) {
+						return []string{"api_key"}
+					}
+					return nil
+				}
+				configA := json.RawMessage(`{"endpoint":"https://a.example.com"}`)
+				configB := json.RawMessage(`{"endpoint":"https://b.example.com"}`)
+				if err := reg.SetConfig(ctx, "example-gateway", configA, "test"); err != nil {
+					t.Fatal(err)
+				}
+				if err := reg.SetSecret(ctx, "example-gateway", "api_key", "credential-a", "test"); err != nil {
+					t.Fatal(err)
+				}
+
+				var configAudit *initAuditBlock
+				if mutation == "config_and_secret" {
+					configAudit = store.blockAudit("config")
+				}
+				secretAudit := store.blockAudit("secret_set")
+				defer configAudit.unblock()
+				defer secretAudit.unblock()
+				store.arm()
+				results := make(chan initHandoffResult, 1)
+				go func() { results <- runInitHandoff(ctx, ps, tc.rpc) }()
+				released := false
+				defer func() {
+					if !released {
+						close(store.release)
+					}
+				}()
+				select {
+				case <-store.started:
+				case <-time.After(5 * time.Second):
+					t.Fatal("secret resolution did not start")
+				}
+
+				saves := make(chan error, 2)
+				saveCount := 1
+				if mutation == "config_and_secret" {
+					saveCount = 2
+					go func() { saves <- reg.SetConfig(ctx, "example-gateway", configB, "test") }()
+					select {
+					case <-configAudit.started:
+					case <-time.After(5 * time.Second):
+						t.Fatal("configuration did not commit before its audit")
+					}
+				}
+				go func() { saves <- reg.SetSecret(ctx, "example-gateway", "api_key", "credential-b", "test") }()
+				select {
+				case <-secretAudit.started:
+				case <-time.After(5 * time.Second):
+					t.Fatal("secret did not commit before its audit")
+				}
+
+				close(store.release)
+				released = true
+				var got initHandoffResult
+				select {
+				case got = <-results:
+				case <-time.After(5 * time.Second):
+					t.Fatal("secret resolution did not finish")
+				}
+				config, credential := initHandoffValues(got, tc.rpc)
+				configAudit.unblock()
+				secretAudit.unblock()
+				for range saveCount {
+					select {
+					case err := <-saves:
+						if err != nil {
+							t.Fatalf("save: %v", err)
+						}
+					case <-time.After(5 * time.Second):
+						t.Fatal("save did not finish")
+					}
+				}
+				if !errors.Is(got.err, extension.ErrSettingsMoved) {
+					t.Fatalf("hand-off returned config %s with %q (err %v), want settings_moved", config, credential, got.err)
+				}
+			})
+		}
 	}
 }
 

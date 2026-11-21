@@ -89,6 +89,8 @@ func (r *Registry) setEnabled(ctx context.Context, id string, on bool, packOff [
 		}
 	}
 	r.mu.Unlock()
+	mutation := r.settingsWrite(id)
+	defer mutation.finish()
 	if err := r.write(ctx, row); err != nil { // the owner's choice, held off or not
 		return err
 	}
@@ -102,7 +104,7 @@ func (r *Registry) setEnabled(ctx context.Context, id string, on bool, packOff [
 	kind := map[bool]string{true: "enabled", false: "disabled"}[on]
 	unlock()
 	r.audit(ctx, id, kind, actor, nil)
-	r.changed(Change{ID: id, Kind: kind})
+	mutation.changed(Change{ID: id, Kind: kind})
 	return nil
 }
 
@@ -130,21 +132,23 @@ func (r *Registry) ForgetPackOff(ctx context.Context, member string) error {
 		}
 	}
 	r.mu.Unlock()
-	var changed []string
+	var changed []*settingsMutation
 	defer func() { // after the operation, as every write tells it
 		unlock()
-		for _, id := range changed {
-			r.changed(Change{ID: id, Kind: "pack_off"})
+		for _, mutation := range changed {
+			mutation.changed(Change{ID: mutation.id, Kind: "pack_off"})
 		}
 	}()
 	for i, row := range rows {
+		mutation := r.settingsWrite(row.ID)
 		if err := r.put(ctx, row); err != nil {
+			mutation.finish()
 			return err
 		}
 		r.mu.Lock()
 		packs[i].Record.PackOff = row.PackOff
 		r.mu.Unlock()
-		changed = append(changed, row.ID)
+		changed = append(changed, mutation)
 	}
 	return nil
 }
@@ -208,6 +212,8 @@ func (r *Registry) setConfigClearing(ctx context.Context, id string, raw json.Ra
 			return nil, fmt.Errorf("%w: the store cannot delete entry secrets with the configuration", ErrSecretNotCleared)
 		}
 	}
+	mutation := r.settingsWrite(id)
+	defer mutation.finish()
 	finish := func(err error) ([]string, error) {
 		unlock()
 		for _, name := range cleared {
@@ -215,12 +221,12 @@ func (r *Registry) setConfigClearing(ctx context.Context, id string, raw json.Ra
 		}
 		if err != nil {
 			if len(cleared) > 0 { // the program runs again without them, on the configuration it had
-				r.changed(Change{ID: id, Kind: "secret"})
+				mutation.changed(Change{ID: id, Kind: "secret"})
 			}
 			return cleared, err
 		}
 		r.audit(ctx, id, "config", actor, nil) // not the values: they may be personal
-		r.changed(Change{ID: id, Kind: "config"})
+		mutation.changed(Change{ID: id, Kind: "config"})
 		return cleared, nil
 	}
 	boundCleared, clearErr := r.clearBound(ctx, p, prepared.raw)
@@ -374,6 +380,8 @@ func (r *Registry) setSecret(ctx context.Context, id, name, value, actor string,
 	if r.store == nil || r.seal == nil {
 		return i18n.Err("extension-status.secret_no_database")
 	}
+	mutation := r.settingsWrite(id)
+	defer mutation.finish()
 	if err := r.ensureRow(ctx, p); err != nil {
 		return err
 	}
@@ -386,7 +394,7 @@ func (r *Registry) setSecret(ctx context.Context, id, name, value, actor string,
 	}
 	unlock()
 	r.audit(ctx, id, "secret_set", actor, detail)
-	r.changed(Change{ID: id, Kind: "secret"})
+	mutation.changed(Change{ID: id, Kind: "secret"})
 	return nil
 }
 
@@ -408,12 +416,14 @@ func (r *Registry) DeleteSecret(ctx context.Context, id, name, actor string) err
 	if r.store == nil {
 		return nil
 	}
+	mutation := r.settingsWrite(id)
+	defer mutation.finish()
 	if err := r.store.DeleteExtensionSecret(ctx, p.Record.StorageKey(), name); err != nil {
 		return err
 	}
 	unlock()
 	r.audit(ctx, id, "secret_delete", actor, map[string]any{"name": name})
-	r.changed(Change{ID: id, Kind: "secret"})
+	mutation.changed(Change{ID: id, Kind: "secret"})
 	return nil
 }
 
