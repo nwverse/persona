@@ -104,6 +104,7 @@ notification and interaction APIs.
 | DSH and Grok runtime tool bridges | Discover the generic tool catalog and forward calls with a runtime-owned session ID |
 | Pi and Oh My Pi with the Persona extension | Register A2A tools in the harness using its current session ID |
 | OpenCode v2 with the Persona plugin | Registers A2A tools through the native tool editor and uses the executing OpenCode session ID |
+| OpenCode ACP companion | Uses its existing per-session MCP route to discover and call A2A tools |
 | Antigravity CLI through Persona ACP | Attaches the A2A tool catalog to Persona Agent chats through a session-scoped MCP ticket |
 | Paseo | Attaches a session-scoped A2A MCP server when Persona starts an Agent on a provider that supports external MCP servers. Other writable sessions can participate through chat |
 | Cindy host, Orca structured Claude chats, Antigravity Desktop, Claude Desktop and Codex App | Writable sessions can receive tasks and participate through chat where the bridge exposes the matching turn. Agent-initiated structured calls require a tool bridge or a verified CLI caller |
