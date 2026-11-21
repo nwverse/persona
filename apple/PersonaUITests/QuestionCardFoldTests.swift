@@ -130,7 +130,13 @@ final class QuestionCardFoldTests: XCTestCase {
         let end = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: x, dy: bottom))
         start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.3)
         settle(0.8)
-        let after = strip(top, bottom, card)
+        var after = strip(top, bottom, card)
+        // Already at its start (a tall iPad, the card short: an earlier drag got there), the list moves the other way.
+        if after == before {
+            end.press(forDuration: 0.05, thenDragTo: start, withVelocity: .slow, thenHoldForDuration: 0.3)
+            settle(0.8)
+            after = strip(top, bottom, card)
+        }
         let moved = { XCTAssertNotEqual(before, after, "\(step): a drag over the conversation (\(Int(top))…\(Int(bottom))) did not move it",
                                         file: file, line: line) }
         // XCUITest's drags never reach the chat's list on the open iPhone Duo simulator, card or not (seen before #9392,
