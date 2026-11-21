@@ -452,6 +452,25 @@ func TestOpenElsewhereSpeaksTheClientsLanguage(t *testing.T) {
 	}
 }
 
+func TestCodexComposerTimeoutUsesNodeWait(t *testing.T) {
+	for _, code := range []string{"codex_no_box", "codex_no_box_here"} {
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			rec := httptest.NewRecorder()
+			err := &rpc.Error{Code: code, Message: "node diagnostic", Data: json.RawMessage(`{"seconds":181.5}`)}
+			body := call(t, langWriter{rec, lang}, rec, err)
+			summary, _ := body["error"].(string)
+			if !strings.Contains(summary, "181.5") || body["seconds"] != 181.5 || body["code"] != code {
+				t.Fatalf("%s %s: %v", code, lang, body)
+			}
+		}
+		rec := httptest.NewRecorder()
+		old := call(t, langWriter{rec, i18n.En}, rec, &rpc.Error{Code: code, Message: "old node diagnostic"})
+		if summary, _ := old["error"].(string); !strings.Contains(summary, "a minute") {
+			t.Fatalf("%s without a duration: %v", code, old)
+		}
+	}
+}
+
 func TestCodexWriterConflictSpeaksTheClientsLanguage(t *testing.T) {
 	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 		rec := httptest.NewRecorder()

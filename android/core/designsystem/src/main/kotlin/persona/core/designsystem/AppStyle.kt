@@ -71,6 +71,14 @@ class AppStyleStore(context: Context) {
         preferences.edit().putBoolean(KEY_NATIVE_INBOX_CHATS, enabled).apply()
         currentNativeInboxChats.value = enabled
     }
+    /** Settings › Connectors › Lark: the optional Messages place on this device, independent of the current hub. */
+    private val currentLarkHomeMessages = MutableStateFlow(preferences.getBoolean(KEY_LARK_HOME_MESSAGES, false))
+    val larkHomeMessages: StateFlow<Boolean> = currentLarkHomeMessages.asStateFlow()
+    fun setLarkHomeMessages(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_LARK_HOME_MESSAGES, enabled).apply()
+        currentLarkHomeMessages.value = enabled
+    }
+
     private val currentSidebar = MutableStateFlow(SidebarLayout.fromKey(preferences.getString(KEY_SIDEBAR, null)))
     val sidebar: StateFlow<SidebarLayout> = currentSidebar.asStateFlow()
 
@@ -168,6 +176,7 @@ class AppStyleStore(context: Context) {
         const val KEY_COLOR = "color"
         const val KEY_DENSITY = "layout-density"
         const val KEY_NATIVE_INBOX_CHATS = "native-inbox-chats"
+        const val KEY_LARK_HOME_MESSAGES = "integrations.lark.enabled"
     }
 }
 

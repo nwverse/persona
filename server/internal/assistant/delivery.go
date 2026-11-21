@@ -292,7 +292,7 @@ func currentDelivery(t Todo) *TodoDelivery {
 			d.Gate, d.Unblock = r.Reason, unblockOther
 		case r.Verdict == reviewNeedsUser && v.State == reviewNeedsUser && !ownerDecisionReturned(v):
 			d.Gate, d.Unblock = cmp.Or(r.Reason, r.Note), unblockUser
-		case acceptanceStands(t) && !r.At.Before(d.At):
+		case (acceptanceStands(t) || userCheckAsked(t)) && !r.At.Before(d.At):
 			d.Gate, d.Unblock = "", ""
 		case d.Unblock == unblockUser && !r.At.Before(d.At) &&
 			(r.Verdict == reviewNeedsUser || r.Verdict == reviewParked || r.Verdict == reviewRework):

@@ -115,7 +115,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			s.CodexRoute, s.CodexRouteNote = n.codexRoute(id) // codex_daemon.go
 		case a.Agent == traexAgent:
 			s.Title = n.traexTitle(id) // the thread's name; the terminal title adds " | <directory>"
-			s.CodexRoute, s.CodexRouteNote = codexRouteTerminal, "TRAEX 没有共享的 app-server"
+			s.CodexRoute, s.CodexRouteNote = codexRouteTerminal, "TRAE CLI 没有共享的 app-server"
 		}
 		n.placeIn(&s, a)
 		s.Ports = n.portsOf(a.PaneID)

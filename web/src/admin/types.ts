@@ -404,6 +404,9 @@ export interface UsageSources {
   poll_minutes: number;
   sources: UsageSource[];
   limit: number;
+  /** Providers the usage bars leave out (display only), and the ones to choose from (#11753). Absent on an older manager. */
+  hidden_providers?: string[];
+  providers?: string[];
 }
 
 export interface UsageSourceInput {

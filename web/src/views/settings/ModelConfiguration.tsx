@@ -2,7 +2,7 @@ import { Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, ApiError, enc, errorText } from "../../lib/api";
 import { extRoot } from "../../lib/extension-api";
 import {
-  providerAgent, providerName, modelPurpose, modelSummary, runtimeLabel, usageTokens,
+  providerAgent, providerName, modelProviderTitle, modelPurpose, modelSummary, runtimeLabel, usageTokens,
   type ModelBinding, type ModelConfigurationBody, type ModelDraft, type ModelProvider, type ModelPurpose, type ModelPurposeBody,
 } from "../../lib/model-config";
 import {
@@ -387,7 +387,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
             <select className={inputClass} value={draft.provider} disabled={busy} onChange={(e) => setDraft((d) => chooseProvider(d, e.target.value))} aria-describedby={claudeCodeOnly(p) ? onlyClaudeID : undefined}>
               <option value="">{follow || t("settings-modelconfiguration.follow_default")}</option>
               {draft.provider && !candidates.some((v) => v.id === draft.provider) && <option value={draft.provider}>{draft.provider.startsWith("legacy.") ? t("settings-modelconfiguration.not_configured") : t("settings-modelconfiguration.provider_unavailable", { id: providerName(draft.provider, data?.providers) ?? draft.provider })}</option>}
-              {candidates.map((v) => <option key={v.id} value={v.id}>{v.hidden ? t("settings-modelconfiguration.provider_hidden", { name: v.name }) : v.name}</option>)}
+              {candidates.map((v) => <option key={v.id} value={v.id}>{v.hidden ? t("settings-modelconfiguration.provider_hidden", { name: modelProviderTitle(v) }) : modelProviderTitle(v)}</option>)}
             </select>
           </label>
           {/* the In-meeting conversation: why only these providers are offered (#7980) */}

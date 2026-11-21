@@ -83,7 +83,7 @@ var (
 	codexDialogPause = time.Second
 )
 
-// errCodexBoxLate: codex runs in the new tab but its input box did not come up within codexStartWait.
+// errCodexBoxLate: Codex runs in the new tab but its input box did not come up in time.
 var errCodexBoxLate = errors.New("codex box late")
 
 // codexLoadingRE: Codex 0.153 draws its input box before its model is known ("model:     loading" in the header).
@@ -93,17 +93,17 @@ var codexLoadingRE = lazyre.New(`(?m)^\W*(model|directory):\s+loading\b`)
 // shows the pane working meanwhile.
 func codexBusyStarting(text string) bool { return strings.Contains(text, "Starting MCP servers") }
 
-// waitCodexBox waits for the input box of the Codex a start without a message ran: what it takes for the row to be
-// offered (codexStartWait at most). The folder trust dialog and an update offer are answered on the way as
+// waitCodexBox waits for the input box of Codex to be offered, for at most maxWait.
+// The folder trust dialog and an update offer are answered on the way as
 // waitCodexThread does. nil once the box shows with the model known; errCodexBoxLate when codex runs but its box did
 // not come in time; the launcher's failure (codex-start's line) at once.
-func (n *Node) waitCodexBox(ctx context.Context, pane string) error {
-	deadline := time.Now().Add(codexStartWait)
+func (n *Node) waitCodexBox(ctx context.Context, pane string, maxWait time.Duration) error {
+	deadline := time.Now().Add(maxWait)
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(codexStartPoll):
+		case <-time.After(min(time.Until(deadline), codexStartPoll)):
 		}
 		text, err := n.readPane(ctx, pane, "visible", screen.DialogLines)
 		if err != nil {
@@ -119,13 +119,20 @@ func (n *Node) waitCodexBox(ctx context.Context, pane string) error {
 			return nil
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if agent, err := n.paneAgent(ctx, pane); err == nil && agent != nil && agent.Agent == "codex" {
 		return errCodexBoxLate
 	}
-	if adoptedPane(ctx) != nil { // Run Agent Here (#5504): the user's own pane, not a new tab, and it stays as it is
-		return &rpc.Error{Code: "codex_no_box_here", Message: i18n.T(i18n.Default, "node-codex-start.no_box_here", map[string]any{"seconds": int(codexStartWait.Seconds())})}
+	args := i18n.Args{"seconds": maxWait.Seconds()}
+	code := "codex_no_box"
+	key := "node-codex-start.no_box"
+	if adoptedPane(ctx) != nil { // Run Agent Here (#5504) leaves the user's pane open.
+		code = "codex_no_box_here"
+		key = "node-codex-start.no_box_here"
 	}
-	return &rpc.Error{Code: "codex_no_box", Message: fmt.Sprintf("Codex 已经在电脑上的新标签里打开了，但 %d 秒内没看到它的输入框", int(codexStartWait.Seconds()))}
+	return refusal(code, i18n.T(i18n.Default, key, args), args)
 }
 
 // answerCodexStartDialog answers what Codex shows before its input box as the user would for a start they asked for:

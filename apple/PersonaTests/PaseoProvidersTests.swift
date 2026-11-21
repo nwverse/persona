@@ -90,6 +90,8 @@ import Testing
         #expect(!labelled.namesOnlyEngine)
         #expect(labelled.agentName(session: nil) == "Grok")
         #expect(labelled.agentName(session: other) == "Grok")
+        let legacyCLI = try Self.card(#","agent":"paseo","agent_label":"TRAEX""#)
+        #expect(legacyCLI.agentName(session: nil) == "TRAE CLI")
         // Claude Code's card stays Claude's, Codex's Codex's, another runtime's its own.
         let claude = try Self.card("")
         let codex = try Self.card(#","agent":"codex""#)

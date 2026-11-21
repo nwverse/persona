@@ -257,10 +257,12 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
     static let paseo = Self(rawValue: "paseo")
     /// Cindy's agents (docs/integrations/engines.md): no terminal; the node runs a bridge to Cindy.
     static let cindy = Self(rawValue: "cindy")
+    /// T3 Code's threads (docs/integrations/engines.md "T3 Code"): no terminal; the node runs a bridge to T3 Code's server.
+    static let t3code = Self(rawValue: "t3code")
     /// No terminal engine: the empty host set (docs/integrations/engines.md "Host sets"), for a computer whose sessions
     /// are only the desktop apps' (#3302). Not a hub engine id: saved as `{"hosts": []}`, and not in `allCases`.
     static let noEngine = Self(rawValue: "none")
-    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .tern, .rex, .paseo, .cindy]
+    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .tern, .rex, .paseo, .cindy, .t3code]
     var id: String { rawValue }
     var name: String {
         switch self {
@@ -272,6 +274,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .rex: "Rex"
         case .paseo: "Paseo"
         case .cindy: "Cindy"
+        case .t3code: "T3 Code"
         case .noEngine: String(localized: "No Terminal Engine")
         default: rawValue
         }
@@ -286,6 +289,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .rex: String(localized: "Terminals in Rex")
         case .paseo: String(localized: "Agents in Paseo")
         case .cindy: String(localized: "Agents in Cindy")
+        case .t3code: String(localized: "Agents in T3 Code")
         case .noEngine: String(localized: "Sessions of the desktop apps only")
         default: nil
         }
@@ -704,10 +708,20 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     /// others, which take none, and from an older computer.
     var permissionModes: [String]? = nil
     var id: String { name }
-    /// What the pickers show: its own name, else its startup name (the web's `providerTitle`).
+    /// What the pickers show: its display name, the built-in CLI's name on older hubs, or its startup name.
     var title: String {
-        guard let d = displayName?.trimmingCharacters(in: .whitespacesAndNewlines), !d.isEmpty else { return name }
-        return d
+        let trimmed = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = trimmed?.isEmpty == false ? trimmed : nil
+        return Self.traeCLITitle(name: name, source: source, agent: runtimeAgent, baseURL: baseURL, displayName: label) ?? label ?? name
+    }
+    /// Older hubs and runtime providers can supply a legacy label. Keep other labels chosen by the user.
+    static func traeCLITitle(name: String, source: String?, agent: String?, baseURL: String?, displayName: String?) -> String? {
+        guard name == "traex" || name == "traecli" || name == "trae-cli",
+              displayName.map(Session.isTraeCLIName) ?? true else { return nil }
+        if agent == MachineEngine.paseo.rawValue { return Session.traeCLIName }
+        guard isMachineSource(source), agent == "traex" || agent == "traecli" || agent == "trae-cli" || baseURL == "(traex)"
+        else { return nil }
+        return Session.traeCLIName
     }
     /// The launcher that starts the session in Claude's desktop app (docs/integrations/claude-integration.md「New sessions
     /// in the desktop app」): with no folder it runs in the app's scratch folder, and a new folder is made for it.
@@ -719,7 +733,8 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     /// A Codex start sends its first message with it and waits for the thread Codex makes.
     var isCodex: Bool { agent == "codex" }
     /// A CLI launcher discovered on the computer, including the source-less responses of older hubs.
-    private var isMachineLauncher: Bool {
+    private var isMachineLauncher: Bool { Self.isMachineSource(source) }
+    private static func isMachineSource(_ source: String?) -> Bool {
         source == nil || source == "" || source == "zshrc" || source == "path" || source == "builtin"
     }
     /// The node starts Oh My Pi only under its own launcher name.
@@ -787,7 +802,7 @@ nonisolated struct LauncherHealth: Codable, Hashable, Sendable {
 
 extension Launcher {
     /// Runs Claude Code or Codex, or is an agent runtime's launcher that says it can: what the Persona assistant can
-    /// use (headless `claude -p`, `codex app-server`, the runtime). Other agents (TRAEX…) are left out; the node
+    /// use (headless `claude -p`, `codex app-server`, the runtime). Other agents (TRAE CLI…) are left out; the node
     /// refuses them with a reason too.
     var runsAssistant: Bool {
         if let assistant { return assistant }
@@ -1097,7 +1112,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var tabID: String?
     var workspaceID: String?
     var agentName: String?
-    /// The coding agent in the pane: "claude" (or nil, from older hubs), "codex" or "traex" (TRAEX, an in-house Codex fork);
+    /// The coding agent in the pane: "claude" (or nil, from older hubs), "codex" or "traex" (TRAE CLI);
     /// for a session a runtime lists (DSH…, docs/integrations/runtimes.md), the agent it runs.
     var agent: String? = nil
     var sourceKind: String? = nil
@@ -1508,6 +1523,14 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
 
     var isCodex: Bool { agent == "codex" || sourceKind == "codex_app_server" || sourceKind == "codex_history" }
     var isTraex: Bool { agent == "traex" }
+    static let traeCLIName = "TRAE CLI"
+    /// Display labels sent for this agent during rolling upgrades.
+    static func isTraeCLIName(_ label: String) -> Bool {
+        switch label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "traex", "traecli", "trae-cli", "trae cli": true
+        default: false
+        }
+    }
     /// Claude Code (or an older hub that does not name the agent): what the Claude-only controls (modes, /clear,
     /// /model) are for. Any other agent — named or not yet known to this app — does not get them.
     var isClaude: Bool { !isCodex && (agent == nil || agent == "" || agent == "claude") }
@@ -1533,14 +1556,22 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// thread driven through its app-server. Claude Code, the assistant and a runtime that declares `capabilities.modes`
     /// (such as Antigravity) change both, the rest neither.
     var setsEffortOnly: Bool { canSend && !assistant && !isClaude && !canChangeModes && !(efforts ?? []).isEmpty }
-    /// Who the user talks to in this session: "Claude", "Codex", "TRAEX", or what the hub calls a runtime's agent ("DSH",
+    /// Who the user talks to in this session: "Claude", "Codex", "TRAE CLI", or what the hub calls a runtime's agent ("DSH",
     /// a Paseo provider's label such as "Grok"). Never the engine of several providers that runs it: a row that names
     /// only Paseo (no label of its own, or the node's "Paseo") names its provider by its launcher instead (#8144).
     var agentLabel: String {
         if isCodex { return "Codex" }
-        if isTraex { return "TRAEX" }
+        if isTraex || agent == "traecli" || agent == "trae-cli" { return Self.traeCLIName }
         if isClaude { return "Claude" }
-        if Self.namesOnlyEngine(agent: agent, label: agentLabelHint), let launcher, !launcher.isEmpty { return launcher }
+        let namesOnlyEngine = Self.namesOnlyEngine(agent: agent, label: agentLabelHint)
+        if let launcher, !launcher.isEmpty {
+            if Self.providerEngines.contains(agent?.lowercased() ?? ""),
+               ["traex", "traecli", "trae-cli"].contains(launcher.lowercased()),
+               namesOnlyEngine || (agentLabelHint.map(Self.isTraeCLIName) ?? false) {
+                return Self.traeCLIName
+            }
+            if namesOnlyEngine { return launcher }
+        }
         return agentLabelHint ?? agent ?? "Claude"
     }
     /// The engines that run agents of several providers and report every agent that is neither Claude Code nor Codex

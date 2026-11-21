@@ -313,6 +313,7 @@ export const SegmentView = memo(function SegmentView({
   trace,
   offscreen,
   busy,
+  dockTurnClock,
 }: {
   seg: Segment;
   live: boolean;
@@ -335,8 +336,10 @@ export const SegmentView = memo(function SegmentView({
    *  answered): drawn finished for a moment when a send drops the live line, its words get no reply bar yet, so the
    *  bar does not come and go (#5314). */
   busy?: boolean;
+  /** The dock owns the live turn's elapsed clock; finished exchanges never receive this state. */
+  dockTurnClock?: boolean;
 }) {
-  const { subagents, tasks, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle, closeoutSegment, children, dockTurnClock } = useChatContext();
+  const { subagents, tasks, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle, closeoutSegment, children } = useChatContext();
   const own = useMemo(() => exchangeSteps(seg), [seg]);
   // the subagents its subagents launched, each a card of its own by when it started (#5030); a trace shows the calls only.
   // Keyed by what places them, not the list: that changes with every subagent's tokens and steps.
