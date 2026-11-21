@@ -56,6 +56,7 @@ let host: HTMLDivElement;
 let root: Root;
 let calls: { method: string; url: string; body?: unknown }[];
 let pickAnswer: () => Response;
+let switchAnswer: () => Response;
 let defaultSetup: { provider: string; model: string; effort: string };
 let superviseSetup: { provider: string; model: string; effort: string };
 let sharedPicker = false;
@@ -70,6 +71,7 @@ beforeEach(() => {
   toast.mockClear();
   calls = [];
   pickAnswer = () => json({ ok: true, model_pick: {} });
+  switchAnswer = () => json({ phase: "preparing" });
   defaultSetup = { provider: "claude", model: "opus", effort: "high" };
   superviseSetup = defaultSetup; // the supervisor's own purpose follows Main chat until it is set apart
   sharedPicker = false;
@@ -97,6 +99,8 @@ beforeEach(() => {
       default: defaultSetup,
       unavailable: [{ name: "gpt-direct", kind: "api", code: "api_protocol", reason: "Responses API" }],
     });
+    if (url.includes("/assistant/conversations/c1/segments?")) return json({ enabled: true, epoch: 4 });
+    if (url.endsWith("/assistant/conversations/c1/switch")) return switchAnswer();
     if (url.includes("/assistant/conversations/c1/model")) return pickAnswer();
     // Newly listed chats re-read Assistant; return its complete snapshot instead of an operation receipt.
     if (url.endsWith("/assistant")) return json(getState().assistant);
@@ -445,9 +449,9 @@ describe("an older hub and the new-conversation page", () => {
     await show(chat({ launcher: "runtime", agent: "claude", model: undefined, effort: "high" }));
     await open();
     const mainProviders = panel.props!.providers;
-    expect(mainProviders.filter((p) => !p.unavailable).map((p) => p.id)).toEqual(sharedLaunchers.assistant);
+    expect(mainProviders.filter((p) => !p.unavailable).map((p) => p.id)).toEqual(["runtime", "team-api"]);
     expect(newNames).toEqual(sharedLaunchers.assistant);
-    expect(mainProviders.map((p) => p.id)).not.toContain("codex-gw");
+    expect(mainProviders.find((p) => p.id === "codex-gw")?.unavailable).toBe(t("chat-modelpanel.other_engine", { from: agentName("claude"), to: agentName("codex") }));
 
     // An older node's display placeholder means the launcher's default, never a model ID or English row label.
     expect(newModels.some(([id, name]) => id === "默认" || name === "默认")).toBe(false);
@@ -529,5 +533,41 @@ describe("a model error's Fix it", () => {
     await showChat(chat({ turn_error_code: "model_route", model_pick: { launcher: "relay", model: "haiku" } }));
     expect(button(t("chat-modelpill.undo_pick"))).toBeUndefined();
     expect(button(t("chat-lines.fix_it"))).toBeDefined();
+  });
+});
+
+describe("explicit logical conversation switch", () => {
+  it("shows other engines on a capable hub and sends nothing before confirmation", async () => {
+    getState().features.push("assistant_segments");
+    await show(chat());
+    await open();
+    expect(panel.props!.providers.find((p) => p.id === "codex")?.unavailable).toBeUndefined();
+    expect(await act(() => panel.props!.onPick({ provider: "codex", model: "gpt-standard", effort: "high" }))).toBe(false);
+    expect(panel.props!.held).toBe(true);
+    expect(calls.some((c) => c.url.endsWith("/switch"))).toBe(false);
+    const cancel = [...document.querySelectorAll<HTMLButtonElement>("[role=dialog] button")].find((b) => b.textContent === t("common.cancel"))!;
+    await act(() => cancel.click());
+    expect(sent("PUT")).toEqual([]);
+    expect(calls.some((c) => c.url.endsWith("/switch"))).toBe(false);
+  });
+  it("uses the explicit operation and preserves it after an unknown response", async () => {
+    getState().features.push("assistant_segments");
+    await show(chat());
+    await open();
+    await act(() => panel.props!.onPick({ provider: "codex", model: "gpt-standard", effort: "high" }));
+    switchAnswer = () => json({ error: "response unconfirmed", delivered: "unknown", code: "timeout" }, 502);
+    const confirm = () => [...document.querySelectorAll<HTMLButtonElement>("[role=dialog] button")].find((b) => b.textContent === t("chat-modelpanel.switch_confirm"))!;
+    await act(async () => confirm().click());
+    await flush();
+    expect(document.querySelector("[role=alert]")?.textContent).toBe(t("chat-modelpanel.switch_unconfirmed", { error: t("lib-api.computer_timeout") }));
+    const first = calls.find((c) => c.url.endsWith("/switch"))!;
+    expect(first.body).toMatchObject({ expected_epoch: 4, source_machine_id: mid(), machine_id: mid(), launcher: "codex", model: "gpt-standard", effort: "high" });
+    expect(getSession(mid(), "c1")?.model_pick).toBeUndefined();
+    switchAnswer = () => json({ phase: "preparing" });
+    await act(async () => confirm().click());
+    await flush();
+    expect(calls.filter((c) => c.url.endsWith("/switch")).map((c) => c.body)).toEqual([first.body, first.body]);
+    expect(calls.filter((c) => c.url.includes("/segments?"))).toHaveLength(2);
+    expect(sent("PUT")).toEqual([]);
   });
 });

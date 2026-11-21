@@ -9,6 +9,7 @@ func TestSupervisionLaunchersRequireAnInstructionChannel(t *testing.T) {
 	list := []Launcher{
 		{Name: "cc", Source: "zshrc"}, {Name: "cx", Agent: "codex", Source: "path"},
 		{Name: "api", Source: "persona"},
+		{Name: "managed-codex", Source: "persona", Agent: "codex"},
 		{Name: "agy", Agent: "agy", Source: "antigravity", Assistant: true, SupervisionPolicy: true},
 		{Name: "oc", Source: "opencode", Assistant: true, SupervisionPolicy: true, DisplayName: "OpenCode"},
 		{Name: "other-oc", Source: "opencode", Assistant: true, SupervisionPolicy: true, DisplayName: "OpenCode"},
@@ -26,14 +27,13 @@ func TestSupervisionLaunchersRequireAnInstructionChannel(t *testing.T) {
 		{Name: "traex", Source: "path", Agent: "traex"},
 		{Name: "ordinary", Source: "unknown", SupervisionPolicy: true},
 		{Name: "old-runtime", Source: "unknown", Assistant: true},
-		{Name: "managed-codex", Source: "persona", Agent: "codex"},
 		{},
 	} {
 		if LauncherSupervisionPolicy(l) {
 			t.Errorf("unverified channel admitted: %+v", l)
 		}
 	}
-	if got, want := SupervisionLauncherNames(list), []string{"OpenCode", "agy", "api", "cc", "cx"}; !reflect.DeepEqual(got, want) {
+	if got, want := SupervisionLauncherNames(list), []string{"OpenCode", "agy", "api", "cc", "cx", "managed-codex"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("labels = %v; want %v", got, want)
 	}
 	if got := SupervisionLauncherNames(nil); len(got) != 0 {
