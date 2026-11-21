@@ -9,6 +9,13 @@ type botMessageRef struct {
 	owner, chat, id string
 }
 
+// The client pointer identifies the active connection generation. Header AppID
+// is optional in older events, but when supplied must agree with that source.
+// Message references themselves remain stable across same-app refreshes.
+func (b *botHub) acceptBotEventLocked(api *feishubot.Client, appID string) bool {
+	return api != nil && b.set.Enabled && b.api == api && (appID == "" || appID == api.AppID())
+}
+
 // Credentials may be refreshed without changing the bot. Keep the identity
 // stable across those reconnects, while separating apps and API domains.
 func botMessageReference(api *feishubot.Client, owner, chat, id string) botMessageRef {

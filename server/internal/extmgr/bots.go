@@ -252,7 +252,7 @@ func (h *Manager) restartBot() {
 		return
 	}
 	b.api = feishubot.New(appID, secret, domain)
-	b.conn = feishubot.NewConn(b.api, h.botEvent, h.logf)
+	b.conn = feishubot.NewConn(b.api, h.botEventHandler(b.api), h.logf)
 	ctx, cancel := context.WithCancel(b.base)
 	b.stop = cancel
 	conn, api := b.conn, b.api

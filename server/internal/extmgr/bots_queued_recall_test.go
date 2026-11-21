@@ -3,6 +3,7 @@ package extmgr
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -10,7 +11,194 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
+
+func TestBotQueuedRecallSurvivesRecentEviction(t *testing.T) {
+	for _, chat := range []string{topicChat, "oc_p2p"} {
+		t.Run(chat, func(t *testing.T) {
+			w := newBotWorld(t)
+			w.pair(t)
+			w.topicsOn(t, topicChat)
+			unblock := blockBotHandoff(t, w, "om_first")
+			event := groupEvent("om_recalled", "ou_me", "obsolete request", chat, "omt_example")
+			if chat == "oc_p2p" {
+				event = botMessageEvent("om_recalled", "ou_me", "text", textContent("obsolete request"), nil)
+			}
+			w.send(t, event)
+			w.send(t, botRecallEvent(chat, "om_recalled", "message_owner"))
+			// Ordinary incoming events evict the canceled id from the recent ring
+			// while its original handler still waits behind the first handoff.
+			for i := 0; i < botSeenKeep; i++ {
+				w.send(t, groupEvent(fmt.Sprintf("om_filler_%d", i), "ou_stranger", "ordinary message", topicChat, "omt_example"))
+			}
+			w.send(t, event)
+			unblock()
+			finishBotQueue(t, w)
+			if got, want := w.handed(), []string{"om_first", "om_marker"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("redelivery revived a recalled pending request: handed %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestBotQueuedRecallStaysRecentAfterCleanup(t *testing.T) {
+	w := newBotWorld(t)
+	w.pair(t)
+	w.topicsOn(t, topicChat)
+	unblock := blockBotHandoff(t, w, "om_first")
+	event := groupEvent("om_recalled", "ou_me", "obsolete request", topicChat, "omt_example")
+	w.send(t, event)
+	w.send(t, botRecallEvent(topicChat, "om_recalled", "message_owner"))
+	for i := 0; i < botSeenKeep; i++ {
+		w.send(t, groupEvent(fmt.Sprintf("om_filler_%d", i), "ou_stranger", "ordinary message", topicChat, "omt_example"))
+	}
+	unblock()
+	finishBotQueue(t, w)
+	// This delivery arrives after pending ownership has been released. It must
+	// still meet bounded recent history rather than recreate the canceled work.
+	w.send(t, event)
+	w.send(t, groupEvent("om_after_cleanup", "ou_me", "ordinary next request", topicChat, "omt_example"))
+	eventually(t, 5*time.Second, "message after cleanup handed", func() bool {
+		got := w.handed()
+		return len(got) > 0 && got[len(got)-1] == "om_after_cleanup"
+	})
+	if got, want := w.handed(), []string{"om_first", "om_marker", "om_after_cleanup"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released recall restarted on immediate redelivery: %v", got)
+	}
+	w.h.bots.mu.Lock()
+	recent := len(w.h.bots.seen)
+	w.h.bots.mu.Unlock()
+	if recent > botSeenKeep {
+		t.Fatalf("completed history grew past its bound: %d", recent)
+	}
+}
+
+func TestBotPendingDedupAndReleaseAfterRecentEviction(t *testing.T) {
+	for _, refused := range []bool{false, true} {
+		t.Run(fmt.Sprintf("refused_%t", refused), func(t *testing.T) {
+			w := newBotWorld(t)
+			w.pair(t)
+			w.topicsOn(t, topicChat)
+			unblock := blockBotHandoff(t, w, "om_first")
+			if refused {
+				w.a.on(assistantwire.MethodFeishuMessage, func(raw json.RawMessage) (any, error) {
+					if bytes.Contains(raw, []byte("om_second")) {
+						return nil, &rpc.Error{Code: "fixture_refused", Message: "synthetic refusal"}
+					}
+					return map[string]any{}, nil
+				})
+			}
+			event := groupEvent("om_second", "ou_me", "ordinary request", topicChat, "omt_example")
+			w.send(t, event)
+			for i := 0; i < botSeenKeep; i++ {
+				w.send(t, groupEvent(fmt.Sprintf("om_filler_%d", i), "ou_stranger", "ordinary message", topicChat, "omt_example"))
+			}
+			var deliveries sync.WaitGroup
+			for i := 0; i < 12; i++ {
+				deliveries.Go(func() { w.send(t, event) })
+			}
+			deliveries.Wait()
+			unblock()
+			finishBotQueue(t, w)
+			if got, want := w.handed(), []string{"om_first", "om_second", "om_marker"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("pending redelivery changed handoff or queue release: %v", got)
+			}
+		})
+	}
+}
+
+func withBotEnvelopeAppID(payload []byte, appID string) []byte {
+	var env map[string]any
+	_ = json.Unmarshal(payload, &env)
+	env["header"].(map[string]any)["app_id"] = appID
+	out, _ := json.Marshal(env)
+	return out
+}
+
+func TestBotConnectionCallbackRejectsReplacedSource(t *testing.T) {
+	for _, sameApp := range []bool{false, true} {
+		t.Run(fmt.Sprintf("same_app_%t", sameApp), func(t *testing.T) {
+			w := newBotWorld(t)
+			w.pair(t)
+			w.topicsOn(t, topicChat)
+			oldAPI, _ := w.h.botAPI()
+			oldCallback := w.h.botEventHandler(oldAPI)
+			body := `{"app_secret":"refreshed-secret"}`
+			if !sameApp {
+				body = `{"app_id":"cli_replacement","app_secret":"replacement-secret"}`
+			}
+			if code, out := w.do(t, "PUT", "/api/v1/bots/feishu", body); code != 200 {
+				t.Fatalf("replace connection: %d %v", code, out)
+			}
+			if !sameApp {
+				w.a.mu.Lock()
+				w.a.told = nil
+				w.a.mu.Unlock()
+				w.pair(t)
+				w.topicsOn(t, topicChat)
+			}
+			api, _ := w.h.botAPI()
+			if api == oldAPI {
+				t.Fatal("credential update did not replace the production client")
+			}
+			currentCallback := w.h.botEventHandler(api)
+			call := func(callback feishubot.Handler, payload []byte) {
+				t.Helper()
+				if _, err := callback(w.ctx, payload); err != nil {
+					t.Fatal(err)
+				}
+			}
+			unblock := blockBotHandoff(t, w, "om_first")
+			w.send(t, groupEvent("om_second", "ou_me", "ordinary request", topicChat, "omt_example"))
+			w.send(t, groupEvent("om_recalled", "ou_me", "obsolete request", topicChat, "omt_example"))
+			// These are the callback factory used by restartBot, retained from
+			// the real prior credential lifecycle; no queue state is fabricated.
+			call(oldCallback, groupEvent("om_old_source", "ou_me", "delayed old event", topicChat, "omt_example"))
+			call(oldCallback, withBotEnvelopeAppID(botRecallEvent(topicChat, "om_second", "message_owner"), api.AppID()))
+			call(currentCallback, withBotEnvelopeAppID(groupEvent("om_wrong_header", "ou_me", "wrong app event", topicChat, "omt_example"), "cli_unrelated"))
+			call(currentCallback, withBotEnvelopeAppID(botRecallEvent(topicChat, "om_second", "message_owner"), "cli_unrelated"))
+			call(currentCallback, withBotEnvelopeAppID(botRecallEvent(topicChat, "om_recalled", "message_owner"), api.AppID()))
+			unblock()
+			finishBotQueue(t, w)
+			if got, want := w.handed(), []string{"om_first", "om_second", "om_marker"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("stale callback or mismatched envelope changed the new queue: %v", got)
+			}
+			if w.h.messageChat("om_old_source") != "" || w.h.messageChat("om_wrong_header") != "" {
+				t.Fatal("a rejected callback altered new message-chat evidence")
+			}
+		})
+	}
+}
+
+func TestBotPendingRecallSurvivesProductionCredentialRefresh(t *testing.T) {
+	w := newBotWorld(t)
+	w.pair(t)
+	w.topicsOn(t, topicChat)
+	oldAPI, _ := w.h.botAPI()
+	oldCallback := w.h.botEventHandler(oldAPI)
+	unblock := blockBotHandoff(t, w, "om_first")
+	w.send(t, groupEvent("om_recalled", "ou_me", "obsolete request", topicChat, "omt_example"))
+	w.send(t, groupEvent("om_second", "ou_me", "ordinary request", topicChat, "omt_example"))
+	if code, out := w.do(t, "PUT", "/api/v1/bots/feishu", `{"app_secret":"refreshed-secret"}`); code != 200 {
+		t.Fatalf("refresh credentials: %d %v", code, out)
+	}
+	api, _ := w.h.botAPI()
+	if api == oldAPI {
+		t.Fatal("production credential refresh kept the old client")
+	}
+	if _, err := oldCallback(w.ctx, botRecallEvent(topicChat, "om_second", "message_owner")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.h.botEventHandler(api)(w.ctx, withBotEnvelopeAppID(botRecallEvent(topicChat, "om_recalled", "message_owner"), api.AppID())); err != nil {
+		t.Fatal(err)
+	}
+	unblock()
+	finishBotQueue(t, w)
+	if got, want := w.handed(), []string{"om_first", "om_second", "om_marker"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("credential refresh lost pending recall or delivery: %v", got)
+	}
+}
 
 func botRecallEvent(chat, id, kind string) []byte {
 	b, _ := json.Marshal(map[string]any{
