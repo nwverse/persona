@@ -1,6 +1,7 @@
 // Semantic native colors; appearance resources own the light and dark variants.
 @ObservedV2
 class NativeColors {
+  readonly surface: ResourceColor = $r('app.color.persona_surface');
   readonly canvas: ResourceColor = $r('app.color.persona_canvas');
   readonly grouped: ResourceColor = $r('app.color.persona_grouped');
   readonly ink: ResourceColor = $r('app.color.persona_ink');

@@ -69,6 +69,41 @@ test('manual confirmation releases only an unknown operation',async()=>{
   await queue.finish(record,'unknown');await queue.acknowledge(record.id);assert.equal(queue.blocked().length,0);
 });
 
+test('manual release rechecks admission in the queue and preserves a pending or replaced owner',async()=>{
+  const store=new MemoryStore(), journal=new MutationStore(store,'rename-owner');
+  const record=await journal.begin('/worktree/rename','POST','payload');
+  await journal.finish(record,'unknown');
+  let current=true;
+  const stale=journal.acknowledge(record.id,()=>current);
+  current=false; await stale;
+  assert.equal(journal.record(record.id).state,'unknown');
+  record.confirmedPending=true;
+  await journal.acknowledge(record.id,()=>true);
+  assert.equal(record.state,'unknown');
+  record.confirmedPending=false;
+  await Promise.all([journal.finish(record,'pending'),journal.acknowledge(record.id,()=>true)]);
+  assert.equal(record.state,'pending');
+  await journal.finish(record,'unknown');
+  await journal.acknowledge(record.id,()=>true);
+  const reopened=new MutationStore(store,'rename-owner'); await reopened.load();
+  assert.equal(reopened.record(record.id).state,'checked'); assert.equal(reopened.blocked().length,0);
+});
+
+test('a long-blocked manual rename remains recoverably checked across terminal history pruning',async()=>{
+  const local=new MemoryStore(), journal=new MutationStore(local,'old-worktree');
+  const old=await journal.begin('/worktree/rename','POST','name');
+  await journal.finish(old,'unknown');
+  for(let i=0;i<100;i++) {
+    const recent=await journal.begin('/independent/'+i,'POST','data');
+    await journal.finish(recent,'done');
+  }
+  local.failNext=true;
+  await assert.rejects(journal.acknowledge(old.id,()=>true)); assert.equal(old.state,'unknown');
+  await journal.acknowledge(old.id,()=>true);
+  const restored=new MutationStore(local,'old-worktree'); await restored.load();
+  assert.equal(restored.record(old.id).state,'checked');
+});
+
 test('history cleanup failure does not turn a confirmed result into an unindexed unknown',async()=>{
  const local=new MemoryStore(),queue=new MutationStore(local,'test');
  const old=await queue.begin('/old/messages','POST','old');await queue.finish(old,'unknown');
@@ -585,4 +620,28 @@ test('an extension without sign-in omits auth state without reporting a detail f
   assert.deepEqual(page.auth,{});assert.equal(page.extensionDetail.id,'native-check');
   assert.equal(!!page.error,status!==404&&status!==405);
  }
+});
+
+test('new Agent uses the selected host worktree and keeps a directory-only start compatible', async () => {
+  const {ResourceRow} = await import('../entry/src/main/ets/models/Wire.ets');
+  const machine = ResourceRow.from({id: 'mac', manager: 'work', online: true}, 'machine');
+  const bodies = [];
+  const transport = {request: async (path, method, payload) => {
+    assert.equal(path, '/api/v1/sessions');
+    assert.equal(method, 'POST');
+    bodies.push(JSON.parse(payload));
+    return JSON.stringify({session: {session_id: 'created', machine_id: 'mac'}});
+  }};
+  const repo = new HubRepository({managerId: 'work', hubId: 'home'}, undefined, () => {}, 'work', transport);
+  const created = await repo.createAgent('Synthetic task', machine, '/repo/feature', 'codex', 'a', '', () => true, 'wt-01', 'paseo');
+  assert.equal(created.session, 'created');
+  assert.deepEqual(bodies[0], {machine_id: 'mac', cwd: '/repo/feature', launcher: 'codex', prompt: 'Synthetic task', workspace_id: 'wt-01', host: 'paseo'});
+  await repo.createAgent('Synthetic task', machine, '/repo', '', 'b');
+  assert.equal('workspace_id' in bodies[1], false);
+  assert.equal('host' in bodies[1], false);
+  assert.equal('model' in bodies[1], false);
+  assert.equal('effort' in bodies[1], false);
+  await repo.createAgent('Synthetic task', machine, '/repo/feature', 'codex', 'c', '', () => true, 'wt-01', 'paseo', 'test-model', 'high');
+  assert.deepEqual(bodies[2], {machine_id:'mac', cwd:'/repo/feature', launcher:'codex', prompt:'Synthetic task',
+    workspace_id:'wt-01', host:'paseo', model:'test-model', effort:'high'});
 });

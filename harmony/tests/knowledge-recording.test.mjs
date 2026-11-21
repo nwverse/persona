@@ -428,3 +428,25 @@ test('forget purges persisted files when no recording model was opened this laun
   assert.equal(recordingSdkFiles.has(directory + '/' + otherId + '.json'), true);
   assert.equal(recordingSdkFiles.has(directory + '/' + otherId + '.pcm'), true);
 });
+
+test('local playback uses the selected capture and stops when the page backgrounds or the paired profile changes',async()=>{
+  const {model,platform,state}=await opened();
+  const id=await startAndStop(model);
+  let admitted,ended,stops=0;
+  platform.playLocal=async(entry,admit,done)=>{assert.equal(entry.id,id);admitted=admit;ended=done;};
+  platform.stopPlayback=async()=>{stops++;};
+  assert.equal(await model.playSelected(),true);assert.equal(admitted(),true);
+  await model.stopForBackground();assert.equal(stops,1);assert.equal(admitted(),false);assert.equal(model.playingId,'');
+  ended(true);assert.equal(model.error,'');
+  assert.equal(await model.playSelected(),true);
+  state.generation++;assert.equal(admitted(),false);
+  await model.dispose();assert.equal(stops,2);
+});
+
+test('an invalid audio file reports a local playback error without requesting a recording upload',async()=>{
+  const {model,platform,state}=await opened();
+  await startAndStop(model);const before=state.calls.length;
+  platform.playLocal=async()=>{throw new Error('invalid audio');};
+  assert.equal(await model.playSelected(),false);assert.equal(model.playingId,'');
+  assert.equal(model.error,'phone_record_play_failed');assert.equal(state.calls.length,before);
+});

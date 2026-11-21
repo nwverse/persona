@@ -9,6 +9,7 @@ import { nativeNotifications, NOTIFICATION_ACTION } from '../platform/NativeNoti
 import { Wire } from '../models/Wire';
 import { KnowledgeRecording } from '../models/KnowledgeRecording';
 import { deviceLook } from '../models/DeviceLook';
+import { NativeDictation } from '../platform/NativeDictation';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
 
 export default class EntryAbility extends UIAbility {
@@ -31,6 +32,7 @@ export default class EntryAbility extends UIAbility {
   private receiveWant(want: Want): void {
     const uri = want.uri || '';
     if (uri.length <= 16384 && isPairingLink(uri)) client.pairingLink = uri;
+    else if (!uri && want.action !== NOTIFICATION_ACTION && want.parameters?.['personaPage'] === 'projects') client.projectsRequested = true;
   }
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     nativeEnvironment.update(this.context.config);
@@ -51,7 +53,7 @@ export default class EntryAbility extends UIAbility {
     stage.loadContent('pages/Index', (error) => { if (error.code) client.error = 'failed'; });
   }
   onWindowStageDestroy(): void { nativeEnvironment.unbindWindow(); }
-  onBackground(): void { this.visible = false; this.lifecycle++; deviceLook.bind(undefined).catch(() => {}); Promise.all([KnowledgeRecording.backgroundAll(), deviceFeatures.background(), client.background()]).catch(() => {}); }
+  onBackground(): void { NativeDictation.cancelActive(); this.visible = false; this.lifecycle++; deviceLook.bind(undefined).catch(() => {}); Promise.all([KnowledgeRecording.backgroundAll(), deviceFeatures.background(), client.background()]).catch(() => {}); }
   onForeground(): void {
     nativeEnvironment.update(this.context.config);
     const epoch = ++this.lifecycle; this.visible = true; client.activateForeground();
@@ -63,5 +65,5 @@ export default class EntryAbility extends UIAbility {
     }).catch(() => { if (this.visible && epoch === this.lifecycle) client.error = 'failed'; });
     deviceFeatures.foreground().catch(() => {});
   }
-  onDestroy(): void { nativeEnvironment.unbindWindow(); this.visible = false; this.lifecycle++; this.pendingNotification = undefined; deviceLook.bind(undefined).catch(() => {}); KnowledgeRecording.backgroundAll().catch(() => {}); deviceFeatures.background().catch(() => {}); client.shutdown().catch(() => {}); }
+  onDestroy(): void { NativeDictation.cancelActive(); nativeEnvironment.unbindWindow(); this.visible = false; this.lifecycle++; this.pendingNotification = undefined; deviceLook.bind(undefined).catch(() => {}); KnowledgeRecording.backgroundAll().catch(() => {}); deviceFeatures.background().catch(() => {}); client.shutdown().catch(() => {}); }
 }

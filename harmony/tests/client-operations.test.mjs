@@ -22,7 +22,7 @@ registerHooks({
       if (specifier==='../core/StorageOwnership') return {url:new URL(specifier+'.ts',context.parentURL).href,shortCircuit:true};
       return {url:'client-boundary:'+specifier,shortCircuit:true};
     }
-    if (context.parentURL?.endsWith('/InboxWorkspace.ets') || context.parentURL?.endsWith('/TodoWorkspace.ets') ||
+    if (context.parentURL?.endsWith('/InboxWorkspace.ets') || context.parentURL?.endsWith('/TodoWorkspace.ets') || context.parentURL?.endsWith('/TodoHubView.ets') ||
       context.parentURL?.endsWith('/MessageImage.ets') || context.parentURL?.endsWith('/RemoteDocument.ets')) {
       if (specifier === '@kit.ArkTS' || specifier === '../platform/HubTransport') return {url:'client-boundary:'+specifier,shortCircuit:true};
       if (specifier.startsWith('.')) return {url:new URL(specifier.endsWith('.ets') || specifier.endsWith('.ts') ? specifier : specifier + '.ets',context.parentURL).href,shortCircuit:true};
@@ -80,6 +80,23 @@ function fixture() {
   model.loadChat=async()=>{};
   return {model,writes};
 }
+
+test('only an identity-matched hello on the current live scope and connection generation supplies a feature version',()=>{
+ const {model}=fixture();
+ model.profile.hubId='verified-id';
+ model.repository.transport={hello(){}};
+ model.repository.close=()=>{};model.reconcileWrites=async()=>{};model.refresh=async()=>{};model.flushNotification=async()=>{};
+ const send=fields=>model.event(JSON.stringify({type:'hello',hub_id:'verified-id',server_version:'0.9.1',features:['client_ops'],...fields}));
+ send({});assert.equal(model.verifiedServerVersion('client_ops'),'0.9.1');assert.equal(model.verifiedServerVersion('missing'),'');
+ model.generation++;assert.equal(model.verifiedServerVersion('client_ops'),'');
+ send({});model.profile.manager='work';assert.equal(model.verifiedServerVersion('client_ops'),'');
+ send({});model.profile.hubId='another';assert.equal(model.verifiedServerVersion('client_ops'),'');
+ model.profile.hubId='verified-id';send({hub_id:'foreign'});assert.equal(model.verifiedServerVersion('client_ops'),'');
+ send({hub_id:''});assert.equal(model.verifiedServerVersion('client_ops'),'');
+ send({server_version:''});assert.equal(model.verifiedServerVersion('client_ops'),'');
+ send({features:[]});assert.equal(model.verifiedServerVersion('client_ops'),'');
+ send({});model.connected=false;assert.equal(model.verifiedServerVersion('client_ops'),'');
+});
 function decision(model,id='request-one') { const value=new Decision(); value.id=id; value.kind='permission'; value.raw=JSON.stringify({id}); model.decision=value; return value; }
 function deferred() { let resolve,reject; const promise=new Promise((yes,no)=>{resolve=yes;reject=no;}); return {promise,resolve,reject}; }
 
@@ -1327,4 +1344,21 @@ test('question resolution rechecks journal-delayed scope, request, capability an
    if(retirement==='uncertain-refresh')assert.equal(request.status,'unknown','a newer authoritative uncertainty must not reopen after admission fails');
   }finally{gate.resolve();globalThis.clientTestRequest=previous;}
  }
+});
+
+test('assistant selection rechecks the source scope and installed, visible roster at the time of the tap', async () => {
+  const { model } = fixture();
+  const calls = [];
+  model.selectManager = async id => { calls.push(id); };
+  const row = (id, data = {}) => ResourceRow.from({ id, ...data }, 'manager');
+  model.managers = [row('ready'), row('hidden', { hidden: true }),
+    row('installing', { installing: '2026-11-21T10:00:00Z' }), row('legacy', { installing: true })];
+  const source = model.scope();
+  for (const id of ['hidden', 'installing', 'legacy', 'missing', model.profile.manager]) {
+    await model.selectListedManager(id, source);
+  }
+  await model.selectListedManager('ready', source + 'previous');
+  assert.deepEqual(calls, []);
+  await model.selectListedManager('ready', source);
+  assert.deepEqual(calls, ['ready']);
 });

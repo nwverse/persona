@@ -198,6 +198,8 @@ export class KnowledgeRecording {
   @Trace uploadState: string = 'idle';
   @Trace error: string = '';
   @Trace transcript: string = '';
+  @Trace playingId: string = '';
+  private playbackRevision: number = 0;
 
   private root: ClientModel | undefined;
   private platform: NativeRecording;
@@ -258,6 +260,7 @@ export class KnowledgeRecording {
     const writes = this.localWrite;
     this.advanceForgetEpoch(profileId);
     const matches = this.local?.profileId === profileId;
+    const playback = matches && this.playingId ? this.stopPlayback() : undefined;
     const capturing = matches && ['requesting', 'recording'].includes(this.captureState);
     const transcribing = matches && (!!this.activeTranscriptionId || this.transcriptionState === 'transcribing');
     if (matches) {
@@ -268,6 +271,7 @@ export class KnowledgeRecording {
       this.activeTranscriptionId = '';
     }
     return (async (): Promise<void> => {
+      if (playback) { try { await playback; } catch (_) { } }
       if (transcribing) { try { await this.platform.cancelTranscription(); } catch (_) { } }
       if (capturing) { try { await this.platform.stop(); } catch (_) { } }
       await writes.catch(() => undefined);
@@ -309,6 +313,7 @@ export class KnowledgeRecording {
   }
 
   async open(client: ClientModel, ownerManager: string, context: Object): Promise<void> {
+    if (this.playingId) this.stopPlayback().catch(() => undefined);
     if (this.captureState === 'recording') await this.stop().catch(() => false);
     if (this.captureState === 'requesting') {
       this.activeTask++;
@@ -354,6 +359,34 @@ export class KnowledgeRecording {
     }
   }
 
+  canPlay(): boolean {
+    return !!this.entry && !!this.local && this.isLocalCurrent(this.local) && this.entry.captureState === 'stopped' &&
+      this.entry.audioBytes > 0 && !['requesting','recording'].includes(this.captureState) && this.transcriptionState !== 'transcribing';
+  }
+  async playSelected(): Promise<boolean> {
+    const snapshot = this.local, entry = this.entry;
+    if (!snapshot || !entry || !this.canPlay()) return false;
+    if (this.playingId) { await this.stopPlayback(); return false; }
+    const revision = ++this.playbackRevision;
+    const valid = (): boolean => this.playbackRevision === revision && this.playingId === entry.id && this.isLocalCurrent(snapshot) && this.entry?.id === entry.id;
+    this.playingId = entry.id;
+    try {
+      await this.platform.playLocal(entry,valid,(failed:boolean) => {
+        if (!valid()) return;
+        this.playingId = ''; if (failed) this.error = 'phone_record_play_failed';
+      });
+      return valid();
+    } catch (_) {
+      if (valid()) { this.playingId = ''; this.error = 'phone_record_play_failed'; }
+      return false;
+    }
+  }
+  async stopPlayback(): Promise<void> {
+    this.playbackRevision++;
+    if (!this.playingId) return;
+    this.playingId = ''; await this.platform.stopPlayback();
+  }
+
   canSelectEntry(): boolean {
     return !this.pendingStartTask && this.activeEntryTasks.size === 0 &&
       !['requesting', 'recording'].includes(this.captureState) && this.transcriptionState !== 'transcribing' && this.uploadState !== 'uploading';
@@ -363,6 +396,7 @@ export class KnowledgeRecording {
     if (!this.canSelectEntry()) return;
     const selected = this.entries.find((item: KnowledgeRecordingEntry) => item.id === recordingId);
     if (!selected) return;
+    if (this.playingId && this.playingId !== selected.id) this.stopPlayback().catch(() => undefined);
     this.entry = selected; this.transcript = selected.transcript; this.captureState = selected.captureState;
     this.transcriptionState = selected.transcriptionState; this.uploadState = selected.uploadState;
     this.error = selected.error || selected.uploadError;
@@ -376,6 +410,11 @@ export class KnowledgeRecording {
   canDeleteLocal(): boolean { return !!this.entry && this.entry.captureState !== 'recording' && this.entry.transcriptionState !== 'transcribing' && this.entry.uploadState !== 'uploading'; }
 
   async start(): Promise<boolean> {
+    if (this.playingId) {
+      const before = this.entry, owner = this.local;
+      await this.stopPlayback();
+      if (before !== this.entry || owner !== this.local) return false;
+    }
     const snapshot = this.local, context = this.context, client = this.root;
     if (!snapshot || !context || !client || !this.canStart() || !this.isLocalCurrent(snapshot)) return false;
     const task = ++this.activeTask;
@@ -443,6 +482,7 @@ export class KnowledgeRecording {
   }
 
   async stopForBackground(): Promise<void> {
+    if (this.playingId) await this.stopPlayback();
     if (this.captureState === 'recording' || this.captureState === 'requesting') {
       this.activeTask++;
       if (this.captureState === 'recording') await this.stop();
@@ -491,6 +531,11 @@ export class KnowledgeRecording {
 
   /** Transcription starts only from this explicit action. The same stable id/revision is then uploaded as full state. */
   async transcribeAndUpload(): Promise<boolean> {
+    if (this.playingId) {
+      const before = this.entry, owner = this.local;
+      await this.stopPlayback();
+      if (before !== this.entry || owner !== this.local) return false;
+    }
     const current = this.entry, snapshot = this.local;
     if (!current || !snapshot || !this.canTranscribe() || !this.isLocalCurrent(snapshot) || this.activeEntryTasks.has(current.id)) return false;
     if (current.language !== 'zh-CN') { this.error = 'knowledge_recording_chinese_only'; return false; }
@@ -576,6 +621,11 @@ export class KnowledgeRecording {
   }
 
   async deleteLocal(): Promise<boolean> {
+    if (this.playingId) {
+      const before = this.entry, owner = this.local;
+      await this.stopPlayback();
+      if (before !== this.entry || owner !== this.local) return false;
+    }
     const current = this.entry, snapshot = this.local;
     if (!current || !snapshot || !this.isLocalCurrent(snapshot) || !this.canDeleteLocal() || current.captureState === 'recording') return false;
     this.locallyDeletedIds.add(current.id);

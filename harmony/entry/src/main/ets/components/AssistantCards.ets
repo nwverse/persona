@@ -12,6 +12,7 @@ import { ResourceRow, Wire } from '../models/Wire';
 import { MarkdownText } from './MarkdownText';
 import { Tokens } from '../design/Tokens';
 import { Colors } from '../design/Colors';
+import { TodoWorkspaceItem, todoWorkspaceStatus } from '../models/TodoWorkspace';
 import { ButtonStyles } from '../design/Controls';
 import { tr } from '../design/Strings';
 import { projectAssistantReceipt, AssistantReceiptProjection, AssistantReceiptCriterion } from '../models/AssistantReceipt';
@@ -19,6 +20,15 @@ import { projectAssistantReceipt, AssistantReceiptProjection, AssistantReceiptCr
 // The Hub accepts bypassPermissions for writable task plans; read-only tasks
 // are locked to plan mode and cannot be upgraded from this editor.
 const PLAN_PERMISSIONS: string[] = ['bypassPermissions'];
+
+class TaskTrayRow {
+  card: Record<string,Object>;
+  bucket: string;
+  state: string;
+  constructor(card: Record<string,Object>, bucket: string, state: string) {
+    this.card = card; this.bucket = bucket; this.state = state;
+  }
+}
 
 @ComponentV2
 export struct AssistantCards {
@@ -37,6 +47,34 @@ export struct AssistantCards {
 
   @Local environment: NativeEnvironment = nativeEnvironment;
   @Local editorInset: number = 0;
+  @Local trayOpen: boolean = false;
+  @Local trayBucket: string = '';
+  private trayOwner: string = '';
+  private trayScope(): string { return JSON.stringify([this.model.scope(), this.model.connectionGeneration(), this.model.target()]); }
+  @Monitor('active', 'model.selected', 'model.profile', 'model.connected', 'feed.conversationId')
+  trayOwnerChanged(): void { if (this.trayOpen && (!this.active || this.trayOwner !== this.trayScope())) this.trayOpen = false; }
+  private openTray(bucket: string): void {
+    if (!this.active || !this.trayRows.some((r: TaskTrayRow) => r.bucket === bucket)) return;
+    this.trayBucket = bucket; this.trayOwner = this.trayScope(); this.trayOpen = true;
+  }
+  @Computed get trayRows(): TaskTrayRow[] {
+    if (!this.dockOnly) return [];
+    const rows: TaskTrayRow[] = [];
+    for (const card of this.feed.taskCardsForConversation()) {
+      const todo = new TodoWorkspaceItem(this.taskTodo(card), this.feed.owner);
+      const state = todoWorkspaceStatus(todo, this.model.sessions);
+      const declared = Wire.text(card, 'state');
+      const ask = todo.ask;
+      const asksOwner = !!Wire.text(ask,'asked_at') && !!Wire.text(ask,'verdict') && !(todo.isDone() && Wire.text(ask,'outcome') === 'decide');
+      const bucket = asksOwner || state === 'needs_you' || !todo.isDone() && ['needs_you','interrupted','usage_limit','failed'].includes(declared) ? 'needs' :
+        state === 'done' ? 'done' : 'progress';
+      rows.push(new TaskTrayRow(card,bucket, declared && declared !== 'unknown' ? this.stateLabel(declared) : tr('todo_state_' + state)));
+    }
+    return rows;
+  }
+  private trayLabel(bucket: string): string { return tr(bucket === 'needs' ? 'needs_you' : bucket === 'done' ? 'done' : 'todo_state_working'); }
+  private trayColor(bucket: string): ResourceColor { return bucket === 'needs' ? Colors.needs : bucket === 'done' ? Colors.positive : Colors.working; }
+
   private editorReady: boolean = false;
   private editorNodeId: string = 'assistant.editor.' + util.generateRandomUUID();
   @Monitor('environment.safeBottomPx') editorBoundaryChanged(): void { this.measureEditor(); }
@@ -60,7 +98,6 @@ export struct AssistantCards {
     this.receiptViewStamp = JSON.stringify([Wire.text(this.item, 'id'), todo, projection, this.feed.todosReady, Wire.text(task, 'id'), agents, sessions, this.feed.busyKeys.includes('todo:' + todo)]);
   }
 
-  private tasks(): Record<string, Object>[] { return this.feed.taskCardsForConversation(); }
 
   private stateLabel(state: string): string {
     const known: string[] = ['not_started', 'working', 'waiting', 'needs_you', 'interrupted', 'usage_limit', 'unread', 'followup', 'done', 'failed', 'cancelled', 'accepted'];
@@ -121,11 +158,11 @@ export struct AssistantCards {
   }
   private openTodo(id: string): void {
     const row = this.feed.openTodo(id);
-    if (row) this.onOpenTodo(row);
+    if (row) { this.trayOpen = false; this.onOpenTodo(row); }
   }
   private openAgentSession(todoId: string, agent: Record<string, Object>): void {
     const row = this.feed.openAgent(todoId, agent);
-    if (row) this.onOpenSession(row);
+    if (row) { this.trayOpen = false; this.onOpenSession(row); }
   }
   private agentTitle(todoId: string, agent: Record<string, Object>): string {
     const row = this.feed.openAgent(todoId, agent);
@@ -275,18 +312,6 @@ export struct AssistantCards {
     return detail.join(' · ');
   }
 
-  @Builder taskRow(card: Record<string, Object>) {
-    Column({ space: Tokens.fine }) {
-      ComposeListItemV2({ contentItemV2: new ContentItemV2({
-        primaryText: Wire.text(this.taskTodo(card), 'title', tr('assistant_feed_task')),
-        secondaryText: this.stateLabel(Wire.text(card, 'state', 'unknown'))
-      }) }).onClick(() => this.openTodo(this.todoId(card))).accessibilityText(tr('assistant_feed_open_todo'))
-      ForEach(this.activeAgents(card), (agent: Record<string, Object>) => this.agentRow(this.todoId(card), agent),
-        (agent: Record<string, Object>) => Wire.text(agent, 'machine_id') + '/' + Wire.text(agent, 'session_id'))
-      if (this.feed.todoError) Text(tr(this.feed.todoError)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).padding({ left: Tokens.page, right: Tokens.page })
-    }.width('100%')
-  }
-
   @Builder agentRow(todoId: string, agent: Record<string, Object>) {
     if (this.feed.openAgent(todoId, agent)) {
       ComposeListItemV2({ contentItemV2: new ContentItemV2({
@@ -296,13 +321,60 @@ export struct AssistantCards {
     }
   }
 
+  @Builder taskRow(entry: TaskTrayRow) {
+    Column({ space: 6 }) {
+      Row({ space: 9 }) {
+        Circle().width(8).height(8).fill(this.trayColor(entry.bucket))
+        Text(Wire.text(this.taskTodo(entry.card), 'title', tr('assistant_feed_task')))
+          .fontSize(17).fontWeight(FontWeight.Medium).fontColor(Colors.ink).layoutWeight(1).maxLines(2)
+        Text(entry.state).fontSize(12).fontColor(this.trayColor(entry.bucket))
+        SymbolGlyph(Symbols.expand).fontSize(12).fontColor([Colors.secondary])
+      }.width('100%').constraintSize({minHeight:44}).onClick(() => this.openTodo(this.todoId(entry.card)))
+        .accessibilityGroup(true).id('chat.tasks.todo.' + this.todoId(entry.card))
+      ForEach(this.activeAgents(entry.card), (agent: Record<string,Object>) => {
+        if (this.feed.openAgent(this.todoId(entry.card), agent)) {
+          Row({space:8}) {
+            SymbolGlyph(Symbols.agent).fontSize(15).fontColor([Colors.secondary])
+            Column({space:3}) {
+              Text(this.agentTitle(this.todoId(entry.card),agent)).fontSize(15).fontColor(Colors.ink).maxLines(2)
+              Text(this.sessionProgress(this.todoId(entry.card),agent) || this.agentMachine(this.todoId(entry.card),agent))
+                .fontSize(13).fontColor(Colors.secondary).maxLines(2).textOverflow({overflow:TextOverflow.Ellipsis})
+            }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+            SymbolGlyph(Symbols.expand).fontSize(12).fontColor([Colors.secondary])
+          }.width('100%').padding({left:12,right:4,top:4,bottom:4}).constraintSize({minHeight:44})
+            .onClick(() => this.openAgentSession(this.todoId(entry.card),agent)).accessibilityGroup(true)
+        }
+      }, (agent:Record<string,Object>) => JSON.stringify([Wire.text(agent,'machine_id'),Wire.text(agent,'session_id')]))
+    }.padding({left:13,right:13,bottom:6}).width('100%').alignItems(HorizontalAlign.Start)
+      .backgroundColor(Colors.surface).borderRadius(13)
+  }
+
+  @Builder trayList() {
+    List({space:6}) {
+      ForEach(this.trayRows.filter((row:TaskTrayRow) => row.bucket === this.trayBucket), (row:TaskTrayRow) => {
+        ListItem() { this.taskRow(row) }
+      }, (row:TaskTrayRow) => JSON.stringify([Wire.text(row.card,'id'),row.state,this.taskTodo(row.card)]))
+      if (!this.trayRows.some((row:TaskTrayRow) => row.bucket === this.trayBucket)) ListItem() {
+        Text(tr('empty')).fontSize(15).fontColor(Colors.secondary).padding(12)
+      }
+      if (this.feed.todoError) ListItem() { Text(tr(this.feed.todoError)).fontSize(14).fontColor(Colors.secondary) }
+    }.width('100%').height('100%').padding({left:16,right:16,top:6,bottom:8}).backgroundColor(Colors.grouped).id('chat.tasks.tray')
+  }
+
   @Builder taskDock() {
-    if (this.tasks().length > 0) {
-      Column({ space: Tokens.gap }) {
-        Text(tr('assistant_feed_task_dock')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).padding({ left: Tokens.page })
-        ForEach(this.tasks(), (card: Record<string, Object>) => this.taskRow(card), (card: Record<string, Object>) => Wire.text(card, 'id'))
-      }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: Tokens.gap, bottom: Tokens.gap })
-    }
+    if (this.trayRows.length) Row({space:6}) {
+      ForEach(['needs','progress','done'], (bucket:string) => {
+        if (this.trayRows.some((r:TaskTrayRow) => r.bucket === bucket)) Button({type: ButtonType.Capsule}) {
+          Row({space:4}) {
+            Circle().width(6).height(6).fill(this.trayColor(bucket))
+            Text(this.trayLabel(bucket)).fontSize(13).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+            Text(String(this.trayRows.filter((r:TaskTrayRow) => r.bucket === bucket).length)).fontSize(12).fontColor(Colors.secondary)
+          }
+        }.height(30).padding({left:9,right:9}).backgroundColor(Colors.control)
+          .responseRegion({x:0,y:-6,width:'100%',height:42}).onClick(() => this.openTray(bucket)).id('chat.tasks.' + bucket)
+      }, (bucket:string) => bucket)
+    }.width('100%').padding({top:5,bottom:4}).justifyContent(FlexAlign.Start)
+      .bindSheet($$this.trayOpen,this.trayList(),{title:{title:this.trayLabel(this.trayBucket)},height:SheetSize.MEDIUM,showClose:true})
   }
 
   private receiptTodo(item: Record<string, Object>): Record<string, Object> { return this.feed.todo(Wire.text(item, 'ref')); }
@@ -493,7 +565,7 @@ export struct AssistantCards {
   }
 
   private todoState(todoId: string): string {
-    const card = this.tasks().find((value: Record<string, Object>) => Wire.text(value, 'todo_id') === todoId);
+    const card = this.feed.taskCardsForConversation().find((value: Record<string, Object>) => Wire.text(value, 'todo_id') === todoId);
     return card ? Wire.text(card, 'state', 'unknown') : 'unknown';
   }
 

@@ -9,13 +9,13 @@ import { stepsToItems } from '../../integrations/antigravity/lib/map.js';
 
 const source = readFileSync(new URL('../entry/src/main/ets/models/ClientModel.ets', import.meta.url), 'utf8');
 
-function method(name) {
-  const match = new RegExp('  private ' + name + '\\(').exec(source);
+function method(name, file = source) {
+  const match = new RegExp('  private ' + name + '\\(').exec(file);
   assert.ok(match, name);
-  const start = match.index, body = source.indexOf('{', start);
+  const start = match.index, body = file.indexOf('{', start);
   let depth = 1, quote = '', escape = false, index = body + 1;
-  for (; index < source.length && depth; index += 1) {
-    const character = source[index];
+  for (; index < file.length && depth; index += 1) {
+    const character = file[index];
     if (quote) {
       if (escape) escape = false;
       else if (character === '\\') escape = true;
@@ -24,7 +24,7 @@ function method(name) {
     else if (character === '{') depth += 1;
     else if (character === '}') depth -= 1;
   }
-  return source.slice(start, index);
+  return file.slice(start, index);
 }
 
 class ChatMessage {
@@ -96,4 +96,66 @@ test('an Antigravity wake keeps the finished reply and its attachment in the con
   assert.match(replies[0].text, /file: \/synthetic\/chart\.png/);
   assert.equal(after.filter(row => row.role === 'user').length, 2);
   assert.ok(after.every(row => !row.work?.includes(steps[2].content)));
+
+  const wake = history.findIndex(item => item.wake === true);
+  assert.ok(wake >= 0);
+  const recap = { id: 'before-wake-recap', role: 'system', kind: 'recap', text: 'The chart is ready.' };
+  const withRecap = project([...history.slice(0, wake), recap, ...history.slice(wake)]);
+  assert.deepEqual(withRecap.filter(row => row.role === 'assistant').map(row => row.text), replies.map(row => row.text));
+  assert.equal(withRecap.find(row => row.role === 'recap').terminalRecap, false);
+});
+
+test('real recap entries retain original answers, time ordering and all consecutive source texts', () => {
+  const inputs = [
+    { id: 'ask', seq: 1, role: 'user', kind: 'text', text: '看一下 PR #42' },
+    { id: 'answer', seq: 2, role: 'assistant', kind: 'text', text: '两条命名建议' },
+    { id: 'recap1', seq: 3, role: 'system', kind: 'recap', text: '旧回顾' },
+    { id: 'recap2', seq: 4, role: 'system', kind: 'recap', text: '最新回顾：`fetchAll`' }
+  ];
+  const legacy = project(inputs.slice(0, 2));
+  const withRecap = project(inputs);
+  assert.deepEqual(withRecap.slice(0, 2), legacy);
+  const last = withRecap.at(-1);
+  assert.equal(last.role, 'recap');
+  assert.equal(last.terminalRecap, true);
+  assert.equal(last.ownerTarget, 'fixture-reading-target');
+  assert.deepEqual(last.recaps.map(item => [item.id, item.text]), [['recap1', '旧回顾'], ['recap2', '最新回顾：`fetchAll`']]);
+  const next = project(inputs.concat({ id: 'next', seq: 5, role: 'assistant', kind: 'text', text: '已补测试' }));
+  assert.equal(next.find(item => item.role === 'recap').terminalRecap, false);
+  assert.equal(next.at(-1).text, '已补测试');
+  assert.ok(project([{ id: 'pretend', seq: 1, role: 'user', kind: 'recap', text: '文档' }]).every(item => item.role !== 'recap'));
+});
+
+test('a recap dismissal belongs to its hub and session and an older storage read cannot close a new recap', async () => {
+  const recapSource = readFileSync(new URL('../entry/src/main/ets/components/ConversationRecap.ets', import.meta.url), 'utf8');
+  const Recap = new Function('return ' + stripTypeScriptTypes('class Recap {' +
+    ['current', 'newest', 'syncOwner', 'open', 'dismiss'].map(name => method(name, recapSource)).join('\n') + '}'))();
+  const reads = new Map(), writes = [], stored = new Map();
+  let scope = 'hub-1', target = 'macbook/review';
+  const v = Object.assign(new Recap(), {
+    active: true, closed: '', ready: false, ownerKey: '', shown: false,
+    model: { selected: {kind:'session'}, target: () => target, scope: () => scope, connectionGeneration: () => 1,
+      captureView: key => {
+        const address = scope + ':' + key, read = Promise.withResolvers(); reads.set(address, read);
+        return { valid: () => true, read: () => read.promise, write: async value => { writes.push([address,value]);stored.set(address,value); } };
+      }},
+    message: {id:'recap:a', ownerTarget:target, terminalRecap:true, recaps:[{id:'a',text:'A'}]}
+  });
+  v.syncOwner();
+  const oldAddress = 'hub-1:closed-recap:macbook/review';
+  scope='hub-2';v.syncOwner();
+  const address = 'hub-2:closed-recap:macbook/review';
+  reads.get(address).resolve('');await Promise.resolve();
+  assert.equal(v.open(),true);
+  v.dismiss();
+  assert.equal(v.open(),false);
+  assert.deepEqual(writes,[[address,'a']]);
+  reads.get(oldAddress).resolve('foreign-id');await Promise.resolve();
+  assert.equal(v.closed,'a');
+  target='macbook/other';v.message={id:'recap:b',ownerTarget:target,terminalRecap:true,recaps:[{id:'b'}]};v.syncOwner();
+  reads.get('hub-2:closed-recap:macbook/other').resolve('');await Promise.resolve();assert.equal(v.open(),true);
+  target='macbook/review';v.message={id:'recap:a',ownerTarget:target,terminalRecap:true,recaps:[{id:'a'}]};v.syncOwner();
+  reads.get(address).resolve(stored.get(address));await Promise.resolve();assert.equal(v.open(),false);
+  v.message={...v.message,recaps:[{id:'a'},{id:'new'}]};v.syncOwner();assert.equal(v.open(),true);
+  v.active=false;v.syncOwner();v.dismiss();assert.equal(writes.length,1);
 });

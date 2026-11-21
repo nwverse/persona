@@ -56,7 +56,7 @@ registerHooks({
   }
 });
 
-const { InboxAttachmentDraft, InboxWorkspace, inboxRowSourceLabel } = await import('../entry/src/main/ets/models/InboxWorkspace.ets');
+const { InboxAttachmentDraft, InboxWorkspace, inboxRowSourceLabel, inboxTier } = await import('../entry/src/main/ets/models/InboxWorkspace.ets');
 const { HubRepository } = await import('../entry/src/main/ets/models/HubRepository.ets');
 const { ResourceRow } = await import('../entry/src/main/ets/models/Wire.ets');
 const { HttpFailure, EndpointConfig } = await import('persona-inbox:transport');
@@ -1022,4 +1022,51 @@ test('reply and process accept a matching direct entry or item envelope before c
     else assert.equal(workspace.detail.done, true);
     await workspace.close();
   }
+});
+
+test('the phone Inbox bar honors Hub status, legacy triage, Done and the stored search choice', () => {
+  const workspace=new InboxWorkspace();
+  const make=(id,extra={})=>rowFor({id,title:id,source:'lark',account:'a',...extra});
+  workspace.items=[make('review',{status:'action',tier:'noise'}),make('processing',{status:'working'}),
+    make('report',{tier:'fyi'}),make('bulk',{tier:'noise'}),make('before-triage',{tier:'working'}),
+    make('archived',{tier:'action',done_at:'2026-11-17T04:00:00Z'})];
+  assert.equal(inboxTier({status:'unrecognized',tier:'noise'}),'noise');
+  const view=()=>workspace.listView();
+  assert.deepEqual(view().choices.map(x=>[x.key,x.count]),[['action',2],['working',1],['fyi',1],['done',1],['all',0]]);
+  assert.deepEqual(workspace.filteredItems.map(x=>x.id),['review','before-triage']);
+  workspace.statusFilter='fyi';workspace.setSearch('archived');
+  assert.equal(workspace.statusFilter,'all');assert.deepEqual(workspace.filteredItems.map(x=>x.id),['archived']);
+  workspace.statusFilter='done';workspace.setSearch('');assert.equal(workspace.statusFilter,'fyi');
+  workspace.statusFilter='all';assert.deepEqual(view().sections.map(x=>x.key),['action','working','fyi','noise','done']);
+  workspace.sourceFilter='mail';workspace.statusFilter='working';
+  assert.deepEqual(view().choices.map(x=>x.key),['action','working','all']);
+});
+
+test('server done cursors are read in order, overlapping recent rows win, and duplicate history pages stop',async()=>{
+  const seen=[];
+  const old={id:'old',title:'Earlier',source:'mail',account:'a',done_at:'2026-11-11T06:00:00Z'};
+  const current={...old,id:'current',title:'Current',done_at:'2026-11-16T06:00:00Z'};
+  const f=makeHarness({rows:[current],handle:async req=>{
+    const path=pathOnly(req.path);
+    if (path==='/api/v1/inbox/done/days') return {days:[{day:'2026-11-11',count:1}]};
+    if (path!=='/api/v1/inbox/done')return undefined;
+    seen.push(req.path);return {items:[{...current,title:'Stale copy'},old],next:{before:old.done_at,before_id:'old'}};
+  }});
+  const workspace=new InboxWorkspace();await workspace.open(f.client);workspace.statusFilter='done';
+  await workspace.loadOlderDone();await workspace.loadOlderDone();await workspace.loadOlderDone();
+  assert.deepEqual(workspace.filteredItems.map(x=>x.title),['Current','Earlier']);assert.equal(seen.length,2);
+  assert.equal(queryValue(seen[1],'before_id'),'old');assert.equal(queryValue(seen[1],'manager'),'work');assert.equal(workspace.historyEnded,true);
+  await workspace.close();
+});
+
+test('an outstanding history request cannot populate a closed or newly bound Inbox',async()=>{
+  let entered,finish;const arrived=new Promise(r=>{entered=r});
+  const f=makeHarness({handle:async req=>{
+    if(pathOnly(req.path)!=='/api/v1/inbox/done')return undefined;
+    entered();return new Promise(r=>{finish=r});
+  }});
+  const workspace=new InboxWorkspace();await workspace.open(f.client);
+  const loading=workspace.loadOlderDone();await arrived;await workspace.close();
+  finish({items:[{id:'old',source:'mail',done_at:'2026-11-12T00:00:00Z'}]});await loading;
+  assert.deepEqual(workspace.doneItems,[]);
 });

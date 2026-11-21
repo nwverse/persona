@@ -15,7 +15,7 @@ function method(name){
  for(;i<source.length&&depth;i++){const c=source[i];if(quote){if(escape)escape=false;else if(c==='\\')escape=true;else if(c===quote)quote='';}else if(c==='"'||c==="'"||c==='`')quote=c;else if(c==='{')depth++;else if(c==='}')depth--;}
  assert.equal(depth,0,name);return source.slice(start,i);
 }
-const names=['consumeNotification','destinationBackHidden','chatSelectionShown','activeModule','readingAgentDetail','routeTarget','openRow','mainDestination','openMain','hideChatTitle','newConversation','resolveMainDestination','ensureMainDestination','pushChat','redeem','childKey','routeRow','openSettings','settingsKind','settingsModel','targetReady','openLinkedResource','openFrom','openComputer','handoffResource','restoreTarget','routeShown','dismissChatActions','markDetailReady'];
+const names=['syncPhonePath','consumeNotification','destinationBackHidden','chatSelectionShown','activeModule','readingAgentDetail','routeTarget','openRow','mainDestination','openMain','hideChatTitle','newConversation','resolveMainDestination','ensureMainDestination','pushChat','redeem','childKey','routeRow','openSettings','settingsKind','settingsModel','targetReady','openLinkedResource','openFrom','openComputer','handoffResource','restoreTarget','routeShown','dismissChatActions','markDetailReady'];
 const NativeNavigation=new Function('NavigationContext','ResourceRow','mainConversationData','Wire','Tokens','return '+stripTypeScriptTypes('class NativeNavigation {'+names.map(method).join('\n')+'}'))(NavigationContext,ResourceRow,mainConversationData,Wire,Tokens);
 function row(id='source',manager='owner-b',kind='conversation'){const r=new ResourceRow(id,id,kind);r.manager=manager;r.machine='machine';r.session=id;return r;}
 function deferred(){let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};}
@@ -166,7 +166,7 @@ test('opening assistant detail restores decision authorization for its captured 
 
 test('a new owner receives a fresh stack before async hydration and merges only its own new intent',async()=>{
  class Stack { routes=[];size(){return this.routes.length;}pushPath(route){this.routes.push(route);}getAllPathName(){return this.routes.map(r=>r.name);}getParamByIndex(i){return this.routes[i]?.param;} }
- const NativeScope=new Function('Wire','NavPathStack','NavigationContext','return '+stripTypeScriptTypes('class NativeScope {'+['routeRow','restoreScope','savePath','changeSection'].map(method).join('\n')+'}'))(Wire,Stack,NavigationContext);
+ const NativeScope=new Function('Wire','NavPathStack','NavigationContext','return '+stripTypeScriptTypes('class NativeScope {'+['routeRow','syncPhonePath','restoreScope','savePath','changeSection'].map(method).join('\n')+'}'))(Wire,Stack,NavigationContext);
  const s=new NativeScope(),gate=deferred(),saved=[];s.model={section:0,scope:()=> 'B',loadView:()=>gate.promise,saveView:async(k,v)=>saved.push(JSON.parse(v)),releaseTerminal(){},sessions:[]};
  s.stack=new Stack();s.stack.pushPath({name:'conversation',param:'private-A'});s.paths=new Map();s.activeScope='A';s.restoring=0;s.navigationIntent=0;s.rowVisibility=new Map();s.routeRevision=0;s.detailModel={hideConversation(){}};s.wide=()=>false;s.ensureMainDestination=()=>{};
  const restoring=s.restoreScope();assert.equal(s.stack.size(),0);
@@ -299,4 +299,14 @@ test('split root title spacing follows the visible path and keeps child Back con
  assert.equal(shell.destinationBackHidden('resources','inbox'),false,'same-name child must keep its native Back control');
  pushed.pop();shell.wide=()=>false;
  assert.equal(shell.destinationBackHidden('resources','inbox'),false,'a single-pane first destination returns to its primary list');
+});
+
+test('a covered destination cannot replace the phone bar or bind the wrong conversation after a fast pop',()=>{
+ const {shell,pushed}=fixture();
+ const current={name:'resources',param:'inbox'};
+ pushed.push(current);shell.activeChild='current';
+ shell.syncPhonePath();assert.deepEqual(shell.phonePath,['resources']);assert.equal(shell.phoneParam,'inbox');
+ shell.routeShown('session','stale');
+ assert.equal(shell.activeChild,'current');
+ assert.deepEqual(shell.phonePath,['resources']);
 });

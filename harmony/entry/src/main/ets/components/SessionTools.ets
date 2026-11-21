@@ -1,3 +1,7 @@
+import { pasteboard } from '@kit.BasicServicesKit';
+import { i18n } from '@kit.LocalizationKit';
+import { FileFindHit, FolderCrumb, commitFilePatch, findWorkspaceFiles, indexWorkspaceFiles, workspaceAgeMinutes, joinedFilePath, parentFolder } from '../models/WorkspaceBrowser';
+import { WorkspacePatch } from './WorkspacePatch';
 import { Symbols } from '../design/Symbols';
 import { IconActions } from '../design/IconActions';
 import { Colors } from '../design/Colors';
@@ -14,7 +18,8 @@ import { FileTransferMachine, FileTransferRecord, FileTransferSetting } from '..
 import { Wire } from '../models/Wire';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Tokens } from '../design/Tokens';
-import { tr } from '../design/Strings';
+import { tr, trError } from '../design/Strings';
+import { nativeEnvironment } from '../platform/NativeEnvironment';
 import { readerLink } from '../platform/ReaderLink';
 
 const TRANSFER_LIMIT: number = 32 * 1024 * 1024;
@@ -33,6 +38,7 @@ class FilePreviewCopy {
 export struct SessionTools {
   @Require @Param model: ClientModel;
   @Param initialFile: string = '';
+  @Param initialTab: number = 0;
   @Local workspace: SessionWorkspace = new SessionWorkspace();
   @Local fileRowBindings: BoundRow<WorkspaceEntry>[] = [];
   @Local gitRowBindings: BoundRow<WorkspaceGitFile>[] = [];
@@ -42,6 +48,12 @@ export struct SessionTools {
   private rowBindingScope: string = '';
   private fileBindingScope: string = '';
   @Local pathDraft: string = '';
+  @Local editingPath: boolean = false;
+  @Local fileQuery: string = '';
+  @Local showHidden: boolean = false;
+  @Local showCommitPatch: boolean = false;
+  @Local collapseChanges: boolean = false;
+  @Local gitFilter: string = 'all';
   @Local terminalInput: string = '';
   @Local transferError: string = '';
   @Local fileOpen: boolean = false;
@@ -53,7 +65,6 @@ export struct SessionTools {
   @Local moveTarget: string = '';
   @Local moveConflictChoice: number = 0;
   @Local fileEditBusy: boolean = false;
-  @Local diffOpen: boolean = false;
   @Local pickerBusy: boolean = false;
   @Local previewBusy: boolean = false;
   @Local previewPixels: image.PixelMap | undefined = undefined;
@@ -65,6 +76,7 @@ export struct SessionTools {
   @Local terminalControlConfirmOpen: boolean = false;
   @Local gitSheetOpen: boolean = false;
   @Local gitSheetMode: string = '';
+  @Local commitFilePath: string = '';
   @Local gitDraftMessage: string = '';
   @Local gitStashMessage: string = '';
   @Local gitStashUntracked: boolean = false;
@@ -84,10 +96,12 @@ export struct SessionTools {
 
   private bindWorkspace(): void {
     this.workspace.bind(this.model);
+    this.workspace.selectTab(this.initialFile ? 0 : this.initialTab);
     this.syncRowBindings();
     this.pathDraft = this.workspace.currentPath;
     this.workspace.show();
-    this.fileOpen = false; this.fileEditSheetOpen = false; this.diffOpen = false;
+    this.fileOpen = false; this.fileEditSheetOpen = false; this.gitSheetOpen=false; this.gitSheetMode=''; this.commitFilePath='';
+    this.editingPath=false; this.fileQuery=''; this.showHidden=false; this.showCommitPatch=false; this.collapseChanges=false; this.gitFilter='all';
     this.fileActionEntry = undefined; this.fileEditMode = '';
     this.transferOpen = false;
     this.fileEditBusy = false; this.pickerBusy = false; this.previewBusy = false; this.transferError = '';
@@ -121,8 +135,8 @@ export struct SessionTools {
     if (!this.fileOpen) this.workspace.closeFile();
   }
 
-  @Monitor('diffOpen') diffSheetChanged(): void {
-    if (!this.diffOpen) this.workspace.closeGitDiff();
+  @Monitor('gitSheetOpen') gitSheetChanged(): void {
+    if (!this.gitSheetOpen) { this.workspace.closeGitDiff(); this.workspace.closeGitShow(); this.showCommitPatch=false; this.commitFilePath=''; }
   }
 
   @Monitor('workspace.entries', 'workspace.gitFiles', 'workspace.gitStashes', 'workspace.previewServers',
@@ -160,10 +174,11 @@ export struct SessionTools {
     if (error.message === 'file_read_failed') return tr('session_tools_file_read_failed');
     if (error.message === 'preview_unavailable') return tr('session_tools_preview_unavailable');
     if (error.message === 'write_unavailable' || error.message === 'pending_action') return tr('session_tools_write_unavailable');
-    return tr('failed') + ': ' + error.message;
+    return trError(error.message || 'failed');
   }
 
   private openEntry(entry: WorkspaceEntry): void {
+    if (entry.directory) { this.fileQuery=''; this.editingPath=false; }
     if (!entry.directory) this.fileOpen = true;
     this.workspace.openEntry(entry).then(() => this.pathDraft = this.workspace.currentPath)
       .catch((error: Error) => this.transferError = this.errorText(error));
@@ -247,9 +262,37 @@ export struct SessionTools {
   private openPath(): void {
     const next = this.pathDraft.trim();
     if (!next) return;
+    this.editingPath=false; this.fileQuery='';
     this.workspace.openPath(next).catch((error: Error) => this.transferError = this.errorText(error));
   }
 
+  @Computed get pathCrumbs():FolderCrumb[] { return this.workspace.crumbs(); }
+  @Computed get shownFileRows():BoundRow<WorkspaceEntry>[] {
+    return this.fileRowBindings.filter((binding:BoundRow<WorkspaceEntry>) => this.showHidden || !binding.value.name.startsWith('.'));
+  }
+  @Computed get findIndex():FileFindHit[] {
+    const names=this.workspace.findError ? this.workspace.entries.map((v:WorkspaceEntry) => v.name+(v.directory ? '/' : '')) : this.workspace.findNames;
+    return indexWorkspaceFiles(names,this.showHidden,/^[A-Za-z]:[\\/]/.test(this.workspace.currentPath) || this.workspace.currentPath.startsWith('\\\\'));
+  }
+  @Computed get findRows():FileFindHit[] { return findWorkspaceFiles(this.findIndex,this.fileQuery); }
+  private goFolder(path:string):void {
+    this.pathDraft=path; this.editingPath=false; this.fileQuery='';
+    this.workspace.openPath(path).then(() => this.pathDraft=this.workspace.currentPath).catch((error:Error) => this.transferError=this.errorText(error));
+  }
+  private folderHistory(forward:boolean):void {
+    this.editingPath=false; this.fileQuery='';
+    this.workspace.historyFolder(forward).then(() => this.pathDraft=this.workspace.currentPath).catch((error:Error) => this.transferError=this.errorText(error));
+  }
+  private findHit(hit:FileFindHit):void {
+    const path=joinedFilePath(this.workspace.currentPath,hit.relative);
+    if (hit.directory) this.goFolder(path);
+    else { this.fileOpen=true; this.workspace.openFile(path,hit.relative.slice(hit.relative.lastIndexOf('/')+1)); }
+  }
+  private editFolder():void { this.pathDraft=this.workspace.currentPath; this.editingPath=true; this.fileQuery=''; }
+  private refreshFolder():void {
+    this.workspace.loadFiles();
+    if (this.fileQuery.trim()) this.workspace.loadFileIndex(true);
+  }
   private selectedGitFile(): WorkspaceGitFile | undefined {
     return this.workspace.gitFiles.find((file: WorkspaceGitFile) => file.path === this.workspace.gitDiffPath);
   }
@@ -259,9 +302,15 @@ export struct SessionTools {
     return !!file && file.staged && file.unstaged;
   }
 
-  private openGitFile(file: WorkspaceGitFile): void {
-    this.diffOpen = true;
-    this.workspace.openGitDiff(file);
+  private openGitFile(file: WorkspaceGitFile, staged?:boolean): void {
+    this.gitSheetMode='diff'; this.gitSheetOpen=true;
+    this.workspace.openGitDiff(file,staged);
+  }
+  private inspectCommit(commit:Record<string,Object>):void {
+    const hash=Wire.text(commit,'hash');
+    if (!hash) return;
+    this.gitSheetMode='history'; this.gitSheetOpen=true; this.showCommitPatch=false; this.commitFilePath='';
+    this.workspace.showGitCommit(hash);
   }
 
   private openGitSheet(mode: string): void {
@@ -610,7 +659,10 @@ export struct SessionTools {
 
   @Builder fileMenu() {
     Menu() {
-      MenuItem({ content: tr('refresh') }).onClick(() => this.workspace.loadFiles())
+      MenuItem({content:tr('session_enter_path')}).onClick(() => this.editFolder())
+      MenuItem({content:tr('session_project_folder')}).onClick(() => this.goFolder(this.workspace.cwd))
+      MenuItem({content:tr('session_show_hidden')}).selected(this.showHidden).selectIcon(true).onClick(() => this.showHidden=!this.showHidden)
+      MenuItem({ content: tr('refresh') }).onClick(() => this.refreshFolder())
       if (this.workspace.canUploadFiles()) MenuItem({ content: tr('upload') }).enabled(!this.pickerBusy).onClick(() => this.pickUpload())
       if (this.workspace.trashUndo.length) MenuItem({ content: tr('session_tools_restore') }).enabled(this.workspace.canEditFiles())
         .onClick(() => this.restoreTrash())
@@ -670,59 +722,135 @@ export struct SessionTools {
     }
   }
 
-  @Builder fileRow(binding: BoundRow<WorkspaceEntry>) {
-    ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.name,
-      secondaryText: binding.value.directory ? tr('directory') : [binding.value.symlink ? tr('symlink') : '',
-        binding.value.ignored ? tr('ignored') : '', this.sizeText(binding.value.size)].filter((value: string) => !!value).join(' · ') }) })
+  private timeLabel(value:string):string {
+    const minute=workspaceAgeMinutes(value,Date.now());
+    if (minute===0) return tr('agent_time_just_now');
+    if (minute>0 && minute<60) return minute+tr('agent_time_minute_suffix');
+    if (minute>=60 && minute<1440) return Math.floor(minute/60)+tr('agent_time_hour_suffix');
+    if (minute>=1440 && minute<10080) return Math.floor(minute/1440)+tr('agent_time_day_suffix');
+    return this.gitDate(value);
   }
-
+  private fileSubtitle(f:WorkspaceEntry):string {
+    const link=f.symlink ? tr('symlink')+(f.linkTarget ? ' → '+f.linkTarget : '') : '';
+    return [link, f.ignored ? tr('ignored') : '',f.directory ? '' : this.sizeText(f.size),this.timeLabel(f.mtime)]
+      .filter((v:string) => !!v).join(' · ');
+  }
+  @Builder fileRow(binding:BoundRow<WorkspaceEntry>) {
+    Row({space:11}) {
+      SymbolGlyph(binding.value.directory ? Symbols.folder : Symbols.document).fontSize('21vp')
+        .fontColor([binding.value.ignored ? Colors.secondary : binding.value.directory ? Colors.link : Colors.secondary])
+        .width(26).flexShrink(0).id('session.fileRow.icon.'+binding.value.path)
+      Column({space:3}) {
+        Text(binding.value.name).fontSize(16).fontWeight(FontWeight.Medium).fontColor(binding.value.ignored ? Colors.secondary : Colors.ink)
+          .wordBreak(WordBreak.BREAK_WORD).id('session.fileRow.name.'+binding.value.path)
+        if (this.fileSubtitle(binding.value)) Text(this.fileSubtitle(binding.value))
+          .fontSize(12).fontColor(binding.value.linkBroken ? Colors.danger : Colors.secondary).wordBreak(WordBreak.BREAK_WORD)
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+      SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
+    }.width('100%').constraintSize({minHeight:46}).padding({left:13,right:13,top:8,bottom:8}).backgroundColor(Colors.surface)
+  }
+  @Builder pathMenu() {
+    Menu() {
+      ForEach(this.pathCrumbs,(crumb:FolderCrumb) => {
+        MenuItem({content:crumb.path}).selected(crumb.path===this.workspace.currentPath).selectIcon(true).onClick(() => this.goFolder(crumb.path))
+      },(crumb:FolderCrumb) => crumb.path)
+      MenuItem({content:tr('session_project_folder')}).onClick(() => this.goFolder(this.workspace.cwd))
+      MenuItem({content:tr('session_enter_path')}).onClick(() => this.editFolder())
+    }
+  }
+  @Builder folderBar() {
+    Column({space:5}) {
+      Row({space:3}) {
+        Button({type:ButtonType.Circle}) { SymbolGlyph(Symbols.collapse).fontSize('16vp').fontColor([Colors.ink]) }
+          .width(44).height(44).padding(0).backgroundColor(Colors.surface).enabled(this.workspace.folderBack.length>0)
+          .accessibilityText(tr('session_folder_back')).onClick(() => this.folderHistory(false)).id('session.files.back')
+        Button({type:ButtonType.Circle}) { SymbolGlyph(Symbols.expand).fontSize('16vp').fontColor([Colors.ink]) }
+          .width(44).height(44).padding(0).backgroundColor(Colors.surface).enabled(this.workspace.folderForward.length>0)
+          .accessibilityText(tr('session_folder_forward')).onClick(() => this.folderHistory(true)).id('session.files.forward')
+        Button({type:ButtonType.Circle}) { SymbolGlyph($r('sys.symbol.arrow_up')).fontSize('16vp').fontColor([Colors.link]).id('session.files.parent') }
+          .width(44).height(44).padding(0).backgroundColor(Colors.surface)
+          .enabled(parentFolder(this.workspace.currentPath) !== this.workspace.currentPath && !!parentFolder(this.workspace.currentPath))
+          .accessibilityText(parentFolder(this.workspace.currentPath)).onClick(() => this.goFolder(parentFolder(this.workspace.currentPath))).id('session.files.up')
+        Row({space:5}) {
+          if (this.pathCrumbs.length > 1) {
+            Text(this.pathCrumbs.slice(-3,-1).map((crumb:FolderCrumb) => crumb.title).join(' › ')+' ›')
+              .fontSize(12).maxFontScale(Tokens.navigationTextMaxScale).fontColor(Colors.secondary)
+              .constraintSize({maxWidth:'34%'}).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
+          } else SymbolGlyph(Symbols.folder).fontSize('16vp').fontColor([Colors.link])
+          Text(this.pathCrumbs[this.pathCrumbs.length-1]?.title || this.workspace.currentPath || tr('directory')).fontSize(16).maxFontScale(Tokens.navigationTextMaxScale)
+            .fontWeight(FontWeight.Medium).fontColor(Colors.ink).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1)
+          SymbolGlyph(Symbols.down).fontSize('11vp').fontColor([Colors.secondary])
+        }.layoutWeight(1).constraintSize({minHeight:44}).padding({left:9,right:8}).backgroundColor(Colors.surface).borderRadius(9)
+          .accessibilityGroup(true).accessibilityText(this.workspace.currentPath).bindMenu(this.pathMenu).id('session.files.path')
+        Button({type:ButtonType.Circle}) { Image(Symbols.more).width(17).height(17).fillColor(Colors.ink) }
+          .width(44).height(44).padding(0).backgroundColor(Colors.surface).bindMenu(this.fileMenu).accessibilityText(tr('more')).id('session.files.more')
+          .bindSheet($$this.transferOpen,this.fileTransferForm(),{title:{title:tr('file_transfer_title')},height:SheetSize.LARGE,showClose:true})
+      }.width('100%')
+      if (this.editingPath) Row({space:5}) {
+        TextInput({text:this.pathDraft,placeholder:tr('path')}).layoutWeight(1).height(Math.max(44,20*nativeEnvironment.fontScale+12)).fontSize(15)
+          .onChange((v:string) => this.pathDraft=v).onSubmit(() => this.openPath()).id('session.files.path_input')
+        Button(tr('open'),{buttonStyle:ButtonStyleMode.TEXTUAL}).constraintSize({minHeight:44}).maxFontScale(Tokens.navigationTextMaxScale)
+          .onClick(() => this.openPath()).id('session.files.open')
+      }.width('100%')
+      if (!this.editingPath) Row() {
+        Search({value:this.fileQuery,placeholder:tr('session_find_files')})
+          .height(Math.max(44,20*nativeEnvironment.fontScale+12)).textFont({size:16}).placeholderFont({size:16}).searchIcon({size:'18vp'}).layoutWeight(1)
+          .onChange((v:string) => { this.fileQuery=v; if (v.trim()) this.workspace.loadFileIndex(); }).id('session.files.query')
+      }.width('100%').id('session.files.find')
+      if (this.fileQuery.trim()) Row({space:6}) {
+        Text(tr('session_find_here')+' · '+(this.pathCrumbs[this.pathCrumbs.length-1]?.title || this.workspace.currentPath))
+          .fontSize(12).fontColor(Colors.secondary).layoutWeight(1).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
+        if (!this.workspace.findBusy) Text((this.findRows.length>=100 ? '≥' : '')+this.findRows.length).fontSize(12).fontColor(Colors.secondary)
+      }.width('100%').padding({left:4,right:4})
+    }.padding({left:12,right:12,top:7,bottom:4}).width('100%')
+  }
   @Builder fileView() {
     Column() {
-      Row({ space: Tokens.gap }) {
-        Button({ buttonStyle: ButtonStyleMode.TEXTUAL }) {
-          Image($r('sys.media.ohos_ic_public_arrow_up')).width(Tokens.title).height(Tokens.title).fillColor($r('sys.color.icon_primary'))
-        }.enabled(this.workspace.currentPath !== this.workspace.cwd).accessibilityText(tr('session_tools_parent_folder'))
-          .onClick(() => { this.workspace.openParent(); this.pathDraft = this.workspace.currentPath; }).width(Tokens.touch).height(Tokens.touch).id('session.files.parent')
-        TextInput({ text: this.pathDraft, placeholder: tr('path') }).onChange((value: string) => this.pathDraft = value)
-          .layoutWeight(1).constraintSize({ minHeight: Tokens.touch }).id('session.files.path')
-        Button({ buttonStyle: ButtonStyleMode.TEXTUAL }) {
-          Image($r('sys.media.ohos_ic_public_arrow_right')).width(Tokens.title).height(Tokens.title).fillColor($r('sys.color.icon_primary'))
-        }.onClick(() => this.openPath()).accessibilityText(tr('open')).width(Tokens.touch).height(Tokens.touch).id('session.files.open')
-        Button({ buttonStyle: ButtonStyleMode.TEXTUAL }) {
-          Image($r('sys.media.ohos_ic_public_more')).width(Tokens.title).height(Tokens.title).fillColor($r('sys.color.icon_primary'))
-        }.bindMenu(this.fileMenu).accessibilityText(tr('more')).width(Tokens.touch).height(Tokens.touch).id('session.files.more')
-      }.padding({ left: Tokens.inset, right: Tokens.inset, top: Tokens.inset, bottom: Tokens.gap })
-
+      this.folderBar()
       if (this.workspace.trashUndo.length && this.workspace.canEditFiles()) Row({ space: Tokens.gap }) {
         Text(tr('session_tools_trashed_count').replace('{count}', String(this.workspace.trashUndo.length))).fontSize(Tokens.meta).layoutWeight(1)
         Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('session_tools_restore')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('session_tools_restore', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('session_tools_restore')).bindTips(tr('session_tools_restore')).onClick(() => this.restoreTrash())
       }.padding({ left: Tokens.inset, right: Tokens.inset, bottom: Tokens.gap })
 
       if (this.transferError) Text(this.transferError).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
-      if (this.workspace.fileError) Text(this.workspace.fileError).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
+      if (this.workspace.fileError) Row({space:8}) {
+        Text(tr(this.workspace.fileError === 'upstream_error' ? 'phone_directory_read_failed' : this.workspace.fileError)).fontSize(14).fontColor(Colors.secondary).layoutWeight(1)
+        Button(tr('retry'), {buttonStyle:ButtonStyleMode.TEXTUAL}).fontSize(14).fontColor(Colors.link).onClick(() => this.openPath())
+      }.padding(12).width('100%')
       if (['pending', 'unknown'].includes(this.workspace.fileWriteState)) Text(tr('session_tools_write_' + this.workspace.fileWriteState))
         .fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
       if (this.pickerBusy) LoadingProgress().height(Tokens.touch).width(Tokens.touch)
-      if (this.workspace.fileBusy) LoadingProgress().height(Tokens.touch).width(Tokens.touch)
+      if (this.workspace.fileBusy || this.fileQuery.trim() && this.workspace.findBusy) LoadingProgress().height(28).width(28)
       List() {
-        ForEach(this.fileRowBindings, (binding: BoundRow<WorkspaceEntry>) => {
+        if (this.fileQuery.trim()) {
+          if (this.workspace.findError) ListItem() { Text(tr('session_find_unavailable')).fontSize(13).fontColor(Colors.secondary).padding(10) }
+          ForEach(this.findRows,(hit:FileFindHit) => {
+            ListItem() {
+              Row({space:10}) {
+                SymbolGlyph(hit.directory ? Symbols.folder : Symbols.document).fontSize('18vp').fontColor([hit.directory ? Colors.link : Colors.secondary])
+                Text(hit.relative).fontSize(15).fontColor(Colors.ink).layoutWeight(1).wordBreak(WordBreak.BREAK_WORD)
+                SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
+              }.width('100%').padding(12).backgroundColor(Colors.surface)
+            }.onClick(() => this.findHit(hit)).id('session.find.'+hit.relative)
+          },(hit:FileFindHit) => hit.relative)
+          if (!this.workspace.findBusy && !this.findRows.length) ListItem() { Text(tr('no_results')).fontSize(14).fontColor(Colors.secondary).padding(14) }
+          if (this.workspace.findTruncated) ListItem() { Text(tr('session_tools_first_entries')).fontSize(13).padding(10) }
+        } else {
+        ForEach(this.shownFileRows, (binding: BoundRow<WorkspaceEntry>) => {
           ListItem() { this.fileRow(binding) }.onClick(() => this.openEntry(binding.value))
             .bindContextMenu(this.fileEntryMenu(binding), ResponseType.LongPress).id('session.files.' + binding.value.path)
         }, (binding: BoundRow<WorkspaceEntry>) => binding.key)
-        if (!this.workspace.entries.length && !this.workspace.fileBusy && !this.workspace.fileError)
-          ListItem() { Text(tr('empty')).padding(Tokens.page) }
+        if (!this.shownFileRows.length && !this.workspace.fileBusy && !this.workspace.fileError) ListItem() { Text(tr('empty')).fontSize(15).fontColor(Colors.secondary).padding(14) }
         if (this.workspace.hasMoreEntries) ListItem() { Text(tr('session_tools_first_entries')).padding(Tokens.inset) }
-      }.width('100%').layoutWeight(1)
-    }.width('100%').height('100%')
-      .bindSheet($$this.fileOpen, this.fileViewer(), {
-        title: { title: this.workspace.selectedFileName || tr('file') }, height: SheetSize.LARGE, showClose: true
-      })
+        }
+      }.divider({strokeWidth:0.5,startMargin:46,color:Colors.divider}).width('100%').layoutWeight(1).padding({left:12,right:12})
+        .bindSheet($$this.fileOpen,this.fileViewer(),{title:{title:this.workspace.selectedFileName || tr('file')},height:SheetSize.LARGE,showClose:true})
+    }.width('100%').height('100%').backgroundColor(Colors.grouped)
+
       .bindSheet($$this.fileEditSheetOpen, this.fileEditForm(), {
         title: { title: tr(this.fileEditMode === 'rename' ? 'session_tools_rename' : 'session_tools_move') }, height: SheetSize.MEDIUM, showClose: true
       })
-      .bindSheet($$this.transferOpen, this.fileTransferForm(), {
-        title: { title: tr('file_transfer_title') }, height: SheetSize.LARGE, showClose: true
-      })
+
   }
 
   private transferSetting(source: boolean): FileTransferSetting {
@@ -846,7 +974,7 @@ export struct SessionTools {
       Text(this.workspace.selectedFile + ' · ' + this.sizeText(this.workspace.selectedFileSize) +
         (this.workspace.selectedFileMime ? ' · ' + this.workspace.selectedFileMime : ''))
         .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).maxLines(2)
-      if (this.workspace.fileError) Text(this.workspace.fileError).fontColor($r('app.color.persona_danger'))
+      if (this.workspace.fileError) Text(trError(this.workspace.fileError)).fontColor($r('app.color.persona_danger'))
       if (this.transferError) Text(this.transferError).fontColor($r('app.color.persona_danger'))
       if (this.workspace.fileReadBusy) LoadingProgress().layoutWeight(1).width(Tokens.touch).height(Tokens.touch)
       else if (this.workspace.selectedFileIsText) {
@@ -880,7 +1008,7 @@ export struct SessionTools {
       }
       if (['pending', 'unknown'].includes(this.workspace.fileWriteState)) Text(tr('session_tools_write_' + this.workspace.fileWriteState))
         .fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
-      if (this.workspace.fileWriteError) Text(this.workspace.fileWriteError).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
+      if (this.workspace.fileWriteError) Text(trError(this.workspace.fileWriteError)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
       Row({ space: Tokens.gap }) {
         Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('cancel')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('cancel', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('cancel')).bindTips(tr('cancel')).onClick(() => this.fileEditSheetOpen = false)
         Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('continue')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('continue', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('continue')).bindTips(tr('continue'))
@@ -891,82 +1019,212 @@ export struct SessionTools {
     }.padding(Tokens.page).width('100%')
   }
 
-  @Builder gitView() {
-    Column() {
-      Row({ space: Tokens.gap }) {
-        Text(tr('git')).fontSize(Tokens.title).layoutWeight(1)
-        Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('refresh')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('refresh', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('refresh')).bindTips(tr('refresh')).onClick(() => this.workspace.loadGit())
-        Button({ type: ButtonType.Circle }) { Image($r('sys.media.ohos_ic_public_more')).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.link) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('more')).bindTips(tr('more')).bindMenu(this.gitMenu)
-      }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.gap })
-      if (this.workspace.gitError) Text(this.workspace.gitError).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
-      if (this.workspace.gitBusy) LoadingProgress().height(Tokens.touch).width(Tokens.touch)
-      if (Object.keys(this.workspace.gitStatus).length > 0 && !this.workspace.gitBusy) {
-        if (!Wire.bool(this.workspace.gitStatus, 'is_repo')) {
-          Column({ space: Tokens.gap }) { Text(tr('session_tools_not_repository')).fontSize(Tokens.body); Text(this.workspace.cwd).fontSize(Tokens.meta) }
-            .alignItems(HorizontalAlign.Start).padding(Tokens.page).width('100%')
-        } else {
-          List() {
-            ListItem() {
-              Column({ space: Tokens.gap }) {
-                Text(Wire.text(this.workspace.gitStatus, 'branch', tr('branch'))).fontSize(Tokens.title)
-                Text(Wire.text(this.workspace.gitStatus, 'upstream', tr('session_tools_no_upstream'))).fontSize(Tokens.meta)
-                  .fontColor($r('sys.color.font_secondary'))
-                Row({ space: Tokens.gap }) {
-                  if (Wire.number(this.workspace.gitStatus, 'ahead') > 0) Text('↑ ' + String(Wire.number(this.workspace.gitStatus, 'ahead')))
-                    .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
-                  if (Wire.number(this.workspace.gitStatus, 'behind') > 0) Text('↓ ' + String(Wire.number(this.workspace.gitStatus, 'behind')))
-                    .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
-                  if (Wire.number(this.workspace.gitStatus, 'ahead') === 0 && Wire.number(this.workspace.gitStatus, 'behind') === 0 && Wire.text(this.workspace.gitStatus, 'upstream')) Text(tr('session_tools_synced'))
-                    .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
-                }
-              }.alignItems(HorizontalAlign.Start).padding(Tokens.page).width('100%')
-            }
-            ListItem() { Text(tr('session_tools_changes') + ' · ' + String(this.workspace.gitFiles.length)).fontSize(Tokens.body).padding(Tokens.inset) }
-            ForEach(this.gitRowBindings, (binding: BoundRow<WorkspaceGitFile>) => {
-              ListItem() {
-                Row({ space: Tokens.gap }) {
-                  Text(binding.value.mark).fontSize(Tokens.body).fontWeight(FontWeight.Bold).width(24).textAlign(TextAlign.Center)
-                  Column({ space: Tokens.fine }) {
-                    Text(binding.value.path).fontSize(Tokens.body).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
-                    Row({ space: Tokens.gap }) {
-                      if (binding.value.originalPath) Text('← ' + binding.value.originalPath).fontSize(Tokens.meta)
-                        .fontColor($r('sys.color.font_secondary'))
-                      if (binding.value.binary) Text(tr('session_tools_binary_file')).fontSize(Tokens.meta)
-                        .fontColor($r('sys.color.font_secondary'))
-                      else if (binding.value.added + binding.value.deleted > 0) Text('+' + String(binding.value.added) + '  −' + String(binding.value.deleted)).fontSize(Tokens.meta)
-                        .fontColor($r('sys.color.font_secondary'))
-                    }
-                  }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-                  Text('›').fontSize(Tokens.title).fontColor($r('sys.color.font_secondary'))
-                }.height(Tokens.touch + Tokens.inset).padding({ left: Tokens.inset, right: Tokens.inset }).width('100%')
-              }.onClick(() => this.openGitFile(binding.value))
-                .bindContextMenu(this.gitFileMenu(binding), ResponseType.LongPress).id('session.git.' + binding.value.path)
-            }, (binding: BoundRow<WorkspaceGitFile>) => binding.key)
-            if (!this.workspace.gitFiles.length) ListItem() { Text(tr('session_tools_clean')).padding(Tokens.page) }
-            if (this.workspace.gitStashes.length) ListItem() { Text(tr('session_tools_stashes')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).padding(Tokens.inset) }
-            ForEach(this.stashRowBindings, (binding: BoundRow<Record<string, Object>>) => {
-              ListItem() {
-                Row({ space: Tokens.gap }) {
-                  Text('stash@{' + String(Wire.number(binding.value, 'index')) + '}').fontSize(Tokens.meta).fontFamily('monospace')
-                  Text(Wire.text(binding.value, 'message')).fontSize(Tokens.meta).layoutWeight(1).maxLines(2)
-                }.height(Tokens.touch).padding({ left: Tokens.inset, right: Tokens.inset }).width('100%')
-              }.bindContextMenu(this.gitStashMenu(binding), ResponseType.LongPress)
-                .id('session.git.stash.' + Wire.text(binding.value, 'oid'))
-            }, (binding: BoundRow<Record<string, Object>>) => binding.key)
-          }.width('100%').layoutWeight(1)
-        }
-      } else if (!this.workspace.gitBusy && !this.workspace.gitError) {
-        Text(tr('loading')).padding(Tokens.page)
+  @Computed get visibleGitRows():BoundRow<WorkspaceGitFile>[] {
+    return this.gitRowBindings.filter((binding:BoundRow<WorkspaceGitFile>) => this.gitFilter==='all' ||
+      (this.gitFilter==='staged' ? binding.value.staged : this.gitFilter==='untracked' ? binding.value.untracked : binding.value.unstaged || binding.value.untracked));
+  }
+  private filterKeys():string[] {
+    return this.gitFilter==='untracked' || this.workspace.gitFiles.some((f:WorkspaceGitFile) => f.untracked) ?
+      ['all','unstaged','staged','untracked'] : ['all','unstaged','staged'];
+  }
+  private filterCount(filter:string):number {
+    return filter==='all' ? this.workspace.gitFiles.length : this.workspace.gitFiles.filter((f:WorkspaceGitFile) =>
+      filter==='staged' ? f.staged : filter==='untracked' ? f.untracked : f.unstaged || f.untracked).length;
+  }
+  private fileInk(file:WorkspaceGitFile):ResourceColor {
+    return file.mark==='!' || file.mark==='D' ? Colors.danger : file.untracked || file.mark==='A' ? Colors.positive : Colors.working;
+  }
+  private leaf(path:string):string { return path.split(/[\\/]/).pop() || path; }
+  private gitDate(value:string):string {
+    const date=new Date(value);
+    return Number.isFinite(date.getTime()) && date.getTime()>0 ? date.toLocaleDateString(this.model.language==='default' ? i18n.getSystemLanguage() : this.model.language) : '';
+  }
+  @Builder gitBranchCard() {
+    Column({space:5}) {
+      Row({space:9}) {
+        SymbolGlyph($r('sys.symbol.code')).fontSize('21vp').fontColor([Colors.link])
+        Text(Wire.text(this.workspace.gitStatus,'branch') || tr('session_git_detached')).fontSize(20).fontWeight(FontWeight.Bold)
+          .fontColor(Colors.ink).layoutWeight(1).maxLines(2)
+        if (this.workspace.canWriteGit()) Button({type:ButtonType.Circle}) { SymbolGlyph(Symbols.down).fontSize('13vp').fontColor([Colors.link]) }
+          .width(44).height(44).padding(0).backgroundColor(Colors.control).accessibilityText(tr('session_tools_switch_branch'))
+          .onClick(() => this.openGitSheet('branch')).id('session.git.branch_picker')
+        Button({type:ButtonType.Circle}) { Image(Symbols.more).width(17).height(17).fillColor(Colors.ink) }
+          .width(44).height(44).padding(0).backgroundColor(Colors.control).bindMenu(this.gitMenu).accessibilityText(tr('more')).id('session.git.menu')
+      }.width('100%')
+      Text([Wire.text(this.workspace.gitStatus,'upstream') || tr('session_tools_no_upstream'),
+        Wire.bool(this.workspace.gitStatus,'gone') ? tr('session_git_remote_gone') :
+        Wire.number(this.workspace.gitStatus,'ahead')>0 || Wire.number(this.workspace.gitStatus,'behind')>0 ?
+          [Wire.number(this.workspace.gitStatus,'ahead')>0 ? '↑ '+Wire.number(this.workspace.gitStatus,'ahead') : '',
+            Wire.number(this.workspace.gitStatus,'behind')>0 ? '↓ '+Wire.number(this.workspace.gitStatus,'behind') : ''].filter((v:string) => !!v).join('  ') :
+          Wire.text(this.workspace.gitStatus,'upstream') ? tr('session_tools_synced') : ''].filter((v:string) => !!v).join(' · '))
+        .fontSize(14).fontColor(Colors.secondary).maxLines(2)
+      Text(Wire.text(this.workspace.gitStatus,'root') || this.workspace.cwd).fontSize(12).fontColor(Colors.secondary)
+        .fontFamily('monospace').maxLines(3).copyOption(CopyOptions.LocalDevice)
+    }.alignItems(HorizontalAlign.Start).padding(14).width('100%').backgroundColor(Colors.surface).borderRadius(14).id('session.git.summary')
+  }
+  @Builder changesHeader() {
+    Row({space:6}) {
+      Text(tr('session_tools_changes')).fontSize(17).fontWeight(FontWeight.Bold).fontColor(Colors.ink)
+      Text(String(this.workspace.gitFiles.length)).fontSize(14).fontColor(Colors.secondary)
+      Blank().layoutWeight(1)
+      if (this.workspace.gitFiles.length) {
+        Text('+'+this.workspace.gitFiles.reduce((n:number,f:WorkspaceGitFile) => n+f.added,0)).fontSize(13).fontColor(Colors.positive)
+        Text('−'+this.workspace.gitFiles.reduce((n:number,f:WorkspaceGitFile) => n+f.deleted,0)).fontSize(13).fontColor(Colors.danger)
+        SymbolGlyph(this.collapseChanges ? Symbols.expand : Symbols.down).fontSize('12vp').fontColor([Colors.secondary])
       }
-    }.width('100%').height('100%')
-      .bindSheet($$this.diffOpen, this.diffViewer(), {
-        title: { title: this.workspace.gitDiffPath.split('/').pop() || tr('git') }, height: SheetSize.LARGE, showClose: true
-      })
-      .bindSheet($$this.gitSheetOpen, this.gitSheet(), {
-        title: { title: tr(this.gitSheetMode === 'commit' ? 'session_tools_commit' : this.gitSheetMode === 'branch' ? 'session_tools_switch_branch' : 'session_tools_stash_save') }, height: SheetSize.MEDIUM, showClose: true
-      })
+    }.width('100%').constraintSize({minHeight:40}).padding({left:5,right:6}).onClick(() => this.collapseChanges=!this.collapseChanges)
+      .id('session.git.changes_header')
+  }
+  @Builder gitFilters() {
+    Flex({wrap:FlexWrap.Wrap,space:{main:LengthMetrics.vp(3),cross:LengthMetrics.vp(3)}}) {
+      ForEach(this.filterKeys(),(key:string) => {
+        Button((key==='all' ? tr('all') : tr(key==='untracked' ? 'session_git_untracked' : 'session_tools_'+key))+' '+this.filterCount(key),{type:ButtonType.Normal})
+          .height(44).flexGrow(1).padding({left:7,right:7}).fontSize(13).maxFontScale(Tokens.navigationTextMaxScale)
+          .fontColor(this.gitFilter===key ? Colors.ink : Colors.secondary)
+          .backgroundColor(this.gitFilter===key ? Colors.surface : Color.Transparent).borderRadius(8)
+          .accessibilitySelected(this.gitFilter===key).onClick(() => this.gitFilter=key).id('session.git.filter.'+key)
+      },(key:string) => key)
+    }.width('100%').padding(3).borderRadius(11).backgroundColor(Colors.control)
+  }
+  @Builder gitFileRow(binding:BoundRow<WorkspaceGitFile>) {
+    Row({space:8}) {
+      if (this.workspace.canWriteGit()) Button({type:ButtonType.Normal}) {
+        Stack() {
+          if (binding.value.staged) Text(binding.value.unstaged ? '−' : '✓').fontWeight(FontWeight.Bold).fontSize('13vp').fontColor(Colors.onAction)
+        }.width(19).height(19).border({width:1.2,color:binding.value.staged ? Colors.link : Colors.secondary,radius:5})
+          .backgroundColor(binding.value.staged ? Colors.link : Color.Transparent)
+      }.width(44).height(44).padding(0).backgroundColor(Color.Transparent)
+        .accessibilityText(tr(binding.value.staged && !binding.value.unstaged ? 'session_tools_unstage' : 'session_tools_stage')+' '+binding.value.path)
+        .onClick(() => this.confirmGitWrite(binding.value.staged && !binding.value.unstaged ? 'unstage' : 'stage',binding.value.path))
+        .id('session.git.toggle.'+binding.value.path)
+      Row({space:8}) {
+        Text(binding.value.mark).width(23).fontSize('13vp').textAlign(TextAlign.Center).fontWeight(FontWeight.Bold)
+          .fontColor(this.fileInk(binding.value)).padding({top:3,bottom:3}).backgroundColor(Colors.control).borderRadius(5)
+        Column({space:3}) {
+          Text(this.leaf(binding.value.path)).fontSize(16).fontWeight(FontWeight.Medium).fontColor(Colors.ink).wordBreak(WordBreak.BREAK_WORD)
+          if (binding.value.untracked || binding.value.mark==='!') Text(tr(binding.value.untracked ? 'session_git_untracked_file' : 'session_git_change_conflict'))
+            .fontSize(12).fontColor(this.fileInk(binding.value))
+          if (binding.value.path.includes('/') || binding.value.originalPath) Text(binding.value.originalPath ?
+            binding.value.originalPath+' → '+binding.value.path : binding.value.path.slice(0,binding.value.path.lastIndexOf('/')))
+            .fontSize(12).fontColor(Colors.secondary).wordBreak(WordBreak.BREAK_WORD)
+          if (nativeEnvironment.fontScale >= 1.5 && (binding.value.binary || binding.value.added || binding.value.deleted)) {
+            if (binding.value.binary) Text(tr('session_tools_binary_file')).fontSize(11).fontColor(Colors.secondary)
+            else Flex({wrap:FlexWrap.Wrap,space:{main:LengthMetrics.vp(5)}}) { this.lineCounts(binding.value.added,binding.value.deleted) }.width('100%')
+          }
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        if (nativeEnvironment.fontScale < 1.5) {
+          if (binding.value.binary) Text(tr('session_tools_binary_file')).fontSize(11).fontColor(Colors.secondary)
+          else if (binding.value.added || binding.value.deleted) Column({space:1}) {
+            this.lineCounts(binding.value.added,binding.value.deleted)
+          }.alignItems(HorizontalAlign.End)
+        }
+        SymbolGlyph(Symbols.expand).fontSize('11vp').fontColor([Colors.secondary])
+      }.layoutWeight(1).constraintSize({minHeight:48}).onClick(() => this.openGitFile(binding.value,this.gitFilter==='all' ? undefined : this.gitFilter==='staged'))
+        .bindContextMenu(this.gitFileMenu(binding),ResponseType.LongPress).id('session.git.'+binding.value.path)
+    }.width('100%').padding({left:11,right:12,top:3,bottom:3}).backgroundColor(Colors.surface)
+  }
+  @Builder commitRow(c:Record<string,Object>) {
+    Row({space:10}) {
+      Column({space:4}) {
+        Text(Wire.text(c,'subject') || Wire.text(c,'short')).fontSize(16).fontWeight(FontWeight.Medium).fontColor(Colors.ink).maxLines(2)
+        Text([Wire.text(c,'short') || Wire.text(c,'hash').slice(0,8),Wire.text(c,'author'),this.timeLabel(Wire.text(c,'date'))]
+          .filter((v:string) => !!v).join(' · ')).fontSize(12).fontColor(Colors.secondary).maxLines(2)
+        if (Wire.text(c,'refs')) Text(Wire.text(c,'refs').replace(/HEAD -> /g,'')).fontSize(12).fontColor(Colors.link).maxLines(2)
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+      SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
+    }.width('100%').padding({left:13,right:12,top:9,bottom:9}).backgroundColor(Colors.surface)
+      .onClick(() => this.inspectCommit(c)).id('session.git.commit.'+Wire.text(c,'hash'))
+  }
+  private gitModalTitle():string {
+    if (this.gitSheetMode==='diff') return this.leaf(this.workspace.gitDiffPath) || tr('git');
+    if (this.gitSheetMode==='history') {
+      if (this.commitFilePath) return this.leaf(this.commitFilePath);
+      const summary = this.workspace.gitCommits.find((c: Record<string,Object>) => Wire.text(c,'hash') === this.workspace.gitCommitHash);
+      return Wire.text(Wire.object(this.workspace.gitShow,'commit'),'short') ||
+        (summary ? Wire.text(summary,'short') : '') || this.workspace.gitCommitHash.slice(0,8) || tr('session_git_history');
+    }
+    return tr(this.gitSheetMode==='commit' ? 'session_tools_commit' : this.gitSheetMode==='branch' ? 'session_tools_switch_branch' : 'session_tools_stash_save');
+  }
+  @Builder gitModal() {
+    if (this.gitSheetMode==='diff') this.diffViewer()
+    else if (this.gitSheetMode==='history') this.commitViewer()
+    else this.gitSheet()
+  }
+  @Builder stagedCommitBar() {
+    Row({space:8}) {
+      SymbolGlyph($r('sys.symbol.checkmark_square_fill')).fontSize('18vp').fontColor([this.filterCount('staged') ? Colors.positive : Colors.secondary])
+      Column({space:1}) {
+        Text(tr('session_tools_staged')+' '+String(this.filterCount('staged'))).fontSize(14).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+        Text(tr('session_tools_changes')+' '+String(this.workspace.gitFiles.length)).fontSize(12).fontColor(Colors.secondary)
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+      Button(tr('session_tools_commit')).fontSize(15).maxFontScale(Tokens.navigationTextMaxScale).padding({left:14,right:14}).constraintSize({minHeight:44})
+        .enabled(this.workspace.canWriteGit() && !!Wire.text(this.workspace.gitStatus,'branch') && this.filterCount('staged') > 0)
+        .backgroundColor(Colors.action).fontColor(Colors.onAction).onClick(() => this.openGitSheet('commit')).id('session.git.commit.new')
+    }.width('100%').padding({left:12,right:9,top:6,bottom:6}).backgroundColor(Colors.surface)
+      .border({width:0.5,color:Colors.divider,radius:14}).borderRadius(14).id('session.git.staged_summary')
   }
 
+  @Builder gitView() {
+    Column() {
+      if (this.workspace.gitError) Row() {
+        Text(trError(this.workspace.gitError)).fontSize(14).fontColor(Colors.danger).layoutWeight(1)
+        Button(tr('retry'),{buttonStyle:ButtonStyleMode.TEXTUAL}).onClick(() => this.workspace.loadGit())
+      }.width('100%').padding(10)
+      if (this.workspace.gitWriteError) Text(trError(this.workspace.gitWriteError)).fontSize(14).fontColor(Colors.danger).padding(8)
+      if (this.workspace.gitWriteState==='pending' || this.workspace.gitWriteState==='unknown')
+        Text(tr('session_tools_write_'+this.workspace.gitWriteState)).fontSize(14).fontColor(Colors.danger).padding(8)
+      if (Object.keys(this.workspace.gitStatus).length && Wire.bool(this.workspace.gitStatus,'is_repo')) {
+        List({space:3}) {
+          ListItem() { this.gitBranchCard() }
+          ListItem() { this.changesHeader() }
+          if (!this.collapseChanges) {
+            if (this.workspace.gitFiles.length) ListItem() { this.gitFilters() }
+            ForEach(this.visibleGitRows,(binding:BoundRow<WorkspaceGitFile>) => {
+              ListItem() { this.gitFileRow(binding) }
+            },(binding:BoundRow<WorkspaceGitFile>) => binding.key)
+            if (!this.visibleGitRows.length) ListItem() {
+              Row({space:7}) {
+                SymbolGlyph(this.workspace.gitFiles.length ? Symbols.filter : Symbols.check).fontSize('16vp').fontColor([this.workspace.gitFiles.length ? Colors.secondary : Colors.positive])
+                Text(tr(!this.workspace.gitFiles.length ? 'session_tools_clean' : 'no_results')).fontSize(15).fontColor(Colors.secondary)
+              }.width('100%').padding(14).borderRadius(12).backgroundColor(Colors.surface)
+            }
+          }
+          if (this.workspace.gitStashes.length) ListItem() { Text(tr('session_tools_stashes')).fontSize(17).fontWeight(FontWeight.Bold).padding(10) }
+          ForEach(this.stashRowBindings,(binding:BoundRow<Record<string,Object>>) => {
+            ListItem() {
+              Row({space:8}) {
+                Text('stash@{'+String(Wire.number(binding.value,'index'))+'}').fontSize(13).fontFamily('monospace')
+                Text(Wire.text(binding.value,'message')).fontSize(14).layoutWeight(1).maxLines(2)
+              }.width('100%').padding(12).backgroundColor(Colors.surface)
+            }.bindContextMenu(this.gitStashMenu(binding),ResponseType.LongPress).id('session.git.stash.'+Wire.text(binding.value,'oid'))
+          },(binding:BoundRow<Record<string,Object>>) => binding.key)
+          if (this.workspace.gitCommits.length) ListItem() {
+            Text(tr('session_git_history')).fontSize(17).fontWeight(FontWeight.Bold).fontColor(Colors.ink)
+              .padding({left:5,top:14,bottom:7}).width('100%').id('session.git.history')
+          }
+          ForEach(this.workspace.gitCommits,(commit:Record<string,Object>) => {
+            ListItem() { this.commitRow(commit) }
+          },(commit:Record<string,Object>) => Wire.text(commit,'hash')+'|'+Wire.text(commit,'refs'))
+          if (this.workspace.gitMoreCommits) ListItem() {
+            Button(tr(this.workspace.gitHistoryError ? 'retry' : 'session_git_earlier'),{buttonStyle:ButtonStyleMode.TEXTUAL})
+              .height(44).width('100%').fontColor(Colors.link).enabled(!this.workspace.gitHistoryBusy)
+              .onClick(() => this.workspace.olderGitCommits()).id('session.git.older')
+          }
+          if (this.workspace.gitHistoryBusy) ListItem() { LoadingProgress().width(25).height(25) }
+          if (this.workspace.gitHistoryError) ListItem() { Text(tr('session_git_history_error')).fontSize(14).fontColor(Colors.danger).padding(9) }
+        }.width('100%').layoutWeight(1).padding({left:12,right:12,top:6,bottom:12})
+        if (this.workspace.gitFiles.length > 0 && this.workspace.canWriteGit()) Row() { this.stagedCommitBar() }
+          .width('100%').padding({left:12,right:12,top:2,bottom:8})
+      } else if (Object.keys(this.workspace.gitStatus).length) {
+        Column({space:6}) {
+          Text(tr('session_tools_not_repository')).fontSize(17).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+          Text(this.workspace.cwd).fontFamily('monospace').fontSize(13).fontColor(Colors.secondary).copyOption(CopyOptions.LocalDevice)
+          Button(tr('refresh'),{buttonStyle:ButtonStyleMode.TEXTUAL}).onClick(() => this.workspace.loadGit())
+        }.width('100%').alignItems(HorizontalAlign.Start).padding(15)
+      } else if (!this.workspace.gitError) LoadingProgress().width(28).height(28).margin(16)
+    }.width('100%').height('100%').backgroundColor(Colors.grouped)
+      .bindSheet($$this.gitSheetOpen,this.gitModal(),{title:{title:this.gitModalTitle()},height:this.gitSheetMode==='diff' || this.gitSheetMode==='history' ? SheetSize.LARGE : SheetSize.MEDIUM,showClose:true})
+  }
   private branchOptions(): SelectOption[] { return this.workspace.gitBranches.map((branch: WorkspaceBranch): SelectOption => ({ value: this.branchLabel(branch) })); }
   @Builder gitSheet() {
     Column({ space: Tokens.gap }) {
@@ -995,30 +1253,142 @@ export struct SessionTools {
       }
       if (this.workspace.gitWriteState === 'pending' || this.workspace.gitWriteState === 'unknown')
         Text(tr('session_tools_write_' + this.workspace.gitWriteState)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
-      if (this.workspace.gitWriteError) Text(this.workspace.gitWriteError).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
+      if (this.workspace.gitWriteError) Text(trError(this.workspace.gitWriteError)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
       if (this.workspace.gitWriteBusy) LoadingProgress().height(Tokens.touch).width(Tokens.touch)
       Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('cancel')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('cancel', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('cancel')).bindTips(tr('cancel')).onClick(() => this.gitSheetOpen = false)
     }.alignItems(HorizontalAlign.Start).padding(Tokens.page).width('100%')
   }
 
+  private async copyPatch(value:string):Promise<void> {
+    if (!value) return;
+    const target=this.workspace.currentTarget(), revision=this.workspace.currentRevision();
+    try {
+      await pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN,value));
+    } catch (_) {
+      if (this.workspace.isCurrent() && this.workspace.currentTarget()===target && this.workspace.currentRevision()===revision)
+        this.getUIContext().getPromptAction().showToast({message:tr('failed')});
+    }
+  }
   @Builder diffViewer() {
-    Column({ space: Tokens.gap }) {
-      Text(this.workspace.gitDiffPath).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
-      if (this.gitDiffHasBoth()) Select([{ value: tr('session_tools_unstaged') }, { value: tr('session_tools_staged') }])
-        .attributeModifier(SelectStyles.inline).selected(this.workspace.gitDiffStaged ? 1 : 0)
-        .value(tr(this.workspace.gitDiffStaged ? 'session_tools_staged' : 'session_tools_unstaged'))
-        .onSelect((index: number) => { this.workspace.gitDiffStaged = index === 1; this.workspace.loadGitDiff(); })
-      if (this.workspace.gitDiffError) Text(this.workspace.gitDiffError).fontColor($r('app.color.persona_danger'))
-      if (this.workspace.gitDiffBusy) LoadingProgress().layoutWeight(1).width(Tokens.touch).height(Tokens.touch)
-      else if (this.workspace.gitDiff) Scroll() {
-        Text(this.workspace.gitDiff).fontFamily('monospace').fontSize(Tokens.meta).copyOption(CopyOptions.LocalDevice)
-          .width('100%').textAlign(TextAlign.Start)
-      }.layoutWeight(1).width('100%')
-      else if (!this.workspace.gitDiffError) Text(tr('session_tools_no_diff')).fontSize(Tokens.meta).layoutWeight(1)
-      if (this.workspace.gitDiffTruncated) Text(tr('session_tools_truncated')).fontSize(Tokens.meta)
-    }.padding(Tokens.page).width('100%').height('100%')
+    Column({space:7}) {
+      Row({space:8}) {
+        Text(this.workspace.gitDiffPath).fontSize(14).fontColor(Colors.secondary).layoutWeight(1).maxLines(3).copyOption(CopyOptions.LocalDevice)
+        if (this.workspace.gitDiff) Button({type:ButtonType.Circle}) { SymbolGlyph(IconActions.symbol('copy')).fontSize('16vp').fontColor([Colors.link]) }
+          .width(44).height(44).padding(0).backgroundColor(Colors.control).accessibilityText(tr('copy'))
+          .onClick(() => this.copyPatch(this.workspace.gitDiff)).id('session.git.diff.copy')
+      }.width('100%')
+      if (this.gitDiffHasBoth()) Row({space:3}) {
+        ForEach(['session_tools_unstaged','session_tools_staged'],(key:string,i:number) => {
+          Button(tr(key),{type:ButtonType.Normal}).layoutWeight(1).height(44).fontSize(14).maxFontScale(Tokens.navigationTextMaxScale).padding(0)
+            .fontColor(this.workspace.gitDiffStaged===(i===1) ? Colors.ink : Colors.secondary)
+            .backgroundColor(this.workspace.gitDiffStaged===(i===1) ? Colors.surface : Color.Transparent).borderRadius(8)
+            .onClick(() => { if (this.workspace.gitDiffStaged!==(i===1)) { this.workspace.gitDiffStaged=i===1; this.workspace.loadGitDiff(); } })
+            .id(i ? 'session.git.diff.staged' : 'session.git.diff.unstaged')
+        },(key:string) => key)
+      }.width('100%').padding(3).borderRadius(10).backgroundColor(Colors.control)
+      if (this.workspace.gitDiffError) Row() {
+        Text(trError(this.workspace.gitDiffError)).fontSize(14).fontColor(Colors.danger).layoutWeight(1)
+        Button(tr('retry'),{buttonStyle:ButtonStyleMode.TEXTUAL}).onClick(() => this.workspace.loadGitDiff())
+      }.width('100%')
+      if (this.workspace.gitDiffBusy) LoadingProgress().height(28).width(28)
+      else if (this.workspace.gitDiff) WorkspacePatch({patch:this.workspace.gitDiff, fileOnly:true}).layoutWeight(1)
+      else if (!this.workspace.gitDiffError) Text(tr('session_tools_no_diff')).fontSize(15).fontColor(Colors.secondary)
+      if (this.workspace.gitDiffTruncated) Text(tr('session_tools_truncated')).fontSize(13).fontColor(Colors.secondary)
+    }.padding({left:12,right:12,top:8,bottom:16}).width('100%').height('100%').alignItems(HorizontalAlign.Start)
   }
 
+  @Computed get selectedCommitPatch():string {
+    return commitFilePatch(Wire.text(this.workspace.gitShow, 'diff'), this.commitFilePath);
+  }
+
+  @Builder commitInfo(commit: Record<string,Object>) {
+    Column({space:5}) {
+      Text(Wire.text(commit,'subject')).fontSize(18).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+      if (Wire.text(commit,'body')) Text(Wire.text(commit,'body')).fontSize(15).fontColor(Colors.secondary)
+      Text([Wire.text(commit,'author'),this.gitDate(Wire.text(commit,'date'))].filter((v:string) => !!v).join(' · '))
+        .fontSize(13).fontColor(Colors.secondary)
+      Button({type:ButtonType.Normal}) {
+        Row({space:7}) {
+          SymbolGlyph(IconActions.symbol('copy')).fontSize('14vp').fontColor([Colors.link])
+          Text(this.workspace.gitCommitHash).fontSize(12).fontFamily('monospace').fontColor(Colors.link)
+            .maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).ellipsisMode(EllipsisMode.CENTER).layoutWeight(1)
+        }.width('100%')
+      }.width('100%').height(Math.max(44,16*nativeEnvironment.fontScale+10)).padding(0).backgroundColor(Color.Transparent)
+        .accessibilityText(tr('copy')+' '+this.workspace.gitCommitHash).onClick(() => this.copyPatch(this.workspace.gitCommitHash)).id('session.git.commit.copy')
+    }.width('100%').padding(13).alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface).borderRadius(14)
+  }
+
+  @Builder lineCounts(added:number,deleted:number) {
+    Text('+'+added).fontSize(12).fontColor(Colors.positive)
+    Text('−'+deleted).fontSize(12).fontColor(Colors.danger)
+  }
+
+  @Builder commitFile(file: Record<string,Object>) {
+    Row({space:8}) {
+      SymbolGlyph(Symbols.document).fontSize('16vp').fontColor([Colors.secondary]).width(20).flexShrink(0)
+        .id('session.commitRow.icon.'+Wire.text(file,'path'))
+      Column({space:2}) {
+        Text(this.leaf(Wire.text(file,'path'))).fontSize(16).fontColor(Colors.ink).wordBreak(WordBreak.BREAK_WORD)
+          .id('session.commitRow.name.'+Wire.text(file,'path'))
+        if (Wire.text(file,'path').includes('/')) Text(Wire.text(file,'path').split('/').slice(0,-1).join('/'))
+          .fontSize(12).fontColor(Colors.secondary).wordBreak(WordBreak.BREAK_WORD)
+        if (nativeEnvironment.fontScale >= 1.5) Flex({wrap:FlexWrap.Wrap,space:{main:LengthMetrics.vp(5)}}) {
+          this.lineCounts(Wire.number(file,'added'),Wire.number(file,'deleted'))
+        }.width('100%')
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+      if (nativeEnvironment.fontScale < 1.5) {
+        this.lineCounts(Wire.number(file,'added'),Wire.number(file,'deleted'))
+      }
+      SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
+    }.width('100%').constraintSize({minHeight:46}).padding({left:12,right:12,top:5,bottom:5})
+      .backgroundColor(Colors.surface).accessibilityGroup(true).accessibilityText(Wire.text(file,'path'))
+      .onClick(() => this.commitFilePath=Wire.text(file,'path')).id('session.git.commit.file.'+Wire.text(file,'path'))
+  }
+
+  @Builder commitViewer() {
+    Column({space:9}) {
+      if (this.workspace.gitShowBusy) LoadingProgress().height(28).width(28)
+      if (this.workspace.gitShowError) Row() {
+        Text(tr('session_git_history_error')).fontSize(14).fontColor(Colors.danger).layoutWeight(1)
+        Button(tr('retry'),{buttonStyle:ButtonStyleMode.TEXTUAL}).onClick(() => this.workspace.showGitCommit(this.workspace.gitCommitHash))
+      }.width('100%')
+      if (Object.keys(this.workspace.gitShow).length) {
+        if (this.commitFilePath || this.showCommitPatch) {
+          Row({space:7}) {
+            Button({type:ButtonType.Circle}) { SymbolGlyph(Symbols.collapse).fontSize('17vp').fontColor([Colors.link]) }
+              .width(44).height(44).padding(0).backgroundColor(Colors.surface).accessibilityText(tr('back'))
+              .onClick(() => { this.commitFilePath=''; this.showCommitPatch=false; }).id('session.git.commit.back')
+            Text(this.commitFilePath || tr('session_git_patch')).fontSize(14).fontColor(Colors.secondary).layoutWeight(1)
+            if (this.selectedCommitPatch || !this.commitFilePath && Wire.text(this.workspace.gitShow,'diff')) {
+              Button({type:ButtonType.Circle}) { SymbolGlyph(IconActions.symbol('copy')).fontSize('16vp').fontColor([Colors.link]) }
+                .width(44).height(44).padding(0).backgroundColor(Colors.surface).accessibilityText(tr('copy'))
+                .onClick(() => this.copyPatch(this.commitFilePath ? this.selectedCommitPatch : Wire.text(this.workspace.gitShow,'diff'))).id('session.git.commit.patch.copy')
+            }
+          }.width('100%')
+          if (this.commitFilePath && !this.selectedCommitPatch) {
+            Text(tr(Wire.bool(this.workspace.gitShow,'truncated') ? 'session_tools_truncated' : 'session_tools_no_diff')).fontColor(Colors.secondary)
+          } else WorkspacePatch({patch:this.commitFilePath ? this.selectedCommitPatch : Wire.text(this.workspace.gitShow,'diff'), fileOnly:!!this.commitFilePath}).layoutWeight(1)
+        } else {
+          List({space:0}) {
+            ListItem() { this.commitInfo(Wire.object(this.workspace.gitShow,'commit')) }
+            ListItem() {
+              Text(tr('files')+' · '+String(Wire.rows(this.workspace.gitShow,'files').length))
+                .fontSize(14).fontColor(Colors.secondary).padding({left:9,top:18,bottom:7})
+            }
+            ForEach(Wire.rows(this.workspace.gitShow,'files'),(file:Record<string,Object>) => {
+              ListItem() { this.commitFile(file) }
+            },(file:Record<string,Object>) => Wire.text(file,'path'))
+            if (Wire.text(this.workspace.gitShow,'diff')) ListItem() {
+              Button(tr('session_git_patch'),{buttonStyle:ButtonStyleMode.TEXTUAL}).fontColor(Colors.link)
+                .onClick(() => this.showCommitPatch=true).id('session.git.commit.toggle_patch')
+            }
+          }.width('100%').layoutWeight(1)
+        }
+        if (Wire.bool(this.workspace.gitShow,'truncated') && (!this.commitFilePath || this.selectedCommitPatch))
+          Text(tr('session_tools_truncated')).fontSize(13).fontColor(Colors.secondary)
+      }
+    }.width('100%').height('100%').padding(14).alignItems(HorizontalAlign.Start).id('session.git.commit_details')
+  }
   @Builder terminalView() {
     Column({ space: Tokens.gap }) {
       Row({ space: Tokens.gap }) {
@@ -1029,7 +1399,7 @@ export struct SessionTools {
         else Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('control')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('control', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('control')).bindTips(tr('control')).enabled(this.workspace.canControlTerminal()).onClick(() => this.confirmTerminalControl())
       }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.gap })
       Text(this.controlDescription()).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).padding({ left: Tokens.page, right: Tokens.page })
-      if (this.workspace.terminalError) Text(this.workspace.terminalError).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
+      if (this.workspace.terminalError) Text(trError(this.workspace.terminalError)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
       Scroll() {
         Text(this.workspace.terminalText || tr('session_tools_terminal_waiting'))
           .fontFamily('monospace').fontSize(Tokens.meta).width('100%').textAlign(TextAlign.Start).copyOption(CopyOptions.LocalDevice)
@@ -1059,7 +1429,7 @@ export struct SessionTools {
       }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.gap })
       Text(tr(this.workspace.screenControlRequested ? 'session_tools_terminal_screen_control_active' : 'session_tools_terminal_screen_view_only'))
         .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).padding({ left: Tokens.page, right: Tokens.page })
-      if (this.workspace.screenError) Text(tr(this.workspace.screenError)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
+      if (this.workspace.screenError) Text(trError(this.workspace.screenError)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
       if (this.transferError) Text(this.transferError).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
       Scroll() {
         Text(this.workspace.screenText || tr('session_tools_terminal_waiting'))
@@ -1109,7 +1479,7 @@ export struct SessionTools {
           Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('refresh')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('refresh', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('refresh')).bindTips(tr('refresh')).onClick(() => this.previewAction('reload'))
         }
       }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.gap })
-      if (this.workspace.previewError) Text(tr(this.workspace.previewError)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
+      if (this.workspace.previewError) Text(trError(this.workspace.previewError)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
       if (this.transferError) Text(this.transferError).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
       if (this.workspace.previewState === 'starting' || this.workspace.previewState === 'opening' || this.workspace.previewState === 'connecting') LoadingProgress()
         .height(Tokens.touch).width(Tokens.touch)
@@ -1143,7 +1513,7 @@ export struct SessionTools {
   private sendTerminalScreenKey(key: string): void {
     const revision = this.workspace.screenRevision;
     this.workspace.sendScreenKeys([key], '', revision).then((ok: boolean) => {
-      if (!ok && this.workspace.screenError) this.transferError = tr(this.workspace.screenError);
+      if (!ok && this.workspace.screenError) this.transferError = trError(this.workspace.screenError);
     });
   }
 
@@ -1234,15 +1604,23 @@ export struct SessionTools {
     return (size / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
   }
 
+  @Builder workspaceTab(label:string, position:number) {
+    Text(tr(label)).fontSize(14).maxFontScale(Tokens.navigationTextMaxScale).maxLines(1)
+      .fontWeight(this.workspace.tab === position ? FontWeight.Bold : FontWeight.Normal)
+      .fontColor(this.workspace.tab === position ? Colors.ink : Colors.secondary).padding({left:12,right:12,top:7,bottom:7})
+      .backgroundColor(this.workspace.tab === position ? Colors.surface : Color.Transparent).borderRadius(15)
+      .accessibilityText(tr(label)).accessibilitySelected(this.workspace.tab === position).id('session.tab.' + label)
+  }
   build() {
     Tabs({ index: this.workspace.tab }) {
-      TabContent() { this.fileView() }.tabBar(tr('files'))
-      TabContent() { this.gitView() }.tabBar(tr('git'))
-      TabContent() { this.terminalView() }.tabBar(tr('terminal'))
-      TabContent() { this.terminalScreenView() }.tabBar(tr('session_tools_terminal_screen'))
-      TabContent() { this.previewView() }.tabBar(tr('preview'))
-    }.barMode(BarMode.Scrollable).barHeight('auto').onChange((index: number) => {
+      TabContent() { this.fileView() }.tabBar(this.workspaceTab('files', 0))
+      TabContent() { this.gitView() }.tabBar(this.workspaceTab('git', 1))
+      TabContent() { this.terminalView() }.tabBar(this.workspaceTab('terminal', 2))
+      TabContent() { this.terminalScreenView() }.tabBar(this.workspaceTab('session_tools_terminal_screen', 3))
+      TabContent() { this.previewView() }.tabBar(this.workspaceTab('preview', 4))
+    }.barMode(BarMode.Scrollable).barBackgroundColor(Colors.grouped).barHeight(nativeEnvironment.fontScale >= 1.5 ? 50 : 44).onChange((index: number) => {
       this.workspace.selectTab(index);
+      if (index===0 && this.fileQuery.trim()) this.workspace.loadFileIndex();
       this.pathDraft = this.workspace.currentPath;
     }).width('100%').height('100%')
   }

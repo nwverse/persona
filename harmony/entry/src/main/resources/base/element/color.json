@@ -34,19 +34,19 @@
     },
     {
       "name": "persona_grouped",
-      "value": "#F5F6F8"
+      "value": "#F2F2F7"
     },
     {
       "name": "persona_ink",
-      "value": "#1B1D21"
+      "value": "#19191D"
     },
     {
       "name": "persona_secondary",
-      "value": "#5D646D"
+      "value": "#62636C"
     },
     {
       "name": "persona_control",
-      "value": "#E9ECF1"
+      "value": "#E7E7ED"
     },
     {
       "name": "persona_selection",
@@ -74,7 +74,7 @@
     },
     {
       "name": "persona_divider",
-      "value": "#E2E5EB"
+      "value": "#D9D9DF"
     },
     {
       "name": "persona_subtle",

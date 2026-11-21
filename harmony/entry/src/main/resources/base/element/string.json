@@ -4739,6 +4739,1218 @@
     {
       "name": "agent_delivery_waiting",
       "value": "Waiting for {computer}."
+    },
+    {
+      "name": "project_search",
+      "value": "Search projects or worktrees"
+    },
+    {
+      "name": "project_all_machines",
+      "value": "All computers"
+    },
+    {
+      "name": "project_worktrees",
+      "value": "worktrees"
+    },
+    {
+      "name": "project_agent_count",
+      "value": "{count} agents"
+    },
+    {
+      "name": "project_sessions",
+      "value": "sessions"
+    },
+    {
+      "name": "project_empty",
+      "value": "No projects on the connected computers yet."
+    },
+    {
+      "name": "project_no_sessions",
+      "value": "No Agents in this worktree yet."
+    },
+    {
+      "name": "project_catalog_unavailable",
+      "value": "The project list could not be loaded."
+    },
+    {
+      "name": "project_catalog_partial",
+      "value": "Some computers could not be refreshed."
+    },
+    {
+      "name": "project_gone",
+      "value": "This project or worktree is no longer in the catalog."
+    },
+    {
+      "name": "project_worktree",
+      "value": "Worktree"
+    },
+    {
+      "name": "project_start_here",
+      "value": "Start in this worktree"
+    },
+    {
+      "name": "welcome_morning",
+      "value": "Good morning"
+    },
+    {
+      "name": "welcome_afternoon",
+      "value": "Good afternoon"
+    },
+    {
+      "name": "welcome_evening",
+      "value": "Good evening"
+    },
+    {
+      "name": "project_free_directory",
+      "value": "Enter a directory"
+    },
+    {
+      "name": "project_count",
+      "value": "projects"
+    },
+    {
+      "name": "project_view_worktree",
+      "value": "View worktree"
+    },
+    {
+      "name": "project_start_unavailable",
+      "value": "The selected computer is unavailable. Refresh the project to try again."
+    },
+    {
+      "name": "tree_create",
+      "value": "New Worktree"
+    },
+    {
+      "name": "tree_rename_current_name",
+      "value": "Name on the host"
+    },
+    {
+      "name": "tree_rename_requested_name",
+      "value": "Requested name"
+    },
+    {
+      "name": "tree_rename_original_name",
+      "value": "Name shown before renaming"
+    },
+    {
+      "name": "tree_rename_keep_current",
+      "value": "Keep current name and clear this request"
+    },
+    {
+      "name": "tree_rename_keep_explanation",
+      "value": "Keeping the current name clears this request on this device. You can then enter a new name."
+    },
+    {
+      "name": "tree_rename_check_again",
+      "value": "The name or workspace changed. Check the current name again."
+    },
+    {
+      "name": "tree_rename",
+      "value": "Rename Worktree"
+    },
+    {
+      "name": "tree_cleanup",
+      "value": "Remove Worktree"
+    },
+    {
+      "name": "tree_remove",
+      "value": "Remove"
+    },
+    {
+      "name": "tree_source",
+      "value": "Source worktree"
+    },
+    {
+      "name": "tree_actions",
+      "value": "Worktree actions"
+    },
+    {
+      "name": "tree_location",
+      "value": "Location"
+    },
+    {
+      "name": "tree_checkout",
+      "value": "Checkout"
+    },
+    {
+      "name": "tree_branch",
+      "value": "Branch"
+    },
+    {
+      "name": "tree_base_branch",
+      "value": "Current branch"
+    },
+    {
+      "name": "tree_branch_hint",
+      "value": "New branch name"
+    },
+    {
+      "name": "tree_path_hint",
+      "value": "Checkout directory"
+    },
+    {
+      "name": "tree_automatic",
+      "value": "Use an automatic name"
+    },
+    {
+      "name": "tree_display_name",
+      "value": "Worktree name"
+    },
+    {
+      "name": "tree_cleanup_preview",
+      "value": "Review removal"
+    },
+    {
+      "name": "tree_dirty_files",
+      "value": "Changed files"
+    },
+    {
+      "name": "tree_force",
+      "value": "Discard uncommitted changes"
+    },
+    {
+      "name": "tree_delete_branch",
+      "value": "Also delete the Git branch"
+    },
+    {
+      "name": "tree_check_result",
+      "value": "Check removal status"
+    },
+    {
+      "name": "tree_created",
+      "value": "Worktree created"
+    },
+    {
+      "name": "tree_renamed",
+      "value": "Worktree renamed"
+    },
+    {
+      "name": "tree_cleaned",
+      "value": "Worktree removed"
+    },
+    {
+      "name": "tree_cleaned_branch",
+      "value": "Worktree removed. Check the remaining branch."
+    },
+    {
+      "name": "tree_preview_changed",
+      "value": "The cleanup preview is out of date. Refresh it before confirming."
+    },
+    {
+      "name": "tree_changed_files",
+      "value": "Review the uncommitted changes before removal."
+    },
+    {
+      "name": "tree_main_protected",
+      "value": "The main checkout must be kept."
+    },
+    {
+      "name": "tree_repo_unavailable",
+      "value": "The host could not identify the repository."
+    },
+    {
+      "name": "phone_settings_search",
+      "value": "Search settings"
+    },
+    {
+      "name": "phone_settings_assistant",
+      "value": "Current assistant"
+    },
+    {
+      "name": "phone_settings_device",
+      "value": "This device"
+    },
+    {
+      "name": "phone_settings_hub",
+      "value": "Hub and runtime"
+    },
+    {
+      "name": "phone_machines",
+      "value": "Machines"
+    },
+    {
+      "name": "phone_machine_manage",
+      "value": "Manage computers"
+    },
+    {
+      "name": "phone_machine_detail",
+      "value": "Machine details"
+    },
+    {
+      "name": "phone_cores",
+      "value": "cores"
+    },
+    {
+      "name": "phone_ram",
+      "value": "Memory"
+    },
+    {
+      "name": "phone_other_agents",
+      "value": "other"
+    },
+    {
+      "name": "phone_today_tokens",
+      "value": "Today’s tokens"
+    },
+    {
+      "name": "phone_record_search",
+      "value": "Search recordings"
+    },
+    {
+      "name": "phone_record_start",
+      "value": "Record audio"
+    },
+    {
+      "name": "phone_configure_path",
+      "value": "Workspace and launcher"
+    },
+    {
+      "name": "phone_launcher_default",
+      "value": "Machine default"
+    },
+    {
+      "name": "phone_connect_hub",
+      "value": "Connect to a Hub"
+    },
+    {
+      "name": "phone_local_demo",
+      "value": "Explore local demo"
+    },
+    {
+      "name": "phone_welcome_intro",
+      "value": "Your conversations, agents and workspaces in one place."
+    },
+    {
+      "name": "phone_scheduled",
+      "value": "Scheduled"
+    },
+    {
+      "name": "phone_history",
+      "value": "Run history"
+    },
+    {
+      "name": "phone_no_schedules",
+      "value": "No scheduled tasks yet"
+    },
+    {
+      "name": "health_default_manager_unavailable",
+      "value": "Connect to your Hub’s default assistant to add a health report."
+    },
+    {
+      "name": "phone_attention",
+      "value": "Needs attention"
+    },
+    {
+      "name": "phone_network",
+      "value": "Network"
+    },
+    {
+      "name": "phone_rate",
+      "value": "Now"
+    },
+    {
+      "name": "phone_hit_rate",
+      "value": "Cache hits"
+    },
+    {
+      "name": "phone_total",
+      "value": "Total"
+    },
+    {
+      "name": "phone_preset",
+      "value": "Agent preset"
+    },
+    {
+      "name": "phone_default_preset",
+      "value": "Custom"
+    },
+    {
+      "name": "phone_read_only_recording",
+      "value": "No recordings yet"
+    },
+    {
+      "name": "phone_directory_read_failed",
+      "value": "The computer could not read this directory. Check the path or try again."
+    },
+    {
+      "name": "flow_all_chats",
+      "value": "All chats"
+    },
+    {
+      "name": "flow_search_chats",
+      "value": "Search conversations"
+    },
+    {
+      "name": "flow_search_local",
+      "value": "Showing matches available on this phone"
+    },
+    {
+      "name": "flow_search_partial",
+      "value": "Some conversations are still being indexed"
+    },
+    {
+      "name": "flow_first_message",
+      "value": "First message"
+    },
+    {
+      "name": "flow_pick_machine",
+      "value": "Choose a computer"
+    },
+    {
+      "name": "flow_pick_tree",
+      "value": "Choose a workspace"
+    },
+    {
+      "name": "flow_choose_folder",
+      "value": "Choose by folder"
+    },
+    {
+      "name": "flow_folder_search",
+      "value": "Enter a path"
+    },
+    {
+      "name": "flow_use_folder",
+      "value": "Use this folder"
+    },
+    {
+      "name": "flow_folder_empty",
+      "value": "No subfolders"
+    },
+    {
+      "name": "flow_use_default",
+      "value": "Use default"
+    },
+    {
+      "name": "flow_model",
+      "value": "Model"
+    },
+    {
+      "name": "flow_effort",
+      "value": "Reasoning effort"
+    },
+    {
+      "name": "flow_start",
+      "value": "Start Agent"
+    },
+    {
+      "name": "flow_recent_setups",
+      "value": "Recent setups"
+    },
+    {
+      "name": "flow_workspace_search",
+      "value": "Search workspaces or branches"
+    },
+    {
+      "name": "flow_start_options",
+      "value": "Launch options"
+    },
+    {
+      "name": "flow_draft_optional",
+      "value": "Optional first message"
+    },
+    {
+      "name": "flow_models_offline",
+      "value": "Model choices are unavailable"
+    },
+    {
+      "name": "project_primary",
+      "value": "Primary"
+    },
+    {
+      "name": "project_children",
+      "value": "child worktrees"
+    },
+    {
+      "name": "project_detached",
+      "value": "Detached HEAD"
+    },
+    {
+      "name": "project_copy_path",
+      "value": "Copy directory path"
+    },
+    {
+      "name": "project_open",
+      "value": "Open project"
+    },
+    {
+      "name": "project_show_all",
+      "value": "Show all"
+    },
+    {
+      "name": "project_idle_repositories",
+      "value": "Idle repositories"
+    },
+    {
+      "name": "machine_status_online",
+      "value": "Online"
+    },
+    {
+      "name": "machine_online_ratio",
+      "value": "{online}/{total} online"
+    },
+    {
+      "name": "machine_running_high",
+      "value": "{count} running high"
+    },
+    {
+      "name": "machine_waiting_agents",
+      "value": "{count} agents need you"
+    },
+    {
+      "name": "machine_high_cpu",
+      "value": "High CPU"
+    },
+    {
+      "name": "machine_low_memory",
+      "value": "Low memory"
+    },
+    {
+      "name": "machine_full_disk",
+      "value": "Disk almost full"
+    },
+    {
+      "name": "machine_high_load",
+      "value": "High load"
+    },
+    {
+      "name": "machine_load",
+      "value": "Load"
+    },
+    {
+      "name": "machine_monitor",
+      "value": "Monitoring"
+    },
+    {
+      "name": "machine_hour",
+      "value": "1 hour"
+    },
+    {
+      "name": "machine_six_hours",
+      "value": "6 hours"
+    },
+    {
+      "name": "machine_day",
+      "value": "24 hours"
+    },
+    {
+      "name": "machine_no_samples",
+      "value": "No samples in this period"
+    },
+    {
+      "name": "machine_monitor_unavailable",
+      "value": "Monitoring is unavailable"
+    },
+    {
+      "name": "machine_history_hint",
+      "value": "Touch a chart to inspect a reading."
+    },
+    {
+      "name": "machine_now",
+      "value": "Latest"
+    },
+    {
+      "name": "machine_disk",
+      "value": "Disk"
+    },
+    {
+      "name": "machine_per_minute",
+      "value": "{value}/min"
+    },
+    {
+      "name": "machine_all_agents",
+      "value": "Show all {count}"
+    },
+    {
+      "name": "machine_no_agents",
+      "value": "No agents running"
+    },
+    {
+      "name": "machine_offline_agents",
+      "value": "Agents appear when this computer connects."
+    },
+    {
+      "name": "machine_pending",
+      "value": "Waiting for you"
+    },
+    {
+      "name": "machine_never",
+      "value": "Not connected yet"
+    },
+    {
+      "name": "machine_update_needed",
+      "value": "Node update available"
+    },
+    {
+      "name": "machine_problem_service",
+      "value": "Persona Link’s background service is stopped. Reinstall it from Persona Link on this computer."
+    },
+    {
+      "name": "machine_problem_link",
+      "value": "Persona Link is offline, or this computer is asleep."
+    },
+    {
+      "name": "machine_problem_never",
+      "value": "Pair this computer using its pairing link."
+    },
+    {
+      "name": "machine_problem_version",
+      "value": "Reinstall Persona Link on this computer to update the node."
+    },
+    {
+      "name": "machine_problem_manager",
+      "value": "Its assistant “{name}” is offline."
+    },
+    {
+      "name": "machine_problem_timeout",
+      "value": "Connection timed out. Check its network or wake the computer."
+    },
+    {
+      "name": "machine_os",
+      "value": "Operating system"
+    },
+    {
+      "name": "machine_arch",
+      "value": "Architecture"
+    },
+    {
+      "name": "machine_hostname",
+      "value": "Hostname"
+    },
+    {
+      "name": "machine_cpu_cores",
+      "value": "{count} cores"
+    },
+    {
+      "name": "machine_time_unavailable",
+      "value": "The computer is no longer in this Hub."
+    },
+    {
+      "name": "settings_agent_options_title",
+      "value": "Agent"
+    },
+    {
+      "name": "settings_language_options_title",
+      "value": "App language"
+    },
+    {
+      "name": "settings_this_assistant",
+      "value": "Current Assistant"
+    },
+    {
+      "name": "settings_alias_models",
+      "value": "provider model api key"
+    },
+    {
+      "name": "settings_alias_appearance",
+      "value": "display dark mode fonts theme"
+    },
+    {
+      "name": "settings_alias_language",
+      "value": "language locale english chinese japanese"
+    },
+    {
+      "name": "settings_alias_machines",
+      "value": "computer mac server host"
+    },
+    {
+      "name": "settings_alias_agents",
+      "value": "agents launcher automation tools engine"
+    },
+    {
+      "name": "machine_today",
+      "value": "Today"
+    },
+    {
+      "name": "flow_navigation",
+      "value": "Phone navigation"
+    },
+    {
+      "name": "flow_separate",
+      "value": "Separate"
+    },
+    {
+      "name": "flow_merged",
+      "value": "Merged sidebar"
+    },
+    {
+      "name": "phone_chat_thoughts",
+      "value": "Thoughts"
+    },
+    {
+      "name": "project_copy_name",
+      "value": "Copy worktree name"
+    },
+    {
+      "name": "project_open_parent",
+      "value": "Open parent worktree"
+    },
+    {
+      "name": "flow_inbox_progress",
+      "value": "In Progress"
+    },
+    {
+      "name": "flow_inbox_fyi",
+      "value": "FYI"
+    },
+    {
+      "name": "flow_inbox_collapsed",
+      "value": "Collapsed"
+    },
+    {
+      "name": "flow_inbox_section_empty",
+      "value": "No items in this section"
+    },
+    {
+      "name": "flow_inbox_older_done",
+      "value": "Load earlier completed items"
+    },
+    {
+      "name": "flow_todo_due",
+      "value": "Due date"
+    },
+    {
+      "name": "flow_todo_no_due",
+      "value": "No due date"
+    },
+    {
+      "name": "flow_todo_today",
+      "value": "Today"
+    },
+    {
+      "name": "flow_todo_week",
+      "value": "This week"
+    },
+    {
+      "name": "flow_todo_month",
+      "value": "This month"
+    },
+    {
+      "name": "flow_todo_order",
+      "value": "Sort by"
+    },
+    {
+      "name": "flow_todo_recent",
+      "value": "Recent activity"
+    },
+    {
+      "name": "flow_todo_priority",
+      "value": "Priority"
+    },
+    {
+      "name": "flow_todo_overdue",
+      "value": "Overdue"
+    },
+    {
+      "name": "knowledge_kind_topics",
+      "value": "Topics"
+    },
+    {
+      "name": "phone_all_meetings",
+      "value": "All Meetings"
+    },
+    {
+      "name": "phone_record_local",
+      "value": "Still on This Device"
+    },
+    {
+      "name": "phone_record_audio_local",
+      "value": "Audio stays on this device. Confirm transcription to sync its text to Knowledge."
+    },
+    {
+      "name": "phone_record_play",
+      "value": "Play recording"
+    },
+    {
+      "name": "phone_record_play_failed",
+      "value": "Couldn’t play this recording"
+    },
+    {
+      "name": "session_find_files",
+      "value": "Find files and folders"
+    },
+    {
+      "name": "session_find_here",
+      "value": "Search in this folder"
+    },
+    {
+      "name": "session_find_unavailable",
+      "value": "Only this folder is available for search"
+    },
+    {
+      "name": "session_folder_back",
+      "value": "Previous folder"
+    },
+    {
+      "name": "session_folder_forward",
+      "value": "Next folder"
+    },
+    {
+      "name": "session_enter_path",
+      "value": "Go to path"
+    },
+    {
+      "name": "session_project_folder",
+      "value": "Session folder"
+    },
+    {
+      "name": "session_show_hidden",
+      "value": "Show hidden files"
+    },
+    {
+      "name": "session_git_history",
+      "value": "Commits"
+    },
+    {
+      "name": "session_git_earlier",
+      "value": "Load earlier commits"
+    },
+    {
+      "name": "session_git_history_error",
+      "value": "Could not load the commit information"
+    },
+    {
+      "name": "session_git_patch",
+      "value": "Show patch"
+    },
+    {
+      "name": "session_git_remote_gone",
+      "value": "Upstream branch deleted"
+    },
+    {
+      "name": "session_git_detached",
+      "value": "Detached HEAD"
+    },
+    {
+      "name": "session_git_changed_paths",
+      "value": "Changed files"
+    },
+    {
+      "name": "session_git_untracked",
+      "value": "Untracked"
+    },
+    {
+      "name": "session_git_change_conflict",
+      "value": "Conflicts"
+    },
+    {
+      "name": "session_git_untracked_file",
+      "value": "Untracked file"
+    },
+    {
+      "name": "phone_agents_current_hub",
+      "value": "Current Hub only"
+    },
+    {
+      "name": "flow_todo_hub",
+      "value": "By Hub status"
+    },
+    {
+      "name": "flow_todo_can_wait",
+      "value": "Can wait"
+    },
+    {
+      "name": "flow_todo_someday",
+      "value": "Someday"
+    },
+    {
+      "name": "flow_todo_plain",
+      "value": "To do"
+    },
+    {
+      "name": "flow_todo_suggested",
+      "value": "Suggested"
+    },
+    {
+      "name": "phone_chat_intro_main",
+      "value": "Use your main chat to ask about projects, messages and the work your agents are doing."
+    },
+    {
+      "name": "phone_chat_intro_side",
+      "value": "Choose a topic for this chat or ask your own question."
+    },
+    {
+      "name": "phone_chat_help_skills",
+      "value": "With a computer and model connected, Persona can follow work, organize your inbox and tasks, and pick up a conversation where you left off."
+    },
+    {
+      "name": "phone_chat_help_model",
+      "value": "Configure a model provider in Settings or sign in to a supported agent on a connected computer, then return here to chat."
+    },
+    {
+      "name": "phone_chat_phone_read",
+      "value": "This question may need data from your phone. You’ll be asked for permission when needed."
+    },
+    {
+      "name": "phone_chat_ask_agenda",
+      "value": "What’s on my calendar today?"
+    },
+    {
+      "name": "phone_chat_ask_mail",
+      "value": "Which emails need my reply?"
+    },
+    {
+      "name": "phone_chat_ask_agents",
+      "value": "What are my agents working on?"
+    },
+    {
+      "name": "phone_chat_ask_lark",
+      "value": "Which Lark messages matter today?"
+    },
+    {
+      "name": "mail_compose",
+      "value": "New email"
+    },
+    {
+      "name": "session_tools_replace_confirm",
+      "value": "Replace the existing item?"
+    },
+    {
+      "name": "session_tools_file_edit_confirm",
+      "value": "Apply this change?"
+    },
+    {
+      "name": "session_tools_rename",
+      "value": "Rename"
+    },
+    {
+      "name": "session_tools_terminal_screen_control_active",
+      "value": "Terminal control enabled"
+    },
+    {
+      "name": "session_tools_terminal_screen_view_only",
+      "value": "View only"
+    },
+    {
+      "name": "upstream_error",
+      "value": "The connected service could not complete the request."
+    },
+    {
+      "name": "storage_unavailable",
+      "value": "Local storage is unavailable."
+    },
+    {
+      "name": "receipt_storage_failed",
+      "value": "The result could not be saved on this device."
+    },
+    {
+      "name": "scope_retired",
+      "value": "The connection changed. Reopen this page to continue."
+    },
+    {
+      "name": "invalid",
+      "value": "The service could not accept this request."
+    },
+    {
+      "name": "unauthorized",
+      "value": "Sign in again to continue."
+    },
+    {
+      "name": "forbidden",
+      "value": "You do not have permission to perform this operation."
+    },
+    {
+      "name": "not_found",
+      "value": "The requested item could not be found."
+    },
+    {
+      "name": "method_not_allowed",
+      "value": "This operation is unavailable on the connected service."
+    },
+    {
+      "name": "conflict",
+      "value": "The item changed. Refresh to see its current state."
+    },
+    {
+      "name": "node_offline",
+      "value": "The selected computer is offline."
+    },
+    {
+      "name": "internal",
+      "value": "The service could not complete the operation."
+    },
+    {
+      "name": "http_error",
+      "value": "The service returned an error."
+    },
+    {
+      "name": "request_failed",
+      "value": "The request could not be completed."
+    },
+    {
+      "name": "transport_failed",
+      "value": "Could not reach the service."
+    },
+    {
+      "name": "redirect_refused",
+      "value": "The service redirected the request to a different address."
+    },
+    {
+      "name": "response_too_large",
+      "value": "The response is too large to open on this device."
+    },
+    {
+      "name": "tree_retry_same_request",
+      "value": "Retry the same request"
+    },
+    {
+      "name": "tree_check_worktree_result",
+      "value": "Check operation result"
+    },
+    {
+      "name": "tree_confirm_not_created",
+      "value": "Confirm no worktree was created and start again"
+    },
+    {
+      "name": "tree_verify_original_checkout",
+      "value": "Enter the original branch and directory to check this earlier request."
+    },
+    {
+      "name": "phone_switch_assistant",
+      "value": "Switch assistant"
+    },
+    {
+      "name": "phone_manage_assistants",
+      "value": "Manage assistants"
+    },
+    {
+      "name": "settings_search_results",
+      "value": "Search Results"
+    },
+    {
+      "name": "settings_assistant_named",
+      "value": "{name}’s Settings"
+    },
+    {
+      "name": "machine_net_down",
+      "value": "Down"
+    },
+    {
+      "name": "machine_net_up",
+      "value": "Up"
+    },
+    {
+      "name": "machine_empty_title",
+      "value": "No computers yet"
+    },
+    {
+      "name": "machine_empty_detail",
+      "value": "Computers appear here once they connect to your Hub."
+    },
+    {
+      "name": "machine_swap",
+      "value": "Swap"
+    },
+    {
+      "name": "machine_total_bytes",
+      "value": "{size} total"
+    },
+    {
+      "name": "machine_battery",
+      "value": "Battery"
+    },
+    {
+      "name": "machine_charging",
+      "value": "Charging"
+    },
+    {
+      "name": "machine_temperature",
+      "value": "Temperature"
+    },
+    {
+      "name": "chat_away_recap",
+      "value": "While You Were Away"
+    },
+    {
+      "name": "session_space_starter",
+      "value": "Starter"
+    },
+    {
+      "name": "session_space_agents",
+      "value": "{count} agents in this workspace"
+    },
+    {
+      "name": "phone_chat_expand_editor",
+      "value": "Expand editor"
+    },
+    {
+      "name": "phone_chat_close_editor",
+      "value": "Collapse editor"
+    },
+    {
+      "name": "phone_chat_hide_keyboard",
+      "value": "Hide keyboard"
+    },
+    {
+      "name": "phone_chat_dictation",
+      "value": "Dictate"
+    },
+    {
+      "name": "phone_dictation_preparing",
+      "value": "Starting on-device dictation…"
+    },
+    {
+      "name": "phone_dictation_listening",
+      "value": "Listening…"
+    },
+    {
+      "name": "phone_dictation_finishing",
+      "value": "Finishing transcription…"
+    },
+    {
+      "name": "phone_dictation_review",
+      "value": "Review the text before adding it to your draft."
+    },
+    {
+      "name": "phone_dictation_insert",
+      "value": "Add to draft"
+    },
+    {
+      "name": "phone_dictation_empty",
+      "value": "No speech was recognized."
+    },
+    {
+      "name": "phone_dictation_unavailable",
+      "value": "On-device dictation is unavailable. You can use your keyboard microphone."
+    },
+    {
+      "name": "phone_dictation_keyboard_language",
+      "value": "Use your keyboard microphone to dictate in this language."
+    },
+    {
+      "name": "phone_dictation_keyboard",
+      "value": "Open keyboard"
+    },
+    {
+      "name": "phone_dictation_too_long",
+      "value": "Your draft has reached its text limit. Copy the transcription or shorten the draft."
+    },
+    {
+      "name": "phone_agent_folders",
+      "value": "Agent Folders"
+    },
+    {
+      "name": "phone_claude_config",
+      "value": "Claude Code Settings"
+    },
+    {
+      "name": "phone_codex_config",
+      "value": "Codex Settings"
+    },
+    {
+      "name": "phone_agy_config",
+      "value": "Antigravity Settings"
+    },
+    {
+      "name": "phone_agent_followup",
+      "value": "Agent Follow-up"
+    },
+    {
+      "name": "phone_agent_layout",
+      "value": "Agents List Layout"
+    },
+    {
+      "name": "phone_agent_tools_note",
+      "value": "Agent tools and automation for this assistant’s computers."
+    },
+    {
+      "name": "phone_folder_pattern",
+      "value": "Folder path or pattern"
+    },
+    {
+      "name": "phone_folder_hide",
+      "value": "Hide"
+    },
+    {
+      "name": "phone_folder_block",
+      "value": "Block collection"
+    },
+    {
+      "name": "phone_follow_start_requested",
+      "value": "Start requested tasks"
+    },
+    {
+      "name": "phone_follow_agent_tasks",
+      "value": "Follow Agent tasks"
+    },
+    {
+      "name": "phone_follow_naming",
+      "value": "Name Agent sessions automatically"
+    },
+    {
+      "name": "phone_follow_supervise",
+      "value": "Supervise tasks from the main chat"
+    },
+    {
+      "name": "phone_follow_close_ended",
+      "value": "Close ended terminals"
+    },
+    {
+      "name": "phone_dictation",
+      "value": "Dictation"
+    },
+    {
+      "name": "phone_system_input",
+      "value": "System input method"
+    },
+    {
+      "name": "phone_dictation_os_note",
+      "value": "The active system keyboard manages voice input and its languages."
+    },
+    {
+      "name": "phone_language_system_note",
+      "value": "Follow System uses the device’s language. You can also choose a language for Persona here."
+    },
+    {
+      "name": "phone_search_conversation_count",
+      "value": "{count} conversations"
+    },
+    {
+      "name": "phone_todo_waiting_hidden",
+      "value": "{count} more items need you outside “{filter}”."
+    },
+    {
+      "name": "phone_kb_confirmed",
+      "value": "Confirmed facts"
+    },
+    {
+      "name": "phone_kb_add_fact",
+      "value": "Add a confirmed fact"
+    },
+    {
+      "name": "phone_kb_fact_note",
+      "value": "Persona keeps your corrections when this entry is updated."
+    },
+    {
+      "name": "phone_kb_profile",
+      "value": "Profile"
+    },
+    {
+      "name": "flow_recent_folders",
+      "value": "Recent folders"
+    },
+    {
+      "name": "flow_use_named_folder",
+      "value": "Use “{name}”"
+    },
+    {
+      "name": "flow_other_model",
+      "value": "Other model…"
+    },
+    {
+      "name": "phone_conditional_read_only",
+      "value": "This Hub supports viewing only. Update it to edit here."
+    },
+    {
+      "name": "phone_rules_changed",
+      "value": "Another device changed the folder rules. Review the latest rules and apply your change again."
+    },
+    {
+      "name": "phone_facts_changed",
+      "value": "Another device changed the confirmed facts. Your draft is still here. Review the latest text before saving again."
+    },
+    {
+      "name": "phone_new_assistant",
+      "value": "New assistant"
     }
   ]
 }

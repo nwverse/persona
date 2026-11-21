@@ -318,3 +318,15 @@ test('a failed initialization keeps selection closed throughout a gated retry',a
  gate.resolve();await retry;deviceLookBoundary.getGate=undefined;assert.equal(restored.ready,true);assert.equal(restored.avatarKey,choice.optionKey());assert.equal(restored.accentId,'avatar');
  const reopened=new DeviceLook();await reopened.initialize({filesDir:'/private/app'});assert.equal(reopened.avatarKey,choice.optionKey());assert.equal(reopened.accentId,'avatar');
 });
+
+test('compact navigation layout survives relaunch and composes with simultaneous density changes',async()=>{
+ const look=await openModel(makeClient());
+ assert.equal(look.phoneNavigation,'separate');
+ const [mode,density]=await Promise.all([look.setPhoneNavigation('merged'),look.setDensity('compact')]);
+ assert.equal(mode,true);assert.equal(density,true);
+ const restored=new DeviceLook();await restored.initialize({filesDir:'/private/app'});
+ assert.equal(restored.phoneNavigation,'merged');assert.equal(restored.density,'compact');
+ assert.equal(await restored.setPhoneNavigation('removed-option'),false);
+ await restored.setPhoneNavigation('separate');
+ const again=new DeviceLook();await again.initialize({filesDir:'/private/app'});assert.equal(again.phoneNavigation,'separate');
+});

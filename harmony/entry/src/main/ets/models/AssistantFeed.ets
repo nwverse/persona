@@ -85,6 +85,7 @@ export class AssistantFeedModel {
   @Trace viewBlocks: string[] = [];
   @Trace nextCursor: string = '';
   @Trace hasLoaded: boolean = false;
+  @Trace feedUnavailable: boolean = false;
   @Trace editing: boolean = false;
   @Trace editingPlanId: string = '';
   @Trace editingPlanVersion: string = '';
@@ -135,7 +136,7 @@ export class AssistantFeedModel {
   private clearState(): void {
     this.loading = false; this.loadingMore = false; this.error = ''; this.todoError = ''; this.todosReady = false; this.itemLookupStatus = '';
     this.conversationId = ''; this.owner = ''; this.items = []; this.plans = {}; this.freshPlanIds = []; this.loadingPlanIds = []; this.planActionErrors = {}; this.taskCards = []; this.todos = [];
-    this.views = {}; this.viewActions = {}; this.viewBlocks = []; this.nextCursor = ''; this.hasLoaded = false;
+    this.views = {}; this.viewActions = {}; this.viewBlocks = []; this.nextCursor = ''; this.hasLoaded = false; this.feedUnavailable = false;
     this.editing = false; this.editingPlanId = ''; this.editingPlanVersion = ''; this.editTasks = []; this.rememberPlans = [];
     this.busyKeys = []; this.uncertainKeys = []; this.pendingMessageIds = []; this.messageDrafts = {};
   }
@@ -344,7 +345,7 @@ export class AssistantFeedModel {
 
   async refresh(): Promise<void> {
     const run = this.generation;
-    if (!this.current(run)) return;
+    if (!this.current(run) || this.feedUnavailable) return;
     if (this.refreshPromise && this.refreshRun === run) return this.refreshPromise;
     this.loading = true; this.error = '';
     const work = this.refreshCurrent(run);
@@ -360,10 +361,19 @@ export class AssistantFeedModel {
     try {
       const initial = !this.hasLoaded;
       const since = initial ? '' : this.latestSeenAt();
-      let result = await this.readPage(run, '', since);
+      let result: Record<string,Object> | undefined;
+      try { result = await this.readPage(run, '', since); }
+      catch (error) {
+        // Older Hubs provide the conversation transcript without the optional activity feed.
+        if (initial && this.errorKey(error as Error) === 'unsupported') {
+          if (this.current(run)) this.feedUnavailable = true;
+          return;
+        }
+        throw error as Error;
+      }
       if (!result || !this.current(run)) return;
       if (initial) this.nextCursor = Wire.text(result, 'next_cursor');
-      this.hasLoaded = true;
+      this.feedUnavailable = false; this.hasLoaded = true;
       let cursor = Wire.text(result, 'next_cursor');
       // A refresh window can be large; bound it and continue from its newest timestamp on the next refresh.
       for (let page = 1; cursor && page < 4; page++) {

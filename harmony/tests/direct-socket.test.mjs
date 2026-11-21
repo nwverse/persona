@@ -146,3 +146,24 @@ test('a second connect or a retired DNS lookup cannot open a socket', async () =
   pending.resolve(records); await Promise.resolve();
   assert.equal(tlsCalls.length, 0); assert.equal(dials.length, 0); assert.equal(writes, 0);
 });
+
+test('only the authenticated operation lookup recognizes the Hub missing-receipt envelope', async () => {
+  const rcp = globalThis.socketTestKit.rcp;
+  let body = {code: 'not_found', error: 'no such operation'}, status = 404;
+  rcp.Request = class { constructor(target, method, headers) { Object.assign(this, {target, method, headers}); } };
+  rcp.createSession = () => ({close() {}, async fetch(request) {
+    request.destination(new TextEncoder().encode(JSON.stringify(body)).buffer);
+    return {statusCode: status, headers: {}};
+  }});
+  const transport = new HubTransport(new EndpointConfig('https://desk.test/', 'fixture', '', '', 'owner'));
+  transport.clientMetadata = () => ({platform: 'harmony', version: '1', build: '1', os: {}});
+  const path = '/api/v1/ops/0d9ce811-24fe-4f6e-ae77-000000000001';
+  const code = async (route, error, method = 'GET') => assert.rejects(
+    transport.request(route, method), failure => failure.status === status && failure.code === error);
+  await code(path, 'no_such_operation');
+  await code('/api/v1/workspaces', 'not_found');
+  await code('/api/v1/ops/bad-id', 'not_found');
+  await code(path, 'not_found', 'POST');
+  status = 403; await code(path, 'not_found');
+  status = 404; body = {code: 'not_found', error: 'no such route'}; await code(path, 'not_found');
+});

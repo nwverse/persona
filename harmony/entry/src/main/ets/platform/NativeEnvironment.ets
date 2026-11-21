@@ -1,6 +1,7 @@
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import type { Configuration } from '@kit.AbilityKit';
 import { display, window } from '@kit.ArkUI';
+import { accessibility } from '@kit.AccessibilityKit';
 
 /** Native application configuration, shared by workspace and detached views. */
 @ObservedV2
@@ -16,6 +17,10 @@ export class NativeEnvironment {
   private sizeChanged: (size: window.Size) => void = (_size: window.Size): void => this.refreshWindow();
   private rectChanged: (event: window.RectChangeOptions) => void = (_event: window.RectChangeOptions): void => this.refreshWindow();
   private avoidChanged: (event: window.AvoidAreaOptions) => void = (_event: window.AvoidAreaOptions): void => this.refreshWindow();
+
+  get reduceMotion(): boolean {
+    try { return accessibility.isAnimationReduceEnabledSync(); } catch (_) { return false; }
+  }
 
   bindWindow(value: window.Window): void {
     this.unbindWindow(); this.windowRef = value;

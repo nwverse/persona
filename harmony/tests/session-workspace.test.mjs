@@ -278,3 +278,138 @@ test('file transfer follows late capabilities of the captured connection and imm
     assert.equal(workspace.canSendFile(entry),false);
   } finally {workspace.hide();}
 });
+
+const {folderCrumbs,parentFolder,indexWorkspaceFiles,findWorkspaceFiles,patchLines}=await import('../entry/src/main/ets/models/WorkspaceBrowser.ets');
+
+test('folder history traverses above the session folder, clears stale rows and invalidates forward on a new branch',async()=>{
+  const {workspace,state}=fixture();
+  await waitForTurn();
+  state.handle=async call=>{
+    if (call.path.includes('/fs?')) {
+      const path=new URL(call.path,'https://test.invalid').searchParams.get('path');
+      return {path,entries:[{name:'source',dir:true}]};
+    }
+  };
+  await workspace.openPath('/repo/Sources');
+  assert.equal(workspace.currentPath,'/repo/Sources');
+  await workspace.openPath('/repo/Sources/App');
+  await workspace.historyFolder(false);assert.equal(workspace.currentPath,'/repo/Sources');
+  await workspace.historyFolder(true);assert.equal(workspace.currentPath,'/repo/Sources/App');
+  await workspace.historyFolder(false);await workspace.openPath('/repo/Tests');assert.deepEqual(workspace.folderForward,[]);
+  await workspace.openPath('/repo');workspace.openParent();await waitForTurn();assert.equal(workspace.currentPath,'/');
+  assert.equal(parentFolder('/'),'');
+  assert.deepEqual(folderCrumbs('/Users/me/code/weather','/Users/me').map(x=>[x.title,x.path]),
+    [['~','/Users/me'],['code','/Users/me/code'],['weather','/Users/me/code/weather']]);
+  assert.deepEqual(folderCrumbs('C:\\Users\\me\\repo','C:\\Users\\me').map(x=>x.path),['C:\\Users\\me','C:\\Users\\me\\repo']);
+  assert.equal(parentFolder('C:\\one'),'C:\\');
+  assert.equal(parentFolder('\\\\host\\share\\one'),'\\\\host\\share');
+  assert.equal(parentFolder('\\\\host\\share'),'');
+  assert.ok(state.calls.every(call=>call.method==='GET'));
+  workspace.hide();
+});
+
+test('recursive file search preserves relative scope, derives folders, respects hidden files, and drops a stale response after navigation',async()=>{
+  const {workspace,state}=fixture();await waitForTurn();let resolve;
+  state.handle=async call=>{
+    if (call.path.includes('/fs/find')) return new Promise(r=>{ resolve=r; });
+    if (call.path.includes('/fs?')) return {path:new URL(call.path,'https://test.invalid').searchParams.get('path'),entries:[]};
+  };
+  const read=workspace.loadFileIndex();await waitForTurn();await workspace.openPath('/repo/other');
+  resolve({files:['wrong-owner.txt']});await read;
+  assert.equal(workspace.findRoot,'');assert.deepEqual(workspace.findNames,[]);
+  const names=['Sources/a.swift','Sources/deep/b.swift','.hidden/file.swift','../bad.swift','/absolute.swift','C:\\unsafe.swift','Sources/a.swift','readme','readme.archive'];
+  const idx=indexWorkspaceFiles(names,false);
+  assert.deepEqual(findWorkspaceFiles(idx,'deep').map(x=>[x.relative,x.directory]),[['Sources/deep',true],['Sources/deep/b.swift',false]]);
+  assert.deepEqual(findWorkspaceFiles(idx,'swift').map(x=>x.relative),['Sources/a.swift','Sources/deep/b.swift']);
+  assert.deepEqual(findWorkspaceFiles(indexWorkspaceFiles(names,true),'.hidden').map(x=>x.relative),['.hidden','.hidden/file.swift']);
+  assert.equal(findWorkspaceFiles(idx,'readme',1)[0].relative,'readme');workspace.hide();
+});
+
+test('a status refresh retains the commit page only for the same history, and commit inspection drops the previous selection',async()=>{
+  const {workspace,state}=fixture();
+  const sha=n=>n.toString(16).padStart(40,'0');
+  let base=1, release, oldShow;
+  state.handle=async call=>{
+    if (call.path.includes('/git/status')) return {is_repo:true,branch:'main',commits:Array.from({length:30},(_,i)=>({hash:sha(base+i),subject:'row '+(base+i)})),files:[]};
+    if (call.path.includes('/git/log')) { assert.equal(new URL(call.path,'https://test.invalid').searchParams.get('skip'),'30');return new Promise(r=>{release=r}); }
+    if (call.path.includes('/git/show')) {
+      const id=new URL(call.path,'https://test.invalid').searchParams.get('hash');if(id===sha(1))return new Promise(r=>{oldShow=r});
+      return {commit:{hash:id,subject:'selected'},files:[],diff:'selected diff'};
+    }
+  };
+  workspace.selectTab(1);await waitForTurn();assert.equal(workspace.gitCommits.length,30);assert.equal(workspace.gitMoreCommits,true);
+  const old=workspace.showGitCommit(sha(1));await waitForTurn();await workspace.showGitCommit(sha(2));
+  oldShow({commit:{hash:sha(1)},files:[],diff:'wrong diff'});await old;assert.equal(workspace.gitShow.diff,'selected diff');
+  const page=workspace.olderGitCommits();await waitForTurn();release({commits:[{hash:sha(30)},{hash:sha(31)}],has_more:false});await page;
+  assert.equal(workspace.gitCommits.length,31);assert.equal(workspace.gitMoreCommits,false);
+  await workspace.loadGit();assert.equal(workspace.gitCommits.length,31);
+  base=5;await workspace.loadGit();assert.equal(workspace.gitCommits.length,30);assert.equal(workspace.gitMoreCommits,true);
+  const stale=workspace.olderGitCommits();await waitForTurn();base=70;await workspace.loadGit();
+  release({commits:[{hash:sha(888)}],has_more:false});await stale;assert.equal(workspace.gitCommits.length,30);
+  assert.equal(workspace.gitCommits[0].hash,sha(70));assert.ok(state.calls.every(call=>call.method==='GET'));workspace.hide();
+});
+
+test('switching between staged and working-tree patches cannot display the wrong half, and line numbers restart at each hunk',async()=>{
+  const {workspace,state}=fixture();const pending=[];
+  state.handle=async call=>{
+    if(call.path.includes('/git/status'))return {is_repo:true,branch:'main',files:[{path:'Sources/App.swift',index:'M',worktree:'M'}],commits:[]};
+    if(call.path.includes('/git/diff?'))return new Promise(r=>pending.push({staged:new URL(call.path,'https://test.invalid').searchParams.get('staged'),resolve:r}));
+  };
+  workspace.selectTab(1);await waitForTurn();
+  const a=workspace.openGitDiff(workspace.gitFiles[0],false);await waitForTurn();
+  const b=workspace.openGitDiff(workspace.gitFiles[0],true);await waitForTurn();
+  pending[1].resolve({diff:'staged patch'});await b;pending[0].resolve({diff:'stale working patch'});await a;
+  assert.deepEqual(pending.map(x=>x.staged),['0','1']);assert.equal(workspace.gitDiff,'staged patch');
+  const c=workspace.loadGitDiff();await waitForTurn();workspace.closeGitDiff();pending[2].resolve({diff:'closed'});await c;
+  assert.equal(workspace.gitDiff,'');assert.equal(workspace.gitDiffBusy,false);
+  const patch='--- a/a\n+++ b/a\n@@ -8,2 +12,2 @@\n-removed\n+added\n both\n@@ -22 +90 @@\n next';
+  assert.deepEqual(patchLines(patch).map(v=>[v.kind,v.oldLine,v.newLine]),[
+    ['meta','',''],['meta','',''],['hunk','',''],['removed','8',''],['added','','12'],['context','9','13'],['hunk','',''],['context','22','90']]);
+  assert.ok(state.calls.every(call=>call.method==='GET'));workspace.hide();
+});
+
+test('folder changes replace names, symlink targets and modification times as one listing even when the previous folder returns late',async()=>{
+  const {workspace,state}=fixture();
+  await waitForTurn();let finishOld;
+  state.handle=async call=>{
+    if (!call.path.includes('/fs?')) return;
+    const path=new URL(call.path,'https://fixture.invalid').searchParams.get('path');
+    if (path==='/repo/old') return new Promise(resolve=>{finishOld=resolve});
+    return {path,entries:[{name:'name with space.md',dir:false,mtime:'2026-11-20T06:41:00Z',symlink:true,link_target:'../README.md',link_broken:false,size:12}]};
+  };
+  const old=workspace.openPath('/repo/old');await waitForTurn();assert.deepEqual(workspace.entries,[]);
+  await workspace.openPath('/repo/new');finishOld({path:'/repo/old',entries:[{name:'stale.md',mtime:'2023-01-01T00:00:00Z'}]});await old;
+  assert.equal(workspace.currentPath,'/repo/new');
+  assert.deepEqual(workspace.entries.map(f=>[f.name,f.path,f.mtime,f.linkTarget,f.linkBroken]),[
+    ['name with space.md','/repo/new/name with space.md','2026-11-20T06:41:00Z','../README.md',false]]);
+  const {workspaceAgeMinutes}=await import('../entry/src/main/ets/models/WorkspaceBrowser.ets');
+  const now=Date.parse('2026-11-20T06:43:30Z');assert.equal(workspaceAgeMinutes(workspace.entries[0].mtime,now),2);
+  assert.equal(workspaceAgeMinutes('0001-01-01T00:00:00Z',now),-1);assert.equal(workspaceAgeMinutes('not-a-date',now),-1);
+  const index=indexWorkspaceFiles(['one\\two.cs','\\\\server\\share\\no.cs'],false,true);
+  assert.deepEqual(findWorkspaceFiles(index,'two').map(h=>h.relative),['one/two.cs']);
+  assert.deepEqual(findWorkspaceFiles(indexWorkspaceFiles(['literal\\backslash.txt'],false),'literal').map(h=>h.relative),['literal\\backslash.txt']);
+  workspace.hide();
+});
+
+test('commit file navigation selects the matching immutable patch, including missing, deleted and renamed paths', async () => {
+  const {commitFilePatch} = await import('../entry/src/main/ets/models/WorkspaceBrowser.ets');
+  const added = 'diff --git a/first file b/first file\n--- /dev/null\n+++ b/first file\n@@ -0,0 +1 @@\n+first';
+  const deleted = 'diff --git a/deleted b/deleted\n--- a/deleted\n+++ /dev/null\n@@ -1 +0,0 @@\n-old';
+  const renamed = 'diff --git a/old b/renamed b/prefix\nsimilarity index 100%\nrename from old\nrename to renamed b/prefix';
+  const encoded = String.raw`diff --git "a/\303\251" "b/\303\251"
+--- "a/\303\251"
++++ "b/\303\251"
+@@ -1 +1 @@
+-old
++nouveau`;
+  const patch = [added,deleted,renamed,encoded].join('\n');
+  assert.equal(commitFilePatch(patch,'first file'),added);
+  assert.equal(commitFilePatch(patch,'deleted'),deleted);
+  assert.equal(commitFilePatch(patch,'renamed b/prefix'),renamed);
+  assert.equal(commitFilePatch(patch,'é'),encoded);
+  assert.equal(commitFilePatch(patch,'prefix'),'');
+  assert.equal(commitFilePatch(patch,'missing'),'');
+  assert.equal(patchLines(added, true)[0].kind,'hunk');
+  assert.equal(patchLines('Binary files differ', true)[0].text,'Binary files differ');
+  assert.equal(patchLines(added)[0].kind,'meta');
+});

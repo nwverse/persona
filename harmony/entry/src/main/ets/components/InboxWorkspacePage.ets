@@ -4,9 +4,9 @@ import { NativeEnvironment, nativeEnvironment } from '../platform/NativeEnvironm
 import { common } from '@kit.AbilityKit';
 import { fileIo, picker } from '@kit.CoreFileKit';
 import { image } from '@kit.ImageKit';
-import { ComposeListItemV2, ContentItemV2, CapsuleSegmentButtonV2, SegmentButtonV2Items, ColorMetrics, LengthMetrics } from '@kit.ArkUI';
+import { ComposeListItemV2, ContentItemV2, LengthMetrics } from '@kit.ArkUI';
 import { ClientModel } from '../models/ClientModel';
-import { InboxAttachmentDraft, InboxMailComposeSnapshot, InboxMailMessage, InboxMessage, InboxWorkspace, inboxRowSourceLabel } from '../models/InboxWorkspace';
+import { InboxAttachmentDraft, InboxMailComposeSnapshot, InboxMailMessage, InboxMessage, InboxWorkspace, InboxListSection, InboxQuickFilter, inboxTier, inboxTierLabel, inboxLineKey, inboxRowSourceLabel } from '../models/InboxWorkspace';
 import { ResourceRow, Wire } from '../models/Wire';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { MarkdownText } from './MarkdownText';
@@ -172,6 +172,13 @@ export struct InboxMessageParts {
   }
 }
 
+@ObservedV2
+class BoundInboxSection {
+  key:string;
+  @Trace rows:BoundRow<ResourceRow>[] = [];
+  constructor(key:string) { this.key=key; }
+}
+
 @ComponentV2
 export struct InboxWorkspacePage {
   @Require @Param model: ClientModel;
@@ -188,6 +195,9 @@ export struct InboxWorkspacePage {
   @Local environment: NativeEnvironment = nativeEnvironment;
   @Local workspace: InboxWorkspace = new InboxWorkspace();
   @Local itemRowBindings: BoundRow<ResourceRow>[] = [];
+  @Local sections: BoundInboxSection[] = [];
+  @Local choices: InboxQuickFilter[] = [];
+  @Local expandedTiers: string[] = [];
   private rowBindingOwner: Object | undefined;
   private rowBindingScope: string = '';
   @Local detailOpen: boolean = false;
@@ -242,14 +252,25 @@ export struct InboxWorkspacePage {
   }
   private acknowledged(changed: boolean): void { if (changed && this.active && this.visible) this.onChanged(); }
 
-  @Monitor('workspace.items', 'workspace.search', 'workspace.sourceFilter', 'workspace.accountFilter', 'workspace.statusFilter') itemRowsChanged(): void {
+  @Monitor('workspace.items', 'workspace.search', 'workspace.sourceFilter', 'workspace.accountFilter', 'workspace.statusFilter','workspace.doneItems','workspace.haveDoneDays','workspace.waitingAgents') itemRowsChanged(): void {
     this.syncItemRows();
   }
 
   private syncItemRows(): void {
     const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager]);
-    this.itemRowBindings = reconcileBoundRows(this.itemRowBindings, this.workspace.filteredItems, (row: ResourceRow) => row.key(),
+    const view=this.workspace.listView(), same=this.model === this.rowBindingOwner && scope === this.rowBindingScope;
+    const previous=same ? this.sections : [];
+    if (!same) this.expandedTiers=[];
+    this.choices=view.choices;
+    const rows=view.sections.flatMap((section:InboxListSection) => section.rows);
+    this.itemRowBindings = reconcileBoundRows(this.itemRowBindings, rows, (row: ResourceRow) => inboxLineKey(row),
       this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    const bindings=new Map<string,BoundRow<ResourceRow>>();
+    this.itemRowBindings.forEach((b:BoundRow<ResourceRow>) => bindings.set(inboxLineKey(b.value),b));
+    this.sections=view.sections.map((section:InboxListSection) => {
+      const group=previous.find((g:BoundInboxSection) => g.key === section.key) || new BoundInboxSection(section.key);
+      group.rows=section.rows.map((row:ResourceRow) => bindings.get(inboxLineKey(row))!); return group;
+    });
     this.rowBindingOwner = this.model; this.rowBindingScope = scope;
   }
 
@@ -437,7 +458,7 @@ export struct InboxWorkspacePage {
 
   @Builder inboxSearch(weighted: boolean) {
     Search({ value: this.workspace.search, placeholder: tr('search') })
-      .onChange((value: string) => this.workspace.search = value).width('100%').layoutWeight(weighted ? 1 : 0)
+      .onChange((value: string) => this.workspace.setSearch(value)).id('inbox.search').width('100%').layoutWeight(weighted ? 1 : 0)
   }
   @Builder inboxActions() {
     Badge({ count: (this.workspace.sourceFilter !== 'all' ? 1 : 0) + (this.workspace.accountFilter !== 'all' ? 1 : 0),
@@ -477,6 +498,41 @@ export struct InboxWorkspacePage {
       .selected(this.accountIndex()).value(this.workspace.accountFilter === 'all' ? tr('all') : this.workspace.accountName(this.workspace.accountFilter)).onSelect((index: number) => this.workspace.accountFilter = this.workspace.accountOptions[index])
       .constraintSize({ minHeight: Tokens.touch }).width('100%')
   }
+  private pickChoice(key:string): void {
+    this.workspace.statusFilter=key;
+    if (key === 'done' && this.workspace.haveDoneDays && !this.workspace.doneItems.length && !this.workspace.historyEnded) this.workspace.loadOlderDone();
+  }
+  @Builder choiceBar() {
+    Scroll() {
+      Row({space:5}) {
+        ForEach(this.choices,(choice:InboxQuickFilter) => {
+          Button({type:ButtonType.Capsule}) {
+            Row({space:5}) {
+              Text(tr(inboxTierLabel(choice.key))).fontSize(14).fontWeight(this.workspace.statusFilter === choice.key ? FontWeight.Bold : FontWeight.Medium)
+                .fontColor(this.workspace.statusFilter === choice.key ? Colors.onAction : Colors.ink)
+              if (choice.count && ['action','working','fyi'].includes(choice.key)) Text(String(choice.count)).fontSize(12).fontWeight(FontWeight.Bold)
+                .fontColor(this.workspace.statusFilter === choice.key ? Colors.onAction : choice.key === 'action' ? Colors.needs : Colors.secondary)
+            }
+          }.height(34).padding({left:10,right:10}).backgroundColor(this.workspace.statusFilter === choice.key ? Colors.action : Colors.surface)
+            .accessibilityText([tr(inboxTierLabel(choice.key)),choice.count ? String(choice.count) : ''].filter((v:string) => !!v).join(' · '))
+            .accessibilitySelected(this.workspace.statusFilter === choice.key).onClick(() => this.pickChoice(choice.key)).id('inbox.choice.'+choice.key)
+        },(choice:InboxQuickFilter) => choice.key + '/' + String(choice.count))
+      }.padding({left:16,right:16})
+    }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).align(Alignment.Start).width('100%').id('inbox.status')
+  }
+  private groupOpen(key:string):boolean {
+    return this.workspace.statusFilter !== 'all' || !!this.workspace.search.trim() || this.expandedTiers.includes(key) || !['done','noise'].includes(key);
+  }
+  @Builder sectionHeading(section:BoundInboxSection) {
+    if (this.workspace.statusFilter === 'all') Row({space:6}) {
+      Text(tr(inboxTierLabel(section.key))).fontSize(15).fontWeight(FontWeight.Bold).fontColor(Colors.ink)
+      Text(String(section.rows.length)).fontSize(13).fontColor(section.key === 'action' ? Colors.needs : Colors.secondary).layoutWeight(1)
+      if (['done','noise'].includes(section.key)) SymbolGlyph(this.groupOpen(section.key) ? Symbols.down : Symbols.expand).fontSize(13).fontColor([Colors.secondary])
+    }.height(38).width('100%').padding({left:3,right:5}).accessibilityGroup(true).onClick(() => {
+      if (['done','noise'].includes(section.key)) this.expandedTiers=this.expandedTiers.includes(section.key) ?
+        this.expandedTiers.filter((s:string) => s !== section.key) : this.expandedTiers.concat([section.key]);
+    }).id('inbox.section.'+section.key)
+  }
   @Builder inboxList() {
     Column({ space: Tokens.gap }) {
       if (this.environment.fontScale >= 1.5) Column({ space: Tokens.gap }) {
@@ -487,34 +543,39 @@ export struct InboxWorkspacePage {
         this.inboxSearch(true)
         this.inboxActions()
       }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap }).width('100%')
-      if (this.environment.fontScale >= 1.5) Row() {
-        Select([{ value: tr('inbox_open') }, { value: tr('done') }, { value: tr('all') }]).attributeModifier(SelectStyles.inline)
-        .selected(this.workspace.statusFilter === 'open' ? 0 : this.workspace.statusFilter === 'done' ? 1 : 2)
-        .value(tr(this.workspace.statusFilter === 'open' ? 'inbox_open' : this.workspace.statusFilter === 'done' ? 'done' : 'all'))
-        .font({ size: Tokens.body }).constraintSize({ minHeight: Tokens.touch }).width('100%')
-        .onSelect((index: number) => this.workspace.statusFilter = index === 0 ? 'open' : index === 1 ? 'done' : 'all')
-        .id('inbox.status')
-      }.width('100%').padding({ left: Tokens.page, right: Tokens.page })
-      else CapsuleSegmentButtonV2({ itemSelectedBackgroundColor: ColorMetrics.resourceColor(Colors.action), itemSelectedFontColor: ColorMetrics.resourceColor(Colors.onAction), itemFontColor: ColorMetrics.resourceColor(Colors.secondary), buttonBackgroundColor: ColorMetrics.resourceColor(Colors.control), itemFontSize: LengthMetrics.fp(Tokens.meta), itemSelectedFontSize: LengthMetrics.fp(Tokens.meta), itemMinHeight: LengthMetrics.vp(Tokens.touch), buttonMinHeight: LengthMetrics.vp(Tokens.touch), buttonPadding: LengthMetrics.vp(Tokens.fine), items: new SegmentButtonV2Items([{ text: tr('inbox_open') }, { text: tr('done') }, { text: tr('all') }]),
-        selectedIndex: this.workspace.statusFilter === 'open' ? 0 : this.workspace.statusFilter === 'done' ? 1 : 2,
-        $selectedIndex: (index: number) => this.workspace.statusFilter = index === 0 ? 'open' : index === 1 ? 'done' : 'all' })
-        .padding({ left: Tokens.page, right: Tokens.page })
+      this.choiceBar()
       if (this.workspace.error) Text(tr(this.workspace.error)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding({ left: Tokens.page, right: Tokens.page })
       if (this.workspace.loading) LoadingProgress().width(Tokens.touch).height(Tokens.touch)
-      List({ space: Tokens.inset }) {
-        ForEach(this.itemRowBindings, (binding: BoundRow<ResourceRow>) => {
+      List({ space: 7 }) {
+        ForEach(this.sections,(section:BoundInboxSection) => {
+          ListItemGroup({header:() => this.sectionHeading(section)}) {
+            if (this.groupOpen(section.key)) {
+        ForEach(section.rows, (binding: BoundRow<ResourceRow>) => {
           ListItem() {
-            Column({ space: Tokens.gap }) {
-              Column({ space: Tokens.gap }) {
-              Row({ space: Tokens.gap }) { Text(this.rowSource(binding.value)).fontSize(Tokens.caption).fontColor(Colors.secondary).layoutWeight(1); Text(this.doneLabel(binding.value)).fontSize(Tokens.caption).fontColor(Colors.secondary) }.width('100%')
-              Text(binding.value.title || tr('inbox')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).fontColor(Colors.ink).width('100%')
-              if (binding.value.detail) Text(binding.value.detail).fontSize(Tokens.body).fontColor(Colors.secondary).maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
-              }.width('100%').constraintSize({ minHeight: Tokens.touch }).alignItems(HorizontalAlign.Start)
-            }.padding(Tokens.card).width('100%').alignItems(HorizontalAlign.Start).backgroundColor(Colors.canvas).borderRadius(Tokens.card)
-          }.onClick(() => this.openRow(binding.value)).accessibilityGroup(true).id('inbox.' + binding.value.key())
+            Row({ space: 10 }) {
+              Stack() { SymbolGlyph(binding.value.kind === 'session' ? Symbols.agent : this.workspace.sourceName(Wire.text(binding.value.data(),'source')) === 'mail' ? Symbols.inbox : Wire.text(binding.value.data(),'source') === 'lark' ? Symbols.persona : Symbols.apps).fontSize(17).fontColor([Colors.link]) }
+                .width(33).height(33).borderRadius(9).backgroundColor(Colors.control)
+              Column({ space: 4 }) {
+                Row({ space: 6 }) {
+                  Text(binding.value.kind === 'session' ? tr('agent') : this.rowSource(binding.value)).fontSize(12).fontWeight(FontWeight.Medium).fontColor(Colors.secondary).layoutWeight(1)
+                  Text(tr(binding.value.kind === 'session' ? 'needs_you' : inboxTierLabel(inboxTier(binding.value.data())))).fontSize(12).fontColor(Colors.secondary)
+                }.width('100%')
+                Text(binding.value.title || tr('inbox')).fontSize(17).fontWeight(FontWeight.Medium).fontColor(Colors.ink).maxLines(2)
+                if (binding.value.detail) Text(binding.value.detail).fontSize(14).fontColor(Colors.secondary).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              SymbolGlyph(Symbols.expand).fontSize(12).fontColor([Colors.secondary])
+            }.width('100%').alignItems(VerticalAlign.Top).padding(14).backgroundColor(Colors.surface).borderRadius(14)
+          }.onClick(() => this.openRow(binding.value)).accessibilityGroup(true).id('inbox.' + inboxLineKey(binding.value))
         }, (binding: BoundRow<ResourceRow>) => binding.key)
+            }
+          }.divider({strokeWidth:0.5,startMargin:52,endMargin:12,color:Colors.divider})
+        },(section:BoundInboxSection) => section.key)
+        if (this.workspace.statusFilter === 'done' && !this.workspace.historyEnded && (this.workspace.haveDoneDays || this.workspace.doneItems.length)) ListItem() {
+          Button(tr('flow_inbox_older_done'),{buttonStyle:ButtonStyleMode.TEXTUAL}).fontSize(14).enabled(!this.workspace.historyBusy)
+            .onClick(() => this.workspace.loadOlderDone()).id('inbox.history.more')
+        }
         if (!this.itemRowBindings.length && !this.workspace.loading)
-          ListItem() { Text(tr(this.workspace.search ? 'no_results' : 'empty')).padding(Tokens.page).width('100%') }
+          ListItem() { Text(tr(this.workspace.search.trim() ? 'no_results' : 'flow_inbox_section_empty')).fontSize(15).fontColor(Colors.secondary).padding(Tokens.page).width('100%') }
       }.layoutWeight(1).width('100%').padding({ left: Tokens.page, right: Tokens.page, bottom: Tokens.footer })
     }.width('100%').height('100%').backgroundColor(Colors.grouped)
   }

@@ -78,16 +78,18 @@ export class MutationStore {
     await this.saveIndex(); this.loaded = true;
   }
   private async persist(record: MutationRecord): Promise<void> { this.assertActive(); await this.local.put(this.key + ':' + record.id, JSON.stringify(record)); }
-  private async saveIndex(): Promise<void> {
+  private async saveIndex(recent?: MutationRecord): Promise<void> {
     this.assertActive();
-    const terminal = this.records.filter((item: MutationRecord) => !['pending', 'unknown'].includes(item.state));
+    const ordered = recent ? this.records.filter((item: MutationRecord) => item !== recent).concat([recent]) : this.records;
+    const terminal = ordered.filter((item: MutationRecord) => !['pending', 'unknown'].includes(item.state));
     const removed = terminal.slice(0, Math.max(0, terminal.length - 100));
-    const retained = this.records.filter((item: MutationRecord) => !removed.includes(item));
+    const retained = ordered.filter((item: MutationRecord) => !removed.includes(item));
     await this.local.put(this.key, JSON.stringify(Wire.payload(['ids'], [retained.map((item: MutationRecord) => item.id)])));
     this.records = retained;
     for (const record of removed) { try { await this.local.remove(this.key + ':' + record.id); } catch (_) { /* Orphaned terminal rows are safe to clean on a later maintenance pass. */ } }
   }
   blocked(): MutationRecord[] { return this.records.filter((item: MutationRecord) => item.state === 'pending' || item.state === 'unknown'); }
+  record(id: string): MutationRecord | undefined { return this.records.find((item: MutationRecord) => item.id === id); }
   async begin(path: string, method: string, payload: string, id: string = ''): Promise<MutationRecord> {
     await this.load();
     return this.transaction(() => this.admit(path, method, payload, id));
@@ -137,8 +139,20 @@ export class MutationStore {
       throw new HttpFailure(0, 'receipt_storage_failed', true);
     }
   }
-  async acknowledge(id: string): Promise<void> {
-    const record = this.records.find((item: MutationRecord) => item.id === id);
-    if (record && record.state === 'unknown' && !record.requiresReceipt) await this.finish(record, 'checked');
+  async acknowledge(id: string, admit?: () => boolean): Promise<void> {
+    const record = this.record(id);
+    if (!record || record.state !== 'unknown' || record.requiresReceipt || record.confirmedPending) return;
+    await this.transaction(async () => {
+      const allowed = (): boolean => this.record(id) === record && record.state === 'unknown' &&
+        !record.requiresReceipt && !record.confirmedPending && (!admit || admit());
+      if (!allowed()) return;
+      if (admit && this.records[this.records.length-1] !== record) {
+        // Persist the review order while it is still unknown. Restoring a checked row
+        // can then finish an interrupted view cleanup even with a full terminal history.
+        await this.saveIndex(record);
+        if (!allowed()) return;
+      }
+      await this.settle(record, 'checked');
+    });
   }
 }

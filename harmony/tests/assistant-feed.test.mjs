@@ -708,3 +708,36 @@ test('a successful page retry reports its current success and a repeated cursor 
  fail=false;repeat=true;assert.equal(await feed.loadMore(),false);assert.equal(feed.nextCursor,'tail','a cursor loop is not authoritative exhaustion');
  repeat=false;assert.equal(await feed.loadMore(),true);assert.equal(feed.error,'');assert.equal(feed.nextCursor,'');
 });
+
+test('a legacy Hub without a conversation feed keeps its message history usable and probes again after reopening', async () => {
+  let supported = false, reads = 0;
+  const f = fixture(async call => {
+    if (call.path.includes('/feed?')) {
+      reads++;
+      if (!supported) throw Object.assign(new Error('not found'), {status: 404});
+      return {items: []};
+    }
+    return {todos: []};
+  });
+  const feed = new AssistantFeedModel();
+  await feed.open(f.model, f.row);
+  assert.equal(feed.feedUnavailable, true);
+  assert.equal(feed.error, '');
+  await feed.refresh();
+  assert.equal(reads, 1);
+  supported = true;
+  await feed.open(f.model, f.row);
+  assert.equal(reads, 2);
+  assert.equal(feed.hasLoaded, true);
+  assert.equal(feed.feedUnavailable, false);
+});
+
+test('a failed or denied activity-feed read remains visible and retryable', async () => {
+  let status = 403;
+  const {feed} = await opened(async () => { throw Object.assign(new Error('failed'), {status}); });
+  assert.equal(feed.feedUnavailable, false);
+  assert.equal(feed.error, 'permission_denied');
+  status = 503; await feed.refresh();
+  assert.equal(feed.feedUnavailable, false);
+  assert.equal(feed.error, 'failed');
+});

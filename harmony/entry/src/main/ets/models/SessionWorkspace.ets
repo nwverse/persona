@@ -1,3 +1,4 @@
+import { FolderCrumb, folderCrumbs, parentFolder, joinedFilePath } from './WorkspaceBrowser';
 import { ClientModel } from './ClientModel';
 import { ResourceRow, Wire } from './Wire';
 import { segment } from './HubRepository';
@@ -15,6 +16,8 @@ export class WorkspaceEntry {
   path: string = '';
   directory: boolean = false;
   symlink: boolean = false;
+  linkTarget: string = '';
+  linkBroken: boolean = false;
   size: number = 0;
   mtime: string = '';
   ignored: boolean = false;
@@ -140,6 +143,14 @@ export class SessionWorkspace {
   @Trace cwd: string = '';
   @Trace currentPath: string = '';
   @Trace entries: WorkspaceEntry[] = [];
+  @Trace folderBack: string[] = [];
+  @Trace folderForward: string[] = [];
+  @Trace findNames: string[] = [];
+  @Trace findRoot: string = '';
+  @Trace findBusy: boolean = false;
+  @Trace findError: string = '';
+  @Trace findTruncated: boolean = false;
+  private findEpoch: number = 0;
   @Trace fileBusy: boolean = false;
   @Trace fileReadBusy: boolean = false;
   @Trace fileError: string = '';
@@ -158,6 +169,20 @@ export class SessionWorkspace {
   @Trace gitError: string = '';
   @Trace gitStatus: Record<string, Object> = {};
   @Trace gitFiles: WorkspaceGitFile[] = [];
+  @Trace gitCommits: Record<string,Object>[] = [];
+  @Trace gitMoreCommits: boolean = false;
+  @Trace gitHistoryBusy: boolean = false;
+  @Trace gitHistoryError: string = '';
+  @Trace gitCommitHash: string = '';
+  @Trace gitShow: Record<string,Object> = {};
+  @Trace gitShowBusy: boolean = false;
+  @Trace gitShowError: string = '';
+  private gitFirst: string = '';
+  private gitSkip: number = 0;
+  private gitStatusEpoch: number = 0;
+  private gitHistoryEpoch: number = 0;
+  private gitShowEpoch: number = 0;
+  private gitDiffEpoch: number = 0;
   @Trace gitDiff: string = '';
   @Trace gitDiffError: string = '';
   @Trace gitDiffBusy: boolean = false;
@@ -255,10 +280,11 @@ export class SessionWorkspace {
     const manager = row.manager || model.profile.manager;
     this.fileTransfer.bind(model, machine, manager);
     this.cwd = cwd;
-    this.currentPath = cwd;
+    this.currentPath = cwd; this.folderBack = []; this.folderForward = []; this.resetFileFind();
     this.entries = [];
     this.fileBusy = false; this.fileReadBusy = false;
-    this.gitStatus = {};
+    this.gitStatus = {}; this.gitFirst = ''; this.gitSkip = 0; this.gitCommits = []; this.gitMoreCommits = false;
+    this.gitHistoryError = ''; this.gitHistoryBusy = false; this.gitHistoryEpoch++; this.closeGitShow(); this.closeGitDiff();
     this.gitFiles = [];
     this.gitBusy = false; this.gitDiffBusy = false;
     this.gitBranches = [];
@@ -421,7 +447,8 @@ export class SessionWorkspace {
     if (next === this.tab && this.visible) return;
     if (next !== this.tab) {
       this.revision++;
-      this.fileListEpoch++;
+      this.fileListEpoch++; if (this.findBusy) this.resetFileFind();
+      this.gitStatusEpoch++; this.gitHistoryEpoch++; this.gitHistoryBusy=false; this.closeGitShow(); this.closeGitDiff();
       this.fileBusy = false; this.fileReadBusy = false; this.gitBusy = false; this.gitDiffBusy = false; this.screenBusy = false;
       this.screenKeyBusy = false;
       this.fileWriteBusy = false; this.gitWriteBusy = false;
@@ -458,11 +485,55 @@ export class SessionWorkspace {
     }
   }
 
-  async openPath(path: string): Promise<void> {
-    const value = path.trim();
-    if (!value || !this.current()) return;
-    this.currentPath = value;
+  private resetFileFind():void {
+    this.findEpoch++; this.findNames=[]; this.findRoot=''; this.findBusy=false; this.findTruncated=false; this.findError='';
+  }
+
+  private async browse(path:string):Promise<void> {
+    if (path !== this.currentPath) {
+      this.entries=[]; this.hasMoreEntries=false; this.fileError=''; this.resetFileFind(); this.sendFsWatch([],false);
+    }
+    this.currentPath=path;
     await this.loadFiles();
+  }
+
+  async openPath(path: string): Promise<void> {
+    const value=path.trim();
+    if (!value || !this.current() || !this.visible || this.tab !== 0) return;
+    if (value !== this.currentPath) {
+      this.folderBack=this.folderBack.concat([this.currentPath]).slice(-50); this.folderForward=[];
+    }
+    await this.browse(value);
+  }
+
+  async historyFolder(forward:boolean):Promise<void> {
+    if (!this.current() || !this.visible || this.tab !== 0) return;
+    const stack=forward ? this.folderForward : this.folderBack;
+    if (!stack.length) return;
+    const next=stack[stack.length-1];
+    if (forward) { this.folderForward=stack.slice(0,-1); this.folderBack=this.folderBack.concat([this.currentPath]).slice(-50); }
+    else { this.folderBack=stack.slice(0,-1); this.folderForward=this.folderForward.concat([this.currentPath]).slice(-50); }
+    await this.browse(next);
+  }
+
+  crumbs(): FolderCrumb[] {
+    const machine=this.model?.machines.find((row:ResourceRow) => row.id === this.machineId);
+    return folderCrumbs(this.currentPath,machine ? Wire.text(machine.data(),'home') : '');
+  }
+
+  async loadFileIndex(force:boolean=false):Promise<void> {
+    if (!this.current() || !this.visible || this.tab !== 0) return;
+    const path=this.currentPath || this.cwd, revision=this.revision;
+    if (!force && this.findRoot===path) return;
+    const epoch=++this.findEpoch; this.findRoot=path; this.findNames=[]; this.findTruncated=false; this.findBusy=true; this.findError='';
+    const live=():boolean => epoch===this.findEpoch && this.activeRevision(revision,this.ownerTarget,0) && path===this.currentPath;
+    try {
+      const reply=await this.request(this.requestPath('/fs/find?cwd='+segment(path)));
+      if (!live()) return;
+      if (!Array.isArray(reply['files'])) throw new Error('session_find_unavailable');
+      this.findNames=Wire.strings(reply,'files'); this.findTruncated=Wire.bool(reply,'truncated');
+    } catch (error) { if (live()) this.findError=this.message(error as Error); }
+    finally { if (epoch===this.findEpoch) this.findBusy=false; }
   }
 
   hide(): void {
@@ -570,6 +641,7 @@ export class SessionWorkspace {
         const row = new WorkspaceEntry();
         row.name = Wire.text(item, 'name'); row.path = this.joinPath(serverPath, row.name);
         row.directory = Wire.bool(item, 'dir'); row.symlink = Wire.bool(item, 'symlink');
+        row.linkTarget = Wire.text(item,'link_target'); row.linkBroken = Wire.bool(item,'link_broken');
         row.size = Wire.number(item, 'size'); row.mtime = Wire.text(item, 'mtime'); row.ignored = Wire.bool(item, 'ignored');
         return row;
       });
@@ -584,25 +656,17 @@ export class SessionWorkspace {
 
   private joinPath(parent: string, name: string): string {
     if (parent.endsWith('/')) return parent + name;
-    return parent + '/' + name;
+    return joinedFilePath(parent,name);
   }
 
   async openEntry(entry: WorkspaceEntry): Promise<void> {
-    if (entry.directory) {
-      this.currentPath = entry.path;
-      await this.loadFiles();
-      this.sendFsWatch([this.currentPath], false);
-    } else await this.openFile(entry.path, entry.name);
+    if (entry.directory) await this.openPath(entry.path);
+    else await this.openFile(entry.path,entry.name);
   }
 
   openParent(): void {
-    if (!this.currentPath || this.currentPath === this.cwd) return;
-    let normalized = this.currentPath;
-    while (normalized.length > 1 && normalized.endsWith('/')) normalized = normalized.slice(0, -1);
-    const slash = normalized.lastIndexOf('/');
-    const parent = slash > 0 ? normalized.slice(0, slash) : this.cwd;
-    this.currentPath = parent.length < this.cwd.length ? this.cwd : parent;
-    this.loadFiles();
+    const parent=parentFolder(this.currentPath);
+    if (parent) this.openPath(parent);
   }
 
   async openFile(path: string, name: string): Promise<void> {
@@ -782,12 +846,19 @@ export class SessionWorkspace {
 
   async loadGit(): Promise<void> {
     if (!this.current() || !this.visible || this.tab !== 1) return;
-    const revision = this.revision;
+    const revision = this.revision, epoch=++this.gitStatusEpoch;
+    const current=():boolean => this.activeRevision(revision,this.ownerTarget,1) && epoch===this.gitStatusEpoch;
     this.gitBusy = true;
     this.gitError = '';
     try {
       const result = await this.request(this.requestPath('/git/status?cwd=' + segment(this.cwd)));
-      if (revision !== this.revision || !this.current()) return;
+      if (!current()) return;
+      const first=Wire.rows(result,'commits'), head=Wire.text(Wire.object(result,'head'),'hash') || (first.length ? Wire.text(first[0],'hash') : '');
+      const identity=JSON.stringify([Wire.text(result,'branch'),head,first.map((c:Record<string,Object>) => Wire.text(c,'hash'))]);
+      if (identity !== this.gitFirst) {
+        this.gitFirst=identity; this.gitHistoryEpoch++; this.gitHistoryBusy=false; this.gitHistoryError='';
+        this.gitCommits=first; this.gitSkip=first.length; this.gitMoreCommits=first.length>=30;
+      } else this.gitCommits=first.concat(this.gitCommits.slice(first.length));
       this.gitStatus = result;
       this.gitFiles = Wire.rows(result, 'files').map((item: Record<string, Object>) => {
         const file = new WorkspaceGitFile();
@@ -799,8 +870,43 @@ export class SessionWorkspace {
       this.gitStashes = Wire.rows(result, 'stashes');
       this.sendFsWatch([], true);
     } catch (error) {
-      if (revision === this.revision && this.current()) this.gitError = this.message(error as Error);
-    } finally { if (revision === this.revision) this.gitBusy = false; }
+      if (current()) this.gitError = this.message(error as Error);
+    } finally { if (current()) this.gitBusy = false; }
+  }
+
+  async olderGitCommits():Promise<void> {
+    if (!this.current() || !this.visible || this.tab!==1 || !this.gitMoreCommits || this.gitHistoryBusy) return;
+    const revision=this.revision, target=this.ownerTarget, first=this.gitFirst, skip=this.gitSkip, epoch=++this.gitHistoryEpoch;
+    const live=():boolean => this.activeRevision(revision,target,1) && first===this.gitFirst && epoch===this.gitHistoryEpoch;
+    this.gitHistoryBusy=true; this.gitHistoryError='';
+    try {
+      const result=await this.request(this.requestPath('/git/log?cwd='+segment(this.cwd)+'&skip='+skip+'&limit=50'));
+      if (!live()) return;
+      if (!Array.isArray(result['commits'])) throw new Error('session_git_history_error');
+      const page=Wire.rows(result,'commits'), seen=new Set<string>(this.gitCommits.map((c:Record<string,Object>) => Wire.text(c,'hash')));
+      const distinct=page.filter((c:Record<string,Object>) => { const hash=Wire.text(c,'hash'); if (!hash || seen.has(hash)) return false; seen.add(hash); return true; });
+      this.gitCommits=this.gitCommits.concat(distinct); this.gitSkip=skip+page.length;
+      this.gitMoreCommits=page.length>0 && Wire.bool(result,'has_more',page.length===50);
+    } catch (error) { if (live()) this.gitHistoryError=this.message(error as Error); }
+    finally { if (live()) this.gitHistoryBusy=false; }
+  }
+
+  async showGitCommit(hash:string):Promise<void> {
+    if (!this.current() || !this.visible || this.tab!==1 || !/^[0-9a-f]{7,64}$/i.test(hash) ||
+      !this.gitCommits.some((c:Record<string,Object>) => Wire.text(c,'hash')===hash)) return;
+    const rev=this.revision, target=this.ownerTarget, epoch=++this.gitShowEpoch;
+    const live=():boolean => this.activeRevision(rev,target,1) && this.gitCommitHash===hash && epoch===this.gitShowEpoch;
+    this.gitCommitHash=hash; this.gitShow={}; this.gitShowError=''; this.gitShowBusy=true;
+    try {
+      const result=await this.request(this.requestPath('/git/show?cwd='+segment(this.cwd)+'&hash='+segment(hash)));
+      if (!live()) return;
+      if (Wire.text(Wire.object(result,'commit'),'hash')!==hash) throw new Error('session_git_history_error');
+      this.gitShow=result;
+    } catch (error) { if (live()) this.gitShowError=this.message(error as Error); }
+    finally { if (live()) this.gitShowBusy=false; }
+  }
+  closeGitShow():void {
+    this.gitShowEpoch++; this.gitCommitHash=''; this.gitShow={}; this.gitShowBusy=false; this.gitShowError='';
   }
 
   async loadGitBranches(): Promise<void> {
@@ -873,27 +979,26 @@ export class SessionWorkspace {
     return this.gitMutation('stash', Wire.payload(fields, values));
   }
 
-  async openGitDiff(file: WorkspaceGitFile): Promise<void> {
-    this.gitDiffPath = file.path;
-    this.gitDiffStaged = file.staged && !file.unstaged;
+  async openGitDiff(file:WorkspaceGitFile, staged?:boolean):Promise<void> {
+    this.gitDiffPath=file.path;
+    this.gitDiffStaged=staged === undefined ? file.staged && !file.unstaged : staged && file.staged;
     await this.loadGitDiff();
   }
 
-  async loadGitDiff(): Promise<void> {
-    if (!this.gitDiffPath || !this.current()) return;
-    const revision = this.revision, path = this.gitDiffPath;
-    this.gitDiffError = ''; this.gitDiff = ''; this.gitDiffBusy = true;
+  async loadGitDiff():Promise<void> {
+    if (!this.gitDiffPath || !this.current() || !this.visible || this.tab!==1) return;
+    const revision=this.revision, target=this.ownerTarget, path=this.gitDiffPath, staged=this.gitDiffStaged, epoch=++this.gitDiffEpoch;
+    const live=():boolean => this.activeRevision(revision,target,1) && this.gitDiffPath===path && this.gitDiffStaged===staged && this.gitDiffEpoch===epoch;
+    this.gitDiffError=''; this.gitDiff=''; this.gitDiffTruncated=false; this.gitDiffBusy=true;
     try {
-      const result = await this.request(this.requestPath('/git/diff?' + query([
-        'cwd=' + segment(this.cwd), 'path=' + segment(path), 'staged=' + (this.gitDiffStaged ? '1' : '0')
-      ])));
-      if (revision !== this.revision || !this.current() || this.gitDiffPath !== path) return;
-      this.gitDiff = Wire.text(result, 'diff'); this.gitDiffTruncated = Wire.bool(result, 'truncated');
-    } catch (error) { if (revision === this.revision && this.current()) this.gitDiffError = this.message(error as Error); }
-    finally { if (revision === this.revision) this.gitDiffBusy = false; }
+      const result=await this.request(this.requestPath('/git/diff?'+query(['cwd='+segment(this.cwd),'path='+segment(path),'staged='+(staged?'1':'0')])));
+      if (!live()) return;
+      this.gitDiff=Wire.text(result,'diff'); this.gitDiffTruncated=Wire.bool(result,'truncated');
+    } catch (error) { if (live()) this.gitDiffError=this.message(error as Error); }
+    finally { if (live()) this.gitDiffBusy=false; }
   }
 
-  closeGitDiff(): void { this.gitDiffPath = ''; this.gitDiff = ''; this.gitDiffError = ''; }
+  closeGitDiff():void { this.gitDiffEpoch++; this.gitDiffPath=''; this.gitDiff=''; this.gitDiffTruncated=false; this.gitDiffError=''; this.gitDiffBusy=false; }
 
   private canReadScreen(): boolean {
     if (!this.current() || !this.visible || this.tab !== 3 || !this.machineTrustedOnline()) return false;
@@ -1407,7 +1512,8 @@ export class SessionWorkspace {
   }
 
   private resetBusyState(): void {
-    this.fileListEpoch++; this.fileReadEpoch++;
+    this.fileListEpoch++; this.fileReadEpoch++; this.resetFileFind();
+    this.gitStatusEpoch++; this.gitHistoryEpoch++; this.gitHistoryBusy=false; this.closeGitShow(); this.closeGitDiff();
     this.fileBusy = false; this.fileReadBusy = false; this.fileWriteBusy = false;
     this.gitBusy = false; this.gitDiffBusy = false; this.gitWriteBusy = false;
     this.screenBusy = false; this.screenKeyBusy = false;

@@ -24,6 +24,9 @@ export struct InteractionDecisionForm {
   @Param readOnly: boolean = false;
   @Param pinFooter: boolean = false;
   @Param fillAvailable: boolean = false;
+  @Param heightLimit: number = 0;
+  @Local inlineBodyHeight: number = 0;
+  @Local inlineFooterHeight: number = 44;
   @Param draft: QuestionDraft | undefined = undefined;
   @Param draftSession: string = '';
   @Event admission: () => boolean = (): boolean => true;
@@ -514,7 +517,9 @@ export struct InteractionDecisionForm {
           if (interactionScreenCanCancel(this.request) && this.pinFooter) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
             .attributeModifier(ButtonStyles.chrome).enabled(this.canRespond()).accessibilityText(tr('more'))
             .margin({ end: LengthMetrics.vp(Tokens.gap) }).bindMenu([{ value: tr('interaction_question_cancel'), action: () => this.submit('cancel') }]).flexShrink(0).id('interaction.more')
-          Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('confirm')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('confirm', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('confirm')).bindTips(tr('confirm')).flexShrink(0).enabled(this.canSubmit())
+          Button(tr('answer'), { type: ButtonType.Capsule }).fontSize(16).fontWeight(FontWeight.Medium)
+            .height(38).padding({ left: 16, right: 16 }).backgroundColor(Colors.action).fontColor(Colors.onAction)
+            .accessibilityText(tr('answer')).enabled(this.canSubmit())
             .onClick(() => this.submit('answer')).id('interaction.submit')
         }.width('100%')
         else {
@@ -522,7 +527,9 @@ export struct InteractionDecisionForm {
             .onClick(() => { this.deferred = true; this.onLater(); }).id('interaction.later')
           if (interactionScreenCanCancel(this.request)) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('cancel')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('cancel', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('cancel')).bindTips(tr('cancel'))
             .enabled(this.canRespond()).onClick(() => this.submit('cancel')).id('interaction.cancel')
-          Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('confirm')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('confirm', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('confirm')).bindTips(tr('confirm')).enabled(this.canSubmit())
+          Button(tr('answer'), { type: ButtonType.Capsule }).fontSize(16).fontWeight(FontWeight.Medium)
+            .height(38).padding({ left: 16, right: 16 }).backgroundColor(Colors.action).fontColor(Colors.onAction)
+            .accessibilityText(tr('answer')).enabled(this.canSubmit())
             .onClick(() => this.submit('answer')).id('interaction.submit')
         }
       } else if (!this.readOnly && this.request.kind === 'elicitation') {
@@ -555,8 +562,32 @@ export struct InteractionDecisionForm {
     } else if (!this.deferred) this.bodyContent()
   }
 
+  private inlineSpace(): number {
+    return Math.max(1, this.heightLimit - this.inlineFooterHeight - 22);
+  }
   build() {
-    if (this.fillAvailable && !this.pinFooter && this.request.kind !== 'question') Scroll() {
+    if (this.heightLimit > 0) Column({space: 6}) {
+      Scroll() {
+        Column({space: Tokens.gap}) {
+          Row({space: 6}) {
+            Circle().width(7).height(7).fill(Colors.needs)
+            Text(tr(this.request.kind === 'question' ? 'question' : this.request.kind === 'plan' ? 'plan' : 'needs_you'))
+              .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
+          }.width('100%')
+          this.formBody()
+        }.width('100%').alignItems(HorizontalAlign.Start).onAreaChange((_before: Area, area: Area) => {
+          const h = Number(area.height);
+          if (Number.isFinite(h) && h > 0 && Math.abs(this.inlineBodyHeight - h) > 0.5) this.inlineBodyHeight = h;
+        })
+      }.width('100%').height(this.inlineBodyHeight > 0 ? Math.min(this.inlineBodyHeight, this.inlineSpace()) : undefined)
+        .constraintSize({maxHeight: this.inlineSpace()}).scrollBar(BarState.Auto).align(Alignment.TopStart).id('interaction.body')
+      Column() { this.responseFooter() }.width('100%').onAreaChange((_before: Area, area: Area) => {
+        const h = Number(area.height);
+        if (Number.isFinite(h) && h > 0 && Math.abs(this.inlineFooterHeight - h) > 0.5) this.inlineFooterHeight = h;
+      })
+    }.width('100%').padding({left:12,right:12,top:8,bottom:8}).alignItems(HorizontalAlign.Start)
+      .backgroundColor(Colors.surface).border({width:0.6,color:Colors.divider,radius:16}).borderRadius(16).id('interaction.card')
+    else if (this.fillAvailable && !this.pinFooter && this.request.kind !== 'question') Scroll() {
       Column({ space: Tokens.gap }) { this.formBody(); this.responseFooter() }
         .width('100%').padding({ top: Tokens.page }).alignItems(HorizontalAlign.Start)
     }.width('100%').height('100%').scrollBar(BarState.Auto).align(Alignment.TopStart).id('interaction.body')

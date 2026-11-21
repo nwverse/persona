@@ -21,9 +21,11 @@ export class Tokens {
   static readonly inputLines: number = 144;
   static readonly compactPane: number = 340;
   static readonly popupWidth: number = 280;
+  // Compact system-like navigation shares a line with back and menu buttons at every text size.
+  static readonly navigationTextMaxScale: number = 1.35;
   static readonly headerSegment: number = 192;
   static readonly headerWideSegment: number = 176;
-  static readonly minimumInput: number = 160;
+  static readonly minimumInput: number = 136;
   static readonly hairline: number = 1;
   static readonly fine: number = 4;
   static readonly gap: number = 8;

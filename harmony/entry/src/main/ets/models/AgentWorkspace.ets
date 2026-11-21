@@ -93,8 +93,10 @@ class AgentPreferences {
 export class AgentWorkspace {
   @Trace groups: AgentWorkspaceGroup[] = [];
   @Trace quickFilter: string = 'all';
+  @Trace filterCounts:Record<string,Object> = {};
   @Trace groupingMode: string = 'state';
   @Trace machineFilter: string = '';
+  @Trace currentHubOnly: boolean = false;
   @Trace search: string = '';
   @Trace history: boolean = false;
   @Trace selectedKey: string = '';
@@ -126,13 +128,23 @@ export class AgentWorkspace {
   private freezeSuppressed: boolean = false;
   private historyRequest: number = 0;
   private persistTimer: number = -1;
+  private hubModeLoaded: boolean = false;
   private adapter: AgentListAdapter;
   constructor(adapter?: AgentListAdapter) { this.adapter = adapter || new CoreAgentListAdapter(); }
   private folded: string[] = [];
   private expandedIdle: string[] = [];
   private expandedQuiet: string[] = [];
   private heldSession: string = '';
-  historySupported(): boolean { return !!this.client?.directoryOwners().some((owner: ClientModel) => owner.features.includes('agent_session_archives')); }
+  includesHub(group: string): boolean {
+    const current = this.client?.profile.id;
+    return !this.currentHubOnly || !current || !group || current === group;
+  }
+  private shownOwners(client: ClientModel): ClientModel[] {
+    return client.directoryOwners().filter((owner: ClientModel) => this.includesHub(owner.profile.id));
+  }
+  historySupported(): boolean {
+    return !!this.client && this.shownOwners(this.client).some((owner: ClientModel) => owner.features.includes('agent_session_archives'));
+  }
   rowOnline(row: ResourceRow): boolean { return this.ownerFor(row)?.connected === true; }
   hasRows(): boolean { return this.groups.some((group: AgentWorkspaceGroup) => group.totalRowCount > 0); }
   visibleRows(): ResourceRow[] {
@@ -169,21 +181,25 @@ export class AgentWorkspace {
     this.viewScope = JSON.stringify([this.scope, this.owner]);
     this.openingView = true; this.loading = true; this.busy = false; this.error = '';
     this.externalSelection = undefined; this.groups = []; this.sourceRows = []; this.latestSourceRows = []; this.historyRows = []; this.historyLoaded = false; this.frozenGroups = undefined;
-    this.quickFilter = 'all'; this.groupingMode = 'state'; this.machineFilter = ''; this.search = ''; this.history = false; this.selectedKey = '';
+    this.quickFilter = 'all'; this.filterCounts = {}; this.groupingMode = 'state'; this.machineFilter = ''; this.search = ''; this.history = false; this.selectedKey = '';
     this.readingDetail = false; this.freezeSuppressed = false;
     this.preferences.clear(); this.pinsSpaces = []; this.pinsSessions = []; this.mutesSpaces = []; this.mutesSessions = []; this.mutesAllowed = [];
     try {
-      const saved = Wire.parse(await client.loadView('agent-workspace'));
+      const values = await Promise.all([client.loadView('agent-workspace'), this.hubModeLoaded ? Promise.resolve('') : client.loadView('agent-hub-mode')]);
       if (!this.loadCurrent(client, revision)) return;
+      const saved = Wire.parse(values[0]);
+      if (!this.hubModeLoaded) { this.currentHubOnly = values[1] === 'current'; this.hubModeLoaded = true; }
       this.quickFilter = ['all', 'needsYou', 'unread', 'working', 'backgroundWaiting'].includes(Wire.text(saved, 'quick')) ? Wire.text(saved, 'quick') :
         (Wire.text(saved, 'quick') === 'needs_you' ? 'needsYou' : 'all');
       this.groupingMode = ['state', 'machine', 'space'].includes(Wire.text(saved, 'grouping')) ? Wire.text(saved, 'grouping') : 'state';
-      this.machineFilter = Wire.text(saved, 'machine'); this.search = Wire.text(saved, 'search');
+      const savedMachine = Wire.text(saved, 'machine');
+      this.machineFilter = this.machineForShownHub(savedMachine); this.search = Wire.text(saved, 'search');
       this.history = Wire.bool(saved, 'history');
       if (this.history && client.connected && !this.historySupported()) this.history = false;
       this.selectedKey = Wire.text(saved, 'selected');
       this.folded = Wire.strings(saved, 'folded'); this.expandedIdle = Wire.strings(saved, 'expanded_idle');
       this.expandedQuiet = Wire.strings(saved, 'expanded_quiet');
+      if (this.machineFilter !== savedMachine) this.saveViewLater();
       this.latestSourceRows = this.history ? this.historyRows.slice() : this.rowsForClient(client);
       this.syncSelected(client);
       this.rebuild();
@@ -204,6 +220,7 @@ export class AgentWorkspace {
   }
 
   hide(): void {
+    this.filterCounts = {};
     this.revision++; this.openingView = false; this.client = undefined; this.groups = []; this.sourceRows = []; this.latestSourceRows = []; this.historyRows = []; this.historyLoaded = false;
     this.frozenGroups = undefined; this.readingDetail = false;
     if (this.persistTimer !== -1) clearTimeout(this.persistTimer);
@@ -294,7 +311,7 @@ export class AgentWorkspace {
   }
 
   async setMachineFilter(value: string): Promise<void> {
-    this.releaseFreeze(); this.machineFilter = value; this.rebuild(); this.saveViewLater();
+    this.releaseFreeze(); this.machineFilter = this.machineForShownHub(value); this.rebuild(); this.saveViewLater();
     if (this.history) {
       const client = this.client;
       if (client) await this.loadHistory(client, this.revision, true);
@@ -302,6 +319,36 @@ export class AgentWorkspace {
     } else {
       this.refreezeAfterFilter();
     }
+  }
+
+  private machineForShownHub(value: string): string {
+    if (!value || !this.currentHubOnly || !this.client?.profile.id) return value;
+    let group = '';
+    if (value.startsWith('[')) {
+      try {
+        const parts = JSON.parse(value) as string[];
+        if (parts.length === 3 && typeof parts[0] === 'string') group = parts[0];
+      } catch (_) {}
+    } else {
+      const parts = value.split('|');
+      if (parts.length >= 3 || parts.length === 2 && this.client.directoryOwners().some((owner: ClientModel) => owner.profile.id === parts[0])) group = parts[0];
+    }
+    return this.includesHub(group) ? value : '';
+  }
+
+  async setCurrentHubOnly(value: boolean): Promise<void> {
+    const client = this.client;
+    if (!client || this.currentHubOnly === value) return;
+    this.hubModeLoaded = true; this.currentHubOnly = value; this.releaseFreeze();
+    this.historyRequest++; this.historyRows = []; this.historyLoaded = false; this.loading = false;
+    this.machineFilter = this.machineForShownHub(this.machineFilter);
+    if (this.history && !this.historySupported()) this.history = false;
+    this.latestSourceRows = this.history ? [] : this.rowsForClient(client);
+    this.rebuild(); this.saveViewLater();
+    const saved = client.saveView('agent-hub-mode', value ? 'current' : 'all').catch(() => undefined);
+    if (this.history) await this.loadHistory(client, this.revision, true);
+    else this.refreezeAfterFilter();
+    await saved;
   }
 
   async setHistory(value: boolean): Promise<void> {
@@ -622,7 +669,7 @@ export class AgentWorkspace {
   private async loadHistory(client: ClientModel, revision: number, refreezeAfterLoad: boolean = false): Promise<void> {
     if (!this.history || !this.historySupported() || client.demo) { if (refreezeAfterLoad) this.refreezeAfterFilter(); return; }
     const request = ++this.historyRequest, machine = this.machineFilter;
-    const owners = new Set<ClientModel>(client.directoryOwners());
+    const owners = new Set<ClientModel>(this.shownOwners(client));
     this.loading = true; this.error = ''; const rows: ResourceRow[] = [];
     try {
       for (const owner of owners) {
@@ -630,12 +677,9 @@ export class AgentWorkspace {
         if (!owner.features.includes('agent_session_archives')) continue;
         const snapshot = this.capture(owner); if (!snapshot) continue;
         const filters = owner.profile.manager ? ['manager=' + segment(owner.profile.manager)] : [];
-        if (machine) {
-          if (machine.startsWith('[')) {
-            const match = owner.machines.find((row: ResourceRow) => this.machineIdentity(row) === machine); if (!match) continue;
-            filters.unshift('machine_id=' + segment(match.id));
-          } else filters.unshift('machine_id=' + segment(machine));
-        }
+        const machineId = this.archiveMachineFor(machine, owner, client);
+        if (machineId === undefined) continue;
+        if (machineId) filters.unshift('machine_id=' + segment(machineId));
         const path = '/api/v1/sessions/archived' + (filters.length ? '?' + filters.join('&') : '');
         try {
           const data = await snapshot.repo.call(path);
@@ -644,7 +688,9 @@ export class AgentWorkspace {
             const row = ResourceRow.from(item, 'session'); if (!row.manager) row.manager = owner.profile.manager;
             row.group = owner.profile.id || ''; if (row.manager === owner.profile.manager && !Wire.bool(row.data(), 'assistant')) rows.push(row);
           }
-        } catch (failure) { if (this.ownerActive(snapshot)) this.fail(failure as Error); }
+        } catch (failure) {
+          if (this.ownerActive(snapshot) && request === this.historyRequest && machine === this.machineFilter) this.fail(failure as Error);
+        }
       }
       if (!this.loadCurrent(client, revision) || request !== this.historyRequest || machine !== this.machineFilter) return;
       if ((refreezeAfterLoad || !this.historyLoaded) && this.readingDetail) { this.freezeSuppressed = false; this.frozenGroups = undefined; }
@@ -652,9 +698,27 @@ export class AgentWorkspace {
     } finally { if (this.loadCurrent(client, revision) && request === this.historyRequest) { this.loading = false; if (refreezeAfterLoad && this.freezeSuppressed) this.refreezeAfterFilter(); } }
   }
 
+  private archiveMachineFor(filter: string, owner: ClientModel, root: ClientModel): string | undefined {
+    if (!filter) return '';
+    if (!filter.startsWith('[') && !filter.includes('|')) return filter;
+    let parts: string[] = [];
+    if (filter.startsWith('[')) {
+      try { parts = JSON.parse(filter) as string[]; } catch (_) { return undefined; }
+      if (!Array.isArray(parts) || parts.length !== 3 || !parts.every((part: string) => typeof part === 'string')) return undefined;
+    } else {
+      parts = filter.split('|');
+      if (parts.length === 2) {
+        const group = root.directoryOwners().some((candidate: ClientModel) => candidate.profile.id === parts[0]);
+        parts = group ? [parts[0], '', parts[1]] : ['', parts[0], parts[1]];
+      }
+    }
+    if (parts.length !== 3 || !parts[2] || parts[0] && parts[0] !== owner.profile.id || parts[1] && parts[1] !== owner.profile.manager) return undefined;
+    return parts[2];
+  }
+
   private rowsForClient(client: ClientModel | undefined): ResourceRow[] {
     if (!client) return [];
-    return (client.directoryReady ? client.directorySessions : client.sessions).filter((row: ResourceRow) => row.kind === 'session' &&
+    return (client.directoryReady ? client.directorySessions : client.sessions).filter((row: ResourceRow) => row.kind === 'session' && this.includesHub(row.group) &&
       !Wire.bool(row.data(), 'archived') && !Wire.bool(row.data(), 'assistant'));
   }
 
@@ -682,7 +746,9 @@ export class AgentWorkspace {
   private rebuild(): void {
     let groups: CoreAgentListGroup[];
     try {
-      groups = this.adapter.project(this.makeListInput()).groups;
+      const projection = this.adapter.project(this.makeListInput());
+      groups = projection.groups;
+      this.filterCounts = projection.filter_counts || {};
     } catch (_) {
       // Preserve both rows and action authority from the same successful snapshot.
       this.error = 'failed';
@@ -731,7 +797,7 @@ export class AgentWorkspace {
     return {rows, history: this.history, grouping: this.groupingMode, quick: this.quickFilter,
       machineFilter: this.machineFilter, query: this.search, reading: this.readingDetail,
       kept: this.frozenGroups?.flatMap((group) => group.memberIds) || [],
-      machines: this.client?.directoryOwners().flatMap((owner: ClientModel): Record<string, Object>[] => {
+      machines: (this.client ? this.shownOwners(this.client) : []).flatMap((owner: ClientModel): Record<string, Object>[] => {
         const current: Record<string, Object>[] = owner.machines.map((row: ResourceRow): Record<string, Object> =>
           ({ 'id': row.id, 'name': row.title, 'group': owner.profile.id, 'manager': row.manager || owner.profile.manager }));
         this.historyRows.filter((session) => (session.group || owner.profile.id) === owner.profile.id && session.manager === owner.profile.manager)
@@ -742,9 +808,9 @@ export class AgentWorkspace {
             }
           });
         return current;
-      }) || [],
+      }),
       coreSettings: { 'sort': 'state', 'folded': this.folded, 'expanded_idle': this.expandedIdle, 'expanded_quiet': this.expandedQuiet,
-        'compact': false, 'history': this.history, 'now': new Date().toISOString(), 'held': this.heldSession },
+        'compact': false, 'history': this.history, 'include_filter_counts': true, 'now': new Date().toISOString(), 'held': this.heldSession },
       preferencesFor: (row: AgentListRow): AgentListPreferences => this.preferencesFor(row.source as ResourceRow),
       machineIdentity: (row: AgentListRow): string => this.machineIdentity(row.source as ResourceRow),
       machineName: (row: AgentListRow): string => {

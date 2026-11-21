@@ -5883,6 +5883,11 @@ is chosen. Matching is lexical and case-sensitive; a home reached through a link
 `NodeInfo.home_real`) matches under either name, and the node also matches a working folder with its links
 followed. Empty is the default.
 
+Managers supporting conditional replacement return `supports_expected_rules: true`. A client may then send the
+exact rules from its read as `expected_rules` alongside `rules` (including an empty array for the first rule).
+A concurrent change returns HTTP 409 without writing. Read again before applying the edit. Clients that omit
+`expected_rules` retain the original replacement behavior.
+
 **Block** (#10053). The manager sends the computer's enabled block patterns in `node.configure`
 (`agent_dirs_blocked: [...]`, `[]` when none block) when its node connects and again whenever they change, then lists
 again; when it cannot read the rules (before its first successful read), it sends `null`, which leaves the node's list

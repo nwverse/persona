@@ -6,11 +6,11 @@
     },
     {
       "name": "persona_canvas",
-      "value": "#121416"
+      "value": "#101012"
     },
     {
       "name": "persona_surface",
-      "value": "#000000"
+      "value": "#1C1C1E"
     },
     {
       "name": "persona_brand",
@@ -34,19 +34,19 @@
     },
     {
       "name": "persona_grouped",
-      "value": "#181B20"
+      "value": "#000000"
     },
     {
       "name": "persona_ink",
-      "value": "#F1F4F8"
+      "value": "#F5F5F7"
     },
     {
       "name": "persona_secondary",
-      "value": "#A8AFBA"
+      "value": "#ACACB3"
     },
     {
       "name": "persona_control",
-      "value": "#343B45"
+      "value": "#2C2C2E"
     },
     {
       "name": "persona_selection",
@@ -74,7 +74,7 @@
     },
     {
       "name": "persona_divider",
-      "value": "#3A414C"
+      "value": "#39393D"
     },
     {
       "name": "persona_subtle",

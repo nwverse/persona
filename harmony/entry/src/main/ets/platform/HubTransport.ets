@@ -213,11 +213,15 @@ function constantTimeEqual(left: string, right: string): boolean {
   return difference === 0;
 }
 
-function errorCode(body: string): string {
+function errorCode(body: string, path: string, method: string, status: number): string {
   if (!body || body.length > 64 * 1024) return 'http_error';
   try {
     const parsed = JSON.parse(body) as Record<string, Object>;
     const code = parsed['code'];
+    // The Hub exposes both a general HTTP code and a precise receipt error. A missing
+    // operation can be checked safely only on its authenticated operation-status route.
+    if (method === 'GET' && status === 404 && code === 'not_found' && parsed['error'] === 'no such operation' &&
+      /^\/api\/v1\/ops\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path)) return 'no_such_operation';
     if (typeof code === 'string' && code.length <= 128) return code;
     const error = parsed['error'];
     if (typeof error === 'string' && error.length <= 128) return error;
@@ -342,7 +346,10 @@ export class HubTransport {
     }
     const session = rcp.createSession(); this.requests.add(session);
     const request = new rcp.Request(target, verb as rcp.HttpMethod, headers, body);
-    request.configuration = { transfer: { autoRedirect: false, timeout: { connectMs: REQUEST_TIMEOUT_MS, transferMs: REQUEST_TIMEOUT_MS, inactivityMs: REQUEST_TIMEOUT_MS } },
+    // Creating or removing a checkout waits on its host. Keep the normal connection and response limits for other calls.
+    const worktreeRequest = verb === 'POST' && /^\/api\/v1\/machines\/[^/]+\/worktree\/(create|delete|add|remove)$/.test(path);
+    const responseTimeout = worktreeRequest ? 165000 : REQUEST_TIMEOUT_MS;
+    request.configuration = { transfer: { autoRedirect: false, timeout: { connectMs: REQUEST_TIMEOUT_MS, transferMs: responseTimeout, inactivityMs: responseTimeout } },
       security: { remoteValidation: this.pin ? (context: rcp.ValidationContext) => this.validateContextPin(context) : 'system' } };
     if (this.proxy) request.configuration.proxy = { url: 'http://' + this.proxy.host + ':' + this.proxy.port,
       createTunnel: 'always', security: { serverAuthentication: { authenticationType: 'basic', credential: {
@@ -363,7 +370,7 @@ export class HubTransport {
         if (state !== 'held') throw new HttpFailure(202, state === 'unknown' ? 'result_unknown' : 'pending', true, state === 'pending');
       }
       if (response.statusCode < 200 || response.statusCode >= 300)
-        throw new HttpFailure(response.statusCode, errorCode(text), !['GET', 'HEAD'].includes(verb) && writeResultUnknown(response.statusCode, text));
+        throw new HttpFailure(response.statusCode, errorCode(text, path, verb, response.statusCode), !['GET', 'HEAD'].includes(verb) && writeResultUnknown(response.statusCode, text));
       const responseType = response.headers['content-type'] || response.headers['Content-Type'];
       return { data: toArrayBuffer(bytes), contentType: typeof responseType === 'string' ? responseType : '' };
     } catch (error) {

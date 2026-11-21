@@ -1,5 +1,4 @@
 import test from 'node:test';
-import { stripTypeScriptTypes } from 'node:module';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
@@ -40,16 +39,37 @@ assert.equal(method(decision,'submitIconKey').call({request:{kind:'screen'},sele
 });
 
 
-test('Agent quick filters retain full names using native Select when the measured pane is too narrow',()=>{
- const src=fs.readFileSync(w+'/components/AgentListPage.ets','utf8');
- const start=src.indexOf('  private quickFilterUsesSelect()'),end=src.indexOf('  @Builder filters()',start);assert(start>=0&&end>start);
- let labelPixels=210;
- const Filters=vm.runInNewContext(stripTypeScriptTypes('class Filters {'+src.slice(start,end)+'}; Filters'),{
-  Tokens:{meta:14,touch:48,inset:12,page:16,fine:4},QUICK_LABELS:['all','needs_you','working','unread','agent_group_background'],QUICK_FILTERS:['all','needsYou','working','unread','backgroundWaiting'],FontWeight:{Medium:'medium'},tr:key=>key
- });
- const view=new Filters();view.environment={fontScale:1};view.getUIContext=()=>({px2vp:p=>p/3,getMeasureUtils:()=>({measureText:()=>labelPixels})});
- for(const width of [0,280,320,420]){view.filterWidth=width;assert.equal(view.quickFilterUsesSelect(),true,String(width));}
- view.filterWidth=713;assert.equal(view.quickFilterUsesSelect(),false);
- labelPixels=420;assert.equal(view.quickFilterUsesSelect(),true,'long localized label');
- labelPixels=210;view.environment.fontScale=1.5;assert.equal(view.quickFilterUsesSelect(),true,'enlarged system text');
+test('every quick filter keeps its complete localized accessible label and applies in one tap on narrow or magnified screens',()=>{
+ const source=fs.readFileSync(w+'/components/AgentListPage.ets','utf8');
+ const filters=source.slice(source.indexOf('  @Builder filters()'),source.indexOf('  @Builder renameForm()'));
+ const keys=source.match(/const QUICK_FILTERS: string\[\] = \[([^\]]+)\]/)[1].match(/'([^']+)'/g);
+ const labels=source.match(/const QUICK_LABELS: string\[\] = \[([^\]]+)\]/)[1].match(/'([^']+)'/g);
+ assert.deepEqual(keys,["'all'","'needsYou'","'unread'","'working'","'backgroundWaiting'"]);
+ assert.deepEqual(labels,["'all'","'needs_you'","'agent_group_unread'","'working'","'agent_group_background'"]);
+ assert.match(filters,/ForEach\(QUICK_FILTERS,[\s\S]*Button\(\{ type: ButtonType.Capsule \}\)[\s\S]*Text\(tr\(QUICK_LABELS\[index\]\)/);
+ assert.match(filters,/accessibilityText\(tr\(QUICK_LABELS\[index\]\)\)/);
+ assert.match(filters,/accessibilityDescription\(Wire.number\(this.workspace.filterCounts,key\)/);
+ assert.match(filters,/accessibilitySelected\(this\.workspace\.quickFilter === key\)/);
+ assert.match(filters,/responseRegion\([\s\S]*Math\.max\(44, [^)]*this\.environment\.fontScale/);
+ assert.match(filters,/onClick\([\s\S]*this\.workspace\.setQuickFilter\(key\)[\s\S]*\.id\('agents\.quick\.' \+ key\)/);
+ assert.match(filters,/\.scrollable\(ScrollDirection\.Horizontal\)/);
+ assert.ok(filters.indexOf('this.filterControl()')>filters.indexOf('.scrollable(ScrollDirection.Horizontal)'));
+});
+
+test('magnified project and Agent views keep symbols inside their slots and give titles and fields room to grow', () => {
+ const read = name => fs.readFileSync(w + '/' + name + '.ets', 'utf8');
+ const projects = read('components/ProjectsPage'), agents = read('components/AgentListPage');
+ const picker = read('components/AgentStartPicker'), phone = read('design/PhoneStyle');
+ const index = read('pages/Index');
+ const launch = index.slice(index.indexOf('  @Builder agentOptionRow('), index.indexOf('  private async loadAgentLaunchers'));
+ for (const source of [phone, projects, agents, picker, launch]) {
+   assert.doesNotMatch(source, /SymbolGlyph\([^\n]*?\)\s*\.fontSize\(\d+\)/, 'a fixed symbol must use vp independent of system text scaling');
+ }
+ assert.match(projects, /nativeEnvironment\.fontScale >= 1\.5[\s\S]{0,120}Column\(\{space:3\}\)[\s\S]{0,110}Text\(line\.tree!\.title\)/);
+ assert.match(projects, /GridRow\(\{columns:nativeEnvironment\.fontScale >= 1\.5 \? 1 : 2/);
+ assert.match(agents, /Text\(tr\(QUICK_LABELS\[index\]\)\)\.fontSize\(14\)\.maxFontScale\(Tokens\.navigationTextMaxScale\)/);
+ assert.match(picker, /TextInput\(\{text:this\.address[^\n]+\.height\(Math\.max\(46, 22 \* nativeEnvironment\.fontScale \+ 14\)\)/);
+ assert.match(launch, /width\(this\.environment\.fontScale >= 1\.5 \? Math\.min\(250,130 \* this\.environment\.fontScale\) : 122\)/);
+ assert.match(launch, /this\.machineChoice\(m\)[\s\S]{0,160}scrollable\(ScrollDirection\.Horizontal\)/);
+ assert.match(launch, /Text\(tr\('new_agent'\)\)\.fontSize\(18\)\.maxFontScale\(Tokens\.navigationTextMaxScale\)/);
 });

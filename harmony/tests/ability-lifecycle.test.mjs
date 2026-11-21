@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks, stripTypeScriptTypes } from 'node:module';
 import { readFileSync } from 'node:fs';
-const state={ready:true,foregrounded:0,background:0,activated:0,recordingStops:0,lookUnbinds:0,localeAnnouncements:0,language:'default',notifications:[],query:Promise.resolve(),init:Promise.resolve()};
+const state={ready:true,foregrounded:0,background:0,activated:0,recordingStops:0,dictationStops:0,lookUnbinds:0,localeAnnouncements:0,language:'default',notifications:[],query:Promise.resolve(),init:Promise.resolve()};
 globalThis.__personaAbilityTest=state;
 registerHooks({
  resolve(specifier,context,next){
@@ -20,6 +20,7 @@ registerHooks({
    export const window={};export const Strings={bind(){},refresh(){}};
    export const NOTIFICATION_ACTION='persona.notification.OPEN';export const nativeNotifications={refresh:()=>s.query};
    export const deviceFeatures={async background(){},async foreground(){}};
+   export const NativeDictation={cancelActive(){s.dictationStops++;}};
    export const KnowledgeRecording={async backgroundAll(){s.recordingStops++;}};
    export const deviceLook={async initialize(){},async bind(owner){if(owner===undefined)s.lookUnbinds++;}};
    export const nativeEnvironment={update(){},bindWindow(){},unbindWindow(){}};
@@ -31,12 +32,12 @@ registerHooks({
 });
 const {default:EntryAbility}=await import('../entry/src/main/ets/entryability/EntryAbility.ets');
 const turn=()=>new Promise(resolve=>setTimeout(resolve,0));
-function reset(){Object.assign(state,{ready:true,foregrounded:0,background:0,activated:0,recordingStops:0,lookUnbinds:0,localeAnnouncements:0,language:'default',notifications:[],query:Promise.resolve(),init:Promise.resolve()});}
+function reset(){Object.assign(state,{ready:true,foregrounded:0,background:0,activated:0,recordingStops:0,dictationStops:0,lookUnbinds:0,localeAnnouncements:0,language:'default',notifications:[],query:Promise.resolve(),init:Promise.resolve()});}
 test('a foreground permission query cannot reopen a connection after background or destroy',async()=>{
  for(const stop of ['onBackground','onDestroy']){
   reset();let release;state.query=new Promise(resolve=>release=resolve);const ability=new EntryAbility();ability.onForeground();ability[stop]();release();await turn();
   assert.equal(state.foregrounded,0);assert.equal(state.background,1);
-  assert.equal(state.recordingStops,1);assert.equal(state.lookUnbinds,1);
+  assert.equal(state.recordingStops,1);assert.equal(state.dictationStops,1);assert.equal(state.lookUnbinds,1);
  }
 });
 test('a notification arriving during cold initialization is retained and dispatched once ready',async()=>{

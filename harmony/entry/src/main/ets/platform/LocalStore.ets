@@ -47,10 +47,14 @@ export class LocalStore {
       await store.insert('client_state', { key: key, value: value }, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
     });
   }
-  async remove(key: string, expectedEpoch: number = this.keyEpoch(key)): Promise<void> {
+  async remove(key: string, expectedEpoch: number = this.keyEpoch(key), expectedValue?: string): Promise<void> {
     if (!this.store) return;
     const store = this.store, epoch = expectedEpoch;
-    await this.queue(async () => { if (epoch !== this.keyEpoch(key)) return; await store.executeSql('DELETE FROM client_state WHERE key = ?', [key]); });
+    await this.queue(async () => {
+      if (epoch !== this.keyEpoch(key)) return;
+      if (expectedValue === undefined) await store.executeSql('DELETE FROM client_state WHERE key = ?', [key]);
+      else if (!this.retiredKey(key)) await store.executeSql('DELETE FROM client_state WHERE key = ? AND value = ?', [key, expectedValue]);
+    });
   }
   async keys(): Promise<string[]> {
     if (!this.store) return [];

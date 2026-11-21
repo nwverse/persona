@@ -2,6 +2,7 @@ import { ClientModel } from './ClientModel';
 import { HubRepository, segment } from './HubRepository';
 import { HttpFailure } from '../platform/HubTransport';
 import { ResourceRow, Wire } from './Wire';
+import { TODO_HUB_CHOICES, TODO_HUB_SECTIONS, TodoHubCounts, TodoHubRow, todoHubChoiceIncludes, todoHubLabel } from './TodoHubView';
 
 const TODO_STATES: string[] = ['needs_you', 'checking', 'working', 'followup', 'not_started', 'done'];
 const TODO_STATUS_ORDER: string[] = ['needs_you', 'checking', 'working', 'followup', 'not_started', 'done'];
@@ -73,6 +74,10 @@ export class TodoWorkspaceItem {
   origin: string = '';
   planId: string = '';
   doneAt: string = '';
+  dueAt: string = '';
+  dueDate: string = '';
+  due: number = Number.NaN;
+  dueBy: number = Number.NaN;
   createdAt: string = '';
   updatedAt: string = '';
   reopenedAt: string = '';
@@ -81,6 +86,8 @@ export class TodoWorkspaceItem {
   startError: string = '';
   project: string = '';
   priority: string = '';
+  partOf: string = '';
+  hubView: TodoHubRow | undefined;
   stage: string = '';
   prUrl: string = '';
   kind: string = '';
@@ -104,6 +111,15 @@ export class TodoWorkspaceItem {
     this.origin = Wire.text(data, 'origin');
     this.planId = Wire.text(data, 'plan_id');
     this.doneAt = Wire.text(data, 'done_at');
+    this.dueAt=Wire.text(data,'due_at'); this.dueDate=Wire.text(data,'due_date');
+    this.due=Date.parse(this.dueAt); this.dueBy=this.due;
+    if (!Number.isFinite(this.due) && /^\d{4}-\d{2}-\d{2}$/.test(this.dueDate)) {
+      const parts=this.dueDate.split('-').map((n:string) => Number(n));
+      const day=new Date(0); day.setFullYear(parts[0],parts[1]-1,parts[2]); day.setHours(0,0,0,0);
+      if (day.getFullYear() === parts[0] && day.getMonth() === parts[1]-1 && day.getDate() === parts[2]) {
+        this.due=day.getTime(); day.setDate(day.getDate()+1); this.dueBy=day.getTime()-1000;
+      }
+    }
     this.createdAt = Wire.text(data, 'created_at');
     this.updatedAt = Wire.text(data, 'updated_at');
     this.reopenedAt = Wire.text(data, 'reopened_at');
@@ -112,6 +128,8 @@ export class TodoWorkspaceItem {
     this.startError = Wire.text(data, 'start_error');
     this.project = Wire.text(data, 'project');
     this.priority = Wire.text(data, 'priority');
+    this.partOf = Wire.text(data, 'part_of');
+    this.hubView = TodoHubRow.read(data);
     this.stage = Wire.text(data, 'stage');
     this.prUrl = Wire.text(data, 'pr_url');
     this.kind = Wire.text(data, 'kind');
@@ -132,6 +150,23 @@ export class TodoWorkspaceItem {
   activeAgents(): TodoWorkspaceAgent[] { return this.agents.filter((agent: TodoWorkspaceAgent) => agent.isActive()); }
   previousAgents(): TodoWorkspaceAgent[] { return this.agents.filter((agent: TodoWorkspaceAgent) => !agent.isActive()); }
   data(): Record<string, Object> { return Wire.parse(this.raw); }
+}
+
+export const TODO_DUE_FILTERS:string[] = ['all','no_due','today','week','month'];
+export const TODO_LIST_ORDERS:string[] = ['recent','due','priority'];
+
+export function todoMatchesDue(todo:TodoWorkspaceItem,filter:string,now:number,firstWeekday:number):boolean {
+  if (filter === 'all') return true;
+  if (filter === 'no_due') return !Number.isFinite(todo.due);
+  if (!Number.isFinite(todo.due)) return false;
+  if (!todo.isDone() && todo.dueBy < now) return true;
+  const start=new Date(now); start.setHours(0,0,0,0);
+  if (filter === 'month') start.setDate(1);
+  if (filter === 'week') start.setDate(start.getDate() - (start.getDay() - firstWeekday + 7) % 7);
+  const end=new Date(start.getTime());
+  if (filter === 'month') end.setMonth(end.getMonth()+1);
+  else end.setDate(end.getDate()+(filter === 'week' ? 7 : 1));
+  return todo.due >= start.getTime() && todo.due < end.getTime();
 }
 
 export class TodoWorkspaceGroup {
@@ -316,6 +351,11 @@ export class TodoWorkspace {
   @Trace search: string = '';
   @Trace statusFilter: string = 'all';
   @Trace groupBy: string = 'status';
+  @Trace hubCounts: TodoHubCounts | undefined = undefined;
+  @Trace hubChoice: string = 'all';
+  @Trace hubUnfolded: string[] = [];
+  @Trace dueFilter:string = 'all';
+  @Trace order:string = 'recent';
   @Trace selected: TodoWorkspaceItem = new TodoWorkspaceItem();
   @Trace loading: boolean = false;
   @Trace saving: boolean = false;
@@ -362,6 +402,14 @@ export class TodoWorkspace {
     this.error = '';
     this.writeState = '';
     this.items = [];
+    this.hubCounts = undefined;
+    this.hubChoice = 'all';
+    this.hubUnfolded = [];
+    this.groupBy = 'status';
+    this.statusFilter = 'all';
+    this.search = '';
+    this.dueFilter = 'all';
+    this.order = 'recent';
     this.sessions = [];
     this.machines = [];
     this.conversations = [];
@@ -414,6 +462,7 @@ export class TodoWorkspace {
     this.boundRepo = undefined;
     this.saving = false;
     this.items = [];
+    this.hubCounts = undefined;
     this.sessions = [];
     this.machines = [];
     this.conversations = [];
@@ -442,7 +491,10 @@ export class TodoWorkspace {
       if (this.ownerClient !== client || !this.loadCurrent(this.rootClient, revision)) return;
       this.search = Wire.text(saved, 'search');
       this.statusFilter = ['all'].concat(TODO_STATES).includes(Wire.text(saved, 'status')) ? Wire.text(saved, 'status', 'all') : 'all';
-      this.groupBy = ['status', 'project', 'thread'].includes(Wire.text(saved, 'group')) ? Wire.text(saved, 'group', 'status') : 'status';
+      this.groupBy = ['status', 'project', 'thread', 'hub'].includes(Wire.text(saved, 'group')) ? Wire.text(saved, 'group', 'status') : 'status';
+      this.hubUnfolded = Wire.strings(saved, 'hubUnfolded').filter((key: string) => ['someday', 'can_wait', 'done'].includes(key));
+      const due=Wire.text(saved,'due'),order=Wire.text(saved,'order');
+      this.dueFilter=TODO_DUE_FILTERS.includes(due) ? due : 'all'; this.order=TODO_LIST_ORDERS.includes(order) ? order : 'recent';
     } catch (_) { if (this.ownerClient === client && this.loadCurrent(this.rootClient, revision)) this.error = 'draft_restore_failed'; }
   }
 
@@ -451,7 +503,8 @@ export class TodoWorkspace {
     if (!client || !this.active) return;
     const owner = this.capture(undefined);
     if (!owner) return;
-    const value = JSON.stringify(Wire.payload(['search', 'status', 'group'], [this.search, this.statusFilter, this.groupBy]));
+    const value = JSON.stringify(Wire.payload(['search', 'status', 'group', 'due', 'order', 'hubUnfolded'],
+      [this.search, this.statusFilter, this.groupBy, this.dueFilter, this.order, this.hubUnfolded]));
     this.draftWrites = this.draftWrites.catch(() => {}).then(async () => {
       if (!this.ownsScope(owner)) return;
       await owner.client.saveView('todo-workspace', value);
@@ -463,9 +516,27 @@ export class TodoWorkspace {
     if (!['all'].concat(TODO_STATES).includes(value)) return;
     this.statusFilter = value; this.saveViewLater();
   }
+  setDueFilter(value:string):void {
+    if (TODO_DUE_FILTERS.includes(value)) { this.dueFilter=value; this.saveViewLater(); }
+  }
+  setOrder(value:string):void {
+    if (TODO_LIST_ORDERS.includes(value)) { this.order=value; this.saveViewLater(); }
+  }
   setGroupBy(value: string): void {
-    if (!['status', 'project', 'thread'].includes(value)) return;
+    if (!['status', 'project', 'thread'].includes(value) && !(value === 'hub' && this.hubCounts)) return;
     this.groupBy = value; this.saveViewLater();
+  }
+
+  effectiveGroup(): string { return this.groupBy === 'hub' && !this.hubCounts ? 'status' : this.groupBy; }
+
+  setHubChoice(choice: string): void {
+    if (this.effectiveGroup() === 'hub' && TODO_HUB_CHOICES.includes(choice)) this.hubChoice = choice;
+  }
+
+  toggleHubFold(key: string): void {
+    if (!['someday', 'can_wait', 'done'].includes(key)) return;
+    this.hubUnfolded = this.hubUnfolded.includes(key) ? this.hubUnfolded.filter((value: string) => value !== key) : this.hubUnfolded.concat([key]);
+    this.saveViewLater();
   }
 
   private capture(todo: TodoWorkspaceItem | undefined): TodoOwnerSnapshot | undefined {
@@ -564,6 +635,7 @@ export class TodoWorkspace {
         const next = await root.viewFor(ref);
         if (revision !== this.listRequestRevision || !this.active || this.rootClient !== root ||
           rootScope !== this.rootScope || !root.owns(rootGeneration, rootScope)) return;
+        this.hubCounts = undefined;
         this.ownerClient = next;
         this.boundRepo = next.repo();
         this.ownerGeneration = next.connectionGeneration();
@@ -581,6 +653,7 @@ export class TodoWorkspace {
       const result = await owner.repo.call('/api/v1/todos' + managerQuery(owner.managerId));
       if (!this.ownsListRequest(owner, revision)) return;
       const items = Wire.rows(result, 'todos').map((item: Record<string, Object>) => new TodoWorkspaceItem(item, owner.managerId));
+      this.hubCounts = owner.client.features.includes('todo_view') ? TodoHubCounts.read(result) : undefined;
       this.items = items;
       this.syncSessions(owner.client);
       if (this.selected.id) {
@@ -702,27 +775,33 @@ export class TodoWorkspace {
     if (Wire.text(saved, 'title') === title && Wire.text(saved, 'notes') === notes) await owner.client.saveView(key, '');
   }
 
-  private async write(path: string, method: string, body: Record<string, Object>, todo: TodoWorkspaceItem | undefined): Promise<Record<string, Object> | undefined> {
+  private async write(path: string, method: string, body: Record<string, Object>, todo: TodoWorkspaceItem | undefined, listRow:boolean=false): Promise<Record<string, Object> | undefined> {
     if (todo && this.rejectGoneTarget(todo)) return undefined;
     const owner = this.capture(todo);
     if (!owner) { this.error = 'offline'; return undefined; }
+    const admit=():boolean => this.owns(owner,!!todo && !listRow) && (!listRow || !!todo && this.items.some((item:TodoWorkspaceItem) =>
+      item.id === todo.id && (item.manager || owner.managerId) === owner.todoManagerId && item.isDone() === todo.isDone()));
+    if (listRow && (this.saving || !todo || !this.items.includes(todo) || !admit())) return undefined;
     if (owner.client.operationBlocked(path)) { this.error = 'todo_write_pending'; return undefined; }
     this.saving = true;
     this.writeState = 'sending';
     this.error = '';
     try {
-      const result = await owner.repo.call(path, method, body);
-      if (!this.owns(owner, !!todo)) return undefined;
+      const result = listRow ? await owner.repo.call(path,method,body,'',admit) : await owner.repo.call(path,method,body);
+      if (!this.owns(owner, !!todo && !listRow)) return undefined;
+      if (listRow && todo && !this.items.some((item:TodoWorkspaceItem) => item.id === todo.id && (item.manager || owner.managerId) === owner.todoManagerId)) {
+        this.writeState=''; return undefined;
+      }
       this.invalidateListReads();
       this.writeState = 'done';
       return result;
     } catch (failure) {
-      if (!this.owns(owner, !!todo)) return undefined;
+      if (!this.owns(owner, !!todo && !listRow)) return undefined;
       this.writeState = failure instanceof HttpFailure && failure.resultPending ? 'pending' :
         failure instanceof HttpFailure && failure.resultUnknown ? 'unknown' : 'failed';
       this.error = this.errorCode(failure as Error);
       return undefined;
-    } finally { if (this.owns(owner, !!todo)) this.saving = false; }
+    } finally { if (this.owns(owner, !!todo && !listRow)) this.saving = false; }
   }
 
   private upsert(data: Record<string, Object>, manager: string): TodoWorkspaceItem {
@@ -732,6 +811,7 @@ export class TodoWorkspace {
     if (index >= 0) next[index] = updated; else next.unshift(updated);
     this.items = next;
     if (this.selected.id === updated.id) this.selected = updated;
+    this.refreshHubCountsAfterMutation();
     return updated;
   }
 
@@ -741,6 +821,14 @@ export class TodoWorkspace {
     if (index >= 0) next[index] = todo; else next.unshift(todo);
     this.items = next;
     if (this.selected.id === todo.id) this.selected = todo;
+    this.refreshHubCountsAfterMutation();
+  }
+
+  private refreshHubCountsAfterMutation(): void {
+    // Mutation acknowledgements contain a row or an OK, never a count snapshot.
+    if (!this.hubCounts) return;
+    this.hubCounts = undefined;
+    this.refresh().catch(() => undefined);
   }
 
   async save(): Promise<boolean> {
@@ -767,15 +855,15 @@ export class TodoWorkspace {
     return true;
   }
 
-  async setDone(todo: TodoWorkspaceItem, done: boolean): Promise<boolean> {
-    if (this.rejectGoneTarget(todo)) return false;
+  async setDone(todo: TodoWorkspaceItem, done: boolean, listRow:boolean=false): Promise<boolean> {
+    if (!todo.id || this.rejectGoneTarget(todo)) return false;
     const owner = this.capture(todo);
     if (!owner) { this.error = 'offline'; return false; }
     const path = '/api/v1/todos/' + pathPart(todo.id) + managerQuery(todo.manager || this.managerId);
-    const result = await this.write(path, 'PATCH', Wire.payload(['done'], [done]), todo);
-    if (!result || !this.owns(owner)) return false;
+    const result = await this.write(path, 'PATCH', Wire.payload(['done'], [done]), todo,listRow);
+    if (!result || !this.owns(owner,!listRow)) return false;
     const data = Wire.object(result, 'todo');
-    if (!Wire.text(data, 'id')) { this.error = 'failed'; return false; }
+    if (Wire.text(data,'id') !== todo.id || Wire.text(data,'manager') && Wire.text(data,'manager') !== (todo.manager || owner.managerId)) { this.error = 'failed'; return false; }
     this.upsert(data, todo.manager || this.managerId);
     return true;
   }
@@ -792,6 +880,7 @@ export class TodoWorkspace {
     this.targetGone = false;
     if (this.initialRow?.id === todo.id && (!this.initialRow.manager || this.initialRow.manager === (todo.manager || this.managerId)))
       this.initialRow = undefined;
+    this.refreshHubCountsAfterMutation();
     return true;
   }
 
@@ -958,8 +1047,79 @@ export class TodoWorkspace {
     return groups;
   }
 
-  sections(): TodoWorkspaceSection[] {
-    let visible = this.items.filter((item: TodoWorkspaceItem) => this.searchMatches(item, this.search));
+  hubSection(item: TodoWorkspaceItem, now: number): string {
+    if (item.hubView) return item.hubView.section;
+    const local = this.state(item);
+    if (local === 'needs_you' || local === 'working') return local;
+    if (local === 'checking') return 'just_finished';
+    if (local === 'done') {
+      const closed = Date.parse(item.doneAt), seen = Date.parse(Wire.text(item.data(), 'seen_at'));
+      return Number.isFinite(closed) && now - closed < 86400000 && !(seen >= closed) ? 'just_finished' : 'done';
+    }
+    return local === 'followup' && (item.prUrl || Wire.text(item.delivery, 'state') === 'pr') ? 'waiting' : 'todo';
+  }
+
+  hubCalm(): boolean {
+    const counts = this.hubCounts;
+    if (!counts || !counts.sections.get('todo')) return false;
+    // A plain list of reminders needs neither the section header nor the bar.
+    // Keep Done reachable on a device that also holds older, closed tasks.
+    return TODO_HUB_SECTIONS.every((key: string) => key === 'todo' || counts.sections.get(key) === 0);
+  }
+
+  private hubSections(visible: TodoWorkspaceItem[], now: number): TodoWorkspaceSection[] {
+    const grouped = new Map<string, TodoWorkspaceGroup[]>();
+    const open = new Set<string>();
+    this.items.forEach((item: TodoWorkspaceItem) => {
+      if (item.hubView ? item.hubView.phase !== 'done' : !item.isDone() || !!item.startError) open.add(JSON.stringify([item.manager, item.id]));
+    });
+    const choice = this.search.trim() || this.hubCalm() ? 'all' : this.hubChoice;
+    const fallbackRanks = new Map<string, number>();
+    const nextRank = new Map<string, number>();
+    for (const item of visible.slice().sort(compareTodoRecent)) {
+      const identity = JSON.stringify([item.manager, item.id]);
+      if (item.partOf && item.partOf !== item.id && open.has(JSON.stringify([item.manager, item.partOf]))) continue;
+      const key = this.hubSection(item, now);
+      if (!todoHubChoiceIncludes(choice, key)) continue;
+      if (!item.hubView) {
+        const group = JSON.stringify([item.manager, key]);
+        const rank = nextRank.get(group) || 0;
+        fallbackRanks.set(identity, rank);
+        nextRank.set(group, rank + 1);
+      }
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key)?.push(new TodoWorkspaceGroup(identity, '', key, [item]));
+    }
+    const rank = (group: TodoWorkspaceGroup): number => group.lead.hubView?.rank ?? fallbackRanks.get(group.key) ?? 0;
+    const order = (item: TodoWorkspaceItem): number => {
+      if (this.order === 'due') return Number.isFinite(item.dueBy) ? item.dueBy : Number.MAX_SAFE_INTEGER;
+      if (this.order === 'priority') return item.priority === 'high' ? 0 : item.priority === 'low' ? 2 : 1;
+      return 0;
+    };
+    const sections: TodoWorkspaceSection[] = [];
+    TODO_HUB_SECTIONS.forEach((key: string) => {
+      const groups = grouped.get(key);
+      if (!groups) return;
+      groups.sort((a: TodoWorkspaceGroup, b: TodoWorkspaceGroup) => order(a.lead) - order(b.lead) || rank(a) - rank(b) ||
+        a.lead.manager.localeCompare(b.lead.manager) || a.lead.id.localeCompare(b.lead.id));
+      sections.push(new TodoWorkspaceSection(key, todoHubLabel(key), groups));
+    });
+    return sections;
+  }
+
+  hiddenWaiting(now:number, firstWeekday:number): number {
+    if (this.dueFilter === 'all') return 0;
+    const hidden = new Set<string>();
+    this.items.forEach((item: TodoWorkspaceItem) => {
+      if (this.searchMatches(item,this.search) && !todoMatchesDue(item,this.dueFilter,now,firstWeekday) &&
+        this.hubSection(item,now) === 'needs_you') hidden.add(JSON.stringify([item.manager,item.id]));
+    });
+    return hidden.size;
+  }
+
+  sections(now:number=Date.now(),firstWeekday:number=1): TodoWorkspaceSection[] {
+    let visible = this.items.filter((item: TodoWorkspaceItem) => this.searchMatches(item,this.search) && todoMatchesDue(item,this.dueFilter,now,firstWeekday));
+    if (this.effectiveGroup() === 'hub') return this.hubSections(visible, now);
     if (this.statusFilter !== 'all') visible = visible.filter((item: TodoWorkspaceItem) => this.state(item) === this.statusFilter);
     const groups = this.groupsFor(visible);
     const grouped: Map<string, TodoWorkspaceGroup[]> = new Map();
@@ -978,11 +1138,14 @@ export class TodoWorkspace {
       titles.set(key, title);
     }
     const order: string[] = Array.from(grouped.keys());
-    if (this.groupBy === 'status') order.sort((left: string, right: string) => statusRank(left) - statusRank(right));
+    if (this.effectiveGroup() === 'status') order.sort((left: string, right: string) => statusRank(left) - statusRank(right));
     else order.sort((left: string, right: string) => (titles.get(left) || left).localeCompare(titles.get(right) || right));
     return order.map((key: string) => {
       const rows = grouped.get(key) || [];
-      rows.sort((left: TodoWorkspaceGroup, right: TodoWorkspaceGroup) => compareTodoRecent(left.lead, right.lead));
+      const priority=(g:TodoWorkspaceGroup):number => g.members.reduce((best:number,item:TodoWorkspaceItem) => Math.min(best,item.priority === 'high' ? 0 : item.priority === 'low' ? 2 : 1),2);
+      const due=(g:TodoWorkspaceGroup):number => g.members.reduce((earliest:number,item:TodoWorkspaceItem) => Number.isFinite(item.dueBy) ? Math.min(earliest,item.dueBy) : earliest,Number.MAX_SAFE_INTEGER);
+      rows.sort((left:TodoWorkspaceGroup,right:TodoWorkspaceGroup) => (this.order === 'priority' ? priority(left)-priority(right) : 0) ||
+        (this.order !== 'recent' ? due(left)-due(right) : 0) || compareTodoRecent(left.lead,right.lead));
       return new TodoWorkspaceSection(key, titles.get(key) || key, rows);
     });
   }

@@ -100,8 +100,8 @@ function clientFixture(options = {}) {
     machineName(id) { return this.machines.find((row) => row.id === id)?.title || id; },
     shortPath(path) { return path.replace(/\\/g, '/').split('/').filter(Boolean).slice(-2).join('/'); },
     operationBlocked(path) { return state.blocked.has(path); },
-    async loadView(key) { return state.views.get(state.scope + ':' + key) || ''; },
-    async saveView(key, value) { state.views.set(state.scope + ':' + key, value); },
+    async loadView(key) { return state.views.get(key === 'agent-hub-mode' ? key : state.scope + ':' + key) || ''; },
+    async saveView(key, value) { state.views.set(key === 'agent-hub-mode' ? key : state.scope + ':' + key, value); },
     directoryOwners(){return[this];}, groupName(){return 'Hub';}, directoryOwnerFor(row){return row.manager===this.profile.manager ? this : undefined;}, async refreshDirectory(){},
     async refresh() {}
   };
@@ -437,6 +437,102 @@ test('legacy empty manager machine filters keep the Hub group', async () => {
   assert.deepEqual(workspace.visibleRows().map((row) => row.id), ['s1']);
 });
 
+function switchedHubs() {
+  const home = clientFixture(), work = clientFixture();
+  home.client.profile.id = 'home'; home.state.scope = 'home:work';
+  work.client.profile.id = 'work'; work.state.scope = 'work:work';
+  const fixtures = [home, work];
+  const rows = fixtures.map(({client}) => {
+    const row = agent('shared-agent', {title: client.profile.id});
+    row.group = client.profile.id; client.machines[0].group = row.group;
+    return row;
+  });
+  for (const {client} of fixtures) {
+    client.directoryReady = true; client.directorySessions = rows;
+    client.directoryOwners = () => fixtures.map((fixture) => fixture.client);
+    client.directoryOwnerFor = (row) => row.group === 'home' ? home.client : work.client;
+    client.features = ['agent_session_archives'];
+  }
+  work.state.views = home.state.views;
+  return {home, work};
+}
+
+test('All Hubs retains a deliberately chosen foreign machine across reloads and identical machine IDs', async () => {
+  const {home, work} = switchedHubs();
+  const workspace = new AgentWorkspace();
+  await workspace.open(home.client);
+  assert.deepEqual(workspace.visibleRows().map((row) => row.group).sort(), ['home', 'work']);
+  const selected = workspace.machineIdentity(work.client.machines[0]);
+  await workspace.setMachineFilter(selected);
+  assert.deepEqual(workspace.visibleRows().map((row) => row.group), ['work']);
+  await new Promise((resolve) => setTimeout(resolve, 240));
+  const restored = new AgentWorkspace();
+  await restored.open(home.client);
+  assert.equal(restored.currentHubOnly, false);
+  assert.equal(restored.machineFilter, selected);
+  assert.deepEqual(restored.visibleRows().map((row) => row.group), ['work']);
+});
+
+test('one-Hub mode follows the current pairing at first appearance, external switch and cold start', async () => {
+  const {home, work} = switchedHubs();
+  const workspace = new AgentWorkspace();
+  await workspace.open(home.client);
+  const oldMachine = workspace.machineIdentity(home.client.machines[0]);
+  await workspace.setMachineFilter(oldMachine);
+  await workspace.setCurrentHubOnly(true);
+  assert.equal(workspace.machineFilter, oldMachine);
+  assert.deepEqual(workspace.visibleRows().map((row) => row.group), ['home']);
+  work.state.views.set('work:work:agent-workspace', JSON.stringify({machine: oldMachine}));
+  workspace.hide();
+  await workspace.open(work.client);
+  assert.equal(workspace.currentHubOnly, true);
+  assert.equal(workspace.machineFilter, '');
+  assert.deepEqual(workspace.visibleRows().map((row) => row.group), ['work']);
+  const restored = new AgentWorkspace();
+  await restored.open(work.client);
+  assert.equal(restored.currentHubOnly, true);
+  assert.equal(restored.machineFilter, '');
+  assert.deepEqual(restored.visibleRows().map((row) => row.group), ['work']);
+  await restored.setCurrentHubOnly(false);
+  assert.deepEqual(restored.visibleRows().map((row) => row.group).sort(), ['home', 'work']);
+});
+
+test('narrowing a live archive invalidates foreign rows and ignores its older in-flight response', async () => {
+  const {home, work} = switchedHubs();
+  const workspace = new AgentWorkspace();
+  await workspace.open(home.client);
+  home.state.history = [JSON.parse(agent('home-archived').raw)];
+  let release, started;
+  const requested = new Promise((resolve) => started = resolve);
+  work.state.request = async ({path}) => {
+    if (!path.startsWith('/api/v1/sessions/archived')) return;
+    started(); return new Promise((resolve) => release = resolve);
+  };
+  const first = workspace.setHistory(true);
+  await requested;
+  await workspace.setCurrentHubOnly(true);
+  release({sessions: [JSON.parse(agent('foreign-archived').raw)]});
+  await first;
+  assert.deepEqual(workspace.visibleRows().map((row) => [row.group, row.id]), [['home', 'home-archived']]);
+  assert.equal(work.state.calls.filter(({path}) => path.startsWith('/api/v1/sessions/archived')).length, 1);
+});
+
+test('All Hubs archives target the selected owner even when its computer has left the live inventory', async () => {
+  const {home, work} = switchedHubs();
+  const workspace = new AgentWorkspace();
+  work.state.history = [JSON.parse(agent('old-work', {machine_id:'retired'}).raw)];
+  work.client.machines = [];
+  await workspace.open(home.client);
+  const qualified = JSON.stringify(['work', 'work', 'retired']);
+  await workspace.setMachineFilter(qualified); await workspace.setHistory(true);
+  assert.equal(workspace.machineFilter, qualified);
+  assert.deepEqual(workspace.visibleRows().map((row) => [row.group, row.id]), [['work', 'old-work']]);
+  assert.ok(work.state.calls.some(({path}) => path === '/api/v1/sessions/archived?machine_id=retired&manager=work'));
+  assert.ok(!home.state.calls.some(({path}) => path.startsWith('/api/v1/sessions/archived')));
+  await workspace.setMachineFilter('work|work|retired');
+  assert.deepEqual(workspace.visibleRows().map((row) => row.id), ['old-work']);
+});
+
 test('time-bounded searches use caller time and group titles remain visible', async () => {
   const {workspace} = await opened({sessions: [agent('s1', {updated_at: new Date().toISOString()})]});
   workspace.setSearch('since:24h');
@@ -530,14 +626,14 @@ test('archived sessions get a registry entry for machine grouping', async () => 
   assert.equal(w.groups[0].machineName, 'retired');
 });
 
-test('group folds use named native icons and idle expansion retains its count', () => {
+test('the whole group header announces the section, count and next fold action; idle expansion retains its count', () => {
   const source = readFileSync(new URL('../entry/src/main/ets/components/AgentListPage.ets', import.meta.url), 'utf8');
-  const header=source.slice(source.indexOf('  @Builder groupHeader('),source.indexOf('  private groupCounts('));
-  assert.match(header,/Button\(\{ type: ButtonType.Circle \}\)/);
-  assert.match(header,/binding\.value\.folded \? Symbols\.down : Symbols\.up/);
-  assert.match(header,/attributeModifier\(ButtonStyles\.icon\)/);
-  assert.ok(header.includes("tr(binding.value.folded ? 'agent_expand' : 'agent_collapse')"));
-  assert.ok(header.includes('this.workspace.toggleFold(binding.value.id)'));
+  const header=source.slice(source.indexOf('  @Builder groupHeader('),source.indexOf('  private rowStatus('));
+  assert.match(header,/Button\(\{ type: ButtonType.Normal \}\)[\s\S]*Text\(tr\(STATE_LABELS\[binding\.value\.id\][\s\S]*String\(binding\.value\.totalRowCount\)/);
+  assert.match(header,/binding\.value\.folded \? Symbols\.expand : Symbols\.down/);
+  assert.match(header,/\.width\('100%'\)\.constraintSize\(\{ minHeight: 44 \}\)/);
+  assert.match(header,/\.accessibilityText\([\s\S]*STATE_LABELS\[binding\.value\.id\][\s\S]*binding\.value\.machineName[\s\S]*binding\.value\.totalRowCount[\s\S]*tr\(binding\.value\.folded \? 'agent_expand' : 'agent_collapse'\)/);
+  assert.match(header,/\.onClick\(\(\) => this\.workspace\.toggleFold\(binding\.value\.id\)\)\.id\('agents\.group\.toggle.'/);
   assert.ok(source.includes("String(binding.value.totalRowCount - binding.value.rows.length) + ' ' + tr('agent_group_more_idle')"));
   assert.ok(source.includes('this.workspace.toggleIdleRows(binding.value.id)'));
 });

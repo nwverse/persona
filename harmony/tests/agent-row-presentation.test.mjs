@@ -44,7 +44,7 @@ const BoundAgentGroup = new Function('return ' + stripTypeScriptTypes(classCode(
 
 function pageClass(wire, translate) {
   return new Function('BoundAgentRow', 'AgentRowPresentation', 'BoundAgentGroup', 'Wire', 'tr', 'Colors', 'reconcileBoundRows',
-    stripTypeScriptTypes('class Page {\n' + ['isRowSelected','syncRowBindings', 'bindAgentRows', 'updateAgentRowPresentation', 'rowTime', 'rowStatus', 'rowStatusColor']
+    stripTypeScriptTypes('class Page {\n' + ['isRowSelected','syncRowBindings', 'bindAgentRows', 'updateAgentRowPresentation', 'rowTime', 'rowStatus', 'rowStatusColor', 'needsStatusLabel', 'rowPlace']
       .map(methodCode).join('\n') + '\n}\n') + '\nreturn Page;')(
         BoundAgentRow, AgentRowPresentation, BoundAgentGroup, wire, translate,
         { needs: 'needs', working: 'working', unread: 'unread', secondary: 'secondary' }, reconcileBoundRows);
@@ -245,6 +245,38 @@ test('idle status uses the same localized words for the row and its spoken label
   const labels=new Map(catalog.string.map(item=>[item.name,item.value]));const Page=pageClass({},key=>labels.get(key)||key);const page=new Page();
   assert.equal(page.rowStatus({status:'idle'}),label);
  }
+});
+
+test('state group headers replace repeated status words, while muted and machine sections retain each Agent’s state',()=>{
+ const {page}=fixture();
+ for(const group of ['pinned','state/needs','state/idle','state/working']) assert.equal(page.needsStatusLabel(group),false);
+ for(const group of ['state/muted','machine/home','space/project']) assert.equal(page.needsStatusLabel(group),true);
+ page.mixedMachines=true;page.workspace={groupingMode:'state'};
+ const display={brand:'claude',provider:'claude',spaceName:'login-form',metadata:['Hub','MacBook']};
+ assert.equal(page.rowPlace(display),'Claude · MacBook · login-form');
+ page.workspace.groupingMode='machine';assert.equal(page.rowPlace(display),'Claude · login-form');
+ const row=source.slice(source.indexOf('  @Builder agentRow('),source.indexOf('  @Builder rowContext('));
+ assert.match(row,/\.accessibilityText\(\[binding\.bound\.value\.title[\s\S]*this\.rowStatus\(binding\.presentation\)/);
+});
+
+test('phone search starts folded, reveals only from a downward top pull, and a saved query survives leaving',()=>{
+ const TouchType={Down:0,Move:1,Up:2};
+ const Search=new Function('TouchType','return '+stripTypeScriptTypes('class Search {'+
+   ['searchVisible','resetSearchReveal','trackPull','refreshAgents'].map(methodCode).join('\n')+'}'))(TouchType);
+ const page=new Search();
+ let top=0,refreshes=0;
+ page.workspace={search:'',setReadingDetail(){},refresh(){refreshes++;return Promise.resolve();},isBoundTo(){return true;}};
+ page.agentScroller={currentOffset:()=>({yOffset:top})};page.compactRoot=true;page.active=true;page.resetSearchReveal();
+ const gesture=(x,y)=>{page.trackPull({type:0,touches:[{windowX:0,windowY:10}]});page.trackPull({type:1,touches:[{windowX:x,windowY:10+y}]});};
+ assert.equal(page.searchVisible(),false);
+ top=180;gesture(0,80);assert.equal(page.searchVisible(),false);
+ top=0;gesture(90,55);assert.equal(page.searchVisible(),false);
+ gesture(0,30);assert.equal(page.searchVisible(),false);
+ gesture(1,60);assert.equal(page.searchVisible(),true);page.refreshAgents();assert.equal(refreshes,0);
+ page.trackPull({type:0,touches:[{windowX:0,windowY:10}]});page.refreshAgents();assert.equal(refreshes,1);
+ page.workspace.search='login';page.resetSearchReveal();assert.equal(page.searchVisible(),true);
+ page.workspace.search='';page.compactRoot=false;assert.equal(page.searchVisible(),true);
+ assert.match(source,/accessibilityText\(tr\('search_sessions'\)\)[\s\S]{0,180}id\('agents.search_reveal'\)/);
 });
 
 test('visible selection can clear on Home without changing the cached selected Agent',()=>{

@@ -299,7 +299,7 @@ export struct HealthWorkspacePage {
             .onClick(() => this.confirmArchive(binding.value)).id('health.chat.archive.' + binding.value.id)
         }.width('100%').alignItems(VerticalAlign.Center)
       }, (binding: BoundRow<ResourceRow>) => binding.key)
-    }.width('100%').alignItems(HorizontalAlign.Start)
+    }.width('100%').alignItems(HorizontalAlign.Start).padding(14).backgroundColor(Colors.surface).borderRadius(15)
   }
 
   @Builder memorySection() {
@@ -315,7 +315,7 @@ export struct HealthWorkspacePage {
         .onClick(() => { this.editingMemory = false; const index = this.workspace.indexMemory(); if (index) this.workspace.openMemory(index); })
         .id('health.memory.index')
       if (this.workspace.selectedMemory) this.memoryDetail(UIUtils.makeBinding((): HealthMemoryFile => this.workspace.selectedMemory || new HealthMemoryFile()))
-    }.width('100%').alignItems(HorizontalAlign.Start)
+    }.width('100%').alignItems(HorizontalAlign.Start).padding(14).backgroundColor(Colors.surface).borderRadius(15)
   }
 
   @Builder reportsSection() {
@@ -340,12 +340,12 @@ export struct HealthWorkspacePage {
         }.width('100%').alignItems(HorizontalAlign.Start).padding(Tokens.inset)
           .backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(Tokens.inset)
       }, (binding: BoundRow<HealthReport>) => binding.key)
-    }.width('100%').alignItems(HorizontalAlign.Start)
+    }.width('100%').alignItems(HorizontalAlign.Start).padding(14).backgroundColor(Colors.surface).borderRadius(15)
   }
 
   @Builder home() {
     Scroll() {
-      Column({ space: Tokens.section }) {
+      Column({ space: 12 }) {
         Column({ space: Tokens.gap }) {
           Text(tr('health_privacy_note')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
           if (this.workspace.error) Text(tr(this.workspace.error)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).width('100%')
@@ -362,7 +362,7 @@ export struct HealthWorkspacePage {
             .fontColor($r('app.color.persona_danger')).width('100%')
           ForEach(HEALTH_SUGGESTIONS, (key: string) => Button({ type: ButtonType.Normal }) { Row({ space: Tokens.inset }) { Text(tr(key)).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1); SymbolGlyph($r('sys.symbol.arrow_up')).fontSize(Tokens.meta).fontColor([Colors.secondary]) }.width('100%').constraintSize({ minHeight: Tokens.touch }) }.buttonStyle(ButtonStyleMode.TEXTUAL).backgroundColor(Color.Transparent).padding({ left: Tokens.page, right: Tokens.page }).width('100%').constraintSize({ minHeight: Tokens.touch })
             .enabled(this.workspace.canStartConversation() && !this.pickerBusy).onClick(() => this.send(tr(key))).id('health.suggestion.' + key), (key: string) => key)
-        }.width('100%').alignItems(HorizontalAlign.Start)
+        }.width('100%').alignItems(HorizontalAlign.Start).padding(14).backgroundColor(Colors.surface).borderRadius(15)
         this.conversationSection()
         this.reportsSection()
         this.memorySection()
@@ -372,7 +372,7 @@ export struct HealthWorkspacePage {
 
   @Builder composer() {
     Row({ space: Tokens.gap }) {
-      TextArea({ text: this.workspace.draft, placeholder: tr('health_ask_placeholder') }).height(Tokens.inputExpanded).layoutWeight(1)
+      TextArea({ text: this.workspace.draft, placeholder: tr('health_ask_placeholder') }).height(this.workspace.draft.includes('\n') ? 80 : 46).fontSize(16).backgroundColor(Colors.control).borderRadius(21).layoutWeight(1)
         .onChange((value: string) => this.workspace.setDraft(value)).id('health.composer')
       Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('send')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('send', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('send')).bindTips(tr('send')).enabled(!!this.workspace.draft.trim() && this.workspace.canStartConversation() && !this.pickerBusy)
         .onClick(() => this.send(this.workspace.draft)).id('health.send')
@@ -384,6 +384,6 @@ export struct HealthWorkspacePage {
     Column() {
       this.home()
       this.composer()
-    }.width('100%').height('100%')
+    }.width('100%').height('100%').backgroundColor(Colors.grouped)
   }
 }

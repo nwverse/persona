@@ -1,3 +1,4 @@
+import type { ConversationRecapItem } from './Wire';
 import { AssistantViewModel } from './AssistantView';
 import { SshTunnel } from './SshTunnel';
 import type { SshProxyLease } from './SshTunnel';
@@ -43,6 +44,7 @@ export interface ClientViewLease {
   valid: () => boolean;
   read: () => Promise<string>;
   write: (value: string) => Promise<void>;
+  clearIfUnchanged: (expected: string) => Promise<void>;
 }
 
 @ObservedV2
@@ -64,6 +66,7 @@ export class ClientModel {
     root.publishDirectory();
   }
   @Trace ready: boolean = false;
+  @Trace projectsRequested: boolean = false;
   @Trace pairingLink: string = '';
   @Trace notificationTarget: string = '';
   @Trace forgottenProfile: string = '';
@@ -77,6 +80,11 @@ export class ClientModel {
   @Trace profile: HubProfile = new HubProfile();
   @Trace managers: ResourceRow[] = [];
   @Trace features: string[] = [];
+  private helloHub: string = '';
+  private helloScope: string = '';
+  private helloGeneration: number = -1;
+  private helloVersion: string = '';
+  private helloFeatures: string[] = [];
   @Trace section: number = 0;
   @Trace sessions: ResourceRow[] = [];
   @Trace sessionsReady: boolean = false;
@@ -390,6 +398,10 @@ export class ClientModel {
     return this.repository;
   }
   connectionGeneration(): number { return this.generation; }
+  verifiedServerVersion(feature: string): string {
+    return this.connected && !!this.helloHub && this.helloHub === this.profile.hubId &&
+      this.owns(this.helloGeneration, this.helloScope) && this.helloFeatures.includes(feature) ? this.helloVersion : '';
+  }
   owns(generation: number, scope: string): boolean { return !this.retired && generation === this.generation && scope === this.scope(); }
   isChat(): boolean { return this.selected.kind === 'conversation' || this.selected.kind === 'session'; }
   reportError(error: Error): void { this.failure(error); }
@@ -534,6 +546,7 @@ export class ClientModel {
         this.profiles = this.profiles.map((item: HubProfile) => item.id === canonical.id ? canonical : item);
         await this.selectProfile(canonical); return;
       }
+      this.managers = Wire.rows(roster, 'managers').map((item: Record<string,Object>) => ResourceRow.from(item,'manager'));
     } catch (error) {
       if (!this.owns(generation, scope)) return;
       // A hub without manager support has one legacy scope. Never downgrade a named manager.
@@ -550,7 +563,7 @@ export class ClientModel {
       if (!this.owns(generation, scope)) return;
       this.connected = state === 'ready' || state === 'online';
       if (this.connected) { this.reconnectAttempt = 0; this.stopReconnect(); }
-      if (state === 'offline' || state === 'closed') { this.clearPendingDecisions(); this.releaseTerminal(); this.error = 'offline'; this.scheduleReconnect(); }
+      if (state === 'offline' || state === 'closed') { this.helloGeneration = -1; this.clearPendingDecisions(); this.releaseTerminal(); this.error = 'offline'; this.scheduleReconnect(); }
       else if (this.connected && this.isChat() && (this.chatVisible || this.decisionsVisible)) {
         const row = this.selected;
         if (this.chatVisible) this.loadChat(row).catch((error: Error) => this.failure(error));
@@ -578,6 +591,19 @@ export class ClientModel {
       this.sessions = Wire.rows(snapshot, 'sessions').map((data: Record<string, Object>) => this.cachedRow(data, 'session'));
       this.conversations = Wire.rows(snapshot, 'conversations').map((data: Record<string, Object>) => this.cachedRow(data, 'conversation')); this.publishDirectory();
     } catch (_) { if (this.owns(generation, scope)) this.error = 'cache_unavailable'; }
+  }
+  listedManagers(): ResourceRow[] {
+    return this.managers.filter((row: ResourceRow) => !!row.id && !Wire.bool(row.data(), 'hidden'));
+  }
+  async selectListedManager(id: string, sourceScope: string): Promise<void> {
+    if (sourceScope !== this.scope() || this.profile.manager === id) return;
+    const row = this.listedManagers().find((item: ResourceRow) => item.id === id);
+    if (!row || row.isInstallingManager()) return;
+    const group = this.profile.id;
+    try { await this.selectManager(id); }
+    catch (error) {
+      if (this.profile.id === group && (this.scope() === sourceScope || this.profile.manager === id)) this.reportError(error as Error);
+    }
   }
   async selectManager(id: string): Promise<void> {
     if (this.demo && id === this.profile.manager) return;
@@ -637,7 +663,15 @@ export class ClientModel {
   private event(payload: string): void {
     try {
       const data = Wire.parse(payload), type = Wire.text(data, 'type');
-      if (type === 'hello') { const hubId = Wire.text(data, 'hub_id'); if (hubId && hubId !== this.profile.hubId) { this.repository?.close(); this.error = 'identity_changed'; return; } }
+      if (type === 'hello') {
+        this.helloGeneration = -1;
+        const hubId = Wire.text(data, 'hub_id');
+        if (hubId && hubId !== this.profile.hubId) { this.repository?.close(); this.error = 'identity_changed'; return; }
+        if (hubId && hubId === this.profile.hubId) {
+          this.helloHub = hubId; this.helloScope = this.scope(); this.helloGeneration = this.generation;
+          this.helloVersion = Wire.text(data, 'server_version'); this.helloFeatures = Wire.strings(data, 'features');
+        }
+      }
       this.workspace?.onEvent(data); this.deviceEvent?.(payload);
       for (const listener of this.eventListeners) { try { listener(payload); } catch (_) {} }
       if (type === 'hello') {
@@ -679,7 +713,11 @@ export class ClientModel {
     try {
       const sessions = await repo.sessions(), assistant = await repo.call('/api/v1/assistant');
       const machines = await repo.machines();
-      const managers = this.features.includes('managers') ? await repo.list('/api/v1/managers', 'managers', 'manager') : [];
+      let managers: ResourceRow[] = [];
+      if (this.managers.length || this.features.includes('sessions_manager') || this.features.includes('managers')) {
+        try { managers = await repo.list('/api/v1/managers', 'managers', 'manager'); }
+        catch (error) { if (!(error instanceof HttpFailure) || ![404,501].includes(error.status)) throw error as Error; }
+      }
       if (!this.owns(generation, scope)) return;
       if (heldRevision !== owner.heldRevision(scope)) { this.queueRefresh(); return; }
       sessions.forEach((row: ResourceRow) => row.group = this.profile.id); machines.forEach((row: ResourceRow) => row.group = this.profile.id);
@@ -928,18 +966,35 @@ export class ClientModel {
   }
   private projectMessages(items: readonly TranscriptItem[], running: boolean): ChatMessage[] {
     const turns: TranscriptItem[][] = []; let turn: TranscriptItem[] = [];
+    const isRecap = (item: TranscriptItem): boolean => item.kind === 'recap' && item.role === 'system' && !!item.id && !!item.text?.trim();
     items.forEach((item: TranscriptItem) => {
-      if (turn.length > 0 && (item.wake === true || (item.role === 'user' && item.kind === 'text'))) { turns.push(turn); turn = []; }
+      const startsTurn = item.wake === true || (item.role === 'user' && item.kind === 'text');
+      if (turn.length && (startsTurn || isRecap(item) !== isRecap(turn[0]))) {
+        turns.push(turn); turn = [];
+      }
       turn.push(item);
     });
     if (turn.length) turns.push(turn);
     const messages: ChatMessage[] = [];
     turns.forEach((group: TranscriptItem[], index: number) => {
+      if (isRecap(group[0])) {
+        const message = new ChatMessage('recap:' + group[0].id, 'recap', group[group.length - 1].text || '');
+        message.ownerTarget = this.target();
+        message.itemId = group[0].id;
+        message.at = this.itemTime(group[0]);
+        message.terminalRecap = index === turns.length - 1;
+        message.recaps = group.map((item: TranscriptItem): ConversationRecapItem => {
+          return { id: item.id, at: this.itemTime(item), text: item.text || '' };
+        });
+        messages.push(message);
+        return;
+      }
       const projection = projectToolTurn(group[0].id, group, running && index === turns.length - 1);
       projection.userMessages.forEach((item: TranscriptItem) => { const display = messageDisplay(item.text || ''); const message = new ChatMessage(item.id, 'user', display.text); message.ownerTarget = this.target(); message.itemId = item.id; message.source = display.sources; const content = parseMessageContent(display.text); message.text = content.text; message.imagePaths = content.images; message.filePaths = content.files; message.at = this.itemTime(item); messages.push(message); });
       projection.userImages.forEach((item: TranscriptItem) => { const message = new ChatMessage(item.id, 'user'); message.imageId = item.id; message.ownerTarget = this.target(); message.itemId = item.id; message.at = this.itemTime(item); messages.push(message); });
       if (projection.summaryVisible) {
         const summary = new ChatMessage(projection.workKey, 'work');
+        summary.toolCount = projection.toolCount; summary.thoughtCount = projection.thoughtCount; summary.running = projection.running;
         summary.work = projection.inspectionSteps.map((step: WorkInspectionStep) => this.workText(step)).filter((value: string) => !!value).join('\n\n');
         summary.raw = JSON.stringify(group); messages.push(summary);
       }
@@ -1401,7 +1456,10 @@ export class ClientModel {
     await new ChatDraftStore(this.local).settle(scope, id, 'checked');
     if (this.owns(generation, scope)) { this.unresolvedWrites = repo.mutations?.blocked() || []; await this.restoreOutbox(generation, scope); }
   }
-  private viewKey(key: string): string { return 'view:' + (key === 'ssh-tunnel' ? scopeKey({ groupId: this.profile.id, managerId: '' }) : this.scope()) + ':' + key; }
+  private viewKey(key: string): string {
+    if (key === 'agent-hub-mode') return 'device:agent-hub-mode';
+    return 'view:' + (key === 'ssh-tunnel' ? scopeKey({ groupId: this.profile.id, managerId: '' }) : this.scope()) + ':' + key;
+  }
   viewRevision(key: string): number { return this.local.revision(this.viewKey(key)); }
   /** Outcome bookkeeping stays on the admitted scope, even after navigation; Forget retires the captured epoch. */
   captureView(key: string): ClientViewLease {
@@ -1418,15 +1476,18 @@ export class ClientModel {
         if (!valid()) throw new Error('request_updated');
         await local.put(path, value, epoch);
         if (!valid()) throw new Error('request_updated');
+      },
+      clearIfUnchanged: async (expected: string): Promise<void> => {
+        if (valid()) await local.remove(path, epoch, expected);
       } };
   }
   async saveView(key: string, value: string, expectedEpoch: number = this.viewRevision(key)): Promise<void> { await this.local.put(this.viewKey(key), value, expectedEpoch); }
   async loadView(key: string): Promise<string> { return this.local.get(this.viewKey(key)); }
   removeContext(): void { this.sourceContext = ''; this.draftRevision = util.generateRandomUUID(); this.persistDraft().catch(() => this.error = 'failed'); }
-  async createAgent(prompt: string, machine: ResourceRow, directory: string, launcher: string, todoId: string = '', admit?: () => boolean): Promise<ResourceRow> {
+  async createAgent(prompt: string, machine: ResourceRow, directory: string, launcher: string, todoId: string = '', admit?: () => boolean, workspaceId: string = '', host: string = '', model: string = '', effort: string = ''): Promise<ResourceRow> {
     if (machine.manager !== this.profile.manager) throw new Error('request_updated');
     const generation = this.generation, scope = this.scope(), repo = this.repo();
-    const row = await repo.createAgent(prompt, machine, directory, launcher, util.generateRandomUUID(), todoId, (): boolean => this.owns(generation, scope) && (!admit || admit()));
+    const row = await repo.createAgent(prompt, machine, directory, launcher, util.generateRandomUUID(), todoId, (): boolean => this.owns(generation, scope) && (!admit || admit()), workspaceId, host, model, effort);
     if (!this.owns(generation, scope)) throw new Error('request_updated');
     try { await this.refresh(); } catch (_) { if (this.owns(generation, scope)) this.error = 'failed'; }
     if (!this.owns(generation, scope)) throw new Error('request_updated'); row.group = this.profile.id; return row;

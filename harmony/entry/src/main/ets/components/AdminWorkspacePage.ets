@@ -16,6 +16,7 @@ const LAUNCHER_AUTHS: string[] = ['api_key', 'bearer'];
 export struct AdminWorkspacePage {
   @Require @Param model: ClientModel;
   @Param page: string = '';
+  @Param createManagerOnly: boolean = false;
   @Param active: boolean = false;
   @Param refreshRevision: number = 0;
   @Param row: ResourceRow | undefined = undefined;
@@ -450,6 +451,17 @@ export struct AdminWorkspacePage {
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
+  @Builder private createManagerForm() {
+    Column({ space: Tokens.gap }) {
+      this.title(this.createManagerOnly ? 'phone_new_assistant' : 'admin_new_manager')
+      TextInput({ text: this.newManagerName, placeholder: tr('admin_manager_name') })
+        .onChange((value: string) => this.newManagerName = value).id('admin.manager.new_name')
+      Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('admin_create_manager')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('admin_create_manager', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('admin_create_manager')).bindTips(tr('admin_create_manager'))
+        .enabled(this.writeAllowed() && !!this.newManagerName.trim()).onClick(() => this.confirmCreateManager()).id('admin.manager.create')
+    }.width('100%').alignItems(HorizontalAlign.Start).padding(Tokens.inset)
+      .backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(Tokens.inset)
+  }
+
   @Builder private managersContent() {
     Column({ space: Tokens.section }) {
       Column({ space: Tokens.gap }) {
@@ -493,14 +505,7 @@ export struct AdminWorkspacePage {
       }.width('100%').alignItems(HorizontalAlign.Start).padding(Tokens.inset)
         .backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(Tokens.inset)
 
-      Column({ space: Tokens.gap }) {
-        this.title('admin_new_manager')
-        TextInput({ text: this.newManagerName, placeholder: tr('admin_manager_name') })
-          .onChange((value: string) => this.newManagerName = value).id('admin.manager.new_name')
-        Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('admin_create_manager')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('admin_create_manager', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('admin_create_manager')).bindTips(tr('admin_create_manager'))
-          .enabled(this.writeAllowed() && !!this.newManagerName.trim()).onClick(() => this.confirmCreateManager()).id('admin.manager.create')
-      }.width('100%').alignItems(HorizontalAlign.Start).padding(Tokens.inset)
-        .backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(Tokens.inset)
+      this.createManagerForm()
 
       Column({ space: Tokens.gap }) {
         this.title('admin_move_machine')
@@ -774,6 +779,7 @@ export struct AdminWorkspacePage {
         this.feedback()
         if (this.page === 'assistant') this.assistantContent()
         else if (this.page === 'memory') this.memoryContent()
+        else if (this.page === 'managers' && this.createManagerOnly) this.createManagerForm()
         else if (this.page === 'managers') this.managersContent()
         else if (this.page === 'launchers') this.launcherContent()
         else if (this.page === 'engine') this.engineContent()

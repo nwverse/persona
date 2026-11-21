@@ -37,9 +37,10 @@ registerHooks({
 });
 
 const { TodoWorkspace, TodoWorkspaceItem, TodoWorkspaceSpace, TodoWorkspaceSpaceChoice,
-  todoWorkspaceStatus, relatedTodoMembers } = await import('../entry/src/main/ets/models/TodoWorkspace.ets');
+  todoWorkspaceStatus, relatedTodoMembers, todoMatchesDue } = await import('../entry/src/main/ets/models/TodoWorkspace.ets');
 const { reconcileBoundRows } = await import('../entry/src/main/ets/models/RowBinding.ets');
 const { ResourceRow } = await import('../entry/src/main/ets/models/Wire.ets');
+const { TodoHubCounts, TodoHubRow, TODO_HUB_SECTIONS } = await import('../entry/src/main/ets/models/TodoHubView.ets');
 const { HttpFailure } = await import('persona-todo:transport');
 
 function todo(id, fields = {}) {
@@ -126,7 +127,7 @@ function makeHarness(options = {}) {
       if (row.manager === state.manager) return client;
       return state.otherClient;
     },
-    todos: [], features: []
+    todos: [], features: options.features || []
   };
   return { client, repo, state };
 }
@@ -139,6 +140,96 @@ async function opened(options = {}) {
 }
 
 function pathOnly(path) { return path.split('?')[0]; }
+
+function countsFor(sections, needs = sections.needs_you || 0) {
+  const values = Object.fromEntries(TODO_HUB_SECTIONS.map(key => [key, sections[key] || 0]));
+  return { open: Object.entries(values).reduce((n, [key, v]) => n + (['someday', 'done'].includes(key) ? 0 : v), 0),
+    needs_you: needs, in_progress: values.working + values.waiting, sections: values };
+}
+
+test('reads production Hub To-do filing and count fixtures, including every stable section, rank and zero', () => {
+  const corpus = name => JSON.parse(readFileSync(new URL('../../spec/fixtures/' + name, import.meta.url))).cases;
+  for (const example of corpus('todo-view/todo_view.json')) {
+    const expected = example.expected.view;
+    const row = TodoHubRow.read({ view: expected });
+    assert.ok(row, example.name);
+    assert.deepEqual([row.phase, row.rank, row.section], [expected.phase, expected.rank, expected.section], example.name);
+    if (expected.line?.key === 'failed_start') assert.equal(row.line, expected.line.args?.error || '', example.name);
+  }
+  for (const example of corpus('todo-counts/todo_counts.json')) {
+    const raw = example.expected.counts, read = TodoHubCounts.read({ counts: raw });
+    assert.deepEqual([read.open, read.needsYou, read.inProgress], [raw.open, raw.needs_you, raw.in_progress], example.name);
+    assert.deepEqual(Object.fromEntries(read.sections), raw.sections, example.name);
+  }
+  assert.equal(TodoHubRow.read({ view: { section: 'future-section', rank: 0, phase: 'future' } }), undefined);
+  assert.equal(TodoHubRow.read({ view: { section: 'working', rank: 2.5, phase: 'working' } }), undefined);
+  assert.equal(TodoHubCounts.read({ counts: { ...countsFor({}), open: -2 } }), undefined);
+  assert.equal(TodoHubCounts.read({ counts: { ...countsFor({}), sections: { todo: 1 } } }), undefined);
+});
+
+test('Hub opt-in files by the authenticated snapshot, ranks distinct rows and uses quiet-aware Needs you counts', async () => {
+  const view = (section, rank, fields = {}) => ({ section, phase: section, reason: 'future_reason', rank, ...fields });
+  const todos = [
+    todo('q2', { title: 'One related reminder', plan_id: 'pair', quiet: true, view: view('needs_you', 2) }),
+    todo('q1', { title: 'One related reminder', plan_id: 'pair', view: view('needs_you', 0,
+      { line: { key: 'agent_asks', args: { run: 'Build bot', text: 'Choose the channel' } } }) }),
+    todo('later', { view: view('can_wait', 0) }),
+    todo('worked', { view: view('working', 1) }),
+    todo('finished', { view: view('just_finished', 0, { phase: 'ready' }) }),
+    todo('child', { part_of: 'worked', view: view('working', 0) }),
+    todo('future', { view: view('new_section', 0) })
+  ];
+  const counts = countsFor({ needs_you: 2, can_wait: 1, working: 1, just_finished: 1, todo: 1 }, 1);
+  const { workspace, state } = await opened({ features: ['todo_view'], request: () => ({ todos, counts }) });
+  assert.equal(workspace.effectiveGroup(), 'status', 'released iOS opens the existing list');
+  workspace.setGroupBy('hub');
+  let sections = workspace.sections();
+  assert.deepEqual(sections.map(s => s.key), ['needs_you','can_wait','working','todo','just_finished']);
+  assert.deepEqual(sections[0].rows.map(row => row.lead.id), ['q1','q2'], 'real rank overrides recency and relation merging');
+  assert.equal(sections[0].rows[0].lead.hubView.line, 'Build bot · Choose the channel');
+  assert.equal(workspace.hubCounts.choiceCount('needs_you'), 1, 'quiet rows stay visible without counting toward owner attention');
+  assert.equal(workspace.hubCounts.choiceCount('in_progress'), 1, 'just-finished rows belong under this choice but never add to its count');
+  assert.deepEqual(workspace.hubCounts.choices('all'), ['all','needs_you','in_progress','todo']);
+  assert.equal(sections.find(s => s.key === 'todo').rows[0].lead.id, 'future', 'unknown future sections fall back per row');
+  workspace.setHubChoice('in_progress');
+  assert.deepEqual(workspace.sections().map(s => s.key), ['working','just_finished']);
+  workspace.setSearch('One related reminder');
+  assert.deepEqual(workspace.sections().map(s => s.key), ['needs_you'], 'search crosses section choices');
+  workspace.setSearch('');
+  assert.deepEqual(workspace.sections().map(s => s.key), ['working','just_finished']);
+  assert.deepEqual(state.calls.map(call => [call.path, call.method]), [['/api/v1/todos?manager=work','GET']]);
+  workspace.close();
+});
+
+test('old servers and malformed snapshots restore the existing list and never reuse counts from a previous owner', async () => {
+  const raw = { todos: [todo('a', { view: { section: 'working', rank: 0, phase: 'working' } })], counts: countsFor({working:1}) };
+  const modern = makeHarness({ features: ['todo_view'], request: () => structuredClone(raw) });
+  const legacy = makeHarness({ manager: 'other', request: () => structuredClone(raw) });
+  for (const h of [modern, legacy]) h.state.views.set(h.state.scope + ':todo-workspace', JSON.stringify({group:'hub',hubUnfolded:['can_wait']}));
+  const workspace = new TodoWorkspace();
+  await workspace.open(modern.client);
+  assert.equal(workspace.effectiveGroup(), 'hub');
+  assert.deepEqual(workspace.hubUnfolded, ['can_wait']);
+  workspace.toggleHubFold('someday');
+  await workspace.draftWrites;
+  assert.deepEqual(JSON.parse(modern.state.views.get(modern.state.scope + ':todo-workspace')).hubUnfolded, ['can_wait','someday']);
+  const slow = deferred();
+  modern.state.request = () => slow.promise;
+  const stale = workspace.refresh();
+  await workspace.open(legacy.client);
+  slow.resolve(raw);
+  await stale;
+  assert.equal(workspace.hubCounts, undefined);
+  assert.equal(workspace.effectiveGroup(), 'status');
+  assert.deepEqual(workspace.sections().map(s => s.key), ['not_started']);
+  legacy.client.features.push('todo_view');
+  legacy.state.request = () => ({ todos: [todo('x')], counts: { needs_you: 0 } });
+  await workspace.refresh();
+  assert.equal(workspace.effectiveGroup(), 'status');
+  assert.equal(workspace.items[0].id, 'x');
+  assert.deepEqual(legacy.state.calls.map(call => call.method), ['GET','GET']);
+  workspace.close();
+});
 
 test('projects server lifecycle fields into the six native states with SOP priority', () => {
   const linked = [{ machine_id: 'm1', session_id: 's1' }];
@@ -625,4 +716,67 @@ test('a Todo detail restored before the first connection binds after the owner b
 test('a same-owner reconnect rebinds reads while retaining and saving an offline Todo editor draft',async()=>{
  const {workspace,client,state}=await opened({todos:[todo('t1')]});await workspace.openRow(workspace.items[0]);workspace.editorOpen=true;state.connected=false;state.generation++;workspace.setTitleDraft('Offline draft');workspace.setNotesDraft('Keep after reconnect');await workspace.draftWrites;
  assert.ok([...state.views.values()].some(value=>value.includes('Offline draft')));state.connected=true;await workspace.refresh();assert.equal(workspace.error,'');assert.equal(workspace.editorOpen,true);assert.equal(workspace.titleDraft,'Offline draft');assert.equal(workspace.notesDraft,'Keep after reconnect');workspace.close();
+});
+
+test('the list checkbox completes and reopens a row without selecting it or replacing a different editor draft',async()=>{
+  const {workspace,state}=await opened({todos:[todo('first'),todo('second')]});
+  await workspace.openRow(workspace.items[1]);workspace.notesDraft='keep draft';
+  let target=workspace.items[0];
+  assert.equal(await workspace.setDone(target,true,true),true);assert.equal(workspace.selected.id,'second');
+  assert.equal(workspace.notesDraft,'keep draft');assert.equal(workspace.items.find(x=>x.id==='first').isDone(),true);
+  assert.equal(await workspace.setDone(target,true,true),false);
+  target=workspace.items.find(x=>x.id==='first');
+  assert.equal(await workspace.setDone(target,false,true),true);
+  assert.equal(state.calls.filter(x=>x.method==='PATCH').length,2);assert.equal(workspace.items.find(x=>x.id==='first').isDone(),false);
+});
+
+test('a listed row that disappeared during a completion cannot be resurrected by its delayed reply',async()=>{
+  let resolve,entered;
+  const arrived=new Promise(r=>{entered=r});
+  const {workspace,state}=await opened({todos:[todo('target')]});
+  state.request=async call=>{
+    assert.equal(call.method,'PATCH');
+    entered();return new Promise(r=>{resolve=r});
+  };
+  const source=workspace.items[0];const outbound=workspace.setDone(source,true,true);await arrived;
+  workspace.items=[];
+  resolve({todo:todo('target',{done_at:'2026-11-20T12:00:00Z'})});assert.equal(await outbound,false);
+  assert.deepEqual(workspace.items,[]);assert.equal(workspace.saving,false);
+});
+
+test('due filters use local calendar days, end-of-day deadlines and the chosen first weekday',()=>{
+  const make=(id,extra)=>new TodoWorkspaceItem(todo(id,extra),'work');
+  const now=new Date(2026,10,18,12).getTime();
+  const same=make('day',{due_date:'2026-11-18'}), past=make('old',{due_date:'2026-11-07'}), future=make('next',{due_date:'2026-11-22'});
+  const completed=make('done',{due_date:'2026-11-07',done_at:'2026-11-06T14:00:00Z'});
+  assert.ok(same.due < now && same.dueBy > now);
+  assert.equal(todoMatchesDue(past,'today',now,1),true);assert.equal(todoMatchesDue(completed,'today',now,1),false);
+  assert.equal(todoMatchesDue(future,'week',now,1),true);assert.equal(todoMatchesDue(future,'week',now,0),false);
+  assert.equal(todoMatchesDue(make('invalid',{due_date:'2026-02-31'}),'no_due',now,1),true);
+});
+
+test('date and priority sort use the earliest date and highest priority of the visible merged members',async()=>{
+  const {workspace}=await opened({todos:[todo('separate',{due_date:'2026-11-23',priority:'low'}),
+    todo('lead',{plan_id:'topic',due_date:'2026-11-25',updated_at:'2026-11-18T00:00:00Z'}),
+    todo('early',{plan_id:'topic',due_date:'2026-11-20',priority:'high'})]});
+  for(const order of ['due','priority']){
+    workspace.setOrder(order);
+    const rows=workspace.sections().flatMap(s=>s.rows);
+    assert.deepEqual(rows.map(r=>r.members.length),[2,1]);
+  }
+});
+
+test('the due warning counts hidden owner actions once per manager and respects the active search', () => {
+  const due = new TodoWorkspace();
+  const now = new Date(2026,10,21,12).getTime();
+  const item = (id, manager, dates = {}) => new TodoWorkspaceItem(todo(id,{manager,title:'Widget '+manager,
+    view:{section:'needs_you',phase:'open',rank:1},...dates}),manager);
+  due.items = [
+    item('same','home'), item('same','home'), item('same','office'),
+    item('today','home',{due_date:'2026-11-21'}), item('later','office',{view:{section:'working',phase:'open',rank:1}})
+  ];
+  due.dueFilter='today';
+  assert.equal(due.hiddenWaiting(now,1),2);
+  due.search='Widget home';assert.equal(due.hiddenWaiting(now,1),1);
+  due.dueFilter='all';assert.equal(due.hiddenWaiting(now,1),0);
 });

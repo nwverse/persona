@@ -37,6 +37,7 @@ export interface CoreAgentListGroup {
 }
 export interface CoreAgentListProjection {
   counts: Record<string, Object>;
+  filter_counts?: Record<string, Object>;
   groups: CoreAgentListGroup[];
   unread_shown: string[];
   quiet_title?: string | null;

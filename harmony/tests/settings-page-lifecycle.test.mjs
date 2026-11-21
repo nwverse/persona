@@ -4,6 +4,28 @@ import { readFileSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
 
 const source = readFileSync(new URL('../entry/src/main/ets/components/SettingsPage.ets', import.meta.url), 'utf8');
+const directory = readFileSync(new URL('../entry/src/main/ets/components/SettingsDirectory.ets', import.meta.url), 'utf8');
+
+test('the phone searches nested settings and restores exactly the query used to open a result', () => {
+  const catalog = directory.slice(directory.indexOf('const AGENT_OPTIONS:'), directory.indexOf('function languageName('));
+  const labels = directory.slice(directory.indexOf('function settingLabel('), directory.indexOf('@ComponentV2'));
+  const appear = directory.slice(directory.indexOf('  aboutToAppear():'), directory.indexOf('  @Computed get managers()'));
+  const lookup = directory.slice(directory.indexOf('  @Computed get results()'), directory.indexOf('  @Builder managerMenu('))
+    .replace('@Computed ', '');
+  const strings = new Map(JSON.parse(readFileSync(new URL('../entry/src/main/resources/zh_CN/element/string.json', import.meta.url))).string
+    .map(entry => [entry.name, entry.value]));
+  const Search = new Function('tr',stripTypeScriptTypes(catalog + labels + ' class Search {' + appear + lookup + '}')+';return Search')(key => strings.get(key) || key);
+  const page = new Search(), actions = [];
+  Object.assign(page,{ initialQuery:' 深色  主题 ', label:id=>id, subtitle:()=>'', field:{ stopEditing:()=>actions.push('dismiss') }, onOpen:id=>actions.push(id) });
+  page.aboutToAppear();
+  assert.deepEqual(page.results,['appearance']);
+  page.openEntry(page.results[0]);
+  assert.deepEqual(actions,['dismiss','appearance']);
+  assert.equal(page.query,' 深色  主题 ');
+  page.query='LaUnChErS'; assert.ok(page.results.includes('launchers'));
+  page.query=' '; assert.deepEqual(page.results,[]);
+});
+
 function method(name) {
   const start = source.indexOf('  private ' + name + '(');
   assert.ok(start >= 0, name);

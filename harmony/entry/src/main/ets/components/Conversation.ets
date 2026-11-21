@@ -1,3 +1,6 @@
+import { PhoneDictationControl } from './PhoneDictationControl';
+import { ConversationRecap } from './ConversationRecap';
+import { AssistantWelcome } from './AssistantWelcome';
 import { IconActions } from '../design/IconActions';
 import { Theme, SymbolGlyphModifier } from '@kit.ArkUI';
 import { ComposerOverlayWorkspace, ComposerOverlaySession } from '../models/ComposerOverlayWorkspace';
@@ -66,14 +69,16 @@ class ComposerActionIntent {
 @ComponentV2
 struct MessageSurface {
   @Param own: boolean = false;
+  @Param personaReply: boolean = false;
   @Param maximum: number = Tokens.readingMax;
   @BuilderParam content: () => void;
   @Local fill: ResourceColor = Color.Transparent;
   onWillApplyTheme(theme: Theme): void { this.fill = theme.colors.compBackgroundPrimary; }
   build() {
     Column() { this.content() }.width(this.own ? undefined : '100%').constraintSize({ maxWidth: this.maximum })
-      .padding(this.own ? Tokens.inset : 0).backgroundColor(this.own ? this.fill : Color.Transparent)
-      .borderRadius(this.own ? Tokens.bubble : 0)
+      .padding(this.own || this.personaReply ? {left:14,right:14,top:9,bottom:9} : 0)
+      .backgroundColor(this.own ? this.fill : this.personaReply ? Colors.control : Color.Transparent)
+      .borderRadius(this.own || this.personaReply ? Tokens.bubble : 0)
   }
 }
 
@@ -92,10 +97,12 @@ class ConversationLine {
 export struct Conversation {
   @Require @Param model: ClientModel;
   @Param active: boolean = true;
+  @Param searchHitId: string = '';
   @Param showContextMenu: boolean = false;
   @Param actionItems: SheetInfo[] = [];
   @Param actionsVisible: boolean = false;
   @Param actionsRequest: number = 0;
+  @Event onPlace: (name: string) => void = () => {};
   @Event onShowActions: () => void = () => {};
   @Event onHideActions: (request: number) => void = () => {};
   @Event admission: () => boolean = (): boolean => true;
@@ -135,9 +142,77 @@ export struct Conversation {
   private readingCursors: Set<string> = new Set();
   @Local readingFailed: boolean = false;
   private firstVisibleIndex: number = 0;
+  private lastVisibleIndex: number = -1;
+  private searchedHit: string = '';
+  private seekingHit: string = '';
+  private searchHighlightTimer: number = -1;
+  @Local highlightedLine: string = '';
+  private hitScope(): string {
+    return JSON.stringify([this.model.scope(),this.model.connectionGeneration(),this.model.target(),this.searchHitId]);
+  }
+  private findSearchLine(hit:string): number {
+    const direct = this.lines.findIndex((line:ConversationLine) => !!line.message &&
+      (line.message.id === hit || line.message.itemId === hit || (line.message.role === 'recap' && line.message.recaps.some((recap) => recap.id === hit))));
+    if (direct >= 0) return direct;
+    return this.lines.findIndex((line:ConversationLine) => {
+      if (!line.message?.work || !line.message.raw.startsWith('[')) return false;
+      try {
+        const items = JSON.parse(line.message.raw) as Object[];
+        return Array.isArray(items) && items.some((item:Object) => Wire.text(Wire.record(item),'id') === hit);
+      } catch (_) { return false; }
+    });
+  }
+  private clearSearchHighlight(): void {
+    if (this.searchHighlightTimer !== -1) clearTimeout(this.searchHighlightTimer);
+    this.searchHighlightTimer = -1; this.highlightedLine = '';
+  }
+  @Monitor('searchHitId') requestedHitChanged(): void {
+    this.searchedHit = ''; this.seekingHit = ''; this.clearSearchHighlight(); this.scheduleReading();
+  }
+  private async seekSearchHit(key:string): Promise<void> {
+    if (this.seekingHit === key) return;
+    const owner = this.model, hit = this.searchHitId, epoch = this.readingEpoch, motion = this.readingMotion;
+    const current = (): boolean => this.active && this.model === owner && this.seekingHit === key &&
+      epoch === this.readingEpoch && this.hitScope() === key && this.readingMotion === motion;
+    this.seekingHit = key;
+    try {
+      for (let page = 0; page <= 6 && current(); page++) {
+        const index = this.findSearchLine(hit);
+        if (index >= 0) {
+          const line = this.lines[index];
+          this.readingRestoring = false;
+          this.getUIContext().postFrameCallback(new ConversationFrame(() => {
+            if (!this.active || this.model !== owner || epoch !== this.readingEpoch || this.hitScope() !== key || this.readingMotion !== motion) return;
+            const visible = this.findSearchLine(hit);
+            if (visible < 0) return;
+            this.clearSearchHighlight(); this.readingRestoring = false; this.atEnd = false;
+            this.scroller.scrollToIndex(visible + this.readingPrefix(), false, ScrollAlign.CENTER);
+            this.highlightedLine = line.id;
+            this.searchHighlightTimer = setTimeout(() => { this.highlightedLine = ''; this.searchHighlightTimer = -1; }, 2600);
+          }));
+          return;
+        }
+        if (page === 6 || !owner.hasMoreMessages || !owner.connected || !await owner.loadOlder()) break;
+        if (current()) this.syncTimeline();
+      }
+    } catch (_) { /* Leave this conversation readable when more history is unavailable. */ } finally {
+      if (this.seekingHit === key) {
+        this.seekingHit = ''; this.searchedHit = key;
+        if (this.readingRestoring && this.findSearchLine(hit) < 0) this.scheduleReading();
+      }
+    }
+  }
   private anchor: ReadingAnchor = { id: '', offset: 0, atEnd: true };
+  private showWelcome(): boolean {
+    return this.model.selected.kind === 'conversation' && this.active && this.model.connected && this.model.transcriptHistoryReady &&
+      !this.model.hasMoreMessages && !this.lines.length && !this.model.error && !this.feed.error;
+  }
+  private welcomeCanAsk(): boolean {
+    return this.composerAvailable() && !this.model.draftLoading && !this.model.draft && !this.model.sourceContext &&
+      !this.attachments.busy && !this.attachments.attachments.length && !this.sending;
+  }
   private readingPrefix(): number {
-    return (this.readingFailed ? 1 : 0) + (this.feed.error && this.feed.error !== this.model.error ? 1 : 0) + (this.model.selected.kind === 'conversation' ? 1 : 0) + (this.model.hasMoreMessages || this.feed.nextCursor ? 1 : 0);
+    return (this.readingFailed ? 1 : 0) + (this.feed.error && this.feed.error !== this.model.error ? 1 : 0) + (this.showWelcome() ? 1 : 0) + (this.model.hasMoreMessages || this.feed.nextCursor ? 1 : 0);
   }
   private saveReading(): void {
     if (!this.readingRestoring && this.readingLease?.valid()) this.readingLease.write(JSON.stringify(this.anchor)).catch(() => {});
@@ -145,22 +220,31 @@ export struct Conversation {
   private syncReading(): void {
     const key = JSON.stringify([this.model.scope(), this.model.target()]);
     if (this.readingKey === key) return;
-    this.saveReading(); this.readingKey = key;
+    this.saveReading(); this.jumpAvailable = false; this.lastVisibleIndex = -1; this.readingKey = key; this.searchedHit = ''; this.seekingHit = ''; if (this.highlightedLine) this.clearSearchHighlight();
     const epoch = ++this.readingEpoch, lease = this.model.captureView('reading:' + this.model.target());
     this.readingLease = lease; this.readingCursors.clear(); this.readingFetching = false; this.readingRestoring = true; this.readingAnchorReady = false; this.readingFailed = false;
     lease.read().then((value: string) => {
       if (epoch !== this.readingEpoch || key !== this.readingKey || !lease.valid()) return;
       this.anchor = parseReadingAnchor(value); this.atEnd = this.anchor.atEnd; this.readingAnchorReady = true;
       this.scheduleReading();
-    }).catch(() => { if (epoch === this.readingEpoch) { this.readingFailed = true; } });
+    }).catch(() => {
+      if (epoch !== this.readingEpoch || key !== this.readingKey || !lease.valid()) return;
+      this.readingFailed = true;
+      if (this.searchHitId) this.scheduleReading();
+    });
   }
   private scheduleReading(): void {
     const epoch = this.readingEpoch;
     this.getUIContext().postFrameCallback(new ConversationFrame(() => { if (epoch === this.readingEpoch && this.active) this.restoreReading(); }));
   }
   private async restoreReading(): Promise<void> {
+    if (this.active && this.searchHitId && this.searchedHit !== this.hitScope()) {
+      if ((this.readingAnchorReady || this.readingFailed) && this.model.transcriptHistoryReady) await this.seekSearchHit(this.hitScope());
+      return;
+    }
     if (!this.active || !this.readingRestoring || !this.readingAnchorReady || this.readingFetching || this.readingFailed) return;
-    if (this.model.selected.kind === 'conversation' && this.feedKey && !this.feed.hasLoaded) return;
+    if (this.model.selected.kind === 'conversation' && this.feedKey && !this.feed.hasLoaded && !this.feed.feedUnavailable) return;
+    if (this.showWelcome()) { this.scroller.scrollEdge(Edge.Top); this.readingRestoring = false; return; }
     if (this.anchor.atEnd || !this.anchor.id) { this.scroller.scrollEdge(Edge.Bottom); this.readingRestoring = false; return; }
     const index = readingAnchorIndex(this.lines.map((line: ConversationLine) => line.readingId), this.anchor);
     if (index >= 0) {
@@ -219,12 +303,48 @@ export struct Conversation {
   private recordReading(start: number): void {
     if (!this.active || this.readingRestoring) return;
     this.atEnd = this.scroller.isAtEnd();
+    this.updateJumpAvailability();
     const prefix = this.readingPrefix(), index = Math.max(prefix, start), line = this.lines[index - prefix];
     if (!line) return;
     try { const rectangle = this.scroller.getItemRect(index); this.anchor = { id: line.readingId, offset: rectangle.y, atEnd: this.atEnd }; } catch (_) {}
   }
+  private trackScrollMotion(offset: number, source: ScrollSource): void {
+    if (!offset || source === ScrollSource.SCROLLER || source === ScrollSource.SCROLLER_ANIMATION || source === ScrollSource.EDGE_EFFECT) return;
+    this.readingMotion++;
+    if (this.searchHitId && this.seekingHit) this.readingRestoring = false;
+  }
   @Local atEnd: boolean = true;
-  @Local hasNew: boolean = false;
+  @Local jumpAvailable: boolean = false;
+  private transcriptHeight: number = 0;
+  private transcriptViewportChanged(height:number):void {
+    if (!Number.isFinite(height) || height <= 0 || Math.abs(height-this.transcriptHeight) < 0.1) return;
+    this.transcriptHeight = height;
+    if (this.active && !this.readingRestoring) this.timelinePositionChanged();
+  }
+  private updateJumpAvailability(): void {
+    if (this.atEnd || !this.lines.length || this.transcriptHeight <= 0) {
+      this.jumpAvailable = false;
+      return;
+    }
+    const index = this.readingPrefix() + this.lines.length - 1;
+    if (this.lastVisibleIndex < index) {
+      this.jumpAvailable = this.lastVisibleIndex >= 0;
+      return;
+    }
+    // A visible last row can be taller than the viewport. iPhone allows a 100pt
+    // glance above the latest reply before the arrow appears.
+    try {
+      const last = this.scroller.getItemRect(index);
+      this.jumpAvailable = last.height > 0 && last.y + last.height - this.transcriptHeight > 100;
+    } catch (_) { /* The row can leave the viewport between the index and geometry callbacks. */ }
+  }
+  private jumpToLatest(): void {
+    this.readingMotion++;
+    this.atEnd = true;
+    this.anchor.atEnd = true;
+    this.jumpAvailable = false;
+    this.scroller.scrollEdge(Edge.Bottom);
+  }
   @Local availableHeight: number = 800;
   @Local availableWidth: number = 360;
   @Local environment: NativeEnvironment = nativeEnvironment;
@@ -232,7 +352,18 @@ export struct Conversation {
   // Re-entering the conversation may sample a newly available native capability.
   private useNativeHover: boolean = nativeEnvironment.nativeHoverAvailable;
   @Local controlsHeight: number = 80;
+  @Local measuredDecision: string = '';
   @Local fieldFocused: boolean = false;
+  @Local draftEditorOpen: boolean = false;
+  @Local draftEditorFocused: boolean = false;
+  private inlineField: TextAreaController = new TextAreaController();
+  private pageField: TextAreaController = new TextAreaController();
+  private draftEditorOwner: string = '';
+  private selectionStart: number = 0;
+  private selectionEnd: number = 0;
+  private parkedStart: number = 0;
+  private parkedEnd: number = 0;
+  private refocusInline: boolean = false;
   @Local composerWidth: number = 360;
   @Local questions: QuestionWorkspace = new QuestionWorkspace();
   @Local questionInset: number = 0;
@@ -255,16 +386,33 @@ export struct Conversation {
   private attachmentNodeId: string = 'chat.attachment.' + util.generateRandomUUID();
   private attachmentLayoutReady: boolean = false;
   private leftActionWidth(): number { const count = (this.model.demo ? 0 : 1) + (this.showContextMenu ? 1 : 0); return count * Tokens.touch + Math.max(0, count - 1) * Tokens.gap; }
-  private expandedComposer(): boolean { return this.fieldFocused || !!this.model.draft || this.attachments.attachments.length > 0 || this.environment.fontScale >= 1.5 || this.composerWidth < Tokens.compactPane || this.composerWidth - this.leftActionWidth() - Tokens.touch - (this.leftActionWidth() ? 2 : 1) * Tokens.gap < Tokens.minimumInput; }
+  private hasComposerAction(): boolean {
+    return this.primaryStop() || this.sending || !!this.model.draft.trim() || this.attachments.attachments.length > 0 || !!this.model.sourceContext;
+  }
+  private trailingActionWidth(): number { return Tokens.touch * (this.hasComposerAction() ? 2 : 1); }
+  private expandedComposer(): boolean {
+    const leading = this.leftActionWidth();
+    const available = this.composerWidth - leading - this.trailingActionWidth() - (leading ? 2 : 1) * Tokens.gap;
+    return this.fieldFocused || this.model.draft.length > 0 || this.attachments.attachments.length > 0 ||
+      !!this.model.sourceContext || this.environment.fontScale >= 1.5 || available < Tokens.minimumInput;
+  }
   private verticalActions(): boolean { return this.environment.fontScale >= 1.5 || this.composerWidth < Tokens.composerNarrowActions; }
   // Native ordering keeps the same editor mounted. Compact slots use pixel precision, not twelfths of the row.
   private composerColumns(): number { return this.expandedComposer() ? 12 : Math.max(1, Math.round(this.getUIContext().vp2px(this.composerWidth))); }
-  private sendColumns(): number { const width = Tokens.touch + (this.expandedComposer() ? 0 : Tokens.gap); return Math.ceil(width * this.composerColumns() / this.composerWidth); }
+  private sendColumns(): number { const width = this.trailingActionWidth() + (this.expandedComposer() ? 0 : Tokens.gap); return Math.ceil(width * this.composerColumns() / this.composerWidth); }
   private leftColumns(): number { const width = this.leftActionWidth(); return Math.ceil((width + (width && !this.expandedComposer() ? Tokens.gap : 0)) * this.composerColumns() / this.composerWidth); }
   private primaryStop(): boolean { return !this.model.decision && this.model.canCompose() && this.model.canStop() && !this.model.draft.trim() && !this.attachments.attachments.length; }
   @Monitor('active', 'model.selected', 'model.sessions', 'model.connected', 'model.draft', 'model.decision', 'attachments.attachments', 'model.interruptPendingKey')
   primaryStopChanged(): void { this.onPrimaryStop(this.active && this.primaryStop()); }
-  private maxControlsHeight(): number { return this.model.decision ? this.availableHeight * (this.environment.keyboardHeightPx > 0 ? 1 : Tokens.decisionFraction) : this.availableHeight * 0.8; }
+  private maxControlsHeight(): number {
+    if (!this.model.decision) return this.availableHeight * 0.8;
+    if (this.environment.keyboardHeightPx > 0) return this.availableHeight;
+    const half = this.availableHeight * Tokens.decisionFraction;
+    return this.model.decision.kind === 'question' ? Math.max(half, this.availableHeight - 72) : half;
+  }
+  private decisionToolsHeight(): number {
+    return this.showContextMenu ? Tokens.touch + Tokens.gap : 0;
+  }
   private measureAttachment(): void {
     if (!this.attachmentLayoutReady) return;
     const inset = nativeSheetInset(this.getUIContext(), this.attachmentNodeId, this.environment.safeBottomPx);
@@ -425,23 +573,32 @@ export struct Conversation {
 
   @Local foldContainerHeight: number = 0;
   private ordinarySplitRatio(): number {
-    const secondary = this.model.decision ? this.maxControlsHeight() : Math.max(1, Math.min(this.controlsHeight, this.maxControlsHeight()));
+    const firstMeasure = this.model.decision && this.measuredDecision !== this.model.decision.id;
+    const secondary = firstMeasure ? this.maxControlsHeight() : Math.max(1, Math.min(this.controlsHeight, this.maxControlsHeight()));
     return Math.max(1, (this.foldContainerHeight || this.availableHeight) - secondary) / secondary;
   }
   @Monitor('model.messages', 'model.transcriptHistoryReady') messagesChanged(): void {
     this.syncTimeline(); this.refreshFeed(); this.syncRevision();
-    if (this.readingRestoring) { this.scheduleReading(); }
-    else if (this.atEnd) this.getUIContext().postFrameCallback(new ConversationFrame(() => { if (this.active && this.atEnd && !this.readingRestoring) this.scroller.scrollEdge(Edge.Bottom); })); else this.hasNew = true;
+    this.timelinePositionChanged();
   }
-  @Monitor('feed.items', 'feed.hasLoaded') feedChanged(): void { this.syncTimeline(); if (this.readingRestoring) this.scheduleReading(); else if (this.atEnd) this.getUIContext().postFrameCallback(new ConversationFrame(() => { if (this.active && this.atEnd && !this.readingRestoring) this.scroller.scrollEdge(Edge.Bottom); })); else this.hasNew = true; }
+  @Monitor('feed.items', 'feed.hasLoaded', 'feed.feedUnavailable') feedChanged(): void { this.syncTimeline(); this.timelinePositionChanged(); }
   @Monitor('active', 'model.selected', 'model.connected') feedContextChanged(): void { if (!this.active) { this.readingMotion++; this.saveReading(); } else this.syncReading(); this.syncFeed(); this.syncAttachments(); this.syncRevision(); }
-  @Monitor('model.decision') decisionChanged(): void { this.refreshFeed(); }
+  @Monitor('model.decision') decisionChanged(): void { this.measuredDecision = ''; this.refreshFeed(); this.scheduleReading(); }
   @Monitor('active', 'model.selected', 'model.profile', 'model.connected', 'model.personaQuestions')
   questionsContextChanged(): void { this.questions.sync(this.model, this.active); }
   @Monitor('model.personaQuestions') personaQuestionsChanged(): void {
     this.syncTimeline(); this.refreshFeed();
-    if (this.readingRestoring) { this.scheduleReading(); }
-    else if (this.atEnd) this.getUIContext().postFrameCallback(new ConversationFrame(() => { if (this.active && this.atEnd && !this.readingRestoring) this.scroller.scrollEdge(Edge.Bottom); })); else this.hasNew = true;
+    this.timelinePositionChanged();
+  }
+  private timelinePositionChanged(): void {
+    if (this.readingRestoring || this.searchHitId && this.searchedHit !== this.hitScope()) { this.scheduleReading(); return; }
+    if (!this.active || this.showWelcome()) return;
+    const epoch = this.readingEpoch, motion = this.readingMotion, follow = this.atEnd;
+    this.getUIContext().postFrameCallback(new ConversationFrame(() => {
+      if (!this.active || this.readingEpoch !== epoch || this.readingRestoring || this.showWelcome()) return;
+      if (follow && this.atEnd && this.readingMotion === motion) this.scroller.scrollEdge(Edge.Bottom);
+      else this.updateJumpAvailability();
+    }));
   }
   private syncFeed(): void {
     if (!this.active || !this.model.connected || this.model.demo || this.model.selected.kind !== 'conversation') {
@@ -475,6 +632,61 @@ export struct Conversation {
     if (this.model.stopPending() || this.sending || this.model.operationState === 'pending') return 'pending';
     return this.model.operationState === 'unknown' ? 'result_unknown' : 'send';
   }
+  private offersDraftEditor(): boolean {
+    return this.fieldFocused || (this.model.draft.length > 0 && (this.model.draft.includes('\n') ||
+      this.editorHeight >= 5.5 * Tokens.lineHeight * Math.max(1, this.environment.fontScale) + Tokens.section));
+  }
+  private draftEditorCurrent(): boolean {
+    return !!this.draftEditorOwner && this.sendCurrent() && this.composerAvailable() &&
+      this.draftEditorOwner === this.composerOwnerKey();
+  }
+  private rememberSelection(start: number, end: number): void {
+    if (start >= 0 && end >= start) { this.selectionStart = start; this.selectionEnd = end; }
+  }
+  private parkSelection(): void { this.parkedStart = this.selectionStart; this.parkedEnd = this.selectionEnd; }
+  private restoreSelection(field: TextAreaController): void {
+    const length = this.model.draft.length;
+    field.setTextSelection(Math.min(this.parkedStart, length), Math.min(this.parkedEnd, length));
+  }
+  private finishPageInput(): void { this.parkSelection(); this.pageField.stopEditing(); }
+  private expandDraftEditor(): void {
+    if (!this.sendCurrent() || !this.composerAvailable() || this.sending || this.model.draftLoading) return;
+    this.draftEditorOwner = this.composerOwnerKey();
+    this.refocusInline = this.fieldFocused;
+    this.parkSelection();
+    this.inlineField.stopEditing();
+    this.draftEditorOpen = true;
+  }
+  private focusDraftPage(): void {
+    const owner = this.draftEditorOwner;
+    this.getUIContext().postFrameCallback(new ConversationFrame(() => {
+      if (this.draftEditorOpen && this.draftEditorOwner === owner && this.draftEditorCurrent()) {
+        this.getUIContext().getFocusController().requestFocus('chat.editor.input');
+        this.restoreSelection(this.pageField);
+      }
+    }));
+  }
+  private draftPageGone(): void {
+    const owner = this.draftEditorOwner;
+    const focus = this.refocusInline && this.draftEditorCurrent();
+    this.draftEditorFocused = false; this.refocusInline = false; this.draftEditorOwner = '';
+    if (focus) this.getUIContext().postFrameCallback(new ConversationFrame(() => {
+      if (!this.draftEditorOpen && this.sendCurrent() && this.composerAvailable() && owner === this.composerOwnerKey()) {
+        this.getUIContext().getFocusController().requestFocus('chat.input');
+        this.restoreSelection(this.inlineField);
+      }
+    }));
+  }
+  @Monitor('active', 'model.selected', 'model.profile', 'model.connected', 'model.decision')
+  draftEditorContextChanged(): void {
+    if (this.draftEditorOpen && !this.draftEditorCurrent()) { this.refocusInline = false; this.draftEditorOpen = false; }
+  }
+  private primaryEnabled(): boolean {
+    return this.sendCurrent() && (this.primaryStop() || this.model.canSend() && !this.model.stopPending() && !this.sending &&
+      !this.attachments.busy && !this.model.draftLoading && (this.model.draft.trim().length > 0 || this.attachments.attachments.length > 0) &&
+      this.model.operationState !== 'pending' && this.model.operationState !== 'unknown');
+  }
+  private dictationOwner(): string { return JSON.stringify([this.model.connectionGeneration(), this.model.scope(), this.model.target()]); }
   private sendCurrent(): boolean { return this.mounted && this.active && this.admission(); }
   private async sendDraft(): Promise<void> {
     if (!this.sendCurrent() || this.sending || this.attachments.busy || !this.model.canSend()) return;
@@ -640,6 +852,7 @@ export struct Conversation {
     });
   }
   aboutToDisappear(): void {
+    this.seekingHit = ''; this.clearSearchHighlight();
     this.mounted = false;
     this.questions.retire(); this.actionIntent = undefined; this.chooser.retire();
     this.onPrimaryStop(false); this.saveReading(); this.readingEpoch++;
@@ -675,9 +888,22 @@ export struct Conversation {
   @Builder message(entry: RepeatItem<ConversationLine>) {
     Column({ space: Tokens.gap }) {
       if (entry.item.message!.work) {
-        Button({ type: ButtonType.Circle }) { SymbolGlyph((this.expanded.includes(entry.item.message!.id) ? Symbols.up : Symbols.down)).fontSize(Tokens.symbolFont).fontColor([IconActions.color('work_summary', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('work_summary')).bindTips(tr('work_summary')).onClick(() => { this.toggle(entry.item.message!.id); if (this.expanded.includes(entry.item.message!.id)) this.model.expandWork(entry.item.message!); }).backgroundColor(Color.Transparent)
+        Button({ type: ButtonType.Normal }) {
+          Row({ space: 7 }) {
+            if (entry.item.message!.running) LoadingProgress().width(14).height(14).color(Colors.working)
+            else SymbolGlyph($r('sys.symbol.list_bullet')).fontSize(15).fontColor([Colors.secondary])
+            Text(tr(entry.item.message!.running ? 'working' : 'work_summary')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
+            if (entry.item.message!.toolCount > 0) Text(tr('tool') + ' ' + String(entry.item.message!.toolCount)).fontSize(12).fontColor(Colors.secondary)
+            if (entry.item.message!.thoughtCount > 0) Text(tr('phone_chat_thoughts') + ' ' + String(entry.item.message!.thoughtCount)).fontSize(12).fontColor(Colors.secondary)
+            SymbolGlyph(this.expanded.includes(entry.item.message!.id) ? Symbols.down : Symbols.expand).fontSize(12).fontColor([Colors.secondary])
+          }.constraintSize({ minHeight: 32 })
+        }.padding({ left: 10, right: 10 }).borderRadius(12).backgroundColor(Colors.control)
+          .accessibilityText(tr('work_summary') + ' · ' + tr(this.expanded.includes(entry.item.message!.id) ? 'agent_collapse' : 'agent_expand'))
+          .onClick(() => { this.toggle(entry.item.message!.id); if (this.expanded.includes(entry.item.message!.id)) this.model.expandWork(entry.item.message!); })
+          .id('chat.work.' + entry.item.message!.id)
         if (this.expanded.includes(entry.item.message!.id)) {
-          Text(entry.item.message!.work).fontFamily('monospace').fontSize(Tokens.meta).copyOption(CopyOptions.LocalDevice)
+          Text(entry.item.message!.work).fontFamily('monospace').fontSize(14).fontColor(Colors.secondary).lineHeight(21)
+            .copyOption(CopyOptions.LocalDevice).padding(12).width('100%').backgroundColor(Colors.control).borderRadius(12)
         }
       }
       if (entry.item.message!.localImageCount > 0) Text(tr('photos') + ' · ' + entry.item.message!.localImageCount).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
@@ -693,9 +919,9 @@ export struct Conversation {
         galleryIndex: this.imageIndex(entry.item.message!, 'item', entry.item.message!.imageId), onEdit: (image: LoadedMessageImage) => this.editReceivedImage(image) })
       if (entry.item.message!.text) {
         WithTheme({ colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT, theme: nativeMessageTheme(this.look, this.model.style, entry.item.message!.role === 'user', this.environment.dark) }) {
-        MessageSurface({ own: entry.item.message!.role === 'user', maximum: entry.item.message!.role === 'user' ? Math.max(Tokens.touch, Math.min(this.availableWidth, Tokens.readingMax) - Tokens.page * 2 - Tokens.touch) : Tokens.readingMax }) {
+        MessageSurface({ own: entry.item.message!.role === 'user', personaReply: this.model.selected.kind === 'conversation' && entry.item.message!.role === 'assistant', maximum: entry.item.message!.role === 'user' ? Math.max(Tokens.touch, Math.min(this.availableWidth, Tokens.readingMax) - Tokens.page * 2 - Tokens.touch) : Tokens.readingMax }) {
           if (entry.item.message!.role === 'assistant' && this.model.selected.kind === 'conversation') AssistantMessage({ model: this.model, feed: this.feed, message: entry.item.message!, active: this.active, onLink: (address: string) => this.onLink(address), onOpenResource: (row: ResourceRow) => this.onOpenResource(row) })
-          else MarkdownText({ text: entry.item.message!.text, fitContent: entry.item.message!.role === 'user', onLink: (address: string) => this.onLink(address) })
+          else MarkdownText({ text: entry.item.message!.text, chatReply: entry.item.message!.role === 'assistant', fitContent: entry.item.message!.role === 'user', onLink: (address: string) => this.onLink(address) })
         }
         }
       }
@@ -704,7 +930,7 @@ export struct Conversation {
       if (entry.item.message!.failed) Text(tr('failed')).fontColor($r('app.color.persona_danger')).fontSize(Tokens.meta)
       if (entry.item.message!.localOperation && this.model.canCheckLocalMessage(entry.item.message!.localOperation)) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('checked')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('checked', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('checked')).bindTips(tr('checked')).onClick(() => this.confirmChecked(entry.item.message!.localOperation))
       if (entry.item.message!.localOperation && this.model.canRestoreMessage(entry.item.message!.localOperation)) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('restore_draft')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('restore_draft', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('restore_draft')).bindTips(tr('restore_draft')).onClick(() => this.restoreDraft(entry.item.message!))
-    }.width('100%').alignItems(entry.item.message!.role === 'user' ? HorizontalAlign.End : HorizontalAlign.Start).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap, bottom: Tokens.gap })
+    }.width('100%').alignItems(entry.item.message!.role === 'user' ? HorizontalAlign.End : HorizontalAlign.Start).padding({ left: Tokens.page, right: Tokens.page, top: 3, bottom: entry.item.message!.work ? 1 : 4 })
       .bindContextMenu(this.messageMenuBuilder(entry), ResponseType.LongPress, { preview: MenuPreviewMode.IMAGE })
   }
   @Builder actionsMenu() {
@@ -766,29 +992,58 @@ export struct Conversation {
             Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('checked')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('checked', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('checked')).bindTips(tr('checked')).onClick(() => { const record = this.model.unresolvedWrites.find((item) => item.state === 'unknown' && !item.requiresReceipt); if (record) this.confirmChecked(record.id); })
         }.padding(Tokens.inset)
       }
-      List({ scroller: this.scroller, space: Tokens.gap }) {
-        if (this.readingFailed) ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry')).bindTips(tr('retry')).onClick(() => this.retryReading()) }
-        if (this.feed.error && this.feed.error !== this.model.error) ListItem() {
-          Row({ space: Tokens.gap }) { Text(tr(this.feed.error)).fontSize(Tokens.meta).layoutWeight(1); Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry')).bindTips(tr('retry')).onClick(() => this.feed.refresh()) }.padding(Tokens.inset)
+      Stack({ alignContent: Alignment.BottomEnd }) {
+        this.transcriptList()
+        if (this.jumpAvailable) {
+          Button({ type: ButtonType.Circle }) {
+            SymbolGlyph(IconActions.symbol('latest')).fontSize(18).fontColor([Colors.ink])
+          }.width(40).height(40).padding(0).backgroundColor(Colors.surface)
+            .border({ width: 0.7, color: Colors.divider, radius: 20 }).shadow(ShadowStyle.OUTER_DEFAULT_XS)
+            .responseRegion({ x: -3, y: -3, width: 46, height: 46 }).margin({ right: Tokens.page, bottom: Tokens.gap })
+            .accessibilityText(tr('latest')).bindTips(tr('latest')).id('chat.latest')
+            .onClick(() => this.jumpToLatest())
         }
-        if (this.model.selected.kind === 'conversation') ListItem() {
-          AssistantCards({ model: this.model, feed: this.feed, active: this.active && this.model.connected, onOpenResource: (row: ResourceRow) => this.onOpenResource(row), dockOnly: true, onOpenCard: (itemId: string, kind: string) => this.onOpenCard(itemId, kind), onOpenSession: (row: ResourceRow) => this.onOpenResource(row),
-            onOpenTodo: (row: ResourceRow) => this.onOpenResource(row), onOpenInbox: (row: ResourceRow) => this.onOpenResource(row), onLink: (address: string) => this.onLink(address) })
-        }
-        if (this.model.hasMoreMessages || this.feed.nextCursor) ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('load_more')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('load_more', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('load_more')).bindTips(tr('load_more')).enabled(!this.readingLoading).onClick(() => this.loadEarlier()) }
-        Repeat(this.lines).each((entry: RepeatItem<ConversationLine>) => {
-          ListItem() {
-            if (entry.item.message) this.message(entry)
-            else if (entry.item.card) AssistantCards({ model: this.model, feed: this.feed, active: this.active && this.model.connected, onOpenResource: (row: ResourceRow) => this.onOpenResource(row), item: entry.item.card, onOpenCard: (itemId: string, kind: string) => this.onOpenCard(itemId, kind), onOpenSession: (row: ResourceRow) => this.onOpenResource(row),
-              onOpenTodo: (row: ResourceRow) => this.onOpenResource(row), onOpenInbox: (row: ResourceRow) => this.onOpenResource(row), onLink: (address: string) => this.onLink(address) })
-            else if (entry.item.decision) this.questionCard(entry)
-          }.padding({ left: entry.item.message ? 0 : Tokens.page, right: entry.item.message ? 0 : Tokens.page }).id('chat.line.' + entry.item.id)
-        }).key((line: ConversationLine) => line.id).virtualScroll({ totalCount: this.lines.length, reusable: false })
-      }.layoutWeight(1).width('100%').id('chat.transcript')
-        .bindSheet(this.questions.shown, this.questionContent(), { title: { title: tr('interaction_question_reopen') }, height: SheetSize.LARGE, keyboardAvoidMode: SheetKeyboardAvoidMode.RESIZE_ONLY, showClose: true, onWillAppear: () => this.presentedQuestion = this.questions.beginPresentation(), onAppear: () => { this.questionLayoutReady = true; this.measureQuestion(); }, onWillDismiss: (action: DismissSheetAction) => this.questions.dismiss(this.presentedQuestion, () => action.dismiss()), onDisappear: () => { this.questionLayoutReady = false; this.questions.endPresentation(this.presentedQuestion); this.presentedQuestion = undefined; } })
-        .maintainVisibleContentPosition(true).onScrollStart(() => this.readingMotion++).onScrollIndex((start: number) => { this.firstVisibleIndex = start; this.recordReading(start); }).onDidScroll(() => this.recordReading(this.firstVisibleIndex)).onReachEnd(() => { if (this.active && !this.readingRestoring) { this.atEnd = true; this.anchor.atEnd = true; this.hasNew = false; } })
-        .onScrollFrameBegin((offset: number) => { if (offset < 0 && !this.readingRestoring) { this.atEnd = false; this.anchor.atEnd = false; } return { offsetRemain: offset }; })
+      }.width('100%').layoutWeight(1)
     }.width('100%').constraintSize({ maxWidth: Tokens.readingMax }).height('100%')
+  }
+  @Builder transcriptList() {
+    List({ scroller: this.scroller, space: Tokens.gap }) {
+      if (this.readingFailed) ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry')).bindTips(tr('retry')).onClick(() => this.retryReading()) }
+      if (this.feed.error && this.feed.error !== this.model.error) ListItem() {
+        Row({ space: Tokens.gap }) { Text(tr(this.feed.error)).fontSize(Tokens.meta).layoutWeight(1); Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry')).bindTips(tr('retry')).onClick(() => this.feed.refresh()) }.padding(Tokens.inset)
+      }
+      if (this.showWelcome()) ListItem() {
+          AssistantWelcome({ model: this.model, canAsk: this.welcomeCanAsk(), onPlace: (name: string) => this.onPlace(name), onAsk: (prompt: string) => {
+            if (this.sendCurrent() && this.welcomeCanAsk()) {
+              this.model.updateDraft(prompt); this.sendDraft();
+            }
+          } })
+      }
+      if (this.model.hasMoreMessages || this.feed.nextCursor) ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('load_more')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('load_more', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('load_more')).bindTips(tr('load_more')).enabled(!this.readingLoading).onClick(() => this.loadEarlier()) }
+      Repeat(this.lines).each((entry: RepeatItem<ConversationLine>) => {
+        ListItem() {
+          if (entry.item.message?.role === 'recap') {
+            ConversationRecap({ model: this.model, message: entry.item.message!, active: this.active,
+              onLink: (address: string) => this.onLink(address) })
+          } else if (entry.item.message) this.message(entry)
+          else if (entry.item.card) AssistantCards({ model: this.model, feed: this.feed, active: this.active && this.model.connected, onOpenResource: (row: ResourceRow) => this.onOpenResource(row), item: entry.item.card, onOpenCard: (itemId: string, kind: string) => this.onOpenCard(itemId, kind), onOpenSession: (row: ResourceRow) => this.onOpenResource(row),
+            onOpenTodo: (row: ResourceRow) => this.onOpenResource(row), onOpenInbox: (row: ResourceRow) => this.onOpenResource(row), onLink: (address: string) => this.onLink(address) })
+          else if (entry.item.decision) this.questionCard(entry)
+        }.padding({ left: entry.item.message ? 0 : Tokens.page, right: entry.item.message ? 0 : Tokens.page })
+          .backgroundColor(entry.item.id === this.highlightedLine ? Colors.selection : Color.Transparent).borderRadius(12)
+          .id('chat.line.' + entry.item.id)
+      }).key((line: ConversationLine) => line.id).virtualScroll({ totalCount: this.lines.length, reusable: false })
+    }.stackFromEnd(!this.showWelcome()).height('100%').width('100%').id('chat.transcript')
+      .onAreaChange((_old: Area, area: Area) => this.transcriptViewportChanged(Number(area.height)))
+      .bindSheet(this.questions.shown, this.questionContent(), { title: { title: tr('interaction_question_reopen') }, height: SheetSize.LARGE, keyboardAvoidMode: SheetKeyboardAvoidMode.RESIZE_ONLY, showClose: true, onWillAppear: () => this.presentedQuestion = this.questions.beginPresentation(), onAppear: () => { this.questionLayoutReady = true; this.measureQuestion(); }, onWillDismiss: (action: DismissSheetAction) => this.questions.dismiss(this.presentedQuestion, () => action.dismiss()), onDisappear: () => { this.questionLayoutReady = false; this.questions.endPresentation(this.presentedQuestion); this.presentedQuestion = undefined; } })
+      .maintainVisibleContentPosition(true)
+      .onWillScroll((offset: number, _state: ScrollState, source: ScrollSource) => this.trackScrollMotion(offset, source))
+      .onScrollIndex((start: number, end: number) => {
+        this.firstVisibleIndex = start; this.lastVisibleIndex = end; this.recordReading(start);
+      })
+      .onDidScroll(() => this.recordReading(this.firstVisibleIndex))
+      .onReachEnd(() => { if (this.active && !this.readingRestoring) { this.atEnd = true; this.anchor.atEnd = true; this.jumpAvailable = false; } })
+      .onScrollFrameBegin((offset: number) => { if (offset < 0 && !this.readingRestoring) { this.atEnd = false; this.anchor.atEnd = false; } return { offsetRemain: offset }; })
   }
 
   private openQuestion(request: Decision): void {
@@ -819,6 +1074,48 @@ export struct Conversation {
       .onAreaChange(() => this.measureQuestion())
   }
 
+  @Builder hideKeyboard(page: boolean) {
+    Button({type:ButtonType.Circle}) {
+      SymbolGlyph($r('sys.symbol.keyboard')).fontSize(19).fontColor([Colors.secondary])
+    }.width(44).height(44).padding(0).backgroundColor(Color.Transparent).accessibilityText(tr('phone_chat_hide_keyboard'))
+      .bindTips(tr('phone_chat_hide_keyboard')).id(page ? 'chat.editor.keyboard' : 'chat.keyboard')
+      .onClick(() => { if (page) this.pageField.stopEditing(); else this.inlineField.stopEditing(); })
+  }
+  @Builder draftPage() {
+    Column({space:8}) {
+      Row({space:8}) {
+        Button({type:ButtonType.Circle}) {
+          SymbolGlyph($r('sys.symbol.arrow_down_right_and_arrow_up_left')).fontSize(19).fontColor([Colors.ink])
+        }.width(44).height(44).padding(0).backgroundColor(Colors.control).accessibilityText(tr('phone_chat_close_editor'))
+          .onClick(() => { this.finishPageInput(); this.draftEditorOpen=false; }).id('chat.editor.collapse')
+        Blank().layoutWeight(1)
+        if (this.draftEditorFocused || this.environment.keyboardHeightPx > 0) this.hideKeyboard(true)
+      }.width('100%')
+      if (this.model.sourceContext) Text(this.model.contextTitle()).fontSize(Tokens.meta).fontColor(Colors.secondary)
+        .maxLines(2).textOverflow({overflow:TextOverflow.Ellipsis}).width('100%')
+      TextArea({text:this.model.draft,placeholder:tr('message'),controller:this.pageField})
+        .maxLength(Tokens.maxMessage).layoutWeight(1).width('100%').fontSize(Tokens.body).fontColor(Colors.ink)
+        .lineHeight(String(Tokens.lineHeight)+'fp').backgroundColor(Color.Transparent).caretColor(Colors.link)
+        .padding({left:8,right:8,top:5,bottom:5}).enabled(!this.sending && !this.model.draftLoading)
+        .onFocus(() => this.draftEditorFocused=true).onBlur(() => this.draftEditorFocused=false)
+        .onTextSelectionChange((start:number,end:number) => { if (this.draftEditorOpen && this.draftEditorCurrent()) this.rememberSelection(start,end); })
+        .onChange((text:string) => { if (this.draftEditorOpen && this.draftEditorCurrent()) this.model.updateDraft(text); })
+        .id('chat.editor.input')
+      Row() {
+        Blank().layoutWeight(1)
+        Button({type:ButtonType.Circle}) {
+          SymbolGlyph(this.primaryStop() ? Symbols.stop : IconActions.symbol('send')).fontSize(Tokens.symbolFont).fontColor([Colors.onAction])
+        }.width(44).height(44).backgroundColor(Colors.action).accessibilityText(tr(this.primaryActionKey()))
+          .enabled(this.draftEditorCurrent() && this.primaryEnabled()).id('chat.editor.send')
+          .onClick(() => {
+            if (!this.draftEditorCurrent() || !this.primaryEnabled()) return;
+            if (this.primaryStop()) { this.model.stop(() => this.draftEditorCurrent()); return; }
+            this.refocusInline=false; this.pageField.stopEditing(); this.draftEditorOpen=false; this.sendDraft();
+          })
+      }.width('100%')
+    }.width('100%').height('100%').padding({left:Tokens.page,right:Tokens.page,top:Tokens.inset,bottom:Tokens.page})
+      .backgroundColor(Colors.surface).id('chat.editor')
+  }
   @Builder composer() {
     Column({ space: Tokens.gap }) {
       AttachmentStrip({ attachments: this.attachments.attachments, errorKey: this.attachments.errorKey, actionsEnabled: !this.sending && !this.attachments.busy,
@@ -827,16 +1124,29 @@ export struct Conversation {
         Text(this.model.contextTitle()).fontSize(Tokens.meta).fontColor(Colors.ink).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
         Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('remove')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('remove', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('remove')).bindTips(tr('remove')).enabled(!this.sending).onClick(() => this.model.removeContext())
       }.width('100%')
-      GridRow({ columns: this.composerColumns(), gutter: { x: 0, y: Tokens.gap } }) {
+      GridRow({ columns: this.composerColumns(), gutter: { x: 0, y: 0 } }) {
         GridCol({ span: this.expandedComposer() ? this.composerColumns() : this.composerColumns() - this.leftColumns() - this.sendColumns(), order: this.expandedComposer() ? 0 : 1 }) {
-          TextArea({ text: this.model.draft, placeholder: this.model.agentInputNotice() === 'agent_computer_holds' ? this.agentNotice() : tr('message') }).maxLength(Tokens.maxMessage).width('100%')
+          Stack({alignContent:Alignment.TopEnd}) {
+          TextArea({ text: this.model.draft, controller:this.inlineField, placeholder: this.model.agentInputNotice() === 'agent_computer_holds' ? this.agentNotice() : tr('message') }).maxLength(Tokens.maxMessage).width('100%')
             .fontSize(Tokens.body).placeholderFont({ size: Tokens.body }).fontColor(Colors.ink).placeholderColor(Colors.secondary)
             .lineHeight(String(Tokens.lineHeight) + 'fp').caretColor(Colors.action).backgroundColor(Color.Transparent)
-            .padding({ left: Tokens.gap, right: Tokens.gap, top: Tokens.inset, bottom: Tokens.inset })
-            .constraintSize({ minHeight: Tokens.touch, maxHeight: Math.max(Tokens.inputLines, Tokens.lineHeight * this.environment.fontScale + Tokens.section) })
+            .padding({ left: this.expandedComposer() ? Tokens.page : Tokens.gap, right: this.offersDraftEditor() ? Tokens.touch : this.expandedComposer() ? Tokens.page : Tokens.gap, top: Tokens.inset, bottom: Tokens.inset })
+            .constraintSize({ minHeight: Tokens.touch, maxHeight: 6 * Tokens.lineHeight * Math.max(1, this.environment.fontScale) + Tokens.section })
             .height(this.expandedComposer() ? undefined : Tokens.touch)
             .enabled(!this.sending && !this.model.draftLoading).onFocus(() => this.fieldFocused = true).onBlur(() => this.fieldFocused = false)
-            .onChange((value: string) => this.model.updateDraft(value)).id('chat.input')
+            .onTextSelectionChange((start:number,end:number) => { if (!this.draftEditorOpen) this.rememberSelection(start,end); })
+            .onChange((value: string) => { if (!this.draftEditorOpen) this.model.updateDraft(value); }).id('chat.input')
+            if (this.offersDraftEditor()) {
+              Button({type:ButtonType.Circle}) {
+                SymbolGlyph($r('sys.symbol.arrow_up_left_and_arrow_down_right')).fontSize(17).fontColor([Colors.ink])
+              }.width(40).height(40).padding(0).backgroundColor(Color.Transparent)
+                .responseRegion({x:-2,y:-2,width:44,height:44}).accessibilityText(tr('phone_chat_expand_editor')).bindTips(tr('phone_chat_expand_editor'))
+                .onClick(() => this.expandDraftEditor()).id('chat.expand')
+            }
+          }.width('100%').bindSheet($$this.draftEditorOpen,this.draftPage(),
+            {height:SheetSize.LARGE,showClose:false,keyboardAvoidMode:SheetKeyboardAvoidMode.RESIZE_ONLY,
+              onAppear:() => this.focusDraftPage(),onWillDismiss:(action:DismissSheetAction) => { this.finishPageInput(); action.dismiss(); },
+              onDisappear:() => this.draftPageGone()})
         }.id(this.editorAnchorId)
           .onAreaChange((_old: Area, area: Area) => { this.editorLeft = Number(area.globalPosition.x); this.editorTop = Number(area.globalPosition.y); this.editorWidth = Number(area.width); this.editorHeight = Number(area.height); })
           .bindPopup(this.chooser.shown && this.chooser.session?.preserveInput === true, this.chooserPopupOptions())
@@ -850,42 +1160,68 @@ export struct Conversation {
               .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick((event: ClickEvent) => this.openComposerActions(event))
               .parallelGesture(LongPressGesture().onAction(() => this.requestComposerActions(false)))
               .bindContextMenu(this.nativeChooser('actions'), this.attachmentNativeMenu, this.actionContextMenuOptions()).id('chat.more')
+            if (this.verticalActions() && (this.fieldFocused || this.environment.keyboardHeightPx > 0)) this.hideKeyboard(false)
           }.width('100%').constraintSize({ minHeight: Tokens.touch }).alignItems(VerticalAlign.Center)
         }
         if (this.expandedComposer() && !this.verticalActions()) GridCol({ span: this.composerColumns() - this.leftColumns() - this.sendColumns(), order: 3 }) {
           Row() {
+            if (this.fieldFocused || this.environment.keyboardHeightPx > 0) this.hideKeyboard(false)
             Blank().layoutWeight(1)
-
           }.width('100%').constraintSize({ minHeight: Tokens.touch })
         }
         GridCol({ span: this.verticalActions() ? this.composerColumns() : this.sendColumns(), order: this.expandedComposer() ? this.verticalActions() ? 1 : 4 : 2 }) {
           Row() {
-          Button({ type: ButtonType.Circle }) {
+          PhoneDictationControl({owner: this.dictationOwner(),
+            active: this.active && !this.draftEditorOpen && !this.sending && !this.model.draftLoading, language: this.model.language,
+            allowed: (owner: string) => owner === this.dictationOwner() && this.sendCurrent() && this.model.canCompose() && !this.model.decision,
+            keyboard: () => this.getUIContext().getFocusController().requestFocus('chat.input'),
+            insert: (text: string, owner: string): boolean => {
+              if (owner !== this.dictationOwner() || !this.sendCurrent() || !this.model.canCompose() || this.model.decision || this.model.draftLoading || this.sending) return false;
+              const draft = this.model.draft, separator = /[a-zA-Z0-9]$/.test(draft) ? ' ' : '';
+              if (draft.length + separator.length + text.length > Tokens.maxMessage) return false;
+              this.model.updateDraft(draft + separator + text);
+              return true;
+            }})
+          if (this.hasComposerAction()) Button({ type: ButtonType.Circle }) {
             if (IconActions.busy(this.primaryActionKey())) LoadingProgress().width(Tokens.symbol).height(Tokens.symbol).color(Colors.onAction)
             else SymbolGlyph(this.primaryActionKey() === 'stop' ? Symbols.stop : IconActions.symbol(this.primaryActionKey())).fontSize(Tokens.symbolFont).fontColor([Colors.onAction])
-          }.accessibilityText(tr(this.primaryActionKey())).attributeModifier(ButtonStyles.primary).padding(0).width(Tokens.touch).height(Tokens.touch)
-            .enabled(this.sendCurrent() && (this.primaryStop() || this.model.canSend() && !this.model.stopPending() && !this.sending && !this.attachments.busy && !this.model.draftLoading &&
-              (this.model.draft.trim().length > 0 || this.attachments.attachments.length > 0) && this.model.operationState !== 'pending' && this.model.operationState !== 'unknown'))
+          }.accessibilityText(tr(this.primaryActionKey())).attributeModifier(ButtonStyles.primary).padding(0).width(this.environment.fontScale >= 1.5 ? 44 : 34).height(this.environment.fontScale >= 1.5 ? 44 : 34)
+            .responseRegion({x:-5,y:-5,width:44,height:44})
+            .enabled(this.primaryEnabled())
             .onClick(() => { if (!this.sendCurrent()) return; if (this.primaryStop()) this.model.stop(() => this.sendCurrent()); else this.sendDraft(); }).id('chat.send')
-          }.width('100%').justifyContent(FlexAlign.End)
+          }.width('100%').height(Tokens.touch).alignItems(VerticalAlign.Center).justifyContent(FlexAlign.End).padding({right:3})
         }
       }.width('100%').onAreaChange((_old: Area, area: Area) => { const width = Number(area.width); if (Number.isFinite(width) && width > 0) this.composerWidth = width; })
-    }.padding(Tokens.gap).backgroundColor(Colors.subtle).borderRadius(Tokens.capsule).width('100%').id('chat.composer')
+    }.padding({left:5,right:5,top:3,bottom:3}).backgroundColor(Colors.surface)
+      .border({width:0.7,color:Colors.divider,radius:25}).borderRadius(25).width('100%').id('chat.composer')
   }
 
+  @Builder taskDock() {
+    if (this.model.selected.kind === 'conversation' && this.model.connected) {
+          AssistantCards({ model: this.model, feed: this.feed, active: this.active && this.model.connected, onOpenResource: (row: ResourceRow) => this.onOpenResource(row), dockOnly: true, onOpenCard: (itemId: string, kind: string) => this.onOpenCard(itemId, kind), onOpenSession: (row: ResourceRow) => this.onOpenResource(row),
+            onOpenTodo: (row: ResourceRow) => this.onOpenResource(row), onOpenInbox: (row: ResourceRow) => this.onOpenResource(row), onLink: (address: string) => this.onLink(address) })
+    }
+  }
   @Builder blockingContent() {
     Column({ space: Tokens.gap }) {
-      Column() {
-        ForEach(this.model.decision ? [this.model.decision] : [], (request: Decision) => {
-          InteractionDecisionForm({ model: this.model, request: request, fillAvailable: true, onLink: (address: string) => this.onLink(address) })
-        }, (request: Decision) => request.id)
-      }.width('100%').layoutWeight(1)
+      this.taskDock()
+      ForEach(this.model.decision ? [this.model.decision] : [], (request: Decision) => {
+        InteractionDecisionForm({ model: this.model, request: request, fillAvailable: true,
+          heightLimit: Math.max(Tokens.touch, this.maxControlsHeight() - this.decisionToolsHeight() - Tokens.gap - Tokens.footer),
+          onLink: (address: string) => this.onLink(address) })
+      }, (request: Decision) => request.id)
       if (this.showContextMenu) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
         .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick(() => this.openFallbackActions())
         .bindMenu(this.actionsVisible, this.actionsMenu, this.actionMenuOptions(this.actionsRequest)).id('chat.more.fallback')
-      if (this.hasNew && !this.atEnd) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('latest')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('latest', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('latest')).bindTips(tr('latest')).onClick(() => { this.scroller.scrollEdge(Edge.Bottom); this.atEnd = true; this.anchor.atEnd = true; this.hasNew = false; }).id('chat.latest')
-    }.width('100%').constraintSize({ maxWidth: Tokens.readingMax }).height('100%')
+    }.width('100%').constraintSize({ maxWidth: Tokens.readingMax, maxHeight: this.maxControlsHeight() })
       .padding({ left: Tokens.page, right: Tokens.page, bottom: Tokens.footer, top: Tokens.gap })
+      .onAreaChange((_before: Area, area: Area) => {
+        const height = Number(area.height);
+        if (this.model.decision && Number.isFinite(height) && height > 0) {
+          this.measuredDecision = this.model.decision.id;
+          if (Math.abs(height - this.controlsHeight) > 1) this.controlsHeight = height;
+        }
+      })
   }
   @Builder interactionContent() {
     if (this.model.decision) this.blockingContent()
@@ -894,7 +1230,7 @@ export struct Conversation {
       if (this.showContextMenu && (this.model.decision || !this.model.canCompose())) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
         .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick(() => this.openFallbackActions())
         .bindMenu(this.actionsVisible, this.actionsMenu, this.actionMenuOptions(this.actionsRequest)).id('chat.more.fallback')
-      if (this.hasNew && !this.atEnd) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('latest')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('latest', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('latest')).bindTips(tr('latest')).onClick(() => { this.scroller.scrollEdge(Edge.Bottom); this.atEnd = true; this.anchor.atEnd = true; this.hasNew = false; }).id('chat.latest')
+      this.taskDock()
       if (this.model.canCompose() && !this.model.decision) {
         if (this.attachments.busy && !this.sending && (this.attachments.errorKey === 'chat_attachment_storage_unavailable' || this.model.error === 'cache_unavailable')) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry')).bindTips(tr('retry')).onClick(() => { this.attachmentKey = ''; this.syncAttachments(); })
         this.composer()
@@ -922,8 +1258,9 @@ export struct Conversation {
         } }).onAreaChange((_old: Area, area: Area): void => { const height = Number(area.height); if (Number.isFinite(height) && height > 0 && Math.abs(height - this.foldContainerHeight) > 0.1) this.foldContainerHeight = height; })
       } else {
         Column() { this.readingContent() }.width('100%').layoutWeight(1).clip(true)
-        Column() { this.interactionContent() }.width('100%')
-          .height(this.model.decision ? this.maxControlsHeight() : Math.max(1, Math.min(this.controlsHeight, this.maxControlsHeight())))
+        if (this.model.decision) this.blockingContent()
+        else Column() { this.interactionContent() }.width('100%')
+          .height(Math.max(1, Math.min(this.controlsHeight, this.maxControlsHeight())))
       }
     }.width('100%').height('100%').backgroundColor(Colors.canvas).expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
       .bindSheet($$this.attachmentSheet, this.attachmentContent(), { title: { title: tr(this.contextKind === 'knowledge' ? 'knowledge' : this.contextKind === 'todo' ? 'todos' : this.contextKind === 'inbox' ? 'inbox' : 'attach') }, height: SheetSize.LARGE, showClose: true, onAppear: () => { this.attachmentLayoutReady = true; this.measureAttachment(); }, onDisappear: () => this.attachmentLayoutReady = false })

@@ -27,6 +27,20 @@ function utf8Length(value: string): number {
   return bytes;
 }
 
+export async function requestRecordingMicrophone(context: Object): Promise<void> {
+  const host = context as common.UIAbilityContext;
+  const access = abilityAccessCtrl.createAtManager();
+  let status = access.getSelfPermissionStatus(MICROPHONE as Permissions);
+  if (status === abilityAccessCtrl.PermissionStatus.NOT_DETERMINED) {
+    await access.requestPermissionsFromUser(host, [MICROPHONE] as Permissions[]);
+    status = access.getSelfPermissionStatus(MICROPHONE as Permissions);
+  }
+  if (status === abilityAccessCtrl.PermissionStatus.DENIED || status === abilityAccessCtrl.PermissionStatus.RESTRICTED) {
+    throw new Error('knowledge_recording_microphone_denied');
+  }
+  if (status !== abilityAccessCtrl.PermissionStatus.GRANTED) throw new Error('knowledge_recording_microphone_denied');
+}
+
 export interface NativeRecordingStop {
   path: string;
   bytes: number;
@@ -51,6 +65,8 @@ export class NativeRecording {
   private cancelAsr: boolean = false;
   private asrCompletion: ((error?: Error) => void) | undefined;
   private asrPending: Promise<string> | undefined;
+  private playbackGeneration: number = 0;
+  private releasePlayer: (() => Promise<void>) | undefined;
 
   /** Purges a forgotten profile even when no Knowledge recording model was opened this launch. */
   static async purgeProfile(context: Object, profileId: string): Promise<void> {
@@ -67,19 +83,7 @@ export class NativeRecording {
     try { fileIo.statSync(this.directory); } catch (_) { fileIo.mkdirSync(this.directory, true); }
   }
 
-  async ensureMicrophonePermission(context: Object): Promise<void> {
-    const host = context as common.UIAbilityContext;
-    const access = abilityAccessCtrl.createAtManager();
-    let status = access.getSelfPermissionStatus(MICROPHONE as Permissions);
-    if (status === abilityAccessCtrl.PermissionStatus.NOT_DETERMINED) {
-      await access.requestPermissionsFromUser(host, [MICROPHONE] as Permissions[]);
-      status = access.getSelfPermissionStatus(MICROPHONE as Permissions);
-    }
-    if (status === abilityAccessCtrl.PermissionStatus.DENIED || status === abilityAccessCtrl.PermissionStatus.RESTRICTED) {
-      throw new Error('knowledge_recording_microphone_denied');
-    }
-    if (status !== abilityAccessCtrl.PermissionStatus.GRANTED) throw new Error('knowledge_recording_microphone_denied');
-  }
+  async ensureMicrophonePermission(context: Object): Promise<void> { await requestRecordingMicrophone(context); }
 
   async start(context: Object, id: string, onLimit: (reason: string) => void): Promise<string> {
     if (this.capturer || this.fileDescriptor >= 0 || !this.directory) throw new Error('recording_busy');
@@ -206,6 +210,80 @@ export class NativeRecording {
       entries.push(entry);
     }
     return entries.sort((left: KnowledgeRecordingEntry, right: KnowledgeRecordingEntry) => right.startedAt.localeCompare(left.startedAt));
+  }
+
+  /** Plays an already captured app-private PCM file. No URL, microphone or Hub credential is involved. */
+  async playLocal(entry: KnowledgeRecordingEntry, admit: () => boolean, done: (failed: boolean) => void): Promise<void> {
+    const generation = ++this.playbackGeneration;
+    const previous = this.releasePlayer; this.releasePlayer = undefined;
+    if (previous) await previous();
+    if (!admit() || generation !== this.playbackGeneration) throw new Error('request_updated');
+    const stored = JSON.parse(fileIo.readTextSync(this.manifestPath(entry.id))) as KnowledgeRecordingEntry;
+    if (stored.id !== entry.id || stored.hubId !== entry.hubId || stored.profileId !== entry.profileId ||
+      stored.managerId !== entry.managerId || stored.captureState !== 'stopped' || stored.audioBytes !== entry.audioBytes)
+      throw new Error('request_updated');
+    const path = this.audioPath(entry.id), size = fileIo.statSync(path).size;
+    if (size < 2 || size > MAX_RECORDING_BYTES || size !== entry.audioBytes || size % 2 !== 0)
+      throw new Error('phone_record_play_failed');
+    const file = fileIo.openSync(path, fileIo.OpenMode.READ_ONLY);
+    let renderer: audio.AudioRenderer | undefined, closed = false, remaining = size, finishing = false;
+    const release = async (): Promise<void> => {
+      if (closed) return;
+      closed = true;
+      try { fileIo.closeSync(file); } catch (_) { }
+      const device = renderer; renderer = undefined;
+      if (!device) return;
+      try { device.off('writeData'); device.off('markReach'); } catch (_) { }
+      try { if (device.state === audio.AudioState.STATE_RUNNING) await device.stop(); } catch (_) { }
+      try { await device.release(); } catch (_) { }
+    };
+    const finish = (failed:boolean): void => {
+      if (finishing || closed) return;
+      finishing = true;
+      setTimeout(() => {
+        if (generation !== this.playbackGeneration) return;
+        this.releasePlayer = undefined;
+        release().finally(() => { if (generation === this.playbackGeneration) done(failed); });
+      }, 0);
+    };
+    this.releasePlayer = release;
+    try {
+      const device = await audio.createAudioRenderer({
+        streamInfo: {samplingRate:SAMPLE_RATE,channels:audio.AudioChannel.CHANNEL_1,
+          sampleFormat:audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,encodingType:audio.AudioEncodingType.ENCODING_TYPE_RAW},
+        rendererInfo: {usage:audio.StreamUsage.STREAM_USAGE_MUSIC,rendererFlags:0}
+      });
+      if (closed || !admit() || generation !== this.playbackGeneration) { await device.release(); throw new Error('request_updated'); }
+      renderer = device;
+      device.on('markReach', size / 2, () => { if (!remaining) finish(false); });
+      device.on('writeData', (buffer:ArrayBuffer):audio.AudioDataCallbackResult => {
+        if (closed || finishing || !admit() || generation !== this.playbackGeneration) { finish(false); return audio.AudioDataCallbackResult.INVALID; }
+        if (!remaining) return audio.AudioDataCallbackResult.INVALID;
+        try {
+          const chunk = Math.min(remaining,buffer.byteLength);
+          if (chunk !== buffer.byteLength) new Uint8Array(buffer).fill(0);
+          const read = fileIo.readSync(file.fd,buffer,{length:chunk});
+          if (read !== chunk || !read) { finish(true); return audio.AudioDataCallbackResult.INVALID; }
+          remaining -= read;
+          if (!remaining) setTimeout(() => {
+            if (closed || finishing || generation !== this.playbackGeneration) return;
+            device.drain().then(() => finish(false)).catch(() => finish(true));
+          },0);
+          return audio.AudioDataCallbackResult.VALID;
+        } catch (_) { finish(true); return audio.AudioDataCallbackResult.INVALID; }
+      });
+      await device.start();
+      if (!admit() || generation !== this.playbackGeneration) throw new Error('request_updated');
+    } catch (error) {
+      if (this.releasePlayer === release) this.releasePlayer = undefined;
+      await release(); throw error as Error;
+    }
+  }
+
+  async stopPlayback(): Promise<void> {
+    this.playbackGeneration++;
+    const release = this.releasePlayer; this.releasePlayer = undefined;
+    if (release) await release();
   }
 
   async transcribe(id: string, language: string): Promise<string> {
