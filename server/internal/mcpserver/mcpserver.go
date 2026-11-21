@@ -351,6 +351,9 @@ func handle(ctx context.Context, version string, req request) (any, *rpcError) {
 		// (report_to_supervisor and the todo tools need to know whose call it is: node callerTools).
 		call := map[string]any{"kind": "mcp.call", "away_ok": true, "name": p.Name, "args": p.Arguments,
 			"session_id": sessionID(), "assistant": isAssistant(), "guest": isGuest(), "pane": nodeclient.HookPane(os.Getenv)}
+		if set := toolSet(); set != "" {
+			call["tool_set"] = set // the node runs no tool outside the narrower set here (node/hooks.go)
+		}
 		if mcpWaitFrom(ctx) != nil {
 			call["wait_updates"] = true // an older node ignores this and returns only its final line
 		}

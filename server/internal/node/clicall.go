@@ -126,17 +126,18 @@ func (n *Node) localAssistantRoots() map[int]string {
 // mcpSession is the session and the assistant's word an MCP server's request (mcp.tools, mcp.call) goes to the hub
 // with. The server's word that it is the assistant's is taken only when the node says so too (mcpAssistantOf, for the
 // process at the other end of c); a request it refuses goes as an agent's, with the session it names. A request that
-// does not say so is not made one.
-func (n *Node) mcpSession(c net.Conn, req sockRequest) (string, bool) {
+// does not say so is not made one. rt is the connected runtime whose assistant conversation it is (Antigravity's, whose
+// MCP server is `personad mcp` too), nil for one this node runs itself.
+func (n *Node) mcpSession(c net.Conn, req sockRequest) (string, bool, *runtimeConn) {
 	if !req.Assistant {
-		return req.SessionID, false
+		return req.SessionID, false, nil
 	}
 	pid, err := peerPID(c)
-	if id, ok := n.mcpAssistantOf(pid, err, parentPID, req.SessionID); ok {
-		return id, true
+	if id, rt, ok := n.mcpAssistantOf(pid, err, parentPID, req.SessionID); ok {
+		return id, true, rt
 	}
 	n.logf("%s: the caller (pid %d) says it is the assistant, but its process is not one Persona runs for the assistant: answered as an agent's", req.Kind, pid)
-	return req.SessionID, false
+	return req.SessionID, false, nil
 }
 
 // mcpAssistantOf is the session of the assistant conversation whose MCP server is the process pid (err: why it is not
@@ -149,28 +150,46 @@ func (n *Node) mcpSession(c net.Conn, req sockRequest) (string, bool) {
 //   - the system does not tell who is at the other end of a socket (errNoPeer): the request's session, if it is one
 //     this node runs for the assistant, or an assistant conversation of a connected runtime that runs them.
 //
-// Any other caller is not the assistant.
-func (n *Node) mcpAssistantOf(pid int, err error, parent func(int) (int, error), session string) (string, bool) {
+// Any other caller is not the assistant. The runtime is the one that vouches (nil: a process of this node's).
+func (n *Node) mcpAssistantOf(pid int, err error, parent func(int) (int, error), session string) (string, *runtimeConn, bool) {
 	if errors.Is(err, errNoPeer) {
 		if n.assistantSession(session) {
-			return session, true
+			return session, nil, true
 		}
 		if h, _, _ := n.runtimes.belongs(session); n.runtimeAssistantChat(h, session) {
-			return session, true
+			return session, h, true
 		}
-		return "", false
+		return "", nil, false
 	}
 	if err != nil {
-		return "", false
+		return "", nil, false
 	}
 	line := lineage(pid, parent)
 	if id, ok := assistantIn(line, n.localAssistantRoots()); ok {
-		return id, true
+		return id, nil, true
 	}
 	if h := n.runtimes.assistantIn(line); h != nil && n.runtimeMayName(h, session) {
-		return session, true
+		return session, h, true
 	}
-	return "", false
+	return "", nil, false
+}
+
+// runtimeWorkerCaller: the process at the other end of c is session's own, when runtime rt reported the worker that
+// runs it (runtime.assistant_pids, verified): one of the worker's descendants. Another process of rt's (an Agent's
+// chat, another assistant conversation) does not get to name it. Without a report for session, or where the system
+// does not tell who is at the other end (errNoPeer), the runtime's word stands, as in mcpAssistantOf.
+func (n *Node) runtimeWorkerCaller(c net.Conn, rt *runtimeConn, session string) bool {
+	for _, w := range n.runtimes.assistantWorkers() {
+		if w.host != rt || w.session != session {
+			continue
+		}
+		pid, err := peerPID(c)
+		if errors.Is(err, errNoPeer) {
+			return true
+		}
+		return err == nil && slices.Contains(lineage(pid, parentPID), w.pid)
+	}
+	return true
 }
 
 // assistantSession: session is the one a process this node runs for the assistant goes to the hub with.
