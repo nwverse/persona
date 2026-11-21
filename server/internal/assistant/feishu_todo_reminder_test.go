@@ -18,6 +18,7 @@ import (
 func todoReminderHub(t *testing.T) (*fakeHub, *Service, *[]map[string]any) {
 	t.Helper()
 	f, posts := feishuHub("ou_a", time.Unix(100, 0))
+	f.ownModels = true // Reminder delivery does not need a model HTTP fixture.
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_a", PairedAt: time.Unix(100, 0), PublicURL: "https://hub.example.com",
 			Features: FeishuFeatures{Main: true, Cards: true, Pushes: true}}, nil
