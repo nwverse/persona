@@ -21,6 +21,7 @@ import {
   makeSessionLookup,
   mostUrgentAgent,
   resolveLinkCurrentTodoId,
+  responsibleOf,
   runningSubagents,
   sortTodos,
   strikesThrough,
@@ -1000,5 +1001,51 @@ describe("striking a finished to-do's title through (#11677)", () => {
 
   it("never strikes an open row, including a failed start waiting on the owner", () => {
     expect(strikesThrough(failed, true)).toBe(false);
+  });
+});
+
+describe("responsible party (#12712)", () => {
+  const base: Todo = {
+    id: "t-resp",
+    title: "External tracking",
+    created_at: "2026-11-22T01:00:00Z",
+    updated_at: "2026-11-22T01:00:00Z",
+    agents: [],
+  };
+
+  it("normalizes valid responsible entries and ignores invalid or empty ones", () => {
+    expect(responsibleOf(base)).toBeUndefined();
+    expect(responsibleOf({ responsible: { kind: "session", name: "  ops-watch  ", machine_id: " box-1 ", session_id: " s-1 " } }))
+      .toEqual({ kind: "session", name: "ops-watch", machine_id: "box-1", session_id: "s-1" });
+    expect(responsibleOf({ responsible: { kind: "person", name: "Alex" } }))
+      .toEqual({ kind: "person", name: "Alex" });
+    expect(responsibleOf({ responsible: { kind: "person", name: "   " } })).toBeUndefined();
+    expect(responsibleOf({ responsible: { kind: "agent" as "person", name: "bot" } })).toBeUndefined();
+  });
+
+  it("derives follow_up instead of not_started when responsible is set without active linked agents", () => {
+    const withSession: Todo = { ...base, responsible: { kind: "session", name: "ops-watch" } };
+    const withPerson: Todo = { ...base, responsible: { kind: "person", name: "Alex" } };
+    expect(todoStatus(withSession)).toBe("follow_up");
+    expect(todoStatus(withPerson)).toBe("follow_up");
+    expect(todoStatus(base)).toBe("not_started");
+  });
+
+  it("keeps linked Persona agent precedence when both linked agent and responsible are set", () => {
+    const working = mockSession("mac-1", "s1", "working");
+    const needs = mockSession("mac-1", "s2", "needs_you");
+    const lookup = makeSessionLookup([working, needs]);
+    const withWorking: Todo = {
+      ...base,
+      responsible: { kind: "person", name: "Alex" },
+      agents: [{ machine_id: "mac-1", session_id: "s1", linked_at: "2026-11-22T01:00:00Z" }],
+    };
+    const withNeeds: Todo = {
+      ...base,
+      responsible: { kind: "session", name: "ops-watch" },
+      agents: [{ machine_id: "mac-1", session_id: "s2", linked_at: "2026-11-22T01:00:00Z" }],
+    };
+    expect(todoStatus(withWorking, lookup)).toBe("working");
+    expect(todoStatus(withNeeds, lookup)).toBe("needs_you");
   });
 });
