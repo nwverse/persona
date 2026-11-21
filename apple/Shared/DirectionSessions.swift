@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // Filing a session under a direction and reading one direction (#11391, #11516; docs/protocol/protocol.md, the rows of
 // `PUT /api/v1/assistant/sessions/{mid}/{sid}/direction` and `GET /api/v1/assistant/directions/{id}`), behind the hub's
@@ -120,18 +121,18 @@ extension APIClient {
     /// Files session `key` under a direction, on its own, or takes its entry out (`PUT …/sessions/{mid}/{sid}/direction`).
     /// Sent once: the route takes no operation receipt, and sending the same move again would answer `changed: false`.
     func fileSession(_ key: SessionKey, to target: DirectionTarget) async throws -> DirectionFilingAnswer {
-        let path = "/api/v1/assistant/sessions/\(Self.segment(key.machineID))/\(Self.segment(key.sessionID))/direction"
+        let path = "/api/v1/assistant/sessions/\(Self.directionPathSegment(key.machineID))/\(Self.directionPathSegment(key.sessionID))/direction"
         let data = try await request("PUT", path, body: DirectionFilingBody(target: target))
         return try JSON.decoder.decode(DirectionFilingAnswer.self, from: data)
     }
 
     /// One direction in a single read (`GET /api/v1/assistant/directions/{id}`).
     func direction(_ id: String) async throws -> DirectionRead {
-        try await getDecodedOffMain("/api/v1/assistant/directions/\(Self.segment(id))", as: DirectionRead.self)
+        try await getDecodedOffMain("/api/v1/assistant/directions/\(Self.directionPathSegment(id))", as: DirectionRead.self)
     }
 
     /// One path segment: a session id may hold characters a path cannot carry as they are.
-    nonisolated static func segment(_ s: String) -> String {
+    nonisolated static func directionPathSegment(_ s: String) -> String {
         var allowed = CharacterSet.urlPathAllowed
         allowed.remove(charactersIn: "/?#")
         return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
