@@ -444,7 +444,7 @@ func (f feishuSink) cotEnd(ctx context.Context, cot, msg string) error {
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		err = f.s.cotCall(cctx, FeishuCotComplete, map[string]any{"cot_id": cot, "message_id": msg, "reason": "done"})
 		cancel()
-		if err == nil || !(errors.Is(err, bus.ErrOffline) || errors.Is(err, rpc.ErrClosed) || cotMaybeSent(err) || cotPassing(err)) {
+		if err == nil || !(cotNotSent(err) || errors.Is(err, bus.ErrOffline) || errors.Is(err, rpc.ErrClosed) || cotMaybeSent(err) || cotPassing(err)) {
 			return err
 		}
 	}

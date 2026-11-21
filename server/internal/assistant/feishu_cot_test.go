@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -614,22 +615,26 @@ func TestCotEndIsTriedAgain(t *testing.T) {
 	saved := cotEndTries
 	cotEndTries = []time.Duration{0, 0, 0}
 	defer func() { cotEndTries = saved }()
-	s, posts, calls := cotHub(t, false)
-	r, _ := cotRun(s)
-	withCot(s, r)
-	feishuSink{s}.progress(context.Background(), r, time.Second, nil, "")
-	s.hub.(*fakeHub).answerApp(AppFeishu, FeishuCotAppend, func(json.RawMessage) (any, error) { return nil, feishuAPIError(99991400) })
-	n := 0
-	s.hub.(*fakeHub).answerApp(AppFeishu, FeishuCotComplete, func(json.RawMessage) (any, error) {
-		n++
-		if n < 3 {
-			return nil, feishuAPIError(99991400)
-		}
-		*calls = append(*calls, "complete")
-		return map[string]any{}, nil
-	})
-	s.finishChannelRun(r, &channel.Result{Answer: "结论"})
-	if n != 3 || !strings.HasSuffix(strings.Join(*calls, " "), "complete") || len(*posts) != 1 {
-		t.Fatalf("tries %d, calls %v, posts %v", n, *calls, *posts)
+	for _, failure := range []error{feishuAPIError(99991400), rpc.NotSent(context.DeadlineExceeded), errors.Join(rpc.ErrNotWritten, context.Canceled)} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			s, posts, calls := cotHub(t, false)
+			r, _ := cotRun(s)
+			withCot(s, r)
+			feishuSink{s}.progress(context.Background(), r, time.Second, nil, "")
+			s.hub.(*fakeHub).answerApp(AppFeishu, FeishuCotAppend, func(json.RawMessage) (any, error) { return nil, feishuAPIError(99991400) })
+			n := 0
+			s.hub.(*fakeHub).answerApp(AppFeishu, FeishuCotComplete, func(json.RawMessage) (any, error) {
+				n++
+				if n < 3 {
+					return nil, failure
+				}
+				*calls = append(*calls, "complete")
+				return map[string]any{}, nil
+			})
+			s.finishChannelRun(r, &channel.Result{Answer: "结论"})
+			if n != 3 || !strings.HasSuffix(strings.Join(*calls, " "), "complete") || len(*posts) != 1 {
+				t.Fatalf("tries %d, calls %v, posts %v", n, *calls, *posts)
+			}
+		})
 	}
 }
