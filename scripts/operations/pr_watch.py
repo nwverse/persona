@@ -556,11 +556,15 @@ class Watcher:
         if not isinstance(head, str) or not pr_watch_common.SHA.fullmatch(head):
             raise WatchError("findings publication requires an exact head")
         if inline:
-            # A re-review on a moved base words the same findings differently;
-            # publish again only when it anchors something new on this head.
-            published = {finding_anchor(f) for f in self.head_publication(repo, number, head).get("published_findings") or []}
-            if findings and all(finding_anchor(f) in published for f in findings):
-                return
+            # A head's findings are published once (#12302). Re-reviews after
+            # main moves word notes differently and find new P1/P2 nits; only a
+            # P0 at a new anchor blocks and is worth another review, alone.
+            published_findings = self.head_publication(repo, number, head).get("published_findings") or []
+            if published_findings:
+                published = {finding_anchor(f) for f in published_findings}
+                findings = [f for f in blocking_findings(findings) if finding_anchor(f) not in published]
+                if not findings:
+                    return
         blocking = bool(blocking_findings(findings))
         if not self.repositories[repo]["merge"]:
             action = "Review-only mode: no automatic repair or merge will be attempted. P1/P2 findings are notes; only P0 blocks."

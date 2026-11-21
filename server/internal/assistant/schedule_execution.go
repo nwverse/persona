@@ -381,6 +381,7 @@ func taskEditConfig(t Task) Task {
 	t.LastRun, t.StatusRun = time.Time{}, time.Time{}
 	t.LastSessionID, t.LastStatus, t.LastError = "", "", ""
 	t.TodoProgress, t.StateNote = nil, nil
+	t.clearSkip() // a skip can be armed or consumed while a configuration edit is being validated
 	if t.Repeat == repeatInterval {
 		t.At = time.Time{} // due runs advance At; ArmedAt records a deliberate retime
 	}
@@ -405,6 +406,7 @@ func mergeTaskEditRuntime(task *Task, before, current Task) error {
 		task.ArmedAt.Equal(before.ArmedAt) && task.Enabled == before.Enabled && !current.At.Equal(before.At) {
 		task.At = current.At
 	}
+	task.keepSkipFrom(current)
 	return nil
 }
 

@@ -198,7 +198,7 @@ Lives at the root of the extension package. Example (a connector for a fictional
 | `off_by_default` | No | Contributions that start off when installed (`["ui/github"]`, #2829), see "Turning contributions on and off". Cannot list connectors or channels bound to connectors. Hubs from before this field read manifests strictly, so extensions with it can't be installed there and their marketplace entries are skipped (with a warning): extensions using it need a new hub anyway |
 | `depends`, `exports`, `extension_pack` | No | Extensions depended on, extension points opened to other extensions, members of a pack; see "Dependencies, exports and packs" |
 | `configuration` | No | JSON Schema for the config, limited to the subset below |
-| `secrets` | No | `[{name, title, description?, required?}]`, `name` matches `^[a-z][a-z0-9_]{0,31}$`, at most 32 |
+| `secrets` | No | Fixed secrets `[{name, title, description?, required?}]`, `name` matches `^[a-z][a-z0-9_]{0,31}$`. Fixed and entry-list `x-secret` declarations share one namespace and a combined limit of 32; every logical declaration name must be unique |
 | `settings_check` | No | Boolean: the program checks a change of its settings or secrets (`settings.check`) before the hub saves it; see "Settings the user fills in" |
 | `permissions` | No | See "Permissions" |
 | `tools` | No | Command-line programs it needs (#4507); the hub installs them in the extension's own directory and puts them on its `PATH`, see "Command-line programs (tools)"; requires `runtime` |
@@ -232,7 +232,7 @@ would make the extension uninstallable on older hubs, while files they do not re
 
 - Every key is optional and a blank string is no translation. `configuration.<property>`: `title`, `description`, `confirm` (translates `x-confirm`,
   never adds one), `choices` (labels by value: a string choice by the string, a number as JSON writes it; on an array, its items' choices) and
-  `properties` (an object's own properties, in the same shape). `secrets.<name>`: `title`, `description`. Keys the hub does not know are ignored.
+  `properties` (an object's own properties, in the same shape). For an entry list, `configuration.<list>.properties.<entry-field>` translates its flat item fields directly (there is no `items.properties` key), and `secrets.<x-secret.name>` translates the list's secret text. `secrets.<name>`: `title`, `description`. Keys the hub does not know are ignored.
 - **Which text**: string by string, the request's language (`X-Persona-Lang` / `Accept-Language`), then English unless the request is
   Simplified Chinese, then the manifest's own text.
 - **Where**: the extension list and details (name, description, the settings form, secrets and the "Missing: …" line), dependency names,
@@ -250,8 +250,8 @@ would make the extension uninstallable on older hubs, while files they do not re
 
 ### Configuration: the form subset
 
-The root is `{"type": "object", "properties": {…}, "required": [...]}`. Every client can draw it as a form, with fields in the order the properties appear in the file (the hub keeps the order when parsing,
-and the API returns the ordered `form.fields`). Anything outside the subset can't be installed, which guarantees every extension's config can be edited in the App.
+The root is `{"type": "object", "properties": {…}, "required": [...]}`. Every client can draw the ordinary fields as a form, with fields in the order the properties appear in the file (the hub keeps the order when parsing,
+and the API returns the ordered `form.fields`). Entry lists are the explicitly gated exception below: only an opted-in client receives their editable form. Anything outside the subset can't be installed, which keeps unsupported manifests off clients that cannot edit them.
 
 | Type | Allowed keywords | Form |
 | --- | --- | --- |
@@ -259,7 +259,8 @@ and the API returns the ordered `form.fields`). Anything outside the subset can'
 | `integer` | Descriptive keywords, `enum`, `minimum`, `maximum`, `x-step` (a positive JSON integer from 1 to 9007199254740991, only for `integer`) | Number field; the iOS and Android apps add a stepper, held to `minimum` / `maximum`. `x-step` sets how much each tap adds or subtracts (1 when absent); it does not restrict typed or saved values |
 | `number` | Descriptive keywords, `enum`, `minimum`, `maximum` | Number field |
 | `boolean` | Descriptive keywords | Toggle; with `x-confirm` (one sentence), turning it on first asks that sentence in the same dialog as a machine's toggle (below), titled with the field's title; Cancel leaves it off, Turn On sets it for Save; turning off doesn't ask |
-| `array` | `items` must be `string` (may have `enum`), `minItems`, `maxItems`, `uniqueItems` | Editable list; with `enum` in `items`, multi-select; with `format: machine` in `items`, one toggle per machine (below) |
+| `array` of strings | `items` must be `string` (may have `enum`), `minItems`, `maxItems`, `uniqueItems` | Editable list; with `enum` in `items`, multi-select; with `format: machine` in `items`, one toggle per machine (below) |
+| Entry list: a top-level `array` of flat objects | `items` is an object with 1–8 string properties and optional `required`; the list has `x-secret`, required `maxItems` (1–32), optional `minItems` and `x-from`. No defaults, nested containers or `uniqueItems` | Web entry editor: add, edit and remove entries, with one write-only secret per entry (below). Other clients receive no editable entry form |
 | `object` | Top level only, containing only the scalars and arrays above; may have its own `required` | A group |
 
 **Integer steppers (`x-step`)**: the hub returns the hint as `step` in `form.fields`. It is not `multipleOf`: with `x-step: 250`, a value of 2100 can still be typed and saved, and the next tap moves it to 2350 or 1850, within `minimum` / `maximum`. A field with `enum` is drawn as a picker, so `x-step` does nothing there. Older apps ignore `step` and use 1. Only a hub with `x-step` installs a manifest that uses it: declare a matching `engines.persona`.
@@ -274,13 +275,47 @@ and the API returns the ordered `form.fields`). Anything outside the subset can'
 
 **Launchers (`format: launcher`, #2385)**: the value is the name of one of the hub's launchers (what `POST /api/v1/assistant/conversations` takes as `launcher`). The hub checks only that it is a name (not empty, no surrounding spaces): a launcher lives on computers that may be offline. The App and web draw a picker of the hub's launchers (`GET /api/v1/launchers`, read once while the page is open, since it asks every machine), **Not set** first, hidden launchers left out, a display name that differs shown with the name. Until the list is in, or when it can't be read, the field is a text field. A value that names no launcher is still shown, marked. Android does the same with its choice sheet (#2448). Only a hub with this format installs a manifest that uses it: declare a matching `engines.persona`.
 
+#### Entry lists and per-entry secrets
+
+A list of accounts, gateways or similar entries (#9504) is one top-level array. It is deliberately not general nested configuration:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "accounts": {
+      "type": "array",
+      "title": "Accounts",
+      "maxItems": 32,
+      "x-secret": {"name": "account_key", "title": "Account key", "hint": "last4"},
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string", "title": "Name", "maxLength": 100},
+          "address": {"type": "string", "title": "Address", "format": "uri"}
+        },
+        "required": ["name", "address"]
+      }
+    }
+  }
+}
+```
+
+- **Declaration**: `x-secret` requires a logical `name` matching the fixed-secret grammar and a nonempty `title`; `hint` may only be `last4`, with `required` as usual. Fixed and list declarations together may not exceed 32, and one logical name cannot appear on both a fixed secret and a list or on two lists. A saved entry `_id` must also be disjoint from the current fixed-secret names; an upgrade or reload that would make those storage keys ambiguous is refused or marked broken rather than conflating the credentials.
+- **Identity and storage**: the host adds a reserved `_id` to each saved entry (`entry_` plus 26 lowercase hex characters). It is stable across edits and reordering; clients cannot choose it or reuse an ID in another entry or list. The existing flat configuration JSON carries the entries and IDs. The existing sealed-secret store carries at most one secret per entry, under the entry ID as its name. A secret value is never part of configuration, a detail response or a browser draft. The secret uses the same value-or-provider-reference and `last4` behavior as a fixed secret. Entry secrets are for the extension on the hub; `node.secrets` cannot name them and node delivery excludes them.
+- **Editing**: a new entry has no ID until its configuration is saved. Only then can its secret be set; a network-bound entry also needs a valid saved address. Removing an entry deletes its sealed secret in the same transaction as the configuration write. Changing the normalized network target also clears that entry's secret, so a credential cannot silently follow a different service. Equivalent spelling of the same target preserves it. A required list that permits zero entries is saved as an explicit `[]`; an optional list may return to its absent state, with `minItems` applying only when the array is present. Orphaned or removed entry secrets are never handed to the extension.
+- **Compatibility**: web detail and detail-returning writes use `entry_lists=1`. Without it, the hub filters entry-list form fields and dynamic secret rows but retains raw configuration. A non-opted configuration write preserves every current entry array, even when its draft omitted the list or contains an old copy, so an older native client can save other settings without deleting entries or secrets. Web's immediate fixed-field saves add `preserve_entries=1` alongside the opt-in to select the same preservation and retain the capable response. Entry lists are excluded from Assistant-driven settings discovery and patching. Declare an `engines.persona` build that understands entry lists; older hubs reject this schema.
+- **Egress and consent**: `permissions.network` accepts `config:accounts[].address` (and the explicit `:http` suffix). Every valid saved entry address produces an exact host/port target under the same URL and address-security rules as `config:<field>`. Install and upgrade consent names the list's addresses, including current valid values and future entries, and its one write-only secret declaration for every current and future entry. Adding, removing or editing entries later does not change the manifest permission digest or ask for new manifest consent; adding the declaration in an upgrade does.
+- **Form metadata**: an opted-in detail response marks a network-bound entry address as `clears_secret: true`, so the editor can explain that saving an address change clears the secret. Dynamic secret views carry `list` and `entry_title`, plus only the usual saved state, hint or reference, never a value.
+- **Moving a fixed slot**: optional `x-from` maps entry fields to fixed top-level fields in the **installed old** schema, for example `{"x-from": {"name": "account_name", "address": "account_address"}}`. Each source belongs to exactly one list and must no longer be a fixed field in the new schema; retained or shared sources are refused because copying/deleting them would not be lossless. The list's `x-secret.name` must name the old fixed secret. Preview and install copy only values explicitly saved in configuration (never defaults) into the first entry and give it the old secret name as `_id`, preserving the sealed row byte-for-byte. Install recomputes and checks the previewed transform. Existing destination content conflicts refuse the migration; applying it again is idempotent. Rollback inverts a lone legacy-ID entry and refuses later entries, replacement identities, unmapped values or other configuration the old schema cannot represent instead of silently losing data. The same previous-schema validation applies to every rollback from an entry-list version, even one without `x-from`, so saved entries and their sealed secrets cannot be stranded in an incompatible old version.
+
 **Conventional settings**: names the hub recognizes; when an extension declares one, it gets extra uses.
 - `triage_rules` (a top-level `string`; `maxLength` of at most 4000 is recommended, since the hub uses only the first 4000 characters): this source's Inbox triage rules, in the user's own words. The extension attaches it as `rules` when it hands over items (`docs/protocol/connector-protocol.md`),
   and the hub uses it instead of the global `inbox.rules` when triaging this source's items (`docs/assistant/inbox.md` ("AI triage")). An extension that declares it gets an item
   `inbox.rules.<extension id>` in the assistant's `persona_settings`: reading is free; changing it pops a confirmation on the phone (before → after), and only once approved is it written through the same config-change path (validated against the schema, only this item changed, extension restarted);
   extensions configured in the manager's manager.json are read-only.
 
-**Every setting in a conversation** (#2385): each extension the user can configure that has a form is `extension.<id>` in the assistant's `persona_settings`. `get` lists every field
+**Every setting in a conversation** (#2385): each extension the user can configure that has an ordinary supported form is `extension.<id>` in the assistant's `persona_settings`. Entry lists are excluded, and an entry-list-only extension is omitted, because the assistant cannot present their per-entry secret and identity lifecycle. `get` lists every exposed field
 with its title, kind (choices, bounds, machine / launcher), current value and default. `set` takes an object of only the fields to change (an `object` field an object of its own fields; `null` puts a field back to its default),
 is checked against the schema (and, for the built-in Messages extension, its one-Mac rule) before any card, and puts a card on the phone that says each changed field `before → after` (a choice by its title, a machine by its name,
 and the field's `x-confirm` sentence when the change turns it on). Only once approved is it saved, through the same path as Settings › Extensions (the extension restarts); a field the card showed that changed meanwhile
@@ -312,7 +347,7 @@ Every extension that uses the Inbox (its connector declares `inbox`) must follow
 **Old hubs**: hubs before #1680 don't know `fallback`, so a connector declaring it fails to register entirely; #1680 hubs drop it and log a line, treating it as having no fallback (so a model is needed).
 Extension versions that declare `fallback` put a hub build number that includes #1730 in `engines.persona` (`">=YYYYMMDDHHMM"`; the build number is the UTC time of the build).
 
-Not supported: `$ref`, `allOf` / `anyOf`, `if` / `then`, arrays of objects, deeper nesting, `additionalProperties` (extra keys are never accepted). Values are at most 64 KB.
+Not supported: `$ref`, `allOf` / `anyOf`, `if` / `then`, arrays of objects other than the entry lists above, deeper nesting, `additionalProperties` (extra keys are never accepted). Values are at most 64 KB.
 `default` and `enum` values are type-checked too. Property names like `password` / `token` / `secret` / `api_key` get a warning: config is stored and shown in plain text, so these belong in `secrets`.
 
 ### Permissions
@@ -454,6 +489,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `assistant.start_defaults` | Read the Agent presets and set the defaults task Agents start with | `GET /api/v1/assistant/worker-presets`, `GET` / `PUT /api/v1/assistant/start-defaults`, `POST /api/v1/assistant/start-defaults/preview` (read-only: what a policy would do for a task, nothing stored or started); a policy written by an extension must expire within one hour ([assistant.md](../assistant/assistant.md) "Start defaults"). Not covered by the legacy `hub_api` full access: it can raise what task Agents spend (a preset, effort `max`, ultracode), so an extension gets it only by naming it, as `agents.permission_mode` |
 | `dispatch.guard` | Read and change the explicit-target dispatch guard and narrow the affected conversations' tools | `GET` / `PUT /api/v1/assistant/dispatch-guard`; an extension-written enabled policy must expire within one hour ([assistant.md](../assistant/assistant.md) "Explicit dispatch guard"). Granted by name only, not by the legacy every-scope grant |
 | `todos.write` | Create and edit to-dos, attach chats to to-dos | `POST /api/v1/todos`, `PATCH /api/v1/todos/{id}`, a to-do's `agents/{mid}/{sid}` and `spaces/{mid}/{space…}` (`PUT` / `DELETE`), `POST /api/v1/todos/{id}/decisions` (outcome decisions only, see [todos.md](../assistant/todos.md) "API overview"), `PUT /api/v1/todos/{id}/repositories` and `PUT /api/v1/todos/{id}/repositories/{repo_id}/links` (replace repository associations and issue/PR links); creating and editing to-dos and adding decisions not with terminal control characters (see below); deleting to-dos, superseding decisions, completion checks and retries still require full access; none of a to-do it is not shown, nor a run or space it may not take onto one (404, see "Never shown to extensions") |
+| `decisions.raise` | Ask the owner for a decision | `POST /api/v1/decisions`, `GET /api/v1/decisions/{id}`, `POST /api/v1/decisions/{id}/withdraw`; raise a rich pending Needs-you decision, poll only the caller's own answer and withdraw it ([todos.md](../assistant/todos.md) "Decisions raised outside a supervisor"). It does not open any owner answer route and is never included in legacy every-scope access |
 | `assistant.read` | Read your Persona chats (your messages and its replies) | No HTTP route: the `assistant.conversations` / `assistant.messages` RPC (see "Assistant conversations"). `assistant.ask` does not include it |
 | `assistant.memory.read` | Read what Persona remembers about you (read-only, never the health space) | No HTTP route: the `assistant.memory` RPC (see "Assistant memory"). Writing and deleting memory stay with full credentials; `assistant.read` does not include it |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
@@ -496,8 +532,8 @@ Scopes cover what an extension calls with its token. The owner's own answers tha
 - **Compatibility**: old extensions with `hub_api: true` still get the hub's full token (only in env vars), with an extra warning on install and upgrade, "hub_api is the legacy form"; extensions in manager.json still get the full token. On a manager other than the built-in one, both get a token of every scope instead (none of the routes open to full credentials only): that manager has no token of the hub's to hand on. Every other extension's token there opens the scopes it asked for and no more.
   An attached package ("Attaching an installed package") granted `hub_api` gets a token of every scope too, on any manager, in `initialize` only: its program is not the manager's child, so it never gets the hub's own token.
   One installed from `remote:` and granted `hub_api` gets no hub token (one granted scopes gets a token of those).
-  A token of every scope has every scope but `agents.permission_mode`, `assistant.start_defaults`, `dispatch.guard` and `market.refresh_own`, which an extension gets only by naming them in `permissions.hub` (`extension.EveryScope`). A manifest that names any scope gets a token of exactly the named scopes, even with `hub_api` set (`Permissions.FullHub`), so an extension that needs one of them lists every scope it uses.
-  The `hub_api` grant covers every scope but those four named-only scopes: upgrading from `hub_api` to a new version that asks for only a few scopes needs no new consent, unless one of them is one of those four (which `added_permissions` then lists); the reverse does.
+  A token of every scope has every scope but `agents.permission_mode`, `assistant.start_defaults`, `decisions.raise`, `dispatch.guard` and `market.refresh_own`, which an extension gets only by naming them in `permissions.hub` (`extension.EveryScope`). A manifest that names any scope gets a token of exactly the named scopes, even with `hub_api` set (`Permissions.FullHub`), so an extension that needs one of them lists every scope it uses.
+  The `hub_api` grant covers every scope but those five named-only scopes: upgrading from `hub_api` to a new version that asks for only a few scopes needs no new consent, unless one of them is one of those five (which `added_permissions` then lists); the reverse does.
 - The permission summary includes the scopes (normalized: sorted, deduplicated); for extensions without `hub` the summary is the same as before. An upgrade that adds scopes needs consent again, and `added_permissions` shows "Use more of the hub's features".
 
 <a id="知识库-rpc1908"></a>
@@ -970,6 +1006,7 @@ The hub has an **egress proxy** (`server/internal/extension/egress`), started th
 - **What it lets through**: only hosts in this extension's `permissions.network` (`*.example.com` means subdomains under it; IP addresses only if listed literally). Anything else gets 403 "`<host>` is not in this extension's
   permissions.network", a log line, and a per-extension count (allowed / denied counts and the last denied host, in `sandbox.egress` of the extension's details; also counted in the health counters `egress.allowed` / `egress.denied`).
   Names that resolve to local loopback or link-local addresses (cloud metadata services) are not allowed, unless that exact IP is listed. Any port.
+- **Addresses in entry lists** (#9504): `config:<list>[].<field>` expands to every valid saved entry address, with `:http` carrying the same explicit HTTP opt-in as a fixed `config:<field>`. Indexes, nested paths and extra suffixes are invalid. Each entry gets its own exact host/port check, including the default port and URL-userinfo rejection; changing that normalized target clears the entry's secret atomically with the settings write. Adding an entry needs no new manifest consent because the list declaration already disclosed current and future addresses.
 - **The hub's own API**: extensions holding a hub token (`hub` scopes or legacy `hub_api`) reach the hub from the sandbox at `http://hub.persona.internal` (that is what `PERSONA_HUB_URL` and `initialize`'s `hub.url` are),
   and the proxy connects it to the hub's local port; loopback inside the sandbox is not the hub's loopback.
 - **Local services on the hub machine** (#2942): use the reserved name `host.persona.internal` (modeled on Docker's `host.docker.internal`). The proxy connects `host.persona.internal:<port>` to the hub machine's
@@ -1647,7 +1684,7 @@ An extension installed from a package (a marketplace, `file:`, `dir:`, …) can 
   `data_dir` in the details (`personad extension show <id>`) says where that data directory is, so a program run on its own on the same machine can keep using it in place.
 - **What is checked**: the sockets must be the ones the package's runtime uses (`rpc` for one that speaks the protocol, `http` when it serves HTTP), and the program on them must answer `manifest` (`GET /manifest` for an HTTP-only one) with the package's id and version, so attaching grants nothing the package did not have. Each connection asks again before `initialize` ("Refused" above), so a program swapped for another one or version later gets nothing either.
   A package with no program, or a source runtime one, cannot be attached; one installed from `remote:` has no package and is attached already.
-- **Its program**: `initialize` gives it no path on the hub machine (`extension.dir` and `extension.data_dir` are empty). It gets its settings and secrets as usual, and a hub token of its granted scopes, or of every scope except the named-only `agents.permission_mode`, `assistant.start_defaults` and `market.refresh_own` when it was granted `hub_api`: never the hub's own token ("Hub API: scopes").
+- **Its program**: `initialize` gives it no path on the hub machine (`extension.dir` and `extension.data_dir` are empty). It gets its settings and secrets as usual, and a hub token of its granted scopes, or of every scope except the named-only `agents.permission_mode`, `assistant.start_defaults`, `decisions.raise`, `dispatch.guard` and `market.refresh_own` when it was granted `hub_api`: never the hub's own token ("Hub API: scopes").
 - **No upgrade or rollback while attached**: both are refused, and it never upgrades itself. Detach it, upgrade the package, and attach the new version's program.
 - **Audit**: `attach` (version and sockets) and `detach` (version) go to the extension's audit log, and the manager switches the extension's connection at once.
 
@@ -1795,6 +1832,7 @@ the host side (every call, every run, every log line) is the `Observer` in `exte
 - Config is stored in the database (`plugins.config`) and validated against the schema on change; the extension gets the copy with `default`s filled in.
 - Secrets are encrypted with the manager's `secret.key` (like mail passwords, launcher keys and connector secrets; [managers.md](../assistant/managers.md) ("The built-in manager's own files")), one per row (`plugin_secrets`), and are **write-only**: endpoints only return "set / not set".
 - Extensions that speak the protocol get `config` and `secrets` in `initialize`; ones that do not get them through the env vars `PERSONA_EXTENSION_CONFIG` and `PERSONA_EXTENSION_SECRETS` (both JSON).
+  For an entry list, the entry's reserved `_id` is its key in that flat secret map (and in a settings check), beside any fixed-secret names. Only currently live entries and fixed declarations are included; removed or ambiguous orphaned rows are not.
   A secret saved as a reference (`op://…`) reaches them as the value it stands for, resolved through its provider each time ([secret-providers.md](secret-providers.md) "References in an extension's secrets").
   Each extension only gets its own. When config, secrets or the switch change, the hub restarts the extension's process (no hot reload).
 - Env vars: `PERSONA_EXTENSION_ID`, `PERSONA_EXTENSION_DIR` (package directory), `PERSONA_EXTENSION_DATA` (`~/.persona/extensions/data/<id>/`, the extension's own cache and data, deleted on uninstall),
@@ -1827,6 +1865,9 @@ manifest can ask for four things. A hub from before them refuses the manifest, s
     market's lines for an installed extension name the address saved there (not the old version's default); a fresh
     install says 未填 (#8570). An upgrade that adds such an entry lists it under the permissions that grew, like a new
     host.
+  - An entry list uses `config:<list>[].<field>` (or the same `:http` suffix), where `<field>` is a URI string in its flat
+    entry object. Every valid saved entry address becomes a target under these same checks. Consent names all current
+    valid targets and explicitly covers future entries; adding an entry later needs no new manifest consent.
   - The proxy holds the extension to these rules only while its sandbox is **enabled** (`sandbox.enabled`, "Sandbox").
     With the sandbox also **active**, the proxy is its only way out. Enabled but not active (this machine has no
     sandbox), its environment points it at the proxy: a well-behaved program goes through it, a misbehaving one can go
@@ -1836,6 +1877,8 @@ manifest can ask for four things. A hub from before them refuses the manifest, s
 - **`settings_check: true`**: before saving a secret or the configuration, the hub calls the running program's
   `settings.check {config, secrets, proxy?}`, with the values as they would be after the change. The answer is
   `{ok: true}` or `{ok: false, error}` (`SettingsCheckParams` / `SettingsCheckResult` in `schema/extension/protocol.schema.json`).
+  For entry lists, `secrets` is keyed by each live entry `_id`; entries or credentials scheduled for deletion by the
+  proposed write are removed before the call. The proposed entry addresses also drive the check's proxy/broker targets.
   - **The check's own way out** (#8459): a program behind the egress proxy (its sandbox enabled) whose granted
     `permissions.network` has a `config:` entry also gets `proxy`, the proxy URL with a credential for this check only:
     `http://ext:<credential>@<address>`, where the address is the one the program reaches the proxy at (the loopback
@@ -1882,9 +1925,9 @@ The `-` endpoints below exist only when `features` in `/health` and hello includ
 | Endpoint | Who can call | Notes |
 | --- | --- | --- |
 | `GET /api/v1/extensions` | Any device | `{"extensions": [ExtensionView], "can_install"}`. `ExtensionView`: the old `id`, `name`, `kind` (the first extension point; voice extensions are still `voice`, connectors are `connectors`), `status`, `error`, plus `version`, `source`, `enabled`, `description`, `contributes` (extension point → id), `needs_setup` (what is still missing, human-readable), `warnings` |
-| `GET /api/v1/extensions/{id}/-/` | Full-access devices | Details: `ExtensionView` plus `publisher`, `homepage`, `origin`, `previous_version`, `read_only`, `form` (`{fields: [{name, type, title, description, default, required, enum: [{value, title}], format, pattern, min_length, max_length, minimum, maximum, step, items, min_items, max_items, unique_items, fields}]}`), `config`, `secrets: [{name, title, description, required, set}]`, `permissions` (a few human-readable lines). Ones from manager.json do not return `config` or `secrets`. `data_dir` is the extension's data directory on the manager's machine (the one its program is given there; an attached package keeps it, none for one installed from `remote:`, one from hub.json or manager.json, or one with no program on the manager), returned to the master token over loopback and the admin UI only, never to a device |
+| `GET /api/v1/extensions/{id}/-/` | Full-access devices | Details: `ExtensionView` plus `publisher`, `homepage`, `origin`, `previous_version`, `read_only`, `form` (`{fields: [{name, type, title, description, default, required, enum: [{value, title}], format, pattern, min_length, max_length, minimum, maximum, step, items, min_items, max_items, unique_items, fields, secret?, clears_secret?}]}`), `config`, `secrets: [{name, title, description, required, set, list?, entry_title?}]`, `permissions` (a few human-readable lines). `?entry_lists=1` retains entry-list form fields and dynamic secret rows; without it they are filtered while raw config remains (see [protocol.md](../protocol/protocol.md), "Extension entry-list settings"). Ones from manager.json do not return `config` or `secrets`. `data_dir` is the extension's data directory on the manager's machine (the one its program is given there; an attached package keeps it, none for one installed from `remote:`, one from hub.json or manager.json, or one with no program on the manager), returned to the master token over loopback and the admin UI only, never to a device |
 | `PUT /api/v1/extensions/{id}/-/enabled` `{enabled}` | Full-access devices | Returns the details; enabling an extension that uses the Inbox and has no fallback while **Message triage** cannot be called returns 409 `needs_triage_model` ("General Inbox rules" above); the same for install and upgrade |
-| `PUT /api/v1/extensions/{id}/-/config` `{config}` | Full-access devices | Replaces the whole thing; not matching the schema returns 400 `{code: "invalid_config", field, message}` |
+| `PUT /api/v1/extensions/{id}/-/config` `{config}` | Full-access devices | Replaces the whole thing; not matching the schema returns 400 `{code: "invalid_config", field, message}`. Capable entry editors add `entry_lists=1`; without it, current entry arrays are preserved server-side while ordinary fields save |
 | `PUT /api/v1/extensions/{id}/-/secrets/{name}` `{value}`, `DELETE …` | Full-access devices | At most 16 KB; the value is never echoed and never goes into logs or the audit log |
 | `GET /api/v1/extensions/-/audit?plugin=&limit=` | Full-access devices (never an extension's token) | `{audit: [{plugin, action, actor, detail, at}]}`, newest first: `plugin` is an extension's, a connector's or `feishu`, everyone's without it; `limit` defaults to 100, at most 1000 (400 below 1); 503 without a database |
 | `POST /api/v1/extensions/-/preview` `{source, upgrade?}` | Master token over loopback | Returns a preview; from anywhere else 403 `this_machine_only` |
@@ -4201,7 +4244,7 @@ can set addresses, keys and switches; admin has a switch too:
 | `owner`, `notes` | What to call you, extra instructions for the voice assistant; supplied values override manager.json |
 | Secret `key` | API key sent as `Authorization: Bearer`; encrypted with `secret.key` in `plugin_secrets`, write-only, endpoint reports only "set" |
 
-`ssh`, `key_file`, `key_command`, an explicit `tools` and additional upstreams are manager.json-only (`key_command` executes on the hub machine, and the form subset has no object arrays).
+`ssh`, `key_file`, `key_command`, an explicit `tools` and additional upstreams are manager.json-only (`key_command` executes on the hub machine). Additional upstreams do not fit the deliberately restricted entry-list shape or its current web-only editing support, so the form still exposes the one upstream above.
 The form's upstream has no `tools` switch, so it is auto: it declares the function tools and drops them only if the service refuses them (#1420). To keep them off, configure that upstream in manager.json with `"tools": false` instead.
 
 - **Merge** (`voice.Merge`): manager.json upstreams first; the form upstream is appended when it has **both** address and key, fixed id `custom` (model ids `custom/<model>`).

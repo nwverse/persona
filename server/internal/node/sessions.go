@@ -360,6 +360,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		s := &out[i]
 		if !s.Assistant && s.PaneID != "" && s.Status != proto.StatusOffline && s.Status != proto.StatusInterrupted {
 			n.observedRunning(s.SessionID)
+			n.noteGatewayRunning(s)
 		}
 		if earlier[s.SessionID] || !n.sessionScopeAllows(s.Cwd) {
 			continue

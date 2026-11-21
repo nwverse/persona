@@ -63,6 +63,7 @@ export interface AssistantEntriesInput {
   conversation: string;
   /** The main conversation's id: it watches every task and the Agents opened by hand. */
   main?: string;
+  manager?: string;
   todos: Todo[];
   /** Every session, as the lists show them (answered cards applied). */
   sessions: Session[];
@@ -236,7 +237,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   }
 
   const plansWaiting: NeedsYouItem[] = Object.values(plans)
-    .filter((plan) => plan.conversation === conversation && plan.state === "open")
+    .filter((plan) => ((isMain && !plan.space) || plan.conversation === conversation) && plan.state === "open" && (!input.manager || !plan.manager || plan.manager === input.manager))
     .sort((a, b) => byTime(a.created_at, b.created_at) || a.id.localeCompare(b.id))
     .map((plan) => ({ kind: "plan", key: `plan:${plan.id}`, plan }));
   const messages: NeedsYouItem[] = feed.filter((it) => messageWaits(it, input.deferred)).map((item) => ({ kind: "message", key: `message:${item.id}`, item }));
@@ -266,7 +267,8 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
 export function needsYouBySupervisor(items: readonly NeedsYouItem[], conversation: string): { supervisor: string; items: NeedsYouItem[] }[] {
   const groups = new Map<string, NeedsYouItem[]>([[conversation, []]]);
   for (const item of items) {
-    const supervisor = item.kind === "task" && item.todo.origin ? item.todo.origin : conversation;
+    const supervisor = item.kind === "task" && item.todo.origin ? item.todo.origin :
+      item.kind === "plan" ? item.plan.conversation || conversation : conversation;
     const group = groups.get(supervisor);
     if (group) group.push(item);
     else groups.set(supervisor, [item]);

@@ -299,6 +299,50 @@ func TestUsageWindowsRouteIncludesGatewayAccounts(t *testing.T) {
 	}
 }
 
+// A relay read with an ordinary API key (#12311): its key self-service document feeds the same bars, named after the
+// provider and plan, and neither the key nor the gateway's account ids reach the answer.
+func TestUsageWindowsRouteIncludesAKeysRelayAccounts(t *testing.T) {
+	now := time.Now()
+	at, reset := now.UTC().Format(time.RFC3339), now.Add(3*time.Hour).UTC().Format(time.RFC3339)
+	var paths []string
+	gate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.RequestURI())
+		if r.Header.Get("Authorization") != "Bearer an-api-key" {
+			w.WriteHeader(401)
+			return
+		}
+		if r.URL.Path != "/me/usage" {
+			w.WriteHeader(404)
+			return
+		}
+		fmt.Fprintf(w, `{"account_quota_shared":true,"accounts":[
+		 {"account_id":"acct-1","provider":"claude","plan":"max","windows":[{"kind":"five_hour","scope":"account","used_ratio":0.4,"resets_at":%[2]q,"checked_at":%[1]q},{"kind":"weekly_fable","scope":"model","scoped_model":"Fable","used_ratio":0.1,"resets_at":%[2]q,"checked_at":%[1]q}]},
+		 {"account_id":"acct-2","provider":"claude","plan":"max","windows":[{"kind":"weekly","scope":"account","used_ratio":0.83,"resets_at":%[2]q,"checked_at":%[1]q}]}]}`, at, reset)
+	}))
+	defer gate.Close()
+	h := newTestDevices(t)
+	h.usageGW.init(UsageConfig{Sources: []UsageSourceConfig{{ID: "s1", Name: "Team relay", Type: "relay_key", URL: gate.URL + "/v1", Key: "an-api-key"}}}, h.usageWin.invalidate, h.logf)
+	h.usageGW.pollDue(context.Background(), now)
+	if len(paths) != 1 || paths[0] != "GET /me/usage" {
+		t.Fatalf("one read of the document: %v", paths)
+	}
+	mux := h.Handler(http.NotFoundHandler())
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/usage/windows", nil))
+	body := w.Body.String()
+	for _, want := range []string{`"name":"Claude Max"`, `"name":"Claude Max 2"`, `"plan":"max"`, `"sources":["Team relay"]`, `"used_percent":40`, `"used_percent":83`, `"model":"Fable"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %s in %s", want, body)
+		}
+	}
+	if strings.Contains(body, "an-api-key") || strings.Contains(body, "acct-") || strings.Contains(body, `"local"`) {
+		t.Errorf("the key and the gateway's ids stay out: %s", body)
+	}
+	if inv := h.usageGW.gatewayAccounts(); len(inv.Sources) != 0 || len(inv.Accounts) != 0 {
+		t.Errorf("a key sees no pool inventory: %+v", inv)
+	}
+}
+
 func TestOfflineNodeCannotClaimASource(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	var u usageWindowsHub
@@ -392,7 +436,7 @@ func TestUsageGatewayAccountsOverTheDevicesMethod(t *testing.T) {
 // A hub.json written before the relay type had its name still reads: any type that is not generic was the relay one.
 func TestUsageSourceConfigReadsOlderTypeNames(t *testing.T) {
 	var cfg UsageConfig
-	raw := `{"sources":[{"id":"a","type":"generic"},{"id":"b","type":"relay"},{"id":"c","type":"some-earlier-name"},{"id":"d"}]}`
+	raw := `{"sources":[{"id":"a","type":"generic"},{"id":"b","type":"relay"},{"id":"c","type":"some-earlier-name"},{"id":"d"},{"id":"e","type":"relay_key"}]}`
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +444,7 @@ func TestUsageSourceConfigReadsOlderTypeNames(t *testing.T) {
 	for _, s := range cfg.Sources {
 		got = append(got, s.Type)
 	}
-	if want := []string{"generic", "relay", "relay", ""}; !slices.Equal(got, want) {
+	if want := []string{"generic", "relay", "relay", "", "relay_key"}; !slices.Equal(got, want) {
 		t.Fatalf("types = %q, want %q", got, want)
 	}
 }

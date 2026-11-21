@@ -84,7 +84,7 @@ struct TodoDetailView: View {
         .sheet(isPresented: $showHandoff) {
             if let todo = currentTodo {
                 // The Agent it is handed to is pushed over this page; with nothing to push on, it opens as before (#12006).
-                TodoHandoffSheet(todo: todo, openAgent: onOpenAgent == nil && pageAgentPush(inSheet: shownAsSheet, { _ in }) == nil
+                TodoHandoffSheet(todo: todo, onOpenAgent: onOpenAgent == nil && pageAgentPush(inSheet: shownAsSheet, { _ in }) == nil
                                  ? nil : { openAgent($0) })
             }
         }

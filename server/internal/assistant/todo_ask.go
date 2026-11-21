@@ -113,7 +113,7 @@ func (s *Service) todoAsks(ctx context.Context) map[string]todoAsk {
 // safe. The list's ask carries it and the view's decision reads it from there (todo/projection), so whatever answers a
 // decision, a row or a push about it, can keep this one rule.
 func askRisk(a *acceptAsk) string {
-	if cannotUndo(a.WhyOwner, a.Deadline, a.Reversible) {
+	if a.OutsideID != "" && !a.Reversible || cannotUndo(a.WhyOwner, a.Deadline, a.Reversible) {
 		return assistantwire.OwnerAskRiskOpen
 	}
 	return assistantwire.OwnerAskRiskSafe
@@ -141,16 +141,20 @@ func (s *Service) pushDecision(ctx context.Context, id string) bool {
 func (s *Service) pushDecisionErr(ctx context.Context, id string) (bool, error) {
 	a, ok := s.askCopy(id)
 	t, found := s.todoNow(id)
-	if !ok || !found || !decideAsk(&a) || a.Recommend == "" || !a.AcceptedAt.IsZero() || t.Origin == "" ||
-		!a.RecheckAt.IsZero() || ownerDecisionReturned(t.Supervision) {
+	if !ok || !found || !decideAsk(&a) || a.Recommend == "" || !a.AcceptedAt.IsZero() ||
+		a.OutsideID == "" && t.Origin == "" || !a.RecheckAt.IsZero() || ownerDecisionReturned(t.Supervision) {
 		return false, nil
 	}
 	here := s.settings(ctx).MachineID
-	if s.muted(here, t.Origin) || s.inHealth(ctx, t.Origin) {
+	sessionID := t.Origin
+	if a.OutsideID != "" && sessionID == "" {
+		sessionID = s.settings(ctx).Main // a standalone decision opens the main chat's Needs you
+	}
+	if s.muted(here, sessionID) || s.inHealth(ctx, sessionID) {
 		return false, nil
 	}
 	l := s.lang(ctx)
-	n := Notification{ID: "ntf_" + randomHex(8), Kind: assistantwire.NotifyDecide, Subtitle: "Persona", DeviceID: here, SessionID: t.Origin,
+	n := Notification{ID: "ntf_" + randomHex(8), Kind: assistantwire.NotifyDecide, Subtitle: "Persona", DeviceID: here, SessionID: sessionID,
 		Title: i18n.T(l, "assistant-reports.verdict_title", i18n.Args{"task": clip(oneLine(t.Title), 30)}),
 		Body:  verdictText(l, &a) + "\n" + recommendText(l, &a),
 		// A decision the owner must take now: P0 interrupts even with the hub's push tiering on, every time it is
