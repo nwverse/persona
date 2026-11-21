@@ -145,6 +145,7 @@
     <string name="chat_request_collapse_full">收起完整页</string>
     <string name="chat_request_allow">允许</string>
     <string name="chat_request_deny">拒绝</string>
+    <string name="chat_request_owner_reply">回复“%1$s”，仅此一次</string>
     <string name="chat_request_always_allows">总是同意会放行：%1$s</string>
     <string name="chat_request_fill_in_allow">填写并允许</string>
     <string name="chat_request_secret_run_commands">依次运行的命令</string>

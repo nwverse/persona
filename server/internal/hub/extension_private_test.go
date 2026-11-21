@@ -565,3 +565,54 @@ func TestRestrictedSessionQueueRoutes(t *testing.T) {
 		}
 	}
 }
+
+// The action routes refuse what the read routes hide (#12216): an extension's token cannot resolve or choose on a
+// pending card it is never shown (a health-space card, one whose directory is in the space, or a private card). The
+// answer is the same 404 a nonexistent card gets and nothing is forwarded to the manager; a card it is shown still
+// goes through.
+func TestExtensionCardActionsRefuseHiddenPendingCards(t *testing.T) {
+	h, url, _, b := reachHub(t)
+	health := identity.HealthDir("/home/me")
+	h.takeFleetSessions(assistantwire.FleetSessions{MachineID: "mb", Sessions: []proto.Session{
+		{MachineID: "mb", SessionID: "b1", Title: "B-SESSION", Cwd: "/work/project"},
+		{MachineID: "mb", SessionID: "bh", Title: "HEALTH-SESSION", Cwd: health, Assistant: true, Space: "health"},
+	}})
+	eventually(t, 5*time.Second, "mb's sessions", func() bool { _, ok := h.localMachine("mb").session("bh"); return ok })
+	cards := []proto.Interaction{
+		{ID: "ix_ok", MachineID: "mb", SessionID: "b1", Cwd: "/work/project", Kind: proto.IxQuestion, Summary: "OK-CARD"},
+		{ID: "ix_health", MachineID: "mb", SessionID: "bh", Kind: proto.IxQuestion, Summary: "HEALTH-CARD"},
+		{ID: "ix_health_cwd", MachineID: "mb", SessionID: "b1", Cwd: health, Kind: proto.IxQuestion, Summary: "HEALTH-CWD-CARD"},
+		{ID: "ix_private", MachineID: "mb", SessionID: "b1", Cwd: "/work/project", Kind: proto.IxQuestion, Private: true, Summary: "PRIVATE-CARD"},
+	}
+	for _, ix := range cards {
+		if err := b.peer.Notify(assistantwire.EventFleetInteraction, assistantwire.FleetInteraction{Interaction: ix}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, 5*time.Second, "the cards", func() bool { return h.interactionOwner("ix_private") != "" })
+
+	hidden := []string{"ix_health", "ix_health_cwd", "ix_private"}
+	for _, id := range hidden {
+		if code, body := extDo(t, url, http.MethodPost, "/api/v1/interactions/"+id+"/resolve", `{"cancel":true}`, nil); code != http.StatusNotFound {
+			t.Errorf("resolve %s: %d %s, want 404", id, code, body)
+		}
+		if code, body := extDo(t, url, http.MethodPost, "/api/v1/interactions/"+id+"/choose", `{"options":[0],"rev":"r1"}`, nil); code != http.StatusNotFound {
+			t.Errorf("choose %s: %d %s, want 404", id, code, body)
+		}
+	}
+	// The route-scope check (extensions.authorize) names the path, but the action must never be forwarded to the
+	// manager: no http.request carrying a hidden card's id leaves the hub.
+	for _, line := range strings.Split(b.log(), "\n") {
+		if strings.HasPrefix(line, assistantwire.MethodHTTP+" ") && (strings.Contains(line, "ix_health") || strings.Contains(line, "ix_private")) {
+			t.Fatalf("a hidden card action reached the manager: %s", line)
+		}
+	}
+	// A card the extension is shown is not refused by the new guard: the resolve is forwarded (an http.request carrying
+	// its id), not answered 404.
+	if code, body := extDo(t, url, http.MethodPost, "/api/v1/interactions/ix_ok/resolve", `{"cancel":true}`, nil); code == http.StatusNotFound {
+		t.Fatalf("a visible card's resolve was refused as hidden: %d %s", code, body)
+	}
+	if !strings.Contains(b.log(), assistantwire.MethodHTTP+" ") || !strings.Contains(b.log(), "ix_ok/resolve") {
+		t.Fatalf("a visible card's resolve was not forwarded:\n%s", b.log())
+	}
+}
