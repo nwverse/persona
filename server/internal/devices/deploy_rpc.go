@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/nodeproto"
+	"github.com/nwverse/persona/server/internal/nodeupdate"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -341,7 +342,7 @@ func (m *Machine) sendNodeUpdate(ctx context.Context, bin string, record *nodeDe
 		m.deployPreflight = nil
 		m.mu.Unlock()
 	}()
-	commit, cancelCommit := context.WithTimeout(ctx, 30*time.Second)
+	commit, cancelCommit := context.WithTimeout(ctx, deployCommitWait())
 	err = peer.Call(commit, "node.update.commit", map[string]any{"id": begin.ID}, nil)
 	cancelCommit()
 	if err != nil {
@@ -356,6 +357,12 @@ func (m *Machine) sendNodeUpdate(ctx context.Context, bin string, record *nodeDe
 	committed = true
 	return m.confirmNodeDeployment(ctx, record, preflight.failed)
 }
+
+// deployCommitWait is how long a deploy waits for node.update.commit's answer. The node answers only after the
+// upload's self-checks, which endpoint protection scanning a new file can hold for up to a minute each
+// (nodeupdate.CommitWait). Waiting less takes a slow answer for a lost one: the deploy then waits for a reconnect, and a
+// check that failed shows as not_confirmed two minutes later instead of as itself.
+func deployCommitWait() time.Duration { return nodeupdate.CommitWait() + 10*time.Second }
 
 func (m *Machine) confirmNodeDeployment(ctx context.Context, record *nodeDeployRecord, preflightFailed <-chan error) error {
 	select {

@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/nodeproto"
+	"github.com/nwverse/persona/server/internal/nodeupdate"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -124,5 +125,15 @@ func TestNodeUpdateRelayInvalidRequestsNeverReachNode(t *testing.T) {
 	}
 	if got := tn.await(t, 0); len(got) != 0 {
 		t.Fatalf("invalid request reached node: %v", got)
+	}
+}
+
+// The relay waits for node.update.commit at least as long as the node may take to answer it.
+func TestNodeUpdateRelayWaitsForCommit(t *testing.T) {
+	if got := nodeUpdateRelayLimit("node.update.commit"); got <= nodeupdate.CommitWait() {
+		t.Fatalf("the relay waits %s for node.update.commit, the node may take %s", got, nodeupdate.CommitWait())
+	}
+	if got := nodeUpdateRelayLimit("node.update.chunk"); got != 45*time.Second {
+		t.Fatalf("a chunk waits %s, want 45s as before", got)
 	}
 }

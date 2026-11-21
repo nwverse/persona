@@ -28,6 +28,12 @@ type CheckLimits struct {
 // checkLimits are the update's own: staging, signing and rollback checks.
 var checkLimits = CheckLimits{FirstRun: 60 * time.Second, Repeat: 20 * time.Second}
 
+// CommitWait is the most Manager.Commit takes before it answers: the upload's node-update-check and, with a Signer, those
+// of up to two signed copies (with the certificate, then ad hoc). Each is a new file, so each may take FirstRun while
+// endpoint protection scans it; signing and the rest get the margin. Whoever waits for node.update.commit (the hub's
+// deploy, devices/deploy_rpc.go, and its relay) waits longer than this, or it takes a slow answer for a lost one.
+func CommitWait() time.Duration { return 3*checkLimits.FirstRun + 30*time.Second }
+
 // passedChecks remembers files whose check passed, so their next runs get the Repeat limit. A file replaced or
 // rewritten at the same path no longer matches its entry and gets FirstRun again.
 var passedChecks = struct {
