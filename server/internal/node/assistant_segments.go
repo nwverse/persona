@@ -87,26 +87,29 @@ func (n *Node) assistantSegment(ctx context.Context, method string, raw json.Raw
 	launcher, _ := p["launcher"].(string)
 	if method == "assistant.segment.check" {
 		agent := ""
-		switch {
-		case launcher == "claude" || launcher == "codex":
-			agent = launcher
-		default:
-			if provider, known := n.managedLauncher(launcher); known {
-				agent = provider.AgentType()
-			} else if !proto.IsExternalLauncher(launcher) {
-				agent = n.launcherProbeCached(ctx, launcher).Agent
-			} else {
-				var err error
-				agent, err = n.assistantAgent(ctx, launcher)
-				if err != nil {
-					return nil, err
+		runtime := n.assistantRuntime(launcher)
+		if runtime == nil {
+			switch {
+			case launcher == "claude" || launcher == "codex":
+				agent = launcher
+			default:
+				if provider, known := n.managedLauncher(launcher); known {
+					agent = provider.AgentType()
+				} else if !proto.IsExternalLauncher(launcher) {
+					agent = n.launcherProbeCached(ctx, launcher).Agent
+				} else {
+					var err error
+					agent, err = n.assistantAgent(ctx, launcher)
+					if err != nil {
+						return nil, err
+					}
 				}
 			}
 		}
 		engine := proto.AssistantExecutionIdentity(agent, "", "", launcher)
 		policy := agent == "claude" || agent == "codex"
 		registered := policy
-		if h := n.assistantRuntime(launcher); h != nil {
+		if h := runtime; h != nil {
 			registered = true
 			h.mu.Lock()
 			agent = h.hello.Agent

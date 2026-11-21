@@ -29,6 +29,9 @@ func prepareLogicalSwitch(t *testing.T, d *DB) ConversationSwitch {
 	if err := d.BeginConversationSwitch(ctx, "root-machine", "root-chat", other); !errors.Is(err, ErrConversationSwitchBusy) {
 		t.Fatalf("two unfinished switches: %v", err)
 	}
+	if err := d.PutConversationHandoff(ctx, "root-machine", "root-chat", op.OperationID, json.RawMessage(`{"summary":"fake compaction result"}`)); err != nil {
+		t.Fatal(err)
+	}
 	if err := d.PrepareConversationSegment(ctx, "root-machine", "root-chat", op.OperationID, conversationlog.Segment{ID: "second", MachineID: "target-machine", SessionID: "target-chat", Engine: "codex", SourceHistory: "source-two"}, 100); err != nil {
 		t.Fatal(err)
 	}
@@ -533,6 +536,10 @@ func TestAcceptedInputKeepsOnlyDigestAndCannotReplayAfterPayloadCleanup(t *testi
 	}
 	if row, err := d.ClaimConversationInput(ctx, "root-machine", "root-chat", 2); err != nil || row == nil {
 		t.Fatalf("claim: %+v %v", row, err)
+	}
+	var before []byte
+	if err := d.pool.QueryRow(ctx, `SELECT handoff FROM conversation_switches WHERE operation_id=$1`, op.OperationID).Scan(&before); err != nil || len(before) == 0 {
+		t.Fatalf("fixture has no handoff to clean: %q %v", before, err)
 	}
 	if err := d.ResolveConversationDelivery(ctx, "root-machine", "root-chat", "receipt", 2, op.OperationID, "accepted"); err != nil {
 		t.Fatal(err)

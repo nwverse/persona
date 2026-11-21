@@ -94,3 +94,29 @@ func TestSegmentRetirementWaitsForRuntimeApprovalToSettle(t *testing.T) {
 		}
 	}
 }
+
+func TestSegmentCheckKeepsRuntimeIdentitySeparateWithoutStartingItsCLI(t *testing.T) {
+	n, _ := runtimeNode(t)
+	hello := assistantRuntimeHello()
+	hello["agent"] = "claude"
+	runtime := dialRuntime(t, n, hello)
+	raw, err := nodeCall(t, n, "assistant.segment.check", map[string]any{"launcher": "dsh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var target struct {
+		Engine      string `json:"engine"`
+		Registered  bool   `json:"registered"`
+		Supervision bool   `json:"supervision_policy"`
+	}
+	if json.Unmarshal(raw, &target) != nil || target.Engine != "claude|runtime:dsh" || !target.Registered || target.Supervision {
+		t.Fatalf("runtime contract: %s", raw)
+	}
+	native, err := nodeCall(t, n, "assistant.segment.check", map[string]any{"launcher": "claude"})
+	if err != nil || strings.Contains(string(native), target.Engine) {
+		t.Fatalf("native and runtime collapsed: %s %v", native, err)
+	}
+	if len(runtime.got("session.start")) != 0 || len(runtime.got("session.send")) != 0 {
+		t.Fatal("checking execution identity started or sent a turn")
+	}
+}
