@@ -19,6 +19,8 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     var herdrVersion: String?
     var claudeVersion: String?
     var lastSeen: Date?
+    /// The hub's synchronous budget for a new Codex start. Nil from older hubs or nodes.
+    var codexStartBudgetMS: Int64? = nil
     /// The machine's personad is not from the hub's build (newer hubs): some answers may be refused until it is deployed.
     var nodeMismatch: Bool?
     /// The machine's personad build.
@@ -77,6 +79,7 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
         case engineHosts = "engine_hosts", engineDefault = "engine_default"
         case errorCode = "error_code"
         case sshHost = "ssh_host", herdrVersion = "herdr_version", claudeVersion = "claude_version", lastSeen = "last_seen"
+        case codexStartBudgetMS = "codex_start_budget_ms"
         case nodeMismatch = "node_mismatch", nodeVersion = "node_version", deploying, deployError = "deploy_error"
         case canDeploy = "can_deploy", deployReason = "deploy_reason", deployPhase = "deploy_phase"
         case linkSwitch = "link_switch"
@@ -137,6 +140,7 @@ extension Machine {
         herdrVersion = try c.decodeIfPresent(String.self, forKey: .herdrVersion)
         claudeVersion = try c.decodeIfPresent(String.self, forKey: .claudeVersion)
         lastSeen = try c.decodeIfPresent(Date.self, forKey: .lastSeen)
+        codexStartBudgetMS = try? c.decodeIfPresent(Int64.self, forKey: .codexStartBudgetMS)
         nodeMismatch = try c.decodeIfPresent(Bool.self, forKey: .nodeMismatch)
         nodeVersion = try c.decodeIfPresent(String.self, forKey: .nodeVersion)
         deploying = try c.decodeIfPresent(Bool.self, forKey: .deploying)

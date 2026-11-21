@@ -1021,10 +1021,15 @@ nonisolated struct APIClient: Sendable {
         }
     }
 
-    func start(_ req: StartRequest) async throws -> Session {
+    func start(_ req: StartRequest, codexStartBudgetMS: Int64? = nil) async throws -> Session {
         var body = req
         body.prompt = req.prompt.map { HubNaming.outbound($0, canonical: personaNaming) }
-        return stamp(try await post("/api/v1/sessions", body: body, timeout: req.async == true ? 20 : 110, as: SessionResponse.self).session)
+        var timeout: TimeInterval = req.async == true ? 20 : 110
+        if req.resumeSessionID == nil, let budget = codexStartBudgetMS, budget > 0 {
+            // Allow the hub's response to arrive, including when it resolves a launcher to synchronous Codex.
+            timeout = max(timeout, TimeInterval(budget) / 1000 + 10)
+        }
+        return stamp(try await post("/api/v1/sessions", body: body, timeout: timeout, as: SessionResponse.self).session)
     }
 
     struct CodexTakeoverInfo: Decodable, Sendable {

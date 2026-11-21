@@ -29,8 +29,9 @@ class HttpAgentCreationService(
     private val base = baseUrl.toHttpUrl()
     private val http = client.newBuilder().followRedirects(false).followSslRedirects(false)
         .retryOnConnectionFailure(false).build()
-    // Match the start endpoint's timeout budget; actual startup latency has not been measured.
-    private val startHttp = http.newBuilder().readTimeout(130, TimeUnit.SECONDS).build()
+    // The hub bounds new session startup using the node's configuration, which can exceed a fixed read timeout.
+    private val startHttp = http.newBuilder().readTimeout(0, TimeUnit.SECONDS).build()
+    private val worktreeHttp = http.newBuilder().readTimeout(130, TimeUnit.SECONDS).build()
     // The hub gives the node 70 s to ask the launcher's CLI for its models (it starts it once, then caches the list).
     private val modelsHttp = http.newBuilder().readTimeout(75, TimeUnit.SECONDS).build()
     private fun url(vararg segments: String) = base.newBuilder().apply { segments.forEach(::addPathSegment) }.build()
@@ -182,10 +183,10 @@ class HttpAgentCreationService(
         }
     }
 
-    // git can take a while on a big repository: the start's budget, not the list's.
+    // Git can take a while on a big repository.
     private suspend fun worktree(machineId: String, action: String, body: JsonObject) = read(
         request("api", "v1", "machines", machineId, "worktree", action).post(body.toString().toRequestBody("application/json".toMediaType())).build(),
-        startHttp)
+        worktreeHttp)
 
     private fun outcome(body: JsonObject): AgentStartResult {
         val session = body["session"] as? JsonObject

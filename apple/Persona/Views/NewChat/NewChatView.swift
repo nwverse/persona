@@ -1248,7 +1248,8 @@ struct NewChatView: View {
                                                   permissionMode: listsModes ? StartModes.sent(providerMode, for: runEntry) : nil,
                                                   effort: listsModes ? providerEffortSent : nil,
                                                   model: sentModel, tabName: name.isEmpty ? nil : name,
-                                                  nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID))
+                                                  nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID),
+                                            codexStartBudgetMS: machine?.codexStartBudgetMS)
                 UserDefaults.standard.set(launcher, forKey: "launcher.\(machineID)")
                 UserDefaults.standard.set(cwd, forKey: "cwd.\(machineID)")
                 record(setup)
@@ -1267,7 +1268,8 @@ struct NewChatView: View {
                                               effort: limitedModes ? providerEffortSent : (effort.isEmpty ? nil : effort),
                                               model: sentModel, tabName: name.isEmpty ? nil : name,
                                               async: true, nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID,
-                                              ultracode: sendsUltracode ? true : nil))
+                                              ultracode: sendsUltracode ? true : nil),
+                                        codexStartBudgetMS: machine?.codexStartBudgetMS)
             if !unifiedModels {
                 UserDefaults.standard.set(launcher, forKey: "launcher.\(machineID)")
                 // The remembered effort is Claude Code's: a limited launcher's start leaves it as it was (#8261).

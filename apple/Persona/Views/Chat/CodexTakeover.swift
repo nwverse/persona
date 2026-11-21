@@ -64,7 +64,7 @@ final class CodexTakeoverCoordinator {
                 pending = .continuation(session, info)
                 return nil
             }
-            return try await executeContinuation(session, info: info, api: api)
+            return try await executeContinuation(session, info: info, api: api, model: model)
         } catch { return fail(error.localizedDescription) }
     }
 
@@ -83,7 +83,7 @@ final class CodexTakeoverCoordinator {
         do {
             switch pending {
             case .takeover: return try await executeTakeover(session, info: info, confirmStop: true, api: api)
-            case .continuation: return try await executeContinuation(session, info: info, api: api)
+            case .continuation: return try await executeContinuation(session, info: info, api: api, model: model)
             }
         } catch { return fail(error.localizedDescription) }
     }
@@ -98,9 +98,10 @@ final class CodexTakeoverCoordinator {
         }
     }
 
-    private func executeContinuation(_ session: Session, info: APIClient.CodexTakeoverInfo, api: APIClient) async throws -> Session {
+    private func executeContinuation(_ session: Session, info: APIClient.CodexTakeoverInfo, api: APIClient, model: AppModel) async throws -> Session {
         try await api.start(.init(machineID: session.machineID, cwd: info.cwd, launcher: "codex",
-                                  prompt: info.continuationPrompt, async: false, todoID: session.todo?.id))
+                                  prompt: info.continuationPrompt, async: false, todoID: session.todo?.id),
+                            codexStartBudgetMS: model.machine(session.key.machineRef)?.codexStartBudgetMS)
     }
 
     private func fail(_ message: String) -> Session? { error = message; return nil }

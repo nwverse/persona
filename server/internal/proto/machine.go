@@ -24,6 +24,8 @@ type Machine struct {
 	HerdrVersion  string    `json:"herdr_version,omitempty"`
 	ClaudeVersion string    `json:"claude_version,omitempty"`
 	LastSeen      time.Time `json:"last_seen,omitempty"`
+	// CodexStartBudgetMS is the hub's response deadline for new Codex starts on this machine.
+	CodexStartBudgetMS int64 `json:"codex_start_budget_ms,omitempty"`
 	// NodeVersion is the machine's personad build. NodeMismatch: the hub offers to redeploy the node, because it runs
 	// another build than the hub's (deploy.sh missed it, or it was installed on its own) or because its manager cannot
 	// drive it (NodeIncompatible). Another build alone is an upgrade offer, not a fault: whether the node can be used
@@ -231,6 +233,9 @@ type NodeInfo struct {
 	// ClaudePlugin is the Persona plugin for Claude Code there (claudeplugin.go): nil from older nodes and from a
 	// node that has not checked yet.
 	ClaudePlugin *ClaudePlugin `json:"claude_plugin,omitempty"`
+	// CodexStartWait is the readiness wait on this node for a fresh Codex terminal, in nanoseconds.
+	// Older nodes omit it, so the hub uses its previous synchronous start budget.
+	CodexStartWait time.Duration `json:"codex_start_wait_ns,omitempty"`
 }
 
 // System is what a machine is: OS, hardware, since when it runs (sysmon; docs/server/machines.md). Read once when the node

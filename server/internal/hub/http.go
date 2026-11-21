@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -964,7 +965,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		parent = context.WithoutCancel(parent)
 	}
 	startedAt := time.Now()
-	budget := startBudget(async && !p.WorkSession)
+	budget := startBudget(async && !p.WorkSession, 0)
 	ctx, cancel := context.WithDeadline(parent, startedAt.Add(budget))
 	defer cancel()
 	var res struct {
@@ -996,8 +997,15 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	resolvedLauncher, _ := params["launcher"].(string)
 	resolvedAgent, _ := params["agent_type"].(string)
 	async = startsAsync(p.Async, p.ResumeSessionID, resolvedLauncher, resolvedAgent)
-	if resolvedBudget := startBudget(async && !p.WorkSession); resolvedBudget != budget {
-		// The manager may have found a synchronous launcher after the request was admitted.
+	var codexWait time.Duration
+	if p.ResumeSessionID == "" && (resolvedAgent == "codex" || (resolvedAgent == "" && resolvedLauncher == "codex")) {
+		delete(params, "async") // A Codex start answers with the actual session after startup.
+		m.mu.Lock()
+		codexWait = m.info.CodexStartWait
+		m.mu.Unlock()
+	}
+	if resolvedBudget := startBudget(async && !p.WorkSession, codexWait); resolvedBudget != budget {
+		// Use the resolved launcher and the node's startup limit before dispatching the start.
 		cancel()
 		resolvedCtx, cancelResolved := context.WithDeadline(parent, startedAt.Add(resolvedBudget))
 		defer cancelResolved()
@@ -1146,16 +1154,19 @@ func startEngine(info proto.NodeInfo) string {
 // startsAsync: a start the app asked to have answered at once is, when the node can acknowledge it before the session
 // is ready (only Claude can, and not a resume).
 func startsAsync(asked bool, resume, launcher, agentType string) bool {
-	return asked && resume == "" && (agentType == "claude" || (agentType == "" && launcher != "agy"))
+	return asked && resume == "" && (agentType == "claude" || (agentType == "" && launcher != "agy" && launcher != "codex"))
 }
 
 // startBudget is how long a start may take: one acknowledged before the session is ready a moment, one answered only
 // after startup (a sync one, Codex, a compatible CLI) as long as a busy machine needs.
-func startBudget(async bool) time.Duration {
+func startBudget(async bool, codexWait time.Duration) time.Duration {
 	if async {
 		return 15 * time.Second
 	}
-	return 100 * time.Second
+	const syncBudget = 100 * time.Second
+	// Keep the same allowance the synchronous path had around Codex's original 60-second wait.
+	const startupOverhead = syncBudget - 60*time.Second
+	return max(syncBudget, min(codexWait, math.MaxInt64-startupOverhead)+startupOverhead)
 }
 
 // ---- WebSocket ----
