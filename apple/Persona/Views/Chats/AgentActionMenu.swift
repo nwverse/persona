@@ -48,6 +48,9 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
     var terminalResume: TerminalResume
     var phone: Bool
     var paneActions: Bool
+    /// Move To…'s choices (#11516, `DirectionFilings.offers`): none, no Move To… (no `direction_sessions`, another
+    /// manager's page, an Agent that follows its supervised task).
+    var moveChoices: [DirectionFilings.Choice]
 
     /// From the model: only `AgentActionMenuReader` may, so what the facts read is observed by the menu alone, never
     /// by a row or a header that holds it (#10231). Elsewhere this does not compile.
@@ -66,7 +69,8 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
                   hosted: hosted, showsSpace: showsSpace,
                   terminalResume: session.status == .offline || session.status == .unknown
                     ? session.terminalResume(on: model.machine(session.key.machineRef)) : .hidden,
-                  phone: AgentMenuFacts.isPhone)
+                  phone: AgentMenuFacts.isPhone,
+                  moveChoices: DirectionFilings.shared.offers(session.key, in: model))
     }
 
     /// Test and preview construction needs no live hub. Production uses the model initializer above.
@@ -74,7 +78,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
          paneBadges: [SessionPane: String] = [:], currentPane: SessionPane = .chat, review: Bool = false,
          preview: Bool = false, screen: Bool = false, todoHub: Bool = false, sideCount: Int = 0,
          hosted: Bool = false, showsSpace: Bool = true, terminalResume: TerminalResume = .hidden,
-         phone: Bool = false, git: GitStatus? = nil) {
+         phone: Bool = false, git: GitStatus? = nil, moveChoices: [DirectionFilings.Choice] = []) {
         key = session.key
         self.session = session
         self.pinned = pinned
@@ -94,6 +98,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
         self.terminalResume = terminalResume
         self.phone = phone
         paneActions = NodeMenu.offersPaneActions(session)
+        self.moveChoices = moveChoices
     }
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
@@ -112,6 +117,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
             && a.session.todo == b.session.todo
             && a.session.subagents?.count == b.session.subagents?.count && a.session.spaceID == b.session.spaceID
             && a.session.paneID == b.session.paneID && a.paneActions == b.paneActions
+            && a.moveChoices == b.moveChoices
     }
 
     /// The complete ordered inventory, including the nested node actions as separate entries.
@@ -142,6 +148,8 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
             if session.todo != nil { add(.todo, .session); add(.moveTodo, .session); add(.unlinkTodo, .session) }
             else { add(.linkTodo, .session) }
         }
+        // After the to-do's own entries, so Move To… reads apart from Move to Another To-do… (#11516).
+        if !moveChoices.isEmpty { add(.moveTo, .session) }
         if session.loop != nil { add(.stopLoop, .session) }
         add(.handToPersona, .session)
         if screen { add(.screen, .session) }
@@ -197,7 +205,7 @@ nonisolated struct AgentActionItem: Equatable, Identifiable, Sendable {
     enum ID: String, Sendable {
         case backToChat, files, git, review, preview, subagents, sideSessions, space
         case attach, interrupt, markSeen, takeover, continueInNewSession, rename, pin, mute
-        case todo, moveTodo, unlinkTodo, linkTodo, stopLoop, handToPersona, screen
+        case todo, moveTodo, unlinkTodo, linkTodo, moveTo, stopLoop, handToPersona, screen
         case copyDirectory, terminal, copyResume, resume
         case splitPane, splitRight, splitDown, nodeGit, gitPull, gitPush, gitFetch, closeTab, close, delete
     }
@@ -361,6 +369,12 @@ struct AgentActionMenu: View, Equatable {
                     catch { model.show(error) }
                 }
             } label: { Label("Unlink", systemImage: Theme.Icon.link) }
+        case .moveTo:
+            MoveToChoices(choices: facts.moveChoices) { choice in
+                guard let s = now() else { return }
+                DirectionFilings.shared.move(s.key, title: s.displayTitle, state: s.state, to: choice,
+                                             from: DirectionFilings.shared.placed(s.key, in: model.directionTree))
+            }
         case .stopLoop:
             Button(role: .destructive) { model.stopLoop(facts.key) } label: { Label("Stop Loop", systemImage: Theme.Icon.stopLoop) }
         case .handToPersona:

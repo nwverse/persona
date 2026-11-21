@@ -53,6 +53,9 @@ struct AssistantView: View {
     #endif
     /// The last shell request shown (`ShellState.request`'s serial).
     @State private var handledRequest = 0
+    /// The leader conversation a direction's page was just opened over from the sidebar (#11516): its becoming current
+    /// is not the user leaving the page, which is already over it.
+    @State private var directionLanding: SessionKey?
     /// The sidebar's place in front and the paths of the places left (docs/design/sidebar-navigation.md).
     @State private var places = ShellPlaces()
     /// A first message whose start failed (#1368): it stays on the page until it is sent again or deleted.
@@ -337,6 +340,7 @@ struct AssistantView: View {
             #endif
         }
         .navigationDestination(item: $openedExtension) { ExtensionNavPage(route: $0) }
+        .navigationDestination(for: DirectionPageRoute.self) { DirectionPage(id: $0.id) }
         .navigationDestination(isPresented: $showHealth) {
             HealthView(disabled: shownStart != nil, launcher: healthLauncherPick, launcherModel: healthModelPick, mode: $starterMode, effort: $starterEffort) { text, images in
                 Task { await start(text, images, space: Session.healthSpace) }
@@ -447,8 +451,17 @@ struct AssistantView: View {
                 // The app picking the main conversation by itself once the hub answers (none was open) is not the user
                 // opening one: any page already pushed at launch stays. User-driven changes leave the conversation but
                 // keep the place's stack for a later return (`ShellPlaces`).
+                if let landing = directionLanding, landing == new {
+                    directionLanding = nil
+                    return // a direction's page was put over it already (`openDirectionPage`)
+                }
                 if AssistantCurrentNavigation.keepsPushedPages(old: old, new: new, main: model.assistantMain) { return }
                 leavePlace()
+            }
+            // A direction's page, from its sidebar row's All › or its leader conversation's title menu (#11516).
+            .onChange(of: DirectionPages.shared.ask?.serial, initial: true) { _, serial in
+                guard let serial, let ask = DirectionPages.shared.take(serial) else { return }
+                openDirectionPage(ask)
             }
             .onChange(of: model.hub?.group) { old, new in
                 if old != new { model.forgetMainClear() }
@@ -712,6 +725,29 @@ struct AssistantView: View {
         #endif
         places.leave(with: navPath.wrappedValue)
         underDrawer { backToRoot() }
+    }
+
+    /// A direction's page (#11516, `DirectionPage`), pushed one level over its leader conversation: ‹ and the edge swipe
+    /// come back to the conversation. From the title menu it is pushed as any page. From the sidebar the conversation
+    /// becomes the current place with the page already over it, without animation, and then the drawer closes: an
+    /// exception to a sidebar pick being a root (docs/design/DESIGN_SYSTEM.md 3.5), since the page is the conversation's
+    /// own drill-down and its ‹ has somewhere to go. On the iPad the same happens in the detail column.
+    private func openDirectionPage(_ ask: DirectionPages.Ask) {
+        let route = DirectionPageRoute(id: ask.id)
+        guard ask.fromSidebar else { return navPath.wrappedValue.append(route) }
+        model.shellSettings = false
+        shell?.select(0, animated: false)
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            leavePlace()
+            if current != ask.lead {
+                directionLanding = ask.lead
+                model.assistantCurrent = ask.lead
+            }
+            navPath.wrappedValue.append(route)
+        }
+        activeDrawer.close()
     }
 
     /// While the drawer is out the page is under it: it changes at once, and the drawer's closing is the only motion.

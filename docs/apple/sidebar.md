@@ -118,8 +118,35 @@ Pinned group at all.
   button says, with Expanded / Collapsed.
 - **Secretary** (书记官): no row in the sidebar (the main conversation's row stands for it, #4331); its to-dos are in the
   To-dos and Agents pages' Pinned grouping.
-- **Code**: `AssistantSidebarDirections.swift` (`AssistantSidebarDirection`);
-  `AssistantSidebar.swift` only places them where the direction rows were. Tests: `DirectionTreeTests`.
+- **Filed sessions and All ›** (#11516): while the hub lists `direction_sessions` and the app holds the default manager's
+  tree (`DirectionFilings.shows`), the open row lists after its to-dos the tree's `sessions`, the live sessions the owner
+  filed there or its leader opened (`working` or `needs_you`). They are drawn as the Agent rows are (state dot, title,
+  state word, one level in from the head like the to-dos), keyed by `machine_id/session_id`, and a tap closes the drawer
+  and opens the session. A last row, **All ›** (全部 / すべて), opens the page of everything under the direction
+  (`DirectionPage`, `docs/design/DESIGN_SYSTEM.md` 3.4 "A direction's page"). "No open to-dos" shows only while there are
+  neither to-dos nor filed rows. The row's "N need you" is unchanged: filings change neither `counts` nor `running`
+  (whether they should is #5974). Filing takes nothing out of Recent, All Chats or the Agents list, so a filed session
+  that needs you keeps its state wherever it was shown. Why a row of its own and not a section: the open row already is
+  the direction's short list, and its to-dos and its filed sessions are one owner's matter; the page has the rest.
+  `DirectionFiledRows` reads the tree's `sessions` and the moves out, so nothing else redraws for them (P5).
+- **Move To…** (移到… / 移動…, #11516): the long-press menu of a conversation row, here and in All Chats, after Pin,
+  and the Agent menus (row and the chat's ⋯, after the to-do's own entries) file the session under one of the current
+  directions, by name in the tree's order, or **On Its Own**. Not offered on the main conversation, the background
+  supervisor, a current leader conversation, an Agent of an open supervised to-do or a session under one (it follows
+  its task; the hub's 409 `direction_supervised_task` covers a lag), or another hub's session; an Agent on the owner's own
+  unsupervised to-do is offered it. Where the session is drawn under a direction (this row, the page) it moves at once
+  and says Moving… until the hub answers; a refusal puts it back with the hub's sentence. A change shows a toast with
+  Undo (`Toast` with an action, as the calendar's move), which sends the answer's `previous` exactly, `null` written out.
+  It is sent once, only while the hub is reachable, never held for later; a lost answer reads the tree and the page
+  again and offers no Undo (`DirectionFilings`). A manager that answers the routes 404 or 405 without their codes hides
+  every entry until the next hello.
+- **Unpin** keeps what was filed: while the hub files sessions the confirmation adds "What you added to it stays." in a
+  string of its own (filings come back if the same chat is pinned again, `docs/assistant/unified-entry.md` "The
+  direction tree").
+- **Code**: `AssistantSidebarDirections.swift` (`AssistantSidebarDirection`, the rows `DirectionTaskRow`,
+  `DirectionAgentRow`, `DirectionFiledRows`), `DirectionPage.swift` (the page, `MoveToMenu`), `DirectionFilings.swift`;
+  `AssistantSidebar.swift` only places them where the direction rows were. Tests: `DirectionTreeTests`,
+  `DirectionFilingsTests`, `AgentActionMenuTests`, `DirectionRowsUITests` (with `MOCK_DIRECTION_SESSIONS=1`).
 
 ## Checks
 

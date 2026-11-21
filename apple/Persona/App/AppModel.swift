@@ -627,6 +627,9 @@ final class AppModel {
     /// Numbers the tree reads in the order they were asked; `directionTreeLanded` is the newest one whose answer was
     /// taken. An answer older than that is dropped; a read that fails moves neither, so it never makes an earlier
     /// good answer count as stale.
+    /// Counts the current hub's hellos (its socket connecting again): a page that reads on reconnect follows it, so it
+    /// reads on that alone and not on every push (#11516's page).
+    private(set) var hubHellos = 0
     @ObservationIgnored private var directionTreeAsk = 0
     @ObservationIgnored private var directionTreeLanded = 0
     @ObservationIgnored private var assistantRetryInFlight: Task<Void, Never>?
@@ -3076,6 +3079,11 @@ final class AppModel {
             if isHub { PersonalAgentSync.shared.received([]) }
             // The direction tree changes while the socket is down: read it again on every (re)connect (#4352).
             if isHub, let hubAPI = api { Task { await refreshDirectionTree(hubAPI) } }
+            // Its features say again whether the filing routes are there (#11516); an open page reads again (`hellos`).
+            if isHub {
+                DirectionFilings.shared.hello()
+                hubHellos += 1
+            }
             #if os(iOS)
             // `meeting_live` events sent while the socket was down are gone: the meetings on screen are read again (#3862).
             if isHub { MeetingConversation.shared.reconnected() }
@@ -4775,6 +4783,7 @@ final class AppModel {
         }
         directionTree = nil // the other hub's to-dos and sessions; `refreshAssistant` below reads this one's
         directionTreeLanded = directionTreeAsk // and a read already under way answers for the other one
+        DirectionFilings.shared.forget() // moves out to the other hub
         // The picked group's settings are read again: until that read finishes, the page shows its loading state.
         assistantConfigLoadFailed = false
         if let a = assistantCurrent, a.group != hub?.group { assistantCurrent = assistantMain }
@@ -4818,6 +4827,7 @@ final class AppModel {
         if switched || !assistantShows(nil) {
             directionTree = nil // the other manager's; `refreshAssistant` below reads this one's
             directionTreeLanded = directionTreeAsk // and a read already under way answers for the other one
+            DirectionFilings.shared.forget() // moves out to the other manager
         }
         assistantConfigLoadFailed = false
         readiness.forget()

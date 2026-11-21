@@ -568,6 +568,8 @@ struct AssistantTopBar: View {
             }
         }
         Section(menuTitle) {
+            // A leader conversation's first item: the page of everything under its direction (#11516).
+            DirectionPageMenuItem(key: key)
             // The Agent SDK could not run here (#2455): it says so, and why.
             if session?.runtimeFallback?.isEmpty == false,
                let r = AssistantRuntime.status(runtime: session?.runtime, fallback: session?.runtimeFallback) {
