@@ -91,6 +91,9 @@ func TestProtectedOrdinaryManagerSendKeepsExistingParams(t *testing.T) {
 	s, f := workService(t)
 	f.withMachine()
 	setSettings(t, s, func(v *Settings) { v.MachineID, v.MainMachineID, v.Main = "server", "server", "s1" })
+	if !s.protectedModelConversation(context.Background(), "server", "s1") {
+		t.Fatal("fixture is not the protected main conversation")
+	}
 	if err := s.sendToSession(context.Background(), "server", "s1", "ordinary manager message"); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +102,8 @@ func TestProtectedOrdinaryManagerSendKeepsExistingParams(t *testing.T) {
 	if len(f.agentSent) != 1 || f.agentSent[0]["text"] != "ordinary manager message" {
 		t.Fatalf("ordinary manager send changed: %v", f.agentSent)
 	}
-	for _, field := range []string{"model", "launcher", "is_main", "follows_setting"} {
+	// Service.call already attests is_main and supervision metadata independently of model selection.
+	for _, field := range []string{"model", "launcher"} {
 		if _, added := f.agentSent[0][field]; added {
 			t.Fatalf("ordinary send resolved model field %s", field)
 		}
