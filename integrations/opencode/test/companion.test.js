@@ -2,8 +2,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { DatabaseSync } from 'node:sqlite'
+import { createHash } from 'node:crypto'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
-import { createOpencodeCompanion } from '../lib/companion.js'
+import { parseCompanionArgs } from '../companion.mjs'
+import { buildAcpEnv, createOpencodeCompanion } from '../lib/companion.js'
 
 const T0 = Date.now() - 60_000
 
@@ -69,6 +71,7 @@ class FakeAcpClient extends EventEmitter {
     this.onNewSession = null
     this.onPrompt = null
     this.failModeSet = null
+    this.sessionState = new Map()
     this.configModels = [
       { value: 'opencode-go/claude-sonnet-4-6', name: 'opencode-go/Claude Sonnet 4.6' },
       { value: 'openai/gpt-5', name: 'openai/GPT-5' },
@@ -106,10 +109,14 @@ class FakeAcpClient extends EventEmitter {
     if (this.failModeSet && configId === 'mode' && value === this.failModeSet) {
       throw new Error('plan mode unavailable')
     }
+    const st = this.sessionState.get(sessionId) || { mode: 'build', model: 'opencode-go/claude-sonnet-4-6', variant: 'low' }
+    st[configId] = value
+    this.sessionState.set(sessionId, st)
     return {
       configOptions: [
-        { id: 'mode', category: 'mode', currentValue: configId === 'mode' ? value : 'build', options: [{ value: 'build', name: 'Build' }, { value: 'plan', name: 'Plan' }] },
-        { id: 'model', category: 'model', currentValue: configId === 'model' ? value : 'opencode-go/claude-sonnet-4-6', options: this.configModels },
+        { id: 'mode', category: 'mode', currentValue: st.mode, options: [{ value: 'build', name: 'Build' }, { value: 'plan', name: 'Plan' }] },
+        { id: 'model', category: 'model', currentValue: st.model, options: this.configModels },
+        { id: 'variant', category: 'reasoning', currentValue: st.variant, options: [{ value: 'low' }, { value: 'high' }] },
       ],
     }
   }
@@ -391,4 +398,236 @@ test('companion resumes a disk-only session via ACP session/load and supports in
 
   const pg = await n.peer.call('session.items', { session_id: 'ses_resume_1', limit: 10 })
   assert.equal(pg.items.at(-1).text, '已中断')
+})
+
+test('parseCompanionArgs honors --bin, --opencode-bin, --name, --display-name, PERSONA_OPENCODE_BIN, OPENCODE_BIN, and rejects unknown flags', () => {
+  const fromDocFlags = parseCompanionArgs(
+    ['--bin', '/opt/oc', '--name', 'My OC', '--model', 'openai/gpt-5', '--no-assistant'],
+    {},
+  )
+  assert.equal(fromDocFlags.bin, '/opt/oc')
+  assert.equal(fromDocFlags.name, 'My OC')
+  assert.equal(fromDocFlags.displayName, 'My OC')
+  assert.equal(fromDocFlags.model, 'openai/gpt-5')
+  assert.equal(fromDocFlags.assistant, false)
+
+  const fromAliases = parseCompanionArgs(['--opencode-bin', '/usr/bin/oc', '--display-name', 'Alias OC'], {})
+  assert.equal(fromAliases.bin, '/usr/bin/oc')
+  assert.equal(fromAliases.name, 'Alias OC')
+  assert.equal(fromAliases.displayName, 'Alias OC')
+
+  const fromEnv = parseCompanionArgs([], { PERSONA_OPENCODE_BIN: '/env/persona-oc', OPENCODE_BIN: '/env/old-oc' })
+  assert.equal(fromEnv.bin, '/env/persona-oc')
+  const fromLegacyEnv = parseCompanionArgs([], { OPENCODE_BIN: '/env/old-oc' })
+  assert.equal(fromLegacyEnv.bin, '/env/old-oc')
+
+  assert.throws(() => parseCompanionArgs(['--unknown-flag', '1'], {}))
+
+  const acpEnv = buildAcpEnv({ OPENCODE_PERMISSION: JSON.stringify({ read: 'allow', bash: 'allow' }) })
+  assert.deepEqual(JSON.parse(acpEnv.OPENCODE_PERMISSION), { read: 'allow', bash: 'ask', edit: 'ask', write: 'ask' })
+})
+
+test('companion enforces raw unclipped command gates, relative AGENTS.md rejection, start model switch without configOptions, default preservation, plan mode across ACP restart, effort switching, acceptEdits, live thinking, and v2 blob + client_msg_id', async (t) => {
+  const n = await startFakeNode(t, {
+    tools: [
+      { name: 'mail_send', description: 'Send mail', input_schema: { type: 'object', properties: {} }, shell: ['send-mail'] },
+    ],
+  })
+
+  // Build a v2 DB with a historical session, a blob-backed image, and 2 prior user messages.
+  const v2db = new DatabaseSync(':memory:')
+  v2db.exec(`
+    create table session_v2 (
+      id text primary key,
+      parent_id text,
+      directory text not null,
+      title text,
+      model text,
+      revert text,
+      time_created integer not null,
+      time_updated integer not null,
+      time_archived integer
+    );
+    create table session_message (
+      id text primary key,
+      session_id text not null,
+      seq integer not null,
+      type text not null,
+      data text not null,
+      time_updated integer not null
+    );
+    create table blob (
+      hash text primary key,
+      data blob not null
+    );
+    create table blob_ref (
+      hash text not null,
+      session_id text not null,
+      message_id text not null,
+      seq integer not null
+    );
+  `)
+  const imgBytes = Buffer.from('fake-png-bytes')
+  const imgHash = createHash('sha256').update(imgBytes).digest('hex')
+  v2db.prepare('insert into session_v2 (id, parent_id, directory, title, model, revert, time_created, time_updated, time_archived) values (?,?,?,?,?,?,?,?,?)')
+    .run('ses_v2_hist', null, '/w/v2', 'V2 Hist', null, null, T0, Date.now(), null)
+  v2db.prepare('insert into session_message (id, session_id, seq, type, data, time_updated) values (?,?,?,?,?,?)')
+    .run('u1', 'ses_v2_hist', 1, 'user', JSON.stringify({ text: 'first msg', files: [{ mime: 'image/png', uri: `media:${imgHash}` }] }), Date.now())
+  v2db.prepare('insert into session_message (id, session_id, seq, type, data, time_updated) values (?,?,?,?,?,?)')
+    .run('a1', 'ses_v2_hist', 2, 'assistant', JSON.stringify({ content: [{ type: 'text', text: 'first reply' }] }), Date.now())
+  v2db.prepare('insert into blob (hash, data) values (?,?)').run(imgHash, imgBytes)
+  v2db.prepare('insert into blob_ref (hash, session_id, message_id, seq) values (?,?,?,?)').run(imgHash, 'ses_v2_hist', 'u1', 1)
+
+  const acp = new FakeAcpClient()
+  let returnEmptyConfigOnNew = false
+  const origNew = acp.newSession.bind(acp)
+  acp.newSession = async (args) => {
+    if (returnEmptyConfigOnNew) {
+      acp.calls.push(['newSession', args])
+      const sessionId = `ses_acp_${acp.nextId++}`
+      acp.loadedSessions.add(sessionId)
+      return { sessionId } // No configOptions returned!
+    }
+    const res = await origNew(args)
+    res.configOptions.push({
+      id: 'variant',
+      category: 'reasoning',
+      currentValue: 'low',
+      options: [{ value: 'low' }, { value: 'high' }],
+    })
+    return res
+  }
+
+  const companion = createOpencodeCompanion({
+    socketPath: n.path,
+    retryMs: 20,
+    pushDelayMs: 5,
+    home: '/home/u',
+    // No explicit default model! CLI catalog's first model differs from ACP's currentValue.
+    openDb: async () => ({ all: (sql, ...p) => v2db.prepare(sql).all(...p), close() {} }),
+    acp,
+    discoverModels: async () => [
+      { providerID: 'openai', id: 'gpt-5', name: 'GPT-5', variants: { low: {}, high: {} } },
+      { providerID: 'opencode-go', id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', variants: { low: {}, high: {} } },
+    ],
+  })
+  t.after(() => companion.stop())
+  await companion.start()
+  await n.ready
+  await n.peer.call('launchers.models', { refresh: true })
+
+  // 1. Blob-backed 2.x image loads in companion.
+  const histItems = await n.peer.call('session.items', { session_id: 'ses_v2_hist', limit: 10 })
+  const imgItem = histItems.items.find((i) => i.kind === 'image')
+  assert.ok(imgItem)
+  const blobImg = await n.peer.call('session.image', { session_id: 'ses_v2_hist', item_id: imgItem.id })
+  assert.deepEqual(blobImg, { mime: 'image/png', data: imgBytes.toString('base64') })
+
+  // 2. Resumed v2 session initializes userInputCount from DB so client_msg_id attaches to the new message (ordinal 2).
+  acp.onPrompt = async (sessionId) => {
+    v2db.prepare('insert into session_message (id, session_id, seq, type, data, time_updated) values (?,?,?,?,?,?)')
+      .run('u2', sessionId, 3, 'user', JSON.stringify({ text: 'second msg' }), Date.now())
+    v2db.prepare('insert into session_message (id, session_id, seq, type, data, time_updated) values (?,?,?,?,?,?)')
+      .run('a2', sessionId, 4, 'assistant', JSON.stringify({ content: [{ type: 'text', text: 'second reply' }] }), Date.now())
+    return { stopReason: 'end_turn' }
+  }
+  await n.peer.call('session.send', { session_id: 'ses_v2_hist', text: 'second msg', client_msg_id: 'cm_v2_2' })
+  await until('v2 turn done', () => !companion.live.get('ses_v2_hist')?.running)
+  const v2After = await n.peer.call('session.items', { session_id: 'ses_v2_hist', limit: 10 })
+  const secondUser = v2After.items.find((i) => i.text === 'second msg')
+  assert.equal(secondUser?.client_msg_id, 'cm_v2_2')
+
+  // 3. Starting without an explicit default model must NOT override ACP session/new's currentValue with models[0].
+  acp.calls.length = 0
+  const defStart = await n.peer.call('session.start', { cwd: '/w/app' })
+  assert.equal(defStart.session.model, 'opencode-go/claude-sonnet-4-6')
+  assert.equal(acp.calls.filter((c) => c[0] === 'setConfigOption' && c[1].configId === 'model').length, 0)
+
+  // 4. Starting with a requested model when session/new returns NO configOptions MUST still call setConfigOption('model', ...).
+  returnEmptyConfigOnNew = true
+  acp.calls.length = 0
+  const explicitStart = await n.peer.call('session.start', { cwd: '/w/app', model: 'openai/gpt-5', effort: 'high' })
+  assert.equal(explicitStart.session.model, 'openai/gpt-5')
+  assert.equal(explicitStart.session.effort, 'high')
+  assert.ok(acp.calls.some((c) => c[0] === 'setConfigOption' && c[1].configId === 'model' && c[1].value === 'openai/gpt-5'))
+  assert.ok(acp.calls.some((c) => c[0] === 'setConfigOption' && c[1].configId === 'variant' && c[1].value === 'high'))
+  returnEmptyConfigOnNew = false
+
+  // 5. Plan mode survives an ACP child restart (ensureLoaded re-applies mode=plan).
+  const planStart = await n.peer.call('session.start', { cwd: '/w/app', permission_mode: 'plan' })
+  const planSid = planStart.session.session_id
+  assert.equal(companion.live.get(planSid).mode, 'plan')
+  acp.generation++
+  acp.loadedSessions.clear()
+  acp.calls.length = 0
+  acp.onPrompt = async () => ({ stopReason: 'end_turn' })
+  await n.peer.call('session.send', { session_id: planSid, text: 'check plan' })
+  await until('plan turn done', () => !companion.live.get(planSid)?.running)
+  assert.equal(companion.live.get(planSid).mode, 'plan')
+  assert.ok(acp.calls.some((c) => c[0] === 'setConfigOption' && c[1].sessionId === planSid && c[1].configId === 'mode' && c[1].value === 'plan'))
+
+  // 6. Long 26KB padded command + shell syntax (`send-mail; echo`) + relative AGENTS.md write + acceptEdits + live thinking.
+  const asstStart = await n.peer.call('session.start', { cwd: '/home/u/.persona/assistant', assistant: true })
+  const asstSid = asstStart.session.session_id
+  await n.peer.call('session.watch', { session_id: asstSid, since_seq: 0 })
+  n.asked.length = 0
+  n.resolve = () => ({ allow: false })
+
+  acp.onPrompt = async (sessionId, _blocks, client) => {
+    // Live thinking streams incrementally.
+    client.emit('update', { sessionId, update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'step 1 ' } } })
+    client.emit('update', { sessionId, update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'step 2' } } })
+
+    // 26KB padded command ending in `; send-mail` (clipInput would truncate to 12KB) must STILL be rejected under bypassPermissions!
+    const longCmd = `echo ${'a'.repeat(26_000)}; "send-mail" --to alice`
+    const gated = await client.onPermissionRequest({
+      sessionId,
+      toolCall: { toolCallId: 'tc_long', kind: 'execute', title: 'bash', rawInput: { command: longCmd } },
+      options: [
+        { optionId: 'once', kind: 'allow_once', name: 'Allow' },
+        { optionId: 'reject', kind: 'reject_once', name: 'Reject' },
+      ],
+    })
+    assert.deepEqual(gated, { outcome: { outcome: 'selected', optionId: 'reject' } })
+
+    // Switch to default mode and check relative `AGENTS.md` is NOT auto-approved as memory write.
+    companion.live.get(sessionId).mode = 'default'
+    const relAgents = await client.onPermissionRequest({
+      sessionId,
+      toolCall: { toolCallId: 'tc_agents', kind: 'edit', title: 'write', rawInput: { filePath: 'AGENTS.md' } },
+      options: [
+        { optionId: 'once', kind: 'allow_once', name: 'Allow' },
+        { optionId: 'reject', kind: 'reject_once', name: 'Reject' },
+      ],
+    })
+    assert.equal(n.asked.length, 1, 'relative AGENTS.md must ask phone')
+    assert.deepEqual(relAgents, { outcome: { outcome: 'selected', optionId: 'reject' } })
+
+    // acceptEdits auto-approves write/edit without asking phone.
+    companion.live.get(sessionId).mode = 'acceptEdits'
+    const editOk = await client.onPermissionRequest({
+      sessionId,
+      toolCall: { toolCallId: 'tc_edit_ok', kind: 'edit', title: 'edit', rawInput: { filePath: '/w/code.js' } },
+      options: [
+        { optionId: 'once', kind: 'allow_once', name: 'Allow' },
+        { optionId: 'reject', kind: 'reject_once', name: 'Reject' },
+      ],
+    })
+    assert.deepEqual(editOk, { outcome: { outcome: 'selected', optionId: 'once' } })
+    assert.equal(n.asked.length, 1)
+
+    return { stopReason: 'end_turn' }
+  }
+
+  await n.peer.call('session.send', {
+    session_id: asstSid,
+    text: 'run checks',
+    assistant: true,
+    mode: 'bypassPermissions',
+    memory_dir: '/home/u/.persona/assistant/memory',
+  })
+  await until('asst checks done', () => !companion.live.get(asstSid)?.running)
+  const thoughtItems = (await n.peer.call('session.items', { session_id: asstSid, limit: 10 })).items.filter((i) => i.kind === 'thinking')
+  assert.equal(thoughtItems.length, 1)
+  assert.equal(thoughtItems[0].text, 'step 1 step 2')
 })

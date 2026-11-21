@@ -899,7 +899,7 @@ func (s *Service) deliverReportingReport(ctx context.Context, t Todo, g supervis
 	if !ok {
 		return true
 	}
-	msg := relayMsg{From: t.ID, FromTitle: "督办", Tool: noticeTool, At: g.At.UTC(),
+	msg := relayMsg{From: t.ID, FromTitle: i18n.T(s.lang(ctx), "assistant-conversations.supervision_source"), Tool: noticeTool, At: g.At.UTC(),
 		Text: s.renderQueuedDigest(ctx, t.Origin, []prompts.SuperviseEntry{entry})}
 	queue := func() bool {
 		if _, err := s.queueRelayDurable(t.Origin, msg); err != nil {

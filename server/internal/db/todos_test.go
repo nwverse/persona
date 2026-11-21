@@ -8,6 +8,29 @@ import (
 	"time"
 )
 
+func TestTodoEditRestartsAnOpenWorkRoundOnlyWhenRequested(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	row := TodoRow{ID: "open-round", Title: "Inspect the layout", CreatedAt: at, UpdatedAt: at}
+	if err := d.CreateTodo(ctx, row); err != nil {
+		t.Fatal(err)
+	}
+	notDone := false
+	rowAgain, err := d.UpdateTodo(ctx, row.ID, nil, nil, &notDone, at.Add(time.Second))
+	if err != nil || rowAgain.DoneAt != nil || rowAgain.ReopenedAt != nil {
+		t.Fatalf("ordinary open edit started a new work round: %+v, %v", rowAgain, err)
+	}
+	restartedAt := at.Add(2 * time.Second)
+	rowAgain, err = d.EditTodo(ctx, row.ID, TodoEdit{Done: &notDone, RestartWork: true}, restartedAt)
+	if err != nil || rowAgain.DoneAt != nil || rowAgain.ReopenedAt == nil || !rowAgain.ReopenedAt.Equal(restartedAt) {
+		t.Fatalf("explicit work restart was not persisted: %+v, %v", rowAgain, err)
+	}
+	stored, err := d.GetTodo(ctx, row.ID)
+	if err != nil || stored.ReopenedAt == nil || !stored.ReopenedAt.Equal(restartedAt) {
+		t.Fatalf("stored work restart: %+v, %v", stored, err)
+	}
+}
+
 func TestTodos(t *testing.T) {
 	d, ctx := open(t), context.Background()
 	now := time.Now().UTC().Truncate(time.Microsecond)

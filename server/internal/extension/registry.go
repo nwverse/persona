@@ -179,9 +179,12 @@ type Registry struct {
 	planProblem error      // while a commit confirmation or package recovery is unresolved, no new writes; wait for a reload
 	mu          sync.Mutex
 	extensions  map[string]*Extension
-	reserved    map[string]map[string]string // point → contribution id → who has it (the hub's own)
-	previews    map[string]*Preview
-	now         func() time.Time
+	// settingsEpoch is odd while a mutation is active and even after its last overlapping mutation finishes.
+	settingsEpoch  map[string]uint64
+	settingsActive map[string]int
+	reserved       map[string]map[string]string // point → contribution id → who has it (the hub's own)
+	previews       map[string]*Preview
+	now            func() time.Time
 	// yields: built-in plugins an installed one of the same id takes the place of (Yields); yielded: those put aside.
 	yields  map[string]bool
 	yielded map[string]*Extension
@@ -252,8 +255,10 @@ func (r *Registry) AddHubJSON(m *Manifest, legacy any, enabled bool) error {
 		return fmt.Errorf("plugin %q: duplicate id", m.ID)
 	}
 	raw, _ := json.Marshal(m)
+	mutation := r.settingsWriteLocked(m.ID)
 	r.extensions[m.ID] = &Extension{Record: Record{ID: m.ID, Source: SourceHubJSON, Version: m.Version, Manifest: raw,
 		Granted: m.Permissions, GrantedDigest: Digest(m), Enabled: enabled}, Manifest: m, Full: m, Legacy: legacy}
+	mutation.finishLocked()
 	return nil
 }
 
@@ -270,8 +275,10 @@ func (r *Registry) AddBuiltin(m *Manifest, dir string, enabled bool) error {
 		return fmt.Errorf("plugin %q: duplicate id", m.ID)
 	}
 	raw, _ := json.Marshal(m)
+	mutation := r.settingsWriteLocked(m.ID)
 	r.extensions[m.ID] = &Extension{Record: Record{ID: m.ID, Source: SourceBuiltin, Version: m.Version, Manifest: raw,
 		Granted: m.Permissions, GrantedDigest: Digest(m), Enabled: enabled}, Manifest: m, Full: m, Schema: schema, Dir: dir}
+	mutation.finishLocked()
 	return nil
 }
 
@@ -328,6 +335,7 @@ func (r *Registry) Load(ctx context.Context) error {
 		cur := r.extensions[row.ID]
 		switch {
 		case row.Source == SourceBuiltin && cur != nil && cur.Record.Source == SourceBuiltin:
+			mutation := r.settingsWriteLocked(row.ID)
 			cur.Record.Enabled, cur.Record.Config = row.Enabled, row.Config
 			if k := r.keptOff[row.ID]; k != nil {
 				k.row, cur.Record.Enabled = row.Enabled, false
@@ -335,11 +343,16 @@ func (r *Registry) Load(ctx context.Context) error {
 			cur.Record.DisabledContributions = row.DisabledContributions
 			cur.Manifest = cur.Full.Without(row.DisabledContributions)
 			cur.Record.InstalledAt, cur.Record.UpdatedAt = row.InstalledAt, row.UpdatedAt
+			mutation.finishLocked()
 		case row.Source == SourceInstalled && cur == nil:
+			mutation := r.settingsWriteLocked(row.ID)
 			r.extensions[row.ID] = r.fromRow(row)
+			mutation.finishLocked()
 		case row.Source == SourceInstalled && r.yielding(cur):
+			mutation := r.settingsWriteLocked(row.ID)
 			r.yielded[row.ID] = cur
 			r.extensions[row.ID] = r.fromRow(row)
+			mutation.finishLocked()
 		}
 	}
 	return nil
@@ -604,8 +617,60 @@ func (r *Registry) audit(ctx context.Context, id, action, actor string, detail a
 	_ = r.store.AddExtensionAudit(ctx, id, action, actor, b)
 }
 
-func (r *Registry) changed(c Change) {
-	if r.OnChange != nil {
-		r.OnChange(c)
+// settingsMutation fences one visible registry mutation. Its completion closes the seqlock before OnChange runs.
+type settingsMutation struct {
+	registry *Registry
+	id       string
+	once     sync.Once
+}
+
+func (r *Registry) settingsWrite(id string) *settingsMutation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.settingsWriteLocked(id)
+}
+
+// settingsWriteLocked starts before the first store write or in-memory change. Overlapping operations after their
+// operation lock is released stay in one odd epoch until the last one finishes.
+func (r *Registry) settingsWriteLocked(id string) *settingsMutation {
+	if r.settingsEpoch == nil {
+		r.settingsEpoch = map[string]uint64{}
+	}
+	if r.settingsActive == nil {
+		r.settingsActive = map[string]int{}
+	}
+	if r.settingsActive[id] == 0 {
+		r.settingsEpoch[id]++
+	}
+	r.settingsActive[id]++
+	return &settingsMutation{registry: r, id: id}
+}
+
+func (m *settingsMutation) finishLocked() {
+	if m == nil {
+		return
+	}
+	m.once.Do(func() {
+		r := m.registry
+		r.settingsActive[m.id]--
+		if r.settingsActive[m.id] == 0 {
+			r.settingsEpoch[m.id]++
+		}
+	})
+}
+
+func (m *settingsMutation) finish() {
+	if m == nil {
+		return
+	}
+	m.registry.mu.Lock()
+	m.finishLocked()
+	m.registry.mu.Unlock()
+}
+
+func (m *settingsMutation) changed(c Change) {
+	m.finish()
+	if m.registry.OnChange != nil {
+		m.registry.OnChange(c)
 	}
 }

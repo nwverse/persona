@@ -55,6 +55,8 @@ type RuntimeHost struct {
 	orca orcaBridgeState
 	// cindy runs the Cindy bridge while the machine's engine is Cindy (cindybridge.go).
 	cindy cindyBridgeState
+	// t3code runs the T3 Code bridge while the machine's engine is T3 Code (t3codebridge.go).
+	t3code t3codeBridgeState
 	// agy runs the Antigravity CLI companion when agy is installed and autoCompanions is enabled (agybridge.go).
 	agy            agyBridge
 	autoCompanions bool

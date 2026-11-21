@@ -99,7 +99,7 @@ func (s *Service) closeStalledTask(ctx context.Context, task Todo, agents []prot
 	}
 	state := task.Supervision.state(task)
 	switch state {
-	case reviewPending, reviewNeedsUser, reviewParked, reviewTimedOut:
+	case reviewPending, reviewNeedsUser, reviewUserCheck, reviewParked, reviewTimedOut:
 		return
 	}
 	recovering := state == reviewClosing

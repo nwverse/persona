@@ -180,7 +180,7 @@ data class HubLauncher(
     val hasScope: Boolean get() = managed && !share.isNullOrBlank()
 
     /** What it is called in lists. */
-    val title: String get() = displayName?.takeIf { it.isNotBlank() } ?: name
+    val title: String get() = launcherTitle(name, harness, displayName?.takeIf(String::isNotBlank), baseUrl, source)
 }
 
 /** What "Test availability" answered: [machine] it ran on (none for a direct API), and the result. */

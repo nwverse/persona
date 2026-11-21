@@ -83,10 +83,11 @@ func ManifestsEqual(a, b *Manifest) bool {
 var errPlanDigest = errors.New("权限摘要对不上：装的不是你看过的那一份")
 
 type plannedRecord struct {
-	preview *Preview
-	old     *Extension
-	row     Record
-	next    *Extension
+	preview               *Preview
+	old                   *Extension
+	row                   Record
+	next                  *Extension
+	mutation, oldMutation *settingsMutation
 }
 type packageMove struct {
 	preview        *Preview
@@ -180,7 +181,8 @@ func (r *Registry) applyPlan(ctx context.Context, id, previewID, digest string, 
 		}
 		r.dropStaging(plan.preview)
 		r.audit(ctx, plan.row.ID, action, actor, detail)
-		r.changed(Change{ID: plan.row.ID, Kind: kind, Old: plan.old})
+		plan.oldMutation.finish()
+		plan.mutation.changed(Change{ID: plan.row.ID, Kind: kind, Old: plan.old})
 	}
 	return main, nil
 }
@@ -310,6 +312,13 @@ func (r *Registry) commitPlan(ctx context.Context, id, previewID, digest string,
 	for _, plan := range plans {
 		rows = append(rows, plan.row)
 	}
+	for i := range plans {
+		plan := &plans[i]
+		plan.mutation = r.settingsWriteLocked(plan.row.ID)
+		if plan.old != nil && plan.old.Record.ID != plan.row.ID {
+			plan.oldMutation = r.settingsWriteLocked(plan.old.Record.ID)
+		}
+	}
 	if store, ok := r.store.(PlanStore); ok {
 		err = store.PutExtensionPlan(ctx, rows)
 	} else if len(rows) == 1 {
@@ -318,6 +327,10 @@ func (r *Registry) commitPlan(ctx context.Context, id, previewID, digest string,
 		err = i18n.Err("extension-status.plan_transaction")
 	}
 	if err != nil {
+		for i := range plans {
+			plans[i].oldMutation.finishLocked()
+			plans[i].mutation.finishLocked()
+		}
 		var unknown *CommitUnknownError
 		if errors.As(err, &unknown) {
 			r.planProblem = &PlanError{"提交确认丢失，未激活；已保留包和备份，请重新加载 hub 后核对", err}

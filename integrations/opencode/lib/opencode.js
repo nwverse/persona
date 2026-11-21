@@ -22,9 +22,9 @@ import { homedir } from 'node:os'
 import { basename, isAbsolute, relative, resolve } from 'node:path'
 import { createRuntime, interactionId, light, page, RpcError, snippet } from '../../runtime-sdk/index.js'
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
-import { contextTokens, fromRow, imageOf, lastText, liveText, messageItems, permissionCard, promptWithContext, visibleUserText } from './map.js'
+import { contextTokens, fromRow, imageOf, lastText, liveText, loadBlobImage, messageItems, permissionCard, promptWithContext, visibleUserText } from './map.js'
 import { createMcpProxy, extractShellGates, matchShellGate } from './mcp.js'
-import { buildLauncher, normalizeModels, resolveModel } from './models.js'
+import { buildLauncher, normalizeModels, PERSONA_EFFORTS, resolveModel } from './models.js'
 
 export const RUNTIME_VERSION = '0.2.0'
 const ROOTS = 200 // sessions looked at for the list (the newest roots)
@@ -35,10 +35,8 @@ const POLL_EVERY = 2000 // ms: while a turn runs, look for messages the events d
 const STALE_MS = 60_000 // an unfinished message of a session that is running is final after this (events missed)
 const SETTLE_MS = 1500 // ...and of one that is not running, after this (an interrupted step never says it completed)
 const MODELS_EVERY = 10 * 60_000 // ms: the models' context windows and catalog are asked again
-const MEDIA_REF = /^media:([0-9a-f]{64})$/
-// Base64 takes 4/3 the raw size; leave 1 KiB of the runtime protocol's 64 MiB line for the JSON envelope.
-const MAX_BLOB_BYTES = (64 * 1024 * 1024 - 1024) * 3 / 4
 const VALID_MODES = new Set(['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'])
+const VALID_EFFORTS = new Set(PERSONA_EFFORTS)
 const SUPERVISION_ERROR_CODE = 'assistant_supervision_runtime'
 
 /**
@@ -67,13 +65,14 @@ export function createOpencodeHost(deps, options = {}) {
   const launcherName = options.launcher === undefined ? 'opencode' : String(options.launcher).trim()
   const displayName = typeof options.displayName === 'string' && options.displayName.trim() ? options.displayName.trim() : 'opencode'
   const assistantEnabled = options.assistant !== false
-  let configuredDefaultModel = typeof options.model === 'string' ? options.model.trim() : ''
+  const explicitDefaultModel = typeof options.model === 'string' ? options.model.trim() : ''
+  let displayDefaultModel = explicitDefaultModel
 
-  const sessions = new Map() // session id -> { running, runningSince, blocked: Map, lastSeq, texts, textMessage, chain, poll, title, model, mode, startedByPersona }
-  const createdSessions = new Map() // session id -> { id, directory, title, model, time_updated, startedByPersona, assistant, mode }
+  const sessions = new Map() // session id -> { running, runningSince, blocked: Map, lastSeq, texts, textMessage, chain, poll, title, model, effort, mode, startedByPersona }
+  const createdSessions = new Map() // session id -> { id, directory, title, model, effort, time_updated, startedByPersona, assistant, mode }
   const assistants = new Map() // session id -> { cwd, mode, memoryDir }
   const activeAssistantByDir = new Map() // directory -> most recently active assistant session id
-  const mcpWiredDirs = new Map() // directory -> { release, route }
+  const mcpWiredDirs = new Map() // directory -> route
   const locations = new Set() // { ctx, directory, abort? } of every registered location, in registration order
   const roots = new Map() // session id -> { root, directory } (a child session answers for its root)
   const windows = new Map() // "provider\0model", "provider/model", and "model" -> context window
@@ -81,6 +80,7 @@ export function createOpencodeHost(deps, options = {}) {
   const derived = new Map() // session id -> { rev, last, model, tokens, hasAssistant } (per max seq)
   let catalog = []
   let gateShellRules = []
+  let gateShellRulesReady = false
   let primary // the location whose context reads the event stream
   let started = false
   let stopped = false
@@ -95,13 +95,21 @@ export function createOpencodeHost(deps, options = {}) {
     tools: async (binding) => {
       const asst = binding?.assistant === true
       const list = await rt.tools({ assistant: asst })
-      if (asst) gateShellRules = extractShellGates(list)
+      if (asst) {
+        gateShellRules = extractShellGates(list)
+        gateShellRulesReady = true
+      }
       return list
     },
     call: async (binding, name, args) => {
       const asst = binding?.assistant === true
-      const sid = binding?.session?.id || binding?.sessionId || (binding?.directory ? activeAssistantByDir.get(binding.directory) : '') || ''
-      if (!sid) {
+      // For directory-scoped routes, always resolve the currently active assistant session for that directory
+      // so later Assistant chats sharing ~/.persona/assistant are never misattributed to the first session.
+      const sid = (binding?.directory ? activeAssistantByDir.get(binding.directory) : '')
+        || binding?.session?.id
+        || binding?.sessionId
+        || ''
+      if (!sid || (asst && !assistants.has(sid))) {
         return { content: [{ type: 'text', text: 'Persona session is not active' }], is_error: true }
       }
       return rt.callTool({ name, args, session_id: sid, assistant: asst })
@@ -110,7 +118,7 @@ export function createOpencodeHost(deps, options = {}) {
   })
 
   const initialLaunchers = launcherName
-    ? [buildLauncher({ name: launcherName, displayName, models: catalog, defaultModel: configuredDefaultModel })]
+    ? [buildLauncher({ name: launcherName, displayName, models: catalog, defaultModel: displayDefaultModel })]
     : undefined
 
   const rt = createRuntime({
@@ -134,8 +142,9 @@ export function createOpencodeHost(deps, options = {}) {
     name: options.name ?? 'opencode',
     agent: 'opencode',
     version: RUNTIME_VERSION,
-    ...(launcherName ? { launcher: launcherName, launcherModel: configuredDefaultModel || undefined, launchers: initialLaunchers } : {}),
+    ...(launcherName ? { launcher: launcherName, launcherModel: displayDefaultModel || undefined, launchers: initialLaunchers } : {}),
     assistant: assistantEnabled,
+    readonly: true,
     modelSwitch: true,
     // Security boundary (#11220): intentionally DO NOT set supervisionPolicy: true.
     socketPath: options.socketPath,
@@ -146,7 +155,11 @@ export function createOpencodeHost(deps, options = {}) {
     retryMs: options.retryMs,
     pushDelayMs: options.pushDelayMs,
     onHub: (connected) => {
-      if (connected && assistantEnabled) void refreshGateRules()
+      if (!connected) {
+        gateShellRulesReady = false
+        return
+      }
+      if (assistantEnabled) void refreshGateRules()
     },
   })
 
@@ -156,12 +169,23 @@ export function createOpencodeHost(deps, options = {}) {
     }
   }
 
-  async function refreshGateRules() {
+  async function refreshGateRules({ throwOnError = false } = {}) {
     try {
       const list = await rt.tools({ assistant: true })
       gateShellRules = extractShellGates(list)
+      gateShellRulesReady = true
     } catch (err) {
+      gateShellRulesReady = false
       log(`persona: opencode assistant tools: ${err.message}`)
+      if (throwOnError) {
+        throw new RpcError(`获取助手工具策略失败：${err.message}`, 'opencode')
+      }
+    }
+  }
+
+  async function ensureGateRules() {
+    if (!gateShellRulesReady) {
+      await refreshGateRules({ throwOnError: rt.hubConnected })
     }
   }
 
@@ -245,6 +269,7 @@ export function createOpencodeHost(deps, options = {}) {
         poll: undefined,
         title: undefined,
         model: undefined,
+        effort: undefined,
         mode: undefined,
         startedByPersona: false,
       }
@@ -299,7 +324,7 @@ export function createOpencodeHost(deps, options = {}) {
     }
     const rawDir = r.directory ?? created?.directory ?? ''
     if (assistantEnabled && rawDir && isAssistantDir(rawDir, home) && !assistants.has(r.id)) {
-      assistants.set(r.id, { cwd: rawDir, mode: 'default', memoryDir: '' })
+      assistants.set(r.id, { cwd: rawDir, mode: 'default', memoryDir: '', activeAt: r.time_updated ?? now() })
     }
     // Preserve the original assistant directory for the chat's whole life (#2368).
     const directory = assistants.get(r.id)?.cwd || rawDir
@@ -323,6 +348,10 @@ export function createOpencodeHost(deps, options = {}) {
     if (d.last) row.last_text = d.last
     const model = s?.model || d.model || modelOf(r.model) || created?.model || ''
     if (model) row.model = model
+    const effort = s?.effort || created?.effort || ''
+    if (effort) row.effort = effort
+    const modelEntry = model ? catalog.find((m) => m.id === model || (d.provider && m.id === `${d.provider}/${model}`)) : undefined
+    if (Array.isArray(modelEntry?.efforts) && modelEntry.efforts.length > 0) row.efforts = modelEntry.efforts
     if (d.tokens > 0) {
       row.context_tokens = d.tokens
       const w = windows.get(`${d.provider}\0${d.model}`) ?? windows.get(`${d.provider}/${d.model}`) ?? windows.get(d.model)
@@ -341,10 +370,25 @@ export function createOpencodeHost(deps, options = {}) {
     try {
       if (!json) return ''
       const parsed = JSON.parse(json)
+      if (parsed?.providerID && parsed?.id) return `${parsed.providerID}/${parsed.id}`
       return parsed?.id ?? ''
     } catch {
       return ''
     }
+  }
+
+  async function currentModelOf(id) {
+    const s = sessions.get(id)
+    if (s?.model) return s.model
+    const created = createdSessions.get(id)
+    if (created?.model) return created.model
+    const [m] = await rows('select max(seq) as seq from session_message where session_id = ?', id)
+    if (m?.seq > 0) {
+      const d = await derive(id, m.seq)
+      if (d?.model) return d.provider ? `${d.provider}/${d.model}` : d.model
+    }
+    const [r] = await rows('select model from session_v2 where id = ?', id)
+    return modelOf(r?.model)
   }
 
   async function listSessions() {
@@ -486,17 +530,9 @@ export function createOpencodeHost(deps, options = {}) {
     const msg = await messageAt(params.session_id, seq)
     const inline = imageOf(msg, idx)
     if (inline) return inline
-    const f = msg?.type === 'user' ? msg.files?.[idx - 1] : undefined
-    const ref = typeof f?.mime === 'string' && f.mime.startsWith('image/') && typeof f.uri === 'string' ? MEDIA_REF.exec(f.uri) : null
-    if (!ref) throw new RpcError(`no image ${params.item_id}`, 'not_found')
-    const [r] = await rows(
-      `select b.data from blob b join blob_ref r on r.hash = b.hash
-       where b.hash = ? and r.session_id = ? and r.message_id = ? and r.seq = ?`,
-      ref[1], params.session_id, msg.id, seq)
-    const data = r?.data
-    if (!(data instanceof Uint8Array) || data.byteLength > MAX_BLOB_BYTES) throw new RpcError(`no image ${params.item_id}`, 'not_found')
-    const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data.buffer, data.byteOffset, data.byteLength)
-    return { mime: f.mime, data: bytes.toString('base64') }
+    const blobImg = await loadBlobImage(rows, { sessionId: params.session_id, msg, seq, idx })
+    if (blobImg) return blobImg
+    throw new RpcError(`no image ${params.item_id}`, 'not_found')
   }
 
   /** Push what became final since the last push (the items only when the phone watches the session). */
@@ -574,7 +610,10 @@ export function createOpencodeHost(deps, options = {}) {
         : null
     if (!registerFn) return
     try {
-      const route = await mcpProxy.allocate({ assistant: true, directory, sessionId })
+      // Do NOT freeze `sessionId` into a directory-scoped route: `mcpProxy.call` resolves
+      // `activeAssistantByDir.get(directory)` dynamically so multiple Assistant chats sharing
+      // `~/.persona/assistant` never inherit the first chat's session identity.
+      const route = await mcpProxy.allocate({ assistant: true, directory })
       await registerFn(route.remoteConfig)
       mcpWiredDirs.set(directory, route)
     } catch (err) {
@@ -594,14 +633,19 @@ export function createOpencodeHost(deps, options = {}) {
 
   async function applyModelAndMode(ctx, id, { model, effort, permission_mode }) {
     const s = st(id)
-    if (model) {
-      if (catalog.length === 0) await refreshModels(ctx, { force: true })
-      const resolved = resolveModel(model, catalog)
+    const normalizedEffort = typeof effort === 'string' && effort.trim() ? effort.trim().toLowerCase() : ''
+    if (normalizedEffort && !VALID_EFFORTS.has(normalizedEffort)) {
+      throw new RpcError(`不支持的思考深度 "${effort}"`, 'bad_request')
+    }
+    if (model || normalizedEffort) {
+      if (catalog.length === 0) await refreshModels(ctx, { force: true }).catch(() => {})
+      const targetModelInput = model || await currentModelOf(id)
+      const resolved = targetModelInput ? resolveModel(targetModelInput, catalog) : null
       if (resolved) {
         const modelRef = {
           providerID: resolved.providerID,
           id: resolved.modelID,
-          ...(effort ? { variant: effort } : {}),
+          ...(normalizedEffort ? { variant: normalizedEffort } : (s.effort ? { variant: s.effort } : {})),
         }
         if (typeof ctx.session?.switchModel === 'function') {
           await ctx.session.switchModel({ sessionID: id, model: modelRef })
@@ -609,8 +653,14 @@ export function createOpencodeHost(deps, options = {}) {
           await ctx.session.model({ sessionID: id, model: modelRef })
         }
         s.model = resolved.id
+        if (normalizedEffort) s.effort = normalizedEffort
         const c = createdSessions.get(id)
-        if (c) c.model = resolved.id
+        if (c) {
+          c.model = resolved.id
+          if (normalizedEffort) c.effort = normalizedEffort
+        }
+      } else if (normalizedEffort) {
+        throw new RpcError('无法确定当前会话的模型，请同时指定 model 后再切换思考深度', 'bad_request')
       }
     }
     if (permission_mode) {
@@ -620,7 +670,14 @@ export function createOpencodeHost(deps, options = {}) {
       const prevMode = s.mode || assistants.get(id)?.mode || 'default'
       const wantAgent = permission_mode === 'plan' ? 'plan' : (prevMode === 'plan' ? 'build' : '')
       if (wantAgent && typeof ctx.session?.switchAgent === 'function') {
-        await ctx.session.switchAgent({ sessionID: id, agent: wantAgent })
+        try {
+          await ctx.session.switchAgent({ sessionID: id, agent: wantAgent })
+        } catch (err) {
+          if (permission_mode === 'plan') {
+            throw new RpcError(`opencode 无法切换到只读模式（plan）：${err?.message ?? err}`, 'readonly_unsupported')
+          }
+          throw err
+        }
       }
       s.mode = permission_mode
       const a = assistants.get(id)
@@ -646,6 +703,10 @@ export function createOpencodeHost(deps, options = {}) {
     if (reqMode && !VALID_MODES.has(reqMode)) {
       throw new RpcError(`不支持的权限模式 "${reqMode}"`, 'bad_request')
     }
+    const reqEffort = typeof params.effort === 'string' && params.effort.trim() ? params.effort.trim().toLowerCase() : ''
+    if (reqEffort && !VALID_EFFORTS.has(reqEffort)) {
+      throw new RpcError(`不支持的思考深度 "${params.effort}"`, 'bad_request')
+    }
 
     let chosenModel = null
     if (typeof params.model === 'string' && params.model.trim()) {
@@ -654,8 +715,9 @@ export function createOpencodeHost(deps, options = {}) {
     }
 
     const isAsst = assistantEnabled && (params.assistant === true || isAssistantDir(cwd, home))
+    if (isAsst) await ensureGateRules()
     const modelRef = chosenModel
-      ? { providerID: chosenModel.providerID, id: chosenModel.modelID, ...(params.effort ? { variant: params.effort } : {}) }
+      ? { providerID: chosenModel.providerID, id: chosenModel.modelID, ...(reqEffort ? { variant: reqEffort } : {}) }
       : undefined
     const createPayload = {
       location: { directory: cwd },
@@ -667,6 +729,9 @@ export function createOpencodeHost(deps, options = {}) {
     try {
       created = await ctx.session.create(createPayload)
     } catch (err) {
+      if (reqMode === 'plan') {
+        throw new RpcError(`opencode 无法以只读模式（plan）新建会话：${err?.message ?? err}`, 'readonly_unsupported')
+      }
       throw new RpcError(`opencode：${err?.message ?? err}`, 'opencode')
     }
     const info = created?.data ?? created ?? {}
@@ -678,6 +743,7 @@ export function createOpencodeHost(deps, options = {}) {
     const s = st(id)
     s.startedByPersona = true
     if (chosenModel) s.model = chosenModel.id
+    if (reqEffort) s.effort = reqEffort
     if (reqMode) s.mode = reqMode
     const createdAt = now()
     createdSessions.set(id, {
@@ -685,6 +751,7 @@ export function createOpencodeHost(deps, options = {}) {
       directory: cwd,
       title: typeof info.title === 'string' ? info.title : '',
       model: chosenModel?.id || (info.model?.providerID && info.model?.id ? `${info.model.providerID}/${info.model.id}` : info.model?.id || ''),
+      effort: reqEffort || '',
       time_updated: createdAt,
       startedByPersona: true,
       assistant: isAsst,
@@ -692,10 +759,9 @@ export function createOpencodeHost(deps, options = {}) {
     })
 
     if (isAsst) {
-      assistants.set(id, { cwd, mode: reqMode || 'default', memoryDir: '' })
+      assistants.set(id, { cwd, mode: reqMode || 'default', memoryDir: '', activeAt: createdAt })
       activeAssistantByDir.set(cwd, id)
       await ensureAssistantMcp(ctx, cwd, id)
-      void refreshGateRules()
     }
 
     // If create() ignored `model` and switchModel() is available, apply it explicitly.
@@ -728,6 +794,8 @@ export function createOpencodeHost(deps, options = {}) {
 
     listCache.at = 0
     rt.sessionsChanged(0)
+    const rowModel = createdSessions.get(id)?.model || ''
+    const modelEntry = rowModel ? catalog.find((m) => m.id === rowModel) : undefined
     const row = {
       session_id: id,
       title: (typeof info.title === 'string' && info.title.trim()) || basename(cwd) || 'opencode',
@@ -740,7 +808,9 @@ export function createOpencodeHost(deps, options = {}) {
       space_kind: 'opencode',
       started_by_persona: true,
       ...(launcherName ? { launcher: launcherName } : {}),
-      ...(createdSessions.get(id)?.model ? { model: createdSessions.get(id).model } : {}),
+      ...(rowModel ? { model: rowModel } : {}),
+      ...(reqEffort ? { effort: reqEffort } : {}),
+      ...(Array.isArray(modelEntry?.efforts) && modelEntry.efforts.length ? { efforts: modelEntry.efforts } : {}),
       ...(reqMode && reqMode !== 'default' ? { permission_mode: reqMode } : {}),
     }
     return { session: row }
@@ -753,10 +823,11 @@ export function createOpencodeHost(deps, options = {}) {
     const isAsst = assistantEnabled && (params.assistant === true || assistants.has(id))
     let text = rawText
     if (isAsst) {
+      await ensureGateRules()
       const prev = assistants.get(id) ?? { cwd: await directoryOf(id), mode: 'default', memoryDir: '' }
       const nextMode = params.mode || params.permission_mode || prev.mode || 'default'
       const nextMemoryDir = typeof params.memory_dir === 'string' && params.memory_dir ? params.memory_dir : prev.memoryDir
-      assistants.set(id, { cwd: prev.cwd, mode: nextMode, memoryDir: nextMemoryDir })
+      assistants.set(id, { cwd: prev.cwd, mode: nextMode, memoryDir: nextMemoryDir, activeAt: now() })
       if (prev.cwd) activeAssistantByDir.set(prev.cwd, id)
       if (typeof params.context === 'string' && params.context.trim()) {
         text = promptWithContext(rawText, params.context)
@@ -765,7 +836,7 @@ export function createOpencodeHost(deps, options = {}) {
     await control(id, async (ctx, dir) => {
       if (isAsst) await ensureAssistantMcp(ctx, assistants.get(id)?.cwd || dir, id)
       const reqMode = params.mode || params.permission_mode || ''
-      if (params.model || reqMode) {
+      if (params.model || params.effort || reqMode) {
         await applyModelAndMode(ctx, id, { model: params.model, effort: params.effort, permission_mode: reqMode })
       }
       // Into the running turn while it works (opencode's steer), a new turn when idle: its default.
@@ -802,12 +873,12 @@ export function createOpencodeHost(deps, options = {}) {
   // ---- what happens in the server ----
 
   function publishCatalog(rawList) {
-    const normalized = normalizeModels(rawList, configuredDefaultModel)
+    const normalized = normalizeModels(rawList, explicitDefaultModel)
     for (const [k, w] of normalized.windows) windows.set(k, w)
     catalog = normalized.models
-    if (!configuredDefaultModel && normalized.defaultModel) configuredDefaultModel = normalized.defaultModel
+    displayDefaultModel = explicitDefaultModel || normalized.defaultModel || displayDefaultModel
     if (launcherName) {
-      rt.launchersChanged([buildLauncher({ name: launcherName, displayName, models: catalog, defaultModel: configuredDefaultModel })])
+      rt.launchersChanged([buildLauncher({ name: launcherName, displayName, models: catalog, defaultModel: displayDefaultModel })])
     }
     return catalog
   }
@@ -872,7 +943,10 @@ export function createOpencodeHost(deps, options = {}) {
     if (action !== 'write' && action !== 'edit') return false
     const file = Array.isArray(resources) && typeof resources[0] === 'string' ? resources[0] : ''
     if (!file) return false
-    const rel = relative(a.memoryDir, resolve(a.memoryDir, file))
+    const baseDir = a.cwd || a.memoryDir
+    const target = isAbsolute(file) ? resolve(file) : resolve(baseDir, file)
+    const memRoot = resolve(a.memoryDir)
+    const rel = relative(memRoot, target)
     return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
   }
 
@@ -889,10 +963,12 @@ export function createOpencodeHost(deps, options = {}) {
     const resources = Array.isArray(data.resources) ? data.resources.map(String) : []
     const asst = isAssistant(root)
     const mode = s.mode || assistants.get(root)?.mode || 'default'
+    const isShell = action === 'shell' || action === 'bash'
 
     // Assistant safety & mode rules (docs/integrations/runtimes.md "Assistant").
     if (asst) {
-      if (action === 'shell' || action === 'bash') {
+      if (isShell) {
+        if (!gateShellRulesReady) await refreshGateRules()
         const gate = matchShellGate(resources[0] ?? '', gateShellRules)
         if (gate) {
           try {
@@ -908,8 +984,22 @@ export function createOpencodeHost(deps, options = {}) {
           resolvePermission(root, data.id)
           return
         }
+        if (!gateShellRulesReady) {
+          try {
+            await ctx.permission.reply({
+              sessionID: data.sessionID,
+              requestID: data.id,
+              decision: 'reject',
+              message: '助手工具门禁尚未就绪，拒绝自动执行 shell 命令。',
+            })
+          } catch (err) {
+            log(`persona: opencode gate fail-closed reject: ${err.message}`)
+          }
+          resolvePermission(root, data.id)
+          return
+        }
       }
-      if (mode === 'plan' && (action === 'write' || action === 'edit' || action === 'shell' || action === 'bash')) {
+      if (mode === 'plan' && (action === 'write' || action === 'edit' || isShell)) {
         try {
           await ctx.permission.reply({
             sessionID: data.sessionID,
@@ -923,7 +1013,8 @@ export function createOpencodeHost(deps, options = {}) {
         resolvePermission(root, data.id)
         return
       }
-      if (isMemoryWrite(root, action, resources) || mode === 'bypassPermissions') {
+      const acceptEditAuto = mode === 'acceptEdits' && (action === 'write' || action === 'edit')
+      if (isMemoryWrite(root, action, resources) || acceptEditAuto || mode === 'bypassPermissions') {
         try {
           await ctx.permission.reply({ sessionID: data.sessionID, requestID: data.id, decision: 'once' })
         } catch (err) {
@@ -932,11 +1023,24 @@ export function createOpencodeHost(deps, options = {}) {
         resolvePermission(root, data.id)
         return
       }
-    } else if (mode === 'bypassPermissions') {
+    } else if (mode === 'plan' && (action === 'write' || action === 'edit' || isShell)) {
+      try {
+        await ctx.permission.reply({
+          sessionID: data.sessionID,
+          requestID: data.id,
+          decision: 'reject',
+          message: '当前处于只读模式（plan），不允许写入或执行命令。',
+        })
+      } catch (err) {
+        log(`persona: opencode plan reject: ${err.message}`)
+      }
+      resolvePermission(root, data.id)
+      return
+    } else if ((mode === 'acceptEdits' && (action === 'write' || action === 'edit')) || mode === 'bypassPermissions') {
       try {
         await ctx.permission.reply({ sessionID: data.sessionID, requestID: data.id, decision: 'once' })
       } catch (err) {
-        log(`persona: opencode bypass allow: ${err.message}`)
+        log(`persona: opencode auto-allow: ${err.message}`)
       }
       resolvePermission(root, data.id)
       return
@@ -985,9 +1089,34 @@ export function createOpencodeHost(deps, options = {}) {
       clearTimeout(commitTimers.get(key))
       commitTimers.delete(key)
     }
+    const asst = assistants.get(id)
     sessions.delete(id)
     createdSessions.delete(id)
     assistants.delete(id)
+    if (asst?.cwd) {
+      let replacementId = ''
+      let replacementAt = -1
+      for (const [otherId, other] of assistants) {
+        if (other.cwd === asst.cwd && (other.activeAt ?? 0) >= replacementAt) {
+          replacementId = otherId
+          replacementAt = other.activeAt ?? 0
+        }
+      }
+      if (replacementId) {
+        if (activeAssistantByDir.get(asst.cwd) === id) {
+          activeAssistantByDir.set(asst.cwd, replacementId)
+        }
+      } else {
+        if (activeAssistantByDir.get(asst.cwd) === id) {
+          activeAssistantByDir.delete(asst.cwd)
+        }
+        const route = mcpWiredDirs.get(asst.cwd)
+        if (route) {
+          route.release?.()
+          mcpWiredDirs.delete(asst.cwd)
+        }
+      }
+    }
     roots.delete(id)
     derived.delete(id)
     listCache.at = 0
