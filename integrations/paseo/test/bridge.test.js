@@ -66,7 +66,7 @@ test("Paseo's agents are the engine's sessions: Claude Code's by its session and
   assert.equal(node.hello.runtime, 'paseo')
   assert.equal(node.hello.name, 'Paseo')
   assert.equal(node.hello.version, '0.14.0', "Paseo's version")
-  assert.deepEqual(node.hello.caps, { start: true, send: true, interrupt: true, rename: true, close: true, assistant: false, modes: true, model: true,
+  assert.deepEqual(node.hello.caps, { start: true, send: true, interrupt: true, queue_edit: false, queue_send_now: false, rename: true, close: true, assistant: false, modes: true, model: true,
     models: true, check: true, rewind: true, seen: true, workspaces: true, resume: true, readonly: true, same_kind: true })
   assert.deepEqual(node.hello.launchers.map((l) => [l.name, l.agent, l.prompt_optional]),
     [['my-claude', 'claude', undefined], ['my-codex', 'codex', true], ['grok', 'paseo', undefined]])

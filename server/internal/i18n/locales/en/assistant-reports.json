@@ -124,6 +124,8 @@
   "verdict_taken_supervisor": "Taken: it went to the task's supervisor, not its Agent",
   "decision_chosen_supervisor": "Chosen: {option}. Kept in the to-do's decisions and passed to its supervisor",
   "delivery_verification_unavailable": "Task {task} is not accepted: delivery status temporarily cannot be verified for {pr} ({reason}). This does not mean the work is unfinished. Keep its current state and check again when verification is available; do not request another merge or deployment, park, or cancel solely because verification is unavailable.",
+  "delivery_host_not_connected": " Delivery of {pr} was not checked: Persona cannot read review requests on {host} yet, so your evidence stands.",
+  "delivery_host_unchecked": " Delivery of {pr} could not be checked on {host} ({reason}), so your evidence stands.",
   "decision_not_delivered": "The owner decided: {decision}. It is recorded, but it did not reach the agent ({error}) and was not resent: pass it on once the agent can take it",
   "not_met": "**Not met**: {list}",
   "not_met_sep": "; ",

@@ -17,6 +17,7 @@ import { initialLauncher, launcherBlock, usableFirst } from "../lib/launcher-hea
 import { defaultLabel, inlineTextStart, machineLaunchers, type LauncherDefault } from "../lib/launcher-models";
 import { providerLabel } from "../lib/provider-names";
 import { navigate } from "../lib/router";
+import { openFromPage } from "../lib/handoff";
 import { ONE_PANE, useMedia } from "../lib/viewport";
 import { settingsHref } from "./settings/nav";
 import { interactionAsk } from "../lib/inbox";
@@ -52,6 +53,7 @@ import {
   todoDueDay,
   todoDueText,
   shownStatus,
+  strikesThrough,
   todoStatus,
   unlinkAgentFromTodo,
   unlinkSpaceFromTodo,
@@ -98,6 +100,7 @@ import {
 } from "../lib/todo-list-filter";
 import type { MenuItem } from "../ui/menu-model";
 import { useRestoredTodos } from "../lib/todo-restore";
+import { stepsWords } from "../lib/todo-steps";
 import { useOwnerNeeds, useTodoLookup, useTodoMinute } from "../lib/todo-owner-needs";
 import { autoReviewLine, checklist, latestReview, parkedLine, progressLine, type CheckMark, type Supervision } from "../lib/supervision";
 import { resultExtras } from "../lib/brief";
@@ -1620,6 +1623,8 @@ const TodoListItem = memo(function TodoListItem({
   const openPR = (section ?? view.section) === "parked" ? openMergePRs(todo, Date.now())[0] : undefined;
   // its state word and tone; a waiting one's say what it waits on, attention only on the owner (#11090)
   const look = todoLook(todo, status, view.wait);
+  // its steps as the hub counts them (#11858, lib/todo-steps.ts): in place of Not started, or after its Agent count
+  const steps = stepsWords(todo, status);
   const held = heldDelivery(todo);
   const thread = useStore((s) => todoThreadsOn(s.features)) ? boundThread(todo) : undefined;
   // a failed start still waiting on the owner reads open, not done, with why it did not start (#3713), in every grouping
@@ -1675,13 +1680,13 @@ const TodoListItem = memo(function TodoListItem({
         <div className="flex items-baseline justify-between gap-2">
           {view.ultracode || todo.kind === "concern" || view.owner ? (
             <span className="flex min-w-0 items-center gap-1">
-              <span className={cx("truncate text-[13.5px] font-semibold text-ink", !view.ultracode && !open && "line-through text-ink-3 font-normal")} data-testid="todo-title">{todo.title}</span>
+              <span className={cx("truncate text-[13.5px] font-semibold text-ink", !view.ultracode && !open && "text-ink-3 font-normal", !view.ultracode && strikesThrough(todo, open) && "line-through")} data-testid="todo-title">{todo.title}</span>
               {view.ultracode && <UltraMark size={11} />}
               {todo.kind === "concern" && <Tag><span data-testid="todo-concern">{t("todos.concern")}</span></Tag>}
               {view.owner && <OwnerMark need={view.owner} />}
             </span>
           ) : (
-            <span className={cx("truncate text-[13.5px] font-semibold text-ink", !open && "line-through text-ink-3 font-normal")} data-testid="todo-title">
+            <span className={cx("truncate text-[13.5px] font-semibold text-ink", !open && "text-ink-3 font-normal", strikesThrough(todo, open) && "line-through")} data-testid="todo-title">
               {todo.title}
             </span>
           )}
@@ -1698,16 +1703,25 @@ const TodoListItem = memo(function TodoListItem({
         {/* Status Line */}
         <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px]" data-testid="todo-status-line">
           {open && <StatusMark state={dotState} size="sm" />}
-          <span className={cx("shrink-0 whitespace-nowrap font-medium", TONE_CLASS[look.tone])} data-testid="todo-status">{look.label}</span>
+          <span className={cx("shrink-0 whitespace-nowrap font-medium", TONE_CLASS[look.tone])} data-testid="todo-status">{steps?.label ?? look.label}</span>
           {!todo.done_at && activeCount > 0 && (
             <>
               <span className="text-ink-3">·</span>
               <span className="text-ink-3">{t("todos.agent_count", { count: activeCount })}</span>
             </>
           )}
-          {!todo.done_at && activeCount === 0 && (
-            <span className="truncate text-ink-3">· {t("todos.not_handed")}</span>
+          {steps?.after && (
+            <>
+              <span className="text-ink-3">·</span>
+              <span className="shrink-0 whitespace-nowrap text-ink-3" data-testid="todo-steps">{steps.after}</span>
+            </>
           )}
+          {/* its steps were handed out: what is next once they are all closed, else nothing about handing it over */}
+          {!todo.done_at && activeCount === 0 && (steps?.tail !== undefined ? (
+            steps.tail && <span className="truncate text-ink-3" data-testid="todo-steps-next">· {steps.tail}</span>
+          ) : (
+            <span className="truncate text-ink-3">· {t("todos.not_handed")}</span>
+          ))}
           {(section ?? view.section) === "just_done" && onSeen ? (
             <span className="ml-auto flex shrink-0 items-center gap-1.5">
               {!todo.done_at && <ReviewBadge todo={todo} />}
@@ -1992,7 +2006,7 @@ const TaskBriefHistory = lazy(() => import("./assistant/TaskBrief").then((m) => 
 const BriefResultExtras = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.BriefResultExtras })));
 // the question a failed start's tab stopped on, answered on its page (#10365): only for such a failure
 const ShellQuestion = lazy(() => import("./ShellQuestionCard"));
-const TodoImageViewer = lazy(() => import("./chat/ImageViewer").then((m) => ({ default: m.ImageViewer })));
+const TodoImageViewer = lazyPage(() => import("./chat/ImageViewer").then((m) => m.ImageViewer));
 
 // The existing review UI lives with this lazy page, not the first screen's card badges.
 const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; className: string; label: () => string }> = {
@@ -2333,6 +2347,8 @@ function TodoDetail({
   const status = todoStatus(todo, lookup);
   // its state word and tone; a waiting one's say what it waits on, attention only on the owner (#11090)
   const look = todoLook(todo, status, waitOf(todo, status, lookup));
+  // its steps as the hub counts them (#11858), as its row says them
+  const steps = stepsWords(todo, status);
   // The to-do's own PR, parsed once here (the list row and the repository section's fallback share it).
   const legacyPR = prLink(todo.pr_url);
   const toneClass = {
@@ -2401,10 +2417,22 @@ function TodoDetail({
       <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-[12.5px] text-ink-2">
         <span className={cx("inline-flex h-5.5 items-center gap-1.5 rounded-md px-2 text-[12px] font-semibold", toneClass)}>
           <StatusMark state={dotState} size="sm" />
-          {look.label}
+          <span data-testid="todo-detail-status">{steps?.label ?? look.label}</span>
         </span>
+        {steps?.tail && (
+          <>
+            <span className="text-ink-3">·</span>
+            <span data-testid="todo-detail-steps-next">{steps.tail}</span>
+          </>
+        )}
         <span className="text-ink-3">·</span>
         <span>{t("todos.agent_count", { count: activeAgents.length })}</span>
+        {steps?.after && (
+          <>
+            <span className="text-ink-3">·</span>
+            <span data-testid="todo-detail-steps">{steps.after}</span>
+          </>
+        )}
         <span className="text-ink-3">·</span>
         <span>{t("todos.created_at", { time: clock(todo.created_at) })}</span>
       </div>
@@ -2549,8 +2577,9 @@ function TodoDetail({
                 <div
                   key={`${agent.machine_id}/${agent.session_id}`}
                   onClick={() => {
+                    // a drill-down: Back and the sidebar stay with this to-do (#12055)
                     if (session) {
-                      navigate({ name: "session", mid: agent.machine_id, sid: agent.session_id });
+                      openFromPage({ name: "session", mid: agent.machine_id, sid: agent.session_id });
                     }
                   }}
                   className={cx(
@@ -3558,7 +3587,7 @@ export function HandoverDialog({
       await refresh();
       toast(t("todos.sent"), "ok");
       onClose();
-      navigate({ name: "session", mid: s.machine_id, sid: s.session_id });
+      openFromPage({ name: "session", mid: s.machine_id, sid: s.session_id });
     } catch (e) {
       toast(t("todos.send_failed", { error: errorText(e) }), "error");
     } finally {

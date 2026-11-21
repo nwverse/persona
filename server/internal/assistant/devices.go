@@ -64,6 +64,8 @@ type Devices interface {
 	// subscription accounts of each upstream provider are schedulable now and when the nearest one recovers.
 	// Read-only, from the manager's in-memory caches; the zero value when no pool is configured.
 	CapacitySnapshot(ctx context.Context) proto.CapacitySnapshot
+	// GatewayRetryAt uses a bound, complete gateway inventory with fresh account observations. Zero means no hold.
+	GatewayRetryAt(source, provider string, now time.Time) time.Time
 	// Follow has the node send the manager a session's items and text as they are made (on), or stop.
 	Follow(ctx context.Context, machine, session string, on bool) error
 	// SetAttention hands over Persona Link's "Needs you" summary (fleet_attention.go) on every look; it goes on to the

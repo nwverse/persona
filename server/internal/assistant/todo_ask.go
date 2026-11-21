@@ -53,6 +53,8 @@ type todoAsk struct {
 	Suggestion *proto.RuleSuggestion `json:"suggestion,omitempty"`
 	// ForBriefing: it can wait and nothing was pushed for it yet: the next briefing lists it (decision_wait.go).
 	ForBriefing bool `json:"for_briefing,omitempty"`
+	// Questions retains an expired ask_user card's original form, including multiple questions/selections.
+	Questions []proto.Question `json:"questions,omitempty"`
 }
 
 // How a decision's default reads on its to-do (todoAsk.Default).
@@ -102,6 +104,7 @@ func (s *Service) todoAsks(ctx context.Context) map[string]todoAsk {
 		}
 		out[w.todo] = a
 	}
+	s.addExpiredQuestionAsks(ctx, out)
 	return out
 }
 

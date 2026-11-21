@@ -1,16 +1,18 @@
 Use task_plan for code, repository research and work beyond a few tool calls. Make one task per independent piece. Check machines_list, then use the knowledge base, agents_list and user preferences to fill the editable choices and their one-line reasons. Read-only, user_requested and preapproved kinds start at once; other tasks wait for the owner's 开始. A queued receipt is dispatch, so check the to-do outcome and reach its Agent via agent_send. Tool-owned reminders and events are separate.
 
-Fixed machine_policy keeps the machine on retries and refuses an unavailable launcher there; the reply explains a flexible task's move. A side conversation supervises its work, receives 督办 and closes with task_review. Main delegates a whole plan with supervisor or leaves it out. With no leader, the background supervisor handles 督办 and task_review unless assistant.main_supervises_own_tasks puts main in charge. If the caller cannot receive 督办, the same follow-up handles it and sends the caller a short notice and link at the end. Check the returned supervisor and similar running work. Pass todo_id for the caller's existing unassigned to-do, including a Lark topic, task split or failed start.
+Default machine_policy=fixed keeps the machine on retries and refuses an unavailable launcher there. Use flexible only for portable work: a failed health check can move it and the reply explains why. A side conversation supervises its work, receives 督办 and closes with task_review. Main delegates a whole plan with supervisor (one of assistant.leaders) or leaves it out. With no leader, the background supervisor handles 督办 and task_review unless assistant.main_supervises_own_tasks puts main in charge. If the caller cannot receive 督办, the same follow-up handles it and sends the caller a short notice and link at the end. Check the returned supervisor and similar running work. Pass todo_id for the caller's existing unassigned to-do, including a Lark topic, task split or failed start.
 
-Every started task keeps its original brief. The hub records the owner's source message, or autonomous work as the caller's with started_why. Give goal, done_when, expect_minutes and out_of_bounds. The card shows the brief for the owner's confirmation. For rework, replacement or another computer give continues and continues_why. Use task_retry for a failed start, including another launcher. Apply owner-approved scope changes with task_scope and pass scope_revision.
+Started tasks keep a brief (owner request or started_why). Give goal, done_when, out_of_bounds. Writable work needs done_when (PR/Issue defaults to PR merged + issue closed unless owner asks for PR-only/draft-only); read-only needs goal. Omit expect_minutes for automatic estimation; positive overrides. Manual Agents have no estimate_due. Continue via continues+continues_why; use task_retry for failed starts and task_scope+scope_revision for scope changes.
 
-Replace a read-only Codex process with a writable one for fixes. Use agent_send for live follow-up when permissions stay the same. Claude-family uses bypassPermissions for both. Codex uses plan unless assistant.readonly_mode=prompt (normal runtime permissions). pi, cursor and agy refuse readonly in either setting. Set role=leader only for a task that splits into direct workers, which it starts and reviews through restricted task_plan/task_review. Workers cannot delegate.
+File changes need readonly=false and explicitly authorized write permission. Replace a read-only Codex process with a writable one for fixes. Use agent_send for live follow-up when permissions stay the same. readonly=true adds the read-only constraint to the assignment. Claude-family uses bypassPermissions for both. Codex uses plan unless assistant.readonly_mode=prompt (normal runtime permissions). pi, cursor and agy refuse readonly in either setting. Set role=worker, or leader to start and review direct workers through restricted task_plan/task_review. Workers cannot delegate.
 
 When repository identity needs resolving, consult repositories_list, and repository_get only when useful. The user's explicit repository URL or path takes precedence. A saved binding is a reference, not authorization or an allowlist; never infer a machine or checkout path from it. Non-repository tasks need no lookup; retrieval is not a mandatory dispatch preflight. Closing the terminal on acceptance is the owner's Start choice; this tool cannot set it.
 
-Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-change"}} names its branch; {"existing":"<cwd or workspace_id>"} selects one; {"backend":{"operation_id":ID}} starts an existing todo's saved naming plan at its root on its computer once every selected repository is ready (optional host: engine); "none" creates nothing. Omitted: readonly uses none; writable Git follows assistant.task_workspace_preference (prefer-existing by default, prefer-new for isolation), and an occupied cwd uses new. Explicit existing never switches silently; refusal names its task owner. For an explicit new branch already checked out, reuse requires a clean checkout, no live Agent and no unfinished-task owner; otherwise refuse with its path and known owner. The machine's engine owns creation, location and registration; never run git worktree add. The card previews the path and is editable before Start. Default branch: task/<todo id>. Creation failure starts no Agent. Workspaces remain after acceptance. Organization read-only policy refusals include their reason: follow it, never retry unchanged.
+For an existing todo with a saved workspace naming plan, explicitly select {"backend":{"operation_id":"<saved operation ID>"}}. Its selected repositories must all be ready before the session starts at the saved root on its owning computer. An optional backend.host selects a supported engine on that computer.
 
-`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.
+Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-change"}} names its branch; {"existing":"<cwd or workspace_id>"} selects one; "none" creates nothing. Omitted: readonly uses none; writable Git follows assistant.task_workspace_preference (prefer-existing by default, prefer-new for isolation), and an occupied cwd uses new. Explicit existing never switches silently; refusal names its task owner. For an explicit new branch already checked out, reuse requires a clean checkout, no live Agent and no unfinished-task owner; otherwise refuse with its path and known owner. The machine's engine owns creation, location and registration; never run git worktree add. The card previews the path and is editable before Start. Default branch: task/<todo id>. Creation failure starts no Agent. Workspaces remain after acceptance. Organization read-only policy refusals include their reason: follow it, never retry unchanged.
+
+`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -37,6 +39,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
         "required": [
           "title",
           "prompt",
+          "role",
           "machine",
           "readonly",
           "user_requested",
@@ -49,7 +52,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
         "properties": {
           "title": {
             "type": "string",
-            "description": "Card title in Chinese, under 20 characters."
+            "description": "{{if eq .Lang "en"}}Card title in English, under 20 characters.{{else if eq .Lang "ja"}}カードに表示する日本語のタイトル（20文字未満）。{{else}}Card title in Chinese, under 20 characters.{{end}}"
           },
           "context": {"type": "string", "description": "facts the manager cannot resolve; omit project background"},
           "prompt": {
@@ -100,8 +103,8 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           },
           "role": {
             "type": "string",
-            "enum": ["leader"],
-            "description": "leader (any conversation): may hand direct workers to its own task; omit for an ordinary worker"
+            "enum": ["worker", "leader"],
+            "description": "worker: ordinary; leader (any conversation): starts/reviews direct workers"
           },
           "ultracode": {
             "type": "boolean",
@@ -117,7 +120,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           },
           "why": {
             "type": "string",
-            "description": "Chinese one-line reason for machine, directory and model."
+            "description": "{{if eq .Lang "en"}}One-line reason in English for the machine, directory and model.{{else if eq .Lang "ja"}}コンピュータ、ディレクトリ、モデルを選ぶ理由を日本語で一行に記述します。{{else}}Chinese one-line reason for machine, directory and model.{{end}}"
           },
           "done_when": {
             "type": "array",
@@ -125,11 +128,11 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
             "items": {
               "type": "string"
             },
-            "description": "Chinese checkable acceptance results told to Agent, one per entry. Nonempty for writable tasks; ignored with continues."
+            "description": "{{if eq .Lang "en"}}Checkable acceptance results in English, one per entry, shared with the Agent. Nonempty for writable tasks; ignored with continues.{{else if eq .Lang "ja"}}Agent に伝える確認可能な完了条件を日本語で一項目ずつ記述します。書き込み可能なタスクは一つ以上必須です。continues 指定時は無視されます。{{else}}Chinese checkable acceptance results told to Agent, one per entry. Nonempty for writable tasks; ignored with continues.{{end}}"
           },
           "goal": {
             "type": "string",
-            "description": "Owner's one-line Chinese outcome. Required read-only; writable defaults to title."
+            "description": "{{if eq .Lang "en"}}Owner's one-line outcome in English. Required for read-only tasks; writable tasks default to the title.{{else if eq .Lang "ja"}}ユーザーが得る結果を日本語で一行に記述します。読み取り専用タスクでは必須です。書き込み可能なタスクで省略した場合はタイトルを使います。{{else}}Owner's one-line Chinese outcome. Required read-only; writable defaults to title.{{end}}"
           },
           "out_of_bounds": {
             "type": "array",
@@ -137,7 +140,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
             "items": {
               "type": "string"
             },
-            "description": "Optional forbidden actions/areas, in Chinese, one per entry."
+            "description": "{{if eq .Lang "en"}}Optional forbidden actions or areas in English, one per entry.{{else if eq .Lang "ja"}}任意の禁止事項や対象外の範囲を日本語で一項目ずつ記述します。{{else}}Optional forbidden actions/areas, in Chinese, one per entry.{{end}}"
           },
           "continues": {
             "type": "string",
@@ -166,7 +169,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           "expect_minutes": {
             "type": "integer",
             "minimum": 0,
-            "description": "Estimated minutes; required and positive unless continues. Stuck after 1.5× without progress (≥20 minutes); overdue reported after 3× without end (≥1 day)."
+            "description": "Optional minutes override. Omit/0: comparable history, or the 60-minute system_default; positive: override. Review at 1×; stuck at 1.5× (min 20m); overdue at 3× (min 24h)."
           },
           "project": {
             "type": "string",

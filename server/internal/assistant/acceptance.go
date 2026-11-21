@@ -84,7 +84,9 @@ type acceptAsk struct {
 	RecheckAt     time.Time        `json:"recheck_at,omitzero"`
 	RaisedAt      time.Time        `json:"raised_at,omitzero"`
 	Response      string           `json:"response,omitempty"`
-	// Chosen: the option the owner chose when it was not the recommended one.
+	// Chosen: the option the owner chose when it was not the recommended one, or their own words (answerDecisionText).
+	// A recurring check's decision answered where its Agent works keeps even the recommended one (decisionTold): its
+	// card then does not say the Agent was not told.
 	Chosen string `json:"chosen,omitempty"`
 	// Check: the recurring schedule whose progress check raised this decision (schedule_todo.go, #11587). The option
 	// the owner takes is about the supervisor's approach, so it goes to the task's supervisor, not its Agent

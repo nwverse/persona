@@ -368,7 +368,7 @@ func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (ac
 	result := acceptSucceeded()
 	switch {
 	case a.Check != "":
-		s.checkDecided(ctx, t, a, label)
+		s.checkDecided(ctx, t, a, label, false)
 	case sendErr != nil:
 		result = s.decisionNotDelivered(ctx, id, a.AskedAt, label, sendErr)
 	default:

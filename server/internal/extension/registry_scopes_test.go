@@ -115,16 +115,17 @@ func TestRegistrySnapshotKeepsProcessState(t *testing.T) {
 	}
 }
 
-// A token of every scope leaves out scopes whose authority the owner must approve by name; the install screen still
-// lists each of them.
+// A token of every scope leaves out scopes whose authority the owner must approve by name (agents.permission_mode,
+// assistant.start_defaults, decisions.raise, dispatch.guard and market.refresh_own); the install screen still lists each.
 func TestEveryScopeLeavesOutThePermissionMode(t *testing.T) {
 	every := EveryScope()
-	for _, named := range []string{ScopeAgentsPermissionMode, ScopeAssistantStartDefaults, ScopeDecisionsRaise, ScopeMarketRefreshOwn} {
+	excluded := []string{ScopeAgentsPermissionMode, ScopeAssistantStartDefaults, ScopeDecisionsRaise, ScopeDispatchGuard, ScopeMarketRefreshOwn}
+	for _, named := range excluded {
 		if slices.Contains(every, named) || !slices.Contains(HubScopes, named) || InEveryScope(named) {
 			t.Fatalf("every scope has %s: %v", named, every)
 		}
 	}
-	if len(every) != len(HubScopes)-4 || !InEveryScope(ScopeAgentsControl) || !InEveryScope(ScopeAssistantDispatchPolicy) {
+	if len(every) != len(HubScopes)-len(excluded) || !InEveryScope(ScopeAgentsControl) || !InEveryScope(ScopeAssistantDispatchPolicy) {
 		t.Fatalf("every scope: %v", every)
 	}
 	every[0] = "x"
