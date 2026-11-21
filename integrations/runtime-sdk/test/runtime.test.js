@@ -917,6 +917,48 @@ test('an in-doubt send stays cached across a node-only restart', async (t) => {
   assert.equal(calls, 1, 'the live companion answers the retry from its cache')
 })
 
+test('session.send_unseen supersedes only a completed in-doubt send', async (t) => {
+  const n = await startFakeNode(t)
+  let calls = 0
+  const rt = createRuntime({ ...minimal(), send: async () => {
+    calls++
+    if (calls === 1) throw new RpcError('send outcome is unknown', 'send_failed', { delivered: 'unknown' })
+  } }, { runtime: 'toy', socketPath: n.path, retryMs: 20, pushDelayMs: 5 })
+  t.after(() => rt.stop())
+  await rt.start()
+  await n.ready
+  const params = { session_id: 's1', text: 'x', client_msg_id: 'm-superseded' }
+  await assert.rejects(n.peer.call('session.send', params), (err) => err.data?.delivered === 'unknown')
+  await assert.rejects(n.peer.call('session.send', params), (err) => err.data?.delivered === 'unknown')
+  assert.equal(calls, 1)
+  assert.deepEqual(await n.peer.call('session.send_unseen', params), { ok: true })
+  assert.equal(calls, 2, 'the checked owner-forced retry calls the driver')
+  await n.peer.call('session.send', params)
+  await n.peer.call('session.send_unseen', params)
+  assert.equal(calls, 2, 'neither retry supersedes the acknowledged attempt')
+})
+
+test('an in-doubt send expires after ten minutes', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] })
+  const n = await startFakeNode(t)
+  let calls = 0
+  const rt = createRuntime({ ...minimal(), send: async () => {
+    calls++
+    if (calls === 1) throw new RpcError('send outcome is unknown', 'send_failed', { delivered: 'unknown' })
+  } }, { runtime: 'toy', socketPath: n.path, retryMs: 20, pushDelayMs: 5 })
+  t.after(() => rt.stop())
+  await rt.start()
+  await n.ready
+  const params = { session_id: 's1', text: 'x', client_msg_id: 'm-expiry' }
+  await assert.rejects(n.peer.call('session.send', params), (err) => err.data?.delivered === 'unknown')
+  t.mock.timers.tick(10 * 60 * 1000)
+  await assert.rejects(n.peer.call('session.send', params), (err) => err.data?.delivered === 'unknown')
+  assert.equal(calls, 1, 'the outcome remains cached through the TTL boundary')
+  t.mock.timers.tick(1)
+  assert.deepEqual(await n.peer.call('session.send', params), { ok: true })
+  assert.equal(calls, 2, 'an expired in-doubt outcome no longer blocks a resend')
+})
+
 test('recent: pinned and phone-touched sessions always, the rest by age up to the limit, newest first', async (t) => {
   const n = await startFakeNode(t)
   const rt = createRuntime(minimal({ send: async () => {} }), { runtime: 'toy', socketPath: n.path, retryMs: 20, pushDelayMs: 5 })
