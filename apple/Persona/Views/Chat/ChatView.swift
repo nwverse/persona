@@ -359,6 +359,8 @@ struct ChatView: View {
         // Every row's memo below (RowMemo) is this chat's: item ids repeat across chats (#372). Outermost, so the
         // sheets this page presents (a tool's detail) are inside it too.
         chatPage.environment(\.rowMemoScope, RowMemo.scope(shownKey))
+            // A tap on a word of a message looks it up while a text_lookup extension answers (#10977).
+            .textLookupSurface(style == .assistant ? "chat" : "agent")
             .environment(\.assistantCardConversation, style == .assistant ? shownKey : nil)
             // Only this chat hands its lifted message to the page (a chat shown in a sheet from it draws its own).
             .environment(\.messageLiftHost, nil)

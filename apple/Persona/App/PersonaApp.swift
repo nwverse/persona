@@ -102,6 +102,7 @@ struct PersonaApp: App {
                 PushRegistrar.shared.foreground() // notifications allowed in Settings since a denial: register now (#1861)
                 model.resumeLinks()
                 model.refreshExtensionSurfaces()
+                model.textLookup.foreground() // the lookup extension turned on or off elsewhere (#10977), at most once a minute
                 #if os(iOS)
                 HomeWidgetWriter.shared.tellHub() // whether the hub should wake it for its widgets (#5721)
                 #endif

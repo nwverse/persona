@@ -1813,6 +1813,7 @@ struct InboxDetailView: View {
                 .safeAreaInset(edge: .top, spacing: 0) {
                     InboxActionBar(item: current, draft: { drafting = true }, handOff: { handingOff = true })
                 }
+                .textLookupSurface("inbox") // the summary's and a chat's words look up on a tap (#10977)
         }
     }
 

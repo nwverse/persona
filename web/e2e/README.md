@@ -557,3 +557,17 @@ the gateway's 用量 (none named) neutral, that the open page keeps `--ink`, tha
 and that every colored icon reads at 3:1 on the sidebar and on the hover fill, as the browser resolves them.
 `--monochrome-only` takes only the Monochrome part, to set its screenshots beside another build's. Screenshots and
 `results.json` go to the artifact directory; a five-minute watchdog ends the run, and the last line is the verdict.
+
+## Click a word to look it up (#10977)
+
+```sh
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<unused port> npx vite --port <web port> --strictPort --host 127.0.0.1 &)
+node web/e2e/text-lookup.mjs <loopback-web-origin> <artifact-directory> [--chromium <executable>]
+```
+
+Opens the real app with every hub request and the socket answered in the browser by invented data. In light and dark
+it clicks a word in an assistant reply, an Agent transcript and an Inbox item and waits for the word card with its
+meaning; it checks the saved-word underline is painted (Custom Highlight ranges, one style element, the text node
+not split); and with `available: false` and with no `text_lookup` feature it checks the same click adds no card, no
+style and no highlight. Fails on any page error. Writes `results.json` and screenshots; a 180-second watchdog ends
+the run with a timeout verdict.

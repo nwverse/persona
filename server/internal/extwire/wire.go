@@ -53,6 +53,8 @@ var Routes = []string{
 	"/api/v1/error-reports",
 	"/api/v1/subscriptions",
 	"/api/v1/subscriptions/",
+	"/api/v1/text-lookup",
+	"/api/v1/text-lookup/",
 	"/api/v1/avatars/", // AvatarsRoute
 }
 

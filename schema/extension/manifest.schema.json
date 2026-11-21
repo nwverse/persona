@@ -364,6 +364,7 @@
         "auth_relay": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/AuthRelayItem"}},
         "secret_providers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/SecretProviderItem"}},
         "repository_providers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/RepositoryProviderItem"}},
+        "text_lookup": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/TextLookupItem"}},
         "messaging": {"type": "array", "minItems": 1, "items": {"$ref": "messaging.schema.json#/$defs/MessagingItem"}}
       }
     },
@@ -578,6 +579,17 @@
           "items": {"$ref": "#/$defs/RepositoryCapability"}}
       },
       "required": ["id", "name", "hosts"]
+    },
+    "TextLookupItem": {
+      "description": "A dictionary the apps ask for the meaning of a word the user taps (text_lookup.state, text_lookup.lookup, text_lookup.save, text_lookup.remove). Needs the program to speak the protocol. Only English (languages [\"en\"]) for now.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 80, "description": "What the dictionary is called, in a few words."},
+        "languages": {"type": "array", "description": "The languages it looks up. Only \"en\" is accepted for now; omitted means [\"en\"].", "minItems": 1, "maxItems": 1, "items": {"type": "string", "enum": ["en"]}}
+      },
+      "required": ["id"]
     },
     "RepositoryCapability": {
       "description": "A repository provider's optional answer: pr_status (repo.pr_status).",

@@ -294,6 +294,7 @@ type Contributes struct {
 	AuthRelay           []AuthRelayItem          `json:"auth_relay,omitempty"`
 	SecretProviders     []SecretProviderItem     `json:"secret_providers,omitempty"`
 	RepositoryProviders []RepositoryProviderItem `json:"repository_providers,omitempty"`
+	TextLookup          []TextLookupItem         `json:"text_lookup,omitempty"`
 	Messaging           []MessagingItem          `json:"messaging,omitempty"`
 	// Extra keys stay at this object's level on the wire; they cannot replace declared fields.
 	AdditionalProperties map[string]json.RawMessage `json:"-"`
@@ -305,7 +306,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "text_lookup", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -337,7 +338,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "text_lookup", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -593,6 +594,17 @@ type RepositoryProviderItem struct {
 	// What else the program answers (#11584): pr_status, the state of a pull request for delivery checks
 	// (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
 	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+// TextLookupItem: A dictionary the apps ask for the meaning of a word the user taps (text_lookup.state,
+// text_lookup.lookup, text_lookup.save, text_lookup.remove). Needs the program to speak the protocol. Only English
+// (languages ["en"]) for now.
+type TextLookupItem struct {
+	ID string `json:"id"`
+	// What the dictionary is called, in a few words.
+	Name string `json:"name,omitempty"`
+	// The languages it looks up. Only "en" is accepted for now; omitted means ["en"].
+	Languages []string `json:"languages,omitempty"`
 }
 
 // RepositoryCapability: A repository provider's optional answer: pr_status (repo.pr_status).
@@ -1420,6 +1432,64 @@ type AuthRelayResult struct {
 	// The app the page authorized (or asked to), as the page names it.
 	App    string `json:"app,omitempty"`
 	Reason string `json:"reason,omitempty"`
+}
+
+// TextLookupStateParams: text_lookup.state's parameters: which contribution to ask for the words the user saved and
+// whether saved words are underlined.
+type TextLookupStateParams struct {
+	Contribution string `json:"contribution"`
+}
+
+// TextLookupStateResult: what text_lookup.state answers. words is capped by the manager at 5000.
+type TextLookupStateResult struct {
+	UnderlineSaved bool     `json:"underline_saved"`
+	Words          []string `json:"words,omitempty"`
+}
+
+// TextLookupLookupParams: text_lookup.lookup's parameters: the word the user tapped, an optional sentence around it,
+// the word's language and the language of the app.
+type TextLookupLookupParams struct {
+	Contribution string `json:"contribution"`
+	Word         string `json:"word"`
+	Context      string `json:"context,omitempty"`
+	Lang         string `json:"lang"`
+	UILang       string `json:"ui_lang"`
+}
+
+// TextLookupSense: one meaning of a looked-up word.
+type TextLookupSense struct {
+	Pos  string `json:"pos,omitempty"`
+	Text string `json:"text"`
+}
+
+// TextLookupLookupResult: what text_lookup.lookup answers: found is false when the dictionary has no entry.
+type TextLookupLookupResult struct {
+	Found    bool              `json:"found"`
+	Word     string            `json:"word"`
+	Lemma    string            `json:"lemma,omitempty"`
+	Phonetic string            `json:"phonetic,omitempty"`
+	Senses   []TextLookupSense `json:"senses,omitempty"`
+	Saved    bool              `json:"saved"`
+}
+
+// TextLookupSaveParams: text_lookup.save's parameters: the word to remember, an optional sentence around it and where
+// the user saved it from.
+type TextLookupSaveParams struct {
+	Contribution string `json:"contribution"`
+	Word         string `json:"word"`
+	Context      string `json:"context,omitempty"`
+	Source       string `json:"source,omitempty"`
+}
+
+// TextLookupRemoveParams: text_lookup.remove's parameters: the saved word to forget.
+type TextLookupRemoveParams struct {
+	Contribution string `json:"contribution"`
+	Word         string `json:"word"`
+}
+
+// TextLookupSavedResult: what text_lookup.save and text_lookup.remove answer: whether the word is saved afterwards.
+type TextLookupSavedResult struct {
+	Saved bool `json:"saved"`
 }
 
 // SecretPurpose: what a secret value is resolved for: kind extension (an extension's secret, id its id), launcher (a
@@ -6611,6 +6681,7 @@ var newDef = map[string]func() any{
 	"AuthRelayItem":                 func() any { return new(AuthRelayItem) },
 	"SecretProviderItem":            func() any { return new(SecretProviderItem) },
 	"RepositoryProviderItem":        func() any { return new(RepositoryProviderItem) },
+	"TextLookupItem":                func() any { return new(TextLookupItem) },
 	"RepositoryLinkLabel":           func() any { return new(RepositoryLinkLabel) },
 	"ErrorReportsItem":              func() any { return new(ErrorReportsItem) },
 	"TunnelItem":                    func() any { return new(TunnelItem) },
@@ -6679,6 +6750,14 @@ var newDef = map[string]func() any{
 	"ErrorReportsDeliver":           func() any { return new(ErrorReportsDeliver) },
 	"AuthRelayCompleteParams":       func() any { return new(AuthRelayCompleteParams) },
 	"AuthRelayResult":               func() any { return new(AuthRelayResult) },
+	"TextLookupStateParams":         func() any { return new(TextLookupStateParams) },
+	"TextLookupStateResult":         func() any { return new(TextLookupStateResult) },
+	"TextLookupLookupParams":        func() any { return new(TextLookupLookupParams) },
+	"TextLookupSense":               func() any { return new(TextLookupSense) },
+	"TextLookupLookupResult":        func() any { return new(TextLookupLookupResult) },
+	"TextLookupSaveParams":          func() any { return new(TextLookupSaveParams) },
+	"TextLookupRemoveParams":        func() any { return new(TextLookupRemoveParams) },
+	"TextLookupSavedResult":         func() any { return new(TextLookupSavedResult) },
 	"SecretPurpose":                 func() any { return new(SecretPurpose) },
 	"SecretsDescribeParams":         func() any { return new(SecretsDescribeParams) },
 	"SecretsDescribeResult":         func() any { return new(SecretsDescribeResult) },

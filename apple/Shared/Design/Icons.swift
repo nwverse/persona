@@ -202,6 +202,11 @@ extension Theme {
         /// New Worktree…: another checkout of a workspace's repository (docs/integrations/terminal.md「New worktree…」).
         static let newWorktree = "plus.rectangle.on.folder"
         static let retry = "arrow.clockwise"
+        /// Look a word up in the text_lookup extension (the edit menu's Look Up in <provider>, #10977).
+        static let lookUpWord = glossary
+        /// Save a looked-up word to the extension's list, and the word saved there (the lookup card's Save / Saved).
+        static let saveWord = "bookmark"
+        static let savedWord = "bookmark.fill"
         /// Put a computer's own Persona files right (Machine Details › What This Computer Can Do › Repair).
         static let repair = "wrench.adjustable"
         /// Loads the in-app page again (the link sheet's header).

@@ -621,6 +621,9 @@ func (ps *extensions) changed(c extension.Change) {
 	if ps.h != nil {
 		ps.h.agentFiltersChanged(ctx) // only when they changed (agent_filters.go)
 	}
+	if ps.h != nil && textLookupTouched(c.Old, c.ID, ps.reg) {
+		ps.h.textLookupChanged() // the apps ask GET /api/v1/text-lookup again
+	}
 	if ps.h != nil {
 		ps.h.sendReport() // its looks came or went: the hub serves them from the report (hub/looks.go)
 		if c.Kind == "removed" && c.Old != nil && len(c.Old.Full.Looks()) > 0 && ps.h.opts.Hub != nil {
