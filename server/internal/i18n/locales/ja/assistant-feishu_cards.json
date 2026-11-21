@@ -107,6 +107,7 @@
   "tasks_no_decide": "今は判断を待っているものはありません。",
   "tasks_no_todos": "進行中のタスクはありません。",
   "help_always": "- `/stop` 現在のやり取りを止める\n- `/status` 現在の送信先\n- `/help` このヘルプ",
+  "menu_needs_workbench": "このメニュー項目はワークベンチが必要です。Persona の「設定 › Feishu ボット」で「ワークベンチ」をオンにしてください。",
   "model_main_only": "このコマンドは Persona のメインチャットでのみ使えます。先に /main を送信してください。",
   "model_no_main": "メインチャットはまだ作成されていません。先にメッセージを送信してください。",
   "model_list_title": "メインチャットのモデル",

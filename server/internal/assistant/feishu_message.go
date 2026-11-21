@@ -33,18 +33,7 @@ func (s *Service) FeishuMessage(ctx context.Context, p FeishuMessage) error {
 	}
 	// It takes its place as it comes, before the bot's status is read (a call to the hub). One that is not handled
 	// (refused, redelivered) still passes the turn on.
-	b := &s.fbot
-	turn := &feishuTurn{done: make(chan struct{}), wait: feishuTurnWait, now: time.Now}
-	b.mu.Lock()
-	if b.now != nil {
-		turn.now = b.now
-	}
-	turn.since = turn.now()
-	turn.prev, b.line = b.line, turn.done
-	if b.turnWait > 0 {
-		turn.wait = b.turnWait
-	}
-	b.mu.Unlock()
+	turn := s.takeFeishuTurn()
 	queued := false
 	defer func() {
 		if !queued {
@@ -78,6 +67,24 @@ func (s *Service) FeishuMessage(ctx context.Context, p FeishuMessage) error {
 		s.feishuMessage(ev, st, p.Action)
 	}()
 	return nil
+}
+
+// takeFeishuTurn is the next place in the chat's line, taken as a message or a menu press comes (FeishuMenu): each
+// waits for the one before it, so they are answered in the order they came.
+func (s *Service) takeFeishuTurn() *feishuTurn {
+	b := &s.fbot
+	turn := &feishuTurn{done: make(chan struct{}), wait: feishuTurnWait, now: time.Now}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.now != nil {
+		turn.now = b.now
+	}
+	turn.since = turn.now()
+	turn.prev, b.line = b.line, turn.done
+	if b.turnWait > 0 {
+		turn.wait = b.turnWait
+	}
+	return turn
 }
 
 func (s *Service) feishuMessage(ev feishubot.MessageEvent, st FeishuStatus, action string) {

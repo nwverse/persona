@@ -75,8 +75,52 @@ func (h *Manager) botEvent(ctx context.Context, payload []byte) (any, error) {
 		if json.Unmarshal(env.Event, &ev) == nil {
 			go h.botWelcome(ev.OperatorID.OpenID, ev.ChatID)
 		}
+	case feishubot.EventBotMenu:
+		var ev feishubot.BotMenu
+		if err := json.Unmarshal(env.Event, &ev); err != nil {
+			return nil, err
+		}
+		// A press Feishu delivers again (its acknowledgement lost) is the same event: dropped here, as a redelivered
+		// message is, and claimed again by the assistant, which keeps its ids across restarts.
+		id := env.Header.EventID
+		if id != "" && !h.claimBotMessage("menu:"+id) {
+			return nil, nil
+		}
+		// Its place in the chat's line is taken as it comes, as a message's is: a /new pressed and a message sent right
+		// after it reach the assistant in that order.
+		b := &h.bots
+		done := make(chan struct{})
+		b.mu.Lock()
+		prev := b.line
+		b.line = done
+		b.mu.Unlock()
+		go h.botMenu(ev, id, time.Now(), prev, done)
 	}
 	return nil, nil
+}
+
+// botMenu hands the owner's press on the bot's menu to the assistant once the message or press before it was handed
+// over (prev), and lets the next one go (done) once this one is; the assistant answers it in the owner's private chat
+// as the command the entry names (docs/extensions/bots.md "The menu"). Anyone else's press is nothing: the menu shows
+// to whoever opens a chat with the bot.
+func (h *Manager) botMenu(ev feishubot.BotMenu, id string, since time.Time, prev, done chan struct{}) {
+	defer close(done)
+	if prev != nil {
+		t := time.NewTimer(botTurnWait())
+		select {
+		case <-prev:
+		case <-t.C:
+		}
+		t.Stop()
+	}
+	_, set := h.botAPI()
+	key := strings.TrimSpace(ev.EventKey)
+	if set.Owner == nil || ev.Operator.OperatorID.OpenID != set.Owner.OpenID || key == "" {
+		return
+	}
+	if err := h.toAssistantSince(assistantwire.MethodFeishuMenu, assistantwire.FeishuMenu{Key: key, EventID: id}, since); err != nil {
+		h.logf("bots: the menu's %s: %v", key, err)
+	}
 }
 
 // botRecalled tells the assistant a message was recalled in a chat the bot is used in (the owner's private chat, a
