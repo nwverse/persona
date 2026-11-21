@@ -2,11 +2,13 @@ package assistant
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func TestOrdinaryModelPickCannotCrossRuntimeConnectionsOfTheSameKind(t *testing.T) {
@@ -17,6 +19,8 @@ func TestOrdinaryModelPickCannotCrossRuntimeConnectionsOfTheSameKind(t *testing.
 		{"native to runtime", "", "", "claude", "hosted-two", "claude|runtime:runtime-two", http.StatusBadRequest},
 		{"runtime to native", proto.SourceRuntime, "runtime-one", "hosted-one", "claude", "claude", http.StatusBadRequest},
 		{"runtime to another runtime", proto.SourceRuntime, "runtime-one", "hosted-one", "hosted-two", "claude|runtime:runtime-two", http.StatusBadRequest},
+		{"native to unidentified runtime", "", "", "claude", "hosted-unknown", "unknown|runtime:runtime-two", http.StatusBadRequest},
+		{"runtime to unidentified runtime", proto.SourceRuntime, "runtime-one", "hosted-one", "hosted-unknown", "unknown|runtime:runtime-two", http.StatusBadRequest},
 		{"same runtime alias", proto.SourceRuntime, "runtime-one", "hosted-one", "hosted-alias", "claude|runtime:runtime-one", http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -25,7 +29,8 @@ func TestOrdinaryModelPickCannotCrossRuntimeConnectionsOfTheSameKind(t *testing.
 			f.launcherList = append(f.launcherList,
 				proto.Launcher{Name: "hosted-one", Source: "runtime-one", Agent: "claude", Assistant: true},
 				proto.Launcher{Name: "hosted-alias", Source: "runtime-one", Agent: "claude", Assistant: true},
-				proto.Launcher{Name: "hosted-two", Source: "runtime-two", Agent: "claude", Assistant: true})
+				proto.Launcher{Name: "hosted-two", Source: "runtime-two", Agent: "claude", Assistant: true},
+				proto.Launcher{Name: "hosted-unknown", Source: "runtime-two", Agent: "unknown", Assistant: true})
 			f.mu.Unlock()
 			f.setSessions("server", proto.Session{SessionID: "main", Assistant: true, Agent: "claude", Launcher: tc.current, SourceKind: tc.source, SourceInstanceID: tc.instance})
 			checks := 0
@@ -47,6 +52,21 @@ func TestOrdinaryModelPickCannotCrossRuntimeConnectionsOfTheSameKind(t *testing.
 			if checks != 1 {
 				t.Fatalf("connection identity was not attested once: %d", checks)
 			}
+			_, err := send(t, s, "main", map[string]any{"launcher": tc.target})
+			if tc.want == http.StatusOK {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				var refusal *rpc.Error
+				if !errors.As(err, &refusal) || !strings.Contains(string(refusal.Data), `"delivered":"none"`) {
+					t.Fatalf("send lost non-delivery receipt: %v", err)
+				}
+			}
+			if checks != 2 {
+				t.Fatalf("send did not attest connection: %d", checks)
+			}
+
 		})
 	}
 }

@@ -70,7 +70,9 @@ func (s *Service) otherKindPick(ctx context.Context, machine, sid, launcher stri
 		picked = assistantKind(s.launcherAgent(ctx, machine, launcher))
 	}
 	if picked == "" {
-		return nil
+		// A runtime must attest its connection even when its display kind is
+		// unknown. Native aliases still retain the no-guessing behavior.
+		return s.logicalAdapterPick(ctx, machine, c, launcher)
 	}
 	if picked == conv {
 		return s.logicalAdapterPick(ctx, machine, c, launcher)
