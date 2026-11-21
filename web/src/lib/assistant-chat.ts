@@ -23,6 +23,7 @@ export interface AssistantLauncher {
   agent_type?: string;
   base_url?: string;
   assistant?: boolean;
+  supervision_policy?: boolean;
   source?: string;
 }
 

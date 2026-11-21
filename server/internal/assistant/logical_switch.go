@@ -246,7 +246,7 @@ func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p 
 		return nil, err
 	}
 	if role && !target.SupervisionPolicy {
-		return nil, logicalRefusal(ctx, "unsupported_policy")
+		return nil, s.supervisionRuntimeRefusal(ctx, p.MachineID)
 	}
 	if c == nil {
 		if p.ExpectedEpoch != 1 || assistantKind(row.Agent) == "" {
