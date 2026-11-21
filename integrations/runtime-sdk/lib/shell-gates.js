@@ -190,4 +190,3 @@ export function matchShellGate(command, gates, depth = 0) {
   }
   return gates.find((g) => g.re?.test(command))
 }
-
