@@ -1397,6 +1397,15 @@ const TodoTriageSection = memo(function TodoTriageSection({
   );
 });
 
+/** Keeps the pinned display order of still-present members while appending newly joined members at the end. */
+function mergePinnedOrder(pinned: readonly string[], members: readonly Todo[]): string[] {
+  const present = new Set(members.map((m) => m.id));
+  const out = pinned.filter((id) => present.has(id));
+  const seen = new Set(out);
+  for (const m of members) if (!seen.has(m.id)) out.push(m.id);
+  return out;
+}
+
 /** A section's row: the group's lead, and its related to-dos under "N related" (same PR, issue, title or plan). */
 function TodoTriageRow({
   group,
@@ -1417,10 +1426,55 @@ function TodoTriageRow({
   onSeen?: (id: string) => void;
   onMenu: TodoRowMenuOpener;
 }) {
-  const others = group.members.slice(1);
-  const [opened, setOpen] = useState(false);
-  // a selected member always shows, however it was selected (a click, the address, a push)
-  const open = opened || others.some((m) => m.id === selectedId);
+  // When selection lands on a non-lead member (deep link, click, or a live tick demoting the selected lead),
+  // latch the row open so it stays expanded even if that member later becomes lead again (#12417).
+  const selectedOtherId = group.members.slice(1).some((m) => m.id === selectedId) ? selectedId : undefined;
+  const [opened, setOpened] = useState(selectedOtherId !== undefined);
+  const [seenSelectedOtherId, setSeenSelectedOtherId] = useState(selectedOtherId);
+  // While expanded, pin member positions so live activity ticks that swap `group.lead` never jump rows under the cursor.
+  const [pinnedOrder, setPinnedOrder] = useState<string[] | null>(() => (selectedOtherId !== undefined ? group.members.map((m) => m.id) : null));
+
+  if (selectedOtherId !== seenSelectedOtherId) {
+    setSeenSelectedOtherId(selectedOtherId);
+    if (selectedOtherId !== undefined && !opened) {
+      setOpened(true);
+      setPinnedOrder(group.members.map((m) => m.id));
+    }
+  }
+
+  if (opened && pinnedOrder) {
+    const nextOrder = mergePinnedOrder(pinnedOrder, group.members);
+    if (nextOrder.length !== pinnedOrder.length || nextOrder.some((id, i) => id !== pinnedOrder[i])) {
+      setPinnedOrder(nextOrder);
+    }
+  }
+
+  const displayMembers = useMemo(() => {
+    if (!opened || !pinnedOrder) return group.members;
+    const byId = new Map(group.members.map((m) => [m.id, m]));
+    const ordered: Todo[] = [];
+    for (const id of pinnedOrder) {
+      const m = byId.get(id);
+      if (m) {
+        ordered.push(m);
+        byId.delete(id);
+      }
+    }
+    for (const m of byId.values()) ordered.push(m);
+    return ordered;
+  }, [opened, pinnedOrder, group.members]);
+
+  const lead = displayMembers[0] ?? group.lead;
+  const others = displayMembers.slice(1);
+  const toggleOpen = () => {
+    if (opened) {
+      setOpened(false);
+      setPinnedOrder(null);
+    } else {
+      setOpened(true);
+      setPinnedOrder(group.members.map((m) => m.id));
+    }
+  };
   const item = (td: Todo) => (
     <TodoListItem
       key={td.id}
@@ -1436,21 +1490,21 @@ function TodoTriageRow({
     />
   );
   return (
-    <div data-testid="todo-triage-row" data-id={group.lead.id} data-members={group.members.length}>
-      {item(group.lead)}
+    <div data-testid="todo-triage-row" data-id={lead.id} data-group-key={group.key} data-members={displayMembers.length}>
+      {item(lead)}
       {others.length > 0 && (
         <button
           type="button"
-          aria-expanded={open}
-          onClick={() => setOpen(!open)}
+          aria-expanded={opened}
+          onClick={toggleOpen}
           className="ml-9 flex h-7 items-center gap-1 rounded-control px-1.5 text-[11.5px] whitespace-nowrap text-ink-3 hover:bg-hover hover:text-ink-2"
         >
-          <Icon name="chevron" size={10} stroke={2.4} className="transition-transform" style={{ transform: open ? "none" : "rotate(-90deg)" }} />
+          <Icon name="chevron" size={10} stroke={2.4} className="transition-transform" style={{ transform: opened ? "none" : "rotate(-90deg)" }} />
           {t("todos.related", { count: others.length })}
-          {!open && <OwnerMarkCount count={ownerCount(others, views)} />}
+          {!opened && <OwnerMarkCount count={ownerCount(others, views)} />}
         </button>
       )}
-      {open && <div className="ml-6 flex flex-col gap-1 border-l border-line pl-2">{others.map(item)}</div>}
+      {opened && others.length > 0 && <div className="ml-6 flex flex-col gap-1 border-l border-line pl-2">{others.map(item)}</div>}
     </div>
   );
 }

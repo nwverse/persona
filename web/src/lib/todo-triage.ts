@@ -381,8 +381,18 @@ export function supersededFailedStarts(todos: Todo[]): Set<string> {
   return new Set(todos.filter((td) => td.start_error && finishedRows.has(root(td.id))).map((td) => td.id));
 }
 
+/** Canonical stable key for a cluster of related to-dos: its lexicographically smallest member id, independent of
+ *  which member currently leads by recency or urgency. */
+export function triageGroupKey(members: readonly Pick<Todo, "id">[]): string {
+  let key = members[0].id;
+  for (let i = 1; i < members.length; i++) {
+    if (members[i].id < key) key = members[i].id;
+  }
+  return key;
+}
+
 export interface TriageGroup {
-  /** The lead's id: stable while the lead stays. */
+  /** Stable cluster key (lexicographically smallest member id), independent of transient lead recency. */
   key: string;
   section: TriageSection;
   /** The member whose section is the group's, most recently active among those. */
@@ -454,7 +464,7 @@ export function triageTodos(
     const lead = members[0];
     const lt = placed.get(lead.id)!;
     const triageOf = new Map(members.map((m) => [m.id, placed.get(m.id)!]));
-    sections[lt.section].push({ key: lead.id, section: lt.section, lead, members, triage: triageOf, last: Math.max(...members.map((m) => placed.get(m.id)!.last)) });
+    sections[lt.section].push({ key: triageGroupKey(members), section: lt.section, lead, members, triage: triageOf, last: Math.max(...members.map((m) => placed.get(m.id)!.last)) });
   }
   for (const s of TRIAGE_SECTIONS) sections[s].sort((a, b) => b.last - a.last || a.key.localeCompare(b.key));
   return { sections, todoCounts, open, shelved, finished };
