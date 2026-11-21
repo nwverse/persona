@@ -30794,6 +30794,28 @@
         }
       }
     },
+    "Assistants on %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Assistants on %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ のアシスタント"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 上的助手"
+          }
+        }
+      }
+    },
     "Attach Live" : {
       "localizations" : {
         "en" : {
