@@ -119,6 +119,41 @@ describe('MCP proxy (#7333)', { timeout: 15_000 }, () => {
   })
 })
 
+describe('command gate tools', { timeout: 15_000 }, () => {
+  // What the node adds for a runtime's assistant chat (server/internal/node/assistant_runtime.go gateTools,
+  // gateToolSchema): the assistant's instructions name it, so agy must see it declared, its schema as the node gives it.
+  const gateSchema = (command) => ({
+    type: 'object', required: ['args'],
+    properties: { args: { type: 'array', items: { type: 'string' }, description: `The words after ${command}: METHOD PATH [JSON body] and its flags, one per item` } },
+  })
+  const chatAPI = {
+    name: 'chat_api',
+    description: 'Run the `ex` helper of the chat skill: `args` are the words after `ex`, e.g. ["GET", "/me"], ["GET", "/conversations?scope=group&limit=100"], ["POST", "/conversations/FEED_ID/messages", "{\\"text\\":\\"hi\\"}"]. Reads run at once; writes other people see are confirmed on the phone first, and a refusal comes back as the result. Returns what ex prints.',
+    inputSchema: gateSchema('ex'),
+  }
+
+  it('declares it with its schema unchanged and passes its calls on by name', async (t) => {
+    const { call } = proxied(t, [chatAPI, { name: 'agents_list', description: 'List the Agents', inputSchema: { type: 'object', properties: {} } }])
+    const listed = await call('tools/list', {})
+    assert.deepEqual(listed.result.tools.map((x) => x.name), ['chat_api', 'persona_call'])
+    assert.deepEqual(listed.result.tools[0], chatAPI)
+    const args = { args: ['GET', '/me'] }
+    for (const params of [{ name: 'chat_api', arguments: args }, { name: 'persona_call', arguments: { name: 'chat_api', arguments: args } }]) {
+      const res = await call('tools/call', params)
+      assert.deepEqual(JSON.parse(res.result.content[0].text), { name: 'chat_api', args })
+    }
+  })
+
+  it('keeps one with a short description reachable through persona_call, with its arguments', async (t) => {
+    const short = { name: 'ex_api', description: 'Run ex.', inputSchema: gateSchema('ex') }
+    const { call } = proxied(t, [short])
+    const listed = await call('tools/list', {})
+    assert.deepEqual(listed.result.tools.map((x) => x.name), ['persona_call'])
+    const text = (await call('tools/call', { name: 'persona_call', arguments: {} })).result.content[0].text
+    assert.ok(text.includes(`- ex_api: Run ex. Arguments: ${JSON.stringify(short.inputSchema)}`), text)
+  })
+})
+
 describe('MCP declaration enums (#9944)', { timeout: 15_000 }, () => {
   // The template has language branches and is not JSON until the server renders it. Use its recorded MCP wire form.
   const rendered = JSON.parse(readFileSync(new URL('../../../server/internal/hub/testdata/prompts/mcp_tools/assistant/task_review.golden', import.meta.url), 'utf8'))
