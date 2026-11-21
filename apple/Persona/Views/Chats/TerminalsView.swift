@@ -495,7 +495,7 @@ nonisolated enum TerminalsList {
         switch (raw ?? "").lowercased() {
         case "", "claude": "Claude"
         case "codex": "Codex"
-        case "traex": "TRAEX"
+        case "traex", "traecli", "trae-cli": Session.traeCLIName
         default: raw ?? ""
         }
     }
