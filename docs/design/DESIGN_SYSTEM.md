@@ -1747,6 +1747,20 @@ Watch maps success, failure, notification, stop and retry the same way. A watch 
 
 ### 4.4 Confirmation and undo
 
+For an existing Assistant conversation on a hub with logical-segment switching,
+choosing a different engine or runtime connection in the existing model panel
+opens the shared `Dialog`/sheet with **Switch connection** and Cancel. The audience
+is people deliberately changing an advanced conversation connection. The text
+explains that recent messages and a summary continue while the conversation and
+tasks stay, and the next message activates the new connection. Selection alone
+sends nothing. The underlying model panel is held beneath the confirmation.
+Submit shows a pending action immediately and uses a distinct switch operation;
+it never writes an ordinary model pick across engines. An uncertain response
+keeps the exact operation for retry, says its result is unconfirmed, and labels
+dismissal Close. Actual session updates, rather than an optimistic engine rename,
+confirm activation. Older hubs keep their existing unavailable-engine explanation.
+
+
 Severity ladder to adopt:
 
 1. Reversible: do it and offer Undo in a toast (inbox bulk actions, remove from list, folder trash do this).

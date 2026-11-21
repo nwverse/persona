@@ -43,7 +43,7 @@ func (e *launcherOtherKind) rpcError(l i18n.Lang) *rpc.Error {
 // as the node tells a conversation's kind.
 func assistantKind(agent string) string {
 	switch agent {
-	case "claude", "codex", "agy":
+	case "claude", "codex", "agy", "pi", "opencode", "omp", "dsh", "grok", "gemini", "qwen", "kimi", "droid", "cursor", "traex":
 		return agent
 	}
 	return ""
@@ -58,6 +58,7 @@ func (s *Service) otherKindPick(ctx context.Context, machine, sid, launcher stri
 	if !known || conv == "" {
 		return nil
 	}
+	machine = s.logicalExecutionMachine(ctx, machine, sid)
 	var picked string
 	if proto.IsExternalLauncher(launcher) {
 		agent, err := s.externalLauncherAgent(ctx, machine, launcher)
@@ -68,8 +69,11 @@ func (s *Service) otherKindPick(ctx context.Context, machine, sid, launcher stri
 	} else {
 		picked = assistantKind(s.launcherAgent(ctx, machine, launcher))
 	}
-	if picked == "" || picked == conv {
+	if picked == "" {
 		return nil
+	}
+	if picked == conv {
+		return s.logicalAdapterPick(ctx, machine, c, launcher)
 	}
 	return &launcherOtherKind{conversationAgent: conv, launcher: launcher, launcherAgent: picked}
 }

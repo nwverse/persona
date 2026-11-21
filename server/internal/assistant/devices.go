@@ -116,7 +116,7 @@ func (b *BusHub) keepFromSnapshot(s Snapshot) {
 // NodeAnswer answers the requests of a node that are the assistant's own (devices.Options.Answer): which launcher and
 // model a message the node sends a conversation by itself runs on (assistant.model), and the live snapshot before
 // each message (assistant.context).
-func (s *Service) NodeAnswer(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
+func (s *Service) nodeAnswer(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
 	if err := s.conversationParamsAvailable(ctx, machine, params); err != nil {
 		return nil, true, err
 	}

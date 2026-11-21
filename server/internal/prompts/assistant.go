@@ -1351,3 +1351,17 @@ func RenderTodoDirection(d DirectionNotes) string {
 	}
 	return render("todo/direction", d)
 }
+
+// SegmentHandoff continues the same logical conversation on a new engine.
+type SegmentHandoff struct {
+	Language string
+	Summary  string
+	Recent   []HandoffTurn
+	Text     string
+	Partial  bool
+}
+
+func RenderSegmentHandoff(h SegmentHandoff) string { return render("assistant/segment_handoff", h) }
+func RenderSegmentSummary(language string) string {
+	return render("assistant/segment_summary", language)
+}
