@@ -132,6 +132,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/android-test.yml").read_text()
         release = PR.read_text()
         self.assertIn("required: true", workflow)
+        self.assertEqual(yaml.load((ROOT / ".github/workflows/ci.yml").read_text(), Loader=yaml.BaseLoader)["jobs"]["android"]["with"]["commit"], "${{ github.sha }}")
         self.assertIn("ref: ${{ inputs.commit || github.sha }}", workflow)
         self.assertIn("lane: [lint-build-test-0, test-1]", workflow)
         self.assertIn("android-source-receipt-${{ inputs.commit || github.sha }}-${{ matrix.lane }}", workflow)
