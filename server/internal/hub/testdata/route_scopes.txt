@@ -84,6 +84,7 @@ inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/machines/{mid}/browser/cookies
 -                    DELETE /api/v1/machines/{mid}/computer/apps/revoke/{bundle}
 -                    DELETE /api/v1/machines/{mid}/computer/apps/{bundle}
+-                    DELETE /api/v1/machines/{mid}/files/entry
 -                    DELETE /api/v1/machines/{mid}/health/reports/{name}
 -                    DELETE /api/v1/machines/{mid}/launchers/{name}/models/custom
 -                    DELETE /api/v1/managers/{id}
@@ -389,6 +390,7 @@ agents.read          GET /api/v1/workspaces
 -                    GET {peerPath}
 -                    PATCH /api/v1/agent-shares/{share_id}
 inbox.write          PATCH /api/v1/inbox/policies/{id}
+-                    PATCH /api/v1/machines/{mid}/files/entry
 -                    PATCH /api/v1/managers/{id}
 -                    PATCH /api/v1/model-config/purposes/{id}
 todos.write          PATCH /api/v1/todos/{id}
@@ -564,11 +566,13 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/files
 -                    POST /api/v1/machines/{mid}/files/chmod
 -                    POST /api/v1/machines/{mid}/files/copy
+-                    POST /api/v1/machines/{mid}/files/create
 -                    POST /api/v1/machines/{mid}/files/mkdir
 -                    POST /api/v1/machines/{mid}/files/move
 -                    POST /api/v1/machines/{mid}/files/rename
 -                    POST /api/v1/machines/{mid}/files/restore
 -                    POST /api/v1/machines/{mid}/files/trash
+-                    POST /api/v1/machines/{mid}/files/upload
 -                    POST /api/v1/machines/{mid}/files/write
 -                    POST /api/v1/machines/{mid}/files/zip
 -                    POST /api/v1/machines/{mid}/git/commit
@@ -756,6 +760,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/machines/{mid}/computer
 -                    PUT /api/v1/machines/{mid}/engine
 -                    PUT /api/v1/machines/{mid}/file-transfer/settings
+-                    PUT /api/v1/machines/{mid}/files/content
 -                    PUT /api/v1/machines/{mid}/grok-settings
 -                    PUT /api/v1/machines/{mid}/herdr
 -                    PUT /api/v1/machines/{mid}/iphone

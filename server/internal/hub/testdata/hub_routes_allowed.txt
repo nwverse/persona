@@ -12,6 +12,7 @@ DELETE /api/v1/admin/machines/{id}
 DELETE /api/v1/admin/peers/{hub_id}
 DELETE /api/v1/auth/tokens/{id}
 DELETE /api/v1/looks/uploads/{id} # the hub keeps the looks: personas/ is its own directory (look_uploads.go)
+DELETE /api/v1/machines/{mid}/files/entry
 DELETE /api/v1/managers/{id}
 DELETE /api/v1/sessions/{mid}/{sid}
 GET /api/v1/admin/devices
@@ -103,6 +104,7 @@ GET {link.StreamPath}
 GET {peerPath}
 GET /i/{code}
 GET /i/{code}/docker
+PATCH /api/v1/machines/{mid}/files/entry
 PATCH /api/v1/managers/{id}
 POST /api/v1/admin/devices/pair
 POST /api/v1/admin/doctor
@@ -143,11 +145,13 @@ POST /api/v1/machines/{mid}/doctor/fix
 POST /api/v1/machines/{mid}/files
 POST /api/v1/machines/{mid}/files/chmod
 POST /api/v1/machines/{mid}/files/copy
+POST /api/v1/machines/{mid}/files/create
 POST /api/v1/machines/{mid}/files/mkdir
 POST /api/v1/machines/{mid}/files/move
 POST /api/v1/machines/{mid}/files/rename
 POST /api/v1/machines/{mid}/files/restore
 POST /api/v1/machines/{mid}/files/trash
+POST /api/v1/machines/{mid}/files/upload
 POST /api/v1/machines/{mid}/files/write
 POST /api/v1/machines/{mid}/files/zip
 POST /api/v1/machines/{mid}/git/commit
@@ -215,6 +219,7 @@ PUT /api/v1/machines/{id}/name
 PUT /api/v1/machines/{mid}/agy-settings
 PUT /api/v1/machines/{mid}/claude-settings
 PUT /api/v1/machines/{mid}/codex-settings
+PUT /api/v1/machines/{mid}/files/content
 PUT /api/v1/machines/{mid}/grok-settings
 PUT /api/v1/machines/{mid}/omp-settings
 PUT /api/v1/mutes
