@@ -120,7 +120,7 @@ func (h *Manager) beginFeishuRegistration(ctx context.Context, errText string) (
 	b.mu.Unlock()
 	next := botRegistration{Region: region, DeviceCodeEnc: sealed, URL: ch.URL, Expires: now.Add(expires), Interval: max(ch.Interval, botRegisterInterval)}
 	h.putRegistration(&next)
-	return h.registerPrompt(ctx, next, errText), true
+	return h.registerPrompt(ctx, next, ""), true
 }
 
 // registration is the registration under way with its sealed parts, nil when there is none.

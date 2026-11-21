@@ -166,7 +166,7 @@ func TestBotRegistrationDeclinedWaitsForBind(t *testing.T) {
 	if acc.devices != 1 {
 		t.Fatalf("polling a declined registration started another: %v", acc.asked)
 	}
-	if p := w.bind(t, ""); p["step"] != stepRegister || p["error"] == nil {
+	if p := w.bind(t, ""); p["step"] != stepRegister || p["error"] != nil {
 		t.Fatalf("explicit retry: %v", p)
 	}
 	if n := strings.Count(strings.Join(acc.asked, "\n"), "begin"); n != 2 {

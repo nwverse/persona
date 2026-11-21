@@ -267,7 +267,7 @@ func TestBotRegistrationTerminalPollWaitsForExplicitBind(t *testing.T) {
 				t.Fatal("terminal session was replaced or cleared")
 			}
 			retry := w.bind(t, "")
-			if retry["step"] != stepRegister || retry["error"] != p["error"] {
+			if retry["step"] != stepRegister || retry["error"] != nil {
 				t.Fatalf("explicit retry: %v", retry)
 			}
 			if acc.devices != 2 {
