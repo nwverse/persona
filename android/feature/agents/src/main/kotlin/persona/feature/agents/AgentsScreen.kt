@@ -893,7 +893,8 @@ internal fun AgentsScreen(
     }
     }
     val glassRows = PersonaTheme.style == AppStyle.Glass
-    if (menu) JActionSheet(buildList {
+    if (menu) AgentsListSettingsSheet {
+        JActionSheet(buildList {
         if (homeChrome) {
             add(JAction(stringResource(R.string.agents_action_search), PhIcons.MagnifyingGlass, onClick = sidebar?.onSearch ?: { searchVisible = true }))
             add(JAction(stringResource(R.string.agents_chip_all_machines), PhIcons.Desktop,
@@ -938,6 +939,7 @@ internal fun AgentsScreen(
         if (requestsInMenu) add(JAction(stringResource(R.string.agents_requests_history), icon = PersonaIcons.waitsForYou,
             onClick = { allRequests = true }))
     }, { menu = false }, title = stringResource(R.string.agents_action_list_settings), note = stringResource(R.string.agents_menu_note))
+    }
     archiveTarget?.let { target ->
         JDialog(onDismiss = { archiveTarget = null }, title = stringResource(R.string.agents_action_archive),
             text = stringResource(R.string.agents_archive_confirm, target.displayTitle),
@@ -1068,6 +1070,9 @@ internal fun AgentsScreen(
             terminalHelp = session?.canTerminal != false)
     }
 }
+
+@Composable
+private fun AgentsListSettingsSheet(content: @Composable () -> Unit) = content()
 
 @Composable
 private fun AgentsListPlaceholder() {
