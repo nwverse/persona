@@ -159,7 +159,8 @@ type Config struct {
 	// SSH is the optional SSH tunnel for active mode (docs/operations/link.md "SSH tunnel").
 	SSH *SSH `json:"ssh,omitempty"`
 	// Proxy is an outbound HTTP(S) CONNECT proxy; "off" disables environment proxies.
-	Proxy string `json:"proxy,omitempty"`
+	Proxy            string            `json:"proxy,omitempty"`
+	CloudflareAccess *CloudflareAccess `json:"cloudflare_access,omitempty"`
 	// Mode is ModeActive (also when empty: files from before passive mode) or ModePassive.
 	Mode    string   `json:"mode,omitempty"`
 	Passive *Passive `json:"passive,omitempty"`
