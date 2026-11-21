@@ -860,6 +860,63 @@ test('a send is made once per client_msg_id: a retry gets the first answer, a fa
   assert.equal(rt.touched('s2'), false)
 })
 
+test('an in-doubt send stays cached, while an explicit non-delivery may go again', async (t) => {
+  const n = await startFakeNode(t)
+  const calls = new Map()
+  const rt = createRuntime({ ...minimal(), send: async ({ client_msg_id: id }) => {
+    calls.set(id, (calls.get(id) ?? 0) + 1)
+    throw new RpcError(`send ${id}`, 'send_failed', { delivered: id })
+  } }, { runtime: 'toy', socketPath: n.path, retryMs: 20, pushDelayMs: 5 })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  const send = async (id) => {
+    const err = await n.peer.call('session.send', { session_id: 's1', text: 'x', client_msg_id: id }).then(() => undefined, (err) => err)
+    assert.ok(err, 'the send must fail')
+    assert.equal(err.code, 'send_failed')
+    assert.equal(err.message, `send ${id}`)
+    assert.deepEqual(err.data, { delivered: id })
+    return err
+  }
+  const first = await send('unknown')
+  const retry = await send('unknown')
+  assert.deepEqual({ message: retry.message, code: retry.code, data: retry.data },
+    { message: first.message, code: first.code, data: first.data })
+  assert.equal(calls.get('unknown'), 1, 'an in-doubt retry returns the original outcome without calling the driver')
+  await send('none')
+  await send('none')
+  assert.equal(calls.get('none'), 2, 'an explicit non-delivery may be retried')
+})
+
+test('an in-doubt send stays cached across a node-only restart', async (t) => {
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const dir = mkdtempSync('/tmp/jrt-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const path = join(dir, 'runtime.sock')
+  const first = await startFakeNode(t, { path })
+  let calls = 0
+  const rt = createRuntime({ ...minimal(), send: async () => {
+    calls++
+    throw new RpcError('send outcome is unknown', 'send_failed', { delivered: 'unknown' })
+  } }, { runtime: 'toy', socketPath: path, retryMs: 20, pushDelayMs: 5 })
+  t.after(() => rt.stop())
+  await rt.start()
+  await first.ready
+  const params = { session_id: 's1', text: 'x', client_msg_id: 'm-unknown' }
+  const send = (node) => assert.rejects(node.peer.call('session.send', params),
+    (err) => err.code === 'send_failed' && err.data?.delivered === 'unknown')
+  await send(first)
+  first.peer.close(new Error('node restarts'))
+  await until('node disconnected', () => !rt.connected)
+  first.close()
+  rmSync(path, { force: true })
+  const second = await startFakeNode(t, { path })
+  await second.ready
+  await send(second)
+  assert.equal(calls, 1, 'the live companion answers the retry from its cache')
+})
+
 test('recent: pinned and phone-touched sessions always, the rest by age up to the limit, newest first', async (t) => {
   const n = await startFakeNode(t)
   const rt = createRuntime(minimal({ send: async () => {} }), { runtime: 'toy', socketPath: n.path, retryMs: 20, pushDelayMs: 5 })
