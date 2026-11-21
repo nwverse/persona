@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // A direction's notes (#10086, direction_notes.go). All ids, names and notes are placeholders.
@@ -99,16 +100,16 @@ func TestDirectionNotesRoute(t *testing.T) {
 // A leader's role policy carries its own notes and its project's goal, and only its own: without notes it is the
 // supervision instructions byte for byte, another leader's policy never changes, and clearing them restores it.
 func TestDirectionNotesReachTheLeaderPolicy(t *testing.T) {
-	s, _ := notesEnv(t)
+	s, f := notesEnv(t)
 	ctx := context.Background()
 	policy := prompts.RenderSupervisionInstructions()
-	if got := mustSupervisionInstructions(t, s, ctx, "server", "conv_lead"); got != policy {
+	if got := dispatchedPolicy(t, s, "conv_lead"); got != policy {
 		t.Fatal("a leader without notes has a different policy")
 	}
-	if _, err := s.setDirectionNotes(ctx, "conv_lead", "Readings: the store build number."); err != nil {
+	if _, _, err := s.setDirectionNotes(ctx, "conv_lead", "Readings: the store build number.", nil); err != nil {
 		t.Fatal(err)
 	}
-	got := mustSupervisionInstructions(t, s, ctx, "server", "conv_lead")
+	got := dispatchedPolicy(t, s, "conv_lead")
 	if !strings.HasPrefix(got, policy+"\n\n") || !strings.Contains(got, "Readings: the store build number.") ||
 		!strings.Contains(got, "Ship the weather app on iOS and Android") || !strings.Contains(got, "「Weather」") {
 		t.Fatalf("policy = %q", strings.TrimPrefix(got, policy))
@@ -116,9 +117,9 @@ func TestDirectionNotesReachTheLeaderPolicy(t *testing.T) {
 	if other := mustSupervisionInstructions(t, s, ctx, "server", "conv_other"); other != policy {
 		t.Fatal("another leader's policy changed")
 	}
-	// Dispatch carries it: what the node is told to append is the same text.
-	p := map[string]any{"session_id": "conv_lead", "text": "go on"}
-	if err := s.putSupervisionInstructions(ctx, "server", "conv_lead", p); err != nil || p["supervision_instructions"] != got {
+	// The manager's own sends carry it too: what the node is told to append is the same text.
+	f.answerNode(DeviceSessionSend, nodeTakes)
+	if sent, err := managerSend(s, "conv_lead"); err != nil || sent != got {
 		t.Fatalf("dispatched policy differs: %v", err)
 	}
 	// The per-message context names the project's status; its one-line summary changing never touches the policy.
@@ -132,13 +133,13 @@ func TestDirectionNotesReachTheLeaderPolicy(t *testing.T) {
 	if err := e.Store.PutProject(pr); err != nil {
 		t.Fatal(err)
 	}
-	if again := mustSupervisionInstructions(t, s, ctx, "server", "conv_lead"); again != got {
+	if again := dispatchedPolicy(t, s, "conv_lead"); again != got {
 		t.Fatal("a project summary rewrite changed the leader's policy")
 	}
-	if _, err := s.setDirectionNotes(ctx, "conv_lead", ""); err != nil {
+	if _, _, err := s.setDirectionNotes(ctx, "conv_lead", "", nil); err != nil {
 		t.Fatal(err)
 	}
-	if back := mustSupervisionInstructions(t, s, ctx, "server", "conv_lead"); back != policy {
+	if back := dispatchedPolicy(t, s, "conv_lead"); back != policy {
 		t.Fatal("cleared notes left the policy changed")
 	}
 	if c := s.Context(ctx, ContextParams{MachineID: "server", SessionID: "conv_lead"}); strings.Contains(c.Text, "Android beta out") {
@@ -152,10 +153,10 @@ func TestDirectionNotesReachTheLeaderPolicy(t *testing.T) {
 func TestDirectionNotesReachNewAgents(t *testing.T) {
 	s, _ := notesEnv(t)
 	ctx := context.Background()
-	if _, err := s.setDirectionNotes(ctx, "conv_lead", "Readings: the store build number."); err != nil {
+	if _, _, err := s.setDirectionNotes(ctx, "conv_lead", "Readings: the store build number.", nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.setDirectionNotes(ctx, "conv_other", "Infra rule: back up first."); err != nil {
+	if _, _, err := s.setDirectionNotes(ctx, "conv_other", "Infra rule: back up first.", nil); err != nil {
 		t.Fatal(err)
 	}
 	got := s.withProjectContext(ctx, "box", "/code/weather/ios", "", "Fix the login page")
@@ -187,5 +188,65 @@ func TestGoldenDirectionNotes(t *testing.T) {
 	}
 	if prompts.RenderDirectionNotes(prompts.DirectionNotes{Name: "x"}) != "" || prompts.RenderTodoDirection(prompts.DirectionNotes{Name: "x", ProjectGoal: "y"}) != "" {
 		t.Fatal("nothing to say still rendered a block")
+	}
+}
+
+// A leader's own task_plan (#10623): PlanTask.Supervisor stays empty, the supervision ledger names the leader, and the
+// task's Agent still starts with the direction's notes, wherever it works.
+func TestDirectionNotesReachALeadersOwnTask(t *testing.T) {
+	s, f := newQuietService(t)
+	f.known["lead1"] = true
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lead1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
+	b := &s.directions
+	b.mu.Lock()
+	if !s.directionsLocked(context.Background()) {
+		t.Fatal("directions unreadable")
+	}
+	b.m["lead1"] = &direction{MachineID: "server", Project: "another-project", By: directionByUser, At: time.Now(), Name: "Platform"}
+	b.mu.Unlock()
+	if _, _, err := s.setDirectionNotes(context.Background(), "lead1", "Heavy gates run on the shared runner.", nil); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
+		"title": "Fix the login crash", "prompt": "Background: the login page crashes.", "machine": "box", "cwd": "/code/app",
+		"readonly": true, "why": "the repository is on box", "done_when": []string{"PR merged"}, "expect_minutes": 30,
+	}}})
+	if _, err := s.toolTaskPlan(context.Background(), "lead1", raw); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the start", func() bool { f.mu.Lock(); defer f.mu.Unlock(); return len(f.starts) == 1 })
+	if v := onlyTodo(s).Supervision; v == nil || v.Supervisor != "lead1" {
+		t.Fatalf("supervision = %+v", v)
+	}
+	f.mu.Lock()
+	p, _ := f.starts[0]["prompt"].(string)
+	f.mu.Unlock()
+	if !strings.HasPrefix(p, "Background: the login page crashes.") ||
+		!strings.Contains(p, `<persona-context kind="context" title="方向 · Platform · 说明"`) ||
+		!strings.Contains(p, "Heavy gates run on the shared runner.") {
+		t.Fatalf("first prompt = %q", p)
+	}
+}
+
+// taskSupervisorOf: the ledger's supervisor first, then the handed-over leader, and a worker of a task leader goes by
+// its leader's task.
+func TestTaskSupervisorOf(t *testing.T) {
+	s, _, todo := newSupervisedService(t)
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].Supervision.Supervisor = "lead1"
+	s.todos.mu.Unlock()
+	if got := s.taskSupervisorOf(&PlanTask{TodoID: todo.ID}); got != "lead1" {
+		t.Fatalf("own plan: %q", got)
+	}
+	if got := s.taskSupervisorOf(&PlanTask{Supervisor: "lead2"}); got != "lead2" {
+		t.Fatalf("handed over, no ledger yet: %q", got)
+	}
+	if got := s.taskSupervisorOf(&PlanTask{TodoID: "todo_unknown", Parent: todo.ID, Supervisor: "x"}); got != "lead1" {
+		t.Fatalf("a task leader's worker: %q", got)
+	}
+	if got := s.taskSupervisorOf(&PlanTask{}); got != "" {
+		t.Fatalf("nobody: %q", got)
 	}
 }

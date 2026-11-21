@@ -12,10 +12,13 @@ enum class OutboxState(val wire: String, val delivery: DeliveryState) {
     Unknown("unknown", DeliveryState.Unknown),
     Refused("refused", DeliveryState.Refused),
     Verifying("verifying", DeliveryState.Verifying),
+    Held("held", DeliveryState.Held),
     Sent("sent", DeliveryState.Sent),
     NeedsConfirmation("needsReview", DeliveryState.NeedsConfirmation),
     Cancelled("cancelled", DeliveryState.Rejected),
     Shown("shown", DeliveryState.Sent),
+    /** The assistant owns delivery now: hidden locally, never published as delivered or retried by this outbox. */
+    Kept("kept", DeliveryState.Rejected),
 }
 
 data class OutboxEntry(
@@ -34,6 +37,8 @@ data class OutboxEntry(
     val model: String? = null,
     /** It carries out the session's waiting launcher switch ([persona.core.contracts.api.MessageSender.sendApplyingSwitch]). */
     val applySwitch: Boolean = false,
+    /** External provenance ([persona.core.contracts.api.MessageVia]); old rows and typed messages restore null. */
+    val via: String? = null,
 ) {
     /** Journal-owned delivery evidence stays out of the public data-class and generated copy signatures. */
     internal var agentHandOff: InboxAgentHandOff? = null

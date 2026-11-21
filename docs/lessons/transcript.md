@@ -21,6 +21,10 @@ The generic screenshot mock folds tool calls without production's `fold.supervis
 review hidden in such a fold falsely makes the entire synthetic round quiet. Emit the same retained evidence as
 production when testing this case; do not disable folding or force-open the UI to make the screenshot pass.
 
+Keep a successful silent finish's call and receipt in the paged transcript (#10418). The clients need both even
+when a partial merge replaces an adjacent work fold. Either one alone does not establish that the round finished
+silent. They still appear inside the ordinary work summary when the reader opens the round.
+
 ## An exchange ends where its turn ends: a wake starts the next one (#9140; replaces #2796's rule)
 
 The chat grouped everything between two of the user's messages into one exchange and showed its last words as the
@@ -57,6 +61,9 @@ Use synthetic conversations for screenshots, not the user's real main conversati
   A live preview must also survive a cold load: `fold_work` hides those original blocks, so folds carry a bounded `latest_thinking` preview without changing their range or counts (#6319).
 - A new session (a headless assistant or a newly launched herdr Agent) has no transcript until claude writes its first line. The phone requests a backlog as soon as it subscribes to the hub. `session.items`
   must return an empty list rather than not found for these "starting" sessions (`startingSession`). Once watch sees the file appear, it must first replay the lines already written, or the chat page briefly flashes an error.
+  Only a session that may not have written yet counts (running, waiting for its first message, starting, or started within the start bound): an empty list for every known session showed a conversation whose file Claude Code had cleaned up as an empty chat, as if nothing had been said. The rest answer `not_found` with `reason: no_transcript`; a watch still waits for any known session (#11388).
+  "May not have written yet" has more forms than a record's start time: a Codex app-server thread before its first message has no rollout, a Codex waiting row is known only by its record until a host refresh after a reconnect, and a Resume keeps the record's first start time while `healClaudeRefusalTranscript` may have just removed the file. An older page (`before_seq`) must still end paging with an empty page: released apps ask an older page again on an error (#11450).
+- On the clients, an exact 404 `not_found` ends the history read: the latest page shows the hub's sentence instead of its loading placeholder, and an older page goes through the same continuity input as an empty `has_more: false` page so the paging effect cannot restart. Match both status and code, and apply the terminal input only while the requested history is still current; a late response must not close a replacement's paging. A plain 404 or another failure keeps the previous loading and explicit-retry behavior. Cover the synchronous and asynchronous continuity paths (#11451).
   A rename is the same: the Feishu /agent names its conversation right after starting it, and the custom-title line had nowhere to go, so the node
   answered "transcript … not found" and the manager kept no title. The node now keeps the title of a running assistant conversation and writes it once the
   transcript appears; if renamed again meanwhile, the newest title wins; if the process ends first, the title is dropped (`retitle`, #5866).
@@ -89,6 +96,8 @@ Use synthetic conversations for screenshots, not the user's real main conversati
 - Claude Code writes `&gt;`, `&lt;`, and `&amp;` itself into the summary / event / result of background task notifications (`<task-notification>`); decode them during parsing. For background commands without a description,
   the summary is the whole command (a heredoc can span dozens of lines). Do not use the summary as notice text: the node parses it into `Item.task`, and the App renders a single tool-style row (`TaskNoteRow`).
   Monitor events carry only task-id; map them back to the call using the tool_result `Monitor started (task <id>` (`TaskIndex`).
+  An event notification is non-terminal (#10356): keep the Monitor's background record and expiry until its stream
+  ends, it is stopped or it expires. Do not remove every task named by a notification; use its parsed kind/status.
 - The App merges its on-disk chat cache by item id. If the hub changes the contents of a type of item (for example, adding fields to notices), new pages do not overwrite old cached items. When the item structure or the hub's kind / text for an existing item changes,
   bump the `ChatCache` directory version (`ChatCache.folder`) so the old representation is dropped.
 - Backward pagination has a parsing budget, but must not return an empty page while earlier content remains. An empty page + `has_more: true` leaves the App with no seq to fetch next, making earlier history permanently inaccessible (large Codex rollouts can have tens of MB of lines that produce no entries between two turns).

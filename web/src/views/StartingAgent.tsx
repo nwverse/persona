@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { shortPath } from "../lib/format";
 import { deliverLaunch, type AgentLaunch } from "../lib/new-agent";
 import { namedLauncher, providerIdNote, providerLabel, providerTitle, useProviderNames } from "../lib/provider-names";
@@ -10,13 +10,18 @@ import { Button, Loading } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { t } from "../i18n";
 
+// the question the start's terminal tab stopped on, answered from here (#10365): only for such a failure
+const ShellQuestion = lazy(() => import("./ShellQuestionCard"));
+
 export function StartingAgent({ launch, onToggleSidebar }: { launch: AgentLaunch; onToggleSidebar?: () => void }) {
   const machine = useStore((s) => s.machines.find((m) => m.id === launch.machineId));
   const [text, setText] = useState(launch.text);
   const [launcher, setLauncher] = useState(launch.launcher);
   // the launcher by the provider's display name; the line's tooltip says it with its startup ID (#5029)
-  const runsOn = namedLauncher(launch.launcher, useProviderNames());
-  const subtitle = (name: string) => [machine?.name ?? launch.machineId, shortPath(launch.cwd), name, launch.model].filter(Boolean).join(" · ");
+  const shownLauncher = launch.launcher || launch.displayLauncher || "";
+  const shownModel = launch.model || launch.displayModel;
+  const runsOn = namedLauncher(shownLauncher, useProviderNames());
+  const subtitle = (name: string) => [machine?.name ?? launch.machineId, shortPath(launch.cwd), name, shownModel].filter(Boolean).join(" · ");
   const editable = launch.phase === "failed" && !launch.session && !launch.uncertain && !launch.repeatOnly;
   useEffect(() => {
     if (launch.phase === "ready" && launch.session) navigate({ name: "session", mid: launch.machineId, sid: launch.session.session_id }, true);
@@ -27,7 +32,7 @@ export function StartingAgent({ launch, onToggleSidebar }: { launch: AgentLaunch
     const other = launcher.trim() !== launch.launcher;
     const retireTextStart = launch.agentType === "traex" && launch.inlinePrompt && (other || !text.trim());
     if (editable) putLaunch({ ...launch, text: text.trim(), launcher: launcher.trim(), outgoing: undefined,
-      ...(other && { model: undefined, effort: undefined }), ...(retireTextStart && { agentType: undefined, inlinePrompt: undefined }) });
+      ...(other && { model: undefined, effort: undefined, displayLauncher: undefined, displayEngine: undefined, displayModel: undefined }), ...(retireTextStart && { agentType: undefined, inlinePrompt: undefined }) });
     void deliverLaunch(launch.id, launch.clearable);
   };
   const label = launch.phase === "creating" ? t("startingagent.creating") : launch.phase === "uploading" ? t("startingagent.uploading") : t("startingagent.sending");
@@ -48,6 +53,7 @@ export function StartingAgent({ launch, onToggleSidebar }: { launch: AgentLaunch
           </div>}
           {launch.phase === "failed" ? <div role="alert" className="flex flex-col items-start gap-3">
             <p className="text-[13px] text-red">{launch.error}</p>
+            {launch.shellWaiting && <Suspense fallback={null}><ShellQuestion launch={launch} /></Suspense>}
             <p className="text-[12px] text-ink-3">{launch.uncertain ? t("startingagent.uncertain") : t("startingagent.kept")}</p>
             {editable && <div className="flex w-full flex-col gap-2">
               <label className="text-[12px] text-ink-2">{t("startingagent.launcher_label")}<input value={launcher} onChange={(e) => setLauncher(e.target.value)} className="mt-1 w-full rounded-control bg-inset px-3 py-2 font-mono text-[12px] text-ink shadow-hairline outline-none" /></label>

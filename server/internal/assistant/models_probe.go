@@ -73,14 +73,68 @@ func launchAuth(auth string) string {
 
 // probeTarget is a resolved gateway: everything needed for one request.
 type probeTarget struct {
-	base, key, headers, model, effort, proxy, noProxy, api, kind, via string
-	models                                                            []proto.ProviderModel
+	base, key, headers, model, effort, proxy, noProxy, api, kind, via, sessionID string
+	models                                                                       []proto.ProviderModel
 	// agent is the agent the request names, else a stored provider's (AgentType); "" for neither.
 	agent string
+	// chatAlias resolves a stored Chat provider's legacy tier aliases for a connection test, not model discovery.
+	chatAlias *storedLauncher
 	// through sends the requests through via's node (models_via.go).
 	through http.RoundTripper
 	// auth is the credential header(s) the requests send (probeAuth*); send settles auto on the first request.
 	auth string
+}
+
+// canonicalProbeURL reports whether raw is an http(s) URL with no duplicate internal slashes in its path.
+func canonicalProbeURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.Opaque != "" {
+		return false
+	}
+	authority := strings.Index(raw, "//")
+	if authority < 0 {
+		return false
+	}
+	authority += len("//")
+	slash := strings.IndexByte(raw[authority:], '/')
+	if slash < 0 {
+		return true
+	}
+	return !strings.Contains(raw[authority+slash:], "//")
+}
+
+// sameProbeGateway reports whether a probe's base_url override still points to stored's canonical gateway so stored
+// credentials may be sent. Overrides are compared only against the normalized LaunchBaseURL (never an unnormalized
+// legacy stored.BaseURL), must have a canonical path without internal "//" or endpoint suffixes (/v1/messages,
+// /chat/completions, /v1/responses), and allow the single-/v1 counterpart on the same canonical base (including across
+// a protocol switch between Messages and OpenAI-compatible protocols, #4886).
+func sameProbeGateway(stored proto.ManagedLauncher, override, reqAPI string, reqAgent *string) bool {
+	b := strings.TrimRight(strings.TrimSpace(override), "/")
+	if !canonicalProbeURL(b) {
+		return false
+	}
+	launch := strings.TrimRight(strings.TrimSpace(stored.LaunchBaseURL()), "/")
+	if b == launch {
+		return true
+	}
+	eff := stored
+	if reqAPI != "" {
+		eff.API = reqAPI
+	}
+	if reqAgent != nil {
+		eff.Agent = strings.TrimSpace(*reqAgent)
+	}
+	u, err := url.Parse(launch)
+	if err != nil || u.Host == "" || u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	if !strings.HasSuffix(launch, "/v1") && (stored.MessagesBase() || eff.MessagesBase()) {
+		return b == launch+"/v1"
+	}
+	if eff.MessagesBase() && strings.HasSuffix(launch, "/v1") {
+		return b == strings.TrimSuffix(launch, "/v1")
+	}
+	return false
 }
 
 func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, error) {
@@ -91,6 +145,7 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 		return t, i18n.Err("assistant-models_launchers.err_auth")
 	}
 	auth := in.Auth
+	var stored *proto.ManagedLauncher
 	if in.Name != "" {
 		list := s.storedLaunchers(ctx)
 		i := slices.IndexFunc(list, func(l storedLauncher) bool { return l.Name == in.Name })
@@ -98,6 +153,7 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 			return t, i18n.Err("assistant-models_probe.err_no_provider", i18n.Args{"name": in.Name})
 		}
 		l := list[i]
+		stored = &l.ManagedLauncher
 		key, err := s.openLauncherKey(ctx, l.KeySealed, l.Name, "")
 		if err != nil {
 			if _, ref := s.keyReference(l.KeySealed); ref {
@@ -111,6 +167,9 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 		}
 		t = probeTarget{base: l.BaseURL, key: key, headers: headers, model: l.Model, effort: l.Effort, proxy: l.Proxy, noProxy: l.NoProxy, api: l.API, kind: l.Kind, via: l.ViaMachine,
 			models: l.Models, agent: l.AgentType()}
+		if l.Kind == "api" && l.API == "chat" {
+			t.chatAlias = &l
+		}
 		if t.kind == "" {
 			t.kind = "launcher" // Stored entries without kind are legacy launchers.
 		}
@@ -125,8 +184,7 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	}
 	if b := strings.TrimSpace(in.BaseURL); b != "" {
 		// The stored key and headers only go to the stored gateway: another address gets just what the request brings.
-		// A trailing /v1 is the same gateway (saving drops it from a Messages base); the host never differs.
-		if in.Name != "" && proto.MessagesBaseURL(b) != proto.MessagesBaseURL(t.base) {
+		if stored != nil && !sameProbeGateway(*stored, b, in.API, in.Agent) {
 			t.key, t.headers = "", ""
 		}
 		t.base = b
@@ -203,42 +261,62 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	if err := checkHeaders(t.headers); err != nil {
 		return t, err
 	}
-	t.base = strings.TrimRight(strings.TrimSpace(t.base), "/")
+	if t.kind != "api" && strings.TrimSpace(t.headers) != "" {
+		l := proto.ManagedLauncher{Agent: t.agent, API: t.api, BaseURL: t.base}
+		if !l.CustomHeadersSupported() {
+			return t, errRuntimeHeaders
+		}
+	}
+	if t.api == "chat" || t.api == "responses" {
+		t.base = proto.APIBaseURL(t.base, t.api)
+	} else {
+		t.base = strings.TrimRight(strings.TrimSpace(t.base), "/")
+	}
+	t.sessionID = modelhttp.OpenCodeSessionID("")
 	if t.via != "" {
 		t.through = viaNode{s: s, machine: t.via}
-	}
-	if t.api == "chat" {
-		t.effort = chatEffortForModel(t.models, t.model, t.effort)
 	}
 	return t, nil
 }
 
-// endpoint is <base>/v1/<path>, a base already ending in /v1 not doubled. A Messages base is read as the node hands it
-// to Claude Code (proto.MessagesBaseURL), so a test passes for the address Agents will call.
+// endpoint is <base>/v1/<path>, a base already ending in /v1 or a pasted endpoint path not doubled. A Messages base is
+// read as the node hands it to Claude Code (proto.MessagesBaseURL), so a test passes for the address Agents will call.
 func (t probeTarget) endpoint(path string) string {
 	if messagesAPI(t.api) {
 		return proto.MessagesBaseURL(t.base) + "/v1/" + path
 	}
-	if strings.HasSuffix(t.base, "/v1") {
-		return t.base + "/" + path
+	base := proto.APIBaseURL(t.base, t.api)
+	if strings.HasSuffix(base, "/v1") {
+		return base + "/" + path
 	}
-	return t.base + "/v1/" + path
+	return base + "/v1/" + path
 }
 
 // modelsEndpoint keeps discovery separate from the inference protocol. DeepSeek documents /models at the
 // official origin, not under its /anthropic Messages base (https://api-docs.deepseek.com/api/list-models/).
 // Only its known HTTPS bases qualify; custom gateway prefixes and authorities stay untouched.
 func (t probeTarget) modelsEndpoint() string {
-	u, err := url.Parse(t.base)
-	if err == nil && u.Scheme == "https" && u.User == nil && u.RawQuery == "" && u.Fragment == "" &&
-		(strings.EqualFold(u.Host, "api.deepseek.com") || strings.EqualFold(u.Host, "api.deepseek.com:443")) {
-		switch u.EscapedPath() {
-		case "", "/v1", "/anthropic", "/anthropic/v1":
-			u.Path, u.RawPath = "/models", ""
-			return u.String()
-		}
+	if u, ok := officialDeepSeekURL(t.base); ok {
+		u.Path, u.RawPath = "/models", ""
+		return u.String()
 	}
 	return t.endpoint("models")
+}
+
+// officialDeepSeekURL parses base when it is one of the official DeepSeek API bases: HTTPS, the provider's own host
+// (with no user info, query or fragment) and a path Persona accepts for it. Only these bases may be read at the
+// provider's own routes (/models, /user/balance); a gateway or a lookalike host is never sent the launcher's key there.
+func officialDeepSeekURL(base string) (*url.URL, bool) {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
+		(!strings.EqualFold(u.Host, "api.deepseek.com") && !strings.EqualFold(u.Host, "api.deepseek.com:443")) {
+		return nil, false
+	}
+	switch u.EscapedPath() {
+	case "", "/v1", "/anthropic", "/anthropic/v1":
+		return u, true
+	}
+	return nil, false
 }
 
 // send sends one request under t.auth. Under auto it goes with Bearer and, when the gateway refuses the key, once
@@ -300,6 +378,7 @@ func (t probeTarget) do(ctx context.Context, method, endpoint string, body []byt
 		req.Header.Set(hd[0], hd[1])
 	}
 	modelhttp.SetDefaultUserAgent(req.Header)
+	modelhttp.SetOpenCodeSession(req.Header, endpoint, t.sessionID)
 	if req.Header.Get("anthropic-version") == "" {
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
@@ -353,7 +432,7 @@ func (t probeTarget) redact(s string) string {
 		secrets = append(secrets, hd[1])
 	}
 	for _, v := range secrets {
-		if len(v) >= 4 {
+		if v != "" {
 			s = strings.ReplaceAll(s, v, "***")
 		}
 	}
@@ -506,6 +585,17 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	if err != nil {
 		out["error"] = i18n.Localize(err, i18n.From(ctx))
 		return out
+	}
+	if t.chatAlias != nil && t.api == "chat" {
+		model, err := resolveAPITierAlias(*t.chatAlias, t.model)
+		if err != nil {
+			out["error"] = i18n.Localize(err, i18n.From(ctx))
+			return out
+		}
+		t.model = model
+	}
+	if t.api == "chat" {
+		t.effort = chatEffortForModel(t.models, t.model, t.effort)
 	}
 	if out["model"] = t.model; t.model == "" {
 		out["error"] = i18n.T(i18n.From(ctx), "assistant-models_launchers.err_model_required")

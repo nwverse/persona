@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,27 +16,30 @@ import (
 )
 
 func (s *Service) toolRepositoryAdd(ctx context.Context, machine, self string, raw json.RawMessage) (string, error) {
-	if machine == "" || self == "" {
-		return "", errors.New("a calling conversation is required")
-	}
 	var in repositoryInput
 	if err := repositoryArguments(raw, &in); err != nil {
-		return "", err
+		return "", repositoryAddNotApplied(err)
 	}
-	binding, err := in.binding()
+	binding, err := s.repositoryBinding(withProviderBudget(ctx), in, "")
 	if err != nil {
-		return "", s.repositoryToolError(ctx, err)
+		return "", repositoryAddNotApplied(s.repositoryToolError(ctx, err))
 	}
 	doc, err := s.repositoryDocument(ctx)
 	if err != nil {
-		return "", s.repositoryToolError(ctx, err)
+		return "", repositoryAddNotApplied(s.repositoryToolError(ctx, err))
 	}
 	for _, saved := range doc.Repositories {
-		if saved.Identity == binding.Identity {
-			return "", s.repositoryToolError(ctx, repositoryProblem("duplicate"))
+		if s.sameRepository(saved.Identity, binding.Identity) {
+			return "", repositoryAddNotApplied(s.repositoryToolError(ctx, repositoryProblem("duplicate")))
 		}
 	}
+	if machine == "" || self == "" {
+		return "", repositoryAddNotApplied(errors.New("a calling conversation is required"))
+	}
 	shown, _ := json.Marshal(in)
+	if repository.IsExtensionProvider(binding.Provider) {
+		shown = providerRepositoryCard(binding)
+	}
 	summary := i18n.T(s.lang(ctx), "assistant-repository_tools.add", i18n.Args{"url": binding.CanonicalURL})
 	now := time.Now().UTC()
 	outcome, err := s.waitPreparedCard(ctx, proto.Interaction{ID: "ix_" + randomHex(6), MachineID: machine, SessionID: self,
@@ -52,7 +56,7 @@ func (s *Service) toolRepositoryAdd(ctx context.Context, machine, self string, r
 				return "", s.repositoryToolError(ctx, err)
 			}
 			for _, saved := range doc.Repositories {
-				if saved.Identity == binding.Identity {
+				if s.sameRepository(saved.Identity, binding.Identity) {
 					return "", approvalops.ErrStale
 				}
 			}
@@ -67,14 +71,41 @@ func (s *Service) toolRepositoryAdd(ctx context.Context, machine, self string, r
 	return outcome.Text, err
 }
 
+// providerRepositoryCard is the card's details for an extension provider's repository: what approving saves, its
+// provider, the name (the provider's own for it when the Agent gave none) and the address it is cloned from, which the
+// provider may have chosen.
+func providerRepositoryCard(binding RepositoryBinding) json.RawMessage {
+	shown, _ := json.Marshal(struct {
+		URL          string   `json:"url"`
+		Provider     string   `json:"provider"`
+		ProviderName string   `json:"provider_name"`
+		Name         string   `json:"name"`
+		Aliases      []string `json:"aliases"`
+		Purpose      string   `json:"purpose"`
+		CloneURL     string   `json:"clone_url"`
+	}{binding.CanonicalURL, binding.Provider, binding.ProviderName, binding.Name, binding.Aliases, binding.Purpose,
+		cmp.Or(binding.CloneURL, binding.CanonicalURL)})
+	return shown
+}
+
+// repositoryAddNotApplied marks only failures proven to precede card creation and Apply.
+// saveRepository and other Apply errors deliberately keep their original uncertainty.
+func repositoryAddNotApplied(err error) error {
+	return fmt.Errorf("%w; nothing was applied (%w)", err, approvalops.ErrNotApplied)
+}
+
 func (s *Service) repositoryToolError(ctx context.Context, err error) error {
 	code := "store"
 	var problem repositoryProblem
 	var check *repository.CheckError
+	var provider *repository.ProviderError
 	if errors.As(err, &problem) {
 		code = string(problem)
 	} else if errors.As(err, &check) {
 		code = check.Code
+	} else if errors.As(err, &provider) {
+		code = providerCode(provider)
+		return fmt.Errorf("repository_%s: %s", code, i18n.T(s.lang(ctx), "assistant-repositories."+code, providerArgs(provider)))
 	}
 	return fmt.Errorf("repository_%s: %s", code, i18n.T(s.lang(ctx), "assistant-repositories."+code))
 }

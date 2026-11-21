@@ -9,7 +9,7 @@ import type { Launcher, Machine, Session } from "./types";
 import { copyText, toast } from "../ui/atoms";
 import { openNewAgent } from "./new-agent";
 import { navigate } from "./router";
-import { openNewWorktree } from "./worktree";
+import { openNewWorktree } from "./worktree-request";
 import type { MenuItem } from "../ui/menu-model";
 import { launcherBlock, usableFirst } from "./launcher-health";
 import { providerIdNote, providerTitle } from "./provider-names";
@@ -19,6 +19,8 @@ export type NodeKind = "machine" | "workspace" | "tab" | "pane";
 
 export interface MenuNode {
   kind: NodeKind;
+  /** Session rows describe the conversation, never operations on its terminal pane. */
+  sessionOnly?: boolean;
   mid: string;
   /** The machine is online; a node of one that is away is only copied from. */
   online?: boolean;
@@ -95,12 +97,12 @@ export interface NodeActionOptions {
   omit?: readonly string[];
 }
 
-/** Closing, splitting, git and running an agent in a shell are herdr's: another host (Orca, herdr-core, Tern, botmux) is
+/** Closing, splitting, git and running an agent in a shell are herdr's: another host (Orca, herdr-core, Tern, Rex, botmux) is
  *  not asked to do them. */
 export const canChangeHost = (host: string | undefined) => !host || host === "herdr";
 
-/** Renaming a workspace or a tab is herdr's and Tern's (the capability table in docs/integrations/engines.md). */
-export const canRenameIn = (host: string | undefined) => canChangeHost(host) || host === "tern";
+/** Renaming a workspace or a tab is herdr's, Tern's and Rex's (the capability table in docs/integrations/engines.md). */
+export const canRenameIn = (host: string | undefined) => canChangeHost(host) || host === "tern" || host === "rex";
 
 /** Claude Code, and a launcher the computer says it starts in a pane the user picked, keeping that pane when the start
  *  fails (`run_here`: its Codex launchers, #5504). An older computer's failed Codex start closes its pane, here the
@@ -344,6 +346,7 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
   );
 
   const omit = new Set(opts.omit);
+  if (node.sessionOnly) for (const key of ["node-split", "node-close-pane", "node-copy-id"]) omit.add(key);
   return groups
     .map((g) => g.filter((it) => !omit.has(it.key)))
     .filter((g) => g.length)
@@ -361,6 +364,7 @@ export function machineNode(m: Machine, extra: Partial<MenuNode> = {}): MenuNode
 export function sessionNode(s: Session, online: boolean, extra: Partial<MenuNode> = {}): MenuNode {
   return {
     kind: "pane",
+    sessionOnly: true,
     mid: s.machine_id,
     online,
     host: s.space_kind,

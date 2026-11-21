@@ -755,13 +755,8 @@ private struct SidebarClosed: View {
 /// start (New Chat, Scheduled Tasks, Knowledge; the shell's drawer: Inbox … Machines); a line; Pin and Recent, one line each with a round
 /// mark; Persona's face, where it runs and Settings at the foot.
 struct AssistantSidebar: View {
-    /// The open conversation's row. On the Mac, the shade the shell's other lists select with (`macSelected`): the
-    /// phone's `well` on the Mac's lighter fills (#1169) was hard to find there.
-    #if os(macOS)
-    private static var selectedFill: Color { Theme.Fill.macSelected } // the style's: read when drawn
-    #else
-    private static let selectedFill = Theme.Fill.well
-    #endif
+    /// The open conversation's row: every sidebar row's one selected shade (`SidebarSelectedShade`, #11032).
+    private static var selectedFill: Color { SidebarSelectedShade.fill }
 
     @Environment(AppModel.self) private var model
     var current: SessionKey?
@@ -791,6 +786,7 @@ struct AssistantSidebar: View {
     /// The Sidebar layout (#6332): Messages (the Lark chats, the Separate layout's third page) among the places while
     /// it is turned on; nil leaves it out.
     var openMessages: (() -> Void)? = nil
+    var openStarred: (() -> Void)? = nil
     private var isShell: Bool { openInbox != nil }
     /// Which part this draws (#6332): the whole sidebar, or one piece of the Sidebar layout's column, which lays the
     /// rows inside the Agents list and puts the head, the main conversation and the foot around it
@@ -916,8 +912,9 @@ struct AssistantSidebar: View {
         .ignoresSafeArea(.keyboard, edges: drawer == nil && !searching ? Edge.Set.bottom : [])
         #endif
         // Which conversations the tasks started: read again as the sidebar comes out, when a conversation came or went, and
-        // for another manager's page.
-        .task(id: out ? "\(all.count)|\(model.assistantManagerID ?? "")" : "") { if out { await taskChats.refresh(model.api) } }
+        // for another hub's or manager's page.
+        .task(id: AssistantTaskChatsStore.readKey(out: out, group: model.hub?.group, manager: model.assistantManagerID,
+                                                   conversations: all.count)) { if out { await taskChats.refresh(model.api) } }
         .modifier(AssistantSidebarPresenters(ui: ui, open: open))
         .background {
             if let drawer {
@@ -955,7 +952,8 @@ struct AssistantSidebar: View {
         // Where the list's rows start (`rowsLeading`): its mark on the places' symbol line, its shade as wide as theirs.
         .padding(.horizontal, ui.rowsLeading ?? Theme.Space.s)
         // Which conversations the tasks started, as the whole sidebar reads them (the rows' source marks).
-        .task(id: out ? "\(all.count)|\(model.assistantManagerID ?? "")" : "") { if out { await taskChats.refresh(model.api) } }
+        .task(id: AssistantTaskChatsStore.readKey(out: out, group: model.hub?.group, manager: model.assistantManagerID,
+                                                   conversations: all.count)) { if out { await taskChats.refresh(model.api) } }
     }
 
     /// The rows the Agents list holds above its own: the places to go and Persona's chats, each under a heading that
@@ -989,10 +987,19 @@ struct AssistantSidebar: View {
     @ViewBuilder private var placesTally: some View {
         if placesFolded {
             let inbox = InboxStore.shared.unreadCount
-            let todos = TodoStore.shared.isSupported ? TodoStore.shared.badgeCount : 0
+            let todos = TodoStore.shared.isSupported ? TodoStore.shared.sidebarCount : 0
             HStack(spacing: Theme.Space.xs) {
                 if inbox > 0 { CountBadge(count: inbox, look: .needs, label: String(localized: "Inbox")) }
-                if todos > 0 { CountBadge(count: todos, look: .needs, label: String(localized: "To-dos")) }
+                if todos > 0 {
+                    if TodosV1.shared.isOn {
+                        // The V1 list's N, readable by its tests (#10465); today's tally stays as it was.
+                        CountBadge(count: todos, look: .needs, label: String(localized: "To-dos"))
+                            .accessibilityValue(String(todos))
+                            .accessibilityIdentifier("sidebar-fold-places.todos")
+                    } else {
+                        CountBadge(count: todos, look: .needs, label: String(localized: "To-dos"))
+                    }
+                }
             }
         }
     }
@@ -1012,8 +1019,7 @@ struct AssistantSidebar: View {
                         .rotationEffect(.degrees(folded.wrappedValue ? 0 : 90))
                     Spacer(minLength: 0)
                 }
-                .padding(.vertical, Theme.Sidebar.rowPadding)
-                .scaledFrame(minHeight: Theme.Sidebar.row)
+                .modifier(SidebarHeadingBox())
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
@@ -1025,10 +1031,26 @@ struct AssistantSidebar: View {
             trailing()
         }
         .padding(.leading, Theme.Space.m)
-        .padding(.top, Theme.Space.s)
+        .padding(.top, SidebarHeadingBox.above)
     }
     #endif
 }
+
+#if os(iOS)
+/// The box of a Sidebar layout section heading's name (#6332, #10551): Pages, Persona Chats and Agents all take it, so the
+/// three are as tall and as far apart whatever a heading carries beside its name (Agents' ⋯, Personal Agents and +, in
+/// a box of their own that never sets the row's height). A sidebar row's height and padding, and `above` over it.
+struct SidebarHeadingBox: ViewModifier {
+    /// The room over each heading, inside its row.
+    static let above = Theme.Space.s
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.vertical, Theme.Sidebar.rowPadding)
+            .scaledFrame(minHeight: Theme.Sidebar.row)
+    }
+}
+#endif
 
 /// Which part of the sidebar an `AssistantSidebar` draws (#6332).
 enum AssistantSidebarPart {
@@ -1096,14 +1118,14 @@ struct AssistantSidebarPresenters: ViewModifier {
         content
         .confirmClose(Bindable(ui).ending)
         .renameSessionAlert(Bindable(ui).renaming)
-        .confirmationDialog(
+        .accessibleConfirmationDialog(
             ui.leaderConfirm.map { session in
                 model.assistantLeaders.contains(session.sessionID)
                     ? String(localized: "Unpin Confirmation Title [Leader Actions 6214]")
                     : String(localized: "Pin Confirmation Title [Leader Actions 6214]")
             } ?? "",
             isPresented: Binding(get: { ui.leaderConfirm != nil }, set: { if !$0 { ui.leaderConfirm = nil } }),
-            titleVisibility: .visible, presenting: ui.leaderConfirm) { session in
+            titleVisibility: .visible, hasCancel: true, presenting: ui.leaderConfirm) { session in
             // The hub stays the only state source: only the second choice calls make/end (#6214).
             let lead = model.assistantLeaders.contains(session.sessionID)
             Button(lead ? String(localized: "Unpin [Assistant Sidebar b7c40e]")
@@ -1300,8 +1322,9 @@ extension AssistantSidebar {
             VStack(alignment: .leading, spacing: 0) {
                 meetingRow
                 action(String(localized: "Inbox"), Theme.Icon.inbox, id: "sidebar-inbox", count: InboxStore.shared.unreadCount, place: .inbox, run: openInbox)
+                starredRow
                 if TodoStore.shared.isSupported {
-                    action(String(localized: "To-dos"), Theme.Icon.todo, id: "sidebar-todos", count: TodoStore.shared.badgeCount, place: .todos, run: { (openTodos ?? openInbox)() })
+                    action(String(localized: "To-dos"), Theme.Icon.todo, id: "sidebar-todos", count: TodoStore.shared.sidebarCount, place: .todos, run: { (openTodos ?? openInbox)() })
                 }
                 action(String(localized: "Scheduled Tasks"), Theme.Icon.schedule, place: .routines, run: openRoutines)
                 action(String(localized: "Knowledge"), Theme.Icon.knowledge, place: .knowledge, run: openKnowledge)
@@ -1332,11 +1355,20 @@ extension AssistantSidebar {
         VStack(alignment: .leading, spacing: 0) {
             action(String(localized: "New Chat [Quick Actions ea4b29]"), Theme.Icon.conversation, id: "sidebar-new", run: newConversation)
             meetingRow
+            starredRow
             action(String(localized: "Scheduled Tasks"), Theme.Icon.schedule, run: openRoutines)
             action(String(localized: "Knowledge"), Theme.Icon.knowledge, run: openKnowledge)
             if let openHealth { action(String(localized: "Health"), Theme.Icon.health, id: "sidebar-health", run: openHealth) }
             extensionRows
         }
+    }
+
+    @ViewBuilder private var starredRow: some View {
+        #if os(iOS)
+        if let openStarred, let count = StarredStore.shared.count {
+            action(String(localized: "Starred"), Theme.Icon.starredMessage, id: "sidebar-starred", count: count, place: .starred, run: openStarred)
+        }
+        #endif
     }
 
     /// First among the places: Meetings (#8731; Recordings before), a place like the rows under it, so a tap opens the page
@@ -1420,8 +1452,9 @@ extension AssistantSidebar {
     }
     #endif
 
-    /// The sidebar's first row in every layout: the main conversation as Persona with the current persona's logo (#2004, #3203).
-    /// Only the name shown is Persona's: it is the same conversation, its key and its data unchanged. Its state
+    /// The sidebar's first row in every layout: the main conversation, as "Main Chat" with the main conversation's symbol
+    /// in the places' symbol column (#9973). The assistant's face and name are the head's right above it; this row had
+    /// them too (#2004, #3203, #6401) and the iPad showed the same face three times. Its state
     /// (working, waiting, unread) on the right, as on a conversation's row. It shows while its session is not in the
     /// list too (not loaded yet, or listed by no machine now, #4606): it still opens it, or with no main conversation
     /// yet the new-conversation page, whose first one becomes it. Off until the hub's assistant config came: a
@@ -1433,13 +1466,13 @@ extension AssistantSidebar {
         let radius = Theme.Sidebar.radius
         return Button { if let key { open(key) } else { newConversation() } } label: {
             HStack(spacing: Theme.Sidebar.gap) {
-                // Where the places below have their symbol, the same width (on the Mac's plain list, `macPlace`'s).
-                PersonaAvatar(size: macPlacesGroup ? Theme.Sidebar.mark : Theme.Sidebar.glyphColumn)
-                // The small "Main Chat" under the name keeps the row readable as a conversation, not a heading (#6328, as the web, #6293).
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(mainDisplayName).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
-                    Text("Main Chat").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
+                // Where the places below have their symbol, drawn as theirs (on the Mac's plain list, `macPlace`'s).
+                Theme.Icon.image(Theme.Icon.home).resizable().scaledToFit() // resizable: an Image, not ThemedIcon
+                    .fontWeight(isShell ? .medium : .regular)
+                    .foregroundStyle(macPlacesGroup ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.primary))
+                    .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
+                    .scaledFrame(width: macPlacesGroup ? Theme.Sidebar.mark : Theme.Sidebar.glyphColumn)
+                Text("Main Chat").font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                 Spacer(minLength: 0)
                 if let main { RowStateMark(state: main.state) }
             }
@@ -1447,14 +1480,14 @@ extension AssistantSidebar {
             .padding(.vertical, Theme.Sidebar.rowPadding)
             .scaledFrame(minHeight: Theme.Sidebar.row)
             .background {
-                if selected { RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Self.selectedFill) }
+                if selected { SidebarSelectedShade() }
             }
             .macHoverShade(in: RoundedRectangle(cornerRadius: radius, style: .continuous))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .macListRow(selected: selected, in: Rectangle(), drawsShade: false) // the row draws its own (`selectedFill`)
-        .accessibilityLabel([mainDisplayName, String(localized: "Main Chat"), main.flatMap { stateWord($0) }].compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+        .accessibilityLabel([String(localized: "Main Chat"), main.flatMap { stateWord($0) }].compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("sidebar-main")
         .disabled(key == nil && model.assistantConfig == nil)
@@ -1475,16 +1508,6 @@ extension AssistantSidebar {
             }
         }
     }
-
-    /// The main conversation's name in the sidebar (#2004; it was Main Chat before, and again in #4606). The current
-    /// assistant's own name when the hub has a roster (#6401: the sidebar's head and this row name one identity),
-    /// else the look's name; "Persona" only as the last fallback.
-    static func mainDisplayName(_ model: AppModel) -> String {
-        model.currentAssistant?.name ?? model.persona.name
-    }
-
-    /// The main conversation's name on this sidebar.
-    private var mainDisplayName: String { Self.mainDisplayName(model) }
 
     /// A place to go; `place`: what it shows beside the Sidebar layout's sidebar, its row shaded while it does.
     @ViewBuilder private func action(_ title: String, _ symbol: String, id: String? = nil, count: Int = 0, place: ShellPage? = nil,
@@ -1517,7 +1540,7 @@ extension AssistantSidebar {
             .padding(.vertical, Theme.Sidebar.rowPadding)
             .scaledFrame(minHeight: Theme.Sidebar.row)
             .background {
-                if selected { RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous).fill(Self.selectedFill) }
+                if selected { SidebarSelectedShade() }
             }
             .contentShape(.rect)
         }
@@ -1729,7 +1752,7 @@ extension AssistantSidebar {
         // The main conversation and the hub's built-in background supervisor (#5083) stay: no Archive, Pin or End.
         let builtIn = model.isBackgroundSupervisor(s.sessionID)
         let kept = isMain || builtIn
-        let title = isMain ? mainDisplayName : named ?? (s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title)
+        let title = isMain ? String(localized: "Main Chat") : named ?? (s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title)
         let preview = s.lastText.map { Fmt.plain($0).replacingOccurrences(of: "\n", with: " ") } ?? ""
         let direction = model.assistantLeaders.contains(s.sessionID) ? model.directionTree?.leader(s.sessionID) : nil
         let counts = direction?.counts.label
@@ -1737,17 +1760,20 @@ extension AssistantSidebar {
         // under it runs (the tree's `running`, an Agent at work, #6626); the row's own needs-you / unread dot still takes
         // precedence. It is the only way the row says so: no "N working" beside it.
         let leadWorking = direction?.running ?? false
-        // What opened it when Persona did (#5195): the rule All Chats' filters use, so its mark and its filter agree.
+        // What opened it when Persona did (#5195): the rule All Chats' filters use, so its mark and its filter agree. One
+        // an extension opened is marked with that extension's own icon when it can be (#10358).
         let source = isMain ? nil : AutoConversations.source(of: s, tasks: taskChats.known(on: model.api))
+        let opener = ConversationOpener.of(s)
         return Button {
             if let said { model.messageJump = MessageJump(key: s.key, item: said.itemID) }
             open(s.key)
         } label: {
             HStack(spacing: Theme.Space.m) {
                 // The shell's list is ChatGPT's: titles only, all in one column (the marks made it busy); the main
-                // conversation (only in search results here) keeps the app's logo, as its first row has it (#2004).
+                // conversation (only in search results here) keeps its symbol, as its first row has it (#9973).
                 if isMain {
-                    PersonaAvatar(size: isShell ? Theme.Sidebar.glyphColumn : Theme.Sidebar.mark)
+                    ThemedIcon(Theme.Icon.home).font(Theme.Font.body).foregroundStyle(.secondary)
+                        .scaledFrame(width: isShell ? Theme.Sidebar.glyphColumn : Theme.Sidebar.mark)
                 } else if isShell {
                     EmptyView()
                 } else {
@@ -1762,7 +1788,7 @@ extension AssistantSidebar {
                 } else {
                     titleText(title, named: !isMain)
                 }
-                ConversationSourceMark(source: source, channels: s.channels) // what opened it, or its latest message's channel
+                ConversationSourceMark(source: source, channels: s.channels, opener: opener) // what opened it, or its latest message's channel
                 Spacer(minLength: Theme.Space.xs)
                 // What waits on you under a direction ("N need you", #4331); what runs is the mark after it (#6626).
                 if let counts {
@@ -1775,7 +1801,7 @@ extension AssistantSidebar {
             .scaledFrame(minHeight: Theme.Sidebar.row)
             .background {
                 if selected && drawsShade {
-                    RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous).fill(Self.selectedFill)
+                    SidebarSelectedShade()
                 }
             }
             .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous), isEnabled: drawsShade)
@@ -1785,9 +1811,9 @@ extension AssistantSidebar {
         .tag(s.key)
         .macListRow(selected: selected, in: Rectangle(), drawsShade: false) // the row draws its own (`selectedFill`)
         // a row a search found by a message says the manager's whole snippet in the last message's place (#6284)
-        .accessibilityLabel([title, counts, isMain && s.title != title ? s.title : nil, source?.markLabel, stateWord(s, under: leadWorking),
-                             said?.snippet ?? (preview.isEmpty ? nil : preview)]
-            .compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+        .sourceLabel([title, counts, isMain && s.title != title ? s.title : nil], source: source, opener: opener,
+                     [stateWord(s, under: leadWorking), said?.snippet ?? (preview.isEmpty ? nil : preview)],
+                     separator: String(localized: ", ", comment: "Separator between parts of an accessibility label"))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier(isMain ? "sidebar-main" : "sidebar-conversation")
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {

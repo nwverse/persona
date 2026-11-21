@@ -128,6 +128,7 @@ var catalogItemTypes = map[string]reflect.Type{
 	"looks":            reflect.TypeFor[LookItem](),
 	"connectors":       reflect.TypeFor[ConnectorItem](),
 	"quota":            reflect.TypeFor[QuotaItem](),
+	"usage":            reflect.TypeFor[UsageItem](),
 	"agent_sources":    reflect.TypeFor[AgentSourceItem](),
 	"providers":        reflect.TypeFor[ProviderItem](),
 	"api":              reflect.TypeFor[APIItem](),
@@ -147,6 +148,8 @@ var catalogItemTypes = map[string]reflect.Type{
 	"shortcuts":        reflect.TypeFor[ShortcutItem](),
 	"computer":         reflect.TypeFor[ComputerItem](),
 	"iphone":           reflect.TypeFor[ComputerItem](),
+
+	"repository_providers": reflect.TypeFor[RepositoryProviderItem](),
 }
 
 // Include the parsed projection as well as the signed entry fields: callers may

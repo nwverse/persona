@@ -20,14 +20,18 @@ import (
 // answer too long, makes no progress, was cut off or did not start — becomes a signal; the signals of all tasks go to
 // the main conversation as one supervision message (the quiet tasks' notices are among them), at most every few minutes, and
 // the turn it starts is not pushed unless the assistant pushes (notify_user). The assistant answers with task_review:
-// accepted closes the todo (its agents are closed later, tasks_close.go), rework sends the gaps back to the agent (at
+// accepted closes the todo unless personal verification is pending (user_check); its agents close later, tasks_close.go.
+// rework sends the gaps back to the agent (at
 // most maxReworkRounds times), needs_user waits for the user, parked waits for something else until a time
 // (parked.go), cancelled ends it.
 //
 // A supervised todo is never closed by the hub's judge (done.go): a finished stretch of work waits for review instead.
 
 const (
+	reviewClosing   = "timeout_closing"
+	reviewTimedOut  = "timed_out"
 	reviewPending   = "pending_review"
+	reviewUserCheck = "user_check"
 	reviewAccepted  = "accepted"
 	reviewRework    = "rework"
 	reviewNeedsUser = "needs_user"
@@ -118,6 +122,8 @@ type TaskReview struct {
 	Evidence *ParkEvidence `json:"evidence,omitempty"`
 	// Reply is the source receipt that ended this exact park, committed with the pending-review transition.
 	Reply *connectorwire.LarkReplyObservation `json:"reply,omitempty"`
+	// ExternalPR is this external-event park's observed object, independent of the task's PR associations.
+	ExternalPR *externalPRObservation `json:"external_pr,omitempty"`
 	// Decided: the owner's decision (its id) that ended this park before its time (parkDecided, parked.go), and
 	// DecidedTold: when a supervision message carried that to the supervisor.
 	Decided     string    `json:"decided,omitempty"`
@@ -125,11 +131,16 @@ type TaskReview struct {
 	// RestateAt: when the hub handed this needs_user back to its supervisor because the owner could not answer it
 	// (undecidable, or owner_cannot_answer): told once.
 	RestateAt time.Time `json:"restate_at,omitzero"`
+	// RecheckAt: when this decision went back to its supervisor to confirm stale facts. While it is the latest review,
+	// the old round is neither shown nor answerable; a fresh needs_user review starts a new round (decision.go).
+	RecheckAt time.Time `json:"recheck_at,omitzero"`
 	// OwnerResponse: the fixed answer the owner gave its decision (decide_yourself, not_what_i_asked, explain_first)
 	// and when; HoldReleased: after not_what_i_asked, the supervisor sent the task's agent on again.
 	OwnerResponse   string    `json:"owner_response,omitempty"`
 	OwnerResponseAt time.Time `json:"owner_response_at,omitzero"`
 	HoldReleased    bool      `json:"hold_released,omitempty"`
+	// Handoff is an internal wait recorded after session.send was acknowledged.
+	Handoff *taskHandoff `json:"handoff,omitempty"`
 }
 
 // OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
@@ -156,12 +167,20 @@ func (v *Supervision) clone() *Supervision {
 	out.Reviews = make([]TaskReview, len(v.Reviews))
 	for i, r := range v.Reviews {
 		out.Reviews[i] = r
+		if r.Handoff != nil {
+			handoff := *r.Handoff
+			out.Reviews[i].Handoff = &handoff
+		}
 		out.Reviews[i].Checks = slices.Clone(r.Checks)
 		out.Reviews[i].Options = slices.Clone(r.Options)
 		out.Reviews[i].Evidence = r.Evidence.clone()
 		if r.Reply != nil {
 			receipt := *r.Reply
 			out.Reviews[i].Reply = &receipt
+		}
+		if r.ExternalPR != nil {
+			observation := *r.ExternalPR
+			out.Reviews[i].ExternalPR = &observation
 		}
 	}
 	if out.DoneWhen == nil {
@@ -193,6 +212,9 @@ func (v *Supervision) state(t Todo) string {
 	if v == nil {
 		return ""
 	}
+	if v.State == reviewUserCheck && t.DoneAt != nil {
+		return reviewAccepted
+	}
 	if v.State == reviewParked && (t.DoneAt != nil || v.parking() == nil) {
 		return ""
 	}
@@ -202,12 +224,31 @@ func (v *Supervision) state(t Todo) string {
 	return v.State
 }
 
+// resetReopenedUserCheck mirrors the store's reopen and also reads rows written before the ledger reset was atomic.
+// A review written after the reopen starts a fresh check.
+func (t *Todo) resetReopenedUserCheck() {
+	v := t.Supervision
+	if t.DoneAt != nil || t.ReopenedAt == nil || v == nil || v.State != reviewUserCheck {
+		return
+	}
+	reviewedAt := v.UpdatedAt
+	if userCheckAsked(*t) {
+		reviewedAt = v.Reviews[len(v.Reviews)-1].At
+	}
+	if reviewedAt.Before(*t.ReopenedAt) {
+		t.Supervision = v.clone()
+		t.Supervision.State = ""
+		t.Supervision.PendingSince = nil
+		t.Supervision.UpdatedAt = maxTime(v.UpdatedAt, *t.ReopenedAt)
+	}
+}
+
 // supervisionStore is what the ledgers keep in the database; a store without it keeps them in memory only.
 type supervisionStore interface {
 	ListTodoSupervision(ctx context.Context) ([]db.TodoSupervisionRow, error)
 	PutTodoSupervision(ctx context.Context, r db.TodoSupervisionRow) error
 	ReviewDoneTodo(ctx context.Context, id, reason string, accepted bool, at time.Time) (*db.TodoRow, bool, error)
-	LinkTodoReviewer(ctx context.Context, todoID, machineID, sessionID, title, cwd, via string, at time.Time) error
+	LinkTodoReviewer(ctx context.Context, todoID, machineID, sessionID, title, cwd, agent, via string, at time.Time) error
 }
 
 var _ supervisionStore = (*db.DB)(nil)
@@ -272,6 +313,30 @@ func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, done
 	}
 }
 
+// startSupervisionRound: a plan's task took todo id over to start a new Agent on it (task_plan continues, or its
+// todo_id; takeTodoForTask), so the work from here is a new round of its supervision (#11553). A terminal review of the
+// work before it (accepted or cancelled) stays in the ledger's reviews, as history, and no longer decides the to-do's
+// state: the ledger goes back to going on, with no reworks and no owner wait yet. Otherwise every client (web
+// acceptanceStands, Apple, Android and the hub's triage alike) went on showing the earlier round's acceptance on the
+// new work, filed the to-do under Just finished or Done whenever its new Agent stopped, and superviseJudged dropped the
+// new round's stops as more work sent after an acceptance. That rule stays for what it was made for (#3156, #7539):
+// more work sent to an accepted task's Agent, a message on its card, a Reopen by hand. A to-do with no ledger gets
+// none here, and a ledger in any other state is the current round's already.
+func (s *Service) startSupervisionRound(ctx context.Context, id string) {
+	if t, ok := s.todoNow(id); !ok || t.Supervision == nil {
+		return
+	}
+	if _, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+		if v.State != reviewAccepted && v.State != reviewCancelled {
+			return false
+		}
+		v.State, v.Round, v.Waits = "", 0, nil
+		return true
+	}); err != nil {
+		s.logf("task %s: new supervision round: %v", id, err)
+	}
+}
+
 // pendingSince is a ledger's PendingSince after a write at now that took its stored state from before to after, given
 // the one it held (since): now on the way into pending_review, unchanged while the review waits (whatever else the write
 // changed: a criterion's report, a new supervisor), nil in every other state. A review that already waited with no
@@ -289,9 +354,19 @@ func pendingSince(before, after string, since *time.Time, now time.Time) *time.T
 // updateSupervision changes todo id's ledger (a new one when it has none) with change, which says whether it changed
 // anything; the ledger as it is then. Writes are one at a time.
 func (s *Service) updateSupervision(ctx context.Context, id string, change func(*Supervision) bool) (Supervision, bool, error) {
+	return s.updateSupervisionAt(ctx, id, time.Now().UTC(), change)
+}
+
+// updateSupervisionAt is updateSupervision at the caller's supervision-pass time.
+func (s *Service) updateSupervisionAt(ctx context.Context, id string, now time.Time, change func(*Supervision) bool) (Supervision, bool, error) {
 	b := &s.supervise
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
+	return s.updateSupervisionLockedAt(ctx, id, now, change)
+}
+
+// updateSupervisionLockedAt is updateSupervisionAt with supervise.writeMu already held.
+func (s *Service) updateSupervisionLockedAt(ctx context.Context, id string, now time.Time, change func(*Supervision) bool) (Supervision, bool, error) {
 	t, ok := s.todoNow(id)
 	if !ok {
 		return Supervision{}, false, db.ErrTodoNotFound
@@ -301,12 +376,17 @@ func (s *Service) updateSupervision(ctx context.Context, id string, change func(
 		v = (&Supervision{}).clone()
 	}
 	before := v.State
+	park := v.parking()
 	if !change(v) {
 		return *v, false, nil
 	}
 	v.Criteria = db.AlignTodoCriteria(v.DoneWhen, v.Criteria)
-	v.UpdatedAt = time.Now().UTC()
+	v.UpdatedAt = now.UTC()
 	v.PendingSince = pendingSince(before, v.State, v.PendingSince, v.UpdatedAt)
+	if park != nil && v.State == reviewPending && park.ExternalPR != nil && park.ExternalPR.wakes(park) {
+		// Match the review period after a reload. Postgres stores PendingSince to microsecond precision.
+		park.ExternalPR.PendingSince = v.UpdatedAt.Truncate(time.Microsecond)
+	}
 	if st := s.supervisionDB(); st != nil && s.todoDB() != nil {
 		if err := st.PutTodoSupervision(ctx, v.row(id)); err != nil {
 			return Supervision{}, false, err
@@ -353,6 +433,8 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 		return "", 5
 	}
 	switch v.state(t) {
+	case reviewUserCheck:
+		return "待你验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
 	case reviewNeedsUser:
 		return "等你决定", 0
 	case reviewPending:
@@ -364,7 +446,7 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 	case reviewParked: // waits on purpose (parked.go): below everything that needs the assistant
 		return parkedHealth(v.parked(), now.Location()), 6
 	}
-	if t.DoneAt != nil && t.StartError != "" && !t.Cancelled() {
+	if t.failedStart() {
 		// Its agent never started: stored done (#1077) but nothing was done. Only the supervisor can retry it, so it
 		// heads the list rather than sitting among the finished ones.
 		return "启动失败，待你处理（重试只有你能做）", 0 // i18n-ignore: the snapshot is the assistant's prompt

@@ -25,10 +25,15 @@ var terminalClosers = map[string][]string{
 		"closeMain",                // the user's Clear context (#5095): the main chat's own headless process, never a pane (session.stop refuses assistant conversations)
 	},
 	"session.retire": {
-		"retireArchived", // the user's "Archive and close" (close_terminal)
+		"retireArchived",     // the user's "Archive and close" (close_terminal)
+		"closeEndedTerminal", // the owner's opt-in close_ended_terminals setting, when an Agent's session ends (#10355)
 	},
 	"panes.close": {},
 	"tabs.close":  {},
+	"session.close_task_terminal": {
+		"finishTaskTerminal", // the owner opted in at dispatch and task_review accepted durable completion (#10201)
+		"tracksNodeWrite",    // classification only: compares method names and never calls a node
+	},
 }
 
 func TestOnlyUserActionsCloseAgentTerminals(t *testing.T) {
@@ -36,7 +41,8 @@ func TestOnlyUserActionsCloseAgentTerminals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	consts := map[string]string{"deviceSessionRetire": "session.retire", "deviceSessionStop": "session.stop"}
+	consts := map[string]string{"deviceSessionRetire": "session.retire", "deviceSessionStop": "session.stop",
+		"MethodCloseTaskTerminal": "session.close_task_terminal"}
 	fset := token.NewFileSet()
 	found := map[string][]string{}
 	for _, name := range files {

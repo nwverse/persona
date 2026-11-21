@@ -33,6 +33,7 @@ data class AssistantHostBindings(
     val coroutineScope: CoroutineScope,
     val phoneToolsAvailable: Boolean?,
     val machines: List<persona.core.contracts.Machine>,
+    val conversations: persona.core.contracts.api.AssistantRepository,
     val mainSender: MainConversationSender,
     val chatContent: @Composable (SessionKey, AssistantChatOptions) -> Unit,
 )
@@ -51,7 +52,7 @@ interface AssistantAppWiring {
 }
 
 @Composable
-internal fun AssistantAppHost(navigator: Navigator, content: @Composable () -> Unit) {
+fun AssistantAppHost(navigator: Navigator, content: @Composable () -> Unit) {
     if (LocalAssistantHost.current != null) { content(); return }
     val context = LocalContext.current.applicationContext
     val dependencies = remember(context) { EntryPointAccessors.fromApplication(context, AssistantEntryPoint::class.java) }
@@ -101,9 +102,12 @@ object AssistantSendingModule {
             override val outbox = messages.outbox
             override val sendReceipts = messages.sendReceipts
 
-            override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) {
+            override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) =
+                sendToMain(text, clientMessageId, draft, null)
+
+            override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?, via: String?) {
                 val pairing = checkNotNull(data.restore()) { context.getString(R.string.assistant_pair_first) }
-                pairing.messages.sendToMain(text, clientMessageId, draft)
+                pairing.messages.sendToMain(text, clientMessageId, draft, via)
             }
 
             override suspend fun mainReplaced(previous: SessionKey) {

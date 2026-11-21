@@ -7,6 +7,7 @@
   "not_delivered": "Not delivered: {error}",
   "interrupted": "Interrupted",
   "interrupt_failed": "Couldn't interrupt: {error}",
+  "send_now_failed": "Couldn't send now: {error}",
   "new_chat": "New chat",
   "session": "Session",
   "not_found_title": "Conversation not found",
@@ -48,6 +49,7 @@
   "files": "Files",
   "review_changes": "Review changes",
   "interrupt": "Interrupt",
+  "session_overview": "Session overview",
   "session_info": "Session info",
   "rename": "Rename…",
   "rename_space": "Rename space…",
@@ -113,7 +115,6 @@
   "agent_device": "Agent runs on {device}",
   "agent_device_offline": "Agent runs on {device}, which is offline. It continues once that computer is back",
   "branch_title": "Branch: {branch}",
-  "background_tasks": "Background tasks",
   "background_running": "Background tasks, {count} running",
   "rename_title": "Rename",
   "agent_device_label": "{agent}. {where}",
@@ -130,5 +131,6 @@
   "todo_completed_label": "To-do (Completed): {title}",
   "export": "Export Conversation…",
   "side_sessions_count": "Side sessions ({count})",
-  "side_sessions_needs_you": "A side session needs you"
+  "side_sessions_needs_you": "A side session needs you",
+  "open_agent_page": "Open Agent page"
 }

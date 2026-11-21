@@ -54,6 +54,9 @@ type doneSeenAgent struct {
 	// no earlier, so an agent resumed with no message (its last step is old) is not stopped on the next pass.
 	running time.Time
 	stopped bool // seen stopped since the task was done, or stopped by this pass
+	// lastStop is when this pass last confirmed a stop. A stale row older than it is retired for workspace cleanup;
+	// newer activity is a resume and keeps the workspace open.
+	lastStop time.Time
 	// resumed: running again after that. Someone brought it back on purpose (the owner's Resume, a message that
 	// resumed it): this pass leaves it to the idle rule (tasks_idle.go), which covers resumed agents.
 	resumed bool
@@ -65,6 +68,7 @@ func (s *Service) taskCloseLoop(ctx context.Context) {
 	refused := taskCloseRefused{}
 	doneSeen := doneSeen{}
 	idleSeen := idleSeen{}
+	endedSeen := endedSeen{}
 	var archived time.Time
 	for {
 		select {
@@ -74,7 +78,8 @@ func (s *Service) taskCloseLoop(ctx context.Context) {
 		}
 		s.closeDoneTaskAgents(ctx, refused, doneSeen)
 		s.closeIdleAgents(ctx, refused, idleSeen)
-		s.orphanWatch(ctx, time.Now()) // open to-dos whose agents are all gone (tasks_orphan.go)
+		s.closeEndedAgentTerminals(ctx, endedSeen) // Agents that quit, with close_ended_terminals on (agent_terminal_close.go)
+		s.orphanWatch(ctx, time.Now())             // open to-dos whose agents are all gone (tasks_orphan.go)
 		if now := time.Now(); now.Sub(archived) >= autoArchiveEvery {
 			archived = now
 			s.archiveClosedSessions(ctx, now) // closed sessions idle for days (agent_archive_auto.go)
@@ -140,7 +145,9 @@ func retirableAfter(s proto.Session, doneAt, now time.Time, idle time.Duration) 
 			return false
 		}
 	}
-	if s.Agent != "" && s.Agent != "claude" && s.Agent != "codex" && s.Agent != "traex" {
+	// Only agents a node quits with Ctrl+C in their pane (node retire.go stoppable). agy quits that way too (#11087);
+	// a runtime's agent and other work agents are left alone.
+	if s.Agent != "" && s.Agent != "claude" && s.Agent != "codex" && s.Agent != "traex" && s.Agent != "agy" {
 		return false
 	}
 	last := doneAt
@@ -156,6 +163,7 @@ func (s *Service) closeDoneTaskAgents(ctx context.Context, refused taskCloseRefu
 	if !s.todosLoaded() {
 		return
 	}
+	defer s.closeDoneTaskSpaces(ctx, time.Now(), seen)
 	agents := s.doneTaskAgents()
 	if len(agents) == 0 {
 		clear(seen)
@@ -194,7 +202,7 @@ func (s *Service) closeDoneTaskAgents(ctx context.Context, refused taskCloseRefu
 		}
 		if s.retireAgent(ctx, refused, "task "+a.todo, a.machine, c, now) {
 			// Stopped by this pass: running again before a pass sees it stopped is a resume too.
-			w.stopped, w.running = true, time.Time{}
+			w.stopped, w.running, w.lastStop = true, time.Time{}, now
 			seen[key] = w
 		}
 	}
@@ -264,13 +272,24 @@ func (s *Service) retireAgent(ctx context.Context, refused taskCloseRefused, who
 	if who == "idle" {
 		cause = proto.StopIdle
 	}
-	err := s.call(cctx, machine, deviceSessionStop, map[string]any{"session_id": c.SessionID, "retire": true, "stop_cause": cause}, &res)
+	// A done task ends its Agent's session: with the owner's close-on-end setting its terminal goes too (#10355,
+	// agent_terminal_close.go). An idle stop is no end: that Agent keeps its terminal either way.
+	closeIt := cause == proto.StopTaskCompleted && !agentCloseBusy(c) && s.closeEndedTerminals(ctx)
+	var err error
+	if closeIt {
+		res.Stopped, err = s.closeEndedTerminal(cctx, machine, c.SessionID, cause)
+	} else {
+		err = s.call(cctx, machine, deviceSessionStop, map[string]any{"session_id": c.SessionID, "retire": true, "stop_cause": cause}, &res)
+	}
 	cancel()
 	var re *rpc.Error
 	switch {
 	case err == nil:
 		delete(refused, key)
-		if res.Stopped {
+		switch {
+		case res.Stopped && closeIt:
+			s.logf("%s: closed agent %s/%s and its terminal (close_ended_terminals)", who, machine, c.SessionID)
+		case res.Stopped:
 			s.logf("%s: stopped agent %s/%s (its terminal stays)", who, machine, c.SessionID)
 		}
 		return true

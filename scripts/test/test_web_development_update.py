@@ -242,6 +242,50 @@ pathlib.Path({str(resumed)!r}).touch()
         self.assertTrue((self.root/"events").read_text().endswith("pause\nresume\n"))
         self.assertFalse((store/"coordination-pending.json").exists())
 
+    def test_builtin_quiesce_custom_directory_and_retention(self):
+        request = self.history_fixture()
+        runtime = Path(request["runtime"])
+        # The Hub paused the writers itself: no hooks, no coordination marker.
+        directory = runtime / "backups/web-dev"
+        request["config"]["backup"] = {"builtin": True, "directory": str(directory), "retain": 2}
+        receipts = [webdev.snapshot(request) for _ in range(3)]
+        snapshots = sorted(p for p in directory.iterdir() if webdev.NAME.fullmatch(p.name))
+        self.assertEqual(len(snapshots), 2)
+        self.assertEqual([p.name for p in snapshots], [r["id"] for r in receipts[-2:]])
+        self.assertEqual(receipts[-1]["retained"], 2)
+        self.assertFalse((runtime / "update/development-backups").exists())
+        self.assertFalse((directory / "coordination-pending.json").exists())
+        # A folder inside the runtime is never archived into the next snapshot.
+        with tarfile.open(snapshots[-1] / "files.tar.gz") as archive:
+            self.assertFalse(any("backups/web-dev" in member.name for member in archive))
+        # The folder must be private.
+        public = runtime / "public-snapshots"
+        public.mkdir()
+        public.chmod(0o755)
+        request["config"]["backup"]["directory"] = str(public)
+        with self.assertRaisesRegex(ValueError, "private"):
+            webdev.snapshot(request)
+        # Relative paths and an out-of-range retention are refused.
+        for broken in ({"directory": "relative/dir"}, {"directory": str(directory), "retain": 51}):
+            request["config"]["backup"] = dict(broken, builtin=True)
+            with self.assertRaises(ValueError):
+                webdev.snapshot(request)
+        # Without the built-in pause, hooks are still required.
+        request["config"]["backup"] = {}
+        with self.assertRaisesRegex(ValueError, "quiesce"):
+            webdev.snapshot(request)
+
+    def test_store_may_not_be_or_contain_a_collected_root(self):
+        request = self.history_fixture()
+        runtime = Path(request["runtime"])
+        # The store and everything below it leave the archive: a store that is
+        # the runtime, or holds it, would drop what the snapshot is for.
+        for store in (runtime, runtime.parent):
+            request["config"]["backup"] = {"builtin": True, "directory": str(store)}
+            with self.assertRaisesRegex(ValueError, "may not be the runtime or contain"):
+                webdev.snapshot(request)
+        self.assertFalse((runtime / "update" / "development-backups").exists())
+
     def test_apply_backup_stages_only_saved_programs_and_preserves_live_data(self):
         request = self.history_fixture()
         request.update(from_version="web-dev-old", from_commit="b"*40, from_build=202611120001,
@@ -336,10 +380,10 @@ pathlib.Path({str(resumed)!r}).touch()
     def test_real_writer_is_quiesced_for_the_whole_snapshot(self):
         request = self.history_fixture()
         runtime = Path(request["runtime"])
-        pause, paused = self.root/"pause", self.root/"paused"
+        pause, paused, ready = self.root/"pause", self.root/"paused", self.root/"writer-ready"
         writer = self.root/"writer.py"
         writer.write_text('''import pathlib,sys,time
-root,pause,paused,db=map(pathlib.Path,sys.argv[1:])
+root,pause,paused,db,ready=map(pathlib.Path,sys.argv[1:])
 counter=0
 while True:
     if pause.exists():
@@ -349,10 +393,13 @@ while True:
     counter+=1
     (root/'data/history.txt').write_text(str(counter))
     db.write_text(str(counter))
+    if counter == 1: ready.touch()
     time.sleep(.002)
 ''')
-        process = subprocess.Popen([sys.executable,str(writer),str(runtime),str(pause),str(paused),str(self.root/"database.json")])
+        process = subprocess.Popen([sys.executable,str(writer),str(runtime),str(pause),str(paused),str(self.root/"database.json"),str(ready)])
         self.addCleanup(lambda: (process.terminate(),process.wait(timeout=3)))
+        # The byte comparison requires the writer's first completed paired write.
+        self.wait_file(ready, process)
         hook = self.tool("coordinate", '''import pathlib,sys,time
 pause,paused=map(pathlib.Path,sys.argv[1:3])
 if sys.argv[3]=='pause': pause.touch()
@@ -369,6 +416,17 @@ else: raise SystemExit(3)
             history = archive.extractfile("root-0/data/history.txt").read()
         self.assertEqual((path/"database-0.dump").read_bytes()[5:], history)
         self.assertFalse(pause.exists())
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                self.fail("writer exited before resuming")
+            live_history = (runtime/"data/history.txt").read_bytes()
+            live_database = (self.root/"database.json").read_bytes()
+            if live_history not in (b"", history) and live_history == live_database:
+                break
+            time.sleep(.01)
+        else:
+            self.fail("writer did not resume paired writes")
 
 
 if __name__ == "__main__":

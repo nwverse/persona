@@ -1,6 +1,7 @@
 // "All chats" (docs/assistant/assistant.md "Managing its own conversations"): the assistant's conversations, the main one first, the rest newest first
 // by day; search on the title and the last message; the archived ones apart. Pure functions, tested without a DOM.
 import type { Session } from "../../lib/types";
+import { byConversationOrder } from "../../lib/conversation-order";
 import { sameManager } from "../../lib/manager-choice";
 import { t } from "../../i18n";
 
@@ -57,10 +58,10 @@ function readableTitle(title: string): string {
 const fold = (s: string) => s.normalize("NFKC").toLowerCase();
 
 /** Matches the title or the last message, ignoring case and full / half width. */
-export function filterConversations<T extends Conversation>(list: T[], query: string): T[] {
+export function filterConversations<T extends Conversation>(list: T[], query: string, main?: string): T[] {
   const q = fold(query.trim());
   if (!q) return list;
-  return list.filter((s) => fold(conversationTitle(s)).includes(q) || fold(s.last_text ?? "").includes(q));
+  return list.filter((s) => (s.session_id === main && fold(t("sidebar.main_chat")).includes(q)) || fold(conversationTitle(s)).includes(q) || fold(s.last_text ?? "").includes(q));
 }
 
 /** Every tag in use, each once and sorted: the filter chips' row (docs/assistant/assistant.md "Conversation tags"). */
@@ -116,10 +117,18 @@ export function mergeConversations(fetched: Conversation[], listed: Session[], l
   return [...by.values()];
 }
 
-/** The main conversation; the others (not archived), by day; the archived ones, newest first. */
-export function arrange(list: Conversation[], main: string | undefined, now: Date) {
+/** The main conversation; the others (not archived), by day or the user's manual order; the archived ones separately. */
+export function arrange(list: Conversation[], main: string | undefined, now: Date, order?: readonly string[]) {
   const mainConv = list.find((s) => s.session_id === main && !s.archived);
   const rest = list.filter((s) => s.session_id !== mainConv?.session_id);
+  if (order?.length) {
+    const ordered = byConversationOrder(newestFirst(rest), order);
+    return {
+      main: mainConv,
+      days: [{ title: "", items: ordered.filter((s) => !s.archived) }],
+      archived: ordered.filter((s) => s.archived),
+    };
+  }
   return {
     main: mainConv,
     days: groupByDay(rest.filter((s) => !s.archived), now),

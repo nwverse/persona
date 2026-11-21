@@ -70,6 +70,18 @@ class NotificationPolicyTest {
         assertNull(NotificationPolicy.resolution(screen, "option.unknown", null))
     }
 
+    @Test fun explicitIrreversibilityOnlyBlocksNotificationResponses() {
+        val card = interaction("question")
+        val irreversible = card.copy(reversible = false)
+        val draft = AnswerDraft(optionIndex = 0)
+        assertTrue(NotificationPolicy.actions(irreversible).isEmpty())
+        assertNull(AnswerBuilder.build(irreversible, AnswerAction.PickOption, draft,
+            AnswerContext(entry = AnswerEntry.Notification)).resolution)
+        assertNotNull(AnswerBuilder.build(irreversible, AnswerAction.PickOption, draft,
+            AnswerContext(entry = AnswerEntry.Conversation)).resolution)
+        assertEquals(NotificationPolicy.actions(card), NotificationPolicy.actions(card.copy(reversible = true)))
+    }
+
     @Test fun sayingNoComesBeforeSayingYes() {
         // The same order as the ongoing notification and Android's dialogs: the negative button on the left.
         assertEquals(listOf(R.string.notify_action_deny, R.string.notify_action_allow),
@@ -146,6 +158,13 @@ class NotificationPolicyTest {
         assertEquals(persona.core.contracts.Resolution(allow = false), NotificationPolicy.resolution(card, "deny", null))
         assertNull(NotificationPolicy.resolution(card, "deny", "typed by mistake"))
         assertNull(NotificationPolicy.resolution(card, "allow", null))
+    }
+
+    @Test fun aSecretHandoffHasNoNotificationApprovalOrStaleResolution() {
+        val card = persona.core.contracts.JsonCodec.decodeFromString<Interaction>(
+            """{"id":"request","kind":"permission","tool_name":"secret_handoff","tool_input":{"variables":[{"name":"TOKEN"}],"reference":"op://Dev/Vault/token","value":"sentinel"}}""")
+        assertTrue(NotificationPolicy.actions(card).isEmpty())
+        for (key in listOf("allow", "always", "deny")) assertNull(NotificationPolicy.resolution(card, key, null))
     }
 
     private fun interaction(kind: String) = Interaction("request", kind = kind,

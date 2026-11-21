@@ -155,9 +155,16 @@ func takesTypedModel(res proto.LauncherModels) bool {
 	return res.Locked == "" && (res.Agent == "claude" || res.Agent == "codex")
 }
 
-// listsModel: model is one of res's ids or what one of its aliases resolves to.
+// listsModel: model is one of res's ids, what one of its aliases resolves to, or a spelling folded into one of its rows
+// (proto.AgentModel.Aliases: a pick saved as "opus" before its row became the concrete model's, #10365). A gateway echo
+// of a listed model (routed under a prefix, or with/without the 1M marker) counts too (proto.SameLauncherModel), so it
+// is not remembered again as a typed id.
 func listsModel(res proto.LauncherModels, model string) bool {
-	return slices.ContainsFunc(res.Models, func(m proto.AgentModel) bool { return m.ID == model || m.Resolved == model })
+	return slices.ContainsFunc(res.Models, func(m proto.AgentModel) bool {
+		return m.ID == model || m.Resolved == model || slices.Contains(m.Aliases, model) ||
+			proto.SameLauncherModel(model, m.ID) || proto.SameLauncherModel(model, m.Resolved) ||
+			slices.ContainsFunc(m.Aliases, func(a string) bool { return proto.SameLauncherModel(model, a) })
+	})
 }
 
 // withCustomModels adds the ids remembered for launcher name on machine to its /model list, after its own entries
@@ -176,6 +183,9 @@ func (s *Service) withCustomModels(ctx context.Context, machine, name string, re
 		seen[m.ID] = true
 		if m.Resolved != "" {
 			seen[m.Resolved] = true
+		}
+		for _, a := range m.Aliases {
+			seen[a] = true
 		}
 	}
 	desc := mc(s.requestCtxLang(ctx), "custom_model_description")

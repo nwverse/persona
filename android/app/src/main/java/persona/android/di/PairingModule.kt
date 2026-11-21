@@ -48,7 +48,7 @@ object PairingModule {
         channels = channels, feishuBot = feishuBot, hubUpdates = hubUpdates, managers = managers, sent = sent,
         hubs = runtime.hubGroups, tunnels = runtime.hubTunnels, addHub = platform.adding, connectors = connectors,
         translation = translation, triage = triage, knowledgeSelection = knowledgeSelection, capsule = capsule, pairingAttempts = attempts, readiness = readiness,
-        standing = standing,
+        standing = standing, developing = (application as PersonaApp).developingPersona,
         appUpdateStore = persona.feature.settings.AppUpdateStore(application, updates, devices.binding),
         desktops = (application as PersonaApp).desktops, clearCacheFiles = { files -> persona.core.data.CacheClearing.delete(files) })
 }
@@ -62,7 +62,7 @@ class WiredPairingService @Inject constructor(application: Application, private 
     override val isPaired = runtime.pairedState
 
     /** The runtime restores (and migrates the old plaintext pairing) at start; this only picks up the result. */
-    suspend fun restore() = lock.withLock {
+    override suspend fun restore() = lock.withLock {
         runtime.settled()
     }
 

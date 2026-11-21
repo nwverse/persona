@@ -8,7 +8,7 @@
   "choose": "「{title}」で「{option}」を選ぶ",
   "choose_recommended": "「{title}」でおすすめの「{option}」を選ぶ",
   "another": "その他…",
-  "another_row": "「{title}」を開いて別の方法で答える",
+  "another_row": "「{title}」に自分の言葉で答える",
   "more": "ほかの答え",
   "decide_yourself": "任せます",
   "decide_yourself_detail": "Persona が決め、前提を記録します。",
@@ -25,5 +25,6 @@
   "confirm": "確認：{option}",
   "dialog_open": "Agent のターミナルのダイアログ「{dialog}」を先に処理してから回答してください。",
   "dialog_open_unnamed": "Agent のターミナルのダイアログを先に処理してから回答してください。",
-  "open_terminal": "ターミナルを開く"
+  "open_terminal": "ターミナルを開く",
+  "answer_recorded": "回答を記録しました。"
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"slices"
 	"time"
@@ -129,7 +128,7 @@ func (a assistantRemote) SendParams(ctx context.Context, machine, session string
 		LauncherNote string         `json:"launcher_note"` // the main chat ran on another launcher, and why (#4659)
 	}
 	err := a.call(ctx, assistantwire.MethodSendParams, assistantwire.SendParams{MachineID: machine, SessionID: session, Params: params,
-		Lang: string(a.h.contextLang(ctx)), Human: personSent(ctx)}, &res)
+		Lang: string(a.h.contextLang(ctx)), Human: personSent(ctx), ReplyInput: legacyAppOwner(ctx)}, &res)
 	if err != nil {
 		return nil, err
 	}
@@ -219,13 +218,8 @@ func writeAssistantErr(w http.ResponseWriter, err error) {
 // or the session; an assistant conversation is the assistant's to rename (assistant.rename), told when an extension's
 // token asks, whose title is then only a hint.
 func (h *Hub) renameSession(w http.ResponseWriter, r *http.Request, m *Machine) {
-	p := map[string]any{}
-	if err := decodeJSONBody(w, r, &p, 1<<20); err != nil && !errors.Is(err, io.EOF) {
-		writeBodyErr(w, err, err)
-		return
-	}
-	if p == nil {
-		writeErr(w, http.StatusBadRequest, errors.New("request body must be a JSON object"))
+	p, ok := optionalObject(w, r, 1<<20)
+	if !ok {
 		return
 	}
 	sid := r.PathValue("sid")

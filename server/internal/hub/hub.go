@@ -16,6 +16,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/hubedge"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/update"
 )
@@ -42,17 +43,27 @@ type Hub struct {
 	extRoster rosterSeen
 	// extLost are when this hub started and when managers' bus connections ended here lately (extensions_proof.go).
 	extLost busLosses
+	// clarificationProofs are short-lived, one-time full-device web question proofs.
+	clarificationProofs hubClarificationProofBook
 	// tests: replaces os.Hostname
 	hostname func() (string, error)
 
-	cfg      *Config
-	version  string
-	build    update.Build // channel, build number, where updates come from (docs/operations/hub-update.md)
-	upd      *updater     // updating itself to the publisher's release (selfupdate.go)
-	logger   *log.Logger
-	traffic  trafficLog // privacy-safe minute counters, flushed to the journal
-	machines []*Machine
-	byID     map[string]*Machine
+	cfg     *Config
+	version string
+	build   update.Build // channel, build number, where updates come from (docs/operations/hub-update.md)
+	upd     *updater     // updating itself to the publisher's release (selfupdate.go)
+	// quiesce and assistantProc pause the hub's own writers for a Web
+	// development snapshot (quiesce.go).
+	quiesce       writeQuiescer
+	assistantProc assistantGate
+	// deviceFinishes: device sessions that ended while a snapshot paused
+	// writes, written on resume (devicesessions.go).
+	deviceFinishesMu sync.Mutex
+	deviceFinishes   []deviceSessionFinish
+	logger           *log.Logger
+	traffic          trafficLog // privacy-safe minute counters, flushed to the journal
+	machines         []*Machine
+	byID             map[string]*Machine
 	// fs.watch: generation fences stale node writes, and forced replays survive machine-ID recreation.
 	fsWatchGenMu     sync.Mutex
 	fsWatchGen       map[string]uint64
@@ -71,6 +82,8 @@ type Hub struct {
 	trust   machineTrust // the computers waiting to be confirmed (machine_trust.go)
 	// machineAdd: one computer is added for a pairing code at a time (machines_add.go), so two get different ids.
 	machineAdd sync.Mutex
+	// linkSwitch: the switches of ssh computers to Persona Link under way (link_switch.go).
+	linkSwitch linkSwitches
 
 	// handedOver: the managers' pushes and outbox items delivered lately, so one sent again is delivered once
 	// (outbox_relay.go).
@@ -121,6 +134,10 @@ type Hub struct {
 	calls      map[string]chan proto.ToolResult
 	wokeAt     map[string]time.Time // device -> last silent push to wake it for a tool call
 	live       *liveActivities      // the lock screen / Dynamic Island activity (liveactivity.go)
+	// primaryPhone: the device the owner chose to take phone calls first (phone_primary.go); the zero value is
+	// Automatic. Under mu; primaryPhoneMu keeps one choice written at a time.
+	primaryPhone   phonePrimary
+	primaryPhoneMu sync.Mutex
 
 	// phoneToolsMu: one phone tool registration written at a time, so the rows and phoneTools agree on the latest.
 	// Never held with mu taken first; the write it covers runs outside mu (#5358).
@@ -166,6 +183,9 @@ type Hub struct {
 
 	mesh  meshState // the other hubs of the mesh group (mesh.go)
 	fleet fleet     // guards machines and byID (machines.go)
+	// historyReads are the history rows an extension's or scoped token was given lately, which it may read though
+	// the live list does not have them (sessions_history.go).
+	historyReads historyReads
 
 	todoLinks todoLinks // what the assistant reports of its todos' agents (assistant_todos.go)
 
@@ -228,6 +248,10 @@ type Store interface {
 	CreatePairToken(ctx context.Context, hash string, expiresAt time.Time, machine string) error
 	PairTokenByHash(ctx context.Context, hash string) (*db.PairToken, error)
 	RedeemPairToken(ctx context.Context, pairHash string, device db.DeviceToken, tokenHash string) (bool, error)
+	// A switch of an ssh computer to Persona Link (link_switch.go): whether it has a link already, and undoing exactly
+	// the code a switch made and the credential it became.
+	MachineLinkInUse(ctx context.Context, machine string) (bool, error)
+	RevokeLinkPair(ctx context.Context, hash, machine string) (credentialID string, found bool, err error)
 }
 
 func Run(ctx context.Context, b update.Build) error {
@@ -301,6 +325,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	h.importLegacy(ctx)
 	h.loadUserLang(ctx)
 	h.loadPhoneTools()
+	h.loadPhonePrimary(ctx)
 	if err := h.startPhoneWrites(ctx); err != nil {
 		return err
 	}
@@ -359,7 +384,7 @@ func (h *Hub) closeDatabaseAfterWorkers(cancel context.CancelFunc, closeDatabase
 	if h.stopping.Load() {
 		h.shutdown.step(h, "hand over the event log", func(ctx context.Context) error { h.saveEventLog(ctx); return nil })
 	}
-	// Every stop, planned or not: the next process may be a build from before hub_push_sent (lnmode.go mirrorSent).
+	// Every stop, planned or not: the next process may be a build from before hub_push_sent (push_grading.go mirrorSent).
 	h.shutdown.step(h, "delivered pushes for an older build", h.push.mirrorSent)
 	h.shutdown.step(h, "close database", closeDatabase)
 }
@@ -553,19 +578,40 @@ func (h *Hub) callPhoneWithWait(ctx context.Context, name string, args json.RawM
 			return phoneWriteResult(existing)
 		}
 	}
-	c := h.phoneClient(name)
-	if c == nil && queue {
-		return h.enqueuePhoneWrite(ctx, name, args)
+	// Which device takes it (docs/apple/phone-tools.md "Which device takes a call"): the primary device the owner chose
+	// while it offers the tool, else the automatic order (phone_primary.go).
+	primary, primaryName, offers := h.primaryPhoneFor(name)
+	wakeFor := ""
+	if offers {
+		wakeFor = primary
 	}
-	if c == nil && phoneOnScreenTools[name] {
-		return proto.TextResult(phoneNotOnScreen, true)
+	c := h.phoneClientPreferring(name, wakeFor)
+	if c == nil || (offers && c.device != primary) { // nobody connected takes it, or the primary device is not connected
+		switch {
+		case queue: // waits for the phone: with a primary device, for that one, even while another is connected
+			return h.enqueuePhoneWrite(ctx, name, args)
+		case phoneOnScreenTools[name]: // never woken for (#4192); a connected device stands in
+			if c == nil {
+				return proto.TextResult(phoneNotOnScreen, true)
+			}
+		default:
+			c = nil
+			if woken := h.wakePhone(ctx, name, wakeFor); woken != nil {
+				c = woken
+			} else if offers && ctx.Err() == nil {
+				// The primary device did not come: another connected device answers, unless the caller has gone
+				// meanwhile (a write would ask on that device for a call nobody waits for).
+				c = h.phoneClientPreferring(name, wakeFor)
+			}
+		}
 	}
-	if c == nil {
-		c = h.wakePhone(ctx, name)
+	if c == nil && offers {
+		return proto.TextResult(prompts.RenderPhonePrimaryOffline(prompts.PhonePrimaryOffline{Primary: primaryName}), true)
 	}
 	if c == nil {
 		return proto.TextResult("The user's iPhone is not connected and did not wake up in the background: ask them to open the Persona app, then retry.", true)
 	}
+	standIn := primary != "" && c.device != primary // a primary device is chosen, and another one answers
 	id := randomHex(8)
 	ch := make(chan proto.ToolResult, 1)
 	h.mu.Lock()
@@ -589,7 +635,21 @@ func (h *Hub) callPhoneWithWait(ctx context.Context, name string, args json.RawM
 	}
 	select {
 	case r := <-ch:
-		return annotateHealthSnapshot(name, r)
+		r = annotateHealthSnapshot(name, r)
+		if !r.IsError && (name == "phone_calendar_create_event" || name == "phone_reminders_create") {
+			// A completed quick-result write came from this selected connection. Queued receipts returned above have
+			// no executing device, and older clients leave whichever identity fields they do not supply absent.
+			h.mu.Lock()
+			r.SourceDeviceName = c.name
+			h.mu.Unlock()
+			c.mu.Lock()
+			r.SourceDevicePlatform = c.meta.Platform
+			c.mu.Unlock()
+		}
+		if standIn {
+			r = withStandInNote(r, h.standInName(c), primaryName)
+		}
+		return r
 	case <-ctx.Done():
 		if confirmed {
 			return proto.TextResult("Timed out waiting for the user to approve this on the phone. The approval may still be "+
@@ -654,9 +714,13 @@ func (h *Hub) requestPhoneWake(name string) bool {
 		return false
 	}
 	h.mu.Lock()
+	primary, offers := h.primaryPhoneLocked(name)
 	var candidates []db.PhoneToolRegistration
 	for _, r := range h.phoneTools {
 		if r.Platform != "" && r.Platform != "ios" {
+			continue
+		}
+		if offers && r.CredentialID != primary { // with a primary device chosen, that one is woken (phone_primary.go)
 			continue
 		}
 		for _, tool := range r.Tools {
@@ -701,8 +765,9 @@ func (h *Hub) requestPhoneWake(name string) bool {
 	return true
 }
 
-// wakePhone asks iOS to wake the app in the background (silent push) and waits briefly for it to connect.
-func (h *Hub) wakePhone(ctx context.Context, name string) *client {
+// wakePhone asks iOS to wake the app in the background (silent push) and waits briefly for it to connect: with primary
+// not empty, for the primary device's app (another device connecting does not end the wait), else for any phone's.
+func (h *Hub) wakePhone(ctx context.Context, name, primary string) *client {
 	if !h.requestPhoneWake(name) {
 		return nil
 	}
@@ -712,7 +777,7 @@ func (h *Hub) wakePhone(ctx context.Context, name string) *client {
 	t := time.NewTicker(300 * time.Millisecond)
 	defer t.Stop()
 	for {
-		if c := h.phoneClient(name); c != nil {
+		if c := h.phoneClientOf(name, primary); c != nil {
 			h.logf("phone woke up for a tool call in %d ms", time.Since(start).Milliseconds())
 			return c
 		}

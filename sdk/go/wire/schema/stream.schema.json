@@ -326,6 +326,35 @@
             "width": {}
           },
           "additionalProperties": false
+        },
+        {
+          "$ref": "view.schema.json#/$defs/GraphComponent",
+          "properties": {
+            "type": {},
+            "key": {},
+            "nodes": {},
+            "edges": {},
+            "layout": {},
+            "direction": {},
+            "selected": {},
+            "folded": {}
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "view.schema.json#/$defs/SceneComponent",
+          "properties": {
+            "type": {},
+            "key": {},
+            "alt": {},
+            "caption": {},
+            "poster": {},
+            "camera": {},
+            "shapes": {},
+            "labels": {},
+            "pins": {}
+          },
+          "additionalProperties": false
         }
       ],
       "x-discriminator": "type",

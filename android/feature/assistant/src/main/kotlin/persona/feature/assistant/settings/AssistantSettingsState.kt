@@ -14,11 +14,15 @@ import persona.core.contracts.api.MemoryFile
 import persona.core.contracts.api.SavedPlace
 import persona.core.contracts.parseTime
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
 import java.util.Locale
@@ -175,6 +179,7 @@ internal class AssistantSettingsState(
      * to the main conversation goes to that one, an ordinary conversation now.
      */
     private val mainChanged: suspend () -> Unit = {},
+    private val recentTaskChatsChanged: suspend () -> suspend (Boolean?) -> Unit = { {} },
     /** After a move: the conversation list now comes from the other machine. */
     private val onMoved: suspend () -> Unit = {},
 ) {
@@ -183,18 +188,19 @@ internal class AssistantSettingsState(
     val phoneZone: String get() = timezone.phoneZone
 
     private var configRevision = 0L
+    private val recentTaskChatsLock = Mutex()
 
     private fun set(change: AssistantSettingsUiState.() -> AssistantSettingsUiState) = mutable.update(change)
 
     fun clearNotice() = set { copy(notice = null) }
 
-    suspend fun load() {
+    suspend fun load() = recentTaskChatsLock.withLock {
         val revision = ++configRevision
         set { copy(loading = true, loadFailed = false) }
         try {
             val config = api.config()
             currentCoroutineContext().ensureActive()
-            if (revision != configRevision) return
+            if (revision != configRevision) return@withLock
             set { copy(config = config) }
             // Like iOS: opening the page brings the hub's zone along with the phone's.
             quietly {
@@ -317,6 +323,36 @@ internal class AssistantSettingsState(
         if (!ok) set { copy(config = this.config?.copy(mainBackgroundFolded = !on)) }
     }
 
+    /** Show scheduled task chats in Recent: bind one snapshot updater for the write and every later outcome. */
+    suspend fun setRecentTaskChats(on: Boolean) = recentTaskChatsLock.withLock {
+        val config = state.value.config ?: return@withLock
+        val was = config.recentTaskChats ?: return@withLock
+        if (state.value.busy || was == on) return@withLock
+        set { copy(config = config.copy(recentTaskChats = on)) }
+        var applied = on
+        var updateRecent: suspend (Boolean?) -> Unit = {}
+        val ok = try {
+            perform(SettingsText(R.string.assistant_settings_save_failed)) {
+                updateRecent = recentTaskChatsChanged()
+                updateRecent(on)
+                val updated = api.updateConfig(AssistantConfigUpdate(recentTaskChats = on))
+                applied = updated.recentTaskChats ?: on
+                set { copy(config = updated.copy(recentTaskChats = applied)) }
+            }
+        } catch (cancelled: CancellationException) {
+            set { copy(config = this.config?.copy(recentTaskChats = was)) }
+            withContext(NonCancellable) { quietly { updateRecent(was) } }
+            throw cancelled
+        }
+        if (!ok) {
+            set { copy(config = this.config?.copy(recentTaskChats = was)) }
+            quietly { updateRecent(was) }
+        } else {
+            // The hub accepted the write; a local snapshot sync failure is not a refusal and must not roll it back.
+            quietly { updateRecent(applied) }
+        }
+    }
+
     /** Suggest the next message: moves at once, follows the hub's answer, and rolls back on failure. */
     suspend fun setNextSuggestions(on: Boolean) {
         val config = state.value.config ?: return
@@ -343,6 +379,73 @@ internal class AssistantSettingsState(
             set { copy(config = updated) }
         }
         if (!ok) set { copy(config = this.config?.copy(mainSupervisesOwnTasks = !on)) }
+    }
+
+    /**
+     * "Close an Agent's terminal when it ends" (#10355): off by default. Moves at once; a failure puts it back and says
+     * so.
+     */
+    suspend fun setCloseEndedTerminals(on: Boolean) {
+        val config = state.value.config ?: return
+        if (config.closeEndedTerminals == null || config.closeEndedTerminals == on) return
+        set { copy(config = config.copy(closeEndedTerminals = on)) }
+        val ok = perform(SettingsText(R.string.assistant_settings_save_failed)) {
+            val updated = api.updateConfig(AssistantConfigUpdate(closeEndedTerminals = on))
+            set { copy(config = updated) }
+        }
+        if (!ok) set { copy(config = this.config?.copy(closeEndedTerminals = !on)) }
+    }
+
+    /** Exact owner replies: default off, reversible, and accepted only after both the write and a fresh read agree. */
+    suspend fun setOwnerReplyApproval(on: Boolean) = setOwnerApprovalSwitch(reply = true, on = on)
+
+    /** Persistent proposals: default off; existing durable grants remain the server's responsibility when turned off. */
+    suspend fun setPersistentOwnerActionCards(on: Boolean) = setOwnerApprovalSwitch(reply = false, on = on)
+
+    private suspend fun setOwnerApprovalSwitch(reply: Boolean, on: Boolean) {
+        val config = state.value.config ?: return
+        val was = if (reply) config.ownerReplyApproval else config.persistentOwnerActionCards
+        if (state.value.busy || was == null || was == on) return
+        set {
+            copy(config = if (reply) config.copy(ownerReplyApproval = on) else config.copy(persistentOwnerActionCards = on))
+        }
+        val ok = perform(SettingsText(R.string.assistant_settings_save_failed)) {
+            val update = if (reply) AssistantConfigUpdate(ownerReplyApproval = on)
+            else AssistantConfigUpdate(persistentOwnerActionCards = on)
+            val updated = api.updateConfig(update)
+            check(updated.manager == config.manager) { "Assistant identity changed" }
+            check((if (reply) updated.ownerReplyApproval else updated.persistentOwnerActionCards) == on) {
+                "The hub did not save the owner-approval setting"
+            }
+            val persisted = api.config()
+            check(persisted.manager == config.manager) { "Assistant identity changed" }
+            check((if (reply) persisted.ownerReplyApproval else persisted.persistentOwnerActionCards) == on) {
+                "The owner-approval setting did not persist"
+            }
+            set { copy(config = persisted) }
+        }
+        if (!ok) set {
+            copy(config = config?.let {
+                if (reply) it.copy(ownerReplyApproval = was) else it.copy(persistentOwnerActionCards = was)
+            })
+        }
+    }
+
+    /** Saves the exact full-reply phrases; an empty list disables phrase approval without touching ordinary cards. */
+    suspend fun setOwnerApprovalPhrases(phrases: List<String>) {
+        val config = state.value.config ?: return
+        if (state.value.busy || config.ownerReplyApprovalPhrases == null || config.ownerReplyApprovalPhrases == phrases) return
+        perform(SettingsText(R.string.assistant_settings_save_failed)) {
+            val updated = api.updateConfig(AssistantConfigUpdate(ownerReplyApprovalPhrases = phrases))
+            check(updated.manager == config.manager && updated.ownerReplyApprovalPhrases == phrases) {
+                "The hub did not save the exact approval phrases"
+            }
+            val persisted = api.config()
+            check(persisted.manager == config.manager && persisted.ownerReplyApprovalPhrases == phrases) {
+                "The exact approval phrases did not persist"
+            }
+            set { copy(config = persisted) }
+        }
     }
 
     suspend fun saveNotes(text: String): Boolean = perform(SettingsText(R.string.assistant_settings_save_failed)) {

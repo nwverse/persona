@@ -67,6 +67,10 @@ type Facts struct {
 	// Sessions are the to-do's linked runs' sessions as the hub sends them to the apps (state worked out); a linked
 	// run whose session is not among them is offline.
 	Sessions []proto.Session `json:"-"`
+	// Interactions are the pending cards of its linked runs' sessions as the hub holds them, a health conversation's
+	// marked Private (its push says nothing of what it asks, as a Just me card's); a run that asks is asked by one of
+	// its own (asksBefore), which says what kind of ask it is and how risky answering it is.
+	Interactions []proto.Interaction `json:"-"`
 	// Unreached: a computer one of its active runs is on did not answer, so their sessions are unknown; it then gets no
 	// Inactive mark, since a run there may be working on it (as the direction tree judges no task stuck then).
 	Unreached bool `json:"-"`
@@ -90,12 +94,15 @@ type Agent struct {
 }
 
 // Ask is the to-do's own open ask (the list's ask): a conclusion's outcome (done, cannot, decide; "" a deployed task's
-// Please verify), the round it was asked in, and a decision's question, options, deadline and whether it can wait.
+// Please verify), the round it was asked in, how risky answering it is, and a decision's question, options, deadline
+// and whether it can wait. Risk is the manager's rule (askRisk), which reads what the list does not carry (whether
+// taking it at its deadline can be undone, also once that deadline passed): the view reads it as listed.
 type Ask struct {
 	Outcome     string                         `json:"outcome,omitempty"`
 	Verdict     string                         `json:"verdict"`
 	Recommend   string                         `json:"recommend,omitempty"`
 	AskedAt     time.Time                      `json:"asked_at"`
+	Risk        string                         `json:"risk,omitempty"`
 	Question    string                         `json:"question,omitempty"`
 	Options     []assistantwire.OwnerAskOption `json:"options,omitempty"`
 	Deadline    *time.Time                     `json:"deadline,omitempty"`
@@ -122,9 +129,16 @@ type Supervision struct {
 
 // Parked is what a parked task waits for: why, until when, on what kind of thing.
 type Parked struct {
-	Reason    string    `json:"reason"`
-	Until     time.Time `json:"until"`
-	WaitingOn string    `json:"waiting_on"`
+	Reason    string        `json:"reason"`
+	Until     time.Time     `json:"until"`
+	WaitingOn string        `json:"waiting_on"`
+	Evidence  *ParkEvidence `json:"evidence,omitempty"`
+}
+
+// ParkEvidence carries only the owner-request link the projection reads; the other evidence stays on the listed to-do.
+type ParkEvidence struct {
+	Kind          string `json:"kind,omitempty"`
+	InteractionID string `json:"interaction_id,omitempty"`
 }
 
 // Review is one review of the ledger: when, its verdict, its note (a cancellation's why), and a needs_user review's
@@ -146,6 +160,8 @@ type Progress struct {
 type Delivery struct {
 	State string    `json:"state"`
 	At    time.Time `json:"at"`
+	Owner bool      `json:"owner,omitempty"` // an open delivery hold asks the owner to release it
+	Gate  string    `json:"gate,omitempty"`
 }
 
 // PRStatus is an observation of one of the task's PRs.
@@ -170,7 +186,8 @@ const (
 	reviewCancelled = "cancelled"
 	reviewParked    = "parked"
 
-	parkSomeoneElse = "someone_else"
+	parkSomeoneElse   = "someone_else"
+	parkExternalEvent = "external_event"
 
 	outcomeDone   = "done"
 	outcomeCannot = "cannot"
@@ -194,6 +211,10 @@ func (f *Facts) closed() bool {
 	return f.DoneAt != nil && (f.StartError == "" || f.Superseded)
 }
 
+// outsideDecisionRow has its own answer home: part_of associates it with
+// existing work, but does not make the request a step of that work (#8235).
+func outsideDecisionRow(f Facts) bool { return strings.HasPrefix(f.ID, "todo_od_") }
+
 // relate fills in what a to-do's facts take from the rest of the list: its steps (the to-dos whose part_of names it,
 // oldest first) and whether a failed start is superseded (a Superseded already set stays). It returns a new list; the
 // steps it attaches carry no steps of their own (steps are one level deep).
@@ -202,7 +223,7 @@ func relate(list []Facts) []Facts {
 	superseded := supersededFailedStarts(list)
 	steps := map[string][]Facts{}
 	for _, f := range list {
-		if f.PartOf != "" && f.PartOf != f.ID {
+		if f.PartOf != "" && f.PartOf != f.ID && !outsideDecisionRow(f) {
 			f.Steps, f.Superseded = nil, f.Superseded || superseded[f.ID]
 			steps[f.PartOf] = append(steps[f.PartOf], f)
 		}
@@ -243,6 +264,11 @@ func relatedKeys(f Facts) []string {
 	}
 	return keys
 }
+
+// Superseded are the failed starts of list whose work finished in a related to-do (supersededFailedStarts). It reads
+// only each to-do's id, title, pr_url, plan_id, done_at, start_error and kind: a caller that works out the views of a
+// part of a list sets Superseded from the whole list's (relate keeps it), so they read as the whole list's views do.
+func Superseded(list []Facts) map[string]bool { return supersededFailedStarts(list) }
 
 // supersededFailedStarts are the failed starts related to a to-do that really finished (closed without a start
 // error): the work got done another way, so nothing is left to retry (#3713). Related to-dos chain; closed and open

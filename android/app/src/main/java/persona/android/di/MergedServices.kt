@@ -31,6 +31,9 @@ import kotlinx.coroutines.flow.*
 private fun <T> GroupStack.mapped(flow: Flow<T>, transform: GroupNames.(T) -> T): Flow<T> =
     if (names.plain) flow else flow.map { names.transform(it) }
 
+internal suspend fun refreshOwnedSessions(machineId: String, call: suspend (namespace: String?, rawMachineId: String) -> Unit) =
+    call(GroupKeys.namespaceOf(machineId), GroupKeys.raw(machineId))
+
 internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : SessionsRepository, VerifiedSessionsRepository {
     override fun supportsFeature(machineId: String, feature: String) =
         feature in stacks.of(machineId)?.connection?.serverFeatures?.value.orEmpty()
@@ -55,6 +58,7 @@ internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : 
         combine(stack.repositories.sessions.listStatus, listNamespaces) { status, namespaces ->
             if (namespaces?.contains(stack.names.namespace) == false) SessionListStatus(loaded = true)
             else status.copy(
+                filter = status.filter.copy(hiddenBotmuxHubs = if (null in status.filter.hiddenBotmuxHubs) setOf(stack.namespace) else emptySet()),
                 counts = status.counts.copy(machine = status.counts.machine.mapKeys { (id, _) -> stack.names.machineId(id) }),
                 machineCounts = status.machineCounts.copy(machine = status.machineCounts.machine.mapKeys { (id, _) -> stack.names.machineId(id) }),
             )
@@ -69,26 +73,32 @@ internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : 
             total = statuses.sumOf { it.total },
             counts = SessionListCounts(total = statuses.sumOf { it.counts.total }, machine = totals({ it.machine }),
                 project = totals({ it.project }), group = totals({ it.group }), state = totals({ it.state }),
-                revision = statuses.joinToString("|") { it.counts.revision }, backgroundWaiting = statuses.sumOf { it.counts.backgroundWaiting }),
+                revision = statuses.joinToString("|") { it.counts.revision }, backgroundWaiting = statuses.sumOf { it.counts.backgroundWaiting },
+                paneSource = totals({ it.paneSource })),
             machineCounts = SessionListCounts(total = statuses.sumOf { it.machineCounts.total }, machine = totals({ it.machine }, true),
                 project = totals({ it.project }, true), group = totals({ it.group }, true), state = totals({ it.state }, true)),
+            filter = SessionListFilter(hiddenBotmuxHubs = statuses.flatMapTo(mutableSetOf()) { it.filter.hiddenBotmuxHubs }),
         )
     }
     override suspend fun setListFilter(filter: SessionListFilter) = stacks.forEach { stack ->
         if (!selected(stack)) return@forEach
         val machine = filter.machineId?.let { id -> if (stack.names.owns(id)) GroupKeys.raw(id) else id }
-        stack.repositories.sessions.setListFilter(filter.copy(machineId = machine))
+        stack.repositories.sessions.setListFilter(filter.forHub(stack.namespace).copy(machineId = machine))
     }
     override suspend fun loadMore() = stacks.forEach { if (selected(it)) it.repositories.sessions.loadMore() }
     override suspend fun loadPrevious() = stacks.forEach { if (selected(it)) it.repositories.sessions.loadPrevious() }
     override suspend fun listCounts(filter: SessionListFilter): SessionListCounts {
         val machine = requireNotNull(filter.machineId)
         return stacks.use(GroupKeys.namespaceOf(machine)) { stack ->
-            val counts = stack.repositories.sessions.listCounts(filter.copy(machineId = GroupKeys.raw(machine)))
+            val counts = stack.repositories.sessions.listCounts(filter.forHub(stack.namespace).copy(machineId = GroupKeys.raw(machine)))
             counts.copy(machine = counts.machine.mapKeys { (id, _) -> stack.names.machineId(id) })
         }
     }
     override suspend fun refresh() = stacks.forEach { it.repositories.sessions.refresh() }
+    override suspend fun refreshMachine(machineId: String) = refreshOwnedSessions(machineId) { namespace, raw ->
+        // Unlike the all-hubs refresh, this read proves this machine's own hub answered (#10671).
+        stacks.use(namespace) { it.repositories.sessions.refreshMachine(raw) }
+    }
     override fun verifiedSessions(): Map<String, List<Session>> = stacks.stacks.value.flatMap { stack ->
         stack.repositories.sessions.verifiedSessions().map { (machine, sessions) ->
             stack.names.machineId(machine) to sessions.map { stack.names.session(it) }
@@ -122,7 +132,13 @@ internal fun mergedInteractions(stacks: GroupStacks): InteractionCenter = object
         stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.resolve(GroupKeys.raw(id), resolution) }
     }
     override suspend fun resolveOutcome(id: String, resolution: Resolution) =
-        stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.resolveOutcome(GroupKeys.raw(id), resolution) }
+        resolveOutcome(id, resolution, handoffCard = false)
+    override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean) =
+        stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.resolveOutcome(GroupKeys.raw(id), resolution, handoffCard) }
+    override suspend fun replyOwnerApproval(interaction: Interaction, phrase: String) =
+        stacks.use(GroupKeys.namespaceOf(interaction.id)) {
+            it.repositories.interactions.replyOwnerApproval(it.names.rawInteraction(interaction), phrase)
+        }
     override suspend fun discardLocal(id: String) =
         stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.discardLocal(GroupKeys.raw(id)) }
     override val delegated = stacks.merged(emptyList<DelegatedAnswer>(), { s ->
@@ -140,7 +156,7 @@ internal fun mergedInteractions(stacks: GroupStacks): InteractionCenter = object
 
 @OptIn(ExperimentalCoroutinesApi::class)
 internal fun mergedChats(stacks: GroupStacks, storage: ChatLocalStorage): ChatRepository =
-    object : ChatRepository, ChatLocalStorage by storage {
+    object : ChatRepository, StructuralChatRepository, ChatLocalStorage by storage {
         override fun observe(session: SessionKey) = stacks.stacks
             .map { list -> list.firstOrNull { it.names.owns(session.machineId) } }
             .distinctUntilChanged()
@@ -150,7 +166,19 @@ internal fun mergedChats(stacks: GroupStacks, storage: ChatLocalStorage): ChatRe
                     ?.catch { failure -> if (stack.current) throw failure }
                     ?: flowOf(ChatSnapshot(loading = false, verified = false))
             }
+        override fun observeStructure(session: SessionKey) = stacks.stacks
+            .map { list -> list.firstOrNull { it.names.owns(session.machineId) } }
+            .distinctUntilChanged()
+            .flatMapLatest { stack ->
+                stack?.repositories?.chats?.observeStructure(stack.names.raw(session))
+                    ?.catch { failure -> if (stack.current) throw failure }
+                    ?: flowOf(ChatSnapshot(loading = false, verified = false))
+            }
         override suspend fun loadOlder(session: SessionKey) = stacks.use(session) { it.repositories.chats.loadOlder(it.names.raw(session)) }
+        override suspend fun earlierEnginePage(session: SessionKey, beforeSeq: Int?) =
+            stacks.use(session) { it.repositories.chats.earlierEnginePage(it.names.raw(session), beforeSeq) }
+        override suspend fun modeChanges(session: SessionKey): List<ModeChange> =
+            stacks.use(session) { it.repositories.chats.modeChanges(it.names.raw(session)) }
         override suspend fun expandFold(session: SessionKey, fromSeq: Int, toSeq: Int) =
             stacks.use(session) { it.repositories.chats.expandFold(it.names.raw(session), fromSeq, toSeq) }
         override suspend fun loadRange(session: SessionKey, fromSeq: Int, throughSeq: Int) =
@@ -185,7 +213,7 @@ internal fun mergedPreferences(stacks: GroupStacks): HubPreferences = object : H
 }
 
 /**
- * Machine management (machines page, engine, Claude Code / Codex settings) over every group (#634): each call goes to the group its machine id
+ * Machine management (machines page, engine, Claude Code / Codex / Antigravity settings) over every group (#634): each call goes to the group its machine id
  * names ([routes]: that group's service, already speaking merged ids), so another group's machine is no longer asked of the
  * selected group's hub. Hub-level services (model configuration, voice) stay with the selected group, like the other hub-level pages.
  * Subscription quota belongs to a hub too, but the merged overview shows every group's machines, so it lists every group's
@@ -201,6 +229,7 @@ internal fun mergedMachineManagement(
     override suspend fun launcherQuota(machineId: String, name: String, refresh: Boolean) =
         routes.on(machineId) { it.launcherQuota(machineId, name, refresh) }
     override suspend fun reconnect(machineId: String) = routes.on(machineId) { it.reconnect(machineId) }
+    override suspend fun startLinkSwitch(machineId: String) = routes.on(machineId) { it.startLinkSwitch(machineId) }
     override suspend fun rename(machineId: String, name: String) = routes.on(machineId) { it.rename(machineId, name) }
     override suspend fun deploy(machineId: String) = routes.on(machineId) { it.deploy(machineId) }
     override suspend fun herdr(machineId: String) = routes.on(machineId) { it.herdr(machineId) }
@@ -214,6 +243,9 @@ internal fun mergedMachineManagement(
     override suspend fun codexSettings(machineId: String) = routes.on(machineId) { it.codexSettings(machineId) }
     override suspend fun setCodexSetting(machineId: String, key: String, value: kotlinx.serialization.json.JsonElement) =
         routes.on(machineId) { it.setCodexSetting(machineId, key, value) }
+    override suspend fun agySettings(machineId: String) = routes.on(machineId) { it.agySettings(machineId) }
+    override suspend fun setAgySetting(machineId: String, key: String, value: kotlinx.serialization.json.JsonElement) =
+        routes.on(machineId) { it.setAgySetting(machineId, key, value) }
     override suspend fun claudeDirs(machineId: String) = routes.on(machineId) { it.claudeDirs(machineId) }
     override suspend fun setBlockedClaudeDirs(machineId: String, blocked: List<String>) =
         routes.on(machineId) { it.setBlockedClaudeDirs(machineId, blocked) }
@@ -309,6 +341,8 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
         override suspend fun verify(session: Session, action: ChatAction) = of(session).verify(session, action)
         override suspend fun editQueue(session: Session, keep: List<Int>) = of(session).editQueue(session, keep)
         override suspend fun sendQueuedNow(session: Session) = of(session).sendQueuedNow(session)
+        override suspend fun retryUndelivered(session: Session, messageId: String) = of(session).retryUndelivered(session, messageId)
+        override suspend fun deleteUndelivered(session: Session, messageId: String) = of(session).deleteUndelivered(session, messageId)
         override suspend fun info(session: Session) = of(session).info(session)
         override suspend fun completeRow(session: Session) = of(session).completeRow(session)
         override suspend fun childRows(session: Session) = of(session).childRows(session)
@@ -355,12 +389,16 @@ internal fun routedFiles(lookup: (machineId: String) -> SessionFiles?): SessionF
     override suspend fun stat(machineId: String, cwd: String, paths: List<String>) = of(machineId).stat(machineId, cwd, paths)
     override suspend fun download(machineId: String, cwd: String, path: String, into: java.io.File) =
         of(machineId).download(machineId, cwd, path, into)
+    override suspend fun readLogTail(machineId: String, cwd: String, path: String, manager: String?) =
+        of(machineId).readLogTail(machineId, cwd, path, manager)
     override fun comparesVersions(machineId: String) = lookup(machineId)?.comparesVersions(machineId) == true
     override suspend fun blob(machineId: String, cwd: String, path: String, rev: String) = of(machineId).blob(machineId, cwd, path, rev)
     override suspend fun thumbnail(machineId: String, cwd: String, path: String, size: Int) = of(machineId).thumbnail(machineId, cwd, path, size)
     override suspend fun convertToPdf(machineId: String, cwd: String, path: String) = of(machineId).convertToPdf(machineId, cwd, path)
     override fun editsFiles(machineId: String) = lookup(machineId)?.editsFiles(machineId) == true
     override suspend fun rename(machineId: String, cwd: String, path: String, name: String) = of(machineId).rename(machineId, cwd, path, name)
+    override suspend fun move(machineId: String, cwd: String, path: String, directory: String, conflict: SessionMoveConflictPolicy?) =
+        of(machineId).move(machineId, cwd, path, directory, conflict)
     override suspend fun trash(machineId: String, cwd: String, paths: List<String>) = of(machineId).trash(machineId, cwd, paths)
     override suspend fun restore(machineId: String, trashIds: List<String>) = of(machineId).restore(machineId, trashIds)
 }
@@ -442,6 +480,8 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
         override suspend fun newAgentModel() = creations.getOrNull(chosen)?.newAgentModel()
         override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean) =
             creation(of(machineId)).launcherModels(machineId, launcher, refresh)
+        override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean, host: String?) =
+            creation(of(machineId)).launcherModels(machineId, launcher, refresh, host)
         override suspend fun worktreeStatus(machineId: String, cwd: String, kind: String?) = creation(of(machineId)).worktreeStatus(machineId, cwd, kind)
         override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String, kind: String?) =
             creation(of(machineId)).addWorktree(machineId, cwd, nameHint, branch, kind)

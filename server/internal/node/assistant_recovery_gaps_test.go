@@ -37,9 +37,14 @@ while IFS= read -r line; do
       count=$(cat "$CLI_FAKE_DIR/attempts" 2>/dev/null || echo 0)
       count=$((count+1))
       echo "$count" > "$CLI_FAKE_DIR/attempts"
+      if [ "$count" -eq 2 ] && [ -n "$CLI_FAKE_RETRY_RESULT_GATE" ]; then
+        while [ ! -f "$CLI_FAKE_RETRY_RESULT_GATE" ]; do sleep 0.01; done
+      fi
       printf '{"type":"stream_event","event":{"type":"message_start","message":{"model":"%s","usage":{"input_tokens":5}}},"parent_tool_use_id":null}\n' "$model"
-      if [ "$count" -le 2 ]; then
+      if [ -n "$CLI_FAKE_RETRY_RESULT_GATE" ] && [ "$count" -le 2 ]; then
         echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
+      elif [ "$count" -le 1 ]; then
+        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged"}'
       else
         echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"answered by fallback"}},"parent_tool_use_id":null}'
         echo '{"type":"result","subtype":"success","is_error":false,"result":"answered by fallback"}'
@@ -60,7 +65,7 @@ func TestAssistantFallbackAsksClaudeForItsTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 	cliWait(t, "the second refusal to resume on the next launcher model", func() bool {
-		return strings.Count(f.file("user.jsonl"), `"type":"user"`) == 3
+		return strings.Count(f.file("user.jsonl"), `"type":"user"`) == 2
 	})
 	f.idle(t, id)
 	if p := f.proc(id); p == nil || p.model.Model != "fallback-model" {
@@ -265,24 +270,23 @@ func TestAssistantFirstFailureInTheHandoverGapIsCarried(t *testing.T) {
 	p := keptProc(t, a, id, "claude")
 	p.launcher, p.model, p.busy = "claude", modelExecution{Model: "primary-model"}, true
 	a.handOverAssistants()
-	if !a.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
+	if !a.recoverAssistantResult(p, true, "API Error: safeguards flagged") {
 		t.Fatal("the first failure in the handover gap was published as final")
 	}
-	send := assistantRecoverySend
+	stubHandoverRecovery(t, a, b)
 	selected := make(chan string, 1)
 	assistantRecoverySend = func(_ context.Context, _ *Node, _ *assistantProc, _, _ string, execution modelExecution) error {
 		selected <- execution.Model
 		return nil
 	}
-	t.Cleanup(func() { assistantRecoverySend = send })
 	if adopted := k.adopt(b); len(adopted) != 1 || adopted[0] != p {
 		t.Fatalf("the live conversation was not adopted: %+v", adopted)
 	}
 	b.resumeAdoptedFailures(true)
 	select {
 	case got := <-selected:
-		if got != "primary-model" {
-			t.Fatalf("the carried first failure did not retry on its own model: %q", got)
+		if got != "fallback-model" {
+			t.Fatalf("the carried safeguards failure did not select the fixture's fallback: %q", got)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("the carried first failure did not resume on the new Node")

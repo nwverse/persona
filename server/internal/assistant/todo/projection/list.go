@@ -12,10 +12,67 @@ import (
 // What the projection works out over a whole list: the rows' order within each section (rank), the counts, and the
 // places (proposal 3.3, 3.4, 3.7; spec/fixtures/todo-counts/README.md).
 
+// routeLinkedInteractions gives one to-do the existing card: the session's tied to-do when it lists it, else the first
+// that lists its worker. A released worker is listed only for its linked park. Non-owners keep their park, not a second ask.
+func routeLinkedInteractions(list []Facts) {
+	type sessionKey struct{ machine, session string }
+	listing := map[sessionKey][]string{}
+	for _, f := range list {
+		linked := parkEvidenceInteractionID(&f) != ""
+		for _, a := range f.Agents {
+			if a.DismissedAt != nil || a.StartError != "" || a.ReleasedAt != nil && !linked {
+				continue
+			}
+			key := sessionKey{a.MachineID, a.SessionID}
+			if !slices.Contains(listing[key], f.ID) {
+				listing[key] = append(listing[key], f.ID)
+			}
+		}
+	}
+	for i := range list {
+		id := parkEvidenceInteractionID(&list[i])
+		if id == "" {
+			continue
+		}
+		var key sessionKey
+		found := false
+		for _, c := range list[i].Interactions {
+			if c.ID == id {
+				key, found = sessionKey{c.MachineID, c.SessionID}, true
+				break
+			}
+		}
+		if !found || len(listing[key]) == 0 {
+			continue
+		}
+		home := listing[key][0]
+	tied:
+		for _, f := range list {
+			for _, s := range f.Sessions {
+				if s.MachineID == key.machine && s.SessionID == key.session && s.Todo != nil && slices.Contains(listing[key], s.Todo.ID) {
+					home = s.Todo.ID
+					break tied
+				}
+			}
+		}
+		if home == list[i].ID {
+			continue
+		}
+		sv := *list[i].Supervision
+		parked := *sv.Parked
+		evidence := *parked.Evidence
+		evidence.InteractionID = ""
+		parked.Evidence = &evidence
+		sv.Parked = &parked
+		list[i].Supervision = &sv
+	}
+}
+
 // Views is the view of every to-do of list at now, in the list's order: each related to the rest of the list (its
 // steps, a superseded failed start), then ranked within its section.
 func Views(list []Facts, now time.Time) []assistantwire.TodoSummary {
 	related := relate(list)
+	routeLinkedInteractions(related)
 	placed := make([]placement, len(related))
 	for i := range related {
 		placed[i] = place(&related[i], now)
@@ -35,8 +92,9 @@ func Views(list []Facts, now time.Time) []assistantwire.TodoSummary {
 //   - Needs you and Can wait: the soonest deadline first (the earlier of the decisions' deadlines on the row, a carried
 //     step's included, and the to-do's due), then the oldest ask (since).
 //   - Working: the latest activity first, its steps' included.
-//   - Waiting: the soonest wake first (a park's end, a usage limit's reset and its grace, a carried step's), then the
-//     longest waiting.
+//   - Waiting: the soonest wake first (a park's end, a usage limit's reset and its grace, the hub's next wake of a run
+//     that waits on another Agent or an outside event, a carried step's), rows with none last, then the longest
+//     waiting.
 //   - To do: by due (overdue, today, later), then priority (high, normal, low), then the newest.
 //   - Just finished and Done: the newest first.
 //   - Someday: the soonest back first, then the newest.
@@ -125,7 +183,7 @@ func carried(list []Facts, views []assistantwire.TodoSummary) []bool {
 	}
 	out := make([]bool, len(list))
 	for i, f := range list {
-		out[i] = f.PartOf != "" && f.PartOf != f.ID && open[f.PartOf]
+		out[i] = f.PartOf != "" && f.PartOf != f.ID && open[f.PartOf] && !outsideDecisionRow(f)
 	}
 	return out
 }

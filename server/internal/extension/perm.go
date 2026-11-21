@@ -86,7 +86,7 @@ func (p Permissions) normalized() Permissions {
 func (p Permissions) FullHub() bool { return p.HubAPI && len(p.Hub) == 0 }
 
 // Covers says whether p grants everything q asks (an upgrade asking for no more needs no new consent). The full token
-// covers every scope but agents.permission_mode, which only a grant naming it covers; scopes never cover the full token.
+// covers only the scopes InEveryScope includes; named-only scopes need a grant naming them. Scopes never cover the full token.
 func (p Permissions) Covers(q Permissions) bool {
 	if q.FullHub() && !p.FullHub() || q.LauncherKeys && !p.LauncherKeys || q.GhLogin && !p.GhLogin ||
 		q.UsageGateways && !p.UsageGateways || q.AgentRuntimes && !p.AgentRuntimes || q.ErrorReports && !p.ErrorReports ||
@@ -151,8 +151,11 @@ func Digest(m *Manifest) string {
 		// SecretSchemes: supplying secret values is agreed to like a permission (empty for any other extension, so
 		// their digests are what they were).
 		SecretSchemes []string `json:"secret_schemes,omitempty"`
+		// RepositoryHosts: being asked about the repositories and links on these hosts is agreed to like a permission
+		// (empty for any other extension, so their digests are what they were).
+		RepositoryHosts []string `json:"repository_hosts,omitempty"`
 	}{m.Runtime != nil, m.Permissions.normalized(), m.Topics(), m.Surfaces(), m.NodeProgram().consent(), m.ToolsConsent(), sendsAsUserIDs(m),
-		hostIntegrationConsent(m), sortedSchemes(m)})
+		hostIntegrationConsent(m), sortedSchemes(m), sortedRepositoryHosts(m)})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
@@ -173,6 +176,27 @@ func sortedSchemes(m *Manifest) []string {
 	out := slices.Clone(m.Schemes())
 	slices.Sort(out)
 	return slices.Compact(out)
+}
+
+// sortedRepositoryHosts are the hosts m's repository_providers claim, sorted: what the digest holds of them.
+func sortedRepositoryHosts(m *Manifest) []string {
+	out := slices.Clone(m.RepositoryHosts())
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// newRepositoryHosts are the hosts m's repository_providers claim that old's did not (old nil: all of them).
+func newRepositoryHosts(old, m *Manifest) []string {
+	var had, out []string
+	if old != nil {
+		had = old.RepositoryHosts()
+	}
+	for _, h := range m.RepositoryHosts() {
+		if !slices.Contains(had, h) && !slices.Contains(out, h) {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // sendsAsUserIDs are the ids of m's connectors that send as the user, sorted: what the digest holds of them.
@@ -267,6 +291,14 @@ func secretProviderLine(l i18n.Lang, title string, schemes []string) PermissionL
 	}
 	return PermissionLine{Key: "secret_provider", Title: permissionText(l, title),
 		Detail: permissionText(l, "secret_provider_detail", i18n.Args{"schemes": strings.Join(shown, permissionText(l, "list_separator"))})}
+}
+
+// repositoryProviderLine is the line for an extension that is a code-hosting source on these hosts
+// (repository_providers): Persona asks it about the addresses, repositories and links there, so it learns which ones
+// the user adds.
+func repositoryProviderLine(l i18n.Lang, title string, hosts []string) PermissionLine {
+	return PermissionLine{Key: "repository_provider", Title: permissionText(l, title),
+		Detail: permissionText(l, "repository_provider_detail", i18n.Args{"hosts": strings.Join(hosts, permissionText(l, "list_separator"))})}
 }
 
 // nodeRunsCode is the line for a program that runs on the computers the user picks.
@@ -376,6 +408,9 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 	if schemes := m.Schemes(); len(schemes) > 0 {
 		out = append(out, secretProviderLine(l, "secret_provider_title", schemes))
 	}
+	if hosts := newRepositoryHosts(nil, m); len(hosts) > 0 {
+		out = append(out, repositoryProviderLine(l, "repository_provider_title", hosts))
+	}
 	if to := m.ContributesTo(); len(to) > 0 {
 		out = append(out, PermissionLine{Key: "contributes_to", Title: permissionText(l, "contributes_title"),
 			Detail: permissionText(l, "contributes_detail", i18n.Args{"names": strings.Join(to, permissionText(l, "list_separator"))})})
@@ -427,6 +462,7 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 		}
 		out = append(out, PermissionLine{Key: "secrets", Title: permissionText(l, "secrets_title"), Detail: strings.Join(names, permissionText(l, "list_separator"))})
 	}
+	out = append(out, entrySecretLines(l, m, nil, false)...)
 	if len(m.Tools) > 0 {
 		out = append(out, toolsLine(l, m.Tools, permissionText(l, "tools_title")))
 	}
@@ -529,6 +565,9 @@ func AddedWith(l i18n.Lang, old, m *Manifest, config json.RawMessage) []Permissi
 	if len(schemes) > 0 {
 		out = append(out, secretProviderLine(l, "secret_provider_more_title", schemes))
 	}
+	if hosts := newRepositoryHosts(old, m); len(hosts) > 0 {
+		out = append(out, repositoryProviderLine(l, "repository_provider_more_title", hosts))
+	}
 	var to []string
 	for _, owner := range m.ContributesTo() {
 		if !slices.Contains(old.ContributesTo(), owner) {
@@ -570,11 +609,14 @@ func AddedWith(l i18n.Lang, old, m *Manifest, config json.RawMessage) []Permissi
 	}
 	var names []string
 	for _, s := range newSecrets(old, m) {
-		names = append(names, s.Title)
+		if slices.ContainsFunc(m.Secrets, func(fixed SecretSpec) bool { return fixed.Name == s.Name }) {
+			names = append(names, s.Title)
+		}
 	}
 	if len(names) > 0 {
 		out = append(out, PermissionLine{Key: "secrets", Title: permissionText(l, "secrets_more_title"), Detail: strings.Join(names, permissionText(l, "list_separator"))})
 	}
+	out = append(out, entrySecretLines(l, m, old, true)...)
 	if m.NodeProgram() != nil {
 		out = append(out, nodeLines(l, m.Node, old.NodeProgram())...)
 		if names := nodeSecrets(m, old); len(names) > 0 {
@@ -584,13 +626,51 @@ func AddedWith(l i18n.Lang, old, m *Manifest, config json.RawMessage) []Permissi
 	return out
 }
 
-// newSecrets are m's secrets whose names old did not declare, whether required or optional.
+// newSecrets are m's fixed or entry-list secret declarations whose scope old did not declare. A fixed secret and a
+// same-named entry-list secret are different scopes: the latter covers every current and future entry.
 func newSecrets(old, m *Manifest) []SecretSpec {
+	var oldFixed []SecretSpec
+	if old != nil {
+		oldFixed = old.Secrets
+	}
 	var out []SecretSpec
 	for _, s := range m.Secrets {
-		if !slices.ContainsFunc(old.Secrets, func(o SecretSpec) bool { return o.Name == s.Name }) {
+		if !slices.ContainsFunc(oldFixed, func(o SecretSpec) bool { return o.Name == s.Name }) {
 			out = append(out, s)
 		}
+	}
+	schema, _ := ParseSchema(m.Configuration)
+	for _, f := range schema.EntryListFields() {
+		if !hasEntrySecretDeclaration(old, f.Secret.Name) {
+			out = append(out, *f.Secret)
+		}
+	}
+	return out
+}
+
+func hasEntrySecretDeclaration(m *Manifest, name string) bool {
+	if m == nil {
+		return false
+	}
+	schema, _ := ParseSchema(m.Configuration)
+	return slices.ContainsFunc(schema.EntryListFields(), func(f Field) bool { return f.Secret.Name == name })
+}
+
+// entrySecretLines explains that one write-only, sealed secret belongs to every current and future entry. The key
+// stays "secrets" so existing clients' generic permission renderer can show it.
+func entrySecretLines(l i18n.Lang, m, old *Manifest, addedOnly bool) []PermissionLine {
+	schema, _ := ParseSchema(m.Configuration)
+	var out []PermissionLine
+	for _, f := range schema.EntryListFields() {
+		if addedOnly && hasEntrySecretDeclaration(old, f.Secret.Name) {
+			continue
+		}
+		title := permissionText(l, "entry_secrets_title")
+		if addedOnly {
+			title = permissionText(l, "entry_secrets_more_title")
+		}
+		out = append(out, PermissionLine{Key: "secrets", Title: title, Detail: permissionText(l, "entry_secrets_detail",
+			i18n.Args{"secret": f.Secret.Title, "list": f.Title})})
 	}
 	return out
 }
@@ -638,23 +718,49 @@ func configuredLines(l i18n.Lang, m *Manifest, cs []ConfiguredNetwork, config js
 	sc, _ := ParseSchema(m.Configuration)
 	for _, c := range cs {
 		field := c.Field
+		listTitle := c.List
 		if sc != nil {
 			for _, f := range sc.Fields {
-				if f.Name == c.Field && f.Title != "" {
+				if c.List == "" && f.Name == c.Field && f.Title != "" {
 					field = f.Title
+				}
+				if c.List != "" && f.Name == c.List && f.EntryList() {
+					if f.Title != "" {
+						listTitle = f.Title
+					}
+					for _, sub := range f.Items.Fields {
+						if sub.Name == c.Field && sub.Title != "" {
+							field = sub.Title
+						}
+					}
 				}
 			}
 		}
+		var hosts []string
+		for _, t := range configuredTargets(c, config) {
+			host := net.JoinHostPort(t.Host, t.Port)
+			if !slices.Contains(hosts, host) {
+				hosts = append(hosts, host)
+			}
+		}
 		now := permissionText(l, "network_config_unset")
-		if t, _ := ConfiguredTarget(c, config); t.Host != "" {
-			now = net.JoinHostPort(t.Host, t.Port)
+		if len(hosts) > 0 {
+			now = strings.Join(hosts, permissionText(l, "list_separator"))
 		}
 		key := "network_config_detail"
 		if c.HTTP {
 			key = "network_config_detail_http"
 		}
+		args := i18n.Args{"field": field, "host": now}
+		if c.List != "" {
+			key = "network_config_entries_detail"
+			if c.HTTP {
+				key = "network_config_entries_detail_http"
+			}
+			args["list"] = listTitle
+		}
 		out = append(out, PermissionLine{Key: "network_config", Title: permissionText(l, "network_config_title"),
-			Detail: permissionText(l, key, i18n.Args{"field": field, "host": now})})
+			Detail: permissionText(l, key, args)})
 	}
 	return out
 }

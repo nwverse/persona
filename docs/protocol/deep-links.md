@@ -43,18 +43,18 @@ Query keys not listed for a row are dropped (not passed on, not acted on). Fragm
 | To-dos | `/todos` | `view`, `mode`, `date` | To-dos | in place | native |
 | A to-do | `/todos/<id>` | | native | in place | native |
 | Knowledge | `/kb`, `/kb/<kind>` | | Knowledge | in place | native |
-| A knowledge entry | `/kb/<kind>/<id>` | | native | in place | (#9932) |
+| A knowledge entry | `/kb/<kind>/<id>` | | native | in place | native |
 | Computers | `/machines` | | Computers | in place | native |
 | A computer | `/machines/<id>` | `range` | native | in place | native |
 | Settings | `/settings` | `tab`, the tab's item key, `manager` | the matching page | in place | native |
-| An extension's page | `/extension/<extension>/<ui>` | `state` | native | in place | (#9932) |
+| An extension's page | `/extension/<extension>/<ui>` | `state` | native | in place | native |
 
 - `<kind>` is one of `projects`, `topics`, `chats`, `people`, `docs`, `meetings`, `events`, `recordings`; a meeting is
   `/kb/meetings/<id>` and a recording `/kb/recordings/<id>`. An id that holds `/` is one escaped segment (`%2F`).
 - `at` names one message to land on (`?at=<item id>`; Claude's ids hold `#`, written `%23`).
 - Settings tabs are the web's (`web/src/views/settings/nav.ts`): `general`, `persona`, `prompts`, `notifications`,
   `models`, `agents`, `channels`, `connectors`, `sources`, `extensions`, `shortcuts`, `devices`, `hub`, `managers`,
-  `knowledge`, `avatar`. Four have an item key: `models` → `purpose`, `channels` → `channel`, `extensions` →
+  `knowledge`, `avatar`, `labs`. Four have an item key: `models` → `purpose`, `channels` → `channel`, `extensions` →
   `extension`, `connectors` → `connector`. An extension's settings are `/settings?tab=extensions&extension=<id>`. An
   unknown tab opens Settings. The iPhone opens the page it has for a tab, else Settings.
 - A page the iPhone has no screen for opens in the in-app web card, as any other link to the hub does.
@@ -130,13 +130,15 @@ checks; none of them is ever written by the hub's link builder.
 - **iPhone**: one parser for the three inputs (a paired hub's web link, an app link, an older form) and one entry that
   every surface opens links with: chats, the Inbox (an item's source link and its Timeline), knowledge, to-dos, mail and
   extension pages, and links from outside the app. A page in the table opens natively; anything else opens in the web
-  card as before (#9928).
+  card as before (#9928). The web sign-in page's `persona://browser-login` code, read by the Camera app, only says where to scan it (Settings › Devices › Scan Browser Sign-in Code, #10293); approving a browser happens only in that scanner.
 - **Web**: links to its own hub go through the router's own `parse` and open in place; app links and older forms in
   messages and cards open the same pages (#9930).
 - **Desktop**: the packaged app registers `persona://`. An app link's path is handed to the web app in the window,
   which applies the table; the desktop app itself only refuses malformed links and drops query keys no row lists, in
   both app-link forms (`persona://open<path>` and `persona://open?route=`; #9931, #10281).
-- **Android**: `core/navigation` `HubLinks` reads paired hubs' web links; app links and the rows it lacks are #9932.
+- **Android**: `core/navigation` `HubLinks` reads paired hubs' web links, canonical and older app links, and every
+  route-table row. Cold starts and links in messages use the same native destinations. An app link's `hub` selects its
+  paired group; the page opens after that group's session is ready. Action links keep their own parsers (#9932).
 - **The hub**: one builder writes every path in the table, and the web link from `public_url` (#9927). Push payloads
   keep their typed keys (`machine_id`, `session_id`, `todo`, …), which each app maps to the same pages.
 

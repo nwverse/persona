@@ -74,6 +74,9 @@ type chanLive struct {
 	sentCard   [32]byte
 	backoff    time.Duration
 	quietUntil time.Time
+	// kit is the progress card as a CardKit entity, streamed into (feishu_stream.go); nil before it is sent, or for
+	// a card sent as a message. Under mu.
+	kit *cardKit
 	// What the progress card shows besides the steps, noted as the items come (liveNote): the calls with no result
 	// yet (oldest first), how many calls, the files read and changed, the subagents.
 	open         []openCall
@@ -228,6 +231,26 @@ func (s *Service) channelRuns(id string) []channel.Run {
 	return out
 }
 
+// finishUnrelatedChannelRun ends a held run whose conversation now belongs to an ordinary user turn. Its original
+// answer stands; no later answer or new quiet-ending card goes to the channel.
+func (s *Service) finishUnrelatedChannelRun(id string) {
+	r, _ := s.channelRunByID(id)
+	if r == nil {
+		return
+	}
+	s.finishChannelRun(r, &channel.Result{Quiet: true, End: channel.EndUnrelated})
+}
+
+// endHeldChannelRuns ends held runs on a conversation before an owner's own new message starts its turn. Channel
+// messages fold their earlier runs before reaching this path, so only runs left held by another surface end here.
+func (s *Service) endHeldChannelRuns(machine, session string) {
+	for _, snap := range s.channelRuns("") {
+		if snap.Held && snap.MachineID == machine && snap.SessionID == session {
+			s.finishUnrelatedChannelRun(snap.ID)
+		}
+	}
+}
+
 // startChannelRun records a run and watches it. An earlier run of the same channel on the same conversation that has
 // not answered yet is folded into this one: one answer covers both messages.
 func (s *Service) startChannelRun(r *channel.Run) {
@@ -254,7 +277,8 @@ func (s *Service) startChannelRunForBinding(r *channel.Run, generation *uint64) 
 		// One answer covers both only when both go to the same place: a topic's reply never turns up in the private chat
 		// (or another topic), nor the other way round.
 		if o.Channel == r.Channel && o.MachineID == r.MachineID && o.SessionID == r.SessionID && !c.answering[o.ID] && !o.Recalled &&
-			o.Ext["chat"] == r.Ext["chat"] && o.Ext["thread"] == r.Ext["thread"] && o.Ext["clarify"] == "" && r.Ext["clarify"] == "" {
+			o.Ext["chat"] == r.Ext["chat"] && o.Ext["thread"] == r.Ext["thread"] && o.Ext["clarify"] == "" && r.Ext["clarify"] == "" &&
+			o.Ext[readChatKey] == "" && r.Ext[readChatKey] == "" { // a /read is answered under its own message, alone
 			folded = append(folded, o)
 			r.Fold(o)
 			continue

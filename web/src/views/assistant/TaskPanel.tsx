@@ -1,8 +1,10 @@
 // A task's detail beside the assistant's conversation (docs/assistant/unified-entry.md "Task details"; iOS TaskDetailSheet): its
 // agent's own chat — everything the Agents page does works here — and, with several agents, a switch between them. Opened
 // while Agents open in the side panel (lib/agent-open.ts, #5424); loaded with the first one (SidePanel).
-import { useState } from "react";
-import { isRemovable, openAsk, TODO_STATUS_INFO } from "../../lib/todos";
+
+import { lazy, Suspense, useState } from "react";
+import { isRemovable, openAsk } from "../../lib/todos";
+import { statusWord } from "../../lib/todo-wait-reason";
 import { TodoAskLine } from "../TodoAsk";
 import { reportText } from "../../lib/supervision";
 import { LatestReport } from "./Supervision";
@@ -11,12 +13,17 @@ import { Button, IconButton, Menu, useMenu, type MenuItem } from "../../ui/atoms
 import { ChatView } from "../chat/ChatView";
 import { PanelHeader } from "../../ui/PanelHeader";
 import { place, removeTaskNow, retryTaskNow, useRetrying, useTaskState, useTodo } from "./Tasks";
+import { retryOnLauncherNow, useFailedStart } from "./FailedTaskRow";
 import { stateOf } from "../../lib/format";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { href, type Route } from "../../lib/router";
 import { t } from "../../i18n";
 import { startInFlight, useFeed } from "../../lib/feed";
 import { TaskWorkspaceLine } from "./TaskWorkspace";
+
+// the question a failed start's tab stopped on, answered here (#10365): only for such a failure. After the imports: in
+// development Vite turns `import { lazy }` into a const at its place, which a call above it would read too early.
+const ShellQuestion = lazy(() => import("../ShellQuestionCard"));
 
 /** ⋯'s "Open in new window": the page the panel shows, as its own tab (⌘-click on the link does the same). */
 function openInWindow(to: Route): MenuItem {
@@ -29,6 +36,7 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
   const sessions = useStore((s) => s.sessions);
   const [picked, setPicked] = useState<string | null>(null);
   const retrying = useRetrying(todoId);
+  const { task: failedTask, instead } = useFailedStart(todo);
   const plans = useFeed((s) => s.plans);
   const planned = Object.values(plans).flatMap((p) => p.tasks).find((t) => t.todo_id === todoId);
   if (!todo || !st) {
@@ -42,12 +50,11 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
   const agents = (todo.agents ?? []).filter((a) => !a.released_at);
   const lead = st.lead;
   const chosen = agents.find((a) => `${a.machine_id}/${a.session_id}` === picked) ?? (lead ? agents.find((a) => a.session_id === lead.session_id) : agents[0]);
-  const info = TODO_STATUS_INFO[st.status];
   const starting = st.status === "not_started" && startInFlight(todo, plans);
   // the header also stands for the agent shown: after ⌄ picks another, its machine and project, not the lead's
   const shown = chosen ? (sessions[chosen.machine_id] ?? []).find((x) => x.session_id === chosen.session_id) : undefined;
   // The chat header prepends the usage-limit line of the agent it shows, so the status word is not said twice.
-  const head = st.status === "usage_limit" && usageLimitLabel(shown ?? lead) ? "" : starting ? t("assistant-tasks.status_starting") : info.label;
+  const head = st.status === "usage_limit" && usageLimitLabel(shown ?? lead) ? "" : starting ? t("assistant-tasks.status_starting") : statusWord(st.status, st.wait);
   const subtitle = [head, chosen ? place({ ...todo, agents: [chosen] }, shown ?? lead) : place(todo, lead)].filter(Boolean).join(" · ");
   const taskItems: MenuItem[] = [
     openInWindow(chosen ? { name: "session", mid: chosen.machine_id, sid: chosen.session_id } : { name: "todos", id: todo.id }),
@@ -66,7 +73,8 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
           key={`${chosen.machine_id}/${chosen.session_id}`}
           mid={chosen.machine_id}
           sid={chosen.session_id}
-          panel={{ onClose, title: todo.title, sub: subtitle, items: taskItems, beside: switcher.length > 1 ? <AgentSwitch agents={switcher} /> : undefined }}
+          // the bubble before × opens the Agent shown (the one ⌄ picked) as its own page
+          panel={{ onClose, page: { name: "session", mid: chosen.machine_id, sid: chosen.session_id }, title: todo.title, sub: subtitle, items: taskItems, beside: switcher.length > 1 ? <AgentSwitch agents={switcher} /> : undefined }}
           // what the task's result waits on from the user (#2056), and what its agent last reported, as it wrote it (#3181),
           // over its agent's chat
           banner={openAsk(todo) || reportText(todo.supervision) || planned?.workspace ? (
@@ -89,7 +97,14 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
           <div className="flex flex-col items-start gap-3 p-6 text-[13px]">
             <div className="font-semibold text-red">{t("assistant-taskpanel.start_failed")}</div>
             <div className="text-ink-2">{st.failure ?? todo.agents?.find((a) => a.start_error)?.start_error}</div>
-            <div className="flex gap-2">
+            {st.status === "failed" && failedTask?.error_code === "shell_waiting" && <Suspense fallback={null}><ShellQuestion todo={todo} task={failedTask} className="w-full" /></Suspense>}
+            <div className="flex flex-wrap gap-2">
+              {/* its launcher can't start there: on the computer's other launcher first (#10365) */}
+              {st.status === "failed" && instead && (
+                <Button icon="retry" tone="accent" busy={retrying} disabled={retrying} onClick={() => retryOnLauncherNow(todo, instead)} testId="task-retry-launcher">
+                  {t("assistant-task-actions.use_launcher_instead", { launcher: instead })}
+                </Button>
+              )}
               {st.status === "failed" && (
                 <Button icon="retry" busy={retrying} disabled={retrying} onClick={() => retryTaskNow(todo)}>
                   {t("assistant-taskpanel.retry")}
@@ -135,7 +150,7 @@ function PanelMore({ items }: { items: MenuItem[] }) {
 export function AgentPanel({ mid, sid, onClose }: { mid: string; sid: string; onClose: () => void }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <ChatView key={`${mid}/${sid}`} mid={mid} sid={sid} panel={{ onClose, items: [openInWindow({ name: "session", mid, sid })] }} />
+      <ChatView key={`${mid}/${sid}`} mid={mid} sid={sid} panel={{ onClose, page: { name: "session", mid, sid }, items: [openInWindow({ name: "session", mid, sid })] }} />
     </div>
   );
 }

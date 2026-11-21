@@ -33,7 +33,7 @@ Supported since 2026-11-02 (issue #325). The node-side code is in `server/intern
 
    A single message is at most 64 MiB. A trailing newline is optional.
 4. **Protocol**: exactly the same as on runtime.sock.
-   - The daemon sends `runtime.hello` first, then pushes `runtime.sessions`, `session.items`, `session.delta`, and sends `interaction.create` for questions.
+   - The daemon sends `runtime.hello` first, then pushes `runtime.sessions`, `session.items`, `session.delta`, `usage.report` (node feature `usage`), and sends `interaction.create` for questions.
    - It answers the node's `session.*` requests as usual.
    - Capabilities are declared in `caps` as usual.
 5. **Connection**:
@@ -103,7 +103,7 @@ A daemon is not necessarily trustworthy, e.g. a multi-tenant platform, or someth
 | Can | Cannot |
 | --- | --- |
 | List, push and page through **its own** sessions | See or claim other sessions. When the node does not know who owns a session it asks every runtime; ids without this daemon's prefix are answered on the node side and never reach the daemon |
-| Answer send message, interrupt, rename, close, start (as declared in `caps`) | Declare other capabilities: only start / send / interrupt / rename / close are allowed. `caps.assistant` is removed, so a daemon cannot run Persona's assistant (`docs/integrations/runtimes.md` ("Assistant")); new capabilities added to the protocol later must also be allowed individually in `daemonCaps` |
+| Answer send message, interrupt, rename, close, start (as declared in `caps`) | Declare other capabilities: only start / send / interrupt / rename / close / execution / history are allowed (`history`: its `sessions.history` is forwarded with the window as it is, and its rows come back with ids prefixed `<id>.` as listed rows do; `docs/protocol/protocol.md` "Session history"). `caps.assistant` is removed, so a daemon cannot run Persona's assistant (`docs/integrations/runtimes.md` ("Assistant")); new capabilities added to the protocol later must also be allowed individually in `daemonCaps` |
 | Ask the phone (questions, plans, permissions); the card shows the name from the config | Use `mcp.*` (phone tools, Persona tools): `mcp.tools` returns an empty list, `mcp.call` returns `unsupported` |
 | | Claim a local terminal pane through `pane_id`, or start a command in the local terminal engine through `resume_argv`: both fields are dropped, and `features` does not tell it `resume_argv` exists |
 | | Reply `code: handover` to a send so the node hands the message to another runtime: the node turns it into `not_running` and sends nothing; `features` does not tell it `handover` exists either |

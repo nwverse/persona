@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -134,8 +135,91 @@ func TestDeployScriptRejectsAnUnusableBinary(t *testing.T) {
 	}
 }
 
+// remote_bin may be a wrapper script that sets the node's environment (PERSONA_HOME, say) and execs the real personad:
+// replacing it with the binary moved the node to another data directory and machine uid, and nothing of the wrapper
+// was kept. The deploy refuses it and touches nothing; a binary it replaces is kept as .prev.
+func TestDeployScriptKeepsAWrapper(t *testing.T) {
+	for _, shell := range loginShells(t) {
+		t.Run(filepath.Base(shell), func(t *testing.T) {
+			for _, tc := range []struct {
+				name, old string
+				replaced  bool
+			}{
+				{"wrapper", "#!/bin/sh\nPERSONA_HOME=\"$HOME/.persona-other\" exec \"$HOME/tools/personad\" \"$@\"\n", false},
+				{"binary", "\x7fELF not really a binary\n", true},
+			} {
+				home := t.TempDir()
+				bin := filepath.Join(home, ".local", "bin", "personad-wrapped")
+				_ = os.MkdirAll(filepath.Dir(bin), 0o755)
+				if err := os.WriteFile(bin, []byte(tc.old), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				var gz bytes.Buffer
+				zw := gzip.NewWriter(&gz)
+				_, _ = zw.Write([]byte("#!/bin/sh\necho new\n"))
+				_ = zw.Close()
+				pkilled := fakePkill(t)
+				cmd := exec.Command(shell, "-c", deployScript("~/.local/bin/personad-wrapped", false))
+				cmd.Env = shellEnv(home, filepath.Dir(pkilled))
+				cmd.Stdin = &gz
+				out, err := cmd.CombinedOutput()
+				got, _ := os.ReadFile(bin)
+				prev, prevErr := os.ReadFile(bin + ".prev")
+				if tc.replaced {
+					if err != nil || string(got) != "#!/bin/sh\necho new\n" {
+						t.Errorf("%s: %v %s, file %q", tc.name, err, out, got)
+					}
+					if prevErr != nil || string(prev) != tc.old {
+						t.Errorf("%s: the replaced binary is not kept as .prev: %q %v", tc.name, prev, prevErr)
+					}
+					continue
+				}
+				var exit *exec.ExitError
+				if !errors.As(err, &exit) || exit.ExitCode() != deployExitWrapper || !strings.Contains(string(out), bin) {
+					t.Errorf("%s: %v %s", tc.name, err, out)
+				}
+				if string(got) != tc.old {
+					t.Errorf("%s: the wrapper was replaced: %q", tc.name, got)
+				}
+				if called, _ := os.ReadFile(pkilled); len(called) != 0 {
+					t.Errorf("%s: the node was restarted: %q", tc.name, called)
+				}
+				if _, err := os.Stat(bin + ".new"); err == nil {
+					t.Errorf("%s: .new left behind", tc.name)
+				}
+				if prevErr == nil {
+					t.Errorf("%s: .prev written for a file that was not replaced", tc.name)
+				}
+			}
+		})
+	}
+}
+
+// The hub says which file is a wrapper and what to update instead, not just the script's exit status.
+func TestDeployRefusingAWrapperSaysSo(t *testing.T) {
+	dir := t.TempDir()
+	ssh := "#!/bin/sh\ncat >/dev/null\necho 'a script' >&2\nexit " + strconv.Itoa(deployExitWrapper) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(ssh), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	bin := filepath.Join(dir, "personad")
+	if err := os.WriteFile(bin, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := &Machine{cfg: MachineConfig{ID: "test-node", RemoteBin: "~/.local/bin/personad-wrapped"}}
+	err := m.deploy(context.Background(), bin, "test")
+	var msg *i18n.Message
+	if !errors.As(err, &msg) || msg.Key != "devices-deploy.wrapper" || msg.Args["path"] != "~/.local/bin/personad-wrapped" {
+		t.Fatalf("deploy: %#v", err)
+	}
+	if text := i18n.T(i18n.En, msg.Key, msg.Args); !strings.Contains(text, "~/.local/bin/personad-wrapped") {
+		t.Errorf("the message does not name the file: %q", text)
+	}
+}
+
 // No binary for the machine's platform on the hub: say what to do, don't start.
-func TestNodeBinaryMissing(t *testing.T) {
+func TestNodeBinaryRequiresMatchingProgramAndVersion(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
@@ -152,16 +236,16 @@ func TestNodeBinaryMissing(t *testing.T) {
 	if p, err := nodeBinary("darwin", "arm64", "", ""); err != nil || filepath.Base(p) != "personad-darwin-arm64" {
 		t.Fatalf("%s %v", p, err)
 	}
-	// A node that runs persona-node gets persona-node when the hub has it for the hub's version, personad otherwise;
-	// one that runs personad (or an older node that does not say) always personad: it may run a hub or a manager too.
-	if p, _ := nodeBinary("darwin", "arm64", nodeproto.ProgramPersonaNode, "v2"); filepath.Base(p) != "personad-darwin-arm64" {
-		t.Fatalf("persona-node without its build on the hub: %s", p)
+	missing := func(version string) {
+		t.Helper()
+		if p, err := nodeBinary("darwin", "arm64", nodeproto.ProgramPersonaNode, version); p != "" || err == nil {
+			t.Fatalf("hub %q: selected %q with error %v, want no matching node build", version, p, err)
+		}
 	}
+	missing("v2") // only personad is available
 	node := filepath.Join(dir, "persona-node-darwin-arm64")
 	copyFile(t, updatetest.Program(t, nodeproto.ProgramPersonaNode, "darwin", "arm64"), node)
-	if p, _ := nodeBinary("darwin", "arm64", nodeproto.ProgramPersonaNode, "v2"); filepath.Base(p) != "personad-darwin-arm64" {
-		t.Fatalf("a persona-node that does not say its version: %s", p)
-	}
+	missing("v2")                                            // persona-node has no version yet
 	_ = os.WriteFile(node+".version", []byte("v2\n"), 0o644) // deploy.sh writes it after the binary
 	for program, want := range map[string]string{nodeproto.ProgramPersonaNode: "persona-node-darwin-arm64",
 		nodeproto.ProgramPersonad: "personad-darwin-arm64", "": "personad-darwin-arm64"} {
@@ -169,17 +253,10 @@ func TestNodeBinaryMissing(t *testing.T) {
 			t.Errorf("%q: %s %v, want %s", program, p, err, want)
 		}
 	}
-	// The hub moved on (its own update replaces personad-* alone), or no version is known: the earlier deploy's
-	// persona-node is another build, never sent.
-	for _, hub := range []string{"v3", ""} {
-		if p, _ := nodeBinary("darwin", "arm64", nodeproto.ProgramPersonaNode, hub); filepath.Base(p) != "personad-darwin-arm64" {
-			t.Errorf("hub %q: %s, want personad", hub, p)
-		}
-	}
-	_ = os.Remove(node) // the version without the file
-	if p, _ := nodeBinary("darwin", "arm64", nodeproto.ProgramPersonaNode, "v2"); filepath.Base(p) != "personad-darwin-arm64" {
-		t.Errorf("no persona-node file: %s", p)
-	}
+	missing("v3") // sidecar is from a previous release
+	missing("")   // hub version unknown
+	_ = os.Remove(node)
+	missing("v2") // version without the file
 }
 
 // The ssh deploy keeps personad where it is when the build nodeBinary picked is persona-node, by its file name there.
@@ -211,7 +288,7 @@ func TestDeployScriptKeepsPersonad(t *testing.T) {
 				bin := filepath.Join(home, ".persona", "bin", "persona-node")
 				old := ""
 				if tc.name != "none" {
-					old = "#!/bin/sh\n[ \"$1\" = node-update-check ] || exit 0\n"
+					old = "[ \"$1\" = node-update-check ] || exit 0\n" // no #! line: sh runs it all the same, and it is no wrapper
 					if tc.existing != "" {
 						old += "echo '" + tc.existing + "'\n"
 					} else {
@@ -250,17 +327,8 @@ func TestDeployScriptKeepsPersonad(t *testing.T) {
 	}
 }
 
-// An ssh deploy writes to the device's file when the node runs from it (persona-node, or personad when the hub has no
-// persona-node build), never persona-node to remote_bin (personad on a computer that may run a hub or a manager too);
-// a personad node's goes to remote_bin as before. nodeProgram brings persona-node back to a device file that holds
-// personad.
+// SSH deploys update the device's executable in place. The installed program's identity is independent of its path.
 func TestRemoteTarget(t *testing.T) {
-	if got := nodeProgram(proto.NodeInfo{Program: nodeproto.ProgramPersonad, Executable: "/home/u/.persona/bin/persona-node"}); got != nodeproto.ProgramPersonaNode {
-		t.Errorf("personad in the device's file: %s", got)
-	}
-	if got := nodeProgram(proto.NodeInfo{Program: nodeproto.ProgramPersonad, Executable: "/home/u/.persona/bin/personad"}); got != nodeproto.ProgramPersonad {
-		t.Errorf("personad: %s", got)
-	}
 	node := proto.NodeInfo{Program: nodeproto.ProgramPersonaNode, Executable: "/home/u/.persona/bin/persona-node"}
 	full := proto.NodeInfo{Program: nodeproto.ProgramPersonad, Executable: "/home/u/.persona/bin/personad"}
 	custom := MachineConfig{RemoteBin: "/opt/persona/personad"}
@@ -275,10 +343,9 @@ func TestRemoteTarget(t *testing.T) {
 		{MachineConfig{}, proto.NodeInfo{}, "/hub/nodes/persona-node-linux-amd64", "~/.persona/bin/persona-node"},
 		{MachineConfig{}, full, "/hub/nodes/personad-linux-amd64", "~/.persona/bin/personad"},
 		{custom, full, "/hub/nodes/personad-linux-amd64", "/opt/persona/personad"},
-		{MachineConfig{}, node, "/hub/nodes/personad-linux-amd64", "/home/u/.persona/bin/persona-node"}, // no persona-node build: personad to that file
 		// personad landed in the device's file before: the node says personad, its file is still the device's.
 		{custom, proto.NodeInfo{Program: nodeproto.ProgramPersonad, Executable: "/home/u/.persona/bin/persona-node"},
-			"/hub/nodes/persona-node-linux-amd64", "/home/u/.persona/bin/persona-node"},
+			"/hub/nodes/personad-linux-amd64", "/home/u/.persona/bin/persona-node"},
 	} {
 		if got := remoteTarget(tc.cfg, tc.info, tc.bin); got != tc.want {
 			t.Errorf("%+v %s: %s, want %s", tc.info, filepath.Base(tc.bin), got, tc.want)

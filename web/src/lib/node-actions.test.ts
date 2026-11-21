@@ -364,8 +364,10 @@ describe("a Tern node (#2154)", () => {
     expect(keys(nodeActions({ ...ternTab, online: false }, deps()))).not.toContain("node-rename");
     for (const host of ["orca", "herdr-core", "botmux"]) expect(keys(nodeActions({ ...ternTab, host }, deps()))).not.toContain("node-rename");
     expect(canRenameIn("tern")).toBe(true);
+    expect(canRenameIn("rex")).toBe(true);
     expect(canRenameIn(undefined)).toBe(true);
     expect(canChangeHost("tern")).toBe(false);
+    expect(canChangeHost("rex")).toBe(false);
   });
 });
 
@@ -469,5 +471,17 @@ describe("the nodes of the two trees", () => {
     expect(shells[0].tabs.map((t) => t.label)).toEqual(["shell", "split"]);
     expect(shells[0].tabs.flatMap((t) => t.panes.map((p) => p.pane))).toEqual(["w1:p2", "w1:p3", "w1:p4"]);
     expect(shellsOnly([{ ...sp, tabs: [sp.tabs[0]] }])).toEqual([]);
+  });
+});
+
+
+describe("session menus keep pane operations in the terminal toolbar (#10239)", () => {
+  it.each(["herdr", "orca", "tern", "botmux"])("removes pane controls for a %s session", (host) => {
+    const node = sessionNode({ machine_id: "m1", session_id: "s1", pane_id: "w1:p1", space_kind: host, cwd: "/project" } as Session, true);
+    const items = keys(nodeActions(node, deps()));
+    for (const key of ["node-split", "node-close-pane", "node-copy-id"]) expect(items).not.toContain(key);
+    expect(items).toContain("node-copy-session");
+    if (host === "herdr") expect(items).toContain("node-git");
+    expect(keys(nodeActions({ ...node, paneId: undefined }, deps()))).not.toContain("node-split");
   });
 });

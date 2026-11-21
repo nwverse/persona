@@ -2,6 +2,9 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../../i18n";
+import { setPairedToken, setToken } from "../../lib/api";
+import { chooseManager, MANAGER_HEADER, resetManagerChoice } from "../../lib/manager-choice";
 import { forgetProviderNames } from "../../lib/provider-names";
 import type { Run, Task } from "../../lib/routines";
 import { Routines } from "./Routines";
@@ -23,26 +26,46 @@ const failedText = /读不到运行记录：.*run history unavailable/;
 let runsReply: () => Response | Promise<Response>;
 let tasksReply: () => Response;
 let providers: unknown[];
+let catalogReplies: Record<string, () => Response | Promise<Response>>;
 // the hub is unreachable: every request, a change or a read, answers 502
 let down: boolean;
 let calls: string[];
+let skipCalls: { path: string; method: string; manager: string | null; body?: unknown }[];
+let skipReply: () => Response | Promise<Response>;
 let host: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  resetManagerChoice();
+  setToken("routine-test");
   calls = [];
+  skipCalls = [];
+  skipReply = () => json({ error: "unexpected skip" }, 400);
   down = false;
   runsReply = failure;
   tasksReply = () => json({ tasks: [task] });
   providers = [];
+  catalogReplies = {};
   forgetProviderNames();
-  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
     calls.push(path);
     if (down) return Promise.resolve(json({ error: "hub unreachable" }, 502));
+    if (path.startsWith(`/api/v1/assistant/tasks/${task.id}/skip-next`)) {
+      skipCalls.push({
+        path, method: init?.method ?? "GET", manager: new Headers(init?.headers).get(MANAGER_HEADER),
+        body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      });
+      return Promise.resolve(skipReply());
+    }
+    if (path === "/api/v1/assistant") return Promise.resolve(json({ conversations: [] }));
     if (path === "/api/v1/assistant/tasks") return Promise.resolve(tasksReply());
     if (path === "/api/v1/assistant/runs") return Promise.resolve(runsReply());
     if (path === "/api/v1/model-config") return Promise.resolve(json({ providers }));
+    const machine = /^\/api\/v1\/machines\/([^/]+)\/launchers/.exec(path)?.[1];
+    if (machine && catalogReplies[machine]) return Promise.resolve(catalogReplies[machine]());
+    if (path.startsWith("/api/v1/machines/box/launchers")) return Promise.resolve(json({ launchers: [{ name: "assistant", display_name: "Assistant", agent: "claude" }, { name: "shared", agent: "claude" }] }));
+    if (path.startsWith("/api/v1/machines/remote/launchers")) return Promise.resolve(json({ launchers: [{ name: "shared", agent: "codex" }] }));
     throw new Error(`Unexpected request: ${path}`);
   }));
   host = document.createElement("div");
@@ -53,10 +76,13 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  resetManagerChoice();
+  setToken("");
   vi.unstubAllGlobals();
 });
 
 const render = () => act(async () => root.render(<Routines onToggleSidebar={() => {}} />));
+const rowOf = (title: string) => [...host.querySelectorAll<HTMLElement>('[role="button"]')].find((el) => el.getAttribute("aria-label")?.includes(title));
 const history = () => host.querySelector("aside")!;
 const retry = () => [...history().querySelectorAll("button")].find((b) => b.textContent === "重试");
 const refresh = () => act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="刷新"]')!.click());
@@ -159,7 +185,6 @@ describe("routine run history loading", () => {
 
 describe("a change the hub refuses while the list cannot be read again", () => {
   const switchOf = () => host.querySelector<HTMLButtonElement>('[role="switch"]')!;
-  const rowOf = (title: string) => [...host.querySelectorAll<HTMLElement>('[role="button"]')].find((el) => el.getAttribute("aria-label")?.includes(title));
 
   it.each([
     { name: "off", enabled: true },
@@ -204,6 +229,58 @@ describe("a change the hub refuses while the list cannot be read again", () => {
 });
 
 describe("what a task runs with (#5029)", () => {
+  it.each([
+    { name: "empty", launchers: [], expected: "shared" },
+    { name: "missing", launchers: [{ name: "other" }], expected: "shared" },
+    { name: "present", launchers: [{ name: "shared", display_name: "Remote alias", agent: "codex" }], expected: "Remote alias" },
+    { name: "failed", launchers: null, expected: "Other computer alias" },
+  ])("uses the execution computer after its $name catalog response", async ({ name, launchers, expected }) => {
+    providers = [{ id: "launcher.shared", name: "Other computer alias", agent: "claude" }];
+    tasksReply = () => json({ tasks: [
+      { ...task, execution: { machine_id: "remote", launcher: "shared", model: "saved-model" } },
+      { ...task, id: "other", title: "Another task", execution: { machine_id: "box", launcher: "assistant" } },
+    ] });
+    runsReply = () => json({ runs: [] });
+    let finish!: (response: Response) => void;
+    catalogReplies.remote = () => new Promise<Response>((resolve) => { finish = resolve; });
+    if (name === "present") catalogReplies.box = () => new Promise<Response>(() => {});
+    await render();
+    await flush();
+    const row = rowOf(task.title)!;
+    expect(row.textContent).toContain("Other computer alias");
+    await act(async () => finish(launchers ? json({ launchers }) : json({ error: "unavailable" }, 503)));
+    await flush();
+    expect(row.textContent).toContain(expected + " ·");
+    if (launchers) expect(row.textContent).not.toContain("Other computer alias");
+  });
+
+  it("resolves backend metadata on each execution computer rather than sharing the same alias across computers", async () => {
+    tasksReply = () => json({ tasks: [
+      { ...task, id: "local", title: "Local task", execution: { machine_id: "box", launcher: "shared", model: "local-model", effort: "high" } },
+      { ...task, id: "remote", title: "Remote task", execution: { machine_id: "remote", launcher: "shared", model: "remote-model", effort: "high" } },
+    ] });
+    runsReply = () => json({ runs: [] });
+    await render();
+    await flush();
+    expect(host.textContent).toContain("shared · claude · local-model · high");
+    expect(host.textContent).toContain("shared · codex · remote-model · high");
+    expect(calls.filter((path) => path.startsWith("/api/v1/machines/box/launchers"))).toHaveLength(1);
+    expect(calls.filter((path) => path.startsWith("/api/v1/machines/remote/launchers"))).toHaveLength(1);
+  });
+
+  it("shows the full effective configuration for inherited tasks and keeps older rows without it usable", async () => {
+    providers = [{ id: "launcher.assistant", name: "Assistant", agent: "claude" }];
+    tasksReply = () => json({ tasks: [{ ...task, execution: { machine_id: "box", launcher: "assistant", model: "opus", effort: "high" } }, { ...task, id: "legacy", title: "Legacy task" }] });
+    runsReply = () => json({ runs: [] });
+    await render();
+    await flush();
+    const row = [...host.querySelectorAll<HTMLElement>('[role="button"]')].find((el) => el.textContent?.includes(task.title))!;
+    expect(row.textContent).toContain("Assistant · claude · opus · high");
+    expect(row.querySelector<HTMLElement>('span[title*="opus"]')?.title).toContain("Assistant · claude · opus · high");
+    expect(host.textContent).toContain("Legacy task");
+    expect(host.textContent).not.toContain("undefined");
+  });
+
   it("names its launcher by the provider's display name with the ID in the tooltip; an rc alias by its ID", async () => {
     providers = [{ id: "launcher.relay-example-com", name: "我的中转 站", kind: "launcher" }];
     tasksReply = () => json({ tasks: [{ ...task, launcher: "relay-example-com" }, { ...task, id: "task-2", title: "Weekly review", launcher: "cc_glm" }] });
@@ -213,5 +290,126 @@ describe("what a task runs with (#5029)", () => {
     const line = (title: string) => [...host.querySelectorAll<HTMLElement>('[role="button"]')].find((el) => el.textContent?.includes(title))!.querySelector<HTMLElement>("div.truncate > span.truncate")!;
     expect([line("Daily summary").textContent, line("Daily summary").title]).toEqual(["我的中转 站", "relay-example-com"]);
     expect([line("Weekly review").textContent, line("Weekly review").hasAttribute("title")]).toEqual(["cc_glm", false]);
+  });
+});
+
+describe("skipping one scheduled occurrence", () => {
+  const due = "2099-01-01T13:23:00.123456789Z";
+  const token = "test-token+1";
+  const skipPath = `/api/v1/assistant/tasks/${task.id}/skip-next`;
+  const scheduled = { ...task, can_skip_next: true, next_run: due };
+  const marked: Task = { ...scheduled, can_skip_next: undefined, skip_next_at: due, skip_next_token: token };
+  const action = (key: string) => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+    .find((item) => item.textContent?.startsWith(t(key)));
+  const showActions = () => act(async () => {
+    const name = t("assistant-routines.menu_actions", { title: task.title });
+    [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.getAttribute("aria-label") === name)!.click();
+  });
+  const choose = (key: string) => act(async () => action(key)!.click());
+
+  it("selects and cancels the exact occurrence while leaving Run now available", async () => {
+    let listed: Task = scheduled;
+    tasksReply = () => json({ tasks: [listed] });
+    runsReply = () => json({ runs: [] });
+    await render();
+    await showActions();
+    expect(action("assistant-routines.menu_run")).toBeDefined();
+    expect(action("assistant-routines.menu_skip_next")).toBeDefined();
+    skipReply = () => {
+      listed = marked;
+      return json({ task: listed });
+    };
+    await choose("assistant-routines.menu_skip_next");
+    await flush();
+    expect(skipCalls).toEqual([{ path: skipPath, method: "POST", manager: "assistant", body: { at: due } }]);
+    expect(rowOf(task.title)?.textContent).toContain("将跳过");
+    expect(history().textContent).not.toContain(t("assistant-routines.section_upcoming"));
+
+    await act(async () => rowOf(task.title)!.dispatchEvent(new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true, cancelable: true })));
+    expect(action("assistant-routines.menu_run")).toBeDefined();
+    expect(action("assistant-routines.menu_skip_next")).toBeUndefined();
+    skipReply = () => {
+      listed = scheduled;
+      return json({ task: listed });
+    };
+    await choose("assistant-routines.menu_cancel_skip");
+    await flush();
+    expect(skipCalls.at(-1)).toEqual({
+      path: `${skipPath}?at=${encodeURIComponent(due)}&token=${encodeURIComponent(token)}`, method: "DELETE", manager: "assistant", body: undefined,
+    });
+    expect(rowOf(task.title)?.textContent).not.toContain("将跳过");
+    expect(history().textContent).toContain(t("assistant-routines.section_upcoming"));
+  });
+
+  it("does not cancel a replacement skip from an outdated open menu", async () => {
+    let listed = marked;
+    tasksReply = () => json({ tasks: [listed] });
+    runsReply = () => json({ runs: [] });
+    await render();
+    await showActions();
+
+    listed = { ...marked, can_skip_next: false, skip_next_token: "replacement" };
+    await refresh();
+    await choose("assistant-routines.menu_cancel_skip");
+    await flush();
+
+    expect(skipCalls).toEqual([]);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(t("assistant-routines.skip_conflict"));
+    expect(rowOf(task.title)?.textContent).toContain("将跳过");
+    await showActions();
+    expect(action("assistant-routines.menu_cancel_skip")).toBeDefined();
+  });
+
+  it("refreshes a stale target after 409 without repeating the write", async () => {
+    let listed: Task = scheduled;
+    tasksReply = () => json({ tasks: [listed] });
+    runsReply = () => json({ runs: [] });
+    skipReply = () => {
+      listed = { ...scheduled, next_run: "2099-01-02T13:23:00Z" };
+      return json({ error: "stale occurrence" }, 409);
+    };
+    await render();
+    await showActions();
+    await choose("assistant-routines.menu_skip_next");
+    await flush();
+    expect(skipCalls).toHaveLength(1);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(t("assistant-routines.skip_conflict"));
+    expect(rowOf(task.title)?.textContent).not.toContain("将跳过");
+    expect(calls.filter((path) => path === "/api/v1/assistant/tasks")).toHaveLength(2);
+  });
+
+  it.each(["manager", "credential"])("retires a pending result when the %s changes", async (change) => {
+    chooseManager("work");
+    let nextTask = scheduled;
+    tasksReply = () => json({ tasks: [nextTask] });
+    runsReply = () => json({ runs: [] });
+    let finish!: (reply: Response) => void;
+    skipReply = () => new Promise<Response>((resolve) => { finish = resolve; });
+    await render();
+    await showActions();
+    await choose("assistant-routines.menu_skip_next");
+    expect(skipCalls[0].manager).toBe("work");
+
+    nextTask = { ...scheduled, title: "Other schedule" };
+    await act(async () => change === "manager" ? chooseManager("other") : setPairedToken("routine-test"));
+    await flush();
+    await act(async () => finish(json({ error: "stale occurrence" }, 409)));
+    await flush();
+
+    expect(rowOf("Other schedule")).toBeDefined();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(skipCalls).toHaveLength(1);
+  });
+
+  it("keeps legacy task controls and identifies owner skips in run history", async () => {
+    const skipped = { ...run, id: "skip-user", status: "skipped", owner_skipped: true };
+    runsReply = () => json({ runs: [skipped] });
+    await render();
+    expect(history().textContent).toContain(t("lib-routines.status_owner_skipped"));
+    const row = rowOf(task.title)!;
+    await act(async () => row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })));
+    expect(action("assistant-routines.menu_run")).toBeDefined();
+    expect(action("assistant-routines.menu_skip_next")).toBeUndefined();
+    expect(action("assistant-routines.menu_cancel_skip")).toBeUndefined();
   });
 });

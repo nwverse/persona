@@ -46,6 +46,8 @@ import persona.core.designsystem.JIcon
 import persona.core.designsystem.JIconButton
 import persona.core.designsystem.JRow
 import persona.core.designsystem.JSearchField
+import persona.core.designsystem.JSegment
+import persona.core.designsystem.JSegmented
 import persona.core.designsystem.JSectionHeader
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
@@ -53,6 +55,8 @@ import persona.core.designsystem.rowPadding
 import persona.core.designsystem.rowTitleStart
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.navigation.MessageJumps
+import persona.core.domain.sort.AgentQuery
+import persona.core.domain.sort.admits
 import java.time.Instant
 
 /**
@@ -67,6 +71,7 @@ internal fun filterChatsForFullSearch(
     names: Map<String, String> = emptyMap(),
     backgroundId: String? = null,
     activeTag: String? = null,
+    mainLabel: Pair<SessionKey, String>? = null,
 ): List<Session> {
     val ordered = chats.distinctBy { it.key }
         .filter { !it.archived }
@@ -80,6 +85,7 @@ internal fun filterChatsForFullSearch(
         it.conversationTitle(words).contains(q, ignoreCase = true) ||
             it.lastText.orEmpty().contains(q, ignoreCase = true) ||
             names[it.sessionId].orEmpty().contains(q, ignoreCase = true) ||
+            (mainLabel != null && it.key == mainLabel.first && mainLabel.second.contains(q, ignoreCase = true)) ||
             (it.sessionId == backgroundId && words.background.contains(q, ignoreCase = true))
     }
 }
@@ -98,17 +104,17 @@ internal fun fullSearchRows(
     names: Map<String, String> = emptyMap(),
     backgroundId: String? = null,
     activeTag: String? = null,
+    mainLabel: Pair<SessionKey, String>? = null,
 ): List<FoundChat> {
-    val local = filterChatsForFullSearch(chats, query, words, names, backgroundId, activeTag)
+    val local = filterChatsForFullSearch(chats, query, words, names, backgroundId, activeTag, mainLabel)
     if (!enabled || query.trim().isEmpty()) return local.map { FoundChat(it, null) }
     return mergeAssistantSearch(local, answer, known)
         .filter { activeTag.isNullOrEmpty() || it.session.tags?.contains(activeTag) == true }
 }
 
 /**
- * Search over the whole window on a regular window (#9171), as the open iPhone Duo's chats-only full search: the field
- * at the foot above the keyboard, a close button beside it, Persona's chats above (latest first), filtered as typed,
- * including the manager search when the hub lists it. A row opens its chat and dismisses; Back and Close dismiss too.
+ * Search over the whole window (#9171). Merged adds an Agents scope using the Agents list's matching rules for
+ * sessions already on the device. Persona Chats still use the manager's search when it is available.
  */
 @Composable
 internal fun AssistantFullSearch(
@@ -121,7 +127,6 @@ internal fun AssistantFullSearch(
     names: Map<String, String> = emptyMap(),
     backgroundId: String? = null,
     activeTag: String? = null,
-    mainName: String? = null,
     mainKey: SessionKey? = null,
     onOpen: (SessionKey) -> Unit,
     onDismiss: () -> Unit,
@@ -129,13 +134,35 @@ internal fun AssistantFullSearch(
     initialQuery: String = "",
     /** False draws the page in place (JVM shots); production keeps the full-screen dialog. */
     overlay: Boolean = true,
+    agents: List<Session>? = null,
+    agentMachines: Map<String, String> = emptyMap(),
+    pinnedAgents: Set<String> = emptySet(),
+    agentsFirst: Boolean = false,
+    onOpenAgent: (SessionKey) -> Unit = {},
 ) {
     var query by rememberSaveable { mutableStateOf(initialQuery) }
-    val search = rememberAssistantSearch(query, searchOn, management, hubKey)
-    val answer = search.current(query)
+    var agentScope by remember(agentsFirst) { mutableStateOf(agentsFirst) }
+    val searchingAgents = agents != null && agentScope
+    val search = rememberAssistantSearch(query, searchOn && !searchingAgents, management, hubKey)
+    val answer = search.current(query).takeUnless { searchingAgents }
+    val agentRows = remember(searchingAgents, agents, query, agentMachines, pinnedAgents) {
+        if (!searchingAgents) emptyList() else {
+            val filter = AgentQuery.parse(query)
+            val now = Instant.now()
+            agents.orEmpty().asSequence().distinctBy { it.key }
+                .filter { !it.isSubagent && !it.archived && filter.admits(it, it.key.path in pinnedAgents, agentMachines[it.machineId], now) }
+                .map { it to it.updated }
+                .sortedByDescending { it.second }
+                .take(50)
+                .map { it.first }
+                .toList()
+        }
+    }
     val partial = answer?.partial == true
-    val rows = remember(query, chats, known, searchOn, answer, words, names, backgroundId, activeTag) {
-        fullSearchRows(query, chats, known, searchOn, answer, words, names, backgroundId, activeTag)
+    val mainTitle = stringResource(R.string.assistant_main_conversation)
+    val mainLabel = mainKey?.let { it to mainTitle }
+    val rows = remember(query, chats, known, searchOn, answer, words, names, backgroundId, activeTag, mainLabel) {
+        fullSearchRows(query, chats, known, searchOn, answer, words, names, backgroundId, activeTag, mainLabel)
     }
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -163,6 +190,13 @@ internal fun AssistantFullSearch(
                 .then(if (overlay) Modifier.statusBarsPadding().imePadding() else Modifier)
                 .testTag("full-search"),
         ) {
+            if (agents != null) JSegmented(
+                listOf(JSegment(stringResource(R.string.assistant_sidebar_search_chats)),
+                    JSegment(stringResource(R.string.assistant_sidebar_search_agents))),
+                if (searchingAgents) 1 else 0,
+                { agentScope = it == 1 },
+                modifier = Modifier.padding(horizontal = Tokens.Space.page, vertical = Tokens.Space.s),
+            )
             val heading = if (query.isBlank()) {
                 stringResource(R.string.assistant_recent)
             } else {
@@ -174,33 +208,44 @@ internal fun AssistantFullSearch(
                     start = Tokens.Space.page, end = Tokens.Space.page, bottom = Tokens.Space.m,
                 ),
             ) {
-                item { JSectionHeader(heading) }
-                if (partial) item {
-                    Text(
-                        stringResource(R.string.assistant_search_partial),
-                        Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s),
-                        style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2,
-                    )
-                }
-                items(rows, key = { it.session.key.path }) { row ->
-                    FullSearchRow(
-                        row = row,
-                        title = when {
-                            mainKey != null && row.session.key == mainKey && !mainName.isNullOrBlank() -> mainName
-                            else -> names[row.session.sessionId] ?: row.session.conversationTitle(words)
-                        },
-                        onOpen = {
-                            row.hit?.let { MessageJumps.request(row.session.machineId, row.session.sessionId, it.itemId) }
-                            onOpen(row.session.key)
-                        },
-                    )
-                }
-                if (rows.isEmpty() && query.isNotBlank()) item {
-                    JEmptyState(
-                        stringResource(R.string.assistant_full_search_no_results, query),
-                        stringResource(R.string.assistant_no_match_detail),
-                        icon = PersonaIcons.search,
-                    )
+                if (searchingAgents) {
+                    item { JSectionHeader(stringResource(if (query.isBlank()) R.string.assistant_recent else R.string.assistant_sidebar_search_agents)) }
+                    items(agentRows, key = { it.key.path }) { session ->
+                        JRow(session.displayTitle, subtitle = agentMachines[session.machineId],
+                            leadingIcon = PersonaIcons.agentChat, onClick = { onOpenAgent(session.key) })
+                    }
+                    if (agentRows.isEmpty() && query.isNotBlank()) item {
+                        JEmptyState(stringResource(R.string.assistant_sidebar_search_no_agents),
+                            stringResource(R.string.assistant_sidebar_search_no_agents_detail), icon = PersonaIcons.search)
+                    }
+                } else {
+                    item { JSectionHeader(heading) }
+                    if (partial) item {
+                        Text(
+                            stringResource(R.string.assistant_search_partial),
+                            Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s),
+                            style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2,
+                        )
+                    }
+                    items(rows, key = { it.session.key.path }) { row ->
+                        val isMain = row.session.key == mainKey
+                        FullSearchRow(
+                            row = row,
+                            title = if (isMain) mainTitle else names[row.session.sessionId] ?: row.session.conversationTitle(words),
+                            isMain = isMain,
+                            onOpen = {
+                                row.hit?.let { MessageJumps.request(row.session.machineId, row.session.sessionId, it.itemId) }
+                                onOpen(row.session.key)
+                            },
+                        )
+                    }
+                    if (rows.isEmpty() && query.isNotBlank()) item {
+                        JEmptyState(
+                            stringResource(R.string.assistant_full_search_no_results, query),
+                            stringResource(R.string.assistant_no_match_detail),
+                            icon = PersonaIcons.search,
+                        )
+                    }
                 }
             }
             Row(
@@ -211,7 +256,7 @@ internal fun AssistantFullSearch(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 JSearchField(
-                    query, { query = it }, stringResource(R.string.assistant_search_chats),
+                    query, { query = it }, stringResource(if (searchingAgents) R.string.assistant_sidebar_search_agent_field else R.string.assistant_search_chats),
                     Modifier.weight(1f).focusRequester(focus).testTag("full-search-field"),
                 )
                 Spacer(Modifier.width(Tokens.Space.m))
@@ -226,14 +271,14 @@ internal fun AssistantFullSearch(
 }
 
 @Composable
-private fun FullSearchRow(row: FoundChat, title: String, onOpen: () -> Unit) {
+private fun FullSearchRow(row: FoundChat, title: String, isMain: Boolean, onOpen: () -> Unit) {
     val said = row.hit?.let(::markedSnippet)
     val preview = row.session.lastText?.replace("\n", " ")?.takeIf { it.isNotBlank() }
     androidx.compose.foundation.layout.Column {
         JRow(
             title,
             onClick = onOpen,
-            subtitle = if (said == null) preview else null,
+            subtitle = if (!isMain && said == null) preview else null,
             subtitleMark = said,
             chevron = false,
             leading = {
@@ -244,7 +289,8 @@ private fun FullSearchRow(row: FoundChat, title: String, onOpen: () -> Unit) {
                         .background(PersonaTheme.palette.surfaceStrong),
                     contentAlignment = Alignment.Center,
                 ) {
-                    JIcon(PersonaIcons.conversation, null, size = Tokens.Size.iconXS, tint = PersonaTheme.palette.ink2)
+                    JIcon(if (isMain) PersonaIcons.home else PersonaIcons.conversation, null,
+                        size = Tokens.Size.iconXS, tint = PersonaTheme.palette.ink2)
                 }
             },
         )

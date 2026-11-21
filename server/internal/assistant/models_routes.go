@@ -40,6 +40,9 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 		return p, err
 	}
 	p.InheritedFrom = inheritedLabel(s.requestCtxLang(ctx), p, base, from, providers)
+	if isExtensionPurpose(p.ID) && !readOnly {
+		p.Candidates = s.purposeCandidates(ctx, p.ID, r.Candidates, p.Effective)
+	}
 	if p.Kind == "api" {
 		p.MachineID = s.settings(ctx).MachineID // where a launcher picked for it runs (models_run.go)
 	}
@@ -68,8 +71,16 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 			}
 		}
 	}
+	if p.Candidates != nil {
+		for _, provider := range s.candidateProviders(ctx, p.Effective.Provider) {
+			id := "launcher." + provider.Name
+			if slices.Contains(p.ProviderIDs, id) {
+				p.Candidates.DirectProviderIDs = append(p.Candidates.DirectProviderIDs, id)
+			}
+		}
+	}
 	if p.Kind == "launcher" {
-		p.Fields = append(p.Fields, "effort")
+		p.Fields = append(p.Fields, "effort", "permission_mode")
 	}
 	if len(p.ConfigDirs) > 0 {
 		p.Fields = append(p.Fields, "config_dir")
@@ -80,7 +91,9 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 		p.Status = room // it follows a main chat on Codex, say: no room starts until a Claude Code launcher is picked here
 	} else if scope := s.purposeScopeStatus(ctx, l, p.Effective.Provider, p.MachineID); p.Kind == "launcher" && scope != "" {
 		p.Status = scope // the provider is out of the main chat's computer's scope: why it does not run there
-	} else if !slices.Contains(p.ProviderIDs, p.Effective.Provider) {
+	} else if !slices.Contains(p.ProviderIDs, p.Effective.Provider) && !s.mainChatOffers(ctx, p) {
+		// The provider list leaves out a runtime's launchers: one the main chat's picker offers on its computer is not
+		// incompatible (#11772); one gone from that computer, or one there that can't run the assistant, still is.
 		p.Status = mc(l, "status_provider_incompatible")
 		if p.Kind == "api" && strings.HasPrefix(p.Effective.Provider, "legacy.") && s.legacyModelConfig(ctx, p.Effective.Provider).BaseURL == "" {
 			p.Status = mc(l, s.noAPIStatus(ctx))
@@ -156,6 +169,7 @@ func (s *Service) modelConfigRoutes() {
 			}
 			purposes = append(purposes, p)
 		}
+		s.addModelUsage(ctx, purposes)
 		apierr.WriteJSON(w, map[string]any{"purposes": purposes, "providers": providers})
 	})
 	detail := func(w http.ResponseWriter, r *http.Request) {
@@ -213,10 +227,21 @@ func (s *Service) modelConfigRoutes() {
 			apierr.Write(w, 400, i18n.Err("assistant-models.err_config_dir_assistant_only"))
 			return
 		}
+		if in.PermissionMode != nil && string(in.PermissionMode) != "null" && p.Kind != "launcher" {
+			apierr.Write(w, 400, i18n.Err("assistant-models.err_permission_mode_launcher_only"))
+			return
+		}
 		b, err := patchModel(p.Override, in)
 		if err != nil {
 			apierr.Write(w, 400, err)
 			return
+		}
+		var candidates *candidateSetting
+		if in.Candidates != nil {
+			if candidates, err = s.patchCandidates(ctx, p, in.Candidates); err != nil {
+				apierr.Write(w, 400, err)
+				return
+			}
 		}
 		if p.Kind == "launcher" { // passed to an agent as --model: a model id (#1644)
 			if err := checkModelID(b.Model); err != nil {
@@ -254,7 +279,7 @@ func (s *Service) modelConfigRoutes() {
 				return
 			}
 		}
-		if err = s.saveModelRecord(ctx, id, p.Revision, b); err != nil {
+		if err = s.writeModelRecord(ctx, id, p.Revision, b, candidates, in.Candidates != nil); err != nil {
 			status := 500
 			if errors.Is(err, errModelConflict) {
 				status = 409

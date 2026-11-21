@@ -139,6 +139,8 @@ nonisolated enum CallEvent: Equatable, Sendable {
     case known
     case audioActivated
     case audioDeactivated
+    /// A joined-state callback (also possible when just the conversation's attributes changed).
+    case conversationJoined
     /// The conversation left without an End action (the system ended it).
     case systemEnded
     /// The manager reset: every call is gone.
@@ -211,6 +213,7 @@ nonisolated struct CallMachine: Equatable, Sendable {
     private(set) var everActive = false
     /// The conversation is in the system's list.
     private(set) var known = false
+    private var sentJoinedMembers = false
     /// Reports kept until the system knows the conversation.
     private(set) var pending: [CallReport] = []
     /// What the engine was last told about hold.
@@ -284,9 +287,9 @@ nonisolated struct CallMachine: Equatable, Sendable {
             out += activated()
 
         case .endAction:
+            // End's dated fulfilment acknowledges that local media has stopped, not a request to stop it.
+            if phase.isLive { out += end(phase == .ringing ? .declined : .hungUp, report: false) }
             out.append(.fulfil)
-            guard phase.isLive else { return out }
-            out += end(phase == .ringing ? .declined : .hungUp, report: false)
 
         case .muteAction(let on):
             out.append(.fulfil)
@@ -357,6 +360,12 @@ nonisolated struct CallMachine: Equatable, Sendable {
                 requestedMute = true
                 out.append(.performMute(true))
             }
+
+        case .conversationJoined:
+            // Announce the active invitee once; a change callback for our own update can still say joined.
+            guard phase.isLive, known, direction == .outgoing, !sentJoinedMembers else { return [] }
+            sentJoinedMembers = true
+            out += [.report(.members)]
 
         case .audioActivated:
             guard phase.isLive else { return [] }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The decision table (docs/design/proposals/todos-redesign.md 6.3): the first row that holds places the to-do, except
@@ -16,36 +17,10 @@ import (
 // fields each sets, and every line key, are listed in spec/fixtures/todo-view/README.md. next_change_at is worked out
 // apart from the rows (nextChange): the first moment the whole view reads differently.
 
-// Line keys (spec/fixtures/todo-view/README.md "Line keys"): stable identifiers, never renamed or reused.
-const (
-	lineFailedStart     = "failed_start"
-	lineAgentAsks       = "agent_asks"
-	lineInterrupted     = "interrupted"
-	lineDecision        = "decision"
-	lineDecisionDefault = "decision_default"
-	lineCannot          = "cannot"
-	lineAwaitsReply     = "awaits_reply"
-	lineWorking         = "working"
-	linePersonaWorking  = "persona_working"
-	lineStarting        = "starting"
-	lineBackground      = "background"
-	lineParked          = "parked"
-	lineFinished        = "finished"
-	lineAccepted        = "accepted"
-	lineDeployed        = "deployed"
-	linePROpen          = "pr_open"
-	lineUsageLimit      = "usage_limit"
-	lineFinishedSeen    = "finished_seen"
-	lineCompleted       = "completed"
-	lineCanceled        = "canceled"
-	lineReported        = "reported"
-	lineSuperseded      = "superseded"
-	lineSomeday         = "someday"
-)
-
 // placement is a view and what ranks it within its section, worked out from the facts together with the view (the
 // ranking never reads them back off it): the soonest deadline of the decisions on the row, when it wakes (a park's
-// end, a usage limit's reset and its grace) and when it comes back from Someday; a zero time is none.
+// end, a usage limit's reset and its grace, the hub's next wake of a run that waits) and when it comes back from
+// Someday; a zero time is none.
 type placement struct {
 	assistantwire.TodoSummary
 	deadline, wake, back time.Time
@@ -146,6 +121,10 @@ func stamp(t time.Time) string {
 // listed is a time as the list writes it, for an ask's id and round: sent back as it is.
 func listed(t time.Time) string { return t.Format(time.RFC3339Nano) }
 
+// DecisionAskID is the id of a to-do's own decision asked at askedAt: its ask's in the view, and the one its push
+// names (assistantwire.NotifyTodo.Ask), so an answer from the notification reaches the same ask.
+func DecisionAskID(askedAt time.Time) string { return "todo:decision@" + listed(askedAt) }
+
 func utc(t time.Time) time.Time {
 	if t.IsZero() {
 		return t
@@ -191,13 +170,13 @@ func (r *reading) outcome() (string, *assistantwire.TodoLine) {
 		f.DoneBy == doneByReview && f.Supervision != nil && f.Supervision.State == reviewCancelled
 	switch {
 	case f.StartError != "": // only a superseded failed start is closed with its error
-		return assistantwire.TodoReasonSuperseded, line(lineSuperseded)
+		return assistantwire.TodoReasonSuperseded, line(assistantwire.TodoLineKeySuperseded)
 	case cancelled:
-		return assistantwire.TodoReasonCanceled, line(lineCanceled, "reason", cancelNote(f))
+		return assistantwire.TodoReasonCanceled, line(assistantwire.TodoLineKeyCanceled, "reason", cancelNote(f))
 	case f.DoneBy == doneByReported:
-		return assistantwire.TodoReasonReported, line(lineReported)
+		return assistantwire.TodoReasonReported, line(assistantwire.TodoLineKeyReported)
 	}
-	return assistantwire.TodoReasonCompleted, line(lineCompleted, "by", f.DoneBy)
+	return assistantwire.TodoReasonCompleted, line(assistantwire.TodoLineKeyCompleted, "by", f.DoneBy)
 }
 
 // cancelNote is why the to-do was cancelled: the first line of the cancelling review's note, else its
@@ -218,8 +197,10 @@ func cancelNote(f *Facts) string {
 
 // ---- row 1: a failed start ----
 
-// failedStart: a run failed to start; it stays open and needs the owner for 48 hours after the failure (its retry is
-// the ask), then rows 12 to 14 place it as nothing works on it, with the Inactive mark whatever its due date or origin.
+// failedStart: a run failed to start; it stays open and needs the owner for 48 hours after the failure, then rows 12
+// to 14 place it as nothing works on it, with the Inactive mark whatever its due date or origin. Its retry is the ask,
+// safe to answer anywhere, on a to-do a conversation opened: the hub starts no other again, so one with no origin only
+// says why it did not start.
 func (r *reading) failedStart() placement {
 	f := r.f
 	// The failure is done_at, which FailTodo stores (a start that fails on a closed to-do keeps the close). updated_at
@@ -235,9 +216,11 @@ func (r *reading) failedStart() placement {
 		return r.rest()
 	}
 	p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonFailedStart)
-	p.Line, p.Since = line(lineFailedStart, "error", f.StartError), utc(failed)
-	p.Asks = []assistantwire.OwnerAsk{{ID: "todo:retry@" + listed(failed), Kind: assistantwire.OwnerAskKindRetry,
-		Home: assistantwire.OwnerAskHomeTodo}}
+	p.Line, p.Since = line(assistantwire.TodoLineKeyFailedStart, "error", f.StartError), utc(failed)
+	if f.Origin != "" {
+		p.Asks = []assistantwire.OwnerAsk{withRisk(assistantwire.OwnerAsk{ID: "todo:retry@" + listed(failed),
+			Kind: assistantwire.OwnerAskKindRetry, Home: assistantwire.OwnerAskHomeTodo}, assistantwire.OwnerAskRiskSafe)}
+	}
 	return p
 }
 
@@ -258,32 +241,81 @@ func (r *reading) runAsks() (placement, bool) {
 		for _, rn := range asking {
 			p.Asks = append(p.Asks, runAsk(rn))
 		}
-		p.Line = line(lineAgentAsks, "run", asking[0].title(), "text", p.Asks[0].Text)
+		p.Line = line(assistantwire.TodoLineKeyAgentAsks, "run", asking[0].title(), "text", p.Asks[0].Text)
 		p.Since = utc(asking[0].since())
 		r.withOwnAsk(&p)
 		return p, true
 	}
 	if rn, ok := firstRun(r.runs, runInterrupted); ok {
 		p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonInterrupted)
-		p.Line, p.Since = line(lineInterrupted, "run", rn.title()), utc(rn.since())
+		p.Line, p.Since = line(assistantwire.TodoLineKeyInterrupted, "run", rn.title()), utc(rn.since())
 		r.withOwnAsk(&p)
 		return p, true
 	}
 	return placement{}, false
 }
 
-// runAsk is run rn's ask: a question at home in its session (the session list says that it waits, not which card it
-// shows), its id following the moment the session came to wait.
+// runAsk is run rn's ask, at home in its session, its id following the moment the session came to wait: what its
+// pending card asks (cardKind), with the card's id to answer it by, safe to answer in place only when a notification
+// may answer it too (proto.Interaction.OneTapQuestion: one question with options, no fields, not a Just me turn's or a
+// health conversation's, and its asker did not say going ahead cannot be undone); a question, open, while the hub
+// holds no card for it (the session list says that it waits, not on what).
 func runAsk(rn run) assistantwire.OwnerAsk {
 	text := rn.s.Asks
 	if text == "" {
 		text = rn.s.AttentionReason
 	}
-	return assistantwire.OwnerAsk{
+	a := assistantwire.OwnerAsk{
 		ID:   "run:" + rn.link.MachineID + "/" + rn.link.SessionID + "@" + listed(rn.since()),
 		Kind: assistantwire.OwnerAskKindQuestion, Home: assistantwire.OwnerAskHomeRun, Text: text,
 		Run: &assistantwire.TodoRunRef{MachineID: rn.link.MachineID, SessionID: rn.link.SessionID, Title: rn.title()},
 	}
+	risk := assistantwire.OwnerAskRiskOpen
+	if c := rn.card; c != nil {
+		a.Kind, a.Interaction = cardKind(c), c.ID
+		if _, ok := c.OneTapQuestion(); ok {
+			risk = assistantwire.OwnerAskRiskSafe
+		}
+	}
+	return withRisk(a, risk)
+}
+
+// cardKind is the kind of ask a run's pending card is: secret when it asks for a password (on the screen, or among
+// the fields to fill in), form for other fields to fill in or an MCP server's form, tool for an approval, plan for a
+// plan, else question (a question card, or a dialog on the screen).
+func cardKind(c *proto.Interaction) string {
+	switch {
+	case c.Secret || slices.ContainsFunc(c.Fields, func(f proto.Field) bool { return f.Secret }):
+		return assistantwire.OwnerAskKindSecret
+	case len(c.Fields) > 0 || c.Kind == proto.IxElicitation:
+		return assistantwire.OwnerAskKindForm
+	case c.Kind == proto.IxPermission:
+		return assistantwire.OwnerAskKindTool
+	case c.Kind == proto.IxPlan:
+		return assistantwire.OwnerAskKindPlan
+	}
+	return assistantwire.OwnerAskKindQuestion
+}
+
+// withRisk is ask a with its risk and the lock-screen action that follows from it (Lockscreen); a risk that is neither
+// safe nor open (none said) is open.
+func withRisk(a assistantwire.OwnerAsk, risk string) assistantwire.OwnerAsk {
+	a.Risk = assistantwire.OwnerAskRiskOpen
+	if risk == assistantwire.OwnerAskRiskSafe {
+		a.Risk = assistantwire.OwnerAskRiskSafe
+	}
+	a.Lockscreen = Lockscreen(risk)
+	return a
+}
+
+// Lockscreen is what a push about an ask of the given risk may offer on the lock screen: its answers (answer) only when
+// it is safe, else nothing (open_only), a risk none said included. The view's asks and the decision push both take it
+// from here.
+func Lockscreen(risk string) string {
+	if risk == assistantwire.OwnerAskRiskSafe {
+		return assistantwire.OwnerAskLockscreenAnswer
+	}
+	return assistantwire.OwnerAskLockscreenOpenOnly
 }
 
 // withOwnAsk adds the to-do's own decision to p's asks when one also waits on the owner.
@@ -316,21 +348,21 @@ func (r *reading) dismissed() bool {
 	return r.f.DecisionReview != nil && r.f.DecisionReview.DismissalID != ""
 }
 
-// ownAsk is the to-do's own decision as an ask at home on the to-do, its id and round the moment it was asked, and the
-// ask it was read from (nil when no decision waits).
+// ownAsk is the to-do's own decision as an ask at home on the to-do, its id and round the moment it was asked, its
+// risk as listed, and the ask it was read from (nil when no decision waits).
 func (r *reading) ownAsk() (assistantwire.OwnerAsk, *Ask) {
 	a := r.decisionAsk()
 	if a == nil {
 		return assistantwire.OwnerAsk{}, nil
 	}
 	round := listed(a.AskedAt)
-	out := assistantwire.OwnerAsk{ID: "todo:decision@" + round, Kind: assistantwire.OwnerAskKindDecision,
+	out := assistantwire.OwnerAsk{ID: DecisionAskID(a.AskedAt), Kind: assistantwire.OwnerAskKindDecision,
 		Home: assistantwire.OwnerAskHomeTodo, Round: round, Text: a.Question, Recommend: a.Recommend,
 		Options: a.Options, CanWait: canWaitDecision(a)}
 	if a.Default == defaultTaken && a.Deadline != nil {
 		out.DefaultAt = utc(*a.Deadline)
 	}
-	return out, a
+	return withRisk(out, a.Risk), a
 }
 
 // canWaitDecision: a decision that can wait for the briefing.
@@ -342,28 +374,29 @@ func canWaitDecision(a *Ask) bool { return a.Outcome == outcomeDecide && a.ForBr
 // done, unless the owner chose Don't handle on it. A decision that can wait is row 4's. verify, steps_proposed,
 // signin and a possible duplicate have no input yet (spec/fixtures/todo-view/README.md "Not produced yet").
 func (r *reading) ownerDecides() (placement, bool) {
-	if r.dismissed() {
-		return placement{}, false
-	}
 	a := r.decisionAsk()
-	switch {
-	case a != nil && canWaitDecision(a): // row 4
-		return placement{}, false
-	case a == nil && reviewState(r.f) != reviewNeedsUser:
-		return placement{}, false
-	}
 	p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonOwnerDecides)
 	switch {
+	case a == nil && (r.dismissed() || reviewState(r.f) != reviewNeedsUser):
+		if d := r.f.Delivery; d != nil && d.Owner {
+			p.Line, p.Since = line(assistantwire.TodoLineKeyDecision, "text", d.Gate), utc(d.At)
+			return p, true
+		}
+		return placement{}, false
+	case a != nil && canWaitDecision(a): // row 4
+		return placement{}, false
+	}
+	switch {
 	case a == nil: // a needs_user review with no ask listed: its question, nothing to answer here
-		p.Line = line(lineDecision)
+		p.Line = line(assistantwire.TodoLineKeyDecision)
 		if rv := latestReview(r.f.Supervision); rv != nil {
-			p.Line, p.Since = line(lineDecision, "text", rv.Reason, "recommend", rv.Recommend), utc(rv.At)
+			p.Line, p.Since = line(assistantwire.TodoLineKeyDecision, "text", rv.Reason, "recommend", rv.Recommend), utc(rv.At)
 		}
 		return p, true
 	case a.Outcome == outcomeCannot:
-		p.Line = line(lineCannot)
+		p.Line = line(assistantwire.TodoLineKeyCannot)
 	default:
-		p.Line = line(lineDecision, "text", a.Question, "recommend", a.Recommend)
+		p.Line = line(assistantwire.TodoLineKeyDecision, "text", a.Question, "recommend", a.Recommend)
 	}
 	p.Since = utc(a.AskedAt)
 	r.withOwnAsk(&p)
@@ -377,9 +410,9 @@ func (r *reading) ownerDecides() (placement, bool) {
 func (r *reading) canWait() (placement, bool) {
 	if a, src := r.ownAsk(); src != nil && a.CanWait {
 		p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionCanWait, assistantwire.TodoReasonCanWait)
-		p.Line = line(lineDecision, "text", a.Text, "recommend", a.Recommend)
+		p.Line = line(assistantwire.TodoLineKeyDecision, "text", a.Text, "recommend", a.Recommend)
 		if !a.DefaultAt.IsZero() {
-			p.Line = line(lineDecisionDefault, "text", a.Text, "recommend", a.Recommend, "default_at", stamp(a.DefaultAt))
+			p.Line = line(assistantwire.TodoLineKeyDecisionDefault, "text", a.Text, "recommend", a.Recommend, assistantwire.TodoLineArgDefaultAt, stamp(a.DefaultAt))
 		}
 		p.Since = utc(src.AskedAt)
 		p.addAsk(a, src)
@@ -387,7 +420,7 @@ func (r *reading) canWait() (placement, bool) {
 	}
 	if rn, ok := firstRun(r.runs, runAwaitsReply); ok {
 		p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionCanWait, assistantwire.TodoReasonAwaitsReply)
-		p.Line, p.Since = line(lineAwaitsReply, "run", rn.title(), "text", rn.s.Asks), utc(rn.since())
+		p.Line, p.Since = line(assistantwire.TodoLineKeyAwaitsReply, "run", rn.title(), "text", rn.s.Asks), utc(rn.since())
 		return p, true
 	}
 	return placement{}, false
@@ -395,9 +428,9 @@ func (r *reading) canWait() (placement, bool) {
 
 // ---- row 5: someone works on it ----
 
-// working: Persona or an Agent works on it now, else a run starts, else one works in the background; within each
-// kind the first such run in the list's order (the newest link first) decides. queued needs the start's admission
-// queue, which the plan keeps and the list does not carry yet.
+// working: Persona or an Agent works on it now, else a run starts, else one works in the background or the hub
+// retries its moment's model failure; within each kind the first such run in the list's order (the newest link first)
+// decides. queued needs the start's admission queue, which the plan keeps and the list does not carry yet.
 func (r *reading) working() (placement, bool) {
 	for _, rn := range r.runs {
 		if rn.kind != runRunning && rn.kind != runPersona {
@@ -408,9 +441,9 @@ func (r *reading) working() (placement, bool) {
 			text = firstLine(rn.s.LastText)
 		}
 		p := r.at(assistantwire.TodoPhaseWorking, assistantwire.TodoListSectionWorking, assistantwire.TodoReasonAgentRunning)
-		p.Line = line(lineWorking, "run", rn.title(), "text", text)
+		p.Line = line(assistantwire.TodoLineKeyWorking, "run", rn.title(), "text", text)
 		if rn.kind == runPersona {
-			p.Reason, p.Line = assistantwire.TodoReasonPersonaWorking, line(linePersonaWorking, "text", text)
+			p.Reason, p.Line = assistantwire.TodoReasonPersonaWorking, line(assistantwire.TodoLineKeyPersonaWorking, "text", text)
 		}
 		p.Since = utc(rn.since())
 		return p, true
@@ -420,8 +453,8 @@ func (r *reading) working() (placement, bool) {
 		reason string
 		key    string
 	}{
-		{runStarting, assistantwire.TodoReasonStarting, lineStarting},
-		{runBackground, assistantwire.TodoReasonBackground, lineBackground},
+		{runStarting, assistantwire.TodoReasonStarting, assistantwire.TodoLineKeyStarting},
+		{runBackground, assistantwire.TodoReasonBackground, assistantwire.TodoLineKeyBackground},
 	} {
 		if rn, ok := firstRun(r.runs, k.kind); ok {
 			p := r.at(assistantwire.TodoPhaseWorking, assistantwire.TodoListSectionWorking, k.reason)
@@ -447,7 +480,7 @@ func (r *reading) parked() (placement, bool) {
 		reason = assistantwire.TodoReasonSomeoneElse
 	}
 	p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, reason)
-	p.Line = line(lineParked, "reason", sv.Parked.Reason, "until", stamp(sv.Parked.Until))
+	p.Line = line(assistantwire.TodoLineKeyParked, "reason", sv.Parked.Reason, assistantwire.TodoLineArgUntil, stamp(sv.Parked.Until))
 	if rv := latestReview(sv); rv != nil && rv.Verdict == reviewParked {
 		p.Since = utc(rv.At)
 	}
@@ -464,26 +497,26 @@ func (r *reading) finish() (time.Time, *assistantwire.TodoLine, bool) {
 	f := r.f
 	if r.settled() {
 		if acceptanceStands(f) {
-			return latestReview(f.Supervision).At, line(lineAccepted), true
+			return latestReview(f.Supervision).At, line(assistantwire.TodoLineKeyAccepted), true
 		}
 		at := f.Delivery.At
 		if at.IsZero() {
 			at = r.last
 		}
-		return at, line(lineDeployed), true
+		return at, line(assistantwire.TodoLineKeyDeployed), true
 	}
 	if rn, ok := firstRun(r.runs, runUnread); ok {
-		return rn.since(), line(lineFinished, "run", rn.title()), true
+		return rn.since(), line(assistantwire.TodoLineKeyFinished, "run", rn.title()), true
 	}
 	if reviewState(f) == reviewPending {
 		at := f.Supervision.UpdatedAt
 		if f.Supervision.PendingSince != nil {
 			at = *f.Supervision.PendingSince
 		}
-		return at, line(lineFinished), true
+		return at, line(assistantwire.TodoLineKeyFinished), true
 	}
 	if a := openAsk(f); a != nil && (a.Outcome == "" || a.Outcome == outcomeDone) {
-		return a.AskedAt, line(lineFinished), true
+		return a.AskedAt, line(assistantwire.TodoLineKeyFinished), true
 	}
 	return time.Time{}, nil, false
 }
@@ -520,27 +553,37 @@ func (r *reading) finishedSeen() (placement, bool) {
 		return placement{}, false
 	}
 	p := r.at(assistantwire.TodoPhaseTodo, assistantwire.TodoListSectionTodo, assistantwire.TodoReasonFinishedSeen)
-	p.Line, p.Since = line(lineFinishedSeen, "at", stamp(at)), utc(at)
+	p.Line, p.Since = line(assistantwire.TodoLineKeyFinishedSeen, assistantwire.TodoLineArgAt, stamp(at)), utc(at)
 	return p, true
 }
 
 // ---- row 10: waiting on something named ----
 
-// waiting: fresh facts say one of its PRs is open and waits for a merge (never accepted or deployed work), or a run
-// stopped on a usage limit until it resets. computer_offline needs Start When It's Back, scheduled_report a report's
-// schedule: neither is kept yet; someone_else comes with a park (row 8).
+// waiting: fresh facts say one of its PRs is open and waits for a merge (never accepted or deployed work), else a run
+// stopped on a usage limit until it resets, else a run's turn ended blocked on another Agent or an outside event
+// (someone_else; it also comes with a park, row 8), in the order 6.3 lists them. computer_offline needs Start When
+// It's Back, scheduled_report a report's schedule: neither is kept yet.
 func (r *reading) waiting() (placement, bool) {
 	if prs := openPRs(r.f, r.now); len(prs) > 0 && !r.settled() {
 		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonPrOpen)
-		p.Line = line(linePROpen)
+		p.Line = line(assistantwire.TodoLineKeyPrOpen)
 		return p, true
 	}
 	if rn, ok := firstRun(r.runs, runLimited); ok {
 		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonUsageLimit)
-		p.Line, p.Since = line(lineUsageLimit, "run", rn.title()), utc(rn.since())
-		if reset := usageLimitReset(rn.s); reset != nil {
-			p.Line = line(lineUsageLimit, "run", rn.title(), "resets_at", stamp(*reset))
+		p.Line, p.Since = line(assistantwire.TodoLineKeyUsageLimit, "run", rn.title()), utc(rn.since())
+		if reset := usageLimitReset(*rn.s); reset != nil {
+			p.Line = line(assistantwire.TodoLineKeyUsageLimit, "run", rn.title(), assistantwire.TodoLineArgResetsAt, stamp(*reset))
 			p.wake = reset.Add(usageLimitGrace)
+		}
+		return p, true
+	}
+	if rn, ok := firstRun(r.runs, runWaits); ok {
+		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonSomeoneElse)
+		p.Line, p.Since = line(assistantwire.TodoLineKeyRunWaits, "run", rn.title(), "on", waitsOn(*rn.s)), utc(rn.since())
+		// When the hub looks next ranks it; that moment passing changes nothing by itself, as a park's end does not.
+		if w := rn.s.Work.WakeAt; w != nil {
+			p.wake = *w
 		}
 		return p, true
 	}
@@ -556,9 +599,9 @@ func (r *reading) someday() (placement, bool) {
 		return placement{}, false
 	}
 	p := r.at(assistantwire.TodoPhaseSomeday, assistantwire.TodoListSectionSomeday, assistantwire.TodoReasonDeferred)
-	p.Line = line(lineSomeday)
+	p.Line = line(assistantwire.TodoLineKeySomeday)
 	if until.Before(somedayNoDate) {
-		p.Line, p.back = line(lineSomeday, "until", stamp(*until)), *until
+		p.Line, p.back = line(assistantwire.TodoLineKeySomeday, assistantwire.TodoLineArgUntil, stamp(*until)), *until
 	}
 	return p, true
 }
@@ -732,8 +775,8 @@ func nextChange(f *Facts, now time.Time, v assistantwire.TodoSummary) time.Time 
 }
 
 // moments are the ends after now of every window the rules read for f and its steps: a failed start's 48 hours,
-// closed or seen work's 24 hours, a PR's freshness, a usage limit's reset and grace, Someday's return, and the 48
-// hours to the Inactive mark or the end of a due day.
+// closed or seen work's 24 hours, a PR's freshness, a usage limit's reset and grace, a scheduled retry's wake and
+// grace, Someday's return, and the 48 hours to the Inactive mark or the end of a due day.
 func moments(f *Facts, now time.Time) []time.Time {
 	var out []time.Time
 	add := func(t time.Time) {
@@ -760,6 +803,9 @@ func moments(f *Facts, now time.Time) []time.Time {
 	for _, s := range f.Sessions {
 		if reset := usageLimitReset(s); reset != nil {
 			add(reset.Add(usageLimitGrace))
+		}
+		if w := s.Work; w != nil && w.On == proto.WaitTransient && w.WakeAt != nil {
+			add(w.WakeAt.Add(retryGrace))
 		}
 	}
 	if u := f.SomedayUntil; u != nil {

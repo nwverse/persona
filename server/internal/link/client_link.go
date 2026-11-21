@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"runtime"
 	"slices"
@@ -30,6 +31,7 @@ type link struct {
 	ep      Endpoint
 	baseURL string       // https base URL for streams (ep.URL when direct; tunnelBaseURL when over SSH)
 	tunnel  *sshTunnel   // non-nil when this link runs over an SSH tunnel
+	proxy   string       // the outbound proxy it runs through, without credentials (Status.Proxy); "" when none
 	local   netip.Addr   // this side's address of the link's TCP connection
 	streams *http.Client // checked the same way (pin or system CAs); streams go where the link went
 	token   string
@@ -80,25 +82,35 @@ func (l *link) getEndpoints() []Endpoint {
 }
 
 func dial(ctx context.Context, c *Config) (*link, error) {
-	l, ep, err := race(ctx, c.Endpoints, func(ctx context.Context, ep Endpoint) (*link, error) {
+	return dialVia(ctx, c, ranked(c.Endpoints), nil)
+}
+
+// dialVia races eps for the link: straight to the hub, or through outbound proxy p when it is set (proxied); every
+// stream later opened on the link takes the same route. eps is already in its intended race order.
+func dialVia(ctx context.Context, c *Config, eps []Endpoint, p *url.URL) (*link, error) {
+	candidates := ranked(eps)
+	l, ep, err := race(ctx, candidates, func(ctx context.Context, ep Endpoint) (*link, error) {
 		var local netip.Addr
-		client := hubClient(c, func(raw net.Conn) {
+		hc := hubClient(c, p, func(raw net.Conn) {
 			if a, err := netip.ParseAddrPort(raw.LocalAddr().String()); err == nil {
 				local = a.Addr().Unmap()
 			}
 		})
-		conn, resp, err := websocket.Dial(ctx, wsURL(ep.URL, Path), &websocket.DialOptions{HTTPClient: client, HTTPHeader: bearer(c.Token)})
+		conn, resp, err := diagnosticDial(ctx, wsURL(ep.URL, Path), &websocket.DialOptions{HTTPClient: hc, HTTPHeader: bearer(c.Token)}, "control", ep.Kind, slices.Index(candidates, ep)+1)
 		if err != nil {
 			return nil, handshakeError(resp, err)
 		}
 		conn.SetReadLimit(1 << 20)
-		return &link{conn: conn, local: local, streams: hubClient(c, nil), token: c.Token}, nil
+		return &link{conn: conn, local: local, streams: hubClient(c, p, nil), token: c.Token}, nil
 	}, func(l *link) { l.closeNow() })
 	if err != nil {
 		return nil, err
 	}
 	l.ep = ep
 	l.baseURL = ep.URL
+	if p != nil {
+		l.proxy = RedactedProxy(p.String())
+	}
 	return l, nil
 }
 
@@ -106,7 +118,7 @@ var streamID = lazyre.New(`^[A-Za-z0-9_-]{1,64}$`)
 
 // serve runs the link until it ends and says why. A direct handoff is already connected and owned by the caller;
 // every other return leaves no direct candidate behind.
-func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (*directHandoff, error) {
+func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter, memory *routeMemory) (*directHandoff, error) {
 	l.again = make(chan struct{}, 1)
 	l.setEndpoints(c.Endpoints)
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -142,12 +154,15 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (
 	since := time.Now()
 	rep.set(func(s *Status) {
 		*s = Status{State: "connected", Conn: l.gen, Machine: c.Machine, HubName: c.HubName, MachineName: c.MachineName, Address: l.ep.URL,
-			Kind: l.ep.Kind, Since: &since, Node: "unknown", Trust: trustOf(c), Endpoints: ranked(c.Endpoints), SSH: cloneSSH(c.SSH)}
+			Kind: l.ep.Kind, Proxy: l.proxy, Since: &since, Node: "unknown", Trust: trustOf(c), Endpoints: ranked(c.Endpoints), SSH: cloneSSH(c.SSH)}
 	})
+	if memory != nil {
+		memory.connected(l.ep.Kind)
+	}
 	go l.renames(ctx, o, rep)
 	go l.presence(ctx, o)
 	go l.confirms(ctx, o)
-	o.Logf("link: connected to %s (%s)", l.ep.URL, l.ep.Kind)
+	o.Logf("link: connected to %s (%s)", l.ep.URL, l.ep.Kind) // a proxy is only "proxy" here: the log never names it
 	drop := func(err error) {
 		cancel(err)
 		l.conn.CloseNow()
@@ -169,8 +184,11 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (
 		// it drops. The zero stamp makes the first look compare: a pairing written while this link was dialing counts.
 		pairT := time.NewTicker(cmp.Or(o.PairCheck, pairCheck))
 		defer pairT.Stop()
+		// On a fallback route (a proxy, or SSH it need not use), direct candidates are probed now and then to switch
+		// back, and a new proxy setting is followed at once.
+		fallback := l.ep.Kind == KindProxy || (l.ep.Kind == KindSSH && c.SSH != nil && !c.SSH.Always)
 		var directC <-chan time.Time
-		if l.ep.Kind == KindSSH && c.SSH != nil && !c.SSH.Always {
+		if fallback {
 			directT := time.NewTicker(cmp.Or(o.DirectRetryEvery, DirectRetryEvery))
 			defer directT.Stop()
 			directC = directT.C
@@ -252,7 +270,7 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (
 					reconnect(errRepaired)
 					return
 				}
-				o.Logf("link: direct hub reachable again; switching off ssh tunnel")
+				o.Logf("link: direct hub reachable again; switching off %s", l.ep.Kind)
 				cancel(errDirectReady)
 				if !errors.Is(context.Cause(ctx), errDirectReady) {
 					// Cancellation won while the configuration was checked or the handoff was logged. The candidate was
@@ -293,6 +311,9 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (
 					ping(false, hb.timeout)
 				}
 			case <-o.Check:
+				if memory != nil {
+					memory.networkChanged()
+				}
 				if l.localGone() {
 					drop(newTextError("link-errors.network_address_gone", nil))
 					return
@@ -311,7 +332,7 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (
 				// Only the mtime says when to look: endpoints and renames rewrite link.json with the same pairing.
 				if now := stampOf(o.Path); !looked || !now.Equal(seen) {
 					looked, seen = true, now
-					if repaired(o.Path, c) {
+					if repaired(o.Path, c, fallback) {
 						reconnect(errRepaired)
 						return
 					}
@@ -462,14 +483,16 @@ func (l *link) pairedAgain() {
 	}
 }
 
-// repaired: link.json now holds another credential, computer, hub or SSH tunnel than c, or was removed (unpaired). A
-// file that cannot be read for another reason changes nothing: the link stays as it is.
-func repaired(path string, c *Config) bool {
+// repaired: link.json now holds another credential, computer, hub or SSH tunnel than c, or another proxy setting for
+// a link on a fallback route (the proxy comes before SSH), or was removed (unpaired). A file that cannot be read for
+// another reason changes nothing: the link stays as it is.
+func repaired(path string, c *Config, fallback bool) bool {
 	f, err := Read(path)
 	if err != nil {
 		return errors.Is(err, os.ErrNotExist)
 	}
-	return f.Token != c.Token || f.FP != c.FP || f.Trust != c.Trust || f.Machine != c.Machine || !f.SSH.Equal(c.SSH)
+	return f.Token != c.Token || f.FP != c.FP || f.Trust != c.Trust || f.Machine != c.Machine || !f.SSH.Equal(c.SSH) ||
+		(fallback && f.Proxy != c.Proxy)
 }
 
 // heartbeat is how a link is pinged: every, and how long a pong may take; hub: the hub said so (endpoints).
@@ -577,7 +600,7 @@ func (l *link) localGone() bool {
 		return false
 	}
 	for _, a := range addrs {
-		if p, err := netip.ParsePrefix(a.String()); err == nil && p.Addr().Unmap().WithZone("") == l.local.WithZone("") {
+		if interfaceIP(a) == l.local.WithZone("") {
 			return false
 		}
 	}
@@ -594,8 +617,8 @@ func (l *link) forward(ctx context.Context, id, target string) error {
 	defer node.Close()
 	dctx, dcancel := context.WithTimeout(ctx, dialTimeout) // the handshake only: the stream lives as long as the link
 	defer dcancel()
-	ws, resp, err := websocket.Dial(dctx, wsURL(cmp.Or(l.baseURL, l.ep.URL), StreamPath+"?id="+id), &websocket.DialOptions{
-		HTTPClient: l.streams, HTTPHeader: bearer(l.token), CompressionMode: StreamCompression})
+	ws, resp, err := diagnosticDial(dctx, wsURL(cmp.Or(l.baseURL, l.ep.URL), StreamPath+"?id="+id), &websocket.DialOptions{
+		HTTPClient: l.streams, HTTPHeader: bearer(l.token), CompressionMode: StreamCompression}, "stream", l.ep.Kind, 1)
 	if err != nil {
 		return newTextError("link-errors.stream_open_failed", handshakeError(resp, err))
 	}

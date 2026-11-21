@@ -6,10 +6,11 @@
 // (lib/assistant-chat.ts), as before; the new-conversation page's pick goes with the conversation's start. First-screen
 // code: the panel's own data is lib/assistant-panel.ts, loaded with the panel.
 import { agentId, sessionAgent } from "./agent-kind";
+import { explicitLauncherModel } from "./compatibility";
 import { conversationKey, launcherOffered, NEW_CONVERSATION, pickedEffort, pickedFast, pickedLauncher, pickedModel } from "./assistant-chat";
-import { modelName, modelSupportsFast, type LauncherDefault } from "./launcher-models";
+import { modelSupportsFast, type LauncherDefault } from "./launcher-models";
 import { providerTitle } from "./provider-names";
-import { currentModelRow, modelLabel, type AssistantLaunchers, type ModelList, type PillView } from "./session-models";
+import { currentModelRow, pillModel, type AssistantLaunchers, type ModelList, type PillView } from "./session-models";
 import type { ModelPick, Session } from "./types";
 
 /** The hub keeps a Persona chat's pick (`model_pick`, PUT / DELETE …/conversations/{id}/model). */
@@ -115,14 +116,14 @@ export function assistantSetup(c: AssistantChat, info: AssistantLaunchers | unde
 export function assistantPillView(c: AssistantChat, setup: AssistantSetup, info: AssistantLaunchers | undefined, e: ModelList): PillView {
   const launcher = info?.launchers.find((l) => l.name === setup.provider);
   const row = currentModelRow(e.list?.models ?? [], setup.model);
-  const id = setup.model || launcher?.model;
+  const id = setup.model || explicitLauncherModel(launcher?.model);
   const out: PillView = {
     engine: agentId(launcher?.agent_type || launcher?.agent || c.session?.agent),
     provider: launcher ? providerTitle(launcher) : setup.provider,
     loading: e.list === undefined && Boolean(e.loading),
     failed: e.list === undefined && Boolean(e.error),
   };
-  const model = row ? modelName(row) : id ? modelLabel(id) : undefined;
+  const model = pillModel(e.list?.models ?? [], setup.model, id);
   if (model) out.model = model;
   if (setup.effort) out.effort = setup.effort;
   if (setup.fast && (c.session || modelSupportsFast(row))) out.fast = true;

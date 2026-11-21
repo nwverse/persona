@@ -1,4 +1,5 @@
 // Shapes of the hub's admin API (docs/operations/admin.md "API", docs/archive/operations/plan-hub-mesh.md 2.7 for peers).
+import type { MachineLinkSwitch } from "../lib/types";
 
 export type Access = "loopback" | "lan" | "cidrs" | "any";
 
@@ -105,6 +106,7 @@ export interface AdminMachine {
   proxy?: string; // service: socks5://… it is dialed through (no password)
   hub_id?: string; // the hub it is reached through now
   paths?: MachinePath[];
+  link_switch?: MachineLinkSwitch; // switching this ssh computer to Persona Link (#10662); absent from older hubs
 }
 
 export interface AddedMachine {
@@ -363,7 +365,9 @@ export interface LogsPage {
 
 // ── usage sources (docs/server/usage-windows.md "Account-pool gateways", docs/operations/admin.md): account-pool gateways feeding the sidebar's usage bars ──
 
-export type UsageSourceType = "relay" | "generic";
+/** relay: a relay's management API (management key); relay_key: the same relay's key self-service usage, read with
+ *  an ordinary API key (#12311); generic: Persona's own JSON shape. */
+export type UsageSourceType = "relay" | "relay_key" | "generic";
 
 export interface UsageSeen {
   accounts: number;
@@ -372,6 +376,8 @@ export interface UsageSeen {
   providers: Record<string, number>;
   /** accounts the gateway listed at all */
   listed: number;
+  /** relay_key: the relay answered but shares no account quota with this key */
+  quota_hidden?: boolean;
 }
 
 export interface UsageSourceStatus {
@@ -398,6 +404,9 @@ export interface UsageSources {
   poll_minutes: number;
   sources: UsageSource[];
   limit: number;
+  /** Providers the usage bars leave out (display only), and the ones to choose from (#11753). Absent on an older manager. */
+  hidden_providers?: string[];
+  providers?: string[];
 }
 
 export interface UsageSourceInput {
@@ -410,4 +419,4 @@ export interface UsageSourceInput {
   enabled?: boolean;
 }
 
-export type UsageTestResult = ({ ok: true } & Pick<UsageSeen, "accounts" | "windows" | "providers" | "listed">) | { ok: false; code: string };
+export type UsageTestResult = ({ ok: true } & Pick<UsageSeen, "accounts" | "windows" | "providers" | "listed" | "quota_hidden">) | { ok: false; code: string };

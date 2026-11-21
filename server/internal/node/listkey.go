@@ -118,6 +118,14 @@ func listKeySized(list []proto.Session, size int) string {
 			w.quote(s.PermissionMode, '/')
 			w.quote(s.Effort, '\n')
 		}
+		if s.PendingEffort != nil {
+			w.b.WriteString("pending-effort:")
+			w.quote(*s.PendingEffort, '/')
+			w.str(strconv.FormatBool(s.EffortChangeFailed), '\n')
+		}
+		if s.OffLauncher { // the scan of running claudes flips it with no turn of the agent (offlauncher.go)
+			w.b.WriteString("off-launcher\n")
+		}
 		w.b.WriteString("source:")
 		w.str(s.SourceKind, '/')
 		w.str(s.SourceThreadID, '/')
@@ -132,6 +140,12 @@ func listKeySized(list []proto.Session, size int) string {
 			w.str(t.ID, ',')
 		}
 		w.str(strconv.FormatBool(s.BackgroundWaiting), '\n')
+		for _, t := range s.BackgroundEnded() {
+			w.b.WriteString("ended:")
+			w.str(t.ID, '/')
+			w.str(t.Status, '/')
+			w.int(unixOf(t.EndedAt), '\n')
+		}
 		// Workflow journals advance without changing the main transcript's rev, and so do its agents: each one's
 		// latest tool call (its name, and its calls to tell one Read from the next) goes out as often as the
 		// workflow cache reads them (workflowReadInterval). Tokens and the last text ride along. Each agent's id too:
@@ -257,6 +271,9 @@ func (w *keyWriter) caps(c *proto.SessionCapabilities) {
 	}
 	if c.PluginInput {
 		w.b.WriteString(" plugin_input=true")
+	}
+	if c.SupervisionPolicy {
+		w.b.WriteString(" supervision_policy=true")
 	}
 	w.b.WriteByte('}')
 }

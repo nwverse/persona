@@ -1,5 +1,25 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## A one-start speed must not become a resume default (#11141)
+
+- Codex's per-start `service_tier` belongs only in the initial argv; validate it against the selected model's catalog rather than trusting Codex to refuse an unadvertised tier.
+- Claude Code fast mode needs `"fastMode": true` in the effective single `--settings` file. Give the initial command a merged copy and keep the base `claudeLaunch` spec for herdr's `resume_argv`, or an automatic resume silently inherits the billable choice. A shell function that supplies its own `--settings` cannot be merged: refuse fast mode rather than appending a fast-only file that would discard the function's credentials and model.
+- A new `session.start` field needs its own node capability: older nodes otherwise accept it and start at the launcher's speed. Faster speed on a resume or another runtime is a coded refusal before approval or launch.
+
+## An account-sealed compaction needs a new conversation, not Continue (#10399)
+
+- Classify the permanent cause before trusting a runtime's generic transient kind or a gateway's status. Cancel
+  continuations already queued before the cause was recognized; hiding the button alone does not stop them.
+- Archiving is visibility, not invalidation: a newer transcript restores it. Derive obsolete interruption rows from
+  the linked task's current participants, parking and close state, and keep the same cases on every client.
+- Error detection also runs on every ordinary session's last answer. Compare a case-insensitive prefix without
+  lowercasing whole answers; an extra allocation per row broke the 8,200-session list's allocation budget.
+- For mock screenshots, combine `MOCK_TASKS=1 MOCK_TASKS_CUT=1 MOCK_TASKS_INVALID=1` with the mock hub. This is UI
+  evidence only, not deployment or proof that a real account-sealed conversation has disappeared from Needs you.
+- Keep permanent compaction errors separate from retryable tool-search refusals when merging error handling.
+  Preserve both wire codes and both failed-turn tests; loading all tools can fix tool search, not account-sealed context.
+
+
 ## A deferred action on an agent belongs to its process, not its session id (#10296)
 
 - A session id outlives its Claude Code process: the owner quits and resumes, Persona's Resume starts a new one, a crash is resumed. A queued restart into Full access, keyed by session id alone for a day, quit a claude that resumed the conversation later in Default and restarted it in Full access.
@@ -19,6 +39,21 @@ unchanged. Regress with the real tool schema and proxy wire flow; a `tools/call`
   `folded_under` and the parent's folded state too; fixing the client list alone still leaves helper rows in
   `agents_list` and the main chat's counts. Do not hide an unknown-parent session by its title or subagent flag alone.
 
+## Compact unattended delivery from actual context and user activity (#8658)
+
+Supervision and scheduled messages are inputs but are not user activity. Keep their structured source when deciding
+whether the owner has been away; reset the idle clock when the owner's input arrives, before a send lock can wait.
+Claude's `result.usage` and `modelUsage` aggregate requests and cannot stand in for context size. Use the last
+main-model request's input plus cache-read and cache-creation tokens, or `compact_boundary`'s `post_tokens`.
+Wait for the compaction command's result, not just its boundary, before writing the next message: the result still
+ends that command. Persist the attempt latch with the session, and rearm only after user activity or a context drop
+below the threshold followed by another idle interval. Failed compactions must not turn every background wake into
+another summary attempt.
+
+Node-only JSON round trips do not prove this state survives a restart. The manager decodes `state.put` through
+`db.NodeSession`, then writes the `node_model` settings value and projects it back for `state.load`. Carry the opaque
+idle state through every boundary, and test the real manager entry points against Postgres after reopening the store.
+
 ## An acknowledged Enter does not confirm Codex consumed a message (#8354)
 
 Terminal key transport can succeed while the paste stays in the composer. Check consumption after both the host prompt
@@ -26,6 +61,17 @@ and the blocked-session fallback; preserve drafts and report unknown delivery if
 a pre-existing draft merely because it equals earlier assistant text: equality proves neither ownership nor non-delivery.
 Use an isolated fixture that acknowledges Enter without consuming the paste, and prove it fails without the production
 check. This demonstrates the confirmation gap, not the cause of any particular live incident.
+
+## herdr's "idle" is not "ready for the first message", and `agent.prompt` only types (#11345)
+
+herdr reports a work agent as soon as it sees its process, and calls agy idle as soon as its input box shows, but agy
+keeps signing in after that (model list, slash commands, skills and hooks reloaded) and can drop a message typed then.
+herdr's `agent.prompt` without `wait` answers `ok` once it has typed the text and Enter, so a start that sends once and
+returns reports a dropped task as started. On one Windows node two of three agy starts lost their task this way, with
+the Enter landing at the same time after agy's "ready" line in the lost and the delivered starts alike, so a fixed
+delay is no fix. Confirm instead: the agent turns working, blocked or done, or its integration reports a session.
+Retype only what is provably gone (the agent still idle, nothing of the message or a `[Pasted text …]` chip on screen),
+and otherwise list the session as needing the user.
 
 # A continuation must stay on its original to-do (#6820)
 
@@ -205,10 +251,14 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
 - AskUserQuestion: a PermissionRequest hook returning `decision.behavior: allow` + `updatedInput.answers` answers on the user's behalf (real pty on 2.1.319). Persona's PreToolUse lets the terminal dialog open and PermissionRequest waits for the phone; PostToolUse removes `answers` to find the call, then completes every waiter of its exact `tool_use_id` (including one that arrived before PermissionRequest). Don't complete by question text or an empty-id wildcard: a late receipt would cancel the next identical question. Keep the PreToolUse pairing by hook attempt: a resume must reuse its assignment, not consume a newer pending id, and overlapping first / resumed requests need the same binding. After a Node replacement, recover only an unambiguous recent transcript tool_use / tool_result; several possible calls hand that ambiguous generation to the terminal and withdraw its restored cards until each PostToolUse arrives, rather than guess or wait for an unmatchable Post. Standby replay must restore Pre / Permission / Post even when stale event reports are filtered, retained for the hook + reconnect lifetime, not the two-minute `hook.decided` dedup window. Don't route receipts through `decisions.decide`: after a phone answer they would be saved for and wrongly suppress that next question (#2382).
 - ExitPlanMode: uses PermissionRequest, not PreToolUse. `allow` must carry `updatedInput` + `updatedPermissions:[{type:setMode,...}]`
   to work; plain `{behavior:allow}` still shows the TUI dialog. `deny` + `message` delivers feedback to the model as tool_result.
-- A read-only `task_plan` task on Claude starts in `bypassPermissions` and carries its read-only constraint in the first prompt (#4864). Codex read-only tasks keep the plan-mode sandbox; traex and omp start with no mode at all, so the hub must not send `plan`, a default mode or a tier's effort to them, or the node refuses the start (#7559); the work agents pi, cursor and agy (`proto.WorkAgentTypes`) get none either, but the node ignores rather than refuses one, so the hub drops a caller's instead of refusing it (#8151); a read-only task for one of them is refused when it is planned instead, since sending no mode would bypass the node's `plan` refusal and leave only the prompt line (#8316). Name the agents that take no modes (`proto.NoModeAgentTypes`, `proto.WorkAgentTypes`) rather than the ones that do: Paseo providers report the agent `paseo` and take `bypassPermissions` through their bridge (#8141), and an allow-list of Claude and Codex would drop it. If a read-only task is already in plan mode, resolve its `ExitPlanMode` request with a denial and instructions to return findings before registering a card; allowing the exit would lift that constraint. Look up the task's saved `readonly` value, including a reused topic to-do whose plan carries its binding instead of `Todo.PlanID` (#3985).
+- A recorded post-plan mode must reach the interaction, not only the node's session state: the clients' legacy primary actions hard-code different modes. Put `plan_then` on the card, show that one mode, and normalize the answer in the manager as well as the hook so old clients cannot make history disagree with Claude's actual `setMode` (#3784). Terminal decisions use `answered_by: "terminal"`; a dismissal alone also covers other hand-backs and does not prove the source.
+- A read-only `task_plan` task on Claude starts in `bypassPermissions` and carries its read-only constraint in the first prompt (#4864). Codex read-only tasks keep the plan-mode sandbox; TRAE CLI and omp start with no mode at all, so the hub must not send `plan`, a default mode or a tier's effort to them, or the node refuses the start (#7559); the work agents pi, cursor and agy (`proto.WorkAgentTypes`) get none either, but the node ignores rather than refuses one, so the hub drops a caller's instead of refusing it (#8151); a read-only task for one of them is refused when it is planned instead, since sending no mode would bypass the node's `plan` refusal and leave only the prompt line (#8316). Name the agents that take no modes (`proto.NoModeAgentTypes`, `proto.WorkAgentTypes`) rather than the ones that do: Paseo providers report the agent `paseo` and take `bypassPermissions` through their bridge (#8141), and an allow-list of Claude and Codex would drop it. If a read-only task is already in plan mode, resolve its `ExitPlanMode` request with a denial and instructions to return findings before registering a card; allowing the exit would lift that constraint. Look up the task's saved `readonly` value, including a reused topic to-do whose plan carries its binding instead of `Todo.PlanID` (#3985).
 - After approving a plan in `herdr`, the `PermissionRequest` hook may not exit promptly, and `interaction.cancel` may not reach hub (2026-11-01: the transcript already had a successful `ExitPlanMode` tool_result, session working, phone still needs_you). On sessions / revs changes, hub reads bounded transcript pages for pending plans and ends them using the matching tool_use_id's tool_result. For old hooks without an id, accept only a unique ExitPlanMode call within 30 seconds before creation, with a result no earlier than card creation. Ambiguous matches, offline nodes, "working" alone, or model text never clear it. A 30-second timer covers lost events; per-card rate limiting and single-flight avoid duplicate disk reads.
   Cleanup only removes stale cards, broadcasts `interaction_resolved`, and records dismissed history; it doesn't fabricate phone approval, permission mode, or answers. A still-waiting hook receives only Dismiss, not allow. New plans, questions / tool permissions aren't affected by old plan results. Regressions: `assistant/fleet_cards_test.go` (missing tool_use_id, cross-page matching, local deny / interrupt, fake approval text, old/new card races, App push and persistence).
 - Tool permissions have the same issue (#3563): answering the terminal permission dialog doesn't end PermissionRequest, leaving the phone card until timeout. Permission cards likewise end from the tool_use_id's tool_result, but require an exact id (don't guess for id-less cards); don't collect phone-answered (claimed) cards, to avoid rewriting resolved as dismissed.
+- TRAE startup, identity and history are separate checks (#7559). A new task can work while SQLite-only history remains unreadable.
+  Test both retained rollouts and paginated-only history; exclude existing thread IDs before a fresh start, and do not preallocate a Claude ID.
+  An Orca workspace can merely contain a terminal that changed directory: derive the TRAE session cwd from its metadata and preserve the real container separately.
 - Hooks in `--settings <file>` are read only at startup; matcher changes require restarting claude. The hook script itself is reread on every execution.
 - `herdr agent wait` may return agent_not_found before herdr recognizes the Agent: poll `agent get` after startup.
 - On computers without herdr's claude integration, `agent list` lacks session ids (fallback in `docs/integrations/claude-integration.md`).
@@ -218,13 +268,16 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   and were always listed offline. The original pane's claude shows the agents view with `parkedJobId`, while herdr still reports "Working" using the original session id and the background session's terminal title (2026-11-04).
   Before mapping panes, read `sessions/<pid>.json`: a parked process isn't running its own session (`docs/integrations/claude-integration.md` ("Background sessions")); but when the pane has opened the job it moved to, the pane belongs to that job—don't list the job separately as read-only and lose its tab. When on the agents list, keep the pane in the original session's tab too (can open the terminal and select from the list, but can't receive messages), rather than listing it nowhere.
 - Forking from a specific reply (#2137) can't rely on the CLI: `claude --resume <id> --fork-session --session-id <new id>` copies the whole chat; hidden `--resume-session-at <uuid>` truncates in `-p`, but not interactive mode (measured 2026-11-05, 2.1.309). node copies the transcript through that turn's end, replaces only `"sessionId":"<old id>"`, then runs `claude --resume <new id>` (`node/fork.go`).
-- Agents herdr doesn't recognize (an internal Codex variant): herdr reports only built-in recognized Agents, and `agent prompt` returns not found for other panes. node uses owner files (pid → session)
-  plus `HERDR_PANE_ID` from the pid's environment (pid → pane) to identify them itself, and reads spinner title characters and screens for state (`docs/integrations/codex.md`, the internal Codex variant section).
+- Agents herdr doesn't recognize (such as TRAE CLI): herdr reports only built-in recognized Agents, and `agent prompt` returns not found for other panes. node uses owner files (pid → session)
+  plus `HERDR_PANE_ID` from the pid's environment (pid → pane) to identify them itself, and reads spinner title characters and screens for state (`docs/integrations/codex.md`, the TRAE CLI section).
 - Claude Code's config directory isn't necessarily `~/.claude`: with a launcher's `CLAUDE_CONFIG_DIR` (multiple profiles), transcripts, `sessions/<pid>.json`, and `settings.json`
   all live there. Every 30 seconds, node scans running claude process environments (Linux `/proc`, one `ps -E` on macOS), searches all directories together,
   and records discovered directories in the database. Put rarely running profiles in `machines[].claude_config_dirs` in `hub.json` (`server/internal/node/claudedirs.go`).
   The old workaround symlinked `~/.claude/projects` and `sessions` to a profile; existing symlinks are fine (deduped by real path), but no more are needed.
   Symptoms of a missed directory: assistant resume says "Session ID … is already in use", transcript not found in the App, herdr Agents can't be mapped to sessions.
+- Auto memory follows the config directory too: a conversation given its own profile gets its own `projects/<encoded cwd>/memory`, with nothing
+  saying so. Whatever must be one memory across profiles needs `autoMemoryDirectory` in the start's `--settings` (ignored in checked-in project
+  settings, known from Claude Code 2.1.74) and a merge of the copies made before it (#9440; `docs/assistant/assistant.md`, "One memory").
   Conversely, automation running claude with its own `CLAUDE_CONFIG_DIR` is discovered and remembered by hub, flooding lists with hundreds of offline sessions. Deleting `claude_dirs/<machine>` records doesn't help
   (the next scan reports it again); use "Mute configuration directory" (`docs/integrations/claude-integration.md`, #676).
 - After node discovered all config directories (PR #12), a machine with over ten Agents and hundreds of MB of transcripts read disk continuously at about 20 MB/s: every herdr event rebuilt session lists,
@@ -306,6 +359,10 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   read the input box once; if it's still the just-sent text (strip `[Image #n]` / `[Pasted text #n]`, compare the first few words), press Enter once more. If empty or different, press nothing.
   Use only that post-wait read: the first version read immediately and gave up on a mismatch, which missed the 11-01 case (right after pasting the box may not yet contain this text).
 - Codex app-server integration (2026-11-02): Unix sockets carry WebSocket, not JSON-lines; external stdio has no second attach port. Directory discovery doesn't resume; control goes only to the original loaded owner. Unknown / cancelled requests must not send error / decline, which could consume the desktop approval callback. `serverRequest/resolved` withdraws cards as dismissed without fabricating approval; deduplicate using generation and typed request ID together. Generic server errors after send admission aren't "definitely not sent" and must not auto-retry; old outbox operation ids don't expire after one day (`docs/integrations/codex-app-server.md`).
+- An npm-installed Codex can be found by absolute path while its `/usr/bin/env node` launcher still fails under a node
+  service (#11686). For stdio app-server calls, resolve the npm launcher symlink and add its installation's bin directory
+  to the child PATH when Node.js is missing. Test subscription polling with a service PATH that omits the NVM directory;
+  a successful interactive launch does not exercise that path.
 - Session effort readback is not an edit capability (#6887): keep Codex rollout effort visible for terminal/history rows,
   and do not replace a running effort missing from a stale model list with its default. Long tool output can move the
   latest `turn_context` beyond the quick tail; include those small setting rows in the existing incremental scan.
@@ -335,6 +392,7 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   listed only `claude`. Let zsh tokenize aliases (`${(@Q)${(z)value}}`), not Go quote parsing. Aliases defined by a script in `zsh -c` don't expand within that
   script (it is parsed all at once); tests must use `zsh -ic` like node and write definitions to temporary `$ZDOTDIR/.zshrc`. With `alias claude=…` in `~/.zshrc`,
   a probe definition like `claude() { … }` expands the alias first, breaking the whole script. Define stubs as `function claude { … }`.
+- Stock-Orca Codex defaults must distinguish a configured no-op alias from plain PATH Codex even though both have `["codex"]` argv. Keep alias provenance beside the launcher argv cache; removing the plain entry breaks bundled and alias discovery (#1984).
 - Tests running launchers or probes use a minimal environment (`HOME`, `ZDOTDIR`, `PATH`); never print all output in failure messages: probe output contains the complete process environment, and dev machines
   contain real keys.
 - Anything run through `zsh -ic` / `bash -ic` shares stdout with the rc files (#6310): Ubuntu's `/etc/bash.bashrc` prints a two-line sudo hint until the user has run sudo once,
@@ -374,7 +432,7 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   "Not running", and phone sends attempted `claude --resume` in herdr. With herdr installed, this starts a second process writing the same session; without it, the error was
   `herdr is not running on this machine: herdr workspace list: exec: "herdr"…`. Before resuming, now check whether a live claude's `sessions/<pid>.json` has this session open;
   if so, reject (`open_elsewhere`, explaining where). Engine startup failures also get human-readable refusals (`engine_missing`). Since 2026-11-07 such sessions list as running (`claude_desktop` / `claude_cli`) and take messages through Claude Code's peer inbox (`docs/integrations/claude-integration.md` ("Claude outside Persona's terminals"), pitfalls in `docs/lessons/windows.md` ("Claude Code's peer inbox")).
-- Codex / an internal Codex variant's sub-Agents write their own rollouts alongside the main chat, with the same directory and cwd, and newer updates. The internal variant's pre-tool automatic approval evaluation (guardian)
+- Sub-Agents in Codex and TRAE CLI write their own rollouts alongside the main chat, with the same directory and cwd, and newer updates. TRAE CLI's pre-tool automatic approval evaluation (guardian)
   is written by the same process, with its own owner file. Identifying sessions by "newest rollout / newest owner file" makes the App show the review chat, unlike the terminal (2026-11-01).
   Always inspect `thread_source` / `source.subagent` in `session_meta`; replace sub-Agent `session_id` with its main chat (`docs/integrations/codex.md`).
 - **A core chooses its own shell and layout destination** (#2532): use `terminal.run`'s returned argv for command syntax, sourcing and startup
@@ -503,6 +561,16 @@ of a kind is code there (as #7319 is for gateways whose model list lacks a fallb
 provider's `env` field, where a value, an empty one too, overrides a Persona default. Check such a setting in the
 profile the process really uses, not in `~/.claude`.
 
+## A profile hook installed on the next scan is too late for the first start (#7636)
+
+Claude Code reads settings hooks only at process startup. An extension that discovers a new assistant profile on its next
+heartbeat can therefore leave the conversation's first process without its `PermissionRequest` policy even when periodic
+reconciliation is otherwise correct. Seed a brand-new directory only with the extension's stable tagged entry, never copy
+arbitrary hooks or rewrite an existing profile; the extension still owns the policy and later profile-local reconciliation.
+A synthetic real-Claude check on 2.1.322 also rejected a plausible but wrong event attribution: storing an `ssh` command in
+a variable and expanding it as the command did not emit `PermissionRequest` in bypass mode and the command ran. Do not infer
+the prompt's command from elapsed time; capture the hook event or use a known bypass-immune call.
+
 ## `--setting-sources project` still reads `~/.claude` as the home's project files (2026-11-12, #5786)
 
 A guest conversation's `--tools ""` and `--strict-mcp-config` take away tools, not context: an extension's guest on the
@@ -547,6 +615,14 @@ oh-my-zsh asks "[oh-my-zsh] Would you like to update? [Y/n]" while `~/.zshrc` lo
 
 The node now waits for the new tab's shell to settle before typing (`node/shellsettle.go`): only shells in front of the pane (no `git` or `nvm` an rc file runs) and the screen unchanged for 600 ms, at most 15 s. A question on the last line is never answered for the user: after 20 s the start ends with `shell_waiting` and the tab is kept open for 10 minutes. A typed line the shell still answers for (`rejects` / `rejectedLine` in `node/shellmiss.go`) is typed once more right away instead of waiting out `claudeStartWait`. Avoid fixed sleeps before typing into a fresh shell; read its screen and foreground processes instead.
 
+Waiting made the question certain to show, and a kept tab nobody could reach left the start failed for good (#10365): the phone could not type into it, a resend got the stored error for 10 minutes, and a Retry opened another tab that stopped on the same question. Three things together fix it:
+
+- **Turn the question off where it is asked**: what the node types arrives after the rc files ran, so it cannot help. The start tab is created with `DISABLE_AUTO_UPDATE=true` + `DISABLE_UPDATE_PROMPT=true` (never the second alone: that updates silently) and `POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true` in its shell's environment, in the same create that gives it the Agent mark `PERSONA_AGENT=1` (#10111; herdr's `tab.create` `env`, asked again without it by a herdr that refuses the field; the Herdr App's `terminal.run` `env`), and the start line unsets them again, keeping the mark, so the Agent's environment stays the user's. A second way to hand a new shell variables (ours first carried them on the context and probed `--help`) was folded into the one #10111 added: one `host.EnvLauncher` create, one old-herdr fallback. Never put them in the herdr server's environment: the user's own tabs would stop updating.
+- **Let the owner answer**: a question no variable turns off is still never answered *for* the user, but its answers go with `shell_waiting` (`questionChoices`) and a full device's pick is typed into the kept tab by `start.continue`, only while the same question is still the tab's last line and only one of the offered keys; never anything into a password prompt. The record goes back to starting under the same id (`startLog.restart`), so a resend waits for the new start instead of the old error.
+- **A retry in the kept tab fails fast**: one whose question is still open ends with `shell_waiting` at once and a renewed `kept_until`, instead of a new tab with the same question. After an answer, though, the question stays the last non-blank line until the shell prints its prompt (oh-my-zsh only moves the cursor), so that start waits it out as a new tab does. That holds for anything typed into the kept tab since its start failed, the assistant's `start.keys` too (`keptStart.typed`): its remedy is keys and then a Retry, often within a second, and a fast fail there spent a retry and invited the same key again, typed at the prompt.
+- **A key that shows after the question is not always a line waiting for Enter**: compinit's `read -q` echoes the key with no newline and has already read it (measured in a pty, 2026-11-18). An Enter "for the echo" goes to whatever reads next: a later `[Y/n]` takes its default, or the prompt gets an empty command. Questions known to read one key (`shellAsk.SingleKey`: compinit, zsh-newuser-install, powerlevel10k's wizard, oh-my-zsh's update question) get the key alone; only a line reader, or one not known (a bare `[Y/n]`), is watched for the echo.
+- **A question answered at the computer is no refusal**: the card's answer then types nothing (an answer at the prompt could run as a command) and the start runs again in the tab all the same, where the shell settles or the question there now ends it with its own answers. A `prompt_changed` refusal ("refresh before answering") left every button on the card failing until the tab closed, though the words had offered the computer as an equal way.
+
 ## Recheck a kept tab after terminal lookup (2026-11-17, #9633)
 
 A stalled Orca Agent can bind its pane while the closer looks up the terminal. A check made before that lookup
@@ -560,6 +636,12 @@ the lookup window and does not make the later engine request atomic with binding
 On a Mac running Orca, starts kept failing after 3 minutes with "the tab's shell had not run it yet", the start line sitting unrun after the prompt. Its echo was printed above the shell's banner too, so it had been typed before the shell started. For the first 40–100 ms after `terminal.create` returns, Orca's `terminal.read` answers `source: "screen-unavailable"` (`orcart.ErrNoScreen`). `settleShell` took any read error to mean "this host cannot read screens" and typed at once. The tty was still canonical, and Orca had been left out of the start file, so the 1400-byte command was cut at 1024 bytes (the echo above the banner is exactly that long) and its Enter was dropped. It looked like it depended on load or on whether the start made a worktree, but it was a race on every start: whether the first settle read came before Orca had a screen.
 
 `settleShell` now waits while the host has no screen yet, and Orca starts type the start file as herdr's do (`TestOrcaStartWaitsForTheScreenAndTypesAShortLine`). If a host can say "not drawn yet", treat that as "wait", not as "cannot read". To check by hand: `orca terminal create` followed at once by `orca terminal send` of a line over 1024 bytes plus `\r` leaves the line unrun.
+
+## An engine naming claude in a start's tab is not claude having come (2026-11-19, #10588)
+
+On a Linux node with Orca, one of three starts sent in the same second failed twice with `agent_start_stalled`, "claude did not become ready within 1m0s of starting". Its tab held only about 30 empty zsh prompts: the start line was never echoed and Claude Code never ran there. No dialog had appeared, so Orca must have named claude for that pane, and `waitReady` took that alone as claude running (`started()`): it waited 1 minute for an input box instead of 3 for the shell, blamed Claude, and skipped the shell's answers (`shellmiss.go`, #1642 and #2570), which it reads only while claude has not come. Orca names an agent from a process scan by pane key and, when that fails, from its own row and terminal identity, which outlive the agent (`hostorca.go`); its `terminal.send` does not say whether the text reached the shell either. Why the line never arrived is still unknown.
+
+A start in an Orca tab now needs evidence of its own before Orca's word counts (`node/startevidence.go`): Claude Code's screen (its banner, input box or a dialog), or the start line run, meaning its start file is gone (the file removes itself first) and nothing on screen says the shell could not run it. The echo alone is not enough: a line sitting unrun after the prompt (#5450) and a line the shell answered for (a cut head, a command not found) both leave it on screen. A start whose line never showed in the tab and whose start file was never read ends after the shell's wait as `terminal_not_ready`: nothing ran, the tab is closed, and the hub's one retry opens a new one. herdr keeps its word: it names the program in front of the pane, stops once it exits (`claudeGoneWait` relies on that), and reports a line it could not send (`pane_send_failed`). `TestOrcaStartNeedsEvidenceBeyondOrcasWord` covers each case. Not covered: an Orca terminal takes one launch (`orcaHost.Run`), so the #2570 retype of a rejected line cannot run in the same Orca tab and fails as a second launch.
 
 ## A pane's shell may be fish: quote for it too (2026-11-10, #2867)
 
@@ -610,6 +692,8 @@ other engines' panes (Orca) keep their original error.
 - **The model service returns 200 with empty content, and the turn ends silently** (measured 2026-11-05, one gateway upstream account): the transcript contains no assistant item and no `isApiErrorMessage`, error, or `stop_reason`;
   Claude Code inserts an `isMeta` "[Your previous response had no visible output. Please continue…]" and retries once; another empty response ends the turn without terminal error, so there is no `turn_error`.
   Tasks once wrote "completed" receipts, sent done notifications, and auto-closed (#2349). Now inspect the turn's items: no reply, tool call, or image counts as interrupted.
+  A verdict that only reaches the receipt is not enough: the Agent's row still said done, so the task read "done, not seen" on every client, in the snapshot and in `agents_list` (#10187). Everything that counts a task interrupted keys on the row's `turn_error`, so the hub puts its own verdict there (`turn_error_kind` `no_output` / `stopped`, `silent_turns.go`) and keeps Session Triage from treating it as a model error.
+  Persona's own Stop (`stopReporting`'s Esc to a task Agent mid first request) can end a turn with no output and no "[Request interrupted by user]" line, so the transcript alone reads it as a model failure; the hub notes the agents it interrupts and calls such a turn stopped.
 - **Codex writes no reply when interrupted by the model service** (measured 2026-11-05, Codex 0.166, fake service returning 503): rollout has only this turn's `task_complete`, with `last_agent_message`
   `null` and the error in `error` (`{"message":"unexpected status 503 …","codex_error_info":{"http_connection_failed":{"http_status_code":503}}}`);
   app-server reports `turn/completed` with `turn.status: "failed"` + `turn.error` (camelCase `codexErrorInfo`). Last-text-only `turn_error` is always empty for Codex:
@@ -679,12 +763,14 @@ Quota can recover before the reported reset. Skipping every on-demand probe unti
   - herdr types argv into the pane shell: quote only necessary elements (an alias as the first element still expands); elements must not contain single quotes.
   - If official integration later reports the same or another session id, herdr retains the original `resume_argv`: after a session id change, explicitly report again or it restores the old session.
   - herdr before 0.9.2 answers `ok` to `resume_argv` and drops it (2026-11-13: a dev machine ran 0.9.0 for days; the upgrade to 0.9.5 by live handoff carried nothing over, the node believed it had reported, and the next restart resumed Persona's Agents bare). A report holds only for the server that took it: the node records the server instance (`herdr.Client.ServerID`, the socket's mtime, new on every restart, handoff and upgrade) and `backfillResume` reports again when a Persona pane's server changed.
+  - The node did not check the version, so a computer that stayed below 0.9.2 resumed bare on every restart without a word (2026-11-20: a power cut restarted a 0.9.1 server, four Persona Agents on a gateway launcher came back on the account's default model, and the assistant's switch back was refused as "runs on <launcher> already", #11792). `reportResume` now asks the server (`ServerVersion`, ping only) and skips a server older than 0.9.2, saying so once; rows whose claude lacks Persona's `--mcp-config` carry `off_launcher` (`offlauncher.go`). Upgrading herdr's binary is not enough: the running server keeps dropping until a live handoff or restart starts the new one.
   - The argv is `eval "<the start command with --resume <id>>"`: herdr only checks that the first word is a plain name (`eval` passes) and types it into the pane's shell, so `CLAUDE_CONFIG_DIR=…` prefixes and launchers that are shell functions work without a wrapper script on PATH. herdr also refuses control characters and more than 8 KiB (`resumeSayable`). Real-Claude check in a throwaway named session: `herdrresume_live_test.go`.
 
 
 ## Claude status line (2026-11-05, #1963)
 
 - Working Claude draws `✻ Frosting… (16m 15s · ↓ 22.8k tokens · thinking with xhigh effort)` above the input box: spinner characters change each frame, parenthesized segments may be absent or reordered (`thought for 1s`, `esc to interrupt`), and ↑ means input tokens. An identical line quoted in the conversation isn't a status line; take the last line above the input box (`screen.AboveInputBox`, `node/claudestatus.go`). When a pane is scrolled up, visible content has no status line.
+- A model retry does not use the ordinary `verb… (…)` grammar: 2.1.326 draws `✻ 429 <error> · retrying in 4s · attempt 5/10` (a 500 has the same shape, and an early line can be only `API Error`). Parse the observed error and attempts before the normal spinner pattern, leave the countdown out, and clear on normal work, line removal, turn end and unwatch; elapsed time alone is not error evidence (#887).
 
 ## Changing Codex app-server effort: validate levels yourself; `null` means model default (2026-11-04, #1709)
 
@@ -917,6 +1003,10 @@ or the server hangs after SIGINT. The event stream is server-wide, so N director
 The plugin API doesn't expose lists or full chats, so read `opencode.db` read-only. Assistant messages are rewritten in place within a step without changing seq, and the runtime SDK doesn't repush batches without an increased `toSeq`, so push only finalized messages. See `docs/integrations/opencode.md`.
 Agents herdr reports but Persona doesn't recognize were silently dropped by `if a.Agent != "claude" { continue }` (their panes invisible on the phone). They're now terminal-only rows; new Agent integrations must not rely on "unclaimed means disappears".
 
+## OpenCode directory MCP names are not session identities (#11936)
+
+OpenCode ACP registers client MCP servers for the directory, replacing a same-name server for other sessions in that process. Different URL/token pairs named `persona` do not isolate same-directory conversations. Give each Assistant a dedicated ACP process, retaining a shared process for ordinary Agents. In the server plugin, never choose the most recently active conversation: freeze the route owner and reject ambiguous or unavailable native inventory. Revoking a worker must also revoke its MCP URL; resuming allocates a fresh URL so a cached retired token never regains authority. The pinned native-engine contract uses a fake local model to exercise actual upstream replacement semantics rather than teaching a fake the desired answer.
+
 ## claude dies, but its hook survives (2026-11-06, #4344, 2.1.318)
 
 Claude Code launches hook commands with `detached: true` on Linux / macOS, so `personad hook` has its own process group: when claude is killed with `kill -9`, crashes, or is OOM-killed, the hook survives, still connected to node.sock waiting for the phone; the card and "Needs you" remain until `hook_timeout_minutes`.
@@ -1141,6 +1231,28 @@ distinguishes even repeated prompts with identical timestamps. Preserve prefix a
 pairing too, and invalidate old cached pages once. Test normal runtime pages and full-item reads across append and
 complete-file replacement; fresh sessions and distinct sequential prompts do not exercise reused identities.
 
+## AGY exports parallel results as they finish; a late step is not a rewind, and a call without a result must not shift the rest (#11086)
+
+Parallel calls are exported in completion order, so a call that fails at once (unknown tool, invalid arguments) lands
+before its sibling's result: `228` (two calls), `230` (INVALID), `229`. Reading the lower index as a rewind popped
+`230`, started a new branch and left the second call without a result. The readers also paired results with calls
+through a queue that nothing reset, so one orphan call shifted every later result onto the call before its own, and the
+newest calls ended with no result, which the hub does not fold and the web draws as running tools. A step whose index
+no retained step has is a late arrival: insert it in step order, keep the branch (item IDs) and change the content
+revision so watchers re-read. A planner step, a prompt or an error closes the calls before it. `integrations/antigravity/lib/map.js`
+and `server/internal/node/agytranscript.go` must stay in step. Test with a real export's shape (the swapped lines,
+an interrupted call, a system message between results) and compare each result with its own call, not only the counts.
+
+## A send is not a history rewrite, even for steps the export has not caught up with (#12014)
+
+The Antigravity companion shows a prompt's steps from ACP before agy exports them, and gave them their own history
+token. Every send switched to it and the export switched back, so every client took each send as a rewrite: the web
+read a fresh two-turn page, the main chat's earlier messages vanished for a moment, and every task card of the day
+stacked above the new message until the rest came back. Projected steps that only grow are appends. Change the token
+only when one of them is dropped (the export replaces them, an interrupt), and record the next token before showing
+them, so a restarted companion cannot report the token clients hold them under. Test the push a send produces (same
+history, `from_seq` at the previous end, no earlier turn sent again) and a restart while a reply awaits its export.
+
 ## An installed CLI is not an explicit runtime override (#9181)
 
 Plain AGY discovery joined the shell launcher cache and shadowed its connected assistant-capable companion. New
@@ -1185,6 +1297,20 @@ settings and session metadata for defaults and current values. A fixed catalog h
 external sessions. Treat ACP configuration responses and notifications as authoritative, publish acknowledged partial
 changes, and propagate failures. Native `auto` is distinct from full permission bypass.
 
+## ACP mode success is not the applied agy mode (#10980)
+
+agy can accept `session/set_mode` yet apply `default` because native Auto is unavailable. Treat the direct mode result or
+`current_mode_update` as the answer, not a model's trailing `config_option_update`; otherwise accepted Auto can be mistaken
+for a refusal. When Auto is refused, apply the existing `bypassPermissions` path through native `accept-edits`, wait for
+that fallback before answering a permission, publish the final mode and emit one notice. An acknowledgement of `auto` can
+precede a delayed `default`, so only a newer non-Auto choice ends that correlation. Serialize the fallback with newer
+explicit mode changes, reapply an explicit mode if native settings diverge from it, and recheck interruption after every
+fallback wait. Keep whether a mode was explicit or came from agy's settings: explicit choices survive settings changes,
+while settings-derived sessions reread and reapply `configuredMode()` before the next prompt. A notice sent only with
+`rt.append` disappears on refetch; keep it in the item projection at a stable sequence as later native steps arrive, and
+retain the native step index separately for output files and client-message bindings. Cover direct and notification
+refusals, repeated starts, all three asking modes, settings changes, notice reloads and en / zh-Hans / ja localization.
+
 ## Runtime availability checks need the runtime's authentication context (#3790)
 
 An SSH node and a local companion can have different credential access. A model list and session start succeeding in
@@ -1197,6 +1323,16 @@ workspace sharing the probe prefix while it still exists.
 Native settings and `session/new` can disagree even when the configured model is valid. Resolve native display names or
 IDs against the catalog and apply the configured default explicitly to new sessions and availability checks. Preserve
 explicit caller choices and the native state of resumed conversations. Announce a model only after ACP accepts it.
+
+## A long-running agy acp keeps the account it saw (#10368)
+
+`agy acp` kept the model list it read when the plan lapsed after the user renewed and signed in again: `session/set_model`
+failed with `Unknown model ID` until the process was restarted, and each `session/new` published the stale list over the
+five-minute `agy models` discovery. Treat a discovery that began after the ACP process started as the newer source, and
+compare by process generation rather than wall-clock time. Pending requests do not show who uses the process: a call
+between two requests, or a native read over HTTP, has none. Hold a lease for each call, turn and read, replace only when
+no other lease is held, with no await between that check and the replacement, and make new users wait for it. Retry once,
+and test with a fake whose ACP side reads the account once at startup.
 
 ## Codex speed has separate native metadata (#3865)
 
@@ -1330,12 +1466,30 @@ rather than counting on the model to follow the prompt, and check a real transcr
 parsing it. Once the card worked, the prompt went back to asking with AskUserQuestion as usual (#8558): a prompt's
 workaround that outlives the fix it stood in for is wrong advice to the model.
 
+## Peer attestation needs the receiver's live permission mode (#9672)
+
+Claude Code 2.1.326's `sessions/<pid>.json` names the live process, session and tmux pane, but not its permission mode or
+bypass availability. A transcript's standalone `permission-mode` row is not rewritten on shift+tab; the next prompt records
+the mode instead. Reading even the newest transcript at send time therefore states the old class immediately after a switch:
+none after default became bypass is held, and stale bypass after the return to default is a mismatch. For an external tmux
+session, read the footer through the pane named by the PID file before using transcript evidence. A visible composer
+without a bypass or plan indicator is prompting even when a draft or dialog hides default's idle hint; do not fall back
+to a stale bypass transcript just because `tuiMode` has no exact idle-text match. Question and permission dialogs draw
+rules too; they are not composers and must not override transcript bypass. Plan has no single class:
+Claude counts it as bypass only when bypass is available, so use the live process's argv for the enabling flag rather than
+treating every plan session as prompting. Without those live sources, keep the old fail-closed outcome instead of guessing.
+
 ## A plugin's asUser prompt is the only way in that counts as the person's (Persona's Claude Code plugin)
 
 The peer inbox frames every message as another session's, and no wording in it makes the model take a go-ahead from
 it: the same "I approve: create the file" was refused through the inbox and when a plugin submitted it framed, and
 accepted only through `$.prompt.submit({ asUser: true })` (Claude Code 2.1.291, 2.1.299 and 2.1.308). Do not try to
 argue the model round in the inbox prompt (#5965). Things that cost time while measuring it:
+
+- An outside Claude's tmux pane is terminal input too, and takes precedence over both plugin and inbox for a verified
+  owner's ordinary message. Let it fall through to the ordinary pane checks and transcript confirmation rather than
+  adding a second typing path; a message without that verified mark must never fall through when the inbox is absent.
+  Keep `plugin_input` off that row because the pane, not the plugin, now carries its owner's message (#5965).
 
 - A `claude` started from inside a desktop-app session inherits that host's provider variables
   (`CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST`, its `ANTHROPIC_BASE_URL`) but not its credentials, and answers "Not logged
@@ -1374,3 +1528,41 @@ can contain multiple workspaces sharing a directory; importing a pin into `pins.
 the timestamp on the workspace catalog and match machine, source and source ID. An unpin must also release retained
 old sessions even if pin and unpin happen before the coalesced catalog push: a session push can observe the temporary
 pin while the final catalog bytes equal the earlier unpinned snapshot.
+
+- **Separate assignment data from framework policy (#10200).** Let the manager supply matching project background once; callers add only facts it cannot resolve. Preserve attachment suffixes when a launcher falls back to first-message rules. A dedicated instruction channel must survive resume and must suppress duplicate SessionStart closeout guidance. Never replace a configured Codex developer policy to obtain a cleaner transcript: fall back conservatively. Herdr refuses apostrophes even inside quoted restore arguments; encode them as TOML Unicode escapes, and use a persistent file for Claude's multiline policy. One new closeout can carry delivery, gate and responsible party while both historical formats remain readable.
+
+## A transcript directory is not the selected launcher's sign-in
+
+When restoring an assistant conversation, finding its newest transcript does not establish that a newly selected launcher can authenticate in that profile. Check private-profile ownership before stopping the old process or writing input; a later CLI sign-in error has already accepted the wrong launch and may forward a provider-only model. A refusal should preserve the original process and session state and explain how to continue. Regression coverage needs cold resumes and live idle processes, with both an omitted model and the old provider's explicit model (#10453).
+
+The same holds for a shell launcher's private profile, which a managed catalog can't name: its gateway token lives in the launcher's environment, so the profile never gets a sign-in, and plain claude started there answers "Not logged in" while `claude auth status` in the user's own setup says signed in. Ask Claude Code about the profile the start will actually use (`claudeAuthStatusProfile`), not the machine's default, and move the conversation to where the launcher is signed in rather than telling the user to sign in again (#11694).
+
+## Cross-session permission evidence (#9671)
+
+- A session-list mode is a display snapshot, not evidence of the mode in which a message was written. Capture at the source node while handling the producing call; delayed reports and retries retain that observation.
+- A caller's session ID is not process identity. Resolve the nearest known Agent in the socket peer's ancestry: a nested Agent may not claim a more privileged parent. Bind external registry data to the process generation; on macOS the kernel creation time also lets an old registry file fail closed after PID reuse.
+- `encoding/json` matches struct fields case-insensitively. Drop every spelling of authority fields and rebuild them from internal context. Ordinary RPCs must ignore source claims even if an older intermediary forwards extra parameters.
+- RPC marshaling compacts `json.RawMessage` and escapes HTML characters. A call digest must use that representation at both ends, or a valid message containing `<` or `&` loses its evidence in transit.
+- A worker's observation cannot grant a class to a later automatic judge or an unknown source in the same digest. Preserve unknown evidence rather than deriving authority from copied text, labels or cached modes. This provenance never makes Agent text the owner's input.
+
+## Managed model discovery must tolerate a slow interactive shell (#10927)
+
+An interactive rc file can spend the entire discovery deadline in a version manager before the launcher command begins.
+A managed model probe has the command and provider settings already, so run it directly and test npm's
+`#!/usr/bin/env node` with a different Node.js on the service's PATH. Keep shell discovery for aliases and functions,
+and require a complete frame before caching an errored scan. A timed-out helper can print a banner inside the frame.
+The Assistant picker reserves a short window after shell discovery so fallback choices still respect a node's own-service policy.
+
+## Gateway quota errors and stopped recovery (#12095)
+
+A gateway can report `rate_limit` without Claude Code's subscription `quotaLimits`. Its UTC available-again prose belongs to the existing usage-limit wait; temporary account capacity is transient. Classifying the turn alone does not permit restarting a terminal Agent that exited: record narrow, node-owned stop provenance too. Never overwrite explicit user/exit provenance, or reauthorize a consumed recovery attempt from a stale transcript error.
+
+- A gateway error alone cannot prove why a terminal Agent later disappeared (#12095). Require a live observation after the failed turn and the retained original Persona pane, and recheck the pane before supervised resume. Keep cold history and externally closed terminals owner-only; a transcript error must not turn an unknown user closure into recovery permission.
+
+## Auxiliary Assistant context must not become native commands (#12427)
+
+Antigravity ACP expands slash commands in every plain text prompt block. A task title in the Assistant snapshot can
+therefore activate its suffix-command parser and append a command to an unrelated request. Send the snapshot as an
+ACP embedded text resource, keeping the user's own text in its separate text block. Separate text blocks alone are
+insufficient: ACP expands each one. Preserve explicit standalone native commands, and test the captured ACP payload
+for both a new conversation and later messages with command names in the snapshot.

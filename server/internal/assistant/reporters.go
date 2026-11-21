@@ -198,7 +198,11 @@ func (s *Service) stopReporting(ctx context.Context, sid, by string) (stopResult
 			if c, ok := s.session(ctx, a.MachineID, a.SessionID); !ok || c.Status != proto.StatusWorking && !c.Starting {
 				continue
 			}
+			// The turn it works on, ending with no output now, was stopped by the owner, not failed by the model service
+			// (silent_turns.go, #10187). Before the interrupt: the turn may end before the call comes back.
+			attempt := s.noteStopped(a.MachineID, a.SessionID, s.taskStretch(t))
 			if err := s.call(ctx, a.MachineID, "session.interrupt", map[string]any{"session_id": a.SessionID}, nil); err != nil {
+				s.forgetStopAttempt(a.MachineID, a.SessionID, attempt)
 				s.logf("stop %s: task %s: agent %s: %v", short(sid), t.ID, short(a.SessionID), err)
 				continue
 			}
@@ -245,6 +249,7 @@ func (s *Service) dropQueuedNotices(conversation string) int {
 // UserStopped: the user stopped a conversation's turn in an app. A reporting one is stopped with what it handed out,
 // as the plugin's /stop does (the plugin sees it in GET /api/v1/assistant/reporters and says so in Feishu).
 func (s *Service) UserStopped(ctx context.Context, r SessionRef) {
+	s.retireTodoWork([2]string{r.MachineID, r.SessionID})
 	if _, ok := s.reporterOf(ctx, r.SessionID); !ok {
 		return
 	}

@@ -268,6 +268,10 @@
     <string name="settings_ext_token_changed">已换 token</string>
     <string name="settings_ext_remove_market_title">删除 %1$s？</string>
     <string name="settings_ext_remove_market_text">hub 不再读这个市场。从它装的扩展留着，但不再升级，直到用同样的地址把市场加回来。</string>
+    <plurals name="settings_ext_remove_market_affected">
+        <item quantity="other">hub 不再读这个市场。从它装的 %1$d 个扩展留着，但不再升级，直到用同样的地址把市场加回来。</item>
+    </plurals>
+    <string name="settings_ext_remove_market_unused">hub 不再读这个市场。没有扩展是从它装的。</string>
     <string name="settings_ext_remove">删除</string>
     <string name="settings_ext_market_removed">已删除市场</string>
     <string name="settings_ext_market_address">地址</string>
@@ -404,4 +408,33 @@
     <plurals name="settings_ext_node_stopped">
         <item quantity="other">%1$d 台机器已停止</item>
     </plurals>
+    <string name="settings_ext_graph">关系图</string>
+    <string name="settings_ext_graph_zoom_out">缩小</string>
+    <string name="settings_ext_graph_zoom_in">放大</string>
+    <string name="settings_ext_graph_fit">适应窗口</string>
+    <string name="settings_ext_graph_full_screen">全屏</string>
+    <string name="settings_ext_graph_open">全屏打开关系图</string>
+    <string name="settings_ext_graph_fold">折叠</string>
+    <plurals name="settings_ext_graph_show_hidden">
+        <item quantity="other">显示 %1$d 个隐藏节点</item>
+    </plurals>
+    <string name="settings_ext_graph_under">位于 %1$s 下</string>
+    <string name="settings_ext_graph_progress">%1$d%%</string>
+    <string name="settings_ext_use_reference">使用引用</string>
+    <string name="settings_ext_reference_placeholder">op://vault/item/field</string>
+    <string name="settings_ext_reference_hint">这个扩展需要时由它的提供方给出值，Persona 只保存引用。</string>
+    <string name="settings_ext_from_provider">来自 %1$s</string>
+    <string name="settings_ext_secret_from_provider">来自 %1$s：%2$s</string>
+    <string name="settings_ext_secret_reference_saved">%1$s 已改用引用</string>
+    <string name="settings_ext_users_title">使用方</string>
+    <string name="settings_ext_users_footer">这些设置会从它这里取值；保存设置就等于长期允许它们取用。</string>
+    <string name="settings_ext_user_launcher">「%1$s」的 Key</string>
+    <string name="settings_ext_user_launcher_machine">%2$s 上「%1$s」的 Key</string>
+    <string name="settings_ext_rules_title">总是交给 Agent</string>
+    <string name="settings_ext_rules_footer">在这台电脑上用这个启动器、由你自己发起的 Agent 会直接拿到值，不再询问。</string>
+    <string name="settings_ext_rule_label">%2$s 上的「%1$s」</string>
+    <string name="settings_ext_rule_remove">移除</string>
+    <string name="settings_ext_rule_remove_title">移除这条规则？</string>
+    <string name="settings_ext_rule_remove_body">下次 %2$s 上的 %1$s 需要它时，会重新请你批准。</string>
+    <string name="settings_ext_rule_removed">规则已移除</string>
 </resources>

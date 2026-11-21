@@ -40,6 +40,7 @@ class PagedSessionsMockTests(unittest.TestCase):
             self.assertEqual(sum(counts[dimension].values()), len(full))
         first = self.read(summary=1, limit=2)
         self.assertEqual(len(first["sessions"]), 2)
+        self.assertEqual(first["added"], [])
         self.assertTrue(first["has_more"])
         self.assertIn("waiting", first["sessions"][0])
         second = self.read(summary=1, limit=2, cursor=first["next_cursor"])
@@ -53,6 +54,22 @@ class PagedSessionsMockTests(unittest.TestCase):
         self.assertNotIn("waiting", exact["sessions"][0])
         self.assertEqual(exact["sessions"][0]["session_id"], row["session_id"])
         self.assertEqual(self.read(summary=0, session_id="missing")["sessions"], [])
+
+    def test_directory_hidden_rows_leave_lists_but_not_the_exact_lookup(self):
+        # As the hub does (server/internal/sessionlist hidden_test.go): a directory-hidden session leaves the default
+        # pages and counts, include_hidden=1 shows it, and the exact machine/session lookup always answers its row.
+        row = next(s for s in self.read()["sessions"] if s.get("cwd") and not s.get("assistant"))
+        with patch.dict(hub.AGENT_DIRS_HIDDEN, {row["machine_id"]: [{"pattern": row["cwd"], "enabled": True}]}):
+            ids = lambda page: [(s["machine_id"], s["session_id"]) for s in page["sessions"]]
+            key = (row["machine_id"], row["session_id"])
+            self.assertNotIn(key, ids(self.read(summary=1, limit=50)))
+            self.assertIn(key, ids(self.read(summary=1, limit=50, include_hidden=1)))
+            exact = self.read(summary=0, machine_id=row["machine_id"], session_id=row["session_id"])
+            self.assertEqual(ids(exact), [key])
+            self.assertTrue(exact["sessions"][0]["hidden_by_directory"])
+            self.assertEqual(exact["total"], 1)
+            # one session id without its machine is no exact lookup: still a filtered list
+            self.assertNotIn(key, ids(self.read(summary=1, session_id=row["session_id"])))
 
     def test_filter_counts_match_filtered_pages(self):
         row = self.read()["sessions"][0]
@@ -90,6 +107,7 @@ class PagedSessionsMockTests(unittest.TestCase):
         delta = self.read(summary=1, since=first["revision"])
         self.assertEqual(delta["sessions"], [])
         self.assertEqual(delta["remove"], [])
+        self.assertEqual(delta["added"], [])
         self.assertFalse(delta["has_more"])
         for query, code in (({"since": ["expired"]}, "revision_expired"), ({"cursor": ["expired:2"]}, "cursor_expired")):
             body, status = hub.paged_sessions(query)
@@ -126,6 +144,21 @@ class PagedSessionsMockTests(unittest.TestCase):
         rest = self.read(summary=0, limit=200, since=base["revision"], cursor=small["next_cursor"])
         self.assertEqual(rest["revision"], small["revision"])
         self.assertEqual(len(small["sessions"]) + len(small["remove"]) + len(rest["sessions"]) + len(rest["remove"]), 2)
+
+    def test_delta_added_distinguishes_creation_from_filter_entrance(self):
+        sessions = hub.SESSIONS
+        saved = [dict(s) for s in sessions]
+        self.addCleanup(lambda: sessions.__setitem__(slice(None), saved))
+        changed = sessions[0]
+        changed["state"] = "idle"
+        baseline = self.read(summary=0, limit=200, state="working")
+        fresh = {**sessions[1], "session_id": "test-created", "title": "Created tab", "state": "working"}
+        changed["state"] = "working"
+        sessions.append(fresh)
+        delta = self.read(summary=0, limit=200, state="working", since=baseline["revision"])
+        self.assertIn(changed["session_id"], [s["session_id"] for s in delta["sessions"]])
+        self.assertIn(fresh["session_id"], [s["session_id"] for s in delta["sessions"]])
+        self.assertEqual(delta["added"], [hub.LIST_TUPLE(hub.decorated_session(fresh))])
 
     def test_journal_is_bounded_like_the_hub(self):
         sessions = hub.SESSIONS

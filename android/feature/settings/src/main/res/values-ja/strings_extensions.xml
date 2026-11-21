@@ -268,6 +268,10 @@
     <string name="settings_ext_token_changed">トークンを変更しました</string>
     <string name="settings_ext_remove_market_title">%1$sを削除しますか？</string>
     <string name="settings_ext_remove_market_text">ハブはこのマーケットを読まなくなります。そこからインストールした拡張機能は残りますが、同じアドレスでマーケットを追加し直すまでアップグレードされません。</string>
+    <plurals name="settings_ext_remove_market_affected">
+        <item quantity="other">ハブはこのマーケットを読まなくなります。そこからインストールした%1$d件の拡張機能は残りますが、同じアドレスでマーケットを追加し直すまでアップグレードされません。</item>
+    </plurals>
+    <string name="settings_ext_remove_market_unused">ハブはこのマーケットを読まなくなります。このマーケットからインストールした拡張機能はありません。</string>
     <string name="settings_ext_remove">削除</string>
     <string name="settings_ext_market_removed">マーケットを削除しました</string>
     <string name="settings_ext_market_address">アドレス</string>
@@ -404,4 +408,33 @@
     <plurals name="settings_ext_node_stopped">
         <item quantity="other">%1$d台のマシンで停止中</item>
     </plurals>
+    <string name="settings_ext_graph">グラフ</string>
+    <string name="settings_ext_graph_zoom_out">縮小</string>
+    <string name="settings_ext_graph_zoom_in">拡大</string>
+    <string name="settings_ext_graph_fit">全体を表示</string>
+    <string name="settings_ext_graph_full_screen">全画面</string>
+    <string name="settings_ext_graph_open">グラフを全画面で開く</string>
+    <string name="settings_ext_graph_fold">折りたたむ</string>
+    <plurals name="settings_ext_graph_show_hidden">
+        <item quantity="other">%1$d 件の非表示ノードを表示</item>
+    </plurals>
+    <string name="settings_ext_graph_under">上位: %1$s</string>
+    <string name="settings_ext_graph_progress">%1$d%%</string>
+    <string name="settings_ext_use_reference">参照を使う</string>
+    <string name="settings_ext_reference_placeholder">op://vault/item/field</string>
+    <string name="settings_ext_reference_hint">この拡張機能が必要なときにプロバイダーが値を渡します。Persona は参照だけを保存します。</string>
+    <string name="settings_ext_from_provider">%1$sから</string>
+    <string name="settings_ext_secret_from_provider">%1$sから: %2$s</string>
+    <string name="settings_ext_secret_reference_saved">%1$sは参照を使うようになりました</string>
+    <string name="settings_ext_users_title">使用中</string>
+    <string name="settings_ext_users_footer">これらの設定はこのプロバイダーから値を取ります。設定を保存すると、その後も値を取ることを許可したことになります。</string>
+    <string name="settings_ext_user_launcher">「%1$s」のキー</string>
+    <string name="settings_ext_user_launcher_machine">%2$sの「%1$s」のキー</string>
+    <string name="settings_ext_rules_title">Agent に常に渡す</string>
+    <string name="settings_ext_rules_footer">このコンピュータでこのランチャーを使い、あなたが自分で始めた Agent は確認なしで値を受け取ります。</string>
+    <string name="settings_ext_rule_label">%2$sの「%1$s」</string>
+    <string name="settings_ext_rule_remove">削除</string>
+    <string name="settings_ext_rule_remove_title">このルールを削除しますか？</string>
+    <string name="settings_ext_rule_remove_body">次に%2$sの%1$sが必要とするとき、もう一度承認します。</string>
+    <string name="settings_ext_rule_removed">ルールを削除しました</string>
 </resources>

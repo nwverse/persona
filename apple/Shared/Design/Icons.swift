@@ -31,6 +31,9 @@ extension Theme {
         /// A status dot (online, unread).
         static let dot = "circle.fill"
         static let time = "clock"
+        /// Someday on a to-do (#10465): the owner's own "not now", put aside for some other day (its swipe, its menu and
+        /// the list's Show Someday). Not `time`, which is Waiting's clock.
+        static let someday = "moon.stars.fill"
         /// An agent that only waits on background commands (Waiting in the Background, #6045): the mark in place of its dot.
         static let backgroundWaiting = "clock.fill"
         /// Agents grouped or ordered by their state (the Agents list's By Status / By Status).
@@ -46,6 +49,10 @@ extension Theme {
         /// Calls moved to the background.
         static let backgroundTask = "gearshape.2"
         static let backgroundTaskFilled = "gearshape.2.fill"
+        /// Running and recently completed background tasks in Agent chat.
+        static let backgroundTasks = taskPlan
+        /// A background command that watches an ongoing signal.
+        static let backgroundMonitor = screen
         /// A multi-agent workflow running in the background (Claude Code's Workflow tool).
         static let workflow = "flowchart"
         static let pinned = "pin.fill"
@@ -111,6 +118,9 @@ extension Theme {
         static let permissions = "lock.shield"
         /// The two little arrows after a value that opens a menu of choices.
         static let choices = "chevron.up.chevron.down"
+        /// The small chevron after an action's words that opens a menu of how far it goes (a pull-down, as UIKit draws
+        /// one): a group title's Mark All Seen in the Inbox (#10422). A value's menu of choices is `choices`.
+        static let pullDown = expand
         static let effort = "gauge.with.dots.needle.50percent"
         /// The effort level left to the model (its own default, Thinking Effort › Auto).
         static let effortAuto = "gauge.with.dots.needle.bottom.50percent"
@@ -401,7 +411,7 @@ extension Theme {
         /// A Moments (Feishu Moments) post in the inbox: the company's public feed.
         static let moments = "newspaper"
         static let folder = "folder"
-        /// Home: Back to Main Chat (the main conversation), a repository's main checkout in the Agents list's By Repository (as Orca
+        /// Home: the main conversation (Back to Main Chat, its row in the sidebar and in search results, #9973), a repository's main checkout in the Agents list's By Repository (as Orca
         /// and the web mark it), and the computer's home folder in the file page's path bar.
         static let home = "house"
         /// Home accessories and scenes (HomeKit, #2285).
@@ -589,6 +599,8 @@ extension Theme {
         /// The user's own messages.
         static let user = "person.fill"
         static let inbox = "tray.full"
+        static let starredMessage = pluginStar
+        static let starredMessageFilled = "star.fill"
         /// The conversations Persona opened by itself (the Inbox's AI twin, scheduled tasks, Lark /agent…): the sidebar's
         /// Auto Chats (#3266).
         static let autoConversations = "sparkles.rectangle.stack"
@@ -848,6 +860,15 @@ extension Theme {
         static let openAI = "brand-openai"
         /// TRAE's mark (Simple Icons' trae.svg), a template image: it takes the foreground color.
         static let trae = "brand-trae"
+        static let opencode = "brand-opencode"
+        static let pi = "brand-pi"
+        static let gemini = "brand-gemini"
+        static let cursor = "brand-cursor"
+        static let grok = "brand-grok"
+        static let agy = "brand-agy"
+        static let dsh = "brand-dsh"
+        static let kimi = "brand-kimi"
+        static let copilot = "brand-copilot"
         static let lark = "brand-lark"
         /// GitHub's mark (primer/octicons mark-github), a template image: it takes the foreground color.
         static let github = "brand-github"
@@ -871,7 +892,11 @@ extension Theme {
         /// they fit the box: a round or wide mark fills it (1), a full square looks bigger than a circle of the same
         /// width, so it is drawn smaller, as on Material's keyline grid (18 of 24 for a square, 20 for a circle).
         static func optical(_ asset: String) -> CGFloat {
-            asset == microsoft ? 0.88 : 1
+            switch asset {
+            case microsoft, opencode, pi, kimi: 0.88
+            case cursor: 0.92
+            default: 1
+            }
         }
 
         /// Marks whose artwork is a circle: they fill a round badge (`BrandBadge`); any other shape is drawn at

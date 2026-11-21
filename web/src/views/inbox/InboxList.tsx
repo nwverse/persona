@@ -2,7 +2,7 @@
 // "Section bar", #9053), filters by source and kind, search, then the section chosen; under All every section stacked,
 // Needs you (agents waiting on you first), In progress, FYI, Collapsed and Done, each opening / closing from its title.
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { agentDraft, agentWorking, conversationRoute, fromLine, interactionAsk, interactionTitle, isDone, isLark, itemKey, itemRoute, muteItem, sameItem, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS, useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup } from "../../lib/inbox";
+import { agentDraft, agentWorking, conversationRoute, interactionAsk, interactionTitle, isDone, isLark, itemKey, itemRoute, muteItem, sameItem, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS, useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup } from "../../lib/inbox";
 import { lineSummary, markdownInSummary, withoutMarks } from "../../lib/inbox-markdown";
 import { repeatsSummary, interactionAgentTitle, listInboxMutes, muteLine, muteShortName, muteTitle, policyMenuTitle, unmuteInbox, BULK_CONFIRM_AT, bulkScope, bulkScopeName, mailShort } from "../../lib/inbox-page";
 import { nowText, rowMeta } from "../../lib/inbox-now";
@@ -19,6 +19,7 @@ import { subscriptionsHref, useInboxSourcesShown, useSubscriptionsShown } from "
 import { type Manager } from "../../lib/managers";
 import { scoped, useScope, useScoped } from "../../lib/current-assistant";
 import { useStore } from "../../lib/store";
+import { directoryVisibleCards } from "../../lib/sessions";
 import type { Interaction } from "../../lib/types";
 import { t } from "../../i18n";
 import { requestRoute } from "../../lib/card-focus";
@@ -43,6 +44,7 @@ import { folderCrumbs, UNFILED } from "../../lib/inbox-folders";
 import { AgentWorking, Chip, Count, DraftCard, Glyph, ItemAvatar, Spark, StatusMenu, Tag, type GlyphName } from "./InboxParts";
 import { CheckMark } from "../settings/ProviderFields";
 import { InboxBar } from "./InboxBar";
+import { groupClear, type GroupClear } from "./group-clear";
 import { OfflineState, useShownOffline } from "../ManagerParts";
 
 function useStored(key: string): [string, (v: string) => void] {
@@ -141,7 +143,7 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
   // The agents waiting, picked in the store: the list holds the store's own interaction objects, so a sessions or
   // machines push that leaves them as they were keeps the same array (useStore compares it item by item) and the list,
   // with every row in it, does not render again.
-  const agents = useScoped(useStore((st) => waitingAgents(st.interactions, st.sessions, st.mutes, { source, kind, query, folder })));
+  const agents = useScoped(useStore((st) => waitingAgents(directoryVisibleCards(st.interactions), st.sessions, st.mutes, { source, kind, query, folder })));
   // the sections opened or closed by hand, by "<manager group>:<section>" (each manager's group keeps its own; one
   // manager: the group ""), the others as they are at first
   const [toggled, setToggled] = useState<Set<string>>(() => view.listToggled());
@@ -597,12 +599,12 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
           );
           const openRow = (it: InboxItem) => row(it);
           const doneRow = (it: InboxItem) => row(it, true);
-          const groupOf = (section: string, g: { key: string; title: string; items: InboxItem[] }, body: React.ReactNode, opts: { more?: boolean; pickable?: boolean; count?: number } = {}) => {
+          const groupOf = (section: string, g: { key: string; title: string; items: InboxItem[] }, body: React.ReactNode, opts: { more?: boolean; pickable?: boolean; count?: number; clear?: GroupClear } = {}) => {
             const id = `${group}|${section}|${g.key}`;
             const n = picking && opts.pickable ? g.items.filter((it) => picked.has(itemKey(it))).length : 0;
             return (
               <Group key={id} id={id} title={g.title} count={opts.count ?? g.items.length} more={opts.more} open={groupOpen(group, section, g.key)} onToggle={(open) => putGroupFold(id, open)}
-                pick={picking && opts.pickable ? { state: n === 0 ? "none" : n === g.items.length ? "all" : "some", picked: n, run: () => pickGroup(g.items) } : undefined}>
+                pick={picking && opts.pickable ? { state: n === 0 ? "none" : n === g.items.length ? "all" : "some", picked: n, run: () => pickGroup(g.items) } : undefined} clear={picking ? undefined : opts.clear}>
                 {body}
               </Group>
             );
@@ -621,7 +623,7 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
                     {titled ? (
                       <>
                         {waiting.length > 0 && groupOf(tier.key, { key: "agents", title: t("lib-inbox-groups.group_agents"), items: [] }, agentRows, { count: waiting.length })}
-                        {groups.map((g) => groupOf(tier.key, g, <Rows items={g.items} row={openRow} keep={isSelected} all={view.restored} />, { pickable: true }))}
+                        {groups.map((g) => groupOf(tier.key, g, <Rows items={g.items} row={openRow} keep={isSelected} all={view.restored} />, { pickable: true, clear: groupClear(tier.key, tier.title, g, list, filtered ? bulkScopeName(filterNames, query) : undefined) }))}
                       </>
                     ) : (
                       <>
@@ -796,7 +798,7 @@ function GroupTick({ state }: { state: "none" | "some" | "all" }) {
  * A group inside a section (#2059): its title sticks to the top while its rows scroll by, and folds it to the title and
  * count. Selecting, its tick picks or unpicks all of it, folded or not; "n selected" says what is picked in it.
  */
-function Group({ id, title, count, more, open, onToggle, pick, children }: { id: string; title: string; count: number; more?: boolean; open: boolean; onToggle: (open: boolean) => void; pick?: { state: "none" | "some" | "all"; picked: number; run: () => void }; children: React.ReactNode }) {
+function Group({ id, title, count, more, open, onToggle, pick, clear, children }: { id: string; title: string; count: number; more?: boolean; open: boolean; onToggle: (open: boolean) => void; pick?: { state: "none" | "some" | "all"; picked: number; run: () => void }; /** FYI's / Collapsed's pull-down for the group or the whole section (#10422). */ clear?: GroupClear; children: React.ReactNode }) {
   return (
     <div data-group={id}>
       <div className="sticky top-0 z-10 -mx-1 flex items-center gap-1.5 bg-canvas/95 px-2 pt-2 pb-0.5 backdrop-blur-sm">
@@ -812,6 +814,7 @@ function Group({ id, title, count, more, open, onToggle, pick, children }: { id:
           <span className="shrink-0 text-ink-3 tabular-nums">{more ? `${count}+` : count}</span>
         </button>
         {pick && pick.picked > 0 && <span className="shrink-0 text-[11px] text-accent-ink tabular-nums">{t("inbox-inboxlist.group_picked", { count: pick.picked })}</span>}
+        {clear && <GroupClearMenu clear={clear} />}
       </div>
       {/* the same 2px of room as the section's (#2703), so a selected card's ring isn't cut inside a group; the header's
           bottom padding gives up those 2px to keep its 4px */}
@@ -819,6 +822,26 @@ function Group({ id, title, count, more, open, onToggle, pick, children }: { id:
         <div inert={!open} className="flex flex-col gap-1.5 pb-1">{children}</div>
       </Collapse>
     </div>
+  );
+}
+
+/**
+ * A group title's "Mark all seen ⌄" (#10422): the group's items or the whole section's, each filed at once with Undo on
+ * the toast, as the section's own button. With a filter, a folder or a search on, each choice says what "all" covers.
+ */
+function GroupClearMenu({ clear }: { clear: GroupClear }) {
+  const menu = useMenu();
+  return (
+    <>
+      <button type="button" onClick={menu.open} aria-haspopup="menu" aria-expanded={Boolean(menu.anchor)} data-group-clear className="touch-hit inline-flex h-6 shrink-0 items-center gap-0.5 rounded-[6px] px-1.5 text-submeta whitespace-nowrap text-ink-3 transition-colors hover:bg-hover hover:text-ink">
+        {clear.label}
+        <Icon name="chevron" size={10} stroke={2.4} />
+      </button>
+      {menu.anchor && (
+        <Menu anchor={menu.anchor} onClose={menu.close} align="right" width={288}
+          items={clear.choices.map((c) => ({ key: c.key, label: c.label, detail: clear.scope, onSelect: () => void setAllDone(c.items, true) }))} />
+      )}
+    </>
   );
 }
 
@@ -847,8 +870,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
   const rows = !done ? it.doc?.rows ?? [] : [];
   const first = rows[0];
   const translated = hubTranslation(it, useTranslatePrefs());
-  // Translated mail keeps the old optional-preview path exactly; mail has no `where`.
-  const meta = translated ? fromLine(it, translated.preview) : rowMeta(it);
+  const meta = rowMeta(it, translated?.preview);
   const from = markdownInSummary(it) ? withoutMarks(meta) : meta; // an older assistant row's line is its Markdown (#9041)
   // a right click: "Done" / "Move back", then what it can be muted by (iOS: the row's long press)
   // (the menu key / Shift+F10 open it next to the row, see ui/context-menu.ts)

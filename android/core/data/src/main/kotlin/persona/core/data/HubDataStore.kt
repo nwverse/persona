@@ -384,7 +384,7 @@ class HubDataStore(
             val persistentPath = File(context.filesDir, "hub-data/${storage.path}/data.db").apply { parentFile!!.mkdirs() }
             val cachePath = File(context.cacheDir, "hub-data/${storage.path}/items.db").apply { parentFile!!.mkdirs() }
             persistent = Room.databaseBuilder(context, PersistentDatabase::class.java, persistentPath.absolutePath).build()
-            cache = Room.databaseBuilder(context, ItemsDatabase::class.java, cachePath.absolutePath).addMigrations(ItemsDatabase.MIGRATION_1_2, ItemsDatabase.MIGRATION_3_4, ItemsDatabase.MIGRATION_4_5, ItemsDatabase.MIGRATION_5_6).build()
+            cache = Room.databaseBuilder(context, ItemsDatabase::class.java, cachePath.absolutePath).addMigrations(ItemsDatabase.MIGRATION_1_2, ItemsDatabase.MIGRATION_3_4, ItemsDatabase.MIGRATION_4_5, ItemsDatabase.MIGRATION_5_6, ItemsDatabase.MIGRATION_6_7).build()
             // Force schema validation before returning a writable scope. Never destructively migrate.
             persistent.openHelper.writableDatabase
             cache.openHelper.writableDatabase
@@ -489,6 +489,7 @@ class ScopedHubData internal constructor(
     val imageCacheDirectory: File get() = directory(cacheDirectory, "images")
     val inboxMediaDirectory: File get() = directory(cacheDirectory, "inbox-media")
     val listPreferences: DataStore<Preferences> by lazy { preferences("lists") }
+    val heldRetryPreferences: DataStore<Preferences> by lazy { preferences("held-retries") }
     val readingPositions: DataStore<Preferences> by lazy { preferences("reading") }
     val backgroundChecks: DataStore<Preferences> by lazy { preferences("background-checks") }
     val operations = OneShotOperationJournal(File(noBackupDirectory, "operations"), scope)

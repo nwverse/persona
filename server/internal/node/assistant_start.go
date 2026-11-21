@@ -245,7 +245,11 @@ func (n *Node) claudeAssistantMCPAndToolsFor(id, cwd string, legacyMCP bool, too
 	// The extensions' MCP servers whose command is on this machine (assistant_mcp.go).
 	var allow, deny []string
 	builtins := assistantBuiltinTools
+	inbox := toolSet == "" && n.assistantOrigin(id) == originInbox
 	if toolSet == "" {
+		if inbox {
+			builtins = assistantInboxBuiltinTools
+		}
 		var extra map[string]any
 		extra, allow, deny = assistantMCPServers(n.assistantLark(context.Background()).MCPServers)
 		for name, s := range extra {
@@ -255,6 +259,12 @@ func (n *Node) claudeAssistantMCPAndToolsFor(id, cwd string, legacyMCP bool, too
 		builtins = roundBuiltinTools
 	}
 	mcp, _ := json.Marshal(map[string]any{"mcpServers": compat.MCPRegistrationServers(servers, legacyMCP)})
+	if inbox {
+		// Local Read is investigation. Network, shell and mutation tools keep their normal permission flow. Credential
+		// denies are appended below as individual arguments, after the legacy comma-joined MCP rules.
+		allow = append(allow, "Read")
+		allow = append(allow, n.inboxReadRules()...) // inbox_policy.go
+	}
 	allow = append(allow, healthReportRules(cwd)...) // healthdeny.go
 	toolFlags := []string{"--mcp-config", string(mcp), "--allowedTools", strings.Join(append([]string{n.assistantTools(legacyMCP)}, allow...), ","), "--tools", builtins}
 	if toolSet != "" {
@@ -263,6 +273,9 @@ func (n *Node) claudeAssistantMCPAndToolsFor(id, cwd string, legacyMCP bool, too
 	// One --disallowedTools with a word per rule (it takes several, up to the next flag): a path may hold a comma.
 	if len(deny) > 0 {
 		deny = []string{strings.Join(deny, ",")}
+	}
+	if inbox {
+		deny = append(deny, n.inboxSecretDenyRules()...)
 	}
 	deny = append(deny, n.healthDenyRules(cwd)...) // healthdeny.go
 	if len(deny) > 0 {
@@ -314,7 +327,7 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	if err := n.checkExternalAssistant(startCtx, id, launcher, execution, spare); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(cwd, 0o700); err != nil {
+	if err := n.prepareAssistantCwd(cwd, execution.Strict); err != nil {
 		return nil, err
 	}
 	guest := n.guestOf(id) != nil // a guest, a meeting's room too (assistant_guest.go)
@@ -325,7 +338,12 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	}
 	configDir := n.assistantConfigDir(launcher, execution.ConfigDir)
 	configPath := n.assistantConfigPath(execution.ConfigDir)
-	if err := os.MkdirAll(configPath, 0o700); err != nil {
+	if n.guestOf(id) != nil {
+		// Guests never load owner source settings; only create their private profile.
+		if err := os.MkdirAll(configPath, 0o700); err != nil {
+			return nil, err
+		}
+	} else if err := n.prepareAssistantProfile(configPath); err != nil {
 		return nil, err
 	}
 	args := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
@@ -338,6 +356,11 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	compaction := n.assistantCompactionPolicy(launcher, cwd, settings, execution)
 	if hooks == "" && n.launcherOwnSettings(context.Background(), launcher) != "" {
 		compaction.ownSettings = ""
+	}
+	toolSearch := n.assistantToolSearch(launcher, execution.Model, compaction)
+	compaction.toolSearchOff = toolSearch.forceOff
+	if toolSearch.forceOff {
+		n.logger.Printf("assistant %s: starts with every tool loaded: %s refused tool search for model %q", short(id), launcher, execution.Model)
 	}
 	var settingsErr error
 	settings, settingsErr = n.assistantCompactionSettings(id, cwd, settings, compaction)
@@ -371,14 +394,17 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		model = n.resumeModel(launcher, cwd, settings, configPath)
 	}
 	if model != "" {
+		model = n.claudeModelArg(launcher, model) // no tier alias for a gateway (#10365); "" its default
+	}
+	if model != "" {
 		args = append(args, "--model", model)
 	}
 	// bypassPermissions only takes as a flag at start; the other modes are set with a control request (syncAssistantModes).
-	var startMode string
+	var startMode, wantMode string
 	if !spare {
-		if mode, _ := n.modesOf(id); mode == proto.ModeBypass {
-			startMode = mode
-			args = append(args, "--permission-mode", mode)
+		if wantMode, _ = n.modesOf(id); wantMode == proto.ModeBypass {
+			startMode = wantMode
+			args = append(args, "--permission-mode", wantMode)
 		}
 	}
 	if resume {
@@ -389,11 +415,18 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	} else {
 		args = append(args, "--session-id", id)
 	}
-	// Tool search is on for every conversation: personad mcp marks the Persona tools used all the time alwaysLoad, the
-	// rest and other MCP servers' tools wait behind ToolSearch (#5838, #7317). ENABLE_TOOL_SEARCH=true lifts Claude
-	// Code's hold-off for a conversation that ran without ToolSearch (one from before #5839), which would otherwise load
-	// every tool until it is compacted. Never false: that turns deferral off for every server (#5838).
-	env := identity.Environment(os.Environ(), append([]string{"PERSONA_ASSISTANT=1", "ENABLE_TOOL_SEARCH=true"}, compaction.env()...)...)
+	// Tool search by where the requests go (toolSearchFor, #10365): personad mcp marks the Persona tools used all the
+	// time alwaysLoad, the rest and other MCP servers' tools wait behind ToolSearch (#5838, #7317). On Anthropic's own
+	// API, ENABLE_TOOL_SEARCH=true lifts Claude Code's hold-off for a conversation that ran without ToolSearch (one from
+	// before #5839), which would otherwise load every tool until it is compacted. Behind a gateway true would also lift
+	// Claude Code's own rule that keeps tool search off there, so a gateway gets false (every tool up front), and a
+	// start that cannot tell where its requests go gets nothing: Claude Code decides, as before #7371. A value the
+	// node inherited never reaches claude.
+	startEnv := []string{"PERSONA_ASSISTANT=1"}
+	if toolSearch.env != "" {
+		startEnv = append(startEnv, toolSearchEnv+"="+toolSearch.env)
+	}
+	env := identity.Environment(withoutEnv(os.Environ(), []string{toolSearchEnv}), append(startEnv, compaction.env()...)...)
 	env = n.claudeProcessEnv(env, configDir)
 	gateEnv, releaseGates := n.assistantLarkEnv(cwd, id) // its addresses at the gate proxy go with the process
 	if guest {
@@ -424,6 +457,12 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		n.logger.Printf("assistant %s: started on the Agent SDK: resumes with claude itself in its recorded profile, not the claude launcher", short(id))
 	}
 	var cmd *exec.Cmd
+	// Interactive Claude Code in place of claude -p when the setting asks for it (assistant_tui.go): the bridge gets
+	// both commands, and runs the print-mode one when the interactive one does not start. Not for an external
+	// launcher, whose adapter is the command.
+	var tui bool
+	var tuiNote, tuiMode, tuiEffort string
+	var tuiLine []byte
 	if proto.IsExternalLauncher(launcher) {
 		cmd, cleanupAdapter, err = n.externalCLICommand(startCtx, id, launcher, cwd, execution, args, env)
 		if err != nil {
@@ -432,6 +471,14 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		}
 	} else {
 		cmd = n.assistantCLICommand(shell, launcher, cwd, itself, args, env)
+		if tui, tuiNote = tuiWanted(execution, guest, spare, round, wantMode); tui {
+			tuiMode, tuiEffort = n.tuiStartModes(id, wantMode, execution)
+			full := withStartModes(args, tuiMode, tuiEffort)
+			interactive := n.assistantCLICommand(shell, launcher, cwd, itself, tuiArgs(full), env)
+			printCmd := n.assistantCLICommand(shell, launcher, cwd, itself, full, env)
+			cmd, tuiLine = n.assistantTUICommand(tuiSpec{Session: id, Cwd: cwd, Resume: resume, AcceptBypass: tuiMode == proto.ModeBypass,
+				ConfigDirs: slices.Compact(append([]string{envValue(env, "CLAUDE_CONFIG_DIR")}, n.claudeConfigDirs()...))}, interactive, printCmd)
+		}
 	}
 	cmd.SysProcAttr = osproc.GroupAttr() // so stop() can kill the whole group
 	msysCmdLine(cmd)
@@ -463,6 +510,10 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		return nil, fmt.Errorf("start %s: %w", launcher, startErr)
 	}
 	started = true
+	if tuiLine != nil {
+		// The bridge reads its spec before anything else; one that cannot take it is a start that failed (awaitStart).
+		_, _ = stdin.Write(tuiLine)
+	}
 	processExecution := execution
 	processExecution.StartupContext = nil // a live or resident process must never keep the completed RPC's context
 	// Effort is deliberately unconfirmed here: --effort cannot express auto and
@@ -471,7 +522,10 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	p := &assistantProc{id: id, agent: "claude", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}), ready: make(chan struct{}),
 		stderrDone: make(chan struct{}), born: time.Now(), lastActive: time.Now(), mode: startMode, canBypass: startMode == proto.ModeBypass, model: processExecution, fingerprint: n.executionFingerprint(launcher, processExecution),
 		instructions: instructions, personaMCPOnly: !legacyMCP, origin: execution.Origin, compactIdleAt: compaction.idle(), declaredWindow: compaction.declared(),
-		round: round.anchor != "", toolSet: round.toolSet}
+		round: round.anchor != "", toolSet: round.toolSet, toolSearch: toolSearch, endpoint: compaction.endpoint, tui: tui, tuiNote: tuiNote}
+	if tui {
+		p.mode, p.effort = tuiMode, tuiEffort // its start flags: nothing to set by control request (syncAssistantModes)
+	}
 	if !spare {
 		n.mu.Lock()
 		n.procs[id] = p

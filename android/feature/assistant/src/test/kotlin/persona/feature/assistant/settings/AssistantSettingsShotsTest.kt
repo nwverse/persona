@@ -18,6 +18,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isPopup
@@ -27,6 +28,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -67,13 +69,28 @@ class AssistantSettingsShotsTest {
     @Test fun japanese() = shots("ja", title = "アシスタント", memory = "朝のまとめ" to "朝のまとめは1画面以内、結論を先に。")
 
     @Config(sdk = [35], qualifiers = "en-w400dp-h2200dp-xhdpi")
+    @Test fun recentTaskChatsEnglish() = recentTaskChatsShots("en")
+
+    @Config(sdk = [35], qualifiers = "zh-w400dp-h2200dp-xhdpi")
+    @Test fun recentTaskChatsSimplifiedChinese() = recentTaskChatsShots("zh")
+
+    @Config(sdk = [35], qualifiers = "ja-w400dp-h2200dp-xhdpi")
+    @Test fun recentTaskChatsJapanese() = recentTaskChatsShots("ja")
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h2200dp-xhdpi")
     @Test fun nextSuggestionsEnglish() = nextSuggestionShots("en")
 
     @Config(sdk = [35], qualifiers = "zh-w400dp-h2200dp-xhdpi")
     @Test fun nextSuggestionsSimplifiedChinese() = nextSuggestionShots("zh")
 
+    @Config(sdk = [35], qualifiers = "en-w400dp-h3200dp-xhdpi")
+    @Test fun recentTaskChatsLargeFont() = recentTaskChatsLargeFontShots()
+
     @Config(sdk = [35], qualifiers = "en-w400dp-h2600dp-xhdpi")
     @Test fun nextSuggestionsLargeFont() = nextSuggestionLargeFont()
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h3600dp-xhdpi")
+    @Test fun ownerApprovalEnglish() = ownerApprovalShots()
 
     private class FakeManagement(memoryTitle: String, memoryBody: String) : AssistantManagement {
         private val updated = Instant.now().minusSeconds(3_600).toString()
@@ -81,6 +98,7 @@ class AssistantSettingsShotsTest {
             timezone = "Asia/Shanghai", notesEffective = "~/code", main = "main", mainTasksQuiet = true,
             // #5084: the background supervisor's off switch and its model row
             mainSupervisesOwnTasks = false, backgroundSupervisor = "supervisor", manager = "assistant", defaultPermissionMode = "bypassPermissions",
+            closeEndedTerminals = false, // #10355: the Terminals switch, off
             permissionDefaults = AssistantPermissionDefaults(1, "assistant", AssistantPermissionDefaults.MODES))
         val files = listOf(
             MemoryFile("MEMORY.md", "- [$memoryTitle](morning.md)", updated),
@@ -95,7 +113,8 @@ class AssistantSettingsShotsTest {
         override suspend fun config() = config
         override suspend fun updateConfig(update: AssistantConfigUpdate): AssistantConfig {
             config = config.copy(timezone = update.timezone ?: config.timezone, notes = update.notes ?: config.notes,
-                nextSuggestions = update.nextSuggestions ?: config.nextSuggestions)
+                nextSuggestions = update.nextSuggestions ?: config.nextSuggestions,
+                recentTaskChats = update.recentTaskChats ?: config.recentTaskChats)
             return config
         }
         override suspend fun endConversation(session: SessionKey) {}
@@ -117,6 +136,77 @@ class AssistantSettingsShotsTest {
 
     private fun save(name: String, image: Bitmap) {
         File(out(), name).outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+    }
+
+    private fun recentTaskChatsShots(language: String) {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var enabled by mutableStateOf(false)
+        val management = FakeManagement("Morning", "Keep it short.").apply {
+            config = config.copy(mainBackgroundFolded = true, recentTaskChats = false)
+        }
+        var title = ""
+        rule.setContent {
+            title = stringResource(R.string.assistant_settings_recent_task_chats)
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                val roster = ManagerRoster(listOf(HubManager("assistant", "Persona", online = true, isDefault = true)), "assistant")
+                CompositionLocalProvider(LocalManagerRoster provides roster) {
+                    Box(Modifier.testTag("recent-shot").width(400.dp).height(2200.dp).background(PersonaTheme.palette.background)) {
+                        key(enabled) { AssistantSettingsScreen(management, machines, onBack = {}, onModelConfiguration = { _, _ -> }) }
+                    }
+                }
+            }
+        }
+        for (on in listOf(false, true)) {
+            management.config = management.config.copy(recentTaskChats = on)
+            enabled = on
+            rule.waitForIdle()
+            if (on) rule.onNode(hasText(title) and isToggleable()).assertIsOn()
+            else rule.onNode(hasText(title) and isToggleable()).assertIsOff()
+            val part = if (on) "on" else "off"
+            for (s in AppStyle.entries) for (d in listOf(false, true)) {
+                style = s
+                dark = d
+                rule.waitForIdle()
+                val image = rule.onNodeWithTag("recent-shot").captureToImage().asAndroidBitmap()
+                save("settings-recent-task-chats-$language-$part-${s.name.lowercase()}-${if (d) "dark" else "light"}.png", image)
+            }
+        }
+        management.config = management.config.copy(recentTaskChats = null)
+        enabled = false
+        rule.waitForIdle()
+        rule.onNodeWithText(title).assertDoesNotExist()
+    }
+
+    private fun recentTaskChatsLargeFontShots() {
+        var fontScale by mutableStateOf(1f)
+        val management = FakeManagement("Morning", "Keep it short.").apply {
+            config = config.copy(mainBackgroundFolded = true, recentTaskChats = false)
+        }
+        var title = ""
+        rule.setContent {
+            title = stringResource(R.string.assistant_settings_recent_task_chats)
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+                PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                    val roster = ManagerRoster(listOf(HubManager("assistant", "Persona", online = true, isDefault = true)), "assistant")
+                    CompositionLocalProvider(LocalManagerRoster provides roster) {
+                        Box(Modifier.testTag("recent-large").width(400.dp).height(3200.dp).background(PersonaTheme.palette.background)) {
+                            AssistantSettingsScreen(management, machines, onBack = {}, onModelConfiguration = { _, _ -> })
+                        }
+                    }
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.onNode(hasText(title) and isToggleable()).assertIsOff()
+        val standard = rule.onNodeWithTag("recent-large").captureToImage().asAndroidBitmap()
+        fontScale = 2f
+        rule.waitForIdle()
+        rule.onNode(hasText(title) and isToggleable()).assertIsOff()
+        val large = rule.onNodeWithTag("recent-large").captureToImage().asAndroidBitmap()
+        assertFalse("the large-text capture really scales Compose text", standard.sameAs(large))
+        save("settings-recent-task-chats-en-off-glass-light-font-2.png", large)
     }
 
     private fun nextSuggestionShots(language: String) {
@@ -187,6 +277,51 @@ class AssistantSettingsShotsTest {
         val large = rule.onNodeWithTag("next-large").captureToImage().asAndroidBitmap()
         assertFalse("the large-text capture really scales Compose text", standard.sameAs(large))
         save("settings-next-suggestions-en-off-glass-light-font-2.png", large)
+    }
+
+    private fun ownerApprovalShots() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var fontScale by mutableStateOf(1f)
+        val management = FakeManagement("Morning", "Keep it short.").apply {
+            config = config.copy(mainBackgroundFolded = true, ownerReplyApproval = false,
+                persistentOwnerActionCards = false, ownerReplyApprovalPhrases = listOf("发", "同意"))
+        }
+        var replyTitle = ""
+        var persistentTitle = ""
+        var saveTitle = ""
+        var zoneTitle = ""
+        rule.setContent {
+            replyTitle = stringResource(R.string.assistant_settings_owner_approval)
+            persistentTitle = stringResource(R.string.assistant_settings_owner_approval_persistent)
+            saveTitle = stringResource(R.string.assistant_settings_owner_approval_save_phrases)
+            zoneTitle = stringResource(R.string.assistant_settings_zone_follow)
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                    val roster = ManagerRoster(listOf(HubManager("assistant", "Persona", online = true, isDefault = true)), "assistant")
+                    CompositionLocalProvider(LocalManagerRoster provides roster) {
+                        Box(Modifier.testTag("owner-shot").width(400.dp).height(3600.dp).background(PersonaTheme.palette.background)) {
+                            AssistantSettingsScreen(management, machines, onBack = {}, onModelConfiguration = { _, _ -> })
+                        }
+                    }
+                }
+            }
+        }
+        for (s in AppStyle.entries) for (d in listOf(false, true)) for (scale in listOf(1f, 2f)) {
+            style = s; dark = d; fontScale = scale
+            rule.waitForIdle()
+            rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(replyTitle))
+            rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("发\n同意"))
+            rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(saveTitle))
+            rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(zoneTitle))
+            rule.onNode(hasText(replyTitle) and isToggleable()).assertIsOff()
+            rule.onNode(hasText(persistentTitle) and isToggleable()).assertIsOff()
+            rule.onNodeWithText("发\n同意").assertExists()
+            val image = rule.onNodeWithTag("owner-shot").captureToImage().asAndroidBitmap()
+            val font = if (scale > 1f) "font-2" else "default"
+            save("settings-owner-approval-en-off-$font-${s.name.lowercase()}-${if (d) "dark" else "light"}.png", image)
+        }
     }
 
     private val machines = listOf(

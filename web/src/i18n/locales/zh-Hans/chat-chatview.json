@@ -7,6 +7,7 @@
   "not_delivered": "没送到：{error}",
   "interrupted": "已中断",
   "interrupt_failed": "中断失败：{error}",
+  "send_now_failed": "立即发送失败：{error}",
   "new_chat": "新对话",
   "session": "会话",
   "not_found_title": "找不到这条对话",
@@ -48,6 +49,7 @@
   "files": "文件",
   "review_changes": "评审改动",
   "interrupt": "中断",
+  "session_overview": "会话概览",
   "session_info": "会话信息",
   "rename": "重命名…",
   "rename_space": "重命名空间…",
@@ -113,7 +115,6 @@
   "agent_device": "Agent 在 {device} 上运行",
   "agent_device_offline": "Agent 在 {device} 上运行，那台电脑现在离线，连上后才能继续",
   "branch_title": "分支：{branch}",
-  "background_tasks": "后台任务",
   "background_running": "后台任务，{count} 个在运行",
   "rename_title": "重命名",
   "agent_device_label": "{agent}。{where}",
@@ -130,5 +131,6 @@
   "todo_completed_label": "待办（已完成）：{title}",
   "export": "导出对话…",
   "side_sessions_count": "分支会话（{count}）",
-  "side_sessions_needs_you": "有分支会话需要你"
+  "side_sessions_needs_you": "有分支会话需要你",
+  "open_agent_page": "打开 Agent 会话"
 }

@@ -37,6 +37,7 @@ func (t *Todo) setPlan(row db.TodoRow) {
 	t.RestoredAt, t.SomedayUntil = row.RestoredAt, row.SomedayUntil
 	t.InboxItem = row.InboxItem
 	t.PartOf, t.After = row.PartOf, slices.Clone(row.After)
+	t.RequireAcceptedAfter = row.RequireAcceptedAfter
 }
 
 // keepPlan writes t's plan, project and the owner's marks (seen, restored, Someday) into row: a row made in memory for a
@@ -53,6 +54,7 @@ func (t *Todo) keepPlan(row *db.TodoRow) {
 	row.RestoredAt, row.SomedayUntil = t.RestoredAt, t.SomedayUntil
 	row.InboxItem = t.InboxItem
 	row.PartOf, row.After = t.PartOf, slices.Clone(t.After)
+	row.RequireAcceptedAfter = t.RequireAcceptedAfter
 }
 
 // todoRowOf is todo t as a row (what memory has of it; the store-less PATCH changes it).
@@ -177,13 +179,21 @@ func todoPriority(p string) (string, error) {
 // createPlainTodo makes a todo of the user's (no conversation, no plan of tasks) with plan's due date, reminder and
 // priority, and tells the apps.
 func (s *Service) createPlainTodo(ctx context.Context, title, notes string, plan db.TodoEdit, bindings ...*repository.CreateBindings) (Todo, error) {
-	return s.createTodoFrom(ctx, title, notes, "", plan, bindings...)
+	return s.createPlainTodoWithImages(ctx, title, notes, plan, nil, bindings...)
+}
+
+func (s *Service) createPlainTodoWithImages(ctx context.Context, title, notes string, plan db.TodoEdit, images []db.TodoImage, bindings ...*repository.CreateBindings) (Todo, error) {
+	return s.createTodoFromWithImages(ctx, title, notes, "", plan, images, bindings...)
 }
 
 // createTodoFrom is createPlainTodo for a to-do made from an Inbox row (#6480): inboxItem is that row's id, "" for none.
 func (s *Service) createTodoFrom(ctx context.Context, title, notes, inboxItem string, plan db.TodoEdit, bindings ...*repository.CreateBindings) (Todo, error) {
+	return s.createTodoFromWithImages(ctx, title, notes, inboxItem, plan, nil, bindings...)
+}
+
+func (s *Service) createTodoFromWithImages(ctx context.Context, title, notes, inboxItem string, plan db.TodoEdit, images []db.TodoImage, bindings ...*repository.CreateBindings) (Todo, error) {
 	now := time.Now().UTC()
-	row := db.TodoRow{ID: "todo_" + randomHex(8), Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now, InboxItem: inboxItem}
+	row := db.TodoRow{ID: "todo_" + randomHex(8), Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now, InboxItem: inboxItem, Images: images}
 	plan.Title, plan.Notes, plan.Done = nil, nil, nil
 	plan.Apply(&row, now)
 	return s.insertTodo(ctx, row, bindings...)
@@ -231,23 +241,37 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	if !ok {
 		return Todo{}, db.ErrTodoNotFound
 	}
+	if e.Done != nil && *e.Done && cur.DoneAt == nil && s.outsideBackingPending(id) {
+		return Todo{}, errOutsideDecisionPending
+	}
 	if cur.isConcern() && cur.DoneAt == nil && e.Done != nil && *e.Done {
 		return Todo{}, db.ErrConcernUnreported // only its report closes it (concerns.go); the store checks it again
 	}
-	links := e.PartOf != nil || e.After != nil
+	links := e.PartOf != nil || e.After != nil || e.RequireAcceptedAfter != nil
 	if f := s.pieceWriteHook; links && f != nil {
 		f(id)
 	}
 	if f := s.editWriteHook; f != nil {
 		f(id)
 	}
+	reopening := e.Done != nil && !*e.Done
+	if reopening {
+		// Keep a concurrent ledger writer from publishing an older state over the reopened row.
+		s.supervise.writeMu.Lock()
+	}
 	s.todos.writing.Lock()
+	unlock := func() {
+		s.todos.writing.Unlock()
+		if reopening {
+			s.supervise.writeMu.Unlock()
+		}
+	}
 	if links {
 		// Checked again with the graph held still: a write since the caller's check may have changed the request
 		// (todo_pieces.go). A *pieceError when it no longer holds.
 		l, err := s.recheckPieces(id, e)
 		if err != nil {
-			s.todos.writing.Unlock()
+			unlock()
 			return Todo{}, err
 		}
 		e.PartOf, e.After = l.PartOf, l.After
@@ -257,7 +281,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	if st := s.todoDB(); st != nil {
 		var err error
 		if row, err = st.EditTodo(ctx, id, e, now); err != nil {
-			s.todos.writing.Unlock()
+			unlock()
 			return Todo{}, err
 		}
 	} else {
@@ -265,7 +289,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		// again from the copy read before the lock)
 		base, ok := s.todoNow(id)
 		if !ok {
-			s.todos.writing.Unlock()
+			unlock()
 			return Todo{}, db.ErrTodoNotFound
 		}
 		r := todoRowOf(base)
@@ -273,7 +297,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		row = &r
 	}
 	out, doneKeys, applied := s.setTodoRow(id, *row, nil)
-	s.todos.writing.Unlock()
+	unlock()
 	if applied {
 		s.todoRowSet(ctx, doneKeys)
 	}
@@ -291,6 +315,9 @@ func (s *Service) deleteTodo(ctx context.Context, id string) error {
 	cur, ok := s.todoNow(id)
 	if !ok {
 		return db.ErrTodoNotFound
+	}
+	if s.outsideBackingPending(id) {
+		return errOutsideDecisionPending
 	}
 	if err := s.removeTodo(ctx, id); err != nil {
 		return err
@@ -402,19 +429,42 @@ func (s *Service) remind(ctx context.Context, id string, at, now time.Time) {
 		return
 	}
 	title, body := s.reminderText(ctx, todo, at, now)
+	larkTitle, larkBody := s.reminderLarkText(ctx, todo, at, now)
 	set := s.settings(ctx)
+	channelTitle, channelBody := s.reminderChannelText(ctx, todo, title, body)
 	// A reminder the owner set for themself: theirs to act on, so P0 even in the hub's low-distraction mode, keyed by
 	// to-do and due time (each due time rings once).
 	s.push(ctx, Notification{Subtitle: i18n.T(s.lang(ctx), "assistant-todos.remind_subtitle"), DeviceID: set.MachineID,
-		SessionID: set.Main, Title: title, Body: body, Level: assistantwire.LevelP0,
+		SessionID: set.Main, Title: channelTitle, Body: channelBody, Level: assistantwire.LevelP0,
 		RelatedKey: "todo-remind:" + id + "@" + at.UTC().Format(time.RFC3339)})
-	s.channelsPushed(set.MachineID, set.Main, title, body) // the Feishu bot and the channels with pushes on, as notify_user
+	// Only the Feishu copy gets the full notes, to-do deep link and reply context. Ordinary phone and other-channel
+	// copies keep their existing short text; a health task's content stays behind the generic notice on every copy.
+	go s.feishuTodoReminder(set.MachineID, set.Main, larkTitle, larkBody, todo)
+	go s.channelPush(set.MachineID, set.Main, channelTitle, channelBody)
 	s.logf("todo %s: reminded (due %s)", id, at.Format(time.RFC3339))
+}
+
+// reminderChannelText applies the health space's outbound rule to phone and channel copies; ordinary text is unchanged.
+func (s *Service) reminderChannelText(ctx context.Context, t Todo, title, body string) (string, string) {
+	if s.todoInHealth(ctx, t) {
+		return healthNotice(s.lang(ctx))
+	}
+	return title, body
 }
 
 // reminderText is the push of t's reminder for at, pushed at now: its title, and its due date, the first line of its
 // notes and how late it is in the body.
 func (s *Service) reminderText(ctx context.Context, t Todo, at, now time.Time) (title, body string) {
+	return s.reminderTextWithNotes(ctx, t, at, now, clip(oneLine(t.Notes), 120), " · ")
+}
+
+// reminderLarkText keeps the notes exactly as saved, including line breaks. answerCards paginates them for Feishu;
+// the to-do link remains the way to read anything beyond the existing card budget.
+func (s *Service) reminderLarkText(ctx context.Context, t Todo, at, now time.Time) (title, body string) {
+	return s.reminderTextWithNotes(ctx, t, at, now, t.Notes, "\n\n")
+}
+
+func (s *Service) reminderTextWithNotes(ctx context.Context, t Todo, at, now time.Time, notes, sep string) (title, body string) {
 	l, loc := s.lang(ctx), s.location(ctx)
 	var parts []string
 	if due := t.dueText(loc); due != "" {
@@ -424,8 +474,8 @@ func (s *Service) reminderText(ctx context.Context, t Todo, at, now time.Time) (
 		}
 		parts = append(parts, i18n.T(l, key, i18n.Args{"when": due}))
 	}
-	if n := oneLine(t.Notes); n != "" {
-		parts = append(parts, clip(n, 120))
+	if strings.TrimSpace(notes) != "" {
+		parts = append(parts, notes)
 	}
 	if now.Sub(at) > remindLate {
 		parts = append(parts, i18n.T(l, "assistant-todos.remind_late", i18n.Args{"when": at.In(loc).Format("01-02 15:04")}))
@@ -433,5 +483,5 @@ func (s *Service) reminderText(ctx context.Context, t Todo, at, now time.Time) (
 	if len(parts) == 0 {
 		parts = append(parts, i18n.T(l, "assistant-todos.remind_body"))
 	}
-	return clip(t.Title, 120), strings.Join(parts, " · ")
+	return clip(t.Title, 120), strings.Join(parts, sep)
 }

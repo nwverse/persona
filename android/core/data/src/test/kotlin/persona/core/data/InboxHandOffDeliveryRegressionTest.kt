@@ -48,7 +48,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -432,6 +431,77 @@ class InboxHandOffDeliveryRegressionTest {
         }
     }
 
+    @Test fun sendingAnotherMessageKeepsTheInFlightRetryUntilItsHttpReply() =
+        retryWhileAnotherMessageIsSent(transcriptFirst = false)
+
+    @Test fun aTranscriptBeforeTheRetryReplyKeepsTheHandOffShownAndRecordedOnce() =
+        retryWhileAnotherMessageIsSent(transcriptFirst = true)
+
+    private fun retryWhileAnotherMessageIsSent(transcriptFirst: Boolean) = runBlocking {
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val fixture = HandOffFixture(owner, pairing, online = true)
+        val http = ComposerHttpFixture(fixture, pairing)
+        val retryStarted = CompletableDeferred<String>()
+        val releaseRetry = CompletableDeferred<Unit>()
+        val nextId = "second-owner-message"
+        var retryJob: Job? = null
+        try {
+            http.server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse {
+                    val op = checkNotNull(request.getHeader("X-Persona-Op-Id"))
+                    if (op == operationId) return refusalResponse()
+                    if (op == nextId) return MockResponse().setBody("{}")
+                    retryStarted.complete(op)
+                    runBlocking { withTimeout(10_000) { releaseRetry.await() } }
+                    return if (transcriptFirst) MockResponse().setBody("{}") else MockResponse().setResponseCode(500)
+                        .setBody("""{"error":"HTTP 500","code":"internal","delivered":"yes"}""")
+                }
+            }
+            val composer = connectRefusedComposer(fixture, http)
+            val retry = owner.async { composer.retryRefused(operationId, clearDraft = true) }
+            retryJob = retry
+            val retryOp = withTimeout(5_000) { retryStarted.await() }
+            assertNotEquals(operationId, retryOp)
+
+            // Another ordinary send wakes a drain and passes its reconciliation step before the retry gets its HTTP reply.
+            fixture.sender.send(SessionKey("laptop", "second-chat"), "Second owner message", nextId)
+            withTimeout(5_000) {
+                fixture.store.entries.first { rows -> rows.any { it.clientMessageId == nextId && it.state == OutboxState.Sending } }
+            }
+            if (transcriptFirst) {
+                fixture.sender.observeTranscript(agent, listOf(
+                    Item("retry-echo", 1, role = "user", kind = "text", text = request.text, clientMsgId = retryOp),
+                ))
+                assertEquals(OutboxState.Shown, fixture.store.state(operationId))
+            } else {
+                assertEquals(OutboxState.Sending, fixture.store.state(operationId))
+                assertFalse(fixture.sender.discard(operationId))
+                assertFalse(fixture.sender.retry(operationId))
+            }
+
+            releaseRetry.complete(Unit)
+            assertEquals(DeliveryState.Sent, withTimeout(5_000) { retry.await() }.state)
+            withTimeout(5_000) {
+                fixture.store.entries.first { rows -> rows.any { it.clientMessageId == nextId && it.state == OutboxState.Sent } }
+            }
+            assertEquals(3, http.server.requestCount)
+            if (transcriptFirst) {
+                assertEquals(OutboxState.Shown, fixture.store.state(operationId))
+                withTimeout(5_000) { fixture.inbox.recordVersions.first { it >= 1 } }
+                assertEquals(listOf(RecordedHandOff("item", agent, "Example agent", operationId)), fixture.inbox.records)
+            } else {
+                assertEquals(OutboxState.Sent, fixture.store.state(operationId))
+                assertNoHandOffRecord(fixture, "a delivered=yes hint does not record a hand-off")
+            }
+        } finally {
+            releaseRetry.complete(Unit)
+            retryJob?.join()
+            http.close()
+            fixture.close()
+            owner.coroutineContext[Job]?.cancelAndJoin()
+        }
+    }
+
     @Test fun httpDeliveredYesComposerRetryDoesNotRecord() = runBlocking {
         val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val fixture = HandOffFixture(owner, pairing, online = true)
@@ -659,7 +729,7 @@ class InboxHandOffDeliveryRegressionTest {
         private val fixture: HandOffFixture,
         private val pairing: HubScope,
     ) {
-        val server = MockWebServer().apply { start() }
+        val server = PortDiscoveryMockServer().apply { start() }
         private val endpoint = Endpoint(server.url("/").toString(), "lan")
         private val connection = OkHttpHubConnection(
             HubConnectionConfig(pairing.hubId, null, "test-token", listOf(endpoint), "test"),

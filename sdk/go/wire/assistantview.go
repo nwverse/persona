@@ -328,6 +328,20 @@ func StripAssistantFields(v *View) []string {
 				drop("assistant_action")
 				e.Button = nil
 			}
+			// a graph's nodes keep their place; only their assistant-only action goes
+			for k := range e.Nodes {
+				if AssistantOnlyAction(e.Nodes[k].Action) {
+					drop("assistant_action")
+					e.Nodes[k].Action = nil
+				}
+			}
+			// and so do a scene's pins
+			for k := range e.Pins {
+				if AssistantOnlyAction(e.Pins[k].Action) {
+					drop("assistant_action")
+					e.Pins[k].Action = nil
+				}
+			}
 			items = append(items, e)
 		}
 		s.Items = items

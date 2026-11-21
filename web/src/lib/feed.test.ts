@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { t } from "../i18n";
 import {
   answeredItems,
   cardFiled,
   cardSent,
   dayLabel,
+  dismissPlan,
   displayLines,
   draftPlaceholder,
   field,
@@ -25,8 +27,9 @@ import {
   type TaskPlan,
 } from "./feed";
 import { conversationCards } from "./assistant-views";
+import { retryOnLauncher, TASK_RETRY_LAUNCHER_FEATURE } from "./start-retry";
 import { getPanel, openPanel } from "./panel";
-import { markConversationDeleted, refreshTodos, reset } from "./store";
+import { getState, markConversationDeleted, refreshTodos, reset } from "./store";
 import type { Todo } from "./todos";
 import type { ChatLine, Segment } from "./turns";
 import type { Item } from "./types";
@@ -196,6 +199,25 @@ describe("a task whose agent did not start (#1077, #1142)", () => {
       expect(posts).toHaveLength(1);
       expect(String(posts[0][0])).toMatch(/\/todos\/t1\/retry$/);
       expect(getFeedState().busy[retryKey("t1")]).toBe(false);
+    });
+
+    it("starts it on another launcher only with a hub that takes it: the body names it, else nothing is sent (#10365)", async () => {
+      const fetcher = vi.fn((_url: string, init?: RequestInit) => Promise.resolve(ok(init?.method === "POST" ? { todo: todo() } : { todos: [] })));
+      vi.stubGlobal("localStorage", { getItem: () => "jd_test" });
+      vi.stubGlobal("fetch", fetcher);
+      const failed = todo({ start_error: "x", done_at: "2026-11-04T10:00:05Z" });
+      const posts = () => fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+      const features = getState().features;
+      Object.assign(getState(), { features: ["todo_seen"] });
+      // an older hub ignores the body and would start the launcher that failed again: refused here, nothing sent
+      await expect(retryOnLauncher(failed, "claude")).rejects.toThrow(t("lib-start-retry.retry_launcher_unsupported"));
+      expect(posts()).toHaveLength(0);
+      expect(getFeedState().busy[retryKey("t1")]).toBeFalsy();
+      Object.assign(getState(), { features: [TASK_RETRY_LAUNCHER_FEATURE] });
+      await retryOnLauncher(failed, "claude");
+      await retryTask(failed);
+      expect(posts().map(([, init]) => init?.body ?? null)).toEqual([JSON.stringify({ launcher: "claude" }), null]);
+      Object.assign(getState(), { features });
     });
 
     it("says why when the hub refuses the retry, and can be tapped again", async () => {
@@ -503,4 +525,54 @@ it("discards a feed response arriving after deletion, including its plan and car
   expect(getFeedState().plans.late).toBeUndefined();
   expect(getFeedState().taskCards[sid]).toBeUndefined();
   reset();
+});
+
+
+it("keeps an owner-dismissed plan when an older Main feed snapshot arrives", async () => {
+  const conversation = "pending-plan-race";
+  const plan: TaskPlan = { id: "pending-race", conversation, tasks: [], state: "open" };
+  let release!: (r: Response) => void;
+  vi.stubGlobal("localStorage", { getItem: () => "tok", setItem() {}, removeItem() {} });
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.includes("/dismiss")
+    ? Promise.resolve(Response.json({ plan: { ...plan, state: "dismissed" } }))
+    : new Promise<Response>((resolve) => { release = resolve; })));
+  try {
+    const reading = loadFeed(conversation);
+    await dismissPlan(plan);
+    release(Response.json({ items: [], plans: { [plan.id]: plan } }));
+    await reading;
+    expect(getFeedState().plans[plan.id]?.state).toBe("dismissed");
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+
+it("removes a pending plan after a reconnect snapshot no longer includes it", async () => {
+  const conversation = "pending-snapshot-main";
+  const plan: TaskPlan = { id: "snapshot-pending", conversation: "routine-snapshot", tasks: [], state: "open" };
+  let pending = true;
+  vi.stubGlobal("localStorage", { getItem: () => "tok", setItem() {}, removeItem() {} });
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ items: [], plans: pending ? { [plan.id]: plan } : {}, pending_plan_ids: pending ? [plan.id] : [] })));
+  try {
+    await loadFeed(conversation);
+    expect(getFeedState().plans[plan.id]?.state).toBe("open");
+    pending = false;
+    await loadFeed(conversation);
+    expect(getFeedState().plans[plan.id]).toBeUndefined();
+  } finally { vi.unstubAllGlobals(); }
+});
+
+it("clears an already-loaded side plan on the first authoritative empty Main snapshot", async () => {
+  const plan: TaskPlan = { id: "side-before-main", conversation: "side-before-main-chat", tasks: [], state: "open" };
+  vi.stubGlobal("localStorage", { getItem: () => "tok", setItem() {}, removeItem() {} });
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => Response.json(url.includes("side-before-main-chat")
+    ? { items: [], plans: { [plan.id]: plan } }
+    : { items: [], plans: {}, pending_plan_ids: [] })));
+  try {
+    await loadFeed(plan.conversation);
+    expect(getFeedState().plans[plan.id]?.state).toBe("open");
+    await loadFeed("first-empty-main-snapshot");
+    expect(getFeedState().plans[plan.id]).toBeUndefined();
+  } finally { vi.unstubAllGlobals(); }
 });

@@ -10,6 +10,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.contracts.api.*
 import kotlinx.coroutines.launch
@@ -30,13 +31,13 @@ internal fun DevicesPage(
 ) {
     val features = LocalHubFeatures.current
     val feedback = LocalAppFeedback.current
-    val context = LocalContext.current
+    val invalidBrowserLogin = stringResource(R.string.settings_browser_login_invalid)
     var loginRequest by remember { mutableStateOf<BrowserLoginRequest?>(null) }
     val scanner = androidx.activity.compose.rememberLauncherForActivityResult(com.journeyapps.barcodescanner.ScanContract()) { result ->
         result.contents?.let { value ->
             val request = browserLoginRequest(value)
             if (request != null) loginRequest = request
-            else feedback?.notice(context.getString(R.string.settings_browser_login_invalid))
+            else feedback?.notice(invalidBrowserLogin)
         }
     }
     val state by controller.state.collectAsState()
@@ -55,8 +56,9 @@ internal fun DevicesPage(
             if (connect != null && "browser_qr_login" in features) item("scan-browser") {
                 JButton(stringResource(R.string.settings_browser_login_scan), {
                     scanner.launch(com.journeyapps.barcodescanner.ScanOptions().setCaptureActivity(PairingScanActivity::class.java)
+                        .addExtra(PairingScanActivity.DisablePhoto, true)
                         .setOrientationLocked(false).setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE).setPrompt("").setBeepEnabled(false))
-                }, kind = JButtonKind.Secondary, icon = PhIcons.QrCode)
+                }, kind = JButtonKind.Secondary, icon = PersonaIcons.scanCode)
             }
             if (connect != null) item("connect") {
                 JGroupItem(GroupPosition.Single, Modifier.padding(bottom = Tokens.Space.m)) {
@@ -252,12 +254,18 @@ private fun elsewhere(tz: String): String? {
 }
 
 @Composable
-internal fun AboutSettingsPage(commit: BuildCommit? = rememberBuildCommit()) {
+internal fun AboutSettingsPage(
+    commit: BuildCommit? = rememberBuildCommit(),
+    developing: DevelopingDiagnostics? = null,
+    onExport: () -> Unit = {},
+) {
     val context = LocalContext.current
     val info = remember(context) { context.packageManager.getPackageInfo(context.packageName, 0) }
-    JGroupItem(GroupPosition.of(0, 3)) { JRow(stringResource(R.string.settings_about_version), value = info.versionName ?: stringResource(R.string.settings_not_provided)) }
-    JGroupItem(GroupPosition.of(1, 3)) { JRow(stringResource(R.string.settings_about_build), trailing = { Text("${info.longVersionCode}", style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }) }
-    JGroupItem(GroupPosition.of(2, 3)) { AboutBuildCommitRow(commit) }
+    val count = if (developing == null) 3 else 4
+    JGroupItem(GroupPosition.of(0, count)) { JRow(stringResource(R.string.settings_about_version), value = info.versionName ?: stringResource(R.string.settings_not_provided)) }
+    JGroupItem(GroupPosition.of(1, count)) { JRow(stringResource(R.string.settings_about_build), trailing = { Text("${info.longVersionCode}", style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }) }
+    JGroupItem(GroupPosition.of(2, count)) { AboutBuildCommitRow(commit) }
+    developing?.let { DevelopingPersonaAbout(it, GroupPosition.of(3, count), onExport) }
 }
 
 @Composable

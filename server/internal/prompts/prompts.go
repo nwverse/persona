@@ -8,7 +8,7 @@
 //     {{template "shared/user_rules" .}}.
 //   - The file's last newline is not part of the prompt (editors add one). A prompt that ends with a newline
 //     has an empty last line.
-//   - mcp/<scene>/<tool>.md are the MCP tools' descriptions and input schemas, read as they are (mcp.go).
+//   - mcp/<scene>/<tool>.md are the MCP tools' descriptions and input schemas, rendered with MCPData (mcp.go).
 package prompts
 
 import (
@@ -116,7 +116,8 @@ var funcs = template.FuncMap{
 	"attr": func(s string) string {
 		return strings.NewReplacer("&", "&amp;", `"`, "&quot;", "<", "&lt;", ">", "&gt;").Replace(s)
 	},
-	"join": strings.Join,
+	"join":      strings.Join,
+	"hasPrefix": strings.HasPrefix,
 	// ctx is text for inside a context block, unable to close it (ContextBody).
 	"ctx": ContextBody,
 	// output is an agent's words for inside an <agent_output> block, unable to open or close one (AgentOutput).

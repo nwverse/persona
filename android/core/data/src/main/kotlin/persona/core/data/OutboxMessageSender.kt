@@ -147,7 +147,7 @@ class OutboxMessageSender(
 
     override val outbox = store.entries.map { entries ->
         entries.filter { it.state !in hidden }.map {
-            OutboxMessage(it.clientMessageId, it.session, it.text, it.state.delivery, it.error, it.mainTarget, it.createdAt)
+            OutboxMessage(it.clientMessageId, it.session, it.text, it.state.delivery, it.error, it.mainTarget, it.createdAt, it.opId)
         }
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
@@ -211,7 +211,11 @@ class OutboxMessageSender(
         enqueue(OutboxEntry(clientMessageId, session, text, clearDraft, createdAt = now()))
 
     override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?) =
-        enqueue(OutboxEntry(clientMessageId, session, text, clearDraft, createdAt = now(), launcher = launcher, model = model))
+        send(session, text, clientMessageId, clearDraft, launcher, model, null)
+
+    override suspend fun send(
+        session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?, via: String?,
+    ) = enqueue(OutboxEntry(clientMessageId, session, text, clearDraft, createdAt = now(), launcher = launcher, model = model, via = via))
 
     override suspend fun sendApplyingSwitch(session: SessionKey, text: String, clientMessageId: String) =
         enqueue(OutboxEntry(clientMessageId, session, text, createdAt = now(), applySwitch = true))
@@ -370,9 +374,17 @@ class OutboxMessageSender(
     ) = lifecycle.withLock {
         check(job.isActive) { "Pairing scope is closed" }
         val entry = store.entries.first().firstOrNull { it.clientMessageId == id } ?: error("Message state changed")
+        val starting = delivery.state == DeliveryState.Sending && result == null
+        if (!starting && opId != null && opId != entry.operationId) return@withLock
+        if (!starting && entry.state !in awaitingReceipt) {
+            // A transcript or receipt can settle the same operation before the HTTP call returns.
+            if (entry.state in settled && result == MessageTransportResult.Accepted) publishAuthoritative(entry)
+            return@withLock
+        }
         val attempt = request(entry).copy(opId = opId ?: entry.operationId)
-        val state = OutboxState.entries.first { it.delivery == delivery.state }
-        val from = if (delivery.state == DeliveryState.Sending) setOf(OutboxState.Refused) else setOf(OutboxState.Sending)
+        val state = if (result == MessageTransportResult.Kept) OutboxState.Kept
+            else OutboxState.entries.first { it.delivery == delivery.state }
+        val from = if (starting) setOf(OutboxState.Refused) else awaitingReceipt
         // Refused again: nothing was delivered under that id either, so a later retry takes another.
         val next = when (state) {
             OutboxState.Refused -> newOperationId()
@@ -383,15 +395,18 @@ class OutboxMessageSender(
             else store.transition(id, from, state, delivery.refusal?.code)) { "Message state changed" }
         // Composer retries bypass attempt(), but their fresh operation still belongs to this same visible message.
         if (state == OutboxState.Sending) receiptState.begin(attempt, entry.mainTarget)
-        else receiptState.result(attempt, if (state in setOf(OutboxState.Sent, OutboxState.Shown))
-            MessageTransportResult.Accepted else MessageTransportResult.NoReceipt)
+        else receiptState.result(attempt, when (state) {
+            OutboxState.Kept, OutboxState.Held -> MessageTransportResult.Kept
+            OutboxState.Sent, OutboxState.Shown -> MessageTransportResult.Accepted
+            else -> MessageTransportResult.NoReceipt
+        })
         if (result == MessageTransportResult.Accepted) publishAuthoritative(entry)
     }
 
     /** Attachments need the same durably bound target before uploading machine-local files. */
-    suspend fun prepareMainConversation(): SessionKey? = processing.withLock {
+    suspend fun prepareMainConversation(via: String? = null): SessionKey? = processing.withLock {
         check(job.isActive) { "Pairing scope is closed" }
-        if (transport.readyToSend.value) (resolveMain() as? MainTarget.Found)?.session else null
+        if (transport.readyToSend.value) (resolveMain(via) as? MainTarget.Found)?.session else null
     }
 
     override suspend fun sendDraft(session: SessionKey, draft: DraftSnapshot, clientMessageId: String) = lifecycle.withLock {
@@ -404,12 +419,15 @@ class OutboxMessageSender(
         Unit
     }
 
-    override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) = lifecycle.withLock {
+    override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) =
+        sendToMain(text, clientMessageId, draft, null)
+
+    override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?, via: String?) = lifecycle.withLock {
         check(job.isActive) { "Pairing scope is closed" }
         require(text.isNotBlank() && clientMessageId.isNotBlank())
         require(draft == null || draft.scope == hubScope)
         store.enqueueDraft(OutboxEntry(clientMessageId, PendingMainConversation, text,
-            createdAt = now(), mainTarget = true), draft)
+            createdAt = now(), mainTarget = true, via = via), draft)
         if (transport.readyToSend.value) receiptState.preparing(PendingMainConversation, clientMessageId, true)
         wake.trySend(Unit)
         Unit
@@ -473,7 +491,7 @@ class OutboxMessageSender(
                 if (!MessageEcho.candidate(item) || (session to item.id) in claimed) continue
                 val entry = pending.firstOrNull { MessageEcho.carries(item, it.clientMessageId) ||
                     it.opId?.let { op -> MessageEcho.carries(item, op) } == true }
-                    ?: pending.firstOrNull { MessageEcho.arrived(it.text, it.createdAt, item) } ?: continue
+                    ?: pending.firstOrNull { it.state != OutboxState.Held && MessageEcho.arrived(it.text, it.createdAt, item) } ?: continue
                 pending.remove(entry)
                 val moved = store.transition(entry.clientMessageId, reconcilable, OutboxState.Shown)
                 // A restored Shown row is only display state; this newly observed transcript item is fresh evidence.
@@ -492,11 +510,13 @@ class OutboxMessageSender(
         // Bound the whole catch-up so unresolved entries cannot hold the sending gate forever.
         withTimeoutOrNull(reconciliationTimeoutMillis) {
             val entries = store.entries.first()
-            for (entry in entries.filter { it.state in catchUpStates }) {
-                if (entry.state in uncertain) store.transition(entry.clientMessageId, uncertain, OutboxState.Verifying)
+            // Startup and group adoption already turn interrupted sends into Unknown. A row still Sending
+            // belongs to a live POST; another message or a reconnect can wake this drain while a composer retry runs.
+            for (entry in entries.filter { it.state in catchUpStates && it.state != OutboxState.Sending }) {
+                if (entry.state in reviewable) store.transition(entry.clientMessageId, reviewable, OutboxState.Verifying)
                 val evidence = try {
                     transport.reconcile(request(entry), entry.createdAt,
-                        entries.count { it.session == entry.session && it.text == entry.text } == 1)
+                        entry.state != OutboxState.Held && entries.count { it.session == entry.session && it.text == entry.text } == 1)
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { null }
                 when (evidence) {
@@ -507,8 +527,8 @@ class OutboxMessageSender(
                     }
                     is MessageEvidence.Receipt -> {
                         // A late success can settle manual review; an unknown receipt must keep that choice visible.
-                        val from = if (evidence.result == MessageTransportResult.Accepted)
-                            uncertain + OutboxState.NeedsConfirmation else uncertain
+                        val from = if (evidence.result == MessageTransportResult.Accepted || evidence.result == MessageTransportResult.Held)
+                            reviewable + OutboxState.NeedsConfirmation else reviewable
                         settle(entry, from, evidence.result)
                     }
                     null -> store.transition(entry.clientMessageId, setOf(OutboxState.Verifying), OutboxState.Unknown)
@@ -539,7 +559,7 @@ class OutboxMessageSender(
             val allowed = if (transport.supportsClientOps) dispatchable + OutboxState.Unknown else dispatchable
             if (entry.mainTarget && entry.session == PendingMainConversation) {
                 if (entry.state !in dispatchable) continue
-                val target = when (val main = resolveMain()) {
+                val target = when (val main = resolveMain(entry.via)) {
                     is MainTarget.Found -> main.session
                     // The hub said why it cannot start (no computer, no Claude Code…): nothing was started, so the
                     // message is not queued behind it (docs/assistant/onboarding.md 4.4); the user fixes the step and retries.
@@ -679,7 +699,7 @@ class OutboxMessageSender(
 
     private fun request(entry: OutboxEntry) = MessageRequest(
         hubScope, entry.session, entry.text, entry.clientMessageId, entry.clearDraft,
-        opId = entry.operationId, launcher = entry.launcher, model = entry.model, applySwitch = entry.applySwitch,
+        opId = entry.operationId, launcher = entry.launcher, model = entry.model, applySwitch = entry.applySwitch, via = entry.via,
     )
 
     private sealed interface MainTarget {
@@ -690,12 +710,12 @@ class OutboxMessageSender(
         data class NotYet(val code: String = "main_not_ready") : MainTarget
     }
 
-    private suspend fun resolveMain(): MainTarget {
+    private suspend fun resolveMain(via: String? = null): MainTarget {
         store.mainConversation()?.let { return MainTarget.Found(it) }
         val resolver = mainResolver ?: return MainTarget.NotYet()
         return try {
             val target = resolver.findMainConversation() ?: if (store.claimMainCreation()) {
-                resolver.createMainConversation()
+                resolver.createMainConversation(via)
             } else null
             if (target != null) store.bindMainConversation(target)
             target?.let { MainTarget.Found(it) } ?: MainTarget.NotYet()
@@ -743,16 +763,16 @@ class OutboxMessageSender(
     companion object {
         /** Refusals of the start that come back by themselves (docs/assistant/onboarding.md 4.6): nothing was created. */
         private val RetryLaterCodes = setOf("node_unreachable", "assistant_offline")
-        private val uncertain = setOf(OutboxState.Sending, OutboxState.Unknown, OutboxState.Verifying)
         private val reviewable = setOf(OutboxState.Unknown, OutboxState.Verifying)
         /** Delivery unknown, with or without the review deadline passed: the user decides (confirm or discard). */
         private val undecided = reviewable + OutboxState.NeedsConfirmation
+        private val awaitingReceipt = undecided + OutboxState.Sending
         private val settled = setOf(OutboxState.Sent, OutboxState.Shown)
-        private val reconcilable = uncertain + OutboxState.Sent + OutboxState.NeedsConfirmation
+        private val reconcilable = awaitingReceipt + OutboxState.Sent + OutboxState.Held
         /** Read-only catch-up may also find late evidence for an already shown message; transcript matching may not. */
         private val catchUpStates = reconcilable + OutboxState.Shown
         private val dispatchable = setOf(OutboxState.Queued, OutboxState.WaitingForNetwork)
-        private val hidden = setOf(OutboxState.Cancelled, OutboxState.Shown)
+        private val hidden = setOf(OutboxState.Cancelled, OutboxState.Shown, OutboxState.Kept, OutboxState.Held)
         private val refusals = setOf("agent_stopped", "input_draft", "dialog_open", "codex_not_ready", "codex_first_text", "codex_waiting", "op_id_reused", "invalid", "stale_session")
         /** A message that keeps coming back waiting while the link is up goes again this often (iOS retryOutboxSoon). */
         private const val StallRetryMillis = 10_000L
@@ -763,7 +783,9 @@ class OutboxMessageSender(
         fun newOperationId(): String = java.util.UUID.randomUUID().toString()
 
         fun classify(result: MessageTransportResult): OutboxState = when (result) {
+            MessageTransportResult.Held -> OutboxState.Held
             MessageTransportResult.Accepted -> OutboxState.Sent
+            MessageTransportResult.Kept -> OutboxState.Kept
             MessageTransportResult.NotSent -> OutboxState.WaitingForNetwork
             MessageTransportResult.NoReceipt -> OutboxState.Unknown
             is MessageTransportResult.HubError -> when {

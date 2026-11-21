@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 
 enum class DeliveryState {
     Sending, WaitingForNetwork, Sent, Rejected, NeedsConfirmation,
-    Queued, Unknown, Refused, Verifying,
+    Queued, Unknown, Refused, Verifying, Held,
 }
 
 data class OutboxMessage(
@@ -18,6 +18,8 @@ data class OutboxMessage(
     val mainTarget: Boolean = false,
     /** When this phone wrote it, epoch millis. Absent on an outbox restored from before that was stored. */
     val createdAt: Long? = null,
+    /** The active attempt's wire id after the manager explicitly refused an earlier attempt. */
+    val opId: String? = null,
 )
 
 private val NoWrittenAt = MutableStateFlow(emptyMap<String, Long>())
@@ -34,6 +36,15 @@ interface MessageSender : MessageSendReceiptSource {
     ) {
         require(launcher == null && model == null) { "Launcher/model overrides are not supported" }
         send(session, text, clientMessageId, clearDraft)
+    }
+
+    /** A marked send must be implemented explicitly; an old sender must never silently drop its provenance. */
+    suspend fun send(
+        session: SessionKey, text: String, clientMessageId: String, clearDraft: String?,
+        launcher: String?, model: String?, via: String?,
+    ) {
+        require(via == null) { "Message provenance is not supported" }
+        send(session, text, clientMessageId, clearDraft, launcher, model)
     }
     /**
      * [send] for the user's own message from a chat whose session shows a launcher switch waiting

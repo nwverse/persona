@@ -20,5 +20,20 @@
   "problem_rejected": "网关不认这把 Key，请到管理界面 → 用量来源更新。显示的是上次的数字",
   "problem_failed": "读网关出错，显示的是上次的数字",
   "problem_error": "网关读这个账号失败，显示的是它存着的数字",
-  "window_model_label": "{name} {window}（{model}）：{percent}已用"
+  "window_model_label": "{name} {window}（{model}）：{percent}已用",
+  "not_connected": "未接额度数据",
+  "connect_action": "让助手接入",
+  "connect_hint_claude": "还没读到 Claude Code 的额度，可以让助手帮你接上",
+  "connect_hint_pending": "还没读到 {name} 的额度，可以让助手帮你看看原因",
+  "connect_hint_other": "Persona 暂时不能直接读这家服务商的额度；如果你用的中转站提供用量，可以让助手帮你接上",
+  "connect_prompt_claude": "请帮我把本机 Claude Code（{id}）的额度显示接入到 Persona 左下角的订阅额度栏：检查我当前的 Claude 配置，如果是官方订阅就帮我配置 statusLine 包装脚本写入 Persona 数据目录的 usage/claude.json（保留原有 statusLine）；如果走的是中转网关，帮我看看怎么接入用量来源或配额扩展。",
+  "connect_prompt_agy": "本机 Antigravity（{id}）的额度没有显示在 Persona 左下角的订阅额度栏。Persona 通过 Antigravity 的本地服务读取额度，请帮我查一下为什么没读到（比如 Antigravity 有没有登录、Persona 的 Antigravity 伴随进程有没有在运行、这台电脑上的 Persona 版本是否太旧），并帮我修好。",
+  "connect_prompt_other": "请帮我把供应商「{name}」（启动器 {id}）的额度显示接入到 Persona 左下角的订阅额度栏，检查它的网关是否支持接入用量来源或对应的配额扩展。",
+  "balance_label": "预付余额",
+  "balance_unavailable": "余额无法读取",
+  "balance_rejected": "DeepSeek 不认这把 Key，请到设置 → 模型供应商更新",
+  "balance_unreachable": "暂时连不上 DeepSeek",
+  "balance_unreachable_kept": "暂时连不上 DeepSeek，显示的是上次的余额",
+  "balance_failed": "读取余额失败",
+  "balance_failed_kept": "读取余额失败，显示的是上次的金额"
 }

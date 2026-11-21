@@ -12,15 +12,36 @@ nonisolated struct LauncherModelChoice: Equatable {
     var configured = ""
     /// How Default's line names [configured]: Model Settings (New Agent), Inherited (Model Settings itself, where empty inherits).
     var configuredLabel = String(localized: "Model Settings [Launcher Model Picker 8cbcf7]")
+    /// An Agent preset explicitly chose the list's default model: send its id instead of following Model Settings.
+    var presetDefault = false
+    /// The launcher New Agent will actually start. A shared settings picker leaves this nil.
+    var startLauncher: Launcher? = nil
+    var startsInHerdr = false
 
-    /// A pick can reach the agent: the launcher does not pass its own --model, and there is a list to pick from or an ID
-    /// can be typed (Claude Code, Codex: their list may be empty).
-    var canPick: Bool { list.locked == nil && (!list.models.isEmpty || takesTyped) }
+    private var supportsTyping: Bool {
+        if let launcher = startLauncher, launcher.startsOmp || launcher.runtimeAgent == "omp" { return launcher.startsOmp }
+        return LauncherModels.takesTypedModel(agent: list.agent)
+    }
+    /// Only the native launcher in herdr can apply an omp start model, even when a different host's catalog has rows.
+    var startAllowsModel: Bool {
+        guard startLauncher?.startsOmp == true else { return true } // other runtimes keep their advertised lists
+        return startsInHerdr && list.supportsStartModel == true && list.locked == nil
+    }
+    private var offersModels: Bool { startAllowsModel && (!list.models.isEmpty || supportsTyping) }
+    /// A pick can reach the agent even when the list is empty if the launcher accepts a typed ID.
+    var canPick: Bool { list.locked == nil && offersModels }
     /// An ID the list doesn't have can be typed in: "Other Model…" (#1644).
-    var takesTyped: Bool { list.takesTypedModel }
+    var takesTyped: Bool { canPick && supportsTyping }
+    var typedStartNote: String {
+        startLauncher?.startsOmp == true ? String(localized: "Not in the list; this start uses the ID as typed")
+            : String(localized: "Used for this start only. Once it runs, it's listed under Typed Before.")
+    }
     /// New Agent shows the locked row: the launcher passes its own --model where a model could otherwise be picked
-    /// or typed (an empty Claude Code / Codex list too; `takesTyped` is off once it is locked).
-    var showsLocked: Bool { list.locked != nil && (!list.models.isEmpty || LauncherModels.takesTypedModel(agent: list.agent)) }
+    /// or typed, even when the list is empty.
+    var showsLocked: Bool {
+        guard list.locked != nil else { return false }
+        return startLauncher?.startsOmp == true ? startsInHerdr : offersModels
+    }
     /// The model the agent runs when it is given none.
     var defaultModel: AgentModel? { list.models.first(where: \.isDefault) }
     /// What can be picked besides the default: the agent's own models, then the IDs typed before.
@@ -30,9 +51,10 @@ nonisolated struct LauncherModelChoice: Equatable {
     var selected: AgentModel? { picked.isEmpty ? nil : list.models.first { $0.id == picked } }
 
     /// The `model` a start sends: nil for the default; a typed ID the list lacks goes as it is when the agent takes one.
+    /// `presetDefault` keeps a preset's explicit choice of the default entry explicit too.
     var sent: String? {
-        guard list.locked == nil, !picked.isEmpty else { return nil }
-        if let m = selected { return m.isDefault ? nil : picked }
+        guard canPick, !picked.isEmpty else { return nil }
+        if let m = selected { return m.isDefault && !presetDefault ? nil : picked }
         return takesTyped && ModelID.isValid(picked) ? picked : nil
     }
 
@@ -112,6 +134,12 @@ extension AgentModel {
     }
 }
 
+/// A model row names its launcher without dropping the ID, resolved model or typed-model explanation.
+nonisolated func launcherModelRowDetail(owner: String?, detail: String?) -> String? {
+    let parts = [owner, detail].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    return parts.isEmpty ? nil : parts.joined(separator: " · ")
+}
+
 /// The list behind New Agent's Model row: Default first, then every model the launcher's agent offers, the IDs typed
 /// before (each can be forgotten), and "Other Model…" for one the list doesn't have (#1644); searchable.
 struct LauncherModelPicker: View {
@@ -119,6 +147,8 @@ struct LauncherModelPicker: View {
     @Binding var picked: String
     /// Asks the CLI again (pull to refresh).
     var refresh: () async -> Void
+    /// New Agent's owning launcher, repeated on every row; Model Settings leaves this nil.
+    var owner: String? = nil
     /// Model Settings: an id the list does not have can be used (what is typed), and the current one stays shown.
     var allowsCustom = false
     /// New Agent: "Other Model…" opens a field for a model ID (`TypedModelSheet`), and a typed pick stays shown.
@@ -214,7 +244,7 @@ struct LauncherModelPicker: View {
             picked = id
             dismiss()
         }) {
-            TypedModelSheet(initial: choice.unlisted ?? "", note: String(localized: "Used for this start only. Once it runs, it's listed under Typed Before.")) { id in
+            TypedModelSheet(initial: choice.unlisted ?? "", note: choice.typedStartNote) { id in
                 typedPick = id
             }
         }
@@ -222,17 +252,18 @@ struct LauncherModelPicker: View {
 
     /// `mono`: a model ID typed by hand, drawn as the field and the other lists draw one.
     private func row(title: String, detail: String?, description: String?, id: String, mono: Bool = false) -> some View {
-        Button {
+        let second = launcherModelRowDetail(owner: owner, detail: detail)
+        return Button {
             picked = id
             Haptics.tap()
             dismiss()
         } label: {
             HStack(spacing: Theme.Space.m) {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(title).font(mono ? Theme.Font.heading.monospaced() : Theme.Font.heading).foregroundStyle(.primary)
+                    Text(title).font(mono ? Theme.Font.heading.monospaced() : Theme.Font.heading).foregroundStyle(Color.primary)
                         .lineLimit(1).truncationMode(mono ? .middle : .tail)
-                    if let detail {
-                        Text(detail).font(Theme.Font.label.monospaced()).foregroundStyle(.secondary)
+                    if let second {
+                        Text(second).font(Theme.Font.label.monospaced()).foregroundStyle(Color.secondary)
                             .lineLimit(1).truncationMode(.middle)
                     }
                     if let description, !description.isEmpty {
@@ -334,7 +365,7 @@ struct TypedModelSheet: View {
                                 dismiss()
                             } label: {
                                 HStack(spacing: Theme.Space.m) {
-                                    Text(m.displayName).font(Theme.Font.body.monospaced()).foregroundStyle(.primary).lineLimit(1).truncationMode(.middle)
+                                    Text(m.displayName).font(Theme.Font.body.monospaced()).foregroundStyle(Color.primary).lineLimit(1).truncationMode(.middle)
                                     Spacer(minLength: Theme.Space.s)
                                     if m.id == id { ThemedIcon(Theme.Icon.done).foregroundStyle(Theme.accent).fontWeight(.semibold) }
                                 }

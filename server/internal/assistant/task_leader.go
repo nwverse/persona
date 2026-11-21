@@ -61,7 +61,11 @@ func (t PlanTask) linkSource() (source, via string) {
 // linkPlanAgent links the agent just started for plan task t to its todo.
 func (s *Service) linkPlanAgent(ctx context.Context, t PlanTask, mid, sid string, allowDone bool) error {
 	source, via := t.linkSource()
-	return s.linkTodoAgentWithSourceAllowingDone(ctx, t.TodoID, mid, sid, t.Title, t.Cwd, "", "", source, via, allowDone)
+	err := s.linkTodoAgentWithSourceAllowingDone(ctx, t.TodoID, mid, sid, t.Title, t.Cwd, t.startedAgent, "", source, via, allowDone)
+	if err == nil && !allowDone {
+		s.estimateAdmitted(ctx, t, mid, sid)
+	}
+	return err
 }
 
 // leaderTask is the open task agent machine/session leads, with the agent's own row; false for any other agent.
@@ -211,7 +215,7 @@ func (s *Service) runtimeLeaderTools(ctx context.Context, machine, session strin
 			return nil
 		}
 	}
-	return leaderToolList()
+	return localizedMCPTools(leaderToolList(), s.toolLanguage(ctx))
 }
 
 // leaderTools are the tools only a task leader's agent gets, on top of any agent's: none for any other agent.
@@ -220,7 +224,7 @@ func (s *Service) leaderTools(ctx context.Context, machine, session string) []pr
 		return nil
 	}
 	if _, _, ok := s.leaderTask(ctx, machine, session); ok {
-		return leaderToolList()
+		return localizedMCPTools(leaderToolList(), s.toolLanguage(ctx))
 	}
 	if revision, _ := ctx.Value(revisionDiscoveryKey{}).(bool); revision {
 		return nil // a revision-aware peer recovers through its cursor, never through the legacy startup wait
@@ -237,7 +241,7 @@ func (s *Service) leaderTools(ctx context.Context, machine, session string) []pr
 		case <-time.After(100 * time.Millisecond):
 		}
 		if _, _, ok := s.leaderTask(ctx, machine, session); ok {
-			return leaderToolList()
+			return localizedMCPTools(leaderToolList(), s.toolLanguage(ctx))
 		}
 	}
 	return nil
@@ -267,11 +271,12 @@ type leaderScope struct {
 	agent TodoAgent
 }
 
-// leaderTaskIn is a worker task as a task leader may plan it: nothing else (no todo_id, role, attachments, project,
-// user_requested…) is read, an unknown field is refused.
+// leaderTaskIn is a worker task as a task leader may plan it: nothing else (no todo_id, attachments, project,
+// user_requested…) is read, an unknown field is refused. Every new worker declares role "worker".
 type leaderTaskIn struct {
 	Title         string   `json:"title"`
 	Prompt        string   `json:"prompt"`
+	Role          string   `json:"role"`
 	Machine       string   `json:"machine"`
 	MachinePolicy string   `json:"machine_policy"`
 	Cwd           string   `json:"cwd"`
@@ -279,6 +284,7 @@ type leaderTaskIn struct {
 	Model         string   `json:"model"`
 	Tier          string   `json:"tier"`
 	Effort        string   `json:"effort"`
+	Speed         string   `json:"speed"`
 	Permission    string   `json:"permission"`
 	Readonly      bool     `json:"readonly"`
 	DoneWhen      []string `json:"done_when"`
@@ -295,13 +301,13 @@ func (l *leaderScope) workerTasks(args json.RawMessage) ([]PlanTask, error) {
 	dec := json.NewDecoder(bytes.NewReader(args))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
-		return nil, fmt.Errorf("a task leader's task_plan takes only the fields its schema lists; todo_id, role, attachments and "+
+		return nil, fmt.Errorf("a task leader's task_plan takes only the fields its schema lists; todo_id, attachments and "+
 			"any other are refused, and workers can only be new tasks beneath your own task (%v)", err)
 	}
 	out := make([]PlanTask, 0, len(in.Tasks))
 	for _, t := range in.Tasks {
-		pt := PlanTask{Title: t.Title, Prompt: t.Prompt, Machine: t.Machine, MachinePolicy: t.MachinePolicy, Cwd: t.Cwd,
-			Launcher: t.Launcher, Model: t.Model, Tier: t.Tier, Effort: t.Effort, Permission: t.Permission, Readonly: t.Readonly,
+		pt := PlanTask{Title: t.Title, Prompt: t.Prompt, Role: t.Role, Machine: t.Machine, MachinePolicy: t.MachinePolicy, Cwd: t.Cwd,
+			Launcher: t.Launcher, Model: t.Model, Tier: t.Tier, Effort: t.Effort, Speed: t.Speed, Permission: t.Permission, Readonly: t.Readonly,
 			DoneWhen: t.DoneWhen, Goal: t.Goal, ExpectMinutes: t.ExpectMinutes, Why: t.Why, Parent: l.task.ID, Project: l.task.Project}
 		if strings.TrimSpace(pt.Machine) == "" {
 			pt.Machine = l.agent.MachineID
@@ -513,6 +519,7 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 	}
 	s.logf("supervise: %d signal(s) to task leader %s", len(entries), short(lead.SessionID))
 	s.parkedDueTold(ctx, kept)
+	s.estimateDueTold(ctx, kept)
 	s.turnsTold(ctx, kept) // how a turn ended is told once, to a leader too (task_turns.go)
 	return true
 }
@@ -532,14 +539,15 @@ func (e leaderEscalated) Error() string { return e.err.Error() }
 func (e leaderEscalated) Unwrap() error { return e.err }
 
 // sendToLeader sends text, the supervision message for signals kept, into the leader agent's session. It states no
-// permission-mode class for the words (#9607): the assistant cannot bind a worker's report to the mode the worker wrote
-// it in, so a bypass leader outside Persona's terminals holds it for approval at its computer.
+// permission-mode class without evidence captured by the source node when the words were written. A digest
+// with missing or mixed classes states none; queued retries reuse the same immutable evidence.
 // A send the node refuses because the agent has stopped (agent_stopped: read-only until the user's Resume, node
 // stopped.go) goes the same way at once (#8518): another digest would only be refused again. So does a send the node
 // says may have arrived (delivered unknown or yes: a Claude's inbox read it but its session was not seen taking it, or
 // typing failed part way), as an unconfirmed one (#9607): the next digest must not pile another copy on it, and it is not
 // told either. A retry the leader takes calls delivered, which tells them then. Other failures are retried by the next digest.
 func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string, kept []superviseSignal, delivered func(context.Context)) error {
+	ctx = supervisionSourceContext(ctx, kept)
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
 	defer cancel()
 	if err := s.call(sctx, lead.MachineID, DeviceSessionSend, sendParams(lead.SessionID, text, false), nil); err != nil {
@@ -563,7 +571,7 @@ func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string,
 func (s *Service) resumeLeaderForSupervision(lead TodoAgent, text string, kept []superviseSignal, completed func(context.Context, error), delivered func(context.Context)) {
 	go func() {
 		ctx := context.Background()
-		err := s.sendToLeaderNow(ctx, lead, text)
+		err := s.sendToLeaderNow(ctx, lead, text, kept)
 		completed(ctx, err)
 		if err != nil {
 			s.logf("task leader %s: resume: %v", short(lead.SessionID), err)
@@ -578,13 +586,15 @@ func (s *Service) leaderDelivered(ctx context.Context, lead TodoAgent, entries [
 		s.logf("supervise: task leader %s took the message; deduplication not recorded: %v", short(lead.SessionID), err)
 	}
 	s.parkedDueTold(ctx, kept)
+	s.estimateDueTold(ctx, kept)
 	s.turnsTold(ctx, kept)
 	s.logf("supervise: %d signal(s) to task leader %s after confirmation", len(kept), short(lead.SessionID))
 }
 
 // sendToLeaderNow is one attempt to put text into the leader's session, resuming it if closed; it waits up to
 // leaderResumeTime. Each attempt has its own time, so it can be called from a goroutine that outlives any request.
-func (s *Service) sendToLeaderNow(ctx context.Context, lead TodoAgent, text string) error {
+func (s *Service) sendToLeaderNow(ctx context.Context, lead TodoAgent, text string, kept []superviseSignal) error {
+	ctx = supervisionSourceContext(ctx, kept)
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.leaderResumeTime())
 	defer cancel()
 	return s.call(sctx, lead.MachineID, DeviceSessionSend, sendParams(lead.SessionID, text, false), nil)
@@ -617,7 +627,7 @@ func (s *Service) escalateLeaderMessage(lead TodoAgent, kept []superviseSignal, 
 				return // the leader's task is closed: its workers were rehomed, nobody is left to tell
 			}
 			s.logf("task leader %s: trying the undelivered supervision message again", short(lead.SessionID))
-			if err := s.sendToLeaderNow(ctx, lead, text); err == nil {
+			if err := s.sendToLeaderNow(ctx, lead, text, kept); err == nil {
 				if delivered != nil {
 					delivered(ctx)
 				}
@@ -735,7 +745,7 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
-	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigOrphaned} {
+	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigOrphaned, sigEstimateDue} {
 		delete(b.pending, t.ID+"|"+k) // reviewed: what waited is answered
 	}
 	b.mu.Unlock()

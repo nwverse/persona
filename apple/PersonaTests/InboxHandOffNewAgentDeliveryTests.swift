@@ -53,8 +53,15 @@ struct InboxHandOffNewAgentDeliveryTests {
         return model
     }
 
-    private func app(_ hub: FakeHub) -> AppModel {
+    /// A model whose requests go to `hub`. `paired`: `hub` is also its hub-level group, with no socket, as in the other
+    /// `refreshAssistant` tests, so the Persona page is `hub`'s default assistant and what `refreshAssistant` reads lands
+    /// (`showsPage(of:)`), whether the simulator restored another pairing or none (#10987).
+    private func app(_ hub: FakeHub, paired: Bool = false) -> AppModel {
         let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString))
+        if paired {
+            model.linkHooksForTests = (transport: hub.client.transport!, socket: { SyncSocket() })
+            model.connectOnly(.demo)
+        }
         model.forgetRestoredForTests()
         model.apiForTests = hub.client
         model.linksUpForTests = true
@@ -191,6 +198,77 @@ struct InboxHandOffNewAgentDeliveryTests {
         #expect(requests.count == 2)
         #expect(Set(requests.map { ($0.headers[OpRetry.header] ?? "").lowercased() }).count == 2,
                 "a refused message retries under a new id, while the hand-off record keeps its prepared client id")
+    }
+
+    @Test func olderHubMessageOverridesSurviveRetryAndClearWithoutChangingAssistantConfig() async throws {
+        // Reading the assistant can make its main conversation the current one, which is kept for the next launch.
+        let savedCurrent = UserDefaults.standard.object(forKey: "assistant.current")
+        defer { UserDefaults.standard.set(savedCurrent, forKey: "assistant.current") }
+        let hub = FakeHub(), path = "/api/v1/sessions/m/\(key.sessionID)/messages"
+        var attempts = 0
+        hub.on("POST", path) { _ in
+            attempts += 1
+            if attempts == 2 {
+                throw APIError(status: 409, message: "Finish the draft first",
+                               fields: ["code": "input_draft", "delivered": "none"])
+            }
+            return Data(#"{"ok":true}"#.utf8)
+        }
+        hub.on("GET", "/api/v1/assistant", json: """
+        {"machine_id":"m","launcher":"saved-launcher","cwd":"/tmp/p","main":"\(key.sessionID)",
+         "timezone_picked":true,"conversations":[]}
+        """)
+        let app = app(hub, paired: true)
+        defer {
+            app.outboxRetry.values.forEach { $0.cancel() }
+            for link in app.links { link.live.disconnect() }
+        }
+        await app.refreshAssistant()
+        let savedLauncher = app.assistantConfig?.launcher
+        #expect(savedLauncher == "saved-launcher", "the settings are this test's hub's, not a hub the simulator kept")
+        app.assistantLaunchers[key] = "team-api"
+        app.assistantModels[key] = "claude-sonnet-5-5"
+
+        let first = PendingMessage(text: "first", images: []), second = PendingMessage(text: "second", images: [])
+        app.chat(key).pending = [first]
+        app.settleSend(key, first.id, await app.sendPending(key, first))
+        app.chat(key).pending.append(second)
+        app.settleSend(key, second.id, await app.sendPending(key, second))
+        let refused = try #require(app.chat(key).pending.first { $0.id == second.id })
+        #expect(refused.state == .failed)
+
+        app.retry(key, refused)
+        try await waitForRefreshTest {
+            let retry = app.chat(key).pending.first { $0.text == "second" }
+            return retry?.state == .waiting && retry?.id != second.id
+        }
+        app.flushOutbox()
+        try await waitForRefreshTest {
+            app.flushingOutbox.isEmpty && hub.sent("POST", path).count == 3 &&
+                app.chat(key).pending.first { $0.text == "second" }?.state == .sent
+        }
+
+        // AssistantTopBar.pickDefault: later messages inherit Settings > Assistant again.
+        app.assistantLaunchers[key] = nil
+        app.assistantModels[key] = nil
+        let third = PendingMessage(text: "default", images: [])
+        app.chat(key).pending.append(third)
+        app.settleSend(key, third.id, await app.sendPending(key, third))
+
+        let requests = hub.sent("POST", path)
+        #expect(requests.count == 4)
+        for request in requests.prefix(3) {
+            let body = try #require(request.body)
+            let fields = try JSONDecoder().decode([String: String].self, from: body)
+            #expect(fields["launcher"] == "team-api")
+            #expect(fields["model"] == "claude-sonnet-5-5")
+        }
+        let defaultBody = try #require(requests.last?.body)
+        let defaultFields = try JSONDecoder().decode([String: String].self, from: defaultBody)
+        #expect(defaultFields["text"] == "default")
+        #expect(defaultFields["launcher"] == nil && defaultFields["model"] == nil)
+        #expect(app.assistantConfig?.launcher == savedLauncher,
+                "default changed from \(savedLauncher ?? "nil") to \(app.assistantConfig?.launcher ?? "nil")")
     }
 
     @Test func failedDeliveryDoesNotRecord() async throws {

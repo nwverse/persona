@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -43,10 +44,26 @@ type briefBody struct {
 	// Progress are the tasks being worked on, the longest running first (at most 8); stage is plan / develop / review / merge / deploy / verify, "" when not known.
 	Progress      []briefBodyProgress `json:"progress"`
 	ProgressTotal int                 `json:"progress_total"`
+	// Directions and DisabledRoutines are the deterministic per-direction facts, already folded as the card is.
+	// Older clients ignore them. Notice is the first line of a model-failure fallback item, already localized.
+	Directions       []prompts.BriefDirection       `json:"directions,omitempty"`
+	DisabledRoutines []prompts.BriefDisabledRoutine `json:"disabled_routines,omitempty"`
+	Notice           string                         `json:"notice,omitempty"`
 	// Setup is the recommended-setup block (setup_suggest.go): which mechanism that is off would have removed how many
 	// of the last 7 days' asks or background rounds. Only on the first briefing of a week, and only when it names
 	// something; left out otherwise (a client that does not draw it skips it).
 	Setup []setupSuggestion `json:"setup,omitempty"`
+	// PRFollowups are closed to-dos whose own delivery PRs are still open and have been silent for a while, oldest
+	// first. They never reopen a to-do; older clients ignore the field.
+	PRFollowups []briefBodyPRFollowup `json:"pr_followups,omitempty"`
+}
+
+// briefBodyPRFollowup is one stale post-closure PR subscription as the briefing shows it.
+type briefBodyPRFollowup struct {
+	TodoID string `json:"todo_id"`
+	Title  string `json:"title"`
+	PRURL  string `json:"pr_url"`
+	State  string `json:"state,omitempty"`
 }
 
 // briefBodyNorthStar is a `brief` item's north star: the lines as the report says them, and today's and yesterday's
@@ -102,7 +119,8 @@ type briefBodyProgress struct {
 // body is the facts as a `brief` item's body.
 func (f *briefFacts) body(s *Service, title string) briefBody {
 	b := briefBody{Confirmations: f.Confirmations, Title: title, At: f.At, Hours: int(briefWindow / time.Hour), WaitingUnknown: f.WaitingUnknown, DoneTotal: f.DoneTotal,
-		Failed: f.Failed, FailedTotal: f.FailedTotal, Waiting: []briefBodyRow{}, Done: []briefBodyDone{}, Accept: []briefBodyRow{}, ProgressTotal: f.ProgressTotal, Progress: []briefBodyProgress{}}
+		Failed: f.Failed, FailedTotal: f.FailedTotal, Waiting: []briefBodyRow{}, Done: []briefBodyDone{}, Accept: []briefBodyRow{}, ProgressTotal: f.ProgressTotal, Progress: []briefBodyProgress{},
+		Directions: f.Directions, DisabledRoutines: f.DisabledRoutines}
 	if b.Failed == nil {
 		b.Failed = []todayFailed{}
 	}
@@ -148,6 +166,17 @@ func (f *briefFacts) body(s *Service, title string) briefBody {
 	for _, p := range f.Progress {
 		b.Progress = append(b.Progress, briefBodyProgress{ID: p.ID, Title: p.Title, Stage: p.Stage, StageKind: p.StageKind})
 	}
+	briefCtx, briefCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	for _, fup := range s.stalePRFollowups(briefCtx, f.At) {
+		title := fup.TodoID
+		if t, ok := s.todoNow(fup.TodoID); ok {
+			title = t.Title
+		}
+		b.PRFollowups = append(b.PRFollowups, briefBodyPRFollowup{
+			TodoID: fup.TodoID, Title: title, PRURL: fup.PRURL, State: fup.State,
+		})
+	}
+	briefCancel()
 	return b
 }
 
@@ -184,9 +213,10 @@ func (s *Service) briefRoutes() {
 
 	// POST /api/v1/todos/{id}/accept {"asked_at"}: the Accept button of a `brief` item. It verifies the task when asked_at is
 	// the round that waits now; a button of an earlier round, or a task already verified, is 409. A decision whose
-	// recommendation could not be sent to the task's agent is 502 (423 with the node's code when the node refused it, such
-	// as dialog_open, #7343), and asks that cannot be read or an acceptance that
-	// cannot be saved is 503; either way nothing was taken (conclusion.go, errAcceptStore). A decision also takes
+	// recommendation could not be sent to the task's agent is 502 accept_not_taken (423 with the node's code when the node
+	// refused it, such as dialog_open, #7343), and asks that cannot be read or an acceptance that
+	// cannot be saved is 503; either way nothing was taken (conclusion.go, errAcceptStore). A send whose answer may have
+	// reached the agent, or did before what followed failed, is 502 send_in_doubt (todo_write_outcome.go). A decision also takes
 	// {"option"}: the label of the option chosen (the recommended one is what the plain press takes; no such option is
 	// 400), or {"response"}: decide_yourself, not_what_i_asked or explain_first, which takes nothing and goes to the
 	// task's supervisor (decision.go; any other value is 400).
@@ -196,17 +226,27 @@ func (s *Service) briefRoutes() {
 			return
 		}
 		var in struct {
-			AskedAt  string `json:"asked_at"`
-			Option   string `json:"option"`
-			Response string `json:"response"`
+			AskedAt  string            `json:"asked_at"`
+			Option   string            `json:"option"`
+			Response string            `json:"response"`
+			Answers  map[string]string `json:"answers"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.AskedAt == "" {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in); err != nil || in.AskedAt == "" {
 			apierr.Write(w, http.StatusBadRequest, errors.New("asked_at is required"))
 			return
 		}
 		var result acceptResult
 		var err error
 		switch {
+		case isAskTodo(r.PathValue("id")):
+			if in.Response != "" {
+				apierr.Write(w, http.StatusBadRequest, errDecisionOption)
+				return
+			}
+			result, err = s.chooseExpiredQuestion(r.Context(), r.PathValue("id"), in.AskedAt, in.Option, in.Answers)
+		case in.Answers != nil:
+			apierr.Write(w, http.StatusBadRequest, errDecisionOption)
+			return
 		case in.Response != "" && in.Option != "":
 			apierr.Write(w, http.StatusBadRequest, errors.New("give option or response, not both"))
 			return
@@ -229,6 +269,13 @@ func (s *Service) briefRoutes() {
 			apierr.Write(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
 			return
 		}
+		if delivered := writeDelivered(err); err != nil && delivered != "none" {
+			// The words may be with the Agent already, or are (todo_write_outcome.go): a failure every app shows, never
+			// "nothing was changed", so the owner looks before taking it again. The button works again (the round still
+			// waits), as for any 502.
+			writeInDoubt(w, http.StatusBadGateway, err, delivered, answerInDoubtKeys)
+			return
+		}
 		if nodeRefusal(err) {
 			// The node refused with a code it words itself (a dialog open in the terminal, a draft in its input box):
 			// that code and the node's details, so the app can say what to do first instead of "try again later".
@@ -236,12 +283,12 @@ func (s *Service) briefRoutes() {
 			// (apierr.Call): on this route the apps already installed (iOS, Android, older web pages) read any 409 as
 			// "this round is over" and lock the button, though nothing reached the agent. 423 Locked (the terminal is
 			// held by the dialog) is a failure to every one of them, which shows the hub's sentence and keeps the button.
-			apierr.CallStatus(w, http.StatusLocked, err)
+			writeNodeRefusal(w, err)
 			return
 		}
-		if err != nil { // another delivery failure: nothing taken, the button works again
+		if err != nil { // another delivery failure: nothing typed or taken, the button works again
 			// In the request's language, the reason too when the hub words it (an offline computer, no agent).
-			apierr.WriteCode(w, http.StatusBadGateway, "accept_not_taken", i18n.Err("assistant-reports.accept_not_taken",
+			writeTypedNothing(w, http.StatusBadGateway, "accept_not_taken", i18n.Err("assistant-reports.accept_not_taken",
 				i18n.Args{"error": clip(oneLine(i18n.Localize(err, s.requestCtxLang(r.Context()))), 120)}))
 			return
 		}

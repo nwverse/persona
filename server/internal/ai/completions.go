@@ -39,10 +39,11 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 		if err != nil {
 			return Reply{}, false, err
 		}
+		c.setCustomHeaders(req)
 		req.Header.Set("content-type", "application/json")
 		req.Header.Set("accept", "text/event-stream")
 		req.Header.Set("authorization", "Bearer "+key)
-		c.setUserAgent(req)
+		c.setGatewayHeaders(ctx, req, r)
 		resp, err := hc.Do(req)
 		if err != nil {
 			return Reply{}, false, fmt.Errorf("ai: %w", err)
@@ -53,7 +54,7 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 			// Recognized machine codes always win over compatibility wording: a limit or a model/context/endpoint
 			// failure must never trigger a modified request, even when its message names a rejected field.
 			if HasRecognizedErrorCode(raw) {
-				return Reply{}, false, newHTTPError(resp, raw)
+				return Reply{}, false, c.newHTTPError(resp, raw, key)
 			}
 			// Some models reject max_tokens and explicitly ask for the newer name, and strict compatible servers
 			// reject stream_options or reasoning_effort. Each such response leads to a modified request, not a replay
@@ -79,7 +80,7 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 				delete(body, "stream_options")
 				continue
 			}
-			return Reply{}, false, newHTTPError(resp, raw)
+			return Reply{}, false, c.newHTTPError(resp, raw, key)
 		}
 		reply, err := readCompletions(resp.Body)
 		resp.Body.Close()
@@ -118,7 +119,7 @@ type chatEffortCache struct {
 var processChatEffortCache chatEffortCache
 
 func chatEffortCacheKey(baseURL, key, model, viaMachine string) string {
-	return gateKey(baseURL, key) + "\x00" + viaMachine + "\x00" + model
+	return gateKeyFor("chat", baseURL, key) + "\x00" + viaMachine + "\x00" + model
 }
 
 // omitChatEffort says whether this connection/model already rejected the requested form of effort recently.

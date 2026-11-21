@@ -51,6 +51,20 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		return err
 	}
 	defer unlock()
+	return n.sendLocked(ctx, id, text, images, opts)
+}
+
+// sendLocked sends to the agent with its input lock held.
+func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.Image, opts sendOpts) error {
+	if opts.WaitForEffort {
+		if change := n.switches().effortChange(id); change.target != "" {
+			if n.effortPaneStillLive(ctx, id, change.pane) {
+				return change.refusal()
+			}
+			n.switches().setEffortChange(id, effortChange{})
+			n.notifySessionsSoon()
+		}
+	}
 	selectionText := text
 	if opts.SwitchNow {
 		// The assistant's agent_switch (#5973): the switch it picked goes with this message now, or nothing does
@@ -90,7 +104,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		ctx = n.withResumeHost(ctx, id)
 	}
 	if err != nil && (n.codexPath(id) != "" || n.traexPath(id) != "") {
-		return n.stoppedRefusal(id) // a stopped Codex or TRAEX takes no messages (stopped.go, #4754)
+		return n.stoppedRefusal(id) // a stopped Codex or TRAE CLI takes no messages (stopped.go, #4754)
 	}
 	kind := "claude"
 	if err == nil {
@@ -119,6 +133,11 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		}
 		if kind == "claude" && ps != nil && ps.Agent == "" {
 			n.leaveLimitQuestion(ctx, id, pane) // the switch moves it off its usage limit: Claude Code's question about it goes
+		}
+		if kind == "claude" && host.ParsePane(pane).Kind == host.Tmux && ownerDeliveryOf(ctx) != nil {
+			// An outside Claude's unseen dialog must never take the owner's go-ahead: unlike an ordinary pane's legacy
+			// best-effort read, this route may type only after a successful screen read (#5965).
+			opts.readBox = true
 		}
 		if err := n.checkPaneFor(ctx, pane, kind, opts); err != nil { // sendsafe.go
 			if opts.SwitchNow {
@@ -170,7 +189,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 			return n.stoppedRefusal(id)
 		}
 		r := n.resumeWith(id, opts)
-		s, err := n.start(ctx, r.cwd, r.launcher, "", id, "", r.mode, r.effort, r.tab, "", "", r.execution)
+		s, err := n.start(ctx, r.cwd, r.launcher, "", id, r.workspaceID, r.mode, r.effort, r.tab, "", "", r.execution)
 		if err != nil {
 			return err
 		}
@@ -249,7 +268,15 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		n.typing.typed(pane, text)
 		n.lostFirst.clear(id) // the message the start could not deliver went in now, or another one
 		if kind == "claude" {
-			err := n.afterPrompt(ctx, id, pane, text, typedAt, watch) // sendsafe_submit.go
+			confirmed, err := n.afterPrompt(ctx, id, pane, text, typedAt, watch) // sendsafe_submit.go
+			if owner := ownerDeliveryOf(ctx); owner != nil && host.ParsePane(pane).Kind == host.Tmux {
+				if err == nil && !confirmed {
+					err = uncertain(errors.New("消息已经打进电脑上的 tmux，但会话记录里没有看到它：先在电脑上看一眼再决定要不要重发。"))
+				}
+				if err == nil {
+					owner.as, owner.reason = deliveredUserInput, "" // typed and confirmed in the outside Claude's tmux pane (#5965)
+				}
+			}
 			if handoff != nil && err == nil {
 				n.dropHandoff(id, handoff) // in with this message (not when that is not known: promptedSince tells then)
 			}

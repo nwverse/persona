@@ -36,8 +36,12 @@ func (t *feishuTopic) target() feishuTarget {
 	return feishuTarget{ChatID: t.Chat, InThread: true}
 }
 
-// runTo is where a run's messages go, from its channel values (Ext): the topic it was asked in, else the private chat.
+// runTo is where a run's messages go, from its channel values (Ext): under the owner's "/read" in its group
+// (feishu_read.go), the topic it was asked in, else the private chat.
 func runTo(ext map[string]string) feishuTarget {
+	if readRun(ext) {
+		return feishuTarget{ChatID: ext[readChatKey], InThread: ext[readThreadKey] != "", NoDetour: true, Read: true}
+	}
 	if ext["chat"] == "" || ext["thread"] == "" {
 		return feishuTarget{}
 	}
@@ -137,7 +141,7 @@ func (s *Service) threadMessage(ctx context.Context, ev feishubot.MessageEvent, 
 		notDelivered(routeErr)
 		return
 	}
-	content.Text = prompts.RenderTodoThreadReply(prompts.TodoThreadReply{Title: contextText(clip(oneLine(t.Title), 80)), Text: text, Recorded: recorded})
+	content.Text = prompts.RenderTodoThreadReply(prompts.TodoThreadReply{Language: answerLanguage(s.hello(ctx).Locale), Title: contextText(clip(oneLine(t.Title), 80)), Text: text, Recorded: recorded})
 	// A to-do that came from a question nobody answered (ask_todo.go): the reply is the owner's call, and goes to the
 	// conversation that asked (not to an Agent) as the answer; the to-do then closes.
 	asked := false

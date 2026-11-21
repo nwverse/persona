@@ -22,6 +22,7 @@ func provenanceHerdr(n *Node) {
 }
 
 func TestStopRPCPersistsItsProvenance(t *testing.T) {
+	t.Run("gateway", testGatewayStoppedProvenance)
 	for _, tc := range []struct {
 		name, method string
 		params       map[string]any
@@ -329,8 +330,12 @@ func TestClosingStoppedTerminalsRecordsUserIntent(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if n.stopCause(sidA) != proto.StopUser {
-				t.Fatalf("user closure remained eligible: %s", n.stopCause(sidA))
+			want := proto.StopUser
+			if action == "exit" {
+				want = proto.StopExit // the Agent was told to quit: an end of its session, never resume-eligible (#10355)
+			}
+			if got := n.stopCause(sidA); got != want || got.AllowsSupervisorResume() {
+				t.Fatalf("user closure: stop cause %s, want %s", got, want)
 			}
 		})
 	}
