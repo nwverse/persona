@@ -54,8 +54,10 @@ type deepseekBalanceBody struct {
 // launcher list or the computers' key store could not be read, so that the caller keeps what it had rather than
 // treating every launcher as removed.
 //
-// A launcher keeps its own key, or one key per computer (machine_keys). The manager reads the first of those it can
-// open, in machine-name order; the launcher's own key wins when it has one.
+// A launcher keeps a global key, per-computer keys (machine_keys), or both. Per-computer keys take precedence over
+// the global key, matching keySealedFor: when ViaMachine names the routed machine, its effective key from
+// keySealedFor is used; otherwise in-scope per-computer keys are tried first in machine-name order, falling back to
+// the global key.
 func (s *Service) LauncherBalances(ctx context.Context) (accounts []proto.UsageAccount, known bool) {
 	stored, known := s.storedLaunchersKnown(ctx)
 	if !known {
@@ -84,7 +86,7 @@ func (s *Service) LauncherBalances(ctx context.Context) (accounts []proto.UsageA
 		if !ok {
 			continue
 		}
-		candidates := launcherKeyCandidates(l, machineKeys[l.Name])
+		candidates := s.launcherKeyCandidates(l, machineKeys[l.Name])
 		if len(candidates) == 0 {
 			continue // no key the manager may read: nothing to ask the provider with
 		}
@@ -202,18 +204,58 @@ type launcherKeyCandidate struct {
 	machine string // "" for the launcher's own key
 }
 
-// launcherKeyCandidates is the keys to try for l, its own first, then its computers' in machine-name order.
-func launcherKeyCandidates(l storedLauncher, machineKeys []machineKey) []launcherKeyCandidate {
+// launcherKeyCandidates returns the sealed key(s) to try for l, honoring keySealedFor's precedence (a computer's own
+// key overrides the launcher's global key):
+//   - When ViaMachine names a routed machine, keySealedFor selects that machine's effective key (its per-computer key
+//     when present, falling back to l.KeySealed only when that machine has none).
+//   - When the launcher is not shared to any computer (shareNone), only the launcher's own global key applies.
+//   - When the launcher is scoped to selected computers (shareSelected), only in-scope computers' keys are considered
+//     via keySealedFor, with per-computer overrides ordered before the global fallback.
+//   - Otherwise, per-computer keys are tried first in sorted machine-name order, with l.KeySealed as fallback.
+func (s *Service) launcherKeyCandidates(l storedLauncher, machineKeys []machineKey) []launcherKeyCandidate {
+	if l.ViaMachine != "" {
+		if sealed := s.keySealedFor(l, machineKeys, l.ViaMachine); sealed != "" {
+			return []launcherKeyCandidate{{sealed: sealed, machine: l.ViaMachine}}
+		}
+	}
+	if l.Share == shareNone {
+		if l.KeySealed == "" {
+			return nil
+		}
+		return []launcherKeyCandidate{{sealed: l.KeySealed}}
+	}
+	if l.Share == shareSelected {
+		machines := slices.Clone(l.ScopeMachines)
+		sort.Strings(machines)
+		var overrides, fallbacks []launcherKeyCandidate
+		seen := map[string]bool{}
+		for _, m := range machines {
+			sealed := s.keySealedFor(l, machineKeys, m)
+			if sealed == "" || seen[sealed] {
+				continue
+			}
+			seen[sealed] = true
+			if l.KeySealed != "" && sealed == l.KeySealed {
+				fallbacks = append(fallbacks, launcherKeyCandidate{sealed: sealed, machine: m})
+			} else {
+				overrides = append(overrides, launcherKeyCandidate{sealed: sealed, machine: m})
+			}
+		}
+		return append(overrides, fallbacks...)
+	}
 	keys := slices.Clone(machineKeys)
 	sort.Slice(keys, func(i, j int) bool { return keys[i].Machine < keys[j].Machine })
-	out := make([]launcherKeyCandidate, 0, 1+len(keys))
-	if l.KeySealed != "" {
-		out = append(out, launcherKeyCandidate{sealed: l.KeySealed})
-	}
+	out := make([]launcherKeyCandidate, 0, len(keys)+1)
+	seen := map[string]bool{}
 	for _, k := range keys {
-		if k.KeySealed != "" {
-			out = append(out, launcherKeyCandidate{sealed: k.KeySealed, machine: k.Machine})
+		if k.KeySealed == "" || seen[k.KeySealed] {
+			continue
 		}
+		seen[k.KeySealed] = true
+		out = append(out, launcherKeyCandidate{sealed: k.KeySealed, machine: k.Machine})
+	}
+	if l.KeySealed != "" && !seen[l.KeySealed] {
+		out = append(out, launcherKeyCandidate{sealed: l.KeySealed})
 	}
 	return out
 }

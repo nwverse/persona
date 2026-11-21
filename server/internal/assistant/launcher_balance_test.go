@@ -539,3 +539,198 @@ func TestLauncherBalancesDoesNotTurnContextExhaustionIntoUnreachable(t *testing.
 		}
 	}
 }
+
+// Per-computer keys override the launcher's global key (matching keySealedFor): when both are configured, the
+// per-computer balance is read instead of the global account's balance, while device scope (shareSelected) limits
+// consideration to in-scope machines (#11825).
+func TestLauncherBalancesPrefersPerComputerKeyOverGlobalKey(t *testing.T) {
+	const (
+		globalKey = "sk-deepseek-global-0001"
+		m1Key     = "sk-deepseek-m1-0002"
+		bKey      = "sk-deepseek-b-0003"
+	)
+	respondByKey := func(r *http.Request) (*http.Response, error) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer " + globalKey:
+			return probeResponse(r, http.StatusOK, `{"balance_infos":[{"currency":"CNY","total_balance":"12.34"}]}`), nil
+		case "Bearer " + m1Key:
+			return probeResponse(r, http.StatusOK, `{"balance_infos":[{"currency":"CNY","total_balance":"88.88"}]}`), nil
+		case "Bearer " + bKey:
+			return probeResponse(r, http.StatusOK, `{"balance_infos":[{"currency":"CNY","total_balance":"66.66"}]}`), nil
+		default:
+			return probeResponse(r, http.StatusUnauthorized, `{}`), nil
+		}
+	}
+
+	t.Run("per-computer override beats global key", func(t *testing.T) {
+		s, mux := launcherTestService(t)
+		if code, raw := launcherCall(t, mux, "POST", "/api/v1/launchers",
+			`{"name":"deepseek","base_url":"https://api.deepseek.com/anthropic","model":"deepseek-v4-pro","api_key":"`+globalKey+`"}`); code != 200 {
+			t.Fatal(code, raw)
+		}
+		sealedM1, err := s.sealKey(m1Key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.putSetting(context.Background(), launchersMachineKeysKey, []machineKey{
+			{Launcher: "deepseek", Machine: "m1", KeySealed: sealedM1},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		var gotAuth string
+		interceptProbe(t, func(r *http.Request) (*http.Response, error) {
+			gotAuth = r.Header.Get("Authorization")
+			return respondByKey(r)
+		})
+		accounts, known := s.LauncherBalances(context.Background())
+		if !known || len(accounts) != 1 || accounts[0].Balance == nil || accounts[0].Balance.Amount != "88.88" || gotAuth != "Bearer "+m1Key {
+			t.Fatalf("per-computer key must override global key: known=%v auth=%q accounts=%+v", known, gotAuth, accounts)
+		}
+	})
+
+	t.Run("shareSelected ignores out-of-scope machine keys and prefers in-scope overrides", func(t *testing.T) {
+		s, _ := launcherTestService(t)
+		sealedGlobal, err := s.sealKey(globalKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sealedM1, err := s.sealKey(m1Key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sealedB, err := s.sealKey(bKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		putLaunchers(t, s, storedLauncher{
+			KeySealed:       sealedGlobal,
+			Share:           shareSelected,
+			ScopeMachines:   []string{"m2"},
+			ManagedLauncher: proto.ManagedLauncher{Name: "deepseek", BaseURL: "https://api.deepseek.com/anthropic"},
+		})
+		if err := s.putSetting(context.Background(), launchersMachineKeysKey, []machineKey{
+			{Launcher: "deepseek", Machine: "m1", KeySealed: sealedM1},
+			{Launcher: "deepseek", Machine: "b-override", KeySealed: sealedB},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		interceptProbe(t, respondByKey)
+		// m2 has no machine key and m1/b-override are out of scope -> falls back to globalKey (12.34).
+		accounts, known := s.LauncherBalances(context.Background())
+		if !known || len(accounts) != 1 || accounts[0].Balance == nil || accounts[0].Balance.Amount != "12.34" {
+			t.Fatalf("in-scope machine without override must use global fallback: known=%v accounts=%+v", known, accounts)
+		}
+
+		// Adding b-override alongside a-default in ScopeMachines must still prefer b-override's per-computer key (66.66).
+		putLaunchers(t, s, storedLauncher{
+			KeySealed:       sealedGlobal,
+			Share:           shareSelected,
+			ScopeMachines:   []string{"a-default", "b-override"},
+			ManagedLauncher: proto.ManagedLauncher{Name: "deepseek", BaseURL: "https://api.deepseek.com/anthropic"},
+		})
+		accounts, known = s.LauncherBalances(context.Background())
+		if !known || len(accounts) != 1 || accounts[0].Balance == nil || accounts[0].Balance.Amount != "66.66" {
+			t.Fatalf("in-scope per-computer override must beat global fallback: known=%v accounts=%+v", known, accounts)
+		}
+	})
+}
+
+// When ViaMachine is set, LauncherBalances uses keySealedFor(l, machineKeys, l.ViaMachine) so the routed computer's
+// own key overrides both the global key and other computers' keys, falls back to the global key only when the routed
+// computer has no override, and never leaks the global account's balance when the routed computer's override fails to
+// open (#11825).
+func TestLauncherBalancesViaMachineUsesKeySealedForPrecedence(t *testing.T) {
+	const (
+		globalKey = "sk-deepseek-via-global-0001"
+		otherKey  = "sk-deepseek-via-other-0002"
+		serverKey = "sk-deepseek-via-server-0003"
+	)
+	respondByKey := func(r *http.Request) (*http.Response, error) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer " + globalKey:
+			return probeResponse(r, http.StatusOK, `{"balance_infos":[{"currency":"CNY","total_balance":"12.34"}]}`), nil
+		case "Bearer " + otherKey:
+			return probeResponse(r, http.StatusOK, `{"balance_infos":[{"currency":"CNY","total_balance":"55.55"}]}`), nil
+		case "Bearer " + serverKey:
+			return probeResponse(r, http.StatusOK, `{"balance_infos":[{"currency":"CNY","total_balance":"77.77"}]}`), nil
+		default:
+			return probeResponse(r, http.StatusUnauthorized, `{}`), nil
+		}
+	}
+
+	t.Run("routed machine per-computer key overrides global and other machines", func(t *testing.T) {
+		s, _ := launcherTestService(t)
+		devs := &viaDevs{}
+		s.devs = devs
+		sealedGlobal, _ := s.sealKey(globalKey)
+		sealedOther, _ := s.sealKey(otherKey)
+		sealedServer, _ := s.sealKey(serverKey)
+		putLaunchers(t, s, storedLauncher{
+			KeySealed:       sealedGlobal,
+			ViaMachine:      "server",
+			ManagedLauncher: proto.ManagedLauncher{Name: "deepseek", BaseURL: "https://api.deepseek.com/anthropic"},
+		})
+		if err := s.putSetting(context.Background(), launchersMachineKeysKey, []machineKey{
+			{Launcher: "deepseek", Machine: "a-other", KeySealed: sealedOther},
+			{Launcher: "deepseek", Machine: "server", KeySealed: sealedServer},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		interceptProbe(t, respondByKey)
+		accounts, known := s.LauncherBalances(context.Background())
+		if !known || len(accounts) != 1 || accounts[0].Balance == nil || accounts[0].Balance.Amount != "77.77" {
+			t.Fatalf("ViaMachine override balance: known=%v accounts=%+v", known, accounts)
+		}
+		if devs.calls.Load() != 1 || http.Header(devs.saw.Header).Get("Authorization") != "Bearer "+serverKey {
+			t.Fatalf("expected routed read with server key: calls=%d auth=%q", devs.calls.Load(), http.Header(devs.saw.Header).Get("Authorization"))
+		}
+	})
+
+	t.Run("routed machine without override falls back to global key rather than another machine", func(t *testing.T) {
+		s, _ := launcherTestService(t)
+		devs := &viaDevs{}
+		s.devs = devs
+		sealedGlobal, _ := s.sealKey(globalKey)
+		sealedOther, _ := s.sealKey(otherKey)
+		putLaunchers(t, s, storedLauncher{
+			KeySealed:       sealedGlobal,
+			ViaMachine:      "server",
+			ManagedLauncher: proto.ManagedLauncher{Name: "deepseek", BaseURL: "https://api.deepseek.com/anthropic"},
+		})
+		if err := s.putSetting(context.Background(), launchersMachineKeysKey, []machineKey{
+			{Launcher: "deepseek", Machine: "a-other", KeySealed: sealedOther},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		interceptProbe(t, respondByKey)
+		accounts, known := s.LauncherBalances(context.Background())
+		if !known || len(accounts) != 1 || accounts[0].Balance == nil || accounts[0].Balance.Amount != "12.34" {
+			t.Fatalf("ViaMachine global fallback balance: known=%v accounts=%+v", known, accounts)
+		}
+		if devs.calls.Load() != 1 || http.Header(devs.saw.Header).Get("Authorization") != "Bearer "+globalKey {
+			t.Fatalf("expected routed read with global fallback key: calls=%d auth=%q", devs.calls.Load(), http.Header(devs.saw.Header).Get("Authorization"))
+		}
+	})
+
+	t.Run("broken routed machine override reports failed instead of leaking global balance", func(t *testing.T) {
+		s, _ := launcherTestService(t)
+		devs := &viaDevs{}
+		s.devs = devs
+		sealedGlobal, _ := s.sealKey(globalKey)
+		putLaunchers(t, s, storedLauncher{
+			KeySealed:       sealedGlobal,
+			ViaMachine:      "server",
+			ManagedLauncher: proto.ManagedLauncher{Name: "deepseek", BaseURL: "https://api.deepseek.com/anthropic"},
+		})
+		if err := s.putSetting(context.Background(), launchersMachineKeysKey, []machineKey{
+			{Launcher: "deepseek", Machine: "server", KeySealed: "not-a-sealed-value"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		interceptProbe(t, respondByKey)
+		accounts, known := s.LauncherBalances(context.Background())
+		if !known || len(accounts) != 1 || accounts[0].Balance != nil || accounts[0].Problem != "failed" || devs.calls.Load() != 0 {
+			t.Fatalf("broken ViaMachine override must not fall back to global key: known=%v calls=%d accounts=%+v", known, devs.calls.Load(), accounts)
+		}
+	})
+}
