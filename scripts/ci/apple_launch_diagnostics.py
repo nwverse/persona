@@ -249,7 +249,7 @@ def collect(output, destination, reader=bounded_output, now=None, stream_reader=
         evidence.write_bytes(encoded)
         (destination / CONTEXT).write_text(json.dumps(context))
         status.write_text(f"captured {len(kept)} scoped events; diagnosis still required\n")
-    except TimeoutError:
+    except (TimeoutError, subprocess.TimeoutExpired):
         # Preserve the established command-deadline category, including the default stream.
         status.write_text("unavailable: scoped log command timed out\n")
     except OutputLimitError:

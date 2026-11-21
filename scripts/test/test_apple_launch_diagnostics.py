@@ -198,8 +198,10 @@ class LaunchDiagnosticsTests(unittest.TestCase):
             launch.stream_output(command, START, START + timedelta(minutes=15), UDID, launch.BUNDLE)
 
     def test_collection_failures_name_the_boundary_not_a_cause(self):
-        self.collect(reader=lambda command: (_ for _ in ()).throw(TimeoutError()))
-        self.assertEqual(self.status(), "unavailable: scoped log command timed out\n")
+        for error in (TimeoutError(), subprocess.TimeoutExpired("/usr/bin/log", 20)):
+            with self.subTest(error=type(error).__name__):
+                self.collect(reader=lambda command, error=error: (_ for _ in ()).throw(error))
+                self.assertEqual(self.status(), "unavailable: scoped log command timed out\n")
         self.collect(reader=lambda command: b"not JSON DO NOT EXPORT")
         self.assertEqual(self.status(),
                          "unavailable: stream-parse-failure; no launch cause established\n")
