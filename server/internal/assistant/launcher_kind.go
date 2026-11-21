@@ -55,7 +55,13 @@ func assistantKind(agent string) string {
 func (s *Service) otherKindPick(ctx context.Context, machine, sid, launcher string) error {
 	c, known := s.session(ctx, machine, sid)
 	conv := assistantKind(c.Agent)
-	if !known || conv == "" {
+	if !known {
+		return nil
+	}
+	if conv == "" {
+		if c.SourceKind == proto.SourceRuntime {
+			return s.logicalAdapterPick(ctx, machine, c, launcher)
+		}
 		return nil
 	}
 	machine = s.logicalExecutionMachine(ctx, machine, sid)
@@ -70,7 +76,9 @@ func (s *Service) otherKindPick(ctx context.Context, machine, sid, launcher stri
 		picked = assistantKind(s.launcherAgent(ctx, machine, launcher))
 	}
 	if picked == "" {
-		return nil
+		// A runtime must attest its connection even when its display kind is
+		// unknown. Native aliases still retain the no-guessing behavior.
+		return s.logicalAdapterPick(ctx, machine, c, launcher)
 	}
 	if picked == conv {
 		return s.logicalAdapterPick(ctx, machine, c, launcher)
